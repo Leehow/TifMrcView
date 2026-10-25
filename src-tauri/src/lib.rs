@@ -283,7 +283,7 @@ pub fn run() {
             set_default_app,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tifview")
+        .expect("error while building TifMrcView")
         .run(|_app, _event| {
             // macOS delivers double-clicked files as an event, not as argv.
             #[cfg(target_os = "macos")]

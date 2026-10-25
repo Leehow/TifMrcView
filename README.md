@@ -1,4 +1,4 @@
-# tifview
+# TifMrcView
 
 一个又小又快的 TIFF / MRC 图像查看器，基于 Rust + Tauri 2。双击 `.tif` / `.tiff` / `.mrc` 就能打开，拖动拉条翻 Z 层。
 
@@ -37,8 +37,8 @@
 
 到仓库的 Releases 页面下载：
 
-- **macOS**：`tifview_x.y.z_universal.dmg`（Intel 和 Apple 芯片通用），拖进「应用程序」。因为没有苹果开发者签名，第一次打开会被拦：到「系统设置 → 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/tifview.app`。首次启动时 tifview 会把自己设为 .tif/.tiff/.mrc 的默认打开方式。
-- **Windows**：`tifview_x.y.z_x64-setup.exe`，双击安装（不需要管理员权限）。安装器会注册 .tif/.tiff/.mrc 关联；如果你以前给 .tif 手动选过别的程序（比如“照片”），Windows 不允许软件偷偷改，点 tifview 里的「设为默认」会打开系统设置页，选一下就好。
+- **macOS**：`TifMrcView_x.y.z_universal.dmg`（Intel 和 Apple 芯片通用），拖进「应用程序」。因为没有苹果开发者签名，第一次打开会被拦：到「系统设置 → 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/TifMrcView.app`。首次启动时 TifMrcView 会把自己设为 .tif/.tiff/.mrc 的默认打开方式。
+- **Windows**：`TifMrcView_x.y.z_x64-setup.exe`，双击安装（不需要管理员权限）。安装器会注册 .tif/.tiff/.mrc 关联；如果你以前给 .tif 手动选过别的程序（比如“照片”），Windows 不允许软件偷偷改，点 TifMrcView 里的「设为默认」会打开系统设置页，选一下就好。
 - **Linux**：Debian/Ubuntu 用 `.deb`，Fedora 等用 `.rpm`，其它发行版用 `.AppImage`。首次启动时会通过 `xdg-mime` 设为默认打开方式。
 
 ## 从源码构建

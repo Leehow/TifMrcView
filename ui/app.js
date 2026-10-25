@@ -101,7 +101,7 @@ async function openPath(path) {
     }));
     $("empty").hidden = true;
     $("st-pixel").textContent = "";
-    T.window.getCurrentWindow().setTitle(`${res.info.name} — tifview`).catch(() => {});
+    T.window.getCurrentWindow().setTitle(`${res.info.name} — TifMrcView`).catch(() => {});
     buildChannels();
     setupSliders();
     updateInfo();

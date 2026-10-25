@@ -2,8 +2,8 @@
 //! `cargo run --release --example probe -- file.tif [...]`
 use std::time::Instant;
 
-use tifview_lib::image::{OpenImage, PlaneData};
-use tifview_lib::{formats, render, with_plane};
+use tifmrcview_lib::image::{OpenImage, PlaneData};
+use tifmrcview_lib::{formats, render, with_plane};
 
 fn main() {
     for path in std::env::args().skip(1) {

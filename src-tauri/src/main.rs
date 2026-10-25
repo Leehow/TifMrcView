@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tifview_lib::run()
+    tifmrcview_lib::run()
 }

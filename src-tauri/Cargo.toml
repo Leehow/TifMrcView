@@ -1,5 +1,5 @@
 [package]
-name = "tifview"
+name = "tifmrcview"
 version = "0.1.0"
 description = "Fast TIFF / MRC stack viewer"
 authors = ["Leehow"]
@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 
 [lib]
-name = "tifview_lib"
+name = "tifmrcview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

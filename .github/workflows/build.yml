@@ -57,14 +57,14 @@ jobs:
           args: ${{ matrix.args }}
           # Only tagged pushes publish a GitHub Release.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('tifview {0}', github.ref_name) || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('TifMrcView {0}', github.ref_name) || '' }}
           releaseBody: "下载对应系统的安装包：macOS 用 .dmg，Windows 用 -setup.exe，Linux 用 .deb / .rpm / .AppImage。"
           releaseDraft: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: tifview-${{ matrix.name }}
+          name: TifMrcView-${{ matrix.name }}
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg
             src-tauri/target/**/release/bundle/nsis/*-setup.exe

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tifview",
+  "productName": "TifMrcView",
   "version": "0.1.0",
-  "identifier": "com.leehow.tifview",
+  "identifier": "com.leehow.tifmrcview",
   "build": {
     "frontendDist": "../ui"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "tifview",
+        "title": "TifMrcView",
         "width": 1200,
         "height": 860,
         "minWidth": 640,
@@ -42,7 +42,7 @@
     ],
     "category": "GraphicsAndDesign",
     "shortDescription": "Fast TIFF / MRC stack viewer",
-    "longDescription": "tifview opens multi-page TIFF, OME-TIFF, ImageJ hyperstacks and MRC files with a Z slider, channel compositing and a folder thumbnail strip.",
+    "longDescription": "TifMrcView opens multi-page TIFF, OME-TIFF, ImageJ hyperstacks and MRC files with a Z slider, channel compositing and a folder thumbnail strip.",
     "fileAssociations": [
       {
         "ext": [
@@ -69,7 +69,7 @@
         "mimeType": "application/x-mrc",
         "rank": "Owner",
         "exportedType": {
-          "identifier": "com.leehow.tifview.mrc",
+          "identifier": "com.leehow.tifmrcview.mrc",
           "conformsTo": [
             "public.data",
             "public.image"
@@ -94,17 +94,17 @@
     "linux": {
       "deb": {
         "files": {
-          "/usr/share/mime/packages/tifview-mrc.xml": "../packaging/linux/tifview-mrc.xml"
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml"
         },
         "postInstallScript": "../packaging/linux/postinst.sh",
-        "desktopTemplate": "../packaging/linux/tifview.desktop"
+        "desktopTemplate": "../packaging/linux/tifmrcview.desktop"
       },
       "rpm": {
         "files": {
-          "/usr/share/mime/packages/tifview-mrc.xml": "../packaging/linux/tifview-mrc.xml"
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml"
         },
         "postInstallScript": "../packaging/linux/postinst.sh",
-        "desktopTemplate": "../packaging/linux/tifview.desktop"
+        "desktopTemplate": "../packaging/linux/tifmrcview.desktop"
       }
     }
   }

@@ -353,7 +353,7 @@ pub fn bg_pool() -> &'static rayon::ThreadPool {
         let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n.saturating_sub(1).max(1))
-            .thread_name(|i| format!("tifview-bg-{i}"))
+            .thread_name(|i| format!("tifmrcview-bg-{i}"))
             .build()
             .expect("thread pool")
     })
