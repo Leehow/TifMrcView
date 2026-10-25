@@ -1,5 +1,6 @@
 mod assoc;
 pub mod formats;
+pub mod imod;
 pub mod image;
 pub mod plugins;
 pub mod render;
@@ -299,6 +300,31 @@ fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
 }
 
 #[tauri::command]
+async fn find_models(path: String) -> Vec<String> {
+    imod::find_for(Path::new(&path))
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[tauri::command]
+async fn load_model(path: String) -> CmdResult<imod::Model> {
+    blocking(move || imod::load(Path::new(&path))).await
+}
+
+#[tauri::command]
+async fn pick_model(app: AppHandle, dir: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("IMOD 模型", &["mod", "fid", "imod", "seed", "3dmod"])
+        .set_directory(dir)
+        .blocking_pick_file()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 async fn set_default_app() -> CmdResult<String> {
     assoc::set_default()
 }
@@ -384,6 +410,9 @@ pub fn run() {
             plugins::open_plugin_dir,
             update::check_update,
             update::install_update,
+            find_models,
+            load_model,
+            pick_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building TifMrcView")

@@ -33,6 +33,8 @@ const S = {
   pxSource: "",
   scaleBar: false,
   hist: null,
+  model: null,      // IMOD model loaded for this image
+  modelShow: true,
 };
 
 const canvas = $("view");
@@ -146,6 +148,7 @@ async function openPath(path) {
     S.hist = null;
     S.ann = [];
     S.selRect = null;
+    setModel(null);
     S.chans = res.info.channels.map((c) => ({
       visible: true,
       color: c.color,
@@ -177,6 +180,7 @@ async function openPath(path) {
     } else {
       fit();
     }
+    autoLoadModel(path);
     await refreshFolder(path);
     pluginEmit("open", S.info);
   } catch (e) {
@@ -642,6 +646,119 @@ function drawAnnotations(g, map, unit, items) {
   }
 }
 
+// ---------- IMOD models ----------
+
+function setModel(m) {
+  S.model = m;
+  const box = $("mod-objects");
+  box.innerHTML = "";
+  if (!m) {
+    $("mod-info").textContent = "同名的 .mod / .fid 会自动加载";
+    return;
+  }
+  const npts = m.objects.reduce((a, o) => a + o.contours.reduce((b, c) => b + c.pts.length / 3, 0), 0);
+  let info = `${basename(m.path)} · ${m.objects.length} 个对象 · ${npts} 个点`;
+  const [mx, my] = m.size;
+  if (S.info && mx > 0 && my > 0 && (Math.abs(mx - S.info.width) > 1 || Math.abs(my - S.info.height) > 1)) {
+    info += `（模型建在 ${mx}×${my} 的图上，和当前图像大小不同）`;
+  }
+  $("mod-info").textContent = info;
+  m.objects.forEach((o, i) => {
+    o.visible = !o.hidden;
+    const el = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = o.visible;
+    cb.addEventListener("change", () => {
+      o.visible = cb.checked;
+      draw();
+    });
+    const sw = document.createElement("span");
+    sw.className = "sw";
+    sw.style.background = `rgb(${o.color.join(",")})`;
+    const nm = document.createElement("span");
+    nm.textContent = `${o.name || `对象 ${i + 1}`}（${o.contours.length}）`;
+    el.append(cb, sw, nm);
+    box.append(el);
+  });
+}
+
+async function loadModelFile(path) {
+  try {
+    setModel(await invoke("load_model", { path }));
+    S.modelShow = $("mod-show").checked = true;
+    draw();
+  } catch (e) {
+    toast(`无法读取模型：${e}`);
+  }
+}
+
+async function autoLoadModel(imagePath) {
+  try {
+    const found = await invoke("find_models", { path: imagePath });
+    if (found.length && S.info && S.info.path === imagePath) {
+      await loadModelFile(found[0]);
+      toast(`已加载 IMOD 模型 ${basename(found[0])}`);
+    }
+  } catch (_) {}
+}
+
+/** Draws the model objects that cross the current Z slice. */
+function drawModel(g, map, k, unit, z = S.z) {
+  const m = S.model;
+  if (!m || !S.modelShow) return;
+  g.save();
+  g.lineJoin = "round";
+  for (const o of m.objects) {
+    if (!o.visible) continue;
+    const color = `rgb(${o.color.join(",")})`;
+    g.strokeStyle = color;
+    g.fillStyle = color;
+    g.lineWidth = Math.max(1, o.lineWidth) * unit;
+    for (const c of o.contours) {
+      const p = c.pts;
+      const n = p.length / 3;
+      if (!o.scattered) {
+        // Planar contours: connect consecutive points on this slice.
+        g.beginPath();
+        let on = 0;
+        let prev = false;
+        for (let i = 0; i < n; i++) {
+          const here = Math.abs(p[i * 3 + 2] - z) < 0.5;
+          if (here) {
+            const [x, y] = map(p[i * 3], p[i * 3 + 1]);
+            prev ? g.lineTo(x, y) : g.moveTo(x, y);
+            on++;
+          }
+          prev = here;
+        }
+        if (!o.open && on === n && n > 2) g.closePath();
+        if (on === 1) {
+          const i = [...Array(n).keys()].find((j) => Math.abs(p[j * 3 + 2] - z) < 0.5);
+          const [x, y] = map(p[i * 3], p[i * 3 + 1]);
+          g.moveTo(x + 2 * unit, y);
+          g.arc(x, y, 2 * unit, 0, Math.PI * 2);
+        }
+        g.stroke();
+      }
+      // Points as spheres: full size on their slice, smaller nearby.
+      if (o.scattered || o.pointSize > 0) {
+        for (let i = 0; i < n; i++) {
+          const r = (c.sizes && c.sizes[i]) || o.pointSize || 3;
+          const dz = Math.abs(p[i * 3 + 2] - z);
+          if (dz >= Math.max(r, 0.5)) continue;
+          const rr = Math.sqrt(Math.max(0, r * r - dz * dz)) || 1;
+          const [x, y] = map(p[i * 3], p[i * 3 + 1]);
+          g.beginPath();
+          g.arc(x, y, Math.max(2 * unit, rr * k), 0, Math.PI * 2);
+          g.stroke();
+        }
+      }
+    }
+  }
+  g.restore();
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -652,6 +769,9 @@ function draw() {
   const [sx, sy] = toScreen(x, y);
   ctx.imageSmoothingEnabled = S.view.scale * dpr < 1;
   ctx.drawImage(frameCanvas, 0, 0, S.frame.w, S.frame.h, sx, sy, w * S.view.scale, h * S.view.scale);
+
+  // Model coordinates are pixel indices; +0.5 puts them on pixel centres.
+  drawModel(ctx, (x, y) => toScreen(x + 0.5, y + 0.5), S.view.scale, 1);
 
   const items = S.annShow ? S.ann : [];
   const extra = S.draft && S.draft.type !== "select" ? [S.draft] : [];
@@ -760,6 +880,7 @@ async function renderRegion(region, { z = S.z, t = S.t, size = null } = {}) {
   g.putImageData(f.image, 0, 0);
   // Overlays keep the size they have on screen relative to the image.
   const unit = Math.max(0.5, k / S.view.scale);
+  drawModel(g, (ix, iy) => [(ix + 0.5 - x) * k, (iy + 0.5 - y) * k], k, unit, z);
   if (S.annShow) drawAnnotations(g, (ix, iy) => [(ix - x) * k, (iy - y) * k], unit, S.ann);
   drawScaleBar(g, f.w, f.h, k, false);
   return c;
@@ -1029,6 +1150,7 @@ window.addEventListener("keydown", (e) => {
         case "p": setTool("pen"); break;
         case "r": setTool("select"); break;
         case "h": toggleAnn(); break;
+        case "i": S.modelShow = $("mod-show").checked = !S.modelShow; draw(); break;
         default: return;
       }
   }
@@ -1114,6 +1236,14 @@ $("sb-show").addEventListener("change", (e) => {
 });
 $("px-size").addEventListener("change", onPxInput);
 $("px-unit").addEventListener("change", onPxInput);
+$("mod-show").addEventListener("change", (e) => {
+  S.modelShow = e.target.checked;
+  draw();
+});
+$("btn-mod-load").addEventListener("click", async () => {
+  const p = await invoke("pick_model", { dir: S.info ? dirname(S.info.path) : "" });
+  if (p) loadModelFile(p);
+});
 $("btn-save-all").addEventListener("click", () => saveAs(false));
 $("btn-save-sel").addEventListener("click", () => saveAs(true));
 
