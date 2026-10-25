@@ -76,6 +76,11 @@ header nav{display:flex;align-items:center}
 @media (prefers-color-scheme:dark){.badge,.dl a small b{color:#5fd391}}
 @media (max-width:560px){.gh{margin-left:0;margin-right:12px}}
 .teaser{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}.teaser h2{margin:0 0 6px;font-size:22px}.teaser p{margin:0;color:var(--mute)}
+.sec-lead{color:var(--mute);margin:-10px 0 20px}
+.steps ol{margin:8px 0 0;padding-left:20px;font-size:15px}
+.steps li{margin:4px 0}
+.steps p{margin:10px 0 0;font-size:13px;color:var(--mute)}
+.steps code{font-size:12px;background:color-mix(in srgb,var(--mute) 12%,transparent);padding:1px 5px;border-radius:5px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -121,6 +126,16 @@ header nav{display:flex;align-items:center}
   </div>
 </section>
 
+<section id="default">
+  <h2 data-i="def_h">设为默认打开方式</h2>
+  <p class="sec-lead" data-i="def_lead"></p>
+  <div class="grid">
+    <div class="card"><div class="os">macOS</div><div class="steps" data-i="def_mac"></div></div>
+    <div class="card"><div class="os">Windows</div><div class="steps" data-i="def_win"></div></div>
+    <div class="card"><div class="os">Linux</div><div class="steps" data-i="def_linux"></div></div>
+  </div>
+</section>
+
 <section id="features">
   <h2 data-i="nav_features">功能</h2>
   <div class="grid">
@@ -157,6 +172,6 @@ header nav{display:flex;align-items:center}
 <footer>TifMrcView <span id="ver"></span> · <span data-i="free">免费使用</span> · <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a></footer>
 </div>
 
-<script src="i18n.js?v=4"></script>
+<script src="i18n.js?v=5"></script>
 </body>
 </html>

@@ -14,6 +14,10 @@
 
   var T = {
     zh: {
+      def_h: '设为默认打开方式', def_lead: '安装后 TifMrcView 一般会自动成为 .tif / .tiff / .mrc 的默认程序。如果双击还是用别的软件打开，或想让 .czi、.rec、.st、.map 也用它打开，按下面操作：',
+      def_mac: '<ol><li>在访达里选中一个文件（比如 .tif），按 <b>⌘ + I</b> 显示简介</li><li>在「打开方式」里选 <b>TifMrcView</b></li><li>点「<b>全部更改…</b>」，再点「继续」</li></ol><p>每种扩展名（.tiff、.mrc、.czi…）各做一次。</p>',
+      def_win: '<ol><li>右键一个文件 →「<b>打开方式</b>」→「<b>选择其他应用</b>」</li><li>选 <b>TifMrcView</b>（列表里没有就点「在电脑上选择应用」找到它）</li><li>勾选「<b>始终使用此应用打开</b>」，点确定</li></ol><p>也可以在「设置 → 应用 → 默认应用」里搜索 TifMrcView，逐个扩展名设置。</p>',
+      def_linux: '<ol><li>右键一个文件 →「<b>属性</b>」→「<b>打开方式</b>」</li><li>选 <b>TifMrcView</b>，点「<b>设为默认</b>」</li></ol><p>或者在终端运行：<code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: '安装包只有 {range}，下载即用',
       title: 'TifMrcView · 快速的 TIFF / MRC 查看器',
       desc: 'TifMrcView：又小又快的 TIFF、OME-TIFF、MRC 图像查看器，支持 Z 层拉条、多通道合成、文件夹浏览。免费下载 macOS、Windows、Linux 版。',
@@ -39,6 +43,10 @@
       free: '免费开源'
     },
     en: {
+      def_h: 'Make it the default app', def_lead: 'TifMrcView normally becomes the default for .tif / .tiff / .mrc when installed. If another app still opens them, or you want .czi, .rec, .st or .map to open in it too:',
+      def_mac: '<ol><li>Select a file (e.g. a .tif) in Finder and press <b>⌘ + I</b> (Get Info)</li><li>Under “Open with”, choose <b>TifMrcView</b></li><li>Click <b>Change All…</b>, then Continue</li></ol><p>Repeat once per extension (.tiff, .mrc, .czi…).</p>',
+      def_win: '<ol><li>Right-click a file → <b>Open with</b> → <b>Choose another app</b></li><li>Pick <b>TifMrcView</b> (if it isn\'t listed, click “Choose an app on your PC” and find it)</li><li>Tick <b>Always use this app</b> and click OK</li></ol><p>Or go to Settings → Apps → Default apps, search for TifMrcView and set each extension.</p>',
+      def_linux: '<ol><li>Right-click a file → <b>Properties</b> → <b>Open With</b></li><li>Select <b>TifMrcView</b> and click <b>Set as default</b></li></ol><p>Or run in a terminal: <code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'Installers are just {range}',
       title: 'TifMrcView · Fast TIFF / MRC Viewer',
       desc: 'TifMrcView: a small, fast viewer for TIFF, OME-TIFF and MRC images with a Z slider, multi-channel compositing and folder browsing. Free for macOS, Windows and Linux.',
@@ -64,6 +72,10 @@
       free: 'Free and open source'
     },
     de: {
+      def_h: 'Als Standard-App festlegen', def_lead: 'Nach der Installation ist TifMrcView normalerweise Standard für .tif / .tiff / .mrc. Öffnet trotzdem ein anderes Programm sie, oder sollen auch .czi, .rec, .st oder .map damit öffnen:',
+      def_mac: '<ol><li>Eine Datei (z. B. .tif) im Finder auswählen und <b>⌘ + I</b> drücken (Informationen)</li><li>Unter „Öffnen mit“ <b>TifMrcView</b> wählen</li><li>Auf <b>Alle ändern …</b> klicken, dann „Fortfahren“</li></ol><p>Für jede Endung (.tiff, .mrc, .czi …) einmal wiederholen.</p>',
+      def_win: '<ol><li>Rechtsklick auf eine Datei → <b>Öffnen mit</b> → <b>Andere App auswählen</b></li><li><b>TifMrcView</b> wählen (fehlt es, „App auf diesem PC auswählen“ und suchen)</li><li><b>Immer diese App verwenden</b> anhaken und OK klicken</li></ol><p>Oder in Einstellungen → Apps → Standard-Apps nach TifMrcView suchen und jede Endung zuweisen.</p>',
+      def_linux: '<ol><li>Rechtsklick auf eine Datei → <b>Eigenschaften</b> → <b>Öffnen mit</b></li><li><b>TifMrcView</b> wählen und <b>Als Standard festlegen</b> klicken</li></ol><p>Oder im Terminal: <code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'Installer nur {range} groß',
       title: 'TifMrcView · Schneller TIFF- / MRC-Viewer',
       desc: 'TifMrcView: ein kleiner, schneller Viewer für TIFF, OME-TIFF und MRC mit Z-Regler, Mehrkanal-Überlagerung und Ordnernavigation. Kostenlos für macOS, Windows und Linux.',
@@ -89,6 +101,10 @@
       free: 'Kostenlos und quelloffen'
     },
     ja: {
+      def_h: '既定のアプリにする', def_lead: '通常はインストールすると TifMrcView が .tif / .tiff / .mrc の既定アプリになります。それでも別のアプリで開く場合や、.czi・.rec・.st・.map も TifMrcView で開きたい場合は：',
+      def_mac: '<ol><li>Finder でファイル（例：.tif）を選び、<b>⌘ + I</b> で「情報を見る」を開く</li><li>「このアプリケーションで開く」で <b>TifMrcView</b> を選ぶ</li><li>「<b>すべてを変更…</b>」を押し、「続ける」を押す</li></ol><p>拡張子（.tiff、.mrc、.czi…）ごとに 1 回ずつ行います。</p>',
+      def_win: '<ol><li>ファイルを右クリック →「<b>プログラムから開く</b>」→「<b>別のプログラムを選択</b>」</li><li><b>TifMrcView</b> を選ぶ（一覧にない場合は「PC でアプリを選択する」から探す）</li><li>「<b>常にこのアプリを使う</b>」にチェックして OK</li></ol><p>「設定 → アプリ → 既定のアプリ」で TifMrcView を検索し、拡張子ごとに設定することもできます。</p>',
+      def_linux: '<ol><li>ファイルを右クリック →「<b>プロパティ</b>」→「<b>開き方</b>」</li><li><b>TifMrcView</b> を選び「<b>既定に設定</b>」を押す</li></ol><p>またはターミナルで：<code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'インストーラはわずか {range}',
       title: 'TifMrcView · 高速な TIFF / MRC ビューア',
       desc: 'TifMrcView：TIFF・OME-TIFF・MRC を軽快に表示するビューア。Z スライダー、マルチチャンネル合成、フォルダ内ブラウズに対応。macOS・Windows・Linux 版を無料でダウンロード。',
@@ -114,6 +130,10 @@
       free: '無料・オープンソース'
     },
     es: {
+      def_h: 'Usarlo como aplicación predeterminada', def_lead: 'Al instalarlo, TifMrcView suele quedar como predeterminado para .tif / .tiff / .mrc. Si otra aplicación los sigue abriendo, o quieres abrir también .czi, .rec, .st o .map con él:',
+      def_mac: '<ol><li>Selecciona un archivo (p. ej. .tif) en el Finder y pulsa <b>⌘ + I</b> (Obtener información)</li><li>En «Abrir con», elige <b>TifMrcView</b></li><li>Pulsa <b>Cambiar todo…</b> y luego «Continuar»</li></ol><p>Repítelo una vez por extensión (.tiff, .mrc, .czi…).</p>',
+      def_win: '<ol><li>Clic derecho en un archivo → <b>Abrir con</b> → <b>Elegir otra aplicación</b></li><li>Elige <b>TifMrcView</b> (si no aparece, pulsa «Elegir una aplicación en el equipo» y búscalo)</li><li>Marca <b>Usar siempre esta aplicación</b> y pulsa Aceptar</li></ol><p>También puedes ir a Configuración → Aplicaciones → Aplicaciones predeterminadas, buscar TifMrcView y asignar cada extensión.</p>',
+      def_linux: '<ol><li>Clic derecho en un archivo → <b>Propiedades</b> → <b>Abrir con</b></li><li>Elige <b>TifMrcView</b> y pulsa <b>Establecer como predeterminada</b></li></ol><p>O en una terminal: <code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'Instaladores de solo {range}',
       title: 'TifMrcView · Visor rápido de TIFF / MRC',
       desc: 'TifMrcView: un visor pequeño y rápido para TIFF, OME-TIFF y MRC con control deslizante de Z, composición multicanal y navegación por carpetas. Gratis para macOS, Windows y Linux.',
@@ -139,6 +159,10 @@
       free: 'Gratis y de código abierto'
     },
     fr: {
+      def_h: 'En faire l’application par défaut', def_lead: 'À l’installation, TifMrcView devient normalement l’application par défaut pour .tif / .tiff / .mrc. Si une autre application les ouvre encore, ou pour ouvrir aussi .czi, .rec, .st ou .map :',
+      def_mac: '<ol><li>Sélectionnez un fichier (par ex. .tif) dans le Finder et appuyez sur <b>⌘ + I</b> (Lire les informations)</li><li>Dans « Ouvrir avec », choisissez <b>TifMrcView</b></li><li>Cliquez sur <b>Tout modifier…</b>, puis « Continuer »</li></ol><p>À refaire une fois par extension (.tiff, .mrc, .czi…).</p>',
+      def_win: '<ol><li>Clic droit sur un fichier → <b>Ouvrir avec</b> → <b>Choisir une autre application</b></li><li>Choisissez <b>TifMrcView</b> (s’il n’apparaît pas, cliquez sur « Choisir une application sur votre PC »)</li><li>Cochez <b>Toujours utiliser cette application</b> puis OK</li></ol><p>Ou dans Paramètres → Applications → Applications par défaut, cherchez TifMrcView et associez chaque extension.</p>',
+      def_linux: '<ol><li>Clic droit sur un fichier → <b>Propriétés</b> → <b>Ouvrir avec</b></li><li>Choisissez <b>TifMrcView</b> puis <b>Définir par défaut</b></li></ol><p>Ou dans un terminal : <code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'Installateurs de seulement {range}',
       title: 'TifMrcView · Visionneuse TIFF / MRC rapide',
       desc: 'TifMrcView : une visionneuse légère et rapide pour TIFF, OME-TIFF et MRC, avec curseur Z, composition multicanal et navigation dans les dossiers. Gratuite pour macOS, Windows et Linux.',
@@ -164,6 +188,10 @@
       free: 'Gratuit et open source'
     },
     ru: {
+      def_h: 'Сделать приложением по умолчанию', def_lead: 'Обычно после установки TifMrcView становится программой по умолчанию для .tif / .tiff / .mrc. Если файлы всё равно открывает другая программа или нужно открывать в нём ещё .czi, .rec, .st или .map:',
+      def_mac: '<ol><li>Выберите файл (например, .tif) в Finder и нажмите <b>⌘ + I</b> («Свойства»)</li><li>В разделе «Открывать в программе» выберите <b>TifMrcView</b></li><li>Нажмите <b>Изменить всё…</b>, затем «Продолжить»</li></ol><p>Повторите для каждого расширения (.tiff, .mrc, .czi…).</p>',
+      def_win: '<ol><li>Щёлкните файл правой кнопкой → <b>Открыть с помощью</b> → <b>Выбрать другое приложение</b></li><li>Выберите <b>TifMrcView</b> (если его нет в списке, нажмите «Выбрать приложение на компьютере»)</li><li>Отметьте <b>Всегда использовать это приложение</b> и нажмите ОК</li></ol><p>Или в «Параметры → Приложения → Приложения по умолчанию» найдите TifMrcView и назначьте каждое расширение.</p>',
+      def_linux: '<ol><li>Щёлкните файл правой кнопкой → <b>Свойства</b> → <b>Открывать в</b></li><li>Выберите <b>TifMrcView</b> и нажмите <b>Назначить по умолчанию</b></li></ol><p>Или в терминале: <code>xdg-mime default TifMrcView.desktop image/tiff application/x-mrc</code></p>',
       badge: 'Установщик всего {range}',
       title: 'TifMrcView · Быстрый просмотрщик TIFF / MRC',
       desc: 'TifMrcView — компактный и быстрый просмотрщик TIFF, OME-TIFF и MRC с ползунком Z, многоканальным наложением и просмотром папки. Бесплатно для macOS, Windows и Linux.',
