@@ -32,6 +32,12 @@
       <button id="btn-scalebar" class="toggle" title="显示/隐藏比例尺（像素尺寸在「工具」里改）"><svg viewBox="0 0 24 24"><path d="M3 16h18M3 12v8M21 12v8M12 14v4"/></svg></button>
       <button id="btn-contrast" class="toggle" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
       <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <span class="sep" id="axis-sep" hidden></span>
+      <div class="seg" id="axisbtns" hidden>
+        <button data-axis="xy" class="on" title="XY 视图：正常看每一层">XY</button>
+        <button data-axis="xz" title="XZ 视图：从侧面看，拉条切换 Y">XZ</button>
+        <button data-axis="yz" title="YZ 视图：从侧面看，拉条切换 X">YZ</button>
+      </div>
     </div>
     <button id="scroll-right" class="scroll-btn" title="向右，显示更多按钮" hidden>›</button>
     <div class="group" id="plugin-buttons"></div>
@@ -147,7 +153,7 @@
 
   <section id="zbar" hidden>
     <button id="btn-play" title="播放 Z (空格)">▶</button>
-    <span class="dim">Z</span>
+    <span class="dim" id="zname">Z</span>
     <div id="zwrap"><div id="zmarks"></div><input type="range" id="zslider" min="0" max="0" value="0" /></div>
     <span id="zlabel"></span>
     <div id="tgroup" hidden>

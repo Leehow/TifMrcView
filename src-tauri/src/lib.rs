@@ -4,6 +4,7 @@ pub mod imod;
 pub mod image;
 pub mod plugins;
 pub mod render;
+pub mod reslice;
 mod update;
 
 use std::collections::HashMap;
@@ -28,6 +29,8 @@ struct AppState {
     next_window: AtomicU64,
     /// Files the OS asked us to open that a window has not picked up yet.
     pending: Mutex<HashMap<String, Vec<String>>>,
+    /// The XZ / YZ side view of each window's file, when one is shown.
+    side: Mutex<HashMap<String, Arc<OpenImage>>>,
     /// The file each window shows or is loading, by window label.
     showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
@@ -76,9 +79,26 @@ async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: Str
         if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             old.cancelled.store(true, Ordering::Relaxed);
         }
+        state.side.lock().unwrap().remove(window.label());
     }
     let (center, _) = info.locate(0, info.size_z / 2, 0);
     img.prefetch(center);
+    Ok(Opened { token, info })
+}
+
+/// Opens the XZ or YZ side view of the file shown under `token`.
+#[tauri::command]
+fn open_reslice(window: WebviewWindow, state: State<'_, AppState>, token: u64, axis: String) -> CmdResult<Opened> {
+    let base = current(&state, token)?;
+    let axis = match axis.as_str() {
+        "xz" => reslice::Axis::Xz,
+        "yz" => reslice::Axis::Yz,
+        _ => return Err(format!("unknown view {axis}")),
+    };
+    let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), CACHE_BUDGET / 8);
+    let info = img.info().clone();
+    state.side.lock().unwrap().insert(window.label().to_string(), img);
     Ok(Opened { token, info })
 }
 
@@ -90,6 +110,7 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .values()
         .find(|i| i.token == token)
         .cloned()
+        .or_else(|| state.side.lock().unwrap().values().find(|i| i.token == token).cloned())
         .ok_or_else(|| "stale".to_string())
 }
 
@@ -509,6 +530,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_pending_open,
             open_image,
+            open_reslice,
             render_view,
             pixel_values,
             list_folder,
@@ -542,6 +564,7 @@ pub fn run() {
                 }
                 state.pending.lock().unwrap().remove(label);
                 state.showing.lock().unwrap().remove(label);
+                state.side.lock().unwrap().remove(label);
             }
             // macOS delivers double-clicked files as an event, not as argv.
             #[cfg(target_os = "macos")]

@@ -25,6 +25,8 @@ const S = {
   dirty: false,
   playing: null,
   tool: "select",
+  axis: "xy",
+  base: null,
   ann: [],          // {type: "line"|"path"|"rect"|"ellipse", pts: [[x, y], ...], color, width, z}
   annShow: true,
   history: [],      // snapshots of annotations and crop, for undo
@@ -150,6 +152,8 @@ async function openPath(path) {
     const sameSize = S.info && S.info.width === res.info.width && S.info.height === res.info.height;
     S.token = res.token;
     S.info = res.info;
+    S.axis = "xy";
+    S.base = null;
     S.z = Math.floor(res.info.sizeZ / 2);
     S.t = 0;
     S.sel = Math.min(S.sel, res.info.channels.length - 1);
@@ -206,6 +210,57 @@ async function openPath(path) {
   } finally {
     $("loading").hidden = true;
   }
+}
+
+/** Switches between the XY view and the XZ / YZ side views of a Z stack. */
+async function setAxis(axis) {
+  if (!S.info || axis === S.axis) return;
+  const prev = S.axis;
+  if (prev === "xy") {
+    flushAnn();
+    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, model: S.model, crop: S.crop, cropStack: S.cropStack };
+  }
+  let token, info, z;
+  if (axis === "xy") {
+    ({ token, info, z } = S.base);
+  } else {
+    try {
+      ({ token, info } = await invoke("open_reslice", { token: S.base.token, axis }));
+    } catch (e) {
+      toast(`无法切换视图：${e}`);
+      if (prev === "xy") S.base = null;
+      return;
+    }
+    z = Math.floor(info.sizeZ / 2);
+  }
+  stopPlay();
+  S.axis = axis;
+  S.token = token;
+  S.info = info;
+  S.z = z;
+  S.frame = null;
+  S.hist = null;
+  S.picked = null;
+  S.op = null;
+  S.cropBox = null;
+  S.lastDrawn = null;
+  showSize(null);
+  if (axis === "xy") {
+    Object.assign(S, { ann: S.base.ann, history: S.base.history, model: S.base.model, crop: S.base.crop, cropStack: S.base.cropStack });
+    S.base = null;
+  } else {
+    Object.assign(S, { ann: [], history: [], model: null, crop: null, cropStack: [] });
+  }
+  const ps = info.pixelSize;
+  if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)]) {
+    S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
+  }
+  const view = axis === "xy" ? "" : ` (${axis.toUpperCase()})`;
+  T.window.getCurrentWindow().setTitle(`${info.name}${view} — TifMrcView`).catch(() => {});
+  setupSliders();
+  syncScaleUi();
+  updateInfo();
+  fit();
 }
 
 function normUnit(u) {
@@ -426,6 +481,9 @@ function drawHist() {
 
 function setupSliders() {
   const { sizeZ, sizeT } = S.info;
+  const stack = (S.base ? S.base.info : S.info).sizeZ > 1;
+  $("axisbtns").hidden = $("axis-sep").hidden = !stack;
+  for (const b of $("axisbtns").children) b.classList.toggle("on", b.dataset.axis === S.axis);
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
   $("zslider").max = sizeZ - 1;
   $("zslider").value = S.z;
@@ -438,6 +496,7 @@ function setupSliders() {
 }
 
 function updateZLabel() {
+  $("zname").textContent = { xy: "Z", xz: "Y", yz: "X" }[S.axis];
   $("zlabel").textContent = `${S.z + 1} / ${S.info.sizeZ}`;
   $("tlabel").textContent = `${S.t + 1} / ${S.info.sizeT}`;
 }
@@ -1064,7 +1123,7 @@ async function writeFile(path, bytes) {
 }
 
 function exportName() {
-  const z = S.info.sizeZ > 1 ? `_z${S.z + 1}` : "";
+  const z = S.info.sizeZ > 1 ? `_${{ xy: "z", xz: "y", yz: "x" }[S.axis]}${S.z + 1}` : "";
   return `${stem(S.info.path)}${z}${S.crop ? "_crop" : ""}`;
 }
 
@@ -1131,7 +1190,8 @@ function setTool(t) {
     const b = document.querySelector('#toolbtns [data-tool="pen"]');
     b.querySelector("svg").innerHTML = PEN_ICONS[t];
     b.title = PEN_TITLES[t] + "。再点一次切换 画笔 / 画框 / 画圆";
-    for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
+    for (const b of $("axisbtns").children) b.addEventListener("click", () => setAxis(b.dataset.axis));
+for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
   }
   for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
   canvas.classList.toggle("cross", t !== "pan" && t !== "select");
@@ -1409,7 +1469,8 @@ function updateZMarks() {
 
 function annChanged() {
   draw();
-  if (!S.info) return;
+  // Side views share the file name; their marks are not saved.
+  if (!S.info || S.axis !== "xy") return;
   S.annPending = { path: S.info.path, size: [S.info.width, S.info.height] };
   clearTimeout(S.annTimer);
   S.annTimer = setTimeout(flushAnn, 2000);
