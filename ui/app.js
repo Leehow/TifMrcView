@@ -220,6 +220,9 @@ async function refreshFolder(path) {
   if (dir !== S.folder.dir) {
     const f = await invoke("list_folder", { path });
     S.folder = { dir, files: f.files, sizes: f.sizes, index: f.index ?? -1 };
+    $("folder-name").textContent = basename(dir) || dir;
+    $("folder-name").title = dir;
+    $("side-head").hidden = false;
     buildStrip();
   } else {
     S.folder.index = S.folder.files.indexOf(path);
@@ -1484,18 +1487,32 @@ function setCursor(p) {
     const tol = 6 / S.view.scale;
     const target = S.tool === "crop" ? S.cropBox : S.picked;
     const h = target && handleAt(target, p, tol);
-    if (h) c = h.dir ? `${HANDLE_CURSOR[h.dir]}-resize` : "move";
+    // Ends of a line get a crosshair, so they read differently from moving the whole line.
+    if (h) c = h.dir ? `${HANDLE_CURSOR[h.dir]}-resize` : "crosshair";
     else if (target && inBox(target, p, tol)) c = "move";
-    else if (S.tool === "select" && annAt(p, tol)) c = "pointer";
+    else if (S.tool === "select") {
+      // Pressing an unpicked annotation acts on it straight away, so show what will happen.
+      const a = annAt(p, tol);
+      const ha = a && handleAt(a, p, tol);
+      if (ha) c = ha.dir ? `${HANDLE_CURSOR[ha.dir]}-resize` : "crosshair";
+      else if (a) c = "move";
+    }
   } else if (S.tool === "measure") {
     const tol = 6 / S.view.scale;
-    if (S.ann.some((a) => a.type === "line" && onSlice(a) && handleAt(a, p, tol))) c = "move";
+    if (S.ann.some((a) => a.type === "line" && onSlice(a) && handleAt(a, p, tol))) c = "crosshair";
   }
   canvas.style.cursor = c;
 }
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!S.info) return;
+  // Right-click with any other tool goes back to the select tool.
+  if (e.button === 2 && S.tool !== "select") {
+    S.op = null;
+    setTool("select");
+    showSize(null);
+    return;
+  }
   canvas.setPointerCapture(e.pointerId);
   if (S.tool === "pan" || e.button === 1 || e.button === 2) {
     S.op = { kind: "pan", x: e.clientX, y: e.clientY, cx: S.view.cx, cy: S.view.cy };
@@ -1836,6 +1853,8 @@ window.addEventListener("keydown", (e) => {
 
 $("btn-open").addEventListener("click", pickFile);
 $("btn-prev").addEventListener("click", () => step(-1));
+$("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
+$("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
 $("btn-next").addEventListener("click", () => step(1));
 $("btn-fit").addEventListener("click", fit);
 $("btn-1to1").addEventListener("click", oneToOne);
@@ -1852,7 +1871,7 @@ $("btn-scalebar").addEventListener("click", () => {
     return;
   }
   S.scaleBar = !S.scaleBar;
-  pref.set("scalebar", S.scaleBar);
+  pref.set("scalebar-on", S.scaleBar);
   syncScaleUi();
   draw();
 });
@@ -1984,7 +2003,7 @@ $("ann-width").addEventListener("change", (e) => {
 });
 $("sb-show").addEventListener("change", (e) => {
   S.scaleBar = e.target.checked;
-  pref.set("scalebar", S.scaleBar);
+  pref.set("scalebar-on", S.scaleBar);
   syncScaleUi();
   draw();
 });
@@ -2087,7 +2106,7 @@ function markStrip() {
 
 // ---------- startup ----------
 
-S.scaleBar = pref.get("scalebar", false);
+S.scaleBar = pref.get("scalebar-on", true);
 toggleSidebar(pref.get("sidebar", true));
 {
   const t = pref.get("tools", null);

@@ -13,19 +13,21 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use image::{ImageInfo, OpenImage};
 
-/// Decoded pages kept in memory for the open file.
+/// Decoded pages kept in memory, shared by the files open in all windows.
 const CACHE_BUDGET: usize = 3 << 30;
 
 #[derive(Default)]
 struct AppState {
-    current: Mutex<Option<Arc<OpenImage>>>,
+    /// The file shown in each window, by window label.
+    current: Mutex<HashMap<String, Arc<OpenImage>>>,
     next_token: AtomicU64,
-    /// Files the OS asked us to open that the UI has not picked up yet.
-    pending: Mutex<Vec<String>>,
+    next_window: AtomicU64,
+    /// Files the OS asked us to open that a window has not picked up yet.
+    pending: Mutex<HashMap<String, Vec<String>>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
 }
 
@@ -47,28 +49,29 @@ struct Opened {
 }
 
 #[tauri::command]
-fn take_pending_open(state: State<'_, AppState>) -> Option<String> {
+fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Option<String> {
     let mut p = state.pending.lock().unwrap();
-    let last = p.pop();
-    p.clear();
-    last
+    let list = p.remove(window.label())?;
+    list.into_iter().last()
 }
 
 #[tauri::command]
-async fn open_image(state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
+async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    // Each window gets an equal share of the page cache.
+    let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
+    let budget = CACHE_BUDGET / (others + 1);
     let img = blocking(move || {
         let src = formats::open(Path::new(&path))?;
-        Ok(OpenImage::new(token, src, CACHE_BUDGET))
+        Ok(OpenImage::new(token, src, budget))
     })
     .await?;
     let info = img.info().clone();
     {
         let mut cur = state.current.lock().unwrap();
-        if let Some(old) = cur.take() {
+        if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             old.cancelled.store(true, Ordering::Relaxed);
         }
-        *cur = Some(img.clone());
     }
     let (center, _) = info.locate(0, info.size_z / 2, 0);
     img.prefetch(center);
@@ -80,8 +83,9 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .current
         .lock()
         .unwrap()
-        .clone()
-        .filter(|i| i.token == token)
+        .values()
+        .find(|i| i.token == token)
+        .cloned()
         .ok_or_else(|| "stale".to_string())
 }
 
@@ -181,7 +185,7 @@ async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> Cmd
         return Ok(Response::new(t.as_ref().clone()));
     }
     // Reuse the decoded pages when the thumbnail is for the open file.
-    let open = state.current.lock().unwrap().clone().filter(|i| i.info().path == path);
+    let open = state.current.lock().unwrap().values().find(|i| i.info().path == path).cloned();
     let bytes = blocking(move || {
         image::bg_pool().install(|| {
             let img = match open {
@@ -351,6 +355,31 @@ async fn pick_model(app: AppHandle, dir: String) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Shows `path` in Finder / Explorer, or opens its folder elsewhere.
+#[tauri::command]
+fn reveal_in_folder(path: String) -> CmdResult<()> {
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg("-R").arg(&path);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("explorer");
+        c.arg(format!("/select,{path}"));
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = Command::new("xdg-open");
+        c.arg(Path::new(&path).parent().unwrap_or(Path::new("/")));
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(err)
+}
+
 #[tauri::command]
 async fn set_default_app() -> CmdResult<String> {
     assoc::set_default()
@@ -374,26 +403,75 @@ fn paths_from_args(args: impl IntoIterator<Item = String>, cwd: Option<&Path>) -
         .collect()
 }
 
+/// Opens files the OS handed us. A file goes to the window that already
+/// shows it or another file from its folder, else to a window with nothing
+/// open yet, else to a new window.
 fn queue_open(app: &AppHandle, paths: Vec<String>) {
-    if paths.is_empty() {
-        return;
+    for path in paths {
+        let label = target_window(app, &path);
+        let state = app.state::<AppState>();
+        state.pending.lock().unwrap().entry(label.clone()).or_default().push(path);
+        match app.get_webview_window(&label) {
+            Some(w) => {
+                let _ = app.emit_to(&label, "open-pending", ());
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            // The new window picks the file up when its page loads.
+            None => {
+                if let Err(e) = new_window(app, &label) {
+                    eprintln!("could not open a window: {e}");
+                }
+            }
+        }
     }
-    app.state::<AppState>().pending.lock().unwrap().extend(paths);
-    let _ = app.emit("open-pending", ());
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+}
+
+fn target_window(app: &AppHandle, path: &str) -> String {
+    let state = app.state::<AppState>();
+    let dir = Path::new(path).parent();
+    let current = state.current.lock().unwrap();
+    let pending = state.pending.lock().unwrap();
+    let windows = app.webview_windows();
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort();
+    let shown = |l: &String| {
+        current.get(l).map(|i| PathBuf::from(&i.info().path)).or_else(|| pending.get(l).and_then(|p| p.last()).map(PathBuf::from))
+    };
+    if let Some(l) = labels.iter().find(|l| shown(l).is_some_and(|p| p.parent() == dir)) {
+        return l.to_string();
     }
+    if let Some(l) = labels.iter().find(|l| shown(l).is_none()) {
+        return l.to_string();
+    }
+    format!("w{}", state.next_window.fetch_add(1, Ordering::Relaxed) + 2)
+}
+
+fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    // Cascade from the window in front so the new one doesn't hide it.
+    let pos = app
+        .webview_windows()
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)));
+    let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title("TifMrcView")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(640.0, 480.0);
+    b = match pos {
+        Some((p, k)) => b.position(p.x as f64 / k + 28.0, p.y as f64 / k + 28.0),
+        None => b.center(),
+    };
+    b.build()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = AppState::default();
-    state
-        .pending
-        .lock()
-        .unwrap()
-        .extend(paths_from_args(std::env::args(), std::env::current_dir().ok().as_deref()));
+    let args = paths_from_args(std::env::args(), std::env::current_dir().ok().as_deref());
+    if !args.is_empty() {
+        state.pending.lock().unwrap().insert("main".into(), args);
+    }
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -402,9 +480,6 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = paths_from_args(args, Some(Path::new(&cwd)));
             queue_open(app, paths);
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
         }));
     }
     builder
@@ -428,6 +503,7 @@ pub fn run() {
             thumbnail,
             pick_file,
             set_default_app,
+            reveal_in_folder,
             histogram,
             pick_save_path,
             free_path,
@@ -446,6 +522,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building TifMrcView")
         .run(|_app, _event| {
+            // Free a window's file when it closes.
+            if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &_event {
+                let state = _app.state::<AppState>();
+                if let Some(img) = state.current.lock().unwrap().remove(label) {
+                    img.cancelled.store(true, Ordering::Relaxed);
+                }
+                state.pending.lock().unwrap().remove(label);
+            }
             // macOS delivers double-clicked files as an event, not as argv.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = _event {
