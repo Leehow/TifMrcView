@@ -489,15 +489,16 @@ impl OpenImage {
                                 std::thread::sleep(std::time::Duration::from_millis(40));
                                 continue;
                             };
-                            match me.page(p) {
-                                Ok(planes) => {
-                                    for i in 0..planes.len() {
-                                        me.stats(p, i, &planes);
-                                    }
+                            // A malformed file may panic inside a decoder; treat that as a failed page.
+                            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let Ok(planes) = me.page(p) else { return false };
+                                for i in 0..planes.len() {
+                                    me.stats(p, i, &planes);
                                 }
-                                Err(_) => {
-                                    failed.lock().unwrap().insert(p);
-                                }
+                                true
+                            }));
+                            if !matches!(ok, Ok(true)) {
+                                failed.lock().unwrap().insert(p);
                             }
                             busy.lock().unwrap().remove(&p);
                         }
@@ -512,7 +513,7 @@ impl OpenImage {
 mod tests {
     use super::*;
 
-    /// 1×1 pages; page 1 always fails to decode.
+    /// 1×1 pages; page 1 fails to decode and page 2 panics.
     struct Flaky {
         info: ImageInfo,
         reads: Arc<[AtomicUsize; 3]>,
@@ -525,12 +526,13 @@ mod tests {
         fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
             self.reads[page].fetch_add(1, Ordering::Relaxed);
             anyhow::ensure!(page != 1, "broken page");
+            assert!(page != 2, "decoder bug");
             Ok(vec![Plane { w: 1, h: 1, data: PlaneData::U8(vec![0]) }])
         }
     }
 
     #[test]
-    fn prefetch_does_not_retry_failed_pages() {
+    fn prefetch_skips_failed_pages() {
         let info = ImageInfo {
             path: String::new(),
             name: String::new(),
@@ -555,6 +557,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(300));
         img.cancelled.store(true, Ordering::Relaxed);
         assert_eq!(reads[1].load(Ordering::Relaxed), 1);
-        assert!(img.cached(0).is_some() && img.cached(2).is_some());
+        assert_eq!(reads[2].load(Ordering::Relaxed), 1);
+        assert!(img.cached(0).is_some());
     }
 }
