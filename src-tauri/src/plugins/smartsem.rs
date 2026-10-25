@@ -1,4 +1,4 @@
-//! Native half of the Zeiss SmartSEM plugin (`ui/plugins/smartsem.js`).
+//! Native half of the Zeiss SmartSEM plugin (`plugins/smartsem/index.js`).
 //!
 //! SmartSEM, the software of Zeiss SEM / FIB-SEM microscopes, writes TIFF
 //! tag 34118 (CZ_SEM): a few numbers, then pairs of lines, a parameter code

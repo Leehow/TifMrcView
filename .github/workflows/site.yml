@@ -1,0 +1,59 @@
+name: site
+
+# Publishes the download site and the plugin market without a full release.
+# Never uses --delete: the server also holds release folders, latest.json
+# and downloads.json.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "plugins/**"
+      - "scripts/pack-plugins.mjs"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Stage site and plugins
+        run: |
+          mkdir -p stage
+          node scripts/pack-plugins.mjs stage
+          cp -R site/. stage/
+          find stage -type f | sort
+
+      - name: Upload to download site
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/tifmrcview' }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
+            echo "::warning::DEPLOY_SSH_KEY / DEPLOY_HOST / DEPLOY_USER not set; skipping upload"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_cmd="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
+          dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
+          # No --delete on purpose.
+          rsync -av --chmod=D755,F644 -e "$ssh_cmd" stage/ "$dest/"

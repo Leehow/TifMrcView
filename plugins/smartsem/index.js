@@ -1,6 +1,6 @@
 "use strict";
 
-// Built-in plugin: Zeiss SmartSEM TIFFs (Zeiss SEM / FIB-SEM such as Crossbeam,
+// Plugin: Zeiss SmartSEM TIFFs (Zeiss SEM / FIB-SEM such as Crossbeam,
 // Gemini, Sigma). Reads the CZ_SEM tag through the native half
 // (src-tauri/src/plugins/smartsem.rs), shows every acquisition setting in the
 // image-info panel and uses the calibrated pixel size for the scale bar.

@@ -1,0 +1,31 @@
+{
+  "id": "zen",
+  "name": "Zeiss ZEN",
+  "version": "1.0.0",
+  "description": "读取蔡司 ZEN 保存的 CZI：显示物镜、激光、探测器、针孔、扫描和 Airyscan 处理等采集参数",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.3.0",
+  "author": "TifMrcView",
+  "native": true,
+  "i18n": {
+    "en": {
+      "name": "Zeiss ZEN",
+      "description": "Reads CZI files saved by Zeiss ZEN: shows the objective, lasers, detectors, pinhole, scan settings, Airyscan processing and other acquisition settings"
+    }
+  },
+  "details": {
+    "zh": [
+      "读取蔡司显微镜软件 ZEN 保存的 CZI 文件（LSM 共聚焦与 Airyscan、Axio Imager、Celldiscoverer 等）里的元数据。TifMrcView 本身就能打开 CZI 的图像；这个插件再把文件里嵌入的 XML 整理成采集参数，显示在图像信息面板里。",
+      "「ZEN 图像」：软件版本、采集时间、像素类型和位深、各维度尺寸、原始压缩方式、像素尺寸与 Z 步长、用户。「ZEN 显微镜」：显微镜型号、物镜名称、放大倍数、数值孔径、浸没介质和工作距离、总放大倍数。",
+      "每个通道单独一组：荧光染料、激发与发射波长、检测范围、采集模式、激光波长与透过率、曝光时间、针孔（AU 和 µm）、探测器及其电压、增益、偏移、分档，像素驻留时间、帧时间、平均次数、扫描速度、缩放和方向，以及 Airyscan 模式。「ZEN 处理」列出 Airyscan 处理强度、参数估计和反卷积方式；「ZEN 全部参数」把所有元数据展开列出，方便查找。",
+      "安装后无需设置，直接打开 .czi 文件即可，状态栏会显示「Zeiss ZEN CZI」和保存它的 ZEN 版本。"
+    ],
+    "en": [
+      "Reads the metadata in CZI files saved by ZEN, the software of Zeiss light microscopes (LSM confocals and Airyscan, Axio Imager, Celldiscoverer and others). TifMrcView opens CZI images on its own; this plugin turns the embedded XML into acquisition settings in the image-info panel.",
+      "\"ZEN image\": software version, acquisition time, pixel type and bit depth, size of every dimension, original compression, pixel size and Z step, user. \"ZEN microscope\": microscope model, objective name, magnification, numerical aperture, immersion and working distance, total magnification.",
+      "Each channel gets its own group: fluorophore, excitation and emission wavelengths, detection range, acquisition mode, laser lines and transmission, exposure time, pinhole (AU and µm), detector with its voltage, gain, offset and binning, pixel dwell time, frame time, averaging, scan speed, zoom and direction, and the Airyscan mode. \"ZEN processing\" lists the Airyscan strength, parameter estimation and deconvolution, and \"ZEN all settings\" flattens every metadata field so you can search it.",
+      "There is nothing to configure: install it and open .czi files. The status bar then shows \"Zeiss ZEN CZI\" with the ZEN version that saved the file."
+    ]
+  }
+}

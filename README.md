@@ -9,7 +9,7 @@
 - Z 拉条和播放；有时间维度时另有 T 拉条
 - 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
 - 亮度 / 对比度 / γ，直方图上拖动直接选显示范围；默认每层自动对比度（饱和 0.1%）
-- 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。内置插件 Zeiss SmartSEM 读取蔡司 SEM 的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺；内置插件 Zeiss ZEN 读取 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
+- 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。插件 Zeiss SmartSEM 读取蔡司 SEM 的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺；插件 Zeiss ZEN 读取 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
 - 右侧预览栏列出同一文件夹里的图像（可收起），显示文件名、格式和大小
 - 顶部图标工具栏（悬停显示名称）：存图、撤销、选择、移动、测距、画笔（再点一次切换 自由 / 框 / 圆）、裁剪、比例尺、亮度对比度
 - 测距按像素尺寸显示真实长度；框和圆在图上一直标着宽 × 高（正圆标直径）
@@ -28,11 +28,13 @@
 
 ## 插件
 
-工具栏「插件」里可以开关插件、打开插件文件夹、检查更新。录制视频就是一个内置插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
+工具栏「插件」里可以开关、安装和卸载插件，以及检查更新。除了多语言，插件都要单独安装：点「插件市场」在浏览器里打开 https://tifmrcview.com/tifmrcview/plugins/ 下载插件包（.zip），再点「加载插件…」选中它即可安装；装同一个插件的新版本会直接替换旧版本。插件源码在仓库的 `plugins/<id>/` 里（`plugin.json` + `index.js`），装好的插件放在插件文件夹的 `<id>/` 子文件夹里。
+
+录制视频插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
 
 界面语言也是一个内置插件（`ui/plugins/i18n.js`）：支持中文、English、Deutsch、日本語、Español、Français、Русский，默认跟随系统语言，工具栏的下拉框可以手动切换。它会把界面上已知的中文文字换成所选语言，所以别的插件和提示信息也一起翻译；加新文字时在 `WORDS`（固定文字）或 `PATTERNS`（带数字、文件名的文字）里加一行。关掉这个插件就回到中文。
 
-自己写插件：把一个 `.js` 文件放进插件文件夹，点「重新加载」即可。最小例子：
+自己写插件：把一个 `.js` 文件放进插件文件夹，点「重新加载」即可；要分发的话，把 `plugin.json`（`id`、`name`、`version`、`description`、`main`、`apiVersion`、`minAppVersion`，格式见 `plugins/recorder/plugin.json`）和脚本一起打成 zip（文件放在 zip 根目录）。最小例子：
 
 ```js
 TifMrcView.register({
@@ -47,7 +49,7 @@ TifMrcView.register({
 });
 ```
 
-`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`，并用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
+`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`；原生部分编进主程序，但只有装了同 id 的插件包才会启用。录制功能用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
 
 插件和主程序有同样的权限，只安装自己信任的插件。
 
@@ -119,7 +121,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 ## 发布
 
-版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.2）加上提交总数，例如 `0.2.57`；打 `v1.2.3` tag 时用 tag 的版本。
+版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.3）加上提交总数，例如 `0.3.57`；打 `v1.2.3` tag 时用 tag 的版本。
 
 每次推送到 `main`，GitHub Actions 会在 macOS / Windows / Linux 上各打一次包，安装包在该次运行的 Artifacts 里。发布到下载站有两种方式：
 

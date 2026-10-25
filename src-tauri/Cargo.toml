@@ -1,6 +1,6 @@
 [package]
 name = "tifmrcview"
-version = "0.2.0"
+version = "0.3.0"
 description = "Fast TIFF / MRC stack viewer"
 authors = ["Leehow"]
 edition = "2021"
@@ -30,6 +30,7 @@ roxmltree = "0.20"
 ruzstd = "0.8"
 openh264 = { version = "0.9", optional = true }
 tauri-plugin-updater = "2.14"
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
 [features]
 default = ["recorder"]

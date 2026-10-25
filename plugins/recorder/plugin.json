@@ -1,0 +1,31 @@
+{
+  "id": "recorder",
+  "name": "录制视频",
+  "version": "1.0.0",
+  "description": "把 Z / T 序列录成 MP4，带当前的对比度、通道、标注和比例尺",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.3.0",
+  "author": "TifMrcView",
+  "native": true,
+  "i18n": {
+    "en": {
+      "name": "Video recorder",
+      "description": "Records the Z / T series as MP4 with the current contrast, channels, annotations and scale bar"
+    }
+  },
+  "details": {
+    "zh": [
+      "把多层 TIFF、MRC、CZI 等图像的 Z 层或时间序列 T 录成 H.264 编码的 MP4 视频。每一帧都按当前的显示效果渲染：亮度对比度、通道颜色与开关、标注和比例尺都会原样出现在视频里，适合放进组会报告、论文补充材料或发给合作者。",
+      "安装后「工具」面板里会多出「录制视频 (MP4)」一栏。拖动 Z 拉条，点「⇤ 设起点」「设终点 ⇥」选出一段，再点「● 录制」并选择保存位置；录制中可以随时点「■ 停止」。",
+      "「详细 ▾」里可以选择按 Z 还是 T 播放、精确的起止帧、帧率（1–60 fps）、「往返」（播完后倒着再播一遍）、录制区域（整张图、选区或当前视野）、视频尺寸（自动、原始尺寸、1920、1280、720）和画质。自动尺寸会把小图按整数倍放大到至少 1000 像素，全屏播放时像素依然清晰；视频最大 3840 × 2160。",
+      "编码在本机完成（使用编进 TifMrcView 的 OpenH264 编码器），不需要安装 ffmpeg，图像不会上传到任何地方。"
+    ],
+    "en": [
+      "Records the Z slices or the time series T of a multi-page TIFF, MRC, CZI or other stack as an H.264 MP4 video. Every frame is rendered exactly as it is shown: brightness and contrast, channel colors and visibility, annotations and the scale bar all appear in the video, ready for a group meeting, supplementary material or a collaborator.",
+      "Once installed, a \"Record video (MP4)\" section appears in the Tools panel. Move the Z slider, press \"⇤ Set start\" and \"Set end ⇥\" to pick a range, then press \"● Record\" and choose where to save; \"■ Stop\" cancels at any time.",
+      "\"Details ▾\" lets you choose the Z or T axis, exact first and last frames, the frame rate (1–60 fps), bounce (play backwards after the end), the region (whole image, selection or current view), the video size (auto, original, 1920, 1280, 720) and the quality. Auto size scales small images up by a whole factor to at least 1000 pixels so they stay crisp full screen; videos are at most 3840 × 2160.",
+      "Encoding runs locally with the OpenH264 encoder built into TifMrcView: no ffmpeg needed, and images never leave your computer."
+    ]
+  }
+}

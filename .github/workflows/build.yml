@@ -161,6 +161,7 @@ jobs:
         run: |
           node scripts/make-release.mjs artifacts release "$VERSION" "$UPDATE_BASE_URL" "$NOTES"
           ls -lR release
+          node scripts/pack-plugins.mjs release
 
       - name: Upload to download site
         env:
@@ -184,6 +185,8 @@ jobs:
           for f in latest.json downloads.json; do
             [ -f "release/$f" ] && rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$f" "$dest/$f"
           done
+          # Plugin market packages and index (served at /plugins/).
+          rsync -av --chmod=D755,F644 -e "$ssh_cmd" release/plugins/ "$dest/plugins/"
 
       - name: GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
