@@ -381,6 +381,7 @@ async function refreshFolder(path) {
     $("folder-name").textContent = basename(dir) || dir;
     $("folder-name").title = dir;
     $("side-head").hidden = false;
+    updateSaveDir();
     buildStrip();
   } else {
     S.folder.index = S.folder.files.indexOf(path);
@@ -1283,18 +1284,45 @@ function exportName() {
   return `${stem(S.info.path)}${z}${S.crop ? "_crop" : ""}`;
 }
 
+/** Folder that saved images go to: the one chosen by the user, else the image's own. */
+function saveDir() {
+  return pref.get("save-dir", null) || dirname(S.info.path);
+}
+
+function setSaveDir(dir) {
+  pref.set("save-dir", dir || null);
+  updateSaveDir();
+}
+
+/** Shows the save folder in the tools panel and the sidebar button for it. */
+function updateSaveDir() {
+  const dir = pref.get("save-dir", null);
+  $("save-dir").textContent = dir || "图片所在文件夹";
+  $("save-dir").title = dir || "";
+  $("save-dir-reset").disabled = !dir;
+  $("btn-reveal-save").hidden = !(dir && S.info && dir !== dirname(S.info.path));
+}
+
+async function pickSaveDir() {
+  const dir = await invoke("pick_folder", { dir: S.info ? saveDir() : pref.get("save-dir", "") || "" });
+  if (dir) setSaveDir(dir);
+}
+
+// The first save asks where to put the image; later saves go to that folder.
 async function saveAs() {
   if (!S.info) return;
   const region = bounds();
-  const path = await invoke("pick_save_path", { dir: dirname(S.info.path), name: exportName() + ".png" });
+  const first = !pref.get("save-dir", null);
+  const path = await invoke("pick_save_path", { dir: saveDir(), name: exportName() + ".png" });
   if (!path) return;
+  if (first) setSaveDir(dirname(path));
   await doSave(region, path);
 }
 
 async function quickSave() {
   if (!S.info) return;
   const region = bounds();
-  const path = await invoke("free_path", { dir: dirname(S.info.path), stem: exportName() });
+  const path = await invoke("free_path", { dir: saveDir(), stem: exportName() });
   await doSave(region, path);
 }
 
@@ -2185,6 +2213,10 @@ $("btn-open").addEventListener("click", pickFile);
 $("btn-prev").addEventListener("click", () => step(-1));
 $("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
 $("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
+$("btn-reveal-save").addEventListener("click", () => S.info && invoke("open_folder", { path: saveDir() }).catch((e) => toast(`${e}`)));
+$("save-dir-pick").addEventListener("click", pickSaveDir);
+$("save-dir-reset").addEventListener("click", () => setSaveDir(null));
+updateSaveDir();
 $("btn-next").addEventListener("click", () => step(1));
 $("btn-zoom").addEventListener("click", fit);
 $("btn-zoomin").addEventListener("click", () => zoomBy(1.25));

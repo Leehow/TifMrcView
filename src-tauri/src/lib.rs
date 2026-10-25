@@ -289,6 +289,30 @@ async fn pick_save_path(
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+async fn pick_folder(app: AppHandle, dir: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .set_directory(dir)
+        .blocking_pick_folder()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Opens a folder in Finder / Explorer / the file manager.
+#[tauri::command]
+fn open_folder(path: String) -> CmdResult<()> {
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    let mut cmd = Command::new("open");
+    #[cfg(windows)]
+    let mut cmd = Command::new("explorer");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = Command::new("xdg-open");
+    cmd.arg(&path).spawn().map(|_| ()).map_err(err)
+}
+
 /// First `<stem>.png`, `<stem>-2.png`, ... that does not exist yet.
 #[tauri::command]
 fn free_path(dir: String, stem: String) -> String {
@@ -547,6 +571,8 @@ pub fn run() {
             reveal_in_folder,
             histogram,
             pick_save_path,
+            pick_folder,
+            open_folder,
             free_path,
             save_file,
             read_annotations,
