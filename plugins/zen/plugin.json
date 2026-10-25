@@ -5,7 +5,7 @@
   "description": "读取蔡司 ZEN 保存的 CZI：显示物镜、激光、探测器、针孔、扫描和 Airyscan 处理等采集参数",
   "main": "index.js",
   "apiVersion": 1,
-  "minAppVersion": "0.2.0",
+  "minAppVersion": "0.3.0",
   "author": "TifMrcView",
   "native": true,
   "i18n": {

@@ -121,7 +121,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 ## 发布
 
-版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.2）加上提交总数，例如 `0.2.57`；打 `v1.2.3` tag 时用 tag 的版本。
+版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.3）加上提交总数，例如 `0.3.57`；打 `v1.2.3` tag 时用 tag 的版本。
 
 每次推送到 `main`，GitHub Actions 会在 macOS / Windows / Linux 上各打一次包，安装包在该次运行的 Artifacts 里。发布到下载站有两种方式：
 

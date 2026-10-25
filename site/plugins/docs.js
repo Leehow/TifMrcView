@@ -51,7 +51,7 @@ window.TMV_DOCS = {
 
     '<h4>最小示例</h4>',
     '<p><code>plugin.json</code>：</p>',
-    '<pre><code>{\n  "id": "show-z",\n  "name": "显示 Z",\n  "version": "1.0.0",\n  "description": "工具栏按钮，弹出当前 Z 层。",\n  "main": "index.js",\n  "apiVersion": 1,\n  "minAppVersion": "0.4.0",\n  "author": "你的名字",\n  "native": false\n}</code></pre>',
+    '<pre><code>{\n  "id": "show-z",\n  "name": "显示 Z",\n  "version": "1.0.0",\n  "description": "工具栏按钮，弹出当前 Z 层。",\n  "main": "index.js",\n  "apiVersion": 1,\n  "minAppVersion": "0.3.0",\n  "author": "你的名字",\n  "native": false\n}</code></pre>',
     '<p><code>index.js</code>：</p>',
     '<pre><code>TifMrcView.register({\n  id: "show-z",\n  name: "显示 Z",\n  version: "1.0.0",\n  description: "工具栏按钮，弹出当前 Z 层。",\n  apiVersion: 1,\n  activate(app) {\n    app.ui.addToolbarButton({\n      label: "Z?",\n      title: "显示当前 Z 层",\n      onClick() {\n        const s = app.state();\n        app.ui.toast(s.path ? `Z = ${s.z + 1} / ${s.sizeZ}` : "还没有打开图像");\n      },\n    });\n  },\n});</code></pre>',
 
@@ -110,7 +110,7 @@ window.TMV_DOCS = {
 
     '<h4>Minimal example</h4>',
     '<p><code>plugin.json</code>:</p>',
-    '<pre><code>{\n  "id": "show-z",\n  "name": "Show Z",\n  "version": "1.0.0",\n  "description": "Toolbar button that toasts the current Z slice.",\n  "main": "index.js",\n  "apiVersion": 1,\n  "minAppVersion": "0.4.0",\n  "author": "Your name",\n  "native": false\n}</code></pre>',
+    '<pre><code>{\n  "id": "show-z",\n  "name": "Show Z",\n  "version": "1.0.0",\n  "description": "Toolbar button that toasts the current Z slice.",\n  "main": "index.js",\n  "apiVersion": 1,\n  "minAppVersion": "0.3.0",\n  "author": "Your name",\n  "native": false\n}</code></pre>',
     '<p><code>index.js</code>:</p>',
     '<pre><code>TifMrcView.register({\n  id: "show-z",\n  name: "Show Z",\n  version: "1.0.0",\n  description: "Toolbar button that toasts the current Z slice.",\n  apiVersion: 1,\n  activate(app) {\n    app.ui.addToolbarButton({\n      label: "Z?",\n      title: "Show the current Z slice",\n      onClick() {\n        const s = app.state();\n        app.ui.toast(s.path ? `Z = ${s.z + 1} / ${s.sizeZ}` : "No image open");\n      },\n    });\n  },\n});</code></pre>',
 
