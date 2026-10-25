@@ -126,6 +126,12 @@ fn open_reslice(window: WebviewWindow, state: State<'_, AppState>, token: u64, a
     Ok(Opened { token, info })
 }
 
+/// Pages of an image already in memory: (loaded, total, whole file fits).
+#[tauri::command]
+fn load_progress(state: State<'_, AppState>, token: u64) -> CmdResult<(usize, usize, bool)> {
+    Ok(current(&state, token)?.load_progress())
+}
+
 fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
     state
         .current
@@ -570,6 +576,7 @@ pub fn run() {
             take_pending_open,
             open_image,
             open_reslice,
+            load_progress,
             render_view,
             pixel_values,
             list_folder,

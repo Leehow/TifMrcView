@@ -14,7 +14,7 @@
 // into the plugin folder (插件 → 打开插件文件夹).
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js", "plugins/smartsem.js"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js", "plugins/smartsem.js", "plugins/zen.js"];
 
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, active, error, cleanup, listeners}

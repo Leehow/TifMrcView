@@ -88,6 +88,23 @@
         "role": "Viewer",
         "mimeType": "application/x-mrc",
         "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "czi"
+        ],
+        "name": "Zeiss CZI Image",
+        "description": "Zeiss ZEN CZI Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-czi",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.czi",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
       }
     ],
     "macOS": {

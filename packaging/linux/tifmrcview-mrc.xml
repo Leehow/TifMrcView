@@ -5,4 +5,11 @@
     <glob pattern="*.mrc"/>
     <glob pattern="*.mrcs"/>
   </mime-type>
+  <mime-type type="application/x-czi">
+    <comment>Zeiss CZI microscopy image</comment>
+    <glob pattern="*.czi"/>
+    <magic priority="60">
+      <match type="string" offset="0" value="ZISRAWFILE"/>
+    </magic>
+  </mime-type>
 </mime-info>

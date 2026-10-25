@@ -354,6 +354,16 @@ impl Source for TiffSource {
         &self.info
     }
 
+    fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
+        let (off, little) = self.contiguous?;
+        if self.info.samples_per_page > 1 || self.palette.is_some() {
+            return None;
+        }
+        let n = self.info.page_bytes();
+        let start = off + page.min(self.info.page_count - 1) * n;
+        Some((&self.mmap[start..start + n], little))
+    }
+
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
         let (w, h, spp) = (self.info.width, self.info.height, self.info.samples_per_page);
         let data = if let Some((off, little)) = self.contiguous {

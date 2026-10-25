@@ -370,6 +370,17 @@ pub trait Source: Send + Sync {
     fn info(&self) -> &ImageInfo;
     /// Decodes one page into one plane per sample.
     fn read_page(&self, page: usize) -> Result<Vec<Plane>>;
+    /// The stored bytes of a one-sample page when they sit uncompressed in a
+    /// mapped file, and whether they are little-endian. Side views read
+    /// single rows from here instead of decoding whole pages.
+    fn raw_page(&self, _page: usize) -> Option<(&[u8], bool)> {
+        None
+    }
+    /// For a view built from other pages: (parts done, total) of the page
+    /// being built now.
+    fn progress(&self) -> Option<(usize, usize)> {
+        None
+    }
 }
 
 pub type Page = Arc<Vec<Plane>>;
@@ -454,6 +465,16 @@ impl OpenImage {
         let s = Stats::compute(&planes[sample.min(planes.len() - 1)]);
         self.stats.lock().unwrap().insert((page, sample), s.clone());
         s
+    }
+
+    /// How many pages are in memory, and whether the whole file fits.
+    pub fn load_progress(&self) -> (usize, usize, bool) {
+        if let Some((done, total)) = self.source.progress() {
+            return (done, total, true);
+        }
+        let n = self.info().page_count;
+        let fits = self.info().page_bytes().saturating_mul(n) <= self.budget;
+        (self.cache.lock().unwrap().len(), n, fits)
     }
 
     /// Tells the background reader which page the user is on now.

@@ -1,3 +1,4 @@
+pub mod czi;
 pub mod mrc;
 pub mod raster;
 pub mod tiff;
@@ -9,7 +10,7 @@ use anyhow::{bail, Result};
 use crate::image::{DType, PlaneData, Source};
 
 pub const EXTENSIONS: &[&str] = &[
-    "tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp",
+    "tif", "tiff", "czi", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp",
 ];
 
 pub fn is_supported(path: &Path) -> bool {
@@ -27,6 +28,7 @@ pub fn open(path: &Path) -> Result<Box<dyn Source>> {
         .to_ascii_lowercase();
     match ext.as_str() {
         "tif" | "tiff" => Ok(Box::new(tiff::TiffSource::open(path)?)),
+        "czi" => Ok(Box::new(czi::CziSource::open(path)?)),
         "mrc" | "mrcs" | "rec" | "st" | "map" => Ok(Box::new(mrc::MrcSource::open(path)?)),
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Ok(Box::new(raster::RasterSource::open(path)?)),
         _ => bail!("不支持的文件类型: {}", path.display()),

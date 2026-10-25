@@ -202,6 +202,15 @@ impl Source for MrcSource {
         };
         Ok(vec![Plane { w, h, data }])
     }
+
+    fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
+        if !matches!(self.mode, 0 | 1 | 2 | 6) {
+            return None;
+        }
+        let n = mrc_plane_bytes(self.mode, self.info.width, self.info.height);
+        let start = self.data_offset + page.min(self.info.page_count - 1) * n;
+        Some((&self.mmap[start..start + n], self.little))
+    }
 }
 
 #[cfg(test)]
