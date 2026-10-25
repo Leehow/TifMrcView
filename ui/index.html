@@ -22,12 +22,10 @@
       <button id="btn-undo" title="撤销 (Ctrl/⌘+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
       <span class="sep"></span>
       <div class="seg" id="toolbtns">
-        <button data-tool="pan" class="on" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg></button>
-        <button data-tool="select" title="选择：点选标注后拖动、缩放，拖端点重新测量，Delete 删除 (S)"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg></button>
+        <button data-tool="select" class="on" title="选择 (S)：拖动标注移动它，拖空白处移动图像；拖控制点缩放或重新测量，Delete 删除"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg></button>
+        <button data-tool="pan" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg></button>
         <button data-tool="measure" title="测距 (M)"><svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
         <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
-        <button data-tool="rect" title="画框 (R)，按住 Shift 画正方形"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
-        <button data-tool="ellipse" title="画圆 (E)，按住 Shift 画正圆"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg></button>
         <button data-tool="crop" title="裁剪 (C)：框出区域后双击或回车裁剪，Esc / 退格撤回"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
       </div>
       <span class="sep"></span>
@@ -83,6 +81,12 @@
 
         <section id="sec-ann">
           <h3>标注</h3>
+          <div class="row" id="pen-shapes">
+            <span class="dim">画笔</span>
+            <button class="small" data-shape="pen" title="自由画线 (P)">自由</button>
+            <button class="small" data-shape="rect" title="画框 (R)">框</button>
+            <button class="small" data-shape="ellipse" title="画圆 (E)">圆</button>
+          </div>
           <div class="row">
             <label title="标注颜色">颜色 <input type="color" id="ann-color" value="#ffb020" /></label>
             <label title="线宽">线宽 <select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
@@ -119,8 +123,10 @@
         </section>
 
       </aside>
+      <div class="resizer" id="tools-resizer" title="拖动调整宽度"></div>
     </main>
 
+    <div class="resizer" id="sidebar-resizer" title="拖动调整宽度"></div>
     <aside id="sidebar">
       <div id="strip"></div>
     </aside>

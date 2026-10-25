@@ -24,7 +24,7 @@ const S = {
   inflight: false,
   dirty: false,
   playing: null,
-  tool: "pan",
+  tool: "select",
   ann: [],          // {type: "line"|"path"|"rect"|"ellipse", pts: [[x, y], ...], color, width, z}
   annShow: true,
   history: [],      // snapshots of annotations and crop, for undo
@@ -90,12 +90,13 @@ function fmtBytes(n) {
   return Math.max(1, Math.round(n / 1024)) + " KB";
 }
 
-function fmtLength(m) {
-  const useA = S.px && S.px.unit === "Å";
-  let u = "mm";
-  if (useA && m < 1e-8) u = "Å";
-  else if (m < 1e-6) u = "nm";
-  else if (m < 1e-3) u = "µm";
+function lengthUnit(m) {
+  if (S.px && S.px.unit === "Å" && m < 1e-8) return "Å";
+  return m < 1e-6 ? "nm" : m < 1e-3 ? "µm" : "mm";
+}
+
+/** Formats a length in metres; `u` forces the unit. */
+function fmtLength(m, u = lengthUnit(m)) {
   const v = m / UNIT_M[u];
   return `${+v.toPrecision(v >= 100 ? 4 : 3)} ${u}`;
 }
@@ -670,19 +671,42 @@ function drawAnnotations(g, map, unit, items) {
         g.stroke();
       }
       const label = lineLength(a.pts[0], a.pts[1]).text.split("  (")[0];
-      g.font = `600 ${13 * unit}px -apple-system, "Segoe UI", sans-serif`;
-      g.textAlign = "center";
-      g.textBaseline = "bottom";
-      const w = g.measureText(label).width;
-      const mx = (x0 + x1) / 2;
-      const my = (y0 + y1) / 2 - 6 * unit;
-      g.fillStyle = "#000a";
-      g.fillRect(mx - w / 2 - 4 * unit, my - 16 * unit, w + 8 * unit, 18 * unit);
-      g.fillStyle = a.color;
-      g.fillText(label, mx, my);
+      drawAnnLabel(g, label, (x0 + x1) / 2, (y0 + y1) / 2 - 6 * unit, unit, a.color);
+    } else if (a.type === "rect" || a.type === "ellipse") {
+      // Width and height above the shape, like the length of a measurement.
+      const [x0, y0] = map(...a.pts[0]);
+      const [x1, y1] = map(...a.pts[1]);
+      const [, , w, h] = rectOf(a);
+      if (w >= 1 && h >= 1) drawAnnLabel(g, shapeLabel(a.type, w, h), (x0 + x1) / 2, Math.min(y0, y1) - 6 * unit, unit, a.color);
     }
     g.restore();
   }
+}
+
+function drawAnnLabel(g, label, mx, my, unit, color) {
+  g.font = `600 ${13 * unit}px -apple-system, "Segoe UI", sans-serif`;
+  g.textAlign = "center";
+  g.textBaseline = "bottom";
+  const w = g.measureText(label).width;
+  g.fillStyle = "#000a";
+  g.fillRect(mx - w / 2 - 4 * unit, my - 16 * unit, w + 8 * unit, 18 * unit);
+  g.fillStyle = color;
+  g.fillText(label, mx, my);
+}
+
+/** "120 nm × 80 nm", or "⌀ 120 nm" for a circle. Pixels when the pixel size is unknown. */
+function shapeLabel(type, w, h) {
+  let lw = `${Math.round(w)} px`;
+  let lh = `${Math.round(h)} px`;
+  if (S.px) {
+    // Both sides in the unit of the longer one.
+    const m = UNIT_M[S.px.unit];
+    const [mw, mh] = [w * S.px.x * m, h * S.px.y * m];
+    const u = lengthUnit(Math.max(mw, mh));
+    [lw, lh] = [fmtLength(mw, u), fmtLength(mh, u)];
+  }
+  if (type === "ellipse" && lw === lh) return `⌀ ${lw}`;
+  return `${lw} × ${lh}`;
 }
 
 // ---------- IMOD models ----------
@@ -819,7 +843,7 @@ function draw() {
   // Model coordinates are pixel indices; +0.5 puts them on pixel centres.
   drawModel(ctx, (x, y) => toScreen(x + 0.5, y + 0.5), S.view.scale, 1);
 
-  const items = S.annShow ? S.ann.filter(onSlice) : [];
+  const items = S.annShow ? S.ann.filter((a) => onSlice(a)) : [];
   const drawing = S.op && S.op.kind === "draw" && S.op.item.type !== "crop" ? [S.op.item] : [];
   drawAnnotations(ctx, toScreen, 1, items.concat(drawing));
   if (S.picked && S.annShow) drawHandles(S.picked);
@@ -1066,9 +1090,28 @@ let wheelZ = 0;
 const TOOL_KEYS = { v: "pan", s: "select", m: "measure", p: "pen", r: "rect", e: "ellipse", c: "crop" };
 const DRAW_TYPES = { measure: "line", pen: "path", rect: "rect", ellipse: "ellipse", crop: "crop" };
 
+// The pen draws free lines, rectangles or ellipses; one toolbar button shows
+// the current shape and clicking it again switches to the next.
+const PEN_SHAPES = ["pen", "rect", "ellipse"];
+const PEN_ICONS = {
+  pen: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/>',
+  rect: '<rect x="4" y="6" width="16" height="12" rx="1"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="8.5" ry="7"/>',
+};
+const PEN_TITLES = { pen: "画笔 (P)", rect: "画框 (R)，按住 Shift 画正方形", ellipse: "画圆 (E)，按住 Shift 画正圆" };
+
 function setTool(t) {
   S.tool = t;
-  for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t);
+  const pen = PEN_SHAPES.includes(t);
+  if (pen) {
+    S.penShape = t;
+    pref.set("pen", t);
+    const b = document.querySelector('#toolbtns [data-tool="pen"]');
+    b.querySelector("svg").innerHTML = PEN_ICONS[t];
+    b.title = PEN_TITLES[t] + "。再点一次切换 画笔 / 画框 / 画圆";
+    for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
+  }
+  for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
   canvas.classList.toggle("cross", t !== "pan" && t !== "select");
   if (t !== "select") S.picked = null;
   if (t !== "crop") S.cropBox = null;
@@ -1092,6 +1135,7 @@ function toggleSidebar(force) {
   const sb = $("sidebar");
   const show = force ?? sb.classList.contains("collapsed");
   sb.classList.toggle("collapsed", !show);
+  $("sidebar-resizer").hidden = !show;
   $("btn-sidebar").classList.toggle("on", show);
   pref.set("sidebar", show);
   if (show) markStrip();
@@ -1188,7 +1232,9 @@ function boxText(w, h) {
   const pxT = `${Math.round(w)} × ${Math.round(h)} px`;
   if (!S.px) return pxT;
   const m = UNIT_M[S.px.unit];
-  return `${fmtLength(w * S.px.x * m)} × ${fmtLength(h * S.px.y * m)}  (${pxT})`;
+  const [mw, mh] = [w * S.px.x * m, h * S.px.y * m];
+  const u = lengthUnit(Math.max(mw, mh));
+  return `${fmtLength(mw, u)} × ${fmtLength(mh, u)}  (${pxT})`;
 }
 
 function sizeText(a) {
@@ -1393,6 +1439,10 @@ canvas.addEventListener("pointerdown", (e) => {
         : h.dir
           ? { kind: "scale", item: a, dir: h.dir, orig: a.pts.map((q) => q.slice()), box: bbox(a.pts), snap }
           : { kind: "point", item: a, i: h.i, snap };
+    } else {
+      // Dragging empty space moves the image, as with the move tool.
+      S.op = { kind: "pan", x: e.clientX, y: e.clientY, cx: S.view.cx, cy: S.view.cy };
+      canvas.classList.add("drag");
     }
     draw();
     return;
@@ -1531,7 +1581,7 @@ canvas.addEventListener("lostpointercapture", endPointer);
 canvas.addEventListener("dblclick", (e) => {
   if (!S.info) return;
   if (S.cropBox && inBox(S.cropBox, toImage(e), 0)) applyCrop();
-  else if (S.tool === "pan") fit();
+  else if (S.tool === "pan" || (S.tool === "select" && !annAt(toImage(e), 6 / S.view.scale))) fit();
 });
 
 canvas.addEventListener(
@@ -1664,7 +1714,7 @@ window.addEventListener("keydown", (e) => {
         S.lastDrawn = null;
         annChanged();
       } else if (!undoCrop()) {
-        setTool("pan");
+        setTool("select");
       }
       showSize(null);
       draw();
@@ -1759,10 +1809,57 @@ $("gamma").addEventListener("input", (e) => {
   $("gamma-v").textContent = S.gamma.toFixed(2);
   requestRender();
 });
-for (const b of $("toolbtns").children) b.addEventListener("click", () => setTool(b.dataset.tool));
+for (const b of $("toolbtns").children)
+  b.addEventListener("click", () => {
+    const t = b.dataset.tool;
+    if (t !== "pen") return setTool(t);
+    const i = PEN_SHAPES.indexOf(S.tool);
+    setTool(i < 0 ? S.penShape : PEN_SHAPES[(i + 1) % PEN_SHAPES.length]);
+  });
+for (const o of document.querySelectorAll("#pen-shapes button")) o.addEventListener("click", () => setTool(o.dataset.shape));
+// Both side panels can be resized by dragging their inner edge.
+function setPanelWidth(name, w) {
+  const [min, max] = name === "sidebar" ? [120, 600] : [220, 640];
+  w = Math.round(Math.max(min, Math.min(max, w, window.innerWidth - 240)));
+  document.documentElement.style.setProperty(`--${name}-w`, `${w}px`);
+  return w;
+}
+for (const name of ["sidebar", "tools"]) {
+  const saved = pref.get(`${name}-w`);
+  if (saved) setPanelWidth(name, saved);
+  const handle = $(`${name}-resizer`);
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("active");
+    const start = e.clientX;
+    const w0 = $(name).getBoundingClientRect().width;
+    const dir = name === "sidebar" ? -1 : 1;
+    let w = w0;
+    const move = (ev) => {
+      w = setPanelWidth(name, w0 + dir * (ev.clientX - start));
+      draw();
+    };
+    const up = () => {
+      handle.classList.remove("active");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("lostpointercapture", up);
+      pref.set(`${name}-w`, w);
+      requestRender();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("lostpointercapture", up);
+  });
+}
+
+S.penShape = PEN_SHAPES.includes(pref.get("pen")) ? pref.get("pen") : "pen";
+setTool(S.penShape);
+setTool("select");
 $("ann-show").addEventListener("change", (e) => toggleAnn(e.target.checked));
 $("btn-clear").addEventListener("click", () => {
-  if (!S.ann.some(onSlice)) return;
+  if (!S.ann.some((a) => onSlice(a))) return;
   pushHistory(snapshot());
   S.ann = S.ann.filter((a) => !onSlice(a));
   S.picked = null;
