@@ -1,6 +1,6 @@
 "use strict";
 
-// Built-in plugin: Zeiss ZEN CZI files (LSM / Airyscan confocals, Axio
+// Plugin: Zeiss ZEN CZI files (LSM / Airyscan confocals, Axio
 // Imager, Celldiscoverer…). The core reader decodes the pixels; this plugin
 // reads the embedded XML through the native half (src-tauri/src/plugins/zen.rs)
 // and shows the acquisition settings in the image-info panel.

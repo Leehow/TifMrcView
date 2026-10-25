@@ -1,4 +1,4 @@
-//! Native half of the Zeiss ZEN plugin (`ui/plugins/zen.js`).
+//! Native half of the Zeiss ZEN plugin (`plugins/zen/index.js`).
 //!
 //! ZEN, the software of Zeiss light microscopes (LSM / Airyscan, Axio
 //! Imager, Celldiscoverer…), saves CZI files whose pixels the core reader
