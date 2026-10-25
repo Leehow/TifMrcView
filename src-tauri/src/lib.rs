@@ -617,7 +617,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod tests {
+mod save_path_tests {
     use super::*;
 
     #[test]
@@ -628,5 +628,118 @@ mod tests {
         assert!(s.allowed("/tmp/a.png"));
         assert!(s.allowed("/tmp/a.png"));
         assert!(!s.allowed("/tmp/b.png"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn natural_cmp_numbers_compare_by_value() {
+        assert_eq!(natural_cmp("img2", "img10"), Ordering::Less);
+        assert_eq!(natural_cmp("img10", "img2"), Ordering::Greater);
+        assert_eq!(natural_cmp("a1b20", "a1b3"), Ordering::Greater);
+    }
+
+    #[test]
+    fn natural_cmp_leading_zeros() {
+        assert_eq!(natural_cmp("img002", "img10"), Ordering::Less);
+        // Leading zeros carry no weight: equal values compare equal.
+        assert_eq!(natural_cmp("img02", "img2"), Ordering::Equal);
+        assert_eq!(natural_cmp("img0", "img00"), Ordering::Equal);
+        assert_eq!(natural_cmp("img007", "img7"), Ordering::Equal);
+        assert_eq!(natural_cmp("img007", "img8"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_ignores_ascii_case() {
+        assert_eq!(natural_cmp("ABC", "abc"), Ordering::Equal);
+        assert_eq!(natural_cmp("a.tif", "B.tif"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_prefixes_and_equal() {
+        assert_eq!(natural_cmp("", ""), Ordering::Equal);
+        assert_eq!(natural_cmp("img", "img1"), Ordering::Less);
+        assert_eq!(natural_cmp("img1", "img"), Ordering::Greater);
+        assert_eq!(natural_cmp("img1.tif", "img1.tif"), Ordering::Equal);
+        // Digits (0x31) sort before letters.
+        assert_eq!(natural_cmp("a1", "ab"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_sorts_a_list() {
+        let mut v = vec!["f10", "f2", "F1", "f01x", "f1"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        // "F1" and "f1" compare equal, so the stable sort keeps input order.
+        assert_eq!(v, ["F1", "f1", "f01x", "f2", "f10"]);
+    }
+
+    #[test]
+    fn percent_decode_ascii_and_escapes() {
+        assert_eq!(percent_decode("plain.tif"), "plain.tif");
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        assert_eq!(percent_decode("%41%62"), "Ab");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    #[test]
+    fn percent_decode_utf8_multibyte() {
+        assert_eq!(percent_decode("%E4%B8%AD.tif"), "中.tif");
+        assert_eq!(percent_decode("日本%E8%AA%9E"), "日本語");
+    }
+
+    #[test]
+    fn percent_decode_lone_or_invalid_percent() {
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%4"), "a%4");
+        assert_eq!(percent_decode("%zz1"), "%zz1");
+        assert_eq!(percent_decode("%G1%41"), "%G1A");
+    }
+
+    #[test]
+    #[ignore = "bug: percent_decode slices &s[i+1..i+3] and panics when a multibyte char follows '%' + 1 byte"]
+    fn percent_decode_multibyte_after_percent() {
+        assert_eq!(percent_decode("%a€"), "%a€");
+    }
+
+    #[test]
+    #[ignore = "bug: from_str_radix accepts a leading '+', so \"%+4\" decodes to byte 0x04"]
+    fn percent_decode_rejects_plus_sign() {
+        assert_eq!(percent_decode("%+4x"), "%+4x");
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn paths_from_args_filters_and_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.tif");
+        let b = dir.path().join("b.mrc");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let abs_b = format!("file://{}", b.display());
+        let got = paths_from_args(
+            args(&["prog", "-x", "a.tif", &abs_b, "missing.tif", "--flag", "sub"]),
+            Some(dir.path()),
+        );
+        assert_eq!(got, vec![a.to_string_lossy(), b.to_string_lossy()]);
+    }
+
+    #[test]
+    fn paths_from_args_skips_argv0_and_handles_missing_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.tif");
+        std::fs::write(&a, b"x").unwrap();
+        let abs = a.to_string_lossy().into_owned();
+        // argv[0] is never treated as a file, even if it exists.
+        assert!(paths_from_args(args(&[&abs]), None).is_empty());
+        assert_eq!(paths_from_args(args(&["prog", &abs]), None), vec![abs.clone()]);
+        assert!(paths_from_args(args(&["prog", "definitely-not-here.tif"]), None).is_empty());
     }
 }

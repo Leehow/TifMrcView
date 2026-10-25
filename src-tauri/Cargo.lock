@@ -4274,6 +4274,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
  "tiff",
  "windows-sys 0.59.0",
 ]
