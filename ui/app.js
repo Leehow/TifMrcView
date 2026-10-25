@@ -449,6 +449,13 @@ function setZ(z) {
   S.z = z;
   $("zslider").value = z;
   updateZLabel();
+  // While Z changes quickly, draw at half resolution, then sharpen once it stops.
+  S.scrubbing = true;
+  clearTimeout(S.scrubTimer);
+  S.scrubTimer = setTimeout(() => {
+    S.scrubbing = false;
+    requestRender();
+  }, 250);
   requestRender();
   pluginEmit("slice", { z: S.z, t: S.t });
 }
@@ -979,8 +986,9 @@ async function renderNow() {
   const dpr = window.devicePixelRatio || 1;
   const scale = S.view.scale * dpr;
   // Never ask for more pixels than the source has; the GPU upscales.
-  const outW = Math.max(1, Math.round(region[2] * Math.min(scale, 1)));
-  const outH = Math.max(1, Math.round(region[3] * Math.min(scale, 1)));
+  const k = Math.min(scale, 1) * (S.scrubbing ? 0.5 : 1);
+  const outW = Math.max(1, Math.round(region[2] * k));
+  const outH = Math.max(1, Math.round(region[3] * k));
   const channels = channelReqs();
   const token = S.token;
   const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };

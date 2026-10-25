@@ -28,6 +28,8 @@ struct AppState {
     next_window: AtomicU64,
     /// Files the OS asked us to open that a window has not picked up yet.
     pending: Mutex<HashMap<String, Vec<String>>>,
+    /// The file each window shows or is loading, by window label.
+    showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
 }
 
@@ -51,13 +53,15 @@ struct Opened {
 #[tauri::command]
 fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Option<String> {
     let mut p = state.pending.lock().unwrap();
-    let list = p.remove(window.label())?;
-    list.into_iter().last()
+    let path = p.remove(window.label())?.into_iter().last()?;
+    state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
+    Some(path)
 }
 
 #[tauri::command]
 async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
     let budget = CACHE_BUDGET / (others + 1);
@@ -92,6 +96,7 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
+    img.set_focus(img.info().locate(0, req.z, req.t).0);
     let bytes = blocking(move || render::render(&img, &req)).await?;
     Ok(Response::new(bytes))
 }
@@ -417,6 +422,8 @@ fn queue_open(app: &AppHandle, paths: Vec<String>) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
+            // The main window is still being set up; it picks the file up when it loads.
+            None if label == "main" => {}
             // The new window picks the file up when its page loads.
             None => {
                 if let Err(e) = new_window(app, &label) {
@@ -430,13 +437,18 @@ fn queue_open(app: &AppHandle, paths: Vec<String>) {
 fn target_window(app: &AppHandle, path: &str) -> String {
     let state = app.state::<AppState>();
     let dir = Path::new(path).parent();
-    let current = state.current.lock().unwrap();
+    let showing = state.showing.lock().unwrap();
     let pending = state.pending.lock().unwrap();
     let windows = app.webview_windows();
+    // On a cold start macOS hands over the file before the main window
+    // exists; it is about to be created, so give the file to it.
+    if windows.is_empty() {
+        return "main".into();
+    }
     let mut labels: Vec<&String> = windows.keys().collect();
     labels.sort();
     let shown = |l: &String| {
-        current.get(l).map(|i| PathBuf::from(&i.info().path)).or_else(|| pending.get(l).and_then(|p| p.last()).map(PathBuf::from))
+        pending.get(l).and_then(|p| p.last()).or_else(|| showing.get(l)).map(PathBuf::from)
     };
     if let Some(l) = labels.iter().find(|l| shown(l).is_some_and(|p| p.parent() == dir)) {
         return l.to_string();
@@ -529,6 +541,7 @@ pub fn run() {
                     img.cancelled.store(true, Ordering::Relaxed);
                 }
                 state.pending.lock().unwrap().remove(label);
+                state.showing.lock().unwrap().remove(label);
             }
             // macOS delivers double-clicked files as an event, not as argv.
             #[cfg(target_os = "macos")]
@@ -536,6 +549,7 @@ pub fn run() {
                 let paths = urls
                     .into_iter()
                     .filter_map(|u| u.to_file_path().ok())
+                    .filter(|p| p.is_file())
                     .map(|p| p.to_string_lossy().into_owned())
                     .collect();
                 queue_open(_app, paths);
