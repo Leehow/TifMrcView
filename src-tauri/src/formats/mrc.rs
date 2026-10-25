@@ -49,7 +49,7 @@ impl MrcSource {
         }
         // IMOD flags: bit 0 set means mode-0 bytes are signed.
         let imod = rd(152, little) == 1146047817;
-        let signed_bytes = !imod || rd(156, little) & 1 == 1;
+        let signed_bytes = mode0_signed(imod, rd(156, little), rf(76), rf(80));
         let dtype = match mode {
             0 if signed_bytes => DType::I8,
             0 => DType::U8,
@@ -91,6 +91,17 @@ impl MrcSource {
         info.fill_default_channels();
         Ok(MrcSource { mmap, info, data_offset, little, mode })
     }
+}
+
+/// Whether mode-0 bytes are signed. The spec says signed, but IMOD marks it
+/// with a flag, and older files without the stamp are often unsigned: for
+/// those, header DMIN/DMAX above the int8 range prove the data is unsigned.
+fn mode0_signed(imod: bool, flags: i32, dmin: f32, dmax: f32) -> bool {
+    if imod {
+        return flags & 1 == 1;
+    }
+    let usable = dmin.is_finite() && dmax.is_finite() && dmax >= dmin;
+    !(usable && dmin >= 0.0 && dmax > 127.0 && dmax <= 255.0)
 }
 
 fn mrc_plane_bytes(mode: i32, w: usize, h: usize) -> usize {
@@ -189,5 +200,67 @@ impl Source for MrcSource {
             _ => raw_to_plane(bytes, self.info.dtype, little),
         };
         Ok(vec![Plane { w, h, data }])
+    }
+}
+
+#[cfg(test)]
+mod format_fix_tests {
+    use super::*;
+
+    #[test]
+    fn mode0_signedness() {
+        // IMOD stamp: flag decides, stats ignored.
+        assert!(mode0_signed(true, 1, 0.0, 200.0));
+        assert!(!mode0_signed(true, 0, -5.0, 100.0));
+        // No stamp: unsigned only when stats prove it.
+        assert!(!mode0_signed(false, 0, 0.0, 200.0));
+        assert!(!mode0_signed(false, 0, 3.0, 255.0));
+        assert!(mode0_signed(false, 0, -100.0, 100.0));
+        assert!(mode0_signed(false, 0, 0.0, 100.0));
+        assert!(mode0_signed(false, 0, 0.0, 300.0));
+        // Unusable stats keep the spec default.
+        assert!(mode0_signed(false, 0, 0.0, 0.0));
+        assert!(mode0_signed(false, 0, 200.0, 10.0));
+        assert!(mode0_signed(false, 0, f32::NAN, 200.0));
+        assert!(mode0_signed(false, 0, 0.0, f32::INFINITY));
+    }
+
+    fn header(dmin: f32, dmax: f32, imod: bool) -> Vec<u8> {
+        let mut h = vec![0u8; 1024 + 4];
+        h[0..4].copy_from_slice(&2i32.to_le_bytes());
+        h[4..8].copy_from_slice(&1i32.to_le_bytes());
+        h[8..12].copy_from_slice(&1i32.to_le_bytes());
+        h[76..80].copy_from_slice(&dmin.to_le_bytes());
+        h[80..84].copy_from_slice(&dmax.to_le_bytes());
+        h[212] = 0x44;
+        if imod {
+            h[152..156].copy_from_slice(&1146047817i32.to_le_bytes());
+        }
+        h[1024..].copy_from_slice(&[200, 10, 0, 0]);
+        h
+    }
+
+    fn open_dtype(name: &str, bytes: &[u8]) -> (DType, PlaneData) {
+        let dir = std::env::temp_dir().join(format!("tmv_mrcfix_{}_{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.mrc");
+        std::fs::write(&p, bytes).unwrap();
+        let s = MrcSource::open(&p).unwrap();
+        let d = s.read_page(0).unwrap().remove(0).data;
+        let t = s.info().dtype;
+        let _ = std::fs::remove_dir_all(&dir);
+        (t, d)
+    }
+
+    #[test]
+    fn open_uses_header_stats() {
+        let (t, d) = open_dtype("u", &header(0.0, 200.0, false));
+        assert_eq!(t, DType::U8);
+        assert!(matches!(d, PlaneData::U8(ref v) if v[0] == 200));
+        let (t, _) = open_dtype("s", &header(0.0, 0.0, false));
+        assert_eq!(t, DType::I8);
+        // IMOD stamp without the flag: unsigned, as before.
+        let (t, _) = open_dtype("i", &header(-5.0, 100.0, true));
+        assert_eq!(t, DType::U8);
     }
 }

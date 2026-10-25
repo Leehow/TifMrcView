@@ -32,6 +32,10 @@ type Dec<'a> = Decoder<Cursor<&'a [u8]>>;
 
 impl TiffSource {
     pub fn open(path: &Path) -> Result<TiffSource> {
+        Self::open_inner(path).map_err(unsupported_msg)
+    }
+
+    fn open_inner(path: &Path) -> Result<TiffSource> {
         let file = File::open(path).with_context(|| format!("无法打开 {}", path.display()))?;
         // SAFETY: the file is opened read-only; concurrent truncation by another
         // process is the usual mmap caveat and is accepted for a viewer.
@@ -258,6 +262,26 @@ impl TiffSource {
             DecodingResult::F16(v) => PlaneData::F32(v.into_iter().map(f32::from).collect()),
         };
         let need = self.info.width * self.info.height * self.info.samples_per_page;
+        let bits = dec.colortype()?.bit_depth();
+        if let (PlaneData::U8(packed), true) = (&data, bits < 8 && self.info.samples_per_page == 1) {
+            // Sub-byte samples come back packed MSB first, rows padded to a byte;
+            // the library has already applied WhiteIsZero inversion.
+            let (w, h) = (self.info.width, self.info.height);
+            let row = (w * bits as usize).div_ceil(8);
+            if packed.len() >= row * h {
+                let max = (1u8 << bits) - 1;
+                let mut out = Vec::with_capacity(w * h);
+                for y in 0..h {
+                    let src = &packed[y * row..(y + 1) * row];
+                    for x in 0..w {
+                        let bit = x * bits as usize;
+                        let v = (src[bit / 8] >> (8 - bits as usize - bit % 8)) & max;
+                        out.push(v);
+                    }
+                }
+                return Ok(PlaneData::U8(out));
+            }
+        }
         if data.len() < need {
             bail!("此 TIFF 的像素布局暂不支持");
         }
@@ -278,7 +302,7 @@ impl Source for TiffSource {
             raw_to_plane(&self.mmap[start..start + n], self.info.dtype, little)
         } else {
             let ifd = *self.ifds.get(page).ok_or_else(|| anyhow!("页码越界"))?;
-            self.decode_ifd(ifd)?
+            self.decode_ifd(ifd).map_err(unsupported_msg)?
         };
         let planes = if self.planar && self.contiguous.is_none() {
             split_planar(data, w * h, spp)
@@ -286,6 +310,14 @@ impl Source for TiffSource {
             data.deinterleave(spp)
         };
         Ok(planes.into_iter().map(|data| Plane { w, h, data }).collect())
+    }
+}
+
+/// Replaces the library's English "unsupported" errors with a user-facing one.
+fn unsupported_msg(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast_ref::<tiff::TiffError>() {
+        Some(tiff::TiffError::UnsupportedError(u)) => anyhow!("不支持的 TIFF 位深或颜色类型（{u}）"),
+        _ => e,
     }
 }
 
@@ -381,4 +413,87 @@ fn parse_imagej(desc: &str, info: &mut ImageInfo) -> Option<usize> {
         info.unit = if u == "micron" || u == "um" || u == "\\u00B5m" { "µm".into() } else { u };
     }
     images
+}
+
+#[cfg(test)]
+mod format_fix_tests {
+    use super::*;
+    use crate::image::PlaneData;
+
+    /// Minimal little-endian single-strip uncompressed gray TIFF.
+    fn build(w: u32, h: u32, bits: u16, photometric: u16, data: &[u8]) -> Vec<u8> {
+        let entries: [(u16, u16, u32, u32); 9] = [
+            (256, 4, 1, w),
+            (257, 4, 1, h),
+            (258, 3, 1, bits as u32),
+            (259, 3, 1, 1),
+            (262, 3, 1, photometric as u32),
+            (273, 4, 1, 8),
+            (277, 3, 1, 1),
+            (278, 4, 1, h),
+            (279, 4, 1, data.len() as u32),
+        ];
+        let mut b = b"II\x2a\x00".to_vec();
+        b.extend(((8 + data.len() + data.len() % 2) as u32).to_le_bytes());
+        b.extend(data);
+        if data.len() % 2 == 1 {
+            b.push(0);
+        }
+        b.extend((entries.len() as u16).to_le_bytes());
+        for (tag, ty, n, v) in entries {
+            b.extend(tag.to_le_bytes());
+            b.extend(ty.to_le_bytes());
+            b.extend(n.to_le_bytes());
+            b.extend(v.to_le_bytes());
+        }
+        b.extend(0u32.to_le_bytes());
+        b
+    }
+
+    fn read(name: &str, bytes: &[u8]) -> Result<(ImageInfo, PlaneData)> {
+        let dir = std::env::temp_dir().join(format!("tmv_fmtfix_{}_{name}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let p = dir.join("t.tif");
+        std::fs::write(&p, bytes)?;
+        let r = crate::formats::open(&p).and_then(|s| {
+            let pl = s.read_page(0)?;
+            Ok((s.info().clone(), pl.into_iter().next().unwrap().data))
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
+    #[test]
+    fn bilevel_black_is_zero() {
+        // 10x2, rows padded to 2 bytes.
+        let (info, d) = read("b1", &build(10, 2, 1, 1, &[0b1010_0000, 0b0100_0000, 0xff, 0xc0])).unwrap();
+        assert_eq!(info.dtype, DType::U8);
+        let PlaneData::U8(v) = d else { panic!() };
+        let mut want = vec![1, 0, 1, 0, 0, 0, 0, 0, 0, 1];
+        want.extend([1u8; 10]);
+        assert_eq!(v, want);
+    }
+
+    #[test]
+    fn bilevel_white_is_zero_inverts() {
+        let (_, d) = read("b1w", &build(8, 1, 1, 0, &[0b1010_0000])).unwrap();
+        let PlaneData::U8(v) = d else { panic!() };
+        assert_eq!(v, vec![0, 1, 0, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn four_bit_gray() {
+        // 3x2, rows padded to 2 bytes.
+        let (_, d) = read("b4", &build(3, 2, 4, 1, &[0x12, 0x30, 0xfe, 0xd0])).unwrap();
+        let PlaneData::U8(v) = d else { panic!() };
+        assert_eq!(v, vec![1, 2, 3, 15, 14, 13]);
+    }
+
+    #[test]
+    fn twelve_bit_gray_clear_error() {
+        // 2x1, 12-bit packed: 0xABC 0x123.
+        // The tiff crate cannot decode 12-bit samples: expect a clear error.
+        let e = read("b12", &build(2, 1, 12, 1, &[0xab, 0xc1, 0x23])).err().unwrap();
+        assert!(e.to_string().contains("不支持的 TIFF 位深"), "{e:#}");
+    }
 }

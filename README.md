@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、8/16/32 位整数和浮点）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`）
+- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节）。`.rec` `.st` `.map` 只出现在「打开方式」里，不会被设为默认程序
 - 也能打开 PNG / JPEG / BMP / GIF / WebP
 - Z 拉条和播放；有时间维度时另有 T 拉条
 - 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
