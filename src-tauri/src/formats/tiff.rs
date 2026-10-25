@@ -26,6 +26,15 @@ pub struct TiffSource {
     /// IFD; in that case this is (offset of plane 0, little endian).
     contiguous: Option<(usize, bool)>,
     planar: bool,
+    /// Set for 8-bit palette images, which the tiff crate does not decode.
+    palette: Option<Palette>,
+}
+
+/// `lut` is None when the colour map is (essentially) a gray ramp: the
+/// indices are then the intensities, as in Zeiss SmartSEM images whose
+/// palette only recolours a few entries for overlays.
+struct Palette {
+    lut: Option<Vec<[u8; 3]>>,
 }
 
 type Dec<'a> = Decoder<Cursor<&'a [u8]>>;
@@ -39,7 +48,22 @@ impl TiffSource {
         let mut dec = Decoder::new(Cursor::new(&mmap[..]))?.with_limits(Limits::unlimited());
 
         let (w, h) = dec.dimensions()?;
-        let color = dec.colortype()?;
+        let photometric = dec.find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)?.unwrap_or(1);
+        let mut palette = None;
+        let color = if photometric == 3 {
+            let bits = dec.find_tag_unsigned::<u16>(Tag::BitsPerSample)?.unwrap_or(1);
+            if bits != 8 {
+                bail!("不支持 {bits} 位的调色板 TIFF");
+            }
+            let map = dec.find_tag_unsigned_vec::<u16>(Tag::ColorMap)?.unwrap_or_default();
+            palette = Some(Palette { lut: color_lut(&map) });
+            match palette.as_ref().and_then(|p| p.lut.as_ref()) {
+                Some(_) => ColorType::RGB(8),
+                None => ColorType::Gray(8),
+            }
+        } else {
+            dec.colortype()?
+        };
         let sample_format = dec
             .find_tag_unsigned_vec::<u16>(Tag::SampleFormat)?
             .and_then(|v| v.first().copied())
@@ -122,6 +146,7 @@ impl TiffSource {
             channels: vec![],
             pixel_size: None,
             unit: String::new(),
+            metadata: vec![],
             samples_per_page: spp.max(1),
             order: DimOrder::CZT,
             page_count: ifds.len(),
@@ -167,7 +192,7 @@ impl TiffSource {
             }
         }
         info.fill_default_channels();
-        Ok(TiffSource { mmap, info, ifds, contiguous, planar: planar == 2 })
+        Ok(TiffSource { mmap, info, ifds, contiguous, planar: planar == 2, palette })
     }
 
     fn decoder_at(&self, ifd: usize) -> Result<Dec<'_>> {
@@ -180,6 +205,9 @@ impl TiffSource {
 
     fn decode_ifd(&self, ifd: usize) -> Result<PlaneData> {
         let mut dec = self.decoder_at(ifd)?;
+        if let Some(p) = &self.palette {
+            return self.decode_palette(&mut dec, p);
+        }
         let (w, h) = (self.info.width, self.info.height);
         let spp = self.info.samples_per_page;
         let bps = self.info.dtype.size();
@@ -238,6 +266,38 @@ impl TiffSource {
             }
         }
         Ok(data)
+    }
+
+    /// Reads the strips of an 8-bit palette image ourselves and maps the
+    /// indices through the colour map unless it is a gray ramp.
+    fn decode_palette(&self, dec: &mut Dec<'_>, pal: &Palette) -> Result<PlaneData> {
+        let (w, h) = (self.info.width, self.info.height);
+        if dec.find_tag(Tag::TileOffsets)?.is_some() {
+            bail!("分块存储的调色板 TIFF 暂不支持");
+        }
+        let offsets = dec.find_tag(Tag::StripOffsets)?.ok_or_else(|| anyhow!("缺少 StripOffsets"))?.into_u64_vec()?;
+        let counts = dec.find_tag(Tag::StripByteCounts)?.ok_or_else(|| anyhow!("缺少 StripByteCounts"))?.into_u64_vec()?;
+        let rps = (dec.find_tag_unsigned::<u32>(Tag::RowsPerStrip)?.unwrap_or(u32::MAX) as usize).clamp(1, h);
+        let compression = dec.find_tag_unsigned::<u16>(Tag::Compression)?.unwrap_or(1);
+        let predictor = dec.find_tag_unsigned::<u16>(Tag::Predictor)?.unwrap_or(1);
+        let mut idx = vec![0u8; w * h];
+        idx.par_chunks_mut(rps * w).enumerate().try_for_each(|(i, out)| -> Result<()> {
+            let (off, n) = (*offsets.get(i).ok_or_else(|| anyhow!("条带缺失"))? as usize, *counts.get(i).unwrap_or(&0) as usize);
+            let src = self.mmap.get(off..off + n).ok_or_else(|| anyhow!("条带超出文件末尾"))?;
+            inflate_strip(src, compression, out)?;
+            if predictor == 2 {
+                for row in out.chunks_mut(w) {
+                    for x in 1..row.len() {
+                        row[x] = row[x].wrapping_add(row[x - 1]);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(match &pal.lut {
+            None => PlaneData::U8(idx),
+            Some(lut) => PlaneData::U8(idx.par_iter().flat_map_iter(|&i| lut[i as usize]).collect()),
+        })
     }
 
     /// Whole-image decode through the library, for unusual layouts.
@@ -381,4 +441,110 @@ fn parse_imagej(desc: &str, info: &mut ImageInfo) -> Option<usize> {
         info.unit = if u == "micron" || u == "um" || u == "\\u00B5m" { "µm".into() } else { u };
     }
     images
+}
+
+/// Gray ramps give None, anything else an 8-bit RGB lookup table. Zeiss
+/// SmartSEM recolours every ninth entry (26 of 256) for its overlays and
+/// keeps image data off those indices, so up to a quarter may differ.
+fn color_lut(map: &[u16]) -> Option<Vec<[u8; 3]>> {
+    let n = map.len() / 3;
+    if n == 0 {
+        return None;
+    }
+    let (r, g, b) = (&map[..n], &map[n..2 * n], &map[2 * n..3 * n]);
+    let gray = (0..n).filter(|&i| r[i] == g[i] && g[i] == b[i] && (r[i] >> 8) as usize == i * 255 / (n - 1).max(1)).count();
+    if gray * 4 >= n * 3 {
+        return None;
+    }
+    let mut lut = vec![[0u8; 3]; 256];
+    for (i, e) in lut.iter_mut().enumerate().take(n) {
+        *e = [(r[i] >> 8) as u8, (g[i] >> 8) as u8, (b[i] >> 8) as u8];
+    }
+    Some(lut)
+}
+
+/// Decompresses one strip into `out` (which is exactly the strip's size).
+fn inflate_strip(src: &[u8], compression: u16, out: &mut [u8]) -> Result<()> {
+    use std::io::Read;
+    match compression {
+        1 => {
+            let n = src.len().min(out.len());
+            out[..n].copy_from_slice(&src[..n]);
+        }
+        5 => {
+            let mut d = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+            let v = d.decode(src).or_else(|_| {
+                // Old-style LZW without the early code size switch.
+                weezl::decode::Decoder::new(weezl::BitOrder::Msb, 8).decode(src)
+            })?;
+            let n = v.len().min(out.len());
+            out[..n].copy_from_slice(&v[..n]);
+        }
+        8 | 32946 => {
+            let mut z = flate2::read::ZlibDecoder::new(src);
+            let mut filled = 0;
+            while filled < out.len() {
+                let k = z.read(&mut out[filled..])?;
+                if k == 0 {
+                    break;
+                }
+                filled += k;
+            }
+        }
+        32773 => {
+            let (mut i, mut o) = (0, 0);
+            while i < src.len() && o < out.len() {
+                let c = src[i] as i8;
+                i += 1;
+                if c >= 0 {
+                    let n = (c as usize + 1).min(src.len() - i).min(out.len() - o);
+                    out[o..o + n].copy_from_slice(&src[i..i + n]);
+                    i += c as usize + 1;
+                    o += n;
+                } else if c != -128 && i < src.len() {
+                    let n = ((1 - c as isize) as usize).min(out.len() - o);
+                    out[o..o + n].fill(src[i]);
+                    i += 1;
+                    o += n;
+                }
+            }
+        }
+        c => bail!("调色板 TIFF 的压缩方式 {c} 暂不支持"),
+    }
+    Ok(())
+}
+
+/// Raw bytes of a tag in the first IFD of a classic TIFF. Used for private
+/// text tags that are not valid NUL-terminated ASCII (Zeiss writes Latin-1).
+pub fn first_ifd_tag(d: &[u8], tag: u16) -> Option<&[u8]> {
+    let le = match d.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| d.get(o..o + 2).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
+    let u32_at = |o: usize| {
+        d.get(o..o + 4).map(|b| {
+            let a = [b[0], b[1], b[2], b[3]];
+            if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
+        })
+    };
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let ifd = u32_at(4)? as usize;
+    let n = u16_at(ifd)? as usize;
+    for k in 0..n {
+        let e = ifd + 2 + 12 * k;
+        if u16_at(e)? == tag {
+            let size = match u16_at(e + 2)? {
+                1 | 2 | 6 | 7 => 1,
+                3 | 8 => 2,
+                4 | 9 | 11 => 4,
+                _ => 8,
+            } * u32_at(e + 4)? as usize;
+            return if size <= 4 { d.get(e + 8..e + 8 + size) } else { d.get(u32_at(e + 8)? as usize..).map(|r| &r[..size.min(r.len())]) };
+        }
+    }
+    None
 }

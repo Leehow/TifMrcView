@@ -84,6 +84,7 @@ impl MrcSource {
             channels: vec![],
             pixel_size,
             unit: "Å".into(),
+            metadata: vec![],
             samples_per_page: 1,
             order: DimOrder::CZT,
             page_count: depth,
