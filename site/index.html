@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TifMrcView · 快速的 TIFF / MRC 查看器</title>
-<meta name="description" content="TifMrcView：又小又快的 TIFF、OME-TIFF、MRC 图像查看器，支持 Z 层拉条、多通道合成、文件夹浏览。免费下载 macOS、Windows、Linux 版。">
+<meta name="description" content="TifMrcView：又小又快的显微图像查看器，支持 TIFF / OME-TIFF、冷冻电镜 MRC、蔡司 CZI 和 SmartSEM TIFF，可画线、框、圆并按物理单位测量，XY/XZ/YZ 三视角，多通道荧光。免费下载 macOS、Windows、Linux 版。">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3">
 <link rel="icon" href="/favicon.ico?v=3" sizes="any">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
@@ -76,6 +76,30 @@ header nav{display:flex;align-items:center}
 @media (prefers-color-scheme:dark){.badge,.dl a small b{color:#5fd391}}
 @media (max-width:560px){.gh{margin-left:0;margin-right:12px}}
 .teaser{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}.teaser h2{margin:0 0 6px;font-size:22px}.teaser p{margin:0;color:var(--mute)}
+.shots{display:grid;gap:18px;grid-template-columns:repeat(2,1fr)}
+.shot{margin:0;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.shot button{display:block;width:100%;padding:0;border:0;background:#0b0d11;cursor:zoom-in;line-height:0}
+.shot img{width:100%;height:auto;display:block}
+.shot button:hover img{opacity:.94}
+.shot button:focus-visible{outline:3px solid var(--blue);outline-offset:-3px}
+.shot figcaption{padding:14px 18px 16px}
+.shot figcaption b{display:block;font-size:16px}
+.shot figcaption span{color:var(--mute);font-size:14px}
+@media (max-width:760px){.shots{grid-template-columns:1fr}}
+.lb{position:fixed;inset:0;z-index:50;background:rgba(8,10,14,.92);display:none;align-items:center;justify-content:center;padding:20px;cursor:zoom-out}
+.lb.open{display:flex}
+.lb img{max-width:100%;max-height:100%;width:auto;height:auto;border-radius:8px;box-shadow:0 10px 50px rgba(0,0,0,.5)}
+.lb button{position:absolute;top:12px;right:14px;background:rgba(255,255,255,.14);border:0;color:#fff;width:40px;height:40px;border-radius:50%;font-size:24px;line-height:1;cursor:pointer}
+.star{text-align:center;padding:36px 22px}
+.star h2{margin:0 0 8px;font-size:24px}
+.star p{margin:0 0 20px;color:var(--mute)}
+.btn.gh2{background:#16181d;color:#fff}
+.btn.gh2:hover{background:#2a2e38}
+@media (prefers-color-scheme:dark){.btn.gh2{background:#eceff4;color:#16181d}.btn.gh2:hover{background:#fff}}
+.btn svg{width:18px;height:18px;fill:currentColor}
+.starn{font-weight:600;opacity:.8;padding-left:8px;border-left:1px solid currentColor;margin-left:2px}
+.starn:empty{display:none}
+.flink .starn{border:0;padding:0;margin:0 0 0 3px}
 </style>
 </head>
 <body>
@@ -89,7 +113,7 @@ header nav{display:flex;align-items:center}
   <img src="icon.png?v=2" alt="TifMrcView 图标">
   <div class="badge" id="badge" hidden></div>
   <h1><span data-i="h1">看 TIFF 和 MRC，<br>就该这么快</span><span class="dot">.</span></h1>
-  <p class="lead" data-i="lead">一个又小又快的显微图像查看器。双击 .tif / .tiff / .mrc 就能打开，拖动拉条翻 Z 层，多通道彩色合成，一个文件夹里的图左右切换。</p>
+  <p class="lead" data-i="lead">又小又快的显微图像查看器：TIFF / OME-TIFF、冷冻电镜 MRC、蔡司 CZI 和 SmartSEM TIFF，双击即开，数 GB 的 Z 栈也秒开。画线、框、圆，按物理单位测量，多通道荧光随点随调。</p>
   <div class="cta">
     <a class="btn primary" id="cta" href="#download" data-i="cta">免费下载</a>
     <a class="btn ghost" href="#download" data-i="all">所有版本</a>
@@ -121,15 +145,34 @@ header nav{display:flex;align-items:center}
   </div>
 </section>
 
+<section id="showcase">
+  <h2 data-i="sc_h">真实截图</h2>
+  <div class="shots">
+    <figure class="shot"><button type="button" data-full="shots/mrc-tomogram-line.webp"><picture><img src="shots/mrc-tomogram-line-1200.webp" srcset="shots/mrc-tomogram-line-1200.webp 1200w, shots/mrc-tomogram-line.webp 2000w" sizes="(min-width:1080px) 500px, (min-width:761px) 47vw, calc(100vw - 40px)" width="1200" height="689" alt="TifMrcView 打开冷冻电镜断层 MRC 文件，测得线段长度 864.2 nm，右侧为标注工具面板" data-i-alt="a1"></picture></button>
+      <figcaption><b data-i="s1t">冷冻电镜断层（MRC）</b><span data-i="s1d">测量长度，叠加 IMOD 模型</span></figcaption></figure>
+    <figure class="shot"><button type="button" data-full="shots/mrc-xz-view-box.webp"><picture><img src="shots/mrc-xz-view-box-1200.webp" srcset="shots/mrc-xz-view-box-1200.webp 1200w, shots/mrc-xz-view-box.webp 2000w" sizes="(min-width:1080px) 500px, (min-width:761px) 47vw, calc(100vw - 40px)" width="1200" height="685" alt="TifMrcView 将断层数据切换到 XZ 侧视图，框选区域显示 1.35 µm × 0.252 µm" data-i-alt="a2" loading="lazy"></picture></button>
+      <figcaption><b data-i="s2t">XY / XZ / YZ 三个视角</b><span data-i="s2d">随时切换，框选直接显示宽 × 高</span></figcaption></figure>
+    <figure class="shot"><button type="button" data-full="shots/czi-airyscan-measure.webp"><picture><img src="shots/czi-airyscan-measure-1200.webp" srcset="shots/czi-airyscan-measure-1200.webp 1200w, shots/czi-airyscan-measure.webp 2000w" sizes="(min-width:1080px) 500px, (min-width:761px) 47vw, calc(100vw - 40px)" width="1200" height="689" alt="TifMrcView 打开蔡司 CZI Airyscan Z 栈荧光图像，带比例尺并测得 37.8 µm" data-i-alt="a3" loading="lazy"></picture></button>
+      <figcaption><b data-i="s3t">蔡司 CZI（Airyscan / LSM）</b><span data-i="s3d">比例尺、标尺、逐层自动对比度</span></figcaption></figure>
+    <figure class="shot"><button type="button" data-full="shots/tiff-multichannel.webp"><picture><img src="shots/tiff-multichannel-1200.webp" srcset="shots/tiff-multichannel-1200.webp 1200w, shots/tiff-multichannel.webp 2000w" sizes="(min-width:1080px) 500px, (min-width:761px) 47vw, calc(100vw - 40px)" width="1200" height="685" alt="TifMrcView 显示三通道荧光 TIFF，工具栏中可分别勾选 C1、C2、C3" data-i-alt="a4" loading="lazy"></picture></button>
+      <figcaption><b data-i="s4t">多通道荧光</b><span data-i="s4d">每个通道单独勾选、换颜色、调对比度</span></figcaption></figure>
+  </div>
+</section>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" hidden><img alt=""><button type="button" data-i-alt="sc_close" data-i-aria="1" aria-label="关闭">×</button></div>
+
 <section id="features">
   <h2 data-i="nav_features">功能</h2>
   <div class="grid">
-    <div class="card feat"><div class="ic">⚡</div><h3 data-i="f1t">打开即看</h3><p data-i="f1d">内存映射读取，多核并行解压，后台预解码相邻 Z 层，拖拉条直接出图。</p></div>
+    <div class="card feat"><div class="ic">⚡</div><h3 data-i="f1t">打开即看</h3><p data-i="f1d">安装包只有几 MB。内存映射读取、多核并行解压、后台预解码相邻 Z 层，数 GB 的栈也能立刻翻。</p></div>
     <div class="card feat"><div class="ic">≡</div><h3 data-i="f2t">Z / T 拉条</h3><p data-i="f2d">拖动或用方向键翻层，空格播放；带时间维度的数据另有 T 拉条。</p></div>
     <div class="card feat"><div class="ic">◐</div><h3 data-i="f3t">多通道合成</h3><p data-i="f3d">勾选显示通道、换颜色，每个通道单独调亮度、对比度和 γ。</p></div>
     <div class="card feat"><div class="ic">▦</div><h3 data-i="f4t">文件夹浏览</h3><p data-i="f4d">侧边缩略图列出同目录的图像，上下键切换文件，不用回到 Finder。</p></div>
-    <div class="card feat"><div class="ic">📏</div><h3 data-i="f5t">标尺与测量</h3><p data-i="f5d">按像素尺寸显示比例尺，画线测长度，一键导出整图或选区为 PNG。</p></div>
-    <div class="card feat"><div class="ic">🗂</div><h3 data-i="f6t">格式齐全</h3><p data-i="f6d">TIFF（LZW/Deflate/JPEG，8–32 位）、OME-TIFF、ImageJ hyperstack、MRC/MRC2014，以及常见图片格式。</p></div>
+    <div class="card feat"><div class="ic">📏</div><h3 data-i="f5t">标注与测量</h3><p data-i="f5d">画线、框、圆，按物理单位（nm / µm）显示长度、宽高，叠加比例尺，一键导出整图或选区为 PNG。</p></div>
+    <div class="card feat"><div class="ic">🗂</div><h3 data-i="f6t">格式齐全</h3><p data-i="f6d">TIFF / OME-TIFF / ImageJ hyperstack、MRC（冷冻电镜 / 冷冻电子断层）、蔡司 CZI、SmartSEM TIFF，以及 PNG / JPEG 等常见图片格式。</p></div>
+    <div class="card feat"><div class="ic">⤢</div><h3 data-i="f7t">XY / XZ / YZ 视图</h3><p data-i="f7d">三维数据随时切换正面、侧面、顶面，在任意视角上标注和测量。</p></div>
+    <div class="card feat"><div class="ic">🖥</div><h3 data-i="f8t">三大平台</h3><p data-i="f8d">macOS、Windows、Linux 都有原生安装包，只有几 MB，下载即用。</p></div>
+    <div class="card feat"><div class="ic">🧩</div><h3 data-i="f9t">插件，无限扩展</h3><p data-i="f9d">录制视频、采集参数、自定义格式……按需安装插件，让 TifMrcView 长成你需要的样子。<a href="plugins/">浏览插件 →</a></p></div>
   </div>
 </section>
 
@@ -137,6 +180,14 @@ header nav{display:flex;align-items:center}
   <div class="card teaser">
     <div><h2 data-i="pl_t">插件市场</h2><p data-i="pl_d">录制视频、蔡司 SmartSEM 和 ZEN 采集参数……按需下载，在应用里一键加载。</p></div>
     <a class="btn primary" href="plugins/" data-i="pl_btn">浏览插件</a>
+  </div>
+</section>
+
+<section id="star">
+  <div class="card star">
+    <h2 data-i="star_t">喜欢的话，请在 GitHub 上给我们点个 ⭐ Star</h2>
+    <p data-i="star_d">这是对作者最大的支持，也能让更多人发现它。</p>
+    <a class="btn gh2" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg><span data-i="star_btn">在 GitHub 上 Star</span><span class="starn" id="starn"></span></a>
   </div>
 </section>
 
@@ -154,9 +205,25 @@ header nav{display:flex;align-items:center}
   </div>
 </section>
 
-<footer>TifMrcView <span id="ver"></span> · <span data-i="free">免费使用</span> · <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a></footer>
+<footer>TifMrcView <span id="ver"></span> · <span data-i="free">免费使用</span> · <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a> · <a class="flink" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener"><span data-i="star_foot">⭐ Star</span><span class="starn" id="starf"></span></a> · <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a></footer>
 </div>
 
-<script src="i18n.js?v=3"></script>
+<script src="i18n.js?v=4"></script>
+<script>
+(function(){
+  var lb=document.getElementById('lb'),im=lb.querySelector('img'),last=null;
+  function open(b){last=b;var t=b.querySelector('img');im.src=b.getAttribute('data-full');im.alt=t.alt;lb.hidden=false;lb.classList.add('open');document.body.style.overflow='hidden';lb.querySelector('button').focus();}
+  function close(){lb.classList.remove('open');lb.hidden=true;im.removeAttribute('src');document.body.style.overflow='';if(last)last.focus();}
+  document.querySelectorAll('.shot button').forEach(function(b){b.addEventListener('click',function(){open(b);});});
+  lb.addEventListener('click',close);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('open'))close();});
+  // live GitHub star count; stays empty if the request fails
+  try{fetch('https://api.github.com/repos/Leehow/TifMrcView').then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d||typeof d.stargazers_count!=='number'||d.stargazers_count<1)return;
+    var n=d.stargazers_count.toLocaleString();
+    document.getElementById('starn').textContent=n;document.getElementById('starf').textContent=n;
+  }).catch(function(){});}catch(e){}
+})();
+</script>
 </body>
 </html>

@@ -326,6 +326,151 @@
     }
   };
   Object.keys(EXTRA).forEach(function (c) { for (var k in EXTRA[c]) T[c][k] = EXTRA[c][k]; });
+  // Showcase, product message and GitHub star strings. Merged after EXTRA, so the
+  // keys that already exist above (lead, desc, f1d, f5*, f6d) are overridden here.
+  var SHOW = {
+    zh: {
+      desc: 'TifMrcView：又小又快的显微图像查看器，支持 TIFF / OME-TIFF、冷冻电镜 MRC、蔡司 CZI 和 SmartSEM TIFF，可画线、框、圆并按物理单位测量，XY/XZ/YZ 三视角，多通道荧光。免费下载 macOS、Windows、Linux 版。',
+      lead: '又小又快的显微图像查看器：TIFF / OME-TIFF、冷冻电镜 MRC、蔡司 CZI 和 SmartSEM TIFF，双击即开，数 GB 的 Z 栈也秒开。画线、框、圆，按物理单位测量，多通道荧光随点随调。',
+      sc_h: '真实截图', sc_zoom: '点击放大', sc_close: '关闭',
+      s1t: '冷冻电镜断层（MRC）', s1d: '测量长度，叠加 IMOD 模型',
+      s2t: 'XY / XZ / YZ 三个视角', s2d: '随时切换，框选直接显示宽 × 高',
+      s3t: '蔡司 CZI（Airyscan / LSM）', s3d: '比例尺、标尺、逐层自动对比度',
+      s4t: '多通道荧光', s4d: '每个通道单独勾选、换颜色、调对比度',
+      a1: 'TifMrcView 打开冷冻电镜断层 MRC 文件，测得线段长度 864.2 nm，右侧为标注工具面板',
+      a2: 'TifMrcView 将断层数据切换到 XZ 侧视图，框选区域显示 1.35 µm × 0.252 µm',
+      a3: 'TifMrcView 打开蔡司 CZI Airyscan Z 栈荧光图像，带比例尺并测得 37.8 µm',
+      a4: 'TifMrcView 显示三通道荧光 TIFF，工具栏中可分别勾选 C1、C2、C3',
+      f1d: '安装包只有几 MB。内存映射读取、多核并行解压、后台预解码相邻 Z 层，数 GB 的栈也能立刻翻。',
+      f5t: '标注与测量', f5d: '画线、框、圆，按物理单位（nm / µm）显示长度、宽高，叠加比例尺，一键导出整图或选区为 PNG。',
+      f6d: 'TIFF / OME-TIFF / ImageJ hyperstack、MRC（冷冻电镜 / 冷冻电子断层）、蔡司 CZI、SmartSEM TIFF，以及 PNG / JPEG 等常见图片格式。',
+      f7t: 'XY / XZ / YZ 视图', f7d: '三维数据随时切换正面、侧面、顶面，在任意视角上标注和测量。',
+      f8t: '三大平台', f8d: 'macOS、Windows、Linux 都有原生安装包，只有几 MB，下载即用。',
+      f9t: '插件，无限扩展', f9d: '录制视频、采集参数、自定义格式……按需安装插件，让 TifMrcView 长成你需要的样子。<a href="plugins/">浏览插件 →</a>',
+      star_t: '喜欢的话，请在 GitHub 上给我们点个 ⭐ Star', star_d: '这是对作者最大的支持，也能让更多人发现它。', star_btn: '在 GitHub 上 Star', star_foot: '⭐ Star'
+    },
+    en: {
+      desc: 'TifMrcView: a small, fast microscopy viewer for TIFF / OME-TIFF, cryo-EM MRC, Zeiss CZI and SmartSEM TIFF. Draw lines, boxes and circles, measure in physical units, switch XY/XZ/YZ views, multichannel fluorescence. Free for macOS, Windows and Linux.',
+      lead: 'A small, fast microscopy viewer for TIFF / OME-TIFF, cryo-EM MRC, Zeiss CZI and SmartSEM TIFF. Double-click to open, even multi-GB Z-stacks load instantly. Draw lines, boxes and circles, measure in physical units, and tune every fluorescence channel on the fly.',
+      sc_h: 'See it in action', sc_zoom: 'Click to enlarge', sc_close: 'Close',
+      s1t: 'Cryo-ET tomograms (MRC)', s1d: 'Measure lengths, overlay IMOD models',
+      s2t: 'XY, XZ and YZ views', s2d: 'Switch any time; boxes show width × height',
+      s3t: 'Zeiss CZI (Airyscan / LSM)', s3d: 'Scale bar, rulers, per-slice auto contrast',
+      s4t: 'Multichannel fluorescence', s4d: 'Toggle, recolour and adjust contrast per channel',
+      a1: 'TifMrcView showing a cryo-electron tomogram (MRC) with a measured line of 864.2 nm and the annotation tools panel',
+      a2: 'TifMrcView showing the tomogram in the XZ side view with a box annotation of 1.35 µm × 0.252 µm',
+      a3: 'TifMrcView showing a Zeiss CZI Airyscan Z-stack in green fluorescence with a scale bar and a 37.8 µm measurement',
+      a4: 'TifMrcView showing a three-channel fluorescence TIFF with C1, C2 and C3 checkboxes in the toolbar',
+      f1d: 'An installer of just a few MB. Memory-mapped reads, parallel decoding on all cores and background prefetch of neighbouring slices make multi-GB stacks scroll instantly.',
+      f5t: 'Annotate & measure', f5d: 'Draw lines, boxes and circles; lengths and sizes in physical units (nm / µm), a scale bar, and one-click PNG export of the whole image or a region.',
+      f6d: 'TIFF / OME-TIFF / ImageJ hyperstacks, MRC (cryo-EM / cryo-ET), Zeiss CZI and SmartSEM TIFF, plus PNG / JPEG and other common formats.',
+      f7t: 'XY / XZ / YZ views', f7d: 'Flip volumes between front, side and top views, and annotate and measure in any of them.',
+      f8t: 'macOS, Windows, Linux', f8d: 'Native installers for all three platforms, just a few MB each. Download and go.',
+      f9t: 'Extensible with plugins', f9d: 'Video recording, acquisition metadata, custom formats… install only what you need and shape TifMrcView to your work. <a href="plugins/">Browse plugins →</a>',
+      star_t: 'Enjoying it? Give us a ⭐ Star on GitHub', star_d: 'It is the best support for the author and helps others find the project.', star_btn: 'Star on GitHub', star_foot: '⭐ Star'
+    },
+    de: {
+      desc: 'TifMrcView: ein kleiner, schneller Mikroskopie-Viewer für TIFF / OME-TIFF, Kryo-EM-MRC, Zeiss CZI und SmartSEM-TIFF. Linien, Rechtecke und Kreise zeichnen, in physikalischen Einheiten messen, XY/XZ/YZ-Ansichten, Mehrkanal-Fluoreszenz. Kostenlos für macOS, Windows und Linux.',
+      lead: 'Ein kleiner, schneller Mikroskopie-Viewer für TIFF / OME-TIFF, Kryo-EM-MRC, Zeiss CZI und SmartSEM-TIFF. Doppelklick genügt, selbst mehrere GB große Z-Stapel öffnen sofort. Linien, Rechtecke und Kreise zeichnen, in physikalischen Einheiten messen und jeden Fluoreszenzkanal live anpassen.',
+      sc_h: 'Echte Screenshots', sc_zoom: 'Zum Vergrößern klicken', sc_close: 'Schließen',
+      s1t: 'Kryo-ET-Tomogramme (MRC)', s1d: 'Längen messen, IMOD-Modelle überlagern',
+      s2t: 'XY-, XZ- und YZ-Ansicht', s2d: 'Jederzeit umschaltbar; Rahmen zeigen Breite × Höhe',
+      s3t: 'Zeiss CZI (Airyscan / LSM)', s3d: 'Maßstab, Lineale, automatischer Kontrast je Schicht',
+      s4t: 'Mehrkanal-Fluoreszenz', s4d: 'Kanäle einzeln ein-/ausblenden, umfärben, Kontrast anpassen',
+      a1: 'TifMrcView zeigt ein Kryo-Elektronentomogramm (MRC) mit einer gemessenen Linie von 864,2 nm und dem Werkzeugfeld für Anmerkungen',
+      a2: 'TifMrcView zeigt das Tomogramm in der XZ-Seitenansicht mit einem Rahmen von 1,35 µm × 0,252 µm',
+      a3: 'TifMrcView zeigt einen Zeiss-CZI-Airyscan-Z-Stapel in grüner Fluoreszenz mit Maßstab und einer Messung von 37,8 µm',
+      a4: 'TifMrcView zeigt ein dreikanaliges Fluoreszenz-TIFF mit den Kontrollkästchen C1, C2 und C3 in der Werkzeugleiste',
+      f1d: 'Ein Installer von nur wenigen MB. Speicherabbildung, paralleles Dekodieren auf allen Kernen und Vorausladen benachbarter Schichten im Hintergrund lassen mehrere GB große Stapel sofort scrollen.',
+      f5t: 'Anmerken & Messen', f5d: 'Linien, Rechtecke und Kreise zeichnen; Längen und Größen in physikalischen Einheiten (nm / µm), Maßstabsbalken und PNG-Export des ganzen Bildes oder eines Bereichs mit einem Klick.',
+      f6d: 'TIFF / OME-TIFF / ImageJ-Hyperstacks, MRC (Kryo-EM / Kryo-ET), Zeiss CZI und SmartSEM-TIFF sowie PNG / JPEG und weitere gängige Formate.',
+      f7t: 'XY- / XZ- / YZ-Ansicht', f7d: 'Volumen zwischen Vorder-, Seiten- und Draufsicht wechseln und in jeder Ansicht anmerken und messen.',
+      f8t: 'macOS, Windows, Linux', f8d: 'Native Installer für alle drei Plattformen, jeweils nur wenige MB. Herunterladen und loslegen.',
+      f9t: 'Erweiterbar durch Plugins', f9d: 'Videoaufnahme, Aufnahmeparameter, eigene Formate … installieren Sie nur, was Sie brauchen. <a href="plugins/">Plugins ansehen →</a>',
+      star_t: 'Gefällt es Ihnen? Geben Sie uns einen ⭐ Star auf GitHub', star_d: 'Das ist die beste Unterstützung für den Autor und hilft anderen, das Projekt zu finden.', star_btn: 'Auf GitHub mit Star markieren', star_foot: '⭐ Star'
+    },
+    ja: {
+      desc: 'TifMrcView：TIFF / OME-TIFF、クライオ電顕 MRC、Zeiss CZI、SmartSEM TIFF に対応した小さくて高速な顕微鏡画像ビューア。線・四角・円の描画、物理単位での計測、XY/XZ/YZ 表示、マルチチャンネル蛍光。macOS・Windows・Linux 版を無料でダウンロード。',
+      lead: 'TIFF / OME-TIFF、クライオ電顕 MRC、Zeiss CZI、SmartSEM TIFF に対応した、小さくて高速な顕微鏡画像ビューア。ダブルクリックで開き、数 GB の Z スタックも一瞬で表示。線・四角・円を描き、物理単位で計測し、蛍光チャンネルをその場で調整できます。',
+      sc_h: '実際の画面', sc_zoom: 'クリックで拡大', sc_close: '閉じる',
+      s1t: 'クライオ電子線トモグラフィ（MRC）', s1d: '長さを計測し、IMOD モデルを重ねて表示',
+      s2t: 'XY / XZ / YZ の 3 方向表示', s2d: 'いつでも切り替え、四角で幅 × 高さを表示',
+      s3t: 'Zeiss CZI（Airyscan / LSM）', s3d: 'スケールバー、定規、スライスごとの自動コントラスト',
+      s4t: 'マルチチャンネル蛍光', s4d: 'チャンネルごとに表示切替・色変更・コントラスト調整',
+      a1: 'クライオ電子トモグラム（MRC）を開き、864.2 nm の線を計測している TifMrcView と注釈ツールパネル',
+      a2: 'トモグラムを XZ 側面表示に切り替え、1.35 µm × 0.252 µm の四角を描いた TifMrcView',
+      a3: 'Zeiss CZI Airyscan の Z スタック蛍光画像をスケールバー付きで表示し、37.8 µm を計測した TifMrcView',
+      a4: 'ツールバーに C1・C2・C3 のチェックボックスがある、3 チャンネル蛍光 TIFF を表示した TifMrcView',
+      f1d: 'インストーラはわずか数 MB。メモリマップ読み込み、全コア並列デコード、隣接スライスのバックグラウンド先読みで、数 GB のスタックも即座にスクロールできます。',
+      f5t: '注釈と計測', f5d: '線・四角・円を描画し、長さやサイズを物理単位（nm / µm）で表示。スケールバーを重ね、画像全体や選択範囲をワンクリックで PNG に書き出せます。',
+      f6d: 'TIFF / OME-TIFF / ImageJ ハイパースタック、MRC（クライオ電顕 / クライオ ET）、Zeiss CZI、SmartSEM TIFF、さらに PNG / JPEG などの一般的な形式。',
+      f7t: 'XY / XZ / YZ 表示', f7d: 'ボリュームを正面・側面・上面に切り替え、どの方向でも注釈と計測ができます。',
+      f8t: 'macOS・Windows・Linux', f8d: '3 つのプラットフォームすべてにネイティブのインストーラを用意。各数 MB で、ダウンロードしてすぐ使えます。',
+      f9t: 'プラグインで無限に拡張', f9d: '動画録画、取得パラメータ、独自フォーマット……必要なものだけを追加して、自分仕様に。<a href="plugins/">プラグインを見る →</a>',
+      star_t: '気に入ったら、GitHub で ⭐ Star をお願いします', star_d: '作者への何よりの応援になり、より多くの人に見つけてもらえます。', star_btn: 'GitHub で Star', star_foot: '⭐ Star'
+    },
+    es: {
+      desc: 'TifMrcView: un visor de microscopía pequeño y rápido para TIFF / OME-TIFF, MRC de crio-EM, Zeiss CZI y TIFF de SmartSEM. Dibuje líneas, cuadros y círculos, mida en unidades físicas, vistas XY/XZ/YZ y fluorescencia multicanal. Gratis para macOS, Windows y Linux.',
+      lead: 'Un visor de microscopía pequeño y rápido para TIFF / OME-TIFF, MRC de crio-EM, Zeiss CZI y TIFF de SmartSEM. Doble clic para abrir; incluso las pilas Z de varios GB se abren al instante. Dibuje líneas, cuadros y círculos, mida en unidades físicas y ajuste cada canal de fluorescencia sobre la marcha.',
+      sc_h: 'Capturas reales', sc_zoom: 'Clic para ampliar', sc_close: 'Cerrar',
+      s1t: 'Tomogramas crio-ET (MRC)', s1d: 'Mida longitudes y superponga modelos IMOD',
+      s2t: 'Vistas XY, XZ y YZ', s2d: 'Cambie cuando quiera; los cuadros muestran ancho × alto',
+      s3t: 'Zeiss CZI (Airyscan / LSM)', s3d: 'Barra de escala, reglas y contraste automático por corte',
+      s4t: 'Fluorescencia multicanal', s4d: 'Active, recolore y ajuste el contraste de cada canal',
+      a1: 'TifMrcView mostrando un tomograma crioelectrónico (MRC) con una línea medida de 864,2 nm y el panel de herramientas de anotación',
+      a2: 'TifMrcView mostrando el tomograma en la vista lateral XZ con un cuadro de 1,35 µm × 0,252 µm',
+      a3: 'TifMrcView mostrando una pila Z de Zeiss CZI Airyscan en fluorescencia verde con barra de escala y una medida de 37,8 µm',
+      a4: 'TifMrcView mostrando un TIFF de fluorescencia de tres canales con las casillas C1, C2 y C3 en la barra de herramientas',
+      f1d: 'Un instalador de solo unos pocos MB. Lectura con mapeo de memoria, decodificación paralela en todos los núcleos y precarga de cortes vecinos en segundo plano: las pilas de varios GB se recorren al instante.',
+      f5t: 'Anotar y medir', f5d: 'Dibuje líneas, cuadros y círculos; longitudes y tamaños en unidades físicas (nm / µm), barra de escala y exportación a PNG de la imagen entera o de una región con un clic.',
+      f6d: 'TIFF / OME-TIFF / hyperstacks de ImageJ, MRC (crio-EM / crio-ET), Zeiss CZI y TIFF de SmartSEM, además de PNG / JPEG y otros formatos habituales.',
+      f7t: 'Vistas XY / XZ / YZ', f7d: 'Cambie los volúmenes entre vista frontal, lateral y superior, y anote y mida en cualquiera de ellas.',
+      f8t: 'macOS, Windows y Linux', f8d: 'Instaladores nativos para las tres plataformas, de solo unos MB cada uno. Descargue y empiece.',
+      f9t: 'Ampliable con complementos', f9d: 'Grabación de vídeo, parámetros de adquisición, formatos propios… instale solo lo que necesite. <a href="plugins/">Ver complementos →</a>',
+      star_t: '¿Le gusta? Danos una ⭐ Star en GitHub', star_d: 'Es el mejor apoyo para el autor y ayuda a que más gente encuentre el proyecto.', star_btn: 'Dar Star en GitHub', star_foot: '⭐ Star'
+    },
+    fr: {
+      desc: 'TifMrcView : un visionneur de microscopie petit et rapide pour TIFF / OME-TIFF, MRC de cryo-EM, Zeiss CZI et TIFF SmartSEM. Tracez des lignes, rectangles et cercles, mesurez en unités physiques, vues XY/XZ/YZ et fluorescence multicanal. Gratuit pour macOS, Windows et Linux.',
+      lead: 'Un visionneur de microscopie petit et rapide pour TIFF / OME-TIFF, MRC de cryo-EM, Zeiss CZI et TIFF SmartSEM. Double-clic pour ouvrir ; même les piles Z de plusieurs Go s’ouvrent instantanément. Tracez des lignes, rectangles et cercles, mesurez en unités physiques et réglez chaque canal de fluorescence à la volée.',
+      sc_h: 'Captures réelles', sc_zoom: 'Cliquer pour agrandir', sc_close: 'Fermer',
+      s1t: 'Tomogrammes cryo-ET (MRC)', s1d: 'Mesurez des longueurs, superposez des modèles IMOD',
+      s2t: 'Vues XY, XZ et YZ', s2d: 'Changez à tout moment ; les rectangles affichent largeur × hauteur',
+      s3t: 'Zeiss CZI (Airyscan / LSM)', s3d: 'Barre d’échelle, règles, contraste automatique par plan',
+      s4t: 'Fluorescence multicanal', s4d: 'Activez, recolorez et réglez le contraste de chaque canal',
+      a1: 'TifMrcView affichant un tomogramme cryo-électronique (MRC) avec une ligne mesurée de 864,2 nm et le panneau d’outils d’annotation',
+      a2: 'TifMrcView affichant le tomogramme en vue latérale XZ avec un rectangle de 1,35 µm × 0,252 µm',
+      a3: 'TifMrcView affichant une pile Z Zeiss CZI Airyscan en fluorescence verte avec barre d’échelle et une mesure de 37,8 µm',
+      a4: 'TifMrcView affichant un TIFF de fluorescence à trois canaux avec les cases C1, C2 et C3 dans la barre d’outils',
+      f1d: 'Un installateur de quelques Mo seulement. Lecture par mappage mémoire, décodage parallèle sur tous les cœurs et pré-chargement des plans voisins en arrière-plan : les piles de plusieurs Go défilent instantanément.',
+      f5t: 'Annoter et mesurer', f5d: 'Tracez des lignes, rectangles et cercles ; longueurs et tailles en unités physiques (nm / µm), barre d’échelle et export PNG de l’image entière ou d’une zone en un clic.',
+      f6d: 'TIFF / OME-TIFF / hyperstacks ImageJ, MRC (cryo-EM / cryo-ET), Zeiss CZI et TIFF SmartSEM, ainsi que PNG / JPEG et d’autres formats courants.',
+      f7t: 'Vues XY / XZ / YZ', f7d: 'Basculez les volumes entre vue de face, de côté et de dessus, et annotez et mesurez dans chacune.',
+      f8t: 'macOS, Windows, Linux', f8d: 'Des installateurs natifs pour les trois plateformes, de quelques Mo chacun. Téléchargez et c’est parti.',
+      f9t: 'Extensible par plugins', f9d: 'Enregistrement vidéo, paramètres d’acquisition, formats personnalisés… n’installez que ce dont vous avez besoin. <a href="plugins/">Parcourir les plugins →</a>',
+      star_t: 'Vous aimez ? Offrez-nous une ⭐ Star sur GitHub', star_d: 'C’est le meilleur soutien pour l’auteur et cela aide d’autres personnes à découvrir le projet.', star_btn: 'Star sur GitHub', star_foot: '⭐ Star'
+    },
+    ru: {
+      desc: 'TifMrcView — компактный и быстрый просмотрщик для микроскопии: TIFF / OME-TIFF, крио-ЭМ MRC, Zeiss CZI и SmartSEM TIFF. Линии, прямоугольники и окружности, измерения в физических единицах, виды XY/XZ/YZ, многоканальная флуоресценция. Бесплатно для macOS, Windows и Linux.',
+      lead: 'Компактный и быстрый просмотрщик для микроскопии: TIFF / OME-TIFF, крио-ЭМ MRC, Zeiss CZI и SmartSEM TIFF. Откройте двойным щелчком — даже Z-стеки на несколько ГБ загружаются мгновенно. Рисуйте линии, прямоугольники и окружности, измеряйте в физических единицах и настраивайте каждый флуоресцентный канал на лету.',
+      sc_h: 'Реальные скриншоты', sc_zoom: 'Нажмите, чтобы увеличить', sc_close: 'Закрыть',
+      s1t: 'Крио-ЭТ томограммы (MRC)', s1d: 'Измерение длин, наложение моделей IMOD',
+      s2t: 'Виды XY, XZ и YZ', s2d: 'Переключайтесь в любой момент; рамки показывают ширину × высоту',
+      s3t: 'Zeiss CZI (Airyscan / LSM)', s3d: 'Масштабная линейка, линейки, автоконтраст по срезам',
+      s4t: 'Многоканальная флуоресценция', s4d: 'Включайте, перекрашивайте и настраивайте контраст каждого канала',
+      a1: 'TifMrcView показывает крио-электронную томограмму (MRC) с измеренной линией 864,2 нм и панелью инструментов аннотаций',
+      a2: 'TifMrcView показывает томограмму в боковом виде XZ с рамкой 1,35 µm × 0,252 µm',
+      a3: 'TifMrcView показывает Z-стек Zeiss CZI Airyscan в зелёной флуоресценции с масштабной линейкой и измерением 37,8 µm',
+      a4: 'TifMrcView показывает трёхканальный флуоресцентный TIFF с флажками C1, C2 и C3 на панели инструментов',
+      f1d: 'Установщик всего в несколько МБ. Отображение файлов в память, параллельное декодирование на всех ядрах и фоновая подгрузка соседних срезов — стеки на несколько ГБ листаются мгновенно.',
+      f5t: 'Аннотации и измерения', f5d: 'Рисуйте линии, прямоугольники и окружности; длины и размеры в физических единицах (нм / µm), масштабная линейка и экспорт в PNG всего изображения или области одним щелчком.',
+      f6d: 'TIFF / OME-TIFF / гиперстеки ImageJ, MRC (крио-ЭМ / крио-ЭТ), Zeiss CZI и SmartSEM TIFF, а также PNG / JPEG и другие распространённые форматы.',
+      f7t: 'Виды XY / XZ / YZ', f7d: 'Переключайте объём между видом спереди, сбоку и сверху, аннотируйте и измеряйте в любом из них.',
+      f8t: 'macOS, Windows, Linux', f8d: 'Нативные установщики для всех трёх платформ, по несколько МБ каждый. Скачал — и работай.',
+      f9t: 'Расширение плагинами', f9d: 'Запись видео, параметры съёмки, собственные форматы… ставьте только то, что нужно. <a href="plugins/">Смотреть плагины →</a>',
+      star_t: 'Нравится? Поставьте нам ⭐ Star на GitHub', star_d: 'Это лучшая поддержка для автора и помощь другим в поиске проекта.', star_btn: 'Star на GitHub', star_foot: '⭐ Star'
+    }
+  };
+  Object.keys(SHOW).forEach(function (c) { for (var k in SHOW[c]) T[c][k] = SHOW[c][k]; });
   // Developer docs (site/plugins/docs.js) exist in Chinese and English only.
   if (window.TMV_DOCS) { T.zh.docs = window.TMV_DOCS.zh; T.en.docs = window.TMV_DOCS.en; }
 
@@ -420,6 +565,12 @@
       var v = t[key];
       if (v == null && code !== 'zh') v = T.en[key];
       if (v != null) el.innerHTML = v;
+    });
+    document.querySelectorAll('[data-i-alt]').forEach(function (el) {
+      var key = el.getAttribute('data-i-alt');
+      var v = t[key];
+      if (v == null && code !== 'zh') v = T.en[key];
+      if (v != null) el.setAttribute(el.hasAttribute('data-i-aria') ? 'aria-label' : 'alt', v);
     });
     var btn = document.querySelector('#lang > button');
     btn.querySelector('.flag').outerHTML = flag(code);
