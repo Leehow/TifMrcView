@@ -155,9 +155,9 @@ jobs:
           ssh_cmd="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
           dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
           # Version folder first, feeds last, so clients never see a half-uploaded release.
-          rsync -av -e "$ssh_cmd" "release/$VERSION" "$dest/"
+          rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$VERSION" "$dest/"
           for f in latest.json downloads.json; do
-            [ -f "release/$f" ] && rsync -av -e "$ssh_cmd" "release/$f" "$dest/$f"
+            [ -f "release/$f" ] && rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$f" "$dest/$f"
           done
 
       - name: GitHub Release
