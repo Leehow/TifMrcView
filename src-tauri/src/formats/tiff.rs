@@ -14,7 +14,7 @@ use tiff::decoder::{ChunkType, Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
 use tiff::ColorType;
 
-use super::{raw_to_plane, sem, xml_attr, xml_tags};
+use super::{raw_to_plane, xml_attr, xml_tags};
 use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, Plane, PlaneData, Source};
 
 pub struct TiffSource {
@@ -31,8 +31,8 @@ pub struct TiffSource {
 }
 
 /// `lut` is None when the colour map is (essentially) a gray ramp: the
-/// indices are then the intensities, as in Zeiss SEM images whose palette
-/// only recolours a few entries for overlays.
+/// indices are then the intensities, as in Zeiss SmartSEM images whose
+/// palette only recolours a few entries for overlays.
 struct Palette {
     lut: Option<Vec<[u8; 3]>>,
 }
@@ -153,17 +153,7 @@ impl TiffSource {
         };
         let mut contiguous = None;
 
-        if let Some(z) = first_ifd_tag(&mmap, sem::ZEISS_SEM_TAG)
-            .map(|b| b.iter().map(|&c| c as char).collect::<String>())
-            .and_then(|t| sem::parse_zeiss(&t, w as usize))
-        {
-            info.format = "Zeiss SEM TIFF".into();
-            info.metadata = z.groups;
-            if let Some(p) = z.pixel_nm {
-                info.pixel_size = Some([p, p, 0.0]);
-                info.unit = "nm".into();
-            }
-        } else if description.contains("<OME") {
+        if description.contains("<OME") {
             parse_ome(&description, &mut info);
         } else if description.starts_with("ImageJ=") {
             let images = parse_imagej(&description, &mut info);
@@ -526,7 +516,7 @@ fn inflate_strip(src: &[u8], compression: u16, out: &mut [u8]) -> Result<()> {
 
 /// Raw bytes of a tag in the first IFD of a classic TIFF. Used for private
 /// text tags that are not valid NUL-terminated ASCII (Zeiss writes Latin-1).
-fn first_ifd_tag(d: &[u8], tag: u16) -> Option<&[u8]> {
+pub fn first_ifd_tag(d: &[u8], tag: u16) -> Option<&[u8]> {
     let le = match d.get(..2)? {
         b"II" => true,
         b"MM" => false,

@@ -1,6 +1,5 @@
 pub mod mrc;
 pub mod raster;
-pub mod sem;
 pub mod tiff;
 
 use std::path::Path;

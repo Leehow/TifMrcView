@@ -37,6 +37,7 @@ const S = {
   crop: null,       // applied crop [x, y, w, h] in image pixels
   cropStack: [],    // earlier crops, for undo
   px: null,         // {x, y, unit} physical pixel size
+  pluginMeta: [],   // metadata groups plugins added for the open file
   pxSource: "",
   scaleBar: false,
   hist: null,
@@ -150,6 +151,7 @@ async function openPath(path) {
     const sameSize = S.info && S.info.width === res.info.width && S.info.height === res.info.height;
     S.token = res.token;
     S.info = res.info;
+    S.pluginMeta = [];
     S.z = Math.floor(res.info.sizeZ / 2);
     S.t = 0;
     S.sel = Math.min(S.sel, res.info.channels.length - 1);
@@ -191,9 +193,6 @@ async function openPath(path) {
     updateInfo();
     updateSaveButtons();
     $("btn-info").disabled = false;
-    $("btn-info").title = res.info.metadata.length
-      ? "图像信息：文件信息和显微镜记录的采集参数（电压、工作距离、放大倍数、探测器等）"
-      : "图像信息";
     $("meta-list").dataset.file = "";
     renderMeta();
     // Keep the zoom when flipping through images of the same size.
@@ -1179,15 +1178,16 @@ function metaGroups() {
   ];
   if (S.px) items.push(["像素尺寸", `${fmt(S.px.x)} ${S.px.unit}`]);
   items.push(["路径", i.path]);
-  return [{ name: "文件信息", items }, ...(i.metadata || [])];
+  return [{ name: "文件信息", items }, ...(i.metadata || []), ...S.pluginMeta];
 }
 
 function renderMeta() {
   const list = $("meta-list");
   if ($("tools").hidden || !$("tools").classList.contains("only-info")) return;
   const q = $("meta-filter").value.trim().toLowerCase();
-  const open = new Set([...list.querySelectorAll("details[open]")].map((d) => d.dataset.name));
-  const first = !list.childElementCount;
+  // Keep what the user expanded while the same file stays open.
+  const same = S.info && list.dataset.file === S.info.path;
+  const prev = new Map(same ? [...list.querySelectorAll("details")].map((d) => [d.dataset.name, d.open]) : []);
   list.textContent = "";
   let shown = 0;
   metaGroups().forEach((g, gi) => {
@@ -1197,7 +1197,7 @@ function renderMeta() {
     const d = document.createElement("details");
     d.dataset.name = g.name;
     // Expand the summaries by default and everything that matches a search.
-    d.open = q ? items.length <= 60 : first || !list.dataset.file ? gi < 2 : open.has(g.name);
+    d.open = q ? items.length <= 60 : prev.has(g.name) ? prev.get(g.name) : gi < 2;
     const sum = document.createElement("summary");
     const name = document.createElement("span");
     name.textContent = g.name;

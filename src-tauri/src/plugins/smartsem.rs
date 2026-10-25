@@ -1,12 +1,57 @@
-//! Electron microscope metadata stored in private TIFF tags.
+//! Native half of the Zeiss SmartSEM plugin (`ui/plugins/smartsem.js`).
 //!
-//! Zeiss SmartSEM writes tag 34118 (CZ_SEM): a few numbers, then pairs of
-//! lines, a parameter code (`AP_WD`, `DP_DETECTOR_CHANNEL`, `SV_VERSION`…)
-//! followed by its display text (`WD =  2.7 mm`, `Date: 22 Oct 2026`).
+//! SmartSEM, the software of Zeiss SEM / FIB-SEM microscopes, writes TIFF
+//! tag 34118 (CZ_SEM): a few numbers, then pairs of lines, a parameter code
+//! (`AP_WD`, `DP_DETECTOR_CHANNEL`, `SV_VERSION`…) followed by its display
+//! text (`WD =  2.7 mm`, `Date: 22 Oct 2026`), in Latin-1.
 
+use std::fs::File;
+use std::path::Path;
+
+use anyhow::{bail, Result};
+use memmap2::Mmap;
+use serde_json::{json, Value};
+
+use super::NativePlugin;
+use crate::formats::tiff::first_ifd_tag;
 use crate::image::MetaGroup;
 
-pub const ZEISS_SEM_TAG: u16 = 34118;
+const CZ_SEM_TAG: u16 = 34118;
+
+pub struct SmartSem;
+
+impl NativePlugin for SmartSem {
+    fn id(&self) -> &'static str {
+        "smartsem"
+    }
+
+    fn call(&self, method: &str, args: Value, _body: &[u8]) -> Result<Value> {
+        match method {
+            // {path, width} -> null, or {groups, pixelNm, version}
+            "read" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                let width = args["width"].as_u64().unwrap_or(0) as usize;
+                Ok(read(Path::new(path), width)?.map_or(Value::Null, |z| {
+                    json!({ "groups": z.groups, "pixelNm": z.pixel_nm, "version": z.version })
+                }))
+            }
+            _ => bail!("unknown method {method}"),
+        }
+    }
+}
+
+fn read(path: &Path, width: usize) -> Result<Option<Zeiss>> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "tif" && ext != "tiff" {
+        return Ok(None);
+    }
+    let file = File::open(path)?;
+    // SAFETY: read-only map, see formats::tiff.
+    let mmap = unsafe { Mmap::map(&file)? };
+    Ok(first_ifd_tag(&mmap, CZ_SEM_TAG)
+        .map(|b| b.iter().map(|&c| c as char).collect::<String>())
+        .and_then(|t| parse_zeiss(&t, width)))
+}
 
 /// Settings shown first, in this order, by parameter code.
 const ZEISS_MAIN: &[&str] = &[
@@ -55,10 +100,12 @@ const ZEISS_MAIN: &[&str] = &[
     "SV_VERSION",
 ];
 
-pub struct Zeiss {
-    pub groups: Vec<MetaGroup>,
+struct Zeiss {
+    groups: Vec<MetaGroup>,
     /// Pixel size in nm.
-    pub pixel_nm: Option<f64>,
+    pixel_nm: Option<f64>,
+    /// SmartSEM version, e.g. "V07.04.00.00 : 10-May-23".
+    version: Option<String>,
 }
 
 fn is_code(l: &str) -> bool {
@@ -89,7 +136,7 @@ fn length_nm(v: &str) -> Option<f64> {
     Some(n * f).filter(|x| *x > 0.0)
 }
 
-pub fn parse_zeiss(text: &str, width: usize) -> Option<Zeiss> {
+fn parse_zeiss(text: &str, width: usize) -> Option<Zeiss> {
     let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches(['\r', '\0', ' '])).collect();
     // code -> (label, value), in file order
     let mut entries: Vec<(&str, String, String)> = vec![];
@@ -116,7 +163,7 @@ pub fn parse_zeiss(text: &str, width: usize) -> Option<Zeiss> {
             }
         }
     }
-    let mut groups = vec![MetaGroup { name: "主要参数".into(), items: main }];
+    let mut groups = vec![MetaGroup { name: "SmartSEM 主要参数".into(), items: main }];
     for (prefix, name) in [("AP_", "全部数值参数 (AP)"), ("DP_", "全部状态 (DP)"), ("SV_", "系统信息 (SV)")] {
         let mut items: Vec<[String; 2]> =
             entries.iter().filter(|e| e.0.starts_with(prefix)).map(|e| [e.1.clone(), e.2.clone()]).collect();
@@ -139,5 +186,6 @@ pub fn parse_zeiss(text: &str, width: usize) -> Option<Zeiss> {
         (Some(n), _) => Some(n),
         (None, _) => get("AP_WIDTH").and_then(|e| length_nm(&e.2)).map(|w| w / width.max(1) as f64),
     };
-    Some(Zeiss { groups, pixel_nm })
+    let version = get("SV_VERSION").map(|e| e.2.clone()).filter(|v| !v.is_empty());
+    Some(Zeiss { groups, pixel_nm, version })
 }

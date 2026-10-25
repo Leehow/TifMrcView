@@ -14,7 +14,7 @@
 // into the plugin folder (插件 → 打开插件文件夹).
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js", "plugins/smartsem.js"];
 
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, active, error, cleanup, listeners}
@@ -153,6 +153,40 @@ function makeApi(rec) {
       dirname,
       basename,
       stem,
+    },
+
+    /**
+     * Adds to what is known about the open file. Each call names the `path`
+     * it is about and is ignored once another file is open, so answers from
+     * slow native calls cannot land on the wrong image.
+     */
+    image: {
+      /** Appends groups `{name, items: [[label, value], ...]}` to the image-info panel. */
+      addMetadata(path, groups) {
+        if (!S.info || S.info.path !== path) return false;
+        S.pluginMeta.push(...groups);
+        renderMeta();
+        return true;
+      },
+      /** Sets the physical pixel size `{x, y, unit}` (unit Å / nm / µm / mm), as if the file said so. */
+      setPixelSize(path, { x, y, unit }) {
+        if (!S.info || S.info.path !== path || !(x > 0) || !UNIT_M[unit]) return false;
+        S.px = { x, y: y > 0 ? y : x, unit };
+        S.pxSource = "来自文件";
+        syncScaleUi();
+        updateInfo();
+        renderMeta();
+        draw();
+        return true;
+      },
+      /** Replaces the format name shown in the status bar, e.g. "Zeiss SmartSEM TIFF". */
+      setFormat(path, name) {
+        if (!S.info || S.info.path !== path) return false;
+        S.info.format = name;
+        updateInfo();
+        renderMeta();
+        return true;
+      },
     },
 
     /** Calls the native half of this plugin. */
