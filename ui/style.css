@@ -120,6 +120,10 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #quickbar button svg { width: 17px; height: 17px; }
 .scroll-btn { flex: none; width: 24px; padding: 0; justify-content: center; font-size: 18px; color: var(--dim); }
 #view-group { padding-left: 8px; border-left: 1px solid var(--line); }
+.zoom { display: flex; align-items: center; gap: 0; }
+.zoom button { padding: 0; justify-content: center; }
+#btn-zoomout, #btn-zoomin { width: 26px; font-size: 16px; }
+#btn-zoom { width: 52px; font-size: 12px; font-variant-numeric: tabular-nums; }
 
 #channels { display: flex; gap: 4px; flex-wrap: nowrap; margin-left: 6px; }
 .chan {
