@@ -47,7 +47,7 @@ const WORDS = [
   ["忽略这个版本", "Skip this version", "Diese Version überspringen", "このバージョンをスキップ", "Omitir esta versión", "Ignorer cette version", "Пропустить эту версию"],
   // empty stage
   ["拖入或双击打开图像", "Drop an image here or double-click to open", "Bild hierher ziehen oder doppelklicken", "画像をドロップするかダブルクリックで開く", "Arrastra una imagen o haz doble clic para abrir", "Déposez une image ou double-cliquez pour ouvrir", "Перетащите изображение или дважды щёлкните"],
-  ["支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "Supports tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "Unterstützt tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "対応形式 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "Admite tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "Formats : tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp", "Форматы: tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp"],
+  ["支持 tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "Supports tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "Unterstützt tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "対応形式 tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "Admite tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "Formats : tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp", "Форматы: tif / tiff / czi / mrc / mrcs / png / jpg / bmp / gif / webp"],
   ["↑ ↓ 切换文件　← → 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG",
     "↑ ↓ file　← → Z　Space play　Wheel zoom　Drag pan　Ctrl/⌘+S save PNG",
     "↑ ↓ Datei　← → Z　Leertaste abspielen　Mausrad zoomen　Ziehen verschieben　Strg/⌘+S PNG speichern",
