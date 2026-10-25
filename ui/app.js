@@ -677,25 +677,35 @@ function drawAnnotations(g, map, unit, items) {
       const [x0, y0] = map(...a.pts[0]);
       const [x1, y1] = map(...a.pts[1]);
       const [, , w, h] = rectOf(a);
-      if (w >= 1 && h >= 1) drawAnnLabel(g, shapeLabel(a.type, w, h), (x0 + x1) / 2, Math.min(y0, y1) - 6 * unit, unit, a.color);
+      if (w >= 1 && h >= 1) {
+        // Width over the top edge, height beside the right edge.
+        const l = shapeLabels(a.type, w, h);
+        const top = Math.min(y0, y1) - 6 * unit;
+        if (l.d) drawAnnLabel(g, l.d, (x0 + x1) / 2, top, unit, a.color);
+        else {
+          drawAnnLabel(g, l.w, (x0 + x1) / 2, top, unit, a.color);
+          drawAnnLabel(g, l.h, Math.max(x0, x1) + 10 * unit, (y0 + y1) / 2 + 9 * unit, unit, a.color, "left");
+        }
+      }
     }
     g.restore();
   }
 }
 
-function drawAnnLabel(g, label, mx, my, unit, color) {
+function drawAnnLabel(g, label, mx, my, unit, color, align = "center") {
   g.font = `600 ${13 * unit}px -apple-system, "Segoe UI", sans-serif`;
-  g.textAlign = "center";
+  g.textAlign = align;
   g.textBaseline = "bottom";
   const w = g.measureText(label).width;
+  const left = align === "left" ? mx : mx - w / 2;
   g.fillStyle = "#000a";
-  g.fillRect(mx - w / 2 - 4 * unit, my - 16 * unit, w + 8 * unit, 18 * unit);
+  g.fillRect(left - 4 * unit, my - 16 * unit, w + 8 * unit, 18 * unit);
   g.fillStyle = color;
   g.fillText(label, mx, my);
 }
 
-/** "120 nm × 80 nm", or "⌀ 120 nm" for a circle. Pixels when the pixel size is unknown. */
-function shapeLabel(type, w, h) {
+/** {w, h} labels, or {d} ("⌀ 120 nm") for a circle. Pixels when the pixel size is unknown. */
+function shapeLabels(type, w, h) {
   let lw = `${Math.round(w)} px`;
   let lh = `${Math.round(h)} px`;
   if (S.px) {
@@ -705,8 +715,8 @@ function shapeLabel(type, w, h) {
     const u = lengthUnit(Math.max(mw, mh));
     [lw, lh] = [fmtLength(mw, u), fmtLength(mh, u)];
   }
-  if (type === "ellipse" && lw === lh) return `⌀ ${lw}`;
-  return `${lw} × ${lh}`;
+  if (type === "ellipse" && lw === lh) return { d: `⌀ ${lw}` };
+  return { w: lw, h: lh };
 }
 
 // ---------- IMOD models ----------
@@ -823,6 +833,7 @@ function drawModel(g, map, k, unit, z = S.z) {
 }
 
 function draw() {
+  updateZMarks();
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1162,7 +1173,7 @@ function rectOf(item) {
 
 /** Annotations belong to the Z slice they were drawn on. */
 function onSlice(a, z = S.z) {
-  return !S.info || S.info.sizeZ <= 1 || a.z === undefined || a.z === z;
+  return !S.info || S.info.sizeZ <= 1 || a.z === undefined || (z >= a.z && z <= (a.z1 ?? a.z));
 }
 
 function distToSeg(p, a, b) {
@@ -1244,7 +1255,19 @@ function sizeText(a) {
 }
 
 function showSize(a) {
-  $("size-out").textContent = a ? sizeText(a) : "";
+  $("size-out").hidden = !a;
+  $("size-text").textContent = a ? sizeText(a) : "";
+  const zb = $("ann-z");
+  const isAnn = a && a.type !== "crop" && a.z !== undefined && S.info && S.info.sizeZ > 1;
+  zb.hidden = !isAnn;
+  if (a !== S.zEdit) {
+    S.zEdit = null;
+    $("ann-z-edit").hidden = true;
+  }
+  if (isAnn) {
+    zb.textContent = zRangeText(a);
+    zb.hidden = !!S.zEdit;
+  }
   if (a && a.type === "line") $("measure-out").textContent = sizeText(a);
 }
 
@@ -1301,6 +1324,78 @@ function toggleAnn(force) {
 // ---------- annotation file ----------
 
 /** Redraws and saves the annotations a moment after the last change. */
+function zRangeText(a) {
+  const z1 = a.z1 ?? a.z;
+  if (a.z === 0 && z1 === S.info.sizeZ - 1) return "全部 Z";
+  return a.z === z1 ? `Z ${a.z + 1}` : `Z ${a.z + 1}–${z1 + 1}`;
+}
+
+/** Sets the Z range of the picked annotation (0-based, inclusive). */
+function setAnnZ(a, z0, z1) {
+  const n = S.info.sizeZ;
+  z0 = Math.max(0, Math.min(n - 1, Math.round(z0)));
+  z1 = Math.max(0, Math.min(n - 1, Math.round(z1)));
+  if (z1 < z0) [z0, z1] = [z1, z0];
+  if (a.z === z0 && (a.z1 ?? a.z) === z1) return;
+  pushHistory(snapshot());
+  a.z = z0;
+  if (z1 === z0) delete a.z1;
+  else a.z1 = z1;
+  annChanged();
+  if (!onSlice(a)) setZ(z0);
+  showSize(a);
+  if (S.zEdit === a) {
+    $("ann-z0").value = z0 + 1;
+    $("ann-z1").value = z1 + 1;
+  }
+}
+
+$("ann-z").addEventListener("click", () => {
+  const a = S.picked;
+  if (!a) return;
+  S.zEdit = a;
+  $("ann-z0").max = $("ann-z1").max = S.info.sizeZ;
+  $("ann-z0").value = a.z + 1;
+  $("ann-z1").value = (a.z1 ?? a.z) + 1;
+  $("ann-z").hidden = true;
+  $("ann-z-edit").hidden = false;
+  $("ann-z0").focus();
+});
+for (const id of ["ann-z0", "ann-z1"])
+  $(id).addEventListener("change", () => S.zEdit && setAnnZ(S.zEdit, $("ann-z0").value - 1, $("ann-z1").value - 1));
+$("ann-z-one").addEventListener("click", () => S.zEdit && setAnnZ(S.zEdit, S.z, S.z));
+$("ann-z-all").addEventListener("click", () => S.zEdit && setAnnZ(S.zEdit, 0, S.info.sizeZ - 1));
+for (const el of [$("ann-z0"), $("ann-z1")])
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === "Escape") {
+      el.blur();
+      S.zEdit = null;
+      $("ann-z-edit").hidden = true;
+      showSize(S.picked);
+    }
+  });
+
+/** Marks on the Z slider where annotations are shown. */
+let zMarksKey = "";
+function updateZMarks() {
+  const n = S.info ? S.info.sizeZ : 0;
+  const items = n > 1 ? S.ann.filter((a) => a.z !== undefined) : [];
+  const key = n + "|" + items.map((a) => `${a.z},${a.z1 ?? a.z},${a.color}`).join(";");
+  if (key === zMarksKey) return;
+  zMarksKey = key;
+  const box = $("zmarks");
+  box.innerHTML = "";
+  for (const a of items) {
+    const i = document.createElement("i");
+    const f0 = a.z / (n - 1);
+    const f1 = (a.z1 ?? a.z) / (n - 1);
+    i.style.left = `${f0 * 100}%`;
+    i.style.width = `calc(${(f1 - f0) * 100}% + 4px)`;
+    i.style.background = a.color;
+    box.append(i);
+  }
+}
+
 function annChanged() {
   draw();
   if (!S.info) return;

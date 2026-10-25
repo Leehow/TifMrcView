@@ -59,7 +59,15 @@
         <div class="hint">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
       </div>
       <div id="loading" hidden></div>
-      <div id="size-out"></div>
+      <div id="size-out" hidden>
+        <span id="size-text"></span>
+        <button id="ann-z" title="这个标注显示在哪些 Z 层，点击修改" hidden></button>
+        <span id="ann-z-edit" hidden>
+          Z <input type="number" id="ann-z0" min="1" /> – <input type="number" id="ann-z1" min="1" />
+          <button id="ann-z-one" title="只在当前层显示">仅本层</button>
+          <button id="ann-z-all" title="在所有层显示">全部层</button>
+        </span>
+      </div>
 
       <div id="drop-hint" hidden><div>松开鼠标打开图像</div></div>
       <aside id="tools" hidden>
@@ -84,9 +92,9 @@
           <h3>标注</h3>
           <div class="row" id="pen-shapes">
             <span class="dim">画笔</span>
-            <button class="small" data-shape="pen" title="自由画线 (P)">自由</button>
-            <button class="small" data-shape="rect" title="画框 (R)">框</button>
-            <button class="small" data-shape="ellipse" title="画圆 (E)">圆</button>
+            <button class="small" data-shape="pen" title="自由画线 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg><span>自由</span></button>
+            <button class="small" data-shape="rect" title="画框 (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><span>框</span></button>
+            <button class="small" data-shape="ellipse" title="画圆 (E)"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg><span>圆</span></button>
           </div>
           <div class="row">
             <label title="标注颜色">颜色 <input type="color" id="ann-color" value="#ffb020" /></label>
@@ -136,7 +144,7 @@
   <section id="zbar" hidden>
     <button id="btn-play" title="播放 Z (空格)">▶</button>
     <span class="dim">Z</span>
-    <input type="range" id="zslider" min="0" max="0" value="0" />
+    <div id="zwrap"><div id="zmarks"></div><input type="range" id="zslider" min="0" max="0" value="0" /></div>
     <span id="zlabel"></span>
     <div id="tgroup" hidden>
       <span class="dim">T</span>
