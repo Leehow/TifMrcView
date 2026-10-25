@@ -499,3 +499,347 @@ impl OpenImage {
         });
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// An `ImageInfo` for tests; `page_count` follows from the dimensions.
+    pub(crate) fn fake_info(w: usize, h: usize, c: usize, z: usize, t: usize, dtype: DType) -> ImageInfo {
+        let mut info = ImageInfo {
+            path: String::new(),
+            name: "fake".into(),
+            format: "fake".into(),
+            width: w,
+            height: h,
+            size_c: c,
+            size_z: z,
+            size_t: t,
+            dtype,
+            is_rgb: false,
+            channels: vec![],
+            pixel_size: None,
+            unit: String::new(),
+            samples_per_page: 1,
+            order: DimOrder::CZT,
+            page_count: c * z * t,
+        };
+        info.fill_default_channels();
+        info
+    }
+
+    /// In-memory 8-bit source: `pages[page][sample]` are the row-major bytes.
+    pub(crate) struct FakeSource {
+        pub info: ImageInfo,
+        pub pages: Vec<Vec<Vec<u8>>>,
+        pub reads: Arc<AtomicUsize>,
+    }
+
+    impl FakeSource {
+        pub(crate) fn new(info: ImageInfo, pages: Vec<Vec<Vec<u8>>>) -> (FakeSource, Arc<AtomicUsize>) {
+            let reads = Arc::new(AtomicUsize::new(0));
+            (FakeSource { info, pages, reads: reads.clone() }, reads)
+        }
+    }
+
+    impl Source for FakeSource {
+        fn info(&self) -> &ImageInfo {
+            &self.info
+        }
+        fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            let p = self.pages.get(page).ok_or_else(|| anyhow::anyhow!("no page {page}"))?;
+            Ok(p.iter()
+                .map(|b| Plane { w: self.info.width, h: self.info.height, data: PlaneData::U8(b.clone()) })
+                .collect())
+        }
+    }
+
+    /// Single-channel stack of `n` pages, each 2x2 (4 bytes) filled with its index.
+    fn stack(n: usize, budget: usize) -> (Arc<OpenImage>, Arc<AtomicUsize>) {
+        let pages = (0..n).map(|i| vec![vec![i as u8; 4]]).collect();
+        let (src, reads) = FakeSource::new(fake_info(2, 2, 1, n, 1, DType::U8), pages);
+        (OpenImage::new(1, Box::new(src), budget), reads)
+    }
+
+    fn plane(data: PlaneData, w: usize, h: usize) -> Plane {
+        Plane { w, h, data }
+    }
+
+    #[test]
+    fn dtype_sizes() {
+        let all = [DType::U8, DType::I8, DType::U16, DType::I16, DType::U32, DType::I32, DType::F32, DType::F64];
+        let sizes: Vec<usize> = all.iter().map(|d| d.size()).collect();
+        assert_eq!(sizes, [1, 1, 2, 2, 4, 4, 4, 8]);
+    }
+
+    #[test]
+    fn plane_data_basics() {
+        let p = PlaneData::zeroed(DType::U16, 3);
+        assert_eq!((p.len(), p.byte_len()), (3, 6));
+        let p = PlaneData::U16(vec![1, 0x0203]);
+        let mut want = 1u16.to_ne_bytes().to_vec();
+        want.extend(0x0203u16.to_ne_bytes());
+        assert_eq!(p.as_bytes(), want);
+        assert_eq!(PlaneData::I16(vec![-5]).get_f64(0), -5.0);
+        let mut p = PlaneData::zeroed(DType::U8, 2);
+        p.as_bytes_mut()[1] = 9;
+        assert_eq!(p.get_f64(1), 9.0);
+    }
+
+    #[test]
+    fn deinterleave_splits_samples() {
+        let planes = PlaneData::U8(vec![1, 10, 100, 2, 20, 200]).deinterleave(3);
+        let got: Vec<Vec<u8>> = planes
+            .iter()
+            .map(|p| match p {
+                PlaneData::U8(v) => v.clone(),
+                _ => panic!("dtype changed"),
+            })
+            .collect();
+        assert_eq!(got, [vec![1, 2], vec![10, 20], vec![100, 200]]);
+    }
+
+    #[test]
+    fn deinterleave_single_channel_is_identity() {
+        let planes = PlaneData::F32(vec![1.0, 2.0, 3.0]).deinterleave(1);
+        assert_eq!(planes.len(), 1);
+        assert_eq!(planes[0].len(), 3);
+        assert_eq!(PlaneData::F32(vec![1.0]).deinterleave(0).len(), 1);
+    }
+
+    #[test]
+    fn deinterleave_f32_pairs() {
+        let planes = PlaneData::F32(vec![0.5, -0.5, 1.5, -1.5]).deinterleave(2);
+        assert_eq!((planes[0].get_f64(1), planes[1].get_f64(1)), (1.5, -1.5));
+    }
+
+    #[test]
+    fn stats_constant_image() {
+        let s = Stats::compute(&plane(PlaneData::U8(vec![7; 16]), 4, 4));
+        assert_eq!((s.min, s.max), (7.0, 7.0));
+        assert_eq!(s.percentile(0.5), 7.0);
+        let (lo, hi) = s.auto_range();
+        assert_eq!(lo, 7.0);
+        assert!(hi > lo);
+        assert_eq!(s.bins(8).iter().sum::<u32>(), 16);
+    }
+
+    #[test]
+    fn stats_ramp() {
+        let s = Stats::compute(&plane(PlaneData::U8((0..=255).collect()), 16, 16));
+        assert_eq!((s.min, s.max), (0.0, 255.0));
+        assert!((s.percentile(0.5) - 128.0).abs() <= 2.0, "{}", s.percentile(0.5));
+        assert!(s.percentile(0.0) <= 1.0);
+        assert!(s.percentile(1.0) >= 254.0);
+        let (lo, hi) = s.auto_range();
+        assert!(lo <= 1.0 && (253.0..=255.0).contains(&hi), "{lo} {hi}");
+    }
+
+    #[test]
+    fn stats_bins_regroup() {
+        let s = Stats::compute(&plane(PlaneData::U8((0..=255).collect()), 16, 16));
+        let b = s.bins(4);
+        assert_eq!(b.len(), 4);
+        assert_eq!(b.iter().sum::<u32>(), 256);
+        assert!(b.iter().all(|&c| (60..=68).contains(&c)), "{b:?}");
+        assert_eq!(s.bins(1), vec![256]);
+    }
+
+    #[test]
+    fn stats_f32_ignores_nan_and_inf() {
+        let v = vec![f32::NAN, 1.0, f32::INFINITY, 3.0, f32::NEG_INFINITY, 2.0];
+        let s = Stats::compute(&plane(PlaneData::F32(v), 3, 2));
+        assert_eq!((s.min, s.max), (1.0, 3.0));
+        assert_eq!(s.bins(4).iter().sum::<u32>(), 3);
+    }
+
+    #[test]
+    fn stats_all_nan_falls_back_to_unit_range() {
+        let s = Stats::compute(&plane(PlaneData::F32(vec![f32::NAN; 4]), 2, 2));
+        assert_eq!((s.min, s.max), (0.0, 1.0));
+        assert_eq!(s.percentile(0.5), 0.0);
+    }
+
+    #[test]
+    fn stats_signed_types() {
+        let s = Stats::compute(&plane(PlaneData::I16(vec![-100, 50, 0, 300]), 2, 2));
+        assert_eq!((s.min, s.max), (-100.0, 300.0));
+        let s = Stats::compute(&plane(PlaneData::I8(vec![-128, 127]), 2, 1));
+        assert_eq!((s.min, s.max), (-128.0, 127.0));
+    }
+
+    #[test]
+    fn dim_order_parse() {
+        let name = |s: &str| format!("{:?}", DimOrder::parse(s));
+        assert_eq!(name("XYCZT"), "CZT");
+        assert_eq!(name("XYCTZ"), "CTZ");
+        assert_eq!(name("XYZCT"), "ZCT");
+        assert_eq!(name("XYZTC"), "ZTC");
+        assert_eq!(name("XYTCZ"), "TCZ");
+        assert_eq!(name("XYTZC"), "TZC");
+        assert_eq!(name("TZC"), "TZC");
+        assert_eq!(name("bogus"), "CZT");
+        assert_eq!(name(""), "CZT");
+    }
+
+    const ORDERS: [DimOrder; 6] =
+        [DimOrder::CZT, DimOrder::CTZ, DimOrder::ZCT, DimOrder::ZTC, DimOrder::TCZ, DimOrder::TZC];
+
+    #[test]
+    fn locate_every_order_is_a_bijection() {
+        for order in ORDERS {
+            let mut info = fake_info(1, 1, 2, 3, 4, DType::U8);
+            info.order = order;
+            let mut seen = vec![false; info.page_count];
+            for t in 0..4 {
+                for z in 0..3 {
+                    for c in 0..2 {
+                        let (p, s) = info.locate(c, z, t);
+                        assert_eq!(s, 0);
+                        assert!(!seen[p], "{order:?}: page {p} hit twice");
+                        seen[p] = true;
+                    }
+                }
+            }
+            assert!(seen.iter().all(|&b| b), "{order:?}");
+        }
+    }
+
+    #[test]
+    fn locate_known_indices() {
+        let loc = |order, c, z, t| {
+            let mut info = fake_info(1, 1, 2, 3, 4, DType::U8);
+            info.order = order;
+            info.locate(c, z, t).0
+        };
+        // (c, z, t) = (1, 2, 3); sizes c=2, z=3, t=4.
+        assert_eq!(loc(DimOrder::CZT, 1, 2, 3), 1 + 2 * (2 + 3 * 3));
+        assert_eq!(loc(DimOrder::CTZ, 1, 2, 3), 1 + 2 * (3 + 4 * 2));
+        assert_eq!(loc(DimOrder::ZCT, 1, 2, 3), 2 + 3 * (1 + 2 * 3));
+        assert_eq!(loc(DimOrder::ZTC, 1, 2, 3), 2 + 3 * (3 + 4));
+        assert_eq!(loc(DimOrder::TCZ, 1, 2, 3), 3 + 4 * (1 + 2 * 2));
+        assert_eq!(loc(DimOrder::TZC, 1, 2, 3), 3 + 4 * (2 + 3));
+        assert_eq!(loc(DimOrder::CZT, 0, 0, 0), 0);
+        assert_eq!(loc(DimOrder::CZT, 1, 0, 0), 1);
+        assert_eq!(loc(DimOrder::ZCT, 0, 1, 0), 1);
+    }
+
+    #[test]
+    fn locate_clamps_out_of_range() {
+        let info = fake_info(1, 1, 2, 3, 4, DType::U8);
+        assert_eq!(info.locate(99, 99, 99), info.locate(1, 2, 3));
+        assert_eq!(info.locate(99, 99, 99).0, info.page_count - 1);
+    }
+
+    #[test]
+    fn locate_interleaved_samples() {
+        // RGB pages: channel is the sample index, pages are (t, z).
+        let mut info = fake_info(1, 1, 3, 2, 2, DType::U8);
+        info.samples_per_page = 3;
+        info.page_count = 4;
+        assert_eq!(info.locate(2, 1, 1), (3, 2));
+        assert_eq!(info.locate(0, 1, 0), (1, 0));
+        assert_eq!(info.locate(7, 7, 7), (3, 2));
+    }
+
+    #[test]
+    fn locate_clamps_to_page_count() {
+        // Metadata claims more planes than the file has.
+        let mut info = fake_info(1, 1, 1, 5, 1, DType::U8);
+        info.page_count = 3;
+        assert_eq!(info.locate(0, 4, 0).0, 2);
+    }
+
+    #[test]
+    fn page_bytes_counts_samples_and_dtype() {
+        let mut info = fake_info(4, 3, 3, 1, 1, DType::U16);
+        info.samples_per_page = 3;
+        assert_eq!(info.page_bytes(), 4 * 3 * 3 * 2);
+    }
+
+    #[test]
+    fn default_channels_gray_multi_and_rgb() {
+        let info = fake_info(1, 1, 1, 1, 1, DType::U8);
+        assert_eq!(info.channels.len(), 1);
+        assert_eq!(info.channels[0].color, [255, 255, 255]);
+        assert_eq!(info.channels[0].name, "C1");
+
+        let info = fake_info(1, 1, 3, 1, 1, DType::U8);
+        let colors: Vec<_> = info.channels.iter().map(|c| c.color).collect();
+        assert_eq!(colors, [DEFAULT_COLORS[0], DEFAULT_COLORS[1], DEFAULT_COLORS[2]]);
+
+        let mut rgb = fake_info(1, 1, 3, 1, 1, DType::U8);
+        rgb.is_rgb = true;
+        rgb.channels.clear();
+        rgb.fill_default_channels();
+        let colors: Vec<_> = rgb.channels.iter().map(|c| c.color).collect();
+        assert_eq!(colors, [[255, 0, 0], [0, 255, 0], [0, 0, 255]]);
+    }
+
+    #[test]
+    fn default_channels_wrap_and_truncate() {
+        let mut info = fake_info(1, 1, 9, 1, 1, DType::U8);
+        assert_eq!(info.channels.len(), 9);
+        assert_eq!(info.channels[7].color, DEFAULT_COLORS[0]);
+        info.size_c = 2;
+        info.fill_default_channels();
+        assert_eq!(info.channels.len(), 2);
+        // Existing entries are kept.
+        info.channels[0].name = "DAPI".into();
+        info.size_c = 3;
+        info.fill_default_channels();
+        assert_eq!((info.channels[0].name.as_str(), info.channels[2].name.as_str()), ("DAPI", "C3"));
+    }
+
+    #[test]
+    fn page_cache_hits_do_not_reread() {
+        let (img, reads) = stack(3, 1000);
+        assert!(img.cached(0).is_none());
+        img.page(0).unwrap();
+        img.page(0).unwrap();
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+        assert!(img.cached(0).is_some());
+        assert!(img.page(9).is_err());
+    }
+
+    #[test]
+    fn page_cache_evicts_farthest_from_focus() {
+        // Budget holds two 4-byte pages.
+        let (img, reads) = stack(10, 8);
+        img.page(0).unwrap();
+        img.page(1).unwrap();
+        img.set_focus(1);
+        img.page(5).unwrap();
+        assert!(img.cached(0).is_none(), "page 0 is farthest from focus 1");
+        assert!(img.cached(1).is_some() && img.cached(5).is_some());
+        // Move focus to the far end: page 1 is now the farthest.
+        img.set_focus(9);
+        img.page(8).unwrap();
+        assert!(img.cached(1).is_none());
+        assert!(img.cached(5).is_some() && img.cached(8).is_some());
+        assert_eq!(reads.load(Ordering::Relaxed), 4);
+        // Evicted pages are decoded again.
+        img.page(0).unwrap();
+        assert_eq!(reads.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn page_larger_than_budget_is_still_returned() {
+        let (img, _) = stack(3, 2);
+        let p = img.page(1).unwrap();
+        assert_eq!(p[0].data.get_f64(0), 1.0);
+        img.page(2).unwrap();
+        assert!(img.cached(1).is_none() && img.cached(2).is_some());
+    }
+
+    #[test]
+    fn stats_are_cached_per_page_and_sample() {
+        let (img, _) = stack(2, 1000);
+        let p = img.page(1).unwrap();
+        let s = img.stats(1, 0, &p);
+        assert_eq!((s.min, s.max), (1.0, 1.0));
+        // Out-of-range sample index is clamped.
+        assert_eq!(img.stats(1, 5, &p).min, 1.0);
+    }
+}

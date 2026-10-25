@@ -96,3 +96,106 @@ pub fn xml_tags<'a>(xml: &'a str, name: &'a str) -> impl Iterator<Item = &'a str
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_extensions() {
+        for f in ["a.tif", "a.TIFF", "b.mrc", "b.MRCS", "c.rec", "c.st", "c.map", "d.png", "d.JPG", "d.webp"] {
+            assert!(is_supported(Path::new(f)), "{f}");
+        }
+        for f in ["a.txt", "noext", "a.tif.bak", ".tif", "a.mod", ""] {
+            assert!(!is_supported(Path::new(f)), "{f}");
+        }
+        assert!(is_supported(Path::new("/some/dir.v2/x.tif")));
+    }
+
+    #[test]
+    fn open_rejects_unknown_extension() {
+        assert!(open(Path::new("x.xyz")).is_err());
+        assert!(open(Path::new("/no/such/file.tif")).is_err());
+    }
+
+    fn f64s(p: &PlaneData) -> Vec<f64> {
+        (0..p.len()).map(|i| p.get_f64(i)).collect()
+    }
+
+    #[test]
+    fn raw_to_plane_u8_i8() {
+        assert_eq!(f64s(&raw_to_plane(&[0, 255], DType::U8, true)), [0.0, 255.0]);
+        assert_eq!(f64s(&raw_to_plane(&[0x80, 0x7f, 0xff], DType::I8, false)), [-128.0, 127.0, -1.0]);
+    }
+
+    #[test]
+    fn raw_to_plane_both_endiannesses() {
+        let le = |v: &[u8]| raw_to_plane(v, DType::U16, true);
+        let be = |v: &[u8]| raw_to_plane(v, DType::U16, false);
+        assert_eq!(f64s(&le(&[0x34, 0x12])), [0x1234 as f64]);
+        assert_eq!(f64s(&be(&[0x12, 0x34])), [0x1234 as f64]);
+        assert_eq!(f64s(&raw_to_plane(&(-2i16).to_le_bytes(), DType::I16, true)), [-2.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-2i16).to_be_bytes(), DType::I16, false)), [-2.0]);
+        assert_eq!(f64s(&raw_to_plane(&70000u32.to_le_bytes(), DType::U32, true)), [70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&70000u32.to_be_bytes(), DType::U32, false)), [70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-70000i32).to_le_bytes(), DType::I32, true)), [-70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-70000i32).to_be_bytes(), DType::I32, false)), [-70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&1.5f32.to_le_bytes(), DType::F32, true)), [1.5]);
+        assert_eq!(f64s(&raw_to_plane(&1.5f32.to_be_bytes(), DType::F32, false)), [1.5]);
+        let p = raw_to_plane(&(-0.25f64).to_le_bytes(), DType::F64, true);
+        assert!(matches!(p, PlaneData::F64(ref v) if v == &[-0.25]));
+        let p = raw_to_plane(&(-0.25f64).to_be_bytes(), DType::F64, false);
+        assert!(matches!(p, PlaneData::F64(ref v) if v == &[-0.25]));
+    }
+
+    #[test]
+    fn raw_to_plane_ignores_trailing_partial_sample() {
+        assert_eq!(raw_to_plane(&[1, 0, 2, 0, 3], DType::U16, true).len(), 2);
+        assert_eq!(raw_to_plane(&[], DType::F32, true).len(), 0);
+    }
+
+    #[test]
+    fn xml_attr_basic_and_quotes() {
+        let tag = r#"<Pixels SizeC="2" Name='a b' Empty="">"#;
+        assert_eq!(xml_attr(tag, "SizeC"), Some("2"));
+        assert_eq!(xml_attr(tag, "Name"), Some("a b"));
+        assert_eq!(xml_attr(tag, "Empty"), Some(""));
+        assert_eq!(xml_attr(tag, "Missing"), None);
+    }
+
+    #[test]
+    fn xml_attr_whitespace_around_equals() {
+        assert_eq!(xml_attr(r#"<a x = "1">"#, "x"), Some("1"));
+    }
+
+    #[test]
+    fn xml_attr_does_not_match_name_suffix() {
+        let tag = r#"<Pixels PhysicalSizeC="9" SizeC="2">"#;
+        assert_eq!(xml_attr(tag, "SizeC"), Some("2"));
+        assert_eq!(xml_attr(r#"<Pixels PhysicalSizeC="9">"#, "SizeC"), None);
+        assert_eq!(xml_attr(r#"<Pixels SizeC="2">"#, "PhysicalSizeC"), None);
+    }
+
+    #[test]
+    fn xml_attr_longer_name_with_same_prefix() {
+        // "SizeCX" starts with "SizeC" but is a different attribute.
+        assert_eq!(xml_attr(r#"<P SizeCX="1" SizeC="2">"#, "SizeC"), Some("2"));
+        assert_eq!(xml_attr(r#"<P SizeCX="1">"#, "SizeC"), None);
+    }
+
+    #[test]
+    fn xml_attr_unquoted_is_none() {
+        assert_eq!(xml_attr("<a x=1>", "x"), None);
+    }
+
+    #[test]
+    fn xml_tags_iterates_opening_tags() {
+        let xml = r#"<OME><Pixels SizeC="2"><Channel ID="a"/><Channel ID="b"></Channel><ChannelX/><Pixel/></Pixels></OME>"#;
+        let ch: Vec<_> = xml_tags(xml, "Channel").collect();
+        assert_eq!(ch, [r#"<Channel ID="a"/"#, r#"<Channel ID="b""#]);
+        assert_eq!(xml_tags(xml, "Pixels").next(), Some(r#"<Pixels SizeC="2""#));
+        assert_eq!(xml_tags(xml, "Nope").count(), 0);
+        assert_eq!(xml_tags("<A>", "A").count(), 1);
+        assert_eq!(xml_tags("<A/>", "A").count(), 1);
+    }
+}

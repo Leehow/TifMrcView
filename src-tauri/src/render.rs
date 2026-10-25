@@ -217,3 +217,214 @@ pub fn thumbnail(img: &Arc<OpenImage>, size: usize) -> Result<Vec<u8>> {
     };
     render(img, &req)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::tests::{fake_info, FakeSource};
+
+    /// 4x4 U8 ramp: pixel i holds 16*i (0..=240).
+    fn ramp() -> Arc<OpenImage> {
+        let page: Vec<u8> = (0..16).map(|i| i * 16).collect();
+        let (src, _) = FakeSource::new(fake_info(4, 4, 1, 1, 1, DType::U8), vec![vec![page]]);
+        OpenImage::new(1, Box::new(src), 1 << 20)
+    }
+
+    fn req(out: usize) -> RenderReq {
+        RenderReq {
+            token: 1,
+            z: 0,
+            t: 0,
+            channels: vec![ChanReq { index: 0, color: [255, 255, 255], min: Some(0.0), max: Some(255.0) }],
+            region: [0.0, 0.0, 4.0, 4.0],
+            out_w: out,
+            out_h: out,
+            gamma: 1.0,
+            invert: false,
+        }
+    }
+
+    fn u32_at(b: &[u8], off: usize) -> u32 {
+        u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+    }
+
+    fn f32_at(b: &[u8], off: usize) -> f32 {
+        f32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+    }
+
+    /// Red channel of every output pixel.
+    fn reds(out: &[u8]) -> Vec<u8> {
+        out[12 + 16 * u32_at(out, 8) as usize..].chunks_exact(4).map(|p| p[0]).collect()
+    }
+
+    fn close(a: &[u8], b: &[u8]) {
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b) {
+            assert!(x.abs_diff(*y) <= 1, "{a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn header_layout() {
+        let out = render(&ramp(), &req(4)).unwrap();
+        assert_eq!(out.len(), 12 + 16 + 4 * 4 * 4);
+        assert_eq!((u32_at(&out, 0), u32_at(&out, 4), u32_at(&out, 8)), (4, 4, 1));
+        // lo, hi (as requested), then data min / max.
+        let h: Vec<f32> = (0..4).map(|k| f32_at(&out, 12 + 4 * k)).collect();
+        assert_eq!(h, [0.0, 255.0, 0.0, 240.0]);
+    }
+
+    #[test]
+    fn full_resolution_pixels() {
+        let out = render(&ramp(), &req(4)).unwrap();
+        close(&reds(&out), &(0..16).map(|i| i * 16).collect::<Vec<u8>>());
+        // Gray channel color: r == g == b, alpha opaque.
+        for px in out[28..].chunks_exact(4) {
+            assert!(px[0].abs_diff(px[1]) <= 1 && px[0].abs_diff(px[2]) <= 1);
+            assert_eq!(px[3], 255);
+        }
+    }
+
+    #[test]
+    fn downscale_box_averages() {
+        let out = render(&ramp(), &req(2)).unwrap();
+        assert_eq!((u32_at(&out, 0), u32_at(&out, 4)), (2, 2));
+        // Mean of each 2x2 block of i*16: (0,1,4,5) -> 40, (2,3,6,7) -> 72, ...
+        close(&reds(&out), &[40, 72, 168, 200]);
+    }
+
+    #[test]
+    fn upscale_repeats_pixels() {
+        let out = render(&ramp(), &req(8)).unwrap();
+        let r = reds(&out);
+        assert_eq!(r.len(), 64);
+        close(&[r[0], r[1], r[8], r[9]], &[0, 0, 0, 0]);
+        close(&[r[2], r[3], r[10], r[11]], &[16, 16, 16, 16]);
+        close(&[r[63]], &[240]);
+    }
+
+    #[test]
+    fn sub_region() {
+        let mut r = req(2);
+        r.region = [2.0, 2.0, 2.0, 2.0];
+        close(&reds(&render(&ramp(), &r).unwrap()), &[160, 176, 224, 240]);
+    }
+
+    #[test]
+    fn region_outside_image_is_clamped() {
+        let mut r = req(2);
+        r.region = [100.0, -50.0, 2.0, 2.0];
+        let out = render(&ramp(), &r).unwrap();
+        assert_eq!(out.len(), 12 + 16 + 16);
+    }
+
+    #[test]
+    fn color_invert_and_gamma() {
+        let mut r = req(4);
+        r.channels[0].color = [255, 0, 0];
+        let out = render(&ramp(), &r).unwrap();
+        let px = &out[28 + 4 * 15..28 + 4 * 16];
+        assert_eq!((px[1], px[2]), (0, 0));
+        assert!(px[0] >= 239);
+
+        r.invert = true;
+        let out = render(&ramp(), &r).unwrap();
+        let px = &out[28 + 4 * 15..28 + 4 * 16];
+        assert_eq!((px[1], px[2]), (255, 255));
+        assert!(px[0] <= 16);
+
+        let mut r = req(4);
+        r.gamma = 2.0;
+        // 128/255 squared is about 0.252.
+        let out = render(&ramp(), &r).unwrap();
+        close(&reds(&out)[8..9], &[(0.5f32.powi(2) * 255.0) as u8]);
+    }
+
+    #[test]
+    fn explicit_window_clamps() {
+        let mut r = req(4);
+        r.channels[0].min = Some(64.0);
+        r.channels[0].max = Some(128.0);
+        let reds = reds(&render(&ramp(), &r).unwrap());
+        assert_eq!((reds[0], reds[3], reds[4]), (0, 0, 0)); // 0, 48, 64 -> black
+        assert_eq!((reds[8], reds[15]), (255, 255)); // 128, 240 -> white
+    }
+
+    #[test]
+    fn two_channels_add() {
+        let page = |v: u8| vec![v; 16];
+        let (src, _) = FakeSource::new(fake_info(4, 4, 2, 1, 1, DType::U8), vec![vec![page(100)], vec![page(100)]]);
+        let img = OpenImage::new(1, Box::new(src), 1 << 20);
+        let mut r = req(4);
+        r.channels = vec![
+            ChanReq { index: 0, color: [255, 0, 0], min: Some(0.0), max: Some(200.0) },
+            ChanReq { index: 1, color: [0, 255, 0], min: Some(0.0), max: Some(200.0) },
+        ];
+        let out = render(&img, &r).unwrap();
+        assert_eq!(u32_at(&out, 8), 2);
+        let px = &out[12 + 32..12 + 32 + 4];
+        assert_eq!((px[0], px[1], px[2], px[3]), (127, 127, 0, 255));
+    }
+
+    #[test]
+    fn auto_range_for_integer_types_is_whole_numbers() {
+        let mut r = req(4);
+        r.channels[0].min = None;
+        r.channels[0].max = None;
+        let out = render(&ramp(), &r).unwrap();
+        let (lo, hi) = (f32_at(&out, 12), f32_at(&out, 16));
+        assert_eq!((lo.fract(), hi.fract()), (0.0, 0.0));
+        assert!(lo < hi);
+    }
+
+    #[test]
+    fn output_size_is_clamped_to_at_least_one() {
+        let mut r = req(1);
+        r.out_w = 0;
+        r.out_h = 0;
+        let out = render(&ramp(), &r).unwrap();
+        assert_eq!((u32_at(&out, 0), u32_at(&out, 4)), (1, 1));
+    }
+
+    #[test]
+    fn pixel_values_in_and_out_of_bounds() {
+        let img = ramp();
+        assert_eq!(pixel_values(&img, 0, 0, 1, 2).unwrap(), [144.0]);
+        assert_eq!(pixel_values(&img, 0, 0, 3, 3).unwrap(), [240.0]);
+        assert!(pixel_values(&img, 0, 0, 4, 0).unwrap().is_empty());
+        assert!(pixel_values(&img, 0, 0, 0, 4).unwrap().is_empty());
+        assert!(pixel_values(&img, 0, 0, usize::MAX, usize::MAX).unwrap().is_empty());
+        // z and t beyond the stack are clamped.
+        assert_eq!(pixel_values(&img, 9, 9, 0, 1).unwrap(), [64.0]);
+    }
+
+    #[test]
+    fn pixel_values_lists_every_channel() {
+        let (src, _) = FakeSource::new(
+            fake_info(2, 1, 2, 1, 1, DType::U8),
+            vec![vec![vec![1, 2]], vec![vec![10, 20]]],
+        );
+        let img = OpenImage::new(1, Box::new(src), 1 << 20);
+        assert_eq!(pixel_values(&img, 0, 0, 1, 0).unwrap(), [2.0, 20.0]);
+    }
+
+    fn sized(w: usize, h: usize) -> Arc<OpenImage> {
+        let (src, _) = FakeSource::new(fake_info(w, h, 1, 1, 1, DType::U8), vec![vec![vec![7; w * h]]]);
+        OpenImage::new(1, Box::new(src), 1 << 20)
+    }
+
+    #[test]
+    fn thumbnail_dimensions() {
+        let dims = |img: &Arc<OpenImage>, size| {
+            let out = thumbnail(img, size).unwrap();
+            assert_eq!(out.len(), 12 + 16 + (u32_at(&out, 0) * u32_at(&out, 4) * 4) as usize);
+            (u32_at(&out, 0), u32_at(&out, 4))
+        };
+        assert_eq!(dims(&sized(8, 4), 4), (4, 2));
+        assert_eq!(dims(&sized(4, 8), 4), (2, 4));
+        // Never enlarged.
+        assert_eq!(dims(&sized(8, 4), 100), (8, 4));
+        // Extreme aspect ratio keeps at least one pixel.
+        assert_eq!(dims(&sized(100, 1), 10), (10, 1));
+    }
+}
