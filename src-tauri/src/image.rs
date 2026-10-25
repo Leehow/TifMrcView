@@ -461,13 +461,16 @@ impl OpenImage {
             // Pages kept on each side of the focus.
             let reach = (me.budget / per_page).max(1).min(n) / 2;
             let busy = Mutex::new(std::collections::HashSet::new());
+            // Pages that failed to decode; never retried in the background.
+            let failed = Mutex::new(std::collections::HashSet::new());
             let next = || -> Option<usize> {
                 let f = me.focus.load(Ordering::Relaxed).min(n - 1);
                 let cache = me.cache.lock().unwrap();
                 let mut busy = busy.lock().unwrap();
+                let failed = failed.lock().unwrap();
                 for d in 0..=reach {
                     for p in [f.checked_add(d), f.checked_sub(d)].into_iter().flatten() {
-                        if p < n && !cache.contains_key(&p) && !busy.contains(&p) {
+                        if p < n && !cache.contains_key(&p) && !busy.contains(&p) && !failed.contains(&p) {
                             busy.insert(p);
                             return Some(p);
                         }
@@ -486,9 +489,14 @@ impl OpenImage {
                                 std::thread::sleep(std::time::Duration::from_millis(40));
                                 continue;
                             };
-                            if let Ok(planes) = me.page(p) {
-                                for i in 0..planes.len() {
-                                    me.stats(p, i, &planes);
+                            match me.page(p) {
+                                Ok(planes) => {
+                                    for i in 0..planes.len() {
+                                        me.stats(p, i, &planes);
+                                    }
+                                }
+                                Err(_) => {
+                                    failed.lock().unwrap().insert(p);
                                 }
                             }
                             busy.lock().unwrap().remove(&p);
@@ -497,5 +505,56 @@ impl OpenImage {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1×1 pages; page 1 always fails to decode.
+    struct Flaky {
+        info: ImageInfo,
+        reads: Arc<[AtomicUsize; 3]>,
+    }
+
+    impl Source for Flaky {
+        fn info(&self) -> &ImageInfo {
+            &self.info
+        }
+        fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
+            self.reads[page].fetch_add(1, Ordering::Relaxed);
+            anyhow::ensure!(page != 1, "broken page");
+            Ok(vec![Plane { w: 1, h: 1, data: PlaneData::U8(vec![0]) }])
+        }
+    }
+
+    #[test]
+    fn prefetch_does_not_retry_failed_pages() {
+        let info = ImageInfo {
+            path: String::new(),
+            name: String::new(),
+            format: String::new(),
+            width: 1,
+            height: 1,
+            size_c: 1,
+            size_z: 3,
+            size_t: 1,
+            dtype: DType::U8,
+            is_rgb: false,
+            channels: vec![],
+            pixel_size: None,
+            unit: String::new(),
+            samples_per_page: 1,
+            order: DimOrder::CZT,
+            page_count: 3,
+        };
+        let reads: Arc<[AtomicUsize; 3]> = Arc::default();
+        let img = OpenImage::new(1, Box::new(Flaky { info, reads: reads.clone() }), usize::MAX);
+        img.prefetch(1);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        img.cancelled.store(true, Ordering::Relaxed);
+        assert_eq!(reads[1].load(Ordering::Relaxed), 1);
+        assert!(img.cached(0).is_some() && img.cached(2).is_some());
     }
 }

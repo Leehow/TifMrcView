@@ -74,6 +74,12 @@ async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: Str
     let info = img.info().clone();
     {
         let mut cur = state.current.lock().unwrap();
+        // If the window closed while the file was opening, nothing would ever
+        // cancel the prefetch below. Tauri unregisters a window before our
+        // Destroyed handler takes this lock, so the check cannot race it.
+        if window.app_handle().get_webview_window(window.label()).is_none() {
+            return Err("window closed".into());
+        }
         if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             old.cancelled.store(true, Ordering::Relaxed);
         }
