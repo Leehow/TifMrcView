@@ -194,3 +194,5 @@ input[type="color"] { width: 32px; height: 22px; padding: 0; border: 1px solid v
 #mod-objects { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; max-height: 160px; overflow-y: auto; }
 #mod-objects label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 #mod-objects .sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }

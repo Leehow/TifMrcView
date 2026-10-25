@@ -341,8 +341,10 @@ async function checkUpdate(manual) {
       showUpdate(info);
     }
   } catch (e) {
-    $("update-status").textContent = `检查失败：${e}`;
-    if (manual) toast(`检查更新失败：${e}`, 6000);
+    // The updater reports a missing or unreachable latest.json this way.
+    const msg = /valid release JSON/i.test(String(e)) ? "暂无可用更新（更新服务器上还没有发布版本，或暂时连不上）" : `检查失败：${e}`;
+    $("update-status").textContent = msg;
+    if (manual) toast(msg, 6000);
   } finally {
     updater.busy = false;
   }

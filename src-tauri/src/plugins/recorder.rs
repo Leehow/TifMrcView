@@ -8,7 +8,8 @@ use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Context, Result};
 use openh264::encoder::{
-    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, RateControlMode, UsageType, VuiConfig,
+    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, QpRange, RateControlMode, UsageType,
+    VuiConfig,
 };
 use openh264::formats::{RgbaSliceU8, YUVBuffer};
 use openh264::OpenH264API;
@@ -73,9 +74,12 @@ impl Recorder {
             bail!("fps must be in (0, 120]");
         }
         let q = a.quality.clamp(0.0, 1.0);
-        // Bits per pixel per frame: 0.05 (small) .. 0.6 (very high).
-        let bpp = 0.05 * (12f64).powf(q);
-        let bps = (w as f64 * h as f64 * a.fps * bpp).clamp(500_000.0, 200_000_000.0) as u32;
+        // Microscopy data is mostly fine-grained noise, which the default
+        // rate control smears into blotches. Budget generously (bits per
+        // pixel per frame 0.15 .. 1.5) and cap the quantiser (31 .. 20).
+        let bpp = 0.15 * (10f64).powf(q);
+        let bps = (w as f64 * h as f64 * a.fps * bpp).clamp(2_000_000.0, 200_000_000.0) as u32;
+        let max_qp = (36.0 - 16.0 * q).round() as u8;
         let cfg = EncoderConfig::new()
             .usage_type(UsageType::CameraVideoRealTime)
             .rate_control_mode(RateControlMode::Quality)
@@ -83,6 +87,9 @@ impl Recorder {
             .max_frame_rate(FrameRate::from_hz(a.fps as f32))
             .skip_frames(false)
             .complexity(Complexity::High)
+            .qp(QpRange::new(10, max_qp))
+            .background_detection(false)
+            .adaptive_quantization(false)
             .intra_frame_period(IntraFramePeriod::from_num_frames((a.fps * 2.0).ceil().max(1.0) as u32))
             .vui(VuiConfig::bt601());
         let encoder = Encoder::with_api_config(OpenH264API::from_source(), cfg).map_err(|e| anyhow!("{e}"))?;
