@@ -113,7 +113,7 @@ Unos segundos después de iniciarse, la aplicación comprueba en segundo plano `
 - Tras abrir un archivo, el resto de cortes Z se decodifican previamente en memoria en segundo plano, empezando por los más cercanos al actual (con aproximadamente una cuarta parte de la memoria física, 512 MB–8 GB), de modo que al arrastrar el control se muestran las imágenes al instante
 - Solo se renderiza la región visible y solo a la resolución de la pantalla; el RGBA de 8 bits se pasa a la interfaz en binario, por lo que ampliar y desplazar una imagen de 4000×4000 sigue siendo fluido
 - Las miniaturas se generan en un grupo de hilos aparte para no competir por la CPU con la imagen actual
-- La interfaz es HTML/JS puro, sin framework de frontend; las compilaciones de release usan LTO y strip, y los instaladores ocupan unos 3–8 MB (el AppImage de Linux incluye WebKit, por lo que ocupa unos 78 MB)
+- La interfaz es HTML/JS puro, sin framework de frontend; las compilaciones de release usan LTO y strip, y los instaladores ocupan unos 4–11 MB (el AppImage de Linux incluye WebKit, por lo que ocupa unos 84 MB)
 
 ## Instalación
 

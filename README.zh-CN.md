@@ -113,7 +113,7 @@ TifMrcView.register({
 - 打开文件后，后台按离当前层由近到远把其它 Z 层预先解码进内存（约占物理内存的四分之一，512 MB–8 GB），拖拉条时直接出图
 - 只渲染屏幕上看得见的区域、只算到屏幕分辨率，再把 8 位 RGBA 以二进制传给界面，所以 4000×4000 的图缩放平移也不卡
 - 缩略图在单独的线程池里生成，不和当前图抢 CPU
-- 界面是纯 HTML/JS，没有前端框架；Release 版开启 LTO、strip，安装包约 3–8 MB（Linux AppImage 自带 WebKit 所以约 78 MB）
+- 界面是纯 HTML/JS，没有前端框架；Release 版开启 LTO、strip，安装包约 4–11 MB（Linux AppImage 自带 WebKit 所以约 84 MB）
 
 ## 安装
 

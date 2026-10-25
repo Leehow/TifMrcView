@@ -113,7 +113,7 @@ A few seconds after start, the app silently checks `https://tifmrcview.com/tifmr
 - After a file is opened, the other Z slices are pre-decoded into memory in the background, nearest to the current slice first (using about a quarter of physical memory, 512 MB–8 GB), so dragging the slider shows images immediately
 - Only the visible region is rendered, and only at screen resolution; the 8-bit RGBA is passed to the UI as binary, so zooming and panning a 4000×4000 image stays smooth
 - Thumbnails are generated in a separate thread pool so they do not compete with the current image for CPU
-- The UI is plain HTML/JS with no frontend framework; release builds use LTO and strip, and the installers are about 3–8 MB (the Linux AppImage bundles WebKit, so it is about 78 MB)
+- The UI is plain HTML/JS with no frontend framework; release builds use LTO and strip, and the installers are about 4–11 MB (the Linux AppImage bundles WebKit, so it is about 84 MB)
 
 ## Install
 

@@ -113,7 +113,7 @@ Quelques secondes après le démarrage, l'application vérifie discrètement `ht
 - Après l'ouverture d'un fichier, les autres coupes Z sont pré-décodées en mémoire en arrière-plan, de la plus proche à la plus éloignée de la coupe actuelle (environ un quart de la mémoire physique, 512 Mo–8 Go), de sorte que les images s'affichent immédiatement quand on fait glisser le curseur
 - Seule la région visible est rendue, et seulement à la résolution de l'écran ; le RGBA 8 bits est transmis à l'interface en binaire, donc zoomer et déplacer une image de 4000×4000 reste fluide
 - Les miniatures sont générées dans un pool de threads séparé pour ne pas concurrencer l'image courante sur le processeur
-- L'interface est du HTML/JS pur, sans framework frontend ; les builds de release utilisent LTO et strip, et les programmes d'installation font environ 3–8 Mo (l'AppImage Linux embarque WebKit et pèse donc environ 78 Mo)
+- L'interface est du HTML/JS pur, sans framework frontend ; les builds de release utilisent LTO et strip, et les programmes d'installation font environ 4–11 Mo (l'AppImage Linux embarque WebKit et pèse donc environ 84 Mo)
 
 ## Installation
 

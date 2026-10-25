@@ -113,7 +113,7 @@ Wenige Sekunden nach dem Start prüft die App im Hintergrund `https://tifmrcview
 - Nach dem Öffnen werden im Hintergrund die übrigen Z-Schichten, von der aktuellen aus nach Nähe geordnet, in den Speicher vorab dekodiert (etwa ein Viertel des Arbeitsspeichers, 512 MB–8 GB), sodass beim Ziehen des Reglers sofort Bilder erscheinen
 - Es wird nur der sichtbare Bereich und nur in Bildschirmauflösung gerendert; die 8-Bit-RGBA-Daten gehen binär an die Oberfläche, daher bleiben Zoomen und Verschieben bei 4000×4000-Bildern flüssig
 - Vorschaubilder entstehen in einem eigenen Thread-Pool und konkurrieren nicht mit dem aktuellen Bild um die CPU
-- Die Oberfläche ist reines HTML/JS ohne Frontend-Framework; Release-Builds nutzen LTO und strip, die Installationspakete sind etwa 3–8 MB groß (das Linux-AppImage enthält WebKit und ist daher etwa 78 MB groß)
+- Die Oberfläche ist reines HTML/JS ohne Frontend-Framework; Release-Builds nutzen LTO und strip, die Installationspakete sind etwa 4–11 MB groß (das Linux-AppImage enthält WebKit und ist daher etwa 84 MB groß)
 
 ## Installation
 
