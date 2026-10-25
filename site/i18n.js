@@ -189,6 +189,146 @@
       free: 'Бесплатно и с открытым кодом'
     }
   };
+  // Strings for the plugin market (site/plugins/) and the teaser on the home page.
+  var EXTRA = {
+    zh: {
+      nav_home: '首页', nav_plugins: '插件',
+      pl_t: '插件市场', pl_d: '录制、蔡司 SmartSEM 元数据、专注模式……按需下载，在应用里一键加载。', pl_btn: '浏览插件',
+      pl_title: '插件市场 · TifMrcView', pl_desc: '为 TifMrcView 下载扩展插件：录制、SmartSEM 元数据、专注模式等，并附带插件开发文档。',
+      pl_h1: '插件市场', pl_lead: '插件给 TifMrcView 增加功能：录制 Z 层动画、读取仪器元数据、简化界面……下载 zip，在应用里加载即可，不需要重装。',
+      pl_install_h: '怎么安装',
+      pl_s1: '在下面选一个插件，下载它的 <b>.zip</b> 文件（不要解压）。',
+      pl_s2: '在 TifMrcView 里打开 <b>插件</b> → <b>加载插件…</b>，选择刚下载的 zip。',
+      pl_s3: '插件马上生效；可以在插件列表里随时关闭或打开。',
+      pl_update: '更新：再次加载新版本的 zip 即可覆盖旧版。',
+      pl_remove: '删除：在插件列表里点 <b>卸载</b>。',
+      pl_need: '需要 TifMrcView {v} 或更高版本', pl_need_all: '各插件需要的最低应用版本见卡片。',
+      pl_builtin: '内置', pl_builtin_note: '已包含在应用里，无需下载',
+      pl_native: '用到内置原生支持', pl_native_tip: '这个插件的原生部分已随应用发布，所以只能在官方版本里使用。',
+      pl_download: '下载 .zip', pl_by: '作者 {a}', pl_more: '详细说明', pl_ver: '版本 {v}',
+      pl_fail: '暂时无法加载插件列表，请稍后刷新重试。', pl_loading: '正在加载插件列表…', pl_empty: '还没有可下载的插件。',
+      pl_dev_h: '制作插件 / 开发者文档', pl_dev_note: '',
+      pl_list_h: '可用插件'
+    },
+    en: {
+      nav_home: 'Home', nav_plugins: 'Plugins',
+      pl_t: 'Plugin market', pl_d: 'Recording, Zeiss SmartSEM metadata, zen mode and more: download what you need and load it in the app.', pl_btn: 'Browse plugins',
+      pl_title: 'Plugin market · TifMrcView', pl_desc: 'Download extension plugins for TifMrcView: recording, SmartSEM metadata, zen mode and more, plus the plugin developer docs.',
+      pl_h1: 'Plugin market', pl_lead: 'Plugins add features to TifMrcView: record Z animations, read instrument metadata, simplify the interface. Download a zip and load it in the app, no reinstall needed.',
+      pl_install_h: 'How to install',
+      pl_s1: 'Pick a plugin below and download its <b>.zip</b> (do not unzip it).',
+      pl_s2: 'In TifMrcView open <b>Plugins</b> → <b>Load plugin…</b> and choose the zip.',
+      pl_s3: 'It takes effect right away; switch it off or on any time in the plugin list.',
+      pl_update: 'To update, load the newer zip; it replaces the old version.',
+      pl_remove: 'To remove, click <b>Uninstall</b> in the plugin list.',
+      pl_need: 'Needs TifMrcView {v} or later', pl_need_all: 'Each card shows the minimum app version it needs.',
+      pl_builtin: 'Built-in', pl_builtin_note: 'Already part of the app, nothing to download',
+      pl_native: 'Uses built-in native support', pl_native_tip: 'The native part of this plugin ships inside the app, so it only works in official builds.',
+      pl_download: 'Download .zip', pl_by: 'by {a}', pl_more: 'Details', pl_ver: 'Version {v}',
+      pl_fail: 'The plugin list could not be loaded right now. Please refresh and try again.', pl_loading: 'Loading plugins…', pl_empty: 'No plugins to download yet.',
+      pl_dev_h: 'Make a plugin / developer docs', pl_dev_note: '',
+      pl_list_h: 'Available plugins'
+    },
+    de: {
+      nav_home: 'Start', nav_plugins: 'Plugins',
+      pl_t: 'Plugin-Markt', pl_d: 'Aufnahme, Zeiss-SmartSEM-Metadaten, Zen-Modus und mehr: herunterladen und in der App laden.', pl_btn: 'Plugins ansehen',
+      pl_title: 'Plugin-Markt · TifMrcView', pl_desc: 'Erweiterungen für TifMrcView herunterladen: Aufnahme, SmartSEM-Metadaten, Zen-Modus und mehr, dazu die Entwicklerdoku.',
+      pl_h1: 'Plugin-Markt', pl_lead: 'Plugins erweitern TifMrcView: Z-Animationen aufnehmen, Geräte-Metadaten lesen, die Oberfläche vereinfachen. ZIP herunterladen und in der App laden, ohne Neuinstallation.',
+      pl_install_h: 'So installierst du es',
+      pl_s1: 'Wähle unten ein Plugin und lade die <b>.zip</b> herunter (nicht entpacken).',
+      pl_s2: 'Öffne in TifMrcView <b>Plugins</b> → <b>Plugin laden…</b> und wähle die ZIP-Datei.',
+      pl_s3: 'Es wirkt sofort; in der Plugin-Liste lässt es sich jederzeit aus- und einschalten.',
+      pl_update: 'Zum Aktualisieren die neuere ZIP laden; sie ersetzt die alte Version.',
+      pl_remove: 'Zum Entfernen in der Plugin-Liste auf <b>Deinstallieren</b> klicken.',
+      pl_need: 'Benötigt TifMrcView {v} oder neuer', pl_need_all: 'Jede Karte nennt die minimal nötige App-Version.',
+      pl_builtin: 'Integriert', pl_builtin_note: 'Schon in der App enthalten, kein Download nötig',
+      pl_native: 'Nutzt integrierte native Unterstützung', pl_native_tip: 'Der native Teil dieses Plugins steckt in der App und funktioniert daher nur in offiziellen Builds.',
+      pl_download: '.zip herunterladen', pl_by: 'von {a}', pl_more: 'Details', pl_ver: 'Version {v}',
+      pl_fail: 'Die Plugin-Liste konnte gerade nicht geladen werden. Bitte neu laden und erneut versuchen.', pl_loading: 'Plugins werden geladen…', pl_empty: 'Noch keine Plugins zum Download.',
+      pl_dev_h: 'Plugin entwickeln / Entwicklerdoku', pl_dev_note: 'Die Entwicklerdoku gibt es auf Englisch und Chinesisch.',
+      pl_list_h: 'Verfügbare Plugins'
+    },
+    ja: {
+      nav_home: 'ホーム', nav_plugins: 'プラグイン',
+      pl_t: 'プラグインマーケット', pl_d: '録画、Zeiss SmartSEM メタデータ、集中モードなど。必要なものをダウンロードして、アプリで読み込みます。', pl_btn: 'プラグインを見る',
+      pl_title: 'プラグインマーケット · TifMrcView', pl_desc: 'TifMrcView の拡張プラグインをダウンロード：録画、SmartSEM メタデータ、集中モードなど。開発者向けドキュメントも掲載。',
+      pl_h1: 'プラグインマーケット', pl_lead: 'プラグインで TifMrcView に機能を追加できます。Z スタックの録画、装置メタデータの読み取り、画面の簡素化など。zip をダウンロードしてアプリで読み込むだけで、再インストールは不要です。',
+      pl_install_h: 'インストール方法',
+      pl_s1: '下からプラグインを選び、<b>.zip</b> をダウンロードします（解凍しないでください）。',
+      pl_s2: 'TifMrcView で <b>プラグイン</b> → <b>プラグインを読み込む…</b> を開き、zip を選びます。',
+      pl_s3: 'すぐに有効になります。プラグイン一覧でいつでもオン／オフできます。',
+      pl_update: '更新するには、新しい zip を読み込むと古いバージョンが置き換わります。',
+      pl_remove: '削除するには、プラグイン一覧の <b>アンインストール</b> を押します。',
+      pl_need: 'TifMrcView {v} 以降が必要', pl_need_all: '各カードに必要な最低アプリバージョンを表示しています。',
+      pl_builtin: '内蔵', pl_builtin_note: 'アプリに含まれています。ダウンロード不要',
+      pl_native: '内蔵のネイティブ機能を使用', pl_native_tip: 'このプラグインのネイティブ部分はアプリに同梱されているため、公式ビルドでのみ動作します。',
+      pl_download: '.zip をダウンロード', pl_by: '作者 {a}', pl_more: '詳細', pl_ver: 'バージョン {v}',
+      pl_fail: 'プラグイン一覧を読み込めませんでした。再読み込みしてもう一度お試しください。', pl_loading: 'プラグインを読み込み中…', pl_empty: 'ダウンロードできるプラグインはまだありません。',
+      pl_dev_h: 'プラグインを作る / 開発者向けドキュメント', pl_dev_note: '開発者向けドキュメントは英語と中国語です。',
+      pl_list_h: '利用できるプラグイン'
+    },
+    es: {
+      nav_home: 'Inicio', nav_plugins: 'Complementos',
+      pl_t: 'Mercado de complementos', pl_d: 'Grabación, metadatos de Zeiss SmartSEM, modo zen y más: descarga lo que necesites y cárgalo en la app.', pl_btn: 'Ver complementos',
+      pl_title: 'Mercado de complementos · TifMrcView', pl_desc: 'Descarga complementos para TifMrcView: grabación, metadatos de SmartSEM, modo zen y más, con la documentación para desarrolladores.',
+      pl_h1: 'Mercado de complementos', pl_lead: 'Los complementos añaden funciones a TifMrcView: grabar animaciones Z, leer metadatos del instrumento, simplificar la interfaz. Descarga un zip y cárgalo en la app, sin reinstalar.',
+      pl_install_h: 'Cómo instalar',
+      pl_s1: 'Elige un complemento abajo y descarga su <b>.zip</b> (no lo descomprimas).',
+      pl_s2: 'En TifMrcView abre <b>Complementos</b> → <b>Cargar complemento…</b> y elige el zip.',
+      pl_s3: 'Funciona de inmediato; puedes desactivarlo o activarlo cuando quieras en la lista.',
+      pl_update: 'Para actualizar, carga el zip más nuevo: reemplaza la versión anterior.',
+      pl_remove: 'Para quitarlo, pulsa <b>Desinstalar</b> en la lista de complementos.',
+      pl_need: 'Requiere TifMrcView {v} o posterior', pl_need_all: 'Cada tarjeta indica la versión mínima de la app.',
+      pl_builtin: 'Integrado', pl_builtin_note: 'Ya forma parte de la app, no hay nada que descargar',
+      pl_native: 'Usa soporte nativo integrado', pl_native_tip: 'La parte nativa de este complemento viene dentro de la app, por lo que solo funciona en las versiones oficiales.',
+      pl_download: 'Descargar .zip', pl_by: 'por {a}', pl_more: 'Detalles', pl_ver: 'Versión {v}',
+      pl_fail: 'No se pudo cargar la lista de complementos. Actualiza la página e inténtalo de nuevo.', pl_loading: 'Cargando complementos…', pl_empty: 'Aún no hay complementos para descargar.',
+      pl_dev_h: 'Crear un complemento / documentación para desarrolladores', pl_dev_note: 'La documentación para desarrolladores está en inglés y chino.',
+      pl_list_h: 'Complementos disponibles'
+    },
+    fr: {
+      nav_home: 'Accueil', nav_plugins: 'Extensions',
+      pl_t: 'Marché des extensions', pl_d: 'Enregistrement, métadonnées Zeiss SmartSEM, mode zen et plus : téléchargez ce qu’il vous faut et chargez-le dans l’appli.', pl_btn: 'Voir les extensions',
+      pl_title: 'Marché des extensions · TifMrcView', pl_desc: 'Téléchargez des extensions pour TifMrcView : enregistrement, métadonnées SmartSEM, mode zen et plus, avec la documentation développeur.',
+      pl_h1: 'Marché des extensions', pl_lead: 'Les extensions ajoutent des fonctions à TifMrcView : enregistrer des animations Z, lire les métadonnées de l’instrument, simplifier l’interface. Téléchargez un zip et chargez-le dans l’appli, sans réinstaller.',
+      pl_install_h: 'Comment installer',
+      pl_s1: 'Choisissez une extension ci-dessous et téléchargez son <b>.zip</b> (ne le décompressez pas).',
+      pl_s2: 'Dans TifMrcView, ouvrez <b>Extensions</b> → <b>Charger une extension…</b> et choisissez le zip.',
+      pl_s3: 'Elle est active immédiatement ; vous pouvez la désactiver ou la réactiver à tout moment dans la liste.',
+      pl_update: 'Pour mettre à jour, chargez le zip plus récent : il remplace l’ancienne version.',
+      pl_remove: 'Pour la supprimer, cliquez sur <b>Désinstaller</b> dans la liste des extensions.',
+      pl_need: 'Nécessite TifMrcView {v} ou plus récent', pl_need_all: 'Chaque carte indique la version minimale de l’appli.',
+      pl_builtin: 'Intégré', pl_builtin_note: 'Déjà inclus dans l’appli, rien à télécharger',
+      pl_native: 'Utilise le support natif intégré', pl_native_tip: 'La partie native de cette extension est livrée dans l’appli ; elle ne fonctionne donc que dans les versions officielles.',
+      pl_download: 'Télécharger le .zip', pl_by: 'par {a}', pl_more: 'Détails', pl_ver: 'Version {v}',
+      pl_fail: 'Impossible de charger la liste des extensions pour le moment. Actualisez la page et réessayez.', pl_loading: 'Chargement des extensions…', pl_empty: 'Aucune extension à télécharger pour l’instant.',
+      pl_dev_h: 'Créer une extension / documentation développeur', pl_dev_note: 'La documentation développeur est en anglais et en chinois.',
+      pl_list_h: 'Extensions disponibles'
+    },
+    ru: {
+      nav_home: 'Главная', nav_plugins: 'Плагины',
+      pl_t: 'Каталог плагинов', pl_d: 'Запись, метаданные Zeiss SmartSEM, режим дзен и другое: скачайте нужное и загрузите в приложении.', pl_btn: 'Смотреть плагины',
+      pl_title: 'Каталог плагинов · TifMrcView', pl_desc: 'Скачивайте плагины для TifMrcView: запись, метаданные SmartSEM, режим дзен и другое, а также документацию для разработчиков.',
+      pl_h1: 'Каталог плагинов', pl_lead: 'Плагины добавляют TifMrcView новые возможности: запись Z-анимации, чтение метаданных прибора, упрощение интерфейса. Скачайте zip и загрузите в приложении, переустановка не нужна.',
+      pl_install_h: 'Как установить',
+      pl_s1: 'Выберите плагин ниже и скачайте его <b>.zip</b> (не распаковывайте).',
+      pl_s2: 'В TifMrcView откройте <b>Плагины</b> → <b>Загрузить плагин…</b> и выберите zip.',
+      pl_s3: 'Он начнёт работать сразу; в списке плагинов его можно в любой момент выключить и включить.',
+      pl_update: 'Чтобы обновить, загрузите более новый zip: он заменит старую версию.',
+      pl_remove: 'Чтобы удалить, нажмите <b>Удалить</b> в списке плагинов.',
+      pl_need: 'Нужен TifMrcView {v} или новее', pl_need_all: 'На каждой карточке указана минимальная версия приложения.',
+      pl_builtin: 'Встроен', pl_builtin_note: 'Уже входит в приложение, скачивать не нужно',
+      pl_native: 'Использует встроенную нативную поддержку', pl_native_tip: 'Нативная часть этого плагина поставляется внутри приложения, поэтому он работает только в официальных сборках.',
+      pl_download: 'Скачать .zip', pl_by: 'автор {a}', pl_more: 'Подробнее', pl_ver: 'Версия {v}',
+      pl_fail: 'Сейчас не удалось загрузить список плагинов. Обновите страницу и повторите попытку.', pl_loading: 'Загрузка плагинов…', pl_empty: 'Пока нет плагинов для скачивания.',
+      pl_dev_h: 'Создать плагин / документация разработчика', pl_dev_note: 'Документация для разработчиков доступна на английском и китайском.',
+      pl_list_h: 'Доступные плагины'
+    }
+  };
+  Object.keys(EXTRA).forEach(function (c) { for (var k in EXTRA[c]) T[c][k] = EXTRA[c][k]; });
+  // Developer docs (site/plugins/docs.js) exist in Chinese and English only.
+  if (window.TMV_DOCS) { T.zh.docs = window.TMV_DOCS.zh; T.en.docs = window.TMV_DOCS.en; }
+
   var LANGS = ['zh', 'en', 'de', 'ja', 'es', 'fr', 'ru'];
   var OS_NAMES = { mac: 'macOS', win: 'Windows', linux: 'Linux' };
 
@@ -206,7 +346,9 @@
 
   var ua = navigator.userAgent;
   var os = /Mac/.test(ua) ? 'mac' : /Win/.test(ua) ? 'win' : /Linux|X11/.test(ua) ? 'linux' : null;
-  var data = null, lang = pick(), sizes = {};
+  var BASE = document.documentElement.getAttribute('data-base') || '';
+  var HOME = !!document.getElementById('cta');
+  var data = null, lang = pick(), sizes = {}, listeners = [];
   function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; }
   function loadSizes(d) {
     var all = [];
@@ -233,7 +375,7 @@
   }
 
   function renderDownloads() {
-    if (!data) return;
+    if (!data || !HOME) return;
     var t = T[lang];
     ['mac', 'win', 'linux'].forEach(function (k) {
       var box = document.querySelector('[data-os="' + k + '"] .dl');
@@ -270,10 +412,13 @@
     lang = code;
     var t = T[code];
     document.documentElement.lang = HTML_LANG[code];
-    document.title = t.title;
-    var md = document.querySelector('meta[name="description"]'); if (md) md.content = t.desc;
+    var page = document.documentElement.getAttribute('data-page');
+    document.title = page === 'plugins' ? t.pl_title : t.title;
+    var md = document.querySelector('meta[name="description"]'); if (md) md.content = page === 'plugins' ? t.pl_desc : t.desc;
     document.querySelectorAll('[data-i]').forEach(function (el) {
-      var v = t[el.getAttribute('data-i')];
+      var key = el.getAttribute('data-i');
+      var v = t[key];
+      if (v == null && code !== 'zh') v = T.en[key];
       if (v != null) el.innerHTML = v;
     });
     var btn = document.querySelector('#lang > button');
@@ -283,6 +428,7 @@
       b.setAttribute('aria-current', b.dataset.lang === code ? 'true' : 'false');
     });
     renderDownloads();
+    listeners.forEach(function (fn) { fn(code); });
   }
 
   // language menu
@@ -307,7 +453,21 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') box.classList.remove('open'); });
 
   apply(lang);
-  fetch('downloads.json', { cache: 'no-cache' }).then(function (r) { return r.json(); })
-    .then(function (d) { data = d; renderDownloads(); return loadSizes(d); })
+  window.TMV = {
+    lang: function () { return lang; },
+    t: function (key, vars) {
+      var v = T[lang][key]; if (v == null) v = T.en[key]; if (v == null) v = '';
+      for (var k in (vars || {})) v = v.replace('{' + k + '}', vars[k]);
+      return v;
+    },
+    onLang: function (fn) { listeners.push(fn); fn(lang); }
+  };
+  fetch(BASE + 'downloads.json', { cache: 'no-cache' }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      data = d;
+      var v = document.getElementById('ver'); if (v) v.textContent = 'v' + d.version;
+      renderDownloads();
+      return HOME ? loadSizes(d) : null;
+    })
     .then(renderDownloads).catch(function () {});
 })();
