@@ -37,7 +37,7 @@
       f3t: '多通道合成', f3d: '勾选显示通道、换颜色，每个通道单独调亮度、对比度和 γ。',
       f4t: '文件夹浏览', f4d: '侧边缩略图列出同目录的图像，上下键切换文件，不用回到 Finder。',
       f5t: '标尺与测量', f5d: '按像素尺寸显示比例尺，画线测长度，一键导出整图或选区为 PNG。',
-      f6t: '格式齐全', f6d: 'TIFF（1–32 位，LZW/Deflate/JPEG 等压缩）、OME-TIFF、ImageJ hyperstack、MRC/MRC2014、PNG/JPEG 等常见格式；装插件后还能打开蔡司 CZI，并读取蔡司 SmartSEM 电镜图的采集参数。',
+      f6t: '格式齐全', f6d: 'TIFF（1–32 位，LZW/Deflate/JPEG 等压缩）、OME-TIFF、ImageJ hyperstack、MRC/MRC2014（含 .mrcs .rec .st .map）、蔡司 CZI，以及 PNG/JPEG 等常见格式；装插件后还能显示蔡司 ZEN 和 SmartSEM 的采集参数。',
       k_file: '上一个 / 下一个文件', k_z: '切换 Z 层', space: '空格', k_play: '播放 / 暂停 Z',
       or_dbl: '或双击', k_fit: '适应窗口', k_save: '保存 PNG 到当前目录', k_open: '打开文件',
       free: '免费开源'
@@ -66,7 +66,7 @@
       f3t: 'Multi-channel', f3d: 'Toggle channels, pick colors, and set brightness, contrast and gamma per channel.',
       f4t: 'Folder browsing', f4d: 'A thumbnail sidebar lists the images in the folder; switch files with the up/down keys.',
       f5t: 'Scale bar & measuring', f5d: 'Scale bar from pixel size, line measurements, and one-click PNG export of the whole image or a region.',
-      f6t: 'All the formats', f6d: 'TIFF (1–32 bit, LZW/Deflate/JPEG and more), OME-TIFF, ImageJ hyperstacks, MRC/MRC2014 and common formats like PNG/JPEG; plugins add Zeiss CZI and the acquisition settings of Zeiss SmartSEM images.',
+      f6t: 'All the formats', f6d: 'TIFF (1–32 bit, LZW/Deflate/JPEG and more), OME-TIFF, ImageJ hyperstacks, MRC/MRC2014 (incl. .mrcs .rec .st .map), Zeiss CZI and common formats like PNG/JPEG; plugins add the acquisition settings from Zeiss ZEN and SmartSEM.',
       k_file: 'Previous / next file', k_z: 'Change Z slice', space: 'Space', k_play: 'Play / pause Z',
       or_dbl: 'or double-click', k_fit: 'Fit to window', k_save: 'Save PNG to current folder', k_open: 'Open file',
       free: 'Free and open source'
@@ -95,7 +95,7 @@
       f3t: 'Mehrkanal', f3d: 'Kanäle ein- und ausblenden, Farben wählen, Helligkeit, Kontrast und Gamma je Kanal einstellen.',
       f4t: 'Ordner durchblättern', f4d: 'Eine Miniaturleiste zeigt alle Bilder im Ordner; mit ↑/↓ zur nächsten Datei.',
       f5t: 'Maßstab & Messen', f5d: 'Maßstabsleiste aus der Pixelgröße, Längenmessung und PNG-Export des ganzen Bildes oder eines Bereichs.',
-      f6t: 'Viele Formate', f6d: 'TIFF (1–32 Bit, LZW/Deflate/JPEG u. a.), OME-TIFF, ImageJ-Hyperstacks, MRC/MRC2014 und gängige Formate wie PNG/JPEG; per Plugin auch Zeiss CZI sowie die Aufnahmeparameter von Zeiss-SmartSEM-Bildern.',
+      f6t: 'Viele Formate', f6d: 'TIFF (1–32 Bit, LZW/Deflate/JPEG u. a.), OME-TIFF, ImageJ-Hyperstacks, MRC/MRC2014 (auch .mrcs .rec .st .map), Zeiss CZI und gängige Formate wie PNG/JPEG; Plugins zeigen die Aufnahmeparameter aus Zeiss ZEN und SmartSEM.',
       k_file: 'Vorherige / nächste Datei', k_z: 'Z-Ebene wechseln', space: 'Leertaste', k_play: 'Z abspielen / pausieren',
       or_dbl: 'oder Doppelklick', k_fit: 'An Fenster anpassen', k_save: 'PNG im aktuellen Ordner speichern', k_open: 'Datei öffnen',
       free: 'Kostenlos und quelloffen'
@@ -124,7 +124,7 @@
       f3t: 'マルチチャンネル', f3d: 'チャンネルの表示切り替えと色の変更、チャンネルごとに明るさ・コントラスト・γ を調整。',
       f4t: 'フォルダ内ブラウズ', f4d: 'サイドバーに同じフォルダの画像をサムネイル表示、↑↓ キーでファイルを切り替え。',
       f5t: 'スケールバーと計測', f5d: 'ピクセルサイズからスケールバーを表示、線で長さを計測、全体または選択範囲を PNG で書き出し。',
-      f6t: '幅広い形式', f6d: 'TIFF（1–32 ビット、LZW/Deflate/JPEG など）、OME-TIFF、ImageJ hyperstack、MRC/MRC2014、PNG/JPEG などの一般形式。プラグインで Zeiss CZI や Zeiss SmartSEM 画像の取得パラメータにも対応。',
+      f6t: '幅広い形式', f6d: 'TIFF（1–32 ビット、LZW/Deflate/JPEG など）、OME-TIFF、ImageJ hyperstack、MRC/MRC2014（.mrcs .rec .st .map を含む）、Zeiss CZI、PNG/JPEG などの一般形式。プラグインで Zeiss ZEN・SmartSEM の取得パラメータも表示。',
       k_file: '前 / 次のファイル', k_z: 'Z 層を切り替え', space: 'スペース', k_play: 'Z の再生 / 一時停止',
       or_dbl: 'またはダブルクリック', k_fit: 'ウィンドウに合わせる', k_save: '現在のフォルダに PNG を保存', k_open: 'ファイルを開く',
       free: '無料・オープンソース'
@@ -153,7 +153,7 @@
       f3t: 'Multicanal', f3d: 'Activa canales, cambia colores y ajusta brillo, contraste y gamma por canal.',
       f4t: 'Navegar carpetas', f4d: 'Una barra lateral de miniaturas muestra las imágenes de la carpeta; cambia de archivo con ↑/↓.',
       f5t: 'Escala y medición', f5d: 'Barra de escala según el tamaño de píxel, medición de líneas y exportación a PNG de la imagen o de una región.',
-      f6t: 'Todos los formatos', f6d: 'TIFF (1–32 bits, LZW/Deflate/JPEG y más), OME-TIFF, hyperstacks de ImageJ, MRC/MRC2014 y formatos comunes como PNG/JPEG; con plugins, también Zeiss CZI y los parámetros de adquisición de imágenes Zeiss SmartSEM.',
+      f6t: 'Todos los formatos', f6d: 'TIFF (1–32 bits, LZW/Deflate/JPEG y más), OME-TIFF, hyperstacks de ImageJ, MRC/MRC2014 (incl. .mrcs .rec .st .map), Zeiss CZI y formatos comunes como PNG/JPEG; con plugins, también los parámetros de adquisición de Zeiss ZEN y SmartSEM.',
       k_file: 'Archivo anterior / siguiente', k_z: 'Cambiar corte Z', space: 'Espacio', k_play: 'Reproducir / pausar Z',
       or_dbl: 'o doble clic', k_fit: 'Ajustar a la ventana', k_save: 'Guardar PNG en la carpeta actual', k_open: 'Abrir archivo',
       free: 'Gratis y de código abierto'
@@ -182,7 +182,7 @@
       f3t: 'Multicanal', f3d: 'Affichez ou masquez les canaux, changez les couleurs, réglez luminosité, contraste et gamma par canal.',
       f4t: 'Parcourir le dossier', f4d: 'Une barre de vignettes liste les images du dossier ; changez de fichier avec ↑/↓.',
       f5t: 'Échelle et mesures', f5d: 'Barre d’échelle selon la taille de pixel, mesure de longueurs et export PNG de l’image entière ou d’une zone.',
-      f6t: 'Tous les formats', f6d: 'TIFF (1–32 bits, LZW/Deflate/JPEG, etc.), OME-TIFF, hyperstacks ImageJ, MRC/MRC2014 et formats courants comme PNG/JPEG ; avec des plugins, aussi Zeiss CZI et les paramètres d’acquisition des images Zeiss SmartSEM.',
+      f6t: 'Tous les formats', f6d: 'TIFF (1–32 bits, LZW/Deflate/JPEG, etc.), OME-TIFF, hyperstacks ImageJ, MRC/MRC2014 (y compris .mrcs .rec .st .map), Zeiss CZI et formats courants comme PNG/JPEG ; des plugins affichent les paramètres d’acquisition de Zeiss ZEN et SmartSEM.',
       k_file: 'Fichier précédent / suivant', k_z: 'Changer de plan Z', space: 'Espace', k_play: 'Lire / mettre en pause Z',
       or_dbl: 'ou double-clic', k_fit: 'Ajuster à la fenêtre', k_save: 'Enregistrer en PNG dans le dossier courant', k_open: 'Ouvrir un fichier',
       free: 'Gratuit et open source'
@@ -211,7 +211,7 @@
       f3t: 'Многоканальность', f3d: 'Включайте каналы, меняйте цвета, настраивайте яркость, контраст и гамму для каждого канала.',
       f4t: 'Просмотр папки', f4d: 'Боковая панель миниатюр показывает изображения папки; ↑/↓ — переключение файлов.',
       f5t: 'Масштаб и измерения', f5d: 'Масштабная линейка по размеру пикселя, измерение длин и экспорт всего изображения или области в PNG.',
-      f6t: 'Все форматы', f6d: 'TIFF (1–32 бит, LZW/Deflate/JPEG и др.), OME-TIFF, гиперстеки ImageJ, MRC/MRC2014 и обычные форматы вроде PNG/JPEG; с плагинами — также Zeiss CZI и параметры съёмки изображений Zeiss SmartSEM.',
+      f6t: 'Все форматы', f6d: 'TIFF (1–32 бит, LZW/Deflate/JPEG и др.), OME-TIFF, гиперстеки ImageJ, MRC/MRC2014 (включая .mrcs .rec .st .map), Zeiss CZI и обычные форматы вроде PNG/JPEG; плагины показывают параметры съёмки из Zeiss ZEN и SmartSEM.',
       k_file: 'Предыдущий / следующий файл', k_z: 'Сменить слой Z', space: 'Пробел', k_play: 'Воспроизвести / пауза Z',
       or_dbl: 'или двойной щелчок', k_fit: 'По размеру окна', k_save: 'Сохранить PNG в текущую папку', k_open: 'Открыть файл',
       free: 'Бесплатно и с открытым кодом'
