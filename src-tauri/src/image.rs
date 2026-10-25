@@ -84,6 +84,14 @@ impl PlaneData {
         with_plane!(self, v => std::mem::size_of_val(v.as_slice()))
     }
 
+    pub fn as_bytes(&self) -> &[u8] {
+        with_plane!(self, v => {
+            let len = std::mem::size_of_val(v.as_slice());
+            // SAFETY: every element type here is plain old data with no padding.
+            unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }
+        })
+    }
+
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         with_plane!(self, v => {
             let len = std::mem::size_of_val(v.as_slice());
@@ -386,6 +394,8 @@ pub struct OpenImage {
     cached_bytes: AtomicUsize,
     budget: usize,
     pub cancelled: AtomicBool,
+    /// The page the user looks at; background reads stay around it.
+    focus: AtomicUsize,
 }
 
 impl OpenImage {
@@ -398,6 +408,7 @@ impl OpenImage {
             cached_bytes: AtomicUsize::new(0),
             budget,
             cancelled: AtomicBool::new(false),
+            focus: AtomicUsize::new(0),
         })
     }
 
@@ -419,9 +430,10 @@ impl OpenImage {
         if let Some(p) = cache.get(&page) {
             return Ok(p.clone());
         }
-        // Evict the pages farthest from this one until the new page fits.
+        // Evict the pages farthest from where the user is until the new page fits.
+        let focus = self.focus.load(Ordering::Relaxed);
         while self.cached_bytes.load(Ordering::Relaxed) + bytes > self.budget && !cache.is_empty() {
-            let far = *cache.keys().max_by_key(|&&k| k.abs_diff(page)).unwrap();
+            let far = *cache.keys().max_by_key(|&&k| k.abs_diff(focus)).unwrap();
             let gone = cache.remove(&far).unwrap();
             let freed: usize = gone.iter().map(|p| p.data.byte_len()).sum();
             self.cached_bytes.fetch_sub(freed, Ordering::Relaxed);
@@ -440,29 +452,56 @@ impl OpenImage {
         s
     }
 
-    /// Decodes pages around `center` in the background so that dragging the Z
-    /// slider is instant. Stops when the file is closed or the budget is full.
+    /// Tells the background reader which page the user is on now.
+    pub fn set_focus(&self, page: usize) {
+        self.focus.store(page, Ordering::Relaxed);
+    }
+
+    /// Decodes pages around the focus page in the background so that dragging
+    /// the Z slider is instant. It follows the focus as the user moves, always
+    /// reading the nearest page that is not in memory yet, and stops when the
+    /// file is closed. Statistics are computed here too, off the UI path.
     pub fn prefetch(self: &Arc<Self>, center: usize) {
+        self.set_focus(center);
         let me = self.clone();
         std::thread::spawn(move || {
             let n = me.info().page_count;
             let per_page = me.info().page_bytes().max(1);
-            let max_pages = (me.budget / per_page).max(1).min(n);
-            let mut order: Vec<usize> = (0..n).collect();
-            order.sort_by_key(|&p| p.abs_diff(center));
-            order.truncate(max_pages);
-            // Workers pull pages nearest-first from a shared counter.
-            let next = AtomicUsize::new(0);
-            let pool = bg_pool();
-            let workers = pool.current_num_threads().div_ceil(2);
-            pool.scope(|s| {
-                for _ in 0..workers {
-                    s.spawn(|_| loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        if i >= order.len() || me.cancelled.load(Ordering::Relaxed) {
-                            break;
+            // Pages kept on each side of the focus.
+            let reach = (me.budget / per_page).max(1).min(n) / 2;
+            let busy = Mutex::new(std::collections::HashSet::new());
+            let next = || -> Option<usize> {
+                let f = me.focus.load(Ordering::Relaxed).min(n - 1);
+                let cache = me.cache.lock().unwrap();
+                let mut busy = busy.lock().unwrap();
+                for d in 0..=reach {
+                    for p in [f.checked_add(d), f.checked_sub(d)].into_iter().flatten() {
+                        if p < n && !cache.contains_key(&p) && !busy.contains(&p) {
+                            busy.insert(p);
+                            return Some(p);
                         }
-                        let _ = me.page(order[i]);
+                    }
+                }
+                None
+            };
+            // Two readers: enough to keep a disk busy without making a slow
+            // external drive seek back and forth between far-apart pages.
+            // Own threads, so the shared pool stays free for thumbnails.
+            std::thread::scope(|s| {
+                for _ in 0..2 {
+                    s.spawn(|| {
+                        while !me.cancelled.load(Ordering::Relaxed) {
+                            let Some(p) = next() else {
+                                std::thread::sleep(std::time::Duration::from_millis(40));
+                                continue;
+                            };
+                            if let Ok(planes) = me.page(p) {
+                                for i in 0..planes.len() {
+                                    me.stats(p, i, &planes);
+                                }
+                            }
+                            busy.lock().unwrap().remove(&p);
+                        }
                     });
                 }
             });

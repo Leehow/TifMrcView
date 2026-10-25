@@ -25,6 +25,8 @@ const S = {
   dirty: false,
   playing: null,
   tool: "select",
+  axis: "xy",
+  base: null,
   ann: [],          // {type: "line"|"path"|"rect"|"ellipse", pts: [[x, y], ...], color, width, z}
   annShow: true,
   history: [],      // snapshots of annotations and crop, for undo
@@ -49,6 +51,9 @@ const canvas = $("view");
 const ctx = canvas.getContext("2d");
 const frameCanvas = document.createElement("canvas");
 const frameCtx = frameCanvas.getContext("2d");
+// The last picture of the previous image, faded out over the new one.
+const fadeCanvas = document.createElement("canvas");
+const FADE_MS = 160;
 
 // ---------- helpers ----------
 
@@ -142,16 +147,22 @@ function parseFrame(buf) {
 
 async function openPath(path) {
   if (!path) return;
+  // Clicking the image already shown changes nothing.
+  if (S.info && S.info.path === path && S.axis === "xy") return;
   flushAnn();
   $("loading").textContent = "加载中…";
-  $("loading").hidden = false;
+  // Only show the hint when loading takes a while, so quick flips do not blink.
+  const slow = setTimeout(() => ($("loading").hidden = false), 300);
   try {
     const res = await invoke("open_image", { path });
     stopPlay();
+    holdFrame();
     const sameSize = S.info && S.info.width === res.info.width && S.info.height === res.info.height;
     S.token = res.token;
     S.info = res.info;
     S.pluginMeta = [];
+    S.axis = "xy";
+    S.base = null;
     S.z = Math.floor(res.info.sizeZ / 2);
     S.t = 0;
     S.sel = Math.min(S.sel, res.info.channels.length - 1);
@@ -209,8 +220,95 @@ async function openPath(path) {
   } catch (e) {
     toast(`无法打开 ${basename(path)}：${e}`);
   } finally {
+    clearTimeout(slow);
     $("loading").hidden = true;
   }
+}
+
+/** Keeps the current picture on screen until the next image has a frame. */
+function holdFrame() {
+  if (!S.frame) return;
+  fadeCanvas.width = canvas.width;
+  fadeCanvas.height = canvas.height;
+  fadeCanvas.getContext("2d").drawImage(canvas, 0, 0);
+  S.fade = { alpha: 1, start: 0 };
+  // Never leave the old picture up if the new one fails to render.
+  setTimeout(startFade, 1500);
+}
+
+/** Fades the held picture out once the new image has drawn. */
+function startFade() {
+  const f = S.fade;
+  if (!f || f.start) return;
+  f.start = performance.now();
+  const tick = (now) => {
+    if (S.fade !== f) return;
+    f.alpha = Math.max(0, 1 - (now - f.start) / FADE_MS);
+    if (f.alpha === 0) S.fade = null;
+    draw();
+    if (S.fade === f) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function drawFade() {
+  if (!S.fade) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = S.fade.alpha;
+  ctx.drawImage(fadeCanvas, 0, 0);
+  ctx.restore();
+}
+
+/** Switches between the XY view and the XZ / YZ side views of a Z stack. */
+async function setAxis(axis) {
+  if (!S.info || axis === S.axis) return;
+  const prev = S.axis;
+  if (prev === "xy") {
+    flushAnn();
+    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, model: S.model, crop: S.crop, cropStack: S.cropStack };
+  }
+  let token, info, z;
+  if (axis === "xy") {
+    ({ token, info, z } = S.base);
+  } else {
+    try {
+      ({ token, info } = await invoke("open_reslice", { token: S.base.token, axis }));
+    } catch (e) {
+      toast(`无法切换视图：${e}`);
+      if (prev === "xy") S.base = null;
+      return;
+    }
+    z = Math.floor(info.sizeZ / 2);
+  }
+  stopPlay();
+  S.axis = axis;
+  S.token = token;
+  S.info = info;
+  S.z = z;
+  S.frame = null;
+  S.hist = null;
+  S.picked = null;
+  S.op = null;
+  S.cropBox = null;
+  S.lastDrawn = null;
+  showSize(null);
+  if (axis === "xy") {
+    Object.assign(S, { ann: S.base.ann, history: S.base.history, model: S.base.model, crop: S.base.crop, cropStack: S.base.cropStack });
+    S.base = null;
+  } else {
+    Object.assign(S, { ann: [], history: [], model: null, crop: null, cropStack: [] });
+  }
+  const ps = info.pixelSize;
+  if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)]) {
+    S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
+  }
+  const view = axis === "xy" ? "" : ` (${axis.toUpperCase()})`;
+  T.window.getCurrentWindow().setTitle(`${info.name}${view} — TifMrcView`).catch(() => {});
+  setupSliders();
+  syncScaleUi();
+  updateInfo();
+  fit();
 }
 
 function normUnit(u) {
@@ -431,6 +529,9 @@ function drawHist() {
 
 function setupSliders() {
   const { sizeZ, sizeT } = S.info;
+  const stack = (S.base ? S.base.info : S.info).sizeZ > 1;
+  $("btn-axis").hidden = $("axis-sep").hidden = !stack;
+  $("btn-axis").textContent = S.axis.toUpperCase();
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
   $("zslider").max = sizeZ - 1;
   $("zslider").value = S.z;
@@ -443,6 +544,7 @@ function setupSliders() {
 }
 
 function updateZLabel() {
+  $("zname").textContent = { xy: "Z", xz: "Y", yz: "X" }[S.axis];
   $("zlabel").textContent = `${S.z + 1} / ${S.info.sizeZ}`;
   $("tlabel").textContent = `${S.t + 1} / ${S.info.sizeT}`;
 }
@@ -454,6 +556,13 @@ function setZ(z) {
   S.z = z;
   $("zslider").value = z;
   updateZLabel();
+  // While Z changes quickly, draw at half resolution, then sharpen once it stops.
+  S.scrubbing = true;
+  clearTimeout(S.scrubTimer);
+  S.scrubTimer = setTimeout(() => {
+    S.scrubbing = false;
+    requestRender();
+  }, 250);
   requestRender();
   pluginEmit("slice", { z: S.z, t: S.t });
 }
@@ -476,8 +585,6 @@ function updateInfo() {
   if (i.sizeT > 1) dims.push(`T${i.sizeT}`);
   const px = S.px ? ` · ${fmt(S.px.x)} ${S.px.unit}/px` : "";
   $("st-info").textContent = `${i.format} · ${dims.join(" × ")} · ${i.dtype}${px}`;
-  $("file-name").textContent = i.name;
-  $("file-name").title = i.path;
   const { files, index } = S.folder;
   $("file-pos").textContent = files.length ? `${index + 1} / ${files.length}` : "–";
   $("btn-prev").disabled = index <= 0;
@@ -846,7 +953,7 @@ function draw() {
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!S.frame || !S.info) return;
+  if (!S.frame || !S.info) return drawFade();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const [x, y, w, h] = S.frame.region;
   const [sx, sy] = toScreen(x, y);
@@ -879,6 +986,7 @@ function draw() {
 
   const { cw, ch } = cssSize();
   drawScaleBar(ctx, cw, ch, S.view.scale, true);
+  drawFade();
   $("st-zoom").textContent = `${Math.round(S.view.scale * dpr * 100)}%`;
 }
 
@@ -985,8 +1093,9 @@ async function renderNow() {
   const dpr = window.devicePixelRatio || 1;
   const scale = S.view.scale * dpr;
   // Never ask for more pixels than the source has; the GPU upscales.
-  const outW = Math.max(1, Math.round(region[2] * Math.min(scale, 1)));
-  const outH = Math.max(1, Math.round(region[3] * Math.min(scale, 1)));
+  const k = Math.min(scale, 1) * (S.scrubbing ? 0.5 : 1);
+  const outW = Math.max(1, Math.round(region[2] * k));
+  const outH = Math.max(1, Math.round(region[3] * k));
   const channels = channelReqs();
   const token = S.token;
   const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };
@@ -1010,6 +1119,7 @@ async function renderNow() {
     });
     syncContrast();
     draw();
+    startFade();
     loadHist();
     pluginEmit("render");
   } catch (e) {
@@ -1062,7 +1172,7 @@ async function writeFile(path, bytes) {
 }
 
 function exportName() {
-  const z = S.info.sizeZ > 1 ? `_z${S.z + 1}` : "";
+  const z = S.info.sizeZ > 1 ? `_${{ xy: "z", xz: "y", yz: "x" }[S.axis]}${S.z + 1}` : "";
   return `${stem(S.info.path)}${z}${S.crop ? "_crop" : ""}`;
 }
 
@@ -1129,7 +1239,7 @@ function setTool(t) {
     const b = document.querySelector('#toolbtns [data-tool="pen"]');
     b.querySelector("svg").innerHTML = PEN_ICONS[t];
     b.title = PEN_TITLES[t] + "。再点一次切换 画笔 / 画框 / 画圆";
-    for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
+for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
   }
   for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
   canvas.classList.toggle("cross", t !== "pan" && t !== "select");
@@ -1490,7 +1600,8 @@ function updateZMarks() {
 
 function annChanged() {
   draw();
-  if (!S.info) return;
+  // Side views share the file name; their marks are not saved.
+  if (!S.info || S.axis !== "xy") return;
   S.annPending = { path: S.info.path, size: [S.info.width, S.info.height] };
   clearTimeout(S.annTimer);
   S.annTimer = setTimeout(flushAnn, 2000);
@@ -1971,6 +2082,8 @@ $("btn-scalebar").addEventListener("click", () => {
 $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
+const AXES = ["xy", "xz", "yz"];
+$("btn-axis").addEventListener("click", () => S.info && setAxis(AXES[(AXES.indexOf(S.axis) + 1) % AXES.length]));
 // Arrows to scroll the tool buttons when the window is too narrow for them.
 {
   const bar = $("quickbar");
