@@ -59,6 +59,7 @@ impl RasterSource {
             channels,
             pixel_size: None,
             unit: String::new(),
+            metadata: vec![],
             samples_per_page: size_c,
             order: DimOrder::CZT,
             page_count: 1,

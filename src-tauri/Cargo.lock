@@ -4262,6 +4262,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
+ "flate2",
  "image",
  "libc",
  "memmap2",
@@ -4276,6 +4277,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tiff",
+ "weezl",
  "windows-sys 0.59.0",
 ]
 
