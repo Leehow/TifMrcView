@@ -134,3 +134,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `DEPLOY_HOST` / `DEPLOY_USER` | Secret | 下载站地址和用户名 |
 | `UPDATE_BASE_URL` | Variable，可选 | 默认 `https://tifmrcview.com/tifmrcview` |
 | `DEPLOY_PATH` | Variable，可选 | 默认 `/var/www/tifmrcview` |
+
+## 许可证
+
+本项目以 [Apache License 2.0](LICENSE) 开源。
