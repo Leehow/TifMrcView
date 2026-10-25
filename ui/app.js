@@ -70,6 +70,11 @@ function fmt(v) {
   return a !== 0 && (a < 1e-3 || a >= 1e6) ? v.toExponential(3) : String(+v.toFixed(4));
 }
 
+/** Notifies plugins (see plugin-host.js). */
+function pluginEmit(event, data) {
+  if (window.TifMrcView) window.TifMrcView.emit(event, data);
+}
+
 function fmtBytes(n) {
   if (n >= 1 << 30) return (n / (1 << 30)).toFixed(1) + " GB";
   if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + " MB";
@@ -173,6 +178,7 @@ async function openPath(path) {
       fit();
     }
     await refreshFolder(path);
+    pluginEmit("open", S.info);
   } catch (e) {
     toast(`无法打开 ${basename(path)}：${e}`);
   } finally {
@@ -419,6 +425,7 @@ function setZ(z) {
   $("zslider").value = z;
   updateZLabel();
   requestRender();
+  pluginEmit("slice", { z: S.z, t: S.t });
 }
 
 function setT(t) {
@@ -427,6 +434,7 @@ function setT(t) {
   $("tslider").value = t;
   updateZLabel();
   requestRender();
+  pluginEmit("slice", { z: S.z, t: S.t });
 }
 
 function updateInfo() {
@@ -719,6 +727,7 @@ async function renderNow() {
     syncContrast();
     draw();
     loadHist();
+    pluginEmit("render");
   } catch (e) {
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
   } finally {
@@ -729,14 +738,18 @@ async function renderNow() {
 
 // ---------- saving ----------
 
-/** Renders `region` at full resolution with visible overlays into PNG bytes. */
-async function exportPng(region) {
+/**
+ * Renders `region` of slice z/t (default: the shown one) with the current
+ * display settings and visible overlays into a canvas. `size` forces the
+ * output size; otherwise it is full resolution, capped at 16384 px.
+ */
+async function renderRegion(region, { z = S.z, t = S.t, size = null } = {}) {
   const [x, y, w, h] = region.map(Math.round);
-  const k = Math.min(1, 16384 / Math.max(w, h));
-  const outW = Math.max(1, Math.round(w * k));
-  const outH = Math.max(1, Math.round(h * k));
+  const k = size ? size[0] / w : Math.min(1, 16384 / Math.max(w, h));
+  const outW = size ? size[0] : Math.max(1, Math.round(w * k));
+  const outH = size ? size[1] : Math.max(1, Math.round(h * k));
   const req = {
-    token: S.token, z: S.z, t: S.t, channels: channelReqs(),
+    token: S.token, z, t, channels: channelReqs(),
     region: [x, y, w, h], outW, outH, gamma: S.gamma, invert: false,
   };
   const f = parseFrame(await invoke("render_view", { req }));
@@ -749,6 +762,12 @@ async function exportPng(region) {
   const unit = Math.max(0.5, k / S.view.scale);
   if (S.annShow) drawAnnotations(g, (ix, iy) => [(ix - x) * k, (iy - y) * k], unit, S.ann);
   drawScaleBar(g, f.w, f.h, k, false);
+  return c;
+}
+
+/** Renders `region` at full resolution with visible overlays into PNG bytes. */
+async function exportPng(region) {
+  const c = await renderRegion(region);
   const blob = await new Promise((res) => c.toBlob(res, "image/png"));
   return new Uint8Array(await blob.arrayBuffer());
 }

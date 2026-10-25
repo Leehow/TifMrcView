@@ -5,3 +5,4 @@ src-tauri/gen/
 # local sample data
 fluorescence-tiff-*/
 *.ome.tif
+src-tauri/tauri.ci.conf.json

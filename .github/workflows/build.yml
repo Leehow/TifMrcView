@@ -6,12 +6,44 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "发布到下载站（自动版本号）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+env:
+  UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL || 'https://tifmrcview.com/tifmrcview' }}
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      notes: ${{ steps.v.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Tags give the version; otherwise major.minor from tauri.conf.json and
+      # the commit count as the patch number, so every build is newer.
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            base=$(node -p "require('./src-tauri/tauri.conf.json').version.split('.').slice(0,2).join('.')")
+            v="$base.$(git rev-list --count HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "notes=$(git log -1 --pretty=%s | tr -d '\r' | head -c 300)" >> "$GITHUB_OUTPUT"
+          echo "Version $v"
+
   bundle:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +65,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev patchelf rpm
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev patchelf rpm nasm
 
       - uses: actions/setup-node@v4
         with:
@@ -49,17 +81,28 @@ jobs:
 
       - run: npm ci || npm install
 
-      - name: Build installers
-        uses: tauri-apps/tauri-action@v0
+      # Version, update feed and (when the signing key is available) signed
+      # updater packages are passed as a config overlay.
+      - name: Build config
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: ${{ matrix.args }}
-          # Only tagged pushes publish a GitHub Release.
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('TifMrcView {0}', github.ref_name) || '' }}
-          releaseBody: "下载对应系统的安装包：macOS 用 .dmg，Windows 用 -setup.exe，Linux 用 .deb / .rpm / .AppImage。"
-          releaseDraft: false
+          VERSION: ${{ needs.version.outputs.version }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          node -e '
+            const c = { version: process.env.VERSION,
+              plugins: { updater: { endpoints: [process.env.UPDATE_BASE_URL.replace(/\/+$/, "") + "/latest.json"] } } };
+            if (process.env.HAS_KEY === "true") c.bundle = { createUpdaterArtifacts: true };
+            require("fs").writeFileSync("src-tauri/tauri.ci.conf.json", JSON.stringify(c, null, 2));
+          '
+          cat src-tauri/tauri.ci.conf.json
+
+      - name: Build installers
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build ${{ matrix.args }} --config "$(cat src-tauri/tauri.ci.conf.json)"
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -67,8 +110,60 @@ jobs:
           name: TifMrcView-${{ matrix.name }}
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg
-            src-tauri/target/**/release/bundle/nsis/*-setup.exe
-            src-tauri/target/**/release/bundle/deb/*.deb
-            src-tauri/target/**/release/bundle/rpm/*.rpm
-            src-tauri/target/**/release/bundle/appimage/*.AppImage
+            src-tauri/target/**/release/bundle/macos/*.app.tar.gz*
+            src-tauri/target/**/release/bundle/nsis/*-setup.exe*
+            src-tauri/target/**/release/bundle/deb/*.deb*
+            src-tauri/target/**/release/bundle/rpm/*.rpm*
+            src-tauri/target/**/release/bundle/appimage/*.AppImage*
           if-no-files-found: error
+
+  publish:
+    needs: [version, bundle]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release
+        env:
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          node scripts/make-release.mjs artifacts release "$VERSION" "$UPDATE_BASE_URL" "$NOTES"
+          ls -lR release
+
+      - name: Upload to download site
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/tifmrcview' }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
+            echo "::warning::DEPLOY_SSH_KEY / DEPLOY_HOST / DEPLOY_USER not set; skipping upload"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_cmd="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
+          dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
+          # Version folder first, feeds last, so clients never see a half-uploaded release.
+          rsync -av -e "$ssh_cmd" "release/$VERSION" "$dest/"
+          for f in latest.json downloads.json; do
+            [ -f "release/$f" ] && rsync -av -e "$ssh_cmd" "release/$f" "$dest/$f"
+          done
+
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TifMrcView ${{ github.ref_name }}
+          body: "下载对应系统的安装包：macOS 用 .dmg，Windows 用 -setup.exe，Linux 用 .deb / .rpm / .AppImage。"
+          files: release/${{ env.VERSION }}/*

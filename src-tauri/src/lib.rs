@@ -1,7 +1,9 @@
 mod assoc;
 pub mod formats;
 pub mod image;
+pub mod plugins;
 pub mod render;
+mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -230,11 +232,19 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
 }
 
 #[tauri::command]
-async fn pick_save_path(app: AppHandle, dir: String, name: String) -> Option<String> {
+async fn pick_save_path(
+    app: AppHandle,
+    dir: String,
+    name: String,
+    filter: Option<String>,
+    exts: Option<Vec<String>>,
+) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let exts = exts.unwrap_or_else(|| vec!["png".into()]);
+    let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
     app.dialog()
         .file()
-        .add_filter("PNG", &["png"])
+        .add_filter(filter.as_deref().unwrap_or("PNG"), &exts)
         .set_directory(dir)
         .set_file_name(name)
         .blocking_save_file()
@@ -255,7 +265,7 @@ fn free_path(dir: String, stem: String) -> String {
     p.to_string_lossy().into_owned()
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -346,8 +356,12 @@ pub fn run() {
     }
     builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(update::Pending::default())
+        .register_uri_scheme_protocol("tmvplugin", plugins::serve)
         .setup(|app| {
+            app.manage(plugins::Plugins::new(plugins::user_dir(app.handle())));
             let dir = app.path().app_config_dir().ok();
             std::thread::spawn(move || assoc::first_run(dir));
             Ok(())
@@ -365,6 +379,11 @@ pub fn run() {
             pick_save_path,
             free_path,
             save_file,
+            plugins::plugin_scan,
+            plugins::plugin_call,
+            plugins::open_plugin_dir,
+            update::check_update,
+            update::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building TifMrcView")
