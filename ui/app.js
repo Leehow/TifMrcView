@@ -30,6 +30,7 @@ const S = {
   ann: [],          // {type: "line"|"path"|"rect"|"ellipse", pts: [[x, y], ...], color, width, z}
   annShow: true,
   history: [],      // snapshots of annotations and crop, for undo
+  future: [],       // undone snapshots, for redo
   lastDrawn: null,  // the annotation drawn last, which Esc removes
   annPending: null, // annotations waiting to be written to disk
   annTimer: 0,
@@ -168,6 +169,7 @@ async function openPath(path) {
     S.hist = null;
     S.ann = [];
     S.history = [];
+    S.future = [];
     S.lastDrawn = null;
     S.picked = null;
     S.op = null;
@@ -261,7 +263,7 @@ async function setAxis(axis) {
   const prev = S.axis;
   if (prev === "xy") {
     flushAnn();
-    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, model: S.model, crop: S.crop, cropStack: S.cropStack };
+    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, future: S.future, model: S.model, crop: S.crop, cropStack: S.cropStack };
   }
   let token, info, z;
   if (axis === "xy") {
@@ -289,10 +291,10 @@ async function setAxis(axis) {
   S.lastDrawn = null;
   showSize(null);
   if (axis === "xy") {
-    Object.assign(S, { ann: S.base.ann, history: S.base.history, model: S.base.model, crop: S.base.crop, cropStack: S.base.cropStack });
+    Object.assign(S, { ann: S.base.ann, history: S.base.history, future: S.base.future, model: S.base.model, crop: S.base.crop, cropStack: S.base.cropStack });
     S.base = null;
   } else {
-    Object.assign(S, { ann: [], history: [], model: null, crop: null, cropStack: [] });
+    Object.assign(S, { ann: [], history: [], future: [], model: null, crop: null, cropStack: [] });
   }
   const ps = info.pixelSize;
   if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)]) {
@@ -701,6 +703,13 @@ function fit() {
   requestRender();
 }
 
+function zoomBy(k) {
+  if (!S.info) return;
+  S.view.scale = Math.min(64, Math.max(0.005, S.view.scale * k));
+  draw();
+  requestRender();
+}
+
 function oneToOne() {
   if (!S.info) return;
   S.view.scale = 1 / (window.devicePixelRatio || 1);
@@ -981,7 +990,9 @@ function draw() {
   const { cw, ch } = cssSize();
   drawScaleBar(ctx, cw, ch, S.view.scale, true);
   drawFade();
-  $("st-zoom").textContent = `${Math.round(S.view.scale * dpr * 100)}%`;
+  const pct = `${Math.round(S.view.scale * dpr * 100)}%`;
+  $("st-zoom").textContent = pct;
+  $("btn-zoom").textContent = pct;
 }
 
 /** Dashed outline and grab points of the picked annotation. */
@@ -1392,6 +1403,7 @@ function snapshot() {
 
 function pushHistory(snap) {
   styled = null;
+  S.future = [];
   S.history.push(snap);
   if (S.history.length > 200) S.history.shift();
 }
@@ -1400,6 +1412,19 @@ function undo() {
   if (S.op) return;
   const h = S.history.pop();
   if (!h) return;
+  S.future.push(snapshot());
+  restore(h);
+}
+
+function redo() {
+  if (S.op) return;
+  const h = S.future.pop();
+  if (!h) return;
+  S.history.push(snapshot());
+  restore(h);
+}
+
+function restore(h) {
   const annChange = h.ann !== JSON.stringify(S.ann);
   S.ann = JSON.parse(h.ann);
   S.picked = null;
@@ -1874,7 +1899,8 @@ window.addEventListener("keydown", (e) => {
   if (mod) {
     if (key === "o") pickFile();
     else if (key === "s") quickSave();
-    else if (key === "z") undo();
+    else if (key === "z") (e.shiftKey ? redo : undo)();
+    else if (key === "y") redo();
     else return;
     e.preventDefault();
     return;
@@ -1943,6 +1969,13 @@ window.addEventListener("keydown", (e) => {
       showSize(null);
       draw();
       break;
+    case "+":
+    case "=":
+      zoomBy(1.25);
+      break;
+    case "-":
+      zoomBy(0.8);
+      break;
     case "1":
       oneToOne();
       break;
@@ -1968,8 +2001,9 @@ $("btn-prev").addEventListener("click", () => step(-1));
 $("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
 $("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
 $("btn-next").addEventListener("click", () => step(1));
-$("btn-fit").addEventListener("click", fit);
-$("btn-1to1").addEventListener("click", oneToOne);
+$("btn-zoom").addEventListener("click", fit);
+$("btn-zoomin").addEventListener("click", () => zoomBy(1.25));
+$("btn-zoomout").addEventListener("click", () => zoomBy(0.8));
 $("btn-play").addEventListener("click", togglePlay);
 $("btn-tools").addEventListener("click", () => showPanel("all"));
 $("btn-contrast").addEventListener("click", () => showPanel("contrast"));
@@ -1989,6 +2023,7 @@ $("btn-scalebar").addEventListener("click", () => {
 });
 $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
+$("btn-redo").addEventListener("click", redo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
 const AXES = ["xy", "xz", "yz"];
 $("btn-axis").addEventListener("click", () => S.info && setAxis(AXES[(AXES.indexOf(S.axis) + 1) % AXES.length]));
