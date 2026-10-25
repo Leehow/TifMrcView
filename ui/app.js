@@ -1412,8 +1412,9 @@ async function flushAnn() {
   const p = S.annPending;
   if (!p) return;
   S.annPending = null;
-  const items = S.ann.map(({ type, z, color, width, pts }) => ({
-    type, z, color, width, pts: pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
+  // z1 is the last Z of a range; it is absent for a single slice.
+  const items = S.ann.map(({ type, z, z1, color, width, pts }) => ({
+    type, z, z1, color, width, pts: pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
   }));
   const json = items.length
     ? JSON.stringify({ app: "TifMrcView", version: 1, image: basename(p.path), size: p.size, items })
