@@ -14,7 +14,7 @@
 // into the plugin folder (插件 → 打开插件文件夹).
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/recorder.js"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js"];
 
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, active, error, cleanup, listeners}
@@ -116,6 +116,17 @@ function makeApi(rec) {
         b.addEventListener("click", onClick);
         $("plugin-buttons").append(track(b));
         return b;
+      },
+      /** Adds a toolbar drop-down. `options` = [[value, label], ...]. */
+      addToolbarSelect({ title = "", options, value, onChange }) {
+        const sel = document.createElement("select");
+        sel.title = title;
+        sel.dataset.plugin = id;
+        for (const [v, label] of options) sel.append(new Option(label, v));
+        if (value !== undefined) sel.value = value;
+        sel.addEventListener("change", () => onChange(sel.value));
+        $("plugin-buttons").append(track(sel));
+        return sel;
       },
       showTools: () => toggleTools(true),
       /** Shows a busy overlay with `text`; `null` hides it. */

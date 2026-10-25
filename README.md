@@ -16,6 +16,8 @@
 
 工具栏「插件」里可以开关插件、打开插件文件夹、检查更新。录制视频就是一个内置插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
 
+界面语言也是一个内置插件（`ui/plugins/i18n.js`）：支持中文、English、Deutsch、日本語、Español、Français、Русский，默认跟随系统语言，工具栏的下拉框可以手动切换。它会把界面上已知的中文文字换成所选语言，所以别的插件和提示信息也一起翻译；加新文字时在 `WORDS`（固定文字）或 `PATTERNS`（带数字、文件名的文字）里加一行。关掉这个插件就回到中文。
+
 自己写插件：把一个 `.js` 文件放进插件文件夹，点「重新加载」即可。最小例子：
 
 ```js
@@ -31,7 +33,7 @@ TifMrcView.register({
 });
 ```
 
-`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`，并用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
+`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`，并用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
 
 插件和主程序有同样的权限，只安装自己信任的插件。
 
