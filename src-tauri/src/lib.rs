@@ -2,12 +2,13 @@ mod assoc;
 pub mod formats;
 pub mod imod;
 pub mod image;
+mod mem;
 pub mod plugins;
 pub mod render;
 pub mod reslice;
 mod update;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,9 +18,6 @@ use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use image::{ImageInfo, OpenImage};
-
-/// Decoded pages kept in memory, shared by the files open in all windows.
-const CACHE_BUDGET: usize = 3 << 30;
 
 #[derive(Default)]
 struct AppState {
@@ -34,6 +32,26 @@ struct AppState {
     /// The file each window shows or is loading, by window label.
     showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    save_paths: SavePaths,
+}
+
+/// Paths the user chose (or quick-save picked) to write to; `save_file`
+/// writes nowhere else.
+#[derive(Default)]
+struct SavePaths(Mutex<HashSet<PathBuf>>);
+
+impl SavePaths {
+    fn allow(&self, path: &str) {
+        let mut set = self.0.lock().unwrap();
+        if set.len() >= 1000 {
+            set.clear();
+        }
+        set.insert(PathBuf::from(path));
+    }
+
+    fn allowed(&self, path: &str) -> bool {
+        self.0.lock().unwrap().contains(Path::new(path))
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -67,7 +85,7 @@ async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: Str
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
-    let budget = CACHE_BUDGET / (others + 1);
+    let budget = mem::cache_budget() / (others + 1);
     let img = blocking(move || {
         let src = formats::open(Path::new(&path))?;
         Ok(OpenImage::new(token, src, budget))
@@ -76,6 +94,12 @@ async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: Str
     let info = img.info().clone();
     {
         let mut cur = state.current.lock().unwrap();
+        // If the window closed while the file was opening, nothing would ever
+        // cancel the prefetch below. Tauri unregisters a window before our
+        // Destroyed handler takes this lock, so the check cannot race it.
+        if window.app_handle().get_webview_window(window.label()).is_none() {
+            return Err("window closed".into());
+        }
         if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             old.cancelled.store(true, Ordering::Relaxed);
         }
@@ -96,7 +120,7 @@ fn open_reslice(window: WebviewWindow, state: State<'_, AppState>, token: u64, a
         _ => return Err(format!("unknown view {axis}")),
     };
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
-    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), CACHE_BUDGET / 8);
+    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), mem::cache_budget() / 8);
     let info = img.info().clone();
     state.side.lock().unwrap().insert(window.label().to_string(), img);
     Ok(Opened { token, info })
@@ -271,22 +295,28 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
+    state: State<'_, AppState>,
     dir: String,
     name: String,
     filter: Option<String>,
     exts: Option<Vec<String>>,
-) -> Option<String> {
+) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let exts = exts.unwrap_or_else(|| vec!["png".into()]);
     let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
-    app.dialog()
+    let path = app
+        .dialog()
         .file()
         .add_filter(filter.as_deref().unwrap_or("PNG"), &exts)
         .set_directory(dir)
         .set_file_name(name)
         .blocking_save_file()
         .and_then(|f| f.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(p) = &path {
+        state.save_paths.allow(p);
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -315,7 +345,7 @@ fn open_folder(path: String) -> CmdResult<()> {
 
 /// First `<stem>.png`, `<stem>-2.png`, ... that does not exist yet.
 #[tauri::command]
-fn free_path(dir: String, stem: String) -> String {
+fn free_path(state: State<'_, AppState>, dir: String, stem: String) -> String {
     let dir = PathBuf::from(dir);
     let mut p = dir.join(format!("{stem}.png"));
     let mut i = 2;
@@ -323,7 +353,9 @@ fn free_path(dir: String, stem: String) -> String {
         p = dir.join(format!("{stem}-{i}.png"));
         i += 1;
     }
-    p.to_string_lossy().into_owned()
+    let p = p.to_string_lossy().into_owned();
+    state.save_paths.allow(&p);
+    p
 }
 
 /// Annotations drawn on an image are kept next to it, e.g.
@@ -354,13 +386,16 @@ fn write_annotations(image: String, json: String) -> CmdResult<()> {
 }
 
 pub(crate) fn percent_decode(s: &str) -> String {
+    fn hex(c: u8) -> Option<u8> {
+        (c as char).to_digit(16).map(|d| d as u8)
+    }
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h << 4 | l);
                 i += 3;
                 continue;
             }
@@ -371,9 +406,10 @@ pub(crate) fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Writes the raw request body to the percent-encoded path in `x-path`.
+/// Writes the raw request body to the percent-encoded path in `x-path`,
+/// which must come from `pick_save_path` or `free_path`.
 #[tauri::command]
-fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+fn save_file(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> CmdResult<()> {
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
         return Err("expected binary body".into());
     };
@@ -383,6 +419,9 @@ fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
         .and_then(|v| v.to_str().ok())
         .map(percent_decode)
         .ok_or("missing path")?;
+    if !state.save_paths.allowed(&path) {
+        return Err(format!("不允许写入：{path}"));
+    }
     std::fs::write(&path, data).map_err(err)
 }
 
@@ -611,4 +650,130 @@ pub fn run() {
                 queue_open(_app, paths);
             }
         });
+}
+
+#[cfg(test)]
+mod save_path_tests {
+    use super::*;
+
+    #[test]
+    fn save_paths_allow_only_handed_out_paths() {
+        let s = SavePaths::default();
+        assert!(!s.allowed("/tmp/a.png"));
+        s.allow("/tmp/a.png");
+        assert!(s.allowed("/tmp/a.png"));
+        assert!(s.allowed("/tmp/a.png"));
+        assert!(!s.allowed("/tmp/b.png"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn natural_cmp_numbers_compare_by_value() {
+        assert_eq!(natural_cmp("img2", "img10"), Ordering::Less);
+        assert_eq!(natural_cmp("img10", "img2"), Ordering::Greater);
+        assert_eq!(natural_cmp("a1b20", "a1b3"), Ordering::Greater);
+    }
+
+    #[test]
+    fn natural_cmp_leading_zeros() {
+        assert_eq!(natural_cmp("img002", "img10"), Ordering::Less);
+        // Leading zeros carry no weight: equal values compare equal.
+        assert_eq!(natural_cmp("img02", "img2"), Ordering::Equal);
+        assert_eq!(natural_cmp("img0", "img00"), Ordering::Equal);
+        assert_eq!(natural_cmp("img007", "img7"), Ordering::Equal);
+        assert_eq!(natural_cmp("img007", "img8"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_ignores_ascii_case() {
+        assert_eq!(natural_cmp("ABC", "abc"), Ordering::Equal);
+        assert_eq!(natural_cmp("a.tif", "B.tif"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_prefixes_and_equal() {
+        assert_eq!(natural_cmp("", ""), Ordering::Equal);
+        assert_eq!(natural_cmp("img", "img1"), Ordering::Less);
+        assert_eq!(natural_cmp("img1", "img"), Ordering::Greater);
+        assert_eq!(natural_cmp("img1.tif", "img1.tif"), Ordering::Equal);
+        // Digits (0x31) sort before letters.
+        assert_eq!(natural_cmp("a1", "ab"), Ordering::Less);
+    }
+
+    #[test]
+    fn natural_cmp_sorts_a_list() {
+        let mut v = vec!["f10", "f2", "F1", "f01x", "f1"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        // "F1" and "f1" compare equal, so the stable sort keeps input order.
+        assert_eq!(v, ["F1", "f1", "f01x", "f2", "f10"]);
+    }
+
+    #[test]
+    fn percent_decode_ascii_and_escapes() {
+        assert_eq!(percent_decode("plain.tif"), "plain.tif");
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        assert_eq!(percent_decode("%41%62"), "Ab");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    #[test]
+    fn percent_decode_utf8_multibyte() {
+        assert_eq!(percent_decode("%E4%B8%AD.tif"), "中.tif");
+        assert_eq!(percent_decode("日本%E8%AA%9E"), "日本語");
+    }
+
+    #[test]
+    fn percent_decode_lone_or_invalid_percent() {
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%4"), "a%4");
+        assert_eq!(percent_decode("%zz1"), "%zz1");
+        assert_eq!(percent_decode("%G1%41"), "%G1A");
+    }
+
+    #[test]
+    fn percent_decode_multibyte_after_percent() {
+        assert_eq!(percent_decode("%a€"), "%a€");
+    }
+
+    #[test]
+    fn percent_decode_rejects_plus_sign() {
+        assert_eq!(percent_decode("%+4x"), "%+4x");
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn paths_from_args_filters_and_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.tif");
+        let b = dir.path().join("b.mrc");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let abs_b = format!("file://{}", b.display());
+        let got = paths_from_args(
+            args(&["prog", "-x", "a.tif", &abs_b, "missing.tif", "--flag", "sub"]),
+            Some(dir.path()),
+        );
+        assert_eq!(got, vec![a.to_string_lossy(), b.to_string_lossy()]);
+    }
+
+    #[test]
+    fn paths_from_args_skips_argv0_and_handles_missing_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.tif");
+        std::fs::write(&a, b"x").unwrap();
+        let abs = a.to_string_lossy().into_owned();
+        // argv[0] is never treated as a file, even if it exists.
+        assert!(paths_from_args(args(&[&abs]), None).is_empty());
+        assert_eq!(paths_from_args(args(&["prog", &abs]), None), vec![abs.clone()]);
+        assert!(paths_from_args(args(&["prog", "definitely-not-here.tif"]), None).is_empty());
+    }
 }

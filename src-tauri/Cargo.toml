@@ -38,16 +38,19 @@ recorder = ["dep:openh264"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation"] }
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[dev-dependencies]
+tempfile = "3"

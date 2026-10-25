@@ -4,7 +4,7 @@
 //! RGBA, `{repeat}` optional), `finish`, `cancel`.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{anyhow, bail, Context, Result};
 use openh264::encoder::{
@@ -62,6 +62,11 @@ struct Frame {
 }
 
 impl Recorder {
+    /// The session survives a panic in the encoder; the next `begin` replaces it.
+    fn session(&self) -> MutexGuard<'_, Option<Session>> {
+        self.session.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn begin(&self, a: Begin) -> Result<Value> {
         let (w, h) = (a.width, a.height);
         if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
@@ -95,7 +100,7 @@ impl Recorder {
         let encoder = Encoder::with_api_config(OpenH264API::from_source(), cfg).map_err(|e| anyhow!("{e}"))?;
         let path = PathBuf::from(&a.path);
         let mp4 = Mp4Writer::create(&path, w, h).with_context(|| format!("cannot write {}", path.display()))?;
-        let mut s = self.session.lock().unwrap();
+        let mut s = self.session();
         if let Some(old) = s.take() {
             let _ = std::fs::remove_file(&old.path);
         }
@@ -114,7 +119,7 @@ impl Recorder {
     }
 
     fn frame(&self, a: Frame, rgba: &[u8]) -> Result<Value> {
-        let mut guard = self.session.lock().unwrap();
+        let mut guard = self.session();
         let s = guard.as_mut().ok_or_else(|| anyhow!("recording not started"))?;
         let (w, h) = (s.width as usize, s.height as usize);
         if rgba.len() != w * h * 4 {
@@ -133,7 +138,7 @@ impl Recorder {
     }
 
     fn finish(&self) -> Result<Value> {
-        let s = self.session.lock().unwrap().take().ok_or_else(|| anyhow!("recording not started"))?;
+        let s = self.session().take().ok_or_else(|| anyhow!("recording not started"))?;
         let frames = s.mp4.frames();
         let path = s.path.clone();
         match s.mp4.finish() {
@@ -146,7 +151,7 @@ impl Recorder {
     }
 
     fn cancel(&self) -> Result<Value> {
-        if let Some(s) = self.session.lock().unwrap().take() {
+        if let Some(s) = self.session().take() {
             drop(s.mp4);
             let _ = std::fs::remove_file(&s.path);
         }

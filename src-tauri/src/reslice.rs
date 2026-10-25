@@ -137,3 +137,68 @@ impl Source for Reslice {
         Ok(out.into_iter().map(|data| Plane { w, h, data }).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::tests::{fake_info, FakeSource};
+    use crate::image::DType;
+
+    /// 3x2 image with two Z slices: slice 0 holds 0..6, slice 1 holds 10..16.
+    fn base(channels: usize) -> Arc<OpenImage> {
+        let mut info = fake_info(3, 2, channels, 2, 1, DType::U8);
+        info.pixel_size = Some([1.0, 2.0, 3.0]);
+        // CZT order: page = c + channels * z.
+        let mut pages = vec![];
+        for z in 0..2 {
+            for c in 0..channels {
+                let off = (z * 10 + c * 100) as u8;
+                pages.push(vec![(0..6).map(|i| off + i).collect()]);
+            }
+        }
+        let (src, _) = FakeSource::new(info, pages);
+        OpenImage::new(1, Box::new(src), 1 << 20)
+    }
+
+    fn values(r: &Reslice, page: usize) -> Vec<f64> {
+        let planes = r.read_page(page).unwrap();
+        (0..planes[0].data.len()).map(|i| planes[0].data.get_f64(i)).collect()
+    }
+
+    #[test]
+    fn xz_view_geometry() {
+        let r = Reslice::new(base(1), Axis::Xz);
+        let i = r.info();
+        assert_eq!((i.width, i.height, i.size_z, i.page_count), (3, 2, 2, 2));
+        assert_eq!(i.pixel_size, Some([1.0, 3.0, 2.0]));
+    }
+
+    #[test]
+    fn xz_rows_are_slices() {
+        let r = Reslice::new(base(1), Axis::Xz);
+        // Slider at y=0: row 0 of each slice; y=1: row 1.
+        assert_eq!(values(&r, 0), [0.0, 1.0, 2.0, 10.0, 11.0, 12.0]);
+        assert_eq!(values(&r, 1), [3.0, 4.0, 5.0, 13.0, 14.0, 15.0]);
+    }
+
+    #[test]
+    fn yz_view_columns() {
+        let r = Reslice::new(base(1), Axis::Yz);
+        let i = r.info();
+        assert_eq!((i.width, i.height, i.size_z, i.page_count), (2, 2, 3, 3));
+        assert_eq!(i.pixel_size, Some([2.0, 3.0, 1.0]));
+        // Slider at x=1: column 1 of each slice, one entry per y.
+        assert_eq!(values(&r, 1), [1.0, 4.0, 11.0, 14.0]);
+        assert_eq!(values(&r, 2), [2.0, 5.0, 12.0, 15.0]);
+    }
+
+    #[test]
+    fn multichannel_pages_map_back_to_channels() {
+        let r = Reslice::new(base(2), Axis::Xz);
+        assert_eq!((r.info().size_c, r.info().page_count), (2, 4));
+        // Page = c + 2*y in the view's CZT order.
+        assert_eq!(values(&r, 0), [0.0, 1.0, 2.0, 10.0, 11.0, 12.0]);
+        assert_eq!(values(&r, 1), [100.0, 101.0, 102.0, 110.0, 111.0, 112.0]);
+        assert_eq!(values(&r, 2), [3.0, 4.0, 5.0, 13.0, 14.0, 15.0]);
+    }
+}

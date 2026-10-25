@@ -31,6 +31,7 @@ fn main() {
             let (page, s) = info.locate(c, z, 0);
             let planes = img.page(page).unwrap();
             let p: &PlaneData = &planes[s].data;
+            #[allow(clippy::unnecessary_cast)] // the F64 arm is already f64
             let sum: f64 = with_plane!(p, v => v.iter().map(|x| *x as f64).sum());
             sums.push(sum);
         }

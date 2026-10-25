@@ -79,6 +79,18 @@
       },
       {
         "ext": [
+          "rec",
+          "st",
+          "map"
+        ],
+        "name": "MRC Image (alternate extensions)",
+        "description": "MRC Electron Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-mrc",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
           "czi"
         ],
         "name": "Zeiss CZI Image",

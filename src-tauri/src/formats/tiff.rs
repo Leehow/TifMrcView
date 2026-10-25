@@ -41,6 +41,10 @@ type Dec<'a> = Decoder<Cursor<&'a [u8]>>;
 
 impl TiffSource {
     pub fn open(path: &Path) -> Result<TiffSource> {
+        Self::open_inner(path).map_err(unsupported_msg)
+    }
+
+    fn open_inner(path: &Path) -> Result<TiffSource> {
         let file = File::open(path).with_context(|| format!("无法打开 {}", path.display()))?;
         // SAFETY: the file is opened read-only; concurrent truncation by another
         // process is the usual mmap caveat and is accepted for a viewer.
@@ -318,6 +322,26 @@ impl TiffSource {
             DecodingResult::F16(v) => PlaneData::F32(v.into_iter().map(f32::from).collect()),
         };
         let need = self.info.width * self.info.height * self.info.samples_per_page;
+        let bits = dec.colortype()?.bit_depth();
+        if let (PlaneData::U8(packed), true) = (&data, bits < 8 && self.info.samples_per_page == 1) {
+            // Sub-byte samples come back packed MSB first, rows padded to a byte;
+            // the library has already applied WhiteIsZero inversion.
+            let (w, h) = (self.info.width, self.info.height);
+            let row = (w * bits as usize).div_ceil(8);
+            if packed.len() >= row * h {
+                let max = (1u8 << bits) - 1;
+                let mut out = Vec::with_capacity(w * h);
+                for y in 0..h {
+                    let src = &packed[y * row..(y + 1) * row];
+                    for x in 0..w {
+                        let bit = x * bits as usize;
+                        let v = (src[bit / 8] >> (8 - bits as usize - bit % 8)) & max;
+                        out.push(v);
+                    }
+                }
+                return Ok(PlaneData::U8(out));
+            }
+        }
         if data.len() < need {
             bail!("此 TIFF 的像素布局暂不支持");
         }
@@ -348,7 +372,7 @@ impl Source for TiffSource {
             raw_to_plane(&self.mmap[start..start + n], self.info.dtype, little)
         } else {
             let ifd = *self.ifds.get(page).ok_or_else(|| anyhow!("页码越界"))?;
-            self.decode_ifd(ifd)?
+            self.decode_ifd(ifd).map_err(unsupported_msg)?
         };
         let planes = if self.planar && self.contiguous.is_none() {
             split_planar(data, w * h, spp)
@@ -356,6 +380,14 @@ impl Source for TiffSource {
             data.deinterleave(spp)
         };
         Ok(planes.into_iter().map(|data| Plane { w, h, data }).collect())
+    }
+}
+
+/// Replaces the library's English "unsupported" errors with a user-facing one.
+fn unsupported_msg(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast_ref::<tiff::TiffError>() {
+        Some(tiff::TiffError::UnsupportedError(u)) => anyhow!("不支持的 TIFF 位深或颜色类型（{u}）"),
+        _ => e,
     }
 }
 
@@ -557,4 +589,415 @@ pub fn first_ifd_tag(d: &[u8], tag: u16) -> Option<&[u8]> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod format_fix_tests {
+    use super::*;
+    use crate::image::PlaneData;
+
+    /// Minimal little-endian single-strip uncompressed gray TIFF.
+    fn build(w: u32, h: u32, bits: u16, photometric: u16, data: &[u8]) -> Vec<u8> {
+        let entries: [(u16, u16, u32, u32); 9] = [
+            (256, 4, 1, w),
+            (257, 4, 1, h),
+            (258, 3, 1, bits as u32),
+            (259, 3, 1, 1),
+            (262, 3, 1, photometric as u32),
+            (273, 4, 1, 8),
+            (277, 3, 1, 1),
+            (278, 4, 1, h),
+            (279, 4, 1, data.len() as u32),
+        ];
+        let mut b = b"II\x2a\x00".to_vec();
+        b.extend(((8 + data.len() + data.len() % 2) as u32).to_le_bytes());
+        b.extend(data);
+        if data.len() % 2 == 1 {
+            b.push(0);
+        }
+        b.extend((entries.len() as u16).to_le_bytes());
+        for (tag, ty, n, v) in entries {
+            b.extend(tag.to_le_bytes());
+            b.extend(ty.to_le_bytes());
+            b.extend(n.to_le_bytes());
+            b.extend(v.to_le_bytes());
+        }
+        b.extend(0u32.to_le_bytes());
+        b
+    }
+
+    fn read(name: &str, bytes: &[u8]) -> Result<(ImageInfo, PlaneData)> {
+        let dir = std::env::temp_dir().join(format!("tmv_fmtfix_{}_{name}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let p = dir.join("t.tif");
+        std::fs::write(&p, bytes)?;
+        let r = crate::formats::open(&p).and_then(|s| {
+            let pl = s.read_page(0)?;
+            Ok((s.info().clone(), pl.into_iter().next().unwrap().data))
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
+    #[test]
+    fn bilevel_black_is_zero() {
+        // 10x2, rows padded to 2 bytes.
+        let (info, d) = read("b1", &build(10, 2, 1, 1, &[0b1010_0000, 0b0100_0000, 0xff, 0xc0])).unwrap();
+        assert_eq!(info.dtype, DType::U8);
+        let PlaneData::U8(v) = d else { panic!() };
+        let mut want = vec![1, 0, 1, 0, 0, 0, 0, 0, 0, 1];
+        want.extend([1u8; 10]);
+        assert_eq!(v, want);
+    }
+
+    #[test]
+    fn bilevel_white_is_zero_inverts() {
+        let (_, d) = read("b1w", &build(8, 1, 1, 0, &[0b1010_0000])).unwrap();
+        let PlaneData::U8(v) = d else { panic!() };
+        assert_eq!(v, vec![0, 1, 0, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn four_bit_gray() {
+        // 3x2, rows padded to 2 bytes.
+        let (_, d) = read("b4", &build(3, 2, 4, 1, &[0x12, 0x30, 0xfe, 0xd0])).unwrap();
+        let PlaneData::U8(v) = d else { panic!() };
+        assert_eq!(v, vec![1, 2, 3, 15, 14, 13]);
+    }
+
+    #[test]
+    fn twelve_bit_gray_clear_error() {
+        // 2x1, 12-bit packed: 0xABC 0x123.
+        // The tiff crate cannot decode 12-bit samples: expect a clear error.
+        let e = read("b12", &build(2, 1, 12, 1, &[0xab, 0xc1, 0x23])).err().unwrap();
+        assert!(e.to_string().contains("不支持的 TIFF 位深"), "{e:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::formats;
+    use crate::image::tests::fake_info;
+    use tiff::encoder::{colortype, Rational, TiffEncoder, TiffValue};
+    use tiff::tags::ResolutionUnit;
+
+    /// Writes one IFD per entry of `pages`; the description goes on the first.
+    fn write_tiff<C: colortype::ColorType>(
+        path: &Path,
+        (w, h): (u32, u32),
+        pages: &[Vec<C::Inner>],
+        desc: Option<&str>,
+        res: Option<(ResolutionUnit, u32)>,
+    ) where
+        [C::Inner]: TiffValue,
+    {
+        let mut enc = TiffEncoder::new(File::create(path).unwrap()).unwrap();
+        for (i, data) in pages.iter().enumerate() {
+            let mut img = enc.new_image::<C>(w, h).unwrap();
+            if let (0, Some(d)) = (i, desc) {
+                img.encoder().write_tag(Tag::ImageDescription, d).unwrap();
+            }
+            if let (0, Some((unit, n))) = (i, res) {
+                img.resolution(unit, Rational { n, d: 1 });
+            }
+            img.write_data(data).unwrap();
+        }
+    }
+
+    fn open(path: &Path) -> Box<dyn Source> {
+        formats::open(path).unwrap()
+    }
+
+    fn page_values(src: &dyn Source, page: usize, sample: usize) -> Vec<f64> {
+        let planes = src.read_page(page).unwrap();
+        let p = &planes[sample].data;
+        (0..p.len()).map(|i| p.get_f64(i)).collect()
+    }
+
+    /// `n` pages of 3x2 pixels where page p holds p*10 + pixel index.
+    fn gray8_pages(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|p| (0..6).map(|i| (p * 10 + i) as u8).collect()).collect()
+    }
+
+    #[test]
+    fn gray8_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(4), None, None);
+        let src = open(&path);
+        let info = src.info();
+        assert_eq!((info.width, info.height), (3, 2));
+        assert_eq!((info.size_c, info.size_z, info.size_t, info.page_count), (1, 4, 1, 4));
+        assert_eq!(info.dtype, DType::U8);
+        assert!(!info.is_rgb);
+        assert_eq!(info.format, "TIFF");
+        assert_eq!(info.pixel_size, None);
+        assert_eq!(page_values(&*src, 2, 0), [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
+        assert_eq!(info.locate(0, 3, 0), (3, 0));
+    }
+
+    #[test]
+    fn gray16_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let pages: Vec<Vec<u16>> = (0..3).map(|p| (0..6).map(|i| (p * 20000 + i * 1000) as u16).collect()).collect();
+        write_tiff::<colortype::Gray16>(&path, (3, 2), &pages, None, None);
+        let src = open(&path);
+        assert_eq!(src.info().dtype, DType::U16);
+        assert_eq!(src.info().size_z, 3);
+        assert_eq!(page_values(&*src, 2, 0), [40000.0, 41000.0, 42000.0, 43000.0, 44000.0, 45000.0]);
+    }
+
+    #[test]
+    fn float32_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let vals = vec![-1.5f32, 0.0, 0.25, 1e6, f32::MIN_POSITIVE, 3.0];
+        write_tiff::<colortype::Gray32Float>(&path, (3, 2), std::slice::from_ref(&vals), None, None);
+        let src = open(&path);
+        assert_eq!(src.info().dtype, DType::F32);
+        assert_eq!(page_values(&*src, 0, 0), vals.iter().map(|&v| v as f64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn rgb8_is_interleaved_into_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        // Two pixels per row, two rows: (r,g,b) = (p, p+100, p+200).
+        let page: Vec<u8> = (0..4u8).flat_map(|p| [p, p + 100, p + 200]).collect();
+        write_tiff::<colortype::RGB8>(&path, (2, 2), &[page.clone(), page], None, None);
+        let src = open(&path);
+        let info = src.info();
+        assert!(info.is_rgb);
+        assert_eq!((info.size_c, info.size_z, info.samples_per_page, info.page_count), (3, 2, 3, 2));
+        assert_eq!(info.channels.len(), 3);
+        assert_eq!(src.read_page(1).unwrap().len(), 3);
+        assert_eq!(page_values(&*src, 0, 0), [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(page_values(&*src, 0, 1), [100.0, 101.0, 102.0, 103.0]);
+        assert_eq!(page_values(&*src, 0, 2), [200.0, 201.0, 202.0, 203.0]);
+        assert_eq!(info.locate(2, 1, 0), (1, 2));
+    }
+
+    #[test]
+    fn page_out_of_range_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(2), None, None);
+        assert!(open(&path).read_page(5).is_err());
+    }
+
+    #[test]
+    fn multiple_strips_per_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let (w, h) = (4u32, 9u32);
+        let page: Vec<u8> = (0..w * h).map(|i| i as u8).collect();
+        let mut enc = TiffEncoder::new(File::create(&path).unwrap()).unwrap();
+        let mut img = enc.new_image::<colortype::Gray8>(w, h).unwrap();
+        img.rows_per_strip(2).unwrap();
+        img.write_data(&page).unwrap();
+        let src = open(&path);
+        assert_eq!(page_values(&*src, 0, 0), page.iter().map(|&v| v as f64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn imagej_hyperstack() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let desc = "ImageJ=1.53t\nimages=6\nchannels=2\nslices=3\nunit=micron\nspacing=0.5\n";
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(6), Some(desc), None);
+        let src = open(&path);
+        let info = src.info();
+        assert_eq!(info.format, "ImageJ TIFF");
+        assert_eq!((info.size_c, info.size_z, info.size_t, info.page_count), (2, 3, 1, 6));
+        assert_eq!(info.unit, "µm");
+        // The z spacing comes from the description.
+        assert_eq!(info.pixel_size.map(|p| p[2]), Some(0.5));
+        assert_eq!(info.channels.len(), 2);
+        // ImageJ order is CZT: channel varies fastest.
+        assert_eq!(info.locate(1, 0, 0).0, 1);
+        let (page, _) = info.locate(1, 2, 0);
+        assert_eq!(page, 5);
+        assert_eq!(page_values(&*src, page, 0)[0], 50.0);
+    }
+
+    #[test]
+    fn imagej_resolution_gives_pixel_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let desc = "ImageJ=1.53t\nimages=1\nunit=micron\n";
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), Some(desc), Some((ResolutionUnit::None, 4)));
+        let info = open(&path).info().clone();
+        assert_eq!(info.unit, "µm");
+        assert_eq!(info.pixel_size, Some([0.25, 0.25, 0.0]));
+    }
+
+    #[test]
+    fn plain_tiff_resolution_in_centimetres() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), None, Some((ResolutionUnit::Centimeter, 10_000)));
+        let info = open(&path).info().clone();
+        assert_eq!(info.unit, "µm");
+        assert_eq!(info.pixel_size, Some([1.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn imagej_contiguous_planes_after_first_ifd() {
+        // A single IFD whose description claims 3 images: all planes are read
+        // from consecutive bytes after the first strip offset.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let desc = "ImageJ=1.53t\nimages=3\nslices=3\n";
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), Some(desc), None);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let off = bytes.windows(6).position(|w| w == [0, 1, 2, 3, 4, 5]).unwrap();
+        bytes.extend_from_slice(&[0; 64]);
+        std::fs::write(&path, &bytes).unwrap();
+        let src = open(&path);
+        assert_eq!((src.info().page_count, src.info().size_z), (3, 3));
+        assert_eq!(page_values(&*src, 0, 0), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        let want: Vec<f64> = bytes[off + 12..off + 18].iter().map(|&b| b as f64).collect();
+        assert_eq!(page_values(&*src, 2, 0), want);
+    }
+
+    #[test]
+    fn imagej_inconsistent_metadata_falls_back_to_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.tif");
+        let desc = "ImageJ=1.53t\nimages=6\nchannels=4\nslices=3\n";
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(6), Some(desc), None);
+        let info = open(&path).info().clone();
+        assert_eq!((info.size_c, info.size_z, info.size_t), (1, 6, 1));
+        assert_eq!(info.channels.len(), 1);
+    }
+
+    #[test]
+    fn ome_tiff_dimension_order_and_scale() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ome.tif");
+        let desc = r#"<?xml version="1.0"?><OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06"><Image ID="Image:0"><Pixels ID="Pixels:0" DimensionOrder="XYZCT" Type="uint8" SizeX="3" SizeY="2" SizeZ="3" SizeC="2" SizeT="1" PhysicalSizeX="0.2" PhysicalSizeY="0.3" PhysicalSizeZ="1.5" PhysicalSizeXUnit="nm"><Channel ID="Channel:0:0" Name="DAPI" Color="-16776961"/><Channel ID="Channel:0:1" Fluor="GFP"/></Pixels></Image></OME>"#;
+        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(6), Some(desc), None);
+        let src = open(&path);
+        let info = src.info();
+        assert_eq!(info.format, "OME-TIFF");
+        assert_eq!((info.size_c, info.size_z, info.size_t), (2, 3, 1));
+        assert_eq!(info.pixel_size, Some([0.2, 0.3, 1.5]));
+        assert_eq!(info.unit, "nm");
+        assert_eq!(info.channels[0].name, "DAPI");
+        assert_eq!(info.channels[0].color, [255, 0, 0]);
+        assert_eq!(info.channels[1].name, "GFP");
+        // XYZCT: z varies fastest, so (c=1, z=2) is page 5 and (c=1, z=0) is page 3.
+        assert_eq!(info.locate(1, 2, 0).0, 5);
+        assert_eq!(info.locate(1, 0, 0).0, 3);
+        assert_eq!(page_values(&*src, info.locate(1, 0, 0).0, 0)[0], 30.0);
+    }
+
+    #[test]
+    fn ome_tiff_with_rgb_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ome.tif");
+        let desc = r#"<OME><Image><Pixels DimensionOrder="XYCZT" SizeZ="2" SizeC="3" SizeT="1"/></Image></OME>"#;
+        let page: Vec<u8> = (0..12).collect();
+        write_tiff::<colortype::RGB8>(&path, (2, 2), &[page.clone(), page], Some(desc), None);
+        let info = open(&path).info().clone();
+        assert_eq!((info.size_c, info.size_z, info.size_t, info.samples_per_page), (3, 2, 1, 3));
+    }
+
+    // ---- parsers on strings ----------------------------------------------
+
+    fn info() -> ImageInfo {
+        fake_info(3, 2, 1, 6, 1, DType::U8)
+    }
+
+    #[test]
+    fn parse_imagej_fields() {
+        let mut i = info();
+        let n = parse_imagej("ImageJ=1.53\nimages=24\nchannels=2\nslices=3\nframes=4\nspacing=0.7\nunit=um\n", &mut i);
+        assert_eq!(n, Some(24));
+        assert_eq!((i.size_c, i.size_z, i.size_t), (2, 3, 4));
+        assert_eq!(i.pixel_size, Some([0.0, 0.0, 0.7]));
+        assert_eq!(i.unit, "µm");
+        assert_eq!(i.format, "ImageJ TIFF");
+    }
+
+    #[test]
+    fn parse_imagej_only_images_means_z_stack() {
+        let mut i = info();
+        assert_eq!(parse_imagej("ImageJ=1.53\nimages=9\n", &mut i), Some(9));
+        assert_eq!((i.size_c, i.size_z, i.size_t), (1, 9, 1));
+        let mut i = info();
+        assert_eq!(parse_imagej("ImageJ=1.53\n", &mut i), None);
+        assert_eq!(i.size_z, 6);
+    }
+
+    #[test]
+    fn parse_imagej_keeps_other_units_and_ignores_garbage() {
+        let mut i = info();
+        parse_imagej("ImageJ=1\nunit=nm\nspacing=abc\nchannels=x\n", &mut i);
+        assert_eq!(i.unit, "nm");
+        assert_eq!(i.pixel_size, None);
+        assert_eq!(i.size_c, 1);
+        // Key prefixes must match whole keys.
+        let mut i = info();
+        parse_imagej("ImageJ=1\nmyslices=5\nslices=2\n", &mut i);
+        assert_eq!(i.size_z, 2);
+    }
+
+    #[test]
+    fn parse_imagej_rgb_keeps_sample_channels() {
+        let mut i = info();
+        i.samples_per_page = 3;
+        i.size_c = 3;
+        parse_imagej("ImageJ=1\nimages=2\nchannels=5\nslices=2\n", &mut i);
+        assert_eq!(i.size_c, 3);
+    }
+
+    #[test]
+    fn parse_ome_defaults_and_order() {
+        let mut i = info();
+        parse_ome(r#"<OME><Pixels SizeZ="6" DimensionOrder="XYTZC"/></OME>"#, &mut i);
+        assert_eq!((i.size_c, i.size_z, i.size_t), (1, 6, 1));
+        assert!(matches!(i.order, DimOrder::TZC));
+        assert_eq!(i.pixel_size, None);
+        assert_eq!(i.format, "OME-TIFF");
+    }
+
+    #[test]
+    fn parse_ome_physical_size_prefix_does_not_confuse_size() {
+        let mut i = info();
+        parse_ome(r#"<OME><Pixels PhysicalSizeZ="2" SizeZ="4" PhysicalSizeX="0.1"/></OME>"#, &mut i);
+        assert_eq!(i.size_z, 4);
+        assert_eq!(i.pixel_size, Some([0.1, 0.1, 2.0]));
+        assert_eq!(i.unit, "µm");
+    }
+
+    #[test]
+    fn parse_ome_channel_colors_and_names() {
+        let mut i = info();
+        parse_ome(
+            r#"<OME><Pixels SizeC="3" SizeZ="2"><Channel Name="A" Color="-65536"/><Channel Color="0"/><Channel Fluor="F" Color="16711935"/></Pixels></OME>"#,
+            &mut i,
+        );
+        let ch: Vec<_> = i.channels.iter().map(|c| (c.name.as_str(), c.color)).collect();
+        // -65536 = 0xFFFF0000 (RGBA) -> yellow; 0 is "no colour" -> default; 0x00FF00FF -> (0,255,0).
+        assert_eq!(ch[0], ("A", [255, 255, 0]));
+        assert_eq!(ch[1], ("C2", crate::image::DEFAULT_COLORS[1]));
+        assert_eq!(ch[2], ("F", [0, 255, 0]));
+    }
+
+    #[test]
+    fn parse_ome_single_channel_is_white() {
+        let mut i = info();
+        parse_ome(r#"<OME><Pixels SizeZ="1"><Channel Name="A" Color="-65536"/></Pixels></OME>"#, &mut i);
+        assert_eq!(i.channels[0].color, [255, 255, 255]);
+    }
+
+    #[test]
+    fn parse_ome_without_pixels_changes_nothing() {
+        let mut i = info();
+        parse_ome("<OME></OME>", &mut i);
+        assert_eq!((i.size_z, i.format.as_str()), (6, "fake"));
+    }
 }
