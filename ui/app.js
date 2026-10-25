@@ -374,19 +374,19 @@ function drawHist() {
   if (!h || !c) return;
   const max = Math.log1p(Math.max(...h.bins));
   const color = c.color.join(",");
-  g.fillStyle = `rgba(${color === "255,255,255" ? "120,140,170" : color},0.85)`;
+  g.fillStyle = `rgba(${color === "255,255,255" ? "140,149,159" : color},0.85)`;
   h.bins.forEach((v, i) => {
     const y = (Math.log1p(v) / max) * hc.height;
     g.fillRect(i, hc.height - y, 1, y);
   });
   if (c.min !== null && h.max > h.min) {
     const xs = [c.min, c.max].map((v) => ((v - h.min) / (h.max - h.min)) * hc.width);
-    g.strokeStyle = "#1c2a4399";
+    g.strokeStyle = "#1f232899";
     g.beginPath();
     g.moveTo(xs[0], hc.height);
     g.lineTo(xs[1], 0);
     g.stroke();
-    g.fillStyle = "#3c70d8";
+    g.fillStyle = "#0969da";
     xs.forEach((x) => g.fillRect(x - 1, 0, 2, hc.height));
   }
 }
@@ -838,7 +838,7 @@ function drawHandles(a) {
     const [x0, y0, x1, y1] = bbox(a.pts);
     const [sx, sy] = toScreen(x0, y0);
     ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = "#3c70d8";
+    ctx.strokeStyle = "#0969da";
     ctx.lineWidth = 1;
     ctx.strokeRect(sx - 3, sy - 3, (x1 - x0) * S.view.scale + 6, (y1 - y0) * S.view.scale + 6);
     ctx.setLineDash([]);
@@ -846,7 +846,7 @@ function drawHandles(a) {
   for (const h of handles(a)) {
     const [x, y] = toScreen(...h.at);
     ctx.fillStyle = "#fff";
-    ctx.strokeStyle = "#3c70d8";
+    ctx.strokeStyle = "#0969da";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     if (h.dir) ctx.rect(x - 4, y - 4, 8, 8);
@@ -865,7 +865,7 @@ function drawCropBox(b) {
   const w = (x1 - x0) * S.view.scale;
   const h = (y1 - y0) * S.view.scale;
   ctx.save();
-  ctx.fillStyle = "rgba(15, 23, 42, 0.5)";
+  ctx.fillStyle = "rgba(31, 35, 40, 0.5)";
   ctx.beginPath();
   ctx.rect(0, 0, cw, ch);
   ctx.rect(sx, sy, w, h);
@@ -897,7 +897,7 @@ function drawTag(g, text, x, y) {
   const { cw, ch } = cssSize();
   x = Math.max(4, Math.min(cw - w - 12, x));
   y = Math.max(18, Math.min(ch - 6, y));
-  g.fillStyle = "rgba(28, 42, 67, 0.85)";
+  g.fillStyle = "rgba(31, 35, 40, 0.85)";
   g.beginPath();
   g.roundRect(x - 6, y - 15, w + 12, 21, 5);
   g.fill();
@@ -1041,6 +1041,9 @@ function updateSaveButtons() {
 }
 
 // ---------- tools / interaction ----------
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+let wheelZ = 0;
 
 const TOOL_KEYS = { v: "pan", s: "select", m: "measure", p: "pen", r: "rect", e: "ellipse", c: "crop" };
 const DRAW_TYPES = { measure: "line", pen: "path", rect: "rect", ellipse: "ellipse", crop: "crop" };
@@ -1518,8 +1521,20 @@ canvas.addEventListener(
   (e) => {
     if (!S.info) return;
     e.preventDefault();
-    if (e.shiftKey && !e.ctrlKey) {
-      setZ(S.z + Math.sign(e.deltaY || e.deltaX));
+    // Ctrl (⌘ on Mac) or Shift + wheel steps through Z. On a Mac, ctrlKey is
+    // also set by trackpad pinches, which keep zooming.
+    if ((IS_MAC ? e.metaKey : e.ctrlKey) || (e.shiftKey && !e.ctrlKey)) {
+      const d = e.deltaY || e.deltaX;
+      // One slice per mouse-wheel notch; trackpads send many small deltas.
+      if (Math.abs(d) >= 50) {
+        setZ(S.z + Math.sign(d));
+      } else {
+        wheelZ += d;
+        if (Math.abs(wheelZ) >= 30) {
+          setZ(S.z + Math.sign(wheelZ));
+          wheelZ = 0;
+        }
+      }
       return;
     }
     const r = canvas.getBoundingClientRect();
@@ -1681,13 +1696,20 @@ $("btn-scalebar").addEventListener("click", () => {
 $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
-$("btn-default").addEventListener("click", async () => {
-  try {
-    toast(await invoke("set_default_app"), 6000);
-  } catch (e) {
-    toast(`设置失败：${e}`, 6000);
-  }
-});
+// Arrows to scroll the tool buttons when the window is too narrow for them.
+{
+  const bar = $("quickbar");
+  const update = () => {
+    const over = bar.scrollWidth > bar.clientWidth + 1;
+    $("scroll-left").hidden = !over || bar.scrollLeft <= 0;
+    $("scroll-right").hidden = !over || bar.scrollLeft + bar.clientWidth >= bar.scrollWidth - 1;
+  };
+  const by = (d) => bar.scrollBy({ left: d * bar.clientWidth * 0.7, behavior: "smooth" });
+  $("scroll-left").addEventListener("click", () => by(-1));
+  $("scroll-right").addEventListener("click", () => by(1));
+  bar.addEventListener("scroll", update);
+  new ResizeObserver(update).observe(bar);
+}
 $("zslider").addEventListener("input", (e) => setZ(+e.target.value));
 $("tslider").addEventListener("input", (e) => setT(+e.target.value));
 $("auto").addEventListener("change", (e) => {

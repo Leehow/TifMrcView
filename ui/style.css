@@ -1,19 +1,20 @@
 [hidden] { display: none !important; }
-/* Colours follow the app icon: white with three blues and an orange dot. */
+/* GitHub (Primer) light colours: white, grey and one blue. */
 :root {
-  --bg: #f4f7fc;
+  --bg: #ffffff;
   --panel: #ffffff;
-  --panel2: #f1f5fd;
-  --line: #dde4f0;
-  --text: #1c2a43;
-  --dim: #66758f;
-  --accent: #3c70d8;
-  --accent-hover: #2d55a8;
-  --accent-soft: #e6eefc;
-  --accent-light: #518ff7;
-  --orange: #ff7a45;
-  --stage: #e7ecf4;
-  --shadow: 0 6px 24px rgba(28, 42, 67, 0.14);
+  --panel2: #f6f8fa;
+  --line: #d1d9e0;
+  --text: #1f2328;
+  --dim: #59636e;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --accent-soft: #ddf4ff;
+  --accent-light: #54aeff;
+  --btn: #f6f8fa;
+  --btn-hover: #eff2f5;
+  --stage: #eff2f5;
+  --shadow: 0 8px 24px rgba(66, 74, 83, 0.12), 0 1px 3px rgba(31, 35, 40, 0.12);
   color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -31,19 +32,21 @@ body { display: flex; flex-direction: column; }
 
 button {
   display: inline-flex; align-items: center; gap: 5px;
-  background: var(--panel);
+  background: var(--btn);
   color: var(--text);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 6px;
   padding: 4px 10px;
+  height: 30px;
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
-button:hover:not(:disabled) { border-color: var(--accent-light); color: var(--accent-hover); }
+button:hover:not(:disabled) { background: var(--btn-hover); }
 button:disabled { opacity: 0.4; cursor: default; }
-button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hover); }
-button.small { padding: 2px 8px; font-size: 12px; }
+button.on { background: var(--accent-soft); border-color: var(--accent-light); color: var(--accent-hover); }
+button.on:hover:not(:disabled) { background: #b6e3ff; }
+button.small { padding: 2px 8px; font-size: 12px; height: 26px; }
 button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 input[type="number"], select {
   background: var(--panel);
@@ -60,26 +63,35 @@ input[type="color"] { width: 30px; height: 24px; padding: 0 2px; border: 1px sol
 #toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 10px;
-  background: var(--panel);
+  background: var(--panel2);
   border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
+.group { display: flex; align-items: center; gap: 6px; flex: none; }
+#file-group { min-width: 0; flex: 0 1 auto; }
+.spacer { flex: 1; }
+/* The tool buttons scroll sideways when the window is too narrow. */
 #quickbar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  background: var(--panel2);
-  border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-#quickbar .seg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
-#quickbar .seg button { border-color: transparent; background: none; padding: 3px 8px; }
-#quickbar .seg button.on { background: var(--accent); color: #fff; }
-#quickbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+#quickbar::-webkit-scrollbar { display: none; }
+#quickbar > * { flex: none; }
+#quickbar .seg { display: flex; background: var(--btn); border: 1px solid var(--line); border-radius: 6px; padding: 1px; gap: 1px; }
+#quickbar .seg button { border-color: transparent; background: none; height: 26px; padding: 0 8px; }
+#quickbar .seg button:hover:not(.on) { background: var(--btn-hover); }
+#quickbar .seg button.on { background: var(--accent); color: #fff; border-radius: 5px; }
+#quickbar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
 #quickbar .qitem { display: flex; align-items: center; }
+.scroll-btn { flex: none; width: 24px; padding: 0; justify-content: center; font-size: 16px; }
+#view-group { border-left: 1px solid var(--line); padding-left: 8px; }
 #size-out {
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
   padding: 3px 12px; border-radius: 12px;
@@ -87,11 +99,8 @@ input[type="color"] { width: 30px; height: 24px; padding: 0 2px; border: 1px sol
   font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
 }
 #size-out:empty { display: none; }
-@media (max-width: 1100px) { #quickbar button span { display: none; } }
-.group { display: flex; align-items: center; gap: 6px; }
-.spacer { flex: 1; }
 #file-pos { color: var(--dim); min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
-#file-name { font-weight: 600; color: var(--text); max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#file-name { font-weight: 600; color: var(--text); max-width: 22vw; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 #channels { display: flex; gap: 6px; flex-wrap: wrap; }
 .chan {
@@ -105,7 +114,7 @@ input[type="color"] { width: 30px; height: 24px; padding: 0 2px; border: 1px sol
 .chan input { margin: 0; }
 .chan.off .nm { opacity: 0.45; text-decoration: line-through; }
 .chan.sel { border-color: var(--accent); }
-.chan .sw { width: 13px; height: 13px; border-radius: 50%; border: 1px solid #1c2a4366; flex: none; }
+.chan .sw { width: 13px; height: 13px; border-radius: 50%; border: 1px solid #1f232866; flex: none; }
 
 #body { flex: 1; min-height: 0; display: flex; }
 #stage { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--stage); }
@@ -128,7 +137,7 @@ input[type="color"] { width: 30px; height: 24px; padding: 0 2px; border: 1px sol
   width: 292px;
   overflow-y: auto;
   padding: 4px 12px 12px;
-  background: #fffffff5;
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: var(--shadow);
@@ -204,5 +213,4 @@ input[type="color"] { width: 30px; height: 24px; padding: 0 2px; border: 1px sol
 #tools.only-contrast section:not(#sec-contrast) { display: none; }
 #tools.only-contrast { bottom: auto; }
 #ann-file { margin-top: 4px; word-break: break-all; }
-#quickbar .seg button.on:hover { color: #fff; }
 #tools.only-contrast section { border-bottom: none; }
