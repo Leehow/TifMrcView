@@ -84,3 +84,7 @@ src-tauri/src/
 ui/                界面（index.html / app.js / style.css）
 packaging/linux/   .desktop 模板、MRC 的 MIME 定义、deb/rpm 安装后脚本
 ```
+
+## 许可证
+
+本项目以 [Apache License 2.0](LICENSE) 开源。

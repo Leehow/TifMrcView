@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Fast TIFF / MRC stack viewer"
 authors = ["Leehow"]
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 
 [lib]
 name = "tifmrcview_lib"
