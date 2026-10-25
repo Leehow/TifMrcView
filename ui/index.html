@@ -17,7 +17,7 @@
     </div>
     <button id="scroll-left" class="scroll-btn" title="向左" hidden>‹</button>
     <div id="quickbar">
-      <button id="btn-save" title="存图：按原始分辨率存 PNG，裁剪后只存裁剪区域，带上显示中的标注和比例尺。Ctrl/⌘+S 直接存到图片所在文件夹"><svg viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><rect x="7" y="13" width="10" height="8" rx="1"/></svg></button>
+      <button id="btn-save" title="存图：按原始分辨率存 PNG，裁剪后只存裁剪区域，带上显示中的标注和比例尺。Ctrl/⌘+S 直接存到存图文件夹（默认是图片所在文件夹，可在「工具」里修改）"><svg viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><rect x="7" y="13" width="10" height="8" rx="1"/></svg></button>
       <button id="btn-undo" title="撤销 (Ctrl/⌘+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
       <button id="btn-redo" title="重做 (Ctrl/⌘+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
       <span class="sep"></span>
@@ -137,6 +137,18 @@
           <div id="px-src" class="dim"></div>
         </section>
 
+        <section id="sec-save">
+          <h3>存图</h3>
+          <div class="row">
+            <span class="dim">存图文件夹</span>
+            <span id="save-dir" class="path"></span>
+          </div>
+          <div class="row">
+            <button id="save-dir-pick" class="small">选择文件夹…</button>
+            <button id="save-dir-reset" class="small">恢复默认</button>
+          </div>
+        </section>
+
         <section id="sec-meta">
           <h3>图像信息</h3>
           <div class="row">
@@ -154,7 +166,8 @@
     <aside id="sidebar">
       <div id="side-head" hidden>
         <span id="folder-name"></span>
-        <button id="btn-reveal" class="small"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>打开文件夹</span></button>
+        <button id="btn-reveal" class="small"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button id="btn-reveal-save" class="small" title="打开存图的文件夹" hidden><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9.5 13.5L12 16l2.5-2.5"/></svg></button>
       </div>
       <div id="strip"></div>
     </aside>
