@@ -8,7 +8,7 @@ pub mod render;
 pub mod reslice;
 mod update;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,26 @@ struct AppState {
     /// The file each window shows or is loading, by window label.
     showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    save_paths: SavePaths,
+}
+
+/// Paths the user chose (or quick-save picked) to write to; `save_file`
+/// writes nowhere else.
+#[derive(Default)]
+struct SavePaths(Mutex<HashSet<PathBuf>>);
+
+impl SavePaths {
+    fn allow(&self, path: &str) {
+        let mut set = self.0.lock().unwrap();
+        if set.len() >= 1000 {
+            set.clear();
+        }
+        set.insert(PathBuf::from(path));
+    }
+
+    fn allowed(&self, path: &str) -> bool {
+        self.0.lock().unwrap().contains(Path::new(path))
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -269,27 +289,33 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
+    state: State<'_, AppState>,
     dir: String,
     name: String,
     filter: Option<String>,
     exts: Option<Vec<String>>,
-) -> Option<String> {
+) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let exts = exts.unwrap_or_else(|| vec!["png".into()]);
     let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
-    app.dialog()
+    let path = app
+        .dialog()
         .file()
         .add_filter(filter.as_deref().unwrap_or("PNG"), &exts)
         .set_directory(dir)
         .set_file_name(name)
         .blocking_save_file()
         .and_then(|f| f.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(p) = &path {
+        state.save_paths.allow(p);
+    }
+    Ok(path)
 }
 
 /// First `<stem>.png`, `<stem>-2.png`, ... that does not exist yet.
 #[tauri::command]
-fn free_path(dir: String, stem: String) -> String {
+fn free_path(state: State<'_, AppState>, dir: String, stem: String) -> String {
     let dir = PathBuf::from(dir);
     let mut p = dir.join(format!("{stem}.png"));
     let mut i = 2;
@@ -297,7 +323,9 @@ fn free_path(dir: String, stem: String) -> String {
         p = dir.join(format!("{stem}-{i}.png"));
         i += 1;
     }
-    p.to_string_lossy().into_owned()
+    let p = p.to_string_lossy().into_owned();
+    state.save_paths.allow(&p);
+    p
 }
 
 /// Annotations drawn on an image are kept next to it, e.g.
@@ -345,9 +373,10 @@ pub(crate) fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Writes the raw request body to the percent-encoded path in `x-path`.
+/// Writes the raw request body to the percent-encoded path in `x-path`,
+/// which must come from `pick_save_path` or `free_path`.
 #[tauri::command]
-fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+fn save_file(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> CmdResult<()> {
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
         return Err("expected binary body".into());
     };
@@ -357,6 +386,9 @@ fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
         .and_then(|v| v.to_str().ok())
         .map(percent_decode)
         .ok_or("missing path")?;
+    if !state.save_paths.allowed(&path) {
+        return Err(format!("不允许写入：{path}"));
+    }
     std::fs::write(&path, data).map_err(err)
 }
 
@@ -582,4 +614,19 @@ pub fn run() {
                 queue_open(_app, paths);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_paths_allow_only_handed_out_paths() {
+        let s = SavePaths::default();
+        assert!(!s.allowed("/tmp/a.png"));
+        s.allow("/tmp/a.png");
+        assert!(s.allowed("/tmp/a.png"));
+        assert!(s.allowed("/tmp/a.png"));
+        assert!(!s.allowed("/tmp/b.png"));
+    }
 }
