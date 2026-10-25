@@ -357,7 +357,7 @@ function onBrightContrast() {
 }
 
 async function loadHist() {
-  if (!S.info || $("tools").hidden || S.info.isRgb) {
+  if (!S.info || $("tools").hidden) {
     drawHist();
     return;
   }
@@ -2004,7 +2004,9 @@ T.event.listen("open-pending", takePending);
 T.webview
   .getCurrentWebview()
   .onDragDropEvent((e) => {
-    if (e.payload.type === "drop" && e.payload.paths.length) openPath(e.payload.paths[0]);
+    const { type, paths } = e.payload;
+    $("drop-hint").hidden = !(type === "enter" || type === "over");
+    if (type === "drop" && paths.length) openPath(paths[0]);
   })
   .catch(() => {});
 takePending();
