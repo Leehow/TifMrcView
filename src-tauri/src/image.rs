@@ -80,6 +80,10 @@ impl PlaneData {
         with_plane!(self, v => v.len())
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn byte_len(&self) -> usize {
         with_plane!(self, v => std::mem::size_of_val(v.as_slice()))
     }
@@ -88,7 +92,7 @@ impl PlaneData {
         with_plane!(self, v => {
             let len = std::mem::size_of_val(v.as_slice());
             // SAFETY: every element type here is plain old data with no padding.
-            unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }
+            unsafe { std::slice::from_raw_parts(v.as_ptr().cast::<u8>(), len) }
         })
     }
 
@@ -96,7 +100,7 @@ impl PlaneData {
         with_plane!(self, v => {
             let len = std::mem::size_of_val(v.as_slice());
             // SAFETY: every element type here is plain old data with no padding.
-            unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, len) }
+            unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr().cast::<u8>(), len) }
         })
     }
 

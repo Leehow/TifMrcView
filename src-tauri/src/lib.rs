@@ -356,13 +356,16 @@ fn write_annotations(image: String, json: String) -> CmdResult<()> {
 }
 
 pub(crate) fn percent_decode(s: &str) -> String {
+    fn hex(c: u8) -> Option<u8> {
+        (c as char).to_digit(16).map(|d| d as u8)
+    }
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h << 4 | l);
                 i += 3;
                 continue;
             }
@@ -700,13 +703,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: percent_decode slices &s[i+1..i+3] and panics when a multibyte char follows '%' + 1 byte"]
     fn percent_decode_multibyte_after_percent() {
         assert_eq!(percent_decode("%a€"), "%a€");
     }
 
     #[test]
-    #[ignore = "bug: from_str_radix accepts a leading '+', so \"%+4\" decodes to byte 0x04"]
     fn percent_decode_rejects_plus_sign() {
         assert_eq!(percent_decode("%+4x"), "%+4x");
     }
