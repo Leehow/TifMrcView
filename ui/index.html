@@ -8,23 +8,52 @@
 </head>
 <body>
   <header id="toolbar">
-    <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
-    <div class="group">
-      <button id="btn-prev" title="上一个文件 (↑)" disabled>▲</button>
+    <div class="group" id="file-group">
+      <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
+      <button id="btn-prev" title="上一个文件 (↑)" disabled>◀</button>
       <span id="file-pos">–</span>
-      <button id="btn-next" title="下一个文件 (↓)" disabled>▼</button>
+      <button id="btn-next" title="下一个文件 (↓)" disabled>▶</button>
+      <div id="channels"></div>
     </div>
-    <span id="file-name" title=""></span>
-    <div id="channels"></div>
-    <div class="spacer"></div>
-    <div class="group">
-      <button id="btn-tools" class="toggle" title="工具：亮度对比度、测量、比例尺、存图 (T)">工具</button>
-      <button id="btn-fit" title="适应窗口 (F)">适应</button>
-      <button id="btn-1to1" title="原始大小 (1)">1:1</button>
+    <button id="scroll-left" class="scroll-btn" title="向左" hidden>‹</button>
+    <div id="quickbar">
+      <button id="btn-save" title="存图：按原始分辨率存 PNG，裁剪后只存裁剪区域，带上显示中的标注和比例尺。Ctrl/⌘+S 直接存到图片所在文件夹"><svg viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><rect x="7" y="13" width="10" height="8" rx="1"/></svg></button>
+      <button id="btn-undo" title="撤销 (Ctrl/⌘+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+      <button id="btn-redo" title="重做 (Ctrl/⌘+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+      <span class="sep"></span>
+      <div class="seg" id="toolbtns">
+        <button data-tool="select" class="on" title="选择 (S)：拖动标注移动它，拖空白处移动图像；拖控制点缩放或重新测量，Delete 删除"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg></button>
+        <button data-tool="pan" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg></button>
+        <button data-tool="measure" title="测距 (M)"><svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
+        <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+        <button data-tool="crop" title="裁剪 (C)：框出区域后双击或回车裁剪，Esc / 退格撤回"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
+      </div>
+      <span class="sep"></span>
+      <button id="btn-scalebar" class="toggle" title="显示/隐藏比例尺（像素尺寸在「工具」里改）"><svg viewBox="0 0 24 24"><path d="M3 16h18M3 12v8M21 12v8M12 14v4"/></svg></button>
+      <button id="btn-contrast" class="toggle" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
+      <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <span class="sep" id="axis-sep" hidden></span>
+      <button id="btn-axis" hidden title="切换视图 XY → XZ → YZ（XZ、YZ 从侧面看，拉条切换 Y、X）">XY</button>
+    </div>
+    <button id="scroll-right" class="scroll-btn" title="向右，显示更多按钮" hidden>›</button>
+    <div class="group" id="plugin-buttons"></div>
+    <div class="group" id="view-group">
+      <div class="zoom">
+        <button id="btn-zoomout" title="缩小 (-)">−</button>
+        <button id="btn-zoom" title="点击适应窗口 (F)；按 1 为 100%">100%</button>
+        <button id="btn-zoomin" title="放大 (+)">+</button>
+      </div>
       <button id="btn-sidebar" class="toggle on" title="显示/收起右侧预览栏 (B)">预览栏</button>
-      <button id="btn-default" title="把 TifMrcView 设为 .tif/.tiff/.mrc 的默认打开方式">设为默认</button>
+      <button id="btn-tools" class="toggle" title="工具：亮度对比度、标注、IMOD 模型、比例尺设置 (T)"><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>工具</span></button>
+      <button id="btn-plugins" class="toggle" title="插件与更新">插件</button>
     </div>
   </header>
+
+  <div id="update-bar" hidden>
+    <span id="update-text"></span>
+    <button id="update-go" class="small">立即更新并重启</button>
+    <button id="update-later" class="small">忽略这个版本</button>
+  </div>
 
   <div id="body">
     <main id="stage">
@@ -32,12 +61,22 @@
       <div id="empty">
         <div class="big">拖入或双击打开图像</div>
         <div class="hint">支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp</div>
-        <div class="hint">↑ ↓ 切换文件　← → 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
+        <div class="hint">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
       </div>
       <div id="loading" hidden></div>
+      <div id="size-out" hidden>
+        <span id="size-text"></span>
+        <button id="ann-z" title="这个标注显示在哪些 Z 层，点击修改" hidden></button>
+        <span id="ann-z-edit" hidden>
+          Z <input type="number" id="ann-z0" min="1" /> – <input type="number" id="ann-z1" min="1" />
+          <button id="ann-z-one" title="只在当前层显示">仅本层</button>
+          <button id="ann-z-all" title="在所有层显示">全部层</button>
+        </span>
+      </div>
 
+      <div id="drop-hint" hidden><div>松开鼠标打开图像</div></div>
       <aside id="tools" hidden>
-        <section>
+        <section id="sec-contrast">
           <h3>亮度 / 对比度 <span id="tool-chan" class="dim"></span></h3>
           <canvas id="hist" width="256" height="64" title="在直方图上拖动可直接选择显示范围"></canvas>
           <div class="row">
@@ -54,24 +93,24 @@
           <label class="slider">γ <input type="range" id="gamma" min="0.2" max="3" step="0.05" value="1" /><span id="gamma-v">1.00</span></label>
         </section>
 
-        <section>
-          <h3>测量与标注</h3>
-          <div class="row tools-row" id="toolbtns">
-            <button data-tool="pan" class="on" title="移动 (V)">✋ 移动</button>
-            <button data-tool="measure" title="测距 (M)">📏 测距</button>
-            <button data-tool="pen" title="画笔 (P)">✏️ 画笔</button>
-            <button data-tool="select" title="框选区域，用于存局部图 (R)">⬚ 选区</button>
+        <section id="sec-ann">
+          <h3>标注</h3>
+          <div class="row" id="pen-shapes">
+            <span class="dim">画笔</span>
+            <button class="small" data-shape="pen" title="自由画线 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg><span>自由</span></button>
+            <button class="small" data-shape="rect" title="画框 (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><span>框</span></button>
+            <button class="small" data-shape="ellipse" title="画圆 (E)"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg><span>圆</span></button>
           </div>
           <div class="row">
-            <label>颜色 <input type="color" id="ann-color" value="#ffd23f" /></label>
-            <label>线宽 <select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
+            <label title="标注颜色">颜色 <input type="color" id="ann-color" value="#ffb020" /></label>
+            <label title="线宽">线宽 <select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
           </div>
           <div class="row">
             <label><input type="checkbox" id="ann-show" checked /> 显示标注 (H)</label>
-            <button id="btn-undo" class="small" title="撤销 (Ctrl/⌘+Z)">撤销</button>
-            <button id="btn-clear" class="small">清除</button>
+            <button id="btn-clear" class="small">清除本层</button>
           </div>
           <div id="measure-out" class="dim"></div>
+          <div id="ann-file" class="dim"></div>
         </section>
 
         <section>
@@ -84,7 +123,7 @@
           <div id="mod-objects"></div>
         </section>
 
-        <section>
+        <section id="sec-scale">
           <h3>比例尺</h3>
           <div class="row">
             <label><input type="checkbox" id="sb-show" /> 显示比例尺</label>
@@ -97,26 +136,24 @@
           <div id="px-src" class="dim"></div>
         </section>
 
-        <section>
-          <h3>存图</h3>
-          <div class="row">
-            <button id="btn-save-all">存整张…</button>
-            <button id="btn-save-sel" disabled title="先用「选区」框出区域">存选区…</button>
-          </div>
-          <div class="dim">按原始分辨率导出 PNG，显示中的标注和比例尺会一起保存。Ctrl/⌘+S 直接存到图片所在文件夹。</div>
-        </section>
       </aside>
+      <div class="resizer" id="tools-resizer" title="拖动调整宽度"></div>
     </main>
 
+    <div class="resizer" id="sidebar-resizer" title="拖动调整宽度"></div>
     <aside id="sidebar">
+      <div id="side-head" hidden>
+        <span id="folder-name"></span>
+        <button id="btn-reveal" class="small"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>打开文件夹</span></button>
+      </div>
       <div id="strip"></div>
     </aside>
   </div>
 
   <section id="zbar" hidden>
     <button id="btn-play" title="播放 Z (空格)">▶</button>
-    <span class="dim">Z</span>
-    <input type="range" id="zslider" min="0" max="0" value="0" />
+    <span class="dim" id="zname">Z</span>
+    <div id="zwrap"><div id="zmarks"></div><input type="range" id="zslider" min="0" max="0" value="0" /></div>
     <span id="zlabel"></span>
     <div id="tgroup" hidden>
       <span class="dim">T</span>
@@ -131,8 +168,32 @@
     <span id="st-pixel"></span>
   </footer>
 
+  <div id="plugin-dialog" hidden>
+    <div class="dlg-head">
+      <h3>插件</h3>
+      <button id="plugin-close" class="small" title="关闭 (Esc)">✕</button>
+    </div>
+    <div id="plugin-list"></div>
+    <div class="row">
+      <button id="plugin-dir" class="small" title="把 .js 插件放进这个文件夹，然后重新加载">打开插件文件夹</button>
+      <button id="plugin-reload" class="small" title="重新加载界面以载入新插件">重新加载</button>
+    </div>
+    <div class="dlg-head">
+      <h3>更新</h3>
+    </div>
+    <div class="row">
+      <span id="app-version"></span>
+      <span id="update-status" class="dim"></span>
+    </div>
+    <div class="row">
+      <button id="update-check" class="small">检查更新</button>
+      <label><input type="checkbox" id="update-auto" /> 启动时自动检查</label>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
 
   <script src="app.js"></script>
+  <script src="plugin-host.js"></script>
 </body>
 </html>

@@ -2,7 +2,10 @@ mod assoc;
 pub mod formats;
 pub mod imod;
 pub mod image;
+pub mod plugins;
 pub mod render;
+pub mod reslice;
+mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,19 +14,25 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use image::{ImageInfo, OpenImage};
 
-/// Decoded pages kept in memory for the open file.
+/// Decoded pages kept in memory, shared by the files open in all windows.
 const CACHE_BUDGET: usize = 3 << 30;
 
 #[derive(Default)]
 struct AppState {
-    current: Mutex<Option<Arc<OpenImage>>>,
+    /// The file shown in each window, by window label.
+    current: Mutex<HashMap<String, Arc<OpenImage>>>,
     next_token: AtomicU64,
-    /// Files the OS asked us to open that the UI has not picked up yet.
-    pending: Mutex<Vec<String>>,
+    next_window: AtomicU64,
+    /// Files the OS asked us to open that a window has not picked up yet.
+    pending: Mutex<HashMap<String, Vec<String>>>,
+    /// The XZ / YZ side view of each window's file, when one is shown.
+    side: Mutex<HashMap<String, Arc<OpenImage>>>,
+    /// The file each window shows or is loading, by window label.
+    showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
 }
 
@@ -45,31 +54,51 @@ struct Opened {
 }
 
 #[tauri::command]
-fn take_pending_open(state: State<'_, AppState>) -> Option<String> {
+fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Option<String> {
     let mut p = state.pending.lock().unwrap();
-    let last = p.pop();
-    p.clear();
-    last
+    let path = p.remove(window.label())?.into_iter().last()?;
+    state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
+    Some(path)
 }
 
 #[tauri::command]
-async fn open_image(state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
+async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
+    // Each window gets an equal share of the page cache.
+    let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
+    let budget = CACHE_BUDGET / (others + 1);
     let img = blocking(move || {
         let src = formats::open(Path::new(&path))?;
-        Ok(OpenImage::new(token, src, CACHE_BUDGET))
+        Ok(OpenImage::new(token, src, budget))
     })
     .await?;
     let info = img.info().clone();
     {
         let mut cur = state.current.lock().unwrap();
-        if let Some(old) = cur.take() {
+        if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             old.cancelled.store(true, Ordering::Relaxed);
         }
-        *cur = Some(img.clone());
+        state.side.lock().unwrap().remove(window.label());
     }
     let (center, _) = info.locate(0, info.size_z / 2, 0);
     img.prefetch(center);
+    Ok(Opened { token, info })
+}
+
+/// Opens the XZ or YZ side view of the file shown under `token`.
+#[tauri::command]
+fn open_reslice(window: WebviewWindow, state: State<'_, AppState>, token: u64, axis: String) -> CmdResult<Opened> {
+    let base = current(&state, token)?;
+    let axis = match axis.as_str() {
+        "xz" => reslice::Axis::Xz,
+        "yz" => reslice::Axis::Yz,
+        _ => return Err(format!("unknown view {axis}")),
+    };
+    let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), CACHE_BUDGET / 8);
+    let info = img.info().clone();
+    state.side.lock().unwrap().insert(window.label().to_string(), img);
     Ok(Opened { token, info })
 }
 
@@ -78,14 +107,17 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .current
         .lock()
         .unwrap()
-        .clone()
-        .filter(|i| i.token == token)
+        .values()
+        .find(|i| i.token == token)
+        .cloned()
+        .or_else(|| state.side.lock().unwrap().values().find(|i| i.token == token).cloned())
         .ok_or_else(|| "stale".to_string())
 }
 
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
+    img.set_focus(img.info().locate(0, req.z, req.t).0);
     let bytes = blocking(move || render::render(&img, &req)).await?;
     Ok(Response::new(bytes))
 }
@@ -179,7 +211,7 @@ async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> Cmd
         return Ok(Response::new(t.as_ref().clone()));
     }
     // Reuse the decoded pages when the thumbnail is for the open file.
-    let open = state.current.lock().unwrap().clone().filter(|i| i.info().path == path);
+    let open = state.current.lock().unwrap().values().find(|i| i.info().path == path).cloned();
     let bytes = blocking(move || {
         image::bg_pool().install(|| {
             let img = match open {
@@ -231,11 +263,19 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
 }
 
 #[tauri::command]
-async fn pick_save_path(app: AppHandle, dir: String, name: String) -> Option<String> {
+async fn pick_save_path(
+    app: AppHandle,
+    dir: String,
+    name: String,
+    filter: Option<String>,
+    exts: Option<Vec<String>>,
+) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let exts = exts.unwrap_or_else(|| vec!["png".into()]);
+    let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
     app.dialog()
         .file()
-        .add_filter("PNG", &["png"])
+        .add_filter(filter.as_deref().unwrap_or("PNG"), &exts)
         .set_directory(dir)
         .set_file_name(name)
         .blocking_save_file()
@@ -256,7 +296,34 @@ fn free_path(dir: String, stem: String) -> String {
     p.to_string_lossy().into_owned()
 }
 
-fn percent_decode(s: &str) -> String {
+/// Annotations drawn on an image are kept next to it, e.g.
+/// `cell.tif` → `cell.tif.annot.json`.
+fn annot_path(image: &str) -> PathBuf {
+    PathBuf::from(format!("{image}.annot.json"))
+}
+
+#[tauri::command]
+fn read_annotations(image: String) -> Option<String> {
+    std::fs::read_to_string(annot_path(&image)).ok()
+}
+
+/// Writes the annotations file, or removes it when `json` is empty.
+#[tauri::command]
+fn write_annotations(image: String, json: String) -> CmdResult<()> {
+    let path = annot_path(&image);
+    if json.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
+            _ => Ok(()),
+        };
+    }
+    // Write to a temporary file first so a crash never leaves half a file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(err)?;
+    std::fs::rename(&tmp, &path).map_err(err)
+}
+
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -314,6 +381,31 @@ async fn pick_model(app: AppHandle, dir: String) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Shows `path` in Finder / Explorer, or opens its folder elsewhere.
+#[tauri::command]
+fn reveal_in_folder(path: String) -> CmdResult<()> {
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg("-R").arg(&path);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("explorer");
+        c.arg(format!("/select,{path}"));
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = Command::new("xdg-open");
+        c.arg(Path::new(&path).parent().unwrap_or(Path::new("/")));
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(err)
+}
+
 #[tauri::command]
 async fn set_default_app() -> CmdResult<String> {
     assoc::set_default()
@@ -337,26 +429,82 @@ fn paths_from_args(args: impl IntoIterator<Item = String>, cwd: Option<&Path>) -
         .collect()
 }
 
+/// Opens files the OS handed us. A file goes to the window that already
+/// shows it or another file from its folder, else to a window with nothing
+/// open yet, else to a new window.
 fn queue_open(app: &AppHandle, paths: Vec<String>) {
-    if paths.is_empty() {
-        return;
+    for path in paths {
+        let label = target_window(app, &path);
+        let state = app.state::<AppState>();
+        state.pending.lock().unwrap().entry(label.clone()).or_default().push(path);
+        match app.get_webview_window(&label) {
+            Some(w) => {
+                let _ = app.emit_to(&label, "open-pending", ());
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            // The main window is still being set up; it picks the file up when it loads.
+            None if label == "main" => {}
+            // The new window picks the file up when its page loads.
+            None => {
+                if let Err(e) = new_window(app, &label) {
+                    eprintln!("could not open a window: {e}");
+                }
+            }
+        }
     }
-    app.state::<AppState>().pending.lock().unwrap().extend(paths);
-    let _ = app.emit("open-pending", ());
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+}
+
+fn target_window(app: &AppHandle, path: &str) -> String {
+    let state = app.state::<AppState>();
+    let dir = Path::new(path).parent();
+    let showing = state.showing.lock().unwrap();
+    let pending = state.pending.lock().unwrap();
+    let windows = app.webview_windows();
+    // On a cold start macOS hands over the file before the main window
+    // exists; it is about to be created, so give the file to it.
+    if windows.is_empty() {
+        return "main".into();
     }
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort();
+    let shown = |l: &String| {
+        pending.get(l).and_then(|p| p.last()).or_else(|| showing.get(l)).map(PathBuf::from)
+    };
+    if let Some(l) = labels.iter().find(|l| shown(l).is_some_and(|p| p.parent() == dir)) {
+        return l.to_string();
+    }
+    if let Some(l) = labels.iter().find(|l| shown(l).is_none()) {
+        return l.to_string();
+    }
+    format!("w{}", state.next_window.fetch_add(1, Ordering::Relaxed) + 2)
+}
+
+fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    // Cascade from the window in front so the new one doesn't hide it.
+    let pos = app
+        .webview_windows()
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)));
+    let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title("TifMrcView")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(640.0, 480.0);
+    b = match pos {
+        Some((p, k)) => b.position(p.x as f64 / k + 28.0, p.y as f64 / k + 28.0),
+        None => b.center(),
+    };
+    b.build()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = AppState::default();
-    state
-        .pending
-        .lock()
-        .unwrap()
-        .extend(paths_from_args(std::env::args(), std::env::current_dir().ok().as_deref()));
+    let args = paths_from_args(std::env::args(), std::env::current_dir().ok().as_deref());
+    if !args.is_empty() {
+        state.pending.lock().unwrap().insert("main".into(), args);
+    }
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -365,15 +513,16 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = paths_from_args(args, Some(Path::new(&cwd)));
             queue_open(app, paths);
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
         }));
     }
     builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(update::Pending::default())
+        .register_uri_scheme_protocol("tmvplugin", plugins::serve)
         .setup(|app| {
+            app.manage(plugins::Plugins::new(plugins::user_dir(app.handle())));
             let dir = app.path().app_config_dir().ok();
             std::thread::spawn(move || assoc::first_run(dir));
             Ok(())
@@ -381,16 +530,25 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_pending_open,
             open_image,
+            open_reslice,
             render_view,
             pixel_values,
             list_folder,
             thumbnail,
             pick_file,
             set_default_app,
+            reveal_in_folder,
             histogram,
             pick_save_path,
             free_path,
             save_file,
+            read_annotations,
+            write_annotations,
+            plugins::plugin_scan,
+            plugins::plugin_call,
+            plugins::open_plugin_dir,
+            update::check_update,
+            update::install_update,
             find_models,
             load_model,
             pick_model,
@@ -398,12 +556,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building TifMrcView")
         .run(|_app, _event| {
+            // Free a window's file when it closes.
+            if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &_event {
+                let state = _app.state::<AppState>();
+                if let Some(img) = state.current.lock().unwrap().remove(label) {
+                    img.cancelled.store(true, Ordering::Relaxed);
+                }
+                state.pending.lock().unwrap().remove(label);
+                state.showing.lock().unwrap().remove(label);
+                state.side.lock().unwrap().remove(label);
+            }
             // macOS delivers double-clicked files as an event, not as argv.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = _event {
                 let paths = urls
                     .into_iter()
                     .filter_map(|u| u.to_file_path().ok())
+                    .filter(|p| p.is_file())
                     .map(|p| p.to_string_lossy().into_owned())
                     .collect();
                 queue_open(_app, paths);
