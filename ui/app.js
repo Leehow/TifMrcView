@@ -161,6 +161,7 @@ async function openPath(path) {
   try {
     const res = await invoke("open_image", { path });
     stopPlay();
+    sideDone();
     holdFrame();
     const sameSize = S.info && S.info.width === res.info.width && S.info.height === res.info.height;
     S.token = res.token;
@@ -223,6 +224,7 @@ async function openPath(path) {
     loadAnn(path);
     await refreshFolder(path);
     pluginEmit("open", S.info);
+    watchLoad();
   } catch (e) {
     toast(`无法打开 ${basename(path)}：${e}`);
   } finally {
@@ -239,7 +241,7 @@ function holdFrame() {
   fadeCanvas.getContext("2d").drawImage(canvas, 0, 0);
   S.fade = { alpha: 1, start: 0 };
   // Never leave the old picture up if the new one fails to render.
-  setTimeout(startFade, 1500);
+  if (!S.sideWait) setTimeout(startFade, 1500);
 }
 
 /** Fades the held picture out once the new image has drawn. */
@@ -288,6 +290,10 @@ async function setAxis(axis) {
     z = Math.floor(info.sizeZ / 2);
   }
   stopPlay();
+  // A side view needs every slice in memory; show progress until it draws.
+  if (axis === "xy") sideDone();
+  else S.sideWait = true;
+  holdFrame();
   S.axis = axis;
   S.token = token;
   S.info = info;
@@ -315,6 +321,49 @@ async function setAxis(axis) {
   syncScaleUi();
   updateInfo();
   fit();
+  watchLoad();
+}
+
+/**
+ * Shows how much of a Z stack is in memory (side views are instant once it
+ * all is), and the progress of a side view that is still being built.
+ */
+function watchLoad() {
+  if (S.loadTimer) return;
+  const tick = async () => {
+    const token = S.axis === "xy" ? S.token : S.base && S.base.token;
+    let done = true;
+    if (token != null && S.info) {
+      try {
+        const [have, total, fits] = await invoke("load_progress", { token });
+        const pct = Math.floor((have / Math.max(1, total)) * 100);
+        const loading = total > 1 && fits && have < total;
+        $("st-cache").textContent = loading ? `已载入内存 ${pct}%` : "";
+        if (S.sideWait) {
+          // Slices read so far for the side view being built.
+          const [d, n] = await invoke("load_progress", { token: S.token });
+          if (S.sideWait) {
+            $("loading").textContent = `正在生成 ${S.axis.toUpperCase()} 视图… ${d} / ${n} 层`;
+            $("loading").style.setProperty("--p", `${(d / Math.max(1, n)) * 100}%`);
+            $("loading").classList.add("progress");
+            $("loading").hidden = false;
+          }
+        }
+        done = !loading && !S.sideWait;
+      } catch (e) {
+        // The image was closed or replaced; the next open restarts this.
+      }
+    }
+    S.loadTimer = done ? null : setTimeout(tick, 250);
+  };
+  S.loadTimer = setTimeout(tick, 0);
+}
+
+function sideDone() {
+  if (!S.sideWait) return;
+  S.sideWait = false;
+  $("loading").hidden = true;
+  $("loading").classList.remove("progress");
 }
 
 function normUnit(u) {
@@ -1171,12 +1220,17 @@ async function renderNow() {
     });
     syncContrast();
     draw();
+    sideDone();
     startFade();
     loadHist();
     if (!S.scrubbing) refreshOverview();
     pluginEmit("render");
   } catch (e) {
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
+    if (token === S.token) {
+      sideDone();
+      startFade();
+    }
   } finally {
     S.inflight = false;
     if (S.dirty) requestRender();
