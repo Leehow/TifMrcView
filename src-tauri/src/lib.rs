@@ -2,6 +2,7 @@ mod assoc;
 pub mod formats;
 pub mod imod;
 pub mod image;
+mod mem;
 pub mod plugins;
 pub mod render;
 pub mod reslice;
@@ -17,9 +18,6 @@ use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use image::{ImageInfo, OpenImage};
-
-/// Decoded pages kept in memory, shared by the files open in all windows.
-const CACHE_BUDGET: usize = 3 << 30;
 
 #[derive(Default)]
 struct AppState {
@@ -67,7 +65,7 @@ async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: Str
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
-    let budget = CACHE_BUDGET / (others + 1);
+    let budget = mem::cache_budget() / (others + 1);
     let img = blocking(move || {
         let src = formats::open(Path::new(&path))?;
         Ok(OpenImage::new(token, src, budget))
@@ -96,7 +94,7 @@ fn open_reslice(window: WebviewWindow, state: State<'_, AppState>, token: u64, a
         _ => return Err(format!("unknown view {axis}")),
     };
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
-    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), CACHE_BUDGET / 8);
+    let img = OpenImage::new(token, Box::new(reslice::Reslice::new(base, axis)), mem::cache_budget() / 8);
     let info = img.info().clone();
     state.side.lock().unwrap().insert(window.label().to_string(), img);
     Ok(Opened { token, info })

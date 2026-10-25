@@ -4263,6 +4263,7 @@ dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
  "image",
+ "libc",
  "memmap2",
  "openh264",
  "rayon",
