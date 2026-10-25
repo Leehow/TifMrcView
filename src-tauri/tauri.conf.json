@@ -111,7 +111,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI0QzNEOTg4Q0NFMEFGN0EKUldSNnIrRE1pTm5ESko3TDNqVUdTTGdXZjgzL0xxVkR0dFh3NTRMZ0syRmY1S2UyOUZDUitoMWgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OTNDQ0RCMDY4RDI0N0IKUldSN0pJMEcyOHlUU0cyZVNFNDZLM3J4Yzk1L0IyeTFxUkJRM1B4SUtaejhkM0I0Y29ORDRIK1gK",
       "endpoints": [
         "https://tifmrcview.com/tifmrcview/latest.json"
       ],
