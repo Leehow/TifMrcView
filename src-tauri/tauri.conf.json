@@ -12,11 +12,12 @@
       {
         "label": "main",
         "title": "TifMrcView",
-        "width": 1200,
-        "height": 860,
+        "width": 1280,
+        "height": 800,
         "minWidth": 640,
         "minHeight": 480,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "center": true
       }
     ],
     "security": {

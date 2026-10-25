@@ -1,4 +1,5 @@
 pub mod mrc;
+pub mod raster;
 pub mod tiff;
 
 use std::path::Path;
@@ -7,7 +8,9 @@ use anyhow::{bail, Result};
 
 use crate::image::{DType, PlaneData, Source};
 
-pub const EXTENSIONS: &[&str] = &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map"];
+pub const EXTENSIONS: &[&str] = &[
+    "tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp",
+];
 
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
@@ -25,6 +28,7 @@ pub fn open(path: &Path) -> Result<Box<dyn Source>> {
     match ext.as_str() {
         "tif" | "tiff" => Ok(Box::new(tiff::TiffSource::open(path)?)),
         "mrc" | "mrcs" | "rec" | "st" | "map" => Ok(Box::new(mrc::MrcSource::open(path)?)),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Ok(Box::new(raster::RasterSource::open(path)?)),
         _ => bail!("不支持的文件类型: {}", path.display()),
     }
 }

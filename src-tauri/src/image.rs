@@ -214,6 +214,15 @@ impl Stats {
         self.max
     }
 
+    /// Histogram regrouped into `n` bins between `min` and `max`.
+    pub fn bins(&self, n: usize) -> Vec<u32> {
+        let mut out = vec![0u32; n];
+        for (i, &c) in self.hist.iter().enumerate() {
+            out[i * n / HIST_BINS] += c;
+        }
+        out
+    }
+
     /// ImageJ-like auto contrast: saturate a small fraction at both ends.
     pub fn auto_range(&self) -> (f32, f32) {
         let lo = self.percentile(0.001);

@@ -110,6 +110,7 @@ async fn pixel_values(
 #[derive(Serialize)]
 struct Folder {
     files: Vec<String>,
+    sizes: Vec<u64>,
     index: Option<usize>,
 }
 
@@ -160,7 +161,8 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
             .collect();
         files.sort_by(|a, b| natural_cmp(a, b));
         let index = files.iter().position(|f| Path::new(f) == p);
-        Ok(Folder { files, index })
+        let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
+        Ok(Folder { files, sizes, index })
     })
     .await
 }
@@ -206,6 +208,84 @@ async fn pick_file(app: AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|f| f.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[derive(Serialize)]
+struct Histogram {
+    bins: Vec<u32>,
+    min: f32,
+    max: f32,
+}
+
+#[tauri::command]
+async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c: usize) -> CmdResult<Histogram> {
+    let img = current(&state, token)?;
+    blocking(move || {
+        let (page, sample) = img.info().locate(c, z, t);
+        let planes = img.page(page)?;
+        let st = img.stats(page, sample, &planes);
+        Ok(Histogram { bins: st.bins(256), min: st.min, max: st.max })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn pick_save_path(app: AppHandle, dir: String, name: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("PNG", &["png"])
+        .set_directory(dir)
+        .set_file_name(name)
+        .blocking_save_file()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// First `<stem>.png`, `<stem>-2.png`, ... that does not exist yet.
+#[tauri::command]
+fn free_path(dir: String, stem: String) -> String {
+    let dir = PathBuf::from(dir);
+    let mut p = dir.join(format!("{stem}.png"));
+    let mut i = 2;
+    while p.exists() {
+        p = dir.join(format!("{stem}-{i}.png"));
+        i += 1;
+    }
+    p.to_string_lossy().into_owned()
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Writes the raw request body to the percent-encoded path in `x-path`.
+#[tauri::command]
+fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("expected binary body".into());
+    };
+    let path = request
+        .headers()
+        .get("x-path")
+        .and_then(|v| v.to_str().ok())
+        .map(percent_decode)
+        .ok_or("missing path")?;
+    std::fs::write(&path, data).map_err(err)
 }
 
 #[tauri::command]
@@ -281,6 +361,10 @@ pub fn run() {
             thumbnail,
             pick_file,
             set_default_app,
+            histogram,
+            pick_save_path,
+            free_path,
+            save_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building TifMrcView")

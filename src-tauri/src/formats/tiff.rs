@@ -79,6 +79,19 @@ impl TiffSource {
             .and_then(|v| v.first().copied());
         let compression = dec.find_tag_unsigned::<u16>(Tag::Compression)?.unwrap_or(1);
         let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration)?.unwrap_or(1);
+        let rational = |v: Option<tiff::decoder::ifd::Value>| {
+            use tiff::decoder::ifd::Value;
+            match v? {
+                Value::Rational(n, d) if d != 0 => Some(n as f64 / d as f64),
+                Value::Float(f) => Some(f as f64),
+                Value::Double(f) => Some(f),
+                _ => None,
+            }
+            .filter(|&r| r > 0.0)
+        };
+        let xres = rational(dec.find_tag(Tag::XResolution).ok().flatten());
+        let yres = rational(dec.find_tag(Tag::YResolution).ok().flatten());
+        let res_unit = dec.find_tag_unsigned::<u16>(Tag::ResolutionUnit).ok().flatten().unwrap_or(2);
 
         // Walk the IFD chain, keeping full-resolution pages of the same shape.
         let mut ifds = vec![0usize];
@@ -139,6 +152,19 @@ impl TiffSource {
             info.size_t = 1;
             info.order = DimOrder::CZT;
             info.channels.clear();
+        }
+        // Pixel size from the resolution tags: ImageJ stores pixels per unit,
+        // other writers usually pixels per centimetre.
+        if let Some(xr) = xres {
+            let known = info.pixel_size.map(|p| p[0] > 0.0).unwrap_or(false);
+            let z = info.pixel_size.map(|p| p[2]).unwrap_or(0.0);
+            let yr = yres.unwrap_or(xr);
+            if !known && info.format == "ImageJ TIFF" && !info.unit.is_empty() && info.unit != "pixel" {
+                info.pixel_size = Some([1.0 / xr, 1.0 / yr, z]);
+            } else if !known && res_unit == 3 {
+                info.pixel_size = Some([1e4 / xr, 1e4 / yr, z]);
+                info.unit = "µm".into();
+            }
         }
         info.fill_default_channels();
         Ok(TiffSource { mmap, info, ifds, contiguous, planar: planar == 2 })
@@ -352,7 +378,7 @@ fn parse_imagej(desc: &str, info: &mut ImageInfo) -> Option<usize> {
         info.pixel_size = Some([0.0, 0.0, sp]);
     }
     if let Some(u) = kv("unit") {
-        info.unit = if u == "micron" || u == "\\u00B5m" { "µm".into() } else { u };
+        info.unit = if u == "micron" || u == "um" || u == "\\u00B5m" { "µm".into() } else { u };
     }
     images
 }

@@ -10,35 +10,98 @@
   <header id="toolbar">
     <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
     <div class="group">
-      <button id="btn-prev" title="上一个文件 (←)" disabled>◀</button>
+      <button id="btn-prev" title="上一个文件 (↑)" disabled>▲</button>
       <span id="file-pos">–</span>
-      <button id="btn-next" title="下一个文件 (→)" disabled>▶</button>
+      <button id="btn-next" title="下一个文件 (↓)" disabled>▼</button>
     </div>
     <span id="file-name" title=""></span>
     <div id="channels"></div>
-    <div class="group" id="contrast" hidden>
-      <label title="每层自动计算显示范围"><input type="checkbox" id="auto" checked /> 自动</label>
-      <input type="number" id="cmin" step="any" title="显示最小值" />
-      <span>–</span>
-      <input type="number" id="cmax" step="any" title="显示最大值" />
-      <label title="伽马">γ <input type="range" id="gamma" min="0.2" max="3" step="0.05" value="1" /></label>
-    </div>
     <div class="spacer"></div>
     <div class="group">
+      <button id="btn-tools" class="toggle" title="工具：亮度对比度、测量、比例尺、存图 (T)">工具</button>
       <button id="btn-fit" title="适应窗口 (F)">适应</button>
       <button id="btn-1to1" title="原始大小 (1)">1:1</button>
+      <button id="btn-sidebar" class="toggle on" title="显示/收起右侧预览栏 (B)">预览栏</button>
       <button id="btn-default" title="把 TifMrcView 设为 .tif/.tiff/.mrc 的默认打开方式">设为默认</button>
     </div>
   </header>
 
-  <main id="stage">
-    <canvas id="view"></canvas>
-    <div id="empty">
-      <div class="big">拖入或双击打开 .tif / .tiff / .mrc</div>
-      <div class="hint">← → 切换文件　↑ ↓ 切换 Z　空格 播放　滚轮 缩放　拖动 平移　F 适应窗口</div>
-    </div>
-    <div id="loading" hidden></div>
-  </main>
+  <div id="body">
+    <main id="stage">
+      <canvas id="view"></canvas>
+      <div id="empty">
+        <div class="big">拖入或双击打开图像</div>
+        <div class="hint">支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp</div>
+        <div class="hint">↑ ↓ 切换文件　← → 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
+      </div>
+      <div id="loading" hidden></div>
+
+      <aside id="tools" hidden>
+        <section>
+          <h3>亮度 / 对比度 <span id="tool-chan" class="dim"></span></h3>
+          <canvas id="hist" width="256" height="64" title="在直方图上拖动可直接选择显示范围"></canvas>
+          <div class="row">
+            <label><input type="checkbox" id="auto" checked /> 自动（每层）</label>
+            <button id="btn-reset" class="small">重置</button>
+          </div>
+          <div class="row">
+            <input type="number" id="cmin" step="any" title="显示最小值" />
+            <span>–</span>
+            <input type="number" id="cmax" step="any" title="显示最大值" />
+          </div>
+          <label class="slider">亮度 <input type="range" id="bright" min="0" max="100" step="0.5" value="50" /></label>
+          <label class="slider">对比度 <input type="range" id="contr" min="0" max="100" step="0.5" value="50" /></label>
+          <label class="slider">γ <input type="range" id="gamma" min="0.2" max="3" step="0.05" value="1" /><span id="gamma-v">1.00</span></label>
+        </section>
+
+        <section>
+          <h3>测量与标注</h3>
+          <div class="row tools-row" id="toolbtns">
+            <button data-tool="pan" class="on" title="移动 (V)">✋ 移动</button>
+            <button data-tool="measure" title="测距 (M)">📏 测距</button>
+            <button data-tool="pen" title="画笔 (P)">✏️ 画笔</button>
+            <button data-tool="select" title="框选区域，用于存局部图 (R)">⬚ 选区</button>
+          </div>
+          <div class="row">
+            <label>颜色 <input type="color" id="ann-color" value="#ffd23f" /></label>
+            <label>线宽 <select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
+          </div>
+          <div class="row">
+            <label><input type="checkbox" id="ann-show" checked /> 显示标注 (H)</label>
+            <button id="btn-undo" class="small" title="撤销 (Ctrl/⌘+Z)">撤销</button>
+            <button id="btn-clear" class="small">清除</button>
+          </div>
+          <div id="measure-out" class="dim"></div>
+        </section>
+
+        <section>
+          <h3>比例尺</h3>
+          <div class="row">
+            <label><input type="checkbox" id="sb-show" /> 显示比例尺</label>
+          </div>
+          <div class="row">
+            <span class="dim">像素尺寸</span>
+            <input type="number" id="px-size" step="any" min="0" placeholder="未知" />
+            <select id="px-unit"><option>Å</option><option>nm</option><option selected>µm</option><option>mm</option></select>
+          </div>
+          <div id="px-src" class="dim"></div>
+        </section>
+
+        <section>
+          <h3>存图</h3>
+          <div class="row">
+            <button id="btn-save-all">存整张…</button>
+            <button id="btn-save-sel" disabled title="先用「选区」框出区域">存选区…</button>
+          </div>
+          <div class="dim">按原始分辨率导出 PNG，显示中的标注和比例尺会一起保存。Ctrl/⌘+S 直接存到图片所在文件夹。</div>
+        </section>
+      </aside>
+    </main>
+
+    <aside id="sidebar">
+      <div id="strip"></div>
+    </aside>
+  </div>
 
   <section id="zbar" hidden>
     <button id="btn-play" title="播放 Z (空格)">▶</button>
@@ -58,7 +121,6 @@
     <span id="st-pixel"></span>
   </footer>
 
-  <nav id="strip"></nav>
   <div id="toast" hidden></div>
 
   <script src="app.js"></script>
