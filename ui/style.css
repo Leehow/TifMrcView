@@ -1,0 +1,140 @@
+[hidden] { display: none !important; }
+:root {
+  --bg: #111418;
+  --panel: #1b1f26;
+  --panel2: #232833;
+  --line: #2e3440;
+  --text: #e6e9ef;
+  --dim: #8a93a6;
+  --accent: #4fa3ff;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+body { display: flex; flex-direction: column; }
+
+button {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+input[type="number"] {
+  width: 92px;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 5px;
+  font: inherit;
+}
+input[type="range"] { accent-color: var(--accent); }
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.group { display: flex; align-items: center; gap: 6px; }
+.spacer { flex: 1; }
+#file-pos { color: var(--dim); min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
+#file-name { font-weight: 600; max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#gamma { width: 70px; vertical-align: middle; }
+
+#channels { display: flex; gap: 6px; }
+.chan {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px 8px 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  background: var(--panel2);
+}
+.chan.off { opacity: 0.45; }
+.chan.sel { border-color: var(--accent); }
+.chan .sw { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #0006; }
+
+#stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #0b0d10; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+#view.drag { cursor: grabbing; }
+#empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  color: var(--dim); pointer-events: none;
+}
+#empty .big { font-size: 18px; color: var(--text); }
+#loading {
+  position: absolute; top: 10px; right: 12px;
+  padding: 3px 10px; border-radius: 10px; background: #000a; color: var(--dim);
+}
+
+#zbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+#zbar input[type="range"] { flex: 1; }
+#tgroup { display: flex; align-items: center; gap: 8px; flex: 0 0 30%; }
+#zlabel, #tlabel { min-width: 64px; font-variant-numeric: tabular-nums; }
+.dim { color: var(--dim); }
+
+#status {
+  display: flex; gap: 18px;
+  padding: 2px 12px;
+  color: var(--dim);
+  background: var(--panel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+#strip {
+  display: flex; gap: 6px;
+  height: 128px;
+  padding: 6px 8px;
+  overflow-x: auto; overflow-y: hidden;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+#strip:empty { display: none; }
+.thumb {
+  flex: 0 0 104px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.thumb:hover { background: var(--panel2); }
+.thumb.cur { border-color: var(--accent); background: var(--panel2); }
+.thumb .box { width: 96px; height: 88px; display: flex; align-items: center; justify-content: center; background: #0b0d10; border-radius: 3px; }
+.thumb canvas { max-width: 96px; max-height: 88px; }
+.thumb .nm { width: 96px; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.thumb.cur .nm { color: var(--text); }
+
+#toast {
+  position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%);
+  max-width: 70vw;
+  padding: 8px 14px; border-radius: 8px;
+  background: #000d; border: 1px solid var(--line);
+}

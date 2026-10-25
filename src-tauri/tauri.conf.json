@@ -1,0 +1,111 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "tifview",
+  "version": "0.1.0",
+  "identifier": "com.leehow.tifview",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "tifview",
+        "width": 1200,
+        "height": 860,
+        "minWidth": 640,
+        "minHeight": 480,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Fast TIFF / MRC stack viewer",
+    "longDescription": "tifview opens multi-page TIFF, OME-TIFF, ImageJ hyperstacks and MRC files with a Z slider, channel compositing and a folder thumbnail strip.",
+    "fileAssociations": [
+      {
+        "ext": [
+          "tif",
+          "tiff"
+        ],
+        "name": "TIFF Image",
+        "description": "TIFF Image",
+        "role": "Viewer",
+        "mimeType": "image/tiff",
+        "contentTypes": [
+          "public.tiff"
+        ],
+        "rank": "Default"
+      },
+      {
+        "ext": [
+          "mrc",
+          "mrcs"
+        ],
+        "name": "MRC Image",
+        "description": "MRC Electron Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-mrc",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "com.leehow.tifview.mrc",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/mime/packages/tifview-mrc.xml": "../packaging/linux/tifview-mrc.xml"
+        },
+        "postInstallScript": "../packaging/linux/postinst.sh",
+        "desktopTemplate": "../packaging/linux/tifview.desktop"
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/mime/packages/tifview-mrc.xml": "../packaging/linux/tifview-mrc.xml"
+        },
+        "postInstallScript": "../packaging/linux/postinst.sh",
+        "desktopTemplate": "../packaging/linux/tifview.desktop"
+      }
+    }
+  }
+}

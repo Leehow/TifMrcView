@@ -1,0 +1,7 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
+# local sample data
+fluorescence-tiff-*/
+*.ome.tif
