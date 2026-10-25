@@ -1,143 +1,189 @@
+**English** | [简体中文](README.zh-CN.md) | [Deutsch](README.de.md) | [日本語](README.ja.md) | [Español](README.es.md) | [Français](README.fr.md) | [Русский](README.ru.md)
+
 # TifMrcView
 
-一个又小又快的 TIFF / MRC 图像查看器，基于 Rust + Tauri 2。双击 `.tif` / `.tiff` / `.mrc` 就能打开，拖动拉条翻 Z 层。
+A small, fast and convenient viewer for microscopy and electron microscopy images: TIFF / OME-TIFF / ImageJ, MRC for cryo-EM and cryo-ET, Zeiss CZI and SmartSEM. Draw lines, boxes and circles with measurements in physical units, switch between XY / XZ / YZ views, and view multichannel fluorescence with per-channel toggles and colours. The installer is only a few MB, yet it opens multi-GB stacks instantly. Runs on macOS, Windows and Linux, and can be extended with plugins. Built with Rust + Tauri 2.
 
-## 功能
+[![Download](https://img.shields.io/badge/download-tifmrcview.com-2f6fed)](https://tifmrcview.com/tifmrcview/#download)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
+[![GitHub stars](https://img.shields.io/github/stars/Leehow/TifMrcView?style=social)](https://github.com/Leehow/TifMrcView)
 
-- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、调色板 TIFF（如蔡司 SEM 图）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节）、蔡司 CZI（ZEN 保存的 LSM / Airyscan 等：不压缩、Zstd、JPEG 子块，8/16/32 位灰度和彩色，C/Z/T 维度、拼接大图、通道名称和颜色、像素尺寸）。`.rec` `.st` `.map` 只出现在「打开方式」里，不会被设为默认程序
-- 也能打开 PNG / JPEG / BMP / GIF / WebP
-- Z 拉条和播放；有时间维度时另有 T 拉条
-- 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
-- 亮度 / 对比度 / γ，直方图上拖动直接选显示范围；默认每层自动对比度（饱和 0.1%）
-- 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。插件 Zeiss SmartSEM 读取蔡司 SEM 的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺；插件 Zeiss ZEN 读取 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
-- 右侧预览栏列出同一文件夹里的图像（可收起），显示文件名、格式和大小
-- 顶部图标工具栏（悬停显示名称）：存图、撤销、选择、移动、测距、画笔（再点一次切换 自由 / 框 / 圆）、裁剪、比例尺、亮度对比度
-- 测距按像素尺寸显示真实长度；框和圆在图上一直标着宽 × 高（正圆标直径）
-- 选择工具（默认）：拖空白处平移图像，点中标注后拖动、拖边框上的点缩放、拖测距线的端点重新测量，Delete 删除，可改颜色和线宽
-- 标注按 Z 层保存，画完约 2 秒自动存到图片旁边的 `<文件名>.annot.json`，下次打开自动读回
-- 裁剪：框出区域后双击或回车，只看这一块；Esc 或退格撤回
-- 同名的 IMOD 模型（`.mod` / `.fid`）自动叠加显示，可按对象开关
-- 存图：按原始分辨率存 PNG（裁剪后只存裁剪区域），带上显示中的标注、模型和比例尺
-- 有 Z 的图可在顶部切换 XY / XZ / YZ 视图（侧视图里画的标注不保存）
-- 左边工具栏和右边预览栏拖内侧边缘可调宽度
-- 鼠标滚轮缩放、拖动平移、双击适应窗口，状态栏显示像素坐标和原始值
-- 拖文件进窗口即可打开；再双击同一文件夹的文件会在原窗口里打开，其他文件夹的文件会开一个新窗口
-- 预览栏顶部的「打开文件夹」按钮会在访达 / 资源管理器里显示当前图像
-- 用其他工具时在图上点右键，切回选择工具
-- 标注可以只显示在一层，也可以跨一段 Z；选中后在上方点 Z 修改，Z 拉条上会标出有标注的层
+**[Download](https://tifmrcview.com/tifmrcview/#download)** · **[Plugin market](https://tifmrcview.com/tifmrcview/plugins/)** · [Website](https://tifmrcview.com/tifmrcview/)
 
-## 插件
+> If you find TifMrcView useful, please give it a ⭐ on GitHub — it really helps.
 
-工具栏「插件」里可以开关、安装和卸载插件，以及检查更新。除了多语言，插件都要单独安装：点「插件市场」在浏览器里打开 https://tifmrcview.com/tifmrcview/plugins/ 下载插件包（.zip），再点「加载插件…」选中它即可安装；装同一个插件的新版本会直接替换旧版本。插件源码在仓库的 `plugins/<id>/` 里（`plugin.json` + `index.js`），装好的插件放在插件文件夹的 `<id>/` 子文件夹里。
+## Screenshots
 
-录制视频插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
+<table>
+  <tr>
+    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="Cryo-ET tomogram in MRC with a length measurement"></a><br><sub>Cryo-ET tomogram (MRC) with a length measurement and the annotation tools.</sub></td>
+    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="XZ side view with a box"></a><br><sub>XZ side view with a box showing width × height.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="Zeiss CZI Airyscan Z-stack with measurement"></a><br><sub>Zeiss CZI Airyscan Z-stack with a measurement and scale bar.</sub></td>
+    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="3-channel fluorescence TIFF"></a><br><sub>3-channel fluorescence TIFF with per-channel toggles.</sub></td>
+  </tr>
+</table>
 
-界面语言也是一个内置插件（`ui/plugins/i18n.js`）：支持中文、English、Deutsch、日本語、Español、Français、Русский，默认跟随系统语言，工具栏的下拉框可以手动切换。它会把界面上已知的中文文字换成所选语言，所以别的插件和提示信息也一起翻译；加新文字时在 `WORDS`（固定文字）或 `PATTERNS`（带数字、文件名的文字）里加一行。关掉这个插件就回到中文。
+## Features
 
-自己写插件：把一个 `.js` 文件放进插件文件夹，点「重新加载」即可；要分发的话，把 `plugin.json`（`id`、`name`、`version`、`description`、`main`、`apiVersion`、`minAppVersion`，格式见 `plugins/recorder/plugin.json`）和脚本一起打成 zip（文件放在 zip 根目录）。最小例子：
+- Supported formats: TIFF (multi-page, strips/tiles, LZW/Deflate/PackBits/JPEG compression, 1–7 bit grayscale such as 1-bit binary and 4-bit, and 8/16/32-bit integer and float; uncommon depths such as 12-bit give a clear error message), OME-TIFF (reads C/Z/T dimensions, channel names and colours, pixel size), ImageJ hyperstacks (including contiguous files larger than 4 GB), palette TIFF (such as Zeiss SEM images), MRC/MRC2014 (modes 0/1/2/3/4/6/12/101, `.mrc` `.mrcs` `.rec` `.st` `.map`; mode 0 files without an IMOD flag are treated as unsigned bytes or not based on the min/max in the header), and Zeiss CZI (LSM / Airyscan etc. saved by ZEN: uncompressed, Zstd and JPEG sub-blocks, 8/16/32-bit grayscale and colour, C/Z/T dimensions, tiled mosaics, channel names and colours, pixel size). `.rec` `.st` `.map` and `.czi` only appear in "Open with" and are not set as the default app
+- Also opens PNG / JPEG / BMP / GIF / WebP
+- Z slider and playback; a T slider as well when there is a time dimension
+- Multichannel colour composite: tick a box to show/hide a channel, click the name to adjust that channel's contrast, click the dot to change its colour
+- Brightness / contrast / gamma; drag on the histogram to pick the display range directly; automatic per-slice contrast by default (0.1% saturation)
+- The ⓘ toolbar button shows image info: format, size, pixel size, and acquisition parameters read by plugins (searchable and copyable). The Zeiss SmartSEM plugin reads all parameters of a Zeiss SEM image (voltage, working distance, magnification, detector, stage position, vacuum, …) and shows a scale bar from the calibrated pixel size; the Zeiss ZEN plugin reads the microscope, objective, lasers, detectors, pinhole, scan and Airyscan processing parameters from a CZI
+- A preview strip on the right lists the images in the same folder (collapsible) with file name, format and size
+- Icon toolbar at the top (hover for names): save image, undo, select, move, measure, pen (click again to cycle free / box / circle), crop, scale bar, brightness/contrast
+- Measurements show real lengths using the pixel size; boxes and circles always show width × height on the image (diameter for a true circle)
+- Select tool (default): drag empty space to pan; click an annotation to drag it, drag the handles on its border to resize, drag the endpoints of a measurement line to re-measure; Delete removes; colour and line width can be changed
+- Annotations are stored per Z slice and saved automatically about 2 seconds after drawing to `<file name>.annot.json` next to the image, and read back the next time you open it
+- Crop: frame a region, then double-click or press Enter to view only that area; Esc or Backspace takes it back
+- An IMOD model (`.mod` / `.fid`) with the same name is overlaid automatically and can be toggled per object
+- Save image: PNG at the original resolution (only the cropped area after cropping), including the visible annotations, model and scale bar
+- Images with Z can switch between XY / XZ / YZ views at the top (annotations drawn in side views are not saved)
+- Drag the inner edge of the left toolbar and the right preview strip to resize them
+- Mouse wheel to zoom, drag to pan, double-click to fit the window; the status bar shows the pixel coordinates and raw value
+- Drag a file into the window to open it; double-clicking another file in the same folder opens it in the existing window, while a file from another folder opens a new window
+- The "Open folder" button at the top of the preview strip reveals the current image in Finder / Explorer
+- With any other tool active, right-click on the image to switch back to the select tool
+- An annotation can be shown on a single slice or span a range of Z; after selecting one, change its Z at the top, and the Z slider marks the slices that have annotations
+
+## Plugins
+
+Plugins can be switched on/off, installed, uninstalled and checked for updates in the toolbar's "Plugins" menu. Except for the languages, every plugin is installed separately: click "Plugin market" to open https://tifmrcview.com/tifmrcview/plugins/ in the browser and download a plugin package (.zip), then click "Load plugin…" and pick it. Installing a newer version of the same plugin simply replaces the old one. The plugin sources are in the repository under `plugins/<id>/` (`plugin.json` + `index.js`; currently `recorder`, `smartsem` and `zen`); installed plugins live in an `<id>/` subfolder of the plugin folder.
+
+Video recorder plugin: in the "Tools" panel under "Record video (MP4)" choose Z or T, the first and last frame, frame rate, region (whole image / selection / current view), size and quality. The resulting H.264 MP4 includes the current contrast, channel colours, annotations and scale bar.
+
+The interface language is also a built-in plugin (`ui/plugins/i18n.js`): it supports 中文, English, Deutsch, 日本語, Español, Français and Русский, follows the system language by default, and can be changed with the drop-down in the toolbar. It replaces the known Chinese texts in the interface with the chosen language, so other plugins and messages are translated as well; to add new text, add a row to `WORDS` (fixed text) or `PATTERNS` (text containing numbers or file names). Switching this plugin off returns to Chinese.
+
+Writing your own plugin: put a `.js` file in the plugin folder and click "Reload". To distribute it, pack `plugin.json` (`id`, `name`, `version`, `description`, `main`, `apiVersion`, `minAppVersion`, optionally `author`, `i18n`, `details`; see `plugins/recorder/plugin.json` for the format) together with the script into a zip (files at the zip root). A minimal example:
 
 ```js
 TifMrcView.register({
   id: "hello",
-  name: "示例插件",
+  name: "Hello plugin",
   version: "1.0.0",
-  description: "在工具面板里显示当前层",
+  description: "Shows the current slice in the tools panel",
   activate(app) {
-    const box = app.ui.addToolSection("示例");
-    app.on("slice", ({ z }) => (box.textContent = `当前第 ${z + 1} 层`));
+    const box = app.ui.addToolSection("Hello");
+    app.on("slice", ({ z }) => (box.textContent = `Slice ${z + 1}`));
   },
 });
 ```
 
-`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`；原生部分编进主程序，但只有装了同 id 的插件包才会启用。录制功能用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
+`app` provides: `state()` (current file, Z/T, size, selection, pixel size), `on("open" | "slice" | "render", fn)`, `setZ` / `setT` / `open(path)`, `renderRegion(region, {z, t, size})` (renders to a canvas with the current display settings, including annotations and scale bar), `ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`, `dialog.save`, `fs.write`, `settings.get/set`, and `native(method, args, bytes)` to call the Rust side. The full definition is in `ui/plugin-host.js`. Plugins that need native code (such as the H.264 encoder used by the recorder) implement `NativePlugin` in `src-tauri/src/plugins/`; the native part is compiled into the main program but only enabled once a plugin package with the same id is installed. A Cargo feature controls whether the recorder is compiled in (`recorder` is on by default; `--no-default-features` removes it and makes the installer about 1 MB smaller).
 
-插件和主程序有同样的权限，只安装自己信任的插件。
+Plugins have the same permissions as the main program: only install plugins you trust.
 
-## 自动更新
+## Automatic updates
 
-应用启动几秒后会静默检查 `https://tifmrcview.com/tifmrcview/latest.json`，有新版本时顶部出现提示条，点「立即更新并重启」会下载、校验签名、安装并重启。更新包用 Tauri 的 minisign 密钥签名，公钥写在 `tauri.conf.json` 里。
+A few seconds after start, the app silently checks `https://tifmrcview.com/tifmrcview/latest.json`. When a new version exists, a banner appears at the top; click "Update now and restart" to download it, verify the signature, install and restart. Update packages are signed with a Tauri minisign key; the public key is in `tauri.conf.json`.
 
-## 快捷键
+## Keyboard shortcuts
 
-| 键 | 作用 |
+| Key | Action |
 | --- | --- |
-| ↑ / ↓ | 上一个 / 下一个文件 |
-| ← / →、PageUp / PageDown、`,` / `.` | 切换 Z |
-| Home / End | 第一层 / 最后一层 |
-| 空格 | 播放 / 暂停 Z |
-| Ctrl/⌘ + 滚轮、Shift + 滚轮 | 切换 Z |
-| S / V / M / P / R / E / C | 选择 / 移动 / 测距 / 画笔 / 画框 / 画圆 / 裁剪 |
-| Shift（画框、画圆时） | 正方形 / 正圆 |
-| Delete / 退格 | 删除选中的标注；没有选中时撤回裁剪 |
-| Esc | 取消正在画的或刚画的标注、取消选中、撤回裁剪 |
-| 回车、双击裁剪框 | 裁剪 |
-| Ctrl/⌘ + Z | 撤销（画线、测距、移动、删除、裁剪都能撤） |
-| Ctrl/⌘ + S | 存 PNG 到图片所在文件夹 |
-| H | 显示 / 隐藏标注 |
-| I | 显示 / 隐藏 IMOD 模型 |
-| T | 打开 / 收起「工具」面板 |
-| B | 显示 / 收起预览栏 |
-| F、双击（移动工具） | 适应窗口 |
-| 1 | 原始大小 (1:1) |
-| Ctrl/⌘ + O | 打开文件 |
+| ↑ / ↓ | Previous / next file |
+| ← / →, PageUp / PageDown, `,` / `.` | Change Z |
+| Home / End | First / last slice |
+| Space | Play / pause Z |
+| Ctrl + wheel (⌘ + wheel on macOS), Shift + wheel | Change Z |
+| S / V / M / P / R / E / C | Select / move / measure / pen / box / circle / crop |
+| Shift (while drawing a box or circle) | Square / true circle |
+| Delete / Backspace | Delete the selected annotation; undo the crop when nothing is selected |
+| Esc | Cancel the annotation being drawn or just drawn, deselect, undo the crop |
+| Enter, double-click the crop box | Crop |
+| Ctrl/⌘ + Z | Undo (drawing, measuring, moving, deleting and cropping can all be undone) |
+| Ctrl/⌘ + Shift + Z, Ctrl/⌘ + Y | Redo |
+| Ctrl/⌘ + S | Save a PNG (next to the image by default, or in the save folder chosen in the Tools panel) |
+| H | Show / hide annotations |
+| I | Show / hide the IMOD model |
+| T | Open / close the "Tools" panel |
+| B | Show / hide the preview strip |
+| F, double-click (move tool) | Fit to window |
+| 1 | Original size (1:1) |
+| + / =, - | Zoom in / out |
+| Ctrl/⌘ + O | Open file |
 
-## 为什么快
+## Why it is fast
 
-- 文件用内存映射读取，一个页面里的多个条带/分块在所有 CPU 核上并行解压
-- 打开文件后，后台按离当前层由近到远把其它 Z 层预先解码进内存（约占物理内存的四分之一，512 MB–8 GB），拖拉条时直接出图
-- 只渲染屏幕上看得见的区域、只算到屏幕分辨率，再把 8 位 RGBA 以二进制传给界面，所以 4000×4000 的图缩放平移也不卡
-- 缩略图在单独的线程池里生成，不和当前图抢 CPU
-- 界面是纯 HTML/JS，没有前端框架；Release 版开启 LTO、strip，安装包约 3–8 MB（Linux AppImage 自带 WebKit 所以约 78 MB）
+- Files are memory-mapped, and the strips/tiles of a page are decompressed in parallel on all CPU cores
+- After a file is opened, the other Z slices are pre-decoded into memory in the background, nearest to the current slice first (using about a quarter of physical memory, 512 MB–8 GB), so dragging the slider shows images immediately
+- Only the visible region is rendered, and only at screen resolution; the 8-bit RGBA is passed to the UI as binary, so zooming and panning a 4000×4000 image stays smooth
+- Thumbnails are generated in a separate thread pool so they do not compete with the current image for CPU
+- The UI is plain HTML/JS with no frontend framework; release builds use LTO and strip, and the installers are about 4–11 MB (the Linux AppImage bundles WebKit, so it is about 84 MB)
 
-## 安装
+## Install
 
-到仓库的 Releases 页面下载：
+Download from the Releases page of the repository or from the [download page](https://tifmrcview.com/tifmrcview/#download):
 
-- **macOS**：`TifMrcView_x.y.z_universal.dmg`（Intel 和 Apple 芯片通用），拖进「应用程序」。因为没有苹果开发者签名，第一次打开会被拦：到「系统设置 → 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/TifMrcView.app`。首次启动时 TifMrcView 会把自己设为 .tif/.tiff/.mrc 的默认打开方式。
-- **Windows**：`TifMrcView_x.y.z_x64-setup.exe`，双击安装（不需要管理员权限）。安装器会注册 .tif/.tiff/.mrc 关联；如果你以前给 .tif 手动选过别的程序（比如“照片”），Windows 不允许软件偷偷改，点 TifMrcView 里的「设为默认」会打开系统设置页，选一下就好。
-- **Linux**：Debian/Ubuntu 用 `.deb`，Fedora 等用 `.rpm`，其它发行版用 `.AppImage`。首次启动时会通过 `xdg-mime` 设为默认打开方式。
+- **macOS** (10.15 or newer): `TifMrcView_x.y.z_universal.dmg` (Intel and Apple silicon), drag it into "Applications". Because the app has no Apple developer signature, the first launch is blocked: go to "System Settings → Privacy & Security" and click "Open Anyway", or run `xattr -dr com.apple.quarantine /Applications/TifMrcView.app` in a terminal. On first start TifMrcView makes itself the default app for .tif/.tiff/.mrc.
+- **Windows**: `TifMrcView_x.y.z_x64-setup.exe`, double-click to install (no administrator rights needed). The installer registers the .tif/.tiff/.mrc associations; if you have manually chosen another program for .tif before (for example "Photos"), Windows does not let software change that silently — click "Set as default" in TifMrcView, which opens the system settings page, and pick TifMrcView there.
+- **Linux**: `.deb` for Debian/Ubuntu, `.rpm` for Fedora and similar, `.AppImage` for other distributions. On first start it sets itself as the default app via `xdg-mime`.
 
-## 从源码构建
+## Build from source
 
-需要 Rust（stable）和 Node.js 18+。Linux 还需要：
+You need Rust (stable) and Node.js 18+. On Linux you also need:
 
 ```sh
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev
 ```
 
-然后：
+Then:
 
 ```sh
 npm install
-npm run dev      # 开发模式
-npm run build    # 生成当前系统的安装包，在 src-tauri/target/release/bundle/
+npm run dev      # development mode
+npm run build    # build the installer for the current OS, in src-tauri/target/release/bundle/
 ```
 
-调试解码可以用自带的小工具，它会打印元数据、各通道像素和以及解码/渲染耗时：
+To debug decoding, use the bundled small tool; it prints metadata, per-channel pixels and decode/render timings:
 
 ```sh
 cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 ```
 
-## 发布
+## Releases
 
-版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.3）加上提交总数，例如 `0.3.57`；打 `v1.2.3` tag 时用 tag 的版本。
+Version numbers are generated automatically: the major.minor in `tauri.conf.json` (currently 0.3) plus the total number of commits, e.g. `0.3.57`; when a `v1.2.3` tag is pushed, the tag's version is used.
 
-每次推送到 `main`，GitHub Actions 会在 macOS / Windows / Linux 上各打一次包，安装包在该次运行的 Artifacts 里。发布到下载站有两种方式：
+Every push to `main` makes GitHub Actions build packages on macOS / Windows / Linux; the installers are in the run's Artifacts. There are two ways to publish to the download site:
 
-- 打一个 `v` 开头的 tag：`git tag v0.3.0 && git push origin v0.3.0`，会上传到下载站并建 GitHub Release；
-- 或在 Actions 里手动运行 build，勾选「发布到下载站」，用自动版本号发布。
+- Push a tag starting with `v`: `git tag v0.3.0 && git push origin v0.3.0` uploads to the download site and creates a GitHub Release;
+- or run the build manually in Actions with "publish to the download site" ticked, which publishes with the automatic version number.
 
-发布时 CI 把安装包和更新包放到下载站的 `<版本>/` 目录，最后更新 `latest.json`（给自动更新用）和 `downloads.json`（给下载页用）。需要在仓库 Settings → Secrets and variables → Actions 里配置：
+When publishing, CI puts the installers and update packages in the download site's `<version>/` directory and finally updates `latest.json` (for auto-update) and `downloads.json` (for the download page). The download page and the plugin market (`site/`, `plugins/`) are also deployed by their own workflow (`.github/workflows/site.yml`) whenever they change on `main`. Configure these in the repository under Settings → Secrets and variables → Actions:
 
-| 名称 | 类型 | 说明 |
+| Name | Type | Description |
 | --- | --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | Secret | 更新包签名私钥（丢了就没法给已安装的用户推更新） |
-| `DEPLOY_SSH_KEY` | Secret | 下载站部署用户的 SSH 私钥 |
-| `DEPLOY_HOST` / `DEPLOY_USER` | Secret | 下载站地址和用户名 |
-| `UPDATE_BASE_URL` | Variable，可选 | 默认 `https://tifmrcview.com/tifmrcview` |
-| `DEPLOY_PATH` | Variable，可选 | 默认 `/var/www/tifmrcview` |
+| `TAURI_SIGNING_PRIVATE_KEY` | Secret | Private key for signing update packages (if lost, you can no longer push updates to installed users) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret, optional | Password of that key, if it has one |
+| `DEPLOY_SSH_KEY` | Secret | SSH private key of the download-site deploy user |
+| `DEPLOY_HOST` / `DEPLOY_USER` | Secret | Host and user name of the download site |
+| `UPDATE_BASE_URL` | Variable, optional | Default `https://tifmrcview.com/tifmrcview` |
+| `DEPLOY_PATH` | Variable, optional | Default `/var/www/tifmrcview` |
 
-## 许可证
+## Project layout
 
-本项目以 [Apache License 2.0](LICENSE) 开源。
+| Path | Contents |
+| --- | --- |
+| `src-tauri/src/formats/` | Decoders: `tiff.rs`, `mrc.rs`, `czi.rs`, `raster.rs` (PNG/JPEG/…), `mod.rs` |
+| `src-tauri/src/` | `lib.rs` (commands, window/file handling), `render.rs`, `reslice.rs` (XZ/YZ views), `image.rs`, `imod.rs` (IMOD models), `mem.rs`, `assoc.rs` (default-app registration), `update.rs` |
+| `src-tauri/src/plugins/` | Native plugin parts (`recorder.rs`, `mp4.rs`, `smartsem.rs`, `zen.rs`) and plugin packages (`package.rs`) |
+| `src-tauri/examples/probe.rs` | The decoding probe tool |
+| `ui/` | Plain HTML/JS frontend: `index.html`, `app.js`, `style.css`, `plugin-host.js`; built-in language plugin in `ui/plugins/i18n.js` |
+| `plugins/<id>/` | Sources of the installable plugins (`recorder`, `smartsem`, `zen`) |
+| `scripts/` | `pack-plugins.mjs` (builds plugin zips and the market index), `make-release.mjs` |
+| `site/` | The website and plugin market, with screenshots in `site/shots/` |
+| `packaging/linux/` | Linux packaging files (MIME type for .mrc) |
+| `.github/workflows/` | `build.yml` (build and release), `site.yml` (site and plugin market deploy) |
+
+## Translations
+
+The README is available in several languages (see the language line at the top). **The English README (`README.md`) is the source of truth**; the other files keep exactly the same sections in the same order. When you change `README.md`, please update the translations too, or open an issue if you cannot.
+
+## License
+
+This project is open source under the [Apache License 2.0](LICENSE).
