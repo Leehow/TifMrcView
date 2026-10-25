@@ -5,25 +5,31 @@
 //! MP4 recorder, also have a Rust half implementing [`NativePlugin`]; the
 //! UI half reaches it through the `plugin_call` command.
 //!
-//! Built-in plugins live in `ui/plugins/`. Users can drop extra `.js`
-//! plugins into the folder returned by `plugin_dir`; they are served to the
-//! webview through the `tmvplugin://` scheme.
+//! Only `ui/plugins/i18n.js` is built in. Other plugins are installed as
+//! packages (see [`package`]) into `<plugin dir>/<id>/`; loose `.js` files in
+//! the plugin dir still load too. Both are served to the webview through the
+//! `tmvplugin://` scheme. The native halves are compiled in but stay dormant
+//! until a package with their id is installed.
 
 #[cfg(feature = "recorder")]
 mod mp4;
+pub mod package;
 #[cfg(feature = "recorder")]
 mod recorder;
 mod smartsem;
 mod zen;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::Value;
 use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Manager, Runtime, State, UriSchemeContext};
+
+/// Where 插件市场 points when the updater endpoint gives no hint.
+const MARKET_URL: &str = "https://tifmrcview.com/tifmrcview/plugins/";
 
 /// The Rust half of a plugin.
 pub trait NativePlugin: Send + Sync {
@@ -48,6 +54,10 @@ impl Plugins {
         list.push(Arc::new(recorder::Recorder::default()));
         Plugins { native: list.into_iter().map(|p| (p.id(), p)).collect(), dir }
     }
+
+    fn dir(&self) -> Result<&Path, String> {
+        self.dir.as_deref().ok_or_else(|| "no plugin folder".into())
+    }
 }
 
 /// Folder for user plugins, created on demand.
@@ -55,24 +65,33 @@ pub fn user_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("plugins"))
 }
 
+fn app_version<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.package_info().version.to_string()
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginScan {
     /// Ids of the native plugins compiled into this build.
     native: Vec<&'static str>,
-    /// File names of user plugins in `dir`.
+    /// Installed packages, including broken ones (with `error`).
+    packages: Vec<package::Installed>,
+    /// File names of loose (legacy) user plugins in `dir`.
     user: Vec<String>,
     dir: String,
 }
 
 #[tauri::command]
-pub fn plugin_scan(plugins: State<'_, Plugins>) -> PluginScan {
+pub fn plugin_scan<R: Runtime>(app: AppHandle<R>, plugins: State<'_, Plugins>) -> PluginScan {
     let mut user = vec![];
+    let mut packages = vec![];
     if let Some(dir) = &plugins.dir {
         let _ = std::fs::create_dir_all(dir);
+        packages = package::scan(dir, &app_version(&app));
         if let Ok(rd) = std::fs::read_dir(dir) {
             user = rd
                 .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .filter(|n| n.ends_with(".js") && !n.starts_with('.'))
                 .collect();
@@ -83,6 +102,7 @@ pub fn plugin_scan(plugins: State<'_, Plugins>) -> PluginScan {
     native.sort();
     PluginScan {
         native,
+        packages,
         user,
         dir: plugins.dir.as_ref().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
     }
@@ -104,16 +124,49 @@ pub async fn plugin_call(plugins: State<'_, Plugins>, request: tauri::ipc::Reque
         tauri::ipc::InvokeBody::Json(_) => vec![],
     };
     let plugin = plugins.native.get(id.as_str()).cloned().ok_or_else(|| format!("no native plugin {id}"))?;
+    // Native code only runs for plugins the user installed.
+    if !plugins.dir.as_deref().is_some_and(|d| package::is_installed(d, &id)) {
+        return Err(format!("插件 {id} 没有安装，请先在插件市场下载安装"));
+    }
     tauri::async_runtime::spawn_blocking(move || plugin.call(&method, args, &body))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Asks for a plugin package (.zip).
+#[tauri::command]
+pub async fn pick_plugin_package(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("TifMrcView 插件包", &["zip"])
+        .blocking_pick_file()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Installs or upgrades the package at `path`; returns its plugin.json.
+#[tauri::command]
+pub async fn plugin_install(app: AppHandle, plugins: State<'_, Plugins>, path: String) -> Result<Value, String> {
+    let dir = plugins.dir()?.to_path_buf();
+    let version = app_version(&app);
+    tauri::async_runtime::spawn_blocking(move || package::install(&dir, Path::new(&path), &version))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|m| m.raw)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn plugin_uninstall(plugins: State<'_, Plugins>, id: String) -> Result<(), String> {
+    package::uninstall(plugins.dir()?, &id).map_err(|e| format!("{e:#}"))
+}
+
 /// Shows the user plugin folder in the file manager.
 #[tauri::command]
 pub fn open_plugin_dir(plugins: State<'_, Plugins>) -> Result<(), String> {
-    let dir = plugins.dir.as_ref().ok_or("no plugin folder")?;
+    let dir = plugins.dir()?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     let opener = "open";
@@ -124,23 +177,68 @@ pub fn open_plugin_dir(plugins: State<'_, Plugins>) -> Result<(), String> {
     std::process::Command::new(opener).arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Serves `tmvplugin://localhost/<file>.js` from the user plugin folder.
+/// The plugin market sits next to the updater feed: `…/latest.json` → `…/plugins/`.
+fn market_url(updater: Option<&Value>) -> String {
+    let endpoint = updater.and_then(|u| u["endpoints"][0].as_str());
+    match endpoint.and_then(|e| e.strip_suffix("latest.json")) {
+        Some(base) if base.starts_with("https://") && base.ends_with('/') => format!("{base}plugins/"),
+        _ => MARKET_URL.into(),
+    }
+}
+
+/// Opens the plugin market in the default browser. Only ever that one URL.
+#[tauri::command]
+pub fn open_market<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let url = market_url(app.config().plugins.0.get("updater"));
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    // `explorer <url>` can open a folder window instead; url.dll hands the URL
+    // to the default browser without going through a shell.
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Serves the user plugin folder: `tmvplugin://localhost/<file>.js` (loose
+/// plugins) and `tmvplugin://localhost/<id>/<path>` (files of a package).
 pub fn serve<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: tauri::http::Request<Vec<u8>>) -> Response<Vec<u8>> {
     let not_found = || Response::builder().status(StatusCode::NOT_FOUND).body(vec![]).unwrap();
-    let name = crate::percent_decode(req.uri().path().trim_start_matches('/'));
-    // Only plain file names; never walk out of the folder.
-    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') || !name.ends_with(".js") {
-        return not_found();
-    }
+    let path = crate::percent_decode(req.uri().path().trim_start_matches('/'));
     let Some(dir) = ctx.app_handle().try_state::<Plugins>().and_then(|p| p.dir.clone()) else {
         return not_found();
     };
-    match std::fs::read(dir.join(name)) {
+    // Never walks out of the folder (see `package::resolve`).
+    let Some((file, mime)) = package::resolve(&dir, &path) else {
+        return not_found();
+    };
+    match std::fs::read(file) {
         Ok(data) => Response::builder()
-            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CONTENT_TYPE, mime)
             .header(header::CACHE_CONTROL, "no-store")
+            // The page (tauri://localhost) is another origin; lets plugins fetch their own files.
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .body(data)
             .unwrap(),
         Err(_) => not_found(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn market_next_to_update_feed() {
+        let conf: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(market_url(conf["plugins"].get("updater")), "https://tifmrcview.com/tifmrcview/plugins/");
+        let other = serde_json::json!({"endpoints": ["http://evil/latest.json"]});
+        assert_eq!(market_url(Some(&other)), MARKET_URL);
+        assert_eq!(market_url(None), MARKET_URL);
     }
 }
