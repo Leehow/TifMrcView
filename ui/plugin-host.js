@@ -10,16 +10,20 @@
 //     deactivate() { ... },      // optional
 //   });
 //
-// Built-in plugins are listed in BUILTIN_PLUGINS. Users drop extra .js files
-// into the plugin folder (插件 → 打开插件文件夹).
+// Only the plugins in BUILTIN_PLUGINS ship with the app. Others are packages
+// (a .zip with plugin.json, see src-tauri/src/plugins/package.rs) installed
+// with 插件 → 加载插件… into <plugin folder>/<id>/. Loose .js files dropped
+// into the plugin folder (插件 → 打开插件文件夹) still load too.
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/recorder.js", "plugins/smartsem.js", "plugins/zen.js"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js"];
+const BUILTIN_IDS = ["i18n"];
 
 const pluginHost = {
-  plugins: new Map(), // id -> {def, source, active, error, cleanup, listeners}
+  plugins: new Map(), // id -> {def, source, pkg, active, error, cleanup, listeners}
+  broken: new Map(), // package id -> {id, source, error}: packages that did not register
   listeners: new Map(), // event -> Set(fn)
-  loading: null, // source of the script being loaded
+  loading: null, // {source, pkg} of the script being loaded
   native: [],
   dir: "",
   appVersion: "",
@@ -242,19 +246,36 @@ window.TifMrcView = {
   apiVersion: PLUGIN_API_VERSION,
 
   register(def) {
+    const from = pluginHost.loading || { source: "?", pkg: null };
+    const fail = (msg) => {
+      console.error(msg);
+      if (from.pkg) pluginHost.broken.set(from.pkg, { id: from.pkg, source: from.source, error: msg });
+      renderPluginList();
+    };
+    if (from.pkg) from.registered = true;
     if (!def || !def.id || typeof def.activate !== "function") {
-      console.error("TifMrcView.register: plugin needs an id and activate()");
-      return;
+      return fail("TifMrcView.register: plugin needs an id and activate()");
+    }
+    if (from.pkg && def.id !== from.pkg) {
+      return fail(`插件 id（${def.id}）和插件包（${from.pkg}）不一致`);
     }
     if (def.apiVersion && def.apiVersion > PLUGIN_API_VERSION) {
-      console.error(`plugin ${def.id} needs API ${def.apiVersion}`);
-      return;
+      return fail(`插件需要更新的 TifMrcView（插件接口版本 ${def.apiVersion}）`);
     }
     if (pluginHost.plugins.has(def.id)) {
       console.warn(`plugin ${def.id} registered twice; keeping the first`);
       return;
     }
-    const rec = { def, source: pluginHost.loading || "?", active: false, error: null, cleanup: [], listeners: [] };
+    const rec = {
+      def,
+      source: from.source,
+      pkg: from.pkg,
+      active: false,
+      error: null,
+      cleanup: [],
+      listeners: [],
+    };
+    pluginHost.broken.delete(def.id);
     pluginHost.plugins.set(def.id, rec);
     if (pluginEnabled(def.id)) activatePlugin(rec);
     renderPluginList();
@@ -273,22 +294,38 @@ window.TifMrcView = {
   },
 };
 
-function loadScript(src, source) {
+/** Loads one script; `from` = {source, pkg} tells `register` where it came from. Resolves to false on a load error. */
+function loadScript(src, from) {
   return new Promise((resolve) => {
     const el = document.createElement("script");
     el.src = src;
-    el.onload = el.onerror = () => {
+    const done = (ok) => () => {
       pluginHost.loading = null;
-      resolve();
+      resolve(ok);
     };
-    pluginHost.loading = source;
+    el.onload = done(true);
+    el.onerror = done(false);
+    pluginHost.loading = from;
     document.body.append(el);
   });
 }
 
-function userPluginUrl(file) {
+/** URL of a file in the user plugin folder; `path` is "file.js" or "<id>/<path>". */
+function userPluginUrl(path) {
   const scheme = navigator.userAgent.includes("Windows") ? "http://tmvplugin.localhost/" : "tmvplugin://localhost/";
-  return scheme + encodeURIComponent(file);
+  return scheme + path.split("/").map(encodeURIComponent).join("/");
+}
+
+/** Loads an installed package ({id, main, error}) from `plugin_scan` or `plugin_install`. */
+async function loadPackage(p) {
+  if (p.error) {
+    pluginHost.broken.set(p.id, { id: p.id, source: "已安装", error: p.error });
+    return;
+  }
+  const from = { source: "已安装", pkg: p.id, registered: false };
+  const ok = await loadScript(userPluginUrl(`${p.id}/${p.main}`), from);
+  if (!ok) pluginHost.broken.set(p.id, { id: p.id, source: "已安装", error: `无法载入 ${p.main}` });
+  else if (!from.registered) pluginHost.broken.set(p.id, { id: p.id, source: "已安装", error: `${p.main} 没有调用 TifMrcView.register` });
 }
 
 async function loadPlugins() {
@@ -297,53 +334,150 @@ async function loadPlugins() {
     pluginHost.native = scan.native;
     pluginHost.dir = scan.dir;
     // Scripts load one at a time so `register` knows which file it came from.
-    for (const src of BUILTIN_PLUGINS) await loadScript(src, "内置");
-    for (const f of scan.user) await loadScript(userPluginUrl(f), f);
+    for (const src of BUILTIN_PLUGINS) await loadScript(src, { source: "内置", pkg: null });
+    for (const p of scan.packages) await loadPackage(p);
+    for (const f of scan.user) await loadScript(userPluginUrl(f), { source: f, pkg: null });
   } catch (e) {
     console.error("loading plugins", e);
   }
   renderPluginList();
 }
 
+// ---------- install / uninstall ----------
+
+async function installPackage() {
+  const path = await invoke("pick_plugin_package");
+  if (!path) return;
+  let m;
+  try {
+    m = await invoke("plugin_install", { path });
+  } catch (e) {
+    toast(`安装失败：${e}`, 6000);
+    return;
+  }
+  const label = `${m.name}  v${m.version}`;
+  const old = pluginHost.plugins.get(m.id);
+  if (old || pluginHost.broken.has(m.id)) {
+    // Its old script is already in the page; start over.
+    if (old) deactivatePlugin(old);
+    toast(`已更新 ${label}，正在重新加载…`);
+    setTimeout(() => location.reload(), 1000);
+    return;
+  }
+  await loadPackage({ id: m.id, main: m.main || "index.js" });
+  renderPluginList();
+  const err = pluginHost.broken.get(m.id);
+  toast(err ? `已安装 ${label}，但出错：${err.error}` : `已安装 ${label}`, err ? 6000 : 3500);
+}
+
+async function uninstallPackage(id) {
+  const rec = pluginHost.plugins.get(id);
+  if (rec) deactivatePlugin(rec);
+  try {
+    await invoke("plugin_uninstall", { id });
+  } catch (e) {
+    toast(`卸载失败：${e}`, 6000);
+    if (rec && pluginEnabled(id)) activatePlugin(rec);
+    renderPluginList();
+    return;
+  }
+  // The script stays in the page but is inactive; a reload drops it.
+  pluginHost.plugins.delete(id);
+  pluginHost.broken.delete(id);
+  renderPluginList();
+  toast(`已卸载 ${rec ? rec.def.name || id : id}`);
+}
+
+/** A 卸载 button that asks once more before acting. */
+function uninstallButton(id) {
+  const b = document.createElement("button");
+  b.className = "small pl-remove";
+  b.textContent = "卸载";
+  b.title = "删除这个插件";
+  let armed = null;
+  b.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!armed) {
+      b.textContent = "确认卸载？";
+      armed = setTimeout(() => {
+        armed = null;
+        b.textContent = "卸载";
+      }, 3000);
+      return;
+    }
+    clearTimeout(armed);
+    b.disabled = true;
+    uninstallPackage(id);
+  });
+  return b;
+}
+
 // ---------- plugin & update dialog ----------
+
+function pluginRow({ name, version, description, source, error, rec, pkg }) {
+  const row = document.createElement("label");
+  row.className = "plugin-row";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  if (rec) {
+    cb.checked = rec.active;
+    cb.addEventListener("change", () => {
+      setPluginEnabled(rec.def.id, cb.checked);
+      if (cb.checked) activatePlugin(rec);
+      else deactivatePlugin(rec);
+      renderPluginList();
+    });
+  } else {
+    cb.disabled = true;
+  }
+  const text = document.createElement("div");
+  text.className = "pl-text";
+  const title = document.createElement("div");
+  title.className = "pl-name";
+  title.textContent = `${name}${version ? "  v" + version : ""}`;
+  const meta = document.createElement("div");
+  meta.className = "dim";
+  meta.textContent = [description, source].filter(Boolean).join(" · ");
+  text.append(title, meta);
+  if (error) {
+    const err = document.createElement("div");
+    err.className = "pl-err";
+    err.textContent = `出错：${error}`;
+    text.append(err);
+  }
+  row.append(cb, text);
+  if (pkg) row.append(uninstallButton(pkg));
+  return row;
+}
 
 function renderPluginList() {
   const box = $("plugin-list");
   if (!box) return;
   box.innerHTML = "";
-  if (!pluginHost.plugins.size) {
-    box.innerHTML = `<div class="dim">没有插件</div>`;
-    return;
-  }
   for (const rec of pluginHost.plugins.values()) {
     const d = rec.def;
-    const row = document.createElement("label");
-    row.className = "plugin-row";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = rec.active;
-    cb.addEventListener("change", () => {
-      setPluginEnabled(d.id, cb.checked);
-      if (cb.checked) activatePlugin(rec);
-      else deactivatePlugin(rec);
-      renderPluginList();
-    });
-    const text = document.createElement("div");
-    const title = document.createElement("div");
-    title.className = "pl-name";
-    title.textContent = `${d.name || d.id}${d.version ? "  v" + d.version : ""}`;
-    const meta = document.createElement("div");
-    meta.className = "dim";
-    meta.textContent = [d.description, rec.source === "内置" ? "内置" : rec.source].filter(Boolean).join(" · ");
-    text.append(title, meta);
-    if (rec.error) {
-      const err = document.createElement("div");
-      err.className = "pl-err";
-      err.textContent = `出错：${rec.error}`;
-      text.append(err);
-    }
-    row.append(cb, text);
-    box.append(row);
+    box.append(
+      pluginRow({
+        name: d.name || d.id,
+        version: d.version,
+        description: d.description,
+        source: rec.source,
+        error: rec.error,
+        rec,
+        pkg: rec.pkg,
+      }),
+    );
+  }
+  for (const b of pluginHost.broken.values()) {
+    box.append(pluginRow({ name: b.id, source: b.source, error: b.error, pkg: b.id }));
+  }
+  const extra = [...pluginHost.plugins.keys()].some((id) => !BUILTIN_IDS.includes(id)) || pluginHost.broken.size;
+  if (!extra) {
+    const hint = document.createElement("div");
+    hint.className = "dim pl-hint";
+    hint.textContent = "到插件市场下载更多插件（录制视频、蔡司 SmartSEM、蔡司 ZEN…），下载后点「加载插件…」安装";
+    box.append(hint);
   }
 }
 
@@ -359,16 +493,26 @@ function togglePluginDialog(force) {
 
 const updater = { info: null, busy: false };
 
+function setUpdateStatus(text, info = null) {
+  $("update-status").textContent = text;
+  const b = $("update-install");
+  b.hidden = !info;
+  if (info) {
+    b.textContent = `更新到 ${info.version}`;
+    b.disabled = updater.busy;
+  }
+}
+
 function showUpdate(info) {
   updater.info = info;
   const bar = $("update-bar");
   if (!info) {
     bar.hidden = true;
-    $("update-status").textContent = "已是最新版本";
+    setUpdateStatus("已是最新版本");
     return;
   }
   $("update-text").textContent = `发现新版本 ${info.version}（当前 ${info.current}）`;
-  $("update-status").textContent = `可更新到 ${info.version}`;
+  setUpdateStatus(`可更新到 ${info.version}`, info);
   $("update-go").disabled = false;
   bar.hidden = false;
 }
@@ -376,19 +520,23 @@ function showUpdate(info) {
 async function checkUpdate(manual) {
   if (updater.busy) return;
   updater.busy = true;
-  $("update-status").textContent = "正在检查…";
+  setUpdateStatus("正在检查…");
   try {
     const info = await invoke("check_update");
+    updater.busy = false;
     if (info && !manual && pref.get("update.skip", "") === info.version) {
       updater.info = info;
-      $("update-status").textContent = `可更新到 ${info.version}（已忽略）`;
+      setUpdateStatus(`可更新到 ${info.version}（已忽略）`, info);
     } else {
       showUpdate(info);
     }
   } catch (e) {
-    // The updater reports a missing or unreachable latest.json this way.
-    const msg = /valid release JSON/i.test(String(e)) ? "暂无可用更新（更新服务器上还没有发布版本，或暂时连不上）" : `检查失败：${e}`;
-    $("update-status").textContent = msg;
+    // The updater says only this when every endpoint failed: offline, server
+    // unreachable, or no (valid) latest.json published yet.
+    const msg = /valid release JSON/i.test(String(e))
+      ? "无法获取更新信息：连不上更新服务器，或服务器上还没有发布版本，请稍后再试"
+      : `检查失败：${e}`;
+    setUpdateStatus(msg);
     if (manual) toast(msg, 6000);
   } finally {
     updater.busy = false;
@@ -398,19 +546,23 @@ async function checkUpdate(manual) {
 async function installUpdate() {
   if (!updater.info || updater.busy) return;
   updater.busy = true;
+  const say = (text) => {
+    $("update-text").textContent = text;
+    $("update-status").textContent = text;
+  };
   $("update-go").disabled = true;
-  $("update-text").textContent = "正在下载更新…";
+  $("update-install").disabled = true;
+  say("正在下载更新…");
   const unlisten = await T.event.listen("update-progress", (e) => {
     const { done, total } = e.payload;
-    $("update-text").textContent = total
-      ? `正在下载更新… ${Math.floor((done / total) * 100)}%`
-      : `正在下载更新… ${fmtBytes(done)}`;
+    say(total ? `正在下载更新… ${Math.floor((done / total) * 100)}%` : `正在下载更新… ${fmtBytes(done)}`);
   });
   try {
     await invoke("install_update"); // restarts the app on success
   } catch (e) {
-    $("update-text").textContent = `更新失败：${e}`;
+    say(`更新失败：${e}`);
     $("update-go").disabled = false;
+    $("update-install").disabled = false;
   } finally {
     unlisten();
     updater.busy = false;
@@ -419,6 +571,10 @@ async function installUpdate() {
 
 $("btn-plugins").addEventListener("click", () => togglePluginDialog());
 $("plugin-close").addEventListener("click", () => togglePluginDialog(false));
+$("plugin-market").addEventListener("click", () =>
+  invoke("open_market").catch((e) => toast(`无法打开插件市场：${e}`)),
+);
+$("plugin-install").addEventListener("click", () => installPackage().catch((e) => toast(`安装失败：${e}`, 6000)));
 $("plugin-dir").addEventListener("click", () =>
   invoke("open_plugin_dir").catch((e) => toast(`无法打开插件文件夹：${e}`)),
 );
@@ -426,6 +582,7 @@ $("plugin-reload").addEventListener("click", () => location.reload());
 $("update-check").addEventListener("click", () => checkUpdate(true));
 $("update-auto").addEventListener("change", (e) => pref.set("update.auto", e.target.checked));
 $("update-go").addEventListener("click", installUpdate);
+$("update-install").addEventListener("click", installUpdate);
 $("update-later").addEventListener("click", () => {
   if (updater.info) pref.set("update.skip", updater.info.version);
   $("update-bar").hidden = true;

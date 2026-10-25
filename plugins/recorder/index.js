@@ -1,6 +1,6 @@
 "use strict";
 
-// Built-in plugin: records the Z (or T) stack as an H.264 MP4, with the
+// Plugin: records the Z (or T) stack as an H.264 MP4, with the
 // current contrast, channels, annotations and scale bar. Frames are rendered
 // here and encoded by the native half (src-tauri/src/plugins/recorder.rs).
 
