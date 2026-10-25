@@ -36,13 +36,21 @@
       <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
     <button id="scroll-right" class="scroll-btn" title="向右，显示更多按钮" hidden>›</button>
+    <div class="group" id="plugin-buttons"></div>
     <div class="group" id="view-group">
       <button id="btn-fit" title="适应窗口 (F)">适应</button>
       <button id="btn-1to1" title="原始大小 (1)">1:1</button>
       <button id="btn-sidebar" class="toggle on" title="显示/收起右侧预览栏 (B)">预览栏</button>
       <button id="btn-tools" class="toggle" title="工具：亮度对比度、标注、IMOD 模型、比例尺设置 (T)"><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>工具</span></button>
+      <button id="btn-plugins" class="toggle" title="插件与更新">插件</button>
     </div>
   </header>
+
+  <div id="update-bar" hidden>
+    <span id="update-text"></span>
+    <button id="update-go" class="small">立即更新并重启</button>
+    <button id="update-later" class="small">忽略这个版本</button>
+  </div>
 
   <div id="body">
     <main id="stage">
@@ -136,8 +144,32 @@
     <span id="st-pixel"></span>
   </footer>
 
+  <div id="plugin-dialog" hidden>
+    <div class="dlg-head">
+      <h3>插件</h3>
+      <button id="plugin-close" class="small" title="关闭 (Esc)">✕</button>
+    </div>
+    <div id="plugin-list"></div>
+    <div class="row">
+      <button id="plugin-dir" class="small" title="把 .js 插件放进这个文件夹，然后重新加载">打开插件文件夹</button>
+      <button id="plugin-reload" class="small" title="重新加载界面以载入新插件">重新加载</button>
+    </div>
+    <div class="dlg-head">
+      <h3>更新</h3>
+    </div>
+    <div class="row">
+      <span id="app-version"></span>
+      <span id="update-status" class="dim"></span>
+    </div>
+    <div class="row">
+      <button id="update-check" class="small">检查更新</button>
+      <label><input type="checkbox" id="update-auto" /> 启动时自动检查</label>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
 
   <script src="app.js"></script>
+  <script src="plugin-host.js"></script>
 </body>
 </html>

@@ -20,6 +20,35 @@
 - 鼠标滚轮缩放、拖动平移、双击适应窗口，状态栏显示像素坐标和原始值
 - 拖文件进窗口即可打开；已开着时再双击别的文件，会在同一个窗口里打开
 
+## 插件
+
+工具栏「插件」里可以开关插件、打开插件文件夹、检查更新。录制视频就是一个内置插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
+
+界面语言也是一个内置插件（`ui/plugins/i18n.js`）：支持中文、English、Deutsch、日本語、Español、Français、Русский，默认跟随系统语言，工具栏的下拉框可以手动切换。它会把界面上已知的中文文字换成所选语言，所以别的插件和提示信息也一起翻译；加新文字时在 `WORDS`（固定文字）或 `PATTERNS`（带数字、文件名的文字）里加一行。关掉这个插件就回到中文。
+
+自己写插件：把一个 `.js` 文件放进插件文件夹，点「重新加载」即可。最小例子：
+
+```js
+TifMrcView.register({
+  id: "hello",
+  name: "示例插件",
+  version: "1.0.0",
+  description: "在工具面板里显示当前层",
+  activate(app) {
+    const box = app.ui.addToolSection("示例");
+    app.on("slice", ({ z }) => (box.textContent = `当前第 ${z + 1} 层`));
+  },
+});
+```
+
+`app` 提供：`state()`（当前文件、Z/T、尺寸、选区、像素尺寸）、`on("open" | "slice" | "render", fn)`、`setZ` / `setT` / `open(path)`、`renderRegion(region, {z, t, size})`（按当前显示设置渲染成 canvas，含标注和比例尺）、`ui.addToolSection` / `ui.addToolbarButton` / `ui.addToolbarSelect` / `ui.toast` / `ui.busy`、`dialog.save`、`fs.write`、`settings.get/set`，以及调用 Rust 端的 `native(method, args, bytes)`。完整定义见 `ui/plugin-host.js`。需要原生代码的插件（如录制用的 H.264 编码器）在 `src-tauri/src/plugins/` 里实现 `NativePlugin`，并用 Cargo feature 控制是否编进去（`recorder` 默认开启，`--no-default-features` 可去掉，安装包小约 1 MB）。
+
+插件和主程序有同样的权限，只安装自己信任的插件。
+
+## 自动更新
+
+应用启动几秒后会静默检查 `https://tifmrcview.com/tifmrcview/latest.json`，有新版本时顶部出现提示条，点「立即更新并重启」会下载、校验签名、安装并重启。更新包用 Tauri 的 minisign 密钥签名，公钥写在 `tauri.conf.json` 里。
+
 ## 快捷键
 
 | 键 | 作用 |
@@ -84,22 +113,19 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 ## 发布
 
-推送到 `main` 时 GitHub Actions 会在 macOS / Windows / Linux 上各打一次包，安装包在该次运行的 Artifacts 里。打一个 `v` 开头的 tag 会自动建 Release 并附上所有安装包：
+版本号自动生成：`tauri.conf.json` 里的主次版本（现在是 0.2）加上提交总数，例如 `0.2.57`；打 `v1.2.3` tag 时用 tag 的版本。
 
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
+每次推送到 `main`，GitHub Actions 会在 macOS / Windows / Linux 上各打一次包，安装包在该次运行的 Artifacts 里。发布到下载站有两种方式：
 
-## 代码结构
+- 打一个 `v` 开头的 tag：`git tag v0.3.0 && git push origin v0.3.0`，会上传到下载站并建 GitHub Release；
+- 或在 Actions 里手动运行 build，勾选「发布到下载站」，用自动版本号发布。
 
-```
-src-tauri/src/
-  lib.rs           Tauri 命令、文件打开/单实例/默认程序入口
-  image.rs         像素平面、元数据、页面缓存和后台预取
-  render.rs        按可见区域渲染、自动对比度、缩略图
-  formats/tiff.rs  TIFF / OME-TIFF / ImageJ 读取（并行解压）
-  formats/mrc.rs   MRC 读取
-  assoc.rs         各系统设置默认打开方式
-ui/                界面（index.html / app.js / style.css）
-packaging/linux/   .desktop 模板、MRC 的 MIME 定义、deb/rpm 安装后脚本
-```
+发布时 CI 把安装包和更新包放到下载站的 `<版本>/` 目录，最后更新 `latest.json`（给自动更新用）和 `downloads.json`（给下载页用）。需要在仓库 Settings → Secrets and variables → Actions 里配置：
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Secret | 更新包签名私钥（丢了就没法给已安装的用户推更新） |
+| `DEPLOY_SSH_KEY` | Secret | 下载站部署用户的 SSH 私钥 |
+| `DEPLOY_HOST` / `DEPLOY_USER` | Secret | 下载站地址和用户名 |
+| `UPDATE_BASE_URL` | Variable，可选 | 默认 `https://tifmrcview.com/tifmrcview` |
+| `DEPLOY_PATH` | Variable，可选 | 默认 `/var/www/tifmrcview` |
