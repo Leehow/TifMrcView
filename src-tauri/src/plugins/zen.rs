@@ -53,6 +53,16 @@ fn num(s: &str) -> String {
     }
 }
 
+/// "2026-10-15T10:12:03.98+08:00" -> "2026-10-15 10:12:03 +08:00".
+fn tidy_date(d: &str) -> String {
+    let Some((day, time)) = d.split_once('T') else { return d.to_string() };
+    let zone_at = time.find(['+', '-', 'Z']).unwrap_or(time.len());
+    let (clock, zone) = time.split_at(zone_at);
+    let clock = clock.split('.').next().unwrap_or(clock);
+    let zone = if zone == "Z" { "UTC" } else { zone };
+    format!("{day} {clock} {zone}").trim_end().to_string()
+}
+
 struct Group(MetaGroup);
 
 impl Group {
@@ -93,7 +103,9 @@ fn groups(meta: Node) -> Vec<MetaGroup> {
     let app = inf.and_then(|i| child(i, "Application"));
     g.add("软件", app.map(|a| format!("{} {}", text(a, "Name").unwrap_or_default(), text(a, "Version").unwrap_or_default()).trim().to_string()));
     if let Some(i) = image {
-        g.add("采集时间", text(i, "AcquisitionDateAndTime"));
+        // The document date carries the local time zone; the acquisition time is UTC.
+        let date = inf.and_then(|i| text(i, "Document/CreationDate")).or_else(|| text(i, "AcquisitionDateAndTime"));
+        g.add("采集时间", date.map(|d| tidy_date(&d)));
         g.add("像素类型", text(i, "PixelType"));
         g.add("位深", text(i, "ComponentBitCount"));
         let dims: Vec<String> = ["X", "Y", "Z", "C", "T", "M", "S", "H"]
