@@ -50,6 +50,9 @@ const canvas = $("view");
 const ctx = canvas.getContext("2d");
 const frameCanvas = document.createElement("canvas");
 const frameCtx = frameCanvas.getContext("2d");
+// The last picture of the previous image, faded out over the new one.
+const fadeCanvas = document.createElement("canvas");
+const FADE_MS = 160;
 
 // ---------- helpers ----------
 
@@ -143,12 +146,16 @@ function parseFrame(buf) {
 
 async function openPath(path) {
   if (!path) return;
+  // Clicking the image already shown changes nothing.
+  if (S.info && S.info.path === path && S.axis === "xy") return;
   flushAnn();
   $("loading").textContent = "加载中…";
-  $("loading").hidden = false;
+  // Only show the hint when loading takes a while, so quick flips do not blink.
+  const slow = setTimeout(() => ($("loading").hidden = false), 300);
   try {
     const res = await invoke("open_image", { path });
     stopPlay();
+    holdFrame();
     const sameSize = S.info && S.info.width === res.info.width && S.info.height === res.info.height;
     S.token = res.token;
     S.info = res.info;
@@ -208,8 +215,44 @@ async function openPath(path) {
   } catch (e) {
     toast(`无法打开 ${basename(path)}：${e}`);
   } finally {
+    clearTimeout(slow);
     $("loading").hidden = true;
   }
+}
+
+/** Keeps the current picture on screen until the next image has a frame. */
+function holdFrame() {
+  if (!S.frame) return;
+  fadeCanvas.width = canvas.width;
+  fadeCanvas.height = canvas.height;
+  fadeCanvas.getContext("2d").drawImage(canvas, 0, 0);
+  S.fade = { alpha: 1, start: 0 };
+  // Never leave the old picture up if the new one fails to render.
+  setTimeout(startFade, 1500);
+}
+
+/** Fades the held picture out once the new image has drawn. */
+function startFade() {
+  const f = S.fade;
+  if (!f || f.start) return;
+  f.start = performance.now();
+  const tick = (now) => {
+    if (S.fade !== f) return;
+    f.alpha = Math.max(0, 1 - (now - f.start) / FADE_MS);
+    if (f.alpha === 0) S.fade = null;
+    draw();
+    if (S.fade === f) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function drawFade() {
+  if (!S.fade) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = S.fade.alpha;
+  ctx.drawImage(fadeCanvas, 0, 0);
+  ctx.restore();
 }
 
 /** Switches between the XY view and the XZ / YZ side views of a Z stack. */
@@ -482,8 +525,8 @@ function drawHist() {
 function setupSliders() {
   const { sizeZ, sizeT } = S.info;
   const stack = (S.base ? S.base.info : S.info).sizeZ > 1;
-  $("axisbtns").hidden = $("axis-sep").hidden = !stack;
-  for (const b of $("axisbtns").children) b.classList.toggle("on", b.dataset.axis === S.axis);
+  $("btn-axis").hidden = $("axis-sep").hidden = !stack;
+  $("btn-axis").textContent = S.axis.toUpperCase();
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
   $("zslider").max = sizeZ - 1;
   $("zslider").value = S.z;
@@ -537,8 +580,6 @@ function updateInfo() {
   if (i.sizeT > 1) dims.push(`T${i.sizeT}`);
   const px = S.px ? ` · ${fmt(S.px.x)} ${S.px.unit}/px` : "";
   $("st-info").textContent = `${i.format} · ${dims.join(" × ")} · ${i.dtype}${px}`;
-  $("file-name").textContent = i.name;
-  $("file-name").title = i.path;
   const { files, index } = S.folder;
   $("file-pos").textContent = files.length ? `${index + 1} / ${files.length}` : "–";
   $("btn-prev").disabled = index <= 0;
@@ -906,7 +947,7 @@ function draw() {
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!S.frame || !S.info) return;
+  if (!S.frame || !S.info) return drawFade();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const [x, y, w, h] = S.frame.region;
   const [sx, sy] = toScreen(x, y);
@@ -939,6 +980,7 @@ function draw() {
 
   const { cw, ch } = cssSize();
   drawScaleBar(ctx, cw, ch, S.view.scale, true);
+  drawFade();
   $("st-zoom").textContent = `${Math.round(S.view.scale * dpr * 100)}%`;
 }
 
@@ -1071,6 +1113,7 @@ async function renderNow() {
     });
     syncContrast();
     draw();
+    startFade();
     loadHist();
     pluginEmit("render");
   } catch (e) {
@@ -1190,7 +1233,6 @@ function setTool(t) {
     const b = document.querySelector('#toolbtns [data-tool="pen"]');
     b.querySelector("svg").innerHTML = PEN_ICONS[t];
     b.title = PEN_TITLES[t] + "。再点一次切换 画笔 / 画框 / 画圆";
-    for (const b of $("axisbtns").children) b.addEventListener("click", () => setAxis(b.dataset.axis));
 for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
   }
   for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
@@ -1948,6 +1990,8 @@ $("btn-scalebar").addEventListener("click", () => {
 $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
+const AXES = ["xy", "xz", "yz"];
+$("btn-axis").addEventListener("click", () => S.info && setAxis(AXES[(AXES.indexOf(S.axis) + 1) % AXES.length]));
 // Arrows to scroll the tool buttons when the window is too narrow for them.
 {
   const bar = $("quickbar");
