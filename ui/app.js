@@ -190,6 +190,12 @@ async function openPath(path) {
     syncScaleUi();
     updateInfo();
     updateSaveButtons();
+    $("btn-info").disabled = false;
+    $("btn-info").title = res.info.metadata.length
+      ? "图像信息：文件信息和显微镜记录的采集参数（电压、工作距离、放大倍数、探测器等）"
+      : "图像信息";
+    $("meta-list").dataset.file = "";
+    renderMeta();
     // Keep the zoom when flipping through images of the same size.
     if (sameSize) {
       draw();
@@ -520,6 +526,7 @@ function onPxInput() {
   }
   syncScaleUi();
   updateInfo();
+  renderMeta();
   draw();
 }
 
@@ -1132,17 +1139,99 @@ function setTool(t) {
   draw();
 }
 
-/** Shows the side panel: "contrast" (only brightness/contrast), "all", or null. */
+/** Shows the side panel: "contrast" (only brightness/contrast), "info"
+ * (only file and acquisition metadata), "all", or null. */
 function showPanel(mode) {
   const panel = $("tools");
-  const cur = panel.hidden ? null : panel.classList.contains("only-contrast") ? "contrast" : "all";
+  const cur = panel.hidden
+    ? null
+    : panel.classList.contains("only-contrast")
+      ? "contrast"
+      : panel.classList.contains("only-info")
+        ? "info"
+        : "all";
   if (mode === cur) mode = null;
   panel.hidden = !mode;
   panel.classList.toggle("only-contrast", mode === "contrast");
+  panel.classList.toggle("only-info", mode === "info");
   $("btn-tools").classList.toggle("on", mode === "all");
   $("btn-contrast").classList.toggle("on", mode === "contrast");
+  $("btn-info").classList.toggle("on", mode === "info");
   pref.set("tools", mode);
-  if (mode) loadHist();
+  if (mode === "info") renderMeta();
+  else if (mode) loadHist();
+}
+
+// ---------- image info / acquisition metadata ----------
+
+/** File facts plus the groups the reader found (e.g. Zeiss SEM settings). */
+function metaGroups() {
+  const i = S.info;
+  if (!i) return [];
+  const dims = [`${i.width} × ${i.height}`];
+  if (i.sizeC > 1) dims.push(`C ${i.sizeC}`);
+  if (i.sizeZ > 1) dims.push(`Z ${i.sizeZ}`);
+  if (i.sizeT > 1) dims.push(`T ${i.sizeT}`);
+  const items = [
+    ["格式", i.format],
+    ["尺寸", dims.join(" · ")],
+    ["数据类型", i.dtype],
+  ];
+  if (S.px) items.push(["像素尺寸", `${fmt(S.px.x)} ${S.px.unit}`]);
+  items.push(["路径", i.path]);
+  return [{ name: "文件信息", items }, ...(i.metadata || [])];
+}
+
+function renderMeta() {
+  const list = $("meta-list");
+  if ($("tools").hidden || !$("tools").classList.contains("only-info")) return;
+  const q = $("meta-filter").value.trim().toLowerCase();
+  const open = new Set([...list.querySelectorAll("details[open]")].map((d) => d.dataset.name));
+  const first = !list.childElementCount;
+  list.textContent = "";
+  let shown = 0;
+  metaGroups().forEach((g, gi) => {
+    const items = q ? g.items.filter(([k, v]) => `${k} ${v}`.toLowerCase().includes(q)) : g.items;
+    if (!items.length) return;
+    shown += items.length;
+    const d = document.createElement("details");
+    d.dataset.name = g.name;
+    // Expand the summaries by default and everything that matches a search.
+    d.open = q ? items.length <= 60 : first || !list.dataset.file ? gi < 2 : open.has(g.name);
+    const sum = document.createElement("summary");
+    const name = document.createElement("span");
+    name.textContent = g.name;
+    const n = document.createElement("span");
+    n.className = "dim";
+    n.textContent = String(items.length);
+    sum.append(name, n);
+    const table = document.createElement("table");
+    for (const [k, v] of items) {
+      const tr = table.insertRow();
+      tr.insertCell().textContent = k;
+      tr.insertCell().textContent = v;
+      tr.title = `${k} = ${v}`;
+    }
+    d.append(sum, table);
+    list.append(d);
+  });
+  list.dataset.file = S.info ? S.info.path : "";
+  if (!shown) {
+    const p = document.createElement("div");
+    p.className = "dim none";
+    p.textContent = q ? "没有匹配的参数" : "未打开图像";
+    list.append(p);
+  }
+}
+
+function copyMeta() {
+  const text = metaGroups()
+    .map((g) => `[${g.name}]\n` + g.items.map(([k, v]) => `${k} = ${v}`).join("\n"))
+    .join("\n\n");
+  navigator.clipboard.writeText(text).then(
+    () => toast("已复制全部参数"),
+    (e) => toast(`复制失败：${e}`),
+  );
 }
 
 function toggleSidebar(force) {
@@ -1862,6 +1951,9 @@ $("btn-1to1").addEventListener("click", oneToOne);
 $("btn-play").addEventListener("click", togglePlay);
 $("btn-tools").addEventListener("click", () => showPanel("all"));
 $("btn-contrast").addEventListener("click", () => showPanel("contrast"));
+$("btn-info").addEventListener("click", () => showPanel("info"));
+$("meta-filter").addEventListener("input", renderMeta);
+$("meta-copy").addEventListener("click", copyMeta);
 $("btn-sidebar").addEventListener("click", () => toggleSidebar());
 $("btn-scalebar").addEventListener("click", () => {
   if (!S.px) {

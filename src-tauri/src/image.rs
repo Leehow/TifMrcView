@@ -265,6 +265,13 @@ pub struct ChannelInfo {
     pub color: [u8; 3],
 }
 
+/// A titled list of (label, value) pairs, e.g. one section of SEM settings.
+#[derive(Clone, Serialize)]
+pub struct MetaGroup {
+    pub name: String,
+    pub items: Vec<[String; 2]>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
@@ -283,6 +290,8 @@ pub struct ImageInfo {
     /// Physical pixel size (x, y, z) and unit, when the file says so.
     pub pixel_size: Option<[f64; 3]>,
     pub unit: String,
+    /// Acquisition parameters stored by the instrument, grouped for display.
+    pub metadata: Vec<MetaGroup>,
     #[serde(skip)]
     pub samples_per_page: usize,
     #[serde(skip)]

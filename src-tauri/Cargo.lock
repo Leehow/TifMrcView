@@ -4262,6 +4262,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
+ "flate2",
  "image",
  "memmap2",
  "openh264",
@@ -4274,6 +4275,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tiff",
+ "weezl",
  "windows-sys 0.59.0",
 ]
 
