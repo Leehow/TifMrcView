@@ -316,3 +316,5 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .plugin-row .dim { font-size: 12px; }
 .pl-name { font-weight: 600; }
 .pl-err { color: #cf222e; font-size: 12px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
