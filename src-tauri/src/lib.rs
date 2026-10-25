@@ -256,6 +256,33 @@ fn free_path(dir: String, stem: String) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Annotations drawn on an image are kept next to it, e.g.
+/// `cell.tif` → `cell.tif.annot.json`.
+fn annot_path(image: &str) -> PathBuf {
+    PathBuf::from(format!("{image}.annot.json"))
+}
+
+#[tauri::command]
+fn read_annotations(image: String) -> Option<String> {
+    std::fs::read_to_string(annot_path(&image)).ok()
+}
+
+/// Writes the annotations file, or removes it when `json` is empty.
+#[tauri::command]
+fn write_annotations(image: String, json: String) -> CmdResult<()> {
+    let path = annot_path(&image);
+    if json.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
+            _ => Ok(()),
+        };
+    }
+    // Write to a temporary file first so a crash never leaves half a file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(err)?;
+    std::fs::rename(&tmp, &path).map_err(err)
+}
+
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -391,6 +418,8 @@ pub fn run() {
             pick_save_path,
             free_path,
             save_file,
+            read_annotations,
+            write_annotations,
             find_models,
             load_model,
             pick_model,
