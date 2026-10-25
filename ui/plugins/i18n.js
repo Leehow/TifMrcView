@@ -271,6 +271,8 @@ const PATTERNS = [
   [/^(.+) 读取失败$/, "Could not read $1", "$1 konnte nicht gelesen werden", "$1 を読めませんでした", "No se pudo leer $1", "Impossible de lire $1", "Не удалось прочитать $1"],
   [/^裁剪 (.+)$/, "Crop $1", "Zuschnitt $1", "切り抜き $1", "Recorte $1", "Rognage $1", "Обрезка $1"],
   [/^(.+)。再点一次切换 画笔 \/ 画框 \/ 画圆$/, "$1. Click again to switch pen / rectangle / ellipse", "$1. Erneut klicken: Stift / Rechteck / Ellipse", "$1。もう一度クリックでペン / 四角形 / 楕円を切替", "$1. Vuelve a hacer clic para cambiar lápiz / rectángulo / elipse", "$1. Cliquez à nouveau pour alterner crayon / rectangle / ellipse", "$1. Нажмите ещё раз: перо / прямоугольник / эллипс"],
+  [/^已载入内存 (\d+)%$/, "In memory $1%", "Im Speicher $1 %", "メモリに読込済み $1%", "En memoria $1 %", "En mémoire $1 %", "В памяти $1%"],
+  [/^正在生成 (\w+) 视图… (\d+) \/ (\d+) 层$/, "Building $1 view… $2 / $3 slices", "$1-Ansicht wird erstellt… $2 / $3 Ebenen", "$1 ビューを作成中… $2 / $3 スライス", "Creando vista $1… $2 / $3 cortes", "Création de la vue $1… $2 / $3 coupes", "Строится вид $1… $2 / $3 слоёв"],
   [/^无法切换视图：(.+)$/, "Cannot switch view: $1", "Ansicht kann nicht gewechselt werden: $1", "ビューを切り替えられません：$1", "No se puede cambiar la vista: $1", "Impossible de changer de vue : $1", "Не удаётся сменить вид: $1"],
   [/^渲染失败：(.+)$/, "Render failed: $1", "Darstellung fehlgeschlagen: $1", "描画に失敗しました：$1", "Error al dibujar: $1", "Échec du rendu : $1", "Ошибка отрисовки: $1"],
   [/^保存失败：(.+)$/, "Save failed: $1", "Speichern fehlgeschlagen: $1", "保存に失敗しました：$1", "Error al guardar: $1", "Échec de l'enregistrement : $1", "Ошибка сохранения: $1"],

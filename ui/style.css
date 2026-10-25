@@ -162,6 +162,10 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
   font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
 }
 #loading { right: 12px; color: var(--dim); }
+#loading.progress {
+  color: var(--text);
+  background: linear-gradient(to right, color-mix(in srgb, var(--accent) 28%, var(--surface)) var(--p, 0%), var(--surface) var(--p, 0%));
+}
 #size-out { left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; }
 /* Centre over the part of the image the tools panel leaves free. */
 #stage:has(#tools:not([hidden])) #size-out { left: calc(50% + (var(--tools-w, 288px) + 10px) / 2); }
