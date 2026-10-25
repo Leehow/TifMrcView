@@ -90,6 +90,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .group { display: flex; align-items: center; gap: 4px; flex: none; }
 #file-group { min-width: 0; flex: 0 1 auto; }
 .spacer { flex: 1; }
+#btn-prev, #btn-next { width: 26px; padding: 0; justify-content: center; font-size: 11px; color: var(--dim); }
 #file-pos { color: var(--dim); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 #file-name { font-weight: 600; margin-left: 4px; max-width: 22vw; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -107,11 +108,15 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #quickbar::-webkit-scrollbar { display: none; }
 #quickbar > * { flex: none; }
 #quickbar .seg { display: flex; gap: 2px; padding: 2px; background: var(--subtle); border-radius: 8px; }
-#quickbar .seg button { height: 26px; padding: 0 8px; color: var(--dim); }
+#quickbar .seg button { height: 26px; width: 30px; }
 #quickbar .seg button:hover:not(.on) { background: var(--muted); color: var(--text); }
 #quickbar .seg button.on { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(31, 35, 40, 0.12), 0 0 0 1px rgba(31, 35, 40, 0.06); }
 #quickbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
-#quickbar .qitem { display: flex; align-items: center; margin-left: 2px; }
+/* Icon-only buttons; the label is in the tooltip. */
+#quickbar button { width: 30px; padding: 0; justify-content: center; color: var(--dim); }
+#quickbar button:hover:not(:disabled) { color: var(--text); }
+#quickbar button.on { color: var(--accent); }
+#quickbar button svg { width: 17px; height: 17px; }
 .scroll-btn { flex: none; width: 24px; padding: 0; justify-content: center; font-size: 18px; color: var(--dim); }
 #view-group { padding-left: 8px; border-left: 1px solid var(--line); }
 
@@ -170,6 +175,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #tools section:last-child { border-bottom: none; }
 #tools h3 { margin: 2px 0 8px; font-size: 12px; font-weight: 600; color: var(--dim); }
 #tools .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+#tools .row label { display: inline-flex; align-items: center; gap: 6px; }
 #tools .slider { display: grid; grid-template-columns: 44px 1fr 36px; align-items: center; gap: 6px; margin: 4px 0; }
 #tools .slider input { width: 100%; }
 #hist { width: 100%; height: 64px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; cursor: ew-resize; display: block; }

@@ -10,31 +10,29 @@
   <header id="toolbar">
     <div class="group" id="file-group">
       <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
-      <button id="btn-prev" title="上一个文件 (↑)" disabled>▲</button>
+      <button id="btn-prev" title="上一个文件 (↑)" disabled>◀</button>
       <span id="file-pos">–</span>
-      <button id="btn-next" title="下一个文件 (↓)" disabled>▼</button>
+      <button id="btn-next" title="下一个文件 (↓)" disabled>▶</button>
       <span id="file-name" title=""></span>
       <div id="channels"></div>
     </div>
     <button id="scroll-left" class="scroll-btn" title="向左" hidden>‹</button>
     <div id="quickbar">
-      <div class="seg" id="toolbtns">
-        <button data-tool="pan" class="on" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg><span>移动</span></button>
-        <button data-tool="select" title="选择：点选标注后拖动、缩放，拖端点重新测量，Delete 删除 (S)"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg><span>选择</span></button>
-        <button data-tool="measure" title="测距 (M)"><svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg><span>测距</span></button>
-        <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg><span>画笔</span></button>
-        <button data-tool="rect" title="画框 (R)，按住 Shift 画正方形"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><span>画框</span></button>
-        <button data-tool="ellipse" title="画圆 (E)，按住 Shift 画正圆"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg><span>画圆</span></button>
-        <button data-tool="crop" title="裁剪 (C)：框出区域后双击或回车裁剪，Esc / 退格撤回"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg><span>裁剪</span></button>
-      </div>
-      <label class="qitem" title="标注颜色"><input type="color" id="ann-color" value="#ffb020" /></label>
-      <label class="qitem" title="线宽"><select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
-      <span class="sep"></span>
-      <button id="btn-scalebar" class="toggle" title="显示/隐藏比例尺（像素尺寸在「工具」里改）"><svg viewBox="0 0 24 24"><path d="M3 16h18M3 12v8M21 12v8M12 14v4"/></svg><span>比例尺</span></button>
-      <button id="btn-contrast" class="toggle" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><span>亮度对比度</span></button>
-      <button id="btn-save" title="存图：按原始分辨率存 PNG，裁剪后只存裁剪区域，带上显示中的标注和比例尺。Ctrl/⌘+S 直接存到图片所在文件夹"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span>存图</span></button>
-      <span class="sep"></span>
+      <button id="btn-save" title="存图：按原始分辨率存 PNG，裁剪后只存裁剪区域，带上显示中的标注和比例尺。Ctrl/⌘+S 直接存到图片所在文件夹"><svg viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><rect x="7" y="13" width="10" height="8" rx="1"/></svg></button>
       <button id="btn-undo" title="撤销 (Ctrl/⌘+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+      <span class="sep"></span>
+      <div class="seg" id="toolbtns">
+        <button data-tool="pan" class="on" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg></button>
+        <button data-tool="select" title="选择：点选标注后拖动、缩放，拖端点重新测量，Delete 删除 (S)"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg></button>
+        <button data-tool="measure" title="测距 (M)"><svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
+        <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+        <button data-tool="rect" title="画框 (R)，按住 Shift 画正方形"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+        <button data-tool="ellipse" title="画圆 (E)，按住 Shift 画正圆"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg></button>
+        <button data-tool="crop" title="裁剪 (C)：框出区域后双击或回车裁剪，Esc / 退格撤回"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
+      </div>
+      <span class="sep"></span>
+      <button id="btn-scalebar" class="toggle" title="显示/隐藏比例尺（像素尺寸在「工具」里改）"><svg viewBox="0 0 24 24"><path d="M3 16h18M3 12v8M21 12v8M12 14v4"/></svg></button>
+      <button id="btn-contrast" class="toggle" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
       <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
     <button id="scroll-right" class="scroll-btn" title="向右，显示更多按钮" hidden>›</button>
@@ -77,6 +75,10 @@
 
         <section id="sec-ann">
           <h3>标注</h3>
+          <div class="row">
+            <label title="标注颜色">颜色 <input type="color" id="ann-color" value="#ffb020" /></label>
+            <label title="线宽">线宽 <select id="ann-width"><option>1</option><option selected>2</option><option>3</option><option>5</option><option>8</option></select></label>
+          </div>
           <div class="row">
             <label><input type="checkbox" id="ann-show" checked /> 显示标注 (H)</label>
             <button id="btn-clear" class="small">清除本层</button>
