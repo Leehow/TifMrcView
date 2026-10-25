@@ -54,6 +54,10 @@ const frameCtx = frameCanvas.getContext("2d");
 // The last picture of the previous image, faded out over the new one.
 const fadeCanvas = document.createElement("canvas");
 const FADE_MS = 160;
+// A small picture of the whole image, drawn under the sharp view so that
+// panning or zooming out never shows blank space while the view renders.
+const ovCanvas = document.createElement("canvas");
+const OV_SIZE = 1024;
 
 // ---------- helpers ----------
 
@@ -960,6 +964,12 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const [x, y, w, h] = S.frame.region;
   const [sx, sy] = toScreen(x, y);
+  if (S.ov && S.ov.token === S.token) {
+    const [ox, oy, ow, oh] = S.ov.region;
+    const [qx, qy] = toScreen(ox, oy);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(ovCanvas, 0, 0, S.ov.w, S.ov.h, qx, qy, ow * S.view.scale, oh * S.view.scale);
+  }
   ctx.imageSmoothingEnabled = S.view.scale * dpr < 1;
   ctx.drawImage(frameCanvas, 0, 0, S.frame.w, S.frame.h, sx, sy, w * S.view.scale, h * S.view.scale);
 
@@ -1079,6 +1089,37 @@ function requestRender() {
   renderNow();
 }
 
+/** Re-renders the whole-image underlay when the slice or display changed. */
+async function refreshOverview() {
+  const region = bounds();
+  // Same contrast as the sharp view, so the two blend without a seam.
+  const channels = channelReqs().map((c) => ({ ...c, min: S.chans[c.index].min, max: S.chans[c.index].max }));
+  const key = JSON.stringify([S.token, S.z, S.t, region, channels, S.gamma]);
+  if (S.ovKey === key || S.ovBusy) return;
+  const k = Math.min(1, OV_SIZE / Math.max(region[2], region[3]));
+  const outW = Math.max(1, Math.round(region[2] * k));
+  const outH = Math.max(1, Math.round(region[3] * k));
+  const token = S.token;
+  S.ovBusy = true;
+  try {
+    const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };
+    const f = parseFrame(await invoke("render_view", { req }));
+    if (token !== S.token) return;
+    ovCanvas.width = f.w;
+    ovCanvas.height = f.h;
+    ovCanvas.getContext("2d").putImageData(f.image, 0, 0);
+    S.ov = { token, region, w: f.w, h: f.h };
+    draw();
+  } catch (e) {
+    // The underlay is only a nicety; the sharp view reports real errors.
+  } finally {
+    S.ovKey = key;
+    S.ovBusy = false;
+  }
+  // Catch up if the view moved on while this was rendering.
+  if (!S.scrubbing) refreshOverview();
+}
+
 function channelReqs() {
   const out = [];
   S.chans.forEach((c, i) => {
@@ -1126,6 +1167,7 @@ async function renderNow() {
     draw();
     startFade();
     loadHist();
+    if (!S.scrubbing) refreshOverview();
     pluginEmit("render");
   } catch (e) {
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
