@@ -315,9 +315,12 @@ impl Group {
     }
     /// Adds an item unless the value is empty.
     pub fn add_str(&mut self, label: &str, value: &str) {
-        if value.is_empty() {
-            return;
+        if !value.is_empty() {
+            self.push(label, value);
         }
+    }
+    /// Adds an item, even with an empty value.
+    pub fn push(&mut self, label: &str, value: &str) {
         if self.len > 0 {
             self.json.push(',');
         }
