@@ -246,7 +246,7 @@ async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> Cmd
         image::bg_pool().install(|| {
             let img = match open {
                 Some(i) => i,
-                None => OpenImage::new(0, formats::open(Path::new(&path))?, usize::MAX),
+                None => OpenImage::new(0, formats::open_pixels(Path::new(&path))?, usize::MAX),
             };
             render::thumbnail(&img, size)
         })
@@ -264,7 +264,8 @@ async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> Cmd
 #[tauri::command]
 async fn pick_file(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
-    let exts: Vec<&str> = formats::EXTENSIONS.to_vec();
+    let exts = formats::extensions();
+    let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
     app.dialog()
         .file()
         .add_filter("TIFF / MRC", &exts)
@@ -591,7 +592,9 @@ pub fn run() {
         .manage(update::Pending::default())
         .register_uri_scheme_protocol("tmvplugin", plugins::serve)
         .setup(|app| {
-            app.manage(plugins::Plugins::new(plugins::user_dir(app.handle())));
+            let dir = plugins::user_dir(app.handle());
+            plugins::registry::Registry::global().configure(dir.clone(), &app.package_info().version.to_string());
+            app.manage(plugins::Plugins::new(dir));
             let dir = app.path().app_config_dir().ok();
             std::thread::spawn(move || assoc::first_run(dir));
             Ok(())
@@ -622,6 +625,7 @@ pub fn run() {
             plugins::pick_plugin_package,
             plugins::plugin_install,
             plugins::plugin_uninstall,
+            plugins::plugin_set_disabled,
             plugins::open_market,
             update::check_update,
             update::install_update,

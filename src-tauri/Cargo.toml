@@ -1,6 +1,6 @@
 [package]
 name = "tifmrcview"
-version = "0.3.0"
+version = "0.4.0"
 description = "Fast TIFF / MRC stack viewer"
 authors = ["Leehow"]
 edition = "2021"
@@ -28,6 +28,9 @@ rayon = "1.10"
 anyhow = "1"
 roxmltree = "0.20"
 ruzstd = "0.8"
+# Sandboxed WebAssembly format plugins (pure-Rust interpreter). Loop dispatch:
+# tail-call dispatch overflows the stack when LLVM does not optimise it (debug).
+wasmi = { version = "2", default-features = false, features = ["std", "stable", "validate", "portable-dispatch"] }
 openh264 = { version = "0.9", optional = true }
 tauri-plugin-updater = "2.14"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }

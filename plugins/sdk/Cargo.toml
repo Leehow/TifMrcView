@@ -1,0 +1,12 @@
+[package]
+name = "tifmrcview-plugin-sdk"
+version = "1.0.0"
+description = "Helpers for TifMrcView WebAssembly format and metadata plugins (ABI v1)"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+# Not part of any workspace: plugin crates are built on their own.
+[workspace]

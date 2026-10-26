@@ -8,31 +8,66 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use crate::image::{DType, PlaneData, Source};
+use crate::plugins::registry::Registry;
 
-pub const EXTENSIONS: &[&str] = &[
-    "tif", "tiff", "czi", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp",
-];
+/// Formats built into the app. Others (Zeiss CZI…) come from WebAssembly
+/// plugins, see `plugins::registry`.
+pub const CORE_EXTENSIONS: &[&str] =
+    &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
-pub fn is_supported(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
+fn ext_of(path: &Path) -> String {
+    path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
+pub fn is_supported(path: &Path) -> bool {
+    is_supported_with(path, Registry::global())
+}
+
+pub fn is_supported_with(path: &Path, reg: &Registry) -> bool {
+    let ext = ext_of(path);
+    !ext.is_empty() && (CORE_EXTENSIONS.contains(&ext.as_str()) || reg.opens(&ext))
+}
+
+/// Every extension that opens now: the core's plus enabled plugins'.
+pub fn extensions() -> Vec<String> {
+    let mut v: Vec<String> = CORE_EXTENSIONS.iter().map(|e| e.to_string()).collect();
+    v.extend(Registry::global().extensions());
+    v
+}
+
+/// Opens a file, including what metadata plugins add.
 pub fn open(path: &Path) -> Result<Box<dyn Source>> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "tif" | "tiff" => Ok(Box::new(tiff::TiffSource::open(path)?)),
-        "czi" => Ok(Box::new(czi::CziSource::open(path)?)),
-        "mrc" | "mrcs" | "rec" | "st" | "map" => Ok(Box::new(mrc::MrcSource::open(path)?)),
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Ok(Box::new(raster::RasterSource::open(path)?)),
-        _ => bail!("不支持的文件类型: {}", path.display()),
-    }
+    open_with(path, Registry::global())
+}
+
+/// Opens a file for its pixels only (thumbnails): metadata plugins are skipped.
+pub fn open_pixels(path: &Path) -> Result<Box<dyn Source>> {
+    open_pixels_with(path, Registry::global()).map(|(s, _)| s)
+}
+
+pub fn open_with(path: &Path, reg: &Registry) -> Result<Box<dyn Source>> {
+    let (src, by) = open_pixels_with(path, reg)?;
+    Ok(reg.add_metadata(path, &ext_of(path), src, by.as_deref()))
+}
+
+/// The source, and the id of the plugin that opened it (if one did).
+fn open_pixels_with(path: &Path, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
+    let ext = ext_of(path);
+    let core: Box<dyn Source> = match ext.as_str() {
+        "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
+        "mrc" | "mrcs" | "rec" | "st" | "map" => Box::new(mrc::MrcSource::open(path)?),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),
+        _ => {
+            return match reg.open(path, &ext) {
+                Some(r) => r.map(|(s, id)| (s, Some(id))),
+                None => match reg.missing(&ext) {
+                    Some(msg) => bail!("{msg}"),
+                    None => bail!("不支持的文件类型: {}", path.display()),
+                },
+            }
+        }
+    };
+    Ok((core, None))
 }
 
 /// Converts raw uncompressed samples in the given byte order into a plane.

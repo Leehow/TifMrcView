@@ -10,13 +10,21 @@
 //! the plugin dir still load too. Both are served to the webview through the
 //! `tmvplugin://` scheme. The native halves are compiled in but stay dormant
 //! until a package with their id is installed.
+//!
+//! Packages can also carry a sandboxed WebAssembly module that opens new
+//! file formats or reads vendor metadata (see [`registry`] and
+//! `docs/format-plugins.md`); that is how Zeiss CZI and SmartSEM support
+//! ship, so no vendor format code lives in the core.
 
 #[cfg(feature = "recorder")]
 mod mp4;
 pub mod package;
+pub mod recipe;
 #[cfg(feature = "recorder")]
 mod recorder;
+pub mod registry;
 mod smartsem;
+pub mod wasm;
 mod zen;
 
 use std::collections::HashMap;
@@ -83,6 +91,8 @@ pub struct PluginScan {
 
 #[tauri::command]
 pub fn plugin_scan<R: Runtime>(app: AppHandle<R>, plugins: State<'_, Plugins>) -> PluginScan {
+    // A reload may follow files copied into the folder by hand.
+    registry::Registry::global().invalidate();
     let mut user = vec![];
     let mut packages = vec![];
     if let Some(dir) = &plugins.dir {
@@ -151,16 +161,27 @@ pub async fn pick_plugin_package(app: AppHandle) -> Option<String> {
 pub async fn plugin_install(app: AppHandle, plugins: State<'_, Plugins>, path: String) -> Result<Value, String> {
     let dir = plugins.dir()?.to_path_buf();
     let version = app_version(&app);
-    tauri::async_runtime::spawn_blocking(move || package::install(&dir, Path::new(&path), &version))
-        .await
-        .map_err(|e| e.to_string())?
-        .map(|m| m.raw)
-        .map_err(|e| format!("{e:#}"))
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        package::install_checked(&dir, Path::new(&path), &version, registry::validate_package)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    registry::Registry::global().invalidate();
+    res.map(|m| m.raw).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub fn plugin_uninstall(plugins: State<'_, Plugins>, id: String) -> Result<(), String> {
-    package::uninstall(plugins.dir()?, &id).map_err(|e| format!("{e:#}"))
+    let res = package::uninstall(plugins.dir()?, &id).map_err(|e| format!("{e:#}"));
+    registry::Registry::global().invalidate();
+    res
+}
+
+/// Tells the backend which plugins the user switched off ("plugins.disabled"
+/// in the UI), so format and metadata plugins follow the same switches.
+#[tauri::command]
+pub fn plugin_set_disabled(ids: Vec<String>) -> Result<(), String> {
+    registry::Registry::global().set_disabled(ids).map_err(|e| format!("{e:#}"))
 }
 
 /// Shows the user plugin folder in the file manager.
