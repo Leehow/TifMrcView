@@ -251,7 +251,7 @@ fn wrapper(names: &[String]) -> String {
     }
 }
 
-fn unique_tmp(dir: &Path, tag: &str, id: &str) -> PathBuf {
+pub(crate) fn unique_tmp(dir: &Path, tag: &str, id: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     dir.join(format!(".{tag}-{id}-{}-{nanos}", std::process::id()))
 }

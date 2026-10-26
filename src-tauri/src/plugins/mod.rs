@@ -18,6 +18,7 @@
 
 #[cfg(feature = "recorder")]
 mod mp4;
+pub mod market;
 pub mod package;
 pub mod recipe;
 #[cfg(feature = "recorder")]
@@ -27,12 +28,12 @@ pub mod wasm;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::Value;
 use tauri::http::{header, Response, StatusCode};
-use tauri::{AppHandle, Manager, Runtime, State, UriSchemeContext};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, UriSchemeContext};
 
 /// Where 插件市场 points when the updater endpoint gives no hint.
 const MARKET_URL: &str = "https://tifmrcview.com/tifmrcview/plugins/";
@@ -222,6 +223,84 @@ pub fn open_market<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// The market's `plugins.json`, fetched once per session.
+#[derive(Default)]
+pub struct MarketCache(Mutex<Option<Value>>);
+
+fn market_base<R: Runtime>(app: &AppHandle<R>) -> String {
+    market_url(app.config().plugins.0.get("updater"))
+}
+
+fn user_agent<R: Runtime>(app: &AppHandle<R>) -> String {
+    format!("TifMrcView/{}", app_version(app))
+}
+
+/// The market's packages and whether each is installed, up to date or
+/// needs a newer app. The list is cached unless `refresh` is set.
+#[tauri::command]
+pub async fn plugin_market_list(
+    app: AppHandle,
+    plugins: State<'_, Plugins>,
+    cache: State<'_, MarketCache>,
+    refresh: Option<bool>,
+) -> Result<Vec<market::Listed>, String> {
+    let cached = if refresh == Some(true) { None } else { cache.0.lock().unwrap().clone() };
+    let index = match cached {
+        Some(i) => i,
+        None => {
+            let url = format!("{}plugins.json", market_base(&app));
+            let bytes = market::http_get(url, market::MAX_INDEX, true, &user_agent(&app))
+                .await
+                .map_err(|e| format!("{e:#}"))?;
+            let index = market::parse_index(&bytes).map_err(|e| format!("{e:#}"))?;
+            *cache.0.lock().unwrap() = Some(index.clone());
+            index
+        }
+    };
+    let dir = plugins.dir.clone();
+    let version = app_version(&app);
+    tauri::async_runtime::spawn_blocking(move || market::list(&index, dir.as_deref(), &version))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct MarketInstalled {
+    manifest: Value,
+    /// Label of the window that asked; it reloads if the plugin was loaded.
+    origin: String,
+}
+
+/// Downloads `id` from the official market, checks it against the index
+/// (size, SHA-256, minAppVersion) and installs it like 加载插件… does. Every
+/// window then gets a `plugin-installed` event to load it.
+#[tauri::command]
+pub async fn plugin_install_from_market(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    plugins: State<'_, Plugins>,
+    cache: State<'_, MarketCache>,
+    id: String,
+) -> Result<Value, String> {
+    if !package::valid_id(&id) {
+        return Err(format!("插件 id 不对：{id}"));
+    }
+    let dir = plugins.dir()?.to_path_buf();
+    let version = app_version(&app);
+    let ua = user_agent(&app);
+    let fetch = |url, max| market::http_get(url, max, true, &ua);
+    let (index, entry, bytes) =
+        market::download(fetch, &market_base(&app), &id, &version).await.map_err(|e| format!("{e:#}"))?;
+    *cache.0.lock().unwrap() = Some(index);
+    let res = tauri::async_runtime::spawn_blocking(move || market::install_bytes(&dir, &entry, &bytes, &version))
+        .await
+        .map_err(|e| e.to_string())?;
+    registry::Registry::global().invalidate();
+    let m = res.map_err(|e| format!("{e:#}"))?;
+    let _ = app.emit("plugin-installed", MarketInstalled { manifest: m.raw.clone(), origin: window.label().into() });
+    Ok(m.raw)
 }
 
 /// Serves the user plugin folder: `tmvplugin://localhost/<file>.js` (loose
