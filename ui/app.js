@@ -225,6 +225,7 @@ async function openPath(path, force = false, series = 0) {
     renderMeta();
     // Keep the zoom when flipping through images of the same size.
     if (sameSize) {
+      clampView();
       draw();
       requestRender();
     } else {
@@ -776,6 +777,7 @@ function resizeCanvas() {
   const r = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(r.width * dpr));
   canvas.height = Math.max(1, Math.round(r.height * dpr));
+  if (S.info) clampView();
   draw();
   requestRender();
 }
@@ -783,6 +785,21 @@ function resizeCanvas() {
 function cssSize() {
   const r = canvas.getBoundingClientRect();
   return { cw: r.width, ch: r.height };
+}
+
+function clampView() {
+  if (!S.info) return;
+  const { cw, ch } = cssSize();
+  const [x, y, w, h] = bounds();
+  const dpr = window.devicePixelRatio || 1;
+  const fitScale = Math.min(cw / w, ch / h);
+  const minScale = Math.min(fitScale, 1 / dpr) / 2;
+  S.view.scale = Math.min(64, Math.max(minScale, S.view.scale));
+  const hw = cw / 2 / S.view.scale;
+  const hh = ch / 2 / S.view.scale;
+  // Centre small images; keep larger ones covering the canvas.
+  S.view.cx = w <= hw * 2 ? x + w / 2 : Math.min(x + w - hw, Math.max(x + hw, S.view.cx));
+  S.view.cy = h <= hh * 2 ? y + h / 2 : Math.min(y + h - hh, Math.max(y + hh, S.view.cy));
 }
 
 function fit() {
@@ -798,7 +815,8 @@ function fit() {
 
 function zoomBy(k) {
   if (!S.info) return;
-  S.view.scale = Math.min(64, Math.max(0.005, S.view.scale * k));
+  S.view.scale *= k;
+  clampView();
   draw();
   requestRender();
 }
@@ -806,6 +824,7 @@ function zoomBy(k) {
 function oneToOne() {
   if (!S.info) return;
   S.view.scale = 1 / (window.devicePixelRatio || 1);
+  clampView();
   draw();
   requestRender();
 }
@@ -1984,6 +2003,7 @@ canvas.addEventListener("pointermove", (e) => {
   if (op.kind === "pan") {
     S.view.cx = op.cx - (e.clientX - op.x) / S.view.scale;
     S.view.cy = op.cy - (e.clientY - op.y) / S.view.scale;
+    clampView();
     draw();
     requestRender();
     return;
@@ -2109,12 +2129,16 @@ canvas.addEventListener(
     const mx = e.clientX - r.left;
     const my = e.clientY - r.top;
     const { cw, ch } = cssSize();
-    const ix = S.view.cx + (mx - cw / 2) / S.view.scale;
-    const iy = S.view.cy + (my - ch / 2) / S.view.scale;
+    const [x, y, w, h] = bounds();
+    const ix = Math.min(x + w, Math.max(x, S.view.cx + (mx - cw / 2) / S.view.scale));
+    const iy = Math.min(y + h, Math.max(y, S.view.cy + (my - ch / 2) / S.view.scale));
     const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0025));
-    S.view.scale = Math.min(64, Math.max(0.005, S.view.scale * k));
+    S.view.scale *= k;
+    // Use the constrained scale when keeping the anchor in place.
+    clampView();
     S.view.cx = ix - (mx - cw / 2) / S.view.scale;
     S.view.cy = iy - (my - ch / 2) / S.view.scale;
+    clampView();
     draw();
     requestRender();
   },
