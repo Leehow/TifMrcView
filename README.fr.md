@@ -121,7 +121,7 @@ Quelques secondes après le démarrage, l'application vérifie discrètement `ht
 
 ## Installation
 
-Téléchargez depuis la page Releases du dépôt ou depuis la [page de téléchargement](https://tifmrcview.com/tifmrcview/#download) :
+Téléchargez depuis le site officiel **[tifmrcview.com/tifmrcview](https://tifmrcview.com/tifmrcview/#download)**. Les nouvelles versions sortent souvent et sont publiées uniquement là (pas de GitHub Releases) ; l'application se met aussi à jour depuis ce site :
 
 - **macOS** (10.15 ou plus récent) : `TifMrcView_x.y.z_universal.dmg` (Intel et Apple silicon), à glisser dans « Applications ». Comme l'application n'a pas de signature de développeur Apple, le premier lancement est bloqué : allez dans « Réglages Système → Confidentialité et sécurité » et cliquez sur « Ouvrir quand même », ou exécutez `xattr -dr com.apple.quarantine /Applications/TifMrcView.app` dans un terminal. Au premier démarrage, TifMrcView se définit comme application par défaut pour .tif/.tiff/.mrc.
 - **Windows** : `TifMrcView_x.y.z_x64-setup.exe`, double-cliquez pour installer (aucun droit administrateur requis). Le programme d'installation enregistre les associations .tif/.tiff/.mrc ; si vous aviez choisi manuellement un autre programme pour .tif (par exemple « Photos »), Windows interdit aux logiciels de le modifier en silence : cliquez sur « Définir par défaut » dans TifMrcView, ce qui ouvre la page des paramètres système, et choisissez-y TifMrcView.

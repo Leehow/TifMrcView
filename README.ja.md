@@ -121,7 +121,7 @@ TifMrcView.register({
 
 ## インストール
 
-リポジトリの Releases ページまたは[ダウンロードページ](https://tifmrcview.com/tifmrcview/#download)からダウンロードします。
+公式サイト **[tifmrcview.com/tifmrcview](https://tifmrcview.com/tifmrcview/#download)** からダウンロードしてください。更新が頻繁なため新しいバージョンは公式サイトでのみ公開しています（GitHub Releases は使いません）。アプリも同じサイトから自動更新されます。
 
 - **macOS**（10.15 以降）：`TifMrcView_x.y.z_universal.dmg`（Intel と Apple シリコン共通）。「アプリケーション」にドラッグします。Apple の開発者署名がないため、初回起動はブロックされます。「システム設定 → プライバシーとセキュリティ」で「このまま開く」をクリックするか、ターミナルで `xattr -dr com.apple.quarantine /Applications/TifMrcView.app` を実行してください。初回起動時に、TifMrcView は自身を .tif/.tiff/.mrc の既定アプリに設定します。
 - **Windows**：`TifMrcView_x.y.z_x64-setup.exe`。ダブルクリックでインストールします（管理者権限は不要）。インストーラーは .tif/.tiff/.mrc の関連付けを登録します。以前 .tif に別のプログラム（たとえば「フォト」）を手動で選んでいた場合、Windows はソフトウェアによる無断変更を許可しないため、TifMrcView の「既定にする」をクリックしてシステム設定ページを開き、そこで TifMrcView を選択してください。

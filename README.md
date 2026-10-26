@@ -121,7 +121,7 @@ A few seconds after start, the app silently checks `https://tifmrcview.com/tifmr
 
 ## Install
 
-Download from the Releases page of the repository or from the [download page](https://tifmrcview.com/tifmrcview/#download):
+Download from the official site, **[tifmrcview.com/tifmrcview](https://tifmrcview.com/tifmrcview/#download)**. New versions come out often and are published only there (GitHub Releases are not used); the app also updates itself from the same site:
 
 - **macOS** (10.15 or newer): `TifMrcView_x.y.z_universal.dmg` (Intel and Apple silicon), drag it into "Applications". Because the app has no Apple developer signature, the first launch is blocked: go to "System Settings → Privacy & Security" and click "Open Anyway", or run `xattr -dr com.apple.quarantine /Applications/TifMrcView.app` in a terminal. On first start TifMrcView makes itself the default app for .tif/.tiff/.mrc.
 - **Windows**: `TifMrcView_x.y.z_x64-setup.exe`, double-click to install (no administrator rights needed). The installer registers the .tif/.tiff/.mrc associations; if you have manually chosen another program for .tif before (for example "Photos"), Windows does not let software change that silently — click "Set as default" in TifMrcView, which opens the system settings page, and pick TifMrcView there.

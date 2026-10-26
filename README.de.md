@@ -121,7 +121,7 @@ Wenige Sekunden nach dem Start prüft die App im Hintergrund `https://tifmrcview
 
 ## Installation
 
-Laden Sie die Dateien von der Releases-Seite des Repositorys oder von der [Download-Seite](https://tifmrcview.com/tifmrcview/#download) herunter:
+Laden Sie TifMrcView von der offiziellen Website **[tifmrcview.com/tifmrcview](https://tifmrcview.com/tifmrcview/#download)** herunter. Neue Versionen erscheinen häufig und nur dort (GitHub Releases werden nicht verwendet); die App aktualisiert sich ebenfalls von dort:
 
 - **macOS** (10.15 oder neuer): `TifMrcView_x.y.z_universal.dmg` (Intel und Apple Silicon), in „Programme“ ziehen. Da die App keine Apple-Entwicklersignatur hat, wird der erste Start blockiert: Gehen Sie zu „Systemeinstellungen → Datenschutz & Sicherheit“ und klicken Sie auf „Trotzdem öffnen“, oder führen Sie im Terminal `xattr -dr com.apple.quarantine /Applications/TifMrcView.app` aus. Beim ersten Start macht sich TifMrcView selbst zum Standardprogramm für .tif/.tiff/.mrc.
 - **Windows**: `TifMrcView_x.y.z_x64-setup.exe`, per Doppelklick installieren (keine Administratorrechte nötig). Das Installationsprogramm registriert die Zuordnungen für .tif/.tiff/.mrc; falls Sie früher für .tif manuell ein anderes Programm gewählt haben (z. B. „Fotos“), erlaubt Windows es Software nicht, das stillschweigend zu ändern – klicken Sie in TifMrcView auf „Als Standard festlegen“, wodurch die Systemeinstellungen geöffnet werden, und wählen Sie dort TifMrcView aus.
