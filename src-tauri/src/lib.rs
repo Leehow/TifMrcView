@@ -646,9 +646,15 @@ pub fn run() {
                 // desktop file, macOS Info.plist). Development builds and
                 // AppImages are not installed, so register them at runtime.
                 #[cfg(any(windows, target_os = "linux"))]
-                if cfg!(debug_assertions) || (cfg!(target_os = "linux") && app.env().appimage.is_some()) {
-                    if let Err(e) = app.deep_link().register_all() {
-                        eprintln!("could not register tifmrcview:// links: {e}");
+                {
+                    #[cfg(target_os = "linux")]
+                    let unpacked = cfg!(debug_assertions) || app.env().appimage.is_some();
+                    #[cfg(windows)]
+                    let unpacked = cfg!(debug_assertions);
+                    if unpacked {
+                        if let Err(e) = app.deep_link().register_all() {
+                            eprintln!("could not register tifmrcview:// links: {e}");
+                        }
                     }
                 }
             }
