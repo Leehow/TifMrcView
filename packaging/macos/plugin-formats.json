@@ -1,0 +1,16 @@
+{
+  "dm3": "Gatan DigitalMicrograph 3",
+  "dm4": "Gatan DigitalMicrograph 4",
+  "emi": "FEI TIA microscopy",
+  "emd": "Velox electron microscopy",
+  "zvi": "Zeiss AxioVision",
+  "vsi": "Olympus cellSens",
+  "ets": "Olympus cellSens tile data",
+  "oif": "Olympus FluoView",
+  "lei": "Leica confocal dataset",
+  "ndpi": "Hamamatsu NanoZoomer",
+  "svs": "Aperio whole-slide image",
+  "ids": "Image Cytometry Standard pixel data",
+  "mvd2": "Volocity dataset",
+  "spi": "SPIDER electron microscopy"
+}

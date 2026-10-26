@@ -82,7 +82,9 @@
         "ext": [
           "rec",
           "st",
-          "map"
+          "map",
+          "ali",
+          "preali"
         ],
         "name": "MRC Image (alternate extensions)",
         "description": "MRC Electron Microscopy Image",
@@ -204,6 +206,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
+      "infoPlist": "target/quicklook.noindex/Info.plist",
       "signingIdentity": "-",
       "files": {
         "PlugIns/TmvThumbnail.appex": "target/quicklook.noindex/TmvThumbnail.appex",

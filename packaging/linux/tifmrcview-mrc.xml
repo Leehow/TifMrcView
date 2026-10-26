@@ -7,6 +7,8 @@
     <glob pattern="*.rec"/>
     <glob pattern="*.st"/>
     <glob pattern="*.map"/>
+    <glob pattern="*.ali"/>
+    <glob pattern="*.preali"/>
   </mime-type>
   <mime-type type="application/x-czi">
     <comment>Zeiss CZI microscopy image</comment>

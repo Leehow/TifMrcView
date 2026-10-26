@@ -1,6 +1,8 @@
 ; Per-user shell extension. Keep the previous provider for uninstall/upgrade.
 !define TMV_THUMB_CLSID "{926e1d8f-eb25-48d9-a251-9d27bf165d8a}"
 !define TMV_THUMB_SLOT "{e357fccd-a995-4576-b01f-234630154e96}"
+!define TMV_PLUGIN_RECORD "Software\com.leehow.tifmrcview\PluginFormats"
+!define TMV_PLUGIN_PROGID "MRC Image"
 !define TMV_THUMB_BACKUP "Software\com.leehow.tifmrcview\ThumbnailBackup"
 
 !macro TMV_REGISTER_EXT EXT
@@ -32,6 +34,8 @@
   !insertmacro ${ACTION} rec
   !insertmacro ${ACTION} st
   !insertmacro ${ACTION} map
+  !insertmacro ${ACTION} ali
+  !insertmacro ${ACTION} preali
   !insertmacro ${ACTION} czi
   !insertmacro ${ACTION} lsm
   !insertmacro ${ACTION} lif
@@ -40,6 +44,41 @@
   !insertmacro ${ACTION} oib
   !insertmacro ${ACTION} oir
   !insertmacro ${ACTION} ims
+!macroend
+
+; Runtime journals only entries it introduced. Do not remove whole extension keys.
+!macro TMV_UNREGISTER_PLUGINS
+  Push $2
+  Push $3
+  Push $4
+  ${Do}
+    EnumRegKey $2 HKCU "${TMV_PLUGIN_RECORD}" 0
+    ${If} $2 == ""
+      ${ExitDo}
+    ${EndIf}
+    ReadRegStr $3 HKCU "${TMV_PLUGIN_RECORD}\$2" "OpenWith"
+    ${If} $3 == "1"
+      DeleteRegValue HKCU "Software\Classes\.$2\OpenWithProgids" "${TMV_PLUGIN_PROGID}"
+    ${EndIf}
+    ReadRegStr $3 HKCU "${TMV_PLUGIN_RECORD}\$2" "Thumbnail"
+    ${If} $3 == "1"
+      ReadRegStr $3 HKCU "Software\Classes\.$2\ShellEx\${TMV_THUMB_SLOT}" ""
+      ${If} $3 == "${TMV_THUMB_CLSID}"
+        ClearErrors
+        ReadRegStr $4 HKCU "${TMV_PLUGIN_RECORD}\$2" "ThumbnailBackup"
+        ${If} ${Errors}
+          DeleteRegValue HKCU "Software\Classes\.$2\ShellEx\${TMV_THUMB_SLOT}" ""
+        ${Else}
+          WriteRegStr HKCU "Software\Classes\.$2\ShellEx\${TMV_THUMB_SLOT}" "" "$4"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    DeleteRegKey HKCU "${TMV_PLUGIN_RECORD}\$2"
+  ${Loop}
+  DeleteRegKey /ifempty HKCU "${TMV_PLUGIN_RECORD}"
+  Pop $4
+  Pop $3
+  Pop $2
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -71,6 +110,7 @@
   Push $0
   Push $1
   SetRegView 64
+  !insertmacro TMV_UNREGISTER_PLUGINS
   !insertmacro TMV_EACH_EXT TMV_UNREGISTER_EXT
   DeleteRegKey HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}"
   DeleteRegKey /ifempty HKCU "${TMV_THUMB_BACKUP}"

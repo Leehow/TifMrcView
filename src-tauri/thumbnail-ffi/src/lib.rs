@@ -75,6 +75,12 @@ mod tests {
     #[test]
     fn allocation_round_trip_and_error_outputs() {
         let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = std::ffi::CString::new(dir.path().join("plugins").to_str().unwrap()).unwrap();
+        // Isolate discovery from plugins installed in the developer account.
+        assert_eq!(unsafe { tmv_configure_plugins(plugin_dir.as_ptr()) }, 0);
+        let missing_plugin = dir.path().join("missing.dm4");
+        std::fs::write(&missing_plugin, b"no installed decoder").unwrap();
+        let missing_plugin = std::ffi::CString::new(missing_plugin.to_str().unwrap()).unwrap();
         let path = dir.path().join("test.mrc");
         let mut bytes = vec![0u8; 1024];
         for (off, value) in [(0, 2i32), (4, 2), (8, 1), (12, 6)] {
@@ -104,6 +110,9 @@ mod tests {
             assert_eq!((w, h, len), (0, 0, 0));
             assert!(data.is_null());
             tmv_free(data, len);
+            assert_eq!(tmv_thumbnail_rgba(missing_plugin.as_ptr(), 256, &mut w, &mut h, &mut data, &mut len), 1);
+            assert_eq!((w, h, len), (0, 0, 0));
+            assert!(data.is_null());
         }
     }
 }

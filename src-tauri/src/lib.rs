@@ -8,6 +8,8 @@ mod mem;
 #[cfg(all(test, feature = "desktop"))]
 mod ipc_config_tests;
 pub mod plugins;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod plugin_assoc;
 pub mod render;
 pub mod reslice;
 #[cfg(feature = "desktop")]
