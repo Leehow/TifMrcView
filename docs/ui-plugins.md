@@ -25,18 +25,58 @@ loader, synchronous API and full privileges. WebAssembly format plugins retain
 their existing sandbox and ABI.
 
 Each API 2 plugin runs in a hidden iframe with `sandbox="allow-scripts"`
-and an opaque origin. The reserved `tmvplugin://localhost/__sandbox/<id>`
-route serves a core-owned frame page. Its CSP starts with `default-src 'none'`
-and permits scripts only from the core runtime and that package's `main` URL.
-There are no inline scripts or eval. The parent CSP permits frame navigation
-only under the reserved sandbox route. This avoids srcdoc's inherited CSP and
-opaque-origin `self` problems without weakening the app's script policy.
-The frame cannot access the parent DOM, Tauri globals, network connections,
-cookies, localStorage or IndexedDB. The runtime connects first and only then
-loads the plugin script. If the WebView injects Tauri globals into the frame,
-the runtime fails closed before loading third-party code. Such a WebView needs
-a native platform fix before API 2 plugins can run; this PR does not weaken
-the sandbox to support it.
+and a host-built `srcdoc` document (`about:srcdoc`, opaque origin). It inherits
+the parent's CSP. A meta CSP at the start of the document further restricts it
+to `default-src 'none'` and exactly two script URLs: the core runtime at
+`tmvplugin://localhost/__sandbox/runtime.js` and that package's main script.
+Windows uses `http://tmvplugin.localhost` for those script URLs. There are no
+inline scripts or eval. In particular, `connect-src` falls back to `'none'`, so
+a plugin cannot fetch its own or another plugin's files, despite the parent
+being allowed to fetch tmvplugin resources. Other plugins' scripts are also
+outside the child's script allowlist. The parent sets `frame-src 'none'`: srcdoc
+is allowed, but subsequent URL navigation (including to privileged app or
+registered-protocol pages) is blocked. The old `__sandbox/<id>` HTML endpoint
+and `frame.html` template are removed; only the reserved runtime script is served.
+The MessageChannel payload, permission, size and lifecycle checks are unchanged.
+
+The frame cannot access the parent DOM, cookies, localStorage or IndexedDB.
+The runtime connects first and only then loads the plugin script. WebView2
+injects Tauri startup scripts into subframes regardless of its main-frame-only
+setting (`wry-0.57.1/src/lib.rs:1029`, `src/webview2/mod.rs:516`). The runtime
+removes configurable globals best-effort and tolerates native nonconfigurable
+ones. This cleanup does not grant or revoke native authority.
+
+**Native IPC boundary (stock Tauri 2.12.5):** `is_local_url` in
+`tauri/src/webview/mod.rs:1960` trusts registered custom protocols. Therefore
+serving the frame document from tmvplugin would incorrectly make its native IPC
+Local. Its scripts may come from tmvplugin; its document must remain srcdoc.
+`about:srcdoc` is not the app URL or a registered protocol. In `on_message`
+(`webview/mod.rs:2044-2105`), it is Remote: app commands require an explicit
+remote capability, and core/plugin commands require matching capabilities too.
+Our capabilities have no `remote` entries and no app ACL manifest grants access.
+The Rust regression `ipc_config_tests` checks source and compiled capability
+configuration plus the generated manifest and the frame navigation policy.
+No Tauri fork, dependency patch or native transport replacement is used; the
+main UI retains stock fetch IPC and its postMessage fallback.
+
+Fetch IPC takes the browser-controlled `Origin` header
+(`tauri/src/ipc/protocol.rs:486`); an opaque frame's `Origin: null` is not a valid
+URL and is rejected before dispatch, even if CSP allowed the request. Native
+postMessage uses the WebView2 event's `Source` (`wry/src/webview2/mod.rs:979`),
+not a source claimed in the JSON body. Wry registers a webview-level
+`WebMessageReceived` handler, not frame-level handlers; whether an iframe message
+is delivered at all must be recorded on the real Windows runtime. If delivered,
+its source must remain non-local and app/core requests must fail ACL checks.
+
+There is one stock-Tauri exception to a blanket no-IPC claim: the internal
+`plugin:__TAURI_CHANNEL__|fetch` command bypasses the general ACL branch
+(`webview/mod.rs:2080`). The public plugin bridge exposes no Tauri channels.
+Do not infer that every internal command is ACL-rejected from the config test
+or toolbar label: Windows acceptance must verify frame-message delivery and
+absence of native command execution. On Linux, wry's raw-message adapter reports
+the top URL (`src/webkitgtk/mod.rs:743`); its init scripts are main-frame-only
+(`:826`), so retaining that platform's key separation is also essential. These
+are platform acceptance boundaries, not properties proven by Chromium mocks.
 
 The host verifies the frame's `event.source` at startup and transfers one
 MessageChannel. Subsequent communication uses only that port:
@@ -108,3 +148,52 @@ files; it performs no Internet requests or package installation. `NODE_PATH`
 can point at an existing Playwright package and `TMV_TEST_CHROMIUM` can select
 an already installed Chromium binary if the cached revision differs. This test
 validates browser isolation and the bridge, not native decoding or MP4 encoding.
+
+
+### Native IPC probe (Windows acceptance)
+
+`ui/sandbox/test/probe/` is a manual API 2 fixture (`sandbox-ipc-probe`, only
+`ui` permission). It is not installed or scanned automatically. Close the app,
+copy that directory to `%APPDATA%\com.leehow.tifmrcview\plugins\sandbox-ipc-probe\`
+(the exact plugin directory is available with Open plugin folder in the app),
+then reopen the app and enable **Sandbox native IPC probe**. This development
+copy avoids the market's API 1/signature approval path; use a disposable test
+profile and remove that exact copied directory afterwards.
+
+The expected toolbar label is `inv0 ipc0 wv0 f10 f20 core0`. Hover or click for
+details; the frame console logs the report and whether it captured a valid
+Tauri invoke key. The probe tries injected `invoke('plugin_market_list')`, both
+native postMessage objects, POST to both IPC URL forms, and a core app-version
+command. Any `!` is a native success response and a failure of acceptance.
+When `keyCaptured` is true, raw probes reuse the key from injected invoke,
+so a missing-key rejection cannot mask a valid-key transport bypass. If it is
+false, treat raw probes as weaker evidence; confirm the native request/key in
+a debugger instead of attributing failure to the ACL.
+
+A `0` means unavailable, rejected, or no reply; **it alone does not prove that
+a fire-and-forget postMessage failed to execute**. `postMessage` returns void,
+and stock Tauri evaluates native callbacks in the top frame. For raw `ipc`/`wv`
+probes, use a debugger on wry's `WebMessageReceived` handler and Tauri's
+`Webview::on_message`: record whether the frame message arrives, its native
+`Source`, and any ACL rejection before dispatch. Set a breakpoint in the app's
+`plugin_market_list` handler to confirm the frame did not execute it. Check core
+command dispatch too. There is no custom "native postMessage disabled" diagnostic
+in this design. Record no-event and unavailable separately from an ACL rejection.
+CSP normally blocks fetch probes before transport; that is additional protection,
+not evidence that the Rust parser or ACL ran. Do not weaken shipped CSP to test.
+
+On Windows, confirm the frame console report says `frameUrl: "about:srcdoc"`
+and `frameOrigin: "null"`, not a tmvplugin document URL. Stock Tauri must treat
+any native request that arrives from that frame as non-local. Because internal
+channel fetch has an ACL exception, also verify that frame-origin messages do
+not reach that internal dispatch; do not assume the general app/core ACL proof
+covers it. Run `cargo test --offline --lib` there to guard the actual build's
+capabilities and manifest. Record the Windows and WebView2 versions.
+
+Also verify on the real Windows app: an ordinary API 2 plugin activates, its
+permitted toolbar/state/metadata/export/settings operations work, undeclared
+operations still reject, and other-plugin file reads/scripts remain blocked.
+Check normal main-UI plugin listing/local installation, annotation read/save
+and export, including reload and a secondary window. Native main-window IPC
+fallback remains available. Chromium tests use mocked native transport and
+cannot substitute for native acceptance on Windows, macOS or Linux.

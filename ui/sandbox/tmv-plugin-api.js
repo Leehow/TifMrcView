@@ -105,10 +105,18 @@
       }
     };
     Promise.resolve().then(async () => {
-      // Some WebView versions inject native startup scripts into subframes.
-      // Fail closed BEFORE loading third-party code if that happened. CSP alone
-      // cannot remove a native-injected IPC object (which can be nonconfigurable).
-      if (window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined) throw new Error("Native APIs are exposed in this frame; refusing to load plugin");
+      // WebView2 injects Tauri startup scripts even into opaque sandbox frames.
+      // Best-effort cleanup is only convenience: native properties/references
+      // (notably chrome.webview) may survive. In stock Tauri 2.12.5,
+      // webview/mod.rs:is_local_url/on_message (1960-2100) treats about:srcdoc
+      // as Remote and rejects app/core IPC without a remote capability (we grant
+      // none). ipc/protocol.rs:486 rejects fetch's opaque Origin: null. Wry's
+      // webview2/mod.rs:979 gets native message Source from WebView2, not JS.
+      // Never navigate this frame to tmvplugin: that registered scheme is Local.
+      // Never rely on deleting globals for isolation.
+      for (const name of ["__TAURI__", "__TAURI_INTERNALS__", "ipc"]) {
+        try { delete window[name]; } catch (_) { /* native property */ }
+      }
       await new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.src = document.documentElement.dataset.main;
@@ -126,6 +134,6 @@
   }
   window.addEventListener("message", connect);
   // Connect before fetching any third-party code, so startup failures can be
-  // reported and the native-API guard runs before the plugin's main script.
+  // reported and best-effort native API cleanup runs before the plugin script.
   window.addEventListener("load", () => window.parent.postMessage({ type: "tmv-plugin-ready" }, "*"), { once: true });
 })();
