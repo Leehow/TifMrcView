@@ -1,13 +1,4 @@
 (function () {
-  var FLAGS = {
-    zh: '<rect width="30" height="20" fill="#de2910"/><polygon fill="#ffde00" points="5,2.5 6.2,6.1 10,6.1 6.9,8.3 8.1,11.9 5,9.7 1.9,11.9 3.1,8.3 0,6.1 3.8,6.1" transform="translate(1,1)"/><circle cx="11" cy="2.5" r=".9" fill="#ffde00"/><circle cx="13" cy="4.5" r=".9" fill="#ffde00"/><circle cx="13" cy="7.5" r=".9" fill="#ffde00"/><circle cx="11" cy="9.5" r=".9" fill="#ffde00"/>',
-    en: '<rect width="30" height="20" fill="#012169"/><path d="M0 0L30 20M30 0L0 20" stroke="#fff" stroke-width="4"/><path d="M0 0L30 20M30 0L0 20" stroke="#c8102e" stroke-width="1.6"/><path d="M15 0V20M0 10H30" stroke="#fff" stroke-width="6"/><path d="M15 0V20M0 10H30" stroke="#c8102e" stroke-width="3.4"/>',
-    de: '<rect width="30" height="20" fill="#ffce00"/><rect width="30" height="13.34" fill="#dd0000"/><rect width="30" height="6.67" fill="#000"/>',
-    ja: '<rect width="30" height="20" fill="#fff"/><circle cx="15" cy="10" r="6" fill="#bc002d"/>',
-    es: '<rect width="30" height="20" fill="#aa151b"/><rect y="5" width="30" height="10" fill="#f1bf00"/>',
-    fr: '<rect width="30" height="20" fill="#ef4135"/><rect width="20" height="20" fill="#fff"/><rect width="10" height="20" fill="#0055a4"/>',
-    ru: '<rect width="30" height="20" fill="#d52b1e"/><rect width="30" height="13.34" fill="#0039a6"/><rect width="30" height="6.67" fill="#fff"/>'
-  };
   var NAMES = { zh: '简体中文', en: 'English', de: 'Deutsch', ja: '日本語', es: 'Español', fr: 'Français', ru: 'Русский' };
   var HTML_LANG = { zh: 'zh-CN', en: 'en', de: 'de', ja: 'ja', es: 'es', fr: 'fr', ru: 'ru' };
   var XATTR = '<code>xattr -dr com.apple.quarantine /Applications/TifMrcView.app</code>';
@@ -773,8 +764,6 @@
     }));
   }
 
-  function flag(code) { return '<svg class="flag" viewBox="0 0 30 20">' + FLAGS[code] + '</svg>'; }
-
   function fileLabel(k, f, t) {
     var ext = (f.file.match(/\.(\w+)$/) || [])[1] || '';
     ext = ext.toLowerCase();
@@ -838,7 +827,6 @@
       if (v != null) el.setAttribute(el.hasAttribute('data-i-aria') ? 'aria-label' : 'alt', v);
     });
     var btn = document.querySelector('#lang > button');
-    btn.querySelector('.flag').outerHTML = flag(code);
     btn.querySelector('span').textContent = NAMES[code];
     document.querySelectorAll('#lang li button').forEach(function (b) {
       b.setAttribute('aria-current', b.dataset.lang === code ? 'true' : 'false');
@@ -851,7 +839,7 @@
   var box = document.getElementById('lang');
   var ul = box.querySelector('ul');
   ul.innerHTML = LANGS.map(function (c) {
-    return '<li><button type="button" role="menuitem" data-lang="' + c + '" lang="' + HTML_LANG[c] + '">' + flag(c) + NAMES[c] + '</button></li>';
+    return '<li><button type="button" role="menuitem" data-lang="' + c + '" lang="' + HTML_LANG[c] + '">' + NAMES[c] + '</button></li>';
   }).join('');
   var toggle = box.querySelector(':scope > button');
   toggle.addEventListener('click', function (e) {
