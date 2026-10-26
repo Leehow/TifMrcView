@@ -3,6 +3,8 @@ pub mod formats;
 pub mod imod;
 pub mod image;
 mod mem;
+#[cfg(test)]
+mod ipc_config_tests;
 pub mod plugins;
 pub mod render;
 pub mod reslice;

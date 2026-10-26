@@ -97,6 +97,23 @@ function sandboxPanel(api, desc, send) {
   api.ui.addToolSection(desc.title).append(fragment);
 }
 
+function sandboxDocument(id, main) {
+  const escape = (value) => String(value).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+  const runtime = userPluginUrl("__sandbox/runtime.js");
+  const script = userPluginUrl(`${id}/${main}`);
+  // srcdoc inherits the parent CSP. This additional policy intersects it,
+  // allowing only these two scripts and no connect/fetch (even to tmvplugin).
+  const policy = `default-src 'none'; script-src ${runtime} ${script}; base-uri 'none'; form-action 'none'`;
+  return `<!doctype html><html data-plugin="${escape(id)}" data-main="${escape(script)}"><head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="${escape(policy)}">
+    <title>Plugin sandbox</title>
+    <script src="${escape(runtime)}" defer></script>
+    </head><body></body></html>`;
+}
+
 async function activateSandbox(rec) {
   if (rec.active) return;
   rec.active = true;
@@ -109,11 +126,11 @@ async function activateSandbox(rec) {
   frame.dataset.pluginSandbox = rec.def.id;
   frame.setAttribute("sandbox", "allow-scripts");
   frame.setAttribute("referrerpolicy", "no-referrer");
-  // A protocol-served document does not inherit the parent's script policy.
-  // Its CSP permits only the runtime and this package's main, without inline
-  // scripts/eval. Parent frame-src permits ONLY this reserved route, including
-  // subsequent navigation, so self-navigation cannot turn into network/IPC access.
-  frame.src = userPluginUrl(`__sandbox/${rec.def.id}`);
+  // Keep the document URL non-local to stock Tauri (about:srcdoc). Navigating
+  // to a registered tmvplugin URL would make native postMessage IPC Local even
+  // with an opaque DOM origin. Parent frame-src 'none' blocks URL navigation;
+  // srcdoc itself is permitted and needs no allow-same-origin or inline script.
+  frame.srcdoc = sandboxDocument(rec.def.id, rec.def.main || "index.js");
   const channel = new MessageChannel();
   let disposed = false, selectedPath = null, picking = false, uiCount = 0, inFlight = 0;
   let timer, resolveReady, rejectReady;

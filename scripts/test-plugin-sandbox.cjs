@@ -15,7 +15,6 @@ const sample = JSON.parse(read(path.join(ui, "sandbox/test/sample/plugin.json"))
 const legacy = fs.readdirSync(path.join(root, "plugins")).filter((id) => fs.existsSync(path.join(root, "plugins", id, "plugin.json")))
   .map((id) => JSON.parse(read(path.join(root, "plugins", id, "plugin.json"))));
 const packages = [...legacy, sample].map((manifest) => ({ id: manifest.id, main: manifest.main || "index.js", manifest }));
-const template = read(path.join(ui, "sandbox/frame.html"));
 const conf = JSON.parse(read(path.join(root, "src-tauri/tauri.conf.json")));
 const translations = vm.runInNewContext(read(path.join(ui, "plugins/i18n.js")) + "; ({WORDS, LANGS})", { TifMrcView: { register() {} } });
 let origin, browser;
@@ -32,14 +31,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname.startsWith("/site/")) file = path.join(root, url.pathname);
   else if (url.pathname === "/tmvplugin/__sandbox/runtime.js") file = path.join(ui, "sandbox/tmv-plugin-api.js");
   else if (url.pathname.startsWith("/tmvplugin/__sandbox/")) {
-    const id = url.pathname.slice("/tmvplugin/__sandbox/".length);
-    const pkg = packages.find((p) => p.id === id && p.manifest.apiVersion === 2);
-    if (!pkg) { res.writeHead(404).end(); return; }
-    res.setHeader("Content-Type", "text/html");
-    res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
-    res.end(template.replaceAll("__TMV_ID__", id).replaceAll("__TMV_MAIN__", `${id}/${pkg.main}`)
-      .replaceAll("__TMV_ORIGIN__", origin + "/tmvplugin"));
-    return;
+    res.writeHead(404).end(); return;
   } else if (url.pathname.startsWith("/tmvplugin/")) {
     const rel = url.pathname.slice("/tmvplugin/".length);
     file = rel.startsWith(sample.id + "/") ? path.join(ui, "sandbox/test/sample", rel.slice(sample.id.length + 1)) : path.join(root, "plugins", rel);
@@ -51,8 +43,6 @@ const server = http.createServer((req, res) => {
     // Same policy as production, with custom-protocol URLs mapped to the test
     // server. In particular, do NOT add unsafe-inline to script-src.
     res.setHeader("Content-Security-Policy", conf.app.security.csp
-      .replaceAll("tmvplugin://localhost/__sandbox/", origin + "/tmvplugin/__sandbox/")
-      .replaceAll("http://tmvplugin.localhost/__sandbox/", origin + "/tmvplugin/__sandbox/")
       .replaceAll("tmvplugin:", origin).replaceAll("http://tmvplugin.localhost", origin));
   }
   let body = fs.readFileSync(file);
@@ -78,14 +68,7 @@ const server = http.createServer((req, res) => {
     return route.continue();
   });
   await page.addInitScript(({ packages }) => {
-    if (window.top !== window) {
-      // Simulate a WebView that injects native APIs into child frames. The
-      // core runtime must stop before even fetching the untrusted main script.
-      if (new URLSearchParams(location.search).has("native-leak")) {
-        Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke() {} } });
-      }
-      return;
-    }
+    if (window.top !== window) return;
     localStorage.setItem("update.auto", "false");
     localStorage.setItem("plugin.i18n.lang", '"zh"');
     window.mockWrites = [];
@@ -174,7 +157,35 @@ const server = http.createServer((req, res) => {
   await page.locator("#update-check").click();
   await page.waitForFunction(() => document.getElementById("update-status").textContent === "已是最新版本");
   await page.locator("#plugin-close").click();
-  const frame = page.frames().find((f) => f.url().includes("/__sandbox/sandbox-sample"));
+  const frame = await page.locator('[data-plugin-sandbox="sandbox-sample"]').elementHandle().then((el) => el.contentFrame());
+  assert.equal(await frame.evaluate(() => location.href), "about:srcdoc", "sandbox document must have a non-local URL");
+  assert.equal(await frame.evaluate(() => location.origin), "null");
+  assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').getAttribute("src"), null);
+  const pluginReadsBefore = requests.filter((url) => url.startsWith("/tmvplugin/")).length;
+  const crossPlugin = await frame.evaluate(async (origin) => {
+    const blocked = async (url) => { try { await fetch(url); return false; } catch (_) { return true; } };
+    const ownFetch = await blocked(origin + "/tmvplugin/sandbox-sample/index.js");
+    const otherFetch = await blocked(origin + "/tmvplugin/recorder/index.js");
+    const otherScript = await new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = origin + "/tmvplugin/recorder/index.js";
+      script.onerror = () => resolve(true);
+      script.onload = () => resolve(false);
+      document.head.append(script);
+    });
+    return { ownFetch, otherFetch, otherScript };
+  }, origin);
+  assert.deepEqual(crossPlugin, { ownFetch: true, otherFetch: true, otherScript: true });
+  assert.equal(requests.filter((url) => url.startsWith("/tmvplugin/")).length, pluginReadsBefore, "narrowed child CSP must block reads/scripts before transport");
+  const escaped = await page.evaluate(() => {
+    const html = sandboxDocument('demo"<&', 'a"<&.js');
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return { id: doc.documentElement.dataset.plugin, main: doc.documentElement.dataset.main, scripts: doc.scripts.length, policy: doc.querySelector('meta[http-equiv="Content-Security-Policy"]').content };
+  });
+  assert.equal(escaped.id, 'demo"<&');
+  assert(escaped.main.endsWith("/demo%22%3C%26/a%22%3C%26.js"));
+  assert.equal(escaped.scripts, 1);
+  assert(escaped.policy.startsWith("default-src 'none'; script-src "));
   const failures = await frame.evaluate(async () => {
     const reject = async (fn) => { try { await fn(); return "ALLOWED"; } catch (e) { return e.message; } };
     return {
@@ -223,7 +234,7 @@ const server = http.createServer((req, res) => {
   assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').count(), 0);
   assert.equal(await page.locator('[data-plugin="sandbox-sample"]').count(), 0);
   await page.evaluate(async () => { await activatePlugin(pluginHost.plugins.get("sandbox-sample")); });
-  const restarted = page.frames().find((f) => f.url().includes("/__sandbox/sandbox-sample"));
+  const restarted = await page.locator('[data-plugin-sandbox="sandbox-sample"]').elementHandle().then((el) => el.contentFrame());
   await restarted.evaluate(async () => { await testApp.settings.set("answer", 42); });
   assert.equal(await restarted.evaluate(() => testApp.settings.get("answer", 0)), 42);
   assert.equal(await page.evaluate(() => localStorage.getItem("plugin.sandbox-sample.answer")), "42");
@@ -233,7 +244,7 @@ const server = http.createServer((req, res) => {
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.notEqual(await page.locator("#toast").textContent(), "forged");
   // Parent frame-src also blocks a plugin navigating itself to another origin
-  // or to the app's privileged document (neither is an allowed sandbox route).
+  // or to the app's privileged document (frame-src forbids URL navigation).
   await restarted.evaluate(() => { location.href = "https://example.com/self-navigation"; });
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
   const rootsBefore = requests.filter((url) => url === "/").length;
@@ -255,18 +266,30 @@ const server = http.createServer((req, res) => {
   assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').count(), 1);
   assert.equal(await page.evaluate(() => pluginHost.plugins.get("sandbox-sample").error), null);
   const mainsBefore = requests.filter((url) => url === "/tmvplugin/sandbox-sample/index.js").length;
+  // Inject only into subsequent frames, after the normal isolation checks.
+  // Chromium mocks the rejection; it cannot validate native Tauri's decision.
+  await page.addInitScript(() => {
+    if (window.top === window) return;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: Object.freeze({
+      invoke: async () => { throw new Error("IPC denied: no remote capability"); },
+    }) });
+    window.__TAURI__ = { core: window.__TAURI_INTERNALS__ };
+  });
   await page.evaluate(async () => {
     const rec = pluginHost.plugins.get("sandbox-sample");
     deactivatePlugin(rec);
-    // Test transport only: point the existing loader at the same reserved
-    // route with the simulated native-injection flag.
-    const originalUrl = userPluginUrl;
-    userPluginUrl = (path) => originalUrl(path) + (path.startsWith("__sandbox/") ? "?native-leak" : "");
-    try { await activatePlugin(rec); } finally { userPluginUrl = originalUrl; }
+    await activatePlugin(rec);
   });
-  assert.match(await page.evaluate(() => pluginHost.plugins.get("sandbox-sample").error), /Native APIs are exposed/);
-  assert.equal(requests.filter((url) => url === "/tmvplugin/sandbox-sample/index.js").length, mainsBefore);
-  assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').count(), 0);
+  assert.equal(await page.evaluate(() => pluginHost.plugins.get("sandbox-sample").error), null);
+  assert.equal(requests.filter((url) => url === "/tmvplugin/sandbox-sample/index.js").length, mainsBefore + 1);
+  assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').count(), 1);
+  const injected = await page.locator('[data-plugin-sandbox="sandbox-sample"]').elementHandle().then((el) => el.contentFrame());
+  assert.equal(await injected.evaluate(() => window.__TAURI__ === undefined), true, "configurable globals are removed");
+  assert.equal(await injected.evaluate(async () => {
+    try { await window.__TAURI_INTERNALS__.invoke("plugin_market_list"); return false; }
+    catch (e) { return /IPC denied/.test(String(e)); }
+  }), true, "surviving nonconfigurable globals must not prevent activation");
+  console.log("PASS: simulated WebView2 injection permits API 2 activation with surviving native APIs denied by mock backend");
   // Exercise the real confirmation UI with mocked native transport only.
   // Plugin loading itself was exercised above; record successful installs here
   // to avoid reloading the page when an installed fixture is updated.
@@ -384,6 +407,8 @@ const server = http.createServer((req, res) => {
   console.log("PASS: website API 2 permissions in Chinese/English with English fallback");
   assert.deepEqual(errors, [], "Unexpected uncaught errors");
   assert(requests.includes("/tmvplugin/__sandbox/runtime.js"));
+  assert(!requests.some((url) => url.startsWith("/tmvplugin/__sandbox/") && url !== "/tmvplugin/__sandbox/runtime.js"), "no protocol-served sandbox documents");
+  console.log("PASS: opaque srcdoc, CSP intersection, cross-plugin read/script denial, escaped document attributes and blocked self-navigation");
   console.log(`PASS: API 2 UI/metadata/PNG export, 10 isolation probes, permissions/limits/settings/lifecycle; ${legacy.length + 1} API 1 plugins loaded`);
 })().catch((e) => { console.error(e); process.exitCode = 1; }).finally(async () => {
   if (browser) await browser.close();
