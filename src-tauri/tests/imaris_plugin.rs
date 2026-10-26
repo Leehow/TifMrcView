@@ -199,6 +199,22 @@ fn real_samples_match_h5py() {
             &[(0, 0, 0, 14489365484), (0, 23, 0, 14710767233), (0, 46, 0, 14513402097)],
         ),
     ];
+    // Imaris 10 LZ4 (one with shuffle too), against mid-Z sums from h5py + hdf5plugin.
+    for (name, sums) in [("croppedRetinaLz4.ims", [193665.0, 56592.0]), ("croppedCDM3DLz4.ims", [9305536.0, 19196455.0])] {
+        let path = dir.join(name);
+        if !path.exists() {
+            eprintln!("SKIPPED: {} not found", path.display());
+            continue;
+        }
+        let src = open(&p.registry, &path);
+        let i = src.info().clone();
+        for (c, want) in sums.iter().enumerate() {
+            let (page, s) = i.locate(c, i.size_z / 2, 0);
+            let d = &src.read_page(page).unwrap()[s].data;
+            let sum: f64 = (0..d.len()).map(|k| d.get_f64(k)).sum();
+            assert_eq!(sum, *want, "{name} c{c}");
+        }
+    }
     for (name, dims, dtype, planes) in cases {
         let path = dir.join(name);
         if !path.exists() {
@@ -220,12 +236,8 @@ fn real_samples_match_h5py() {
         }
     }
 
-    // Imaris 10 LZ4 / shuffle and the old IMS3 format are refused with a reason.
-    for (name, msg) in [
-        ("croppedRetinaLz4.ims", "LZ4"),
-        ("croppedCDM3DLz4.ims", "shuffle"),
-        ("Convallaria_3C_1T_confocal_IMS3.ims", "IMS3"),
-    ] {
+    // The old IMS3 format is refused with a reason.
+    for (name, msg) in [("Convallaria_3C_1T_confocal_IMS3.ims", "IMS3")] {
         let path = dir.join(name);
         if path.exists() {
             let e = err(&p.registry, &path);

@@ -33,6 +33,8 @@ wasmi = { version = "2", default-features = false, features = ["std", "stable", 
 openh264 = { version = "0.9", optional = true }
 tauri-plugin-updater = "2.14"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# Imaris LZ4 chunks (HDF5 filter 32004).
+lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
 [features]
 default = ["recorder"]
@@ -57,3 +59,5 @@ opt-level = 2
 
 [dev-dependencies]
 tempfile = "3"
+# Tests write LZ4 blocks.
+lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode", "safe-encode", "alloc"] }

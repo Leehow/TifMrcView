@@ -109,25 +109,24 @@ fn child(h5: &H5<HostFile>, obj: &Object, name: &str) -> Result<Option<u64>> {
 }
 
 /// Checks the filter pipeline of a chunk (`mask` bit i: filter i skipped)
-/// and returns the host codec for it.
-fn codec(filters: &[hdf5::Filter], mask: u32) -> Result<Codec> {
-    let mut codec = Codec::Raw;
+/// and returns the host codec and chunk flags for it.
+fn codec(filters: &[hdf5::Filter], mask: u32) -> Result<(Codec, u8)> {
+    let (mut codec, mut fl) = (Codec::Raw, 0);
     for (i, f) in filters.iter().enumerate() {
         if i < 32 && mask & (1 << i) != 0 {
             continue;
         }
         match f.id {
+            // Shuffle is applied before compression when writing, so it must come first.
+            hdf5::FILTER_SHUFFLE if codec == Codec::Raw => fl |= flags::SHUFFLE,
             hdf5::FILTER_DEFLATE if codec == Codec::Raw => codec = Codec::Zlib,
+            hdf5::FILTER_LZ4 if codec == Codec::Raw => codec = Codec::Lz4H5,
             // A checksum after the data; the data itself is unchanged.
             hdf5::FILTER_FLETCHER32 => {}
-            hdf5::FILTER_SHUFFLE => bail!("这个 IMS 文件用了 HDF5 字节重排（shuffle）过滤器，暂不支持"),
-            hdf5::FILTER_LZ4 => {
-                bail!("这个 IMS 文件用 LZ4 压缩，暂不支持；请在 Imaris 里另存为 gzip 压缩或不压缩的 .ims")
-            }
-            id => bail!("这个 IMS 文件用了不支持的 HDF5 过滤器（编号 {id}）"),
+            id => bail!("这个 IMS 文件用了不支持的 HDF5 过滤器组合（编号 {id}）"),
         }
     }
-    Ok(codec)
+    Ok((codec, fl))
 }
 
 fn filter_names(filters: &[hdf5::Filter]) -> String {
@@ -448,14 +447,15 @@ impl Format for Ims {
             }
             let rect = [x0 as u32, y0 as u32, cx as u32, cy as u32];
             let dz = z - ch.start[0];
-            let chunk = match codec(&v.filters, ch.mask)? {
-                Codec::Raw => {
+            let (codec, fl) = codec(&v.filters, ch.mask)?;
+            let chunk = match codec {
+                Codec::Raw if fl == 0 => {
                     if (dz + 1) * plane > ch.size {
                         bail!("IMS 数据块被截断");
                     }
                     Chunk::file(ch.addr + dz * plane, plane, rect)
                 }
-                codec => Chunk::file(ch.addr, ch.size, rect).codec(codec).skip(dz * plane),
+                codec => Chunk::file(ch.addr, ch.size, rect).codec(codec).skip(dz * plane).flags(fl),
             };
             r.push(chunk.stride(row as u32).flags(be));
         }
@@ -567,13 +567,16 @@ mod tests {
 
     #[test]
     fn filters_map_to_host_codecs() {
-        assert_eq!(codec(&[], 0).unwrap(), Codec::Raw);
-        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE)], 0).unwrap(), Codec::Zlib);
-        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE), f(hdf5::FILTER_FLETCHER32)], 0).unwrap(), Codec::Zlib);
+        assert_eq!(codec(&[], 0).unwrap(), (Codec::Raw, 0));
+        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE)], 0).unwrap(), (Codec::Zlib, 0));
+        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE), f(hdf5::FILTER_FLETCHER32)], 0).unwrap(), (Codec::Zlib, 0));
         // Filter mask bit set: that filter was skipped for this chunk.
-        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE)], 1).unwrap(), Codec::Raw);
-        assert!(codec(&[f(hdf5::FILTER_SHUFFLE), f(hdf5::FILTER_DEFLATE)], 0).unwrap_err().0.contains("shuffle"));
-        assert!(codec(&[f(hdf5::FILTER_LZ4)], 0).unwrap_err().0.contains("LZ4"));
+        assert_eq!(codec(&[f(hdf5::FILTER_DEFLATE)], 1).unwrap(), (Codec::Raw, 0));
+        let shuffled = codec(&[f(hdf5::FILTER_SHUFFLE), f(hdf5::FILTER_DEFLATE)], 0).unwrap();
+        assert_eq!(shuffled, (Codec::Zlib, flags::SHUFFLE));
+        assert_eq!(codec(&[f(hdf5::FILTER_LZ4)], 0).unwrap(), (Codec::Lz4H5, 0));
+        // Shuffling after compression is not something the host can undo.
+        assert!(codec(&[f(hdf5::FILTER_LZ4), f(hdf5::FILTER_SHUFFLE)], 0).is_err());
         assert!(codec(&[f(307)], 0).unwrap_err().0.contains("307"));
         assert_eq!(filter_names(&[f(hdf5::FILTER_DEFLATE)]), "gzip");
         assert_eq!(filter_names(&[]), "不压缩");

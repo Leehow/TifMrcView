@@ -261,6 +261,8 @@ pub enum Codec {
     Jpeg = 5,
     /// PackBits (TIFF compression 32773).
     PackBits = 6,
+    /// LZ4 blocks in the framing of the HDF5 LZ4 filter (32004). App 0.5.0.
+    Lz4H5 = 7,
 }
 
 /// Dimension order of pages, fastest first (like OME's `DimensionOrder` without XY).
@@ -602,6 +604,8 @@ pub mod flags {
     pub const BGR: u8 = 4;
     /// TIFF horizontal differencing (predictor 2), undone per row after decoding (integer types).
     pub const PREDICTOR: u8 = 8;
+    /// HDF5 byte shuffle over the whole decoded chunk, undone before `skip`. App 0.5.0.
+    pub const SHUFFLE: u8 = 16;
 }
 
 /// One block of pixels: where its bytes are, how they are compressed and

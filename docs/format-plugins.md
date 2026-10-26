@@ -224,6 +224,7 @@ Codecs (`codec`, also for the `decompress` import):
 | 4 | Zstandard |
 | 5 | baseline JPEG (`dtype` u8, `samples` 1 = gray or 3 = RGB; recipes only) |
 | 6 | PackBits |
+| 7 | LZ4 in the framing of the HDF5 LZ4 filter 32004: decoded size (u64 BE), block size (u32 BE), then per block its stored size (u32 BE) and bytes (stored as-is when not smaller). App 0.5.0. |
 
 `dtype` codes: 0 `u8`, 1 `i8`, 2 `u16`, 3 `i16`, 4 `u32`, 5 `i32`, 6 `f32`,
 7 `f64`.
@@ -236,6 +237,7 @@ Flags (combine with `|`):
 | 2 | "hi/lo": 16-bit samples stored as all low bytes, then all high bytes (CZI zstd1) |
 | 4 | BGR: the first three samples are blue, green, red (sample 0 → `plane + 2`) |
 | 8 | horizontal differencing (TIFF predictor 2), undone per row |
+| 16 | HDF5 byte shuffle: the whole decoded chunk holds all first bytes of its samples, then all second bytes…; undone before `skip`. Not with hi/lo or JPEG. App 0.5.0. |
 
 Decoded data shorter than `stride · (h - 1) + w · samples · size` is an
 error ("图像数据不完整"). For odd formats the plugin can decode a chunk

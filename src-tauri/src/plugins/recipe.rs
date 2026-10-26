@@ -28,7 +28,10 @@ pub mod flags {
     pub const HILO: u8 = 2;
     pub const BGR: u8 = 4;
     pub const PREDICTOR: u8 = 8;
-    pub const ALL: u8 = BIG_ENDIAN | HILO | BGR | PREDICTOR;
+    /// HDF5 byte shuffle: all first bytes of the samples, then all second
+    /// bytes, and so on, over the whole decoded chunk.
+    pub const SHUFFLE: u8 = 16;
+    pub const ALL: u8 = BIG_ENDIAN | HILO | BGR | PREDICTOR | SHUFFLE;
 }
 
 /// Compression codes shared by recipes and the `decompress` import.
@@ -40,6 +43,8 @@ pub mod codec {
     pub const ZSTD: u8 = 4;
     pub const JPEG: u8 = 5;
     pub const PACKBITS: u8 = 6;
+    /// LZ4 blocks as the HDF5 LZ4 filter (32004) frames them (Imaris).
+    pub const LZ4_H5: u8 = 7;
 }
 
 pub fn dtype_code(d: DType) -> u8 {
@@ -123,7 +128,10 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Recipe> {
         if chunk.skip > 0 && (chunk.flags & flags::HILO != 0 || chunk.codec == codec::JPEG) {
             bail!("页面描述里的 skip 不能用于 hi/lo 或 JPEG 块");
         }
-        if chunk.codec > codec::PACKBITS {
+        if chunk.flags & flags::SHUFFLE != 0 && (chunk.flags & flags::HILO != 0 || chunk.codec == codec::JPEG) {
+            bail!("页面描述里的 shuffle 不能用于 hi/lo 或 JPEG 块");
+        }
+        if chunk.codec > codec::LZ4_H5 {
             bail!("页面描述里的压缩方式 {} 不支持", chunk.codec);
         }
         if chunk.flags & !flags::ALL != 0 {
@@ -176,9 +184,55 @@ pub fn decompress(codec: u8, src: &[u8], max_out: usize) -> Result<Vec<u8>> {
                 }
             }
         }
+        codec::LZ4_H5 => out = lz4_h5(src, max_out)?,
         c => bail!("不支持的压缩方式 {c}"),
     }
     Ok(out)
+}
+
+/// The HDF5 LZ4 filter's framing: the decoded size (u64, big-endian), the
+/// block size (u32), then per block its stored size (u32) and the bytes,
+/// stored as-is when LZ4 did not make them smaller.
+fn lz4_h5(src: &[u8], max_out: usize) -> Result<Vec<u8>> {
+    let be32 = |o: usize| src.get(o..o + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize);
+    let total = src.get(..8).map(|b| u64::from_be_bytes(b.try_into().unwrap())).context("LZ4 数据不完整")?;
+    let block = be32(8).filter(|&b| b > 0).context("LZ4 数据不完整")?;
+    let want = usize::try_from(total).unwrap_or(usize::MAX).min(max_out);
+    let mut out = Vec::with_capacity(want.min(256 << 20));
+    let mut buf = vec![0u8; block.min(1 << 30)];
+    let mut pos = 12;
+    let mut done = 0u64;
+    while done < total && out.len() < want {
+        let n = (total - done).min(block as u64) as usize;
+        let stored = be32(pos).context("LZ4 数据不完整")?;
+        let data = src.get(pos + 4..pos + 4 + stored).context("LZ4 数据不完整")?;
+        pos += 4 + stored;
+        let take = n.min(want - out.len());
+        if stored == n {
+            out.extend_from_slice(&data[..take]);
+        } else {
+            let got = lz4_flex::block::decompress_into(data, &mut buf[..n]).map_err(|e| anyhow::anyhow!("LZ4: {e}"))?;
+            if got != n {
+                bail!("LZ4 数据不完整");
+            }
+            out.extend_from_slice(&buf[..take]);
+        }
+        done += n as u64;
+    }
+    Ok(out)
+}
+
+/// Undoes the HDF5 shuffle filter for samples of `size` bytes.
+fn unshuffle(v: &[u8], size: usize) -> Vec<u8> {
+    let n = v.len() / size;
+    let mut out = vec![0u8; v.len()];
+    out.par_chunks_mut(size).take(n).enumerate().for_each(|(i, px)| {
+        for (b, o) in px.iter_mut().enumerate() {
+            *o = v[b * n + i];
+        }
+    });
+    out[n * size..].copy_from_slice(&v[n * size..]);
+    out
 }
 
 /// The decoded bytes of one chunk: `rows` rows of `stride` bytes.
@@ -200,6 +254,8 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
     // Never more than the chunk can contribute to the page (decompression bombs).
     let want = stride.checked_mul(rows).filter(|&n| n <= 1 << 34).context("图像块太大")?;
     let skip = usize::try_from(c.skip).ok().filter(|&k| k <= 1 << 34).context("图像块太大")?;
+    // Shuffled bytes are spread over the whole block, so it is decoded whole.
+    let shuffle = c.flags & flags::SHUFFLE != 0 && size > 1;
     let src_all = if c.inline { payload } else { file };
     let src = usize::try_from(c.offset)
         .ok()
@@ -207,6 +263,11 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
         .and_then(|(o, l)| src_all.get(o..o.checked_add(l)?))
         .with_context(|| format!("第 {} 块的数据位置超出了文件", i + 1))?;
     let mut bytes: Cow<[u8]> = match c.codec {
+        codec::RAW if shuffle => {
+            let mut v = unshuffle(src, size);
+            v.drain(..skip.min(v.len()));
+            Cow::Owned(v)
+        }
         codec::RAW => Cow::Borrowed(src.get(skip..).unwrap_or(&[])),
         codec::JPEG => {
             if size != 1 || !(c.samples == 1 || c.samples == 3) {
@@ -216,7 +277,7 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
             Cow::Owned(if c.samples == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() })
         }
         codec => {
-            let mut v = decompress(codec, src, skip + want)?;
+            let mut v = if shuffle { unshuffle(&decompress(codec, src, 1 << 32)?, size) } else { decompress(codec, src, skip + want)? };
             v.drain(..skip.min(v.len()));
             Cow::Owned(v)
         }
@@ -533,6 +594,41 @@ mod tests {
         assert_eq!(values(&run(&info, &[r.clone()], &block, b"").unwrap()[0]), want);
         r.skip = 1000;
         assert!(run(&info, &[r], &block, b"").is_err());
+    }
+
+    #[test]
+    fn lz4_hdf5_framing_and_shuffle() {
+        // 2 slices of 3x2 u16, shuffled, in LZ4 blocks of 8 bytes (the last one stored as-is).
+        let info = fake_info(3, 2, 1, 1, 1, DType::U16);
+        let vals: Vec<u16> = (0..12).map(|v| v * 300).collect();
+        let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut sh = vec![0u8; raw.len()];
+        for i in 0..12 {
+            sh[i] = raw[2 * i];
+            sh[12 + i] = raw[2 * i + 1];
+        }
+        let mut z = (sh.len() as u64).to_be_bytes().to_vec();
+        z.extend_from_slice(&8u32.to_be_bytes());
+        for (k, b) in sh.chunks(8).enumerate() {
+            let enc = if k == 2 { b.to_vec() } else { lz4_flex::compress(b) };
+            let enc = if enc.len() >= b.len() { b.to_vec() } else { enc };
+            z.extend_from_slice(&(enc.len() as u32).to_be_bytes());
+            z.extend_from_slice(&enc);
+        }
+        assert_eq!(decompress(codec::LZ4_H5, &z, 1 << 20).unwrap(), sh);
+        assert_eq!(decompress(codec::LZ4_H5, &z, 5).unwrap(), &sh[..5]);
+        let mut c = chunk(0, z.len() as u64, [0, 0, 3, 2]);
+        c.codec = codec::LZ4_H5;
+        c.flags = flags::SHUFFLE;
+        c.skip = 12;
+        let want: Vec<f64> = vals[6..].iter().map(|&v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[c], &z, b"").unwrap()[0]), want);
+        // Shuffled raw data too.
+        let mut r = chunk(0, sh.len() as u64, [0, 0, 3, 2]);
+        r.flags = flags::SHUFFLE;
+        let want: Vec<f64> = vals[..6].iter().map(|&v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[r], &sh, b"").unwrap()[0]), want);
+        assert!(decompress(codec::LZ4_H5, &z[..20], 100).is_err());
     }
 
     #[test]
