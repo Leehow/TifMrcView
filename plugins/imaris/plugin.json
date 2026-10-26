@@ -14,6 +14,26 @@
     "en": {
       "name": "Imaris",
       "description": "Opens Imaris (.ims) files and shows the pixel size, channel colours and wavelengths, acquisition time and other settings"
+    },
+    "de": {
+      "name": "Imaris",
+      "description": "Öffnet Imaris-Dateien (.ims) und zeigt Pixelgröße, Kanalfarben und Wellenlängen, Aufnahmezeit und weitere Einstellungen"
+    },
+    "ja": {
+      "name": "Imaris",
+      "description": "Imaris（.ims）を開き、ピクセルサイズ、チャンネルの色と波長、取得時刻などの設定を表示します"
+    },
+    "es": {
+      "name": "Imaris",
+      "description": "Abre archivos Imaris (.ims) y muestra el tamaño de píxel, los colores y longitudes de onda de los canales, la hora de adquisición y otros parámetros"
+    },
+    "fr": {
+      "name": "Imaris",
+      "description": "Ouvre les fichiers Imaris (.ims) et affiche la taille de pixel, les couleurs et longueurs d’onde des canaux, l’heure d’acquisition et d’autres paramètres"
+    },
+    "ru": {
+      "name": "Imaris",
+      "description": "Открывает Imaris (.ims) и показывает размер пикселя, цвета и длины волн каналов, время съёмки и другие параметры"
     }
   },
   "details": {
@@ -28,6 +48,36 @@
       "The plugin also shows the settings stored in the file in the image-info panel. \"Imaris image\": the software that saved it, file format version, name and description, acquisition time, size of every dimension, pixel type, compression and chunk size, resolution levels, pixel size and Z step, microscope mode, objective magnification and numerical aperture, original format, and the start, end and mean interval of a time series.",
       "Each channel gets its own group: description, excitation and emission wavelengths, pinhole, objective, gain, offset, colour, display range and gamma. \"Imaris all settings\" flattens every attribute of every group under DataSetInfo (including vendor groups from Dragonfly, Fusion, Zeiss LSM and others) so you can search it.",
       "Not supported yet: the old Imaris 3 format (IMS3); opening such a file says so. There is nothing to configure: install it and open .ims files. The status bar then shows \"Imaris IMS\" with the software that saved the file. Needs TifMrcView 0.5.0 or newer."
+    ],
+    "de": [
+      "Öffnet .ims-Dateien im Format Imaris 5.5 und neuer: Dateien von Oxford Instruments (Bitplane) Imaris sowie von Andor Dragonfly, Fusion und ImarisFileConverter. TifMrcView selbst enthält keinen IMS-(HDF5-)Code; mit diesem Plugin lassen sich .ims-Dateien mit Kanälen, Z-Stapeln und Zeitserien öffnen. Unterstützt werden 8-, 16- oder 32-Bit-Ganzzahl- und Gleitkommapixel, unkomprimiert oder mit gzip bzw. LZ4 komprimiert (mit oder ohne Shuffle-Filter). Von der Auflösungspyramide wird die volle Auflösung angezeigt. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; die App selbst dekomprimiert und setzt die Blöcke parallel zusammen, genauso schnell wie bei integrierten Formaten.",
+      "Das Plugin zeigt außerdem die gespeicherten Einstellungen im Bildinformationsbereich an. „Imaris-Bild“: speichernde Software, Dateiformatversion, Name und Beschreibung, Aufnahmezeit, Größe jeder Dimension, Pixeltyp, Komprimierung und Blockgröße, Auflösungsstufen, Pixelgröße und Z-Schritt, Mikroskopmodus, Objektivvergrößerung und numerische Apertur, Ursprungsformat sowie Beginn, Ende und mittleres Intervall einer Zeitserie.",
+      "Jeder Kanal erhält eine eigene Gruppe: Beschreibung, Anregungs- und Emissionswellenlängen, Lochblende, Objektiv, Verstärkung, Offset, Farbe, Anzeigebereich und Gamma. „Alle Imaris-Einstellungen“ listet jedes Attribut jeder Gruppe unter DataSetInfo auf, einschließlich Herstellergruppen von Dragonfly, Fusion, Zeiss LSM und anderen, damit sie durchsucht werden können.",
+      "Noch nicht unterstützt wird das alte Imaris-3-Format (IMS3); beim Öffnen erscheint ein entsprechender Hinweis. Keine Konfiguration nötig: nach der Installation .ims-Dateien öffnen. Die Statusleiste zeigt „Imaris IMS“ mit der Software an, die die Datei gespeichert hat. Benötigt TifMrcView 0.5.0 oder neuer."
+    ],
+    "ja": [
+      "Imaris 5.5 以降の形式の .ims を開きます。Oxford Instruments（Bitplane）Imaris の保存ファイルと、Andor Dragonfly、Fusion、ImarisFileConverter の出力に対応します。TifMrcView 本体には IMS（HDF5）のコードは含まれていません。このプラグインを入れると、チャンネル、Z スタック、時系列を含む .ims を開けます。8・16・32 ビットの整数または浮動小数点のピクセル、非圧縮、gzip・LZ4 圧縮（shuffle フィルターの有無を問わず）に対応します。ファイル内の解像度ピラミッドでは最高解像度を表示します。WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。ブロックの展開と結合はアプリ本体が並列に行うため、内蔵形式と同じ速度で読み込めます。",
+      "ファイル内の設定も画像情報パネルに表示します。「Imaris 画像」には保存したソフトウェア、ファイル形式のバージョン、名前と説明、取得時刻、各次元のサイズ、ピクセル型、圧縮方式とブロックサイズ、解像度レベル、ピクセルサイズ、Z ステップ、顕微鏡モード、対物倍率と開口数、元の形式、時系列の開始・終了時刻と平均間隔を表示します。",
+      "チャンネルごとに、説明、励起・蛍光波長、ピンホール、対物レンズ、ゲイン、オフセット、色、表示範囲、ガンマをまとめます。「Imaris 全設定」では DataSetInfo 配下の全グループ（Dragonfly、Fusion、Zeiss LSM などのメーカー固有グループも含む）の全属性を展開して検索できます。",
+      "旧 Imaris 3 形式（IMS3）は未対応で、開いた際にその旨を表示します。設定は不要です。インストール後に .ims を開くと、ステータスバーに「Imaris IMS」と保存したソフトウェアが表示されます。TifMrcView 0.5.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre .ims en formato Imaris 5.5 y posterior: archivos guardados por Oxford Instruments (Bitplane) Imaris y los generados por Andor Dragonfly, Fusion e ImarisFileConverter. TifMrcView no incluye código IMS (HDF5); este complemento abre .ims con canales, pilas Z y series temporales, con píxeles enteros o de coma flotante de 8, 16 o 32 bits, sin comprimir o comprimidos con gzip o LZ4 (con o sin filtro shuffle). De la pirámide de resolución del archivo se muestra la resolución completa. Se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; la propia aplicación descomprime y ensambla los bloques en paralelo, con la misma rapidez que los formatos integrados.",
+      "El complemento también muestra los parámetros del archivo en el panel de información. «Imagen Imaris»: software que lo guardó, versión del formato, nombre y descripción, hora de adquisición, tamaño de cada dimensión, tipo de píxel, compresión y tamaño de bloque, niveles de resolución, tamaño de píxel y paso Z, modo del microscopio, aumento y apertura numérica del objetivo, formato original, inicio, final e intervalo medio de una serie temporal.",
+      "Cada canal tiene su propio grupo: descripción, longitudes de onda de excitación y emisión, pinhole, objetivo, ganancia, offset, color, rango de visualización y gamma. «Todos los parámetros Imaris» despliega todos los atributos de todos los grupos de DataSetInfo (incluidos los grupos de fabricantes como Dragonfly, Fusion y Zeiss LSM) para poder buscarlos.",
+      "Aún no admite el antiguo formato Imaris 3 (IMS3); se indica al abrirlo. No requiere configuración: instálalo y abre .ims. La barra de estado muestra «Imaris IMS» con el software que guardó el archivo. Requiere TifMrcView 0.5.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les .ims au format Imaris 5.5 et ultérieur : fichiers enregistrés par Oxford Instruments (Bitplane) Imaris ou produits par Andor Dragonfly, Fusion et ImarisFileConverter. TifMrcView ne contient pas de code IMS (HDF5) ; cette extension ouvre les .ims avec canaux, piles Z et séries temporelles, avec des pixels entiers ou flottants de 8, 16 ou 32 bits, non compressés ou compressés avec gzip ou LZ4 (avec ou sans filtre shuffle). La pleine résolution de la pyramide stockée dans le fichier est affichée. L’extension s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert ; l’application décompresse et assemble elle-même les blocs en parallèle, aussi vite que pour les formats intégrés.",
+      "L’extension affiche aussi les paramètres du fichier dans le panneau d’informations. « Image Imaris » : logiciel d’enregistrement, version du format, nom et description, heure d’acquisition, taille de chaque dimension, type de pixel, compression et taille des blocs, niveaux de résolution, taille de pixel et pas Z, mode du microscope, grossissement et ouverture numérique de l’objectif, format d’origine, début, fin et intervalle moyen d’une série temporelle.",
+      "Chaque canal dispose de son propre groupe : description, longueurs d’onde d’excitation et d’émission, diaphragme confocal, objectif, gain, offset, couleur, plage d’affichage et gamma. « Tous les paramètres Imaris » déroule tous les attributs de tous les groupes de DataSetInfo (y compris ceux des fabricants Dragonfly, Fusion, Zeiss LSM et autres) pour permettre leur recherche.",
+      "L’ancien format Imaris 3 (IMS3) n’est pas encore pris en charge ; un message l’indique à l’ouverture. Aucune configuration nécessaire : installez l’extension et ouvrez des .ims. La barre d’état affiche « Imaris IMS » avec le logiciel ayant enregistré le fichier. Nécessite TifMrcView 0.5.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает .ims в формате Imaris 5.5 и новее: файлы Oxford Instruments (Bitplane) Imaris, а также созданные Andor Dragonfly, Fusion и ImarisFileConverter. В самом TifMrcView нет кода IMS (HDF5); плагин открывает .ims с каналами, Z-стеками и временными сериями, с целочисленными пикселями или пикселями с плавающей точкой на 8, 16 или 32 бита, без сжатия либо со сжатием gzip или LZ4 (с фильтром shuffle или без него). Из пирамиды разрешений отображается полное разрешение. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; приложение само распаковывает и собирает блоки параллельно, так же быстро, как для встроенных форматов.",
+      "Плагин также показывает параметры файла на панели информации. «Изображение Imaris»: сохранившая его программа, версия формата, название и описание, время съёмки, размер каждого измерения, тип пикселя, сжатие и размер блока, уровни разрешения, размер пикселя и шаг Z, режим микроскопа, увеличение и числовая апертура объектива, исходный формат, начало, конец и средний интервал временной серии.",
+      "У каждого канала своя группа: описание, длины волн возбуждения и излучения, пинхол, объектив, усиление, смещение, цвет, диапазон отображения и гамма. «Все параметры Imaris» разворачивает все атрибуты всех групп DataSetInfo (в том числе групп производителей Dragonfly, Fusion, Zeiss LSM и других) для поиска.",
+      "Старый формат Imaris 3 (IMS3) пока не поддерживается; при открытии выводится соответствующее сообщение. Настройка не требуется: установите плагин и открывайте .ims. В строке состояния появится «Imaris IMS» с программой, сохранившей файл. Требуется TifMrcView 0.5.0 или новее."
     ]
   }
 }

@@ -14,6 +14,26 @@
     "en": {
       "name": "Olympus FluoView",
       "description": "Opens OIB and OIR files from Olympus / Evident FluoView confocals and shows the objective, scan, laser, detector, pinhole and other acquisition settings"
+    },
+    "de": {
+      "name": "Olympus FluoView",
+      "description": "Öffnet OIB- und OIR-Dateien von Olympus- / Evident-FluoView-Konfokalmikroskopen und zeigt Objektiv, Scan, Laser, Detektor, Lochblende und weitere Aufnahmeparameter"
+    },
+    "ja": {
+      "name": "Olympus FluoView",
+      "description": "Olympus / Evident FluoView 共焦点顕微鏡の OIB・OIR を開き、対物レンズ、走査、レーザー、検出器、ピンホールなどの取得条件を表示します"
+    },
+    "es": {
+      "name": "Olympus FluoView",
+      "description": "Abre OIB y OIR de confocales Olympus / Evident FluoView y muestra el objetivo, el barrido, el láser, el detector, el pinhole y otros parámetros de adquisición"
+    },
+    "fr": {
+      "name": "Olympus FluoView",
+      "description": "Ouvre les OIB et OIR des confocaux Olympus / Evident FluoView et affiche l’objectif, le balayage, le laser, le détecteur, le diaphragme confocal et les autres paramètres d’acquisition"
+    },
+    "ru": {
+      "name": "Olympus FluoView",
+      "description": "Открывает OIB и OIR конфокальных микроскопов Olympus / Evident FluoView и показывает объектив, сканирование, лазер, детектор, пинхол и другие параметры съёмки"
     }
   },
   "details": {
@@ -30,6 +50,41 @@
       "The plugin also turns the file's settings into acquisition settings in the image-info panel. \"FluoView image\": system and software version, acquisition time, size, bit depth, pixel size, Z step and time interval. \"FluoView microscope\": objective, magnification, numerical aperture, working distance, scan zoom, scanner and scan mode, pixel dwell time, line and frame time, Kalman / line averaging and sequential scanning.",
       "Each channel gets its own group: dye, excitation and emission wavelengths or detection range, laser lines with their transmissivity, detector, voltage (HV), gain, offset and pinhole diameter; \"FluoView all settings\" lists every setting in the file so you can search it.",
       "There is nothing to configure: install it and open .oib or .oir files. The status bar then shows \"Olympus FluoView OIB / OIR\" with the model and version of the acquisition system. Needs TifMrcView 0.5.0 or newer."
+    ],
+    "de": [
+      "Öffnet Dateien von Olympus-(Evident-)FluoView-Laserscanning-Konfokalmikroskopen: .oib vom FV1000 / FV1200 sowie .oir vom FV3000 / FV4000 und cellSens FV. TifMrcView selbst enthält keinen Lesecode für diese Formate; mit diesem Plugin lassen sie sich mit Kanälen, Z-Stapeln, Zeitserien und λ-Scans (Spektralscans) öffnen. Jede Wellenlänge eines λ-Scans wird als Kanal angezeigt. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; es erstellt lediglich einen Index. Die App liest die Pixel selbst parallel direkt aus der Datei, genauso schnell wie bei integrierten Formaten.",
+      "Das Referenzbild einer OIR-Datei wird als zweites Bild in der Bildauswahl angeboten. Lange OIR-Aufnahmen können auf eine Hauptdatei und Begleitdateien (_00001 …) verteilt sein; das Plugin kann nur die geöffnete Datei lesen, daher bleiben Ebenen aus Begleitdateien leer.",
+      "Das Plugin bereitet außerdem die gespeicherten Einstellungen als Aufnahmeparameter im Bildinformationsbereich auf. „FluoView-Bild“: System- und Softwareversion, Aufnahmezeit, Größe, Bittiefe, Pixelgröße, Z-Schritt und Zeitintervall. „FluoView-Mikroskop“: Objektiv, Vergrößerung, numerische Apertur, Arbeitsabstand, Scanzoom, Scanner und Scanmodus, Pixelverweilzeit, Zeilen- und Bildzeit, Kalman- / Zeilenmittelung und sequenzielles Scannen.",
+      "Jeder Kanal erhält eine eigene Gruppe: Farbstoff, Anregungs- und Emissionswellenlängen oder Detektionsbereich, Laserlinien mit Transmission, Detektor, Spannung (HV), Verstärkung, Offset und Lochblendendurchmesser. „Alle FluoView-Einstellungen“ listet sämtliche Einstellungen der Datei zum Durchsuchen auf.",
+      "Keine Konfiguration nötig: nach der Installation .oib- oder .oir-Dateien öffnen. Die Statusleiste zeigt „Olympus FluoView OIB / OIR“ mit Modell und Version des Aufnahmesystems an. Benötigt TifMrcView 0.5.0 oder neuer."
+    ],
+    "ja": [
+      "Olympus（Evident）FluoView レーザー走査共焦点顕微鏡の保存ファイルを開きます。FV1000 / FV1200 の .oib と、FV3000 / FV4000・cellSens FV の .oir に対応します。TifMrcView 本体にはこれらの形式の読み取りコードは含まれていません。このプラグインを入れると、チャンネル、Z スタック、時系列、λ（スペクトル）走査を含むファイルを開けます。λ 走査の各波長はチャンネルとして表示します。プラグインは WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ってインデックスを作成します。ピクセルはアプリ本体がファイルから直接並列に読み取るため、内蔵形式と同じ速度で読み込めます。",
+      "OIR ファイルの参照画像は 2 つ目の画像として一覧に表示され、画像選択で切り替えられます。長時間の OIR 取得はメインファイルと付随ファイル（_00001 など）に分割される場合があります。プラグインは開いたファイルだけを読み取るため、付随ファイルに保存された平面は空白になります。",
+      "ファイル内の設定も整理し、画像情報パネルに取得条件として表示します。「FluoView 画像」にはシステム・ソフトウェアのバージョン、取得時刻、サイズ、ビット深度、ピクセルサイズ、Z ステップ、時間間隔を表示します。「FluoView 顕微鏡」には対物レンズ、倍率、開口数、作動距離、走査ズーム、スキャナーと走査モード、ピクセル滞留時間、ライン時間とフレーム時間、Kalman・ライン平均化、順次走査を表示します。",
+      "チャンネルごとに、色素、励起・蛍光波長または検出範囲、レーザー波長と透過率、検出器、電圧（HV）、ゲイン、オフセット、ピンホール径をまとめます。「FluoView 全設定」ではファイル内の全設定を一覧表示して検索できます。",
+      "設定は不要です。インストール後に .oib / .oir を開くと、ステータスバーに「Olympus FluoView OIB / OIR」と取得システムのモデル・バージョンが表示されます。TifMrcView 0.5.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos guardados por confocales de barrido láser Olympus (Evident) FluoView: .oib de FV1000 / FV1200 y .oir de FV3000 / FV4000 y cellSens FV. TifMrcView no incluye código para estos formatos; el complemento permite abrirlos con canales, pilas Z, series temporales y barridos λ (espectrales), mostrando cada longitud de onda del barrido λ como un canal. Se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; únicamente crea un índice, y la aplicación lee los píxeles directamente del archivo en paralelo, con la misma rapidez que los formatos integrados.",
+      "La imagen de referencia de un OIR se enumera como segunda imagen, seleccionable en el selector de imágenes. Las adquisiciones OIR largas pueden dividirse en un archivo principal y archivos auxiliares (_00001…); el complemento solo lee el archivo abierto, por lo que los planos almacenados en los auxiliares quedan en blanco.",
+      "También convierte los ajustes del archivo en parámetros de adquisición en el panel de información. «Imagen FluoView»: versión del sistema y del software, hora de adquisición, tamaño, profundidad de bits, tamaño de píxel, paso Z e intervalo temporal. «Microscopio FluoView»: objetivo, aumento, apertura numérica, distancia de trabajo, zoom de barrido, escáner y modo de barrido, tiempo de permanencia por píxel, tiempo de línea y fotograma, promediado Kalman / de líneas y barrido secuencial.",
+      "Cada canal tiene su propio grupo: colorante, longitudes de onda de excitación y emisión o rango de detección, líneas láser con transmisión, detector, voltaje (HV), ganancia, offset y diámetro del pinhole. «Todos los parámetros FluoView» enumera todos los ajustes del archivo para poder buscarlos.",
+      "No requiere configuración: instálalo y abre .oib o .oir. La barra de estado muestra «Olympus FluoView OIB / OIR» con el modelo y la versión del sistema de adquisición. Requiere TifMrcView 0.5.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers enregistrés par les confocaux à balayage laser Olympus (Evident) FluoView : .oib des FV1000 / FV1200 et .oir des FV3000 / FV4000 et cellSens FV. TifMrcView ne contient pas de code pour ces formats ; cette extension les ouvre avec canaux, piles Z, séries temporelles et balayages λ (spectraux), chaque longueur d’onde d’un balayage λ étant affichée comme un canal. Elle s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert ; elle construit uniquement un index, puis l’application lit les pixels directement dans le fichier, en parallèle, aussi vite que pour les formats intégrés.",
+      "L’image de référence d’un OIR est proposée comme deuxième image dans le sélecteur d’images. Les longues acquisitions OIR peuvent être réparties entre un fichier principal et des fichiers associés (_00001…) ; l’extension ne peut lire que le fichier ouvert, les plans stockés dans les fichiers associés restent donc vides.",
+      "L’extension convertit aussi les réglages du fichier en paramètres d’acquisition dans le panneau d’informations. « Image FluoView » : versions du système et du logiciel, heure d’acquisition, taille, profondeur de bits, taille de pixel, pas Z et intervalle temporel. « Microscope FluoView » : objectif, grossissement, ouverture numérique, distance de travail, zoom de balayage, scanner et mode de balayage, temps de séjour par pixel, durée de ligne et d’image, moyennage Kalman / de lignes et balayage séquentiel.",
+      "Chaque canal dispose de son propre groupe : colorant, longueurs d’onde d’excitation et d’émission ou plage de détection, raies laser et transmission, détecteur, tension (HV), gain, offset et diamètre du diaphragme confocal. « Tous les paramètres FluoView » liste tous les réglages du fichier pour permettre leur recherche.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des .oib ou .oir. La barre d’état affiche « Olympus FluoView OIB / OIR » avec le modèle et la version du système d’acquisition. Nécessite TifMrcView 0.5.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы конфокальных микроскопов Olympus (Evident) FluoView с лазерным сканированием: .oib от FV1000 / FV1200 и .oir от FV3000 / FV4000 и cellSens FV. В самом TifMrcView нет кода этих форматов; плагин открывает их с каналами, Z-стеками, временными сериями и λ-сканированием (спектральным), где каждая длина волны отображается отдельным каналом. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; он лишь строит индекс, а приложение читает пиксели напрямую из файла параллельно, так же быстро, как для встроенных форматов.",
+      "Опорное изображение OIR отображается вторым изображением в списке, где на него можно переключиться. Длительная съёмка OIR может быть разделена на основной файл и сопутствующие файлы (_00001…); плагин читает только открываемый файл, поэтому плоскости из сопутствующих файлов остаются пустыми.",
+      "Плагин также преобразует настройки файла в параметры съёмки на панели информации. «Изображение FluoView»: версии системы и программы, время съёмки, размер, битовая глубина, размер пикселя, шаг Z и временной интервал. «Микроскоп FluoView»: объектив, увеличение, числовая апертура, рабочее расстояние, масштаб сканирования, сканер и режим сканирования, время выдержки пикселя, время строки и кадра, усреднение Калмана / строк и последовательное сканирование.",
+      "У каждого канала своя группа: краситель, длины волн возбуждения и излучения или диапазон детекции, линии лазеров с пропусканием, детектор, напряжение (HV), усиление, смещение и диаметр пинхола. «Все параметры FluoView» перечисляет все настройки файла для поиска.",
+      "Настройка не требуется: установите плагин и открывайте .oib или .oir. В строке состояния появится «Olympus FluoView OIB / OIR» с моделью и версией системы съёмки. Требуется TifMrcView 0.5.0 или новее."
     ]
   }
 }

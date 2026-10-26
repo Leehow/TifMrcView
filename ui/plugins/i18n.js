@@ -138,6 +138,11 @@ const WORDS = [
     "Не удалось получить сведения об обновлении: сервер обновлений недоступен или версия ещё не опубликована. Повторите позже"],
   // plugin packages
   ["插件市场", "Plugin market", "Plugin-Markt", "プラグインマーケット", "Tienda de complementos", "Catalogue d'extensions", "Каталог плагинов"],
+  ["搜索插件", "Search plugins", "Plugins suchen", "プラグインを検索", "Buscar complementos", "Rechercher des extensions", "Поиск плагинов"],
+  ["没有匹配的插件", "No matching plugins", "Keine passenden Plugins", "一致するプラグインがありません", "No hay complementos que coincidan", "Aucune extension correspondante", "Подходящих плагинов нет"],
+  ["插件市场上的插件都已安装", "All plugins in the market are installed", "Alle Plugins im Plugin-Markt sind installiert", "マーケットのプラグインはすべてインストール済みです", "Todos los complementos de la tienda están instalados", "Toutes les extensions du catalogue sont installées", "Все плагины из каталога установлены"],
+  ["正在更新…", "Updating…", "Wird aktualisiert…", "更新中…", "Actualizando…", "Mise à jour…", "Обновление…"],
+  ["关闭", "Close", "Schließen", "閉じる", "Cerrar", "Fermer", "Закрыть"],
   ["在浏览器里打开插件市场，下载插件包 (.zip)", "Open the plugin market in your browser to download plugin packages (.zip)", "Plugin-Markt im Browser öffnen und Plugin-Pakete (.zip) herunterladen", "ブラウザでプラグインマーケットを開き、プラグインパッケージ (.zip) をダウンロード", "Abre la tienda de complementos en el navegador para descargar paquetes (.zip)", "Ouvrir le catalogue d'extensions dans le navigateur pour télécharger des paquets (.zip)", "Открыть каталог плагинов в браузере и скачать пакеты (.zip)"],
   ["加载插件…", "Install plugin…", "Plugin installieren…", "プラグインをインストール…", "Instalar complemento…", "Installer une extension…", "Установить плагин…"],
   ["选择下载好的插件包 (.zip) 安装或升级", "Choose a downloaded plugin package (.zip) to install or upgrade", "Heruntergeladenes Plugin-Paket (.zip) zum Installieren oder Aktualisieren wählen", "ダウンロードしたプラグインパッケージ (.zip) を選んでインストール・更新", "Elige un paquete descargado (.zip) para instalarlo o actualizarlo", "Choisir un paquet téléchargé (.zip) à installer ou mettre à jour", "Выберите скачанный пакет плагина (.zip) для установки или обновления"],
@@ -485,7 +490,7 @@ const PATTERNS = [
 ];
 
 const CJK = /[　-〿㐀-鿿＀-￯]/;
-const ATTRS = ["title", "placeholder"];
+const ATTRS = ["title", "placeholder", "aria-label"];
 const SKIP = "[data-no-i18n], #file-name, script, style";
 
 /** Picks a supported language from the system's preferred languages. */

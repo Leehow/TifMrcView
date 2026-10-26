@@ -175,6 +175,11 @@ const builtin = [
     details: {
       zh: ["内置在应用里，无需下载。可在「插件」窗口里随时开关。"],
       en: ["Built into the app, nothing to download. Switch it on or off in the Plugins window."],
+      de: ["In die App integriert, kein Download erforderlich. Lässt sich im Fenster „Plugins“ jederzeit ein- oder ausschalten."],
+      ja: ["アプリに内蔵されているため、ダウンロードは不要です。「プラグイン」ウィンドウでいつでも有効・無効を切り替えられます。"],
+      es: ["Integrado en la aplicación, no requiere descarga. Se puede activar o desactivar en la ventana de complementos."],
+      fr: ["Intégré à l'application, sans téléchargement. Vous pouvez l'activer ou le désactiver dans la fenêtre des extensions."],
+      ru: ["Встроен в приложение, скачивать ничего не нужно. Его можно включить или выключить в окне плагинов."],
     },
   },
 ];
