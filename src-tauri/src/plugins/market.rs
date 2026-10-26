@@ -683,8 +683,10 @@ mod tests {
         let dead = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
         let error = rt(http_get_once(&client, &format!("http://{dead}/"), 10, Duration::from_secs(1))).unwrap_err();
         assert!(retryable(&error));
-        // Exactly the string the interface translates, no reqwest detail.
-        assert_eq!(format!("{error:#}"), "连不上插件市场，请检查网络后再试");
+        // Exactly a string the interface translates, no reqwest detail. A
+        // refused port can also time out (Windows retries the SYN for ~2 s).
+        let shown = format!("{error:#}");
+        assert!(["连不上插件市场，请检查网络后再试", "连接插件市场超时，请检查网络后再试"].contains(&shown.as_str()), "{shown}");
         let error = rt(test_get(&client, "invalid://url", 10)).unwrap_err();
         assert!(!retryable(&error));
 
