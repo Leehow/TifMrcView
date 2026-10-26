@@ -121,7 +121,7 @@ TifMrcView.register({
 
 ## 安装
 
-到仓库的 Releases 页面或[下载页](https://tifmrcview.com/tifmrcview/#download)下载：
+到官网 **[tifmrcview.com/tifmrcview](https://tifmrcview.com/tifmrcview/#download)** 下载。版本更新频繁，只在官网发布（不再用 GitHub Releases），软件也从官网自动更新：
 
 - **macOS**（10.15 及以上）：`TifMrcView_x.y.z_universal.dmg`（Intel 和 Apple 芯片通用），拖进「应用程序」。因为没有苹果开发者签名，第一次打开会被拦：到「系统设置 → 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/TifMrcView.app`。首次启动时 TifMrcView 会把自己设为 .tif/.tiff/.mrc 的默认打开方式。
 - **Windows**：`TifMrcView_x.y.z_x64-setup.exe`，双击安装（不需要管理员权限）。安装器会注册 .tif/.tiff/.mrc 关联；如果你以前给 .tif 手动选过别的程序（比如“照片”），Windows 不允许软件偷偷改，点 TifMrcView 里的「设为默认」会打开系统设置页，选一下就好。
