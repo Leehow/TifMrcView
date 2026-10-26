@@ -17,6 +17,7 @@ permissions:
 
 env:
   UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL || 'https://tifmrcview.com/tifmrcview' }}
+  DIRECT_BASE_URL: ${{ vars.DIRECT_BASE_URL || 'https://dl.tifmrcview.com:9443/tifmrcview' }}
 
 jobs:
   version:
@@ -143,7 +144,10 @@ jobs:
         run: |
           node -e '
             const c = { version: process.env.VERSION,
-              plugins: { updater: { endpoints: [process.env.UPDATE_BASE_URL.replace(/\/+$/, "") + "/latest.json"] } } };
+              plugins: { updater: { endpoints: [
+                process.env.DIRECT_BASE_URL.replace(/\/+$/, "") + "/latest-direct.json",
+                process.env.UPDATE_BASE_URL.replace(/\/+$/, "") + "/latest.json"
+              ] } } };
             if (process.env.HAS_KEY === "true") c.bundle = { createUpdaterArtifacts: true };
             require("fs").writeFileSync("src-tauri/tauri.ci.conf.json", JSON.stringify(c, null, 2));
           '
@@ -197,7 +201,7 @@ jobs:
         env:
           NOTES: ${{ needs.version.outputs.notes }}
         run: |
-          node scripts/make-release.mjs artifacts release "$VERSION" "$UPDATE_BASE_URL" "$NOTES"
+          node scripts/make-release.mjs artifacts release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
           ls -lR release
           node scripts/pack-plugins.mjs release
 
@@ -220,11 +224,26 @@ jobs:
           dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
           # Version folder first, feeds last, so clients never see a half-uploaded release.
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$VERSION" "$dest/"
-          for f in latest.json downloads.json; do
-            [ -f "release/$f" ] && rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$f" "$dest/$f"
-          done
           # Plugin market packages and index (served at /plugins/).
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" release/plugins/ "$dest/plugins/"
+          for f in latest.json latest-direct.json downloads.json; do
+            [ -f "release/$f" ] && rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$f" "$dest/$f"
+          done
+
+      # Deploys rewrite files in place (plugin zips are rebuilt every time), and
+      # Cloudflare keeps versioned files for 30 days, so drop its copies.
+      - name: Purge Cloudflare cache
+        env:
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID || '3dc3af1d7361be94d38608f6e7c642d9' }}
+          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
+        run: |
+          if [ -z "$CF_PURGE_TOKEN" ]; then
+            echo "::warning::CF_PURGE_TOKEN not set; Cloudflare may serve old copies of rebuilt files"
+            exit 0
+          fi
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CF_PURGE_TOKEN" -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}'
 
       - name: GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

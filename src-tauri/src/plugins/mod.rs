@@ -227,13 +227,25 @@ pub fn open_plugin_dir(plugins: State<'_, Plugins>) -> Result<(), String> {
     std::process::Command::new(opener).arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// The plugin market sits next to the updater feed: `…/latest.json` → `…/plugins/`.
-fn market_url(updater: Option<&Value>) -> String {
-    let endpoint = updater.and_then(|u| u["endpoints"][0].as_str());
-    match endpoint.and_then(|e| e.strip_suffix("latest.json")) {
-        Some(base) if base.starts_with("https://") && base.ends_with('/') => format!("{base}plugins/"),
-        _ => MARKET_URL.into(),
+/// Markets sit next to either updater feed, in endpoint order.
+fn market_urls(updater: Option<&Value>) -> Vec<String> {
+    let mut bases = Vec::new();
+    if let Some(endpoints) = updater.and_then(|u| u["endpoints"].as_array()) {
+        for endpoint in endpoints.iter().filter_map(Value::as_str) {
+            let base = endpoint.strip_suffix("latest.json").or_else(|| endpoint.strip_suffix("latest-direct.json"));
+            if let Some(base) = base.filter(|b| b.starts_with("https://") && b.ends_with('/')) {
+                let url = format!("{base}plugins/");
+                if !bases.contains(&url) { bases.push(url); }
+            }
+        }
     }
+    if bases.is_empty() { bases.push(MARKET_URL.into()); }
+    bases
+}
+
+/// Browser navigation uses the last (main site / Cloudflare) endpoint.
+fn market_url(updater: Option<&Value>) -> String {
+    market_urls(updater).pop().unwrap()
 }
 
 /// Opens the plugin market in the default browser. Only ever that one URL.
@@ -259,8 +271,8 @@ pub fn open_market<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 #[derive(Default)]
 pub struct MarketCache(Mutex<Option<Value>>);
 
-fn market_base<R: Runtime>(app: &AppHandle<R>) -> String {
-    market_url(app.config().plugins.0.get("updater"))
+fn market_bases<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    market_urls(app.config().plugins.0.get("updater"))
 }
 
 fn user_agent<R: Runtime>(app: &AppHandle<R>) -> String {
@@ -280,11 +292,9 @@ pub async fn plugin_market_list(
     let index = match cached {
         Some(i) => i,
         None => {
-            let url = format!("{}plugins.json", market_base(&app));
-            let bytes = market::http_get(url, market::MAX_INDEX, true, &user_agent(&app))
-                .await
-                .map_err(|e| format!("{e:#}"))?;
-            let index = market::parse_index(&bytes).map_err(|e| format!("{e:#}"))?;
+            let ua = user_agent(&app);
+            let index = market::fetch_index(|url, max| market::http_get(url, max, true, &ua), &market_bases(&app))
+                .await.map_err(|e| format!("{e:#}"))?;
             *cache.0.lock().unwrap() = Some(index.clone());
             index
         }
@@ -323,7 +333,7 @@ pub async fn plugin_install_from_market(
     let ua = user_agent(&app);
     let fetch = |url, max| market::http_get(url, max, true, &ua);
     let (index, entry, bytes) =
-        market::download(fetch, &market_base(&app), &id, &version).await.map_err(|e| format!("{e:#}"))?;
+        market::download_from_bases(fetch, &market_bases(&app), &id, &version).await.map_err(|e| format!("{e:#}"))?;
     let published = market::entries(&index).unwrap().iter().find(|p| p["id"].as_str() == Some(&id));
     if !published.is_some_and(|p| market::matches_confirmation(p, &approval)) {
         return Err("插件市场的信息已改变，请重新确认安装".into());
@@ -405,8 +415,19 @@ mod tests {
     fn market_next_to_update_feed() {
         let conf: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         assert_eq!(market_url(conf["plugins"].get("updater")), "https://tifmrcview.com/tifmrcview/plugins/");
+        assert_eq!(market_urls(conf["plugins"].get("updater")), vec![
+            "https://dl.tifmrcview.com:9443/tifmrcview/plugins/", MARKET_URL,
+        ]);
+        let repeated = serde_json::json!({"endpoints": [
+            "https://direct.test/latest-direct.json", "https://direct.test/latest.json",
+            "http://evil/latest.json", "https://main.test/latest.json",
+        ]});
+        assert_eq!(market_urls(Some(&repeated)), vec!["https://direct.test/plugins/", "https://main.test/plugins/"]);
+        assert_eq!(market_url(Some(&repeated)), "https://main.test/plugins/");
         let other = serde_json::json!({"endpoints": ["http://evil/latest.json"]});
         assert_eq!(market_url(Some(&other)), MARKET_URL);
         assert_eq!(market_url(None), MARKET_URL);
+        assert_eq!(market_urls(Some(&other)), vec![MARKET_URL]);
+        assert_eq!(market_urls(None), vec![MARKET_URL]);
     }
 }
