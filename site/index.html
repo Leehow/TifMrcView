@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TifMrcView · 显微与电镜图像查看器</title>
-<meta name="description" content="TifMrcView：又小又快的显微与电镜图像查看器。TIFF / OME-TIFF、冷冻电镜 MRC、蔡司 CZI 与 SmartSEM，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光。免费开源，支持 macOS、Windows、Linux。">
+<meta name="description" content="TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；装上插件还能读出蔡司 CZI 与 SmartSEM 的采集参数。支持 macOS、Windows、Linux。">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="canonical" href="https://tifmrcview.com/tifmrcview/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TifMrcView">
 <meta property="og:url" content="https://tifmrcview.com/tifmrcview/">
-<meta property="og:title" content="TifMrcView · 每一层，即刻可见。">
-<meta property="og:description" content="又小又快的显微与电镜图像查看器：TIFF、OME-TIFF、MRC、蔡司 CZI。数 GB 的栈双击即开。免费开源，macOS · Windows · Linux。">
+<meta property="og:title" content="TifMrcView · 又小、又快、又方便的 TIFF / MRC 查看器，免费开源">
+<meta property="og:description" content="又小、又快、又方便的 TIFF / MRC 查看器，免费开源。数 GB 的栈双击即开，XY / XZ / YZ 三视角，按物理单位测量，多通道荧光。">
 <meta property="og:image" content="https://tifmrcview.com/tifmrcview/shots/og-1200x630.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -20,8 +20,8 @@
 <meta property="og:locale" content="zh_CN">
 <meta property="og:locale:alternate" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="TifMrcView · Every slice. Instantly.">
-<meta name="twitter:description" content="A tiny, fast viewer for microscopy and electron microscopy: TIFF, OME-TIFF, MRC, Zeiss CZI. Multi-GB stacks open on double-click. Free and open source for macOS, Windows and Linux.">
+<meta name="twitter:title" content="TifMrcView · A small, fast, free and open-source TIFF / MRC viewer">
+<meta name="twitter:description" content="A small, fast, free and open-source TIFF / MRC viewer. Multi-GB stacks open on double-click; XY / XZ / YZ views, physical-unit measurements, multichannel fluorescence.">
 <meta name="twitter:image" content="https://tifmrcview.com/tifmrcview/shots/og-1200x630.jpg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3">
 <link rel="icon" href="/favicon.ico?v=3" sizes="any">
@@ -48,8 +48,9 @@
   <div class="wrap">
     <img class="icon rv" src="icon.png?v=2" alt="" width="72" height="72">
     <p class="eye rv">TifMrcView</p>
-    <h1 class="h h1 rv d1" data-i="h1"><span>每一层，</span><span>即刻可见。</span></h1>
-    <p class="lede rv d2" data-i="lead">为显微与电镜图像而生的查看器。TIFF、MRC、CZI，数 GB 的栈，双击即开。</p>
+    <h1 class="h h1 rv d1" data-i="h1"><span>看 TIFF 和 MRC，</span><span>就该这么快。</span></h1>
+    <p class="slogan rv d2" data-i="slogan">又小、又快、又方便。免费开源。</p>
+    <p class="lede rv d2" data-i="lead">显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，蔡司 CZI 与 SmartSEM 的采集参数一览无余。macOS、Windows、Linux 通用。</p>
     <div class="cta rv d3">
       <a class="pill" id="cta" href="#download" data-i="cta">免费下载</a>
       <a class="more" href="#download" data-i="all">所有版本</a>
@@ -121,7 +122,7 @@
   <div class="wrap">
     <p class="eye rv" data-i="c4_eye">荧光 · 多通道</p>
     <h2 class="h h2 rv" data-i="c4_h"><span>每个通道，</span><span>恰到好处。</span></h2>
-    <p class="lede rv" data-i="c4_p">逐个通道开关、换色、单独调对比度，每一层自动计算显示范围。蔡司 ZEN 的 CZI、OME-TIFF 与 ImageJ hyperstack，原生读取。</p>
+    <p class="lede rv" data-i="c4_p">逐个通道开关、换色、单独调对比度，每一层自动计算显示范围。OME-TIFF 与 ImageJ hyperstack 原生读取；装上 Zeiss ZEN 插件，CZI 的物镜、激光、探测器等参数随图显示。</p>
     <div class="seg rv" role="tablist" aria-label="TIFF / CZI">
       <button type="button" role="tab" id="tab-tif" aria-controls="pan-tif" aria-selected="true" data-i="c4_t1">多通道 TIFF</button>
       <button type="button" role="tab" id="tab-czi" aria-controls="pan-czi" aria-selected="false" tabindex="-1" data-i="c4_t2">蔡司 CZI · Airyscan</button>
@@ -154,10 +155,10 @@
     <div class="c">
       <h2 class="h h3 rv" data-i="fm_h"><span>11 种格式，</span><span>双击即开。</span></h2>
       <ul class="fmts rv">
-        <li class="k">TIFF</li><li class="k">OME-TIFF</li><li class="k">ImageJ hyperstack</li><li class="k">MRC / MRC2014</li><li class="k">Zeiss CZI</li><li class="k">Zeiss SmartSEM</li>
+        <li class="k">TIFF</li><li class="k">OME-TIFF</li><li class="k">ImageJ hyperstack</li><li class="k">MRC / MRC2014</li><li class="k">Zeiss CZI<sup class="pt" data-i="fm_plug">插件</sup></li><li class="k">Zeiss SmartSEM<sup class="pt" data-i="fm_plug">插件</sup></li>
         <li>PNG</li><li>JPEG</li><li>GIF</li><li>BMP</li><li>WebP</li>
       </ul>
-      <p class="lede rv" data-i="fm_p">超过 4 GB 的 ImageJ 栈、MRC 的 8 种数据模式、蔡司 SmartSEM 的调色板 TIFF，一样从容。</p>
+      <p class="lede rv" data-i="fm_p">超过 4 GB 的 ImageJ 栈、MRC 的 8 种数据模式，一样从容；蔡司 CZI 与 SmartSEM TIFF 的采集参数和校准比例尺，由插件提供。</p>
     </div>
   </div>
 </section>
