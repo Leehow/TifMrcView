@@ -226,6 +226,21 @@ jobs:
           # Plugin market packages and index (served at /plugins/).
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" release/plugins/ "$dest/plugins/"
 
+      # Deploys rewrite files in place (plugin zips are rebuilt every time), and
+      # Cloudflare keeps versioned files for 30 days, so drop its copies.
+      - name: Purge Cloudflare cache
+        env:
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID || '3dc3af1d7361be94d38608f6e7c642d9' }}
+          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
+        run: |
+          if [ -z "$CF_PURGE_TOKEN" ]; then
+            echo "::warning::CF_PURGE_TOKEN not set; Cloudflare may serve old copies of rebuilt files"
+            exit 0
+          fi
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CF_PURGE_TOKEN" -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}'
+
       - name: GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
