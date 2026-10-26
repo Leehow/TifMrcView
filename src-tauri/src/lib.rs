@@ -490,14 +490,18 @@ async fn set_default_app() -> CmdResult<String> {
     assoc::set_default()
 }
 
-/// Paths passed on the command line (Windows and Linux double-click).
+/// Paths passed on the command line (Windows and Linux double-click). The
+/// Linux launcher passes `file://` URIs (`%U`, so `tifmrcview://` links
+/// reach us too).
 fn paths_from_args(args: impl IntoIterator<Item = String>, cwd: Option<&Path>) -> Vec<String> {
     args.into_iter()
         .skip(1)
         .filter(|a| !a.starts_with('-'))
         .map(|a| {
-            let a = a.strip_prefix("file://").map(str::to_string).unwrap_or(a);
-            let p = PathBuf::from(&a);
+            let p = match a.starts_with("file://") {
+                true => tauri::Url::parse(&a).ok().and_then(|u| u.to_file_path().ok()).unwrap_or_default(),
+                false => PathBuf::from(&a),
+            };
             match cwd {
                 Some(c) if p.is_relative() => c.join(p),
                 _ => p,
@@ -559,6 +563,35 @@ fn target_window(app: &AppHandle, path: &str) -> String {
     format!("w{}", state.next_window.fetch_add(1, Ordering::Relaxed) + 2)
 }
 
+/// The newest `tifmrcview://install-plugin` link the UI has not picked up.
+#[derive(Default)]
+struct InstallRequest(Mutex<Option<plugins::market::InstallLink>>);
+
+#[tauri::command]
+fn take_install_request(state: State<'_, InstallRequest>) -> Option<plugins::market::InstallLink> {
+    state.0.lock().unwrap().take()
+}
+
+/// Handles URLs the OS opened us with: an install link brings the main
+/// window to the front, where the UI asks before installing anything.
+/// Everything else (files on macOS, malformed links) is ignored here.
+fn handle_links(app: &AppHandle, urls: impl IntoIterator<Item = String>) {
+    let Some(link) = urls.into_iter().find_map(|u| plugins::market::parse_install_link(&u)) else {
+        return;
+    };
+    *app.state::<InstallRequest>().0.lock().unwrap() = Some(link);
+    let windows = app.webview_windows();
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort_by_key(|l| (l.as_str() != "main", l.as_str()));
+    // With no window yet, the main window picks the link up when it loads.
+    if let Some(w) = labels.first().and_then(|l| windows.get(*l)) {
+        let _ = app.emit_to(w.label(), "install-request", ());
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     // Cascade from the window in front so the new one doesn't hide it.
     let pos = app
@@ -595,15 +628,45 @@ pub fn run() {
         }));
     }
     builder
+        // After single-instance: it forwards a second instance's link here.
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .manage(update::Pending::default())
+        .manage(InstallRequest::default())
+        .manage(plugins::MarketCache::default())
         .register_uri_scheme_protocol("tmvplugin", plugins::serve)
         .setup(|app| {
             let dir = plugins::user_dir(app.handle());
             plugins::registry::Registry::global().configure(dir.clone(), &app.package_info().version.to_string());
             app.manage(plugins::Plugins::new(dir));
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Windows / Linux: a link to a running app comes through the
+                // single-instance plugin; macOS: through the open-URL event.
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |e| handle_links(&handle, e.urls().into_iter().map(String::from)));
+                // Cold start: Windows / Linux pass the link as the only argument.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    handle_links(app.handle(), urls.into_iter().map(String::from));
+                }
+                // Installers register the scheme (NSIS registry key, .deb/.rpm
+                // desktop file, macOS Info.plist). Development builds and
+                // AppImages are not installed, so register them at runtime.
+                #[cfg(any(windows, target_os = "linux"))]
+                {
+                    #[cfg(target_os = "linux")]
+                    let unpacked = cfg!(debug_assertions) || app.env().appimage.is_some();
+                    #[cfg(windows)]
+                    let unpacked = cfg!(debug_assertions);
+                    if unpacked {
+                        if let Err(e) = app.deep_link().register_all() {
+                            eprintln!("could not register tifmrcview:// links: {e}");
+                        }
+                    }
+                }
+            }
             let dir = app.path().app_config_dir().ok();
             std::thread::spawn(move || assoc::first_run(dir));
             Ok(())
@@ -636,6 +699,9 @@ pub fn run() {
             plugins::plugin_uninstall,
             plugins::plugin_set_disabled,
             plugins::open_market,
+            plugins::plugin_market_list,
+            plugins::plugin_install_from_market,
+            take_install_request,
             update::check_update,
             update::install_update,
             find_models,
@@ -656,10 +722,13 @@ pub fn run() {
                 state.side.lock().unwrap().remove(label);
             }
             // macOS delivers double-clicked files as an event, not as argv.
+            // tifmrcview:// links arrive here too; the deep-link plugin
+            // passes them to `handle_links`.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = _event {
                 let paths = urls
                     .into_iter()
+                    .filter(|u| u.scheme() == "file")
                     .filter_map(|u| u.to_file_path().ok())
                     .filter(|p| p.is_file())
                     .map(|p| p.to_string_lossy().into_owned())

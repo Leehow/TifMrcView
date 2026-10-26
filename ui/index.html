@@ -198,6 +198,15 @@
       <h3>插件</h3>
       <button id="plugin-close" class="small" title="关闭 (Esc)">✕</button>
     </div>
+    <div id="market-confirm" hidden>
+      <div id="mc-title" class="pl-name"></div>
+      <div id="mc-desc" class="dim"></div>
+      <div id="mc-msg" class="dim"></div>
+      <div class="row">
+        <button id="mc-install" class="small primary">安装</button>
+        <button id="mc-cancel" class="small">取消</button>
+      </div>
+    </div>
     <div id="plugin-list"></div>
     <div class="row">
       <button id="plugin-market" class="small primary" title="在浏览器里打开插件市场，下载插件包 (.zip)">插件市场</button>
@@ -207,6 +216,11 @@
       <button id="plugin-dir" class="small" title="把 .js 插件放进这个文件夹，然后重新加载">打开插件文件夹</button>
       <button id="plugin-reload" class="small" title="重新加载界面以载入新插件">重新加载</button>
     </div>
+    <div class="dlg-head">
+      <h3>插件市场</h3>
+      <button id="market-refresh" class="small" title="重新读取插件市场的插件列表">刷新</button>
+    </div>
+    <div id="market-list"></div>
     <div class="dlg-head">
       <h3>更新</h3>
     </div>

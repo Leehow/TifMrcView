@@ -349,5 +349,14 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .plugin-row .dim { font-size: 12px; }
 .pl-name { font-weight: 600; }
 .pl-err { color: #cf222e; font-size: 12px; }
+#market-confirm { margin: 8px 0 4px; padding: 10px 12px 2px; border: 1px solid var(--accent); border-radius: 10px; }
+#market-confirm .dim { font-size: 12px; margin-top: 4px; }
+#market-confirm .dim:empty { display: none; }
+#market-confirm #mc-msg.pl-err { color: #cf222e; }
+.market-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.market-row .pl-text { flex: 1; min-width: 0; }
+.market-row .dim { font-size: 12px; }
+.market-row button { flex: none; }
+#market-list > .dim { padding: 8px 0; font-size: 12px; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }

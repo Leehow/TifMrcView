@@ -226,6 +226,13 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "tifmrcview"
+        ]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OTNDQ0RCMDY4RDI0N0IKUldSN0pJMEcyOHlUU0cyZVNFNDZLM3J4Yzk1L0IyeTFxUkJRM1B4SUtaejhkM0I0Y29ORDRIK1gK",
       "endpoints": [
