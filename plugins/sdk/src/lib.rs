@@ -625,12 +625,16 @@ pub struct Chunk {
     pub plane: u32,
     /// Bytes per decoded row; 0 = `w * samples * dtype size`.
     pub stride: u32,
+    /// Decoded bytes to skip before the first row, e.g. `z * h * stride` to
+    /// take one slice of a compressed 3D block. Needs TifMrcView 0.5.0
+    /// (a recipe using it is written as version 2).
+    pub skip: u64,
 }
 
 impl Chunk {
     /// Uncompressed single-sample bytes at `offset..offset+length` of the file.
     pub fn file(offset: u64, length: u64, rect: [u32; 4]) -> Chunk {
-        Chunk { source: 0, codec: Codec::Raw, dtype: None, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0 }
+        Chunk { source: 0, codec: Codec::Raw, dtype: None, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0, skip: 0 }
     }
     pub fn codec(mut self, c: Codec) -> Chunk {
         self.codec = c;
@@ -652,6 +656,10 @@ impl Chunk {
         self.stride = s;
         self
     }
+    pub fn skip(mut self, bytes: u64) -> Chunk {
+        self.skip = bytes;
+        self
+    }
 }
 
 /// How to build one page. See [`Chunk`]. Chunks are applied in order, so
@@ -664,6 +672,8 @@ pub struct Recipe {
 
 pub const RECIPE_MAGIC: &[u8; 4] = b"TMVR";
 pub const CHUNK_SIZE: usize = 48;
+/// Chunk size in version 2 recipes (with `skip`).
+pub const CHUNK_SIZE_V2: usize = 56;
 /// Chunk dtype code meaning "the page's dtype".
 pub const DTYPE_OF_PAGE: u8 = 0xff;
 
@@ -681,15 +691,18 @@ impl Recipe {
     pub fn inline(&mut self, bytes: &[u8], codec: Codec, rect: [u32; 4]) -> &mut Chunk {
         let offset = self.payload.len() as u64;
         self.payload.extend_from_slice(bytes);
-        self.chunks.push(Chunk { source: 1, codec, dtype: None, flags: 0, samples: 1, offset, length: bytes.len() as u64, rect, plane: 0, stride: 0 });
+        self.chunks.push(Chunk { source: 1, codec, dtype: None, flags: 0, samples: 1, offset, length: bytes.len() as u64, rect, plane: 0, stride: 0, skip: 0 });
         self.chunks.last_mut().unwrap()
     }
 
     /// The binary form `tmv_page` returns.
+    /// Version 1 unless a chunk uses `skip`, so older apps keep working.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(16 + self.chunks.len() * CHUNK_SIZE + self.payload.len());
+        let v2 = self.chunks.iter().any(|c| c.skip > 0);
+        let size = if v2 { CHUNK_SIZE_V2 } else { CHUNK_SIZE };
+        let mut out = Vec::with_capacity(16 + self.chunks.len() * size + self.payload.len());
         out.extend_from_slice(RECIPE_MAGIC);
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(if v2 { 2u32 } else { 1 }).to_le_bytes());
         out.extend_from_slice(&(self.chunks.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
         for c in &self.chunks {
@@ -705,6 +718,9 @@ impl Recipe {
             }
             out.extend_from_slice(&c.plane.to_le_bytes());
             out.extend_from_slice(&c.stride.to_le_bytes());
+            if v2 {
+                out.extend_from_slice(&c.skip.to_le_bytes());
+            }
         }
         out.extend_from_slice(&self.payload);
         out

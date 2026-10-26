@@ -453,6 +453,7 @@ impl Source for WasmSource {
                 let f = self.recipe(page).ok().and_then(|r| match r.chunks.as_slice() {
                     [c] if !c.inline
                         && c.codec == recipe::codec::RAW
+                        && c.skip == 0
                         && c.samples == 1
                         && c.flags & !recipe::flags::BIG_ENDIAN == 0
                         && c.rect == [0, 0, self.info.width, self.info.height]

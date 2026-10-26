@@ -17,7 +17,9 @@ use crate::image::{DType, ImageInfo, Plane, PlaneData};
 
 pub const MAGIC: &[u8; 4] = b"TMVR";
 const HEADER: usize = 16;
+/// Chunk size in recipe version 1; version 2 adds `skip` (8 bytes).
 const CHUNK: usize = 48;
+const CHUNK_V2: usize = 56;
 /// Chunk dtype code meaning "the page's dtype".
 const DTYPE_OF_PAGE: u8 = 0xff;
 
@@ -65,6 +67,9 @@ pub struct Chunk {
     pub rect: [usize; 4],
     pub plane: usize,
     pub stride: usize,
+    /// Decoded bytes to skip before the first row (version 2), e.g. to pick
+    /// one Z slice out of a compressed 3D block.
+    pub skip: u64,
 }
 
 #[derive(Debug)]
@@ -86,15 +91,17 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Recipe> {
     if bytes.len() < HEADER || &bytes[..4] != MAGIC {
         bail!("插件返回的页面描述格式不对");
     }
-    if u32_at(&bytes, 4) != 1 {
-        bail!("插件返回的页面描述版本不支持（{}）", u32_at(&bytes, 4));
-    }
+    let size = match u32_at(&bytes, 4) {
+        1 => CHUNK,
+        2 => CHUNK_V2,
+        v => bail!("插件返回的页面描述版本不支持（{v}）"),
+    };
     let n = u32_at(&bytes, 8) as usize;
-    let table = n.checked_mul(CHUNK).and_then(|t| t.checked_add(HEADER)).filter(|&t| t <= bytes.len());
+    let table = n.checked_mul(size).and_then(|t| t.checked_add(HEADER)).filter(|&t| t <= bytes.len());
     let table = table.context("插件返回的页面描述被截断")?;
     let mut chunks = Vec::with_capacity(n);
     for i in 0..n {
-        let c = &bytes[HEADER + i * CHUNK..HEADER + (i + 1) * CHUNK];
+        let c = &bytes[HEADER + i * size..HEADER + (i + 1) * size];
         let rect = [u32_at(c, 24), u32_at(c, 28), u32_at(c, 32), u32_at(c, 36)].map(|v| v as usize);
         let chunk = Chunk {
             inline: match c[0] {
@@ -111,7 +118,11 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Recipe> {
             rect,
             plane: u32_at(c, 40) as usize,
             stride: u32_at(c, 44) as usize,
+            skip: if size == CHUNK_V2 { u64_at(c, 48) } else { 0 },
         };
+        if chunk.skip > 0 && (chunk.flags & flags::HILO != 0 || chunk.codec == codec::JPEG) {
+            bail!("页面描述里的 skip 不能用于 hi/lo 或 JPEG 块");
+        }
         if chunk.codec > codec::PACKBITS {
             bail!("页面描述里的压缩方式 {} 不支持", chunk.codec);
         }
@@ -188,6 +199,7 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
     let rows = if c.flags & flags::HILO != 0 { c.rect[3] } else { rows };
     // Never more than the chunk can contribute to the page (decompression bombs).
     let want = stride.checked_mul(rows).filter(|&n| n <= 1 << 34).context("图像块太大")?;
+    let skip = usize::try_from(c.skip).ok().filter(|&k| k <= 1 << 34).context("图像块太大")?;
     let src_all = if c.inline { payload } else { file };
     let src = usize::try_from(c.offset)
         .ok()
@@ -195,7 +207,7 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
         .and_then(|(o, l)| src_all.get(o..o.checked_add(l)?))
         .with_context(|| format!("第 {} 块的数据位置超出了文件", i + 1))?;
     let mut bytes: Cow<[u8]> = match c.codec {
-        codec::RAW => Cow::Borrowed(src),
+        codec::RAW => Cow::Borrowed(src.get(skip..).unwrap_or(&[])),
         codec::JPEG => {
             if size != 1 || !(c.samples == 1 || c.samples == 3) {
                 bail!("JPEG 块只能是 8 位灰度或 RGB");
@@ -203,7 +215,11 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
             let img = image::load_from_memory_with_format(src, image::ImageFormat::Jpeg)?;
             Cow::Owned(if c.samples == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() })
         }
-        codec => Cow::Owned(decompress(codec, src, want)?),
+        codec => {
+            let mut v = decompress(codec, src, skip + want)?;
+            v.drain(..skip.min(v.len()));
+            Cow::Owned(v)
+        }
     };
     if c.codec == codec::JPEG && stride != row {
         bail!("JPEG 块不能指定行宽");
@@ -370,8 +386,9 @@ mod tests {
 
     /// Writes a recipe the way the SDK does.
     pub(crate) fn build(chunks: &[Chunk], payload: &[u8]) -> Vec<u8> {
+        let v2 = chunks.iter().any(|c| c.skip > 0);
         let mut out = MAGIC.to_vec();
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(if v2 { 2u32 } else { 1 }).to_le_bytes());
         out.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
         for c in chunks {
@@ -384,13 +401,16 @@ mod tests {
             }
             out.extend_from_slice(&(c.plane as u32).to_le_bytes());
             out.extend_from_slice(&(c.stride as u32).to_le_bytes());
+            if v2 {
+                out.extend_from_slice(&c.skip.to_le_bytes());
+            }
         }
         out.extend_from_slice(payload);
         out
     }
 
     fn chunk(offset: u64, length: u64, rect: [usize; 4]) -> Chunk {
-        Chunk { inline: false, codec: 0, dtype: DTYPE_OF_PAGE, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0 }
+        Chunk { inline: false, codec: 0, dtype: DTYPE_OF_PAGE, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0, skip: 0 }
     }
 
     fn run(info: &ImageInfo, chunks: &[Chunk], file: &[u8], payload: &[u8]) -> Result<Vec<Plane>> {
@@ -403,7 +423,7 @@ mod tests {
 
     #[test]
     fn parse_roundtrip_and_rejects_garbage() {
-        let c = Chunk { inline: true, codec: codec::ZSTD, dtype: 2, flags: flags::HILO, samples: 3, offset: 5, length: 9, rect: [1, 2, 3, 4], plane: 1, stride: 20 };
+        let c = Chunk { inline: true, codec: codec::ZSTD, dtype: 2, flags: flags::HILO, samples: 3, offset: 5, length: 9, rect: [1, 2, 3, 4], plane: 1, stride: 20, skip: 0 };
         let r = parse(build(std::slice::from_ref(&c), b"xyz")).unwrap();
         assert_eq!(r.chunks, std::slice::from_ref(&c));
         assert_eq!(r.payload, b"xyz");
@@ -488,6 +508,31 @@ mod tests {
 
         let pb = [2u8, 1, 2, 3, 0xfe, 9]; // literal 1 2 3, then 9 x3
         assert_eq!(decompress(codec::PACKBITS, &pb, 100).unwrap(), [1, 2, 3, 9, 9, 9]);
+    }
+
+    #[test]
+    fn skip_picks_a_slice_of_a_3d_block() {
+        // A zlib block of 3 slices of 3x2 u16; the page is slice 1.
+        let info = fake_info(3, 2, 1, 1, 1, DType::U16);
+        let block: Vec<u8> = (0..18u16).flat_map(|v| v.to_le_bytes()).collect();
+        let mut zl = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+        std::io::Write::write_all(&mut zl, &block).unwrap();
+        let zl = zl.finish().unwrap();
+        let mut c = chunk(0, zl.len() as u64, [0, 0, 3, 2]);
+        c.codec = codec::ZLIB;
+        c.skip = 12;
+        let bytes = build(&[c.clone()], b"");
+        assert_eq!(u32_at(&bytes, 4), 2);
+        assert_eq!(parse(bytes).unwrap().chunks[0].skip, 12);
+        let want: Vec<f64> = (6..12).map(|v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[c], &zl, b"").unwrap()[0]), want);
+        // Raw data too, and a skip past the end is an error, not a panic.
+        let mut r = chunk(0, block.len() as u64, [0, 0, 3, 2]);
+        r.skip = 24;
+        let want: Vec<f64> = (12..18).map(|v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[r.clone()], &block, b"").unwrap()[0]), want);
+        r.skip = 1000;
+        assert!(run(&info, &[r], &block, b"").is_err());
     }
 
     #[test]

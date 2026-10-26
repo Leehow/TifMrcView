@@ -190,14 +190,14 @@ Binary, little-endian:
 ```
 offset  size  header
 0       4     magic "TMVR"
-4       4     u32 version = 1
+4       4     u32 version = 1 (48-byte chunks) or 2 (56-byte chunks)
 8       4     u32 chunk count N
 12      4     reserved, 0
-16      48·N  chunks
-16+48N  …     inline payload
+16      S·N   chunks (S = 48 or 56)
+16+S·N  …     inline payload
 ```
 
-Each chunk (48 bytes):
+Each chunk (48 bytes; version 2 adds `skip`):
 
 | Offset | Type | Field |
 | --- | --- | --- |
@@ -211,6 +211,7 @@ Each chunk (48 bytes):
 | 24 | u32 ×4 | destination rectangle `x, y, w, h` in page pixels (clipped to the page; chunks entirely outside are skipped) |
 | 40 | u32 | `plane`: page plane that sample 0 goes to; sample *s* goes to `plane + s`, samples landing past `samplesPerPage` are dropped |
 | 44 | u32 | `stride`: bytes per decoded row, 0 = `w · samples · size` |
+| 48 | u64 | `skip` (version 2 only): decoded bytes to drop before the first row, e.g. `z · h · stride` to take one Z slice of a compressed 3D block (HDF5 chunks). Not with hi/lo or JPEG. Needs app 0.5.0; the SDK writes version 2 only when a chunk uses it. |
 
 Codecs (`codec`, also for the `decompress` import):
 
