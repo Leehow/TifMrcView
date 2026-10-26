@@ -24,6 +24,7 @@ const pluginHost = {
   broken: new Map(), // package id -> {id, source, error}: packages that did not register
   listeners: new Map(), // event -> Set(fn)
   loading: null, // {source, pkg} of the script being loaded
+  manifests: new Map(), // package id -> plugin.json
   native: [],
   dir: "",
   appVersion: "",
@@ -38,6 +39,24 @@ function setPluginEnabled(id, on) {
   if (on) off.delete(id);
   else off.add(id);
   pref.set("plugins.disabled", [...off]);
+  syncDisabled().then(() => reopenIfAffected(id));
+}
+
+/** Tells the backend which plugins are off, so format and metadata plugins (WebAssembly) follow the switches too. */
+function syncDisabled() {
+  return invoke("plugin_set_disabled", { ids: pref.get("plugins.disabled", []) }).catch((e) =>
+    console.warn("plugin_set_disabled", e),
+  );
+}
+
+/** Re-reads the open file when a format or metadata plugin for it was switched on or off. */
+function reopenIfAffected(id) {
+  const m = pluginHost.manifests.get(id);
+  if (!m || !m.wasm || !S.info || S.axis !== "xy") return;
+  const ext = (S.info.path.match(/\.([^./\\]+)$/) || [])[1];
+  if (!ext) return;
+  const exts = [...(m.formats || []).flatMap((f) => f.ext || []), ...((m.metadata || {}).ext || [])];
+  if (exts.some((e) => String(e).replace(/^\./, "").toLowerCase() === ext.toLowerCase())) openPath(S.info.path, true);
 }
 
 /** Calls the Rust half of a plugin. */
@@ -318,6 +337,7 @@ function userPluginUrl(path) {
 
 /** Loads an installed package ({id, main, error}) from `plugin_scan` or `plugin_install`. */
 async function loadPackage(p) {
+  if (p.manifest) pluginHost.manifests.set(p.id, p.manifest);
   if (p.error) {
     pluginHost.broken.set(p.id, { id: p.id, source: "已安装", error: p.error });
     return;
@@ -330,6 +350,7 @@ async function loadPackage(p) {
 
 async function loadPlugins() {
   try {
+    await syncDisabled();
     const scan = await invoke("plugin_scan");
     pluginHost.native = scan.native;
     pluginHost.dir = scan.dir;
@@ -364,7 +385,7 @@ async function installPackage() {
     setTimeout(() => location.reload(), 1000);
     return;
   }
-  await loadPackage({ id: m.id, main: m.main || "index.js" });
+  await loadPackage({ id: m.id, main: m.main || "index.js", manifest: m });
   renderPluginList();
   const err = pluginHost.broken.get(m.id);
   toast(err ? `已安装 ${label}，但出错：${err.error}` : `已安装 ${label}`, err ? 6000 : 3500);
