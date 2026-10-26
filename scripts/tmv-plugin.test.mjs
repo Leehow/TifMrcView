@@ -92,7 +92,7 @@ test("source checks share manifest rules and distinguish a missing build", (t) =
   fs.writeFileSync(path.join(dir, "Cargo.toml"), "");
   assert.deepEqual(checkPlugin(dir).errors, []);
   assert.match(checkPlugin(dir).notes[0], /manifest only/);
-  for (const [field, value] of [["id", "r_16"], ["version", "bad"], ["apiVersion", 2], ["apiVersion", null], ["minAppVersion", "0.6.0"], ["minAppVersion", "bad"], ["main", "../index.js"]]) {
+  for (const [field, value] of [["id", "r_16"], ["version", "bad"], ["apiVersion", 3], ["permissions", ["fs"]], ["apiVersion", null], ["minAppVersion", "0.6.0"], ["minAppVersion", "bad"], ["main", "../index.js"]]) {
     write({ ...manifest, [field]: value });
     assert.ok(checkPlugin(dir).errors.some((e) => e.includes(field)), `${field}: ${value}`);
   }

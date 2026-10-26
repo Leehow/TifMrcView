@@ -169,8 +169,12 @@ export function checkPlugin(input, { appVersion = "0.5.0" } = {}) {
     errors.push(...validateManifest(manifest, folder, files));
     if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return { manifest, errors, warnings, notes };
     if (typeof manifest.id === "string" && !/^[a-z0-9-]{1,64}$/.test(manifest.id)) errors.push("id must use at most 64 lowercase letters, digits or - for the current app");
-    if (Object.hasOwn(manifest, "apiVersion") && (!Number.isInteger(manifest.apiVersion) || manifest.apiVersion < 0 || manifest.apiVersion > 1)) {
-      errors.push("apiVersion is unsupported; this app accepts API version 1 (default)");
+    if (Object.hasOwn(manifest, "apiVersion") && (!Number.isInteger(manifest.apiVersion) || manifest.apiVersion < 0 || manifest.apiVersion > 2)) {
+      errors.push("apiVersion is unsupported; this app accepts API version 1 (default) or 2 (sandboxed)");
+    }
+    // Permission names the sandbox host checks (SANDBOX_PERMISSIONS in ui/plugin-sandbox.js).
+    if (manifest.permissions != null && !(Array.isArray(manifest.permissions) && manifest.permissions.every((p) => ["state", "ui", "metadata", "export", "settings"].includes(p)))) {
+      errors.push('permissions must be a list of "state", "ui", "metadata", "export", "settings"');
     }
     try {
       versionParts(appVersion);
