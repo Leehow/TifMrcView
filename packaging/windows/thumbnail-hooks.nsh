@@ -52,7 +52,12 @@
   Delete "$INSTDIR\tmv_thumbnail_win.old"
   Rename "$INSTDIR\tmv_thumbnail_win.dll" "$INSTDIR\tmv_thumbnail_win.old"
   Delete /REBOOTOK "$INSTDIR\tmv_thumbnail_win.old"
-  File "${__FILEDIR__}\..\..\src-tauri\target\thumbnail-windows\tmv_thumbnail_win.dll"
+  ; __FILEDIR__ is target\[<triple>\]release\nsis\x64 here, where Tauri writes installer.nsi.
+  !if /FileExists "${__FILEDIR__}\..\..\..\thumbnail-windows\tmv_thumbnail_win.dll"
+    File "${__FILEDIR__}\..\..\..\thumbnail-windows\tmv_thumbnail_win.dll"
+  !else
+    File "${__FILEDIR__}\..\..\..\..\thumbnail-windows\tmv_thumbnail_win.dll"
+  !endif
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}" "" "TifMrcView thumbnails"
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}\InprocServer32" "" "$INSTDIR\tmv_thumbnail_win.dll"
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}\InprocServer32" "ThreadingModel" "Apartment"
