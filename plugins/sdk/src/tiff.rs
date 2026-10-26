@@ -121,12 +121,13 @@ pub fn parse(
         max_ifds.min(MAX_IFDS)
     };
     let mut ifds = Vec::new();
-    let mut seen = Vec::new();
+    let mut seen = alloc::collections::BTreeSet::new();
+    let mut ifd_at = next;
     while next != 0 && next < size && ifds.len() < limit {
-        if seen.contains(&next) {
+        if !seen.insert(next) {
             break;
         }
-        seen.push(next);
+        ifd_at = next;
         let cb = read(next, count_size)?;
         let n = if big {
             e.u64(&cb, 0)
@@ -175,7 +176,7 @@ pub fn parse(
             e.u32(nb, 0) as u64
         };
         ifds.push(Ifd {
-            offset: seen[seen.len() - 1],
+            offset: ifd_at,
             entries,
         });
     }

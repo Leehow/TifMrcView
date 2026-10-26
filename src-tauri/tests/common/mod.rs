@@ -6,6 +6,7 @@
 
 pub mod czi;
 pub mod lasx;
+pub mod lsm;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
