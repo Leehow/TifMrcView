@@ -308,9 +308,42 @@ pub async fn plugin_install_from_market(
 pub fn serve<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: tauri::http::Request<Vec<u8>>) -> Response<Vec<u8>> {
     let not_found = || Response::builder().status(StatusCode::NOT_FOUND).body(vec![]).unwrap();
     let path = crate::percent_decode(req.uri().path().trim_start_matches('/'));
+    // Reserved core resources cannot be replaced by installed plugin files.
+    if path == "__sandbox/runtime.js" {
+        return Response::builder()
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header("X-Content-Type-Options", "nosniff")
+            .body(include_bytes!("../../../ui/sandbox/tmv-plugin-api.js").to_vec())
+            .unwrap();
+    }
     let Some(dir) = ctx.app_handle().try_state::<Plugins>().and_then(|p| p.dir.clone()) else {
         return not_found();
     };
+    if let Some(id) = path.strip_prefix("__sandbox/") {
+        if !package::valid_id(id) {
+            return not_found();
+        }
+        let Ok(m) = package::read_installed(&dir.join(id), &app_version(ctx.app_handle())) else {
+            return not_found();
+        };
+        if m.raw["apiVersion"] != 2 {
+            return not_found();
+        }
+        // These documents have their own restrictive CSP (no inherited 'self'
+        // issue). The parent frame-src confines navigation to __sandbox/.
+        // Wry normalizes Windows requests back to tmvplugin:// internally;
+        // the browser still needs the http://tmvplugin.localhost URL.
+        let html = sandbox_document(id, &m.main, cfg!(windows));
+        return Response::builder()
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONTENT_SECURITY_POLICY, "sandbox allow-scripts")
+            .header("X-Content-Type-Options", "nosniff")
+            .body(html.into_bytes())
+            .unwrap();
+    }
     // Never walks out of the folder (see `package::resolve`).
     let Some((file, mime)) = package::resolve(&dir, &path) else {
         return not_found();
@@ -327,9 +360,37 @@ pub fn serve<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: tauri::http::Request
     }
 }
 
+fn sandbox_document(id: &str, main: &str, windows: bool) -> String {
+    // safe_rel rejects traversal; percent-encoding also makes unusual filenames
+    // safe in both HTML attributes and the CSP source list.
+    let main: String = main
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    include_str!("../../../ui/sandbox/frame.html")
+        .replace("__TMV_ID__", id)
+        .replace("__TMV_MAIN__", &format!("{id}/{main}"))
+        .replace("__TMV_ORIGIN__", if windows { "http://tmvplugin.localhost" } else { "tmvplugin://localhost" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_page_limits_scripts_and_escapes_paths() {
+        let html = sandbox_document("demo", "a\"<&.js", false);
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("tmvplugin://localhost/demo/a%22%3C%26.js"));
+        assert!(!html.contains("__TMV_"));
+        assert!(sandbox_document("demo", "index.js", true).contains("http://tmvplugin.localhost/demo/index.js"));
+    }
 
     #[test]
     fn market_next_to_update_feed() {

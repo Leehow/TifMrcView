@@ -13,8 +13,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
-/// Plugin API version this host implements (`PLUGIN_API_VERSION` in plugin-host.js).
-pub const API_VERSION: u64 = 1;
+/// Highest package API supported. API 1 keeps its trusted legacy loader;
+/// API 2 uses the isolated frame bridge in ui/plugin-sandbox.js.
+pub const API_VERSION: u64 = 2;
 /// Plugins that ship inside the app and cannot be installed over.
 pub const BUILTIN: &[&str] = &["i18n"];
 pub const MANIFEST: &str = "plugin.json";
@@ -445,7 +446,8 @@ mod tests {
         assert!(bad(r#"{"id":"demo","name":"x"}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"../x.js"}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"index.html"}"#));
-        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2}"#));
+        assert!(!bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2}"#));
+        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":3}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","minAppVersion":"0.10.0"}"#));
         assert!(!bad(r#"{"id":"demo-2","name":"x","version":"1.0.0","minAppVersion":"0.1.9"}"#));
     }
