@@ -73,10 +73,26 @@ jobs:
       - name: plugin crates
         if: runner.os == 'Linux'
         run: |
-          for p in plugins/*/; do
+          for p in plugins/*/ templates/format-plugin/; do
             [ -f "$p/Cargo.toml" ] || continue
             cargo test --manifest-path "$p/Cargo.toml" --target-dir target/plugin-tests
           done
+
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+
+      - name: Plugin manifests and checker
+        if: runner.os == 'Linux'
+        run: |
+          node --test scripts/tmv-plugin.test.mjs
+          for p in plugins/*/ templates/format-plugin/; do
+            [ -f "$p/plugin.json" ] || continue
+            node scripts/tmv-plugin.mjs check "$p"
+          done
+          node templates/format-plugin/build.mjs
+          node scripts/tmv-plugin.mjs check templates/format-plugin/dist/*.zip
 
   bundle:
     needs: version

@@ -1,0 +1,29 @@
+[package]
+name = "tmv-plugin-r16"
+version = "1.0.0"
+description = "A minimal R16 format plugin for TifMrcView"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+tifmrcview-plugin-sdk = { path = "../../plugins/sdk" }
+# Outside this repository, vendor the SDK and use path = "vendor/sdk",
+# or replace the dependency above with this (pin rev to a reviewed commit):
+# tifmrcview-plugin-sdk = { git = "https://github.com/Leehow/TifMrcView", rev = "<commit>" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Built on its own, never as part of the app.
+[workspace]
+# The vendored SDK has its own workspace too.
+exclude = ["vendor/sdk"]

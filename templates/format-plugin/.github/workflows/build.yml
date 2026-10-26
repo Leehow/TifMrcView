@@ -1,0 +1,36 @@
+name: build plugin
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Standalone setup: vendor/sdk + tools/ as described in the README.
+      # A checkout folder matching plugin.json's id also works for forks.
+      - name: Test, build and check
+        run: |
+          id=$(node -p "require('./plugin.json').id")
+          mkdir -p "$RUNNER_TEMP/$id"
+          cp -R . "$RUNNER_TEMP/$id/"
+          cd "$RUNNER_TEMP/$id"
+          cargo test
+          node build.mjs
+          node tools/tmv-plugin.mjs check dist/*.zip
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp dist/*.zip "$GITHUB_WORKSPACE/artifacts/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin
+          path: artifacts/*.zip
+          if-no-files-found: error
