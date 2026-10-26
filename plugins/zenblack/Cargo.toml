@@ -1,0 +1,24 @@
+[package]
+name = "tmv-plugin-zenblack"
+version = "1.0.0"
+description = "Zeiss ZEN black / AIM LSM reader for TifMrcView (WebAssembly format plugin)"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+tifmrcview-plugin-sdk = { path = "../sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Built on its own, never as part of the app.
+[workspace]
