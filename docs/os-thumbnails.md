@@ -113,8 +113,8 @@ There is no WebView2 initialization or Tauri dependency in this DLL. No Windows
 preview-pane handler is included.
 
 The bundle hook builds the DLL for the selected target and stages it under the
-ignored `target/thumbnail-windows/`. `tauri.windows.conf.json` ships it beside the
-app executable. NSIS currentUser hooks register:
+ignored `target/thumbnail-windows/`. The NSIS post-install hook copies it beside
+the app executable (moving a DLL Explorer still holds aside first) and registers:
 
 - HKCU\Software\Classes\CLSID\{926e1d8f-eb25-48d9-a251-9d27bf165d8a}\InprocServer32,
   with ThreadingModel=Apartment.

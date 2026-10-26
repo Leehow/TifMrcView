@@ -46,6 +46,13 @@
   Push $0
   Push $1
   SetRegView 64
+  ; Built by scripts/build-thumbnails.mjs (beforeBundleCommand).
+  SetOutPath "$INSTDIR"
+  ; Explorer keeps a loaded DLL open: move it aside so the update can write.
+  Delete "$INSTDIR\tmv_thumbnail_win.old"
+  Rename "$INSTDIR\tmv_thumbnail_win.dll" "$INSTDIR\tmv_thumbnail_win.old"
+  Delete /REBOOTOK "$INSTDIR\tmv_thumbnail_win.old"
+  File "${__FILEDIR__}\..\..\src-tauri\target\thumbnail-windows\tmv_thumbnail_win.dll"
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}" "" "TifMrcView thumbnails"
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}\InprocServer32" "" "$INSTDIR\tmv_thumbnail_win.dll"
   WriteRegStr HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}\InprocServer32" "ThreadingModel" "Apartment"
@@ -63,6 +70,8 @@
   DeleteRegKey HKCU "Software\Classes\CLSID\${TMV_THUMB_CLSID}"
   DeleteRegKey /ifempty HKCU "${TMV_THUMB_BACKUP}"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ; Explorer may still hold the DLL; remove it at the next reboot then.
+  Delete /REBOOTOK "$INSTDIR\tmv_thumbnail_win.dll"
   Pop $1
   Pop $0
 !macroend
