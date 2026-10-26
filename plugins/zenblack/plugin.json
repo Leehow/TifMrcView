@@ -14,6 +14,26 @@
     "en": {
       "name": "Zeiss ZEN black",
       "description": "Opens LSM files saved by Zeiss ZEN black / AIM and shows the objective, lasers, detectors, pinholes and the acquisition settings of every track"
+    },
+    "de": {
+      "name": "Zeiss ZEN black",
+      "description": "Öffnet mit Zeiss ZEN black / AIM gespeicherte LSM-Dateien und zeigt Objektiv, Laser, Detektoren, Lochblenden und die Aufnahmeparameter jeder Spur"
+    },
+    "ja": {
+      "name": "Zeiss ZEN black",
+      "description": "Zeiss ZEN black / AIM で保存した LSM を開き、対物レンズ、レーザー、検出器、ピンホール、各トラックの取得条件を表示します"
+    },
+    "es": {
+      "name": "Zeiss ZEN black",
+      "description": "Abre LSM guardados por Zeiss ZEN black / AIM y muestra el objetivo, los láseres, los detectores, los pinholes y los parámetros de adquisición de cada pista"
+    },
+    "fr": {
+      "name": "Zeiss ZEN black",
+      "description": "Ouvre les LSM enregistrés par Zeiss ZEN black / AIM et affiche l’objectif, les lasers, les détecteurs, les diaphragmes confocaux et les paramètres d’acquisition de chaque piste"
+    },
+    "ru": {
+      "name": "Zeiss ZEN black",
+      "description": "Открывает LSM из Zeiss ZEN black / AIM и показывает объектив, лазеры, детекторы, пинхолы и параметры съёмки каждого трека"
     }
   },
   "details": {
@@ -28,6 +48,36 @@
       "The plugin also reads the private structures of the LSM file and gives the app the pixel size, Z step, time interval, channel names and colours, and turns them into acquisition settings in the image-info panel. \"ZEN black image\": recording name, user, acquisition time, scan type and mode, size of every dimension, bit depth, pixel size, field of view and scan zoom, measured time interval. \"ZEN black microscope\": objective, lasers with their power, and the beam splitters and filters in the light path.",
       "Each channel gets its own group: its track, detector, dye, filter, detection range, pinhole (µm), detector gain, amplifier gain and offset, excitation wavelengths with transmission, sampling (averaging) mode and number, pixel dwell time and bit depth. \"ZEN black all settings\" flattens the LSM info structure and the whole scan-information tree so you can search it.",
       "There is nothing to configure: install it and open .lsm files. Needs TifMrcView 0.5.0 or newer."
+    ],
+    "de": [
+      "Öffnet LSM-Dateien von ZEN black / AIM, der Software der konfokalen Zeiss-LSM-Mikroskope (LSM 510, 710, 780, 880, 900, 980 und weitere). TifMrcView selbst enthält keinen LSM-Lesecode; mit diesem Plugin lassen sich .lsm-Dateien mit Kanälen, Z-Stapeln und Zeitserien öffnen, unkomprimiert oder LZW-komprimiert (mit oder ohne Prädiktor). Auch in Dateien über 4 GB werden die Daten korrekt lokalisiert; jede Position und Kachel erscheint als eigene Serie. Die gespeicherten Vorschaubilder werden übersprungen. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; die App selbst dekomprimiert die Pixel parallel, genauso schnell wie bei integrierten Formaten.",
+      "Das Plugin liest außerdem die herstellerspezifischen LSM-Strukturen, übergibt der App Pixelgröße, Z-Schritt, Zeitintervall sowie Kanalnamen und -farben und zeigt sie als Aufnahmeparameter im Bildinformationsbereich. „ZEN black-Bild“: Aufnahmename, Benutzer, Aufnahmezeit, Scantyp und -modus, Größe jeder Dimension, Bittiefe, Pixelgröße, Bildfeld und Scanzoom, gemessenes Zeitintervall. „ZEN black-Mikroskop“: Objektiv, Laser mit Leistung sowie Strahlteiler und Filter im Strahlengang.",
+      "Jeder Kanal erhält eine eigene Gruppe: Spur, Detektor, Farbstoff, Filter, Detektionsbereich, Lochblende (µm), Detektorverstärkung, Verstärker-Gain und Offset, Anregungswellenlängen mit Transmission, Abtastmodus (Mittelung) und Anzahl, Pixelverweilzeit und Bittiefe. „Alle ZEN black-Einstellungen“ listet die LSM-Informationsstruktur und den gesamten Scaninformationsbaum zum Durchsuchen auf.",
+      "Keine Konfiguration nötig: nach der Installation .lsm-Dateien öffnen. Benötigt TifMrcView 0.5.0 oder neuer."
+    ],
+    "ja": [
+      "Zeiss の LSM 共焦点顕微鏡（LSM 510、710、780、880、900、980 など）のソフトウェア ZEN black / AIM で保存した LSM ファイルを開きます。TifMrcView 本体には LSM の読み取りコードは含まれていません。このプラグインを入れると、非圧縮または LZW 圧縮（予測処理の有無を問わず）の .lsm を、チャンネル、Z スタック、時系列に対応して開けます。4 GB を超えるファイルでもデータ位置を正しく特定し、各位置とタイルを別のシリーズとして表示します。ファイル内のサムネイルは読み飛ばします。WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。ピクセルの展開はアプリ本体が並列に行うため、内蔵形式と同じ速度で読み込めます。",
+      "LSM ファイル固有の構造も読み取り、ピクセルサイズ、Z ステップ、時間間隔、チャンネル名と色をアプリに渡し、画像情報パネルに取得条件として表示します。「ZEN black 画像」には記録名、ユーザー、取得時刻、走査タイプとモード、各次元のサイズ、ビット深度、ピクセルサイズ、視野、走査ズーム、実測時間間隔を表示します。「ZEN black 顕微鏡」には対物レンズ、レーザーと出力、光路内のビームスプリッターとフィルターを表示します。",
+      "チャンネルごとに、トラック、検出器、色素、フィルター、検出範囲、ピンホール（µm）、検出器ゲイン、アンプゲインとオフセット、励起波長と透過率、サンプリング（平均化）のモードと回数、ピクセル滞留時間、ビット深度をまとめます。「ZEN black 全設定」では LSM 情報構造と走査情報ツリー全体を展開して検索できます。",
+      "設定は不要です。インストール後に .lsm を開くだけで使えます。TifMrcView 0.5.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos LSM guardados por ZEN black / AIM, el software de los confocales Zeiss LSM (LSM 510, 710, 780, 880, 900, 980 y otros). TifMrcView no incluye código LSM; este complemento abre .lsm con canales, pilas Z y series temporales, sin comprimir o comprimidos con LZW (con o sin predictor). Localiza correctamente los datos de archivos de más de 4 GB y presenta cada posición y tesela como una serie independiente. Omite las miniaturas del archivo. Se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; la propia aplicación descomprime los píxeles en paralelo, con la misma rapidez que los formatos integrados.",
+      "El complemento también lee las estructuras privadas del LSM, proporciona a la aplicación el tamaño de píxel, el paso Z, el intervalo temporal y los nombres y colores de los canales, y los muestra como parámetros de adquisición. «Imagen ZEN black»: nombre de grabación, usuario, hora de adquisición, tipo y modo de barrido, tamaño de cada dimensión, profundidad de bits, tamaño de píxel, campo de visión, zoom de barrido e intervalo temporal medido. «Microscopio ZEN black»: objetivo, láseres y sus potencias, divisores de haz y filtros del trayecto óptico.",
+      "Cada canal tiene su propio grupo: pista, detector, colorante, filtro, rango de detección, pinhole (µm), ganancia del detector, ganancia y offset del amplificador, longitudes de onda de excitación con transmisión, modo y número de muestreos (promediado), tiempo de permanencia por píxel y profundidad de bits. «Todos los parámetros ZEN black» despliega la estructura de información LSM y todo el árbol de información de barrido para poder buscarlos.",
+      "No requiere configuración: instálalo y abre archivos .lsm. Requiere TifMrcView 0.5.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers LSM enregistrés par ZEN black / AIM, le logiciel des confocaux Zeiss LSM (LSM 510, 710, 780, 880, 900, 980 et autres). TifMrcView ne contient pas de code LSM ; cette extension ouvre les .lsm avec canaux, piles Z et séries temporelles, non compressés ou compressés en LZW (avec ou sans prédicteur). Les données des fichiers de plus de 4 Go sont correctement localisées et chaque position et tuile apparaît comme une série distincte. Les vignettes du fichier sont ignorées. L’extension s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert ; l’application décompresse elle-même les pixels en parallèle, aussi vite que pour les formats intégrés.",
+      "L’extension lit aussi les structures privées du LSM, transmet à l’application la taille de pixel, le pas Z, l’intervalle temporel, les noms et couleurs des canaux et les présente comme paramètres d’acquisition. « Image ZEN black » : nom de l’enregistrement, utilisateur, heure d’acquisition, type et mode de balayage, taille de chaque dimension, profondeur de bits, taille de pixel, champ de vue, zoom de balayage et intervalle temporel mesuré. « Microscope ZEN black » : objectif, lasers et puissances, séparateurs de faisceau et filtres du trajet optique.",
+      "Chaque canal dispose de son propre groupe : piste, détecteur, colorant, filtre, plage de détection, diaphragme confocal (µm), gain du détecteur, gain et offset de l’amplificateur, longueurs d’onde d’excitation et transmission, mode et nombre d’échantillonnages (moyennage), temps de séjour par pixel et profondeur de bits. « Tous les paramètres ZEN black » déroule la structure d’informations LSM et tout l’arbre des informations de balayage pour permettre leur recherche.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des fichiers .lsm. Nécessite TifMrcView 0.5.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы LSM, сохранённые ZEN black / AIM — программой конфокальных микроскопов Zeiss LSM (LSM 510, 710, 780, 880, 900, 980 и других). В самом TifMrcView нет кода LSM; плагин открывает .lsm с каналами, Z-стеками и временными сериями, без сжатия или со сжатием LZW (с предиктором или без него). Данные файлов объёмом более 4 ГБ адресуются корректно; каждая позиция и плитка отображается отдельной серией. Миниатюры в файле пропускаются. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; приложение само распаковывает пиксели параллельно, так же быстро, как для встроенных форматов.",
+      "Плагин также читает собственные структуры LSM, передаёт приложению размер пикселя, шаг Z, временной интервал, названия и цвета каналов и показывает их как параметры съёмки. «Изображение ZEN black»: название записи, пользователь, время съёмки, тип и режим сканирования, размер каждого измерения, битовая глубина, размер пикселя, поле зрения и масштаб сканирования, измеренный временной интервал. «Микроскоп ZEN black»: объектив, лазеры и их мощности, светоделители и фильтры оптического пути.",
+      "У каждого канала своя группа: трек, детектор, краситель, фильтр, диапазон детекции, пинхол (µm), усиление детектора, усиление и смещение усилителя, длины волн возбуждения с пропусканием, режим и число выборок (усреднение), время выдержки пикселя и битовая глубина. «Все параметры ZEN black» разворачивает информационную структуру LSM и всё дерево параметров сканирования для поиска.",
+      "Настройка не требуется: установите плагин и открывайте .lsm. Требуется TifMrcView 0.5.0 или новее."
     ]
   }
 }

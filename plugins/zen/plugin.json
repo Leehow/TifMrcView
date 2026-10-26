@@ -14,6 +14,26 @@
     "en": {
       "name": "Zeiss ZEN",
       "description": "Opens CZI files saved by Zeiss ZEN and shows the objective, lasers, detectors, pinhole, scan settings, Airyscan processing and other acquisition settings"
+    },
+    "de": {
+      "name": "Zeiss ZEN",
+      "description": "Öffnet mit Zeiss ZEN gespeicherte CZI-Dateien und zeigt Objektiv, Laser, Detektoren, Lochblende, Scaneinstellungen, Airyscan-Verarbeitung und weitere Aufnahmeparameter"
+    },
+    "ja": {
+      "name": "Zeiss ZEN",
+      "description": "Zeiss ZEN で保存した CZI を開き、対物レンズ、レーザー、検出器、ピンホール、走査設定、Airyscan 処理などの取得条件を表示します"
+    },
+    "es": {
+      "name": "Zeiss ZEN",
+      "description": "Abre CZI guardados por Zeiss ZEN y muestra el objetivo, los láseres, los detectores, el pinhole, el barrido, el procesamiento Airyscan y otros parámetros de adquisición"
+    },
+    "fr": {
+      "name": "Zeiss ZEN",
+      "description": "Ouvre les CZI enregistrés par Zeiss ZEN et affiche l’objectif, les lasers, les détecteurs, le diaphragme confocal, le balayage, le traitement Airyscan et les autres paramètres d’acquisition"
+    },
+    "ru": {
+      "name": "Zeiss ZEN",
+      "description": "Открывает CZI из Zeiss ZEN и показывает объектив, лазеры, детекторы, пинхол, параметры сканирования, обработку Airyscan и другие параметры съёмки"
     }
   },
   "details": {
@@ -28,6 +48,36 @@
       "The plugin also turns the embedded XML into acquisition settings in the image-info panel. \"ZEN image\": software version, acquisition time, pixel type and bit depth, size of every dimension, original compression, pixel size and Z step, user. \"ZEN microscope\": microscope model, objective name, magnification, numerical aperture, immersion and working distance, total magnification.",
       "Each channel gets its own group: fluorophore, excitation and emission wavelengths, detection range, acquisition mode, laser lines and transmission, exposure time, pinhole (AU and µm), detector with its voltage, gain, offset and binning, pixel dwell time, frame time, averaging, scan speed, zoom and direction, and the Airyscan mode. \"ZEN processing\" lists the Airyscan strength, parameter estimation and deconvolution, and \"ZEN all settings\" flattens every metadata field so you can search it.",
       "There is nothing to configure: install it and open .czi files. The status bar then shows \"Zeiss ZEN CZI\" with the ZEN version that saved the file. Needs TifMrcView 0.4.0 or newer."
+    ],
+    "de": [
+      "Öffnet CZI-Dateien von ZEN, der Software der Zeiss-Lichtmikroskope (LSM-Konfokalmikroskope und Airyscan, Axio Imager, Celldiscoverer und weitere). TifMrcView selbst enthält keinen CZI-Lesecode; mit diesem Plugin lassen sich .czi-Dateien mit Kanälen, Z-Stapeln, Zeitserien und Mosaiken öffnen, unkomprimiert oder mit Zstd- bzw. JPEG-Unterblöcken. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; die App selbst dekomprimiert und setzt die Pixel parallel zusammen, genauso schnell wie bei integrierten Formaten.",
+      "Das Plugin bereitet außerdem das eingebettete XML als Aufnahmeparameter im Bildinformationsbereich auf. „ZEN-Bild“: Softwareversion, Aufnahmezeit, Pixeltyp und Bittiefe, Größe jeder Dimension, ursprüngliche Komprimierung, Pixelgröße und Z-Schritt, Benutzer. „ZEN-Mikroskop“: Mikroskopmodell, Objektivname, Vergrößerung, numerische Apertur, Immersion und Arbeitsabstand, Gesamtvergrößerung.",
+      "Jeder Kanal erhält eine eigene Gruppe: Fluorophor, Anregungs- und Emissionswellenlängen, Detektionsbereich, Aufnahmemodus, Laserlinien und Transmission, Belichtungszeit, Lochblende (AU und µm), Detektor mit Spannung, Verstärkung, Offset und Binning, Pixelverweilzeit, Bildzeit, Mittelung, Scangeschwindigkeit, Zoom und Richtung sowie Airyscan-Modus. „ZEN-Verarbeitung“ zeigt Airyscan-Stärke, Parameterschätzung und Dekonvolution; „Alle ZEN-Einstellungen“ listet sämtliche Metadatenfelder zum Durchsuchen auf.",
+      "Keine Konfiguration nötig: nach der Installation .czi-Dateien öffnen. Die Statusleiste zeigt dann „Zeiss ZEN CZI“ und die ZEN-Version an, mit der die Datei gespeichert wurde. Benötigt TifMrcView 0.4.0 oder neuer."
+    ],
+    "ja": [
+      "Zeiss の光学顕微鏡（LSM 共焦点・Airyscan、Axio Imager、Celldiscoverer など）のソフトウェア ZEN で保存した CZI ファイルを開きます。TifMrcView 本体には CZI の読み取りコードは含まれていません。このプラグインを入れると、非圧縮または Zstd・JPEG サブブロックを使った .czi を、チャンネル、Z スタック、時系列、モザイクに対応して開けます。プラグインは WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。ピクセルの展開と結合はアプリ本体が並列に行うため、内蔵形式と同じ速度で読み込めます。",
+      "埋め込み XML を整理し、画像情報パネルに取得条件として表示します。「ZEN 画像」にはソフトウェアバージョン、取得時刻、ピクセル型とビット深度、各次元のサイズ、元の圧縮方式、ピクセルサイズ、Z ステップ、ユーザーを表示します。「ZEN 顕微鏡」には顕微鏡モデル、対物レンズ名、倍率、開口数、液浸、作動距離、総合倍率を表示します。",
+      "チャンネルごとに、蛍光色素、励起・蛍光波長、検出範囲、取得モード、レーザー波長と透過率、露光時間、ピンホール（AU・µm）、検出器と電圧・ゲイン・オフセット・ビニング、ピクセル滞留時間、フレーム時間、平均化、走査速度・ズーム・方向、Airyscan モードをまとめます。「ZEN 処理」には Airyscan 強度、パラメーター推定、デコンボリューションを表示し、「ZEN 全設定」にはすべてのメタデータ項目を展開して検索できるようにします。",
+      "設定は不要です。インストール後に .czi を開くと、ステータスバーに「Zeiss ZEN CZI」と保存に使った ZEN バージョンが表示されます。TifMrcView 0.4.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos CZI guardados por ZEN, el software de los microscopios ópticos Zeiss (confocales LSM y Airyscan, Axio Imager, Celldiscoverer y otros). TifMrcView no incluye código para CZI; al instalar este complemento, abre .czi con canales, pilas Z, series temporales y mosaicos, sin comprimir o con subbloques Zstd o JPEG. El complemento se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; la propia aplicación descomprime y ensambla los píxeles en paralelo, con la misma rapidez que los formatos integrados.",
+      "El complemento también convierte el XML integrado en parámetros de adquisición en el panel de información de imagen. «Imagen ZEN»: versión del software, hora de adquisición, tipo de píxel y profundidad de bits, tamaño de cada dimensión, compresión original, tamaño de píxel y paso Z, usuario. «Microscopio ZEN»: modelo, nombre del objetivo, aumento, apertura numérica, inmersión, distancia de trabajo y aumento total.",
+      "Cada canal tiene su propio grupo: fluoróforo, longitudes de onda de excitación y emisión, rango de detección, modo de adquisición, líneas láser y transmisión, exposición, pinhole (AU y µm), detector con voltaje, ganancia, offset y binning, tiempo de permanencia por píxel, tiempo de fotograma, promediado, velocidad, zoom y dirección de barrido y modo Airyscan. «Procesamiento ZEN» enumera la intensidad Airyscan, la estimación de parámetros y la deconvolución; «Todos los parámetros ZEN» despliega todos los campos de metadatos para buscarlos.",
+      "No requiere configuración: instálalo y abre archivos .czi. La barra de estado muestra «Zeiss ZEN CZI» con la versión de ZEN que guardó el archivo. Requiere TifMrcView 0.4.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers CZI enregistrés par ZEN, le logiciel des microscopes optiques Zeiss (confocaux LSM et Airyscan, Axio Imager, Celldiscoverer et autres). TifMrcView ne contient pas de code CZI ; cette extension permet d’ouvrir les .czi avec canaux, piles Z, séries temporelles et mosaïques, non compressés ou avec des sous-blocs Zstd ou JPEG. Elle s’exécute en WebAssembly dans un environnement isolé et ne peut lire que le fichier ouvert ; l’application décompresse et assemble elle-même les pixels en parallèle, aussi vite que pour les formats intégrés.",
+      "L’extension convertit aussi le XML intégré en paramètres d’acquisition dans le panneau d’informations. « Image ZEN » : version du logiciel, heure d’acquisition, type de pixel et profondeur de bits, taille de chaque dimension, compression d’origine, taille de pixel et pas Z, utilisateur. « Microscope ZEN » : modèle, nom de l’objectif, grossissement, ouverture numérique, immersion, distance de travail et grossissement total.",
+      "Chaque canal dispose de son propre groupe : fluorophore, longueurs d’onde d’excitation et d’émission, plage de détection, mode d’acquisition, raies laser et transmission, exposition, diaphragme confocal (AU et µm), détecteur avec tension, gain, offset et binning, temps de séjour par pixel, durée d’image, moyennage, vitesse, zoom et sens de balayage, mode Airyscan. « Traitement ZEN » indique l’intensité Airyscan, l’estimation des paramètres et la déconvolution ; « Tous les paramètres ZEN » déroule tous les champs de métadonnées pour permettre leur recherche.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des fichiers .czi. La barre d’état affiche « Zeiss ZEN CZI » avec la version de ZEN ayant enregistré le fichier. Nécessite TifMrcView 0.4.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы CZI, сохранённые ZEN — программой оптических микроскопов Zeiss (конфокальные LSM и Airyscan, Axio Imager, Celldiscoverer и другие). В самом TifMrcView нет кода CZI; после установки плагина файлы .czi открываются с каналами, Z-стеками, временными сериями и мозаиками, без сжатия либо с подблоками Zstd или JPEG. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; распаковку и сшивку пикселей приложение выполняет само, параллельно, так же быстро, как для встроенных форматов.",
+      "Плагин также преобразует встроенный XML в параметры съёмки на панели информации. «Изображение ZEN»: версия программы, время съёмки, тип пикселя и битовая глубина, размер каждого измерения, исходное сжатие, размер пикселя и шаг Z, пользователь. «Микроскоп ZEN»: модель, название объектива, увеличение, числовая апертура, иммерсия, рабочее расстояние и общее увеличение.",
+      "У каждого канала своя группа: флуорофор, длины волн возбуждения и излучения, диапазон детекции, режим съёмки, линии лазеров и пропускание, экспозиция, пинхол (AU и µm), детектор с напряжением, усилением, смещением и биннингом, время выдержки пикселя, время кадра, усреднение, скорость, масштаб и направление сканирования, режим Airyscan. «Обработка ZEN» показывает интенсивность Airyscan, оценку параметров и деконволюцию, а «Все параметры ZEN» разворачивает все поля метаданных для поиска.",
+      "Настройка не требуется: установите плагин и открывайте .czi. В строке состояния появится «Zeiss ZEN CZI» с версией ZEN, сохранившей файл. Требуется TifMrcView 0.4.0 или новее."
     ]
   }
 }

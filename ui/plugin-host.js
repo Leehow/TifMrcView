@@ -422,8 +422,7 @@ const thisWindow = T.webviewWindow.getCurrentWebviewWindow();
 function uiLang() {
   const rec = pluginHost.plugins.get("i18n");
   if (!rec || !rec.active) return "zh";
-  const sys = typeof systemLang === "function" ? systemLang() : "zh";
-  return pref.get("plugin.i18n.lang", null) || sys;
+  return (document.documentElement.lang || "zh").split("-")[0];
 }
 
 /** A plugins.json text field in the interface language (as the market page picks it). */
@@ -451,6 +450,7 @@ function loadMarket(refresh = false) {
     .finally(() => {
       market.loading = null;
       renderMarket();
+      renderPluginList();
     });
   renderMarket();
   return market.loading;
@@ -461,7 +461,7 @@ function marketButton(item) {
   const b = document.createElement("button");
   b.className = "small";
   if (market.busy.has(p.id)) {
-    b.textContent = "正在安装…";
+    b.textContent = item.state === "update" ? "正在更新…" : "正在安装…";
     b.disabled = true;
     return b;
   }
@@ -484,7 +484,11 @@ function marketButton(item) {
       b.disabled = true;
       return b;
   }
-  b.addEventListener("click", () => installFromMarket(p.id));
+  b.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    installFromMarket(p.id);
+  });
   return b;
 }
 
@@ -506,8 +510,17 @@ function renderMarket() {
     }
     return;
   }
-  const list = market.list.filter((l) => l.state !== "builtin");
-  if (!list.length) note("插件市场上暂时没有插件");
+  const available = market.list.filter((l) => !["builtin", "installed", "update"].includes(l.state));
+  const query = $("market-search").value.trim().toLowerCase();
+  const list = available.filter(({ entry: p }) =>
+    [p.id, p.name, p.description, ...Object.values(p.i18n || {}).flatMap((tr) => [tr.name, tr.description])]
+      .some((s) => (s || "").toLowerCase().includes(query)),
+  );
+  if (!list.length) {
+    if (query) note("没有匹配的插件");
+    else if (market.list.some((l) => l.state === "installed" || l.state === "update")) note("插件市场上的插件都已安装");
+    else note("插件市场上暂时没有插件");
+  }
   for (const item of list) {
     const p = item.entry;
     const row = document.createElement("div");
@@ -531,6 +544,7 @@ async function installFromMarket(id, quiet = false) {
   if (market.busy.has(id)) return "busy";
   market.busy.add(id);
   renderMarket();
+  renderPluginList();
   let error = null;
   try {
     // The backend's plugin-installed event then loads it (see below).
@@ -608,6 +622,8 @@ $("mc-install").addEventListener("click", async () => {
 });
 $("mc-cancel").addEventListener("click", hideConfirm);
 $("market-refresh").addEventListener("click", () => loadMarket(true));
+$("market-search").addEventListener("input", renderMarket);
+new MutationObserver(renderMarket).observe(document.documentElement, { attributeFilter: ["lang"] });
 thisWindow.listen("install-request", takeInstallRequest);
 T.event.listen("plugin-installed", (e) => {
   const { manifest, origin } = e.payload;
@@ -630,6 +646,7 @@ async function uninstallPackage(id) {
   pluginHost.plugins.delete(id);
   pluginHost.broken.delete(id);
   renderPluginList();
+  if (market.list) loadMarket();
   toast(`已卸载 ${rec ? rec.def.name || id : id}`);
 }
 
@@ -692,7 +709,16 @@ function pluginRow({ name, version, description, source, error, rec, pkg }) {
     text.append(err);
   }
   row.append(cb, text);
-  if (pkg) row.append(uninstallButton(pkg));
+  if (pkg) {
+    const actions = document.createElement("div");
+    actions.className = "pl-actions";
+    const remove = uninstallButton(pkg);
+    remove.disabled = market.busy.has(pkg);
+    actions.append(remove);
+    const update = (market.list || []).find((item) => item.entry.id === pkg && item.state === "update");
+    if (update) actions.append(marketButton(update));
+    row.append(actions);
+  }
   return row;
 }
 
@@ -740,7 +766,7 @@ function togglePluginDialog(force) {
 
 // ---------- updates ----------
 
-const updater = { info: null, busy: false };
+const updater = { info: null, busy: false, dismissed: false };
 
 function setUpdateStatus(text, info = null) {
   $("update-status").textContent = text;
@@ -763,7 +789,7 @@ function showUpdate(info) {
   $("update-text").textContent = `发现新版本 ${info.version}（当前 ${info.current}）`;
   setUpdateStatus(`可更新到 ${info.version}`, info);
   $("update-go").disabled = false;
-  bar.hidden = false;
+  bar.hidden = updater.dismissed;
 }
 
 async function checkUpdate(manual) {
@@ -832,6 +858,10 @@ $("update-check").addEventListener("click", () => checkUpdate(true));
 $("update-auto").addEventListener("change", (e) => pref.set("update.auto", e.target.checked));
 $("update-go").addEventListener("click", installUpdate);
 $("update-install").addEventListener("click", installUpdate);
+$("update-close").addEventListener("click", () => {
+  updater.dismissed = true;
+  $("update-bar").hidden = true;
+});
 $("update-later").addEventListener("click", () => {
   if (updater.info) pref.set("update.skip", updater.info.version);
   $("update-bar").hidden = true;

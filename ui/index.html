@@ -53,8 +53,11 @@
 
   <div id="update-bar" hidden>
     <span id="update-text"></span>
-    <button id="update-go" class="small">立即更新并重启</button>
-    <button id="update-later" class="small">忽略这个版本</button>
+    <button id="update-close" title="关闭" aria-label="关闭">✕</button>
+    <div class="update-actions">
+      <button id="update-go" class="small primary">立即更新并重启</button>
+      <button id="update-later" class="small">忽略这个版本</button>
+    </div>
   </div>
 
   <div id="body">
@@ -220,6 +223,7 @@
       <h3>插件市场</h3>
       <button id="market-refresh" class="small" title="重新读取插件市场的插件列表">刷新</button>
     </div>
+    <input id="market-search" type="search" placeholder="搜索插件" aria-label="搜索插件" />
     <div id="market-list"></div>
     <div class="dlg-head">
       <h3>更新</h3>

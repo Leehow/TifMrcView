@@ -14,6 +14,26 @@
     "en": {
       "name": "Nikon NIS-Elements",
       "description": "Opens ND2 files saved by Nikon NIS-Elements, with multipoint positions, Z stacks, time series and channels, and shows the objective, camera, lasers, filters and other acquisition settings"
+    },
+    "de": {
+      "name": "Nikon NIS-Elements",
+      "description": "Öffnet ND2-Dateien von Nikon NIS-Elements mit Mehrpunktpositionen, Z-Stapeln, Zeitserien und Kanälen und zeigt Objektiv, Kamera, Laser, Filter und weitere Aufnahmeparameter"
+    },
+    "ja": {
+      "name": "Nikon NIS-Elements",
+      "description": "Nikon NIS-Elements の ND2 を多点位置、Z スタック、時系列、チャンネルに対応して開き、対物レンズ、カメラ、レーザー、フィルターなどの取得条件を表示します"
+    },
+    "es": {
+      "name": "Nikon NIS-Elements",
+      "description": "Abre ND2 de Nikon NIS-Elements con posiciones multipunto, pilas Z, series temporales y canales, y muestra el objetivo, la cámara, los láseres, los filtros y otros parámetros de adquisición"
+    },
+    "fr": {
+      "name": "Nikon NIS-Elements",
+      "description": "Ouvre les ND2 de Nikon NIS-Elements avec positions multipoints, piles Z, séries temporelles et canaux, et affiche l’objectif, la caméra, les lasers, les filtres et les autres paramètres d’acquisition"
+    },
+    "ru": {
+      "name": "Nikon NIS-Elements",
+      "description": "Открывает ND2 из Nikon NIS-Elements с многоточечными позициями, Z-стеками, временными сериями и каналами, показывает объектив, камеру, лазеры, фильтры и другие параметры съёмки"
     }
   },
   "details": {
@@ -28,6 +48,36 @@
       "The plugin also turns the file's metadata into acquisition settings in the image-info panel. \"NIS image\": software version, acquisition time, size of every dimension, experiment loops, bit depth, compression, pixel size, Z step, time interval and stage position. \"NIS microscope\": microscope model, objective, magnification, numerical aperture, refractive index, zoom, pinhole, camera and Z drive, plus camera settings such as binning, exposure, gain and temperature.",
       "Each channel gets its own group: display colour, modality (fluorescence, brightfield, spinning disk or laser scanning confocal…), excitation and emission wavelengths, fluorescent probe, filter, pinhole, exposure time, binning, the laser lines in use with their power, and every microscope setting NIS-Elements recorded for that channel. \"NIS all settings\" flattens every metadata field so you can search it.",
       "There is nothing to configure: install it and open .nd2 files. The status bar then shows \"Nikon ND2\" with the NIS-Elements version that saved the file. Old JPEG 2000-based ND2 files (from before 2007) and lossy compressed ND2 files are not supported yet. Needs TifMrcView 0.5.0 or newer."
+    ],
+    "de": [
+      "Öffnet ND2-Dateien von NIS-Elements, der Software der Nikon-Mikroskope (Weitfeld, Spinning-Disk, A1/AX-Laserscanning-Konfokalmikroskope, Farbkameras für Hellfeld und weitere). TifMrcView selbst enthält keinen ND2-Lesecode; mit diesem Plugin lassen sich .nd2-Dateien mit Kanälen, Z-Stapeln und Zeitserien öffnen. Jede Probentischposition eines Mehrpunktexperiments wird als eigenes, auswählbares Bild angezeigt. Unterstützt werden unkomprimierte und verlustfrei komprimierte Dateien mit 8-Bit-, 16-Bit- und 32-Bit-Gleitkommadaten sowie 8-Bit-Farbbildern. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; die App selbst dekomprimiert die Pixel und trennt die Kanäle parallel, genauso schnell wie bei integrierten Formaten.",
+      "Das Plugin bereitet außerdem die Metadaten als Aufnahmeparameter im Bildinformationsbereich auf. „NIS-Bild“: Softwareversion, Aufnahmezeit, Größe jeder Dimension, Experimentabläufe, Bittiefe, Komprimierung, Pixelgröße, Z-Schritt, Zeitintervall und Probentischposition. „NIS-Mikroskop“: Mikroskopmodell, Objektiv, Vergrößerung, numerische Apertur, Brechungsindex, Zoom, Lochblende, Kamera und Z-Antrieb sowie Kameraeinstellungen wie Binning, Belichtung, Verstärkung und Temperatur.",
+      "Jeder Kanal erhält eine eigene Gruppe: Anzeigefarbe, Modalität (Fluoreszenz, Hellfeld, Spinning-Disk oder Laserscanning-Konfokal …), Anregungs- und Emissionswellenlängen, Fluoreszenzsonde, Filter, Lochblende, Belichtungszeit, Binning, verwendete Laserlinien mit Leistung und alle von NIS-Elements für diesen Kanal aufgezeichneten Mikroskopeinstellungen. „Alle NIS-Einstellungen“ listet sämtliche Metadatenfelder zum Durchsuchen auf.",
+      "Keine Konfiguration nötig: nach der Installation .nd2-Dateien öffnen. Die Statusleiste zeigt „Nikon ND2“ und die NIS-Elements-Version an, mit der die Datei gespeichert wurde. Alte JPEG-2000-basierte ND2-Dateien (vor 2007) und verlustbehaftet komprimierte ND2-Dateien werden noch nicht unterstützt. Benötigt TifMrcView 0.5.0 oder neuer."
+    ],
+    "ja": [
+      "Nikon 顕微鏡のソフトウェア NIS-Elements（広視野、スピニングディスク、A1/AX レーザー走査共焦点、明視野カラーカメラなど）で保存した ND2 を開きます。TifMrcView 本体には ND2 の読み取りコードは含まれていません。このプラグインを入れると、チャンネル、Z スタック、時系列を含む .nd2 を開け、多点実験の各ステージ位置を別の画像として切り替えられます。非圧縮および可逆圧縮のファイルに対応し、8 ビット、16 ビット、32 ビット浮動小数点のデータと 8 ビットカラー画像を読み取れます。WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。ピクセルの展開とチャンネル分離はアプリ本体が並列に行うため、内蔵形式と同じ速度で読み込めます。",
+      "ファイルのメタデータも整理し、画像情報パネルに取得条件として表示します。「NIS 画像」にはソフトウェアバージョン、取得時刻、各次元のサイズ、実験ループ、ビット深度、圧縮方式、ピクセルサイズ、Z ステップ、時間間隔、ステージ位置を表示します。「NIS 顕微鏡」には顕微鏡モデル、対物レンズ、倍率、開口数、屈折率、ズーム、ピンホール、カメラ、Z 駆動装置と、ビニング・露光・ゲイン・温度などのカメラ設定を表示します。",
+      "チャンネルごとに、表示色、観察方式（蛍光、明視野、スピニングディスク、レーザー走査共焦点など）、励起・蛍光波長、蛍光プローブ、フィルター、ピンホール、露光時間、ビニング、使用レーザー波長と出力、そのチャンネルについて NIS-Elements が記録したすべての顕微鏡設定をまとめます。「NIS 全設定」では全メタデータ項目を展開して検索できます。",
+      "設定は不要です。インストール後に .nd2 を開くと、ステータスバーに「Nikon ND2」と保存に使った NIS-Elements バージョンが表示されます。2007 年より前の JPEG 2000 ベースの ND2 と、非可逆圧縮の ND2 は未対応です。TifMrcView 0.5.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos ND2 guardados por NIS-Elements, el software de los microscopios Nikon (campo amplio, disco giratorio, confocales de barrido láser A1/AX, cámaras de campo claro en color y otros). TifMrcView no incluye código ND2; este complemento abre .nd2 con canales, pilas Z y series temporales, y cada posición de platina de un experimento multipunto se convierte en una imagen independiente seleccionable. Lee archivos sin comprimir o con compresión sin pérdida, con datos de 8 bits, 16 bits y coma flotante de 32 bits, e imágenes en color de 8 bits. Se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; la aplicación descomprime los píxeles y separa los canales en paralelo, con la misma rapidez que los formatos integrados.",
+      "También convierte los metadatos del archivo en parámetros de adquisición en el panel de información. «Imagen NIS»: versión del software, hora de adquisición, tamaño de cada dimensión, bucles del experimento, profundidad de bits, compresión, tamaño de píxel, paso Z, intervalo temporal y posición de platina. «Microscopio NIS»: modelo, objetivo, aumento, apertura numérica, índice de refracción, zoom, pinhole, cámara y accionamiento Z, además de ajustes de cámara como binning, exposición, ganancia y temperatura.",
+      "Cada canal tiene su propio grupo: color de visualización, modalidad (fluorescencia, campo claro, disco giratorio o confocal de barrido láser…), longitudes de onda de excitación y emisión, sonda fluorescente, filtro, pinhole, exposición, binning, líneas láser utilizadas con sus potencias y todos los ajustes del microscopio registrados por NIS-Elements para ese canal. «Todos los parámetros NIS» despliega todos los campos de metadatos para poder buscarlos.",
+      "No requiere configuración: instálalo y abre .nd2. La barra de estado muestra «Nikon ND2» con la versión de NIS-Elements que guardó el archivo. Aún no admite los antiguos ND2 basados en JPEG 2000 (anteriores a 2007) ni los ND2 con compresión con pérdida. Requiere TifMrcView 0.5.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers ND2 enregistrés par NIS-Elements, le logiciel des microscopes Nikon (champ large, disque rotatif, confocaux à balayage laser A1/AX, caméras couleur en champ clair et autres). TifMrcView ne contient pas de code ND2 ; cette extension ouvre les .nd2 avec canaux, piles Z et séries temporelles, et chaque position de platine d’une expérience multipoint devient une image distincte à sélectionner. Elle lit les fichiers non compressés ou compressés sans perte, avec données de 8 bits, 16 bits et flottantes de 32 bits, ainsi que les images couleur de 8 bits. Elle s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert ; l’application décompresse les pixels et sépare les canaux en parallèle, aussi vite que pour les formats intégrés.",
+      "L’extension convertit aussi les métadonnées en paramètres d’acquisition dans le panneau d’informations. « Image NIS » : version du logiciel, heure d’acquisition, taille de chaque dimension, boucles de l’expérience, profondeur de bits, compression, taille de pixel, pas Z, intervalle temporel et position de platine. « Microscope NIS » : modèle, objectif, grossissement, ouverture numérique, indice de réfraction, zoom, diaphragme confocal, caméra et entraînement Z, ainsi que les réglages de caméra : binning, exposition, gain et température.",
+      "Chaque canal dispose de son groupe : couleur d’affichage, modalité (fluorescence, champ clair, disque rotatif ou confocal à balayage laser…), longueurs d’onde d’excitation et d’émission, sonde fluorescente, filtre, diaphragme confocal, exposition, binning, raies laser utilisées et puissances, et tous les réglages du microscope enregistrés par NIS-Elements pour ce canal. « Tous les paramètres NIS » déroule tous les champs de métadonnées pour permettre leur recherche.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des .nd2. La barre d’état affiche « Nikon ND2 » avec la version de NIS-Elements ayant enregistré le fichier. Les anciens ND2 basés sur JPEG 2000 (avant 2007) et les ND2 compressés avec perte ne sont pas encore pris en charge. Nécessite TifMrcView 0.5.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы ND2, сохранённые NIS-Elements — программой микроскопов Nikon (широкопольных, с вращающимся диском, конфокальных A1/AX с лазерным сканированием, цветных камер светлого поля и других). В самом TifMrcView нет кода ND2; плагин открывает .nd2 с каналами, Z-стеками и временными сериями, а каждая позиция столика многоточечного эксперимента становится отдельным переключаемым изображением. Читаются файлы без сжатия и со сжатием без потерь, с данными на 8 бит, 16 бит и 32 бита с плавающей точкой, а также цветные 8-битные изображения. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; приложение распаковывает пиксели и разделяет каналы параллельно, так же быстро, как для встроенных форматов.",
+      "Плагин также преобразует метаданные в параметры съёмки на панели информации. «Изображение NIS»: версия программы, время съёмки, размер каждого измерения, циклы эксперимента, битовая глубина, сжатие, размер пикселя, шаг Z, временной интервал и позиция столика. «Микроскоп NIS»: модель, объектив, увеличение, числовая апертура, показатель преломления, масштаб, пинхол, камера и привод Z, а также настройки камеры: биннинг, экспозиция, усиление и температура.",
+      "У каждого канала своя группа: цвет отображения, метод (флуоресценция, светлое поле, вращающийся диск, конфокальное лазерное сканирование…), длины волн возбуждения и излучения, флуоресцентный зонд, фильтр, пинхол, экспозиция, биннинг, используемые линии лазеров с мощностями и все настройки микроскопа, записанные NIS-Elements для этого канала. «Все параметры NIS» разворачивает все поля метаданных для поиска.",
+      "Настройка не требуется: установите плагин и открывайте .nd2. В строке состояния появится «Nikon ND2» с версией NIS-Elements, сохранившей файл. Старые ND2 на основе JPEG 2000 (до 2007 года) и ND2 со сжатием с потерями пока не поддерживаются. Требуется TifMrcView 0.5.0 или новее."
     ]
   }
 }

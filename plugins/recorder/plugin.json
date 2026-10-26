@@ -12,6 +12,26 @@
     "en": {
       "name": "Video recorder",
       "description": "Records the Z / T series as MP4 with the current contrast, channels, annotations and scale bar"
+    },
+    "de": {
+      "name": "Videoaufnahme",
+      "description": "Nimmt die Z- / T-Serie als MP4 mit dem aktuellen Kontrast, den Kanälen, Anmerkungen und dem Maßstabsbalken auf"
+    },
+    "ja": {
+      "name": "動画録画",
+      "description": "現在のコントラスト、チャンネル、注釈、スケールバーを反映して Z / T シリーズを MP4 に録画します"
+    },
+    "es": {
+      "name": "Grabador de vídeo",
+      "description": "Graba la serie Z / T como MP4 con el contraste, los canales, las anotaciones y la barra de escala actuales"
+    },
+    "fr": {
+      "name": "Enregistreur vidéo",
+      "description": "Enregistre la série Z / T en MP4 avec le contraste, les canaux, les annotations et la barre d’échelle actuels"
+    },
+    "ru": {
+      "name": "Запись видео",
+      "description": "Записывает серию Z / T в MP4 с текущими настройками контраста, каналами, аннотациями и масштабной линейкой"
     }
   },
   "details": {
@@ -26,6 +46,36 @@
       "Once installed, a \"Record video (MP4)\" section appears in the Tools panel. Move the Z slider, press \"⇤ Set start\" and \"Set end ⇥\" to pick a range, then press \"● Record\" and choose where to save; \"■ Stop\" cancels at any time.",
       "\"Details ▾\" lets you choose the Z or T axis, exact first and last frames, the frame rate (1–60 fps), bounce (play backwards after the end), the region (whole image, selection or current view), the video size (auto, original, 1920, 1280, 720) and the quality. Auto size scales small images up by a whole factor to at least 1000 pixels so they stay crisp full screen; videos are at most 3840 × 2160.",
       "Encoding runs locally with the OpenH264 encoder built into TifMrcView: no ffmpeg needed, and images never leave your computer."
+    ],
+    "de": [
+      "Nimmt die Z-Schnitte oder die Zeitserie T eines mehrseitigen TIFF-, MRC-, CZI- oder anderen Bildstapels als H.264-MP4-Video auf. Jedes Bild wird genau wie in der Anzeige gerendert: Helligkeit und Kontrast, Kanalfarben und Sichtbarkeit, Anmerkungen und Maßstabsbalken erscheinen im Video – bereit für die Gruppenbesprechung, ergänzendes Material oder die Zusammenarbeit.",
+      "Nach der Installation erscheint im Werkzeugbereich der Abschnitt „Video aufnehmen (MP4)“. Verschieben Sie den Z-Regler und wählen Sie mit „⇤ Start setzen“ und „Ende setzen ⇥“ den Bereich. Klicken Sie dann auf „● Aufnehmen“ und wählen Sie den Speicherort; „■ Stopp“ bricht jederzeit ab.",
+      "Unter „Details ▾“ wählen Sie die Z- oder T-Achse, das genaue erste und letzte Bild, die Bildrate (1–60 fps), die Pendelwiedergabe (nach dem Ende rückwärts), den Bereich (ganzes Bild, Auswahl oder aktuelle Ansicht), die Videogröße (automatisch, Original, 1920, 1280, 720) und die Qualität. Die automatische Größe vergrößert kleine Bilder um einen ganzzahligen Faktor auf mindestens 1000 Pixel, damit sie im Vollbild scharf bleiben; Videos sind höchstens 3840 × 2160 Pixel groß.",
+      "Die Kodierung erfolgt lokal mit dem in TifMrcView integrierten OpenH264-Encoder: ffmpeg ist nicht erforderlich, und die Bilder verlassen Ihren Computer nicht."
+    ],
+    "ja": [
+      "複数ページの TIFF、MRC、CZI などのスタックの Z スライスや時系列 T を、H.264 の MP4 動画として録画します。各フレームは画面の表示どおりに描画され、明るさとコントラスト、チャンネルの色と表示状態、注釈、スケールバーがすべて動画に反映されます。研究室のミーティング、補足資料、共同研究者への共有にそのまま使えます。",
+      "インストールすると、ツールパネルに「動画録画 (MP4)」セクションが表示されます。Z スライダーを動かし、「⇤ 開始を設定」と「終了を設定 ⇥」で範囲を選び、「● 録画」を押して保存先を指定します。「■ 停止」でいつでも中止できます。",
+      "「詳細 ▾」では、Z または T 軸、最初と最後のフレーム、フレームレート（1～60 fps）、往復再生（末尾の後に逆再生）、範囲（画像全体、選択範囲、現在の表示）、動画サイズ（自動、元のサイズ、1920、1280、720）、画質を選べます。自動サイズでは、小さい画像を整数倍で少なくとも 1000 ピクセルまで拡大し、全画面でも鮮明に表示します。動画の最大サイズは 3840 × 2160 です。",
+      "エンコードは TifMrcView 内蔵の OpenH264 エンコーダーでローカルに実行します。ffmpeg は不要で、画像がコンピューターの外に送信されることはありません。"
+    ],
+    "es": [
+      "Graba los cortes Z o la serie temporal T de un TIFF multipágina, MRC, CZI u otra pila como vídeo MP4 H.264. Cada fotograma se renderiza tal como se ve: el brillo y el contraste, los colores y la visibilidad de los canales, las anotaciones y la barra de escala aparecen en el vídeo, listo para una reunión de grupo, material complementario o un colaborador.",
+      "Una vez instalado, aparece una sección «Grabar vídeo (MP4)» en el panel de herramientas. Mueve el deslizador Z y pulsa «⇤ Fijar inicio» y «Fijar final ⇥» para elegir el intervalo; después pulsa «● Grabar» y elige dónde guardar. «■ Detener» permite cancelar en cualquier momento.",
+      "«Detalles ▾» permite elegir el eje Z o T, los fotogramas inicial y final exactos, la tasa de fotogramas (1–60 fps), la reproducción de ida y vuelta (hacia atrás al llegar al final), la región (imagen completa, selección o vista actual), el tamaño del vídeo (automático, original, 1920, 1280, 720) y la calidad. El tamaño automático amplía las imágenes pequeñas por un factor entero hasta al menos 1000 píxeles para que se vean nítidas a pantalla completa; los vídeos tienen un máximo de 3840 × 2160.",
+      "La codificación se realiza localmente con el codificador OpenH264 integrado en TifMrcView: no se necesita ffmpeg y las imágenes nunca salen de tu ordenador."
+    ],
+    "fr": [
+      "Enregistre les coupes Z ou la série temporelle T d’un TIFF multipage, d’un MRC, d’un CZI ou d’une autre pile en vidéo MP4 H.264. Chaque image est rendue exactement comme à l’écran : luminosité et contraste, couleurs et visibilité des canaux, annotations et barre d’échelle figurent dans la vidéo, prête pour une réunion d’équipe, des données supplémentaires ou un collaborateur.",
+      "Après l’installation, une section « Enregistrer une vidéo (MP4) » apparaît dans le panneau Outils. Déplacez le curseur Z, puis utilisez « ⇤ Définir le début » et « Définir la fin ⇥ » pour choisir la plage. Cliquez ensuite sur « ● Enregistrer » et choisissez l’emplacement de sauvegarde ; « ■ Arrêter » permet d’annuler à tout moment.",
+      "« Détails ▾ » permet de choisir l’axe Z ou T, les première et dernière images exactes, la cadence (1–60 images/s), la lecture aller-retour (en sens inverse après la fin), la région (image entière, sélection ou vue actuelle), la taille de la vidéo (automatique, originale, 1920, 1280, 720) et la qualité. La taille automatique agrandit les petites images d’un facteur entier jusqu’à au moins 1000 pixels pour préserver leur netteté en plein écran ; les vidéos ne dépassent pas 3840 × 2160.",
+      "L’encodage s’effectue localement avec l’encodeur OpenH264 intégré à TifMrcView : ffmpeg n’est pas nécessaire et les images ne quittent jamais votre ordinateur."
+    ],
+    "ru": [
+      "Записывает Z-срезы или временную серию T многостраничного TIFF, MRC, CZI или другого стека в видео MP4 H.264. Каждый кадр отрисовывается точно так же, как на экране: яркость и контраст, цвета и видимость каналов, аннотации и масштабная линейка попадают в видео, готовое для встречи группы, дополнительных материалов или передачи коллеге.",
+      "После установки на панели инструментов появляется раздел «Запись видео (MP4)». Переместите ползунок Z и кнопками «⇤ Задать начало» и «Задать конец ⇥» выберите диапазон, затем нажмите «● Запись» и укажите место сохранения; «■ Стоп» позволяет отменить запись в любой момент.",
+      "В разделе «Подробности ▾» можно выбрать ось Z или T, точные первый и последний кадры, частоту кадров (1–60 кадров/с), воспроизведение туда и обратно (в обратном порядке после конца), область (всё изображение, выделение или текущий вид), размер видео (авто, исходный, 1920, 1280, 720) и качество. Автоматический размер увеличивает небольшие изображения в целое число раз как минимум до 1000 пикселей, сохраняя чёткость на полном экране; максимальный размер видео — 3840 × 2160.",
+      "Кодирование выполняется локально встроенным в TifMrcView кодировщиком OpenH264: ffmpeg не нужен, а изображения никогда не покидают ваш компьютер."
     ]
   }
 }
