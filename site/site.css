@@ -50,9 +50,10 @@ a:hover{text-decoration:underline}
 .nav .pill{font-size:12.5px;padding:0 14px;height:30px;margin-left:6px}
 .nav .tap{display:inline-flex;align-items:center;min-height:44px}
 .lang{position:relative}
-.lang>button{display:flex;align-items:center;gap:7px;background:none;border:0;border-radius:8px;padding:0 8px;min-height:44px;color:var(--ink);opacity:.85;font:inherit;font-size:13.5px;cursor:pointer}
+.lang>button{display:flex;align-items:center;gap:6px;background:none;border:0;border-radius:8px;padding:0 8px;min-height:44px;color:var(--ink);opacity:.9;font:inherit;font-size:14px;font-weight:500;cursor:pointer}
 .lang>button:hover{opacity:1}
-.flag{width:20px;height:14px;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.12);flex:none;display:block}
+.lang .ti,.lang .chev{flex:none;display:block}
+.lang .chev{opacity:.7}
 .lang ul{position:absolute;right:0;top:calc(100% + 2px);margin:0;padding:6px;list-style:none;background:var(--card);border:1px solid var(--hair);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.16);min-width:180px;z-index:50;display:none}
 .lang.open ul{display:block}
 .lang li button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:0 10px;min-height:40px;border-radius:9px;color:var(--ink);font:inherit;font-size:14px;cursor:pointer;text-align:left}
