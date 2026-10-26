@@ -4,6 +4,7 @@
 //! `latest.json` that CI publishes to the download site.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -23,7 +24,15 @@ pub struct UpdateInfo {
 
 #[tauri::command]
 pub async fn check_update(app: AppHandle, pending: State<'_, Pending>) -> Result<Option<UpdateInfo>, String> {
-    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let update = app
+        .updater_builder()
+        .timeout(Duration::from_secs(300))
+        .configure_client(|client| client.connect_timeout(Duration::from_secs(20)).read_timeout(Duration::from_secs(60)))
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
     let info = update.as_ref().map(|u| UpdateInfo {
         current: u.current_version.clone(),
         version: u.version.clone(),

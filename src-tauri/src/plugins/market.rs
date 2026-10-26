@@ -14,7 +14,7 @@
 use std::cmp::Ordering;
 use std::future::Future;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
@@ -227,29 +227,83 @@ pub async fn http_get(url: String, max: u64, https_only: bool, user_agent: &str)
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
-    let offline = |e: reqwest::Error| {
-        if e.is_timeout() {
-            anyhow!("连接插件市场超时，请检查网络后再试")
-        } else {
-            anyhow!("连不上插件市场，请检查网络后再试")
-        }
-    };
+    // reqwest's hyper-util connector already races IPv4/IPv6 (Happy
+    // Eyeballs, 300 ms fallback), including on Windows. Keep that default.
     let client = reqwest::Client::builder()
         .https_only(https_only)
         .user_agent(user_agent)
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(20))
+        .read_timeout(Duration::from_secs(60))
+        // The loop below owns retries, including response-body timeouts.
+        .retry(reqwest::retry::never())
         .build()
         .map_err(offline)?;
-    let mut resp = client.get(&url).send().await.map_err(offline)?;
+    http_get_retry(&client, &url, max, Duration::from_secs(300), [Duration::from_secs(1), Duration::from_secs(3)]).await
+}
+
+/// A network failure shown to the user as just `message` (the interface
+/// translates these exact strings), remembering whether a retry may help.
+#[derive(Debug)]
+struct NetError {
+    message: String,
+    retry: bool,
+}
+
+impl std::fmt::Display for NetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NetError {}
+
+fn offline(e: reqwest::Error) -> anyhow::Error {
+    let message = if e.is_timeout() { "连接插件市场超时，请检查网络后再试" } else { "连不上插件市场，请检查网络后再试" };
+    anyhow::Error::new(NetError { message: message.into(), retry: e.is_connect() || e.is_timeout() })
+}
+
+fn retryable(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<NetError>().is_some_and(|e| e.retry)
+}
+
+/// Three attempts at most; the budget includes downloads and backoff. The
+/// remaining budget becomes each request's total timeout (headers and body).
+async fn http_get_retry(client: &reqwest::Client, url: &str, max: u64, budget: Duration, backoff: [Duration; 2]) -> Result<Vec<u8>> {
+    let started = Instant::now();
+    let mut delays = backoff.into_iter();
+    loop {
+        let remaining = budget.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            bail!("连接插件市场超时，请检查网络后再试");
+        }
+        match http_get_once(client, url, max, remaining).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                if !retryable(&error) {
+                    return Err(error);
+                }
+                let Some(delay) = delays.next() else { return Err(error) };
+                if delay >= budget.saturating_sub(started.elapsed()) {
+                    return Err(error);
+                }
+                // Tauri does not re-export an async timer. Sleep on its blocking
+                // pool so backoff never blocks an async worker or the UI thread.
+                tauri::async_runtime::spawn_blocking(move || std::thread::sleep(delay)).await?;
+            }
+        }
+    }
+}
+
+async fn http_get_once(client: &reqwest::Client, url: &str, max: u64, timeout: Duration) -> Result<Vec<u8>> {
+    let mut resp = client.get(url).timeout(timeout).send().await.map_err(offline)?;
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         let name = url.rsplit('/').next().unwrap_or_default();
         bail!("插件市场上找不到 {name}（404）");
     }
     if !status.is_success() {
-        bail!("插件市场返回错误 {}", status.as_u16());
+        let retry = status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+        return Err(anyhow::Error::new(NetError { message: format!("插件市场返回错误 {}", status.as_u16()), retry }));
     }
     let too_big = || anyhow!("下载的文件太大（超过 {} MB）", max.div_ceil(1 << 20));
     if resp.content_length().is_some_and(|n| n > max) {
@@ -435,6 +489,29 @@ mod tests {
         assert!(rt(download(fetch(files), base, "demo", "0.4.0")).is_err());
     }
 
+    #[test]
+    fn download_does_not_retry_integrity_failures() {
+        let zip = zip_bytes(PLUGIN);
+        let index = serde_json::to_vec(&index_for(&zip, "0.5.0")).unwrap();
+        for truncate in [false, true] {
+            let mut bad = zip.clone();
+            if truncate {
+                bad.pop();
+            } else {
+                bad[10] ^= 0xff;
+            }
+            let calls = std::cell::Cell::new(0);
+            let fetch = |url: String, _: u64| {
+                calls.set(calls.get() + 1);
+                let bytes = if url.ends_with("plugins.json") { index.clone() } else { bad.clone() };
+                async move { Ok(bytes) }
+            };
+            let err = rt(download(fetch, "https://market.test/", "demo", "0.5.0")).unwrap_err();
+            assert!(err.to_string().contains(if truncate { "大小" } else { "SHA-256" }), "{err:#}");
+            assert_eq!(calls.get(), 2, "only fetch the index and package once each");
+        }
+    }
+
     /// Serves `routes` over plain HTTP on localhost, one request per connection.
     fn serve(routes: HashMap<&'static str, Vec<u8>>, requests: usize) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -490,5 +567,154 @@ mod tests {
         let dead = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
         let err = rt(http_get(format!("http://{dead}/x"), 10, false, "t")).unwrap_err();
         assert!(format!("{err:#}").contains("连不上"), "{err:#}");
+    }
+
+    /// Scripted responses, with an optional stall after the headers. Dropping
+    /// `stop` shuts the server down even when the client makes fewer requests.
+    fn serve_sequence(
+        responses: Vec<(u16, Vec<u8>, Duration)>,
+    ) -> (String, std::sync::mpsc::Sender<()>, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut requests = 0;
+            while matches!(stopped.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(e) => panic!("{e}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut buf = [0u8; 4096];
+                let mut req = Vec::new();
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
+                }
+                if !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    continue;
+                }
+                let (status, body, delay) = &responses[requests.min(responses.len() - 1)];
+                requests += 1;
+                let _ = write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let split = if delay.is_zero() { 0 } else { body.len().min(1) };
+                let _ = stream.write_all(&body[..split]);
+                std::thread::sleep(*delay);
+                let _ = stream.write_all(&body[split..]);
+            }
+            requests
+        });
+        (format!("http://{addr}/plugins/"), stop, server)
+    }
+
+    #[test]
+    fn http_retries_transient_status() {
+        let responses = [503, 429, 200].into_iter().map(|s| (s, b"ok".to_vec(), Duration::ZERO)).collect();
+        let (base, stop, server) = serve_sequence(responses);
+        let result = rt(http_get(format!("{base}plugins.json"), 10, false, "t"));
+        drop(stop);
+        assert_eq!(server.join().unwrap(), 3);
+        assert_eq!(result.unwrap(), b"ok");
+    }
+
+    fn test_client(read_timeout: Duration) -> reqwest::Client {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::Client::builder().no_proxy().read_timeout(read_timeout).retry(reqwest::retry::never()).build().unwrap()
+    }
+
+    async fn test_get(client: &reqwest::Client, url: &str, max: u64) -> Result<Vec<u8>> {
+        http_get_retry(client, url, max, Duration::from_secs(3), [Duration::from_millis(5), Duration::from_millis(15)]).await
+    }
+
+    #[test]
+    fn http_retry_status_policy_and_attempt_limit() {
+        let client = test_client(Duration::from_secs(1));
+        for status in [500, 502, 503, 504, 599, 429, 400, 401, 403, 404, 408] {
+            let (base, stop, server) = serve_sequence(vec![(status, b"error".to_vec(), Duration::ZERO)]);
+            let result = rt(test_get(&client, &base, 10));
+            drop(stop);
+            let attempts = if status >= 500 || status == 429 { 3 } else { 1 };
+            assert_eq!(server.join().unwrap(), attempts, "HTTP {status}");
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains(&status.to_string()), "{error:#}");
+            assert_eq!(retryable(&error), status >= 500 || status == 429);
+        }
+    }
+
+    #[test]
+    fn http_retries_body_timeout_from_scratch() {
+        let client = test_client(Duration::from_millis(300));
+        let (base, stop, server) = serve_sequence(vec![
+            (200, b"stale".to_vec(), Duration::from_millis(450)),
+            (200, b"ok".to_vec(), Duration::ZERO),
+        ]);
+        let result = rt(test_get(&client, &base, 10));
+        drop(stop);
+        assert_eq!(server.join().unwrap(), 2);
+        assert_eq!(result.unwrap(), b"ok");
+    }
+
+    #[test]
+    fn http_overall_budget_limits_requests_and_backoff() {
+        let client = test_client(Duration::from_secs(1));
+        for (status, stall, backoff) in [(200, 300, 5), (503, 0, 1000)] {
+            let (base, stop, server) = serve_sequence(vec![(status, b"ok".to_vec(), Duration::from_millis(stall))]);
+            let started = Instant::now();
+            let result = rt(http_get_retry(&client, &base, 10, Duration::from_millis(100), [Duration::from_millis(backoff); 2]));
+            let elapsed = started.elapsed();
+            drop(stop);
+            assert_eq!(server.join().unwrap(), 1);
+            assert!(result.is_err());
+            assert!(elapsed < Duration::from_millis(500), "budget exceeded: {elapsed:?}");
+        }
+    }
+
+    #[test]
+    fn http_connection_errors_retry_but_invalid_urls_and_size_caps_do_not() {
+        let client = test_client(Duration::from_secs(1));
+        let dead = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let error = rt(http_get_once(&client, &format!("http://{dead}/"), 10, Duration::from_secs(1))).unwrap_err();
+        assert!(retryable(&error));
+        // Exactly the string the interface translates, no reqwest detail.
+        assert_eq!(format!("{error:#}"), "连不上插件市场，请检查网络后再试");
+        let error = rt(test_get(&client, "invalid://url", 10)).unwrap_err();
+        assert!(!retryable(&error));
+
+        let (base, stop, server) = serve_sequence(vec![(200, b"too big".to_vec(), Duration::ZERO)]);
+        let result = rt(test_get(&client, &base, 1));
+        drop(stop);
+        assert_eq!(server.join().unwrap(), 1);
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("太大"));
+        assert!(!retryable(&error));
+    }
+
+    #[test]
+    fn http_download_retries_index_and_zip() {
+        let zip = zip_bytes(PLUGIN);
+        let index = serde_json::to_vec(&index_for(&zip, "0.5.0")).unwrap();
+        let (base, stop, server) = serve_sequence(vec![
+            (503, vec![], Duration::ZERO),
+            (200, index, Duration::ZERO),
+            (429, vec![], Duration::ZERO),
+            (200, zip.clone(), Duration::ZERO),
+        ]);
+        let client = test_client(Duration::from_secs(1));
+        let fetch = |url: String, max: u64| {
+            let client = &client;
+            async move { test_get(client, &url, max).await }
+        };
+        let result = rt(download(fetch, &base, "demo", "0.5.0"));
+        drop(stop);
+        assert_eq!(server.join().unwrap(), 4);
+        assert_eq!(result.unwrap().2, zip);
     }
 }
