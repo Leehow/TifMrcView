@@ -27,9 +27,18 @@ const MAX_PAGE_BYTES: u64 = 1 << 34;
 /// Where the UI's on/off switches are remembered, inside the plugin folder.
 const DISABLED_FILE: &str = ".disabled.json";
 
-/// Vendor formats that used to be built in, so a missing plugin gets a
+/// Vendor formats the official plugins open, so a missing plugin gets a
 /// helpful message: (extension, plugin id, plugin name).
-const KNOWN: &[(&str, &str, &str)] = &[("czi", "zen", "Zeiss ZEN")];
+const KNOWN: &[(&str, &str, &str)] = &[
+    ("czi", "zen", "Zeiss ZEN"),
+    ("lsm", "zenblack", "Zeiss ZEN black"),
+    ("lif", "lasx", "Leica LAS X"),
+    ("lof", "lasx", "Leica LAS X"),
+    ("nd2", "nis", "Nikon NIS-Elements"),
+    ("oib", "fluoview", "Olympus FluoView"),
+    ("oir", "fluoview", "Olympus FluoView"),
+    ("ims", "imaris", "Imaris"),
+];
 
 /// One installed package with a WebAssembly module.
 struct Pkg {
