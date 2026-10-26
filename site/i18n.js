@@ -815,6 +815,7 @@
       c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }
+    document.dispatchEvent(new Event('downloads-rendered'));
   }
 
   function apply(code) {

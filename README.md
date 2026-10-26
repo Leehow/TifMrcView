@@ -83,7 +83,7 @@ Plugins have the same permissions as the main program: only install plugins you 
 
 ## Automatic updates
 
-A few seconds after start, the app silently checks `https://tifmrcview.com/tifmrcview/latest.json`. When a new version exists, a banner appears at the top; click "Update now and restart" to download it, verify the signature, install and restart. Update packages are signed with a Tauri minisign key; the public key is in `tauri.conf.json`.
+A few seconds after start, the app silently checks `https://dl.tifmrcview.com:9443/tifmrcview/latest-direct.json`, falling back to `https://tifmrcview.com/tifmrcview/latest.json` if the direct host fails. When a new version exists, a banner appears at the top; click "Update now and restart" to download it, verify the signature, install and restart. Update packages are signed with a Tauri minisign key; the public key is in `tauri.conf.json`.
 
 ## Keyboard shortcuts
 
@@ -158,7 +158,7 @@ Every push to `main` makes GitHub Actions build packages on macOS / Windows / Li
 - Push a tag starting with `v`: `git tag v0.3.0 && git push origin v0.3.0` uploads to the download site and creates a GitHub Release;
 - or run the build manually in Actions with "publish to the download site" ticked, which publishes with the automatic version number.
 
-When publishing, CI puts the installers and update packages in the download site's `<version>/` directory and finally updates `latest.json` (for auto-update) and `downloads.json` (for the download page). The download page and the plugin market (`site/`, `plugins/`) are also deployed by their own workflow (`.github/workflows/site.yml`) whenever they change on `main`. Configure these in the repository under Settings → Secrets and variables → Actions:
+When publishing, CI puts the installers and update packages in the download site's `<version>/` directory and finally updates `latest.json` and `latest-direct.json` (for auto-update) and `downloads.json` (for the download page). The download page and the plugin market (`site/`, `plugins/`) are also deployed by their own workflow (`.github/workflows/site.yml`) whenever they change on `main`. Configure these in the repository under Settings → Secrets and variables → Actions:
 
 | Name | Type | Description |
 | --- | --- | --- |
@@ -166,8 +166,14 @@ When publishing, CI puts the installers and update packages in the download site
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret, optional | Password of that key, if it has one |
 | `DEPLOY_SSH_KEY` | Secret | SSH private key of the download-site deploy user |
 | `DEPLOY_HOST` / `DEPLOY_USER` | Secret | Host and user name of the download site |
-| `UPDATE_BASE_URL` | Variable, optional | Default `https://tifmrcview.com/tifmrcview` |
+| `UPDATE_BASE_URL` | Variable, optional | Default `https://tifmrcview.com/tifmrcview` (Cloudflare fallback) |
+| `DIRECT_BASE_URL` | Variable, optional | Default `https://dl.tifmrcview.com:9443/tifmrcview` (DNS-only direct host) |
 | `DEPLOY_PATH` | Variable, optional | Default `/var/www/tifmrcview` |
+| `CF_PURGE_TOKEN` | Secret, optional | Cloudflare API token with Zone → Cache Purge; the deploy purges the cache after uploading |
+
+Both hosts serve the same deploy directory: `<version>/…`, the three JSON feeds, and `plugins/`. The app tries the direct host first for updates and plugin listings/installs, then Cloudflare on network/HTTP errors; plugin integrity errors stop the install. Browser navigation to the market stays on the main site. The download page keeps relative links unless a 3-second probe of the direct host succeeds; that host must allow cross-origin JSON requests. Port 9443 may be blocked on some networks.
+
+When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a final `[direct-base-url]` argument after `[notes]` to also write `latest-direct.json`. Without it only the original feeds are written; both updater feeds use the same package signatures.
 
 ## Project layout
 

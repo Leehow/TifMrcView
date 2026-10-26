@@ -1,20 +1,22 @@
 // Collects CI bundle artifacts into a release folder for the download site.
 //
-//   node scripts/make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes]
+//   node scripts/make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes] [direct-base-url]
 //
 // Produces <out-dir>/<version>/ with the installers and updater packages,
 // plus <out-dir>/latest.json (Tauri updater feed) and
-// <out-dir>/downloads.json (read by the download page).
+// <out-dir>/downloads.json (read by the download page). DIRECT_BASE_URL or
+// the final argument also writes latest-direct.json for the direct host.
 
 import fs from "node:fs";
 import path from "node:path";
 
-const [src, out, version, baseUrl, notes = ""] = process.argv.slice(2);
+const [src, out, version, baseUrl, notes = "", directBaseUrl = process.env.DIRECT_BASE_URL] = process.argv.slice(2);
 if (!src || !out || !version || !baseUrl) {
-  console.error("usage: make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes]");
+  console.error("usage: make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes] [direct-base-url]");
   process.exit(1);
 }
 const base = baseUrl.replace(/\/+$/, "");
+const directBase = directBaseUrl?.replace(/\/+$/, "");
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -62,10 +64,14 @@ for (const k of kinds) {
 const date = new Date().toISOString();
 fs.writeFileSync(path.join(out, "downloads.json"), JSON.stringify({ version, date: date.slice(0, 10), files: downloads }, null, 2) + "\n");
 if (Object.keys(platforms).length) {
-  fs.writeFileSync(
-    path.join(out, "latest.json"),
-    JSON.stringify({ version, notes, pub_date: date.replace(/\.\d+Z$/, "Z"), platforms }, null, 2) + "\n",
-  );
+  const feed = { version, notes, pub_date: date.replace(/\.\d+Z$/, "Z"), platforms };
+  fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(feed, null, 2) + "\n");
+  if (directBase) {
+    const directPlatforms = Object.fromEntries(Object.entries(platforms).map(([key, entry]) => [
+      key, { ...entry, url: directBase + entry.url.slice(base.length) },
+    ]));
+    fs.writeFileSync(path.join(out, "latest-direct.json"), JSON.stringify({ ...feed, platforms: directPlatforms }, null, 2) + "\n");
+  }
 } else {
   console.warn("no .sig files: updater feed not written (is TAURI_SIGNING_PRIVATE_KEY set?)");
 }

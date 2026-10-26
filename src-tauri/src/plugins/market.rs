@@ -195,6 +195,39 @@ where
     Ok((index, entry, bytes))
 }
 
+/// Try each host only for transport/HTTP failures. An index and its package
+/// always come from one host; validation failures stop immediately.
+pub async fn download_from_bases<F, Fut>(fetch: F, bases: &[String], id: &str, app_version: &str) -> Result<(Value, Entry, Vec<u8>)>
+where
+    F: Fn(String, u64) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>>>,
+{
+    let mut error = None;
+    for base in bases {
+        match download(&fetch, base, id, app_version).await {
+            Err(e) if e.is::<NetError>() => error = Some(e),
+            result => return result,
+        }
+    }
+    Err(error.unwrap_or_else(|| anyhow!("连不上插件市场，请检查网络后再试")))
+}
+
+/// Listing uses the same ordered hosts, without retrying a malformed index.
+pub async fn fetch_index<F, Fut>(fetch: F, bases: &[String]) -> Result<Value>
+where
+    F: Fn(String, u64) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>>>,
+{
+    let mut error = None;
+    for base in bases {
+        match fetch(format!("{base}plugins.json"), MAX_INDEX).await {
+            Err(e) if e.is::<NetError>() => error = Some(e),
+            result => return parse_index(&result?),
+        }
+    }
+    Err(error.unwrap_or_else(|| anyhow!("连不上插件市场，请检查网络后再试")))
+}
+
 /// Installs a downloaded, verified package like 加载插件… does.
 pub fn install_bytes(dir: &Path, entry: &Entry, bytes: &[u8], app_version: &str) -> Result<Manifest> {
     verify(entry, bytes)?;
@@ -263,15 +296,21 @@ pub async fn http_get(url: String, max: u64, https_only: bool, user_agent: &str)
     }
     // reqwest's hyper-util connector already races IPv4/IPv6 (Happy
     // Eyeballs, 300 ms fallback), including on Windows. Keep that default.
+    let direct = tauri::Url::parse(&url).is_ok_and(|u| u.port() == Some(9443));
     let client = reqwest::Client::builder()
         .https_only(https_only)
         .user_agent(user_agent)
-        .connect_timeout(Duration::from_secs(20))
-        .read_timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(if direct { 5 } else { 20 }))
+        .read_timeout(Duration::from_secs(if direct { 15 } else { 60 }))
         // The loop below owns retries, including response-body timeouts.
         .retry(reqwest::retry::never())
         .build()
         .map_err(offline)?;
+    // One direct attempt lets a blocked port fall back after ~5 seconds.
+    // Keep #25's longer budget and retries for the Cloudflare route.
+    if direct {
+        return http_get_once(&client, &url, max, Duration::from_secs(300)).await;
+    }
     http_get_retry(&client, &url, max, Duration::from_secs(300), [Duration::from_secs(1), Duration::from_secs(3)]).await
 }
 
@@ -308,7 +347,7 @@ async fn http_get_retry(client: &reqwest::Client, url: &str, max: u64, budget: D
     loop {
         let remaining = budget.saturating_sub(started.elapsed());
         if remaining.is_zero() {
-            bail!("连接插件市场超时，请检查网络后再试");
+            return Err(anyhow::Error::new(NetError { message: "连接插件市场超时，请检查网络后再试".into(), retry: true }));
         }
         match http_get_once(client, url, max, remaining).await {
             Ok(bytes) => return Ok(bytes),
@@ -333,7 +372,7 @@ async fn http_get_once(client: &reqwest::Client, url: &str, max: u64, timeout: D
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         let name = url.rsplit('/').next().unwrap_or_default();
-        bail!("插件市场上找不到 {name}（404）");
+        return Err(anyhow::Error::new(NetError { message: format!("插件市场上找不到 {name}（404）"), retry: false }));
     }
     if !status.is_success() {
         let retry = status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
@@ -603,9 +642,87 @@ mod tests {
                 let bytes = if url.ends_with("plugins.json") { index.clone() } else { bad.clone() };
                 async move { Ok(bytes) }
             };
-            let err = rt(download(fetch, "https://market.test/", "demo", "0.5.0")).unwrap_err();
+            let err = rt(download_from_bases(fetch, &["https://direct.test/".into(), "https://cloudflare.test/".into()], "demo", "0.5.0")).unwrap_err();
             assert!(err.to_string().contains(if truncate { "大小" } else { "SHA-256" }), "{err:#}");
             assert_eq!(calls.get(), 2, "only fetch the index and package once each");
+        }
+    }
+
+    #[test]
+    fn download_direct_first_and_network_fallback_keep_hosts_together() {
+        let zip = zip_bytes(PLUGIN);
+        let direct_index = serde_json::to_vec(&index_for(&zip, "0.5.0")).unwrap();
+        let mut fallback_index = index_for(&zip, "0.5.0");
+        fallback_index["plugins"][0]["file"] = "demo-fallback.zip".into();
+        let fallback_index = serde_json::to_vec(&fallback_index).unwrap();
+        let bases = vec!["https://direct.test/".into(), "https://cloudflare.test/".into()];
+        // The direct host works, or fails fetching either the index or package.
+        // Non-retryable HTTP errors (e.g. 404) also permit host fallback.
+        for fail_at in [None, Some("plugins.json"), Some("demo-1.2.0.zip")] {
+            for retry in [false, true] {
+                let calls = std::cell::RefCell::new(Vec::new());
+                let fetch = |url: String, _: u64| {
+                    calls.borrow_mut().push(url.clone());
+                    let result = if url.starts_with(&bases[0]) && fail_at.is_some_and(|f| url.ends_with(f)) {
+                        Err(anyhow::Error::new(NetError { message: "network/HTTP failure".into(), retry }))
+                    } else if url == format!("{}plugins.json", bases[0]) {
+                        Ok(direct_index.clone())
+                    } else if url == format!("{}plugins.json", bases[1]) {
+                        Ok(fallback_index.clone())
+                    } else if url == format!("{}demo-1.2.0.zip", bases[0]) || url == format!("{}demo-fallback.zip", bases[1]) {
+                        Ok(zip.clone())
+                    } else { panic!("mixed index/package hosts: {url}") };
+                    async move { result }
+                };
+                let (_, entry, bytes) = rt(download_from_bases(fetch, &bases, "demo", "0.5.0")).unwrap();
+                assert_eq!(bytes, zip);
+                let mut expected = vec![format!("{}plugins.json", bases[0])];
+                if fail_at != Some("plugins.json") { expected.push(format!("{}demo-1.2.0.zip", bases[0])); }
+                if fail_at.is_some() {
+                    expected.extend([format!("{}plugins.json", bases[1]), format!("{}demo-fallback.zip", bases[1])]);
+                    assert_eq!(entry.file, "demo-fallback.zip");
+                }
+                assert_eq!(*calls.borrow(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn listing_uses_ordered_fallback_but_bad_indexes_stop() {
+        let valid = serde_json::to_vec(&index_for(&zip_bytes(PLUGIN), "0.5.0")).unwrap();
+        let bases = vec!["https://direct.test/".into(), "https://cloudflare.test/".into()];
+        for mode in ["direct", "network", "json", "index", "size"] {
+            let calls = std::cell::Cell::new(0);
+            let fetch = |url: String, _: u64| {
+                calls.set(calls.get() + 1);
+                let result = if url.starts_with(&bases[1]) { Ok(valid.clone()) } else {
+                    match mode {
+                        "network" => Err(anyhow::Error::new(NetError { message: "offline".into(), retry: true })),
+                        "json" => Ok(b"invalid JSON".to_vec()),
+                        "index" => Ok(b"{}".to_vec()),
+                        "size" => Err(anyhow!("file too large")),
+                        _ => Ok(valid.clone()),
+                    }
+                };
+                async move { result }
+            };
+            assert_eq!(rt(fetch_index(fetch, &bases)).is_ok(), matches!(mode, "direct" | "network"));
+            assert_eq!(calls.get(), if mode == "network" { 2 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn download_bad_index_does_not_fall_back() {
+        let bases = vec!["https://direct.test/".into(), "https://cloudflare.test/".into()];
+        for bytes in [b"invalid JSON".to_vec(), b"{}".to_vec(), br#"{"plugins":[{"id":"demo"}]}"#.to_vec()] {
+            let calls = std::cell::Cell::new(0);
+            let fetch = |_: String, _: u64| {
+                calls.set(calls.get() + 1);
+                let bytes = bytes.clone();
+                async move { Ok(bytes) }
+            };
+            assert!(rt(download_from_bases(fetch, &bases, "demo", "0.5.0")).is_err());
+            assert_eq!(calls.get(), 1);
         }
     }
 

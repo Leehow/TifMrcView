@@ -65,6 +65,32 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && lb.classList.contains('open')) close(); });
   }
 
+  // Render normal links first, then prefer the direct host if its JSON is reachable.
+  if (document.getElementById('cta') && window.fetch && window.AbortController) {
+    var direct = 'https://dl.tifmrcview.com:9443/tifmrcview/';
+    var probing = false, directReady = false;
+    function directLinks() {
+      document.querySelectorAll('#download a[download], #cta[download]').forEach(function (a) {
+        var file = a.getAttribute('href');
+        if (file && !/^(?:[a-z]+:|\/|#)/i.test(file)) a.href = direct + file;
+      });
+    }
+    function preferDirect() {
+      if (directReady) { directLinks(); return; }
+      if (probing) return;
+      probing = true;
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 3000);
+      fetch(direct + 'downloads.json', { signal: controller.signal, cache: 'no-cache' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d && d.files) { directReady = true; directLinks(); } })
+        .catch(function () {})
+        .finally(function () { clearTimeout(timer); });
+    }
+    document.addEventListener('downloads-rendered', preferDirect);
+    if (document.querySelector('#download a[download]')) preferDirect();
+  }
+
   // Live GitHub star count; the counters stay empty (hidden) if it fails or is 0.
   var counters = document.querySelectorAll('.starn');
   if (counters.length && window.fetch) {
