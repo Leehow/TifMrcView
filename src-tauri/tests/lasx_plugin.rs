@@ -375,8 +375,17 @@ fn stopped_scans_and_broken_files() {
     lasx::write_lif(&path, 2, "Project", &[Node::Image(lasx::stack("S", 16, 16, 2, 3, 1, 16))]);
     let full = std::fs::read(&path).unwrap();
 
+    // Each case gets its own file: Windows cannot rewrite a file that is still memory-mapped.
+    let mut n = 0;
+    let mut fresh = |bytes: &[u8]| {
+        n += 1;
+        let p = tmp.path().join(format!("case{n}.lif"));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+
     // The last plane is missing (acquisition stopped): the others still read, it stays blank.
-    std::fs::write(&path, &full[..full.len() - 100]).unwrap();
+    let path = fresh(&full[..full.len() - 100]);
     let src = open(&p.registry, &path, 0);
     assert_eq!(plane(&*src, 0, 0, 0), pattern_plane(16, 16, 0, 0, 0, u16::MAX));
     assert_eq!(plane(&*src, 1, 2, 0), vec![0.0; 256]);
@@ -384,29 +393,32 @@ fn stopped_scans_and_broken_files() {
 
     // Garbage and cuts anywhere are errors, never crashes.
     for cut in [0, 5, 12, 40, 400, 1500, full.len() / 2] {
-        std::fs::write(&path, &full[..cut]).unwrap();
+        let path = fresh(&full[..cut]);
         let _ = formats::open_series_with(&path, 0, &p.registry).and_then(|s| s.read_page(0));
     }
-    std::fs::write(&path, b"this is not a Leica file at all").unwrap();
+    let path = fresh(b"this is not a Leica file at all");
     assert!(err(&p.registry, &path, 0).contains("不是徕卡"));
-    std::fs::write(&path, b"").unwrap();
+    let path = fresh(b"");
     assert!(!err(&p.registry, &path, 0).is_empty());
 
     // A project whose block is missing from the file.
+    let path = tmp.path().join("small.lif");
     lasx::write_lif(&path, 2, "Project", &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))]);
     let mut bytes = std::fs::read(&path).unwrap();
     let xml_end = 13 + 2 * u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
     bytes.truncate(xml_end);
-    std::fs::write(&path, &bytes).unwrap();
+    let path = fresh(&bytes);
     assert!(err(&p.registry, &path, 0).contains("找不到图像数据块"));
 
     // Unsupported pixel type, and a layout that is not row-major.
     let mut bad = lasx::stack("S", 4, 4, 1, 1, 1, 8);
     bad.chans[0].0 = 64;
+    let path = tmp.path().join("bad1.lof");
     lasx::write_lof(&path, &bad);
     assert!(err(&p.registry, &path, 0).contains("像素类型"));
     let mut bad = lasx::stack("S", 4, 4, 1, 1, 1, 8);
     bad.dims[1].5 = 2;
+    let path = tmp.path().join("bad2.lof");
     lasx::write_lof(&path, &bad);
     assert!(err(&p.registry, &path, 0).contains("不支持的 LIF 像素排列"));
 }
