@@ -1,0 +1,33 @@
+{
+  "id": "imaris",
+  "name": "Imaris",
+  "version": "1.0.0",
+  "description": "打开 Imaris（.ims）文件，并显示像素尺寸、通道颜色与波长、采集时间等参数",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.5.0",
+  "author": "TifMrcView",
+  "native": false,
+  "wasm": "imaris.wasm",
+  "formats": [{ "ext": ["ims"], "name": "Imaris IMS" }],
+  "i18n": {
+    "en": {
+      "name": "Imaris",
+      "description": "Opens Imaris (.ims) files and shows the pixel size, channel colours and wavelengths, acquisition time and other settings"
+    }
+  },
+  "details": {
+    "zh": [
+      "打开 Imaris 5.5 及更新版本的 .ims 文件：牛津仪器（Bitplane）Imaris 保存的文件，以及 Andor Dragonfly、Fusion 和 ImarisFileConverter 写出的文件。TifMrcView 本身不带 IMS（HDF5）读取代码；装上这个插件后即可打开 .ims：多通道、Z 栈和时间序列都支持，像素类型可以是 8、16、32 位整数或浮点，数据块不压缩、用 gzip 或 LZ4 压缩（包括 shuffle 过滤器）都能读。文件里的多级分辨率只显示最高一级。插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件，数据块的解压和拼接由应用本身并行完成，速度和内置格式一样。",
+      "插件还把文件里保存的参数整理后显示在图像信息面板里。「Imaris 图像」：保存它的软件、文件格式版本、名称和描述、采集时间、各维度尺寸、像素类型、压缩方式与分块大小、分辨率层级、像素尺寸与 Z 步长、显微镜模式、物镜放大倍数与数值孔径、原始格式，以及时间序列的开始、结束时间和平均间隔。",
+      "每个通道单独一组：描述、激发与发射波长、针孔、物镜、增益、偏移、颜色、显示范围和伽马。「Imaris 全部参数」把 DataSetInfo 下所有组（包括 Dragonfly、Fusion、蔡司 LSM 等厂商自己的组）的全部属性展开列出，方便查找。",
+      "暂不支持旧版 Imaris 3 格式（IMS3），打开这类文件时会给出提示。安装后无需设置，直接打开 .ims 文件即可，状态栏会显示「Imaris IMS」和保存它的软件。需要 TifMrcView 0.5.0 或更新版本。"
+    ],
+    "en": [
+      "Opens .ims files in the Imaris 5.5 format and newer: files saved by Oxford Instruments (Bitplane) Imaris, and those written by Andor Dragonfly, Fusion and ImarisFileConverter. TifMrcView itself contains no IMS (HDF5) code; with this plugin installed, .ims files open with channels, Z stacks and time series, with 8, 16 or 32-bit integer or floating-point pixels, uncompressed or compressed with gzip or LZ4 (with or without the shuffle filter). Of the resolution pyramid stored in the file, the full resolution is shown. The plugin runs sandboxed as WebAssembly and can only read the file being opened; decompressing and assembling the chunks is done by the app itself, in parallel, as fast as for built-in formats.",
+      "The plugin also shows the settings stored in the file in the image-info panel. \"Imaris image\": the software that saved it, file format version, name and description, acquisition time, size of every dimension, pixel type, compression and chunk size, resolution levels, pixel size and Z step, microscope mode, objective magnification and numerical aperture, original format, and the start, end and mean interval of a time series.",
+      "Each channel gets its own group: description, excitation and emission wavelengths, pinhole, objective, gain, offset, colour, display range and gamma. \"Imaris all settings\" flattens every attribute of every group under DataSetInfo (including vendor groups from Dragonfly, Fusion, Zeiss LSM and others) so you can search it.",
+      "Not supported yet: the old Imaris 3 format (IMS3); opening such a file says so. There is nothing to configure: install it and open .ims files. The status bar then shows \"Imaris IMS\" with the software that saved the file. Needs TifMrcView 0.5.0 or newer."
+    ]
+  }
+}

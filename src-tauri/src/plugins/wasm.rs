@@ -237,9 +237,16 @@ impl Instance {
             .context("插件返回的数据位置越界")
     }
 
-    pub fn open(&mut self, path: &str) -> Result<i32> {
+    /// Opens image `series` of the file; 0 is the first (or only) one.
+    pub fn open(&mut self, path: &str, series: u32) -> Result<i32> {
         let arg = self.put(path)?;
-        let r = self.call::<(u32, u32), i32>("tmv_open", arg, FUEL_OPEN);
+        let r = if series == 0 {
+            self.call::<(u32, u32), i32>("tmv_open", arg, FUEL_OPEN)
+        } else if self.inst.get_export(&self.store, "tmv_open_series").is_some() {
+            self.call::<(u32, u32, u32), i32>("tmv_open_series", (arg.0, arg.1, series), FUEL_OPEN)
+        } else {
+            Err(anyhow!("插件 {} 不支持打开文件里的其他图像，请更新插件", self.store.data().plugin))
+        };
         self.release(arg);
         match r? {
             h if h >= 0 => Ok(h),

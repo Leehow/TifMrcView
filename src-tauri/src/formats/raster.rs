@@ -63,6 +63,8 @@ impl RasterSource {
             samples_per_page: size_c,
             order: DimOrder::CZT,
             page_count: 1,
+            series: vec![],
+            series_index: 0,
         };
         Ok(RasterSource { path: path.to_path_buf(), info })
     }

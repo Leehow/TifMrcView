@@ -45,6 +45,9 @@ use core::fmt::Write as _;
 
 pub use alloc::{format, vec};
 
+pub mod tiff;
+pub mod xml;
+
 /// The ABI version this SDK implements (`tmv_abi`).
 pub const ABI_VERSION: u32 = 1;
 
@@ -258,6 +261,8 @@ pub enum Codec {
     Jpeg = 5,
     /// PackBits (TIFF compression 32773).
     PackBits = 6,
+    /// LZ4 blocks in the framing of the HDF5 LZ4 filter (32004). App 0.5.0.
+    Lz4H5 = 7,
 }
 
 /// Dimension order of pages, fastest first (like OME's `DimensionOrder` without XY).
@@ -282,6 +287,14 @@ impl Order {
             Order::TZC => "TZC",
         }
     }
+}
+
+/// One image of a file that holds several (a LIF project, ND2 positions…).
+#[derive(Clone, Debug)]
+pub struct Series {
+    pub name: String,
+    /// A short description for the picker, e.g. "1024×1024 · 2C · 20Z".
+    pub detail: String,
 }
 
 #[derive(Clone, Debug)]
@@ -369,6 +382,11 @@ pub struct Info {
     /// Shown in the status bar, e.g. "Zeiss CZI".
     pub format: String,
     pub metadata: Vec<Group>,
+    /// Every image in the file, when it holds more than one; the app then
+    /// offers a picker and reopens the file with [`Format::open_series`].
+    pub series: Vec<Series>,
+    /// Which entry of `series` this is.
+    pub series_index: u32,
 }
 
 impl Info {
@@ -390,6 +408,8 @@ impl Info {
             unit: String::new(),
             format: format.to_string(),
             metadata: vec![],
+            series: vec![],
+            series_index: 0,
         }
     }
 
@@ -410,6 +430,21 @@ impl Info {
         j.str("unit", &self.unit);
         j.str("format", &self.format);
         j.raw("metadata", &groups_json(&self.metadata));
+        if self.series.len() > 1 {
+            let mut s = String::from("[");
+            for (i, x) in self.series.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let mut o = Json::object();
+                o.str("name", &x.name);
+                o.str("detail", &x.detail);
+                s.push_str(&o.finish());
+            }
+            s.push(']');
+            j.raw("series", &s);
+            j.num("seriesIndex", self.series_index as f64);
+        }
         j.finish()
     }
 }
@@ -569,6 +604,8 @@ pub mod flags {
     pub const BGR: u8 = 4;
     /// TIFF horizontal differencing (predictor 2), undone per row after decoding (integer types).
     pub const PREDICTOR: u8 = 8;
+    /// HDF5 byte shuffle over the whole decoded chunk, undone before `skip`. App 0.5.0.
+    pub const SHUFFLE: u8 = 16;
 }
 
 /// One block of pixels: where its bytes are, how they are compressed and
@@ -592,12 +629,16 @@ pub struct Chunk {
     pub plane: u32,
     /// Bytes per decoded row; 0 = `w * samples * dtype size`.
     pub stride: u32,
+    /// Decoded bytes to skip before the first row, e.g. `z * h * stride` to
+    /// take one slice of a compressed 3D block. Needs TifMrcView 0.5.0
+    /// (a recipe using it is written as version 2).
+    pub skip: u64,
 }
 
 impl Chunk {
     /// Uncompressed single-sample bytes at `offset..offset+length` of the file.
     pub fn file(offset: u64, length: u64, rect: [u32; 4]) -> Chunk {
-        Chunk { source: 0, codec: Codec::Raw, dtype: None, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0 }
+        Chunk { source: 0, codec: Codec::Raw, dtype: None, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0, skip: 0 }
     }
     pub fn codec(mut self, c: Codec) -> Chunk {
         self.codec = c;
@@ -619,6 +660,10 @@ impl Chunk {
         self.stride = s;
         self
     }
+    pub fn skip(mut self, bytes: u64) -> Chunk {
+        self.skip = bytes;
+        self
+    }
 }
 
 /// How to build one page. See [`Chunk`]. Chunks are applied in order, so
@@ -631,6 +676,8 @@ pub struct Recipe {
 
 pub const RECIPE_MAGIC: &[u8; 4] = b"TMVR";
 pub const CHUNK_SIZE: usize = 48;
+/// Chunk size in version 2 recipes (with `skip`).
+pub const CHUNK_SIZE_V2: usize = 56;
 /// Chunk dtype code meaning "the page's dtype".
 pub const DTYPE_OF_PAGE: u8 = 0xff;
 
@@ -648,15 +695,18 @@ impl Recipe {
     pub fn inline(&mut self, bytes: &[u8], codec: Codec, rect: [u32; 4]) -> &mut Chunk {
         let offset = self.payload.len() as u64;
         self.payload.extend_from_slice(bytes);
-        self.chunks.push(Chunk { source: 1, codec, dtype: None, flags: 0, samples: 1, offset, length: bytes.len() as u64, rect, plane: 0, stride: 0 });
+        self.chunks.push(Chunk { source: 1, codec, dtype: None, flags: 0, samples: 1, offset, length: bytes.len() as u64, rect, plane: 0, stride: 0, skip: 0 });
         self.chunks.last_mut().unwrap()
     }
 
     /// The binary form `tmv_page` returns.
+    /// Version 1 unless a chunk uses `skip`, so older apps keep working.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(16 + self.chunks.len() * CHUNK_SIZE + self.payload.len());
+        let v2 = self.chunks.iter().any(|c| c.skip > 0);
+        let size = if v2 { CHUNK_SIZE_V2 } else { CHUNK_SIZE };
+        let mut out = Vec::with_capacity(16 + self.chunks.len() * size + self.payload.len());
         out.extend_from_slice(RECIPE_MAGIC);
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(if v2 { 2u32 } else { 1 }).to_le_bytes());
         out.extend_from_slice(&(self.chunks.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
         for c in &self.chunks {
@@ -672,6 +722,9 @@ impl Recipe {
             }
             out.extend_from_slice(&c.plane.to_le_bytes());
             out.extend_from_slice(&c.stride.to_le_bytes());
+            if v2 {
+                out.extend_from_slice(&c.skip.to_le_bytes());
+            }
         }
         out.extend_from_slice(&self.payload);
         out
@@ -685,6 +738,13 @@ pub trait Format: Sized + 'static {
     /// Inspects the file (through [`file`]) and builds whatever index the
     /// pages need. `path` is for information only (name, extension).
     fn open(path: &str) -> Result<Self>;
+    /// Opens image `series` (1, 2, …) of a file that holds several (see
+    /// [`Info::series`]); series 0 always goes to `open`. Only formats with
+    /// series need it.
+    fn open_series(path: &str, series: u32) -> Result<Self> {
+        let _ = path;
+        bail!("这个文件只有一个图像（请求第 {} 个）", series + 1)
+    }
     /// Called once, right after `open`; may move data out of `self`.
     fn info(&mut self) -> Result<Info>;
     /// How to build page `page` (0-based; the order given by [`Info::order`]).
@@ -793,8 +853,20 @@ macro_rules! export_format {
         /// Called by the host with a buffer from `tmv_alloc`.
         #[no_mangle]
         pub unsafe extern "C" fn tmv_open(ptr: *const u8, len: u32) -> i32 {
+            tmv_open_series(ptr, len, 0)
+        }
+
+        /// # Safety
+        /// Called by the host with a buffer from `tmv_alloc`.
+        #[no_mangle]
+        pub unsafe extern "C" fn tmv_open_series(ptr: *const u8, len: u32, series: u32) -> i32 {
             let path = $crate::str_arg(ptr, len);
-            match <$t as $crate::Format>::open(path) {
+            let opened = if series == 0 {
+                <$t as $crate::Format>::open(path)
+            } else {
+                <$t as $crate::Format>::open_series(path, series)
+            };
+            match opened {
                 Ok(v) => {
                     let hs = __TMV_HANDLES.get();
                     match hs.iter().position(|x| x.is_none()) {

@@ -108,6 +108,7 @@ English is fine too).
 | `tmv_alloc` | `(len: i32) -> i32` | Allocates `len` bytes; `0` on failure. The host uses it to pass the path. |
 | `tmv_free` | `(ptr: i32, len: i32)` | Frees what `tmv_alloc` returned. |
 | `tmv_open` | `(path_ptr: i32, path_len: i32) -> i32` | Opens the file (UTF-8 path, for information only — read the file through the imports). Returns a handle ≥ 0, or < 0 on error. |
+| `tmv_open_series` | `(path_ptr: i32, path_len: i32, series: i32) -> i32` | Optional. Opens image `series` (≥ 1) of a file that holds several (see `series` below); like `tmv_open` otherwise. |
 | `tmv_info` | `(handle: i32) -> i64` | Image description, JSON (below). Called once, right after `tmv_open`. |
 | `tmv_page` | `(handle: i32, page: i32) -> i64` | Recipe for one page (below). `page` is `0 … pageCount-1`. |
 | `tmv_close` | `(handle: i32)` | The file was closed. |
@@ -160,6 +161,7 @@ A module importing anything else is refused.
 | `pixelSize`, `unit` | `[x, y, z]` in `Å`, `nm`, `µm` or `mm`; `null` or 0 when unknown. |
 | `format` | Shown in the status bar; default: the `formats[].name`. |
 | `metadata` | Groups for the image-info panel. |
+| `series`, `seriesIndex` | Optional, for files that hold several images (a Leica LIF project, ND2 positions…): one `{ "name", "detail" }` per image, in order, and which one this is. With two or more entries the viewer shows a picker and reopens the file through `tmv_open_series`. Older versions of the app ignore them and show image 0. |
 
 ### `tmv_metadata` JSON
 
@@ -188,14 +190,14 @@ Binary, little-endian:
 ```
 offset  size  header
 0       4     magic "TMVR"
-4       4     u32 version = 1
+4       4     u32 version = 1 (48-byte chunks) or 2 (56-byte chunks)
 8       4     u32 chunk count N
 12      4     reserved, 0
-16      48·N  chunks
-16+48N  …     inline payload
+16      S·N   chunks (S = 48 or 56)
+16+S·N  …     inline payload
 ```
 
-Each chunk (48 bytes):
+Each chunk (48 bytes; version 2 adds `skip`):
 
 | Offset | Type | Field |
 | --- | --- | --- |
@@ -209,6 +211,7 @@ Each chunk (48 bytes):
 | 24 | u32 ×4 | destination rectangle `x, y, w, h` in page pixels (clipped to the page; chunks entirely outside are skipped) |
 | 40 | u32 | `plane`: page plane that sample 0 goes to; sample *s* goes to `plane + s`, samples landing past `samplesPerPage` are dropped |
 | 44 | u32 | `stride`: bytes per decoded row, 0 = `w · samples · size` |
+| 48 | u64 | `skip` (version 2 only): decoded bytes to drop before the first row, e.g. `z · h · stride` to take one Z slice of a compressed 3D block (HDF5 chunks). Not with hi/lo or JPEG. Needs app 0.5.0; the SDK writes version 2 only when a chunk uses it. |
 
 Codecs (`codec`, also for the `decompress` import):
 
@@ -221,6 +224,7 @@ Codecs (`codec`, also for the `decompress` import):
 | 4 | Zstandard |
 | 5 | baseline JPEG (`dtype` u8, `samples` 1 = gray or 3 = RGB; recipes only) |
 | 6 | PackBits |
+| 7 | LZ4 in the framing of the HDF5 LZ4 filter 32004: decoded size (u64 BE), block size (u32 BE), then per block its stored size (u32 BE) and bytes (stored as-is when not smaller). App 0.5.0. |
 
 `dtype` codes: 0 `u8`, 1 `i8`, 2 `u16`, 3 `i16`, 4 `u32`, 5 `i32`, 6 `f32`,
 7 `f64`.
@@ -233,6 +237,7 @@ Flags (combine with `|`):
 | 2 | "hi/lo": 16-bit samples stored as all low bytes, then all high bytes (CZI zstd1) |
 | 4 | BGR: the first three samples are blue, green, red (sample 0 → `plane + 2`) |
 | 8 | horizontal differencing (TIFF predictor 2), undone per row |
+| 16 | HDF5 byte shuffle: the whole decoded chunk holds all first bytes of its samples, then all second bytes…; undone before `skip`. Not with hi/lo or JPEG. App 0.5.0. |
 
 Decoded data shorter than `stride · (h - 1) + w · samples · size` is an
 error ("图像数据不完整"). For odd formats the plugin can decode a chunk
@@ -348,6 +353,15 @@ A compressed or tiled format only changes `page`: push one chunk per tile
 with `.codec(Codec::Zstd)`, `.samples(3).flags(flags::BGR)` and so on. A
 metadata plugin implements `Metadata::metadata(path) -> Result<Option<Meta>>`
 and uses `export_metadata!` (see `plugins/smartsem`).
+
+A file holding several images sets `Info::series` (and `series_index`) and
+implements `Format::open_series(path, series)`; `export_format!` exports
+`tmv_open_series` for every plugin, and series 0 always goes to `open`.
+
+The SDK also has two parsers that vendor formats keep needing:
+`tifmrcview_plugin_sdk::xml`, a fast, lenient XML tree for metadata
+documents, and `tifmrcview_plugin_sdk::tiff`, a TIFF / BigTIFF directory
+reader over any byte source, for formats that are TIFF underneath.
 
 ### Build and package
 

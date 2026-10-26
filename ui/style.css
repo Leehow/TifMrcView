@@ -93,6 +93,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .spacer { flex: 1; }
 #btn-prev, #btn-next { width: 26px; padding: 0; justify-content: center; font-size: 11px; color: var(--dim); }
 #file-pos { color: var(--dim); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+#series { max-width: 220px; margin-left: 4px; }
 
 /* The tool buttons scroll sideways when the window is too narrow. */
 #quickbar {

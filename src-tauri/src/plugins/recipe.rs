@@ -17,7 +17,9 @@ use crate::image::{DType, ImageInfo, Plane, PlaneData};
 
 pub const MAGIC: &[u8; 4] = b"TMVR";
 const HEADER: usize = 16;
+/// Chunk size in recipe version 1; version 2 adds `skip` (8 bytes).
 const CHUNK: usize = 48;
+const CHUNK_V2: usize = 56;
 /// Chunk dtype code meaning "the page's dtype".
 const DTYPE_OF_PAGE: u8 = 0xff;
 
@@ -26,7 +28,10 @@ pub mod flags {
     pub const HILO: u8 = 2;
     pub const BGR: u8 = 4;
     pub const PREDICTOR: u8 = 8;
-    pub const ALL: u8 = BIG_ENDIAN | HILO | BGR | PREDICTOR;
+    /// HDF5 byte shuffle: all first bytes of the samples, then all second
+    /// bytes, and so on, over the whole decoded chunk.
+    pub const SHUFFLE: u8 = 16;
+    pub const ALL: u8 = BIG_ENDIAN | HILO | BGR | PREDICTOR | SHUFFLE;
 }
 
 /// Compression codes shared by recipes and the `decompress` import.
@@ -38,6 +43,8 @@ pub mod codec {
     pub const ZSTD: u8 = 4;
     pub const JPEG: u8 = 5;
     pub const PACKBITS: u8 = 6;
+    /// LZ4 blocks as the HDF5 LZ4 filter (32004) frames them (Imaris).
+    pub const LZ4_H5: u8 = 7;
 }
 
 pub fn dtype_code(d: DType) -> u8 {
@@ -65,6 +72,9 @@ pub struct Chunk {
     pub rect: [usize; 4],
     pub plane: usize,
     pub stride: usize,
+    /// Decoded bytes to skip before the first row (version 2), e.g. to pick
+    /// one Z slice out of a compressed 3D block.
+    pub skip: u64,
 }
 
 #[derive(Debug)]
@@ -86,15 +96,17 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Recipe> {
     if bytes.len() < HEADER || &bytes[..4] != MAGIC {
         bail!("插件返回的页面描述格式不对");
     }
-    if u32_at(&bytes, 4) != 1 {
-        bail!("插件返回的页面描述版本不支持（{}）", u32_at(&bytes, 4));
-    }
+    let size = match u32_at(&bytes, 4) {
+        1 => CHUNK,
+        2 => CHUNK_V2,
+        v => bail!("插件返回的页面描述版本不支持（{v}）"),
+    };
     let n = u32_at(&bytes, 8) as usize;
-    let table = n.checked_mul(CHUNK).and_then(|t| t.checked_add(HEADER)).filter(|&t| t <= bytes.len());
+    let table = n.checked_mul(size).and_then(|t| t.checked_add(HEADER)).filter(|&t| t <= bytes.len());
     let table = table.context("插件返回的页面描述被截断")?;
     let mut chunks = Vec::with_capacity(n);
     for i in 0..n {
-        let c = &bytes[HEADER + i * CHUNK..HEADER + (i + 1) * CHUNK];
+        let c = &bytes[HEADER + i * size..HEADER + (i + 1) * size];
         let rect = [u32_at(c, 24), u32_at(c, 28), u32_at(c, 32), u32_at(c, 36)].map(|v| v as usize);
         let chunk = Chunk {
             inline: match c[0] {
@@ -111,8 +123,15 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Recipe> {
             rect,
             plane: u32_at(c, 40) as usize,
             stride: u32_at(c, 44) as usize,
+            skip: if size == CHUNK_V2 { u64_at(c, 48) } else { 0 },
         };
-        if chunk.codec > codec::PACKBITS {
+        if chunk.skip > 0 && (chunk.flags & flags::HILO != 0 || chunk.codec == codec::JPEG) {
+            bail!("页面描述里的 skip 不能用于 hi/lo 或 JPEG 块");
+        }
+        if chunk.flags & flags::SHUFFLE != 0 && (chunk.flags & flags::HILO != 0 || chunk.codec == codec::JPEG) {
+            bail!("页面描述里的 shuffle 不能用于 hi/lo 或 JPEG 块");
+        }
+        if chunk.codec > codec::LZ4_H5 {
             bail!("页面描述里的压缩方式 {} 不支持", chunk.codec);
         }
         if chunk.flags & !flags::ALL != 0 {
@@ -165,9 +184,55 @@ pub fn decompress(codec: u8, src: &[u8], max_out: usize) -> Result<Vec<u8>> {
                 }
             }
         }
+        codec::LZ4_H5 => out = lz4_h5(src, max_out)?,
         c => bail!("不支持的压缩方式 {c}"),
     }
     Ok(out)
+}
+
+/// The HDF5 LZ4 filter's framing: the decoded size (u64, big-endian), the
+/// block size (u32), then per block its stored size (u32) and the bytes,
+/// stored as-is when LZ4 did not make them smaller.
+fn lz4_h5(src: &[u8], max_out: usize) -> Result<Vec<u8>> {
+    let be32 = |o: usize| src.get(o..o + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize);
+    let total = src.get(..8).map(|b| u64::from_be_bytes(b.try_into().unwrap())).context("LZ4 数据不完整")?;
+    let block = be32(8).filter(|&b| b > 0).context("LZ4 数据不完整")?;
+    let want = usize::try_from(total).unwrap_or(usize::MAX).min(max_out);
+    let mut out = Vec::with_capacity(want.min(256 << 20));
+    let mut buf = vec![0u8; block.min(1 << 30)];
+    let mut pos = 12;
+    let mut done = 0u64;
+    while done < total && out.len() < want {
+        let n = (total - done).min(block as u64) as usize;
+        let stored = be32(pos).context("LZ4 数据不完整")?;
+        let data = src.get(pos + 4..pos + 4 + stored).context("LZ4 数据不完整")?;
+        pos += 4 + stored;
+        let take = n.min(want - out.len());
+        if stored == n {
+            out.extend_from_slice(&data[..take]);
+        } else {
+            let got = lz4_flex::block::decompress_into(data, &mut buf[..n]).map_err(|e| anyhow::anyhow!("LZ4: {e}"))?;
+            if got != n {
+                bail!("LZ4 数据不完整");
+            }
+            out.extend_from_slice(&buf[..take]);
+        }
+        done += n as u64;
+    }
+    Ok(out)
+}
+
+/// Undoes the HDF5 shuffle filter for samples of `size` bytes.
+fn unshuffle(v: &[u8], size: usize) -> Vec<u8> {
+    let n = v.len() / size;
+    let mut out = vec![0u8; v.len()];
+    out.par_chunks_mut(size).take(n).enumerate().for_each(|(i, px)| {
+        for (b, o) in px.iter_mut().enumerate() {
+            *o = v[b * n + i];
+        }
+    });
+    out[n * size..].copy_from_slice(&v[n * size..]);
+    out
 }
 
 /// The decoded bytes of one chunk: `rows` rows of `stride` bytes.
@@ -188,6 +253,9 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
     let rows = if c.flags & flags::HILO != 0 { c.rect[3] } else { rows };
     // Never more than the chunk can contribute to the page (decompression bombs).
     let want = stride.checked_mul(rows).filter(|&n| n <= 1 << 34).context("图像块太大")?;
+    let skip = usize::try_from(c.skip).ok().filter(|&k| k <= 1 << 34).context("图像块太大")?;
+    // Shuffled bytes are spread over the whole block, so it is decoded whole.
+    let shuffle = c.flags & flags::SHUFFLE != 0 && size > 1;
     let src_all = if c.inline { payload } else { file };
     let src = usize::try_from(c.offset)
         .ok()
@@ -195,7 +263,12 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
         .and_then(|(o, l)| src_all.get(o..o.checked_add(l)?))
         .with_context(|| format!("第 {} 块的数据位置超出了文件", i + 1))?;
     let mut bytes: Cow<[u8]> = match c.codec {
-        codec::RAW => Cow::Borrowed(src),
+        codec::RAW if shuffle => {
+            let mut v = unshuffle(src, size);
+            v.drain(..skip.min(v.len()));
+            Cow::Owned(v)
+        }
+        codec::RAW => Cow::Borrowed(src.get(skip..).unwrap_or(&[])),
         codec::JPEG => {
             if size != 1 || !(c.samples == 1 || c.samples == 3) {
                 bail!("JPEG 块只能是 8 位灰度或 RGB");
@@ -203,7 +276,11 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
             let img = image::load_from_memory_with_format(src, image::ImageFormat::Jpeg)?;
             Cow::Owned(if c.samples == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() })
         }
-        codec => Cow::Owned(decompress(codec, src, want)?),
+        codec => {
+            let mut v = if shuffle { unshuffle(&decompress(codec, src, 1 << 32)?, size) } else { decompress(codec, src, skip + want)? };
+            v.drain(..skip.min(v.len()));
+            Cow::Owned(v)
+        }
     };
     if c.codec == codec::JPEG && stride != row {
         bail!("JPEG 块不能指定行宽");
@@ -370,8 +447,9 @@ mod tests {
 
     /// Writes a recipe the way the SDK does.
     pub(crate) fn build(chunks: &[Chunk], payload: &[u8]) -> Vec<u8> {
+        let v2 = chunks.iter().any(|c| c.skip > 0);
         let mut out = MAGIC.to_vec();
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(if v2 { 2u32 } else { 1 }).to_le_bytes());
         out.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
         for c in chunks {
@@ -384,13 +462,16 @@ mod tests {
             }
             out.extend_from_slice(&(c.plane as u32).to_le_bytes());
             out.extend_from_slice(&(c.stride as u32).to_le_bytes());
+            if v2 {
+                out.extend_from_slice(&c.skip.to_le_bytes());
+            }
         }
         out.extend_from_slice(payload);
         out
     }
 
     fn chunk(offset: u64, length: u64, rect: [usize; 4]) -> Chunk {
-        Chunk { inline: false, codec: 0, dtype: DTYPE_OF_PAGE, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0 }
+        Chunk { inline: false, codec: 0, dtype: DTYPE_OF_PAGE, flags: 0, samples: 1, offset, length, rect, plane: 0, stride: 0, skip: 0 }
     }
 
     fn run(info: &ImageInfo, chunks: &[Chunk], file: &[u8], payload: &[u8]) -> Result<Vec<Plane>> {
@@ -403,7 +484,7 @@ mod tests {
 
     #[test]
     fn parse_roundtrip_and_rejects_garbage() {
-        let c = Chunk { inline: true, codec: codec::ZSTD, dtype: 2, flags: flags::HILO, samples: 3, offset: 5, length: 9, rect: [1, 2, 3, 4], plane: 1, stride: 20 };
+        let c = Chunk { inline: true, codec: codec::ZSTD, dtype: 2, flags: flags::HILO, samples: 3, offset: 5, length: 9, rect: [1, 2, 3, 4], plane: 1, stride: 20, skip: 0 };
         let r = parse(build(std::slice::from_ref(&c), b"xyz")).unwrap();
         assert_eq!(r.chunks, std::slice::from_ref(&c));
         assert_eq!(r.payload, b"xyz");
@@ -488,6 +569,66 @@ mod tests {
 
         let pb = [2u8, 1, 2, 3, 0xfe, 9]; // literal 1 2 3, then 9 x3
         assert_eq!(decompress(codec::PACKBITS, &pb, 100).unwrap(), [1, 2, 3, 9, 9, 9]);
+    }
+
+    #[test]
+    fn skip_picks_a_slice_of_a_3d_block() {
+        // A zlib block of 3 slices of 3x2 u16; the page is slice 1.
+        let info = fake_info(3, 2, 1, 1, 1, DType::U16);
+        let block: Vec<u8> = (0..18u16).flat_map(|v| v.to_le_bytes()).collect();
+        let mut zl = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+        std::io::Write::write_all(&mut zl, &block).unwrap();
+        let zl = zl.finish().unwrap();
+        let mut c = chunk(0, zl.len() as u64, [0, 0, 3, 2]);
+        c.codec = codec::ZLIB;
+        c.skip = 12;
+        let bytes = build(&[c.clone()], b"");
+        assert_eq!(u32_at(&bytes, 4), 2);
+        assert_eq!(parse(bytes).unwrap().chunks[0].skip, 12);
+        let want: Vec<f64> = (6..12).map(|v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[c], &zl, b"").unwrap()[0]), want);
+        // Raw data too, and a skip past the end is an error, not a panic.
+        let mut r = chunk(0, block.len() as u64, [0, 0, 3, 2]);
+        r.skip = 24;
+        let want: Vec<f64> = (12..18).map(|v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[r.clone()], &block, b"").unwrap()[0]), want);
+        r.skip = 1000;
+        assert!(run(&info, &[r], &block, b"").is_err());
+    }
+
+    #[test]
+    fn lz4_hdf5_framing_and_shuffle() {
+        // 2 slices of 3x2 u16, shuffled, in LZ4 blocks of 8 bytes (the last one stored as-is).
+        let info = fake_info(3, 2, 1, 1, 1, DType::U16);
+        let vals: Vec<u16> = (0..12).map(|v| v * 300).collect();
+        let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut sh = vec![0u8; raw.len()];
+        for i in 0..12 {
+            sh[i] = raw[2 * i];
+            sh[12 + i] = raw[2 * i + 1];
+        }
+        let mut z = (sh.len() as u64).to_be_bytes().to_vec();
+        z.extend_from_slice(&8u32.to_be_bytes());
+        for (k, b) in sh.chunks(8).enumerate() {
+            let enc = if k == 2 { b.to_vec() } else { lz4_flex::compress(b) };
+            let enc = if enc.len() >= b.len() { b.to_vec() } else { enc };
+            z.extend_from_slice(&(enc.len() as u32).to_be_bytes());
+            z.extend_from_slice(&enc);
+        }
+        assert_eq!(decompress(codec::LZ4_H5, &z, 1 << 20).unwrap(), sh);
+        assert_eq!(decompress(codec::LZ4_H5, &z, 5).unwrap(), &sh[..5]);
+        let mut c = chunk(0, z.len() as u64, [0, 0, 3, 2]);
+        c.codec = codec::LZ4_H5;
+        c.flags = flags::SHUFFLE;
+        c.skip = 12;
+        let want: Vec<f64> = vals[6..].iter().map(|&v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[c], &z, b"").unwrap()[0]), want);
+        // Shuffled raw data too.
+        let mut r = chunk(0, sh.len() as u64, [0, 0, 3, 2]);
+        r.flags = flags::SHUFFLE;
+        let want: Vec<f64> = vals[..6].iter().map(|&v| v as f64).collect();
+        assert_eq!(values(&run(&info, &[r], &sh, b"").unwrap()[0]), want);
+        assert!(decompress(codec::LZ4_H5, &z[..20], 100).is_err());
     }
 
     #[test]

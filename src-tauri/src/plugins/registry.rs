@@ -20,16 +20,25 @@ use wasmi::Module;
 use super::package::{self, Manifest};
 use super::recipe;
 use super::wasm::{self, Exports, Instance};
-use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, Source};
+use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source};
 
 /// Largest page a plugin may describe (bytes).
 const MAX_PAGE_BYTES: u64 = 1 << 34;
 /// Where the UI's on/off switches are remembered, inside the plugin folder.
 const DISABLED_FILE: &str = ".disabled.json";
 
-/// Vendor formats that used to be built in, so a missing plugin gets a
+/// Vendor formats the official plugins open, so a missing plugin gets a
 /// helpful message: (extension, plugin id, plugin name).
-const KNOWN: &[(&str, &str, &str)] = &[("czi", "zen", "Zeiss ZEN")];
+const KNOWN: &[(&str, &str, &str)] = &[
+    ("czi", "zen", "Zeiss ZEN"),
+    ("lsm", "zenblack", "Zeiss ZEN black"),
+    ("lif", "lasx", "Leica LAS X"),
+    ("lof", "lasx", "Leica LAS X"),
+    ("nd2", "nis", "Nikon NIS-Elements"),
+    ("oib", "fluoview", "Olympus FluoView"),
+    ("oir", "fluoview", "Olympus FluoView"),
+    ("ims", "imaris", "Imaris"),
+];
 
 /// One installed package with a WebAssembly module.
 struct Pkg {
@@ -173,11 +182,11 @@ impl Registry {
         v
     }
 
-    /// Opens `path` with the first enabled plugin that handles `ext`;
-    /// also returns that plugin's id.
-    pub fn open(&self, path: &Path, ext: &str) -> Option<Result<(Box<dyn Source>, String)>> {
+    /// Opens image `series` of `path` with the first enabled plugin that
+    /// handles `ext`; also returns that plugin's id.
+    pub fn open(&self, path: &Path, ext: &str, series: usize) -> Option<Result<(Box<dyn Source>, String)>> {
         let pkg = self.active().into_iter().find(|p| p.opens(ext).is_some())?;
-        Some(WasmSource::open(&pkg, path).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
+        Some(WasmSource::open(&pkg, path, series).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
     }
 
     /// Why a file with this extension cannot be opened, when a plugin could help.
@@ -277,6 +286,18 @@ struct InfoJson {
     format: Option<String>,
     #[serde(default)]
     metadata: Vec<GroupJson>,
+    #[serde(default)]
+    series: Vec<SeriesJson>,
+    #[serde(default)]
+    series_index: usize,
+}
+
+#[derive(Deserialize)]
+struct SeriesJson {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    detail: String,
 }
 
 #[derive(Deserialize)]
@@ -358,7 +379,18 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
         samples_per_page: spp,
         order: DimOrder::parse(&j.order),
         page_count,
+        series: vec![],
+        series_index: 0,
     };
+    if j.series.len() > 1 && j.series_index < j.series.len() {
+        info.series_index = j.series_index;
+        info.series = j
+            .series
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| SeriesInfo { name: if s.name.is_empty() { format!("图像 {}", i + 1) } else { s.name }, detail: s.detail })
+            .collect();
+    }
     if info.pixel_size.is_none() {
         info.unit.clear();
     }
@@ -384,11 +416,12 @@ pub struct WasmSource {
 }
 
 impl WasmSource {
-    fn open(pkg: &Pkg, path: &Path) -> Result<WasmSource> {
+    fn open(pkg: &Pkg, path: &Path, series: usize) -> Result<WasmSource> {
         let module = pkg.module()?;
         let file = map_file(path)?;
         let mut inst = Instance::new(module, file.clone(), &pkg.manifest.id)?;
-        let handle = inst.open(&path.to_string_lossy())?;
+        let series = u32::try_from(series).context("图像序号太大")?;
+        let handle = inst.open(&path.to_string_lossy(), series)?;
         let json = inst.info(handle)?;
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         let name = pkg.opens(&ext).filter(|n| !n.is_empty()).unwrap_or(&pkg.manifest.name).to_string();
@@ -429,6 +462,7 @@ impl Source for WasmSource {
                 let f = self.recipe(page).ok().and_then(|r| match r.chunks.as_slice() {
                     [c] if !c.inline
                         && c.codec == recipe::codec::RAW
+                        && c.skip == 0
                         && c.samples == 1
                         && c.flags & !recipe::flags::BIG_ENDIAN == 0
                         && c.rect == [0, 0, self.info.width, self.info.height]

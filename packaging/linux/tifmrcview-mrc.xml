@@ -12,4 +12,26 @@
       <match type="string" offset="0" value="ZISRAWFILE"/>
     </magic>
   </mime-type>
+  <mime-type type="application/x-zeiss-lsm">
+    <comment>Zeiss ZEN black LSM microscopy image</comment>
+    <glob pattern="*.lsm"/>
+  </mime-type>
+  <mime-type type="application/x-leica-lif">
+    <comment>Leica LAS X LIF / LOF microscopy image</comment>
+    <glob pattern="*.lif"/>
+    <glob pattern="*.lof"/>
+  </mime-type>
+  <mime-type type="application/x-nikon-nd2">
+    <comment>Nikon NIS-Elements ND2 microscopy image</comment>
+    <glob pattern="*.nd2"/>
+  </mime-type>
+  <mime-type type="application/x-olympus-fluoview">
+    <comment>Olympus FluoView OIB / OIR microscopy image</comment>
+    <glob pattern="*.oib"/>
+    <glob pattern="*.oir"/>
+  </mime-type>
+  <mime-type type="application/x-imaris">
+    <comment>Imaris IMS microscopy image</comment>
+    <glob pattern="*.ims"/>
+  </mime-type>
 </mime-info>

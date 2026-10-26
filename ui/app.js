@@ -155,17 +155,20 @@ function needsPlugin(e) {
   return /「.+」插件/.test(String(e));
 }
 
-/** Opens `path`; `force` re-reads the file shown now (e.g. after a plugin was switched). */
-async function openPath(path, force = false) {
+/**
+ * Opens `path` (image `series` of a file that holds several); `force`
+ * re-reads the file shown now (e.g. after a plugin was switched).
+ */
+async function openPath(path, force = false, series = 0) {
   if (!path) return;
   // Clicking the image already shown changes nothing.
-  if (!force && S.info && S.info.path === path && S.axis === "xy") return;
+  if (!force && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
   flushAnn();
   $("loading").textContent = "加载中…";
   // Only show the hint when loading takes a while, so quick flips do not blink.
   const slow = setTimeout(() => ($("loading").hidden = false), 300);
   try {
-    const res = await invoke("open_image", { path });
+    const res = await invoke("open_image", { path, series });
     stopPlay();
     sideDone();
     holdFrame();
@@ -212,6 +215,7 @@ async function openPath(path, force = false) {
     $("st-pixel").textContent = "";
     T.window.getCurrentWindow().setTitle(`${res.info.name} — TifMrcView`).catch(() => {});
     buildChannels();
+    buildSeries();
     setupSliders();
     syncScaleUi();
     updateInfo();
@@ -227,7 +231,7 @@ async function openPath(path, force = false) {
       fit();
     }
     autoLoadModel(path);
-    loadAnn(path);
+    loadAnn(path, res.info.seriesIndex);
     await refreshFolder(path);
     pluginEmit("open", S.info);
     watchLoad();
@@ -418,6 +422,27 @@ async function takePending() {
 }
 
 // ---------- channels ----------
+
+/** The picker for files that hold several images (LIF projects, ND2 positions…). */
+function buildSeries() {
+  const sel = $("series");
+  const list = (S.info && S.info.series) || [];
+  sel.hidden = list.length < 2;
+  sel.innerHTML = "";
+  list.forEach((s, i) => {
+    const o = document.createElement("option");
+    o.value = i;
+    o.textContent = `${i + 1}/${list.length}  ${s.name}`;
+    o.title = s.detail ? `${s.name}\n${s.detail}` : s.name;
+    sel.appendChild(o);
+  });
+  if (list.length > 1) sel.value = S.info.seriesIndex;
+}
+
+$("series").addEventListener("change", (e) => {
+  if (S.info) openPath(S.info.path, false, +e.target.value);
+  e.target.blur();
+});
 
 function buildChannels() {
   const box = $("channels");
@@ -1759,7 +1784,7 @@ function annChanged() {
   draw();
   // Side views share the file name; their marks are not saved.
   if (!S.info || S.axis !== "xy") return;
-  S.annPending = { path: S.info.path, size: [S.info.width, S.info.height] };
+  S.annPending = { path: S.info.path, series: S.info.seriesIndex, size: [S.info.width, S.info.height] };
   clearTimeout(S.annTimer);
   S.annTimer = setTimeout(flushAnn, 2000);
 }
@@ -1777,20 +1802,25 @@ async function flushAnn() {
     ? JSON.stringify({ app: "TifMrcView", version: 1, image: basename(p.path), size: p.size, items })
     : "";
   try {
-    await invoke("write_annotations", { image: p.path, json });
-    if (S.info && S.info.path === p.path) {
-      $("ann-file").textContent = items.length ? `已自动保存到 ${basename(p.path)}.annot.json` : "";
+    await invoke("write_annotations", { image: p.path, series: p.series, json });
+    if (S.info && S.info.path === p.path && S.info.seriesIndex === p.series) {
+      $("ann-file").textContent = items.length ? `已自动保存到 ${annName(p.path, p.series)}` : "";
     }
   } catch (e) {
     toast(`标注保存失败：${e}`, 6000);
   }
 }
 
-async function loadAnn(path) {
+/** The annotations file of an image (see annot_path in lib.rs). */
+function annName(path, series) {
+  return `${basename(path)}${series > 0 ? `.series${series + 1}` : ""}.annot.json`;
+}
+
+async function loadAnn(path, series) {
   const token = S.token;
   let text = null;
   try {
-    text = await invoke("read_annotations", { image: path });
+    text = await invoke("read_annotations", { image: path, series });
   } catch (_) {}
   if (token !== S.token) return;
   S.ann = [];
@@ -1800,11 +1830,11 @@ async function loadAnn(path) {
       const ok = new Set(["line", "path", "rect", "ellipse"]);
       S.ann = items.filter((a) => ok.has(a.type) && Array.isArray(a.pts) && a.pts.length);
     } catch (_) {
-      toast(`${basename(path)}.annot.json 读取失败`);
+      toast(`${annName(path, series)} 读取失败`);
     }
   }
   $("ann-file").textContent = text
-    ? `从 ${basename(path)}.annot.json 读入 ${S.ann.length} 个标注`
+    ? `从 ${annName(path, series)} 读入 ${S.ann.length} 个标注`
     : "标注会在画完几秒后自动存到图片旁边的 .annot.json 文件";
   draw();
 }

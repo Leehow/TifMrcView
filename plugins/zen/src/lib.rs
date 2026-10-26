@@ -16,13 +16,11 @@
 
 use std::collections::BTreeMap;
 
-mod xml;
-
 use tifmrcview_plugin_sdk::{
     bail, export_format, file, flags, le_i32, le_i64, Channel, Chunk, Codec, Context, DType, Format, Group, Info,
     Recipe, Result,
 };
-use xml::Node;
+use tifmrcview_plugin_sdk::xml::{self, Node};
 
 const SEG_HEADER: u64 = 32;
 

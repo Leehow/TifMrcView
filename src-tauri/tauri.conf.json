@@ -105,6 +105,93 @@
             "public.image"
           ]
         }
+      },
+      {
+        "ext": [
+          "lsm"
+        ],
+        "name": "Zeiss LSM Image",
+        "description": "Zeiss ZEN black LSM Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-zeiss-lsm",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.lsm",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "lif",
+          "lof"
+        ],
+        "name": "Leica LIF Image",
+        "description": "Leica LAS X LIF / LOF Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-leica-lif",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.lif",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "nd2"
+        ],
+        "name": "Nikon ND2 Image",
+        "description": "Nikon NIS-Elements ND2 Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-nikon-nd2",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.nd2",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "oib",
+          "oir"
+        ],
+        "name": "Olympus FluoView Image",
+        "description": "Olympus FluoView OIB / OIR Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-olympus-fluoview",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.oib",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "ims"
+        ],
+        "name": "Imaris Image",
+        "description": "Imaris IMS Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-imaris",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.ims",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
       }
     ],
     "macOS": {

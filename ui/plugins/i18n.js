@@ -26,6 +26,10 @@ const WORDS = [
   ["打开文件 (Ctrl/⌘+O)", "Open file (Ctrl/⌘+O)", "Datei öffnen (Strg/⌘+O)", "ファイルを開く (Ctrl/⌘+O)", "Abrir archivo (Ctrl/⌘+O)", "Ouvrir un fichier (Ctrl/⌘+O)", "Открыть файл (Ctrl/⌘+O)"],
   ["上一个文件 (↑)", "Previous file (↑)", "Vorherige Datei (↑)", "前のファイル (↑)", "Archivo anterior (↑)", "Fichier précédent (↑)", "Предыдущий файл (↑)"],
   ["下一个文件 (↓)", "Next file (↓)", "Nächste Datei (↓)", "次のファイル (↓)", "Archivo siguiente (↓)", "Fichier suivant (↓)", "Следующий файл (↓)"],
+  ["这个文件里有多个图像，选择要看的那个", "This file holds several images; choose the one to view", "Diese Datei enthält mehrere Bilder; wählen Sie eines aus", "このファイルには複数の画像があります。表示する画像を選んでください", "Este archivo contiene varias imágenes; elija la que quiere ver", "Ce fichier contient plusieurs images ; choisissez celle à afficher", "В этом файле несколько изображений; выберите нужное"],
+  ["图像", "Image", "Bild", "画像", "Imagen", "Image", "Изображение"],
+  ["参考图像", "Reference image", "Referenzbild", "参照画像", "Imagen de referencia", "Image de référence", "Опорное изображение"],
+  ["这个文件只有一个图像", "This file holds only one image", "Diese Datei enthält nur ein Bild", "このファイルには画像が 1 つしかありません", "Este archivo solo contiene una imagen", "Ce fichier ne contient qu'une image", "В этом файле только одно изображение"],
   ["工具", "Tools", "Werkzeuge", "ツール", "Herramientas", "Outils", "Инструменты"],
   ["工具：亮度对比度、测量、比例尺、存图 (T)", "Tools: brightness/contrast, measure, scale bar, export (T)", "Werkzeuge: Helligkeit/Kontrast, Messen, Maßstab, Export (T)", "ツール：明るさ/コントラスト、計測、スケールバー、書き出し (T)", "Herramientas: brillo/contraste, medir, barra de escala, exportar (T)", "Outils : luminosité/contraste, mesure, barre d'échelle, export (T)", "Инструменты: яркость/контраст, измерение, масштаб, экспорт (T)"],
   ["缩小 (-)", "Zoom out (-)", "Verkleinern (-)", "縮小 (-)", "Reducir (-)", "Zoom arrière (-)", "Уменьшить (-)"],
@@ -362,6 +366,11 @@ const WORDS = [
 
 // prettier-ignore
 const PATTERNS = [
+  // image picker: "2/8  name"; the name is translated on its own
+  [/^(\d+\/\d+)  (.+)$/, "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2"],
+  [/^图像 (\d+)$/, "Image $1", "Bild $1", "画像 $1", "Imagen $1", "Image $1", "Изображение $1"],
+  [/^位置 (\d+)$/, "Position $1", "Position $1", "位置 $1", "Posición $1", "Position $1", "Позиция $1"],
+  [/^拼块 (\d+) · 位置 (\d+)$/, "Tile $1 · position $2", "Kachel $1 · Position $2", "タイル $1 · 位置 $2", "Mosaico $1 · posición $2", "Tuile $1 · position $2", "Плитка $1 · позиция $2"],
   // longer / more specific first
   // format plugins (WebAssembly)
   [/^需要安装「(.+)」插件才能打开 \.(\w+) 文件$/, "The “$1” plugin is needed to open .$2 files", "Zum Öffnen von .$2-Dateien wird das Plugin „$1“ benötigt", ".$2 ファイルを開くには「$1」プラグインが必要です", "Se necesita el complemento «$1» para abrir archivos .$2", "L'extension « $1 » est nécessaire pour ouvrir les fichiers .$2", "Для открытия файлов .$2 нужен плагин «$1»"],

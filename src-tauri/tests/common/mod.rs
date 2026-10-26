@@ -5,6 +5,11 @@
 #![allow(dead_code)]
 
 pub mod czi;
+pub mod fluoview;
+pub mod imaris;
+pub mod lasx;
+pub mod lsm;
+pub mod nis;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

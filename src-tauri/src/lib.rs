@@ -80,14 +80,19 @@ fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Optio
 }
 
 #[tauri::command]
-async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
+async fn open_image(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: String,
+    series: Option<usize>,
+) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
     let budget = mem::cache_budget() / (others + 1);
     let img = blocking(move || {
-        let src = formats::open(Path::new(&path))?;
+        let src = formats::open_series(Path::new(&path), series.unwrap_or(0))?;
         Ok(OpenImage::new(token, src, budget))
     })
     .await?;
@@ -360,20 +365,24 @@ fn free_path(state: State<'_, AppState>, dir: String, stem: String) -> String {
 }
 
 /// Annotations drawn on an image are kept next to it, e.g.
-/// `cell.tif` → `cell.tif.annot.json`.
-fn annot_path(image: &str) -> PathBuf {
-    PathBuf::from(format!("{image}.annot.json"))
+/// `cell.tif` → `cell.tif.annot.json`; the other images of a file that holds
+/// several get their own file (`project.lif.series3.annot.json` for the third).
+fn annot_path(image: &str, series: Option<usize>) -> PathBuf {
+    match series {
+        Some(s) if s > 0 => PathBuf::from(format!("{image}.series{}.annot.json", s + 1)),
+        _ => PathBuf::from(format!("{image}.annot.json")),
+    }
 }
 
 #[tauri::command]
-fn read_annotations(image: String) -> Option<String> {
-    std::fs::read_to_string(annot_path(&image)).ok()
+fn read_annotations(image: String, series: Option<usize>) -> Option<String> {
+    std::fs::read_to_string(annot_path(&image, series)).ok()
 }
 
 /// Writes the annotations file, or removes it when `json` is empty.
 #[tauri::command]
-fn write_annotations(image: String, json: String) -> CmdResult<()> {
-    let path = annot_path(&image);
+fn write_annotations(image: String, series: Option<usize>, json: String) -> CmdResult<()> {
+    let path = annot_path(&image, series);
     if json.is_empty() {
         return match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),

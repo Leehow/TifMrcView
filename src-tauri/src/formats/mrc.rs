@@ -88,6 +88,8 @@ impl MrcSource {
             samples_per_page: 1,
             order: DimOrder::CZT,
             page_count: depth,
+            series: vec![],
+            series_index: 0,
         };
         info.fill_default_channels();
         Ok(MrcSource { mmap, info, data_offset, little, mode })

@@ -154,6 +154,8 @@ impl TiffSource {
             samples_per_page: spp.max(1),
             order: DimOrder::CZT,
             page_count: ifds.len(),
+            series: vec![],
+            series_index: 0,
         };
         let mut contiguous = None;
 

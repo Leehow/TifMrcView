@@ -39,6 +39,8 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 sha2 = "0.10"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# Imaris LZ4 chunks (HDF5 filter 32004).
+lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
 [features]
 default = ["recorder"]
@@ -68,3 +70,5 @@ opt-level = 2
 
 [dev-dependencies]
 tempfile = "3"
+# Tests write LZ4 blocks.
+lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode", "safe-encode", "alloc"] }

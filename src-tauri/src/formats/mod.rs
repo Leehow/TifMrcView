@@ -39,25 +39,37 @@ pub fn open(path: &Path) -> Result<Box<dyn Source>> {
     open_with(path, Registry::global())
 }
 
+/// Opens image `series` of a file that holds several (see `ImageInfo::series`).
+pub fn open_series(path: &Path, series: usize) -> Result<Box<dyn Source>> {
+    open_series_with(path, series, Registry::global())
+}
+
 /// Opens a file for its pixels only (thumbnails): metadata plugins are skipped.
 pub fn open_pixels(path: &Path) -> Result<Box<dyn Source>> {
-    open_pixels_with(path, Registry::global()).map(|(s, _)| s)
+    open_pixels_with(path, 0, Registry::global()).map(|(s, _)| s)
 }
 
 pub fn open_with(path: &Path, reg: &Registry) -> Result<Box<dyn Source>> {
-    let (src, by) = open_pixels_with(path, reg)?;
+    open_series_with(path, 0, reg)
+}
+
+pub fn open_series_with(path: &Path, series: usize, reg: &Registry) -> Result<Box<dyn Source>> {
+    let (src, by) = open_pixels_with(path, series, reg)?;
     Ok(reg.add_metadata(path, &ext_of(path), src, by.as_deref()))
 }
 
 /// The source, and the id of the plugin that opened it (if one did).
-fn open_pixels_with(path: &Path, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
+fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
     let ext = ext_of(path);
+    if series > 0 && CORE_EXTENSIONS.contains(&ext.as_str()) {
+        bail!("这个文件只有一个图像");
+    }
     let core: Box<dyn Source> = match ext.as_str() {
         "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
         "mrc" | "mrcs" | "rec" | "st" | "map" => Box::new(mrc::MrcSource::open(path)?),
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),
         _ => {
-            return match reg.open(path, &ext) {
+            return match reg.open(path, &ext, series) {
                 Some(r) => r.map(|(s, id)| (s, Some(id))),
                 None => match reg.missing(&ext) {
                     Some(msg) => bail!("{msg}"),
