@@ -246,3 +246,7 @@ footer.dkf{background:#000;border-top-color:rgba(255,255,255,.1);--mute:#a1a1a6;
 .lb button:hover{background:rgba(255,255,255,.26)}
 
 .k .pt{margin-left:5px;padding:1px 6px;border-radius:999px;font-size:.68em;font-weight:600;vertical-align:.15em;background:rgba(100,180,255,.22);color:#8cc8ff}
+.steps ol{margin:12px 0 0;padding-left:20px;font-size:15px;line-height:1.55}
+.steps li{margin:5px 0}
+.steps p{margin:12px 0 0;font-size:13px;line-height:1.55;color:var(--faint)}
+.steps code{overflow-wrap:anywhere}
