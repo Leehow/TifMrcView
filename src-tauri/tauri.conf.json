@@ -4,7 +4,8 @@
   "version": "0.5.0",
   "identifier": "com.leehow.tifmrcview",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBundleCommand": "node scripts/build-thumbnails.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -87,7 +88,14 @@
         "description": "MRC Electron Microscopy Image",
         "role": "Viewer",
         "mimeType": "application/x-mrc",
-        "rank": "Alternate"
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.mrc-alternate",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
       },
       {
         "ext": [
@@ -196,7 +204,11 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "files": {
+        "PlugIns/TmvThumbnail.appex": "target/quicklook.noindex/TmvThumbnail.appex",
+        "PlugIns/TmvPreview.appex": "target/quicklook.noindex/TmvPreview.appex"
+      }
     },
     "windows": {
       "nsis": {
@@ -205,20 +217,23 @@
           "SimpChinese",
           "English"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "../packaging/windows/thumbnail-hooks.nsh"
       }
     },
     "linux": {
       "deb": {
         "files": {
-          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml"
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
+          "/usr/share/thumbnailers/tifmrcview.thumbnailer": "../packaging/linux/tifmrcview.thumbnailer"
         },
         "postInstallScript": "../packaging/linux/postinst.sh",
         "desktopTemplate": "../packaging/linux/tifmrcview.desktop"
       },
       "rpm": {
         "files": {
-          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml"
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
+          "/usr/share/thumbnailers/tifmrcview.thumbnailer": "../packaging/linux/tifmrcview.thumbnailer"
         },
         "postInstallScript": "../packaging/linux/postinst.sh",
         "desktopTemplate": "../packaging/linux/tifmrcview.desktop"

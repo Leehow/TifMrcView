@@ -25,6 +25,7 @@ pub const MANIFEST: &str = "plugin.json";
 
 const MAX_ENTRIES: usize = 500;
 const MAX_TOTAL: u64 = 50 << 20;
+pub const MAX_PACKAGE: u64 = 50 << 20;
 const MAX_MANIFEST: u64 = 1 << 20;
 
 /// `[a-z0-9-]+`, at most 64 characters.
@@ -291,9 +292,9 @@ pub fn install_checked(
 pub fn read_archive(path: &Path) -> Result<Vec<u8>> {
     let file = File::open(path).with_context(|| format!("无法打开 {}", path.display()))?;
     let mut bytes = vec![];
-    file.take(super::market::MAX_PACKAGE + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > super::market::MAX_PACKAGE {
-        bail!("插件包太大（超过 {} MB）", super::market::MAX_PACKAGE >> 20);
+    file.take(MAX_PACKAGE + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PACKAGE {
+        bail!("插件包太大（超过 {} MB）", MAX_PACKAGE >> 20);
     }
     Ok(bytes)
 }

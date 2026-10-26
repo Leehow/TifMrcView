@@ -1,0 +1,14 @@
+[package]
+name = "tmv-thumbnail-ffi"
+version = "0.5.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+tifmrcview = { path = "..", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
