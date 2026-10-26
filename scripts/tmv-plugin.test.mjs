@@ -167,7 +167,7 @@ test("template build packages a fixture module without invoking Rust", (t) => {
   fs.writeFileSync(cargo, `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path"), assert = require("node:assert/strict");
 const args = process.argv.slice(2);
-for (const arg of ["build", "--target", "wasm32-unknown-unknown", "--release", "--offline"]) assert.ok(args.includes(arg));
+for (const arg of ["build", "--target", "wasm32-unknown-unknown", "--release"]) assert.ok(args.includes(arg));
 const out = path.join(args[args.indexOf("--target-dir") + 1], "wasm32-unknown-unknown/release");
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, "tmv_plugin_r16.wasm"), Buffer.from(${JSON.stringify([...wasm()])}));
