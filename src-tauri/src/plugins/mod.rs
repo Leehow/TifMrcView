@@ -25,7 +25,6 @@ mod recorder;
 pub mod registry;
 mod smartsem;
 pub mod wasm;
-mod zen;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,7 +56,7 @@ impl Plugins {
     #[allow(unused_mut, clippy::vec_init_then_push)] // entries depend on enabled features
     pub fn new(dir: Option<PathBuf>) -> Self {
         #[allow(unused_mut)]
-        let mut list: Vec<Arc<dyn NativePlugin>> = vec![Arc::new(smartsem::SmartSem), Arc::new(zen::Zen)];
+        let mut list: Vec<Arc<dyn NativePlugin>> = vec![Arc::new(smartsem::SmartSem)];
         #[cfg(feature = "recorder")]
         list.push(Arc::new(recorder::Recorder::default()));
         Plugins { native: list.into_iter().map(|p| (p.id(), p)).collect(), dir }

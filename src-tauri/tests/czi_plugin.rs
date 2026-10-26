@@ -260,3 +260,35 @@ fn large_metadata_stays_within_the_fuel_budget() {
     assert_eq!(all.name, "ZEN 全部参数");
     assert!(all.items.len() > 80_000);
 }
+
+/// Open and read every page, like the prefetcher (two readers).
+/// `cargo test --release --test czi_plugin -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn benchmark_open_and_read_all_pages() {
+    let p = zen!();
+    let tmp = tempfile::tempdir().unwrap();
+    for (name, comp, extra) in [("uncompressed", 0, 0), ("uncompressed", 0, 2000), ("zstd", 5, 2000), ("zstd hi/lo", 6, 2000)] {
+        let path = tmp.path().join(format!("{comp}-{extra}.czi"));
+        czi::stack(&path, 1024, 1024, 2, 20, comp, extra);
+        let mb = std::fs::metadata(&path).unwrap().len() >> 20;
+        let mut t_open = std::time::Duration::MAX;
+        let mut read = std::time::Duration::MAX;
+        for _ in 0..6 {
+            let t = std::time::Instant::now();
+            let img = OpenImage::new(1, open(&p.registry, &path), usize::MAX);
+            t_open = t_open.min(t.elapsed());
+            let t = std::time::Instant::now();
+            let n = img.info().page_count;
+            std::thread::scope(|s| {
+                for k in 0..2 {
+                    let img = &img;
+                    s.spawn(move || (k..n).step_by(2).for_each(|page| drop(img.page(page).unwrap())));
+                }
+            });
+            read = read.min(t.elapsed());
+        }
+        println!("{name:>13} ({mb} MB, 40 pages, extra XML {extra:>4}): open {t_open:>10.2?}, read all {read:>10.2?}");
+    }
+}
+

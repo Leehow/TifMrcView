@@ -1,4 +1,3 @@
-pub mod czi;
 pub mod mrc;
 pub mod raster;
 pub mod tiff;

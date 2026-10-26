@@ -26,7 +26,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 memmap2 = "0.9"
 rayon = "1.10"
 anyhow = "1"
-roxmltree = "0.20"
 ruzstd = "0.8"
 # Sandboxed WebAssembly format plugins (pure-Rust interpreter). Loop dispatch:
 # tail-call dispatch overflows the stack when LLVM does not optimise it (debug).
