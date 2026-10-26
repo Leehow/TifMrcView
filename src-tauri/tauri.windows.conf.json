@@ -1,7 +1,0 @@
-{
-  "bundle": {
-    "resources": {
-      "target/thumbnail-windows/tmv_thumbnail_win.dll": "tmv_thumbnail_win.dll"
-    }
-  }
-}
