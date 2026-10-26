@@ -21,13 +21,13 @@
       "打开蔡司共聚焦软件 ZEN black / AIM 保存的 LSM 文件（LSM 510、710、780、880、900、980 等）。TifMrcView 本身不带 LSM 读取代码；装上这个插件后即可打开 .lsm：多通道、Z 栈、时间序列都支持，未压缩和 LZW 压缩（含预测器）都能读，超过 4 GB 的大文件也能正确定位，每个位置和拼块作为一个序列单独切换。文件里附带的缩略图会被跳过。插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件，像素的解压由应用本身并行完成，速度和内置格式一样。",
       "插件还会读取 LSM 文件里的私有结构，把像素尺寸、Z 步长、时间间隔、通道名称和颜色交给应用，并整理成采集参数显示在图像信息面板里。「ZEN black 图像」：记录名称、用户、采集时间、扫描类型与模式、各维度尺寸、位深、像素尺寸、视场和扫描缩放、实测时间间隔。「ZEN black 显微镜」：物镜、激光器及其功率、光路上的分束器与滤光片。",
       "每个通道单独一组：所属轨道、检测器、染料、滤光片、检测范围、针孔（µm）、检测器增益、放大器增益与偏移、激发波长与透过率、采样（平均）方式与次数、像素驻留时间和位深。「ZEN black 全部参数」把 LSM 信息结构和整棵扫描信息树展开列出，方便查找。",
-      "安装后无需设置，直接打开 .lsm 文件即可。需要 TifMrcView 0.4.0 或更新版本。"
+      "安装后无需设置，直接打开 .lsm 文件即可。需要 TifMrcView 0.5.0 或更新版本。"
     ],
     "en": [
       "Opens LSM files saved by ZEN black / AIM, the software of Zeiss LSM confocals (LSM 510, 710, 780, 880, 900, 980 and others). TifMrcView itself contains no LSM code; with this plugin installed, .lsm files open with channels, Z stacks and time series, uncompressed or LZW compressed (with or without the predictor). Files over 4 GB are located correctly, and every position and tile appears as its own series. The thumbnails stored in the file are skipped. The plugin runs sandboxed as WebAssembly and can only read the file being opened; decompressing the pixels is done by the app itself, in parallel, as fast as for built-in formats.",
       "The plugin also reads the private structures of the LSM file and gives the app the pixel size, Z step, time interval, channel names and colours, and turns them into acquisition settings in the image-info panel. \"ZEN black image\": recording name, user, acquisition time, scan type and mode, size of every dimension, bit depth, pixel size, field of view and scan zoom, measured time interval. \"ZEN black microscope\": objective, lasers with their power, and the beam splitters and filters in the light path.",
       "Each channel gets its own group: its track, detector, dye, filter, detection range, pinhole (µm), detector gain, amplifier gain and offset, excitation wavelengths with transmission, sampling (averaging) mode and number, pixel dwell time and bit depth. \"ZEN black all settings\" flattens the LSM info structure and the whole scan-information tree so you can search it.",
-      "There is nothing to configure: install it and open .lsm files. Needs TifMrcView 0.4.0 or newer."
+      "There is nothing to configure: install it and open .lsm files. Needs TifMrcView 0.5.0 or newer."
     ]
   }
 }
