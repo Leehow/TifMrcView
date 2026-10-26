@@ -31,6 +31,17 @@ jobs:
         with:
           node-version: 22
 
+      # pack-plugins.mjs builds the WebAssembly plugins.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            plugins/zen -> ../../target/wasm-plugins
+            plugins/smartsem -> ../../target/wasm-plugins
+
       - name: Stage site and plugins
         run: |
           mkdir -p stage

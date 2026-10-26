@@ -6,15 +6,25 @@
 // <out-dir>/plugins/plugins.json (read by the plugin market page).
 // plugin.json sits at the zip root. No dependencies: a minimal zip writer.
 // Set PLUGINS_DIR to pack from somewhere other than ./plugins (for tests).
+//
+// A plugin folder with a Cargo.toml is a WebAssembly plugin crate (see
+// docs/format-plugins.md): it is built with
+//   cargo build --release --target wasm32-unknown-unknown
+// and the .wasm goes into the zip under the name plugin.json gives in
+// "wasm"; the Rust sources and Cargo files stay out. Needs Rust with the
+// wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).
+// PLUGINS_TARGET_DIR sets the cargo target folder (default target/wasm-plugins).
 
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginsDir = path.resolve(root, process.env.PLUGINS_DIR || "plugins");
+const targetDir = path.resolve(root, process.env.PLUGINS_TARGET_DIR || "target/wasm-plugins");
 const outArg = process.argv[2];
 if (!outArg) {
   console.error("usage: pack-plugins.mjs <out-dir>");
@@ -106,6 +116,25 @@ function listFiles(dir, rel = "") {
   return out;
 }
 
+// Crate files that are not part of the installed plugin.
+const CRATE_FILES = new Set(["Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain", "rust-toolchain.toml"]);
+const CRATE_DIRS = ["src/", "target/", "tests/", "benches/", "examples/"];
+const isCrateFile = (f) => CRATE_FILES.has(f) || CRATE_DIRS.some((d) => f.startsWith(d));
+
+const EXT = /^[a-z0-9]{1,16}$/;
+const extList = (v) => Array.isArray(v) && v.length > 0 && v.every((e) => typeof e === "string" && EXT.test(e));
+
+/** Builds the plugin crate in `dir` for wasm32; returns the .wasm path. */
+function buildWasm(dir) {
+  const toml = fs.readFileSync(path.join(dir, "Cargo.toml"), "utf8");
+  const name = (toml.match(/^\s*name\s*=\s*"([^"]+)"/m) || [])[1];
+  if (!name) throw new Error("Cargo.toml has no package name");
+  const args = ["build", "--release", "--target", "wasm32-unknown-unknown", "--manifest-path", path.join(dir, "Cargo.toml"), "--target-dir", targetDir];
+  console.log(`cargo ${args.join(" ")}`);
+  execFileSync(process.env.CARGO || "cargo", args, { stdio: "inherit" });
+  return path.join(targetDir, "wasm32-unknown-unknown", "release", `${name.replace(/-/g, "_")}.wasm`);
+}
+
 const REQUIRED = ["id", "name", "version", "description", "main"];
 function validate(m, dirName, files) {
   const errs = [];
@@ -116,6 +145,13 @@ function validate(m, dirName, files) {
   if (typeof m.main === "string" && !files.includes(m.main)) errs.push(`main "${m.main}" not found in package`);
   if (m.apiVersion != null && !Number.isInteger(m.apiVersion)) errs.push("apiVersion must be an integer");
   if (m.native != null && typeof m.native !== "boolean") errs.push("native must be a boolean");
+  if (m.wasm != null && (typeof m.wasm !== "string" || !/^[\w.-]+(\/[\w.-]+)*\.wasm$/.test(m.wasm))) errs.push("wasm must be a .wasm path");
+  if (m.wasm != null && !files.includes(m.wasm)) errs.push(`wasm "${m.wasm}" not found in package`);
+  if (m.formats != null && !(Array.isArray(m.formats) && m.formats.every((f) => f && extList(f.ext)))) {
+    errs.push('formats must be [{"ext": ["abc"], "name": "…"}] with lower-case extensions');
+  }
+  if (m.metadata != null && !(m.metadata && extList(m.metadata.ext))) errs.push('metadata must be {"ext": ["tif"]}');
+  if ((m.formats || m.metadata) && m.wasm == null) errs.push("formats / metadata need a wasm module");
   return errs;
 }
 
@@ -169,7 +205,27 @@ for (const d of dirs) {
     failed = true;
     continue;
   }
-  const files = listFiles(dir);
+  // name in the zip -> file on disk
+  const sources = new Map();
+  const crate = fs.existsSync(path.join(dir, "Cargo.toml"));
+  for (const f of listFiles(dir)) if (!crate || !isCrateFile(f)) sources.set(f, path.join(dir, f));
+  if (crate) {
+    if (typeof m.wasm !== "string") {
+      console.error(`${d}: has a Cargo.toml but plugin.json names no "wasm" module`);
+      failed = true;
+      continue;
+    }
+    try {
+      const wasm = buildWasm(dir);
+      if (!fs.existsSync(wasm)) throw new Error(`${wasm} was not built`);
+      sources.set(m.wasm, wasm);
+    } catch (e) {
+      console.error(`${d}: building the WebAssembly module failed: ${e.message}`);
+      failed = true;
+      continue;
+    }
+  }
+  const files = [...sources.keys()].sort();
   const errs = validate(m, d, files);
   if (errs.length) {
     console.error(`${d}: ${errs.join("; ")}`);
@@ -178,7 +234,7 @@ for (const d of dirs) {
   }
   // plugin.json first, then the rest in sorted order.
   const ordered = ["plugin.json", ...files.filter((f) => f !== "plugin.json")];
-  const buf = zip(ordered.map((name) => ({ name, data: fs.readFileSync(path.join(dir, name)) })));
+  const buf = zip(ordered.map((name) => ({ name, data: fs.readFileSync(sources.get(name)) })));
   const file = `${m.id}-${m.version}.zip`;
   fs.writeFileSync(path.join(outDir, file), buf);
   fs.writeFileSync(path.join(outDir, `${m.id}.zip`), buf);

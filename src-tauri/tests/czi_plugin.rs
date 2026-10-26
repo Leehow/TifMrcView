@@ -206,6 +206,22 @@ fn broken_and_unsupported_files() {
 }
 
 #[test]
+fn install_validation_checks_the_module() {
+    use tifmrcview_lib::plugins::{package, registry::validate_package};
+    let p = zen!();
+    let dir = p.dir.path().join("zen");
+    let mut m = package::read_installed(&dir, env!("CARGO_PKG_VERSION")).unwrap();
+    validate_package(&dir, &m).unwrap();
+    // Promising metadata the module does not export is refused.
+    m.metadata = vec!["tif".into()];
+    assert!(format!("{:#}", validate_package(&dir, &m).unwrap_err()).contains("tmv_metadata"));
+    // So is a module that is not WebAssembly.
+    std::fs::write(dir.join("zen.wasm"), b"\0asm garbage").unwrap();
+    m.metadata.clear();
+    assert!(validate_package(&dir, &m).is_err());
+}
+
+#[test]
 fn needs_the_plugin_and_follows_the_switch() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("a.czi");
