@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod czi;
+pub mod imaris;
 pub mod lasx;
 pub mod lsm;
 
