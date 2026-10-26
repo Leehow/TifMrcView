@@ -176,14 +176,18 @@ struct Decoded<'a> {
     stride: usize,
 }
 
-fn decode_chunk<'a>(c: &Chunk, i: usize, file: &'a [u8], payload: &'a [u8], size: usize) -> Result<Decoded<'a>> {
-    let [_, _, w, h] = c.rect;
-    let row = w * c.samples * size;
+/// Decodes the first `rows` rows of chunk `c` (the rows that land on the page).
+fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &'a [u8], size: usize) -> Result<Decoded<'a>> {
+    let w = c.rect[2];
+    let row = w.checked_mul(c.samples * size).context("图像块太大")?;
     let stride = if c.stride == 0 { row } else { c.stride };
     if stride < row {
         bail!("第 {} 块的行宽不对", i + 1);
     }
-    let want = stride.checked_mul(h).context("图像块太大")?;
+    // hi/lo data splits at half the whole chunk, so it is always decoded whole.
+    let rows = if c.flags & flags::HILO != 0 { c.rect[3] } else { rows };
+    // Never more than the chunk can contribute to the page (decompression bombs).
+    let want = stride.checked_mul(rows).filter(|&n| n <= 1 << 34).context("图像块太大")?;
     let src_all = if c.inline { payload } else { file };
     let src = usize::try_from(c.offset)
         .ok()
@@ -317,7 +321,7 @@ pub fn execute(recipe: &Recipe, file: &[u8], info: &ImageInfo) -> Result<Vec<Pla
         .filter(|(_, c)| c.rect[0] < w && c.rect[1] < h && c.rect[2] > 0 && c.rect[3] > 0)
         .collect();
     let decoded: Vec<Decoded> =
-        visible.par_iter().map(|&(i, c)| decode_chunk(c, i, file, &recipe.payload, size)).collect::<Result<_>>()?;
+        visible.par_iter().map(|&(i, c)| decode_chunk(c, i, c.rect[3].min(h - c.rect[1]), file, &recipe.payload, size)).collect::<Result<_>>()?;
 
     let target_of = |c: &Chunk, s: usize| if c.flags & flags::BGR != 0 && s < 3 { c.plane + 2 - s } else { c.plane + s };
 
@@ -505,5 +509,14 @@ mod tests {
         // Decompression is capped at what the chunk needs.
         let big = ruzstd::encoding::compress_to_vec(&vec![7u8; 1 << 20][..], ruzstd::encoding::CompressionLevel::Fastest);
         assert_eq!(decompress(codec::ZSTD, &big, 10).unwrap().len(), 10);
+        // A chunk claiming a billion rows only decodes the rows on the page.
+        let mut c = chunk(0, big.len() as u64, [0, 0, 2, 1_000_000_000]);
+        c.codec = codec::ZSTD;
+        let planes = run(&info, &[c], &big, b"").unwrap();
+        assert_eq!(values(&planes[0]), [7.0; 4]);
+        // Absurd sizes are refused rather than allocated.
+        let mut c = chunk(0, 4, [0, 0, u32::MAX as usize, u32::MAX as usize]);
+        c.samples = 64;
+        assert!(run(&info, &[c], &[0; 4], b"").is_err());
     }
 }
