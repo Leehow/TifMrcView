@@ -113,7 +113,7 @@ test("install permissions and errors have all seven i18n columns", () => {
     assert.equal(row.length, 7, row[0]);
     assert.ok(row.every((s) => typeof s === "string" && s.trim()), row[0]);
   }
-  const rust = ["src/lib.rs", "src/plugins/mod.rs", "src/plugins/market.rs", "src/plugins/package.rs"]
+  const rust = ["src/desktop.rs", "src/plugins/desktop.rs", "src/plugins/market.rs", "src/plugins/package.rs"]
     .map((p) => fs.readFileSync(path.join(root, "src-tauri", p), "utf8")).join("\n");
   for (const row of WORDS.slice(9, 15)) assert.ok(rust.includes(row[0]), `UI error must match backend: ${row[0]}`);
 });

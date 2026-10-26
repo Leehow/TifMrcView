@@ -71,6 +71,36 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Windows thumbnail DLL and COM tests
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        run: |
+          cargo build --target x86_64-pc-windows-msvc -p tmv-thumbnail-win
+          cargo test --target x86_64-pc-windows-msvc -p tmv-thumbnail-win
+
+      - name: Headless thumbnail core
+        working-directory: src-tauri
+        run: |
+          cargo test --no-default-features --lib
+          cargo test -p tmv-thumbnail-ffi
+
+      - name: Linux CLI without a display
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import struct
+          header = bytearray(1024)
+          struct.pack_into('<4i', header, 0, 16, 16, 1, 6)
+          header[208:212] = b'MAP '
+          header[212] = 0x44
+          with open('/tmp/thumbnail.mrc', 'wb') as f:
+              f.write(header)
+              f.write(struct.pack('<256H', *range(108, 364)))
+          PYTHON
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo run --manifest-path src-tauri/Cargo.toml --bin tifmrcview -- --thumbnail /tmp/thumbnail.mrc /tmp/thumbnail.png --size 64
+          test "$(od -An -tx1 -N8 /tmp/thumbnail.png | tr -d ' \n')" = 89504e470d0a1a0a
+
       - name: plugin crates
         if: runner.os == 'Linux'
         run: |

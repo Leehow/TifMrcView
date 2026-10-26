@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use super::package::{self, Manifest};
 
 /// Largest package the market may serve (bytes).
-pub const MAX_PACKAGE: u64 = 50 << 20;
+pub use super::package::MAX_PACKAGE;
 /// Largest `plugins.json` (bytes).
 pub const MAX_INDEX: u64 = 4 << 20;
 pub const SCHEME: &str = "tifmrcview";

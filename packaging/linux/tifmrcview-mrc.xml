@@ -4,6 +4,9 @@
     <comment>MRC electron microscopy image</comment>
     <glob pattern="*.mrc"/>
     <glob pattern="*.mrcs"/>
+    <glob pattern="*.rec"/>
+    <glob pattern="*.st"/>
+    <glob pattern="*.map"/>
   </mime-type>
   <mime-type type="application/x-czi">
     <comment>Zeiss CZI microscopy image</comment>
