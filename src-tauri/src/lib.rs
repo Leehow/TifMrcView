@@ -381,8 +381,21 @@ fn read_annotations(image: String, series: Option<usize>) -> Option<String> {
 
 /// Writes the annotations file, or removes it when `json` is empty.
 #[tauri::command]
-fn write_annotations(image: String, series: Option<usize>, json: String) -> CmdResult<()> {
-    let path = annot_path(&image, series);
+fn write_annotations(window: WebviewWindow, state: State<'_, AppState>, image: String, series: Option<usize>, json: String) -> CmdResult<()> {
+    let current = state.current.lock().unwrap();
+    let info = current.get(window.label()).map(|img| img.info());
+    let path = checked_annot_path(info.map(|i| (i.path.as_str(), i.series_index)), &image, series)?;
+    write_annotations_at(&path, &json)
+}
+
+fn checked_annot_path(opened: Option<(&str, usize)>, image: &str, series: Option<usize>) -> CmdResult<PathBuf> {
+    match opened {
+        Some((path, index)) if path == image && index == series.unwrap_or(0) => Ok(annot_path(path, Some(index))),
+        _ => Err("只能保存当前窗口已打开图像的标注".into()),
+    }
+}
+
+fn write_annotations_at(path: &Path, json: &str) -> CmdResult<()> {
     if json.is_empty() {
         return match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
@@ -391,8 +404,15 @@ fn write_annotations(image: String, series: Option<usize>, json: String) -> CmdR
     }
     // Write to a temporary file first so a crash never leaves half a file.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(err)?;
-    std::fs::rename(&tmp, &path).map_err(err)
+    // Never follow a pre-existing temporary-file symlink.
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(err)?;
+    let result = file.write_all(json.as_bytes()).and_then(|_| {
+        drop(file);
+        std::fs::rename(&tmp, path)
+    });
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    result.map_err(err)
 }
 
 pub(crate) fn percent_decode(s: &str) -> String {
@@ -696,6 +716,7 @@ pub fn run() {
             plugins::open_plugin_dir,
             plugins::pick_plugin_package,
             plugins::plugin_install,
+            plugins::plugin_inspect_package,
             plugins::plugin_uninstall,
             plugins::plugin_set_disabled,
             plugins::open_market,
@@ -741,6 +762,43 @@ pub fn run() {
 #[cfg(test)]
 mod save_path_tests {
     use super::*;
+
+    #[test]
+    fn annotations_only_for_current_image_and_series() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("cell.tif").to_string_lossy().into_owned();
+        let other = dir.path().join("other.tif").to_string_lossy().into_owned();
+        let current = Some((image.as_str(), 0));
+        assert!(checked_annot_path(None, &image, None).is_err());
+        assert!(checked_annot_path(current, &other, None).is_err());
+        assert!(checked_annot_path(current, &format!("{image}/../other.tif"), None).is_err());
+        assert!(checked_annot_path(current, &image, Some(1)).is_err());
+        let path = checked_annot_path(current, &image, None).unwrap();
+        assert_eq!(path, PathBuf::from(format!("{image}.annot.json")));
+        write_annotations_at(&path, "{\"items\":[]}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"items\":[]}");
+        write_annotations_at(&path, "updated").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
+        write_annotations_at(&path, "").unwrap();
+        write_annotations_at(&path, "").unwrap();
+        assert!(!path.exists());
+        let series = checked_annot_path(Some((&image, 2)), &image, Some(2)).unwrap();
+        assert_eq!(series, PathBuf::from(format!("{image}.series3.annot.json")));
+        assert!(checked_annot_path(Some((&image, 2)), &image, None).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn annotations_do_not_follow_temporary_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("unrelated");
+        std::fs::write(&target, "original").unwrap();
+        let path = dir.path().join("cell.tif.annot.json");
+        let tmp = path.with_extension("json.tmp");
+        std::os::unix::fs::symlink(&target, &tmp).unwrap();
+        assert!(write_annotations_at(&path, "changed").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
+    }
 
     #[test]
     fn save_paths_allow_only_handed_out_paths() {

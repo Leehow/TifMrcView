@@ -26,6 +26,12 @@
     return Array.isArray(list) ? list : [String(list)];
   }
 
+  // API 2 install permissions. Languages without a translation use English.
+  var permissions = {
+    zh: { title: '插件权限', none: '无额外权限', state: '读取当前图像的信息并切换层和帧', ui: '添加工具栏按钮和面板', metadata: '给图像添加元数据并设置像素尺寸和格式', export: '导出图片到你选择的位置', settings: '保存自己的设置' },
+    en: { title: 'Plugin permissions', none: 'No additional permissions', state: 'Read image information and change slices and frames', ui: 'Add toolbar buttons and panels', metadata: 'Add image metadata and set pixel size and format', export: 'Export images to a location you choose', settings: 'Save its own settings' }
+  };
+
   // Hands a tifmrcview:// link to the app. Browsers say nothing when no app
   // handles the scheme, so if the page still has focus after a moment
   // (no app took over, no "open TifMrcView?" prompt), show how to get one.
@@ -71,6 +77,16 @@
     if (p.minAppVersion) c.appendChild(el('p', 'meta2', T('pl_need', { v: p.minAppVersion })));
 
     c.appendChild(el('p', 'desc', field(p, 'description', lang)));
+    if (p.apiVersion === 2) {
+      var words = permissions[lang] || permissions.en;
+      c.appendChild(el('p', 'meta2', words.title));
+      var list = el('ul', 'permissions');
+      var names = p.permissions || [];
+      (names.length ? names : ['none']).forEach(function (name) {
+        list.appendChild(el('li', null, words[name] || permissions.en[name] || name));
+      });
+      c.appendChild(list);
+    }
 
     var paras = paragraphs(p, lang);
     if (paras.length) {

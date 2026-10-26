@@ -155,18 +155,48 @@ pub async fn pick_plugin_package(app: AppHandle) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Installs or upgrades the package at `path`; returns its plugin.json.
+/// Inspect a zip before confirmation. Only the backend-fetched official index
+/// can authorize an API 1 package; never accept an index from the frontend.
 #[tauri::command]
-pub async fn plugin_install(app: AppHandle, plugins: State<'_, Plugins>, path: String) -> Result<Value, String> {
+pub async fn plugin_inspect_package(app: AppHandle, cache: State<'_, MarketCache>, path: String) -> Result<Value, String> {
+    let version = app_version(&app);
+    let index = cache.0.lock().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = package::read_archive(Path::new(&path))?;
+        let m = inspect_installable(&bytes, index.as_ref(), &version)?;
+        Ok(serde_json::json!({"manifest": m.raw, "sha256": market::sha256(&bytes)}))
+    }).await.map_err(|e| e.to_string())?.map_err(|e: anyhow::Error| format!("{e:#}"))
+}
+
+fn inspect_installable(bytes: &[u8], index: Option<&Value>, version: &str) -> anyhow::Result<package::Manifest> {
+    let m = package::inspect(bytes, version)?;
+    let entry = index.and_then(|i| market::find_entry(i, &m.id, version).ok());
+    market::check_install_policy(&m, bytes, entry.as_ref())?;
+    Ok(m)
+}
+
+/// Re-read and hash one snapshot after confirmation, then extract those bytes.
+#[tauri::command]
+pub async fn plugin_install(app: AppHandle, plugins: State<'_, Plugins>, cache: State<'_, MarketCache>, path: String, sha256: String) -> Result<Value, String> {
     let dir = plugins.dir()?.to_path_buf();
     let version = app_version(&app);
+    let index = cache.0.lock().unwrap().clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
-        package::install_checked(&dir, Path::new(&path), &version, registry::validate_package)
+        let bytes = package::read_archive(Path::new(&path))?;
+        install_confirmed_zip(&dir, &bytes, &sha256, index.as_ref(), &version)
     })
     .await
     .map_err(|e| e.to_string())?;
     registry::Registry::global().invalidate();
     res.map(|m| m.raw).map_err(|e| format!("{e:#}"))
+}
+
+fn install_confirmed_zip(dir: &Path, bytes: &[u8], sha256: &str, index: Option<&Value>, version: &str) -> anyhow::Result<package::Manifest> {
+    if market::sha256(bytes) != sha256 {
+        anyhow::bail!("插件包已改变，请重新选择并确认安装");
+    }
+    inspect_installable(bytes, index, version)?;
+    package::install_data_checked(dir, bytes, version, registry::validate_package)
 }
 
 #[tauri::command]
@@ -283,6 +313,7 @@ pub async fn plugin_install_from_market(
     plugins: State<'_, Plugins>,
     cache: State<'_, MarketCache>,
     id: String,
+    approval: Value,
 ) -> Result<Value, String> {
     if !package::valid_id(&id) {
         return Err(format!("插件 id 不对：{id}"));
@@ -293,6 +324,10 @@ pub async fn plugin_install_from_market(
     let fetch = |url, max| market::http_get(url, max, true, &ua);
     let (index, entry, bytes) =
         market::download(fetch, &market_base(&app), &id, &version).await.map_err(|e| format!("{e:#}"))?;
+    let published = market::entries(&index).unwrap().iter().find(|p| p["id"].as_str() == Some(&id));
+    if !published.is_some_and(|p| market::matches_confirmation(p, &approval)) {
+        return Err("插件市场的信息已改变，请重新确认安装".into());
+    }
     *cache.0.lock().unwrap() = Some(index);
     let res = tauri::async_runtime::spawn_blocking(move || market::install_bytes(&dir, &entry, &bytes, &version))
         .await
@@ -382,6 +417,26 @@ fn sandbox_document(id: &str, main: &str, windows: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip_inspection_does_not_install_and_confirmation_pins_bytes() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("plugin.json", opts).unwrap();
+        zip.write_all(br#"{"id":"demo","name":"Demo","version":"1.0.0","apiVersion":2,"permissions":[]}"#).unwrap();
+        zip.start_file("index.js", opts).unwrap(); zip.write_all(b"// demo").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins");
+        let m = inspect_installable(&bytes, None, "0.5.0").unwrap();
+        assert_eq!(m.id, "demo");
+        assert!(!dir.exists(), "inspection must not create an install directory");
+        assert!(install_confirmed_zip(&dir, &bytes, "old-digest", None, "0.5.0").is_err());
+        assert!(!dir.exists(), "changed bytes must be rejected before extraction");
+        install_confirmed_zip(&dir, &bytes, &market::sha256(&bytes), None, "0.5.0").unwrap();
+        assert!(package::is_installed(&dir, "demo"));
+    }
 
     #[test]
     fn sandbox_page_limits_scripts_and_escapes_paths() {

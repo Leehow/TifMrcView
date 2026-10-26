@@ -5,8 +5,9 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import vm from "node:vm";
 import { checkPlugin, checkWasm } from "./tmv-plugin.mjs";
-import { validateManifest } from "./plugin-manifest.mjs";
+import { validateManifest, SANDBOX_PERMISSION_NAMES } from "./plugin-manifest.mjs";
 import { zip } from "./plugin-zip.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -82,6 +83,41 @@ test("format/metadata ABI, optional series, imports and signatures", () => {
   assert.match(checkWasm(wasm().subarray(0, 12), manifest).errors[0], /invalid WebAssembly/);
 });
 
+test("permission vocabulary matches Rust and the runtime; API 2 is strict", () => {
+  const rust = fs.readFileSync(path.join(root, "src-tauri/src/plugins/package.rs"), "utf8");
+  const names = JSON.parse("[" + rust.match(/pub const SANDBOX_PERMISSIONS:.*?= &\[([\s\S]*?)\];/)[1] + "]");
+  const runtime = fs.readFileSync(path.join(root, "ui/plugin-sandbox.js"), "utf8");
+  const methods = vm.runInNewContext(runtime + "; SANDBOX_PERMISSIONS");
+  assert.deepEqual([...new Set(Object.values(methods))].sort(), [...names].sort());
+  assert.deepEqual([...SANDBOX_PERMISSION_NAMES].sort(), [...names].sort());
+  const m = { ...manifest, apiVersion: 2, permissions: [...names] };
+  const check = (value) => validateManifest(value, "r16", ["index.js", "r16.wasm"]);
+  assert.deepEqual(check(m), []);
+  assert.deepEqual(check({ ...m, permissions: [] }), []);
+  const { permissions, ...missing } = m;
+  assert.ok(check(missing).some((e) => e.includes("permissions")));
+  for (const permissions of [null, "state", {}, ["unknown"], [1]]) {
+    assert.ok(check({ ...m, permissions }).some((e) => e.includes("permissions")));
+  }
+  for (const native of [null, false, true]) assert.ok(check({ ...m, native }).some((e) => e.includes("native")));
+  const official = JSON.parse("[" + fs.readFileSync(path.join(root, "src-tauri/src/plugins/market.rs"), "utf8")
+    .match(/pub const OFFICIAL_API1_IDS:.*?= &\[([\s\S]*?)\];/)[1] + "]");
+  const shipped = fs.readdirSync(path.join(root, "plugins")).filter((id) => fs.existsSync(path.join(root, "plugins", id, "plugin.json")));
+  assert.deepEqual(official.sort(), shipped.sort());
+});
+
+test("install permissions and errors have all seven i18n columns", () => {
+  const { WORDS } = vm.runInNewContext(fs.readFileSync(path.join(root, "ui/plugins/i18n.js"), "utf8") + "; ({WORDS})", { TifMrcView: { register() {} } });
+  // The install-time rows are grouped at the start of WORDS.
+  for (const row of WORDS.slice(0, 15)) {
+    assert.equal(row.length, 7, row[0]);
+    assert.ok(row.every((s) => typeof s === "string" && s.trim()), row[0]);
+  }
+  const rust = ["src/lib.rs", "src/plugins/mod.rs", "src/plugins/market.rs", "src/plugins/package.rs"]
+    .map((p) => fs.readFileSync(path.join(root, "src-tauri", p), "utf8")).join("\n");
+  for (const row of WORDS.slice(9, 15)) assert.ok(rust.includes(row[0]), `UI error must match backend: ${row[0]}`);
+});
+
 test("source checks share manifest rules and distinguish a missing build", (t) => {
   const dir = path.join(temp(t), "r16");
   fs.mkdirSync(dir);
@@ -136,7 +172,7 @@ test("root and wrapped zips, missing wasm, unsafe paths and CLI exit status", (t
 test("market packer validates and produces the same package layout", (t) => {
   const dir = temp(t), plugins = path.join(dir, "plugins"), source = path.join(plugins, "example");
   fs.mkdirSync(source, { recursive: true });
-  const m = { id: "example", name: "Example", version: "1.0.0", description: "test", main: "index.js", apiVersion: 1 };
+  const m = { apiVersion: 2, permissions: ["state", "ui"], id: "example", name: "Example", version: "1.0.0", description: "test", main: "index.js" };
   fs.writeFileSync(path.join(source, "plugin.json"), JSON.stringify(m));
   fs.writeFileSync(path.join(source, "index.js"), "// test\n");
   const args = ["scripts/pack-plugins.mjs", path.join(dir, "out")];
@@ -151,6 +187,8 @@ test("market packer validates and produces the same package layout", (t) => {
   const market = JSON.parse(fs.readFileSync(path.join(output, "plugins.json")));
   assert.equal(market.plugins.length, 2); // One built-in plus our fixture; no template.
   assert.equal(market.plugins[1].size, archive.length);
+  assert.equal(market.plugins[1].apiVersion, 2);
+  assert.deepEqual(market.plugins[1].permissions, ["state", "ui"]);
   fs.writeFileSync(path.join(source, "plugin.json"), JSON.stringify({ ...m, main: "missing.js" }));
   const invalid = spawnSync(process.execPath, args, options);
   assert.equal(invalid.status, 1);
