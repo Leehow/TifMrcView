@@ -2,6 +2,17 @@
 // Other languages fall back to English (see i18n.js).
 window.TMV_DOCS = {
   zh: [
+    '<p>插件是一个 JavaScript 脚本加一份 <code>plugin.json</code>。脚本在应用的界面里运行，通过 <code>TifMrcView.register()</code> 注册，拿到一个 <code>app</code> 对象来使用下面的接口。第三方插件的界面部分用 JS 编写；<code>native</code> 原生部分只有随应用一起发布的插件才有。要支持新的文件格式，插件可以另带一个沙箱里的 WebAssembly 模块，见文末「格式插件（WebAssembly）」。</p>',
+
+    '<h4>快速开始</h4>',
+    '<p>写格式插件，可以从仓库复制 <a href="https://github.com/Leehow/TifMrcView/tree/main/templates/format-plugin">templates/format-plugin</a>：改好插件 id 和文件夹名，编辑 <code>src/lib.rs</code>，然后在插件文件夹里构建。需要 Rust（已安装 <code>wasm32-unknown-unknown</code> target）和 Node 22：</p>',
+    '<pre><code>node build.mjs</code></pre>',
+    '<p>这会生成插件 zip，在 TifMrcView 里点 <b>插件 → 加载插件…</b> 安装。在仓库根目录可以检查插件文件夹或 zip：</p>',
+    '<pre><code>node scripts/tmv-plugin.mjs check &lt;dir|zip&gt;</code></pre>',
+    '<p>发布到插件市场：提一个 PR，把插件文件夹加到仓库的 <code>plugins/</code> 下。</p>',
+
+    '<h4>安全</h4>',
+    '<p><b>WebAssembly 格式 / 元数据模块</b>在 <code>wasmi</code> 沙箱里运行，只允许下文列出的宿主导入，只读访问正在打开的那个文件，不能访问网络、其它文件或界面。这个沙箱只隔离 WebAssembly 部分。</p>',
     '<p>安全：API 2 界面插件在受限沙盒中运行，必须在 <code>plugin.json</code> 声明 <code>permissions</code>，安装前会显示权限并要求确认；不能声明 <code>native</code>。权限名称为 <code>state</code>、<code>ui</code>、<code>metadata</code>、<code>export</code>、<code>settings</code>。不再接受第三方 API 1 JS 插件包；迁移期间，仓库自带的官方旧包仅在 id、版本和 SHA-256 与官方市场索引完全匹配时允许安装（zip 安装须先读取市场索引）。已安装的 API 1 插件继续以完整权限加载。WASM 格式模块保持原有沙盒。新的界面插件请参阅 <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/ui-plugins.md">API 2 文档</a>；下面的同步接口参考适用于旧版 API 1。</p>',
 
     '<h4>包结构</h4>',
@@ -15,7 +26,7 @@ window.TMV_DOCS = {
     '<tr><td><code>main</code></td><td>入口脚本，相对 zip 根目录。</td></tr>',
     '<tr><td><code>apiVersion</code></td><td>新插件使用 <code>2</code>；<code>1</code> 为受信的旧接口。</td></tr>',
     '<tr><td><code>permissions</code></td><td>API 2 必填的已知权限名称数组；无权限时填 <code>[]</code>。</td></tr>',
-    '<tr><td><code>minAppVersion</code></td><td>需要的最低应用版本。</td></tr>',
+    '<tr><td><code>minAppVersion</code></td><td>需要的最低应用版本。使用多图像、配方 <code>skip</code>、HDF5 LZ4 或字节 shuffle 的格式插件填 <code>"0.5.0"</code>。</td></tr>',
     '<tr><td><code>author</code></td><td>作者。</td></tr>',
     '<tr><td><code>native</code></td><td>仅旧版 API 1 使用；API 2 禁止该字段（即使为 <code>false</code>）。</td></tr>',
     '<tr><td><code>i18n</code></td><td>可选，其它语言的 <code>{ "en": { "name", "description" } }</code>。</td></tr>',
@@ -67,21 +78,49 @@ window.TMV_DOCS = {
 
     '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">格式插件（WebAssembly）</summary>',
     '<p>插件包还可以带一个 <b>WebAssembly 模块</b>，让 TifMrcView 打开新的文件格式，或给已能打开的文件补充元数据。蔡司 CZI（Zeiss ZEN 插件）和 SmartSEM 就是这样实现的：主程序里没有厂商格式的代码。模块在沙箱里运行，只能读取正在打开的那个文件，不能访问文件系统、网络和界面；内存上限 512 MiB，每次调用有运行时间（fuel）上限，出错只会让这个文件打不开，不会让应用崩溃或卡死。</p>',
-    '<p>格式插件不自己解码像素：它为每一页给出一份“配方”，即文件里的若干数据块、各自的压缩方式（不压缩、zlib、deflate、LZW、Zstd、JPEG、PackBits）和要放到图像的哪个位置，由应用本身在内存映射的文件上并行解压、拼接，所以速度和内置格式一样。</p>',
+    '<p>格式插件不自己解码像素：它为每一页给出一份“配方”，即文件里的若干数据块、各自的压缩方式（不压缩、zlib、deflate、LZW、Zstd、JPEG、PackBits、HDF5 LZ4）和要放到图像的哪个位置，由应用本身在内存映射的文件上并行解压、拼接，所以速度和内置格式一样。</p>',
     '<div class="tw"><table class="ref"><thead><tr><th>plugin.json 字段</th><th>说明</th></tr></thead><tbody>',
     '<tr><td><code>wasm</code></td><td>包里的 <code>.wasm</code> 文件，如 <code>"zen.wasm"</code>。</td></tr>',
     '<tr><td><code>formats</code></td><td>能打开的格式：<code>[{ "ext": ["czi"], "name": "Zeiss CZI" }]</code>。不能接管内置格式（tif、mrc、png…）。</td></tr>',
     '<tr><td><code>metadata</code></td><td>要补充元数据的扩展名：<code>{ "ext": ["tif", "tiff"] }</code>。</td></tr>',
     '</tbody></table></div>',
     '<p>模块导出（ABI v1）：<code>memory</code>、<code>tmv_abi()</code>（返回 1）、<code>tmv_alloc</code> / <code>tmv_free</code>；打开格式用 <code>tmv_open(path)</code> → 句柄、<code>tmv_info(句柄)</code> → 图像信息 JSON、<code>tmv_page(句柄, 页)</code> → 页面配方、<code>tmv_close(句柄)</code>；补充元数据用 <code>tmv_metadata(path)</code> → JSON。宿主提供的导入只有 <code>file_size</code>、<code>read</code>、<code>decompress</code>、<code>log</code>、<code>error</code>。安装时应用会编译模块并检查这些导出。<code>main</code> 脚本仍然需要，用来在插件列表里注册（可以只是一个空的 <code>activate()</code>）。</p>',
+
+    '<h4>一个文件里的多幅图像</h4>',
+    '<p>Leica LIF 项目、ND2 的多个位置等，可以在 <code>tmv_info</code> JSON 里列出多幅图像。两项或更多时，查看器会显示选择器，切换时重新打开文件：</p>',
+    '<div class="tw"><table class="ref"><thead><tr><th>字段 / 导出</th><th>说明</th></tr></thead><tbody>',
+    '<tr><td><code>series</code></td><td>按顺序排列的图像列表，每项为 <code>{ "name", "detail" }</code>。</td></tr>',
+    '<tr><td><code>seriesIndex</code></td><td>当前图像在列表里的索引，从 0 开始。</td></tr>',
+    '<tr><td><code>tmv_open_series(path_ptr, path_len, series)</code></td><td>可选导出，打开 <code>series ≥ 1</code> 的图像；参数都是 <code>i32</code>，返回句柄（<code>i32</code>），失败返回负数。图像 0 始终由 <code>tmv_open</code> 打开。</td></tr>',
+    '</tbody></table></div>',
+    '<p>SDK 插件设置 <code>Info::series</code> 和 <code>series_index</code>，实现 <code>Format::open_series(path, series)</code>；<code>export_format!</code> 会为每个格式插件导出 <code>tmv_open_series</code>，图像 0 走 <code>Format::open</code>。需要应用 0.5.0，在 <code>plugin.json</code> 里设 <code>"minAppVersion": "0.5.0"</code>；旧版应用会忽略这些 JSON 字段，只显示图像 0。</p>',
+
+    '<h4>页面配方 v2</h4>',
+    '<p><code>tmv_page</code> 返回的配方以 <code>TMVR</code> 开头。版本 1 的每块为 48 字节；版本 2 为 56 字节，在偏移 48 处增加一个 <code>u64 skip</code> 字段（小端）。<code>skip</code> 是解码后、第一行之前要丢弃的字节数，例如 <code>z · h · stride</code> 可取出压缩的三维 HDF5 数据块中的一个 Z 切片。</p>',
+    '<p><code>skip</code> 不能与 hi/lo 或 JPEG 一起用，需要应用 0.5.0（<code>"minAppVersion": "0.5.0"</code>）。SDK 只有在某块用到 <code>skip</code> 时才写版本 2，否则仍写版本 1。</p>',
+    '<p>应用 0.5.0 还支持 HDF5 LZ4 filter 32004 的压缩封装（codec 7），以及 HDF5 字节 shuffle（flag 16）：先对整个解码块撤销 shuffle，再应用 <code>skip</code>。shuffle 同样不能与 hi/lo 或 JPEG 一起用。</p>',
+
+    '<h4>Rust SDK</h4>',
     '<p>用仓库里的 Rust SDK（<code>plugins/sdk</code>）写最方便：实现 <code>Format</code>（<code>open</code> / <code>info</code> / <code>page</code>）或 <code>Metadata</code>，再用 <code>export_format!</code> / <code>export_metadata!</code> 导出。一个读取简单原始格式的例子：</p>',
     '<pre><code>use tifmrcview_plugin_sdk::*;\n\nstruct R16 { w: u32, h: u32, depth: u32 }\n\nimpl Format for R16 {\n    fn open(_path: &amp;str) -&gt; Result&lt;R16&gt; {\n        let head = file::read(0, 16)?;\n        if &amp;head[..4] != b"R16\\0" { bail!("不是 R16 文件"); }\n        Ok(R16 { w: le_u32(&amp;head, 4), h: le_u32(&amp;head, 8), depth: le_u32(&amp;head, 12) })\n    }\n    fn info(&amp;mut self) -&gt; Result&lt;Info&gt; {\n        let mut i = Info::new(self.w, self.h, DType::U16, "R16 stack");\n        i.size_z = self.depth;\n        i.page_count = self.depth;\n        Ok(i)\n    }\n    fn page(&amp;self, page: u32) -&gt; Result&lt;Recipe&gt; {\n        let n = self.w as u64 * self.h as u64 * 2;\n        let mut r = Recipe::new();\n        r.push(Chunk::file(16 + page as u64 * n, n, [0, 0, self.w, self.h]));\n        Ok(r)\n    }\n}\n\nexport_format!(R16);</code></pre>',
     '<pre><code>rustup target add wasm32-unknown-unknown\ncargo build --release --target wasm32-unknown-unknown\n# 把 plugin.json、index.js 和 target/wasm32-unknown-unknown/release/r16.wasm\n# 放进 zip 的根目录（wasm 的名字和 plugin.json 里的 "wasm" 一致）</code></pre>',
-    '<p>完整的接口说明（图像信息 JSON、配方的二进制格式、压缩方式和标志、限制、调试方法）见 <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>。需要 TifMrcView 0.4.0 或更新版本（<code>"minAppVersion": "0.4.0"</code>）。</p>',
+    '<p>共享 SDK 还提供 <code>tifmrcview_plugin_sdk::xml</code>（宽容的元数据 XML 树）和 <code>tifmrcview_plugin_sdk::tiff</code>（可读取任意字节源的 TIFF / BigTIFF 目录解析器）。</p>',
+    '<p>完整的接口说明（图像信息 JSON、配方的二进制格式、压缩方式和标志、限制、调试方法）见 <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>。基本格式插件需要 TifMrcView 0.4.0（<code>"minAppVersion": "0.4.0"</code>）；使用多图像、<code>skip</code>、HDF5 LZ4 或 shuffle 的插件需要 0.5.0（<code>"minAppVersion": "0.5.0"</code>）。</p>',
     '</details>'
   ].join('\n'),
 
   en: [
+    '<p>A plugin is a JavaScript file plus a <code>plugin.json</code>. The script runs inside the app’s interface, registers itself with <code>TifMrcView.register()</code> and receives an <code>app</code> object with the API below. Third-party plugins use JavaScript for their interface; a <code>native</code> half exists only for plugins whose code ships inside the app. To support new file formats, a plugin can add a sandboxed WebAssembly module; see “Format plugins (WebAssembly)” at the end.</p>',
+
+    '<h4>Quick start</h4>',
+    '<p>For a format plugin, copy <a href="https://github.com/Leehow/TifMrcView/tree/main/templates/format-plugin">templates/format-plugin</a> from the repository, rename the plugin id and folder, edit <code>src/lib.rs</code>, then build inside the plugin folder. You need Rust with the <code>wasm32-unknown-unknown</code> target installed and Node 22:</p>',
+    '<pre><code>node build.mjs</code></pre>',
+    '<p>This produces the plugin zip. In TifMrcView, click <b>Plugins → Install plugin…</b> to install it. From the repository root, check the plugin folder or zip with:</p>',
+    '<pre><code>node scripts/tmv-plugin.mjs check &lt;dir|zip&gt;</code></pre>',
+    '<p>To submit it to the market, open a PR that adds the plugin folder under <code>plugins/</code> in the repository.</p>',
+
+    '<h4>Security</h4>',
+    '<p><b>WebAssembly format / metadata modules</b> run in a <code>wasmi</code> sandbox with only the host imports listed below. They have read-only access to the file being opened, with no network, other files or UI access. This sandbox isolates only the WebAssembly part.</p>',
     '<p>Security: API 2 UI plugins run in a restricted sandbox, must declare <code>permissions</code> in <code>plugin.json</code>, and show those permissions for confirmation before installation. They cannot declare <code>native</code>. Permission names are <code>state</code>, <code>ui</code>, <code>metadata</code>, <code>export</code>, <code>settings</code>. Third-party API 1 JS packages are no longer accepted. During migration, legacy packages shipped in this repository require an exact id, version and SHA-256 match in the official market index (fetch the market index before installing a zip). Already-installed API 1 plugins still load with full privileges. WASM format modules retain their sandbox. New UI plugins should use the <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/ui-plugins.md">API 2 documentation</a>; the synchronous reference below describes legacy API 1.</p>',
 
     '<h4>Package layout</h4>',
@@ -95,7 +134,7 @@ window.TMV_DOCS = {
     '<tr><td><code>main</code></td><td>Entry script, relative to the zip root.</td></tr>',
     '<tr><td><code>apiVersion</code></td><td>Use <code>2</code> for new plugins; <code>1</code> is the trusted legacy API.</td></tr>',
     '<tr><td><code>permissions</code></td><td>Required array of known permission names for API 2; use <code>[]</code> for none.</td></tr>',
-    '<tr><td><code>minAppVersion</code></td><td>Minimum app version.</td></tr>',
+    '<tr><td><code>minAppVersion</code></td><td>Minimum app version. Use <code>"0.5.0"</code> for format plugins using multiple images, recipe <code>skip</code>, HDF5 LZ4 or byte shuffle.</td></tr>',
     '<tr><td><code>author</code></td><td>Author.</td></tr>',
     '<tr><td><code>native</code></td><td>Legacy API 1 only; forbidden in API 2, even when <code>false</code>.</td></tr>',
     '<tr><td><code>i18n</code></td><td>Optional translations: <code>{ "de": { "name", "description" } }</code>.</td></tr>',
@@ -138,26 +177,43 @@ window.TMV_DOCS = {
 
     '<h4>Package and test</h4>',
     '<pre><code>cd my-plugin\nzip -r ../my-plugin.zip .</code></pre>',
-    '<p>Run it from <b>inside</b> the plugin folder so <code>plugin.json</code> ends up at the zip root. Then in TifMrcView click <b>Plugins → Load plugin…</b> and choose the zip; after changing the code, load it again to update. Errors show in the plugin list.</p>',
+    '<p>Run it from <b>inside</b> the plugin folder so <code>plugin.json</code> ends up at the zip root. Then in TifMrcView click <b>Plugins → Install plugin…</b> and choose the zip; after changing the code, install it again to update. Errors show in the plugin list.</p>',
 
     '<h4>One-click install links</h4>',
     '<p>Since 0.5, TifMrcView registers <code>tifmrcview://</code> links. The market page’s <b>Install</b> button opens:</p>',
     '<pre><code>tifmrcview://install-plugin?id=&lt;id&gt;&amp;version=&lt;x.y.z&gt;</code></pre>',
-    '<p><code>version</code> is optional and only shown. The app comes to the front, opens the Plugins window and shows the plugin’s name and description from the market, and <b>installs nothing until the user clicks Install</b>. It only accepts ids listed in the market’s <code>plugins.json</code>: it downloads the zip from the official market over HTTPS, checks size and SHA-256 and <code>minAppVersion</code>, then installs it exactly like “Load plugin…”. The link therefore cannot install plugins from arbitrary URLs; keep distributing your own plugins as zips. The “Plugin market” list in the app’s Plugins window installs and updates the same way.</p>',
+    '<p><code>version</code> is optional and only shown. The app comes to the front, opens the Plugins window and shows the plugin’s name and description from the market, and <b>installs nothing until the user clicks Install</b>. It only accepts ids listed in the market’s <code>plugins.json</code>: it downloads the zip from the official market over HTTPS, checks size and SHA-256 and <code>minAppVersion</code>, then installs it exactly like “Install plugin…”. The link therefore cannot install plugins from arbitrary URLs; keep distributing your own plugins as zips. The “Plugin market” list in the app’s Plugins window installs and updates the same way.</p>',
 
     '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">Format plugins (WebAssembly)</summary>',
     '<p>A plugin package can also carry a <b>WebAssembly module</b> that lets TifMrcView open new file formats, or adds metadata to files it already opens. Zeiss CZI (the Zeiss ZEN plugin) and SmartSEM work this way: the app itself contains no vendor format code. The module runs in a sandbox and can only read the file being opened — no file system, network or UI access; memory is capped at 512 MiB and every call has a time (fuel) budget, so a broken plugin can only make that one file fail to open, never crash or hang the app.</p>',
-    '<p>A format plugin does not decode pixels itself: for each page it returns a <i>recipe</i> — byte ranges of the file, how each is compressed (none, zlib, deflate, LZW, Zstd, JPEG, PackBits) and where it goes in the image — and the app decompresses and assembles them natively, in parallel, from the memory-mapped file. That makes plugin formats as fast as built-in ones.</p>',
+    '<p>A format plugin does not decode pixels itself: for each page it returns a <i>recipe</i> — byte ranges of the file, how each is compressed (none, zlib, deflate, LZW, Zstd, JPEG, PackBits, HDF5 LZ4) and where it goes in the image — and the app decompresses and assembles them natively, in parallel, from the memory-mapped file. That makes plugin formats as fast as built-in ones.</p>',
     '<div class="tw"><table class="ref"><thead><tr><th>plugin.json field</th><th>Meaning</th></tr></thead><tbody>',
     '<tr><td><code>wasm</code></td><td>The <code>.wasm</code> file in the package, e.g. <code>"zen.wasm"</code>.</td></tr>',
     '<tr><td><code>formats</code></td><td>Formats it opens: <code>[{ "ext": ["czi"], "name": "Zeiss CZI" }]</code>. Built-in formats (tif, mrc, png…) cannot be taken over.</td></tr>',
     '<tr><td><code>metadata</code></td><td>Extensions it adds metadata to: <code>{ "ext": ["tif", "tiff"] }</code>.</td></tr>',
     '</tbody></table></div>',
     '<p>Module exports (ABI v1): <code>memory</code>, <code>tmv_abi()</code> (returns 1), <code>tmv_alloc</code> / <code>tmv_free</code>; for formats <code>tmv_open(path)</code> → handle, <code>tmv_info(handle)</code> → image info JSON, <code>tmv_page(handle, page)</code> → page recipe, <code>tmv_close(handle)</code>; for metadata <code>tmv_metadata(path)</code> → JSON. The only imports are <code>file_size</code>, <code>read</code>, <code>decompress</code>, <code>log</code> and <code>error</code>. The app compiles the module and checks these exports when the package is installed. The <code>main</code> script is still needed to register the plugin in the plugin list (an empty <code>activate()</code> is enough).</p>',
+
+    '<h4>Multiple images in one file</h4>',
+    '<p>For Leica LIF projects, ND2 positions and similar files, list the images in the <code>tmv_info</code> JSON. With two or more entries the viewer shows a picker and reopens the file when the selection changes:</p>',
+    '<div class="tw"><table class="ref"><thead><tr><th>Field / export</th><th>Meaning</th></tr></thead><tbody>',
+    '<tr><td><code>series</code></td><td>Images in order, each described by <code>{ "name", "detail" }</code>.</td></tr>',
+    '<tr><td><code>seriesIndex</code></td><td>The current image’s index in the list, starting at 0.</td></tr>',
+    '<tr><td><code>tmv_open_series(path_ptr, path_len, series)</code></td><td>Optional export that opens image <code>series ≥ 1</code>; all arguments are <code>i32</code>, returning an <code>i32</code> handle or a negative value on failure. Image 0 always goes to <code>tmv_open</code>.</td></tr>',
+    '</tbody></table></div>',
+    '<p>SDK plugins set <code>Info::series</code> and <code>series_index</code> and implement <code>Format::open_series(path, series)</code>. <code>export_format!</code> exports <code>tmv_open_series</code> for every format plugin; image 0 goes to <code>Format::open</code>. This needs app 0.5.0: set <code>"minAppVersion": "0.5.0"</code> in <code>plugin.json</code>. Older apps ignore these JSON fields and show image 0.</p>',
+
+    '<h4>Page recipes v2</h4>',
+    '<p>The recipe returned by <code>tmv_page</code> starts with <code>TMVR</code>. Version 1 uses 48-byte chunks; version 2 uses 56-byte chunks, adding a little-endian <code>u64 skip</code> at offset 48. <code>skip</code> is the number of decoded bytes to drop before the first row: for example, <code>z · h · stride</code> selects one Z slice of a compressed 3D HDF5 chunk.</p>',
+    '<p><code>skip</code> cannot be combined with hi/lo or JPEG and needs app 0.5.0 (<code>"minAppVersion": "0.5.0"</code>). The SDK writes version 2 only when a chunk uses <code>skip</code>; otherwise it keeps writing version 1.</p>',
+    '<p>App 0.5.0 also supports LZ4 in the framing of HDF5 LZ4 filter 32004 (codec 7) and HDF5 byte shuffle (flag 16). Shuffle is undone over the whole decoded chunk before <code>skip</code>; it also cannot be combined with hi/lo or JPEG.</p>',
+
+    '<h4>Rust SDK</h4>',
     '<p>The Rust SDK in the repository (<code>plugins/sdk</code>) makes this easy: implement <code>Format</code> (<code>open</code> / <code>info</code> / <code>page</code>) or <code>Metadata</code> and export it with <code>export_format!</code> / <code>export_metadata!</code>. A reader for a trivial raw format:</p>',
     '<pre><code>use tifmrcview_plugin_sdk::*;\n\nstruct R16 { w: u32, h: u32, depth: u32 }\n\nimpl Format for R16 {\n    fn open(_path: &amp;str) -&gt; Result&lt;R16&gt; {\n        let head = file::read(0, 16)?;\n        if &amp;head[..4] != b"R16\\0" { bail!("not an R16 file"); }\n        Ok(R16 { w: le_u32(&amp;head, 4), h: le_u32(&amp;head, 8), depth: le_u32(&amp;head, 12) })\n    }\n    fn info(&amp;mut self) -&gt; Result&lt;Info&gt; {\n        let mut i = Info::new(self.w, self.h, DType::U16, "R16 stack");\n        i.size_z = self.depth;\n        i.page_count = self.depth;\n        Ok(i)\n    }\n    fn page(&amp;self, page: u32) -&gt; Result&lt;Recipe&gt; {\n        let n = self.w as u64 * self.h as u64 * 2;\n        let mut r = Recipe::new();\n        r.push(Chunk::file(16 + page as u64 * n, n, [0, 0, self.w, self.h]));\n        Ok(r)\n    }\n}\n\nexport_format!(R16);</code></pre>',
     '<pre><code>rustup target add wasm32-unknown-unknown\ncargo build --release --target wasm32-unknown-unknown\n# put plugin.json, index.js and target/wasm32-unknown-unknown/release/r16.wasm\n# at the root of the zip (the .wasm named as "wasm" in plugin.json)</code></pre>',
-    '<p>The full reference (image info JSON, the binary recipe format, codecs and flags, limits, debugging) is in <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>. Needs TifMrcView 0.4.0 or newer (<code>"minAppVersion": "0.4.0"</code>).</p>',
+    '<p>The shared SDK also includes <code>tifmrcview_plugin_sdk::xml</code>, a lenient XML tree for metadata, and <code>tifmrcview_plugin_sdk::tiff</code>, a TIFF / BigTIFF directory reader over any byte source.</p>',
+    '<p>The full reference (image info JSON, the binary recipe format, codecs and flags, limits, debugging) is in <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>. Basic format plugins need TifMrcView 0.4.0 (<code>"minAppVersion": "0.4.0"</code>); plugins using multiple images, <code>skip</code>, HDF5 LZ4 or shuffle need 0.5.0 (<code>"minAppVersion": "0.5.0"</code>).</p>',
     '</details>'
   ].join('\n')
 };
