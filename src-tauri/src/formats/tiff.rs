@@ -556,41 +556,6 @@ fn inflate_strip(src: &[u8], compression: u16, out: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-/// Raw bytes of a tag in the first IFD of a classic TIFF. Used for private
-/// text tags that are not valid NUL-terminated ASCII (Zeiss writes Latin-1).
-pub fn first_ifd_tag(d: &[u8], tag: u16) -> Option<&[u8]> {
-    let le = match d.get(..2)? {
-        b"II" => true,
-        b"MM" => false,
-        _ => return None,
-    };
-    let u16_at = |o: usize| d.get(o..o + 2).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
-    let u32_at = |o: usize| {
-        d.get(o..o + 4).map(|b| {
-            let a = [b[0], b[1], b[2], b[3]];
-            if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
-        })
-    };
-    if u16_at(2)? != 42 {
-        return None;
-    }
-    let ifd = u32_at(4)? as usize;
-    let n = u16_at(ifd)? as usize;
-    for k in 0..n {
-        let e = ifd + 2 + 12 * k;
-        if u16_at(e)? == tag {
-            let size = match u16_at(e + 2)? {
-                1 | 2 | 6 | 7 => 1,
-                3 | 8 => 2,
-                4 | 9 | 11 => 4,
-                _ => 8,
-            } * u32_at(e + 4)? as usize;
-            return if size <= 4 { d.get(e + 8..e + 8 + size) } else { d.get(u32_at(e + 8)? as usize..).map(|r| &r[..size.min(r.len())]) };
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod format_fix_tests {
     use super::*;

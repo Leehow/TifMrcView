@@ -1,13 +1,15 @@
 {
   "id": "smartsem",
   "name": "Zeiss SmartSEM",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "读取蔡司 SmartSEM 保存的 TIF：显示电压、工作距离、放大倍数、探测器、样品台等全部采集参数，并按校准的像素尺寸显示比例尺",
   "main": "index.js",
   "apiVersion": 1,
-  "minAppVersion": "0.3.0",
+  "minAppVersion": "0.4.0",
   "author": "TifMrcView",
-  "native": true,
+  "native": false,
+  "wasm": "smartsem.wasm",
+  "metadata": { "ext": ["tif", "tiff"] },
   "i18n": {
     "en": {
       "name": "Zeiss SmartSEM",
@@ -16,16 +18,16 @@
   },
   "details": {
     "zh": [
-      "读取蔡司扫描电镜软件 SmartSEM 保存的 TIF 图像（Gemini、Sigma、Crossbeam FIB-SEM 等机型）。SmartSEM 把全部采集参数写在 TIFF 的 CZ_SEM 标签（34118）里，一般看图软件看不到；装上这个插件后，打开这类 TIF 时会自动读出来。",
+      "读取蔡司扫描电镜软件 SmartSEM 保存的 TIF 图像（Gemini、Sigma、Crossbeam FIB-SEM 等机型）。SmartSEM 把全部采集参数写在 TIFF 的 CZ_SEM 标签（34118）里，一般看图软件看不到；装上这个插件后，打开这类 TIF 时会自动读出来。插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件。",
       "图像信息面板里的「SmartSEM 主要参数」列出最常用的项：日期时间、加速电压、工作距离、放大倍数、像素尺寸、探测器与信号混合、束流、光阑、扫描速度与驻留时间、降噪与平均、亮度对比度、消像散、倾转、样品台 X/Y/Z/T/R 位置、真空度、操作者和 SmartSEM 版本；另外按 AP（数值参数）、DP（状态）、SV（系统信息）分组列出文件里的全部参数，方便查找。",
       "插件用文件里校准过的像素尺寸设置比例尺和测量单位，不用手动输入；状态栏的格式显示为「Zeiss SmartSEM TIFF」。",
-      "安装后无需设置，直接打开 SmartSEM 保存的 .tif / .tiff 文件即可；其他 TIF 不受影响。"
+      "安装后无需设置，直接打开 SmartSEM 保存的 .tif / .tiff 文件即可；其他 TIF 不受影响。需要 TifMrcView 0.4.0 或更新版本。"
     ],
     "en": [
-      "Reads TIFF images saved by SmartSEM, the software of Zeiss scanning electron microscopes (Gemini, Sigma, Crossbeam FIB-SEM and others). SmartSEM stores every acquisition setting in the TIFF tag CZ_SEM (34118), which ordinary image viewers ignore; with this plugin they are read automatically whenever such a TIFF is opened.",
+      "Reads TIFF images saved by SmartSEM, the software of Zeiss scanning electron microscopes (Gemini, Sigma, Crossbeam FIB-SEM and others). SmartSEM stores every acquisition setting in the TIFF tag CZ_SEM (34118), which ordinary image viewers ignore; with this plugin they are read automatically whenever such a TIFF is opened. The plugin runs sandboxed as WebAssembly and can only read the file being opened.",
       "The image-info panel gets a \"SmartSEM key settings\" group with the most useful values: date and time, accelerating voltage, working distance, magnification, pixel size, detector and signal mixing, probe current, aperture, scan speed and dwell time, noise reduction and averaging, brightness and contrast, stigmation, tilt, stage X/Y/Z/T/R, vacuum, operator and SmartSEM version. Every parameter in the file is also listed, grouped as AP (values), DP (states) and SV (system), so you can search them.",
       "The calibrated pixel size from the file sets the scale bar and measurement units with nothing to type in, and the status bar shows the format as \"Zeiss SmartSEM TIFF\".",
-      "There is nothing to configure: install it and open .tif / .tiff files saved by SmartSEM. Other TIFFs are not affected."
+      "There is nothing to configure: install it and open .tif / .tiff files saved by SmartSEM. Other TIFFs are not affected. Needs TifMrcView 0.4.0 or newer."
     ]
   }
 }

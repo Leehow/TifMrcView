@@ -2,7 +2,7 @@
 // Other languages fall back to English (see i18n.js).
 window.TMV_DOCS = {
   zh: [
-    '<p>插件是一个 JavaScript 脚本加一份 <code>plugin.json</code>。脚本在应用的界面里运行，通过 <code>TifMrcView.register()</code> 注册，拿到一个 <code>app</code> 对象来使用下面的接口。第三方插件只有 JS 部分；<code>native</code> 原生部分只有随应用一起发布的插件才有。</p>',
+    '<p>插件是一个 JavaScript 脚本加一份 <code>plugin.json</code>。脚本在应用的界面里运行，通过 <code>TifMrcView.register()</code> 注册，拿到一个 <code>app</code> 对象来使用下面的接口。第三方插件只有 JS 部分；<code>native</code> 原生部分只有随应用一起发布的插件才有。要支持新的文件格式，插件可以另带一个沙箱里的 WebAssembly 模块，见文末「格式插件（WebAssembly）」。</p>',
 
     '<h4>包结构</h4>',
     '<p>插件包是一个 zip，<b><code>plugin.json</code> 必须在 zip 的根目录</b>（不要多套一层文件夹）：</p>',
@@ -57,11 +57,26 @@ window.TMV_DOCS = {
 
     '<h4>打包与测试</h4>',
     '<pre><code>cd my-plugin\nzip -r ../my-plugin.zip .</code></pre>',
-    '<p>注意在插件文件夹<b>里面</b>执行，这样 <code>plugin.json</code> 才在 zip 根目录。然后在 TifMrcView 里点 <b>插件 → 加载插件…</b>，选择 zip；改了代码后再加载一次即可更新。出错信息会显示在插件列表里。</p>'
+    '<p>注意在插件文件夹<b>里面</b>执行，这样 <code>plugin.json</code> 才在 zip 根目录。然后在 TifMrcView 里点 <b>插件 → 加载插件…</b>，选择 zip；改了代码后再加载一次即可更新。出错信息会显示在插件列表里。</p>',
+
+    '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">格式插件（WebAssembly）</summary>',
+    '<p>插件包还可以带一个 <b>WebAssembly 模块</b>，让 TifMrcView 打开新的文件格式，或给已能打开的文件补充元数据。蔡司 CZI（Zeiss ZEN 插件）和 SmartSEM 就是这样实现的：主程序里没有厂商格式的代码。模块在沙箱里运行，只能读取正在打开的那个文件，不能访问文件系统、网络和界面；内存上限 512 MiB，每次调用有运行时间（fuel）上限，出错只会让这个文件打不开，不会让应用崩溃或卡死。</p>',
+    '<p>格式插件不自己解码像素：它为每一页给出一份“配方”，即文件里的若干数据块、各自的压缩方式（不压缩、zlib、deflate、LZW、Zstd、JPEG、PackBits）和要放到图像的哪个位置，由应用本身在内存映射的文件上并行解压、拼接，所以速度和内置格式一样。</p>',
+    '<div class="tw"><table class="ref"><thead><tr><th>plugin.json 字段</th><th>说明</th></tr></thead><tbody>',
+    '<tr><td><code>wasm</code></td><td>包里的 <code>.wasm</code> 文件，如 <code>"zen.wasm"</code>。</td></tr>',
+    '<tr><td><code>formats</code></td><td>能打开的格式：<code>[{ "ext": ["czi"], "name": "Zeiss CZI" }]</code>。不能接管内置格式（tif、mrc、png…）。</td></tr>',
+    '<tr><td><code>metadata</code></td><td>要补充元数据的扩展名：<code>{ "ext": ["tif", "tiff"] }</code>。</td></tr>',
+    '</tbody></table></div>',
+    '<p>模块导出（ABI v1）：<code>memory</code>、<code>tmv_abi()</code>（返回 1）、<code>tmv_alloc</code> / <code>tmv_free</code>；打开格式用 <code>tmv_open(path)</code> → 句柄、<code>tmv_info(句柄)</code> → 图像信息 JSON、<code>tmv_page(句柄, 页)</code> → 页面配方、<code>tmv_close(句柄)</code>；补充元数据用 <code>tmv_metadata(path)</code> → JSON。宿主提供的导入只有 <code>file_size</code>、<code>read</code>、<code>decompress</code>、<code>log</code>、<code>error</code>。安装时应用会编译模块并检查这些导出。<code>main</code> 脚本仍然需要，用来在插件列表里注册（可以只是一个空的 <code>activate()</code>）。</p>',
+    '<p>用仓库里的 Rust SDK（<code>plugins/sdk</code>）写最方便：实现 <code>Format</code>（<code>open</code> / <code>info</code> / <code>page</code>）或 <code>Metadata</code>，再用 <code>export_format!</code> / <code>export_metadata!</code> 导出。一个读取简单原始格式的例子：</p>',
+    '<pre><code>use tifmrcview_plugin_sdk::*;\n\nstruct R16 { w: u32, h: u32, depth: u32 }\n\nimpl Format for R16 {\n    fn open(_path: &amp;str) -&gt; Result&lt;R16&gt; {\n        let head = file::read(0, 16)?;\n        if &amp;head[..4] != b"R16\\0" { bail!("不是 R16 文件"); }\n        Ok(R16 { w: le_u32(&amp;head, 4), h: le_u32(&amp;head, 8), depth: le_u32(&amp;head, 12) })\n    }\n    fn info(&amp;mut self) -&gt; Result&lt;Info&gt; {\n        let mut i = Info::new(self.w, self.h, DType::U16, "R16 stack");\n        i.size_z = self.depth;\n        i.page_count = self.depth;\n        Ok(i)\n    }\n    fn page(&amp;self, page: u32) -&gt; Result&lt;Recipe&gt; {\n        let n = self.w as u64 * self.h as u64 * 2;\n        let mut r = Recipe::new();\n        r.push(Chunk::file(16 + page as u64 * n, n, [0, 0, self.w, self.h]));\n        Ok(r)\n    }\n}\n\nexport_format!(R16);</code></pre>',
+    '<pre><code>rustup target add wasm32-unknown-unknown\ncargo build --release --target wasm32-unknown-unknown\n# 把 plugin.json、index.js 和 target/wasm32-unknown-unknown/release/r16.wasm\n# 放进 zip 的根目录（wasm 的名字和 plugin.json 里的 "wasm" 一致）</code></pre>',
+    '<p>完整的接口说明（图像信息 JSON、配方的二进制格式、压缩方式和标志、限制、调试方法）见 <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>。需要 TifMrcView 0.4.0 或更新版本（<code>"minAppVersion": "0.4.0"</code>）。</p>',
+    '</details>'
   ].join('\n'),
 
   en: [
-    '<p>A plugin is a JavaScript file plus a <code>plugin.json</code>. The script runs inside the app’s interface, registers itself with <code>TifMrcView.register()</code> and receives an <code>app</code> object with the API below. Third-party plugins are JavaScript only; a <code>native</code> half exists only for plugins whose code ships inside the app.</p>',
+    '<p>A plugin is a JavaScript file plus a <code>plugin.json</code>. The script runs inside the app’s interface, registers itself with <code>TifMrcView.register()</code> and receives an <code>app</code> object with the API below. Third-party plugins are JavaScript only; a <code>native</code> half exists only for plugins whose code ships inside the app. To support new file formats, a plugin can add a sandboxed WebAssembly module; see “Format plugins (WebAssembly)” at the end.</p>',
 
     '<h4>Package layout</h4>',
     '<p>A plugin package is a zip with <b><code>plugin.json</code> at the zip root</b> (no extra wrapping folder):</p>',
@@ -116,6 +131,21 @@ window.TMV_DOCS = {
 
     '<h4>Package and test</h4>',
     '<pre><code>cd my-plugin\nzip -r ../my-plugin.zip .</code></pre>',
-    '<p>Run it from <b>inside</b> the plugin folder so <code>plugin.json</code> ends up at the zip root. Then in TifMrcView click <b>Plugins → Load plugin…</b> and choose the zip; after changing the code, load it again to update. Errors show in the plugin list.</p>'
+    '<p>Run it from <b>inside</b> the plugin folder so <code>plugin.json</code> ends up at the zip root. Then in TifMrcView click <b>Plugins → Load plugin…</b> and choose the zip; after changing the code, load it again to update. Errors show in the plugin list.</p>',
+
+    '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">Format plugins (WebAssembly)</summary>',
+    '<p>A plugin package can also carry a <b>WebAssembly module</b> that lets TifMrcView open new file formats, or adds metadata to files it already opens. Zeiss CZI (the Zeiss ZEN plugin) and SmartSEM work this way: the app itself contains no vendor format code. The module runs in a sandbox and can only read the file being opened — no file system, network or UI access; memory is capped at 512 MiB and every call has a time (fuel) budget, so a broken plugin can only make that one file fail to open, never crash or hang the app.</p>',
+    '<p>A format plugin does not decode pixels itself: for each page it returns a <i>recipe</i> — byte ranges of the file, how each is compressed (none, zlib, deflate, LZW, Zstd, JPEG, PackBits) and where it goes in the image — and the app decompresses and assembles them natively, in parallel, from the memory-mapped file. That makes plugin formats as fast as built-in ones.</p>',
+    '<div class="tw"><table class="ref"><thead><tr><th>plugin.json field</th><th>Meaning</th></tr></thead><tbody>',
+    '<tr><td><code>wasm</code></td><td>The <code>.wasm</code> file in the package, e.g. <code>"zen.wasm"</code>.</td></tr>',
+    '<tr><td><code>formats</code></td><td>Formats it opens: <code>[{ "ext": ["czi"], "name": "Zeiss CZI" }]</code>. Built-in formats (tif, mrc, png…) cannot be taken over.</td></tr>',
+    '<tr><td><code>metadata</code></td><td>Extensions it adds metadata to: <code>{ "ext": ["tif", "tiff"] }</code>.</td></tr>',
+    '</tbody></table></div>',
+    '<p>Module exports (ABI v1): <code>memory</code>, <code>tmv_abi()</code> (returns 1), <code>tmv_alloc</code> / <code>tmv_free</code>; for formats <code>tmv_open(path)</code> → handle, <code>tmv_info(handle)</code> → image info JSON, <code>tmv_page(handle, page)</code> → page recipe, <code>tmv_close(handle)</code>; for metadata <code>tmv_metadata(path)</code> → JSON. The only imports are <code>file_size</code>, <code>read</code>, <code>decompress</code>, <code>log</code> and <code>error</code>. The app compiles the module and checks these exports when the package is installed. The <code>main</code> script is still needed to register the plugin in the plugin list (an empty <code>activate()</code> is enough).</p>',
+    '<p>The Rust SDK in the repository (<code>plugins/sdk</code>) makes this easy: implement <code>Format</code> (<code>open</code> / <code>info</code> / <code>page</code>) or <code>Metadata</code> and export it with <code>export_format!</code> / <code>export_metadata!</code>. A reader for a trivial raw format:</p>',
+    '<pre><code>use tifmrcview_plugin_sdk::*;\n\nstruct R16 { w: u32, h: u32, depth: u32 }\n\nimpl Format for R16 {\n    fn open(_path: &amp;str) -&gt; Result&lt;R16&gt; {\n        let head = file::read(0, 16)?;\n        if &amp;head[..4] != b"R16\\0" { bail!("not an R16 file"); }\n        Ok(R16 { w: le_u32(&amp;head, 4), h: le_u32(&amp;head, 8), depth: le_u32(&amp;head, 12) })\n    }\n    fn info(&amp;mut self) -&gt; Result&lt;Info&gt; {\n        let mut i = Info::new(self.w, self.h, DType::U16, "R16 stack");\n        i.size_z = self.depth;\n        i.page_count = self.depth;\n        Ok(i)\n    }\n    fn page(&amp;self, page: u32) -&gt; Result&lt;Recipe&gt; {\n        let n = self.w as u64 * self.h as u64 * 2;\n        let mut r = Recipe::new();\n        r.push(Chunk::file(16 + page as u64 * n, n, [0, 0, self.w, self.h]));\n        Ok(r)\n    }\n}\n\nexport_format!(R16);</code></pre>',
+    '<pre><code>rustup target add wasm32-unknown-unknown\ncargo build --release --target wasm32-unknown-unknown\n# put plugin.json, index.js and target/wasm32-unknown-unknown/release/r16.wasm\n# at the root of the zip (the .wasm named as "wasm" in plugin.json)</code></pre>',
+    '<p>The full reference (image info JSON, the binary recipe format, codecs and flags, limits, debugging) is in <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/format-plugins.md">docs/format-plugins.md</a>. Needs TifMrcView 0.4.0 or newer (<code>"minAppVersion": "0.4.0"</code>).</p>',
+    '</details>'
   ].join('\n')
 };

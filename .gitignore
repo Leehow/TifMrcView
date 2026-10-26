@@ -6,3 +6,7 @@ src-tauri/gen/
 fluorescence-tiff-*/
 *.ome.tif
 src-tauri/tauri.ci.conf.json
+# plugin crates built in place, and by scripts/pack-plugins.mjs
+/target/
+plugins/*/target/
+plugins/sdk/Cargo.lock

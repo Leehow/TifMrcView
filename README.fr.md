@@ -28,7 +28,7 @@ Une visionneuse petite, rapide et pratique pour les images de microscopie et de 
 
 ## Fonctionnalités
 
-- Formats pris en charge : TIFF (multipage, bandes/tuiles, compression LZW/Deflate/PackBits/JPEG, niveaux de gris de 1 à 7 bits comme le binaire 1 bit et le 4 bits, ainsi que les entiers et flottants 8/16/32 bits ; les profondeurs inhabituelles comme 12 bits donnent un message d'erreur explicite), OME-TIFF (lit les dimensions C/Z/T, les noms et couleurs de canaux, la taille de pixel), hyperpiles ImageJ (y compris les fichiers contigus de plus de 4 Go), TIFF à palette (comme les images SEM Zeiss), MRC/MRC2014 (modes 0/1/2/3/4/6/12/101, `.mrc` `.mrcs` `.rec` `.st` `.map` ; pour les fichiers de mode 0 sans marqueur IMOD, le minimum/maximum de l'en-tête sert à déterminer s'il s'agit d'octets non signés) et Zeiss CZI (LSM / Airyscan, etc. enregistrés par ZEN : sous-blocs non compressés, Zstd et JPEG, niveaux de gris et couleur 8/16/32 bits, dimensions C/Z/T, mosaïques en tuiles, noms et couleurs de canaux, taille de pixel). `.rec` `.st` `.map` et `.czi` n'apparaissent que dans « Ouvrir avec » et ne sont pas définis comme application par défaut
+- Formats pris en charge : TIFF (multipage, bandes/tuiles, compression LZW/Deflate/PackBits/JPEG, niveaux de gris de 1 à 7 bits comme le binaire 1 bit et le 4 bits, ainsi que les entiers et flottants 8/16/32 bits ; les profondeurs inhabituelles comme 12 bits donnent un message d'erreur explicite), OME-TIFF (lit les dimensions C/Z/T, les noms et couleurs de canaux, la taille de pixel), hyperpiles ImageJ (y compris les fichiers contigus de plus de 4 Go), TIFF à palette (comme les images SEM Zeiss), MRC/MRC2014 (modes 0/1/2/3/4/6/12/101, `.mrc` `.mrcs` `.rec` `.st` `.map` ; pour les fichiers de mode 0 sans marqueur IMOD, le minimum/maximum de l'en-tête sert à déterminer s'il s'agit d'octets non signés) et, avec le plugin Zeiss ZEN, Zeiss CZI (LSM / Airyscan, etc. enregistrés par ZEN : sous-blocs non compressés, Zstd et JPEG, niveaux de gris et couleur 8/16/32 bits, dimensions C/Z/T, mosaïques en tuiles, noms et couleurs de canaux, taille de pixel). `.rec` `.st` `.map` et `.czi` n'apparaissent que dans « Ouvrir avec » et ne sont pas définis comme application par défaut
 - Ouvre aussi PNG / JPEG / BMP / GIF / WebP
 - Curseur Z et lecture ; un curseur T supplémentaire quand il y a une dimension temporelle
 - Composition couleur multicanal : la case à cocher affiche/masque un canal, un clic sur le nom règle le contraste de ce canal, un clic sur le point change sa couleur
@@ -53,6 +53,8 @@ Une visionneuse petite, rapide et pratique pour les images de microscopie et de 
 ## Plugins
 
 Le menu « Plugins » de la barre d'outils permet d'activer/désactiver, d'installer et de désinstaller des plugins, et de vérifier les mises à jour. À part les langues, chaque plugin s'installe séparément : cliquez sur « Marché de plugins » pour ouvrir https://tifmrcview.com/tifmrcview/plugins/ dans le navigateur et télécharger un paquet de plugin (.zip), puis cliquez sur « Charger un plugin… » et choisissez-le. Installer une version plus récente du même plugin remplace simplement l'ancienne. Les sources des plugins se trouvent dans le dépôt sous `plugins/<id>/` (`plugin.json` + `index.js` ; actuellement `recorder`, `smartsem` et `zen`) ; les plugins installés se trouvent dans un sous-dossier `<id>/` du dossier des plugins.
+
+Plugins de format : un paquet de plugin peut aussi ajouter des formats de fichier et des lecteurs de métadonnées sous forme de module WebAssembly isolé, écrit par exemple en Rust avec le SDK de `plugins/sdk`. Zeiss CZI (`zen`) et Zeiss SmartSEM (`smartsem`) fonctionnent ainsi ; le programme ne contient aucun code de format propre à un fabricant : sans le plugin Zeiss ZEN, les fichiers .czi ne s'ouvrent pas et l'application indique quel plugin installer. Un module ne voit que le fichier ouvert, tourne avec des limites de mémoire et de temps et décrit chaque page comme une liste de morceaux du fichier que l'application décompresse et assemble elle-même, en parallèle. ABI, limites et exemple : [docs/format-plugins.md](docs/format-plugins.md).
 
 Plugin d'enregistrement vidéo : dans le panneau « Outils », sous « Enregistrer une vidéo (MP4) », choisissez Z ou T, l'image de début et de fin, la fréquence d'images, la région (image entière / sélection / vue actuelle), la taille et la qualité. Le MP4 H.264 obtenu contient le contraste actuel, les couleurs des canaux, les annotations et la barre d'échelle.
 
@@ -169,12 +171,12 @@ Chaque push sur `main` fait compiler des paquets par GitHub Actions sur macOS / 
 
 | Chemin | Contenu |
 | --- | --- |
-| `src-tauri/src/formats/` | Décodeurs : `tiff.rs`, `mrc.rs`, `czi.rs`, `raster.rs` (PNG/JPEG/…), `mod.rs` |
+| `src-tauri/src/formats/` | Décodeurs : `tiff.rs`, `mrc.rs`, `raster.rs` (PNG/JPEG/…), `mod.rs` |
 | `src-tauri/src/` | `lib.rs` (commandes, gestion des fenêtres et fichiers), `render.rs`, `reslice.rs` (vues XZ/YZ), `image.rs`, `imod.rs` (modèles IMOD), `mem.rs`, `assoc.rs` (enregistrement comme application par défaut), `update.rs` |
-| `src-tauri/src/plugins/` | Parties natives des plugins (`recorder.rs`, `mp4.rs`, `smartsem.rs`, `zen.rs`) et paquets de plugins (`package.rs`) |
+| `src-tauri/src/plugins/` | Parties natives des plugins (`recorder.rs`, `mp4.rs`), paquets de plugins (`package.rs`) et hôte WebAssembly des plugins de format (`wasm.rs`, `recipe.rs`, `registry.rs`) |
 | `src-tauri/examples/probe.rs` | L'outil de sondage du décodage |
 | `ui/` | Frontend en HTML/JS pur : `index.html`, `app.js`, `style.css`, `plugin-host.js` ; plugin de langue intégré dans `ui/plugins/i18n.js` |
-| `plugins/<id>/` | Sources des plugins installables (`recorder`, `smartsem`, `zen`) |
+| `plugins/<id>/` | Sources des plugins installables (`recorder`, `smartsem`, `zen` ; les deux derniers sont des crates Rust compilées en WebAssembly) et le SDK des plugins (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (construit les zip de plugins et l'index du marché), `make-release.mjs` |
 | `site/` | Le site web et le marché de plugins, captures d'écran dans `site/shots/` |
 | `packaging/linux/` | Fichiers de packaging Linux (type MIME de .mrc) |

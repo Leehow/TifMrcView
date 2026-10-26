@@ -150,10 +150,16 @@ function parseFrame(buf) {
 
 // ---------- opening files ----------
 
-async function openPath(path) {
+/** Whether an open error says a (format) plugin is missing or switched off. */
+function needsPlugin(e) {
+  return /「.+」插件/.test(String(e));
+}
+
+/** Opens `path`; `force` re-reads the file shown now (e.g. after a plugin was switched). */
+async function openPath(path, force = false) {
   if (!path) return;
   // Clicking the image already shown changes nothing.
-  if (S.info && S.info.path === path && S.axis === "xy") return;
+  if (!force && S.info && S.info.path === path && S.axis === "xy") return;
   flushAnn();
   $("loading").textContent = "加载中…";
   // Only show the hint when loading takes a while, so quick flips do not blink.
@@ -226,7 +232,9 @@ async function openPath(path) {
     pluginEmit("open", S.info);
     watchLoad();
   } catch (e) {
-    toast(`无法打开 ${basename(path)}：${e}`);
+    toast(`无法打开 ${basename(path)}：${e}`, needsPlugin(e) ? 8000 : 3500);
+    // The plugin window has the way to the plugin market.
+    if (needsPlugin(e) && typeof togglePluginDialog === "function") togglePluginDialog(true);
   } finally {
     clearTimeout(slow);
     $("loading").hidden = true;

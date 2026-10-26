@@ -28,7 +28,7 @@
 
 ## 機能
 
-- 対応フォーマット：TIFF（マルチページ、ストリップ/タイル、LZW/Deflate/PackBits/JPEG 圧縮、1 ビット二値や 4 ビットなどの 1〜7 ビットグレースケール、8/16/32 ビットの整数と浮動小数点。12 ビットなど一般的でないビット深度は明確なエラーメッセージを表示）、OME-TIFF（C/Z/T 次元、チャンネル名と色、ピクセルサイズを読み取り）、ImageJ ハイパースタック（4 GB を超える連続格納ファイルを含む）、パレット TIFF（Zeiss SEM 画像など）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101、`.mrc` `.mrcs` `.rec` `.st` `.map`。IMOD フラグのない mode 0 ファイルは、ヘッダーの最小値/最大値から符号なしバイトかどうかを判定）、Zeiss CZI（ZEN で保存された LSM / Airyscan など：非圧縮、Zstd、JPEG サブブロック、8/16/32 ビットのグレースケールとカラー、C/Z/T 次元、タイル状モザイク、チャンネル名と色、ピクセルサイズ）。`.rec` `.st` `.map` と `.czi` は「このアプリケーションで開く」にのみ表示され、既定のアプリには設定されません
+- 対応フォーマット：TIFF（マルチページ、ストリップ/タイル、LZW/Deflate/PackBits/JPEG 圧縮、1 ビット二値や 4 ビットなどの 1〜7 ビットグレースケール、8/16/32 ビットの整数と浮動小数点。12 ビットなど一般的でないビット深度は明確なエラーメッセージを表示）、OME-TIFF（C/Z/T 次元、チャンネル名と色、ピクセルサイズを読み取り）、ImageJ ハイパースタック（4 GB を超える連続格納ファイルを含む）、パレット TIFF（Zeiss SEM 画像など）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101、`.mrc` `.mrcs` `.rec` `.st` `.map`。IMOD フラグのない mode 0 ファイルは、ヘッダーの最小値/最大値から符号なしバイトかどうかを判定）、Zeiss ZEN プラグインを入れれば Zeiss CZI（ZEN で保存された LSM / Airyscan など：非圧縮、Zstd、JPEG サブブロック、8/16/32 ビットのグレースケールとカラー、C/Z/T 次元、タイル状モザイク、チャンネル名と色、ピクセルサイズ）。`.rec` `.st` `.map` と `.czi` は「このアプリケーションで開く」にのみ表示され、既定のアプリには設定されません
 - PNG / JPEG / BMP / GIF / WebP も開けます
 - Z スライダーと再生。時間次元がある場合は T スライダーも表示
 - 多チャンネルのカラー合成：チェックボックスでチャンネルを表示/非表示、名前をクリックしてそのチャンネルのコントラストを調整、丸印をクリックして色を変更
@@ -53,6 +53,8 @@
 ## プラグイン
 
 ツールバーの「プラグイン」で、プラグインのオン/オフ、インストール、アンインストール、更新の確認ができます。多言語化を除き、プラグインは個別にインストールします。「プラグインマーケット」をクリックするとブラウザーで https://tifmrcview.com/tifmrcview/plugins/ が開くので、プラグインパッケージ（.zip）をダウンロードし、「プラグインを読み込む…」でそれを選択するとインストールされます。同じプラグインの新しいバージョンをインストールすると、古いバージョンが置き換えられます。プラグインのソースはリポジトリの `plugins/<id>/`（`plugin.json` + `index.js`。現在は `recorder`、`smartsem`、`zen`）にあり、インストール済みのプラグインはプラグインフォルダー内の `<id>/` サブフォルダーに置かれます。
+
+フォーマットプラグイン：プラグインパッケージには、サンドボックスで動く WebAssembly モジュールを含めて、新しいファイル形式やメタデータの読み取りを追加することもできます（例：`plugins/sdk` の Rust SDK で作成）。Zeiss CZI（`zen`）と Zeiss SmartSEM（`smartsem`）はこの方式で、本体にはメーカー固有の形式のコードはありません。Zeiss ZEN プラグインがなければ .czi は開けず、必要なプラグインが表示されます。モジュールは開いているファイルだけを読め、メモリと実行時間に上限があります。各ページをファイル内のデータ片のリストとして記述し、展開と組み立てはアプリ本体が並列に行います。ABI・制限・例は [docs/format-plugins.md](docs/format-plugins.md) を参照してください。
 
 動画録画プラグイン：「ツール」パネルの「動画を録画 (MP4)」で、Z または T、開始/終了フレーム、フレームレート、範囲（画像全体 / 選択範囲 / 現在の表示範囲）、サイズ、画質を選びます。出力される H.264 MP4 には、現在のコントラスト、チャンネルの色、注釈、スケールバーが反映されます。
 
@@ -169,12 +171,12 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 | パス | 内容 |
 | --- | --- |
-| `src-tauri/src/formats/` | デコーダー：`tiff.rs`、`mrc.rs`、`czi.rs`、`raster.rs`（PNG/JPEG など）、`mod.rs` |
+| `src-tauri/src/formats/` | デコーダー：`tiff.rs`、`mrc.rs`、`raster.rs`（PNG/JPEG など）、`mod.rs` |
 | `src-tauri/src/` | `lib.rs`（コマンド、ウィンドウ/ファイル処理）、`render.rs`、`reslice.rs`（XZ/YZ ビュー）、`image.rs`、`imod.rs`（IMOD モデル）、`mem.rs`、`assoc.rs`（既定アプリの登録）、`update.rs` |
-| `src-tauri/src/plugins/` | プラグインのネイティブ部分（`recorder.rs`、`mp4.rs`、`smartsem.rs`、`zen.rs`）とプラグインパッケージ（`package.rs`） |
+| `src-tauri/src/plugins/` | プラグインのネイティブ部分（`recorder.rs`、`mp4.rs`）、プラグインパッケージ（`package.rs`）、フォーマットプラグインの WebAssembly ホスト（`wasm.rs`、`recipe.rs`、`registry.rs`） |
 | `src-tauri/examples/probe.rs` | デコード確認用ツール |
 | `ui/` | 素の HTML/JS フロントエンド：`index.html`、`app.js`、`style.css`、`plugin-host.js`。組み込みの言語プラグインは `ui/plugins/i18n.js` |
-| `plugins/<id>/` | インストール可能なプラグインのソース（`recorder`、`smartsem`、`zen`） |
+| `plugins/<id>/` | インストール可能なプラグインのソース（`recorder`、`smartsem`、`zen`。後の 2 つは WebAssembly にビルドする Rust クレート）とプラグイン SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（プラグインの zip とマーケットの索引を作成）、`make-release.mjs` |
 | `site/` | ウェブサイトとプラグインマーケット。スクリーンショットは `site/shots/` |
 | `packaging/linux/` | Linux のパッケージング用ファイル（.mrc の MIME タイプ） |

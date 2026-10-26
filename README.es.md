@@ -28,7 +28,7 @@ Un visor pequeño, rápido y cómodo para imágenes de microscopía y microscop�
 
 ## Características
 
-- Formatos compatibles: TIFF (multipágina, bandas/teselas, compresión LZW/Deflate/PackBits/JPEG, escala de grises de 1–7 bits como binario de 1 bit y 4 bits, y enteros y coma flotante de 8/16/32 bits; las profundidades poco habituales, como 12 bits, dan un mensaje de error claro), OME-TIFF (lee las dimensiones C/Z/T, nombres y colores de canal, tamaño de píxel), hiperpilas de ImageJ (incluidos archivos contiguos de más de 4 GB), TIFF con paleta (como las imágenes SEM de Zeiss), MRC/MRC2014 (modos 0/1/2/3/4/6/12/101, `.mrc` `.mrcs` `.rec` `.st` `.map`; en los archivos de modo 0 sin marca IMOD se decide si son bytes sin signo según el mínimo/máximo de la cabecera) y Zeiss CZI (LSM / Airyscan, etc. guardados por ZEN: subbloques sin comprimir, Zstd y JPEG, escala de grises y color de 8/16/32 bits, dimensiones C/Z/T, mosaicos en teselas, nombres y colores de canal, tamaño de píxel). `.rec` `.st` `.map` y `.czi` solo aparecen en «Abrir con» y no se establecen como aplicación predeterminada
+- Formatos compatibles: TIFF (multipágina, bandas/teselas, compresión LZW/Deflate/PackBits/JPEG, escala de grises de 1–7 bits como binario de 1 bit y 4 bits, y enteros y coma flotante de 8/16/32 bits; las profundidades poco habituales, como 12 bits, dan un mensaje de error claro), OME-TIFF (lee las dimensiones C/Z/T, nombres y colores de canal, tamaño de píxel), hiperpilas de ImageJ (incluidos archivos contiguos de más de 4 GB), TIFF con paleta (como las imágenes SEM de Zeiss), MRC/MRC2014 (modos 0/1/2/3/4/6/12/101, `.mrc` `.mrcs` `.rec` `.st` `.map`; en los archivos de modo 0 sin marca IMOD se decide si son bytes sin signo según el mínimo/máximo de la cabecera) y, con el plugin Zeiss ZEN, Zeiss CZI (LSM / Airyscan, etc. guardados por ZEN: subbloques sin comprimir, Zstd y JPEG, escala de grises y color de 8/16/32 bits, dimensiones C/Z/T, mosaicos en teselas, nombres y colores de canal, tamaño de píxel). `.rec` `.st` `.map` y `.czi` solo aparecen en «Abrir con» y no se establecen como aplicación predeterminada
 - También abre PNG / JPEG / BMP / GIF / WebP
 - Control deslizante Z y reproducción; con dimensión temporal, también un control T
 - Composición de color multicanal: la casilla muestra/oculta un canal, pulsar el nombre ajusta el contraste de ese canal y pulsar el punto cambia su color
@@ -53,6 +53,8 @@ Un visor pequeño, rápido y cómodo para imágenes de microscopía y microscop�
 ## Plugins
 
 En «Plugins», en la barra de herramientas, se pueden activar/desactivar, instalar y desinstalar plugins y buscar actualizaciones. Salvo los idiomas, cada plugin se instala por separado: pulse «Mercado de plugins» para abrir https://tifmrcview.com/tifmrcview/plugins/ en el navegador y descargar un paquete de plugin (.zip); después pulse «Cargar plugin…» y selecciónelo. Instalar una versión más reciente del mismo plugin reemplaza simplemente a la anterior. El código fuente de los plugins está en el repositorio, en `plugins/<id>/` (`plugin.json` + `index.js`; actualmente `recorder`, `smartsem` y `zen`); los plugins instalados están en una subcarpeta `<id>/` de la carpeta de plugins.
+
+Plugins de formato: un paquete de plugin también puede añadir formatos de archivo y lectores de metadatos como un módulo WebAssembly aislado, escrito por ejemplo en Rust con el SDK de `plugins/sdk`. Zeiss CZI (`zen`) y Zeiss SmartSEM (`smartsem`) funcionan así, de modo que el programa no contiene código de formatos de fabricantes: sin el plugin Zeiss ZEN, los .czi no se abren y la aplicación indica qué plugin instalar. Un módulo solo ve el archivo que se abre, funciona con límites de memoria y tiempo y describe cada página como una lista de fragmentos del archivo que la aplicación descomprime y monta en paralelo. La ABI, los límites y un ejemplo están en [docs/format-plugins.md](docs/format-plugins.md).
 
 Plugin de grabación de vídeo: en el panel «Herramientas», en «Grabar vídeo (MP4)», elija Z o T, el fotograma inicial y final, la tasa de fotogramas, la región (imagen completa / selección / vista actual), el tamaño y la calidad. El MP4 H.264 resultante incluye el contraste actual, los colores de canal, las anotaciones y la barra de escala.
 
@@ -169,12 +171,12 @@ Al publicar, la CI coloca los instaladores y los paquetes de actualización en e
 
 | Ruta | Contenido |
 | --- | --- |
-| `src-tauri/src/formats/` | Decodificadores: `tiff.rs`, `mrc.rs`, `czi.rs`, `raster.rs` (PNG/JPEG/…), `mod.rs` |
+| `src-tauri/src/formats/` | Decodificadores: `tiff.rs`, `mrc.rs`, `raster.rs` (PNG/JPEG/…), `mod.rs` |
 | `src-tauri/src/` | `lib.rs` (comandos, gestión de ventanas y archivos), `render.rs`, `reslice.rs` (vistas XZ/YZ), `image.rs`, `imod.rs` (modelos IMOD), `mem.rs`, `assoc.rs` (registro como aplicación predeterminada), `update.rs` |
-| `src-tauri/src/plugins/` | Partes nativas de los plugins (`recorder.rs`, `mp4.rs`, `smartsem.rs`, `zen.rs`) y paquetes de plugins (`package.rs`) |
+| `src-tauri/src/plugins/` | Partes nativas de los plugins (`recorder.rs`, `mp4.rs`), paquetes de plugins (`package.rs`) y el host WebAssembly de los plugins de formato (`wasm.rs`, `recipe.rs`, `registry.rs`) |
 | `src-tauri/examples/probe.rs` | La herramienta de sondeo de decodificación |
 | `ui/` | Frontend en HTML/JS puro: `index.html`, `app.js`, `style.css`, `plugin-host.js`; plugin de idioma integrado en `ui/plugins/i18n.js` |
-| `plugins/<id>/` | Código fuente de los plugins instalables (`recorder`, `smartsem`, `zen`) |
+| `plugins/<id>/` | Código fuente de los plugins instalables (`recorder`, `smartsem`, `zen`; los dos últimos son crates de Rust compilados a WebAssembly) y el SDK de plugins (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (genera los zip de plugins y el índice del mercado), `make-release.mjs` |
 | `site/` | El sitio web y el mercado de plugins, con capturas en `site/shots/` |
 | `packaging/linux/` | Archivos de empaquetado para Linux (tipo MIME de .mrc) |

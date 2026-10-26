@@ -59,12 +59,43 @@ pub fn compare_versions(a: &str, b: &str) -> Result<Ordering> {
     Ok(a.cmp(&b))
 }
 
+/// A file type a WebAssembly plugin can open (`formats` in plugin.json).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatDecl {
+    /// Lower-case extensions without the dot.
+    pub ext: Vec<String>,
+    pub name: String,
+}
+
 /// The fields of `plugin.json` the host relies on; `raw` keeps the rest.
 #[derive(Debug, Clone)]
 pub struct Manifest {
     pub id: String,
+    pub name: String,
     pub main: String,
+    /// WebAssembly module (`docs/format-plugins.md`), relative to the package.
+    pub wasm: Option<String>,
+    pub formats: Vec<FormatDecl>,
+    /// Extensions whose files `tmv_metadata` should see.
+    pub metadata: Vec<String>,
     pub raw: Value,
+}
+
+/// `[a-z0-9]{1,16}`, lower-cased, without the dot.
+fn parse_exts(v: Option<&Value>, what: &str) -> Result<Vec<String>> {
+    let list = v.and_then(Value::as_array).ok_or_else(|| anyhow!("{what} 的 ext 必须是扩展名列表"))?;
+    let mut out = vec![];
+    for e in list {
+        let e = e.as_str().unwrap_or("").trim_start_matches('.').to_ascii_lowercase();
+        if e.is_empty() || e.len() > 16 || !e.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            bail!("{what} 里的扩展名不对：{e}");
+        }
+        out.push(e);
+    }
+    if out.is_empty() {
+        bail!("{what} 至少要有一个扩展名");
+    }
+    Ok(out)
 }
 
 pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
@@ -95,7 +126,37 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
             bail!("插件需要 TifMrcView {min} 或更新版本（当前 {app_version}）");
         }
     }
-    Ok(Manifest { id, main, raw })
+    let wasm = match raw.get("wasm") {
+        None => None,
+        Some(w) => {
+            let w = w.as_str().unwrap_or("");
+            if safe_rel(w).is_none() || !w.ends_with(".wasm") {
+                bail!("wasm 不是插件里的 .wasm 文件：{w}");
+            }
+            Some(w.to_string())
+        }
+    };
+    let mut formats = vec![];
+    if let Some(f) = raw.get("formats") {
+        for d in f.as_array().ok_or_else(|| anyhow!("formats 必须是列表"))? {
+            let ext = parse_exts(d.get("ext"), "formats")?;
+            // The core's own formats cannot be taken over.
+            if let Some(core) = ext.iter().find(|e| crate::formats::CORE_EXTENSIONS.contains(&e.as_str())) {
+                bail!("formats 不能接管内置格式 .{core}");
+            }
+            let name = d.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+            formats.push(FormatDecl { ext, name });
+        }
+    }
+    let metadata = match raw.get("metadata") {
+        None => vec![],
+        Some(m) => parse_exts(m.get("ext"), "metadata")?,
+    };
+    if wasm.is_none() && (!formats.is_empty() || !metadata.is_empty()) {
+        bail!("声明了 formats 或 metadata 的插件必须有 wasm 模块");
+    }
+    let name = s("name").unwrap_or_default().to_string();
+    Ok(Manifest { id, name, main, wasm, formats, metadata, raw })
 }
 
 /// Reads and checks `<pkg>/plugin.json`, including that `main` exists.
@@ -107,6 +168,11 @@ pub fn read_installed(pkg: &Path, app_version: &str) -> Result<Manifest> {
     }
     if !pkg.join(safe_rel(&m.main).unwrap()).is_file() {
         bail!("插件里没有 {}", m.main);
+    }
+    if let Some(w) = &m.wasm {
+        if !pkg.join(safe_rel(w).unwrap()).is_file() {
+            bail!("插件里没有 {w}");
+        }
     }
     Ok(m)
 }
@@ -192,6 +258,17 @@ fn unique_tmp(dir: &Path, tag: &str, id: &str) -> PathBuf {
 
 /// Installs (or replaces) the package at `zip_path` into `dir/<id>/`.
 pub fn install(dir: &Path, zip_path: &Path, app_version: &str) -> Result<Manifest> {
+    install_checked(dir, zip_path, app_version, |_, _| Ok(()))
+}
+
+/// Like [`install`]; `check` looks at the unpacked files (in a temporary
+/// folder) before they replace an installed version.
+pub fn install_checked(
+    dir: &Path,
+    zip_path: &Path,
+    app_version: &str,
+    check: impl FnOnce(&Path, &Manifest) -> Result<()>,
+) -> Result<Manifest> {
     let file = File::open(zip_path).with_context(|| format!("无法打开 {}", zip_path.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("不是有效的 zip 插件包")?;
     if zip.len() > MAX_ENTRIES {
@@ -216,6 +293,12 @@ pub fn install(dir: &Path, zip_path: &Path, app_version: &str) -> Result<Manifes
         if !tmp.join(safe_rel(&manifest.main).unwrap()).is_file() {
             bail!("插件包里没有 {}", manifest.main);
         }
+        if let Some(w) = &manifest.wasm {
+            if !tmp.join(safe_rel(w).unwrap()).is_file() {
+                bail!("插件包里没有 {w}");
+            }
+        }
+        check(&tmp, &manifest)?;
         replace(dir, &manifest.id, &tmp)
     });
     if res.is_err() {
@@ -365,6 +448,45 @@ mod tests {
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","minAppVersion":"0.10.0"}"#));
         assert!(!bad(r#"{"id":"demo-2","name":"x","version":"1.0.0","minAppVersion":"0.1.9"}"#));
+    }
+
+    #[test]
+    fn manifest_wasm_formats_and_metadata() {
+        let base = r#""id":"fmt","name":"F","version":"1.0.0""#;
+        let parse = |extra: &str| parse_manifest(format!("{{{base},{extra}}}").as_bytes(), "0.4.0");
+        let m = parse(r#""wasm":"f.wasm","formats":[{"ext":["ABC",".xyz"],"name":"ABC"}],"metadata":{"ext":["tif"]}"#).unwrap();
+        assert_eq!(m.wasm.as_deref(), Some("f.wasm"));
+        assert_eq!(m.formats, [FormatDecl { ext: vec!["abc".into(), "xyz".into()], name: "ABC".into() }]);
+        assert_eq!(m.metadata, ["tif"]);
+        assert!(parse(r#""wasm":"../f.wasm""#).is_err());
+        assert!(parse(r#""wasm":"f.js""#).is_err());
+        assert!(parse(r#""formats":[{"ext":["abc"]}]"#).is_err(), "formats without wasm");
+        assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":["tif"]}]"#).is_err(), "core format");
+        assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":["a/b"]}]"#).is_err());
+        assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":[]}]"#).is_err());
+        assert!(parse(r#""wasm":"f.wasm","metadata":{"ext":"tif"}"#).is_err());
+        assert!(parse(r#""wasm":"f.wasm","metadata":{"ext":["tif"]}"#).is_ok());
+    }
+
+    #[test]
+    fn install_checks_wasm_and_runs_the_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins");
+        let z = tmp.path().join("f.zip");
+        let m = r#"{"id":"fmt","name":"F","version":"1.0.0","wasm":"f.wasm","formats":[{"ext":["abc"]}]}"#;
+        make_zip(&z, &[("plugin.json", m), ("index.js", "1")]);
+        assert!(format!("{:#}", install(&dir, &z, "0.4.0").unwrap_err()).contains("f.wasm"));
+        make_zip(&z, &[("plugin.json", m), ("index.js", "1"), ("f.wasm", "x")]);
+        let err = install_checked(&dir, &z, "0.4.0", |tmp, m| {
+            assert!(tmp.join("f.wasm").is_file());
+            bail!("bad module {}", m.id)
+        });
+        assert!(format!("{:#}", err.unwrap_err()).contains("bad module fmt"));
+        assert!(!dir.join("fmt").exists());
+        install(&dir, &z, "0.4.0").unwrap();
+        assert!(read_installed(&dir.join("fmt"), "0.4.0").is_ok());
+        fs::remove_file(dir.join("fmt/f.wasm")).unwrap();
+        assert!(read_installed(&dir.join("fmt"), "0.4.0").is_err());
     }
 
     #[test]
