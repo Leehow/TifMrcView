@@ -8,159 +8,119 @@
 <link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png?v=3">
 <link rel="icon" href="/favicon.ico?v=3" sizes="any">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=3">
+<link rel="stylesheet" href="../site.css?v=1">
+<script>document.documentElement.className+=' js'</script>
 <style>
-:root{--bg:#fbfbfd;--card:#fff;--ink:#16181d;--mute:#5d6470;--line:#e6e8ee;--blue:#2f6fe4;--blue2:#1f57c2;--orange:#f59a23;--shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.06)}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--ink:#eceff4;--mute:#9aa3b2;--line:#262a33;--blue:#5b8ff0;--blue2:#7aa5f5;--shadow:none}}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",Roboto,sans-serif}
-a{color:var(--blue);text-decoration:none}
-.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
-header{display:flex;align-items:center;justify-content:space-between;height:64px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:650;color:var(--ink)}
-.brand img{width:28px;height:28px;border-radius:7px}
-nav a{color:var(--mute);margin-left:22px;font-size:15px}
-nav a:hover{color:var(--ink)}
-.hero{text-align:center;padding:64px 0 40px}
-.hero img{display:block;margin:0 auto;width:112px;height:112px;border-radius:26px;box-shadow:var(--shadow)}
-h1{font-size:clamp(34px,6vw,52px);line-height:1.1;margin:26px 0 14px;letter-spacing:-.02em}
-.dot{color:var(--orange)}
-.lead{font-size:clamp(17px,2.3vw,20px);color:var(--mute);max-width:620px;margin:0 auto}
-.cta{margin-top:30px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:12px;font-weight:600;font-size:16px;border:1px solid transparent;cursor:pointer}
-.btn.primary{background:var(--blue);color:#fff}
-.btn.primary:hover{background:var(--blue2)}
-.btn.ghost{border-color:var(--line);color:var(--ink);background:var(--card)}
-.meta{margin-top:12px;color:var(--mute);font-size:14px}
-section{padding:40px 0}
-h2{font-size:26px;margin:0 0 22px;letter-spacing:-.01em}
-.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow)}
-.card.hl{border-color:var(--blue);box-shadow:0 0 0 3px color-mix(in srgb,var(--blue) 18%,transparent)}
-.os{display:flex;align-items:center;gap:10px;font-weight:650;font-size:19px;margin-bottom:4px}
-.os svg{width:22px;height:22px;fill:currentColor}
-.sub{color:var(--mute);font-size:14px;margin-bottom:16px}
-.dl{display:flex;flex-direction:column;gap:8px}
-.dl a{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-radius:10px;border:1px solid var(--line);color:var(--ink);font-weight:550}
-.dl a:hover{border-color:var(--blue);color:var(--blue)}
-.dl a{flex-direction:column;align-items:flex-start;gap:1px}
-.dl a span{white-space:nowrap}
-.dl a small{color:var(--mute);font-weight:400}
-.tip{margin-top:14px;font-size:13px;color:var(--mute)}
-.tip code{font-size:12px;background:color-mix(in srgb,var(--mute) 12%,transparent);padding:1px 5px;border-radius:5px;word-break:break-all}
-.feat h3{margin:0 0 6px;font-size:17px}
-.feat p{margin:0;color:var(--mute);font-size:15px}
-.feat .ic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--blue) 12%,transparent);color:var(--blue);margin-bottom:12px;font-size:18px}
-table{width:100%;border-collapse:collapse;font-size:15px}
-td{padding:9px 4px;border-bottom:1px solid var(--line)}
-td:first-child{white-space:nowrap;padding-right:18px}
-kbd{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:1px 6px;background:var(--card)}
-footer{padding:40px 0 56px;color:var(--mute);font-size:14px;text-align:center}
-@media (max-width:560px){nav>a:not(.gh){display:none}.hero{padding-top:36px}}
-.lang{position:relative;margin-left:22px}
-.lang>button{display:flex;align-items:center;gap:7px;background:none;border:1px solid var(--line);border-radius:9px;padding:5px 10px;color:var(--ink);font:inherit;font-size:14px;cursor:pointer}
-.lang>button:hover{border-color:var(--blue)}
-.flag{width:20px;height:14px;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.12);flex:none;display:block}
-.lang ul{position:absolute;right:0;top:calc(100% + 6px);margin:0;padding:6px;list-style:none;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);min-width:170px;z-index:10;display:none}
-.lang.open ul{display:block}
-.lang li button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:8px 10px;border-radius:8px;color:var(--ink);font:inherit;font-size:14px;cursor:pointer;text-align:left}
-.lang li button:hover,.lang li button[aria-current="true"]{background:color-mix(in srgb,var(--blue) 10%,transparent)}
-header nav{display:flex;align-items:center}
-@media (max-width:560px){.lang>button span{display:none}}
-.gh{display:flex;margin-left:22px;color:var(--mute)}
-.gh:hover{color:var(--ink)}
-.badge{display:inline-flex;align-items:center;gap:6px;margin-top:24px;padding:5px 14px;border-radius:999px;font-size:14px;font-weight:600;color:#1d7a46;background:color-mix(in srgb,#22a55b 13%,transparent)}
-.badge[hidden]{display:none}
-.badge+h1{margin-top:14px}
-.dl a small b{color:#1d7a46;font-weight:600;margin-left:6px}
-@media (prefers-color-scheme:dark){.badge,.dl a small b{color:#5fd391}}
-@media (max-width:560px){.gh{margin-left:0;margin-right:12px}}
-
-nav a.cur{color:var(--ink)}
-.phead{padding:44px 0 8px}
-.phead h1{margin:0 0 12px}
-.phead .lead{margin:0;max-width:680px}
-.steps{margin:0;padding-left:1.3em}
-.steps li{margin:6px 0}
-.steps li::marker{color:var(--blue);font-weight:650}
-.note{color:var(--mute);font-size:14px;margin:14px 0 0}
-code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace;background:color-mix(in srgb,var(--mute) 12%,transparent);padding:1px 5px;border-radius:5px}
+.phead{padding:clamp(56px,9vw,112px) 0 clamp(40px,5vw,64px);text-align:center}
+.phead .lede{margin-left:auto;margin-right:auto;text-wrap:balance}
+.psec{padding:0 0 clamp(56px,7vw,96px)}
+.psec h2{font-size:clamp(26px,3vw,34px);font-weight:700;letter-spacing:-.02em;margin:0 0 20px}
+.steps{margin:0;padding-left:1.4em;font-size:16.5px}
+.steps li{margin:8px 0}
+.steps li::marker{color:var(--accent);font-weight:700}
+.pnote{color:var(--faint);font-size:14px;margin:16px 0 0}
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(290px,1fr))}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 18px;min-height:44px;border-radius:980px;font-weight:500;font-size:15px;border:1px solid transparent;cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent2);text-decoration:none}
 .plug{display:flex;flex-direction:column;gap:10px}
-.plug h3{margin:0;font-size:20px;line-height:1.25}
+.plug h3{margin:0;font-size:22px;line-height:1.25;letter-spacing:-.015em}
 .plug .tags{display:flex;flex-wrap:wrap;gap:6px}
-.tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:600;background:color-mix(in srgb,var(--blue) 12%,transparent);color:var(--blue)}
-.tag.green{background:color-mix(in srgb,#22a55b 13%,transparent);color:#1d7a46}
-.tag.orange{background:color-mix(in srgb,var(--orange) 18%,transparent);color:#a35f00}
-@media (prefers-color-scheme:dark){.tag.green{color:#5fd391}.tag.orange{color:#f5b45a}}
-.plug .meta2{color:var(--mute);font-size:13.5px;margin:0}
-.plug .desc{margin:0}
-.plug details{border-top:1px solid var(--line);padding-top:8px;font-size:15px}
-.plug summary{cursor:pointer;color:var(--blue);font-weight:550}
+.tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:600;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.tag.green{background:color-mix(in srgb,#22a55b 14%,transparent);color:var(--ok)}
+.tag.orange{background:color-mix(in srgb,#f59a23 18%,transparent);color:#a35f00}
+@media (prefers-color-scheme:dark){.tag.orange{color:#f5b45a}}
+.plug .meta2{color:var(--faint);font-size:13.5px;margin:0}
+.plug .desc{margin:0;font-size:16px}
+.plug details{border-top:1px solid var(--hair);padding-top:10px;font-size:15px}
+.plug summary{cursor:pointer;color:var(--link);font-weight:500;min-height:32px}
 .plug details p{margin:8px 0 0;color:var(--mute)}
-.plug .act{margin-top:auto;padding-top:6px}
-.plug .btn{width:100%;justify-content:center;padding:10px 16px;font-size:15px}
-.plug .btn.off{background:none;border-color:var(--line);color:var(--mute);cursor:default}
-.msg{padding:18px;border:1px dashed var(--line);border-radius:14px;color:var(--mute);text-align:center}
-details.dev{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
-details.dev>summary{cursor:pointer;padding:18px 22px;font-size:20px;font-weight:650;list-style-position:inside}
-details.dev>summary:hover{color:var(--blue)}
-.docs{padding:0 22px 22px;font-size:15.5px}
-.docs h4{font-size:18px;margin:26px 0 8px}
+.plug .act{margin-top:auto;padding-top:8px}
+.plug .btn{width:100%}
+.plug .btn.off{background:var(--bg2);color:var(--mute);cursor:default}
+.msg{padding:22px;border:1px dashed var(--line);border-radius:18px;color:var(--mute);text-align:center}
+details.dev{background:var(--card);border:1px solid var(--hair);border-radius:22px}
+details.dev>summary{cursor:pointer;padding:22px 26px;font-size:21px;font-weight:600;letter-spacing:-.015em;list-style-position:inside}
+details.dev>summary:hover{color:var(--link)}
+.docs{padding:0 26px 26px;font-size:15.5px}
+.docs h4{font-size:19px;margin:28px 0 8px;letter-spacing:-.01em}
 .docs p{margin:8px 0}
-.docs pre{margin:10px 0;padding:14px 16px;border-radius:12px;overflow-x:auto;background:color-mix(in srgb,var(--mute) 10%,transparent);border:1px solid var(--line);font-size:13.5px;line-height:1.5;-webkit-overflow-scrolling:touch}
+.docs pre{margin:10px 0;padding:14px 16px;border-radius:14px;overflow-x:auto;background:var(--bg2);border:1px solid var(--hair);font-size:13.5px;line-height:1.5;-webkit-overflow-scrolling:touch}
 .docs pre code{background:none;padding:0;font-size:inherit;white-space:pre}
 .tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
 table.ref{min-width:520px;font-size:14.5px}
 table.ref th{text-align:left;padding:8px 8px 8px 0;border-bottom:2px solid var(--line);color:var(--mute);font-weight:600}
-table.ref td{vertical-align:top;padding:9px 12px 9px 0;white-space:normal}
+table.ref td{vertical-align:top;padding:9px 12px 9px 0;border-bottom:1px solid var(--hair)}
 table.ref td:first-child{white-space:nowrap}
-.devnote{color:var(--mute);font-size:14px;padding:0 22px}
-@media (max-width:700px){table.ref{min-width:0}table.ref thead{display:none}table.ref tr{display:block;padding:10px 0;border-bottom:1px solid var(--line)}table.ref td{display:block;border:0;padding:2px 0;white-space:normal!important}table.ref td:first-child{font-weight:600}table.ref td code{overflow-wrap:anywhere}}
-@media (max-width:560px){.wrap{padding:0 16px}.docs,.devnote{padding-left:16px;padding-right:16px}details.dev>summary{padding:16px}}
+.devnote{color:var(--mute);font-size:14px;padding:0 26px}
+.devnote:empty{display:none}
+@media (max-width:700px){table.ref{min-width:0}table.ref thead{display:none}table.ref tr{display:block;padding:10px 0;border-bottom:1px solid var(--hair)}table.ref td{display:block;border:0;padding:2px 0;white-space:normal!important}table.ref td:first-child{font-weight:600}table.ref td code{overflow-wrap:anywhere}}
+@media (max-width:560px){.docs,.devnote{padding-left:18px;padding-right:18px}details.dev>summary{padding:18px}}
 </style>
 </head>
 <body>
-<div class="wrap">
-<header>
-  <a class="brand" href="../"><img src="../icon.png?v=2" alt="">TifMrcView</a>
-  <nav><a href="../" data-i="nav_home">首页</a><a href="../#download" data-i="nav_download">下载</a><a class="cur" href="./" data-i="nav_plugins">插件</a><a class="gh" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg></a><div class="lang" id="lang"><button type="button" aria-haspopup="true" aria-expanded="false"><svg class="flag" viewBox="0 0 30 20"></svg><span></span><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M1 3l4 4 4-4z"/></svg></button><ul role="menu"></ul></div></nav>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../icon.png?v=2" alt="" width="26" height="26">TifMrcView</a>
+    <a class="nl" href="../" data-i="nav_home">首页</a>
+    <a class="nl" href="../#keys" data-i="nav_keys">快捷键</a>
+    <a class="nl cur" href="./" aria-current="page" data-i="nav_plugins">插件</a>
+    <a class="gh" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg></a>
+    <div class="lang" id="lang"><button type="button" aria-haspopup="true" aria-expanded="false"><svg class="flag" viewBox="0 0 30 20"></svg><span></span><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true"><path d="M1 3l4 4 4-4z"/></svg></button><ul role="menu"></ul></div>
+    <a class="tap" href="../#download"><span class="pill" data-i="nav_download">下载</span></a>
+  </div>
 </header>
 
+<main>
+<div class="wrap">
 <div class="phead">
-  <h1><span data-i="pl_h1">插件市场</span><span class="dot">.</span></h1>
-  <p class="lead" data-i="pl_lead">插件给 TifMrcView 增加功能：把 Z / T 序列录成视频、读取蔡司电镜和共聚焦的采集参数……下载 zip，在应用里加载即可，不需要重装。</p>
+  <p class="eye rv">TifMrcView</p>
+  <h1 class="h h2 rv" data-i="pl_h1">插件市场</h1>
+  <p class="lede rv" data-i="pl_lead">插件给 TifMrcView 增加功能：把 Z / T 序列录成视频、读取蔡司电镜和共聚焦的采集参数……下载 zip，在应用里加载即可，不需要重装。</p>
 </div>
 
-<section id="install">
-  <div class="card">
-    <h2 style="font-size:20px;margin-bottom:12px" data-i="pl_install_h">怎么安装</h2>
+<section class="psec" id="install">
+  <div class="card rv">
+    <h2 data-i="pl_install_h">怎么安装</h2>
     <ol class="steps">
       <li data-i="pl_s1">在下面选一个插件，下载它的 <b>.zip</b> 文件（不要解压）。</li>
       <li data-i="pl_s2">在 TifMrcView 里打开 <b>插件</b> → <b>加载插件…</b>，选择刚下载的 zip。</li>
       <li data-i="pl_s3">插件马上生效；可以在插件列表里随时关闭或打开。</li>
     </ol>
-    <p class="note"><span data-i="pl_update">更新：再次加载新版本的 zip 即可覆盖旧版。</span> <span data-i="pl_remove">删除：在插件列表里点 <b>卸载</b>。</span> <span data-i="pl_need_all">各插件需要的最低应用版本见卡片。</span></p>
+    <p class="pnote"><span data-i="pl_update">更新：再次加载新版本的 zip 即可覆盖旧版。</span> <span data-i="pl_remove">删除：在插件列表里点 <b>卸载</b>。</span> <span data-i="pl_need_all">各插件需要的最低应用版本见卡片。</span></p>
   </div>
 </section>
 
-<section id="list">
+<section class="psec" id="list">
   <h2 data-i="pl_list_h">可用插件</h2>
   <div class="grid" id="plugins"><div class="msg" data-i="pl_loading" style="grid-column:1/-1">正在加载插件列表…</div></div>
 </section>
 
-<section id="dev">
+<section class="psec" id="dev">
   <details class="dev">
     <summary data-i="pl_dev_h">制作插件 / 开发者文档</summary>
     <p class="devnote" data-i="pl_dev_note"></p>
     <div class="docs" data-i="docs"></div>
   </details>
 </section>
-
-<footer>TifMrcView <span id="ver"></span> · <span data-i="free">免费使用</span> · <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" data-i="star_foot">⭐ Star</a> · <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a></footer>
 </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="fb">TifMrcView <span id="ver"></span></span>
+    <span data-i="free">免费开源</span>
+    <a href="../" data-i="nav_home">首页</a>
+    <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener"><span data-i="star_foot">⭐ Star</span><span class="starn"></span></a>
+    <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a>
+  </div>
+</footer>
 
 <script src="docs.js?v=1"></script>
-<script src="../i18n.js?v=4"></script>
+<script src="../i18n.js?v=5"></script>
 <script src="market.js?v=1"></script>
+<script src="../site.js?v=1"></script>
 </body>
 </html>
