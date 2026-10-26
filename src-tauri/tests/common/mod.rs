@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod czi;
+pub mod fluoview;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

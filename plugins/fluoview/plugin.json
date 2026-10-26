@@ -1,0 +1,35 @@
+{
+  "id": "fluoview",
+  "name": "Olympus FluoView",
+  "version": "1.0.0",
+  "description": "打开奥林巴斯 / Evident FluoView 共聚焦的 OIB 和 OIR 文件，并显示物镜、扫描、激光、探测器和针孔等采集参数",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.4.0",
+  "author": "TifMrcView",
+  "native": false,
+  "wasm": "fluoview.wasm",
+  "formats": [{ "ext": ["oib"], "name": "Olympus OIB" }, { "ext": ["oir"], "name": "Olympus OIR" }],
+  "i18n": {
+    "en": {
+      "name": "Olympus FluoView",
+      "description": "Opens OIB and OIR files from Olympus / Evident FluoView confocals and shows the objective, scan, laser, detector, pinhole and other acquisition settings"
+    }
+  },
+  "details": {
+    "zh": [
+      "打开奥林巴斯（Evident）FluoView 激光共聚焦显微镜保存的文件：FV1000 / FV1200 的 .oib，以及 FV3000 / FV4000 和 cellSens FV 的 .oir。TifMrcView 本身不带这两种格式的读取代码；装上这个插件后即可直接打开：多通道、Z 栈、时间序列和 λ（光谱）扫描都支持，λ 扫描的每个波长显示为一个通道。插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件；它只建立索引，像素由应用本身直接从文件中并行读取，速度和内置格式一样。",
+      "OIR 文件里的参考图像（reference image）作为第二个图像列出，可以在图像选择器里切换。较长的 OIR 采集可能分成主文件和 _00001 等附属文件；插件只能读取打开的这个文件，附属文件里的平面会显示为空白。",
+      "插件还把文件里的设置整理成采集参数，显示在图像信息面板里。「FluoView 图像」：系统和软件版本、采集时间、尺寸、位深、像素尺寸、Z 步长和时间间隔。「FluoView 显微镜」：物镜、放大倍数、数值孔径、工作距离、扫描缩放、扫描器与扫描模式、像素驻留时间、行和帧时间、Kalman / 行平均、顺序扫描。",
+      "每个通道单独一组：荧光染料、激发与发射波长或检测范围、激光波长及透过率、探测器、电压（HV）、增益、偏移和针孔直径；「FluoView 全部参数」把文件里的所有设置展开列出，方便查找。",
+      "安装后无需设置，直接打开 .oib 或 .oir 文件即可，状态栏会显示「Olympus FluoView OIB / OIR」和采集系统的型号与版本。需要 TifMrcView 0.4.0 或更新版本。"
+    ],
+    "en": [
+      "Opens files saved by Olympus (Evident) FluoView laser scanning confocals: .oib from the FV1000 / FV1200, and .oir from the FV3000 / FV4000 and cellSens FV. TifMrcView itself contains no code for these formats; with this plugin installed they open with channels, Z stacks, time series and λ (spectral) scans, each wavelength of a λ scan shown as a channel. The plugin runs sandboxed as WebAssembly and can only read the file being opened; it only builds an index, and the app reads the pixels straight from the file, in parallel, as fast as for built-in formats.",
+      "The reference image of an OIR file is listed as a second image that you can pick in the image chooser. Long OIR acquisitions may be split into a main file and companion files (_00001…); the plugin can only read the file you open, so planes stored in companion files stay blank.",
+      "The plugin also turns the file's settings into acquisition settings in the image-info panel. \"FluoView image\": system and software version, acquisition time, size, bit depth, pixel size, Z step and time interval. \"FluoView microscope\": objective, magnification, numerical aperture, working distance, scan zoom, scanner and scan mode, pixel dwell time, line and frame time, Kalman / line averaging and sequential scanning.",
+      "Each channel gets its own group: dye, excitation and emission wavelengths or detection range, laser lines with their transmissivity, detector, voltage (HV), gain, offset and pinhole diameter; \"FluoView all settings\" lists every setting in the file so you can search it.",
+      "There is nothing to configure: install it and open .oib or .oir files. The status bar then shows \"Olympus FluoView OIB / OIR\" with the model and version of the acquisition system. Needs TifMrcView 0.4.0 or newer."
+    ]
+  }
+}
