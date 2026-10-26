@@ -1,15 +1,18 @@
-//! A small, lenient XML tree for the CZI metadata document.
+//! A small, lenient XML tree for vendor metadata documents (CZI, LIF, OIR…).
 //!
 //! The plugin runs in an interpreter, where a general-purpose parser spends
 //! hundreds of instructions per byte (UTF-8 validation, entity handling and
 //! allocations for every node and attribute). This one makes a single pass
 //! over the bytes, stores only ranges, and decodes names, attributes and
 //! text when they are asked for, which keeps opening a CZI with megabytes
-//! of metadata fast. It accepts what ZEN writes: elements, attributes,
+//! of metadata fast. It accepts what vendor software writes: elements, attributes,
 //! text, CDATA, comments, processing instructions and a DOCTYPE; anything
 //! malformed is skipped rather than rejected.
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy)]
 struct Elem {
@@ -194,7 +197,7 @@ impl<'a> Doc<'a> {
                     }
                     prev
                 }
-                None => std::mem::replace(&mut roots_last, idx),
+                None => core::mem::replace(&mut roots_last, idx),
             };
             if prev != NONE {
                 elems[prev as usize].next_sibling = idx;
@@ -256,7 +259,7 @@ impl<'a> Doc<'a> {
 /// UTF-8 without a copy when valid (the fast path of `from_utf8`, unlike
 /// `from_utf8_lossy`, which decodes byte by byte).
 fn utf8(b: &[u8]) -> Cow<'_, str> {
-    match std::str::from_utf8(b) {
+    match core::str::from_utf8(b) {
         Ok(s) => Cow::Borrowed(s),
         Err(_) => String::from_utf8_lossy(b),
     }
@@ -406,6 +409,7 @@ impl<'d, 'a> Iterator for Children<'d, 'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     const XML: &str = r#"<?xml version="1.0"?>
 <!DOCTYPE x>

@@ -284,6 +284,14 @@ pub struct MetaGroup {
     pub items: Vec<[String; 2]>,
 }
 
+/// One image of a file that holds several (a Leica LIF project, ND2 positions…).
+#[derive(Clone, Serialize)]
+pub struct SeriesInfo {
+    pub name: String,
+    /// Size and dimensions, for the picker.
+    pub detail: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
@@ -310,6 +318,11 @@ pub struct ImageInfo {
     pub order: DimOrder,
     #[serde(skip)]
     pub page_count: usize,
+    /// Every image in the file when it holds several (empty otherwise); the
+    /// viewer offers a picker that reopens the file with another index.
+    pub series: Vec<SeriesInfo>,
+    /// Which entry of `series` is open.
+    pub series_index: usize,
 }
 
 pub const DEFAULT_COLORS: [[u8; 3]; 7] = [
@@ -585,6 +598,8 @@ mod prefetch_tests {
             samples_per_page: 1,
             order: DimOrder::CZT,
             page_count: 3,
+            series: vec![],
+            series_index: 0,
         };
         let reads: Arc<[AtomicUsize; 3]> = Arc::default();
         let img = OpenImage::new(1, Box::new(Flaky { info, reads: reads.clone() }), usize::MAX);
@@ -621,6 +636,8 @@ pub(crate) mod tests {
             samples_per_page: 1,
             order: DimOrder::CZT,
             page_count: c * z * t,
+            series: vec![],
+            series_index: 0,
         };
         info.fill_default_channels();
         info

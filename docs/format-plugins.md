@@ -108,6 +108,7 @@ English is fine too).
 | `tmv_alloc` | `(len: i32) -> i32` | Allocates `len` bytes; `0` on failure. The host uses it to pass the path. |
 | `tmv_free` | `(ptr: i32, len: i32)` | Frees what `tmv_alloc` returned. |
 | `tmv_open` | `(path_ptr: i32, path_len: i32) -> i32` | Opens the file (UTF-8 path, for information only — read the file through the imports). Returns a handle ≥ 0, or < 0 on error. |
+| `tmv_open_series` | `(path_ptr: i32, path_len: i32, series: i32) -> i32` | Optional. Opens image `series` (≥ 1) of a file that holds several (see `series` below); like `tmv_open` otherwise. |
 | `tmv_info` | `(handle: i32) -> i64` | Image description, JSON (below). Called once, right after `tmv_open`. |
 | `tmv_page` | `(handle: i32, page: i32) -> i64` | Recipe for one page (below). `page` is `0 … pageCount-1`. |
 | `tmv_close` | `(handle: i32)` | The file was closed. |
@@ -160,6 +161,7 @@ A module importing anything else is refused.
 | `pixelSize`, `unit` | `[x, y, z]` in `Å`, `nm`, `µm` or `mm`; `null` or 0 when unknown. |
 | `format` | Shown in the status bar; default: the `formats[].name`. |
 | `metadata` | Groups for the image-info panel. |
+| `series`, `seriesIndex` | Optional, for files that hold several images (a Leica LIF project, ND2 positions…): one `{ "name", "detail" }` per image, in order, and which one this is. With two or more entries the viewer shows a picker and reopens the file through `tmv_open_series`. Older versions of the app ignore them and show image 0. |
 
 ### `tmv_metadata` JSON
 
@@ -348,6 +350,15 @@ A compressed or tiled format only changes `page`: push one chunk per tile
 with `.codec(Codec::Zstd)`, `.samples(3).flags(flags::BGR)` and so on. A
 metadata plugin implements `Metadata::metadata(path) -> Result<Option<Meta>>`
 and uses `export_metadata!` (see `plugins/smartsem`).
+
+A file holding several images sets `Info::series` (and `series_index`) and
+implements `Format::open_series(path, series)`; `export_format!` exports
+`tmv_open_series` for every plugin, and series 0 always goes to `open`.
+
+The SDK also has two parsers that vendor formats keep needing:
+`tifmrcview_plugin_sdk::xml`, a fast, lenient XML tree for metadata
+documents, and `tifmrcview_plugin_sdk::tiff`, a TIFF / BigTIFF directory
+reader over any byte source, for formats that are TIFF underneath.
 
 ### Build and package
 

@@ -45,6 +45,9 @@ use core::fmt::Write as _;
 
 pub use alloc::{format, vec};
 
+pub mod tiff;
+pub mod xml;
+
 /// The ABI version this SDK implements (`tmv_abi`).
 pub const ABI_VERSION: u32 = 1;
 
@@ -284,6 +287,14 @@ impl Order {
     }
 }
 
+/// One image of a file that holds several (a LIF project, ND2 positions…).
+#[derive(Clone, Debug)]
+pub struct Series {
+    pub name: String,
+    /// A short description for the picker, e.g. "1024×1024 · 2C · 20Z".
+    pub detail: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct Channel {
     pub name: String,
@@ -369,6 +380,11 @@ pub struct Info {
     /// Shown in the status bar, e.g. "Zeiss CZI".
     pub format: String,
     pub metadata: Vec<Group>,
+    /// Every image in the file, when it holds more than one; the app then
+    /// offers a picker and reopens the file with [`Format::open_series`].
+    pub series: Vec<Series>,
+    /// Which entry of `series` this is.
+    pub series_index: u32,
 }
 
 impl Info {
@@ -390,6 +406,8 @@ impl Info {
             unit: String::new(),
             format: format.to_string(),
             metadata: vec![],
+            series: vec![],
+            series_index: 0,
         }
     }
 
@@ -410,6 +428,21 @@ impl Info {
         j.str("unit", &self.unit);
         j.str("format", &self.format);
         j.raw("metadata", &groups_json(&self.metadata));
+        if self.series.len() > 1 {
+            let mut s = String::from("[");
+            for (i, x) in self.series.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let mut o = Json::object();
+                o.str("name", &x.name);
+                o.str("detail", &x.detail);
+                s.push_str(&o.finish());
+            }
+            s.push(']');
+            j.raw("series", &s);
+            j.num("seriesIndex", self.series_index as f64);
+        }
         j.finish()
     }
 }
@@ -685,6 +718,13 @@ pub trait Format: Sized + 'static {
     /// Inspects the file (through [`file`]) and builds whatever index the
     /// pages need. `path` is for information only (name, extension).
     fn open(path: &str) -> Result<Self>;
+    /// Opens image `series` (1, 2, …) of a file that holds several (see
+    /// [`Info::series`]); series 0 always goes to `open`. Only formats with
+    /// series need it.
+    fn open_series(path: &str, series: u32) -> Result<Self> {
+        let _ = path;
+        bail!("这个文件只有一个图像（请求第 {} 个）", series + 1)
+    }
     /// Called once, right after `open`; may move data out of `self`.
     fn info(&mut self) -> Result<Info>;
     /// How to build page `page` (0-based; the order given by [`Info::order`]).
@@ -793,8 +833,20 @@ macro_rules! export_format {
         /// Called by the host with a buffer from `tmv_alloc`.
         #[no_mangle]
         pub unsafe extern "C" fn tmv_open(ptr: *const u8, len: u32) -> i32 {
+            tmv_open_series(ptr, len, 0)
+        }
+
+        /// # Safety
+        /// Called by the host with a buffer from `tmv_alloc`.
+        #[no_mangle]
+        pub unsafe extern "C" fn tmv_open_series(ptr: *const u8, len: u32, series: u32) -> i32 {
             let path = $crate::str_arg(ptr, len);
-            match <$t as $crate::Format>::open(path) {
+            let opened = if series == 0 {
+                <$t as $crate::Format>::open(path)
+            } else {
+                <$t as $crate::Format>::open_series(path, series)
+            };
+            match opened {
                 Ok(v) => {
                     let hs = __TMV_HANDLES.get();
                     match hs.iter().position(|x| x.is_none()) {

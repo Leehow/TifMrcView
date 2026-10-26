@@ -80,14 +80,19 @@ fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Optio
 }
 
 #[tauri::command]
-async fn open_image(window: WebviewWindow, state: State<'_, AppState>, path: String) -> CmdResult<Opened> {
+async fn open_image(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: String,
+    series: Option<usize>,
+) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
     let budget = mem::cache_budget() / (others + 1);
     let img = blocking(move || {
-        let src = formats::open(Path::new(&path))?;
+        let src = formats::open_series(Path::new(&path), series.unwrap_or(0))?;
         Ok(OpenImage::new(token, src, budget))
     })
     .await?;
