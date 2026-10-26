@@ -6,7 +6,7 @@
 
 use std::cmp::Ordering;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,6 +16,9 @@ use serde_json::Value;
 /// Highest package API supported. API 1 keeps its trusted legacy loader;
 /// API 2 uses the isolated frame bridge in ui/plugin-sandbox.js.
 pub const API_VERSION: u64 = 2;
+/// API 2 permission vocabulary. Keep in sync with scripts/plugin-manifest.mjs;
+/// scripts/tmv-plugin.test.mjs compares both with the sandbox method map.
+pub const SANDBOX_PERMISSIONS: &[&str] = &["state", "ui", "metadata", "export", "settings"];
 /// Plugins that ship inside the app and cannot be installed over.
 pub const BUILTIN: &[&str] = &["i18n"];
 pub const MANIFEST: &str = "plugin.json";
@@ -119,8 +122,17 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
         None => 1,
         Some(v) => v.as_u64().ok_or_else(|| anyhow!("apiVersion 必须是整数"))?,
     };
-    if api > API_VERSION {
+    if api == 0 || api > API_VERSION {
         bail!("插件需要更新的 TifMrcView（插件接口版本 {api}，当前 {API_VERSION}）");
+    }
+    if api == 2 {
+        let permissions = raw.get("permissions").and_then(Value::as_array);
+        if permissions.is_none_or(|ps| ps.iter().any(|p| !p.as_str().is_some_and(|p| SANDBOX_PERMISSIONS.contains(&p)))) {
+            bail!("API 2 的 permissions 必须是已知权限名称的列表");
+        }
+        if raw.get("native").is_some() {
+            bail!("API 2 插件不能声明 native 字段");
+        }
     }
     if let Some(min) = s("minAppVersion") {
         if compare_versions(min, app_version)? == Ordering::Greater {
@@ -270,23 +282,52 @@ pub fn install_checked(
     app_version: &str,
     check: impl FnOnce(&Path, &Manifest) -> Result<()>,
 ) -> Result<Manifest> {
-    let file = File::open(zip_path).with_context(|| format!("无法打开 {}", zip_path.display()))?;
-    let mut zip = zip::ZipArchive::new(file).context("不是有效的 zip 插件包")?;
+    let bytes = read_archive(zip_path)?;
+    install_data_checked(dir, &bytes, app_version, check)
+}
+
+/// Read one bounded snapshot: inspection, hashing and extraction must see the
+/// same bytes, even if the user replaces the selected zip meanwhile.
+pub fn read_archive(path: &Path) -> Result<Vec<u8>> {
+    let file = File::open(path).with_context(|| format!("无法打开 {}", path.display()))?;
+    let mut bytes = vec![];
+    file.take(super::market::MAX_PACKAGE + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > super::market::MAX_PACKAGE {
+        bail!("插件包太大（超过 {} MB）", super::market::MAX_PACKAGE >> 20);
+    }
+    Ok(bytes)
+}
+
+/// Reads a manifest without extracting or installing anything.
+pub fn inspect(bytes: &[u8], app_version: &str) -> Result<Manifest> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).context("不是有效的 zip 插件包")?;
+    archive_manifest(&mut zip, app_version).map(|(m, _)| m)
+}
+
+fn archive_manifest(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, app_version: &str) -> Result<(Manifest, String)> {
     if zip.len() > MAX_ENTRIES {
         bail!("插件包里的文件太多（{} 个，最多 {MAX_ENTRIES} 个）", zip.len());
     }
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
     let strip = wrapper(&names);
-
-    let manifest = {
-        let mut f = zip.by_name(&format!("{strip}{MANIFEST}")).map_err(|_| anyhow!("插件包里没有 plugin.json"))?;
-        let mut buf = vec![];
-        (&mut f).take(MAX_MANIFEST).read_to_end(&mut buf)?;
-        parse_manifest(&buf, app_version)?
-    };
+    let mut f = zip.by_name(&format!("{strip}{MANIFEST}")).map_err(|_| anyhow!("插件包里没有 plugin.json"))?;
+    let mut buf = vec![];
+    (&mut f).take(MAX_MANIFEST).read_to_end(&mut buf)?;
+    let manifest = parse_manifest(&buf, app_version)?;
     if BUILTIN.contains(&manifest.id.as_str()) {
         bail!("{} 是内置插件，不能另外安装", manifest.id);
     }
+    Ok((manifest, strip))
+}
+
+pub fn install_data_checked(
+    dir: &Path,
+    bytes: &[u8],
+    app_version: &str,
+    check: impl FnOnce(&Path, &Manifest) -> Result<()>,
+) -> Result<Manifest> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).context("不是有效的 zip 插件包")?;
+    let (manifest, strip) = archive_manifest(&mut zip, app_version)?;
 
     fs::create_dir_all(dir).context("无法创建插件文件夹")?;
     let tmp = unique_tmp(dir, "install", &manifest.id);
@@ -308,7 +349,7 @@ pub fn install_checked(
     res.map(|_| manifest)
 }
 
-fn extract(zip: &mut zip::ZipArchive<File>, strip: &str, tmp: &Path) -> Result<()> {
+fn extract(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, strip: &str, tmp: &Path) -> Result<()> {
     fs::create_dir_all(tmp)?;
     let mut total = 0u64;
     for i in 0..zip.len() {
@@ -446,10 +487,36 @@ mod tests {
         assert!(bad(r#"{"id":"demo","name":"x"}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"../x.js"}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"index.html"}"#));
-        assert!(!bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2}"#));
+        assert!(!bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2,"permissions":[]}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":3}"#));
         assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","minAppVersion":"0.10.0"}"#));
         assert!(!bad(r#"{"id":"demo-2","name":"x","version":"1.0.0","minAppVersion":"0.1.9"}"#));
+    }
+
+    #[test]
+    fn api2_permissions_and_native() {
+        let mut m: Value = serde_json::from_str(OK).unwrap();
+        m["apiVersion"] = 2.into();
+        let parse = |m: &Value| parse_manifest(&serde_json::to_vec(m).unwrap(), "0.5.0");
+        assert!(parse(&m).is_err(), "permissions required");
+        for bad in [Value::Null, serde_json::json!({}), serde_json::json!("state"), serde_json::json!(["state", 1]), serde_json::json!(["native"])] {
+            m["permissions"] = bad;
+            assert!(parse(&m).is_err());
+        }
+        m["permissions"] = serde_json::json!([]);
+        assert!(parse(&m).is_ok());
+        m["permissions"] = serde_json::json!(SANDBOX_PERMISSIONS);
+        assert!(parse(&m).is_ok());
+        for native in [Value::Null, false.into(), true.into(), "recorder".into()] {
+            m["native"] = native;
+            assert!(parse(&m).is_err(), "native is forbidden regardless of value");
+        }
+        m.as_object_mut().unwrap().remove("native");
+        m["apiVersion"] = 0.into();
+        assert!(parse(&m).is_err());
+        m.as_object_mut().unwrap().remove("apiVersion");
+        m.as_object_mut().unwrap().remove("permissions");
+        assert!(parse(&m).is_ok(), "legacy installed manifests still parse");
     }
 
     #[test]

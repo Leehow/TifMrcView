@@ -163,7 +163,7 @@ async function openPath(path, force = false, series = 0) {
   if (!path) return;
   // Clicking the image already shown changes nothing.
   if (!force && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
-  flushAnn();
+  await flushAnn();
   $("loading").textContent = "加载中…";
   // Only show the hint when loading takes a while, so quick flips do not blink.
   const slow = setTimeout(() => ($("loading").hidden = false), 300);

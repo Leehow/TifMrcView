@@ -32,6 +32,42 @@ function marketText(p, key) {
   return p[key] || "";
 }
 
+// Human descriptions are translated by the built-in i18n DOM observer.
+const PERMISSION_LABELS = Object.freeze({
+  state: "读取当前图像的信息并切换层和帧",
+  ui: "添加工具栏按钮和面板",
+  metadata: "给图像添加元数据并设置像素尺寸和格式",
+  export: "导出图片到你选择的位置",
+  settings: "保存自己的设置",
+});
+
+function permissionDetails(p) {
+  const box = document.createElement("div");
+  box.className = "dim pl-permissions";
+  if ((p.apiVersion ?? 1) !== 2) {
+    box.textContent = "官方 API 1 插件使用完整权限";
+    return box;
+  }
+  const label = document.createElement("div");
+  label.textContent = "插件权限";
+  box.append(label);
+  const list = document.createElement("ul");
+  const labels = (p.permissions || []).map((p) => PERMISSION_LABELS[p] || p);
+  for (const text of labels.length ? labels : ["无额外权限"]) {
+    const item = document.createElement("li");
+    item.textContent = text;
+    list.append(item);
+  }
+  box.append(list);
+  return box;
+}
+
+function showConfirmDetails(p) {
+  $("mc-api").textContent = `API ${p.apiVersion ?? 1}`;
+  $("mc-permissions").replaceChildren(permissionDetails(p));
+  $("market-confirm").scrollIntoView({ block: "start" });
+}
+
 /** Fetches the market list (the backend caches it for the session unless `refresh`). */
 function loadMarket(refresh = false) {
   if (market.loading) return market.loading;
@@ -83,7 +119,7 @@ function marketButton(item) {
   b.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    installFromMarket(p.id);
+    confirmInstall({ id: p.id });
   });
   return b;
 }
@@ -130,13 +166,14 @@ function renderMarket() {
     meta.className = "dim";
     meta.textContent = marketText(p, "description");
     text.append(title, meta);
+    if (p.apiVersion === 2) text.append(permissionDetails(p));
     row.append(text, marketButton(item));
     box.append(row);
   }
 }
 
 /** Downloads, checks and installs `id` from the official market. Resolves to an error message, or null. */
-async function installFromMarket(id, quiet = false) {
+async function installFromMarket(id, quiet = false, approval) {
   if (market.busy.has(id)) return "busy";
   market.busy.add(id);
   renderMarket();
@@ -144,7 +181,7 @@ async function installFromMarket(id, quiet = false) {
   let error = null;
   try {
     // The backend's plugin-installed event then loads it (see below).
-    await invoke("plugin_install_from_market", { id });
+    await invoke("plugin_install_from_market", { id, approval });
   } catch (e) {
     error = String(e);
     if (!quiet) toast(`安装失败：${error}`, 8000);
@@ -172,8 +209,11 @@ async function confirmInstall(req) {
   market.request = req;
   togglePluginDialog(true);
   $("market-confirm").hidden = false;
+  $("market-confirm").scrollIntoView({ block: "start" });
   $("mc-title").textContent = `从 TifMrcView 插件市场安装「${req.id}」？`;
   $("mc-desc").textContent = "";
+  $("mc-api").textContent = "";
+  $("mc-permissions").replaceChildren();
   $("mc-install").disabled = true;
   confirmMsg("正在读取插件市场…");
   // Always read the current list: the link may name a plugin published after the cached copy.
@@ -189,6 +229,8 @@ async function confirmInstall(req) {
   const name = marketText(p, "name") || p.id;
   $("mc-title").textContent = `从 TifMrcView 插件市场安装「${name}」 ${p.version}？`;
   $("mc-desc").textContent = marketText(p, "description");
+  req.approval = p;
+  showConfirmDetails(p);
   if (item.state === "builtin") return confirmMsg(`${p.id} 是内置插件，不能另外安装`, true);
   if (item.state === "needsApp") {
     const cur = pluginHost.appVersion;
@@ -204,12 +246,50 @@ async function takeInstallRequest() {
   if (req) confirmInstall(req);
 }
 
+/** Zip inspection has no install side effects. The digest pins the reviewed bytes. */
+async function confirmPackage(path) {
+  togglePluginDialog(true);
+  const req = { path };
+  market.request = req;
+  $("market-confirm").hidden = false;
+  $("market-confirm").scrollIntoView({ block: "start" });
+  $("mc-title").textContent = "正在读取插件包…";
+  $("mc-desc").textContent = "";
+  $("mc-api").textContent = "";
+  $("mc-permissions").replaceChildren();
+  $("mc-install").disabled = true;
+  confirmMsg("");
+  // Populate the backend's official-index cache when available. Offline API 2
+  // zips still work; API 1 needs a previously fetched matching official entry.
+  if (market.loading) await market.loading;
+  else if (!market.list) await loadMarket();
+  try {
+    const inspected = await invoke("plugin_inspect_package", { path });
+    if (market.request !== req) return;
+    req.sha256 = inspected.sha256;
+    const p = inspected.manifest;
+    $("mc-title").textContent = `${p.name}  v${p.version}`;
+    $("mc-desc").textContent = p.description || "";
+    showConfirmDetails(p);
+    $("mc-install").disabled = false;
+  } catch (e) {
+    if (market.request === req) confirmMsg(`安装失败：${e}`, true);
+  }
+}
+
 $("mc-install").addEventListener("click", async () => {
   const req = market.request;
   if (!req) return;
   $("mc-install").disabled = true;
-  confirmMsg("正在下载并安装…");
-  const error = await installFromMarket(req.id, true);
+  confirmMsg(req.path ? "正在安装…" : "正在下载并安装…");
+  let error;
+  if (req.path) {
+    try {
+      const m = await invoke("plugin_install", { path: req.path, sha256: req.sha256 });
+      await afterInstall(m, true);
+      if (market.list) loadMarket();
+    } catch (e) { error = String(e); }
+  } else error = await installFromMarket(req.id, true, req.approval);
   if (market.request !== req) return;
   if (error) {
     confirmMsg(`安装失败：${error}`, true);

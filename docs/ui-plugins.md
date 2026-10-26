@@ -1,9 +1,28 @@
 # UI plugins: API 2 preview
 
 API 2 packages set `"apiVersion": 2` and declare `permissions` in
-`plugin.json`. This preview keeps API 1 packages and loose scripts on their
-existing trusted loader, with their existing synchronous API and privileges.
-WebAssembly format plugins keep their existing sandbox and ABI.
+`plugin.json`. Installation rejects missing/non-array permissions, unknown
+permission names and any `native` field (even `false` or `null`). The permission
+vocabulary is `state`, `ui`, `metadata`, `export`, `settings`; Rust documents it
+in `package::SANDBOX_PERMISSIONS`, JavaScript in `scripts/plugin-manifest.mjs`.
+A regression compares both with the sandbox's method-to-permission map.
+
+Both zip and market installs show the name, version, API and human-readable
+permissions before the user clicks Install. API 2 permissions are also shown
+on market cards. Zip inspection does not install or execute the package, and
+its SHA-256 pins the bytes approved by the user. Market installs check the
+confirmed fields against the fresh official index and the actual manifest.
+
+Third-party API 1 JavaScript packages are no longer accepted for installation.
+During migration, the eight legacy packages shipped in `plugins/` remain
+installable only with an exact id + version + SHA-256 (and size) match against
+the official HTTPS market index. The backend keeps that index in memory for
+the session; refresh the market before installing an official API 1 zip. With
+no matching cached index, the zip fails closed. A manifest flag cannot grant
+this exception, and neither a `wasm` field nor the content of its JS is a bypass.
+Already-installed API 1 packages and loose scripts retain their existing trusted
+loader, synchronous API and full privileges. WebAssembly format plugins retain
+their existing sandbox and ABI.
 
 Each API 2 plugin runs in a hidden iframe with `sandbox="allow-scripts"`
 and an opaque origin. The reserved `tmvplugin://localhost/__sandbox/<id>`
@@ -75,9 +94,12 @@ write; cancellation, writing or deactivation revokes it. Plugins cannot select
 a directory programmatically. No arbitrary filesystem, native plugin calls,
 image opening, DOM access or video encoding API is exposed.
 
-Install-time permission confirmation, API 1 third-party rejection, recorder /
-format / i18n migration, language packs and developer templates belong to later
-PRs. API 2 is a preview until those migration and platform acceptance steps land.
+Annotation writes are restricted by Rust to the image currently open in the
+calling window and its current series: `<image>.annot.json` (or the existing
+`<image>.seriesN.annot.json` convention for later series).
+
+Recorder / format / i18n migration, language packs and developer templates
+belong to later PRs. API 2 is a preview until those migration and platform acceptance steps land.
 
 Run the local browser regression with `node scripts/test-plugin-sandbox.cjs`
 using an existing `playwright` installation and Chromium cache. The test serves

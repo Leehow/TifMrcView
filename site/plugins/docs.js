@@ -2,7 +2,7 @@
 // Other languages fall back to English (see i18n.js).
 window.TMV_DOCS = {
   zh: [
-    '<p>插件是一个 JavaScript 脚本加一份 <code>plugin.json</code>。脚本在应用的界面里运行，通过 <code>TifMrcView.register()</code> 注册，拿到一个 <code>app</code> 对象来使用下面的接口。第三方插件只有 JS 部分；<code>native</code> 原生部分只有随应用一起发布的插件才有。要支持新的文件格式，插件可以另带一个沙箱里的 WebAssembly 模块，见文末「格式插件（WebAssembly）」。</p>',
+    '<p>安全：API 2 界面插件在受限沙盒中运行，必须在 <code>plugin.json</code> 声明 <code>permissions</code>，安装前会显示权限并要求确认；不能声明 <code>native</code>。权限名称为 <code>state</code>、<code>ui</code>、<code>metadata</code>、<code>export</code>、<code>settings</code>。不再接受第三方 API 1 JS 插件包；迁移期间，仓库自带的官方旧包仅在 id、版本和 SHA-256 与官方市场索引完全匹配时允许安装（zip 安装须先读取市场索引）。已安装的 API 1 插件继续以完整权限加载。WASM 格式模块保持原有沙盒。新的界面插件请参阅 <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/ui-plugins.md">API 2 文档</a>；下面的同步接口参考适用于旧版 API 1。</p>',
 
     '<h4>包结构</h4>',
     '<p>插件包是一个 zip，<b><code>plugin.json</code> 必须在 zip 的根目录</b>（不要多套一层文件夹）：</p>',
@@ -13,10 +13,11 @@ window.TMV_DOCS = {
     '<tr><td><code>version</code></td><td>版本号，如 <code>1.0.0</code>。</td></tr>',
     '<tr><td><code>description</code></td><td>一行简介。</td></tr>',
     '<tr><td><code>main</code></td><td>入口脚本，相对 zip 根目录。</td></tr>',
-    '<tr><td><code>apiVersion</code></td><td>需要的插件接口版本，目前是 <code>1</code>。</td></tr>',
+    '<tr><td><code>apiVersion</code></td><td>新插件使用 <code>2</code>；<code>1</code> 为受信的旧接口。</td></tr>',
+    '<tr><td><code>permissions</code></td><td>API 2 必填的已知权限名称数组；无权限时填 <code>[]</code>。</td></tr>',
     '<tr><td><code>minAppVersion</code></td><td>需要的最低应用版本。</td></tr>',
     '<tr><td><code>author</code></td><td>作者。</td></tr>',
-    '<tr><td><code>native</code></td><td>布尔值，是否用到随应用发布的原生代码。第三方插件填 <code>false</code>。</td></tr>',
+    '<tr><td><code>native</code></td><td>仅旧版 API 1 使用；API 2 禁止该字段（即使为 <code>false</code>）。</td></tr>',
     '<tr><td><code>i18n</code></td><td>可选，其它语言的 <code>{ "en": { "name", "description" } }</code>。</td></tr>',
     '<tr><td><code>details</code></td><td>可选，市场页上的详细说明：<code>{ "zh": ["段落", …], "en": [ … ] }</code>。</td></tr>',
     '</tbody></table></div>',
@@ -81,7 +82,7 @@ window.TMV_DOCS = {
   ].join('\n'),
 
   en: [
-    '<p>A plugin is a JavaScript file plus a <code>plugin.json</code>. The script runs inside the app’s interface, registers itself with <code>TifMrcView.register()</code> and receives an <code>app</code> object with the API below. Third-party plugins are JavaScript only; a <code>native</code> half exists only for plugins whose code ships inside the app. To support new file formats, a plugin can add a sandboxed WebAssembly module; see “Format plugins (WebAssembly)” at the end.</p>',
+    '<p>Security: API 2 UI plugins run in a restricted sandbox, must declare <code>permissions</code> in <code>plugin.json</code>, and show those permissions for confirmation before installation. They cannot declare <code>native</code>. Permission names are <code>state</code>, <code>ui</code>, <code>metadata</code>, <code>export</code>, <code>settings</code>. Third-party API 1 JS packages are no longer accepted. During migration, legacy packages shipped in this repository require an exact id, version and SHA-256 match in the official market index (fetch the market index before installing a zip). Already-installed API 1 plugins still load with full privileges. WASM format modules retain their sandbox. New UI plugins should use the <a href="https://github.com/Leehow/TifMrcView/blob/main/docs/ui-plugins.md">API 2 documentation</a>; the synchronous reference below describes legacy API 1.</p>',
 
     '<h4>Package layout</h4>',
     '<p>A plugin package is a zip with <b><code>plugin.json</code> at the zip root</b> (no extra wrapping folder):</p>',
@@ -92,10 +93,11 @@ window.TMV_DOCS = {
     '<tr><td><code>version</code></td><td>Version, e.g. <code>1.0.0</code>.</td></tr>',
     '<tr><td><code>description</code></td><td>One-line summary.</td></tr>',
     '<tr><td><code>main</code></td><td>Entry script, relative to the zip root.</td></tr>',
-    '<tr><td><code>apiVersion</code></td><td>Plugin API version it needs; currently <code>1</code>.</td></tr>',
+    '<tr><td><code>apiVersion</code></td><td>Use <code>2</code> for new plugins; <code>1</code> is the trusted legacy API.</td></tr>',
+    '<tr><td><code>permissions</code></td><td>Required array of known permission names for API 2; use <code>[]</code> for none.</td></tr>',
     '<tr><td><code>minAppVersion</code></td><td>Minimum app version.</td></tr>',
     '<tr><td><code>author</code></td><td>Author.</td></tr>',
-    '<tr><td><code>native</code></td><td>Boolean: uses native code shipped inside the app. Use <code>false</code> for third-party plugins.</td></tr>',
+    '<tr><td><code>native</code></td><td>Legacy API 1 only; forbidden in API 2, even when <code>false</code>.</td></tr>',
     '<tr><td><code>i18n</code></td><td>Optional translations: <code>{ "de": { "name", "description" } }</code>.</td></tr>',
     '<tr><td><code>details</code></td><td>Optional longer text for the market page: <code>{ "en": ["paragraph", …], "zh": [ … ] }</code>.</td></tr>',
     '</tbody></table></div>',

@@ -389,15 +389,7 @@ async function loadPlugins() {
 async function installPackage() {
   const path = await invoke("pick_plugin_package");
   if (!path) return;
-  let m;
-  try {
-    m = await invoke("plugin_install", { path });
-  } catch (e) {
-    toast(`安装失败：${e}`, 6000);
-    return;
-  }
-  await afterInstall(m, true);
-  if (market.list) loadMarket();
+  await confirmPackage(path);
 }
 
 /**

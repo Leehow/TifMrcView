@@ -7,6 +7,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const vm = require("node:vm");
 const root = path.resolve(__dirname, "..");
 const ui = path.join(root, "ui");
 const read = (file) => fs.readFileSync(file, "utf8");
@@ -16,13 +17,20 @@ const legacy = fs.readdirSync(path.join(root, "plugins")).filter((id) => fs.exis
 const packages = [...legacy, sample].map((manifest) => ({ id: manifest.id, main: manifest.main || "index.js", manifest }));
 const template = read(path.join(ui, "sandbox/frame.html"));
 const conf = JSON.parse(read(path.join(root, "src-tauri/tauri.conf.json")));
+const translations = vm.runInNewContext(read(path.join(ui, "plugins/i18n.js")) + "; ({WORDS, LANGS})", { TifMrcView: { register() {} } });
 let origin, browser;
 const requests = [];
 const server = http.createServer((req, res) => {
   requests.push(req.url);
   const url = new URL(req.url, origin);
   let file;
-  if (url.pathname === "/tmvplugin/__sandbox/runtime.js") file = path.join(ui, "sandbox/tmv-plugin-api.js");
+  if (url.pathname === "/site/plugins/permission-test.html") {
+    res.setHeader("Content-Type", "text/html");
+    res.end('<!doctype html><meta charset="utf-8"><div id="plugins"></div><script src="/site/plugins/market.js"></script>');
+    return;
+  }
+  if (url.pathname.startsWith("/site/")) file = path.join(root, url.pathname);
+  else if (url.pathname === "/tmvplugin/__sandbox/runtime.js") file = path.join(ui, "sandbox/tmv-plugin-api.js");
   else if (url.pathname.startsWith("/tmvplugin/__sandbox/")) {
     const id = url.pathname.slice("/tmvplugin/__sandbox/".length);
     const pkg = packages.find((p) => p.id === id && p.manifest.apiVersion === 2);
@@ -83,6 +91,14 @@ const server = http.createServer((req, res) => {
     window.mockWrites = [];
     window.mockSavePaths = ["/chosen/sandbox.png"];
     window.mockCalls = [];
+    window.mockInstalls = [];
+    window.mockZip = { id: "confirm-v2", name: "Permission demo", version: "2.1.0", apiVersion: 2,
+      permissions: ["state", "ui", "metadata", "export", "settings"], description: "Confirm before install" };
+    window.mockMarket = [
+      { entry: window.mockZip, state: "install" },
+      { entry: { id: "confirm-none", name: "No permissions", version: "1.0.0", apiVersion: 2, permissions: [] }, state: "install" },
+      { entry: { id: "recorder", name: "Official legacy", version: "1.0.0" }, state: "update", installed: "0.9.0" },
+    ];
     const listen = async () => () => {};
     window.__TAURI__ = {
       core: { invoke: async (command, args, options) => {
@@ -92,7 +108,12 @@ const server = http.createServer((req, res) => {
             S.info = { path: "/test/image.tif", name: "image.tif", width: 8, height: 8, sizeZ: 3, sizeT: 2, sizeC: 1, dtype: "u8", format: "TIFF", metadata: [] };
             S.chans = [{ visible: true, color: [255, 255, 255], min: 0, max: 255 }];
             return { native: ["recorder"], dir: "/mock/plugins", packages, user: [] };
-          case "plugin_market_list": return [];
+          case "plugin_market_list": return window.mockMarket;
+          case "take_install_request": { const req = window.mockRequest; window.mockRequest = null; return req; }
+          case "pick_plugin_package": return "/test/demo.zip";
+          case "plugin_inspect_package": return { manifest: window.mockZip, sha256: "approved-digest" };
+          case "plugin_install":
+          case "plugin_install_from_market": window.mockInstalls.push({ command, args }); return window.mockZip;
           case "histogram": return { bins: new Array(256).fill(0), min: 0, max: 255 };
           case "pick_save_path": return window.mockSavePaths.shift() ?? null;
           case "save_file": window.mockWrites.push({ path: decodeURIComponent(options.headers["x-path"]), bytes: Array.from(args) }); return;
@@ -246,6 +267,121 @@ const server = http.createServer((req, res) => {
   assert.match(await page.evaluate(() => pluginHost.plugins.get("sandbox-sample").error), /Native APIs are exposed/);
   assert.equal(requests.filter((url) => url === "/tmvplugin/sandbox-sample/index.js").length, mainsBefore);
   assert.equal(await page.locator('[data-plugin-sandbox="sandbox-sample"]').count(), 0);
+  // Exercise the real confirmation UI with mocked native transport only.
+  // Plugin loading itself was exercised above; record successful installs here
+  // to avoid reloading the page when an installed fixture is updated.
+  await page.evaluate(() => {
+    window.confirmedInstalls = [];
+    afterInstall = async (m) => window.confirmedInstalls.push(m.id);
+    togglePluginDialog(true);
+  });
+  await page.waitForFunction(() => market.list?.length === 3);
+  const permissionTexts = ["读取当前图像的信息并切换层和帧", "添加工具栏按钮和面板", "给图像添加元数据并设置像素尺寸和格式", "导出图片到你选择的位置", "保存自己的设置"];
+  assert.deepEqual(await page.locator("#market-list .market-row").first().locator(".pl-permissions li").allTextContents(), permissionTexts);
+  // In-app market install buttons also pass through confirmation.
+  await page.locator("#market-list .market-row").first().getByRole("button", { name: "安装", exact: true }).click();
+  await page.waitForFunction(() => !document.getElementById("mc-install").disabled);
+  assert.equal(await page.locator("#mc-api").textContent(), "API 2");
+  assert.deepEqual(await page.locator("#mc-permissions li").allTextContents(), permissionTexts);
+  assert.equal(await page.evaluate(() => mockInstalls.length), 0);
+  await page.locator("#mc-cancel").click();
+  assert.equal(await page.locator("#market-confirm").isHidden(), true);
+  assert.equal(await page.evaluate(() => mockInstalls.length), 0);
+  // tifmrcview:// uses the same card; nothing installs while it is open.
+  await page.evaluate(async () => {
+    mockRequest = { id: "confirm-v2", version: "2.1.0" };
+    await takeInstallRequest();
+  });
+  await page.waitForFunction(() => !document.getElementById("mc-install").disabled);
+  assert.match(await page.locator("#mc-title").textContent(), /Permission demo.*2\.1\.0/);
+  assert.deepEqual(await page.locator("#mc-permissions li").allTextContents(), permissionTexts);
+  await page.locator("#mc-install").click();
+  await page.waitForFunction(() => mockInstalls.length === 1 && document.getElementById("market-confirm").hidden);
+  const marketInstall = await page.evaluate(() => mockInstalls[0]);
+  assert.equal(marketInstall.command, "plugin_install_from_market");
+  assert.equal(marketInstall.args.approval.apiVersion, 2);
+  assert.deepEqual(marketInstall.args.approval.permissions, ["state", "ui", "metadata", "export", "settings"]);
+  await page.evaluate(() => confirmInstall({ id: "confirm-none" }));
+  assert.deepEqual(await page.locator("#mc-permissions li").allTextContents(), ["无额外权限"]);
+  await page.evaluate(() => confirmInstall({ id: "recorder" }));
+  assert.equal(await page.locator("#mc-api").textContent(), "API 1");
+  assert.equal(await page.locator("#mc-permissions").textContent(), "官方 API 1 插件使用完整权限");
+  await page.locator("#mc-cancel").click();
+  // Zip selection calls inspect first, then waits for a separate Install click.
+  await page.locator("#plugin-install").click();
+  await page.waitForFunction(() => !document.getElementById("mc-install").disabled);
+  assert.equal(await page.locator("#mc-title").textContent(), "Permission demo  v2.1.0");
+  const cardBounds = await page.locator("#market-confirm").boundingBox();
+  const dialogBounds = await page.locator("#plugin-dialog").boundingBox();
+  assert(cardBounds.y >= dialogBounds.y && cardBounds.y + cardBounds.height <= dialogBounds.y + dialogBounds.height,
+    "Confirmation must be visible after selecting a zip in a scrolled plugin dialog");
+  if (process.env.TMV_TEST_SCREENSHOT) await page.locator("#plugin-dialog").screenshot({ path: process.env.TMV_TEST_SCREENSHOT });
+  assert.deepEqual(await page.locator("#mc-permissions li").allTextContents(), permissionTexts);
+  assert.equal(await page.evaluate(() => mockInstalls.length), 1);
+  await page.locator("#mc-cancel").click();
+  assert.equal(await page.evaluate(() => mockInstalls.length), 1);
+  await page.locator("#plugin-install").click();
+  await page.waitForFunction(() => !document.getElementById("mc-install").disabled);
+  await page.locator("#mc-install").click();
+  await page.waitForFunction(() => mockInstalls.length === 2 && document.getElementById("market-confirm").hidden);
+  assert.deepEqual(await page.evaluate(() => mockInstalls[1]), {
+    command: "plugin_install", args: { path: "/test/demo.zip", sha256: "approved-digest" },
+  });
+  // Drive all seven languages through i18n's real selector and DOM observer.
+  await page.evaluate(() => confirmInstall({ id: "confirm-v2" }));
+  const languages = ["en", "de", "ja", "es", "fr", "ru", "zh"];
+  for (const lang of languages) {
+    await page.evaluate((lang) => {
+      const select = document.querySelector('#plugin-buttons select[data-plugin="i18n"]');
+      select.value = lang;
+      select.dispatchEvent(new Event("change"));
+    }, lang);
+    await page.waitForFunction((lang) => document.documentElement.lang.startsWith(lang), lang);
+    const column = translations.LANGS.findIndex(([code]) => code === lang);
+    const expected = permissionTexts.map((text) => translations.WORDS.find((r) => r[0] === text)[column]);
+    await page.waitForFunction((expected) => {
+      const texts = [...document.querySelectorAll("#mc-permissions li")].map((e) => e.textContent);
+      return JSON.stringify(texts) === JSON.stringify(expected);
+    }, expected);
+  }
+  await page.locator("#mc-cancel").click();
+  console.log("PASS: market/deep-link/zip permission confirmation, cancel/install boundaries, API 1 warning, empty permissions, seven languages");
+  // The website card uses Chinese/English descriptions and English fallback.
+  const website = await browser.newPage();
+  website.on("pageerror", (e) => errors.push(String(e)));
+  await website.addInitScript(() => {
+    window.siteLang = "zh";
+    window.TMV = { t: (key) => key, lang: () => window.siteLang, onLang: (fn) => { window.renderSite = fn; } };
+  });
+  await website.route("**/*", (route) => {
+    const url = route.request().url();
+    if (!url.startsWith(origin + "/")) { external.push(url); return route.abort(); }
+    if (url.endsWith("/site/plugins/plugins.json")) return route.fulfill({ json: { plugins: [
+      { id: "web-v2", name: "Web demo", version: "1.0.0", apiVersion: 2, permissions: ["state", "ui", "metadata", "export", "settings"] },
+      { id: "web-empty", name: "Web empty", version: "1.0.0", apiVersion: 2, permissions: [] },
+      { id: "web-legacy", name: "Web legacy", version: "1.0.0" },
+    ] } });
+    return route.continue();
+  });
+  await website.goto(origin + "/site/plugins/permission-test.html");
+  await website.waitForFunction(() => document.querySelectorAll("#plugins article").length === 3);
+  assert.deepEqual(await website.locator(".permissions").first().locator("li").allTextContents(), permissionTexts);
+  assert.equal(await website.locator("#plugins article").nth(1).locator(".permissions").textContent(), "无额外权限");
+  assert.equal(await website.locator("#plugins article").nth(2).locator(".permissions").count(), 0);
+  let english;
+  for (const lang of ["en", "ja", "de", "es", "fr", "ru"]) {
+    await website.evaluate((lang) => { siteLang = lang; renderSite(); }, lang);
+    const texts = await website.locator(".permissions").first().locator("li").allTextContents();
+    if (lang === "en") {
+      english = texts;
+      assert.equal(texts[0], "Read image information and change slices and frames");
+      assert.equal(texts[4], "Save its own settings");
+    } else assert.deepEqual(texts, english);
+    assert.equal(await website.locator("#plugins article").nth(1).locator(".permissions").textContent(), "No additional permissions");
+  }
+  await website.close();
+  assert.deepEqual(external, [], "All browser tests must stay offline");
+  console.log("PASS: website API 2 permissions in Chinese/English with English fallback");
   assert.deepEqual(errors, [], "Unexpected uncaught errors");
   assert(requests.includes("/tmvplugin/__sandbox/runtime.js"));
   console.log(`PASS: API 2 UI/metadata/PNG export, 10 isolation probes, permissions/limits/settings/lifecycle; ${legacy.length + 1} API 1 plugins loaded`);

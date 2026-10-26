@@ -29,6 +29,12 @@ pub const MAX_PACKAGE: u64 = 50 << 20;
 pub const MAX_INDEX: u64 = 4 << 20;
 pub const SCHEME: &str = "tifmrcview";
 
+/// Legacy packages shipped in plugins/ at the API 2 transition. A name alone
+/// grants nothing: the exact version and archive hash must also match the
+/// backend's official HTTPS index. Remove this exception as they migrate.
+pub const OFFICIAL_API1_IDS: &[&str] = &["fluoview", "imaris", "lasx", "nis", "recorder", "smartsem", "zen", "zenblack"];
+pub const LEGACY_REJECTED: &str = "不再接受第三方 API 1 插件，请联系开发者升级到 API 2；官方旧版插件须与已读取的插件市场索引完全匹配，请先刷新插件市场";
+
 /// What a `tifmrcview://install-plugin?id=…&version=…` link asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstallLink {
@@ -85,6 +91,8 @@ pub struct Entry {
     pub file: String,
     pub size: u64,
     pub sha256: String,
+    pub api_version: u64,
+    pub permissions: Option<Value>,
 }
 
 /// The package list of a parsed `plugins.json`.
@@ -131,7 +139,8 @@ pub fn find_entry(index: &Value, id: &str, app_version: &str) -> Result<Entry> {
             bail!("「{name}」需要 TifMrcView {min} 或更新版本（当前 {app_version}），请先在下面「检查更新」");
         }
     }
-    Ok(Entry { id: id.to_string(), name, version, file, size, sha256 })
+    let api_version = p.get("apiVersion").map_or(Some(1), Value::as_u64).ok_or_else(|| anyhow!("apiVersion 必须是整数"))?;
+    Ok(Entry { id: id.to_string(), name, version, file, size, sha256, api_version, permissions: p.get("permissions").cloned() })
 }
 
 /// Checks a download against its index entry.
@@ -139,11 +148,37 @@ pub fn verify(entry: &Entry, bytes: &[u8]) -> Result<()> {
     if bytes.len() as u64 != entry.size {
         bail!("下载的插件包大小不对（可能没下载完整），请重试");
     }
-    let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let hash = sha256(bytes);
     if hash != entry.sha256 {
         bail!("下载的插件包校验失败（SHA-256 不一致），已取消安装");
     }
     Ok(())
+}
+
+pub fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Install policy only; never used by scanning/loading already installed code.
+pub fn check_install_policy(m: &Manifest, bytes: &[u8], entry: Option<&Entry>) -> Result<()> {
+    if m.raw.get("apiVersion").and_then(Value::as_u64).unwrap_or(1) == 2 {
+        return Ok(());
+    }
+    let official = entry.is_some_and(|e| {
+        OFFICIAL_API1_IDS.contains(&m.id.as_str()) && m.id == e.id
+            && m.raw["version"].as_str() == Some(e.version.as_str()) && verify(e, bytes).is_ok()
+    });
+    if !official {
+        bail!("{LEGACY_REJECTED}");
+    }
+    Ok(())
+}
+
+/// Bind the permission confirmation to the manifest that is actually installed.
+pub fn matches_confirmation(a: &Value, b: &Value) -> bool {
+    ["id", "version", "name", "permissions"].iter().all(|k| a.get(k) == b.get(k))
+        && a.get("apiVersion").and_then(Value::as_u64).unwrap_or(1)
+            == b.get("apiVersion").and_then(Value::as_u64).unwrap_or(1)
 }
 
 /// Downloads `<base>plugins.json` and `<base><file>` with `fetch(url, max_bytes)`
@@ -162,17 +197,16 @@ where
 
 /// Installs a downloaded, verified package like 加载插件… does.
 pub fn install_bytes(dir: &Path, entry: &Entry, bytes: &[u8], app_version: &str) -> Result<Manifest> {
-    std::fs::create_dir_all(dir).context("无法创建插件文件夹")?;
-    let tmp = package::unique_tmp(dir, "download", &entry.id).with_extension("zip");
-    std::fs::write(&tmp, bytes).context("无法保存下载的插件包")?;
-    let res = package::install_checked(dir, &tmp, app_version, |unpacked, m| {
-        if m.id != entry.id || package::compare_versions(m.raw["version"].as_str().unwrap_or(""), &entry.version)? != Ordering::Equal {
+    verify(entry, bytes)?;
+    package::install_data_checked(dir, bytes, app_version, |unpacked, m| {
+        if m.id != entry.id || m.name != entry.name || m.raw["version"].as_str() != Some(entry.version.as_str())
+            || m.raw.get("apiVersion").and_then(Value::as_u64).unwrap_or(1) != entry.api_version
+            || m.raw.get("permissions") != entry.permissions.as_ref() {
             bail!("插件包和插件市场的信息不一致");
         }
+        check_install_policy(m, bytes, Some(entry))?;
         super::registry::validate_package(unpacked, m)
-    });
-    let _ = std::fs::remove_file(&tmp);
-    res
+    })
 }
 
 /// What the plugin dialog shows for one market package.
@@ -273,7 +307,7 @@ mod tests {
     use std::net::TcpListener;
     use tauri::async_runtime::block_on as rt;
 
-    const PLUGIN: &str = r#"{"id":"demo","name":"Demo","version":"1.2.0","main":"index.js","minAppVersion":"0.5.0"}"#;
+    const PLUGIN: &str = r#"{"id":"demo","name":"Demo","version":"1.2.0","main":"index.js","minAppVersion":"0.5.0","apiVersion":2,"permissions":[]}"#;
 
     fn zip_bytes(manifest: &str) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -292,9 +326,72 @@ mod tests {
     fn index_for(zip: &[u8], min: &str) -> Value {
         serde_json::json!({"plugins": [
             {"id": "demo", "name": "Demo", "version": "1.2.0", "minAppVersion": min,
-             "file": "demo-1.2.0.zip", "size": zip.len(), "sha256": sha(zip)},
+             "file": "demo-1.2.0.zip", "size": zip.len(), "sha256": sha(zip), "apiVersion": 2, "permissions": []},
             {"id": "i18n", "name": "多语言", "version": "1.0.0", "builtin": true},
         ]})
+    }
+
+    #[test]
+    fn api1_requires_official_id_exact_version_and_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        for api in [None, Some(1)] {
+            let mut manifest: Value = serde_json::from_str(PLUGIN).unwrap();
+            manifest.as_object_mut().unwrap().remove("permissions");
+            manifest.as_object_mut().unwrap().remove("apiVersion");
+            if let Some(api) = api { manifest["apiVersion"] = api.into(); }
+            for id in OFFICIAL_API1_IDS.iter().copied().chain(["third-party"]) {
+                manifest["id"] = id.into();
+                manifest["official"] = true.into(); // Self-asserted trust is ignored.
+                let bytes = zip_bytes(&manifest.to_string());
+                let m = package::inspect(&bytes, "0.5.0").unwrap();
+                let mut index = index_for(&bytes, "0.5.0");
+                index["plugins"][0]["id"] = id.into();
+                index["plugins"][0].as_object_mut().unwrap().remove("apiVersion");
+                index["plugins"][0].as_object_mut().unwrap().remove("permissions");
+                let e = find_entry(&index, id, "0.5.0").unwrap();
+                assert!(check_install_policy(&m, &bytes, None).is_err());
+                assert!(super::super::inspect_installable(&bytes, None, "0.5.0").is_err());
+                let official = OFFICIAL_API1_IDS.contains(&id);
+                assert_eq!(super::super::inspect_installable(&bytes, Some(&index), "0.5.0").is_ok(), official);
+                assert_eq!(install_bytes(tmp.path(), &e, &bytes, "0.5.0").is_ok(), official);
+                assert_eq!(super::super::install_confirmed_zip(tmp.path(), &bytes, &sha256(&bytes), Some(&index), "0.5.0").is_ok(), official);
+                if official {
+                    let mut bad = e.clone();
+                    bad.version = "1.2".into(); // Numerically equal is insufficient.
+                    assert!(check_install_policy(&m, &bytes, Some(&bad)).is_err());
+                    bad = e.clone(); bad.sha256 = "0".repeat(64);
+                    assert!(check_install_policy(&m, &bytes, Some(&bad)).is_err());
+                    let mut altered = bytes.clone(); *altered.last_mut().unwrap() ^= 1;
+                    assert!(check_install_policy(&m, &altered, Some(&e)).is_err());
+                }
+            }
+        }
+        // A wasm declaration is not an exception for unrecognised API 1 code.
+        let m = package::parse_manifest(br#"{"id":"other","name":"Other","version":"1.0.0","wasm":"f.wasm"}"#, "0.5.0").unwrap();
+        assert!(check_install_policy(&m, b"anything", None).is_err());
+        // The loading path is unchanged for an already installed third-party API 1 package.
+        let archive = tmp.path().join("legacy.zip");
+        std::fs::write(&archive, zip_bytes(&PLUGIN.replace(",\"apiVersion\":2,\"permissions\":[]", ""))).unwrap();
+        package::install(tmp.path(), &archive, "0.5.0").unwrap();
+        assert!(package::read_installed(&tmp.path().join("demo"), "0.5.0").is_ok());
+    }
+
+    #[test]
+    fn confirmation_matches_actual_permissions_and_api() {
+        let m: Value = serde_json::from_str(PLUGIN).unwrap();
+        assert!(matches_confirmation(&m, &m));
+        for (key, value) in [("id", "other".into()), ("version", "1.2".into()), ("name", "Changed".into()), ("apiVersion", 1.into()), ("permissions", serde_json::json!(["export"]))] {
+            let mut changed = m.clone(); changed[key] = value;
+            assert!(!matches_confirmation(&m, &changed));
+        }
+        let bytes = zip_bytes(PLUGIN);
+        let mut e = find_entry(&index_for(&bytes, "0.5.0"), "demo", "0.5.0").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        e.permissions = Some(serde_json::json!(["export"]));
+        assert!(install_bytes(tmp.path(), &e, &bytes, "0.5.0").is_err());
+        assert!(!package::is_installed(tmp.path(), "demo"));
+        e.permissions = Some(serde_json::json!([])); e.api_version = 1;
+        assert!(install_bytes(tmp.path(), &e, &bytes, "0.5.0").is_err());
     }
 
     #[test]
