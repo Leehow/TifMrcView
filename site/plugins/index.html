@@ -35,8 +35,15 @@
 .plug details{border-top:1px solid var(--hair);padding-top:10px;font-size:15px}
 .plug summary{cursor:pointer;color:var(--link);font-weight:500;min-height:32px}
 .plug details p{margin:8px 0 0;color:var(--mute)}
-.plug .act{margin-top:auto;padding-top:8px}
-.plug .btn{width:100%}
+.plug .act{margin-top:auto;padding-top:8px;display:flex;flex-wrap:wrap;gap:8px}
+.plug .btn{flex:1 1 auto}
+.plug .btn.primary{flex:1 1 55%}
+.btn.sec{background:transparent;border-color:var(--line);color:var(--link)}
+.btn.sec:hover{border-color:var(--link);text-decoration:none}
+.plug .nohandler{flex-basis:100%;margin:2px 0 0;font-size:14px;color:var(--mute)}
+.plug .nohandler[hidden]{display:none}
+.one{margin:0 0 14px;font-size:16.5px}
+.manual{margin:0 0 4px;color:var(--mute);font-size:15px}
 .plug .btn.off{background:var(--bg2);color:var(--mute);cursor:default}
 .msg{padding:22px;border:1px dashed var(--line);border-radius:18px;color:var(--mute);text-align:center}
 details.dev{background:var(--card);border:1px solid var(--hair);border-radius:22px}
@@ -77,18 +84,20 @@ table.ref td:first-child{white-space:nowrap}
 <div class="phead">
   <p class="eye rv">TifMrcView</p>
   <h1 class="h h2 rv" data-i="pl_h1">插件市场</h1>
-  <p class="lede rv" data-i="pl_lead">插件给 TifMrcView 增加功能：把 Z / T 序列录成视频、读取蔡司电镜和共聚焦的采集参数……下载 zip，在应用里加载即可，不需要重装。</p>
+  <p class="lede rv" data-i="pl_lead">插件给 TifMrcView 增加功能：把 Z / T 序列录成视频、读取蔡司电镜和共聚焦的采集参数……点「安装」一键装进应用（也可以下载 zip 手动加载），不需要重装。</p>
 </div>
 
 <section class="psec" id="install">
   <div class="card rv">
     <h2 data-i="pl_install_h">怎么安装</h2>
+    <p class="one" data-i="pl_one"><b>一键安装：</b>装好并打开 TifMrcView 0.5 或更新版本，点插件卡片上的 <b>安装</b>；浏览器询问时允许打开 TifMrcView，再在应用里点 <b>安装</b> 确认。</p>
+    <p class="manual" data-i="pl_manual">也可以手动安装 zip：</p>
     <ol class="steps">
       <li data-i="pl_s1">在下面选一个插件，下载它的 <b>.zip</b> 文件（不要解压）。</li>
       <li data-i="pl_s2">在 TifMrcView 里打开 <b>插件</b> → <b>加载插件…</b>，选择刚下载的 zip。</li>
       <li data-i="pl_s3">插件马上生效；可以在插件列表里随时关闭或打开。</li>
     </ol>
-    <p class="pnote"><span data-i="pl_update">更新：再次加载新版本的 zip 即可覆盖旧版。</span> <span data-i="pl_remove">删除：在插件列表里点 <b>卸载</b>。</span> <span data-i="pl_need_all">各插件需要的最低应用版本见卡片。</span></p>
+    <p class="pnote"><span data-i="pl_update">更新：再点一次 <b>安装</b>，或加载新版本的 zip 覆盖旧版。</span> <span data-i="pl_remove">删除：在插件列表里点 <b>卸载</b>。</span> <span data-i="pl_need_all">各插件需要的最低应用版本见卡片。</span></p>
   </div>
 </section>
 
@@ -119,8 +128,8 @@ table.ref td:first-child{white-space:nowrap}
 </footer>
 
 <script src="docs.js?v=1"></script>
-<script src="../i18n.js?v=5"></script>
-<script src="market.js?v=1"></script>
+<script src="../i18n.js?v=6"></script>
+<script src="market.js?v=2"></script>
 <script src="../site.js?v=1"></script>
 </body>
 </html>
