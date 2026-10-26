@@ -122,12 +122,11 @@ pub fn parse(
     };
     let mut ifds = Vec::new();
     let mut seen = alloc::collections::BTreeSet::new();
-    let mut ifd_at = next;
     while next != 0 && next < size && ifds.len() < limit {
         if !seen.insert(next) {
             break;
         }
-        ifd_at = next;
+        let ifd_at = next;
         let cb = read(next, count_size)?;
         let n = if big {
             e.u64(&cb, 0)
