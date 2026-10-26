@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TifMrcView",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.leehow.tifmrcview",
   "build": {
     "frontendDist": "../ui"
@@ -139,6 +139,13 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "tifmrcview"
+        ]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OTNDQ0RCMDY4RDI0N0IKUldSN0pJMEcyOHlUU0cyZVNFNDZLM3J4Yzk1L0IyeTFxUkJRM1B4SUtaejhkM0I0Y29ORDRIK1gK",
       "endpoints": [

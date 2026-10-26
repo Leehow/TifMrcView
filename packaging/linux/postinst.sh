@@ -1,5 +1,6 @@
 #!/bin/sh
-# Register the .mrc MIME type and refresh desktop caches.
+# Register the .mrc MIME type and refresh desktop caches (the desktop
+# database maps x-scheme-handler/tifmrcview, i.e. tifmrcview:// links, to us).
 if command -v update-mime-database >/dev/null 2>&1; then
   update-mime-database /usr/share/mime || true
 fi

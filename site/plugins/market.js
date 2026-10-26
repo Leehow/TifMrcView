@@ -26,6 +26,31 @@
     return Array.isArray(list) ? list : [String(list)];
   }
 
+  // Hands a tifmrcview:// link to the app. Browsers say nothing when no app
+  // handles the scheme, so if the page still has focus after a moment
+  // (no app took over, no "open TifMrcView?" prompt), show how to get one.
+  var frame = null;
+  function launch(url, hint) {
+    var left = false;
+    function away() { left = true; }
+    function vis() { if (document.hidden) left = true; }
+    window.addEventListener('blur', away);
+    document.addEventListener('visibilitychange', vis);
+    hint.hidden = true;
+    if (/Firefox\//.test(navigator.userAgent)) {
+      // Firefox replaces the page with an error for unknown schemes; keep that in a hidden frame.
+      if (!frame) { frame = document.createElement('iframe'); frame.hidden = true; document.body.appendChild(frame); }
+      frame.src = url;
+    } else {
+      location.href = url;
+    }
+    setTimeout(function () {
+      window.removeEventListener('blur', away);
+      document.removeEventListener('visibilitychange', vis);
+      if (!left && !document.hidden && document.hasFocus()) hint.hidden = false;
+    }, 1500);
+  }
+
   function card(p, lang) {
     var T = window.TMV.t;
     var c = el('article', 'card plug');
@@ -59,10 +84,20 @@
     if (p.builtin) {
       act.appendChild(el('div', 'btn off', T('pl_builtin_note')));
     } else {
-      var a = el('a', 'btn primary', T('pl_download'));
+      var hint = el('p', 'nohandler');
+      hint.hidden = true;
+      hint.setAttribute('role', 'status');
+      hint.innerHTML = T('pl_nohandler');
+      var ins = el('a', 'btn primary', T('pl_install'));
+      ins.href = 'tifmrcview://install-plugin?id=' + encodeURIComponent(p.id) + '&version=' + encodeURIComponent(p.version);
+      ins.title = T('pl_install_tip');
+      ins.addEventListener('click', function (e) { e.preventDefault(); launch(ins.href, hint); });
+      var a = el('a', 'btn sec', T('pl_download'));
       a.href = p.file;
       a.setAttribute('download', '');
+      act.appendChild(ins);
       act.appendChild(a);
+      act.appendChild(hint);
     }
     c.appendChild(act);
     return c;

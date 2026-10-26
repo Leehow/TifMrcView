@@ -59,6 +59,11 @@ window.TMV_DOCS = {
     '<pre><code>cd my-plugin\nzip -r ../my-plugin.zip .</code></pre>',
     '<p>注意在插件文件夹<b>里面</b>执行，这样 <code>plugin.json</code> 才在 zip 根目录。然后在 TifMrcView 里点 <b>插件 → 加载插件…</b>，选择 zip；改了代码后再加载一次即可更新。出错信息会显示在插件列表里。</p>',
 
+    '<h4>一键安装链接</h4>',
+    '<p>TifMrcView 0.5 起注册了 <code>tifmrcview://</code> 链接。市场页的 <b>安装</b> 按钮打开的是：</p>',
+    '<pre><code>tifmrcview://install-plugin?id=&lt;id&gt;&amp;version=&lt;x.y.z&gt;</code></pre>',
+    '<p><code>version</code> 可以省略，只用来显示。应用收到链接后会到前台，打开插件窗口，显示插件市场上这个插件的名称和说明，<b>用户点「安装」后才会安装</b>。它只认插件市场的 <code>plugins.json</code> 里列出的 id：从官方市场通过 HTTPS 下载 zip，核对大小和 SHA-256，检查 <code>minAppVersion</code>，再像「加载插件…」一样安装。所以这个链接不能用来安装任意网址上的插件；自己分发的插件请继续用 zip。应用里「插件」窗口的「插件市场」列表也用同样的方式一键安装和更新。</p>',
+
     '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">格式插件（WebAssembly）</summary>',
     '<p>插件包还可以带一个 <b>WebAssembly 模块</b>，让 TifMrcView 打开新的文件格式，或给已能打开的文件补充元数据。蔡司 CZI（Zeiss ZEN 插件）和 SmartSEM 就是这样实现的：主程序里没有厂商格式的代码。模块在沙箱里运行，只能读取正在打开的那个文件，不能访问文件系统、网络和界面；内存上限 512 MiB，每次调用有运行时间（fuel）上限，出错只会让这个文件打不开，不会让应用崩溃或卡死。</p>',
     '<p>格式插件不自己解码像素：它为每一页给出一份“配方”，即文件里的若干数据块、各自的压缩方式（不压缩、zlib、deflate、LZW、Zstd、JPEG、PackBits）和要放到图像的哪个位置，由应用本身在内存映射的文件上并行解压、拼接，所以速度和内置格式一样。</p>',
@@ -132,6 +137,11 @@ window.TMV_DOCS = {
     '<h4>Package and test</h4>',
     '<pre><code>cd my-plugin\nzip -r ../my-plugin.zip .</code></pre>',
     '<p>Run it from <b>inside</b> the plugin folder so <code>plugin.json</code> ends up at the zip root. Then in TifMrcView click <b>Plugins → Load plugin…</b> and choose the zip; after changing the code, load it again to update. Errors show in the plugin list.</p>',
+
+    '<h4>One-click install links</h4>',
+    '<p>Since 0.5, TifMrcView registers <code>tifmrcview://</code> links. The market page’s <b>Install</b> button opens:</p>',
+    '<pre><code>tifmrcview://install-plugin?id=&lt;id&gt;&amp;version=&lt;x.y.z&gt;</code></pre>',
+    '<p><code>version</code> is optional and only shown. The app comes to the front, opens the Plugins window and shows the plugin’s name and description from the market, and <b>installs nothing until the user clicks Install</b>. It only accepts ids listed in the market’s <code>plugins.json</code>: it downloads the zip from the official market over HTTPS, checks size and SHA-256 and <code>minAppVersion</code>, then installs it exactly like “Load plugin…”. The link therefore cannot install plugins from arbitrary URLs; keep distributing your own plugins as zips. The “Plugin market” list in the app’s Plugins window installs and updates the same way.</p>',
 
     '<details><summary style="cursor:pointer;font-size:19px;font-weight:600;margin:28px 0 8px">Format plugins (WebAssembly)</summary>',
     '<p>A plugin package can also carry a <b>WebAssembly module</b> that lets TifMrcView open new file formats, or adds metadata to files it already opens. Zeiss CZI (the Zeiss ZEN plugin) and SmartSEM work this way: the app itself contains no vendor format code. The module runs in a sandbox and can only read the file being opened — no file system, network or UI access; memory is capped at 512 MiB and every call has a time (fuel) budget, so a broken plugin can only make that one file fail to open, never crash or hang the app.</p>',

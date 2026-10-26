@@ -3,10 +3,10 @@ Categories={{categories}}
 {{#if comment}}
 Comment={{comment}}
 {{/if}}
-Exec={{exec}} %F
+Exec={{exec}} %U
 StartupWMClass={{exec}}
 Icon={{icon}}
 Name={{name}}
 Terminal=false
 Type=Application
-MimeType=image/tiff;application/x-mrc;application/x-czi;
+MimeType=image/tiff;application/x-mrc;application/x-czi;x-scheme-handler/tifmrcview;
