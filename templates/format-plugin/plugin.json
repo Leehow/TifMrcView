@@ -1,0 +1,11 @@
+{
+  "id": "format-plugin",
+  "name": "R16 example",
+  "version": "1.0.0",
+  "description": "Opens simple R16 stacks of little-endian u16 pixels",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.5.0",
+  "wasm": "r16.wasm",
+  "formats": [{ "ext": ["r16"], "name": "R16 stack" }]
+}

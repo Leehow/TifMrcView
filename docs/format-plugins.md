@@ -261,6 +261,16 @@ Panics abort the call (the module is built with `panic = "abort"`).
 
 ### Example: a trivial raw format
 
+For a copyable crate with host tests, a sample generator, a one-command
+build and a standalone GitHub Actions workflow, start with
+[`templates/format-plugin`](../templates/format-plugin/README.md)
+([简体中文](../templates/format-plugin/README.zh-CN.md)). It targets plugin
+API 1 / ABI 1 and app 0.5.0. Run
+`node scripts/tmv-plugin.mjs check templates/format-plugin` to check the
+manifest before building; the same command accepts an installable zip
+and checks the module's static ABI. Source crates without a built module
+get a manifest-only check.
+
 `.r16` files: `"R16\0"`, then width, height and depth as little-endian u32,
 then the planes as little-endian u16.
 

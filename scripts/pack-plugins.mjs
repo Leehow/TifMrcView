@@ -17,7 +17,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
+import { zip } from "./plugin-zip.mjs";
+import { validateManifest } from "./plugin-manifest.mjs";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -31,77 +32,6 @@ if (!outArg) {
   process.exit(1);
 }
 const outDir = path.join(path.resolve(outArg), "plugins");
-
-const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-// Fixed timestamp (2020-01-01 00:00) keeps the archives reproducible.
-const DOS_TIME = 0;
-const DOS_DATE = ((2020 - 1980) << 9) | (1 << 5) | 1;
-
-/** entries: [{name, data}] -> Buffer */
-function zip(entries) {
-  const parts = [];
-  const central = [];
-  let offset = 0;
-  for (const { name, data } of entries) {
-    const nameBuf = Buffer.from(name, "utf8");
-    const crc = crc32(data);
-    let method = 8;
-    let body = zlib.deflateRawSync(data, { level: 9 });
-    if (body.length >= data.length) {
-      method = 0;
-      body = data;
-    }
-    const flags = 0x0800; // UTF-8 names
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(flags, 6);
-    local.writeUInt16LE(method, 8);
-    local.writeUInt16LE(DOS_TIME, 10);
-    local.writeUInt16LE(DOS_DATE, 12);
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(body.length, 18);
-    local.writeUInt32LE(data.length, 22);
-    local.writeUInt16LE(nameBuf.length, 26);
-    local.writeUInt16LE(0, 28);
-    parts.push(local, nameBuf, body);
-
-    const c = Buffer.alloc(46);
-    c.writeUInt32LE(0x02014b50, 0);
-    c.writeUInt16LE((3 << 8) | 20, 4); // made by Unix
-    c.writeUInt16LE(20, 6);
-    c.writeUInt16LE(flags, 8);
-    c.writeUInt16LE(method, 10);
-    c.writeUInt16LE(DOS_TIME, 12);
-    c.writeUInt16LE(DOS_DATE, 14);
-    c.writeUInt32LE(crc, 16);
-    c.writeUInt32LE(body.length, 20);
-    c.writeUInt32LE(data.length, 24);
-    c.writeUInt16LE(nameBuf.length, 28);
-    c.writeUInt32LE((0o100644 << 16) >>> 0, 38); // external attrs: regular file 0644
-    c.writeUInt32LE(offset, 42);
-    central.push(c, nameBuf);
-    offset += local.length + nameBuf.length + body.length;
-  }
-  const cdSize = central.reduce((n, b) => n + b.length, 0);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(cdSize, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...parts, ...central, end]);
-}
 
 /** Files under dir, relative posix paths, sorted, dotfiles skipped. */
 function listFiles(dir, rel = "") {
@@ -121,9 +51,6 @@ const CRATE_FILES = new Set(["Cargo.toml", "Cargo.lock", "build.rs", "rust-toolc
 const CRATE_DIRS = ["src/", "target/", "tests/", "benches/", "examples/"];
 const isCrateFile = (f) => CRATE_FILES.has(f) || CRATE_DIRS.some((d) => f.startsWith(d));
 
-const EXT = /^[a-z0-9]{1,16}$/;
-const extList = (v) => Array.isArray(v) && v.length > 0 && v.every((e) => typeof e === "string" && EXT.test(e));
-
 /** Builds the plugin crate in `dir` for wasm32; returns the .wasm path. */
 function buildWasm(dir) {
   const toml = fs.readFileSync(path.join(dir, "Cargo.toml"), "utf8");
@@ -133,26 +60,6 @@ function buildWasm(dir) {
   console.log(`cargo ${args.join(" ")}`);
   execFileSync(process.env.CARGO || "cargo", args, { stdio: "inherit" });
   return path.join(targetDir, "wasm32-unknown-unknown", "release", `${name.replace(/-/g, "_")}.wasm`);
-}
-
-const REQUIRED = ["id", "name", "version", "description", "main"];
-function validate(m, dirName, files) {
-  const errs = [];
-  for (const k of REQUIRED) if (typeof m[k] !== "string" || !m[k]) errs.push(`missing "${k}"`);
-  if (m.id !== dirName) errs.push(`id "${m.id}" does not match folder "${dirName}"`);
-  if (typeof m.id === "string" && !/^[a-z0-9][a-z0-9._-]*$/.test(m.id)) errs.push("id must be lowercase letters, digits, . _ -");
-  if (typeof m.version === "string" && !/^\d+\.\d+\.\d+([-+][\w.]+)?$/.test(m.version)) errs.push("version must look like 1.2.3");
-  if (typeof m.main === "string" && !files.includes(m.main)) errs.push(`main "${m.main}" not found in package`);
-  if (m.apiVersion != null && !Number.isInteger(m.apiVersion)) errs.push("apiVersion must be an integer");
-  if (m.native != null && typeof m.native !== "boolean") errs.push("native must be a boolean");
-  if (m.wasm != null && (typeof m.wasm !== "string" || !/^[\w.-]+(\/[\w.-]+)*\.wasm$/.test(m.wasm))) errs.push("wasm must be a .wasm path");
-  if (m.wasm != null && !files.includes(m.wasm)) errs.push(`wasm "${m.wasm}" not found in package`);
-  if (m.formats != null && !(Array.isArray(m.formats) && m.formats.every((f) => f && extList(f.ext)))) {
-    errs.push('formats must be [{"ext": ["abc"], "name": "…"}] with lower-case extensions');
-  }
-  if (m.metadata != null && !(m.metadata && extList(m.metadata.ext))) errs.push('metadata must be {"ext": ["tif"]}');
-  if ((m.formats || m.metadata) && m.wasm == null) errs.push("formats / metadata need a wasm module");
-  return errs;
 }
 
 // The only plugin compiled into the app: listed on the market, no download.
@@ -231,7 +138,7 @@ for (const d of dirs) {
     }
   }
   const files = [...sources.keys()].sort();
-  const errs = validate(m, d, files);
+  const errs = validateManifest(m, d, files);
   if (errs.length) {
     console.error(`${d}: ${errs.join("; ")}`);
     failed = true;
