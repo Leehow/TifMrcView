@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 /// The bytes of the file a plugin reads (usually a memory map).
 pub type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
-use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
+use wasmi::{Caller, Config, Engine, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 use super::recipe;
 
@@ -85,6 +85,10 @@ fn debug() -> bool {
 
 struct HostState {
     file: Bytes,
+    /// The plugin's exported memory, set once the instance exists. Host
+    /// functions read it from here instead of `Caller::get_export`, which
+    /// crashed on Windows (wasmi 2.0 read an invalid instance pointer).
+    memory: Option<Memory>,
     error: Option<String>,
     limits: StoreLimits,
     plugin: String,
@@ -101,7 +105,7 @@ pub struct Instance {
 }
 
 fn memory_of(caller: &Caller<'_, HostState>) -> Option<Memory> {
-    caller.get_export("memory").and_then(Extern::into_memory)
+    caller.data().memory
 }
 
 /// A UTF-8 string from plugin memory, at most 4 KB.
@@ -161,11 +165,12 @@ impl Instance {
     /// Instantiates `module` for reading `file`. `plugin` names it in messages.
     pub fn new(module: &Module, file: Bytes, plugin: &str) -> Result<Instance> {
         let limits = StoreLimitsBuilder::new().memory_size(MAX_MEMORY).memories(1).tables(4).instances(1).build();
-        let mut store = Store::new(engine(), HostState { file, error: None, limits, plugin: plugin.into() });
+        let mut store = Store::new(engine(), HostState { file, memory: None, error: None, limits, plugin: plugin.into() });
         store.limiter(|s| &mut s.limits);
         store.set_fuel(FUEL_CALL)?;
         let inst = linker()?.instantiate_and_start(&mut store, module).map_err(|e| trap(e, plugin, None))?;
         let memory = inst.get_memory(&store, "memory").context("插件没有导出 memory")?;
+        store.data_mut().memory = Some(memory);
         let alloc = inst.get_typed_func(&store, "tmv_alloc").context("插件的 tmv_alloc 签名不对")?;
         let free = inst.get_typed_func(&store, "tmv_free").context("插件的 tmv_free 签名不对")?;
         let mut me = Instance { store, memory, alloc, free, inst };
