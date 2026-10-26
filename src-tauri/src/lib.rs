@@ -365,20 +365,24 @@ fn free_path(state: State<'_, AppState>, dir: String, stem: String) -> String {
 }
 
 /// Annotations drawn on an image are kept next to it, e.g.
-/// `cell.tif` → `cell.tif.annot.json`.
-fn annot_path(image: &str) -> PathBuf {
-    PathBuf::from(format!("{image}.annot.json"))
+/// `cell.tif` → `cell.tif.annot.json`; the other images of a file that holds
+/// several get their own file (`project.lif.series3.annot.json` for the third).
+fn annot_path(image: &str, series: Option<usize>) -> PathBuf {
+    match series {
+        Some(s) if s > 0 => PathBuf::from(format!("{image}.series{}.annot.json", s + 1)),
+        _ => PathBuf::from(format!("{image}.annot.json")),
+    }
 }
 
 #[tauri::command]
-fn read_annotations(image: String) -> Option<String> {
-    std::fs::read_to_string(annot_path(&image)).ok()
+fn read_annotations(image: String, series: Option<usize>) -> Option<String> {
+    std::fs::read_to_string(annot_path(&image, series)).ok()
 }
 
 /// Writes the annotations file, or removes it when `json` is empty.
 #[tauri::command]
-fn write_annotations(image: String, json: String) -> CmdResult<()> {
-    let path = annot_path(&image);
+fn write_annotations(image: String, series: Option<usize>, json: String) -> CmdResult<()> {
+    let path = annot_path(&image, series);
     if json.is_empty() {
         return match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
