@@ -1,11 +1,17 @@
 //! Developer tool: decode a file and print metadata, checksums and timings.
 //! `cargo run --release --example probe -- file.tif [...]`
+//! Set `TMV_PLUGIN_DIR` to a plugin folder (installed packages in `<id>/`)
+//! to open formats from WebAssembly plugins, e.g. .czi with the zen plugin.
 use std::time::Instant;
 
 use tifmrcview_lib::image::{OpenImage, PlaneData};
+use tifmrcview_lib::plugins::registry::Registry;
 use tifmrcview_lib::{formats, render, with_plane};
 
 fn main() {
+    if let Some(dir) = std::env::var_os("TMV_PLUGIN_DIR") {
+        Registry::global().configure(Some(dir.into()), env!("CARGO_PKG_VERSION"));
+    }
     for path in std::env::args().skip(1) {
         let t0 = Instant::now();
         let src = match formats::open(path.as_ref()) {

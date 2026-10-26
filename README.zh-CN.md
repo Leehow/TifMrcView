@@ -28,7 +28,7 @@
 
 ## 功能
 
-- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、调色板 TIFF（如蔡司 SEM 图）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节）、蔡司 CZI（ZEN 保存的 LSM / Airyscan 等：不压缩、Zstd、JPEG 子块，8/16/32 位灰度和彩色，C/Z/T 维度、拼接大图、通道名称和颜色、像素尺寸）。`.rec` `.st` `.map` 和 `.czi` 只出现在「打开方式」里，不会被设为默认程序
+- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、调色板 TIFF（如蔡司 SEM 图）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节），以及装上 Zeiss ZEN 插件后的蔡司 CZI（ZEN 保存的 LSM / Airyscan 等：不压缩、Zstd、JPEG 子块，8/16/32 位灰度和彩色，C/Z/T 维度、拼接大图、通道名称和颜色、像素尺寸）。`.rec` `.st` `.map` 和 `.czi` 只出现在「打开方式」里，不会被设为默认程序
 - 也能打开 PNG / JPEG / BMP / GIF / WebP
 - Z 拉条和播放；有时间维度时另有 T 拉条
 - 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
@@ -53,6 +53,8 @@
 ## 插件
 
 工具栏「插件」里可以开关、安装和卸载插件，以及检查更新。除了多语言，插件都要单独安装：点「插件市场」在浏览器里打开 https://tifmrcview.com/tifmrcview/plugins/ 下载插件包（.zip），再点「加载插件…」选中它即可安装；装同一个插件的新版本会直接替换旧版本。插件源码在仓库的 `plugins/<id>/` 里（`plugin.json` + `index.js`，目前有 `recorder`、`smartsem`、`zen`），装好的插件放在插件文件夹的 `<id>/` 子文件夹里。
+
+格式插件：插件包还可以带一个在沙箱里运行的 WebAssembly 模块，用来支持新的文件格式或读取元数据，例如用 `plugins/sdk` 里的 Rust SDK 编写。蔡司 CZI（`zen`）和蔡司 SmartSEM（`smartsem`）都是这样实现的，主程序里没有任何厂商格式的代码：没装 Zeiss ZEN 插件时打不开 .czi，应用会提示需要安装哪个插件。模块只能读取正在打开的文件，内存和运行时间都有上限；它把每一页描述成文件里的一组数据块，由应用本身并行解压、拼接。接口（ABI）、限制和示例见 [docs/format-plugins.md](docs/format-plugins.md)。
 
 录制视频插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
 
@@ -169,12 +171,12 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 | 路径 | 内容 |
 | --- | --- |
-| `src-tauri/src/formats/` | 解码器：`tiff.rs`、`mrc.rs`、`czi.rs`、`raster.rs`（PNG/JPEG 等）、`mod.rs` |
+| `src-tauri/src/formats/` | 解码器：`tiff.rs`、`mrc.rs`、`raster.rs`（PNG/JPEG 等）、`mod.rs` |
 | `src-tauri/src/` | `lib.rs`（命令、窗口和文件处理）、`render.rs`、`reslice.rs`（XZ/YZ 视图）、`image.rs`、`imod.rs`（IMOD 模型）、`mem.rs`、`assoc.rs`（默认程序注册）、`update.rs` |
-| `src-tauri/src/plugins/` | 插件的原生部分（`recorder.rs`、`mp4.rs`、`smartsem.rs`、`zen.rs`）和插件包（`package.rs`） |
+| `src-tauri/src/plugins/` | 插件的原生部分（`recorder.rs`、`mp4.rs`）、插件包（`package.rs`）和 WebAssembly 格式插件宿主（`wasm.rs`、`recipe.rs`、`registry.rs`） |
 | `src-tauri/examples/probe.rs` | 解码调试小工具 |
 | `ui/` | 纯 HTML/JS 前端：`index.html`、`app.js`、`style.css`、`plugin-host.js`；内置语言插件在 `ui/plugins/i18n.js` |
-| `plugins/<id>/` | 可安装插件的源码（`recorder`、`smartsem`、`zen`） |
+| `plugins/<id>/` | 可安装插件的源码（`recorder`、`smartsem`、`zen`；后两个是编译成 WebAssembly 的 Rust crate）和插件 SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（打包插件 zip 并生成市场索引）、`make-release.mjs` |
 | `site/` | 官网和插件市场，截图在 `site/shots/` |
 | `packaging/linux/` | Linux 打包文件（.mrc 的 MIME 类型） |
