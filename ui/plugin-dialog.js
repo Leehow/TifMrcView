@@ -57,11 +57,13 @@ function renderPluginList() {
   box.innerHTML = "";
   for (const rec of pluginHost.plugins.values()) {
     const d = rec.def;
+    // Installed packages carry their own translations in plugin.json.
+    const m = (rec.pkg && pluginHost.manifests.get(rec.pkg)) || d;
     box.append(
       pluginRow({
-        name: d.name || d.id,
+        name: marketText(m, "name") || d.name || d.id,
         version: d.version,
-        description: d.description,
+        description: marketText(m, "description") || d.description,
         source: rec.source,
         error: rec.error,
         rec,
@@ -84,6 +86,8 @@ function renderPluginList() {
     box.append(hint);
   }
 }
+
+new MutationObserver(renderPluginList).observe(document.documentElement, { attributeFilter: ["lang"] });
 
 function togglePluginDialog(force) {
   const dlg = $("plugin-dialog");
