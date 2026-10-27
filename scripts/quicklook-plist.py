@@ -39,6 +39,10 @@ def app_types(config):
 
 def generate(kind):
     config = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
+    # CI passes the release version in this overlay (`tauri build --config`).
+    ci = ROOT / "src-tauri/tauri.ci.conf.json"
+    if ci.exists():
+        config["version"] = json.loads(ci.read_text()).get("version", config["version"])
     app = app_types(config)
     if kind == "App":
         # Tauri merges top-level keys, so include the existing document types.
