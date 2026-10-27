@@ -787,28 +787,47 @@ function cssSize() {
   return { cw: r.width, ch: r.height };
 }
 
+/** Canvas area available beside the floating tools panel, in CSS pixels. */
+function freeRect() {
+  const r = canvas.getBoundingClientRect();
+  const panel = $("tools");
+  let x0 = 0;
+  if (!panel.hidden) {
+    const inset = Math.max(0, panel.getBoundingClientRect().right - r.left + 10);
+    if (r.width - inset >= 200) x0 = inset;
+  }
+  return { x0, x1: r.width, y0: 0, y1: r.height };
+}
+
 function clampView() {
   if (!S.info) return;
   const { cw, ch } = cssSize();
+  const { x0, x1, y0, y1 } = freeRect();
   const [x, y, w, h] = bounds();
   const dpr = window.devicePixelRatio || 1;
-  const fitScale = Math.min(cw / w, ch / h);
+  const fitScale = Math.min((x1 - x0) / w, (y1 - y0) / h);
   const minScale = Math.min(fitScale, 1 / dpr) / 2;
   S.view.scale = Math.min(64, Math.max(minScale, S.view.scale));
-  const hw = cw / 2 / S.view.scale;
-  const hh = ch / 2 / S.view.scale;
-  // Centre small images; keep larger ones covering the canvas.
-  S.view.cx = w <= hw * 2 ? x + w / 2 : Math.min(x + w - hw, Math.max(x + hw, S.view.cx));
-  S.view.cy = h <= hh * 2 ? y + h / 2 : Math.min(y + h - hh, Math.max(y + hh, S.view.cy));
+  const scale = S.view.scale;
+  const clampAxis = (c, start, size, canvasSize, lo, hi) => {
+    const overlap = Math.min(size * scale, (hi - lo) / 2);
+    // Screen right >= lo + overlap, and screen left <= hi - overlap.
+    const min = start + (canvasSize / 2 - hi + overlap) / scale;
+    const max = start + size + (canvasSize / 2 - lo - overlap) / scale;
+    return Math.min(max, Math.max(min, c));
+  };
+  S.view.cx = clampAxis(S.view.cx, x, w, cw, x0, x1);
+  S.view.cy = clampAxis(S.view.cy, y, h, ch, y0, y1);
 }
 
 function fit() {
   if (!S.info) return;
   const { cw, ch } = cssSize();
+  const { x0, x1, y0, y1 } = freeRect();
   const [x, y, w, h] = bounds();
-  S.view.scale = Math.min(cw / w, ch / h);
-  S.view.cx = x + w / 2;
-  S.view.cy = y + h / 2;
+  S.view.scale = Math.min((x1 - x0) / w, (y1 - y0) / h);
+  S.view.cx = x + w / 2 - ((x0 + x1) / 2 - cw / 2) / S.view.scale;
+  S.view.cy = y + h / 2 - ((y0 + y1) / 2 - ch / 2) / S.view.scale;
   draw();
   requestRender();
 }
@@ -1454,6 +1473,11 @@ function showPanel(mode) {
   $("btn-contrast").classList.toggle("on", mode === "contrast");
   $("btn-info").classList.toggle("on", mode === "info");
   pref.set("tools", mode);
+  if (S.info) {
+    clampView();
+    draw();
+    requestRender();
+  }
   if (mode === "info") renderMeta();
   else if (mode) loadHist();
 }
@@ -2383,7 +2407,9 @@ for (const name of ["sidebar", "tools"]) {
     let w = w0;
     const move = (ev) => {
       w = setPanelWidth(name, w0 + dir * (ev.clientX - start));
+      if (name === "tools" && S.info) clampView();
       draw();
+      if (name === "tools" && S.info) requestRender();
     };
     const up = () => {
       handle.classList.remove("active");
