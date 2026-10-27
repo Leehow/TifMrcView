@@ -35,7 +35,7 @@ Une visionneuse petite, rapide et pratique pour les images de microscopie et de 
 - Luminosité / contraste / gamma ; glissez sur l'histogramme pour choisir directement la plage affichée ; contraste automatique par coupe par défaut (saturation de 0,1 %)
 - Le bouton ⓘ de la barre d'outils affiche les informations de l'image : format, taille, taille de pixel et paramètres d'acquisition lus par les plugins (recherchables et copiables). Le plugin Zeiss lit tous les paramètres d'une image SEM Zeiss SmartSEM (tension, distance de travail, grossissement, détecteur, position de la platine, vide, …) et affiche une barre d'échelle d'après la taille de pixel calibrée, et dans un CZI le microscope, l'objectif, les lasers, les détecteurs, le pinhole, le balayage et les paramètres de traitement Airyscan
 - Une barre d'aperçu à droite (repliable) liste les images du même dossier avec nom de fichier, format et taille
-- Barre d'icônes en haut (noms au survol) : enregistrer l'image, annuler, sélectionner, déplacer, mesurer, crayon (un nouveau clic alterne entre libre / rectangle / cercle), recadrer, barre d'échelle, luminosité/contraste
+- Barre d'icônes en haut (noms au survol) : enregistrer l'image, annuler, sélectionner, déplacer, mesurer, crayon (la flèche à côté ouvre un menu : libre / ligne / flèche / rectangle / cercle), texte, recadrer, barre d'échelle, luminosité/contraste
 - Les mesures affichent les longueurs réelles d'après la taille de pixel ; les rectangles et cercles affichent toujours largeur × hauteur sur l'image (le diamètre pour un cercle parfait)
 - Outil de sélection (par défaut) : glissez dans le vide pour déplacer l'image ; cliquez sur une annotation pour la déplacer, glissez les points du contour pour la redimensionner, glissez les extrémités d'une ligne de mesure pour la remesurer ; Suppr supprime ; la couleur et l'épaisseur du trait sont modifiables
 - Les annotations sont enregistrées par coupe Z et sauvegardées automatiquement environ 2 secondes après le tracé dans `<nom du fichier>.annot.json` à côté de l'image, puis relues à la prochaine ouverture
@@ -94,8 +94,9 @@ Quelques secondes après le démarrage, l'application vérifie discrètement `ht
 | Début / Fin | Première / dernière coupe |
 | Espace | Lire / mettre en pause Z |
 | Ctrl + molette (⌘ + molette sous macOS), Maj + molette | Changer de Z |
-| S / V / M / P / R / E / C | Sélectionner / déplacer / mesurer / crayon / rectangle / cercle / recadrer |
+| S / V / M / P / L / A / R / E / X / C | Sélectionner / déplacer / mesurer / crayon / ligne / flèche / rectangle / cercle / texte / recadrer |
 | Maj (en traçant un rectangle ou un cercle) | Carré / cercle parfait |
+| Maj (en traçant une ligne ou une flèche) | Aligner sur 45° |
 | Suppr / Retour arrière | Supprimer l'annotation sélectionnée ; sans sélection, annuler le recadrage |
 | Échap | Annuler l'annotation en cours ou venant d'être tracée, désélectionner, annuler le recadrage |
 | Entrée, double-clic sur le cadre de recadrage | Recadrer |

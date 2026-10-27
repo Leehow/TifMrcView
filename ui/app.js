@@ -27,7 +27,7 @@ const S = {
   tool: "select",
   axis: "xy",
   base: null,
-  ann: [],          // {type: "line"|"path"|"rect"|"ellipse", pts: [[x, y], ...], color, width, z}
+  ann: [],          // {type: "line"|"path"|"segment"|"arrow"|"rect"|"ellipse"|"text", pts: [[x, y], ...], color, width, z, text?}
   annShow: true,
   history: [],      // snapshots of annotations and crop, for undo
   future: [],       // undone snapshots, for redo
@@ -163,6 +163,7 @@ async function openPath(path, force = false, series = 0) {
   if (!path) return;
   // Clicking the image already shown changes nothing.
   if (!force && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
+  finishText(true);
   await flushAnn();
   $("loading").textContent = "加载中…";
   // Only show the hint when loading takes a while, so quick flips do not blink.
@@ -283,6 +284,7 @@ function drawFade() {
 
 /** Switches between the XY view and the XZ / YZ side views of a Z stack. */
 async function setAxis(axis) {
+  finishText(true);
   if (!S.info || axis === S.axis) return;
   const prev = S.axis;
   if (prev === "xy") {
@@ -621,7 +623,7 @@ function setupSliders() {
   const { sizeZ, sizeT } = S.info;
   const stack = (S.base ? S.base.info : S.info).sizeZ > 1;
   $("btn-axis").hidden = $("axis-sep").hidden = !stack;
-  $("btn-axis").textContent = S.axis.toUpperCase();
+  $("axis-label").textContent = S.axis.toUpperCase();
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
   $("zslider").max = sizeZ - 1;
   $("zslider").value = S.z;
@@ -889,6 +891,10 @@ function lineLength(a, b) {
  */
 function drawAnnotations(g, map, unit, items) {
   for (const a of items) {
+    if (a.type === "text") {
+      if (!S.textEdit || S.textEdit.item !== a) drawText(g, a, map, unit);
+      continue;
+    }
     if (a.pts.length < 2) continue;
     g.save();
     g.strokeStyle = a.color;
@@ -901,6 +907,8 @@ function drawAnnotations(g, map, unit, items) {
       const [x1, y1] = map(...a.pts[1]);
       if (a.type === "rect") g.rect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
       else g.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2, 0, 0, Math.PI * 2);
+    } else if (a.type === "arrow") {
+      drawArrow(g, map(...a.pts[0]), map(...a.pts[1]), a.width * unit);
     } else {
       a.pts.forEach((p, i) => {
         const [x, y] = map(p[0], p[1]);
@@ -940,6 +948,51 @@ function drawAnnotations(g, map, unit, items) {
     }
     g.restore();
   }
+}
+
+/** A line from `a` to `b` with a filled head at `b`; leaves the shaft as the current path. */
+function drawArrow(g, [x0, y0], [x1, y1], lw) {
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  const head = Math.min(len, 6 + lw * 3.5);
+  const ang = Math.atan2(y1 - y0, x1 - x0);
+  // The shaft stops inside the head so its round cap does not poke out of the tip.
+  const k = len ? (len - head * 0.7) / len : 0;
+  g.save();
+  g.fillStyle = g.strokeStyle;
+  g.beginPath();
+  g.moveTo(x1, y1);
+  g.lineTo(x1 - head * Math.cos(ang - 0.42), y1 - head * Math.sin(ang - 0.42));
+  g.lineTo(x1 - head * Math.cos(ang + 0.42), y1 - head * Math.sin(ang + 0.42));
+  g.closePath();
+  g.fill();
+  g.restore();
+  g.beginPath();
+  g.moveTo(x0, y0);
+  g.lineTo(x0 + (x1 - x0) * k, y0 + (y1 - y0) * k);
+}
+
+/** Font size of a text annotation in screen pixels; it follows the line width. */
+function textSize(a) {
+  return 10 + a.width * 3;
+}
+
+function textFont(a, unit) {
+  return `600 ${textSize(a) * unit}px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`;
+}
+
+/** Text with a dark outline, so it reads on bright and dark images alike. */
+function drawText(g, a, map, unit) {
+  const [x, y] = map(...a.pts[0]);
+  g.save();
+  g.font = textFont(a, unit);
+  g.textBaseline = "top";
+  g.lineJoin = "round";
+  g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+  g.lineWidth = 3 * unit;
+  g.strokeText(a.text, x, y);
+  g.fillStyle = a.color;
+  g.fillText(a.text, x, y);
+  g.restore();
 }
 
 function drawAnnLabel(g, label, mx, my, unit, color, align = "center") {
@@ -1127,6 +1180,7 @@ function draw() {
   const { cw, ch } = cssSize();
   drawScaleBar(ctx, cw, ch, S.view.scale, true);
   drawFade();
+  placeTextEdit();
   const pct = `${Math.round(S.view.scale * dpr * 100)}%`;
   $("st-zoom").textContent = pct;
   $("btn-zoom").textContent = pct;
@@ -1135,8 +1189,8 @@ function draw() {
 /** Dashed outline and grab points of the picked annotation. */
 function drawHandles(a) {
   ctx.save();
-  if (a.type !== "line") {
-    const [x0, y0, x1, y1] = bbox(a.pts);
+  if (!TWO_POINT.has(a.type)) {
+    const [x0, y0, x1, y1] = annBox(a);
     const [sx, sy] = toScreen(x0, y0);
     ctx.setLineDash([4, 3]);
     ctx.strokeStyle = "#0969da";
@@ -1423,20 +1477,38 @@ function updateSaveButtons() {
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 let wheelZ = 0;
 
-const TOOL_KEYS = { v: "pan", s: "select", m: "measure", p: "pen", r: "rect", e: "ellipse", c: "crop" };
-const DRAW_TYPES = { measure: "line", pen: "path", rect: "rect", ellipse: "ellipse", crop: "crop" };
+const TOOL_KEYS = {
+  v: "pan", s: "select", m: "measure", p: "pen", l: "segment", a: "arrow", r: "rect", e: "ellipse", x: "text", c: "crop",
+};
+const DRAW_TYPES = {
+  measure: "line", pen: "path", segment: "segment", arrow: "arrow", rect: "rect", ellipse: "ellipse", crop: "crop",
+};
+// Annotations made of two end points rather than a box.
+const TWO_POINT = new Set(["line", "segment", "arrow"]);
 
-// The pen draws free lines, rectangles or ellipses; one toolbar button shows
-// the current shape and clicking it again switches to the next.
-const PEN_SHAPES = ["pen", "rect", "ellipse"];
+// The pen draws free lines, straight lines, arrows, rectangles or ellipses;
+// the toolbar button shows the current shape and its menu picks another.
+const PEN_SHAPES = ["pen", "segment", "arrow", "rect", "ellipse"];
 const PEN_ICONS = {
   pen: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/>',
+  segment: '<path d="M5 19L19 5"/>',
+  arrow: '<path d="M5 19L19 5"/><path d="M10 5h9v9"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/>',
   ellipse: '<ellipse cx="12" cy="12" rx="8.5" ry="7"/>',
 };
-const PEN_TITLES = { pen: "画笔 (P)", rect: "画框 (R)，按住 Shift 画正方形", ellipse: "画圆 (E)，按住 Shift 画正圆" };
+const PEN_NAMES = { pen: "画笔", segment: "直线", arrow: "箭头", rect: "画框", ellipse: "画圆" };
+const PEN_KEYS = { pen: "P", segment: "L", arrow: "A", rect: "R", ellipse: "E" };
+const PEN_TITLES = {
+  pen: "画笔 (P)",
+  segment: "直线 (L)，按住 Shift 对齐 45°",
+  arrow: "箭头 (A)，按住 Shift 对齐 45°",
+  rect: "画框 (R)，按住 Shift 画正方形",
+  ellipse: "画圆 (E)，按住 Shift 画正圆",
+};
 
 function setTool(t) {
+  if (S.textEdit) finishText(true);
+  closeMenu();
   S.tool = t;
   const pen = PEN_SHAPES.includes(t);
   if (pen) {
@@ -1444,15 +1516,159 @@ function setTool(t) {
     pref.set("pen", t);
     const b = document.querySelector('#toolbtns [data-tool="pen"]');
     b.querySelector("svg").innerHTML = PEN_ICONS[t];
-    b.title = PEN_TITLES[t] + "。再点一次切换 画笔 / 画框 / 画圆";
-for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
+    b.title = PEN_TITLES[t];
+    for (const o of document.querySelectorAll("#pen-shapes button")) o.classList.toggle("on", o.dataset.shape === t);
   }
-  for (const b of $("toolbtns").children) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
-  canvas.classList.toggle("cross", t !== "pan" && t !== "select");
+  for (const b of document.querySelectorAll("#toolbtns [data-tool]")) b.classList.toggle("on", b.dataset.tool === t || (pen && b.dataset.tool === "pen"));
+  $("pen-split").classList.toggle("on", pen);
+  canvas.classList.toggle("cross", t !== "pan" && t !== "select" && t !== "text");
+  canvas.classList.toggle("text", t === "text");
   if (t !== "select") S.picked = null;
   if (t !== "crop") S.cropBox = null;
   draw();
 }
+
+// ---------- drop-down menus ----------
+
+let menuAnchor = null;
+
+/**
+ * Opens the drop-down menu under `anchor`. Items are {value, label, icon?,
+ * hint?, key?, on?}; `pick` gets the chosen value.
+ */
+function openMenu(anchor, items, pick) {
+  const m = $("dropmenu");
+  m.innerHTML = "";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", it.on ? "true" : "false");
+    b.classList.toggle("on", !!it.on);
+    if (it.icon) b.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 24 24">${it.icon}</svg>`);
+    const text = document.createElement("span");
+    text.className = "mi-label";
+    text.textContent = it.label;
+    b.append(text);
+    if (it.hint) {
+      const h = document.createElement("span");
+      h.className = "mi-hint";
+      h.textContent = it.hint;
+      b.append(h);
+    }
+    if (it.key) {
+      const k = document.createElement("kbd");
+      k.textContent = it.key;
+      b.append(k);
+    }
+    b.addEventListener("click", () => {
+      closeMenu();
+      pick(it.value);
+    });
+    m.append(b);
+  }
+  menuAnchor = anchor;
+  anchor.classList.add("open");
+  m.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  m.style.top = `${r.bottom + 6}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8))}px`;
+}
+
+/** Closes the menu; true if one was open (for `anchor`, when given, so a second click toggles it shut). */
+function closeMenu(anchor) {
+  const was = menuAnchor;
+  if (!was) return false;
+  menuAnchor = null;
+  was.classList.remove("open");
+  $("dropmenu").hidden = true;
+  return !anchor || was === anchor;
+}
+
+document.addEventListener(
+  "pointerdown",
+  (e) => {
+    if (menuAnchor && !$("dropmenu").contains(e.target) && !menuAnchor.contains(e.target)) closeMenu();
+  },
+  true,
+);
+window.addEventListener("blur", () => closeMenu());
+window.addEventListener("resize", () => closeMenu());
+$("quickbar").addEventListener("scroll", () => closeMenu());
+$("dropmenu").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeMenu();
+    e.stopPropagation();
+  }
+});
+
+// ---------- text annotations ----------
+
+/** Opens the in-place editor for text annotation `item` (`isNew`: not yet in S.ann). */
+function editText(item, isNew) {
+  const el = $("text-edit");
+  S.textEdit = { item, isNew, snap: snapshot() };
+  S.picked = null;
+  showSize(null);
+  el.value = item.text;
+  el.hidden = false;
+  placeTextEdit();
+  draw();
+  // After the press that opened it has moved focus, or it would blur at once.
+  setTimeout(() => {
+    if (S.textEdit && S.textEdit.item !== item) return;
+    el.focus();
+    el.select();
+  });
+}
+
+/** Keeps the editor over its text while the view moves. */
+function placeTextEdit() {
+  const t = S.textEdit;
+  if (!t) return;
+  const el = $("text-edit");
+  const [x, y] = toScreen(...t.item.pts[0]);
+  const size = textSize(t.item);
+  el.style.font = textFont(t.item, 1);
+  el.style.color = t.item.color;
+  // The padding and border are taken off so the typed text sits where it will be drawn.
+  el.style.left = `${x - 5}px`;
+  el.style.top = `${y - 3}px`;
+  el.style.height = `${Math.round(size * 1.2) + 6}px`;
+  ctx.save();
+  ctx.font = textFont(t.item, 1);
+  const w = ctx.measureText(el.value || "M").width;
+  ctx.restore();
+  el.style.width = `${Math.ceil(w) + 24}px`;
+}
+
+/** Ends text editing; `ok` keeps what was typed. Empty text removes the annotation. */
+function finishText(ok) {
+  const t = S.textEdit;
+  if (!t) return;
+  S.textEdit = null;
+  const el = $("text-edit");
+  const v = el.value.trim();
+  el.hidden = true;
+  el.blur();
+  if (!ok || v === t.item.text || (t.isNew && !v)) return draw();
+  pushHistory(t.snap);
+  if (!v) S.ann = S.ann.filter((a) => a !== t.item);
+  else {
+    t.item.text = v;
+    if (t.isNew) {
+      S.ann.push(t.item);
+      S.lastDrawn = t.item;
+    }
+  }
+  annChanged();
+}
+
+$("text-edit").addEventListener("input", placeTextEdit);
+$("text-edit").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) finishText(true);
+  else if (e.key === "Escape") finishText(false);
+});
+$("text-edit").addEventListener("blur", () => finishText(true));
 
 /** Shows the side panel: "contrast" (only brightness/contrast), "info"
  * (only file and acquisition metadata), "all", or null. */
@@ -1598,8 +1814,9 @@ function distToSeg(p, a, b) {
 
 /** Whether point `p` (image pixels) touches the outline of `a`, within `tol`. */
 function hits(a, p, tol) {
-  const [x0, y0, x1, y1] = bbox(a.pts);
+  const [x0, y0, x1, y1] = annBox(a);
   if (p[0] < x0 - tol || p[0] > x1 + tol || p[1] < y0 - tol || p[1] > y1 + tol) return false;
+  if (a.type === "text") return true;
   if (a.type === "rect") {
     return !(p[0] > x0 + tol && p[0] < x1 - tol && p[1] > y0 + tol && p[1] < y1 - tol);
   }
@@ -1615,9 +1832,21 @@ function hits(a, p, tol) {
   return false;
 }
 
-/** Drag handles: the two ends of a line, otherwise the 8 points of the box. */
+/** Image-space box of an annotation; text takes its size on screen. */
+function annBox(a) {
+  if (a.type !== "text") return bbox(a.pts);
+  ctx.save();
+  ctx.font = textFont(a, 1);
+  const w = ctx.measureText(a.text).width;
+  ctx.restore();
+  const [x, y] = a.pts[0];
+  return [x, y, x + w / S.view.scale, y + (textSize(a) * 1.2) / S.view.scale];
+}
+
+/** Drag handles: the two ends of a line, none for text, otherwise the 8 points of the box. */
 function handles(a) {
-  if (a.type === "line") return a.pts.map((p, i) => ({ at: p, i }));
+  if (TWO_POINT.has(a.type)) return a.pts.map((p, i) => ({ at: p, i }));
+  if (a.type === "text") return [];
   const [x0, y0, x1, y1] = bbox(a.pts);
   const xm = (x0 + x1) / 2, ym = (y0 + y1) / 2;
   return [
@@ -1633,7 +1862,7 @@ function handleAt(a, p, tol) {
 }
 
 function inBox(a, p, tol) {
-  const [x0, y0, x1, y1] = bbox(a.pts);
+  const [x0, y0, x1, y1] = annBox(a);
   return p[0] >= x0 - tol && p[0] <= x1 + tol && p[1] >= y0 - tol && p[1] <= y1 + tol;
 }
 
@@ -1662,7 +1891,8 @@ function boxText(w, h) {
 }
 
 function sizeText(a) {
-  if (a.type === "line") return lineLength(a.pts[0], a.pts[a.pts.length - 1]).text;
+  if (a.type === "text") return "文字";
+  if (TWO_POINT.has(a.type)) return lineLength(a.pts[0], a.pts[a.pts.length - 1]).text;
   const [, , w, h] = rectOf(a);
   return (a.type === "crop" ? "裁剪 " : "") + boxText(w, h);
 }
@@ -1838,8 +2068,8 @@ async function flushAnn() {
   if (!p) return;
   S.annPending = null;
   // z1 is the last Z of a range; it is absent for a single slice.
-  const items = S.ann.map(({ type, z, z1, color, width, pts }) => ({
-    type, z, z1, color, width, pts: pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
+  const items = S.ann.map(({ type, z, z1, color, width, pts, text }) => ({
+    type, z, z1, color, width, text, pts: pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
   }));
   const json = items.length
     ? JSON.stringify({ app: "TifMrcView", version: 1, image: basename(p.path), size: p.size, items })
@@ -1870,8 +2100,10 @@ async function loadAnn(path, series) {
   if (text) {
     try {
       const items = JSON.parse(text).items || [];
-      const ok = new Set(["line", "path", "rect", "ellipse"]);
-      S.ann = items.filter((a) => ok.has(a.type) && Array.isArray(a.pts) && a.pts.length);
+      const ok = new Set(["line", "path", "segment", "arrow", "rect", "ellipse", "text"]);
+      S.ann = items.filter(
+        (a) => ok.has(a.type) && Array.isArray(a.pts) && a.pts.length && (a.type !== "text" || typeof a.text === "string"),
+      );
     } catch (_) {
       toast(`${annName(path, series)} 读取失败`);
     }
@@ -1931,12 +2163,20 @@ function setCursor(p) {
   } else if (S.tool === "measure") {
     const tol = 6 / S.view.scale;
     if (S.ann.some((a) => a.type === "line" && onSlice(a) && handleAt(a, p, tol))) c = "crosshair";
+  } else if (S.tool === "text") {
+    const a = annAt(p, 6 / S.view.scale);
+    c = a && a.type === "text" ? "pointer" : "text";
   }
   canvas.style.cursor = c;
 }
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!S.info) return;
+  // A click beside the text being typed finishes it.
+  if (S.textEdit) {
+    finishText(true);
+    if (e.button === 0) return;
+  }
   // Right-click with any other tool goes back to the select tool.
   if (e.button === 2 && S.tool !== "select") {
     S.op = null;
@@ -2001,6 +2241,16 @@ canvas.addEventListener("pointerdown", (e) => {
       }
     }
   }
+  if (S.tool === "text") {
+    const a = annAt(p, tol);
+    if (a && a.type === "text") editText(a, false);
+    else {
+      toggleAnn(true);
+      editText({ type: "text", pts: [p], text: "", color: $("ann-color").value, width: +$("ann-width").value, z: S.z }, true);
+    }
+    e.preventDefault();
+    return;
+  }
   const type = DRAW_TYPES[S.tool];
   if (!type) return;
   const q = type === "crop" ? clampToImage(p) : p;
@@ -2040,7 +2290,13 @@ canvas.addEventListener("pointermove", (e) => {
       const last = it.pts[it.pts.length - 1];
       if (Math.hypot(p[0] - last[0], p[1] - last[1]) * S.view.scale > 2) it.pts.push(p);
     } else {
-      if (e.shiftKey && it.type !== "line") {
+      if (e.shiftKey && (it.type === "segment" || it.type === "arrow")) {
+        // Snap to multiples of 45°.
+        const a = it.pts[0];
+        const len = Math.hypot(p[0] - a[0], p[1] - a[1]);
+        const ang = Math.round(Math.atan2(p[1] - a[1], p[0] - a[0]) / (Math.PI / 4)) * (Math.PI / 4);
+        p = [a[0] + len * Math.cos(ang), a[1] + len * Math.sin(ang)];
+      } else if (e.shiftKey && it.type !== "line") {
         // Square / circle: use the longer side.
         const a = it.pts[0];
         const d = Math.max(Math.abs(p[0] - a[0]), Math.abs(p[1] - a[1]));
@@ -2124,7 +2380,9 @@ window.addEventListener("pointerup", endPointer);
 canvas.addEventListener("lostpointercapture", endPointer);
 canvas.addEventListener("dblclick", (e) => {
   if (!S.info) return;
+  const hit = S.tool === "select" && annAt(toImage(e), 6 / S.view.scale);
   if (S.cropBox && inBox(S.cropBox, toImage(e), 0)) applyCrop();
+  else if (hit && hit.type === "text") editText(hit, false);
   else if (S.tool === "pan" || (S.tool === "select" && !annAt(toImage(e), 6 / S.view.scale))) fit();
 });
 
@@ -2193,6 +2451,7 @@ async function showPixel(e) {
 window.addEventListener("keydown", (e) => {
   const tag = e.target.tagName;
   if ((tag === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "range") || tag === "SELECT") return;
+  if (e.key === "Escape" && closeMenu()) return e.preventDefault();
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod) {
@@ -2331,8 +2590,12 @@ $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-redo").addEventListener("click", redo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
-const AXES = ["xy", "xz", "yz"];
-$("btn-axis").addEventListener("click", () => S.info && setAxis(AXES[(AXES.indexOf(S.axis) + 1) % AXES.length]));
+const AXES = { xy: "正常看每一层", xz: "从侧面看，拉条切换 Y", yz: "从侧面看，拉条切换 X" };
+$("btn-axis").addEventListener("click", () => {
+  if (!S.info || closeMenu($("btn-axis"))) return;
+  const items = Object.entries(AXES).map(([v, hint]) => ({ value: v, label: v.toUpperCase(), hint, on: S.axis === v }));
+  openMenu($("btn-axis"), items, (v) => v !== S.axis && setAxis(v));
+});
 // Arrows to scroll the tool buttons when the window is too narrow for them.
 {
   const bar = $("quickbar");
@@ -2378,13 +2641,19 @@ $("gamma").addEventListener("input", (e) => {
   $("gamma-v").textContent = S.gamma.toFixed(2);
   requestRender();
 });
-for (const b of $("toolbtns").children)
+for (const b of document.querySelectorAll("#toolbtns [data-tool]"))
   b.addEventListener("click", () => {
     const t = b.dataset.tool;
     if (t !== "pen") return setTool(t);
-    const i = PEN_SHAPES.indexOf(S.tool);
-    setTool(i < 0 ? S.penShape : PEN_SHAPES[(i + 1) % PEN_SHAPES.length]);
+    // A second click on the active pen opens its shape menu.
+    if (PEN_SHAPES.includes(S.tool)) return $("pen-menu").click();
+    setTool(S.penShape);
   });
+$("pen-menu").addEventListener("click", () => {
+  if (closeMenu($("pen-split"))) return;
+  const items = PEN_SHAPES.map((v) => ({ value: v, icon: PEN_ICONS[v], label: PEN_NAMES[v], key: PEN_KEYS[v], on: S.tool === v }));
+  openMenu($("pen-split"), items, setTool);
+});
 for (const o of document.querySelectorAll("#pen-shapes button")) o.addEventListener("click", () => setTool(o.dataset.shape));
 // Both side panels can be resized by dragging their inner edge.
 function setPanelWidth(name, w) {
