@@ -1,7 +1,7 @@
 //! Developer tool: decode a file and print metadata, checksums and timings.
 //! `cargo run --release --example probe -- file.tif [...]`
 //! Set `TMV_PLUGIN_DIR` to a plugin folder (installed packages in `<id>/`)
-//! to open formats from WebAssembly plugins, e.g. .czi with the zen plugin.
+//! to open formats from WebAssembly plugins, e.g. .czi with the zeiss plugin.
 use std::time::Instant;
 
 use tifmrcview_lib::image::{OpenImage, PlaneData};

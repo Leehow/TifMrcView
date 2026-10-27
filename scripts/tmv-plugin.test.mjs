@@ -103,7 +103,10 @@ test("permission vocabulary matches Rust and the runtime; API 2 is strict", () =
   const official = JSON.parse("[" + fs.readFileSync(path.join(root, "src-tauri/src/plugins/market.rs"), "utf8")
     .match(/pub const OFFICIAL_API1_IDS:.*?= &\[([\s\S]*?)\];/)[1] + "]");
   const shipped = fs.readdirSync(path.join(root, "plugins")).filter((id) => fs.existsSync(path.join(root, "plugins", id, "plugin.json")));
-  assert.deepEqual(official.sort(), shipped.sort());
+  // API 2 plugins need no exception.
+  const api1 = shipped.filter((id) => JSON.parse(fs.readFileSync(path.join(root, "plugins", id, "plugin.json"), "utf8")).apiVersion !== 2);
+  assert.deepEqual(official.sort(), api1.sort());
+  assert.ok(shipped.includes("zeiss") && !api1.includes("zeiss"));
 });
 
 test("install permissions and errors have all seven i18n columns", () => {
@@ -128,7 +131,7 @@ test("source checks share manifest rules and distinguish a missing build", (t) =
   fs.writeFileSync(path.join(dir, "Cargo.toml"), "");
   assert.deepEqual(checkPlugin(dir).errors, []);
   assert.match(checkPlugin(dir).notes[0], /manifest only/);
-  for (const [field, value] of [["id", "r_16"], ["version", "bad"], ["apiVersion", 3], ["permissions", ["fs"]], ["apiVersion", null], ["minAppVersion", "0.6.0"], ["minAppVersion", "bad"], ["main", "../index.js"]]) {
+  for (const [field, value] of [["id", "r_16"], ["version", "bad"], ["apiVersion", 3], ["permissions", ["fs"]], ["apiVersion", null], ["minAppVersion", "0.7.0"], ["minAppVersion", "bad"], ["main", "../index.js"]]) {
     write({ ...manifest, [field]: value });
     assert.ok(checkPlugin(dir).errors.some((e) => e.includes(field)), `${field}: ${value}`);
   }

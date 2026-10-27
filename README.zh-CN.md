@@ -28,12 +28,12 @@
 
 ## 功能
 
-- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、调色板 TIFF（如蔡司 SEM 图）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节），以及装上 Zeiss ZEN 插件后的蔡司 CZI（ZEN 保存的 LSM / Airyscan 等：不压缩、Zstd、JPEG 子块，8/16/32 位灰度和彩色，C/Z/T 维度、拼接大图、通道名称和颜色、像素尺寸）。其他格式插件可以打开蔡司 LSM（`zenblack`）、徕卡 LIF / LOF（`lasx`）、尼康 ND2（`nis`）、奥林巴斯 OIB / OIR（`fluoview`）和 Imaris IMS（`imaris`）；一个文件里有多个图像时（如 LIF 工程、ND2 多位置），文件序号旁会出现图像选择框。`.rec` `.st` `.map` 和插件支持的格式只出现在「打开方式」里，不会被设为默认程序
+- 支持格式：TIFF（多页、条带/分块、LZW/Deflate/PackBits/JPEG 压缩、1–7 位灰度（如 1 位二值、4 位）以及 8/16/32 位整数和浮点；12 位等不常见位深会给出明确的错误提示）、OME-TIFF（读取 C/Z/T 维度、通道名称和颜色、像素尺寸）、ImageJ hyperstack（包括 >4 GB 的连续存储文件）、调色板 TIFF（如蔡司 SEM 图）、MRC/MRC2014（mode 0/1/2/3/4/6/12/101，`.mrc` `.mrcs` `.rec` `.st` `.map`；没有 IMOD 标记的 mode 0 文件会按文件头的最小/最大值判断是否为无符号字节），以及装上 Zeiss 插件后的蔡司 CZI（ZEN 保存的 LSM / Airyscan 等：不压缩、Zstd、JPEG 子块，8/16/32 位灰度和彩色，C/Z/T 维度、拼接大图、通道名称和颜色、像素尺寸）。同一个插件还能打开蔡司 LSM；其他格式插件每个厂商一个，可以打开徕卡 LIF / LOF（`lasx`）、尼康 ND2（`nis`）、奥林巴斯 OIB / OIR（`fluoview`）和 Imaris IMS（`imaris`）；一个文件里有多个图像时（如 LIF 工程、ND2 多位置），文件序号旁会出现图像选择框。`.rec` `.st` `.map` 和插件支持的格式只出现在「打开方式」里，不会被设为默认程序
 - 也能打开 PNG / JPEG / BMP / GIF / WebP
 - Z 拉条和播放；有时间维度时另有 T 拉条
 - 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
 - 亮度 / 对比度 / γ，直方图上拖动直接选显示范围；默认每层自动对比度（饱和 0.1%）
-- 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。插件 Zeiss SmartSEM 读取蔡司 SEM 的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺；插件 Zeiss ZEN 读取 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
+- 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。Zeiss 插件读取蔡司 SmartSEM 电镜图的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺，以及 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
 - 右侧预览栏列出同一文件夹里的图像（可收起），显示文件名、格式和大小
 - 顶部图标工具栏（悬停显示名称）：存图、撤销、选择、移动、测距、画笔（再点一次切换 自由 / 框 / 圆）、裁剪、比例尺、亮度对比度
 - 测距按像素尺寸显示真实长度；框和圆在图上一直标着宽 × 高（正圆标直径）
@@ -52,11 +52,11 @@
 
 ## 插件
 
-工具栏「插件」里可以开关、安装和卸载插件，以及检查更新。除了多语言，插件都要单独安装：点「插件市场」在浏览器里打开 https://tifmrcview.com/tifmrcview/plugins/ 下载插件包（.zip），再点「加载插件…」选中它即可安装；装同一个插件的新版本会直接替换旧版本。插件源码在仓库的 `plugins/<id>/` 里（`plugin.json` + `index.js`，目前有 `recorder`、`smartsem`、`zen`、`zenblack`、`lasx`、`nis`、`fluoview`、`imaris`），装好的插件放在插件文件夹的 `<id>/` 子文件夹里。
+工具栏「插件」里可以开关、安装和卸载插件，以及检查更新。除了多语言，插件都要单独安装：点「插件市场」在浏览器里打开 https://tifmrcview.com/tifmrcview/plugins/ 下载插件包（.zip），再点「加载插件…」选中它即可安装；装同一个插件的新版本会直接替换旧版本。插件源码在仓库的 `plugins/<id>/` 里（`plugin.json` + `index.js`，目前有 `recorder`、`zeiss`、`lasx`、`nis`、`fluoview`、`imaris`），装好的插件放在插件文件夹的 `<id>/` 子文件夹里。
 
 一键安装（0.5 及以上）：在插件市场网页的插件卡片上点 **安装**，或者在「插件」窗口的「插件市场」列表里点 **安装**（有新版本时显示「更新到 x.y.z」）。网页会把 `tifmrcview://install-plugin?id=<id>`（可带 `&version=<x.y.z>`）这样的链接交给应用，应用先显示插件名称和说明，点 **安装** 后才会安装。它只安装官方插件市场（更新源旁边的 `plugins.json`）上列出的插件，通过 HTTPS 下载，并在安装前核对大小和 SHA-256。下载 zip 再点「加载插件…」的方式仍然可用。
 
-格式插件：插件包还可以带一个在沙箱里运行的 WebAssembly 模块，用来支持新的文件格式或读取元数据，例如用 `plugins/sdk` 里的 Rust SDK 编写。蔡司 CZI（`zen`）、蔡司 SmartSEM（`smartsem`）和其他厂商格式都是这样实现的，主程序里没有任何厂商格式的代码：没装 Zeiss ZEN 插件时打不开 .czi，应用会提示需要安装哪个插件。模块只能读取正在打开的文件，内存和运行时间都有上限；它把每一页描述成文件里的一组数据块，由应用本身并行解压、拼接。接口（ABI）、限制和示例见 [docs/format-plugins.md](docs/format-plugins.md)。
+格式插件：插件包还可以带一个在沙箱里运行的 WebAssembly 模块，用来支持新的文件格式或读取元数据，例如用 `plugins/sdk` 里的 Rust SDK 编写。每个厂商一个这样的插件（`zeiss` 打开 CZI、LSM 并读取 SmartSEM 参数），主程序里没有任何厂商格式的代码：没装 Zeiss 插件时打不开 .czi，应用会提示需要安装哪个插件。模块只能读取正在打开的文件，内存和运行时间都有上限；它把每一页描述成文件里的一组数据块，由应用本身并行解压、拼接。接口（ABI）、限制和示例见 [docs/format-plugins.md](docs/format-plugins.md)。
 
 录制视频插件：在「工具」面板的「录制视频 (MP4)」里选 Z 或 T、起止帧、帧率、区域（整张/选区/当前视野）、尺寸和画质，录出来的 H.264 MP4 带有当前的对比度、通道颜色、标注和比例尺。
 
@@ -178,7 +178,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `src-tauri/src/plugins/` | 插件的原生部分（`recorder.rs`、`mp4.rs`）、插件包（`package.rs`）和 WebAssembly 格式插件宿主（`wasm.rs`、`recipe.rs`、`registry.rs`） |
 | `src-tauri/examples/probe.rs` | 解码调试小工具 |
 | `ui/` | 纯 HTML/JS 前端：`index.html`、`app.js`、`style.css`、`plugin-host.js`；内置语言插件在 `ui/plugins/i18n.js` |
-| `plugins/<id>/` | 可安装插件的源码（`recorder`，以及编译成 WebAssembly 的 Rust crate 格式插件 `smartsem`、`zen`、`zenblack`、`lasx`、`nis`、`fluoview`、`imaris`）和插件 SDK（`sdk`） |
+| `plugins/<id>/` | 可安装插件的源码（`recorder`，以及编译成 WebAssembly 的 Rust crate 格式插件（每个厂商一个）`zeiss`、`lasx`、`nis`、`fluoview`、`imaris`）和插件 SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（打包插件 zip 并生成市场索引）、`make-release.mjs` |
 | `site/` | 官网和插件市场，截图在 `site/shots/` |
 | `packaging/linux/` | Linux 打包文件（.mrc 的 MIME 类型） |

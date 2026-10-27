@@ -1,6 +1,5 @@
-//! Zeiss SmartSEM plugin: acquisition settings of TIFFs saved by SmartSEM,
-//! the software of Zeiss SEM / FIB-SEM microscopes (Gemini, Sigma,
-//! Crossbeam…), as a TifMrcView WebAssembly metadata plugin.
+//! Acquisition settings of TIFFs saved by SmartSEM, the software of Zeiss
+//! SEM / FIB-SEM microscopes (Gemini, Sigma, Crossbeam…).
 //!
 //! SmartSEM writes TIFF tag 34118 (CZ_SEM): a few numbers, then pairs of
 //! lines, a parameter code (`AP_WD`, `DP_DETECTOR_CHANNEL`, `SV_VERSION`…)
@@ -8,7 +7,7 @@
 //! Latin-1. The core opens the image; this plugin adds the settings, the
 //! calibrated pixel size and the format name.
 
-use tifmrcview_plugin_sdk::{export_metadata, file, Group, Meta, Metadata, Result};
+use tifmrcview_plugin_sdk::{file, Group, Meta, Metadata, Result};
 
 const CZ_SEM_TAG: u16 = 34118;
 const IMAGE_WIDTH_TAG: u16 = 256;
@@ -137,7 +136,7 @@ impl Ifd {
     }
 }
 
-struct SmartSem;
+pub struct SmartSem;
 
 impl Metadata for SmartSem {
     fn metadata(path: &str) -> Result<Option<Meta>> {
@@ -154,7 +153,7 @@ impl Metadata for SmartSem {
     }
 }
 
-export_metadata!(SmartSem);
+
 
 fn is_code(l: &str) -> bool {
     l.len() > 3

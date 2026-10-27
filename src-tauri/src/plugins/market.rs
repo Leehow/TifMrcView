@@ -32,7 +32,7 @@ pub const SCHEME: &str = "tifmrcview";
 /// Legacy packages shipped in plugins/ at the API 2 transition. A name alone
 /// grants nothing: the exact version and archive hash must also match the
 /// backend's official HTTPS index. Remove this exception as they migrate.
-pub const OFFICIAL_API1_IDS: &[&str] = &["fluoview", "imaris", "lasx", "nis", "recorder", "smartsem", "zen", "zenblack"];
+pub const OFFICIAL_API1_IDS: &[&str] = &["fluoview", "imaris", "lasx", "nis", "recorder"];
 pub const LEGACY_REJECTED: &str = "不再接受第三方 API 1 插件，请联系开发者升级到 API 2；官方旧版插件须与已读取的插件市场索引完全匹配，请先刷新插件市场";
 
 /// What a `tifmrcview://install-plugin?id=…&version=…` link asks for.
@@ -93,6 +93,14 @@ pub struct Entry {
     pub sha256: String,
     pub api_version: u64,
     pub permissions: Option<Value>,
+    /// Plugins this one takes over (`replaces`).
+    pub replaces: Vec<String>,
+}
+
+/// The `replaces` ids of an index entry or manifest, ignoring junk.
+fn replaces(p: &Value) -> Vec<String> {
+    let ids = p.get("replaces").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+    ids.filter(|i| package::valid_id(i)).map(str::to_string).collect()
 }
 
 /// The package list of a parsed `plugins.json`.
@@ -140,7 +148,8 @@ pub fn find_entry(index: &Value, id: &str, app_version: &str) -> Result<Entry> {
         }
     }
     let api_version = p.get("apiVersion").map_or(Some(1), Value::as_u64).ok_or_else(|| anyhow!("apiVersion 必须是整数"))?;
-    Ok(Entry { id: id.to_string(), name, version, file, size, sha256, api_version, permissions: p.get("permissions").cloned() })
+    let permissions = p.get("permissions").cloned();
+    Ok(Entry { id: id.to_string(), name, version, file, size, sha256, api_version, permissions, replaces: replaces(p) })
 }
 
 /// Checks a download against its index entry.
@@ -234,12 +243,22 @@ pub fn install_bytes(dir: &Path, entry: &Entry, bytes: &[u8], app_version: &str)
     package::install_data_checked(dir, bytes, app_version, |unpacked, m| {
         if m.id != entry.id || m.name != entry.name || m.raw["version"].as_str() != Some(entry.version.as_str())
             || m.raw.get("apiVersion").and_then(Value::as_u64).unwrap_or(1) != entry.api_version
-            || m.raw.get("permissions") != entry.permissions.as_ref() {
+            || m.raw.get("permissions") != entry.permissions.as_ref() || m.replaces != entry.replaces {
             bail!("插件包和插件市场的信息不一致");
         }
         check_install_policy(m, bytes, Some(entry))?;
         super::registry::validate_package(unpacked, m)
     })
+    .inspect(|m| {
+        package::retire_replaced(dir, m);
+    })
+}
+
+/// Whether `bytes` are exactly the official market's package of `m`, the
+/// condition for a hand-picked zip to remove the plugins it replaces.
+pub fn is_official(index: Option<&Value>, m: &Manifest, bytes: &[u8], app_version: &str) -> bool {
+    let Some(e) = index.and_then(|i| find_entry(i, &m.id, app_version).ok()) else { return false };
+    m.raw["version"].as_str() == Some(e.version.as_str()) && m.replaces == e.replaces && verify(&e, bytes).is_ok()
 }
 
 /// What the plugin dialog shows for one market package.
@@ -250,8 +269,11 @@ pub struct Listed {
     pub entry: Value,
     /// Version installed now, if any.
     pub installed: Option<String>,
-    /// "install", "update", "installed", "builtin" or "needsApp".
+    /// "install", "update", "installed", "builtin", "needsApp" or "replace"
+    /// (not installed, but takes over the installed plugins in `replaces`).
     pub state: &'static str,
+    /// Installed plugins this package replaces.
+    pub replaces: Vec<String>,
 }
 
 /// Pairs the market list with what is installed in `dir`.
@@ -274,14 +296,17 @@ pub fn list(index: &Value, dir: Option<&Path>, app_version: &str) -> Vec<Listed>
                 .and_then(Value::as_str)
                 .is_some_and(|m| !matches!(package::compare_versions(m, app_version), Ok(Ordering::Less | Ordering::Equal)));
             let newer = |h: &str| package::compare_versions(version, h).is_ok_and(|o| o == Ordering::Greater);
+            let mut replacing = replaces(p);
+            replacing.retain(|old| old != id && installed.iter().any(|i| &i.id == old));
             let state = match &have {
                 _ if builtin => "builtin",
                 Some(h) if !newer(h) => "installed",
                 _ if too_old => "needsApp",
                 Some(_) => "update",
+                None if !replacing.is_empty() => "replace",
                 None => "install",
             };
-            Some(Listed { entry: p.clone(), installed: have, state })
+            Some(Listed { entry: p.clone(), installed: have, state, replaces: replacing })
         })
         .collect()
 }
@@ -575,6 +600,44 @@ mod tests {
         index["plugins"][0]["version"] = "1.10.0".into();
         assert_eq!(states(&index), ["update", "builtin", "needsApp"]);
         assert_eq!(list(&index, Some(tmp.path()), "0.5.0")[0].installed.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn merged_plugin_replaces_the_installed_old_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = |id: &str| {
+            let archive = tmp.path().join(format!("{id}.zip"));
+            std::fs::write(&archive, zip_bytes(&PLUGIN.replace("\"demo\"", &format!("\"{id}\"")))).unwrap();
+            package::install(tmp.path(), &archive, "0.5.0").unwrap();
+            std::fs::remove_file(archive).unwrap();
+        };
+        old("old-a");
+        old("old-b");
+        let merged = PLUGIN.replace(r#""permissions":[]"#, r#""permissions":[],"replaces":["old-a","old-b","old-c"]"#);
+        let zip = zip_bytes(&merged);
+        let mut index = index_for(&zip, "0.5.0");
+        index["plugins"][0]["replaces"] = serde_json::json!(["old-a", "old-b", "old-c"]);
+        let listed = list(&index, Some(tmp.path()), "0.5.0");
+        assert_eq!((listed[0].state, listed[0].replaces.clone()), ("replace", vec!["old-a".to_string(), "old-b".into()]));
+
+        // An index entry that does not match the package's replaces is refused.
+        let mut e = find_entry(&index, "demo", "0.5.0").unwrap();
+        e.replaces.pop();
+        assert!(install_bytes(tmp.path(), &e, &zip, "0.5.0").is_err());
+        assert!(package::is_installed(tmp.path(), "old-a"));
+
+        // A hand-picked copy of the official package removes them too, any other only hides them.
+        let other = zip_bytes(&merged.replace("1.2.0", "1.2.1"));
+        super::super::install_confirmed_zip(tmp.path(), &other, &sha256(&other), Some(&index), "0.5.0").unwrap();
+        assert!(package::is_installed(tmp.path(), "old-a") && package::is_installed(tmp.path(), "old-b"));
+        super::super::install_confirmed_zip(tmp.path(), &zip, &sha256(&zip), Some(&index), "0.5.0").unwrap();
+        assert!(!package::is_installed(tmp.path(), "old-a") && !package::is_installed(tmp.path(), "old-b"));
+        assert_eq!(list(&index, Some(tmp.path()), "0.5.0")[0].state, "installed");
+
+        old("old-a");
+        let e = find_entry(&index, "demo", "0.5.0").unwrap();
+        install_bytes(tmp.path(), &e, &zip, "0.5.0").unwrap();
+        assert!(!package::is_installed(tmp.path(), "old-a") && package::is_installed(tmp.path(), "demo"));
     }
 
     #[test]

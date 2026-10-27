@@ -170,7 +170,13 @@ fn install_confirmed_zip(dir: &Path, bytes: &[u8], sha256: &str, index: Option<&
         anyhow::bail!("插件包已改变，请重新选择并确认安装");
     }
     inspect_installable(bytes, index, version)?;
-    package::install_data_checked(dir, bytes, version, registry::validate_package)
+    let m = package::install_data_checked(dir, bytes, version, registry::validate_package)?;
+    // Only the official package may remove the plugins it replaces; any
+    // other only hides them (see the registry).
+    if market::is_official(index, &m, bytes, version) {
+        package::retire_replaced(dir, &m);
+    }
+    Ok(m)
 }
 
 #[tauri::command]

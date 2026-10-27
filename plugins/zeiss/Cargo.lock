@@ -7,8 +7,8 @@ name = "tifmrcview-plugin-sdk"
 version = "1.0.0"
 
 [[package]]
-name = "tmv-plugin-zen"
-version = "2.0.0"
+name = "tmv-plugin-zeiss"
+version = "1.0.0"
 dependencies = [
  "tifmrcview-plugin-sdk",
 ]

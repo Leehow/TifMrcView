@@ -29,6 +29,9 @@ export function validateManifest(m, dirName, files) {
   }
   if (m.metadata != null && !(m.metadata && extList(m.metadata.ext))) errs.push('metadata must be {"ext": ["tif"]}');
   if ((m.formats || m.metadata) && m.wasm == null) errs.push("formats / metadata need a wasm module");
+  if (m.replaces != null && !(Array.isArray(m.replaces) && m.replaces.every((r) => typeof r === "string" && /^[a-z0-9-]{1,64}$/.test(r) && r !== m.id && r !== "i18n"))) {
+    errs.push("replaces must be a list of other plugin ids");
+  }
   return errs;
 }
 

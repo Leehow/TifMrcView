@@ -30,8 +30,8 @@ const DISABLED_FILE: &str = ".disabled.json";
 /// Vendor formats the official plugins open, so a missing plugin gets a
 /// helpful message: (extension, plugin id, plugin name).
 const KNOWN: &[(&str, &str, &str)] = &[
-    ("czi", "zen", "Zeiss ZEN"),
-    ("lsm", "zenblack", "Zeiss ZEN black"),
+    ("czi", "zeiss", "Zeiss"),
+    ("lsm", "zeiss", "Zeiss"),
     ("lif", "lasx", "Leica LAS X"),
     ("lof", "lasx", "Leica LAS X"),
     ("nd2", "nis", "Nikon NIS-Elements"),
@@ -145,6 +145,7 @@ impl Registry {
         let mut idx = Index::default();
         if let Some(dir) = self.dir.read().unwrap().as_ref() {
             let version = self.app_version.read().unwrap().clone();
+            let mut replaced = HashSet::new();
             for p in package::scan(dir, &version) {
                 idx.installed.insert(p.id.clone(), p.error.clone());
                 if p.error.is_some() {
@@ -152,11 +153,15 @@ impl Registry {
                 }
                 let pkg = PathBuf::from(&p.dir);
                 if let Ok(m) = package::read_installed(&pkg, &version) {
+                    replaced.extend(m.replaces.iter().cloned());
                     if m.wasm.is_some() {
                         idx.wasm.push(Arc::new(Pkg { manifest: m, dir: pkg, module: OnceLock::new() }));
                     }
                 }
             }
+            // A plugin that another installed one replaces (e.g. the old
+            // per-product Zeiss plugins next to "zeiss") never runs.
+            idx.wasm.retain(|p| !replaced.contains(&p.manifest.id));
         }
         let idx = Arc::new(idx);
         *self.index.write().unwrap() = Some(idx.clone());
@@ -198,7 +203,7 @@ impl Registry {
         let &(_, id, name) = KNOWN.iter().find(|k| k.0 == ext)?;
         Some(match idx.installed.get(id) {
             Some(Some(err)) => format!("「{name}」插件无法加载：{err}"),
-            Some(None) => format!("请把「{name}」插件更新到 2.0 或更新版本，才能打开 .{ext} 文件"),
+            Some(None) => format!("请把「{name}」插件更新到最新版本，才能打开 .{ext} 文件"),
             None => format!("需要安装「{name}」插件才能打开 .{ext} 文件"),
         })
     }
@@ -599,18 +604,41 @@ mod tests {
     fn missing_plugin_messages_and_switches() {
         let tmp = tempfile::tempdir().unwrap();
         let r = Registry::new(Some(tmp.path().to_path_buf()), "0.4.0");
-        assert!(r.missing("czi").unwrap().contains("需要安装「Zeiss ZEN」插件"));
+        assert!(r.missing("czi").unwrap().contains("需要安装「Zeiss」插件"));
+        assert!(r.missing("lsm").unwrap().contains("需要安装「Zeiss」插件"));
         assert!(r.missing("xyz").is_none());
-        // An old, JavaScript-only zen package.
-        std::fs::create_dir_all(tmp.path().join("zen")).unwrap();
-        std::fs::write(tmp.path().join("zen/plugin.json"), r#"{"id":"zen","name":"Zeiss ZEN","version":"1.0.0"}"#).unwrap();
-        std::fs::write(tmp.path().join("zen/index.js"), "").unwrap();
+        // A JavaScript-only zeiss package.
+        std::fs::create_dir_all(tmp.path().join("zeiss")).unwrap();
+        std::fs::write(tmp.path().join("zeiss/plugin.json"), r#"{"id":"zeiss","name":"Zeiss","version":"1.0.0"}"#).unwrap();
+        std::fs::write(tmp.path().join("zeiss/index.js"), "").unwrap();
         r.invalidate();
-        assert!(r.missing("czi").unwrap().contains("更新到 2.0"));
+        assert!(r.missing("czi").unwrap().contains("更新到最新版本"));
 
-        r.set_disabled(vec!["zen".into(), "../bad".into()]).unwrap();
+        r.set_disabled(vec!["zeiss".into(), "../bad".into()]).unwrap();
         let again = Registry::new(Some(tmp.path().to_path_buf()), "0.4.0");
-        assert!(!again.enabled("zen") && again.enabled("smartsem"));
+        assert!(!again.enabled("zeiss") && again.enabled("nis"));
         assert!(r.extensions().is_empty() && !r.opens("czi"));
+    }
+
+    #[test]
+    fn replaced_plugins_never_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = |id: &str, extra: &str| {
+            let d = tmp.path().join(id);
+            std::fs::create_dir_all(&d).unwrap();
+            let m = format!(r#"{{"id":"{id}","name":"{id}","version":"1.0.0","wasm":"m.wasm"{extra}}}"#);
+            std::fs::write(d.join("plugin.json"), m).unwrap();
+            std::fs::write(d.join("index.js"), "").unwrap();
+            std::fs::write(d.join("m.wasm"), "").unwrap();
+        };
+        pkg("zen", r#","formats":[{"ext":["czi"]}]"#);
+        pkg("smartsem", r#","metadata":{"ext":["tif"]}"#);
+        let r = Registry::new(Some(tmp.path().to_path_buf()), "0.6.0");
+        assert_eq!(r.extensions(), ["czi"]);
+        assert_eq!(r.active().len(), 2);
+        pkg("zeiss", r#","formats":[{"ext":["lsm"]}],"replaces":["zen","smartsem"]"#);
+        r.invalidate();
+        assert_eq!(r.extensions(), ["lsm"]);
+        assert_eq!(r.active().iter().map(|p| p.manifest.id.as_str()).collect::<Vec<_>>(), ["zeiss"]);
     }
 }

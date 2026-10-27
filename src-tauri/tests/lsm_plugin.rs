@@ -1,5 +1,5 @@
-//! Zeiss LSM through the "zenblack" WebAssembly plugin, end to end: the plugin
-//! is built from `plugins/zenblack`, installed into a temporary plugin folder
+//! Zeiss LSM through the "zeiss" WebAssembly plugin, end to end: the plugin
+//! is built from `plugins/zeiss`, installed into a temporary plugin folder
 //! and used through `formats::open_with` / `open_series_with`, exactly as the
 //! app does.
 
@@ -12,9 +12,9 @@ use tifmrcview_lib::formats;
 use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source};
 use tifmrcview_lib::plugins::registry::Registry;
 
-macro_rules! zenblack {
+macro_rules! zeiss {
     () => {
-        match common::install(&["zenblack"]) {
+        match common::install(&["zeiss"]) {
             Some(p) => p,
             None => return,
         }
@@ -66,7 +66,7 @@ fn write(dir: &Path, name: &str, s: &Spec) -> std::path::PathBuf {
 
 #[test]
 fn stack_info_metadata_and_pixels() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     // Two channels (with the empty third entry of the strip arrays that LSM writes), three Z planes,
     // strips of five rows (the last one has one), thumbnails between the images.
@@ -135,7 +135,7 @@ fn stack_info_metadata_and_pixels() {
 
 #[test]
 fn single_channel_raw_pages_are_read_in_place() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let mut s = Spec::new(16, 16, 1, 2, 1);
     s.rows_per_strip = 4;
@@ -156,7 +156,7 @@ fn single_channel_raw_pages_are_read_in_place() {
 
 #[test]
 fn compression_predictor_and_time_series() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     for (comp, bits, name) in [
         (Comp::Lzw, 8, "lzw8"),
@@ -186,7 +186,7 @@ fn compression_predictor_and_time_series() {
 
 #[test]
 fn interleaved_samples() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     for (comp, bits) in [(Comp::None, 8), (Comp::None, 16), (Comp::LzwPredictor, 8), (Comp::LzwPredictor, 16)] {
         // Three channels as chunky samples; the LSMINFO has no scan information
@@ -210,7 +210,7 @@ fn interleaved_samples() {
 
 #[test]
 fn positions_and_tiles_are_series() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     // 2 positions x 3 tiles, 2 Z planes each: tile is the outer loop, then position.
     let mut s = Spec::new(16, 8, 2, 2, 1);
@@ -250,7 +250,7 @@ fn positions_and_tiles_are_series() {
 
 #[test]
 fn aborted_acquisition_shows_the_saved_images() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     // Four Z planes announced, three written.
     let mut s = Spec::new(16, 8, 2, 4, 1);
@@ -274,7 +274,7 @@ fn aborted_acquisition_shows_the_saved_images() {
 #[cfg(unix)]
 #[test]
 fn offsets_beyond_4_gib_are_unwrapped() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     // The data starts below 4 GiB, so strips on both sides of the wrap occur (and for two
     // channels the empty third entry points at the end of the data). In the first case the
@@ -299,7 +299,7 @@ fn offsets_beyond_4_gib_are_unwrapped() {
 
 #[test]
 fn broken_and_unsupported_files() {
-    let p = zenblack!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
 
     // A TIFF without CZ_LSMINFO is not an LSM.
@@ -374,7 +374,7 @@ fn sample_cntrl1() {
         eprintln!("SKIPPED: {} is not there", path.display());
         return;
     }
-    let p = zenblack!();
+    let p = zeiss!();
     let src = open(&p.registry, path);
     let i = src.info();
     assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.page_count), (1024, 1024, 2, 1, 1, 1));

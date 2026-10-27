@@ -399,6 +399,17 @@ async function installPackage() {
  */
 async function afterInstall(m, own) {
   const label = `${m.name}  v${m.version}`;
+  // The backend removed the installed plugins this one replaces.
+  const replaced = [];
+  for (const id of m.replaces || []) {
+    const rec = pluginHost.plugins.get(id);
+    if (!rec && !pluginHost.broken.has(id)) continue;
+    if (rec) deactivatePlugin(rec);
+    replaced.push(rec ? rec.def.name || id : id);
+    pluginHost.plugins.delete(id);
+    pluginHost.broken.delete(id);
+    pluginHost.manifests.delete(id);
+  }
   const old = pluginHost.plugins.get(m.id);
   if (old || pluginHost.broken.has(m.id)) {
     if (!own) return;
@@ -412,7 +423,9 @@ async function afterInstall(m, own) {
   renderPluginList();
   if (!own) return;
   const err = pluginHost.broken.get(m.id);
-  toast(err ? `已安装 ${label}，但出错：${err.error}` : `已安装 ${label}`, err ? 6000 : 3500);
+  if (err) toast(`已安装 ${label}，但出错：${err.error}`, 6000);
+  else if (replaced.length) toast(`已安装 ${label}，取代了 ${replaced.join(" / ")}`, 6000);
+  else toast(`已安装 ${label}`, 3500);
 }
 
 async function uninstallPackage(id) {

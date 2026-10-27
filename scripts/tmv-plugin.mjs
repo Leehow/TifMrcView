@@ -137,7 +137,7 @@ function newer(a, b) {
 const safeRel = (s) => typeof s === "string" && s.split("/").every((c) => c && !c.startsWith(".") && /^[\w.-]+$/.test(c));
 
 /** Source crates may omit the wasm until built; packages and zips may not. */
-export function checkPlugin(input, { appVersion = "0.5.0" } = {}) {
+export function checkPlugin(input, { appVersion = "0.6.0" } = {}) {
   const errors = [], warnings = [], notes = [];
   let manifest;
   try {
@@ -194,7 +194,7 @@ export function checkPlugin(input, { appVersion = "0.5.0" } = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, input, flag, appVersion] = process.argv.slice(2);
   if (command !== "check" || !input || (flag && (flag !== "--app-version" || !appVersion)) || process.argv.length > 6) {
-    console.error("usage: tmv-plugin.mjs check <dir-or-zip> [--app-version 0.5.0]");
+    console.error("usage: tmv-plugin.mjs check <dir-or-zip> [--app-version 0.6.0]");
     process.exitCode = 1;
   } else {
     const result = checkPlugin(input, { appVersion });

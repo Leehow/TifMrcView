@@ -39,8 +39,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            plugins/zen -> ../../target/wasm-plugins
-            plugins/smartsem -> ../../target/wasm-plugins
+            plugins/zeiss -> ../../target/wasm-plugins
 
       - name: Stage site and plugins
         run: |

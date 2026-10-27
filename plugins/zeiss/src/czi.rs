@@ -1,5 +1,5 @@
-//! Zeiss ZEN plugin: reads CZI files (LSM / Airyscan / Axioscan /
-//! Celldiscoverer) as a TifMrcView WebAssembly format plugin.
+//! CZI files saved by Zeiss ZEN (LSM / Airyscan / Axioscan /
+//! Celldiscoverer).
 //!
 //! A CZI file is a chain of segments, each a 16-byte id (`ZISRAWFILE`,
 //! `ZISRAWDIRECTORY`, `ZISRAWSUBBLOCK`, `ZISRAWMETADATA`…) plus sizes. The
@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use tifmrcview_plugin_sdk::{
-    bail, export_format, file, flags, le_i32, le_i64, Channel, Chunk, Codec, Context, DType, Format, Group, Info,
+    bail, file, flags, le_i32, le_i64, Channel, Chunk, Codec, Context, DType, Format, Group, Info,
     Recipe, Result,
 };
 use tifmrcview_plugin_sdk::xml::{self, Node};
@@ -300,8 +300,6 @@ impl Czi {
         })
     }
 }
-
-export_format!(Czi);
 
 /// The metadata XML of the file (UTF-8, not validated as a whole).
 fn metadata_xml(pos: u64) -> Result<Vec<u8>> {
