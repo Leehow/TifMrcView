@@ -145,23 +145,20 @@ impl Registry {
         let mut idx = Index::default();
         if let Some(dir) = self.dir.read().unwrap().as_ref() {
             let version = self.app_version.read().unwrap().clone();
-            let mut replaced = HashSet::new();
             for p in package::scan(dir, &version) {
                 idx.installed.insert(p.id.clone(), p.error.clone());
-                if p.error.is_some() {
+                // A plugin that another installed one replaces (e.g. the old
+                // per-product Zeiss plugins next to "zeiss") never runs.
+                if p.error.is_some() || p.replaced_by.is_some() {
                     continue;
                 }
                 let pkg = PathBuf::from(&p.dir);
                 if let Ok(m) = package::read_installed(&pkg, &version) {
-                    replaced.extend(m.replaces.iter().cloned());
                     if m.wasm.is_some() {
                         idx.wasm.push(Arc::new(Pkg { manifest: m, dir: pkg, module: OnceLock::new() }));
                     }
                 }
             }
-            // A plugin that another installed one replaces (e.g. the old
-            // per-product Zeiss plugins next to "zeiss") never runs.
-            idx.wasm.retain(|p| !replaced.contains(&p.manifest.id));
         }
         let idx = Arc::new(idx);
         *self.index.write().unwrap() = Some(idx.clone());
@@ -640,5 +637,7 @@ mod tests {
         r.invalidate();
         assert_eq!(r.extensions(), ["lsm"]);
         assert_eq!(r.active().iter().map(|p| p.manifest.id.as_str()).collect::<Vec<_>>(), ["zeiss"]);
+        let by: Vec<_> = package::scan(tmp.path(), "0.6.0").into_iter().map(|p| (p.id, p.replaced_by)).collect();
+        assert_eq!(by, [("smartsem".into(), Some("zeiss".into())), ("zeiss".into(), None), ("zen".into(), Some("zeiss".into()))]);
     }
 }

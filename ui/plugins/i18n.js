@@ -452,6 +452,7 @@ const PATTERNS = [
   [/^正在下载更新… (.+)$/, "Downloading update… $1", "Update wird geladen… $1", "アップデートをダウンロード中… $1", "Descargando actualización… $1", "Téléchargement de la mise à jour… $1", "Загрузка обновления… $1"],
   [/^更新失败：(.+)$/, "Update failed: $1", "Update fehlgeschlagen: $1", "更新に失敗しました：$1", "Error al actualizar: $1", "Échec de la mise à jour : $1", "Ошибка обновления: $1"],
   // plugin packages (plugin-host.js, src-tauri/src/plugins/package.rs)
+  [/^已由「(.+)」取代，可以卸载$/, "Replaced by “$1”; you can uninstall it", "Durch „$1“ ersetzt; kann deinstalliert werden", "「$1」に置き換えられました。アンインストールできます", "Sustituido por «$1»; se puede desinstalar", "Remplacée par « $1 » ; vous pouvez la désinstaller", "Заменён плагином «$1»; его можно удалить"],
   [/^换成 (.+)$/, "Switch to $1", "Zu $1 wechseln", "$1 に切り替え", "Cambiar a $1", "Passer à $1", "Заменить на $1"],
   [/^将取代已安装的 (.+)$/, "Replaces the installed $1", "Ersetzt das installierte $1", "インストール済みの $1 を置き換えます", "Sustituye a $1 instalado", "Remplace $1 installée", "Заменит установленный $1"],
   [/^已安装 (.+)，取代了 (.+)$/, "Installed $1, replacing $2", "$1 installiert, ersetzt $2", "$1 をインストールし、$2 を置き換えました", "$1 instalado; sustituye a $2", "$1 installée, à la place de $2", "Установлен $1 вместо $2"],

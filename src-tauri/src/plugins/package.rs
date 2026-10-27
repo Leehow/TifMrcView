@@ -213,11 +213,15 @@ pub struct Installed {
     pub main: Option<String>,
     pub manifest: Option<Value>,
     pub error: Option<String>,
+    /// Name of the installed package that replaces this one (see
+    /// [`Manifest::replaces`]); such a package never runs.
+    pub replaced_by: Option<String>,
 }
 
 /// Lists the package folders in `dir`; broken ones carry `error`.
 pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
     let Ok(rd) = fs::read_dir(dir) else { return vec![] };
+    let mut replacers: Vec<(String, Vec<String>)> = vec![];
     let mut out: Vec<Installed> = rd
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -230,11 +234,22 @@ pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
             let pkg = e.path();
             let dir = pkg.to_string_lossy().into_owned();
             Some(match read_installed(&pkg, app_version) {
-                Ok(m) => Installed { id: m.id, dir, main: Some(m.main), manifest: Some(m.raw), error: None },
-                Err(err) => Installed { id: name, dir, main: None, manifest: None, error: Some(format!("{err:#}")) },
+                Ok(m) => {
+                    if !m.replaces.is_empty() {
+                        replacers.push((m.name.clone(), m.replaces.clone()));
+                    }
+                    Installed { id: m.id, dir, main: Some(m.main), manifest: Some(m.raw), error: None, replaced_by: None }
+                }
+                Err(err) => {
+                    let error = Some(format!("{err:#}"));
+                    Installed { id: name, dir, main: None, manifest: None, error, replaced_by: None }
+                }
             })
         })
         .collect();
+    for p in &mut out {
+        p.replaced_by = replacers.iter().find(|(_, ids)| ids.contains(&p.id)).map(|(name, _)| name.clone());
+    }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
 }

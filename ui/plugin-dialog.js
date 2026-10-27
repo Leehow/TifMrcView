@@ -72,7 +72,11 @@ function renderPluginList() {
   for (const b of pluginHost.broken.values()) {
     box.append(pluginRow({ name: b.id, source: b.source, error: b.error, pkg: b.id }));
   }
-  const extra = [...pluginHost.plugins.keys()].some((id) => !BUILTIN_IDS.includes(id)) || pluginHost.broken.size;
+  for (const r of pluginHost.replaced.values()) {
+    box.append(pluginRow({ name: r.name, version: r.version, description: `已由「${r.by}」取代，可以卸载`, pkg: r.id }));
+  }
+  const extra =
+    [...pluginHost.plugins.keys()].some((id) => !BUILTIN_IDS.includes(id)) || pluginHost.broken.size || pluginHost.replaced.size;
   if (!extra) {
     const hint = document.createElement("div");
     hint.className = "dim pl-hint";
