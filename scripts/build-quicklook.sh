@@ -13,6 +13,7 @@ case "$target" in
   *) echo "Unsupported Quick Look target: $target" >&2; exit 1;;
 esac
 mkdir -p "$out/module-cache"
+python3 scripts/quicklook-plist.py App "$out/Info.plist"
 export CLANG_MODULE_CACHE_PATH="$out/module-cache"
 export SWIFT_MODULECACHE_PATH="$out/module-cache"
 for arch in "${arches[@]}"; do

@@ -12,7 +12,7 @@ use crate::plugins::registry::Registry;
 /// Formats built into the app. Others (Zeiss CZI…) come from WebAssembly
 /// plugins, see `plugins::registry`.
 pub const CORE_EXTENSIONS: &[&str] =
-    &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
+    &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "ali", "preali", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
 fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
@@ -66,7 +66,7 @@ fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<d
     }
     let core: Box<dyn Source> = match ext.as_str() {
         "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
-        "mrc" | "mrcs" | "rec" | "st" | "map" => Box::new(mrc::MrcSource::open(path)?),
+        "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" | "preali" => Box::new(mrc::MrcSource::open(path)?),
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),
         _ => {
             return match reg.open(path, &ext, series) {
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn supported_extensions() {
-        for f in ["a.tif", "a.TIFF", "b.mrc", "b.MRCS", "c.rec", "c.st", "c.map", "d.png", "d.JPG", "d.webp"] {
+        for f in ["a.tif", "a.TIFF", "b.mrc", "b.MRCS", "c.rec", "c.st", "c.map", "c.ali", "c.preali", "d.png", "d.JPG", "d.webp"] {
             assert!(is_supported(Path::new(f)), "{f}");
         }
         for f in ["a.txt", "noext", "a.tif.bak", ".tif", "a.mod", ""] {
@@ -164,6 +164,30 @@ mod tests {
     fn open_rejects_unknown_extension() {
         assert!(open(Path::new("x.xyz")).is_err());
         assert!(open(Path::new("/no/such/file.tif")).is_err());
+    }
+
+    #[test]
+    fn imod_aliases_open_mrc_pixels_and_missing_plugin_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::new(Some(dir.path().join("plugins")), "0.5.0");
+        let mut bytes = vec![0u8; 1024];
+        for (offset, value) in [(0, 2i32), (4, 2), (8, 1), (12, 0)] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes[208..212].copy_from_slice(b"MAP ");
+        bytes[212] = 0x44;
+        bytes.extend_from_slice(&[1, 2, 3, 4]);
+        for ext in ["ali", "preali"] {
+            let path = dir.path().join(format!("image.{ext}"));
+            std::fs::write(&path, &bytes).unwrap();
+            let (src, plugin) = open_pixels_with(&path, 0, &reg).unwrap();
+            assert_eq!((src.info().width, src.info().height), (2, 2));
+            assert!(plugin.is_none());
+            assert_eq!(src.read_page(0).unwrap()[0].data.len(), 4);
+        }
+        let path = dir.path().join("missing.dm4");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(open_pixels_with(&path, 0, &reg).is_err());
     }
 
     fn f64s(p: &PlaneData) -> Vec<f64> {

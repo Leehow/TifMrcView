@@ -64,6 +64,7 @@ pub struct PluginScan {
 pub fn plugin_scan<R: Runtime>(app: AppHandle<R>, plugins: State<'_, Plugins>) -> PluginScan {
     // A reload may follow files copied into the folder by hand.
     registry::Registry::global().invalidate();
+    crate::plugin_assoc::sync_plugin_formats();
     let mut user = vec![];
     let mut packages = vec![];
     if let Some(dir) = &plugins.dir {
@@ -160,6 +161,7 @@ pub async fn plugin_install(app: AppHandle, plugins: State<'_, Plugins>, cache: 
     .await
     .map_err(|e| e.to_string())?;
     registry::Registry::global().invalidate();
+    crate::plugin_assoc::sync_plugin_formats();
     res.map(|m| m.raw).map_err(|e| format!("{e:#}"))
 }
 
@@ -175,6 +177,7 @@ fn install_confirmed_zip(dir: &Path, bytes: &[u8], sha256: &str, index: Option<&
 pub fn plugin_uninstall(plugins: State<'_, Plugins>, id: String) -> Result<(), String> {
     let res = package::uninstall(plugins.dir()?, &id).map_err(|e| format!("{e:#}"));
     registry::Registry::global().invalidate();
+    crate::plugin_assoc::sync_plugin_formats();
     res
 }
 
@@ -182,7 +185,9 @@ pub fn plugin_uninstall(plugins: State<'_, Plugins>, id: String) -> Result<(), S
 /// in the UI), so format and metadata plugins follow the same switches.
 #[tauri::command]
 pub fn plugin_set_disabled(ids: Vec<String>) -> Result<(), String> {
-    registry::Registry::global().set_disabled(ids).map_err(|e| format!("{e:#}"))
+    registry::Registry::global().set_disabled(ids).map_err(|e| format!("{e:#}"))?;
+    crate::plugin_assoc::sync_plugin_formats();
+    Ok(())
 }
 
 /// Shows the user plugin folder in the file manager.
@@ -315,6 +320,7 @@ pub async fn plugin_install_from_market(
         .await
         .map_err(|e| e.to_string())?;
     registry::Registry::global().invalidate();
+    crate::plugin_assoc::sync_plugin_formats();
     let m = res.map_err(|e| format!("{e:#}"))?;
     let _ = app.emit("plugin-installed", MarketInstalled { manifest: m.raw.clone(), origin: window.label().into() });
     Ok(m.raw)

@@ -678,7 +678,10 @@ pub fn run() {
                 }
             }
             let dir = app.path().app_config_dir().ok();
-            std::thread::spawn(move || assoc::first_run(dir));
+            std::thread::spawn(move || {
+                crate::plugin_assoc::sync_plugin_formats();
+                assoc::first_run(dir);
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
