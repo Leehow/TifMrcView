@@ -26,7 +26,11 @@
         <button data-tool="select" class="on" title="选择 (S)：拖动标注移动它，拖空白处移动图像；拖控制点缩放或重新测量，Delete 删除"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.5-7.5L21 10z"/></svg></button>
         <button data-tool="pan" title="移动 (V)"><svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg></button>
         <button data-tool="measure" title="测距 (M)"><svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
-        <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+        <div class="split" id="pen-split">
+          <button data-tool="pen" title="画笔 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+          <button class="caret" id="pen-menu" title="选择形状"><svg viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg></button>
+        </div>
+        <button data-tool="text" title="文字 (X)：点击图像输入文字，回车完成；双击已有文字可修改"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/></svg></button>
         <button data-tool="crop" title="裁剪 (C)：框出区域后双击或回车裁剪，Esc / 退格撤回"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
       </div>
       <span class="sep"></span>
@@ -35,7 +39,7 @@
       <button id="btn-info" class="toggle" title="图像信息：格式、尺寸、像素尺寸，以及插件读出的显微镜采集参数" disabled><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/></svg></button>
       <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <span class="sep" id="axis-sep" hidden></span>
-      <button id="btn-axis" hidden title="切换视图 XY → XZ → YZ（XZ、YZ 从侧面看，拉条切换 Y、X）">XY</button>
+      <button id="btn-axis" hidden title="切换视图：XY 正常看每一层，XZ、YZ 从侧面看"><span id="axis-label">XY</span><svg viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg></button>
     </div>
     <button id="scroll-right" class="scroll-btn" title="向右，显示更多按钮" hidden>›</button>
     <div class="group" id="plugin-buttons"></div>
@@ -79,6 +83,7 @@
         </span>
       </div>
 
+      <input id="text-edit" type="text" spellcheck="false" autocomplete="off" hidden />
       <div id="drop-hint" hidden><div>松开鼠标打开图像</div></div>
       <aside id="tools" hidden>
         <section id="sec-contrast">
@@ -103,6 +108,8 @@
           <div class="row" id="pen-shapes">
             <span class="dim">画笔</span>
             <button class="small" data-shape="pen" title="自由画线 (P)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg><span>自由</span></button>
+            <button class="small" data-shape="segment" title="直线 (L)"><svg viewBox="0 0 24 24"><path d="M5 19L19 5"/></svg><span>直线</span></button>
+            <button class="small" data-shape="arrow" title="箭头 (A)"><svg viewBox="0 0 24 24"><path d="M5 19L19 5"/><path d="M10 5h9v9"/></svg><span>箭头</span></button>
             <button class="small" data-shape="rect" title="画框 (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><span>框</span></button>
             <button class="small" data-shape="ellipse" title="画圆 (E)"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="7"/></svg><span>圆</span></button>
           </div>
@@ -241,6 +248,7 @@
     </div>
   </div>
 
+  <div id="dropmenu" role="menu" hidden></div>
   <div id="toast" hidden></div>
 
   <script src="app.js"></script>

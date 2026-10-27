@@ -35,7 +35,7 @@ Un visor pequeño, rápido y cómodo para imágenes de microscopía y microscop�
 - Brillo / contraste / gamma; arrastre sobre el histograma para elegir directamente el rango visible; contraste automático por corte de forma predeterminada (saturación del 0,1 %)
 - El botón ⓘ de la barra de herramientas muestra la información de la imagen: formato, tamaño, tamaño de píxel y parámetros de adquisición leídos por plugins (con búsqueda y copia). El plugin Zeiss lee todos los parámetros de una imagen SEM de Zeiss SmartSEM (voltaje, distancia de trabajo, aumento, detector, posición de la platina, vacío, …) y muestra una barra de escala según el tamaño de píxel calibrado, y de un CZI el microscopio, objetivo, láseres, detectores, pinhole, escaneo y parámetros de procesamiento Airyscan
 - Una barra de vista previa a la derecha (plegable) lista las imágenes de la misma carpeta con nombre, formato y tamaño
-- Barra de iconos superior (nombres al pasar el ratón): guardar imagen, deshacer, seleccionar, mover, medir, lápiz (pulsar de nuevo alterna entre libre / rectángulo / círculo), recortar, barra de escala, brillo/contraste
+- Barra de iconos superior (nombres al pasar el ratón): guardar imagen, deshacer, seleccionar, mover, medir, lápiz (la flecha de al lado abre un menú: libre / línea / flecha / rectángulo / círculo), texto, recortar, barra de escala, brillo/contraste
 - Las mediciones muestran longitudes reales según el tamaño de píxel; los rectángulos y círculos muestran siempre ancho × alto sobre la imagen (el diámetro en un círculo perfecto)
 - Herramienta de selección (predeterminada): arrastre un espacio vacío para desplazar la imagen; pulse una anotación para arrastrarla, arrastre los puntos del borde para cambiar su tamaño, arrastre los extremos de una línea de medición para volver a medir; Supr elimina; se pueden cambiar el color y el grosor de línea
 - Las anotaciones se guardan por corte Z y se almacenan automáticamente unos 2 segundos después de dibujar en `<nombre del archivo>.annot.json` junto a la imagen, y se vuelven a leer la próxima vez que se abre
@@ -94,8 +94,9 @@ Unos segundos después de iniciarse, la aplicación comprueba en segundo plano `
 | Inicio / Fin | Primer / último corte |
 | Espacio | Reproducir / pausar Z |
 | Ctrl + rueda (⌘ + rueda en macOS), Mayús + rueda | Cambiar Z |
-| S / V / M / P / R / E / C | Seleccionar / mover / medir / lápiz / rectángulo / círculo / recortar |
+| S / V / M / P / L / A / R / E / X / C | Seleccionar / mover / medir / lápiz / línea / flecha / rectángulo / círculo / texto / recortar |
 | Mayús (al dibujar un rectángulo o círculo) | Cuadrado / círculo perfecto |
+| Mayús (al dibujar una línea o flecha) | Ajustar a 45° |
 | Supr / Retroceso | Eliminar la anotación seleccionada; sin selección, deshacer el recorte |
 | Esc | Cancelar la anotación que se está dibujando o recién dibujada, deseleccionar, deshacer el recorte |
 | Intro, doble clic en el marco de recorte | Recortar |

@@ -35,7 +35,7 @@ A small, fast and convenient viewer for microscopy and electron microscopy image
 - Brightness / contrast / gamma; drag on the histogram to pick the display range directly; automatic per-slice contrast by default (0.1% saturation)
 - The ⓘ toolbar button shows image info: format, size, pixel size, and acquisition parameters read by plugins (searchable and copyable). The Zeiss plugin also reads all parameters of a Zeiss SmartSEM image (voltage, working distance, magnification, detector, stage position, vacuum, …) and shows a scale bar from the calibrated pixel size, and for CZI the microscope, objective, lasers, detectors, pinhole, scan and Airyscan processing parameters from a CZI
 - A preview strip on the right lists the images in the same folder (collapsible) with file name, format and size
-- Icon toolbar at the top (hover for names): save image, undo, select, move, measure, pen (click again to cycle free / box / circle), crop, scale bar, brightness/contrast
+- Icon toolbar at the top (hover for names): save image, undo, select, move, measure, pen (the arrow beside it opens a menu: free / line / arrow / box / circle), text, crop, scale bar, brightness/contrast
 - Measurements show real lengths using the pixel size; boxes and circles always show width × height on the image (diameter for a true circle)
 - Select tool (default): drag empty space to pan; click an annotation to drag it, drag the handles on its border to resize, drag the endpoints of a measurement line to re-measure; Delete removes; colour and line width can be changed
 - Annotations are stored per Z slice and saved automatically about 2 seconds after drawing to `<file name>.annot.json` next to the image, and read back the next time you open it
@@ -94,8 +94,9 @@ A few seconds after start, the app silently checks `https://dl.tifmrcview.com:94
 | Home / End | First / last slice |
 | Space | Play / pause Z |
 | Ctrl + wheel (⌘ + wheel on macOS), Shift + wheel | Change Z |
-| S / V / M / P / R / E / C | Select / move / measure / pen / box / circle / crop |
+| S / V / M / P / L / A / R / E / X / C | Select / move / measure / pen / line / arrow / box / circle / text / crop |
 | Shift (while drawing a box or circle) | Square / true circle |
+| Shift (while drawing a line or arrow) | Snap to 45° |
 | Delete / Backspace | Delete the selected annotation; undo the crop when nothing is selected |
 | Esc | Cancel the annotation being drawn or just drawn, deselect, undo the crop |
 | Enter, double-click the crop box | Crop |

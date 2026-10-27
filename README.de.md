@@ -35,7 +35,7 @@ Ein kleiner, schneller und bequemer Viewer für Mikroskopie- und Elektronenmikro
 - Helligkeit / Kontrast / Gamma; im Histogramm ziehen, um den Anzeigebereich direkt zu wählen; standardmäßig automatischer Kontrast pro Schicht (0,1 % Sättigung)
 - Die ⓘ-Schaltfläche der Werkzeugleiste zeigt Bildinformationen: Format, Größe, Pixelgröße und von Plugins gelesene Aufnahmeparameter (durchsuchbar und kopierbar). Das Plugin Zeiss liest alle Parameter eines Zeiss-SmartSEM-Bildes (Spannung, Arbeitsabstand, Vergrößerung, Detektor, Probentischposition, Vakuum, …) und zeigt anhand der kalibrierten Pixelgröße einen Maßstabsbalken und aus einer CZI-Datei Mikroskop, Objektiv, Laser, Detektoren, Pinhole, Scan- und Airyscan-Verarbeitungsparameter
 - Eine Vorschauleiste rechts listet die Bilder im selben Ordner (einklappbar) mit Dateiname, Format und Größe
-- Symbolleiste oben (Namen beim Überfahren): Bild speichern, Rückgängig, Auswählen, Verschieben, Messen, Stift (erneut klicken wechselt zwischen Freihand / Rechteck / Kreis), Zuschneiden, Maßstabsbalken, Helligkeit/Kontrast
+- Symbolleiste oben (Namen beim Überfahren): Bild speichern, Rückgängig, Auswählen, Verschieben, Messen, Stift (der Pfeil daneben öffnet ein Menü: Freihand / Linie / Pfeil / Rechteck / Kreis), Text, Zuschneiden, Maßstabsbalken, Helligkeit/Kontrast
 - Messungen zeigen reale Längen anhand der Pixelgröße; Rechtecke und Kreise zeigen im Bild stets Breite × Höhe (bei einem echten Kreis den Durchmesser)
 - Auswahlwerkzeug (Standard): leere Fläche ziehen verschiebt das Bild; eine Annotation anklicken und ziehen, an den Punkten auf dem Rand skalieren, die Endpunkte einer Messlinie ziehen, um neu zu messen; Entf löscht; Farbe und Linienstärke sind änderbar
 - Annotationen werden pro Z-Schicht gespeichert und etwa 2 Sekunden nach dem Zeichnen automatisch in `<Dateiname>.annot.json` neben dem Bild abgelegt; beim nächsten Öffnen werden sie wieder gelesen
@@ -94,8 +94,9 @@ Wenige Sekunden nach dem Start prüft die App im Hintergrund `https://tifmrcview
 | Pos1 / Ende | Erste / letzte Schicht |
 | Leertaste | Z abspielen / pausieren |
 | Strg + Mausrad (⌘ + Mausrad unter macOS), Umschalt + Mausrad | Z wechseln |
-| S / V / M / P / R / E / C | Auswählen / Verschieben / Messen / Stift / Rechteck / Kreis / Zuschneiden |
+| S / V / M / P / L / A / R / E / X / C | Auswählen / Verschieben / Messen / Stift / Linie / Pfeil / Rechteck / Kreis / Text / Zuschneiden |
 | Umschalt (beim Zeichnen von Rechteck oder Kreis) | Quadrat / echter Kreis |
+| Umschalt (beim Zeichnen von Linie oder Pfeil) | In 45°-Schritten |
 | Entf / Rücktaste | Ausgewählte Annotation löschen; ohne Auswahl das Zuschneiden rückgängig machen |
 | Esc | Gerade gezeichnete Annotation abbrechen, Auswahl aufheben, Zuschneiden rückgängig machen |
 | Eingabetaste, Doppelklick auf den Zuschneiderahmen | Zuschneiden |
