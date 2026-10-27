@@ -1,5 +1,5 @@
-//! Zeiss CZI through the "zen" WebAssembly plugin, end to end: the plugin
-//! is built from `plugins/zen`, installed into a temporary plugin folder
+//! Zeiss CZI through the "zeiss" WebAssembly plugin, end to end: the plugin
+//! is built from `plugins/zeiss`, installed into a temporary plugin folder
 //! and used through `formats::open_with`, exactly as the app does.
 
 mod common;
@@ -12,9 +12,9 @@ use tifmrcview_lib::formats;
 use tifmrcview_lib::image::{DType, OpenImage, PlaneData, Source};
 use tifmrcview_lib::plugins::registry::Registry;
 
-macro_rules! zen {
+macro_rules! zeiss {
     () => {
-        match common::install(&["zen"]) {
+        match common::install(&["zeiss"]) {
             Some(p) => p,
             None => return,
         }
@@ -38,7 +38,7 @@ fn err(reg: &Registry, path: &Path) -> String {
 
 #[test]
 fn stack_info_metadata_and_pixels() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("stack.czi");
     czi::stack(&path, 64, 48, 2, 3, 0, 0);
@@ -82,7 +82,7 @@ fn stack_info_metadata_and_pixels() {
 
 #[test]
 fn compressed_subblocks() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let (w, h) = (40, 30);
     let raw = czi::u16_tile(0, 0, 0, 0, w, h);
@@ -118,7 +118,7 @@ fn compressed_subblocks() {
 
 #[test]
 fn mosaic_rgb_pyramid_and_extra_dimensions() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
 
     // Two 4x2 tiles overlapping by 2 columns, origin at negative coordinates;
@@ -169,7 +169,7 @@ fn mosaic_rgb_pyramid_and_extra_dimensions() {
 
 #[test]
 fn broken_and_unsupported_files() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let tile = |px: i32| Block::tile(px, 0, 0, 2, 2, 0, 0, 0, 0, vec![0; 8]);
     let case = |name: &str, blocks: &[Block], part: i32| {
@@ -208,16 +208,12 @@ fn broken_and_unsupported_files() {
 #[test]
 fn install_validation_checks_the_module() {
     use tifmrcview_lib::plugins::{package, registry::validate_package};
-    let p = zen!();
-    let dir = p.dir.path().join("zen");
-    let mut m = package::read_installed(&dir, env!("CARGO_PKG_VERSION")).unwrap();
+    let p = zeiss!();
+    let dir = p.dir.path().join("zeiss");
+    let m = package::read_installed(&dir, env!("CARGO_PKG_VERSION")).unwrap();
     validate_package(&dir, &m).unwrap();
-    // Promising metadata the module does not export is refused.
-    m.metadata = vec!["tif".into()];
-    assert!(format!("{:#}", validate_package(&dir, &m).unwrap_err()).contains("tmv_metadata"));
-    // So is a module that is not WebAssembly.
-    std::fs::write(dir.join("zen.wasm"), b"\0asm garbage").unwrap();
-    m.metadata.clear();
+    // A module that is not WebAssembly is refused.
+    std::fs::write(dir.join("zeiss.wasm"), b"\0asm garbage").unwrap();
     assert!(validate_package(&dir, &m).is_err());
 }
 
@@ -227,13 +223,13 @@ fn needs_the_plugin_and_follows_the_switch() {
     let path = tmp.path().join("a.czi");
     czi::stack(&path, 8, 8, 1, 1, 0, 0);
     let none = Registry::new(Some(tmp.path().join("no-plugins")), "0.4.0");
-    assert_eq!(err(&none, &path), "需要安装「Zeiss ZEN」插件才能打开 .czi 文件");
+    assert_eq!(err(&none, &path), "需要安装「Zeiss」插件才能打开 .czi 文件");
     assert!(!formats::is_supported_with(&path, &none));
 
-    let p = zen!();
+    let p = zeiss!();
     assert!(formats::is_supported_with(&path, &p.registry));
-    assert_eq!(p.registry.extensions(), ["czi"]);
-    p.registry.set_disabled(vec!["zen".into()]).unwrap();
+    assert_eq!(p.registry.extensions(), ["czi", "lsm"]);
+    p.registry.set_disabled(vec!["zeiss".into()]).unwrap();
     assert!(err(&p.registry, &path).contains("已停用"));
     assert!(!formats::is_supported_with(&path, &p.registry));
     p.registry.set_disabled(vec![]).unwrap();
@@ -242,7 +238,7 @@ fn needs_the_plugin_and_follows_the_switch() {
 
 #[test]
 fn pages_decode_in_parallel_threads() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("par.czi");
     czi::stack(&path, 128, 96, 2, 8, 6, 0);
@@ -264,7 +260,7 @@ fn pages_decode_in_parallel_threads() {
 
 #[test]
 fn large_metadata_stays_within_the_fuel_budget() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("bigxml.czi");
     // About 3 MB of XML, more than real ZEN files carry.
@@ -282,7 +278,7 @@ fn large_metadata_stays_within_the_fuel_budget() {
 #[test]
 #[ignore]
 fn benchmark_open_and_read_all_pages() {
-    let p = zen!();
+    let p = zeiss!();
     let tmp = tempfile::tempdir().unwrap();
     for (name, comp, extra) in [("uncompressed", 0, 0), ("uncompressed", 0, 2000), ("zstd", 5, 2000), ("zstd hi/lo", 6, 2000)] {
         let path = tmp.path().join(format!("{comp}-{extra}.czi"));

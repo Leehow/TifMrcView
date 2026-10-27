@@ -42,7 +42,9 @@ function pluginRow({ name, version, description, source, error, rec, pkg }) {
     const remove = uninstallButton(pkg);
     remove.disabled = market.busy.has(pkg);
     actions.append(remove);
-    const update = (market.list || []).find((item) => item.entry.id === pkg && item.state === "update");
+    const update = (market.list || []).find(
+      (item) => (item.entry.id === pkg && item.state === "update") || (item.state === "replace" && item.replaces.includes(pkg)),
+    );
     if (update) actions.append(marketButton(update));
     row.append(actions);
   }
@@ -70,11 +72,15 @@ function renderPluginList() {
   for (const b of pluginHost.broken.values()) {
     box.append(pluginRow({ name: b.id, source: b.source, error: b.error, pkg: b.id }));
   }
-  const extra = [...pluginHost.plugins.keys()].some((id) => !BUILTIN_IDS.includes(id)) || pluginHost.broken.size;
+  for (const r of pluginHost.replaced.values()) {
+    box.append(pluginRow({ name: r.name, version: r.version, description: `已由「${r.by}」取代，可以卸载`, pkg: r.id }));
+  }
+  const extra =
+    [...pluginHost.plugins.keys()].some((id) => !BUILTIN_IDS.includes(id)) || pluginHost.broken.size || pluginHost.replaced.size;
   if (!extra) {
     const hint = document.createElement("div");
     hint.className = "dim pl-hint";
-    hint.textContent = "在下面的插件市场一键安装更多插件（录制视频、蔡司 SmartSEM、蔡司 ZEN…）";
+    hint.textContent = "在下面的插件市场一键安装更多插件（录制视频、蔡司、徕卡、尼康…）";
     box.append(hint);
   }
 }
@@ -204,5 +210,8 @@ window.addEventListener("keydown", (e) => {
   // Opened (or started) by a tifmrcview://install-plugin link.
   await takeInstallRequest();
   // Check quietly a little after start so opening a file is never delayed.
-  if (pref.get("update.auto", true)) setTimeout(() => checkUpdate(false), 4000);
+  if (pref.get("update.auto", true)) {
+    setTimeout(() => checkUpdate(false), 4000);
+    if (pluginHost.manifests.size) setTimeout(() => migrateReplaced().catch((e) => console.warn("plugin migration", e)), 5000);
+  }
 })();

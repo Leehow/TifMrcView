@@ -83,6 +83,10 @@ pub struct Manifest {
     pub formats: Vec<FormatDecl>,
     /// Extensions whose files `tmv_metadata` should see.
     pub metadata: Vec<String>,
+    /// Older packages this one takes over (`replaces`), e.g. when several
+    /// plugins of one brand merge. An installed package hides the ones it
+    /// replaces; an official install from the market also removes them.
+    pub replaces: Vec<String>,
     pub raw: Value,
 }
 
@@ -169,8 +173,18 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
     if wasm.is_none() && (!formats.is_empty() || !metadata.is_empty()) {
         bail!("声明了 formats 或 metadata 的插件必须有 wasm 模块");
     }
+    let mut replaces = vec![];
+    if let Some(r) = raw.get("replaces") {
+        for v in r.as_array().ok_or_else(|| anyhow!("replaces 必须是插件 id 列表"))? {
+            let old = v.as_str().filter(|o| valid_id(o) && *o != id && !BUILTIN.contains(o));
+            let old = old.ok_or_else(|| anyhow!("replaces 里的插件 id 不对：{v}"))?;
+            if !replaces.iter().any(|r| r == old) {
+                replaces.push(old.to_string());
+            }
+        }
+    }
     let name = s("name").unwrap_or_default().to_string();
-    Ok(Manifest { id, name, main, wasm, formats, metadata, raw })
+    Ok(Manifest { id, name, main, wasm, formats, metadata, replaces, raw })
 }
 
 /// Reads and checks `<pkg>/plugin.json`, including that `main` exists.
@@ -199,11 +213,15 @@ pub struct Installed {
     pub main: Option<String>,
     pub manifest: Option<Value>,
     pub error: Option<String>,
+    /// Name of the installed package that replaces this one (see
+    /// [`Manifest::replaces`]); such a package never runs.
+    pub replaced_by: Option<String>,
 }
 
 /// Lists the package folders in `dir`; broken ones carry `error`.
 pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
     let Ok(rd) = fs::read_dir(dir) else { return vec![] };
+    let mut replacers: Vec<(String, Vec<String>)> = vec![];
     let mut out: Vec<Installed> = rd
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -216,11 +234,22 @@ pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
             let pkg = e.path();
             let dir = pkg.to_string_lossy().into_owned();
             Some(match read_installed(&pkg, app_version) {
-                Ok(m) => Installed { id: m.id, dir, main: Some(m.main), manifest: Some(m.raw), error: None },
-                Err(err) => Installed { id: name, dir, main: None, manifest: None, error: Some(format!("{err:#}")) },
+                Ok(m) => {
+                    if !m.replaces.is_empty() {
+                        replacers.push((m.name.clone(), m.replaces.clone()));
+                    }
+                    Installed { id: m.id, dir, main: Some(m.main), manifest: Some(m.raw), error: None, replaced_by: None }
+                }
+                Err(err) => {
+                    let error = Some(format!("{err:#}"));
+                    Installed { id: name, dir, main: None, manifest: None, error, replaced_by: None }
+                }
             })
         })
         .collect();
+    for p in &mut out {
+        p.replaced_by = replacers.iter().find(|(_, ids)| ids.contains(&p.id)).map(|(name, _)| name.clone());
+    }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
 }
@@ -408,6 +437,23 @@ pub fn uninstall(dir: &Path, id: &str) -> Result<()> {
     fs::remove_dir_all(&target).with_context(|| format!("无法删除 {}", target.display()))
 }
 
+/// Removes the installed packages `m` replaces (see [`Manifest::replaces`])
+/// and returns their ids. A package that cannot be removed stays, hidden by
+/// the registry, and is only logged: the new one is already installed.
+pub fn retire_replaced(dir: &Path, m: &Manifest) -> Vec<String> {
+    let mut gone = vec![];
+    for old in &m.replaces {
+        if !dir.join(old).is_dir() {
+            continue;
+        }
+        match uninstall(dir, old) {
+            Ok(()) => gone.push(old.clone()),
+            Err(e) => eprintln!("plugin {}: could not remove the replaced plugin {old}: {e:#}", m.id),
+        }
+    }
+    gone
+}
+
 /// Maps a `tmvplugin://` path (already percent-decoded, no leading slash) to
 /// a file in `dir`: `<file>.js` for loose legacy plugins, or `<id>/<rel>`
 /// inside an installed package.
@@ -518,6 +564,16 @@ mod tests {
         m.as_object_mut().unwrap().remove("apiVersion");
         m.as_object_mut().unwrap().remove("permissions");
         assert!(parse(&m).is_ok(), "legacy installed manifests still parse");
+    }
+
+    #[test]
+    fn manifest_replaces() {
+        let parse = |extra: &str| parse_manifest(format!(r#"{{"id":"zeiss","name":"Z","version":"1.0.0"{extra}}}"#).as_bytes(), "0.6.0");
+        assert!(parse("").unwrap().replaces.is_empty());
+        assert_eq!(parse(r#","replaces":["zen","smartsem","zen"]"#).unwrap().replaces, ["zen", "smartsem"]);
+        for bad in [r#""zen""#, r#"["../x"]"#, r#"["zeiss"]"#, r#"["i18n"]"#, r#"[1]"#] {
+            assert!(parse(&format!(r#","replaces":{bad}"#)).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -93,7 +93,7 @@ function marketButton(item) {
   const b = document.createElement("button");
   b.className = "small";
   if (market.busy.has(p.id)) {
-    b.textContent = item.state === "update" ? "正在更新…" : "正在安装…";
+    b.textContent = item.state === "update" || item.state === "replace" ? "正在更新…" : "正在安装…";
     b.disabled = true;
     return b;
   }
@@ -104,6 +104,10 @@ function marketButton(item) {
       break;
     case "update":
       b.textContent = `更新到 ${p.version}`;
+      b.classList.add("primary");
+      break;
+    case "replace":
+      b.textContent = `换成 ${marketText(p, "name") || p.id}`;
       b.classList.add("primary");
       break;
     case "needsApp":
@@ -142,7 +146,8 @@ function renderMarket() {
     }
     return;
   }
-  const available = market.list.filter((l) => !["builtin", "installed", "update"].includes(l.state));
+  // Updates and replacements show on the installed plugin's row instead.
+  const available = market.list.filter((l) => !["builtin", "installed", "update", "replace"].includes(l.state));
   const query = $("market-search").value.trim().toLowerCase();
   const list = available.filter(({ entry: p }) =>
     [p.id, p.name, p.description, ...Object.values(p.i18n || {}).flatMap((tr) => [tr.name, tr.description])]
@@ -150,7 +155,7 @@ function renderMarket() {
   );
   if (!list.length) {
     if (query) note("没有匹配的插件");
-    else if (market.list.some((l) => l.state === "installed" || l.state === "update")) note("插件市场上的插件都已安装");
+    else if (market.list.some((l) => ["installed", "update", "replace"].includes(l.state))) note("插件市场上的插件都已安装");
     else note("插件市场上暂时没有插件");
   }
   for (const item of list) {
@@ -189,6 +194,26 @@ async function installFromMarket(id, quiet = false, approval) {
   market.busy.delete(id);
   await loadMarket();
   return error;
+}
+
+/** Names of the installed plugins a "replace" item takes over. */
+function replacedNames(item) {
+  return item.replaces.map((id) => pluginHost.plugins.get(id)?.def.name || id).join(" / ");
+}
+
+/**
+ * Moves users of plugins that were merged into one (e.g. the three Zeiss
+ * plugins into "zeiss") over to the new plugin, quietly, once the market
+ * list shows a replacement. Only replacements that ask for no permissions
+ * are installed without asking; others keep their button on the old row.
+ */
+async function migrateReplaced() {
+  await loadMarket();
+  for (const item of market.list || []) {
+    const p = item.entry;
+    if (item.state !== "replace" || p.apiVersion !== 2 || (p.permissions || []).length) continue;
+    await installFromMarket(p.id, true, p);
+  }
 }
 
 // ---------- tifmrcview://install-plugin links ----------
@@ -237,7 +262,8 @@ async function confirmInstall(req) {
     return confirmMsg(`「${name}」需要 TifMrcView ${p.minAppVersion} 或更新版本（当前 ${cur}），请先在下面「检查更新」`, true);
   }
   if (item.state === "installed") return confirmMsg(`已安装 ${name}  v${item.installed}，已是最新版本`);
-  confirmMsg(item.state === "update" ? `已安装 ${item.installed}，将更新到 ${p.version}` : "");
+  if (item.state === "replace") confirmMsg(`将取代已安装的 ${replacedNames(item)}`);
+  else confirmMsg(item.state === "update" ? `已安装 ${item.installed}，将更新到 ${p.version}` : "");
   $("mc-install").disabled = false;
 }
 

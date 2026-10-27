@@ -1,5 +1,5 @@
-//! Zeiss ZEN black / AIM plugin: reads LSM files (LSM 510 / 710 / 780 / 880 /
-//! 900 / 980 confocals) as a TifMrcView WebAssembly format plugin.
+//! LSM files saved by Zeiss ZEN black / AIM (LSM 510 / 710 / 780 / 880 /
+//! 900 / 980 confocals).
 //!
 //! An LSM file is a TIFF with a private tag, 34412 (CZ_LSMINFO), that holds
 //! the dimensions, voxel sizes and file offsets of further structures: the
@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 
 use tifmrcview_plugin_sdk::tiff::{self, tag};
 use tifmrcview_plugin_sdk::{
-    bail, export_format, file, flags, Channel, Chunk, Codec, Context, DType, Format, Group, Info, Recipe, Result, Series,
+    bail, file, flags, Channel, Chunk, Codec, Context, DType, Format, Group, Info, Recipe, Result, Series,
 };
 
 /// The private CZ_LSMINFO tag.
@@ -1283,8 +1283,6 @@ impl Format for Lsm {
         Ok(r)
     }
 }
-
-export_format!(Lsm);
 
 // ---------------------------------------------------------------- info-panel groups
 

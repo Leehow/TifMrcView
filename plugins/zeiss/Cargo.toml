@@ -1,7 +1,7 @@
 [package]
-name = "tmv-plugin-smartsem"
-version = "2.0.0"
-description = "Zeiss SmartSEM TIFF metadata for TifMrcView (WebAssembly metadata plugin)"
+name = "tmv-plugin-zeiss"
+version = "1.0.0"
+description = "Zeiss formats for TifMrcView: ZEN CZI, ZEN black LSM and SmartSEM TIFF metadata (WebAssembly format plugin)"
 edition = "2021"
 license = "Apache-2.0"
 publish = false

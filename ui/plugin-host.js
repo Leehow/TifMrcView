@@ -25,6 +25,7 @@ const BUILTIN_IDS = ["i18n"];
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, pkg, active, error, cleanup, listeners}
   broken: new Map(), // package id -> {id, source, error}: packages that did not register
+  replaced: new Map(), // package id -> {id, name, version, by}: installed but taken over by another package
   listeners: new Map(), // event -> Set(fn)
   loading: null, // {source, pkg} of the script being loaded
   manifests: new Map(), // package id -> plugin.json
@@ -351,6 +352,11 @@ async function loadPackage(p) {
     pluginHost.broken.set(p.id, { id: p.id, source: "已安装", error: p.error });
     return;
   }
+  // Never runs; listed only so it can be uninstalled.
+  if (p.replacedBy) {
+    pluginHost.replaced.set(p.id, { id: p.id, name: p.manifest.name || p.id, version: p.manifest.version, by: p.replacedBy });
+    return;
+  }
   if (p.manifest && p.manifest.apiVersion === 2) {
     if (pluginHost.plugins.has(p.id)) return;
     const rec = {
@@ -399,6 +405,24 @@ async function installPackage() {
  */
 async function afterInstall(m, own) {
   const label = `${m.name}  v${m.version}`;
+  // The plugins this one replaces stop running. The backend removed them
+  // (official package) or keeps them hidden; the rescan below lists the latter.
+  const replaced = [];
+  for (const id of m.replaces || []) {
+    const rec = pluginHost.plugins.get(id);
+    const hidden = pluginHost.replaced.get(id);
+    if (!rec && !hidden && !pluginHost.broken.has(id)) continue;
+    if (rec) deactivatePlugin(rec);
+    replaced.push(rec ? rec.def.name || id : hidden ? hidden.name : id);
+    pluginHost.plugins.delete(id);
+    pluginHost.broken.delete(id);
+    pluginHost.replaced.delete(id);
+    pluginHost.manifests.delete(id);
+  }
+  if (replaced.length) {
+    const scan = await invoke("plugin_scan").catch(() => ({ packages: [] }));
+    for (const p of scan.packages) if (p.replacedBy) await loadPackage(p);
+  }
   const old = pluginHost.plugins.get(m.id);
   if (old || pluginHost.broken.has(m.id)) {
     if (!own) return;
@@ -412,7 +436,9 @@ async function afterInstall(m, own) {
   renderPluginList();
   if (!own) return;
   const err = pluginHost.broken.get(m.id);
-  toast(err ? `已安装 ${label}，但出错：${err.error}` : `已安装 ${label}`, err ? 6000 : 3500);
+  if (err) toast(`已安装 ${label}，但出错：${err.error}`, 6000);
+  else if (replaced.length) toast(`已安装 ${label}，取代了 ${replaced.join(" / ")}`, 6000);
+  else toast(`已安装 ${label}`, 3500);
 }
 
 async function uninstallPackage(id) {
@@ -429,6 +455,7 @@ async function uninstallPackage(id) {
   // The script stays in the page but is inactive; a reload drops it.
   pluginHost.plugins.delete(id);
   pluginHost.broken.delete(id);
+  pluginHost.replaced.delete(id);
   renderPluginList();
   if (market.list) loadMarket();
   toast(`已卸载 ${rec ? rec.def.name || id : id}`);

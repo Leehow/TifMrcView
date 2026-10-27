@@ -4,7 +4,10 @@ TifMrcView reads TIFF / OME-TIFF / ImageJ, MRC and the common raster formats
 itself. Everything else — vendor formats such as Zeiss CZI, or vendor
 metadata hidden in TIFF tags such as Zeiss SmartSEM — comes from **format
 plugins**: a WebAssembly module inside an ordinary plugin package. The
-"zen" (CZI) and "smartsem" plugins in `plugins/` are built this way.
+"zeiss" plugin in `plugins/` (CZI, LSM and SmartSEM metadata) and the other
+vendor plugins next to it are built this way. One vendor gets one plugin:
+a module can open several file types (dispatch on the extension of the path
+in `open`) and add metadata in the same package.
 
 A format plugin can do two things:
 
@@ -54,16 +57,18 @@ plugin market) with a `.wasm` file and three more fields in `plugin.json`:
 
 ```json
 {
-  "id": "zen",
-  "name": "Zeiss ZEN",
-  "version": "2.0.0",
+  "id": "zeiss",
+  "name": "Zeiss",
+  "version": "1.0.0",
   "description": "…",
   "main": "index.js",
-  "apiVersion": 1,
-  "minAppVersion": "0.4.0",
-  "wasm": "zen.wasm",
-  "formats": [{ "ext": ["czi"], "name": "Zeiss CZI" }],
-  "metadata": { "ext": ["tif", "tiff"] }
+  "apiVersion": 2,
+  "permissions": [],
+  "minAppVersion": "0.6.0",
+  "wasm": "zeiss.wasm",
+  "formats": [{ "ext": ["czi"], "name": "Zeiss CZI" }, { "ext": ["lsm"], "name": "Zeiss LSM" }],
+  "metadata": { "ext": ["tif", "tiff"] },
+  "replaces": ["zen", "zenblack", "smartsem"]
 }
 ```
 
@@ -72,13 +77,15 @@ plugin market) with a `.wasm` file and three more fields in `plugin.json`:
 | `wasm` | Path of the module inside the package. |
 | `formats` | File types the module opens: `ext` (lower-case, no dot, `[a-z0-9]{1,16}`) and a display `name` (used as the format name when the plugin gives none). Needs the format exports. |
 | `metadata` | Extensions whose files `tmv_metadata` should see. Needs the metadata export. |
+| `replaces` | Optional ids of older plugins this one takes over, e.g. when several plugins merge into one. While both are installed the old ones never run. Installing the official market package (from the market, or the same zip by hand) also removes them, and at start-up the app installs such a replacement for users who have the old plugins, when it asks for no permissions. The market entry must list the same ids. |
 
 `main` (a JavaScript file) is still required: it registers the plugin so it
-shows up in the plugin window, where the user can switch it off. For a pure
-format plugin it can be as small as
+shows up in the plugin window, where the user can switch it off. With
+`"apiVersion": 2` and no permissions it runs in the sandboxed frame like any
+other API 2 plugin, and for a pure format plugin it can be as small as
 
 ```js
-TifMrcView.register({ id: "zen", name: "Zeiss ZEN", version: "2.0.0", description: "…", activate() {} });
+TifMrcView.register({ id: "zeiss", activate() {} });
 ```
 
 On install the app compiles the module, checks that it has the exports
@@ -362,7 +369,8 @@ TifMrcView.register({ id: "r16", name: "R16", version: "1.0.0", description: "Op
 A compressed or tiled format only changes `page`: push one chunk per tile
 with `.codec(Codec::Zstd)`, `.samples(3).flags(flags::BGR)` and so on. A
 metadata plugin implements `Metadata::metadata(path) -> Result<Option<Meta>>`
-and uses `export_metadata!` (see `plugins/smartsem`).
+and uses `export_metadata!` (see `plugins/zeiss/src/smartsem.rs`; one crate may
+use both macros, as `plugins/zeiss/src/lib.rs` does).
 
 A file holding several images sets `Info::series` (and `series_index`) and
 implements `Format::open_series(path, series)`; `export_format!` exports

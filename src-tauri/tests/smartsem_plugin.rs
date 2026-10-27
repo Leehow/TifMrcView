@@ -1,5 +1,5 @@
-//! Zeiss SmartSEM TIFF metadata through the "smartsem" WebAssembly plugin,
-//! end to end (built from `plugins/smartsem`, installed into a temporary
+//! Zeiss SmartSEM TIFF metadata through the "zeiss" WebAssembly plugin,
+//! end to end (built from `plugins/zeiss`, installed into a temporary
 //! plugin folder, used through `formats::open_with`).
 
 mod common;
@@ -85,7 +85,7 @@ fn cz_sem() -> Vec<u8> {
 }
 
 fn plugins() -> Option<common::Plugins> {
-    common::install(&["smartsem"])
+    common::install(&["zeiss"])
 }
 
 fn items(g: &tifmrcview_lib::image::MetaGroup) -> Vec<(String, String)> {
@@ -148,7 +148,7 @@ fn other_tiffs_are_untouched_and_the_switch_is_respected() {
     let sem = tmp.path().join("sem.tif");
     let tag = cz_sem();
     tiff(&sem, 1024, 1, &[(34118, 1, tag.len() as u32, tag)]);
-    p.registry.set_disabled(vec!["smartsem".into()]).unwrap();
+    p.registry.set_disabled(vec!["zeiss".into()]).unwrap();
     assert!(formats::open_with(&sem, &p.registry).unwrap().info().metadata.is_empty());
     p.registry.set_disabled(vec![]).unwrap();
     assert!(!formats::open_with(&sem, &p.registry).unwrap().info().metadata.is_empty());
