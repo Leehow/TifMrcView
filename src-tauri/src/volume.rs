@@ -25,6 +25,9 @@ pub struct VolumeReq {
     pub channels: Vec<VolChan>,
     /// Largest number of voxels per channel.
     pub max_voxels: usize,
+    /// Gaussian smoothing of the reduced volume, sigma in voxels (0 = none).
+    #[serde(default)]
+    pub smooth: f32,
 }
 
 /// Largest side of a 3D texture that every desktop GPU accepts.
@@ -75,8 +78,6 @@ pub fn volume(img: &Arc<OpenImage>, req: &VolumeReq) -> Result<Vec<u8>> {
         let lo = c.min.unwrap_or(alo);
         let hi = c.max.unwrap_or(ahi);
         let scale = 255.0 / (hi - lo).max(f32::MIN_POSITIVE);
-        out.extend_from_slice(&lo.to_le_bytes());
-        out.extend_from_slice(&hi.to_le_bytes());
         let mut voxels = vec![0u8; ow * oh * od];
         voxels.par_chunks_mut(ow * oh).enumerate().try_for_each(|(oz, slab)| -> Result<()> {
             let mut acc = vec![0f32; ow * oh];
@@ -106,9 +107,75 @@ pub fn volume(img: &Arc<OpenImage>, req: &VolumeReq) -> Result<Vec<u8>> {
             }
             Ok(())
         })?;
+        // Smoothing narrows the value spread, so the result is stretched
+        // again and the range written below follows it.
+        let (mut lo, mut hi) = (lo, hi);
+        if req.smooth > 0.0 {
+            let (a, b) = gaussian(&mut voxels, (ow, oh, od), req.smooth);
+            let span = hi - lo;
+            (lo, hi) = (lo + span * a / 255.0, lo + span * b / 255.0);
+        }
+        out.extend_from_slice(&lo.to_le_bytes());
+        out.extend_from_slice(&hi.to_le_bytes());
         out.extend_from_slice(&voxels);
     }
     Ok(out)
+}
+
+/// Separable 3D Gaussian blur of a w*h*d byte volume (edges clamped). Noisy
+/// tomograms need it before a surface level shows continuous membranes.
+/// The result is stretched so its 0.1–99.9 % range fills 0..255; returns
+/// that range in the old 0..255 units.
+pub fn gaussian(v: &mut [u8], (w, h, d): (usize, usize, usize), sigma: f32) -> (f32, f32) {
+    let r = (sigma * 3.0).ceil() as isize;
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f32 = k.iter().sum();
+    let k: Vec<f32> = k.iter().map(|x| x / sum).collect();
+    let mut a: Vec<f32> = v.iter().map(|&x| x as f32).collect();
+    let mut b = vec![0f32; a.len()];
+    // One pass along an axis with `stride` between neighbours and `len` samples.
+    let pass = |src: &[f32], dst: &mut [f32], len: usize, stride: usize| {
+        dst.par_iter_mut().enumerate().for_each(|(i, o)| {
+            let pos = (i / stride) % len;
+            let mut acc = 0.0;
+            for (j, kj) in k.iter().enumerate() {
+                let p = (pos as isize + j as isize - r).clamp(0, len as isize - 1) as usize;
+                acc += kj * src[i - pos * stride + p * stride];
+            }
+            *o = acc;
+        });
+    };
+    pass(&a, &mut b, w, 1);
+    pass(&b, &mut a, h, w);
+    if d > 1 {
+        pass(&a, &mut b, d, w * h);
+        std::mem::swap(&mut a, &mut b);
+    }
+    // Percentiles from a fine histogram of the blurred values.
+    let mut hist = vec![0u64; 4096];
+    for &x in &a {
+        hist[((x / 255.0 * 4095.0) as usize).min(4095)] += 1;
+    }
+    let pick = |frac: f64| {
+        let target = (a.len() as f64 * frac) as u64;
+        let mut seen = 0;
+        for (i, &n) in hist.iter().enumerate() {
+            seen += n;
+            if seen > target {
+                return i as f32 / 4095.0 * 255.0;
+            }
+        }
+        255.0
+    };
+    let (lo, mut hi) = (pick(0.001), pick(0.999));
+    if hi - lo < 1.0 {
+        hi = lo + 1.0;
+    }
+    let k = 255.0 / (hi - lo);
+    for (o, x) in v.iter_mut().zip(&a) {
+        *o = ((x - lo) * k).round().clamp(0.0, 255.0) as u8;
+    }
+    (lo, hi)
 }
 
 #[cfg(test)]
@@ -123,7 +190,7 @@ mod tests {
         let pages = (0..3).map(|z| vec![vec![50 * z as u8; 16]]).collect();
         let (src, _) = FakeSource::new(fake_info(4, 4, 1, 3, 1, DType::U8), pages);
         let img = OpenImage::new(1, Box::new(src), 1 << 20);
-        let req = VolumeReq { token: 1, t: 0, channels: vec![VolChan { index: 0, min: Some(0.0), max: Some(100.0) }], max_voxels: 1 << 20 };
+        let req = VolumeReq { token: 1, t: 0, channels: vec![VolChan { index: 0, min: Some(0.0), max: Some(100.0) }], max_voxels: 1 << 20, smooth: 0.0 };
         let out = volume(&img, &req).unwrap();
         let u = |i: usize| u32::from_le_bytes(out[i..i + 4].try_into().unwrap());
         assert_eq!((u(0), u(4), u(8), u(12)), (4, 4, 3, 1));
@@ -136,8 +203,23 @@ mod tests {
     fn single_slice_is_an_error() {
         let (src, _) = FakeSource::new(fake_info(4, 4, 1, 1, 1, DType::U8), vec![vec![vec![0; 16]]]);
         let img = OpenImage::new(1, Box::new(src), 1 << 20);
-        let req = VolumeReq { token: 1, t: 0, channels: vec![VolChan { index: 0, min: None, max: None }], max_voxels: 1 << 20 };
+        let req = VolumeReq { token: 1, t: 0, channels: vec![VolChan { index: 0, min: None, max: None }], max_voxels: 1 << 20, smooth: 0.0 };
         assert!(volume(&img, &req).is_err());
+    }
+
+    #[test]
+    fn gaussian_spreads_and_keeps_mass() {
+        let (w, h, d) = (9, 9, 9);
+        let mut v = vec![0u8; w * h * d];
+        v[4 * 81 + 4 * 9 + 4] = 255;
+        let mut flat = vec![100u8; w * h * d];
+        gaussian(&mut flat, (w, h, d), 1.5);
+        assert!(flat.windows(2).all(|p| p[0] == p[1]), "a flat volume stays flat");
+        let (lo, hi) = gaussian(&mut v, (w, h, d), 0.7);
+        assert!(lo < 1.0 && hi > 0.0 && hi < 255.0, "range {lo}..{hi} shrank");
+        assert_eq!(v[4 * 81 + 4 * 9 + 4], 255, "peak stretched back to full");
+        assert!(v[4 * 81 + 4 * 9 + 5] > 0);
+        assert_eq!(v[4 * 81 + 4 * 9 + 5], v[5 * 81 + 4 * 9 + 4], "same in X and Z");
     }
 
     #[test]

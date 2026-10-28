@@ -59,3 +59,6 @@
 /* Slices with segmentation labels: a band under the Z slider (annotation marks sit above it). */
 #zlabels { position: absolute; left: 8px; right: 8px; bottom: -4px; height: 3px; pointer-events: none; }
 #zlabels i { position: absolute; top: 0; height: 3px; margin-left: -2px; border-radius: 0; opacity: 0.9; }
+#vol-panel .vp-pre { align-items: center; justify-content: space-between; }
+#vol-panel label.vp-inline { flex-direction: row; align-items: center; gap: 6px; }
+#vol-panel label.vp-inline select { width: auto; }

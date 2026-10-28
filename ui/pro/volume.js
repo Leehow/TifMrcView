@@ -48,12 +48,19 @@ vec3 labelColor(uint l, vec3 t, vec3 rd) {
   return palette[(l - 1u) % 16u] * (0.35 + 0.65 * abs(dot(n, -rd)));
 }
 
-float sampleCh(int c, vec3 t) {
+uniform int invert;       // dark structures (cryo-EM density) shown bright
+
+float sampleRaw(int c, vec3 t) {
   // Indexing a sampler array needs a constant index in GLSL ES.
   if (c == 0) return texture(vol[0], t).r;
   if (c == 1) return texture(vol[1], t).r;
   if (c == 2) return texture(vol[2], t).r;
   return texture(vol[3], t).r;
+}
+
+float sampleCh(int c, vec3 t) {
+  float v = sampleRaw(c, t);
+  return invert == 1 ? 1.0 - v : v;
 }
 
 vec3 toTex(vec3 p) {
@@ -242,7 +249,7 @@ void main() {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       this.u = {};
-      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "upper", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity"]) {
+      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "upper", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity", "invert"]) {
         this.u[name] = gl.getUniformLocation(prog, name);
       }
       gl.uniform1iv(gl.getUniformLocation(prog, "vol"), [0, 1, 2, 3]);
@@ -255,7 +262,7 @@ void main() {
       this.labelTex = null;
       this.setLabels(null);
       // levels[mode] = [start, full] in 0..1 of the volume's value range (surface uses start only).
-      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7 };
+      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7, invert: false, smooth: 0 };
       this.resetView();
     }
 
@@ -361,6 +368,7 @@ void main() {
       gl.uniform1f(this.u.brightness, s.brightness);
       gl.uniform1i(this.u.hasLabels, this.hasLabels && s.showLabels ? 1 : 0);
       gl.uniform1f(this.u.labelOpacity, s.labelOpacity);
+      gl.uniform1i(this.u.invert, s.invert ? 1 : 0);
       const v = this.vol;
       const full = Math.min(2048, Math.round(1.5 * Math.max(v.w, v.h, v.d)));
       gl.uniform1i(this.u.steps, fast ? Math.max(64, full >> 2) : full);
@@ -429,6 +437,17 @@ void main() {
       <div class="vp-sigma" id="vp-sigma"></div>
     </div>
     <label id="vp-op-row">不透明度 <input type="range" id="vp-op" min="0.02" max="1" step="0.01" value="0.2"></label>
+    <div class="vp-row vp-pre">
+      <label class="vp-check" title="暗的结构显示为亮，冷冻电镜的断层和密度图一般要开"><input type="checkbox" id="vp-inv"> 反相</label>
+      <label class="vp-inline" title="先做高斯平滑再显示，噪声大的断层用它才能看出连续的膜">平滑
+        <select id="vp-smooth">
+          <option value="0">无</option>
+          <option value="1">轻</option>
+          <option value="2">中</option>
+          <option value="3">强</option>
+        </select>
+      </label>
+    </div>
     <label>亮度 <input type="range" id="vp-br" min="0.2" max="4" step="0.05" value="1.2"></label>
     <label>Z 比例 <input type="range" id="vp-z" min="0.1" max="5" step="0.05" value="1"></label>
     <div id="vp-lab-rows" hidden>
@@ -475,8 +494,14 @@ void main() {
     hist = { counts, min: c.min, max: c.max, mean, sd };
   }
 
-  const toValue = (v) => hist.min + v * (hist.max - hist.min);
-  const fromValue = (x) => (hist.max > hist.min ? (x - hist.min) / (hist.max - hist.min) : 0);
+  // With invert on, 0..1 runs from the brightest value down to the darkest.
+  const inv = () => !!(view && view.settings.invert);
+  const toValue = (v) => (inv() ? hist.max - v * (hist.max - hist.min) : hist.min + v * (hist.max - hist.min));
+  const fromValue = (x) => {
+    if (!(hist.max > hist.min)) return 0;
+    const f = (x - hist.min) / (hist.max - hist.min);
+    return inv() ? 1 - f : f;
+  };
   const num = (x) => +x.toPrecision(4);
 
   function drawHist() {
@@ -490,6 +515,7 @@ void main() {
     g.clearRect(0, 0, w, h);
     if (!hist || !view) return;
     const logs = Array.from(hist.counts, (n) => Math.log1p(n));
+    if (inv()) logs.reverse();
     const top = Math.max(...logs) || 1;
     g.fillStyle = "#8c959f";
     for (let b = 0; b < 256; b++) {
@@ -526,6 +552,24 @@ void main() {
     if (document.activeElement !== $("vp-hi")) $("vp-hi").value = num(toValue(hi));
     $("vp-sigma").textContent = hist.sd > 0 ? `${num((toValue(lo) - hist.mean) / hist.sd)} σ · 平均 ${num(hist.mean)} · σ ${num(hist.sd)}` : "";
     drawHist();
+  }
+
+  /// Starting levels from the value spread, like ChimeraX's σ levels:
+  /// MIP mean..mean+4σ, translucent mean+0.5σ..mean+3σ, surface mean+2σ
+  /// (in the shown direction, so after invert they pick the dark side).
+  let levelsFor = 0;
+  function autoLevels() {
+    if (!view || !hist || !(hist.sd > 0)) return;
+    const span = hist.max - hist.min;
+    let m = (hist.mean - hist.min) / span;
+    const sd = hist.sd / span;
+    if (inv()) m = 1 - m;
+    const c = (x) => Math.max(0, Math.min(1, x));
+    view.settings.levels = [
+      [c(m), c(m + 4 * sd)],
+      [c(m + 0.5 * sd), c(m + 3 * sd)],
+      [c(m + 2 * sd), 1],
+    ];
   }
 
   function setLevel(which, v) {
@@ -565,7 +609,22 @@ void main() {
     });
   }
 
+  /// Cryo-ET tomograms (MRC slabs much thinner than wide) start inverted and
+  /// lightly smoothed; other stacks start as they are. Per image.
+  let defaultsFor = 0;
+  function applyDefaults() {
+    if (!view || defaultsFor === S.token || !S.info) return;
+    defaultsFor = S.token;
+    const i = S.info;
+    const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
+    view.settings.invert = tomo;
+    view.settings.smooth = tomo ? 1 : 0;
+    $("vp-inv").checked = view.settings.invert;
+    $("vp-smooth").value = String(view.settings.smooth);
+  }
+
   async function load() {
+    applyDefaults();
     const chans = S.chans.map((c, i) => ({ c, i })).filter(({ c }) => c.visible).slice(0, MAX_CHANNELS);
     if (!chans.length) { status("没有显示中的通道"); return; }
     const token = S.token;
@@ -573,6 +632,7 @@ void main() {
       token, t: S.t,
       channels: chans.map(({ c, i }) => ({ index: i, min: c.min ?? null, max: c.max ?? null })),
       maxVoxels: Math.floor(VOXEL_BUDGET / chans.length),
+      smooth: view ? view.settings.smooth : 0,
     };
     status("正在读取整个 Z 堆栈…");
     const started = performance.now();
@@ -581,6 +641,10 @@ void main() {
       if (token !== S.token || !view) return;
       view.setVolume(vol, chans.map(({ c }) => c.color));
       computeHist(vol);
+      if (levelsFor !== token) {
+        levelsFor = token;
+        autoLevels();
+      }
       syncLevels();
       shownToken = token;
       lastBudget = req.maxVoxels;
@@ -703,6 +767,18 @@ void main() {
   bind("vp-br", "brightness", parseFloat);
   bind("vp-z", "zScale", parseFloat);
   bind("vp-lab-op", "labelOpacity", parseFloat);
+  $("vp-inv").addEventListener("change", (e) => {
+    if (!view) return;
+    view.settings.invert = e.target.checked;
+    autoLevels();
+    syncLevels();
+    view.draw();
+  });
+  $("vp-smooth").addEventListener("change", (e) => {
+    if (!view) return;
+    view.settings.smooth = +e.target.value;
+    load();
+  });
   $("vp-lab").addEventListener("change", (e) => {
     if (!view) return;
     view.settings.showLabels = e.target.checked;
