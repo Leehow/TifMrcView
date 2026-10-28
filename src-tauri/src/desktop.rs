@@ -426,6 +426,39 @@ async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16)
     .await
 }
 
+/// Carries the last SAM mask along Z and paints every slice it reaches,
+/// as one undo step; reports `sam-propagate` {done, total}.
+#[tauri::command]
+async fn sam_propagate(app: AppHandle, req: crate::sam::PropagateReq, label: u16, guard: u16) -> CmdResult<LabelsState> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let e = labels_entry(&app.state::<AppState>(), req.token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let info = img.info();
+        let d = e.lock().unwrap().labels.d;
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
+            use crate::labels::Values;
+            vals.slice(z)
+        };
+        let progress = |done, total| {
+            let _ = app2.emit("sam-propagate", serde_json::json!({ "done": done, "total": total }));
+        };
+        let masks = sam.propagate(&req, (info.width, info.height, d), values, progress)?;
+        let refs: Vec<(usize, &[bool])> = masks.iter().map(|(z, m)| (*z, m.as_slice())).collect();
+        let mut e = e.lock().unwrap();
+        let zs = e.labels.apply_masks(&refs, label, guard);
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+#[tauri::command]
+fn sam_cancel(sam: State<'_, crate::sam::Sam>) {
+    sam.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
@@ -988,6 +1021,8 @@ pub fn run() {
             sam_download,
             sam_predict,
             sam_apply,
+            sam_propagate,
+            sam_cancel,
             pixel_values,
             list_folder,
             thumbnail,

@@ -4,16 +4,14 @@
 //! and the masks (disc.u8, box.u8) for comparing with the PyTorch model.
 use std::time::Instant;
 
-use tmv_sam::{Point, Predictor, Sam2Config};
+use tmv_sam::{Point, Sam2Config};
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1).expect("checkpoint path");
     let out = std::env::args().nth(2).map(std::path::PathBuf::from);
-    let (device, backend) = tmv_sam::pick_device();
-    println!("backend {backend}");
     let t = Instant::now();
-    let p = Predictor::load(path.as_ref(), &Sam2Config::tiny(), &device)?;
-    println!("load {:.2?}", t.elapsed());
+    let (p, backend) = tmv_sam::load_best(path.as_ref(), &Sam2Config::tiny())?;
+    println!("backend {backend}, load + warm-up {:.2?}", t.elapsed());
     let (w, h) = (800usize, 600usize);
     let mut img = vec![0u8; w * h];
     let mut seed = 1u32;

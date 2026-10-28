@@ -98,7 +98,7 @@ pub struct Material {
 
 /// Euclidean distance from every pixel to the nearest `true` one
 /// (Felzenszwalb & Huttenlocher); a large value when there is none.
-fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
+pub(crate) fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
     const INF: f32 = 1e20;
     let mut g: Vec<f32> = mask.iter().map(|&b| if b { 0.0 } else { INF }).collect();
     let n = w.max(h);
@@ -654,15 +654,22 @@ impl Labels {
 
     /// Paints `label` (0 erases) wherever `mask` is set on slice `z`.
     pub fn apply_mask(&mut self, z: usize, mask: &[bool], label: u16, guard: u16) -> Vec<usize> {
-        if z >= self.d || mask.len() != self.w * self.h {
-            return vec![];
-        }
+        self.apply_masks(&[(z, mask)], label, guard)
+    }
+
+    /// `apply_mask` on several slices as one undo step.
+    pub fn apply_masks(&mut self, masks: &[(usize, &[bool])], label: u16, guard: u16) -> Vec<usize> {
         let locked = self.locked();
         let mut edit = vec![];
-        let s = Self::touch(&mut self.slices, &mut edit, z, mask.len());
-        for (v, &m) in s.iter_mut().zip(mask) {
-            if m && allowed(*v, label, guard, &locked) {
-                *v = label;
+        for &(z, mask) in masks {
+            if z >= self.d || mask.len() != self.w * self.h {
+                continue;
+            }
+            let s = Self::touch(&mut self.slices, &mut edit, z, mask.len());
+            for (v, &m) in s.iter_mut().zip(mask) {
+                if m && allowed(*v, label, guard, &locked) {
+                    *v = label;
+                }
             }
         }
         self.commit(edit)

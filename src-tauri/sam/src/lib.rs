@@ -14,34 +14,71 @@ use burn_store::{ModuleSnapshot, PytorchStore};
 
 pub use model::{Features, Sam2, Sam2Config, IMAGE_SIZE};
 
-/// The fastest backend that works here: CUDA, then the platform GPU API
-/// (Metal, DX12 or Vulkan through wgpu), then the CPU. Each candidate runs a
-/// small computation first, so a missing driver falls through instead of
-/// failing later. Returns the device and a name to show.
+/// The backends to try, fastest first: CUDA, then the platform GPU API
+/// (Metal, DX12 or Vulkan through wgpu), then the CPU, with names to show.
+fn candidates() -> Vec<(fn() -> Device, &'static str)> {
+    #[allow(unused_mut)]
+    let mut v: Vec<(fn() -> Device, &'static str)> = vec![];
+    #[cfg(feature = "cuda")]
+    v.push((|| Device::cuda(0), "CUDA"));
+    #[cfg(feature = "wgpu")]
+    v.push((
+        || Device::wgpu(burn::tensor::DeviceKind::DefaultDevice),
+        if cfg!(target_os = "macos") { "Metal" } else if cfg!(windows) { "GPU (DX12/Vulkan)" } else { "GPU (Vulkan)" },
+    ));
+    #[cfg(feature = "flex")]
+    v.push((Device::flex, "CPU"));
+    if v.is_empty() {
+        v.push((Device::default, "CPU"));
+    }
+    v
+}
+
+/// Runs `f`, turning a panic (how Burn reports a failed GPU kernel or
+/// allocation) into an error.
+fn guarded<T>(f: impl FnOnce() -> T) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| {
+        let msg = e.downcast_ref::<String>().map(String::as_str).or_else(|| e.downcast_ref::<&str>().copied()).unwrap_or("panic");
+        anyhow!("{}", msg.lines().next().unwrap_or(msg))
+    })
+}
+
+/// The fastest backend where a small computation works. Returns the
+/// device and a name to show.
 pub fn pick_device() -> (Device, &'static str) {
-    #[allow(unused)]
-    fn works(make: impl FnOnce() -> Device + std::panic::UnwindSafe) -> Option<Device> {
-        std::panic::catch_unwind(|| {
+    for (make, name) in candidates() {
+        let ok = guarded(|| {
             let d = make();
             let x = Tensor::<2>::ones([8, 8], &d);
             let s: f32 = x.clone().matmul(x).sum().into_scalar();
             (s == 512.0).then_some(d)
-        })
-        .ok()
-        .flatten()
+        });
+        if let Ok(Some(d)) = ok {
+            return (d, name);
+        }
     }
-    #[cfg(feature = "cuda")]
-    if let Some(d) = works(|| Device::cuda(0)) {
-        return (d, "CUDA");
-    }
-    #[cfg(feature = "wgpu")]
-    if let Some(d) = works(|| Device::wgpu(burn::tensor::DeviceKind::DefaultDevice)) {
-        return (d, if cfg!(target_os = "macos") { "Metal" } else if cfg!(windows) { "GPU (DX12/Vulkan)" } else { "GPU (Vulkan)" });
-    }
-    #[cfg(feature = "flex")]
-    return (Device::flex(), "CPU");
-    #[allow(unreachable_code)]
     (Device::default(), "CPU")
+}
+
+/// Loads the model on the fastest backend that can really run it: each
+/// candidate encodes a blank image and decodes one click first, so a GPU
+/// with too little memory or too small buffer limits falls through to the
+/// next one instead of failing on the user's first click.
+pub fn load_best(path: &Path, cfg: &Sam2Config) -> Result<(Predictor, &'static str)> {
+    let mut last = anyhow!("no backend");
+    for (make, name) in candidates() {
+        let tried = guarded(|| -> Result<Predictor> {
+            let p = Predictor::load(path, cfg, &make())?;
+            let enc = p.encode_gray(&[0u8; 64 * 64], 64, 64);
+            p.predict(&enc, &[Point { x: 32.0, y: 32.0, positive: true }], None, None);
+            Ok(p)
+        });
+        match tried {
+            Ok(Ok(p)) => return Ok((p, name)),
+            Ok(Err(e)) | Err(e) => last = e.context(format!("{name} backend")),
+        }
+    }
+    Err(last)
 }
 
 /// A loaded model plus the tensors that only depend on its weights.

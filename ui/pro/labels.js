@@ -35,7 +35,7 @@
     hover: null,      // pointer in image pixels
     stroke: null,
     lasso: null,      // {z, pts, erase} while a lasso is drawn
-    sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null },
+    sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null, along: null },
     busy: false,
     saveTimer: 0,
   };
@@ -75,6 +75,7 @@
       <div class="row">
         <button class="small" id="lab-sam-get">下载模型</button>
         <button class="small" id="lab-sam-apply" title="把预览的分割写进当前标签（回车）">应用</button>
+        <button class="small" id="lab-sam-z" title="从这一层开始，逐层向上和向下自动分割同一个物体，直到找不到它为止（Esc 停止）">沿 Z 传播</button>
         <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
       </div>
     </div>
@@ -598,6 +599,7 @@
   window.addEventListener("keydown", (e) => {
     if (S.tool !== "label" || L.sub !== "sam" || e.target.tagName === "INPUT" && e.target.type === "text") return;
     if (e.key === "Enter" && L.sam.mask) { samApply(); e.preventDefault(); }
+    if (e.key === "Escape" && L.sam.along) { invoke("sam_cancel"); e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === "Escape" && (L.sam.points.length || L.sam.box)) { samClear(); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
@@ -639,10 +641,13 @@
     $("lab-sam-apply").hidden = !ready;
     $("lab-sam-clear").hidden = !ready;
     $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
+    $("lab-sam-z").hidden = !ready || !(S.info.sizeZ > 1);
+    $("lab-sam-z").disabled = !L.sam.mask || L.sam.busy;
     let text;
     if (!st.available) text = "SAM 分割只在 TifMrcView Pro 里有";
     else if (L.sam.progress) text = `正在下载模型 ${Math.round((L.sam.progress.done / L.sam.progress.total) * 100)}%`;
     else if (!ready) text = `第一次使用要先下载 SAM 2.1 模型（约 ${Math.round(st.size / 1e6)} MB，只下载一次）`;
+    else if (L.sam.along) text = `正在沿 Z 传播 ${L.sam.along.done}/${L.sam.along.total} 层（Esc 停止）`;
     else if (L.sam.busy) text = st.loaded ? "SAM 计算中…" : "正在加载模型和计算图像特征…";
     else if (L.sam.mask) text = `预测质量 ${Math.round(L.sam.iou * 100)}%：回车写进当前标签，Alt+点击去掉多余部分`;
     else text = "点一下要分割的物体；Alt+点击标背景，Shift+拖动拉框";
@@ -764,6 +769,28 @@
     if (st) samClear();
   }
 
+  async function samAlong() {
+    if (!L.sam.mask || L.sam.busy) return;
+    const c = S.chans[channel()];
+    const req = { token: S.token, z: L.sam.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, up: true, down: true, max: 100000 };
+    L.sam.busy = true;
+    L.sam.along = { done: 0, total: 0 };
+    syncSam();
+    const un = await T.event.listen("sam-propagate", (ev) => { L.sam.along = ev.payload; syncSam(); });
+    try {
+      const st = await editWith("sam_propagate", { req, label: L.active, guard: L.guard ? L.active : 0 });
+      if (st) {
+        samClear();
+        toast(`沿 Z 分割了 ${st.zs.length} 层`, 3000);
+      }
+    } finally {
+      un();
+      L.sam.busy = false;
+      L.sam.along = null;
+      syncSam();
+    }
+  }
+
   async function samDownload() {
     L.sam.progress = { done: 0, total: L.sam.status.size };
     syncSam();
@@ -781,6 +808,7 @@
 
   $("lab-sam-get").addEventListener("click", samDownload);
   $("lab-sam-apply").addEventListener("click", samApply);
+  $("lab-sam-z").addEventListener("click", samAlong);
   $("lab-sam-clear").addEventListener("click", samClear);
 
   // ---------- panel controls ----------
