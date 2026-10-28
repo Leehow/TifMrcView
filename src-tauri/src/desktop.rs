@@ -23,6 +23,8 @@ struct AppState {
     showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
     save_paths: SavePaths,
+    /// Pro label maps of the open images.
+    labels: crate::labels::Store,
 }
 
 /// Paths the user chose (or quick-save picked) to write to; `save_file`
@@ -147,6 +149,148 @@ async fn volume_data(state: State<'_, AppState>, req: crate::volume::VolumeReq) 
     Ok(Response::new(bytes))
 }
 
+// ---------- Pro label maps ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelsState {
+    /// The label file next to the image.
+    path: String,
+    /// Voxels per label, indexed by label.
+    counts: Vec<u64>,
+    /// Slices that changed.
+    zs: Vec<usize>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum LabelOp {
+    Stroke { z: usize, pts: Vec<[f32; 2]>, radius: f32, label: u16, guard: u16 },
+    Wand { x: usize, y: usize, z: usize, c: usize, t: usize, tol: f32, label: u16, guard: u16, three_d: bool },
+    Threshold { z0: usize, z1: usize, c: usize, t: usize, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize },
+    Watershed { z0: usize, z1: usize, c: usize, t: usize },
+    Delete { label: u16 },
+    Undo,
+    Redo,
+}
+
+/// Saves and drops the label maps of images no window shows any more.
+fn prune_labels(state: &AppState) {
+    let open: HashSet<u64> = state.current.lock().unwrap().values().map(|i| i.token).collect();
+    let gone: Vec<_> = {
+        let mut store = state.labels.lock().unwrap();
+        let tokens: Vec<u64> = store.keys().copied().filter(|t| !open.contains(t)).collect();
+        tokens.into_iter().filter_map(|t| store.remove(&t)).collect()
+    };
+    for e in gone {
+        let mut e = e.lock().unwrap();
+        if e.labels.dirty {
+            let path = PathBuf::from(&e.path);
+            if let Err(err) = e.labels.save(&path) {
+                eprintln!("saving {}: {err}", path.display());
+            }
+        }
+    }
+}
+
+fn labels_entry(state: &AppState, token: u64) -> CmdResult<Arc<Mutex<crate::labels::Entry>>> {
+    state.labels.lock().unwrap().get(&token).cloned().ok_or_else(|| "stale".to_string())
+}
+
+/// Loads (or starts) the label map of an open image.
+#[tauri::command]
+async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<LabelsState> {
+    prune_labels(&state);
+    if let Ok(e) = labels_entry(&state, token) {
+        let e = e.lock().unwrap();
+        return Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), zs: vec![] });
+    }
+    let img = state.current.lock().unwrap().values().find(|i| i.token == token).cloned().ok_or("stale")?;
+    let entry = blocking(move || {
+        let info = img.info();
+        let path = crate::labels::labels_path(&info.path, info.series_index);
+        let labels = if Path::new(&path).exists() {
+            crate::labels::Labels::load(Path::new(&path), info.width, info.height, info.size_z)?
+        } else {
+            crate::labels::Labels::new(info.width, info.height, info.size_z)
+        };
+        Ok(crate::labels::Entry { labels, path })
+    })
+    .await?;
+    let out = LabelsState { path: entry.path.clone(), counts: entry.labels.counts(), zs: vec![] };
+    state.labels.lock().unwrap().entry(token).or_insert_with(|| Arc::new(Mutex::new(entry)));
+    Ok(out)
+}
+
+/// One slice of the label map as little-endian u16.
+#[tauri::command]
+async fn labels_slice(state: State<'_, AppState>, token: u64, z: usize) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || Ok(e.lock().unwrap().labels.slice_bytes(z))).await?;
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> CmdResult<LabelsState> {
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    blocking(move || {
+        use crate::labels::ChannelValues;
+        let mut e = e.lock().unwrap();
+        let values = |c, t| ChannelValues { img: img.clone(), c, t };
+        let l = &mut e.labels;
+        let zs = match op {
+            LabelOp::Stroke { z, pts, radius, label, guard } => l.stroke(z, &pts, radius, label, guard),
+            LabelOp::Wand { x, y, z, c, t, tol, label, guard, three_d } => l.wand(&values(c, t), x, y, z, tol, label, guard, three_d)?,
+            LabelOp::Threshold { z0, z1, c, t, lo, hi, label, guard, split, min_size } => {
+                l.threshold(&values(c, t), z0..z1, lo, hi, label, guard, split, min_size)?
+            }
+            LabelOp::Watershed { z0, z1, c, t } => l.watershed(&values(c, t), z0..z1)?,
+            LabelOp::Delete { label } => l.delete_label(label),
+            LabelOp::Undo => l.undo(),
+            LabelOp::Redo => l.redo(),
+        };
+        Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), zs })
+    })
+    .await
+}
+
+/// Writes the label file when it changed; returns whether a file exists now.
+#[tauri::command]
+async fn labels_save(state: State<'_, AppState>, token: u64) -> CmdResult<bool> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let mut e = e.lock().unwrap();
+        let path = PathBuf::from(&e.path);
+        if !e.labels.dirty {
+            return Ok(path.exists());
+        }
+        e.labels.save(&path)
+    })
+    .await
+}
+
+/// The label map reduced like `volume_data` for the 3D view: u32 width,
+/// height, depth, then one byte per voxel.
+#[tauri::command]
+async fn labels_volume(state: State<'_, AppState>, token: u64, max_voxels: usize) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || {
+        let e = e.lock().unwrap();
+        let l = &e.labels;
+        let (f, fz) = crate::volume::factors(l.w, l.h, l.d, max_voxels);
+        let (w, h, d, v) = l.reduced(f, fz);
+        let mut out = Vec::with_capacity(12 + v.len());
+        for n in [w, h, d] {
+            out.extend_from_slice(&(n as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&v);
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
@@ -221,7 +365,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.is_file() && formats::is_supported(p))
+            .filter(|p| p.is_file() && formats::is_supported(p) && !crate::labels::is_labels_file(p))
             .filter(|p| !p.file_name().map(|n| n.to_string_lossy().starts_with("._")).unwrap_or(false))
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
@@ -699,6 +843,11 @@ pub fn run() {
             load_progress,
             render_view,
             volume_data,
+            labels_open,
+            labels_slice,
+            labels_edit,
+            labels_save,
+            labels_volume,
             pixel_values,
             list_folder,
             thumbnail,
@@ -743,6 +892,12 @@ pub fn run() {
                 state.pending.lock().unwrap().remove(label);
                 state.showing.lock().unwrap().remove(label);
                 state.side.lock().unwrap().remove(label);
+                prune_labels(&state);
+            }
+            if let tauri::RunEvent::Exit = &_event {
+                let state = _app.state::<AppState>();
+                state.current.lock().unwrap().clear();
+                prune_labels(&state);
             }
             // macOS delivers double-clicked files as an event, not as argv.
             // tifmrcview:// links arrive here too; the deep-link plugin

@@ -32,3 +32,19 @@
 #vol-panel .vp-row { display: flex; gap: 6px; }
 #vol-panel .vp-row button { flex: 1; justify-content: center; border: 1px solid var(--line-strong); }
 #vol-panel .vp-status { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; min-height: 1.4em; }
+#vol-panel label.vp-check { flex-direction: row; align-items: center; gap: 6px; }
+
+/* Segmentation labels (labels.js). */
+#lab-tools button.on { background: var(--muted); color: var(--accent); border-color: var(--accent); }
+#lab-list { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 220px; overflow-y: auto; }
+#lab-list .lab-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+#lab-list .lab-row:hover { background: var(--muted); }
+#lab-list .lab-row.on { background: var(--muted); box-shadow: inset 2px 0 0 var(--accent); }
+#lab-list .sw { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+#lab-list .name { flex: none; }
+#lab-list .n { flex: 1; text-align: right; font-variant-numeric: tabular-nums; }
+#lab-list .del { flex: none; height: 18px; padding: 0 4px; font-size: 11px; color: var(--faint); }
+#lab-list .del:hover { color: var(--accent); }
+#sec-labels details { margin: 6px 0; }
+#sec-labels summary { cursor: pointer; font-size: 12px; color: var(--dim); }
+#sec-labels input[type="number"] { width: 84px; }

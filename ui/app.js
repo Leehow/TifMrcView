@@ -62,6 +62,12 @@ const S = {
   modelShow: true,
 };
 
+// Tools and overlays added from outside this file (the Pro label tools):
+// tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on)},
+// where p is the pointer in image pixels; overlays are f(ctx) drawn over the
+// image in screen coordinates, under the annotations.
+const ext = { tools: {}, overlays: [] };
+
 const canvas = $("view");
 const ctx = canvas.getContext("2d");
 const frameCanvas = document.createElement("canvas");
@@ -1176,6 +1182,7 @@ function draw() {
 
   // Model coordinates are pixel indices; +0.5 puts them on pixel centres.
   drawModel(ctx, (x, y) => toScreen(x + 0.5, y + 0.5), S.view.scale, 1);
+  for (const f of ext.overlays) f(ctx);
 
   const items = S.annShow ? S.ann.filter((a) => onSlice(a)) : [];
   const drawing = S.op && S.op.kind === "draw" && S.op.item.type !== "crop" ? [S.op.item] : [];
@@ -1539,6 +1546,7 @@ function setTool(t) {
   canvas.classList.toggle("text", t === "text");
   if (t !== "select") S.picked = null;
   if (t !== "crop") S.cropBox = null;
+  for (const [name, x] of Object.entries(ext.tools)) if (x.active) x.active(name === t);
   draw();
 }
 
@@ -1943,6 +1951,7 @@ function pushHistory(snap) {
 
 function undo() {
   if (S.op) return;
+  if (ext.tools[S.tool] && ext.tools[S.tool].undo) return ext.tools[S.tool].undo();
   const h = S.history.pop();
   if (!h) return;
   S.future.push(snapshot());
@@ -1951,6 +1960,7 @@ function undo() {
 
 function redo() {
   if (S.op) return;
+  if (ext.tools[S.tool] && ext.tools[S.tool].redo) return ext.tools[S.tool].redo();
   const h = S.future.pop();
   if (!h) return;
   S.history.push(snapshot());
@@ -2204,6 +2214,11 @@ canvas.addEventListener("pointerdown", (e) => {
     canvas.classList.add("drag");
     return;
   }
+  if (ext.tools[S.tool]) {
+    S.op = { kind: "ext" };
+    ext.tools[S.tool].down(e, toImage(e));
+    return;
+  }
   const p = toImage(e);
   const tol = 6 / S.view.scale;
   const snap = snapshot();
@@ -2296,6 +2311,10 @@ canvas.addEventListener("pointermove", (e) => {
     requestRender();
     return;
   }
+  if (op.kind === "ext") {
+    if (ext.tools[S.tool]) ext.tools[S.tool].move(e, toImage(e));
+    return;
+  }
   let p = toImage(e);
   const it = op.item;
   if (it.type === "crop") p = clampToImage(p);
@@ -2351,6 +2370,10 @@ function endPointer() {
   if (!op) return;
   if (op.kind === "pan") {
     canvas.classList.remove("drag");
+    return;
+  }
+  if (op.kind === "ext") {
+    if (ext.tools[S.tool]) ext.tools[S.tool].up();
     return;
   }
   const it = op.item;

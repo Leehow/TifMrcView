@@ -3,6 +3,8 @@
 // Shares app.js globals: S (viewer state), invoke, $.
 (() => {
   const MAX_CHANNELS = 4;
+  // Same order as labels.js, so a label has one colour in 2D and 3D.
+  const LABEL_COLORS = window.TifMrcViewPro.LABEL_COLORS;
   const VOXEL_BUDGET = 96 << 20; // all channels together
 
   const VERT = `#version 300 es
@@ -13,6 +15,7 @@ void main() { ndc = pos; gl_Position = vec4(pos, 0.0, 1.0); }`;
   const FRAG = `#version 300 es
 precision highp float;
 precision highp sampler3D;
+precision highp usampler3D;
 in vec2 ndc;
 out vec4 outColor;
 uniform mat4 invViewProj;
@@ -26,6 +29,22 @@ uniform float opacity;
 uniform float brightness;
 uniform int steps;
 uniform vec3 texel;       // 1 / voxel counts
+uniform usampler3D labels; // segmentation labels, 0 = none
+uniform int hasLabels;
+uniform float labelOpacity;
+uniform vec3 palette[16];
+
+uint labelAt(vec3 t) { return texture(labels, t).r; }
+
+// Shaded colour of the label at t, lit by the outline of its region.
+vec3 labelColor(uint l, vec3 t, vec3 rd) {
+  vec3 g = vec3(
+    float(labelAt(t + vec3(texel.x, 0, 0)) == l) - float(labelAt(t - vec3(texel.x, 0, 0)) == l),
+    float(labelAt(t - vec3(0, texel.y, 0)) == l) - float(labelAt(t + vec3(0, texel.y, 0)) == l),
+    float(labelAt(t + vec3(0, 0, texel.z)) == l) - float(labelAt(t - vec3(0, 0, texel.z)) == l));
+  vec3 n = length(g) > 1e-5 ? -normalize(g) : -rd;
+  return palette[(l - 1u) % 16u] * (0.35 + 0.65 * abs(dot(n, -rd)));
+}
 
 float sampleCh(int c, vec3 t) {
   // Indexing a sampler array needs a constant index in GLSL ES.
@@ -54,11 +73,32 @@ void main() {
   float dt = (tf - tn) / float(steps);
   vec3 acc = vec3(0.0);
   float alpha = 0.0;
+  vec3 surf = vec3(0.0);
+  bool surfHit = false;
+  vec3 lab = vec3(0.0);
+  bool labHit = false;
   float mx[${MAX_CHANNELS}];
   for (int c = 0; c < ${MAX_CHANNELS}; c++) mx[c] = 0.0;
   for (int i = 0; i < 2048; i++) {
     if (i >= steps) break;
     vec3 tc = toTex(ro + rd * (tn + (float(i) + 0.5) * dt));
+    if (hasLabels == 1 && !labHit) {
+      uint l = labelAt(tc);
+      if (l > 0u) {
+        vec3 lc = labelColor(l, tc, rd);
+        if (mode == 1) {
+          // Labels take part in the translucent blend like dense voxels.
+          float a1 = 1.0 - pow(1.0 - labelOpacity, dt * 200.0);
+          acc += (1.0 - alpha) * a1 * lc;
+          alpha += (1.0 - alpha) * a1;
+          if (alpha > 0.98) break;
+          continue;
+        }
+        lab = lc;
+        labHit = true;
+        if (mode == 2 && !surfHit) break;
+      }
+    }
     if (mode == 0) {
       for (int c = 0; c < ${MAX_CHANNELS}; c++) if (c < nch) mx[c] = max(mx[c], sampleCh(c, tc));
     } else if (mode == 1) {
@@ -85,19 +125,29 @@ void main() {
             sampleCh(c, tc + vec3(0, 0, texel.z)) - sampleCh(c, tc - vec3(0, 0, texel.z)));
           vec3 n = length(g) > 1e-5 ? -normalize(g) : -rd;
           float diff = abs(dot(n, -rd));
-          outColor = vec4(color[c] * (0.25 + 0.75 * diff) * brightness, 1.0);
-          return;
+          surf = color[c] * (0.25 + 0.75 * diff) * brightness;
+          surfHit = true;
+          break;
         }
       }
+      // A surface in front hides the labels behind it.
+      if (surfHit) break;
     }
   }
+  vec3 base;
   if (mode == 0) {
-    vec3 col = vec3(0.0);
-    for (int c = 0; c < ${MAX_CHANNELS}; c++) if (c < nch) col += color[c] * mx[c];
-    outColor = vec4(col * brightness, 1.0);
+    base = vec3(0.0);
+    for (int c = 0; c < ${MAX_CHANNELS}; c++) if (c < nch) base += color[c] * mx[c];
+    base *= brightness;
+  } else if (mode == 1) {
+    base = acc;
   } else {
-    outColor = vec4(acc, 1.0);
+    base = surf;
   }
+  // In MIP mode the nearest label is laid over the picture.
+  // (In surface mode a label reached first is a surface itself.)
+  float k = mode == 2 ? 1.0 : labelOpacity;
+  outColor = vec4(labHit && mode != 1 ? mix(base, lab, k) : base, 1.0);
 }`;
 
   // --- 4x4 matrices, column-major like WebGL ---
@@ -189,13 +239,19 @@ void main() {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       this.u = {};
-      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "opacity", "brightness", "steps", "texel"]) {
+      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity"]) {
         this.u[name] = gl.getUniformLocation(prog, name);
       }
       gl.uniform1iv(gl.getUniformLocation(prog, "vol"), [0, 1, 2, 3]);
+      gl.uniform1i(gl.getUniformLocation(prog, "labels"), MAX_CHANNELS);
+      const pal = new Float32Array(48);
+      LABEL_COLORS.forEach((rgb, i) => pal.set(rgb.map((x) => x / 255), i * 3));
+      gl.uniform3fv(gl.getUniformLocation(prog, "palette"), pal);
       this.uColor = gl.getUniformLocation(prog, "color");
       this.textures = [];
-      this.settings = { mode: 0, threshold: 0.25, opacity: 0.2, brightness: 1.2, zScale: 1 };
+      this.labelTex = null;
+      this.setLabels(null);
+      this.settings = { mode: 0, threshold: 0.25, opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7 };
       this.resetView();
     }
 
@@ -228,6 +284,25 @@ void main() {
       }
       this.vol = vol;
       this.colors = colors.slice(0, MAX_CHANNELS);
+      this.draw();
+    }
+
+    /// Label volume {w, h, d, data} matching the image volume, or null.
+    setLabels(lab) {
+      const gl = this.gl;
+      if (this.labelTex) gl.deleteTexture(this.labelTex);
+      const ok = lab && this.vol && lab.w === this.vol.w && lab.h === this.vol.h && lab.d === this.vol.d;
+      this.labelTex = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS);
+      gl.bindTexture(gl.TEXTURE_3D, this.labelTex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      // Integer textures cannot be filtered; an empty 1x1x1 one stands in when there are no labels.
+      if (ok) gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8UI, lab.w, lab.h, lab.d, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, lab.data);
+      else gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8UI, 1, 1, 1, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, new Uint8Array(1));
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
+      this.hasLabels = !!ok;
       this.draw();
     }
 
@@ -272,6 +347,8 @@ void main() {
       gl.uniform1f(this.u.threshold, s.threshold);
       gl.uniform1f(this.u.opacity, s.opacity);
       gl.uniform1f(this.u.brightness, s.brightness);
+      gl.uniform1i(this.u.hasLabels, this.hasLabels && s.showLabels ? 1 : 0);
+      gl.uniform1f(this.u.labelOpacity, s.labelOpacity);
       const v = this.vol;
       const full = Math.min(2048, Math.round(1.5 * Math.max(v.w, v.h, v.d)));
       gl.uniform1i(this.u.steps, fast ? Math.max(64, full >> 2) : full);
@@ -286,6 +363,7 @@ void main() {
       this.textures.forEach((t) => this.gl.deleteTexture(t));
       this.textures = [];
       this.vol = null;
+      this.setLabels(null);
     }
   }
 
@@ -322,6 +400,10 @@ void main() {
     <label id="vp-op-row">不透明度 <input type="range" id="vp-op" min="0.02" max="1" step="0.01" value="0.2"></label>
     <label>亮度 <input type="range" id="vp-br" min="0.2" max="4" step="0.05" value="1.2"></label>
     <label>Z 比例 <input type="range" id="vp-z" min="0.1" max="5" step="0.05" value="1"></label>
+    <div id="vp-lab-rows" hidden>
+      <label class="vp-check"><input type="checkbox" id="vp-lab" checked> 显示标签</label>
+      <label>标签不透明度 <input type="range" id="vp-lab-op" min="0.05" max="1" step="0.01" value="0.7"></label>
+    </div>
     <div class="vp-row">
       <button id="vp-reset">复位视角</button>
       <button id="vp-reload" title="按 2D 视图当前的通道和对比度重新读取">刷新</button>
@@ -355,8 +437,31 @@ void main() {
       if (token !== S.token || !view) return;
       view.setVolume(vol, chans.map(({ c }) => c.color));
       shownToken = token;
+      lastBudget = req.maxVoxels;
+      await loadLabels();
       const secs = ((performance.now() - started) / 1000).toFixed(1);
       status(`${vol.w} × ${vol.h} × ${vol.d} 体素 · ${secs} 秒`);
+    } catch (e) {
+      status(String(e));
+    }
+  }
+
+  let lastBudget = 0;
+
+  /// Lays the segmentation labels of this image (labels.js) into the volume.
+  async function loadLabels() {
+    const labels = window.TifMrcViewPro.labels;
+    const has = !!(labels && labels.token() === S.token && labels.any());
+    $("vp-lab-rows").hidden = !has;
+    if (!view || !view.vol) return;
+    if (!has) { view.setLabels(null); return; }
+    const token = S.token;
+    try {
+      const buf = await invoke("labels_volume", { token, maxVoxels: lastBudget });
+      if (token !== S.token || !view || !view.vol) return;
+      const dv = new DataView(buf);
+      const [w, h, d] = [0, 4, 8].map((o) => dv.getUint32(o, true));
+      view.setLabels({ w, h, d, data: new Uint8Array(buf, 12, w * h * d) });
     } catch (e) {
       status(String(e));
     }
@@ -436,8 +541,22 @@ void main() {
   bind("vp-op", "opacity", parseFloat);
   bind("vp-br", "brightness", parseFloat);
   bind("vp-z", "zScale", parseFloat);
+  bind("vp-lab-op", "labelOpacity", parseFloat);
+  $("vp-lab").addEventListener("change", (e) => {
+    if (!view) return;
+    view.settings.showLabels = e.target.checked;
+    view.draw();
+  });
   $("vp-reset").addEventListener("click", () => view && view.resetView());
   $("vp-reload").addEventListener("click", load);
 
-  window.TifMrcViewPro.volume = { open, close, parseVolume };
+  // Labels changed in 2D: refresh them in the open 3D view.
+  let labelTimer = 0;
+  function labelsChanged() {
+    if (canvas3d.hidden || !view || !view.vol) return;
+    clearTimeout(labelTimer);
+    labelTimer = setTimeout(loadLabels, 300);
+  }
+
+  window.TifMrcViewPro.volume = { open, close, parseVolume, labelsChanged };
 })();

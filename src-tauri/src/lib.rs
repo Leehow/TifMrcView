@@ -3,6 +3,7 @@ mod assoc;
 pub mod edition;
 pub mod formats;
 pub mod imod;
+pub mod labels;
 pub mod image;
 #[cfg(feature = "desktop")]
 mod mem;
