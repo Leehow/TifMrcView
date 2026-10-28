@@ -40,11 +40,16 @@
 #lab-list .lab-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 #lab-list .lab-row:hover { background: var(--muted); }
 #lab-list .lab-row.on { background: var(--muted); box-shadow: inset 2px 0 0 var(--accent); }
-#lab-list .sw { flex: none; width: 12px; height: 12px; border-radius: 3px; }
-#lab-list .name { flex: none; }
-#lab-list .n { flex: 1; text-align: right; font-variant-numeric: tabular-nums; }
-#lab-list .del { flex: none; height: 18px; padding: 0 4px; font-size: 11px; color: var(--faint); }
-#lab-list .del:hover { color: var(--accent); }
+#lab-list .sw { flex: none; width: 12px; height: 12px; border-radius: 3px; cursor: pointer; position: relative; overflow: hidden; }
+#lab-list .sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+#lab-list .name { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lab-list .name-edit { flex: none; width: 100px; font-size: 12px; padding: 1px 4px; }
+#lab-list .n { flex: 1; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#lab-list .del, #lab-list .eye, #lab-list .lock { flex: none; height: 18px; padding: 0 3px; font-size: 11px; color: var(--faint); background: none; border: 0; }
+#lab-list .eye svg, #lab-list .lock svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; }
+#lab-list .del:hover, #lab-list .eye:hover, #lab-list .lock:hover { color: var(--accent); }
+#lab-list .lab-row.off .name, #lab-list .lab-row.off .sw { opacity: 0.4; }
+#lab-list .lab-row.off .eye, #lab-list .lab-row.locked .lock { color: var(--fg, #1f2328); }
 #sec-labels details { margin: 6px 0; }
 #sec-labels summary { cursor: pointer; font-size: 12px; color: var(--dim); }
 #sec-labels input[type="number"] { width: 84px; }

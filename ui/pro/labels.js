@@ -6,7 +6,12 @@
 // Shares app.js globals: S, ext, invoke, $, setTool, showPanel, toScreen, toast, draw.
 (() => {
   const COLORS = window.TifMrcViewPro.LABEL_COLORS;
-  const colorOf = (k) => COLORS[((k - 1) % 255) % COLORS.length];
+  // Name, colour and flags per label, like Amira's materials (labels.rs Material).
+  const mat = (k) => L.materials[k] || {};
+  const colorOf = (k) => mat(k).color || COLORS[((k - 1) % 255) % COLORS.length];
+  const nameOf = (k) => mat(k).name || `标签 ${k}`;
+  const hidden = (k) => !!mat(k).hidden;
+  const locked = (k) => !!mat(k).locked;
 
   const L = {
     token: 0,
@@ -15,6 +20,7 @@
     path: "",
     counts: [],
     slices: [],       // main label of each slice, for the Z slider marks
+    materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
     sub: "brush",     // brush | eraser | wand
     radius: 6,        // brush radius in image pixels
@@ -131,15 +137,32 @@
       const row = document.createElement("div");
       row.className = "lab-row" + (k === L.active ? " on" : "");
       const n = L.counts[k] || 0;
-      row.innerHTML = `<span class="sw"></span><span class="name"></span><span class="n dim"></span><button class="del" title="删除这个标签">✕</button>`;
-      row.querySelector(".sw").style.background = `rgb(${colorOf(k).join(",")})`;
-      row.querySelector(".name").textContent = `标签 ${k}`;
+      row.className += (hidden(k) ? " off" : "") + (locked(k) ? " locked" : "");
+      row.innerHTML = `<label class="sw" title="改颜色"><input type="color"></label><span class="name" title="双击改名"></span><span class="n dim"></span>`
+        + `<button class="eye" title="显示 / 隐藏（2D 和 3D）">${hidden(k) ? EYE_OFF : EYE}</button>`
+        + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
+        + `<button class="del" title="删除这个标签">✕</button>`;
+      const hex = "#" + colorOf(k).map((x) => x.toString(16).padStart(2, "0")).join("");
+      row.querySelector(".sw").style.background = hex;
+      const pick = row.querySelector("input");
+      pick.value = hex;
+      pick.addEventListener("change", () => {
+        const v = pick.value;
+        setMaterial(k, { color: [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)) });
+      });
+      row.querySelector(".name").textContent = nameOf(k);
+      row.querySelector(".name").addEventListener("dblclick", () => rename(k, row.querySelector(".name")));
       row.querySelector(".n").textContent = n ? sizeText(n) : "";
       row.querySelector(".del").hidden = !n;
       row.addEventListener("click", (e) => {
-        if (e.target.classList.contains("del")) return edit({ kind: "delete", label: k });
+        const b = e.target.closest("button, label, input");
+        if (b && b.classList.contains("del")) return edit({ kind: "delete", label: k });
+        if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
+        if (b && b.classList.contains("lock")) return setMaterial(k, { locked: !locked(k) });
+        if (b) return;
+        // Only move the highlight, so a double-click still reaches the name.
         L.active = k;
-        renderList();
+        for (const r of list.querySelectorAll(".lab-row")) r.classList.toggle("on", r === row);
       });
       list.appendChild(row);
     }
@@ -149,6 +172,57 @@
       more.textContent = `共 ${ks.length} 个标签，只列出前 200 个`;
       list.appendChild(more);
     }
+  }
+
+  const EYE = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
+  const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+  const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+
+  /** Changes one label's material and stores it with the label file. */
+  function setMaterial(k, patch) {
+    const m = { label: k, name: "", color: null, hidden: false, locked: false, ...mat(k), ...patch };
+    L.materials = { ...L.materials, [k]: m };
+    const list = Object.values(L.materials).filter((m) => m.name || m.color || m.hidden || m.locked);
+    if (L.slice) repaint(0, 0, S.info.width, S.info.height);
+    renderList();
+    renderZMarks();
+    if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.materialsChanged();
+    draw();
+    edit({ kind: "materials", materials: list });
+  }
+
+  function rename(k, el) {
+    const input = document.createElement("input");
+    input.className = "name-edit";
+    input.value = nameOf(k);
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (save && v !== nameOf(k)) setMaterial(k, { name: v === `标签 ${k}` ? "" : v });
+      else renderList();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  /** 256 RGBA entries for the 3D view: reduced label byte -> colour, alpha 0 = hidden. */
+  function colorTable() {
+    const t = new Uint8Array(256 * 4);
+    for (let b = 1; b < 256; b++) {
+      t.set(colorOf(b), b * 4);
+      t[b * 4 + 3] = hidden(b) ? 0 : 255;
+    }
+    return t;
   }
 
   /** Pixel count, plus the volume when the pixel size is known. */
@@ -177,10 +251,10 @@
     try {
       const st = await invoke("labels_open", { token });
       if (token !== S.token) return;
-      Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
+      Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
-      Object.assign(L, { token, path: "", counts: [], slices: [], error: `标签文件读取失败：${e}`, z: -1, slice: null });
+      Object.assign(L, { token, path: "", counts: [], slices: [], materials: {}, error: `标签文件读取失败：${e}`, z: -1, slice: null });
     } finally {
       if (L.opening === token) L.opening = 0;
     }
@@ -191,6 +265,7 @@
     if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
     draw();
   }
+  const matMap = (list) => Object.fromEntries((list || []).map((m) => [m.label, m]));
   const maxUsedOf = (counts) => {
     for (let k = counts.length - 1; k > 0; k--) if (counts[k] > 0) return k;
     return 0;
@@ -230,7 +305,7 @@
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
         const i = y * w + x, k = s[i], o = i * 4;
-        if (k) {
+        if (k && !hidden(k)) {
           const c = colorOf(k);
           px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255;
         } else {
@@ -284,7 +359,7 @@
   function renderZMarks() {
     const n = S.info ? S.info.sizeZ : 0;
     const show = n > 1 && S.axis === "xy" && L.token === S.token && L.slices.length === n;
-    const key = show ? L.slices.join(",") : "";
+    const key = show ? L.slices.join(",") + JSON.stringify(L.materials) : "";
     if (key === zbandKey) return;
     zbandKey = key;
     zband.textContent = "";
@@ -293,12 +368,12 @@
       const k = L.slices[z];
       let e = z + 1;
       while (e < n && L.slices[e] === k) e++;
-      if (k) {
+      if (k && !hidden(k)) {
         const i = document.createElement("i");
         i.style.left = `${(z / (n - 1)) * 100}%`;
         i.style.width = `calc(${((e - 1 - z) / (n - 1)) * 100}% + 4px)`;
         i.style.background = `rgb(${colorOf(k).join(",")})`;
-        i.title = e - z > 1 ? `标签 Z ${z + 1}–${e}` : `标签 Z ${z + 1}`;
+        i.title = `${nameOf(k)} · ` + (e - z > 1 ? `Z ${z + 1}–${e}` : `Z ${z + 1}`);
         zband.appendChild(i);
       }
       z = e;
@@ -317,9 +392,10 @@
       if (token !== L.token) return;
       L.counts = st.counts;
       L.slices = st.slices;
+      L.materials = matMap(st.materials);
       renderZMarks();
       if (st.zs.includes(S.z) || L.z !== S.z) L.z = -1;
-      if (st.zs.length) scheduleSave();
+      if (st.zs.length || op.kind === "materials") scheduleSave();
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
     } catch (e) {
@@ -360,6 +436,7 @@
       for (let x = x0; x < x1; x++) {
         const dx = x + 0.5 - cx, i = y * w + x, cur = s[i];
         if (dx * dx + dy * dy > r * r) continue;
+        if (cur && cur !== label && locked(cur)) continue;
         if (guard && (label ? cur !== 0 && cur !== label : cur !== guard)) continue;
         s[i] = label;
       }
@@ -527,5 +604,6 @@
     token: () => L.token,
     any,
     flush,
+    colorTable,
   };
 })();

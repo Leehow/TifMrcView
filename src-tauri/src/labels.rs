@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::image::{OpenImage, Px};
 use crate::with_plane;
@@ -74,9 +75,43 @@ impl Bits {
 /// Whether a pixel holding `cur` may be changed to `label`. `guard` 0 lets
 /// everything through; otherwise painting only fills empty pixels (or ones
 /// already holding the label) and erasing only clears label `guard`.
+/// Labels in `locked` are never changed by the tools.
 #[inline]
-fn allowed(cur: u16, label: u16, guard: u16) -> bool {
+fn allowed(cur: u16, label: u16, guard: u16, locked: &[u16]) -> bool {
+    if cur != 0 && cur != label && locked.contains(&cur) {
+        return false;
+    }
     guard == 0 || if label != 0 { cur == 0 || cur == label } else { cur == guard }
+}
+
+/// Name, colour and flags of one label (like a material in Amira). Labels
+/// without an entry use the default name and palette colour.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Material {
+    pub label: u16,
+    pub name: String,
+    pub color: Option<[u8; 3]>,
+    pub hidden: bool,
+    pub locked: bool,
+}
+
+/// Key of the materials line in the label file's ImageJ description.
+const MATERIALS_KEY: &str = "tmv_materials=";
+
+/// TIFF text tags must be ASCII, so other characters become \u escapes.
+fn ascii_json(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            for u in c.encode_utf16(&mut [0; 2]) {
+                out += &format!("\\u{u:04x}");
+            }
+        }
+    }
+    out
 }
 
 pub struct Labels {
@@ -86,13 +121,14 @@ pub struct Labels {
     slices: Vec<Option<Vec<u16>>>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
+    pub materials: Vec<Material>,
     /// Changed since the last save.
     pub dirty: bool,
 }
 
 impl Labels {
     pub fn new(w: usize, h: usize, d: usize) -> Labels {
-        Labels { w, h, d, slices: vec![None; d], undo: vec![], redo: vec![], dirty: false }
+        Labels { w, h, d, slices: vec![None; d], undo: vec![], redo: vec![], materials: vec![], dirty: false }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -108,6 +144,21 @@ impl Labels {
         match &self.slices[z.min(self.d - 1)] {
             Some(s) => s.iter().flat_map(|v| v.to_le_bytes()).collect(),
             None => vec![0; self.w * self.h * 2],
+        }
+    }
+
+    fn locked(&self) -> Vec<u16> {
+        self.materials.iter().filter(|m| m.locked).map(|m| m.label).collect()
+    }
+
+    /// Replaces the material list (entries for label 0 are dropped).
+    pub fn set_materials(&mut self, mut m: Vec<Material>) {
+        m.retain(|m| m.label != 0);
+        m.sort_by_key(|m| m.label);
+        m.dedup_by_key(|m| m.label);
+        if m != self.materials {
+            self.materials = m;
+            self.dirty = true;
         }
     }
 
@@ -207,6 +258,7 @@ impl Labels {
             return vec![];
         }
         let (w, h) = (self.w, self.h);
+        let locked = self.locked();
         let mut edit = vec![];
         let s = Self::touch(&mut self.slices, &mut edit, z, w * h);
         let r = radius.max(0.5);
@@ -220,7 +272,7 @@ impl Labels {
                 for x in x0..x1 {
                     let dx = x as f32 + 0.5 - cx;
                     let v = &mut s[y * w + x];
-                    if dx * dx + dy * dy <= r * r && allowed(*v, label, guard) {
+                    if dx * dx + dy * dy <= r * r && allowed(*v, label, guard, &locked) {
                         *v = label;
                     }
                 }
@@ -250,6 +302,7 @@ impl Labels {
         }
         let n = w * h;
         let seed = vol.slice(z)?[y * w + x];
+        let locked = self.locked();
         let mut seen: HashMap<usize, Bits> = HashMap::new();
         // Pixels waiting in each slice, worked through one slice at a time.
         let mut todo: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -261,7 +314,7 @@ impl Labels {
             let vals = vol.slice(cz)?;
             let bits = seen.entry(cz).or_insert_with(|| Bits::new(n));
             let s = Self::touch(&mut self.slices, &mut edit, cz, n);
-            let ok = |i: usize, s: &[u16]| (vals[i] - seed).abs() <= tol && allowed(s[i], label, guard);
+            let ok = |i: usize, s: &[u16]| (vals[i] - seed).abs() <= tol && allowed(s[i], label, guard, &locked);
             while let Some(i) = stack.pop() {
                 if bits.get(i) || !ok(i, s) {
                     continue;
@@ -299,13 +352,14 @@ impl Labels {
     pub fn threshold(&mut self, vol: &dyn Values, zs: Range<usize>, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize) -> Result<Vec<usize>> {
         let zs = zs.start.min(self.d)..zs.end.min(self.d);
         let n = self.w * self.h;
+        let locked = self.locked();
         let mut edit = vec![];
         if !split {
             for z in zs {
                 let vals = vol.slice(z)?;
                 let s = Self::touch(&mut self.slices, &mut edit, z, n);
                 for (v, &p) in s.iter_mut().zip(&vals) {
-                    if p >= lo && p <= hi && allowed(*v, label, guard) {
+                    if p >= lo && p <= hi && allowed(*v, label, guard, &locked) {
                         *v = label;
                     }
                 }
@@ -318,7 +372,8 @@ impl Labels {
             let vals = vol.slice(z)?;
             let mut b = Bits::new(n);
             for (i, &p) in vals.iter().enumerate() {
-                if p >= lo && p <= hi && (guard == 0 || self.get(i % self.w, i / self.w, z) == 0) {
+                let cur = self.get(i % self.w, i / self.w, z);
+                if p >= lo && p <= hi && (guard == 0 || cur == 0) && !locked.contains(&cur) {
                     b.set(i);
                 }
             }
@@ -522,7 +577,11 @@ impl Labels {
             let mut enc = TiffEncoder::new(file)?.with_compression(Compression::Deflate(DeflateLevel::Fast));
             let zero = vec![0u16; self.w * self.h];
             // ImageJ reads the pages as a Z stack.
-            let desc = format!("ImageJ=1.11a\nimages={0}\nslices={0}\nhyperstack=false\n", self.d);
+            // Names and colours ride along on a line of their own, which ImageJ ignores.
+            let mut desc = format!("ImageJ=1.11a\nimages={0}\nslices={0}\nhyperstack=false\n", self.d);
+            if !self.materials.is_empty() {
+                desc += &format!("{MATERIALS_KEY}{}\n", ascii_json(&serde_json::to_string(&self.materials)?));
+            }
             for z in 0..self.d {
                 let mut img = enc.new_image::<Gray16>(self.w as u32, self.h as u32)?;
                 if z == 0 {
@@ -543,6 +602,11 @@ impl Labels {
         let file = std::io::BufReader::new(std::fs::File::open(path)?);
         let mut dec = Decoder::new(file).context("标签文件不是 TIFF")?;
         let mut out = Labels::new(w, h, d);
+        if let Ok(desc) = dec.get_tag_ascii_string(tiff::tags::Tag::ImageDescription) {
+            if let Some(json) = desc.lines().find_map(|l| l.strip_prefix(MATERIALS_KEY)) {
+                out.materials = serde_json::from_str(json).unwrap_or_default();
+            }
+        }
         for z in 0..d {
             let (pw, ph) = dec.dimensions()?;
             if (pw as usize, ph as usize) != (w, h) {
@@ -634,6 +698,19 @@ mod tests {
     }
 
     #[test]
+    fn locked_labels_stay() {
+        let mut l = Labels::new(10, 10, 1);
+        l.stroke(0, &[[2.5, 2.5]], 1.0, 1, 0);
+        l.set_materials(vec![Material { label: 1, locked: true, ..Default::default() }]);
+        l.stroke(0, &[[2.5, 2.5]], 3.0, 2, 0);
+        assert_eq!(l.get(2, 2, 0), 1);
+        assert_eq!(l.get(4, 2, 0), 2);
+        l.stroke(0, &[[2.5, 2.5]], 3.0, 0, 0);
+        assert_eq!(l.get(2, 2, 0), 1);
+        assert_eq!(l.get(4, 2, 0), 0);
+    }
+
+    #[test]
     fn wand_stays_inside_region() {
         // A bright 4x4 square in each slice, dark elsewhere.
         let vol = Fake(10, 10, |x, y, _| if (3..7).contains(&x) && (3..7).contains(&y) { 100.0 } else { 0.0 });
@@ -702,10 +779,12 @@ mod tests {
         let path = dir.path().join("a.mrc.labels.tif");
         let mut l = Labels::new(9, 7, 5);
         l.stroke(3, &[[4.0, 3.0]], 2.0, 1234, 0);
+        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false }]);
         assert!(l.save(&path).unwrap());
         assert!(!l.dirty);
         let back = Labels::load(&path, 9, 7, 5).unwrap();
         assert_eq!(back.counts(), l.counts());
+        assert_eq!(back.materials, l.materials);
         assert!(back.slices[0].is_none());
         assert!(Labels::load(&path, 9, 7, 6).is_err());
         assert!(Labels::load(&path, 8, 7, 5).is_err());

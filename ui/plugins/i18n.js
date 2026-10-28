@@ -466,12 +466,19 @@ const WORDS = [
   ["区域太大，请收窄阈值范围", "The region is too large; narrow the threshold range", "Bereich zu groß; Schwellbereich verkleinern", "領域が大きすぎます。しきい値の範囲を狭めてください", "La región es demasiado grande; estrecha el rango de umbral", "Région trop grande ; resserrez la plage de seuil", "Область слишком велика; сузьте диапазон порога"],
   ["区域超过 65535 个，请加大最小体积或收窄阈值范围", "More than 65535 regions; raise the minimum size or narrow the threshold range", "Mehr als 65535 Bereiche; Mindestgröße erhöhen oder Schwellbereich verkleinern", "領域が 65535 個を超えました。最小サイズを大きくするか、しきい値の範囲を狭めてください", "Más de 65535 regiones; sube el tamaño mínimo o estrecha el rango de umbral", "Plus de 65535 régions ; augmentez la taille minimale ou resserrez la plage de seuil", "Более 65535 областей; увеличьте минимальный размер или сузьте диапазон порога"],
   ["先用画笔在每个物体和背景里各画一笔不同的标签，作为分水岭的种子", "First paint a stroke of a different label in each object and in the background as watershed seeds", "Zuerst in jedes Objekt und in den Hintergrund einen Strich mit verschiedenen Labels als Saat für die Wasserscheide malen", "まずブラシで各物体と背景に異なるラベルを一筆ずつ描いて分水嶺の種にしてください", "Primero pinta un trazo de una etiqueta distinta en cada objeto y en el fondo como semillas de la divisoria", "Peignez d'abord un trait d'étiquette différente dans chaque objet et dans le fond comme graines", "Сначала нарисуйте кистью штрих своей метки в каждом объекте и в фоне как затравки водораздела"],
+  // TifMrcView Pro: label materials.
+  ["改颜色", "Change colour", "Farbe ändern", "色を変更", "Cambiar color", "Changer la couleur", "Изменить цвет"],
+  ["双击改名", "Double-click to rename", "Doppelklick zum Umbenennen", "ダブルクリックで名前を変更", "Doble clic para renombrar", "Double-cliquer pour renommer", "Двойной щелчок — переименовать"],
+  ["显示 / 隐藏（2D 和 3D）", "Show / hide (2D and 3D)", "Ein- / ausblenden (2D und 3D)", "表示 / 非表示（2D と 3D）", "Mostrar / ocultar (2D y 3D)", "Afficher / masquer (2D et 3D)", "Показать / скрыть (2D и 3D)"],
+  ["锁定：其他工具不会改动这个标签", "Lock: other tools leave this label alone", "Sperren: andere Werkzeuge ändern dieses Label nicht", "ロック：他のツールはこのラベルを変更しない", "Bloquear: las demás herramientas no tocan esta etiqueta", "Verrouiller : les autres outils ne modifient pas cette étiquette", "Заблокировать: другие инструменты не меняют эту метку"],
 ];
 
 // prettier-ignore
 const PATTERNS = [
   [/^(\d+) × (\d+) × (\d+) 体素 · ([\d.]+) 秒$/, "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 Voxel · $4 s", "$1 × $2 × $3 ボクセル · $4 秒", "$1 × $2 × $3 vóxeles · $4 s", "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 вокселей · $4 с"],
   [/^(-?[\d.e+-]+) σ · 平均 (-?[\d.e+-]+) · σ (-?[\d.e+-]+)$/, "$1 σ · mean $2 · σ $3", "$1 σ · Mittel $2 · σ $3", "$1 σ · 平均 $2 · σ $3", "$1 σ · media $2 · σ $3", "$1 σ · moyenne $2 · σ $3", "$1 σ · среднее $2 · σ $3"],
+  [/^标签 (\d+) · Z (\d+)–(\d+)$/, "Label $1 · Z $2–$3", "Label $1 · Z $2–$3", "ラベル $1 · Z $2–$3", "Etiqueta $1 · Z $2–$3", "Étiquette $1 · Z $2–$3", "Метка $1 · Z $2–$3"],
+  [/^标签 (\d+) · Z (\d+)$/, "Label $1 · Z $2", "Label $1 · Z $2", "ラベル $1 · Z $2", "Etiqueta $1 · Z $2", "Étiquette $1 · Z $2", "Метка $1 · Z $2"],
   [/^标签 Z (\d+)–(\d+)$/, "Labels Z $1–$2", "Labels Z $1–$2", "ラベル Z $1–$2", "Etiquetas Z $1–$2", "Étiquettes Z $1–$2", "Метки Z $1–$2"],
   [/^标签 Z (\d+)$/, "Labels Z $1", "Labels Z $1", "ラベル Z $1", "Etiquetas Z $1", "Étiquettes Z $1", "Метки Z $1"],
   [/^标签 (\d+)$/, "Label $1", "Label $1", "ラベル $1", "Etiqueta $1", "Étiquette $1", "Метка $1"],

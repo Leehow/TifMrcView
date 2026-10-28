@@ -34,9 +34,12 @@ uniform vec3 texel;       // 1 / voxel counts
 uniform usampler3D labels; // segmentation labels, 0 = none
 uniform int hasLabels;
 uniform float labelOpacity;
-uniform vec3 palette[16];
+uniform sampler2D lut;     // colour per label byte, alpha 0 = hidden
 
-uint labelAt(vec3 t) { return texture(labels, t).r; }
+uint labelAt(vec3 t) {
+  uint l = texture(labels, t).r;
+  return l == 0u || texelFetch(lut, ivec2(int(l), 0), 0).a < 0.5 ? 0u : l;
+}
 
 // Shaded colour of the label at t, lit by the outline of its region.
 vec3 labelColor(uint l, vec3 t, vec3 rd) {
@@ -45,7 +48,7 @@ vec3 labelColor(uint l, vec3 t, vec3 rd) {
     float(labelAt(t - vec3(0, texel.y, 0)) == l) - float(labelAt(t + vec3(0, texel.y, 0)) == l),
     float(labelAt(t + vec3(0, 0, texel.z)) == l) - float(labelAt(t - vec3(0, 0, texel.z)) == l));
   vec3 n = length(g) > 1e-5 ? -normalize(g) : -rd;
-  return palette[(l - 1u) % 16u] * (0.35 + 0.65 * abs(dot(n, -rd)));
+  return texelFetch(lut, ivec2(int(l), 0), 0).rgb * (0.35 + 0.65 * abs(dot(n, -rd)));
 }
 
 uniform int invert;       // dark structures (cryo-EM density) shown bright
@@ -318,9 +321,11 @@ void main() { outColor = vec4(1.0); }`;
       }
       gl.uniform1iv(gl.getUniformLocation(prog, "vol"), [0, 1, 2, 3]);
       gl.uniform1i(gl.getUniformLocation(prog, "labels"), MAX_CHANNELS);
-      const pal = new Float32Array(48);
-      LABEL_COLORS.forEach((rgb, i) => pal.set(rgb.map((x) => x / 255), i * 3));
-      gl.uniform3fv(gl.getUniformLocation(prog, "palette"), pal);
+      gl.uniform1i(gl.getUniformLocation(prog, "lut"), MAX_CHANNELS + 3);
+      this.lut = gl.createTexture();
+      const table = new Uint8Array(256 * 4);
+      for (let b = 1; b < 256; b++) table.set([...LABEL_COLORS[(b - 1) % LABEL_COLORS.length], 255], b * 4);
+      this.setColorTable(table);
       this.uColor = gl.getUniformLocation(prog, "color");
       this.textures = []; // what the ray marcher samples: the raw R8 volumes or their smoothed copies
       this.raw = [];
@@ -499,6 +504,18 @@ void main() { outColor = vec4(1.0); }`;
       return counts;
     }
 
+    /// 256 RGBA bytes: colour of each label byte, alpha 0 hides it.
+    setColorTable(table) {
+      const gl = this.gl;
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 3);
+      gl.bindTexture(gl.TEXTURE_2D, this.lut);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, table);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      this.draw();
+    }
+
     /// Label volume {w, h, d, data} matching the image volume, or null.
     setLabels(lab) {
       const gl = this.gl;
@@ -567,6 +584,8 @@ void main() { outColor = vec4(1.0); }`;
       }
       gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS);
       gl.bindTexture(gl.TEXTURE_3D, this.labelTex);
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 3);
+      gl.bindTexture(gl.TEXTURE_2D, this.lut);
       gl.uniform2fv(this.u.remap, this.remap);
       gl.uniformMatrix4fv(this.u.invViewProj, false, invert(vp));
       gl.uniform3fv(this.u.extent, this.extent());
@@ -886,6 +905,7 @@ void main() { outColor = vec4(1.0); }`;
     $("vp-lab-rows").hidden = !has;
     if (!view || !view.vol) return;
     if (!has) { view.setLabels(null); return; }
+    view.setColorTable(labels.colorTable());
     const token = S.token;
     try {
       const buf = await invoke("labels_volume", { token, maxVoxels: lastBudget });
@@ -1020,5 +1040,12 @@ void main() { outColor = vec4(1.0); }`;
     labelTimer = setTimeout(loadLabels, 300);
   }
 
-  window.TifMrcViewPro.volume = { open, close, parseVolume, labelsChanged };
+  // Label colours or visibility changed: only the colour table needs updating.
+  function materialsChanged() {
+    const labels = window.TifMrcViewPro.labels;
+    if (!view || canvas3d.hidden || !labels || labels.token() !== S.token) return;
+    view.setColorTable(labels.colorTable());
+  }
+
+  window.TifMrcViewPro.volume = { open, close, parseVolume, labelsChanged, materialsChanged };
 })();

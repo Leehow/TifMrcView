@@ -162,6 +162,7 @@ struct LabelsState {
     slices: Vec<u16>,
     /// Slices that changed.
     zs: Vec<usize>,
+    materials: Vec<crate::labels::Material>,
 }
 
 #[derive(serde::Deserialize)]
@@ -172,6 +173,7 @@ enum LabelOp {
     Threshold { z0: usize, z1: usize, c: usize, t: usize, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize },
     Watershed { z0: usize, z1: usize, c: usize, t: usize },
     Delete { label: u16 },
+    Materials { materials: Vec<crate::labels::Material> },
     Undo,
     Redo,
 }
@@ -195,6 +197,11 @@ fn prune_labels(state: &AppState) {
     }
 }
 
+fn labels_state(e: &crate::labels::Entry, zs: Vec<usize>) -> LabelsState {
+    let l = &e.labels;
+    LabelsState { path: e.path.clone(), counts: l.counts(), slices: l.slice_labels(), zs, materials: l.materials.clone() }
+}
+
 fn labels_entry(state: &AppState, token: u64) -> CmdResult<Arc<Mutex<crate::labels::Entry>>> {
     state.labels.lock().unwrap().get(&token).cloned().ok_or_else(|| "stale".to_string())
 }
@@ -205,7 +212,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
     prune_labels(&state);
     if let Ok(e) = labels_entry(&state, token) {
         let e = e.lock().unwrap();
-        return Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), slices: e.labels.slice_labels(), zs: vec![] });
+        return Ok(labels_state(&e, vec![]));
     }
     let img = state.current.lock().unwrap().values().find(|i| i.token == token).cloned().ok_or("stale")?;
     let entry = blocking(move || {
@@ -219,7 +226,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
         Ok(crate::labels::Entry { labels, path })
     })
     .await?;
-    let out = LabelsState { path: entry.path.clone(), counts: entry.labels.counts(), slices: entry.labels.slice_labels(), zs: vec![] };
+    let out = labels_state(&entry, vec![]);
     state.labels.lock().unwrap().entry(token).or_insert_with(|| Arc::new(Mutex::new(entry)));
     Ok(out)
 }
@@ -249,10 +256,14 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
             }
             LabelOp::Watershed { z0, z1, c, t } => l.watershed(&values(c, t), z0..z1)?,
             LabelOp::Delete { label } => l.delete_label(label),
+            LabelOp::Materials { materials } => {
+                l.set_materials(materials);
+                vec![]
+            }
             LabelOp::Undo => l.undo(),
             LabelOp::Redo => l.redo(),
         };
-        Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), slices: e.labels.slice_labels(), zs })
+        Ok(labels_state(&e, zs))
     })
     .await
 }
