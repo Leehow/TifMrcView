@@ -26,6 +26,7 @@ pub struct VolumeReq {
     /// Largest number of voxels per channel.
     pub max_voxels: usize,
     /// Gaussian smoothing of the reduced volume, sigma in voxels (0 = none).
+    /// The 3D view smooths on the GPU and asks for this only when it cannot.
     #[serde(default)]
     pub smooth: f32,
 }

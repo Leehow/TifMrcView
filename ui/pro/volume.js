@@ -49,6 +49,7 @@ vec3 labelColor(uint l, vec3 t, vec3 rd) {
 }
 
 uniform int invert;       // dark structures (cryo-EM density) shown bright
+uniform vec2 remap[${MAX_CHANNELS}]; // stretch of each channel after smoothing: (start, scale)
 
 float sampleRaw(int c, vec3 t) {
   // Indexing a sampler array needs a constant index in GLSL ES.
@@ -59,7 +60,7 @@ float sampleRaw(int c, vec3 t) {
 }
 
 float sampleCh(int c, vec3 t) {
-  float v = sampleRaw(c, t);
+  float v = clamp((sampleRaw(c, t) - remap[c].x) * remap[c].y, 0.0, 1.0);
   return invert == 1 ? 1.0 - v : v;
 }
 
@@ -160,6 +161,54 @@ void main() {
   outColor = vec4(labHit && mode != 1 ? mix(base, lab, k) : base, 1.0);
 }`;
 
+  // --- GPU helpers: Gaussian smoothing and histograms of the volume textures ---
+  // Both draw without vertex buffers; positions come from gl_VertexID.
+  const BLUR_VERT = `#version 300 es
+void main() { gl_Position = vec4(float((gl_VertexID & 1) * 4 - 1), float((gl_VertexID >> 1) * 4 - 1), 0.0, 1.0); }`;
+
+  // One pass of a separable blur along `axis`, writing one Z layer.
+  const BLUR_FRAG = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler3D src;
+uniform ivec3 size;
+uniform ivec3 axis;
+uniform int layer;
+uniform int radius;
+uniform float weights[32];
+out vec4 outColor;
+void main() {
+  ivec3 p = ivec3(ivec2(gl_FragCoord.xy), layer);
+  float acc = 0.0;
+  for (int i = -radius; i <= radius; i++) {
+    acc += weights[i + radius] * texelFetch(src, clamp(p + axis * i, ivec3(0), size - 1), 0).r;
+  }
+  outColor = vec4(acc, 0.0, 0.0, 1.0);
+}`;
+
+  // Every voxel (or every stride-th) adds 1 to its bin in an n x 1 float target.
+  const HIST_VERT = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler3D src;
+uniform ivec3 size;
+uniform int stride;
+uniform float lo;
+uniform float hi;
+uniform int bins;
+void main() {
+  int id = gl_VertexID * stride;
+  ivec3 p = ivec3(id % size.x, (id / size.x) % size.y, id / (size.x * size.y));
+  float v = texelFetch(src, p, 0).r;
+  float b = clamp(floor((v - lo) / (hi - lo) * float(bins)), 0.0, float(bins - 1));
+  gl_Position = vec4((b + 0.5) / float(bins) * 2.0 - 1.0, 0.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+}`;
+  const HIST_FRAG = `#version 300 es
+precision highp float;
+out vec4 outColor;
+void main() { outColor = vec4(1.0); }`;
+
   // --- 4x4 matrices, column-major like WebGL ---
   const mul = (a, b) => {
     const o = new Float32Array(16);
@@ -235,13 +284,28 @@ void main() {
         if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
         return s;
       };
-      const prog = gl.createProgram();
-      gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT));
-      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      const link = (vs, fs) => {
+        const p = gl.createProgram();
+        gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+        gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        return p;
+      };
+      const prog = link(VERT, FRAG);
       this.prog = prog;
+      // Smoothing and histograms run on the GPU when it can render to and blend
+      // float textures; otherwise volume.rs smooths and the histogram is counted here.
+      this.gpu = !!(gl.getExtension("EXT_color_buffer_float") && gl.getExtension("EXT_float_blend"));
+      if (this.gpu) {
+        this.blurProg = link(BLUR_VERT, BLUR_FRAG);
+        this.histProg = link(HIST_VERT, HIST_FRAG);
+        this.emptyVao = gl.createVertexArray();
+        this.fbo = gl.createFramebuffer();
+      }
       gl.useProgram(prog);
+      this.vao = gl.createVertexArray();
+      gl.bindVertexArray(this.vao);
       const vbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -249,7 +313,7 @@ void main() {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       this.u = {};
-      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "upper", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity", "invert"]) {
+      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "upper", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity", "invert", "remap"]) {
         this.u[name] = gl.getUniformLocation(prog, name);
       }
       gl.uniform1iv(gl.getUniformLocation(prog, "vol"), [0, 1, 2, 3]);
@@ -258,7 +322,10 @@ void main() {
       LABEL_COLORS.forEach((rgb, i) => pal.set(rgb.map((x) => x / 255), i * 3));
       gl.uniform3fv(gl.getUniformLocation(prog, "palette"), pal);
       this.uColor = gl.getUniformLocation(prog, "color");
-      this.textures = [];
+      this.textures = []; // what the ray marcher samples: the raw R8 volumes or their smoothed copies
+      this.raw = [];
+      this.smoothed = [];
+      this.remap = new Float32Array(MAX_CHANNELS * 2).fill(1);
       this.labelTex = null;
       this.setLabels(null);
       // levels[mode] = [start, full] in 0..1 of the volume's value range (surface uses start only).
@@ -276,8 +343,9 @@ void main() {
 
     setVolume(vol, colors) {
       const gl = this.gl;
-      this.textures.forEach((t) => gl.deleteTexture(t));
-      this.textures = [];
+      this.dropSmoothed();
+      this.raw.forEach((t) => gl.deleteTexture(t));
+      this.raw = [];
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       vol.chans.slice(0, MAX_CHANNELS).forEach((c, i) => {
         const tex = gl.createTexture();
@@ -287,16 +355,148 @@ void main() {
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
-        this.textures.push(tex);
+        this.raw.push(tex);
       });
-      // Unused samplers still need a valid texture bound.
-      for (let i = this.textures.length; i < MAX_CHANNELS; i++) {
-        gl.activeTexture(gl.TEXTURE0 + i);
-        gl.bindTexture(gl.TEXTURE_3D, this.textures[0]);
-      }
+      this.textures = this.raw.slice();
+      this.remap.fill(1);
+      for (let i = 0; i < MAX_CHANNELS; i++) this.remap[i * 2] = 0;
       this.vol = vol;
       this.colors = colors.slice(0, MAX_CHANNELS);
       this.draw();
+    }
+
+    dropSmoothed() {
+      this.smoothed.forEach((t) => this.gl.deleteTexture(t));
+      this.smoothed = [];
+    }
+
+    float3D(filter) {
+      const gl = this.gl, v = this.vol;
+      const tex = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 1);
+      gl.bindTexture(gl.TEXTURE_3D, tex);
+      gl.texStorage3D(gl.TEXTURE_3D, 1, gl.R16F, v.w, v.h, v.d);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, filter);
+      for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_3D, null);
+      return tex;
+    }
+
+    /// Gaussian smoothing on the GPU (sigma in voxels, 0 = off): three separable
+    /// passes into half-float textures, then each channel is stretched so its
+    /// 0.1–99.9 % range fills 0..1, like volume.rs does on the CPU.
+    /// Returns per channel [a, b], the kept range in 0..1 of the raw values.
+    smooth(sigma) {
+      const gl = this.gl, v = this.vol;
+      this.dropSmoothed();
+      const ranges = [];
+      if (!(sigma > 0) || !this.gpu) {
+        this.textures = this.raw.slice();
+        this.raw.forEach((_, c) => { this.remap[c * 2] = 0; this.remap[c * 2 + 1] = 1; ranges.push([0, 1]); });
+        this.draw();
+        return ranges;
+      }
+      const radius = Math.min(15, Math.ceil(sigma * 3));
+      const w = new Float32Array(32);
+      let sum = 0;
+      for (let i = -radius; i <= radius; i++) sum += (w[i + radius] = Math.exp(-(i * i) / (2 * sigma * sigma)));
+      w.forEach((x, i) => (w[i] = x / sum));
+      const p = this.blurProg;
+      gl.useProgram(p);
+      gl.bindVertexArray(this.emptyVao);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+      gl.viewport(0, 0, v.w, v.h);
+      gl.disable(gl.BLEND);
+      gl.uniform1i(gl.getUniformLocation(p, "src"), MAX_CHANNELS + 2);
+      gl.uniform3i(gl.getUniformLocation(p, "size"), v.w, v.h, v.d);
+      gl.uniform1i(gl.getUniformLocation(p, "radius"), radius);
+      gl.uniform1fv(gl.getUniformLocation(p, "weights"), w);
+      const uAxis = gl.getUniformLocation(p, "axis"), uLayer = gl.getUniformLocation(p, "layer");
+      const pass = (src, dst, axis) => {
+        gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 2);
+        gl.bindTexture(gl.TEXTURE_3D, src);
+        gl.uniform3i(uAxis, ...axis);
+        for (let z = 0; z < v.d; z++) {
+          gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, dst, 0, z);
+          gl.uniform1i(uLayer, z);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+      };
+      this.raw.forEach((raw, c) => {
+        const a = this.float3D(gl.LINEAR), b = this.float3D(gl.NEAREST);
+        pass(raw, a, [1, 0, 0]);
+        pass(a, b, [0, 1, 0]);
+        if (v.d > 1) pass(b, a, [0, 0, 1]);
+        else pass(b, a, [0, 0, 0]);
+        gl.deleteTexture(b);
+        this.smoothed.push(a);
+        // Percentiles from a fine histogram of the blurred values.
+        const counts = this.histogram(a, 0, 1, 4096);
+        const total = counts.reduce((x, y) => x + y, 0);
+        const pick = (frac) => {
+          let seen = 0;
+          for (let i = 0; i < counts.length; i++) {
+            seen += counts[i];
+            if (seen > total * frac) return i / 4096;
+          }
+          return 1;
+        };
+        const lo = pick(0.001);
+        const hi = Math.max(pick(0.999) + 1 / 4096, lo + 1 / 255);
+        this.remap[c * 2] = lo;
+        this.remap[c * 2 + 1] = 1 / (hi - lo);
+        ranges.push([lo, hi]);
+      });
+      this.textures = this.smoothed.slice();
+      this.draw();
+      return ranges;
+    }
+
+    /// Counts of channel c's shown values (after the stretch) in `bins` bins over 0..1.
+    shownHistogram(c, bins) {
+      const a = this.remap[c * 2], k = this.remap[c * 2 + 1];
+      return this.histogram(this.textures[c], a, a + 1 / k, bins);
+    }
+
+    /// GPU histogram of a volume texture: `bins` counts of values in lo..hi.
+    histogram(tex, lo, hi, bins) {
+      const gl = this.gl, v = this.vol;
+      const n = v.w * v.h * v.d;
+      // Float sums stay exact up to 2^24, so very large volumes are sampled.
+      const stride = Math.max(1, Math.ceil(n / (1 << 24)));
+      const target = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 1);
+      gl.bindTexture(gl.TEXTURE_2D, target);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, bins, 1);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      const p = this.histProg;
+      gl.useProgram(p);
+      gl.bindVertexArray(this.emptyVao);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+      gl.viewport(0, 0, bins, 1);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS + 2);
+      gl.bindTexture(gl.TEXTURE_3D, tex);
+      gl.uniform1i(gl.getUniformLocation(p, "src"), MAX_CHANNELS + 2);
+      gl.uniform3i(gl.getUniformLocation(p, "size"), v.w, v.h, v.d);
+      gl.uniform1i(gl.getUniformLocation(p, "stride"), stride);
+      gl.uniform1f(gl.getUniformLocation(p, "lo"), lo);
+      gl.uniform1f(gl.getUniformLocation(p, "hi"), hi);
+      gl.uniform1i(gl.getUniformLocation(p, "bins"), bins);
+      gl.drawArrays(gl.POINTS, 0, Math.ceil(n / stride));
+      gl.disable(gl.BLEND);
+      const px = new Float32Array(bins * 4);
+      gl.readPixels(0, 0, bins, 1, gl.RGBA, gl.FLOAT, px);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      gl.deleteTexture(target);
+      const counts = new Float64Array(bins);
+      for (let i = 0; i < bins; i++) counts[i] = px[i * 4] * stride;
+      return counts;
     }
 
     /// Label volume {w, h, d, data} matching the image volume, or null.
@@ -340,6 +540,9 @@ void main() {
       const w = Math.max(1, Math.round(c.clientWidth * dpr * scale));
       const h = Math.max(1, Math.round(c.clientHeight * dpr * scale));
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindVertexArray(this.vao);
+      gl.disable(gl.BLEND);
       gl.viewport(0, 0, w, h);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -357,6 +560,14 @@ void main() {
       const pan = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0], -t[1], -t[2], 1]);
       const vp = mul(perspective(FOVY, (w - x0) / h, 0.05, 20), mul(lookAt(eye), pan));
       gl.useProgram(this.prog);
+      // Unused samplers still need a valid texture bound.
+      for (let i = 0; i < MAX_CHANNELS; i++) {
+        gl.activeTexture(gl.TEXTURE0 + i);
+        gl.bindTexture(gl.TEXTURE_3D, this.textures[Math.min(i, this.textures.length - 1)]);
+      }
+      gl.activeTexture(gl.TEXTURE0 + MAX_CHANNELS);
+      gl.bindTexture(gl.TEXTURE_3D, this.labelTex);
+      gl.uniform2fv(this.u.remap, this.remap);
       gl.uniformMatrix4fv(this.u.invViewProj, false, invert(vp));
       gl.uniform3fv(this.u.extent, this.extent());
       gl.uniform1i(this.u.nch, this.textures.length);
@@ -391,7 +602,9 @@ void main() {
     }
 
     dispose() {
-      this.textures.forEach((t) => this.gl.deleteTexture(t));
+      this.dropSmoothed();
+      this.raw.forEach((t) => this.gl.deleteTexture(t));
+      this.raw = [];
       this.textures = [];
       this.vol = null;
       this.setLabels(null);
@@ -478,20 +691,27 @@ void main() {
   const histCanvas = $("vp-hist");
   let hist = null; // {counts, min, max, mean, sd}
 
-  function computeHist(vol) {
+  /// `range` is the first channel's [a, b] kept by smoothing, in 0..1 of its raw values.
+  function computeHist(vol, range = [0, 1]) {
     const c = vol.chans[0];
-    const counts = new Float64Array(256);
-    for (const v of c.data) counts[v]++;
+    const min = c.min + range[0] * (c.max - c.min), max = c.min + range[1] * (c.max - c.min);
+    let counts;
+    if (view.gpu) {
+      counts = view.shownHistogram(0, 256);
+    } else {
+      counts = new Float64Array(256);
+      for (const v of c.data) counts[v]++;
+    }
     let n = 0, s1 = 0, s2 = 0;
     for (let b = 0; b < 256; b++) {
-      const x = c.min + (b / 255) * (c.max - c.min);
+      const x = min + (b / 255) * (max - min);
       n += counts[b];
       s1 += counts[b] * x;
       s2 += counts[b] * x * x;
     }
     const mean = s1 / Math.max(1, n);
     const sd = Math.sqrt(Math.max(0, s2 / Math.max(1, n) - mean * mean));
-    hist = { counts, min: c.min, max: c.max, mean, sd };
+    hist = { counts, min, max, mean, sd };
   }
 
   // With invert on, 0..1 runs from the brightest value down to the darkest.
@@ -632,7 +852,8 @@ void main() {
       token, t: S.t,
       channels: chans.map(({ c, i }) => ({ index: i, min: c.min ?? null, max: c.max ?? null })),
       maxVoxels: Math.floor(VOXEL_BUDGET / chans.length),
-      smooth: view ? view.settings.smooth : 0,
+      // Without GPU float targets volume.rs smooths instead.
+      smooth: view && !view.gpu ? view.settings.smooth : 0,
     };
     status("正在读取整个 Z 堆栈…");
     const started = performance.now();
@@ -640,7 +861,7 @@ void main() {
       const vol = parseVolume(await invoke("volume_data", { req }));
       if (token !== S.token || !view) return;
       view.setVolume(vol, chans.map(({ c }) => c.color));
-      computeHist(vol);
+      computeHist(vol, view.smooth(view.settings.smooth)[0]);
       if (levelsFor !== token) {
         levelsFor = token;
         autoLevels();
@@ -777,7 +998,11 @@ void main() {
   $("vp-smooth").addEventListener("change", (e) => {
     if (!view) return;
     view.settings.smooth = +e.target.value;
-    load();
+    if (!view.gpu || !view.vol) { load(); return; }
+    const started = performance.now();
+    computeHist(view.vol, view.smooth(view.settings.smooth)[0]);
+    syncLevels();
+    status(`${view.vol.w} × ${view.vol.h} × ${view.vol.d} 体素 · 平滑 ${((performance.now() - started) / 1000).toFixed(2)} 秒`);
   });
   $("vp-lab").addEventListener("change", (e) => {
     if (!view) return;
