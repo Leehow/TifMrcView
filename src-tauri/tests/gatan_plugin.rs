@@ -184,6 +184,10 @@ fn broken_files_give_errors() {
     };
     assert!(err("empty.dm3", b"").contains("不是 DigitalMicrograph"));
     assert!(err("v5.dm4", &[0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]).contains("版本号 5"));
+    // An unsupported real image is reported, not replaced by the preview.
+    let packed = std::fs::read(fixture("gatan_packed.dm4")).unwrap();
+    let e = err("packed.dm4", &packed);
+    assert!(e.contains("FFT 压缩复数") && e.contains("DataType 27"), "{e}");
     let cut = err("cut.dm3", &good[..good.len() / 2]);
     assert!(cut.contains("文件不完整"), "{cut}");
     // Every truncation either opens or fails cleanly.
@@ -235,4 +239,52 @@ fn samples_ome_dm4() {
     let v = values(&src.read_page(0).unwrap()[0].data);
     assert_eq!(&v[..4], &[36497.0, 36314.0, 36997.0, 37726.0]);
     assert_eq!(v.iter().sum::<f64>(), 2155673292753.0);
+}
+
+/// The DigitalMicrograph test files of rosettasciio (GPL test data, not in the
+/// repository; e.g. from sources.debian.org python-rosettasciio
+/// rsciio/tests/data/digitalmicrograph): every file opens, and pixel sums
+/// were checked against ncempy and rosettasciio.
+#[test]
+fn samples_rosettasciio() {
+    let dir = Path::new("/home/user/samples/dm3");
+    if !dir.join("2D/test_STEM_image.dm3").exists() {
+        eprintln!("SKIPPED: {} is not there", dir.display());
+        return;
+    }
+    let p = gatan!();
+    let mut n = 0;
+    for sub in ["", "1D", "2D", "3D"] {
+        for e in std::fs::read_dir(dir.join(sub)).unwrap() {
+            let path = e.unwrap().path();
+            if !path.is_file() {
+                continue;
+            }
+            n += 1;
+            let r = formats::open_with(&path, &p.registry);
+            if path.ends_with("test_fft_packed_complex8.dm4") {
+                let e = format!("{:#}", r.err().expect("packed complex opened"));
+                assert!(e.contains("DataType 27"), "{e}");
+                continue;
+            }
+            let src = r.unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+            let i = src.info().clone();
+            for k in 0..i.page_count {
+                src.read_page(k).unwrap_or_else(|e| panic!("{} page {k}: {e:#}", path.display()));
+            }
+        }
+    }
+    assert!(n > 100, "{n} files");
+    let open1 = |name: &str| open(&p.registry, &dir.join(name));
+    let i = open1("2D/test_STEM_image.dm3").info().clone();
+    assert_eq!((i.width, i.dtype, i.unit.as_str()), (68, DType::U32, "nm"));
+    assert_eq!(item(&i, "Gatan 图像", "GMS 版本").as_deref(), Some("2.31.734.0"));
+    let i = open1("2D/test_diffraction_pattern.dm3").info().clone();
+    assert_eq!(i.pixel_size, None);
+    assert!(item(&i, "Gatan 图像", "X 标定").unwrap().contains("1/nm"));
+    let i = open1("3D/EELS_SI.dm4").info().clone();
+    assert_eq!((i.width, i.height, i.size_z), (2, 2, 2048));
+    let i = open1("2D/multi_signal.dm3").info().clone();
+    assert_eq!(i.series.len(), 2);
+    assert_eq!(values(&open1("2D/test-23.dm4").read_page(0).unwrap()[0].data), [1.0, 2.0, 3.0, 4.0]);
 }

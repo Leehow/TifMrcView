@@ -60,7 +60,7 @@ fn dm_type_name(t: u32) -> String {
         1 => "16 位有符号整数",
         2 => "32 位浮点",
         3 => "复数（2 × 32 位浮点）",
-        5 => "压缩复数",
+        5 | 27 => "FFT 压缩复数（packed complex）",
         6 => "8 位无符号整数",
         7 => "32 位有符号整数",
         8 => "RGB",
@@ -124,18 +124,25 @@ fn images(tree: &Tree) -> Result<Vec<Image>> {
     };
     let mut out = Vec::new();
     let mut first_err = None;
+    // Images with pixel data, including the ones we cannot read.
+    let mut with_data = 0;
     for (index, (_, node)) in list.iter().enumerate() {
         let Some(img) = node.dir() else { continue };
         match image(img, index, le) {
-            Ok(Some(i)) => out.push(i),
+            Ok(Some(i)) => {
+                with_data += 1;
+                out.push(i)
+            }
             Ok(None) => {}
             Err(e) => {
+                with_data += 1;
                 first_err.get_or_insert(e);
             }
         }
     }
-    // The preview DigitalMicrograph stores in front of the real image.
-    if out.len() > 1 && matches!(out[0].pixels, Pixels::Bgra) && out[0].index == 0 {
+    // The preview DigitalMicrograph stores in front of the real image; when
+    // the real image cannot be read, say why rather than show the preview.
+    if with_data > 1 && out.first().is_some_and(|i| matches!(i.pixels, Pixels::Bgra) && i.index == 0) {
         out.remove(0);
     }
     if out.is_empty() {

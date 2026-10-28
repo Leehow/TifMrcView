@@ -13,6 +13,8 @@ below (DigitalMicrograph itself is not needed); the pixel values follow
 - gatan_complex.dm3: a 4x3 complex64 diffraction pattern in 1/nm.
 - gatan_rgb.dm4: a single 5x4 RGBA image.
 - gatan_be.dm3: big-endian data, two i16 images (the series picker).
+- gatan_packed.dm4: a preview and an FFT in packed complex (DataType 27),
+  which is not supported: opening it must fail, not show the preview.
 """
 
 import struct
@@ -221,7 +223,14 @@ def be_dm3(out):
     open(f"{out}/gatan_be.dm3", "wb").write(w.file(doc(w, ims)))
 
 
+def packed_dm4(out):
+    w = Writer(4)
+    px = np.zeros((4, 4), dtype="f4")
+    im = image(w, "FFT", 27, px, [4, 4], [cal(w, 1.0, "1/nm"), cal(w, 1.0, "1/nm")])
+    open(f"{out}/gatan_packed.dm4", "wb").write(w.file(doc(w, [preview(w), im])))
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
-    for f in (u16_dm3, stack_dm4, complex_dm3, rgb_dm4, be_dm3):
+    for f in (u16_dm3, stack_dm4, complex_dm3, rgb_dm4, be_dm3, packed_dm4):
         f(out)
