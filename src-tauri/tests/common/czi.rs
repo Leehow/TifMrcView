@@ -113,7 +113,9 @@ pub fn write(path: &Path, blocks: &[Block], xml: &str, file_part: i32) {
 pub fn xml(channels: &[(&str, &str)], pixel_m: f64, z_m: f64, extra: usize) -> String {
     let mut x = String::from("<ImageDocument><Metadata><Information>");
     x.push_str("<Application><Name>ZEN 3.8 (blue edition)</Name><Version>3.8.2.0</Version></Application>");
-    x.push_str("<Document><CreationDate>2026-10-15T10:12:03.98+08:00</CreationDate><UserName>tester</UserName></Document>");
+    x.push_str(
+        "<Document><CreationDate>2026-10-15T10:12:03.98+08:00</CreationDate><UserName>tester</UserName></Document>",
+    );
     x.push_str("<Image><PixelType>Gray16</PixelType><ComponentBitCount>12</ComponentBitCount><SizeX>64</SizeX><SizeY>48</SizeY><SizeZ>3</SizeZ><SizeC>2</SizeC><Dimensions><Channels>");
     for (i, (name, _)) in channels.iter().enumerate() {
         x.push_str(&format!(

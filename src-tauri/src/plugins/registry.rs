@@ -38,6 +38,8 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("oib", "fluoview", "Olympus FluoView"),
     ("oir", "fluoview", "Olympus FluoView"),
     ("ims", "imaris", "Imaris"),
+    ("dm3", "gatan", "Gatan"),
+    ("dm4", "gatan", "Gatan"),
 ];
 
 /// One installed package with a WebAssembly module.

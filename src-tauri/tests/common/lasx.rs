@@ -75,8 +75,10 @@ fn dim_xml(d: &Dim) -> String {
 
 fn chan_xml(c: &Chan, props: &[(&str, &str)]) -> String {
     let (bits, lut, inc, tag) = c;
-    let props: String =
-        props.iter().map(|(k, v)| format!("<ChannelProperty><Key>{k}</Key><Value>{v}</Value></ChannelProperty>")).collect();
+    let props: String = props
+        .iter()
+        .map(|(k, v)| format!("<ChannelProperty><Key>{k}</Key><Value>{v}</Value></ChannelProperty>"))
+        .collect();
     format!(
         "<ChannelDescription DataType=\"0\" ChannelTag=\"{tag}\" Resolution=\"{bits}\" NameOfMeasuredQuantity=\"\" Min=\"0.0\" Max=\"65535.0\" Unit=\"\" LUTName=\"{lut}\" IsLUTInverted=\"0\" BytesInc=\"{inc}\" BitInc=\"0\">{props}</ChannelDescription>"
     )

@@ -52,7 +52,7 @@
 
 ## プラグイン
 
-ツールバーの「プラグイン」で、プラグインのオン/オフ、インストール、アンインストール、更新の確認ができます。多言語化を除き、プラグインは個別にインストールします。「プラグインマーケット」をクリックするとブラウザーで https://tifmrcview.com/tifmrcview/plugins/ が開くので、プラグインパッケージ（.zip）をダウンロードし、「プラグインを読み込む…」でそれを選択するとインストールされます。同じプラグインの新しいバージョンをインストールすると、古いバージョンが置き換えられます。プラグインのソースはリポジトリの `plugins/<id>/`（`plugin.json` + `index.js`。現在は `recorder`、`zeiss`、`lasx`、`nis`、`fluoview`、`imaris`）にあり、インストール済みのプラグインはプラグインフォルダー内の `<id>/` サブフォルダーに置かれます。
+ツールバーの「プラグイン」で、プラグインのオン/オフ、インストール、アンインストール、更新の確認ができます。多言語化を除き、プラグインは個別にインストールします。「プラグインマーケット」をクリックするとブラウザーで https://tifmrcview.com/tifmrcview/plugins/ が開くので、プラグインパッケージ（.zip）をダウンロードし、「プラグインを読み込む…」でそれを選択するとインストールされます。同じプラグインの新しいバージョンをインストールすると、古いバージョンが置き換えられます。プラグインのソースはリポジトリの `plugins/<id>/`（`plugin.json` + `index.js`。現在は `recorder`、`zeiss`、`lasx`、`nis`、`fluoview`、`imaris`、`gatan`）にあり、インストール済みのプラグインはプラグインフォルダー内の `<id>/` サブフォルダーに置かれます。
 
 ワンクリックインストール（0.5 以降）：プラグインマーケットのカード、またはプラグインメニューの「プラグインマーケット」一覧で **インストール** を押します（新しいバージョンがあると「x.y.z に更新」と表示されます）。Web サイトは `tifmrcview://install-plugin?id=<id>`（`&version=<x.y.z>` 付きも可）という形式のリンクをアプリに渡し、アプリはプラグインの名前と説明を表示して、**インストール** を押すまで何もインストールしません。インストールできるのは公式マーケット（更新フィードの隣の `plugins.json`）に載っているプラグインだけで、HTTPS でダウンロードし、インストール前にサイズと SHA-256 を確認します。zip をダウンロードして「プラグインをインストール…」を使う方法も引き続き使えます。
 
@@ -179,7 +179,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `src-tauri/src/plugins/` | プラグインのネイティブ部分（`recorder.rs`、`mp4.rs`）、プラグインパッケージ（`package.rs`）、フォーマットプラグインの WebAssembly ホスト（`wasm.rs`、`recipe.rs`、`registry.rs`） |
 | `src-tauri/examples/probe.rs` | デコード確認用ツール |
 | `ui/` | 素の HTML/JS フロントエンド：`index.html`、`app.js`、`style.css`、`plugin-host.js`。組み込みの言語プラグインは `ui/plugins/i18n.js` |
-| `plugins/<id>/` | インストール可能なプラグインのソース（`recorder` と、メーカーごとのフォーマットプラグイン `zeiss`、`lasx`、`nis`、`fluoview`、`imaris`。後者は WebAssembly にビルドする Rust クレート）とプラグイン SDK（`sdk`） |
+| `plugins/<id>/` | インストール可能なプラグインのソース（`recorder` と、メーカーごとのフォーマットプラグイン `zeiss`、`lasx`、`nis`、`fluoview`、`imaris`、`gatan`。後者は WebAssembly にビルドする Rust クレート）とプラグイン SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（プラグインの zip とマーケットの索引を作成）、`make-release.mjs` |
 | `site/` | ウェブサイトとプラグインマーケット。スクリーンショットは `site/shots/` |
 | `packaging/linux/` | Linux のパッケージング用ファイル（.mrc の MIME タイプ） |

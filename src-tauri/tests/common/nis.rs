@@ -180,7 +180,13 @@ pub fn container(path: &Path, version: &str, chunks: &[(String, Vec<u8>)], pad: 
     chunk(&mut out, "ND2 FILE SIGNATURE CHUNK NAME01!", &ver, 0);
     let mut map = vec![];
     for (i, (name, data)) in chunks.iter().enumerate() {
-        let pad = if !name.starts_with("ImageDataSeq") { i % 7 } else if pad { 4072 - name.len() } else { 0 };
+        let pad = if !name.starts_with("ImageDataSeq") {
+            i % 7
+        } else if pad {
+            4072 - name.len()
+        } else {
+            0
+        };
         let pos = chunk(&mut out, name, data, pad);
         map.extend_from_slice(name.as_bytes());
         map.extend_from_slice(&pos.to_le_bytes());
@@ -348,7 +354,10 @@ fn picture_metadata(spec: &Spec) -> Lv {
             let spectrum = |w: f64| {
                 level(vec![
                     ("uiCount", Lv::U32(1)),
-                    ("pPoint", level(vec![("Point0", level(vec![("eType", Lv::U32(4)), ("dWavelength", Lv::F64(w))]))])),
+                    (
+                        "pPoint",
+                        level(vec![("Point0", level(vec![("eType", Lv::U32(4)), ("dWavelength", Lv::F64(w))]))]),
+                    ),
                 ])
             };
             (
@@ -386,10 +395,16 @@ fn picture_metadata(spec: &Spec) -> Lv {
                         "pCameraSetting",
                         level(vec![
                             ("CameraUserName", s("Photometrics Prime 95B")),
-                            ("FormatQuality", level(vec![("fmtDesc", level(vec![("dBinningX", two()), ("dBinningY", two())]))])),
+                            (
+                                "FormatQuality",
+                                level(vec![("fmtDesc", level(vec![("dBinningX", two()), ("dBinningY", two())]))]),
+                            ),
                         ]),
                     ),
-                    ("pObjectiveSetting", level(vec![("wsObjectiveName", s(OBJECTIVE)), ("dObjectiveMag", Lv::F64(60.0))])),
+                    (
+                        "pObjectiveSetting",
+                        level(vec![("wsObjectiveName", s(OBJECTIVE)), ("dObjectiveMag", Lv::F64(60.0))]),
+                    ),
                     (
                         "pDeviceSetting",
                         level(vec![
