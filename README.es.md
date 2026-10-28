@@ -52,7 +52,7 @@ Un visor pequeño, rápido y cómodo para imágenes de microscopía y microscop�
 
 ## Plugins
 
-En «Plugins», en la barra de herramientas, se pueden activar/desactivar, instalar y desinstalar plugins y buscar actualizaciones. Salvo los idiomas, cada plugin se instala por separado: pulse «Mercado de plugins» para abrir https://tifmrcview.com/tifmrcview/plugins/ en el navegador y descargar un paquete de plugin (.zip); después pulse «Cargar plugin…» y selecciónelo. Instalar una versión más reciente del mismo plugin reemplaza simplemente a la anterior. El código fuente de los plugins está en el repositorio, en `plugins/<id>/` (`plugin.json` + `index.js`; actualmente `recorder`, `zeiss`, `lasx`, `nis`, `fluoview` e `imaris`); los plugins instalados están en una subcarpeta `<id>/` de la carpeta de plugins.
+En «Plugins», en la barra de herramientas, se pueden activar/desactivar, instalar y desinstalar plugins y buscar actualizaciones. Salvo los idiomas, cada plugin se instala por separado: pulse «Mercado de plugins» para abrir https://tifmrcview.com/tifmrcview/plugins/ en el navegador y descargar un paquete de plugin (.zip); después pulse «Cargar plugin…» y selecciónelo. Instalar una versión más reciente del mismo plugin reemplaza simplemente a la anterior. El código fuente de los plugins está en el repositorio, en `plugins/<id>/` (`plugin.json` + `index.js`; actualmente `recorder`, `zeiss`, `lasx`, `nis`, `fluoview`, `imaris` y `gatan`); los plugins instalados están en una subcarpeta `<id>/` de la carpeta de plugins.
 
 Instalación con un clic (0.5 o posterior): pulse **Instalar** en la tarjeta de un plugin en el mercado, o en la lista «Mercado de plugins» del menú Plugins (que muestra «Actualizar a x.y.z» cuando hay una versión nueva). La web pasa a la aplicación un enlace del tipo `tifmrcview://install-plugin?id=<id>` (opcionalmente `&version=<x.y.z>`); la aplicación muestra el nombre y la descripción del plugin y no instala nada hasta que pulse **Instalar**. Solo instala plugins publicados en el mercado oficial (`plugins.json` junto al canal de actualizaciones), los descarga por HTTPS y comprueba el tamaño y el SHA-256 antes de instalarlos. Descargar el zip y usar «Instalar plugin…» sigue funcionando.
 
@@ -179,7 +179,7 @@ Al publicar, la CI coloca los instaladores y los paquetes de actualización en e
 | `src-tauri/src/plugins/` | Partes nativas de los plugins (`recorder.rs`, `mp4.rs`), paquetes de plugins (`package.rs`) y el host WebAssembly de los plugins de formato (`wasm.rs`, `recipe.rs`, `registry.rs`) |
 | `src-tauri/examples/probe.rs` | La herramienta de sondeo de decodificación |
 | `ui/` | Frontend en HTML/JS puro: `index.html`, `app.js`, `style.css`, `plugin-host.js`; plugin de idioma integrado en `ui/plugins/i18n.js` |
-| `plugins/<id>/` | Código fuente de los plugins instalables (`recorder` y los plugins de formato `zeiss`, `lasx`, `nis`, `fluoview` e `imaris`, uno por fabricante, crates de Rust compilados a WebAssembly) y el SDK de plugins (`sdk`) |
+| `plugins/<id>/` | Código fuente de los plugins instalables (`recorder` y los plugins de formato `zeiss`, `lasx`, `nis`, `fluoview`, `imaris` y `gatan`, uno por fabricante, crates de Rust compilados a WebAssembly) y el SDK de plugins (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (genera los zip de plugins y el índice del mercado), `make-release.mjs` |
 | `site/` | El sitio web y el mercado de plugins, con capturas en `site/shots/` |
 | `packaging/linux/` | Archivos de empaquetado para Linux (tipo MIME de .mrc) |

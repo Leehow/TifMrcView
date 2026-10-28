@@ -188,7 +188,6 @@ Accepted extensions (none are currently declared by core or official plugins):
 
 | Extensions | Format / reason |
 | --- | --- |
-| dm3, dm4 | Gatan DigitalMicrograph, established EM containers |
 | emi, emd | FEI TIA / Velox, established EM metadata/container types |
 | zvi | Zeiss AxioVision |
 | vsi, ets | cellSens dataset and tile container |

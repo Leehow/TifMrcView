@@ -48,7 +48,10 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
     let mut chains: Vec<Vec<u32>> = vec![vec![]; streams.len()];
     let order: Vec<(usize, usize)> = if interleave {
         let most = big.iter().map(|&i| streams[i].data.len().div_ceil(SEC)).max().unwrap_or(0);
-        (0..most).flat_map(|k| big.iter().map(move |&i| (i, k))).filter(|&(i, k)| k < streams[i].data.len().div_ceil(SEC)).collect()
+        (0..most)
+            .flat_map(|k| big.iter().map(move |&i| (i, k)))
+            .filter(|&(i, k)| k < streams[i].data.len().div_ceil(SEC))
+            .collect()
     } else {
         big.iter().flat_map(|&i| (0..streams[i].data.len().div_ceil(SEC)).map(move |k| (i, k))).collect()
     };
@@ -280,22 +283,40 @@ impl Default for OibSpec {
 
 fn main_oif(s: &OibSpec) -> String {
     let mut m = String::new();
-    m.push_str("[Version Info]\r\nFileVersion=\"1.2.6.0\"\r\nSystemName=\"FLUOVIEW FV1000\"\r\nSystemVersion=\"4.2.4.5\"\r\n");
+    m.push_str(
+        "[Version Info]\r\nFileVersion=\"1.2.6.0\"\r\nSystemName=\"FLUOVIEW FV1000\"\r\nSystemVersion=\"4.2.4.5\"\r\n",
+    );
     m.push_str("[Acquisition Parameters Common]\r\nAcquisition Device=\"FV1000\"\r\nImageCaputreDate='2022-08-24 14:31:02'\r\n");
     m.push_str("IntegrationCount=2\r\nIntegrationType=\"Line Kalman\"\r\nLaserTransmissivity01=5,3.0\r\nLaserTransmissivity02=12,5.0\r\n");
     m.push_str("LaserWavelength01=405\r\nLaserWavelength02=543\r\nScanDirection=\"Oneway\"\r\nScanMode=\"XYZ\"\r\nSequentialMode=\"Line\"\r\nZoomValue=2.0\r\n");
-    let axes = [("X", s.w, "um"), ("Y", s.h, "um"), ("C", s.nc, "Ch"), ("Z", s.nz, "nm"), ("T", if s.nt > 1 { s.nt } else { 0 }, "ms"), ("A", 0, "deg"), ("L", 0, "nm"), ("P", 0, "mm")];
+    let axes = [
+        ("X", s.w, "um"),
+        ("Y", s.h, "um"),
+        ("C", s.nc, "Ch"),
+        ("Z", s.nz, "nm"),
+        ("T", if s.nt > 1 { s.nt } else { 0 }, "ms"),
+        ("A", 0, "deg"),
+        ("L", 0, "nm"),
+        ("P", 0, "mm"),
+    ];
     for (i, (code, n, unit)) in axes.iter().enumerate() {
-        m.push_str(&format!("[Axis {i} Parameters Common]\r\nAxisCode=\"{code}\"\r\nMaxSize={n}\r\nPixUnit=\"{unit}\"\r\n"));
+        m.push_str(&format!(
+            "[Axis {i} Parameters Common]\r\nAxisCode=\"{code}\"\r\nMaxSize={n}\r\nPixUnit=\"{unit}\"\r\n"
+        ));
         match *code {
-            "Z" => m.push_str(&format!("StartPosition=-1000.0\r\nEndPosition={}.0\r\nInterval=150\r\n", -1000 + 150 * (*n as i64 - 1))),
+            "Z" => m.push_str(&format!(
+                "StartPosition=-1000.0\r\nEndPosition={}.0\r\nInterval=150\r\n",
+                -1000 + 150 * (*n as i64 - 1)
+            )),
             "T" => m.push_str(&format!("StartPosition=0.0\r\nEndPosition={}.0\r\n", 2500 * (*n as i64 - 1).max(0))),
             _ => {}
         }
     }
     let order = if s.nt > 1 { "XYCZT" } else { "XYCZ" };
     m.push_str(&format!("[Axis Parameter Common]\r\nAxisCount={}\r\nAxisOrder=\"{order}\"\r\n", order.len()));
-    for (c, (dye, ch, ex, em)) in [("DAPI", "CH1", 405, 461), ("Alexa Fluor 594", "CH3", 543, 618)].iter().enumerate().take(s.nc) {
+    for (c, (dye, ch, ex, em)) in
+        [("DAPI", "CH1", 405, 461), ("Alexa Fluor 594", "CH3", 543, 618)].iter().enumerate().take(s.nc)
+    {
         m.push_str(&format!(
             "[Channel {} Parameters]\r\nAnalogPMTVoltage={}\r\nBF Name=\"BA430-455\"\r\nCH Name=\"{ch}\"\r\nConfocal=\"ON\"\r\nDyeName=\"{dye}\"\r\nEmissionDM Name=\"SDM473\"\r\nEmissionWavelength={em}\r\nExcitationWavelength={ex}\r\nPMTDetectingMode=0\r\n",
             c + 1,
@@ -370,8 +391,11 @@ pub fn write_oib(path: &Path, s: &OibSpec) {
 
 // ---------------------------------------------------------------- OIR
 
-pub const GUIDS: [&str; 3] =
-    ["8bf167bc-288a-4fa1-8817-0814f5e321ed", "46ac593d-5fab-4079-a377-8f2df6102d3e", "c263395c-ad37-4a8d-bfe5-2603c4c5a39a"];
+pub const GUIDS: [&str; 3] = [
+    "8bf167bc-288a-4fa1-8817-0814f5e321ed",
+    "46ac593d-5fab-4079-a377-8f2df6102d3e",
+    "c263395c-ad37-4a8d-bfe5-2603c4c5a39a",
+];
 
 pub struct OirSpec {
     pub w: usize,
@@ -560,7 +584,13 @@ pub fn write_oir(path: &Path, s: &OirSpec) {
                     // λ planes use the channel index c + nc·l for the pattern.
                     let d = bytes(&plane(c + s.nc * l, z, t, s.w, s.h));
                     for (n, chunk) in d.chunks(s.strip).enumerate() {
-                        uid_block(&mut out, &mut offsets, &format!("{prefix}_0_1_{}_{n}", GUIDS[c]), n * s.strip, chunk);
+                        uid_block(
+                            &mut out,
+                            &mut offsets,
+                            &format!("{prefix}_0_1_{}_{n}", GUIDS[c]),
+                            n * s.strip,
+                            chunk,
+                        );
                     }
                 }
                 block(&mut out, &mut offsets, 5, &[]);

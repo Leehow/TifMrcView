@@ -329,7 +329,12 @@ fn pages(s: &Spec) -> Vec<Page> {
         if s.thumbnails {
             let (tw, th) = (s.w / 8, s.h / 8);
             let plane = vec![0xEEu8; (tw * th) as usize];
-            out.push(Page { main: false, strips: vec![plane.clone(), plane.clone(), plane], counts: vec![tw * th; 3], dummy: false });
+            out.push(Page {
+                main: false,
+                strips: vec![plane.clone(), plane.clone(), plane],
+                counts: vec![tw * th; 3],
+                dummy: false,
+            });
         }
     }
     out

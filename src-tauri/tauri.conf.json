@@ -202,6 +202,24 @@
             "public.image"
           ]
         }
+      },
+      {
+        "ext": [
+          "dm3",
+          "dm4"
+        ],
+        "name": "Gatan DigitalMicrograph Image",
+        "description": "Gatan DigitalMicrograph DM3 / DM4 Electron Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-gatan-dm",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.dm",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
       }
     ],
     "macOS": {

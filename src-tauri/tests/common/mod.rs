@@ -41,7 +41,9 @@ pub fn build_plugin(id: &str) -> Option<PathBuf> {
         return p.clone();
     }
     let out = if !wasm_target_installed() {
-        eprintln!("SKIPPED: the wasm32-unknown-unknown target is not installed (rustup target add wasm32-unknown-unknown)");
+        eprintln!(
+            "SKIPPED: the wasm32-unknown-unknown target is not installed (rustup target add wasm32-unknown-unknown)"
+        );
         None
     } else {
         let target = std::env::var("CARGO_TARGET_DIR")

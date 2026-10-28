@@ -52,7 +52,7 @@ Ein kleiner, schneller und bequemer Viewer für Mikroskopie- und Elektronenmikro
 
 ## Plugins
 
-Im Menü „Plugins“ der Werkzeugleiste lassen sich Plugins ein-/ausschalten, installieren, deinstallieren und auf Updates prüfen. Mit Ausnahme der Sprachen wird jedes Plugin einzeln installiert: Über „Plugin-Markt“ öffnet sich https://tifmrcview.com/tifmrcview/plugins/ im Browser, dort laden Sie ein Plugin-Paket (.zip) herunter und wählen es danach über „Plugin laden…“ aus. Wird eine neuere Version desselben Plugins installiert, ersetzt sie die alte. Die Plugin-Quellen liegen im Repository unter `plugins/<id>/` (`plugin.json` + `index.js`; derzeit `recorder`, `zeiss`, `lasx`, `nis`, `fluoview` und `imaris`); installierte Plugins liegen im Unterordner `<id>/` des Plugin-Ordners.
+Im Menü „Plugins“ der Werkzeugleiste lassen sich Plugins ein-/ausschalten, installieren, deinstallieren und auf Updates prüfen. Mit Ausnahme der Sprachen wird jedes Plugin einzeln installiert: Über „Plugin-Markt“ öffnet sich https://tifmrcview.com/tifmrcview/plugins/ im Browser, dort laden Sie ein Plugin-Paket (.zip) herunter und wählen es danach über „Plugin laden…“ aus. Wird eine neuere Version desselben Plugins installiert, ersetzt sie die alte. Die Plugin-Quellen liegen im Repository unter `plugins/<id>/` (`plugin.json` + `index.js`; derzeit `recorder`, `zeiss`, `lasx`, `nis`, `fluoview`, `imaris` und `gatan`); installierte Plugins liegen im Unterordner `<id>/` des Plugin-Ordners.
 
 Installation mit einem Klick (ab 0.5): Auf einer Plugin-Karte im Plugin-Markt oder in der Liste „Plugin-Markt“ im Plugins-Menü auf **Installieren** klicken (dort steht bei neueren Versionen „Auf x.y.z aktualisieren“). Die Website übergibt der App einen Link der Form `tifmrcview://install-plugin?id=<id>` (optional `&version=<x.y.z>`); die App zeigt Name und Beschreibung des Plugins und installiert erst, wenn du **Installieren** klickst. Installiert werden nur Plugins aus dem offiziellen Plugin-Markt (`plugins.json` neben dem Update-Feed), geladen über HTTPS und vor der Installation auf Größe und SHA-256 geprüft. ZIP herunterladen und „Plugin installieren…“ funktioniert weiterhin.
 
@@ -179,7 +179,7 @@ Beim Veröffentlichen legt die CI Installations- und Update-Pakete im Verzeichni
 | `src-tauri/src/plugins/` | Native Plugin-Teile (`recorder.rs`, `mp4.rs`), Plugin-Pakete (`package.rs`) und der WebAssembly-Host für Format-Plugins (`wasm.rs`, `recipe.rs`, `registry.rs`) |
 | `src-tauri/examples/probe.rs` | Das Dekodier-Prüfwerkzeug |
 | `ui/` | Reines HTML/JS-Frontend: `index.html`, `app.js`, `style.css`, `plugin-host.js`; eingebautes Sprach-Plugin in `ui/plugins/i18n.js` |
-| `plugins/<id>/` | Quellen der installierbaren Plugins (`recorder` sowie die Formatplugins `zeiss`, `lasx`, `nis`, `fluoview` und `imaris`, eines pro Hersteller, als nach WebAssembly gebaute Rust-Crates) und das Plugin-SDK (`sdk`) |
+| `plugins/<id>/` | Quellen der installierbaren Plugins (`recorder` sowie die Formatplugins `zeiss`, `lasx`, `nis`, `fluoview`, `imaris` und `gatan`, eines pro Hersteller, als nach WebAssembly gebaute Rust-Crates) und das Plugin-SDK (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (erstellt Plugin-ZIPs und den Markt-Index), `make-release.mjs` |
 | `site/` | Die Website und der Plugin-Markt, Screenshots in `site/shots/` |
 | `packaging/linux/` | Linux-Paketierungsdateien (MIME-Typ für .mrc) |

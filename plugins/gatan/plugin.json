@@ -1,0 +1,96 @@
+{
+  "id": "gatan",
+  "name": "Gatan",
+  "version": "1.0.0",
+  "description": "打开 Gatan DigitalMicrograph / GMS 保存的 DM3 和 DM4 电镜图像，并显示像素标定、加速电压、放大倍数、相机和曝光时间等参数",
+  "main": "index.js",
+  "apiVersion": 2,
+  "permissions": [],
+  "minAppVersion": "0.6.0",
+  "author": "TifMrcView",
+  "wasm": "gatan.wasm",
+  "formats": [
+    {
+      "ext": [
+        "dm3"
+      ],
+      "name": "Gatan DM3"
+    },
+    {
+      "ext": [
+        "dm4"
+      ],
+      "name": "Gatan DM4"
+    }
+  ],
+  "i18n": {
+    "en": {
+      "name": "Gatan",
+      "description": "Opens DM3 and DM4 electron-microscopy images saved by Gatan DigitalMicrograph / GMS, and shows the calibration, accelerating voltage, magnification, camera, exposure time and other settings"
+    },
+    "de": {
+      "name": "Gatan",
+      "description": "Öffnet DM3- und DM4-Elektronenmikroskopiebilder aus Gatan DigitalMicrograph / GMS und zeigt Kalibrierung, Beschleunigungsspannung, Vergrößerung, Kamera, Belichtungszeit und weitere Einstellungen"
+    },
+    "ja": {
+      "name": "Gatan",
+      "description": "Gatan DigitalMicrograph / GMS が保存した DM3・DM4 の電子顕微鏡画像を開き、キャリブレーション、加速電圧、倍率、カメラ、露光時間などの設定を表示します"
+    },
+    "es": {
+      "name": "Gatan",
+      "description": "Abre imágenes de microscopía electrónica DM3 y DM4 guardadas por Gatan DigitalMicrograph / GMS y muestra la calibración, el voltaje de aceleración, el aumento, la cámara, el tiempo de exposición y otros parámetros"
+    },
+    "fr": {
+      "name": "Gatan",
+      "description": "Ouvre les images de microscopie électronique DM3 et DM4 enregistrées par Gatan DigitalMicrograph / GMS et affiche l’étalonnage, la tension d’accélération, le grossissement, la caméra, le temps d’exposition et d’autres paramètres"
+    },
+    "ru": {
+      "name": "Gatan",
+      "description": "Открывает электронно-микроскопические изображения DM3 и DM4 из Gatan DigitalMicrograph / GMS и показывает калибровку, ускоряющее напряжение, увеличение, камеру, время экспозиции и другие параметры"
+    }
+  },
+  "details": {
+    "zh": [
+      "打开 Gatan DigitalMicrograph（GMS 1、2、3）保存的 .dm3 和 .dm4 文件：透射电镜、扫描透射（STEM）、电子衍射和 Gatan 相机（OneView、K2、K3、Rio、Orius、Ultrascan 等）的图像。TifMrcView 本身不带 DM 读取代码；装上这个插件后即可打开：二维图像、三维栈（如断层倾转序列、原位视频）和四维数据集都支持，像素可以是 8、16、32 位整数、32/64 位浮点、复数（实部与虚部作为两个通道）或 RGB。超过 4 GB 的 DM4 也能读。文件里 DigitalMicrograph 附带的缩略图会被跳过；一个文件里有多张图像时可以逐张切换。",
+      "插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件。DM 文件的像素不压缩，插件只找出像素在文件里的位置，由应用本身直接读取，速度和内置格式一样。",
+      "插件用文件里的标定设置比例尺和测量单位（pm、Å、nm、µm、mm），不用手动输入；衍射图等倒空间标定（如 1/nm）会列在参数里。图像信息面板里：「Gatan 图像」列出文件格式、名称、尺寸、像素类型、各维度标定、强度标定、采集日期时间和 GMS 版本；「Gatan 显微镜」列出显微镜、加速电压、操作与照明模式、标称和实际放大倍数、相机长度、球差、发射电流、束斑、样品台位置、操作者和样品；「Gatan 采集」列出相机、曝光时间、像素合并和处理方式；「Gatan 全部参数」把 ImageTags 下的所有标签展开列出，方便查找。",
+      "安装后无需设置，直接打开 .dm3 或 .dm4 即可，状态栏会显示「Gatan DM3」或「Gatan DM4」以及 GMS 版本。需要 TifMrcView 0.6.0 或更新版本。"
+    ],
+    "en": [
+      "Opens .dm3 and .dm4 files saved by Gatan DigitalMicrograph (GMS 1, 2 and 3): TEM, STEM and electron-diffraction images and images from Gatan cameras (OneView, K2, K3, Rio, Orius, Ultrascan and others). TifMrcView itself contains no DM code; with this plugin installed they open as 2D images, 3D stacks (tilt series, in-situ movies) or 4D data sets, with 8, 16 or 32-bit integer, 32/64-bit floating-point, complex (real and imaginary parts as two channels) or RGB pixels. DM4 files over 4 GB work too. The thumbnail DigitalMicrograph stores in the file is skipped; a file holding several images lets you switch between them.",
+      "The plugin runs sandboxed as WebAssembly and can only read the file being opened. DM pixels are uncompressed: the plugin only finds where they are, and the app reads them directly, as fast as built-in formats.",
+      "The calibration in the file sets the scale bar and measurement unit (pm, Å, nm, µm, mm), with nothing to type in; reciprocal-space calibrations such as 1/nm for diffraction patterns are listed with the settings. In the image-info panel, \"Gatan image\" lists the file format, name, size, pixel type, the calibration of every dimension, intensity calibration, acquisition date and time and GMS version; \"Gatan microscope\" the microscope, accelerating voltage, operation and illumination mode, indicated and actual magnification, camera length, Cs, emission current, spot size, stage position, operator and specimen; \"Gatan acquisition\" the camera, exposure time, binning and processing; \"Gatan all settings\" flattens every tag under ImageTags so you can search it.",
+      "There is nothing to configure: install it and open .dm3 or .dm4 files. The status bar then shows \"Gatan DM3\" or \"Gatan DM4\" with the GMS version. Needs TifMrcView 0.6.0 or newer."
+    ],
+    "de": [
+      "Öffnet .dm3- und .dm4-Dateien aus Gatan DigitalMicrograph (GMS 1, 2 und 3): TEM-, STEM- und Elektronenbeugungsbilder sowie Bilder von Gatan-Kameras (OneView, K2, K3, Rio, Orius, Ultrascan u. a.). TifMrcView selbst enthält keinen DM-Code; mit diesem Plugin öffnen sie sich als 2D-Bilder, 3D-Stapel (Kippserien, In-situ-Filme) oder 4D-Datensätze mit 8-, 16- oder 32-Bit-Ganzzahl-, 32/64-Bit-Gleitkomma-, komplexen (Real- und Imaginärteil als zwei Kanäle) oder RGB-Pixeln. Auch DM4-Dateien über 4 GB funktionieren. Das von DigitalMicrograph gespeicherte Vorschaubild wird übersprungen; enthält eine Datei mehrere Bilder, kann man zwischen ihnen wechseln.",
+      "Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die geöffnete Datei lesen. DM-Pixel sind unkomprimiert: Das Plugin ermittelt nur ihre Lage, die App liest sie direkt, genauso schnell wie integrierte Formate.",
+      "Die Kalibrierung aus der Datei setzt Maßstabsbalken und Messeinheit (pm, Å, nm, µm, mm); Kalibrierungen im reziproken Raum wie 1/nm für Beugungsbilder erscheinen bei den Einstellungen. Im Bildinformationsbereich zeigt „Gatan-Bild“ Dateiformat, Name, Größe, Pixeltyp, Kalibrierung jeder Dimension, Intensitätskalibrierung, Aufnahmedatum und -zeit sowie GMS-Version; „Gatan-Mikroskop“ Mikroskop, Beschleunigungsspannung, Betriebs- und Beleuchtungsmodus, nominelle und tatsächliche Vergrößerung, Kameralänge, Cs, Emissionsstrom, Spotgröße, Tischposition, Bediener und Probe; „Gatan-Aufnahme“ Kamera, Belichtungszeit, Binning und Verarbeitung; „Alle Gatan-Einstellungen“ listet jedes Tag unter ImageTags zum Durchsuchen auf.",
+      "Keine Konfiguration nötig: nach der Installation .dm3- oder .dm4-Dateien öffnen. Die Statusleiste zeigt „Gatan DM3“ bzw. „Gatan DM4“ mit der GMS-Version. Benötigt TifMrcView 0.6.0 oder neuer."
+    ],
+    "ja": [
+      "Gatan DigitalMicrograph（GMS 1・2・3）が保存した .dm3 と .dm4 を開きます。TEM、STEM、電子回折の画像や Gatan カメラ（OneView、K2、K3、Rio、Orius、Ultrascan など）の画像に対応します。TifMrcView 本体には DM のコードは含まれていません。このプラグインを入れると、2D 画像、3D スタック（傾斜シリーズ、その場観察動画）、4D データセットとして開けます。ピクセルは 8・16・32 ビット整数、32/64 ビット浮動小数点、複素数（実部と虚部を 2 チャンネルとして表示）、RGB に対応し、4 GB を超える DM4 も読めます。DigitalMicrograph がファイルに保存するサムネイルはスキップし、複数の画像を含むファイルでは切り替えられます。",
+      "WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。DM のピクセルは非圧縮なので、プラグインは位置を調べるだけで、アプリ本体が直接読み込みます。内蔵形式と同じ速度です。",
+      "ファイル内のキャリブレーションでスケールバーと測定単位（pm、Å、nm、µm、mm）を設定します。回折像などの逆空間キャリブレーション（1/nm など）は設定一覧に表示します。画像情報パネルの「Gatan 画像」にはファイル形式、名前、サイズ、ピクセル型、各次元のキャリブレーション、強度キャリブレーション、取得日時、GMS バージョン、「Gatan 顕微鏡」には顕微鏡、加速電圧、動作・照明モード、公称倍率と実倍率、カメラ長、Cs、エミッション電流、スポットサイズ、ステージ位置、オペレーター、試料、「Gatan 取得」にはカメラ、露光時間、ビニング、処理方式を表示します。「Gatan 全設定」では ImageTags 配下のすべてのタグを展開して検索できます。",
+      "設定は不要です。インストール後に .dm3 や .dm4 を開くと、ステータスバーに「Gatan DM3」または「Gatan DM4」と GMS バージョンが表示されます。TifMrcView 0.6.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos .dm3 y .dm4 guardados por Gatan DigitalMicrograph (GMS 1, 2 y 3): imágenes de TEM, STEM y difracción de electrones e imágenes de cámaras Gatan (OneView, K2, K3, Rio, Orius, Ultrascan y otras). TifMrcView no incluye código DM; con este complemento se abren como imágenes 2D, pilas 3D (series de inclinación, vídeos in situ) o conjuntos 4D, con píxeles enteros de 8, 16 o 32 bits, de coma flotante de 32/64 bits, complejos (parte real e imaginaria como dos canales) o RGB. También funcionan archivos DM4 de más de 4 GB. Se omite la miniatura que DigitalMicrograph guarda en el archivo; si un archivo contiene varias imágenes, se puede cambiar entre ellas.",
+      "Se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto. Los píxeles DM no están comprimidos: el complemento solo localiza dónde están y la propia aplicación los lee directamente, con la misma rapidez que los formatos integrados.",
+      "La calibración del archivo fija la barra de escala y la unidad de medida (pm, Å, nm, µm, mm); las calibraciones en espacio recíproco, como 1/nm en patrones de difracción, aparecen entre los parámetros. En el panel de información, «Imagen Gatan» muestra el formato, nombre, tamaño, tipo de píxel, calibración de cada dimensión, calibración de intensidad, fecha y hora de adquisición y versión de GMS; «Microscopio Gatan», el microscopio, voltaje de aceleración, modos de operación e iluminación, aumento nominal y real, longitud de cámara, Cs, corriente de emisión, tamaño de spot, posición de la platina, operador y muestra; «Adquisición Gatan», la cámara, tiempo de exposición, binning y procesamiento; «Todos los parámetros Gatan» despliega todas las etiquetas de ImageTags para poder buscarlas.",
+      "No requiere configuración: instálalo y abre archivos .dm3 o .dm4. La barra de estado muestra «Gatan DM3» o «Gatan DM4» con la versión de GMS. Requiere TifMrcView 0.6.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers .dm3 et .dm4 enregistrés par Gatan DigitalMicrograph (GMS 1, 2 et 3) : images de MET, de STEM et de diffraction électronique, et images des caméras Gatan (OneView, K2, K3, Rio, Orius, Ultrascan, etc.). TifMrcView ne contient pas de code DM ; avec cette extension, ils s’ouvrent comme images 2D, piles 3D (séries d’inclinaison, films in situ) ou jeux de données 4D, avec des pixels entiers de 8, 16 ou 32 bits, flottants de 32/64 bits, complexes (parties réelle et imaginaire en deux canaux) ou RVB. Les fichiers DM4 de plus de 4 Go fonctionnent aussi. La vignette que DigitalMicrograph enregistre dans le fichier est ignorée ; un fichier contenant plusieurs images permet de passer de l’une à l’autre.",
+      "L’extension s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert. Les pixels DM ne sont pas compressés : l’extension ne fait que les localiser et l’application les lit directement, aussi vite que les formats intégrés.",
+      "L’étalonnage du fichier règle la barre d’échelle et l’unité de mesure (pm, Å, nm, µm, mm) ; les étalonnages en espace réciproque, comme 1/nm pour les clichés de diffraction, figurent parmi les paramètres. Dans le panneau d’informations, « Image Gatan » indique le format, le nom, la taille, le type de pixel, l’étalonnage de chaque dimension, l’étalonnage d’intensité, la date et l’heure d’acquisition et la version de GMS ; « Microscope Gatan » le microscope, la tension d’accélération, les modes de fonctionnement et d’illumination, les grossissements nominal et réel, la longueur de caméra, le Cs, le courant d’émission, la taille de sonde, la position de la platine, l’opérateur et l’échantillon ; « Acquisition Gatan » la caméra, le temps d’exposition, le binning et le traitement ; « Tous les paramètres Gatan » déroule toutes les balises d’ImageTags pour permettre leur recherche.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des fichiers .dm3 ou .dm4. La barre d’état affiche « Gatan DM3 » ou « Gatan DM4 » avec la version de GMS. Nécessite TifMrcView 0.6.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы .dm3 и .dm4, сохранённые Gatan DigitalMicrograph (GMS 1, 2 и 3): изображения ПЭМ, ПРЭМ и электронной дифракции, а также снимки камер Gatan (OneView, K2, K3, Rio, Orius, Ultrascan и других). В самом TifMrcView нет кода DM; с плагином они открываются как 2D-изображения, 3D-стеки (серии наклонов, in situ видео) или 4D-наборы данных с целочисленными пикселями на 8, 16 или 32 бита, с плавающей точкой на 32/64 бита, комплексными (действительная и мнимая части как два канала) или RGB. Поддерживаются и файлы DM4 больше 4 ГБ. Миниатюра, которую DigitalMicrograph сохраняет в файле, пропускается; если в файле несколько изображений, между ними можно переключаться.",
+      "Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл. Пиксели DM не сжаты: плагин лишь находит их положение, а приложение читает их напрямую, так же быстро, как встроенные форматы.",
+      "Калибровка из файла задаёт масштабную линейку и единицу измерения (pm, Å, nm, µm, mm); калибровки обратного пространства, например 1/nm для дифракционных картин, показаны среди параметров. На панели информации «Изображение Gatan» содержит формат, название, размер, тип пикселя, калибровку каждого измерения, калибровку интенсивности, дату и время съёмки и версию GMS; «Микроскоп Gatan» — микроскоп, ускоряющее напряжение, режимы работы и освещения, номинальное и фактическое увеличение, длину камеры, Cs, ток эмиссии, размер пятна, положение столика, оператора и образец; «Съёмка Gatan» — камеру, время экспозиции, биннинг и обработку; «Все параметры Gatan» разворачивает все теги ImageTags для поиска.",
+      "Настройка не требуется: установите плагин и открывайте .dm3 или .dm4. В строке состояния появится «Gatan DM3» или «Gatan DM4» с версией GMS. Требуется TifMrcView 0.6.0 или новее."
+    ]
+  }
+}

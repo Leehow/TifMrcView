@@ -39,4 +39,9 @@
     <comment>Imaris IMS microscopy image</comment>
     <glob pattern="*.ims"/>
   </mime-type>
+  <mime-type type="application/x-gatan-dm">
+    <comment>Gatan DigitalMicrograph DM3 / DM4 electron microscopy image</comment>
+    <glob pattern="*.dm3"/>
+    <glob pattern="*.dm4"/>
+  </mime-type>
 </mime-info>
