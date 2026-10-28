@@ -11,7 +11,7 @@ const cloudflare = "https://tifmrcview.com/tifmrcview";
 const direct = "https://dl.tifmrcview.com:9443/tifmrcview";
 const artifacts = ["test.dmg", "test.app.tar.gz", "test-setup.exe", "test.deb", "test.rpm", "test.AppImage"];
 
-function release(t, { arg, env, signed = true } = {}) {
+function release(t, { arg, env, signed = true, edition } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tmv-release-test-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const src = path.join(dir, "artifacts"), out = path.join(dir, "release");
@@ -23,6 +23,8 @@ function release(t, { arg, env, signed = true } = {}) {
   const childEnv = { ...process.env };
   delete childEnv.DIRECT_BASE_URL;
   if (env !== undefined) childEnv.DIRECT_BASE_URL = env;
+  delete childEnv.TMV_EDITION;
+  if (edition) childEnv.TMV_EDITION = edition;
   execFileSync(process.execPath, [script, src, out, "1.2.3", cloudflare + "/", "Release notes\non two lines", ...(arg === undefined ? [] : [arg])], { env: childEnv, stdio: "pipe" });
   return { out, read: (name) => JSON.parse(fs.readFileSync(path.join(out, name), "utf8")) };
 }
@@ -60,4 +62,16 @@ test("unsigned releases do not publish either updater feed", (t) => {
   assert.ok(read("downloads.json").files.win.length);
   assert.equal(fs.existsSync(path.join(out, "latest.json")), false);
   assert.equal(fs.existsSync(path.join(out, "latest-direct.json")), false);
+});
+
+test("Pro writes its own feeds and file names next to the standard ones", (t) => {
+  const { out, read } = release(t, { env: direct, edition: "pro" });
+  assert.equal(fs.existsSync(path.join(out, "latest.json")), false);
+  assert.equal(fs.existsSync(path.join(out, "downloads.json")), false);
+  const feed = read("latest-pro.json");
+  assert.equal(feed.platforms["windows-x86_64"].url, cloudflare + "/1.2.3/TifMrcViewPro_1.2.3_x64-setup.exe");
+  assert.equal(read("latest-pro-direct.json").platforms["windows-x86_64"].url, direct + "/1.2.3/TifMrcViewPro_1.2.3_x64-setup.exe");
+  assert.deepEqual(read("downloads-pro.json").files.linux.map((f) => f.file), [
+    "1.2.3/TifMrcViewPro_1.2.3_amd64.deb", "1.2.3/TifMrcViewPro-1.2.3-1.x86_64.rpm", "1.2.3/TifMrcViewPro_1.2.3_amd64.AppImage",
+  ]);
 });

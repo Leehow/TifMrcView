@@ -205,10 +205,12 @@ window.addEventListener("keydown", (e) => {
 });
 
 (async () => {
+  let name = "TifMrcView";
   try {
     pluginHost.appVersion = await T.app.getVersion();
+    name = await T.app.getName();
   } catch (_) {}
-  $("app-version").textContent = pluginHost.appVersion ? `TifMrcView ${pluginHost.appVersion}` : "TifMrcView";
+  $("app-version").textContent = pluginHost.appVersion ? `${name} ${pluginHost.appVersion}` : name;
   $("update-auto").checked = pref.get("update.auto", true);
   await loadPlugins();
   // Opened (or started) by a tifmrcview://install-plugin link.

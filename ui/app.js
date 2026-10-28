@@ -4,6 +4,20 @@ const T = window.__TAURI__;
 const invoke = T.core.invoke;
 const $ = (id) => document.getElementById(id);
 
+// Standard or Pro build (same code; the Pro build has its own product name).
+// Pro loads its extra tools from pro/pro.js.
+const EDITION = { name: "TifMrcView", pro: false };
+T.app.getName().then((name) => {
+  EDITION.name = name;
+  EDITION.pro = name !== "TifMrcView";
+  document.title = name;
+  if (!EDITION.pro) return;
+  document.documentElement.dataset.edition = "pro";
+  const s = document.createElement("script");
+  s.src = "pro/pro.js";
+  document.body.appendChild(s);
+}).catch(() => {});
+
 const COLORS = [
   [255, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0],
   [0, 0, 255], [0, 255, 255], [255, 255, 0],
@@ -214,7 +228,7 @@ async function openPath(path, force = false, series = 0) {
     }
     $("empty").hidden = true;
     $("st-pixel").textContent = "";
-    T.window.getCurrentWindow().setTitle(`${res.info.name} — TifMrcView`).catch(() => {});
+    T.window.getCurrentWindow().setTitle(`${res.info.name} — ${EDITION.name}`).catch(() => {});
     buildChannels();
     buildSeries();
     setupSliders();
@@ -331,7 +345,7 @@ async function setAxis(axis) {
     S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
   }
   const view = axis === "xy" ? "" : ` (${axis.toUpperCase()})`;
-  T.window.getCurrentWindow().setTitle(`${info.name}${view} — TifMrcView`).catch(() => {});
+  T.window.getCurrentWindow().setTitle(`${info.name}${view} — ${EDITION.name}`).catch(() => {});
   setupSliders();
   syncScaleUi();
   updateInfo();

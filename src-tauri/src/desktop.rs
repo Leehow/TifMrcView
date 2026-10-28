@@ -610,7 +610,7 @@ fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .find(|w| w.is_focused().unwrap_or(false))
         .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)));
     let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
-        .title("TifMrcView")
+        .title(crate::edition::NAME)
         .inner_size(1280.0, 800.0)
         .min_inner_size(640.0, 480.0);
     b = match pos {

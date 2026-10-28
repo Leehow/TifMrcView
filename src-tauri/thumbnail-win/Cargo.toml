@@ -4,6 +4,9 @@ version = "0.5.0"
 edition = "2021"
 license = "Apache-2.0"
 
+[features]
+pro = ["tifmrcview/pro"]
+
 [lib]
 crate-type = ["cdylib"]
 

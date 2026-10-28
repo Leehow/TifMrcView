@@ -1,11 +1,11 @@
-//! Making TifMrcView the default app for .tif/.tiff/.mrc.
+//! Making TifMrcView (or Pro) the default app for .tif/.tiff/.mrc.
 //!
 //! The installers already register TifMrcView as a handler for these types
 //! (see `bundle.fileAssociations`). What each OS lets an app do beyond that
 //! differs, so this module does the most each platform allows.
 
-#[cfg(target_os = "macos")]
-const BUNDLE_ID: &str = "com.leehow.tifmrcview";
+use crate::edition::NAME;
+
 #[cfg(target_os = "macos")]
 const MRC_UTI: &str = "com.leehow.tifmrcview.mrc";
 
@@ -23,7 +23,7 @@ pub fn set_default() -> Result<String, String> {
         ) -> i32;
     }
     const ROLES_ALL: u32 = 0xFFFF_FFFF;
-    let handler = CFString::new(BUNDLE_ID);
+    let handler = CFString::new(crate::edition::APP_ID);
     let mut failed = vec![];
     for uti in ["public.tiff", MRC_UTI] {
         let t = CFString::new(uti);
@@ -36,7 +36,7 @@ pub fn set_default() -> Result<String, String> {
         }
     }
     if failed.is_empty() {
-        Ok("已将 TifMrcView 设为 .tif / .tiff / .mrc 的默认打开方式".into())
+        Ok(format!("已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"))
     } else {
         Err(format!("部分类型设置失败: {}", failed.join(", ")))
     }
@@ -55,20 +55,21 @@ pub fn set_default() -> Result<String, String> {
             let _ = Command::new("update-mime-database").arg(&dir).status();
         }
     }
-    let desktop = ["TifMrcView.desktop", "tifmrcview.desktop"]
-        .into_iter()
+    let candidates = [format!("{NAME}.desktop"), format!("{}.desktop", crate::edition::BIN)];
+    let desktop = candidates
+        .iter()
         .find(|d| {
             ["/usr/share/applications", "/usr/local/share/applications"]
                 .iter()
                 .any(|p| std::path::Path::new(p).join(d).exists())
         })
-        .unwrap_or("TifMrcView.desktop");
+        .unwrap_or(&candidates[0]);
     let status = Command::new("xdg-mime")
         .args(["default", desktop, "image/tiff", "application/x-mrc"])
         .status()
         .map_err(|e| format!("无法运行 xdg-mime: {e}"))?;
     if status.success() {
-        Ok("已将 TifMrcView 设为 .tif / .tiff / .mrc 的默认打开方式".into())
+        Ok(format!("已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"))
     } else {
         Err("xdg-mime 设置失败".into())
     }
@@ -80,10 +81,10 @@ pub fn set_default() -> Result<String, String> {
     // The installer registers TifMrcView; this opens the page where the user
     // confirms it.
     std::process::Command::new("explorer.exe")
-        .arg("ms-settings:defaultapps?registeredAppUser=TifMrcView")
+        .arg(format!("ms-settings:defaultapps?registeredAppUser={}", NAME.replace(' ', "%20")))
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok("已打开系统“默认应用”设置，请在其中把 .tif / .tiff / .mrc 选为 TifMrcView".into())
+    Ok(format!("已打开系统“默认应用”设置，请在其中把 .tif / .tiff / .mrc 选为 {NAME}"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

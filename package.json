@@ -6,7 +6,9 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "dev:pro": "tauri dev --config src-tauri/tauri.pro.conf.json",
+    "build:pro": "tauri build --config src-tauri/tauri.pro.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4"

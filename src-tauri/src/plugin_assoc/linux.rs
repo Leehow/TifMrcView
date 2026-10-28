@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const DESKTOP: &str = "tifmrcview.desktop";
+const DESKTOP: &str = if crate::edition::PRO { "tifmrcview-pro.desktop" } else { "tifmrcview.desktop" };
 const PREFIX: &str = "application/x-tifmrcview-";
 
 #[derive(Default, Deserialize, Serialize)]
@@ -62,8 +62,10 @@ fn thumbnailer(mimes: &BTreeSet<String>) -> String {
         .lines()
         .find(|line| line.starts_with("Exec="))
         .unwrap();
+    let exec = exec.replacen("Exec=tifmrcview ", &format!("Exec={} ", crate::edition::BIN), 1);
     format!(
-        "[Thumbnailer Entry]\nTryExec=tifmrcview\n{exec}\nMimeType={};\n",
+        "[Thumbnailer Entry]\nTryExec={}\n{exec}\nMimeType={};\n",
+        crate::edition::BIN,
         mimes.iter().cloned().collect::<Vec<_>>().join(";")
     )
 }
@@ -163,8 +165,8 @@ fn desktop(exe: &Path, mimes: &BTreeSet<String>) -> String {
         .replace('%', "%%")
         // Desktop string escapes are decoded before Exec argument escapes.
         .replace('\\', "\\\\");
-    format!("[Desktop Entry]\nType=Application\nName=TifMrcView\nExec=\"{executable}\" %U\nIcon=tifmrcview\nTerminal=false\nNoDisplay=true\nMimeType={};\n",
-        mimes.iter().cloned().collect::<Vec<_>>().join(";"))
+    format!("[Desktop Entry]\nType=Application\nName={}\nExec=\"{executable}\" %U\nIcon={}\nTerminal=false\nNoDisplay=true\nMimeType={};\n",
+        crate::edition::NAME, crate::edition::BIN, mimes.iter().cloned().collect::<Vec<_>>().join(";"))
 }
 
 fn read_optional(path: &Path) -> Result<String> {
@@ -222,7 +224,7 @@ fn sync_at(
     globs: &str,
     exe: &Path,
 ) -> Result<()> {
-    let record_path = data.join("com.leehow.tifmrcview/plugin-formats.json");
+    let record_path = data.join(crate::edition::APP_ID).join("plugin-formats.json");
     let record = read_optional(&record_path)?;
     let previous: Record = if record.is_empty() {
         Record::default()
@@ -250,12 +252,12 @@ fn sync_at(
         write_changed(&record_path, Some(&serde_json::to_string(&journal)?))?;
     }
     let mime_dir = data.join("mime");
-    let xml_path = mime_dir.join("packages/tifmrcview-plugins.xml");
+    let xml_path = mime_dir.join(format!("packages/{}-plugins.xml", crate::edition::BIN));
     let xml = mime_xml(&types);
     let mime_changed = write_changed(&xml_path, (!types.is_empty()).then_some(xml.as_str()))?;
     let thumb = thumbnailer(&mimes);
     write_changed(
-        &data.join("thumbnailers/tifmrcview-plugins.thumbnailer"),
+        &data.join(format!("thumbnailers/{}-plugins.thumbnailer", crate::edition::BIN)),
         (!mimes.is_empty()).then_some(thumb.as_str()),
     )?;
     if !apps.is_empty() {

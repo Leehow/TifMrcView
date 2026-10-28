@@ -13,11 +13,16 @@ case "$target" in
   *) echo "Unsupported Quick Look target: $target" >&2; exit 1;;
 esac
 mkdir -p "$out/module-cache"
+# TMV_EDITION=pro (build-thumbnails.mjs --pro): extensions must sit under Pro's bundle id.
+app_id=com.leehow.tifmrcview; features=()
+if [ "${TMV_EDITION:-standard}" = pro ]; then app_id=com.leehow.tifmrcview.pro; features=(--features tmv-thumbnail-ffi/pro); fi
+export TMV_APP_ID="$app_id"
+sed "s|/com.leehow.tifmrcview/|/$app_id/|" packaging/macos/extension.entitlements > "$out/extension.entitlements"
 python3 scripts/quicklook-plist.py App "$out/Info.plist"
 export CLANG_MODULE_CACHE_PATH="$out/module-cache"
 export SWIFT_MODULECACHE_PATH="$out/module-cache"
 for arch in "${arches[@]}"; do
-  cargo build --offline --manifest-path src-tauri/Cargo.toml --release --target "$arch-apple-darwin" -p tmv-thumbnail-ffi
+  cargo build --offline --manifest-path src-tauri/Cargo.toml --release --target "$arch-apple-darwin" -p tmv-thumbnail-ffi ${features[@]+"${features[@]}"}
 done
 for kind in Thumbnail Preview; do
   bundle="$out/Tmv${kind}.appex"
@@ -40,6 +45,6 @@ for kind in Thumbnail Preview; do
   if [ "${#binaries[@]}" = 1 ]; then cp "${binaries[0]}" "$bundle/Contents/MacOS/Tmv$kind"
   else lipo -create "${binaries[@]}" -output "$bundle/Contents/MacOS/Tmv$kind"; fi
   python3 scripts/quicklook-plist.py "$kind" "$bundle/Contents/Info.plist"
-  codesign --force --sign - --entitlements packaging/macos/extension.entitlements "$bundle"
+  codesign --force --sign - --entitlements "$out/extension.entitlements" "$bundle"
   codesign --verify --strict "$bundle"
 done

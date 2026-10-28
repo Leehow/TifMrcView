@@ -55,6 +55,8 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 [features]
 default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls"]
+# TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
+pro = []
 # MP4 recorder plugin (OpenH264, adds about 1 MB).
 recorder = ["desktop", "dep:openh264"]
 

@@ -6,6 +6,8 @@
 // plus <out-dir>/latest.json (Tauri updater feed) and
 // <out-dir>/downloads.json (read by the download page). DIRECT_BASE_URL or
 // the final argument also writes latest-direct.json for the direct host.
+// TMV_EDITION=pro names the files TifMrcViewPro_* and writes latest-pro.json,
+// latest-pro-direct.json and downloads-pro.json instead, in the same folder.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +19,9 @@ if (!src || !out || !version || !baseUrl) {
 }
 const base = baseUrl.replace(/\/+$/, "");
 const directBase = directBaseUrl?.replace(/\/+$/, "");
+const pro = process.env.TMV_EDITION === "pro";
+const product = pro ? "TifMrcViewPro" : "TifMrcView";
+const feedName = (name) => (pro ? name.replace(/^(latest|downloads)/, "$1-pro") : name);
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -28,12 +33,12 @@ function walk(dir) {
 // Each kind: how to recognise the bundle, its published name, and where it
 // goes in latest.json / downloads.json.
 const kinds = [
-  { id: "dmg", re: /\.dmg$/, name: `TifMrcView_${version}_universal.dmg`, os: "mac", label: "下载 .dmg（通用）", note: "Apple 芯片与 Intel 通用，macOS 10.15+" },
-  { id: "app", re: /\.app\.tar\.gz$/, name: `TifMrcView_${version}_universal.app.tar.gz`, updater: ["darwin-aarch64", "darwin-x86_64", "darwin-aarch64-app", "darwin-x86_64-app"] },
-  { id: "nsis", re: /-setup\.exe$/, name: `TifMrcView_${version}_x64-setup.exe`, os: "win", label: "下载安装程序", note: "Windows 10 / 11，64 位", updater: ["windows-x86_64", "windows-x86_64-nsis"] },
-  { id: "deb", re: /\.deb$/, name: `TifMrcView_${version}_amd64.deb`, os: "linux", label: ".deb", note: "Debian / Ubuntu", updater: ["linux-x86_64-deb"] },
-  { id: "rpm", re: /\.rpm$/, name: `TifMrcView-${version}-1.x86_64.rpm`, os: "linux", label: ".rpm", note: "Fedora / openSUSE", updater: ["linux-x86_64-rpm"] },
-  { id: "appimage", re: /\.AppImage$/, name: `TifMrcView_${version}_amd64.AppImage`, os: "linux", label: ".AppImage", note: "其它发行版，免安装", updater: ["linux-x86_64", "linux-x86_64-appimage"] },
+  { id: "dmg", re: /\.dmg$/, name: `${product}_${version}_universal.dmg`, os: "mac", label: "下载 .dmg（通用）", note: "Apple 芯片与 Intel 通用，macOS 10.15+" },
+  { id: "app", re: /\.app\.tar\.gz$/, name: `${product}_${version}_universal.app.tar.gz`, updater: ["darwin-aarch64", "darwin-x86_64", "darwin-aarch64-app", "darwin-x86_64-app"] },
+  { id: "nsis", re: /-setup\.exe$/, name: `${product}_${version}_x64-setup.exe`, os: "win", label: "下载安装程序", note: "Windows 10 / 11，64 位", updater: ["windows-x86_64", "windows-x86_64-nsis"] },
+  { id: "deb", re: /\.deb$/, name: `${product}_${version}_amd64.deb`, os: "linux", label: ".deb", note: "Debian / Ubuntu", updater: ["linux-x86_64-deb"] },
+  { id: "rpm", re: /\.rpm$/, name: `${product}-${version}-1.x86_64.rpm`, os: "linux", label: ".rpm", note: "Fedora / openSUSE", updater: ["linux-x86_64-rpm"] },
+  { id: "appimage", re: /\.AppImage$/, name: `${product}_${version}_amd64.AppImage`, os: "linux", label: ".AppImage", note: "其它发行版，免安装", updater: ["linux-x86_64", "linux-x86_64-appimage"] },
 ];
 
 const files = walk(src);
@@ -62,15 +67,15 @@ for (const k of kinds) {
 }
 
 const date = new Date().toISOString();
-fs.writeFileSync(path.join(out, "downloads.json"), JSON.stringify({ version, date: date.slice(0, 10), files: downloads }, null, 2) + "\n");
+fs.writeFileSync(path.join(out, feedName("downloads.json")), JSON.stringify({ version, date: date.slice(0, 10), files: downloads }, null, 2) + "\n");
 if (Object.keys(platforms).length) {
   const feed = { version, notes, pub_date: date.replace(/\.\d+Z$/, "Z"), platforms };
-  fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(feed, null, 2) + "\n");
+  fs.writeFileSync(path.join(out, feedName("latest.json")), JSON.stringify(feed, null, 2) + "\n");
   if (directBase) {
     const directPlatforms = Object.fromEntries(Object.entries(platforms).map(([key, entry]) => [
       key, { ...entry, url: directBase + entry.url.slice(base.length) },
     ]));
-    fs.writeFileSync(path.join(out, "latest-direct.json"), JSON.stringify({ ...feed, platforms: directPlatforms }, null, 2) + "\n");
+    fs.writeFileSync(path.join(out, feedName("latest-direct.json")), JSON.stringify({ ...feed, platforms: directPlatforms }, null, 2) + "\n");
   }
 } else {
   console.warn("no .sig files: updater feed not written (is TAURI_SIGNING_PRIVATE_KEY set?)");

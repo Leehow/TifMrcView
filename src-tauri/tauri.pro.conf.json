@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TifMrcView Pro",
+  "mainBinaryName": "tifmrcview-pro",
+  "identifier": "com.leehow.tifmrcview.pro",
+  "build": {
+    "features": ["pro"],
+    "beforeBundleCommand": "node scripts/build-thumbnails.mjs --pro"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "TifMrcView Pro",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480,
+        "dragDropEnabled": true,
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "shortDescription": "TIFF / MRC viewer with 3D and segmentation",
+    "longDescription": "TifMrcView Pro is TifMrcView plus advanced tools: 3D volume rendering and click-to-segment.",
+    "windows": {
+      "nsis": {
+        "installerHooks": "target/pro/thumbnail-hooks.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": null,
+          "/usr/share/thumbnailers/tifmrcview.thumbnailer": null,
+          "/usr/share/mime/packages/tifmrcview-pro-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
+          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/mime/packages/tifmrcview-mrc.xml": null,
+          "/usr/share/thumbnailers/tifmrcview.thumbnailer": null,
+          "/usr/share/mime/packages/tifmrcview-pro-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
+          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://dl.tifmrcview.com:9443/tifmrcview/latest-pro-direct.json",
+        "https://tifmrcview.com/tifmrcview/latest-pro.json"
+      ]
+    }
+  }
+}

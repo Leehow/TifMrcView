@@ -30,5 +30,5 @@ pub fn user_dir() -> Option<PathBuf> {
     };
     #[cfg(not(target_os = "macos"))]
     let data = dirs::data_dir()?;
-    Some(data.join("com.leehow.tifmrcview/plugins"))
+    Some(data.join(crate::edition::APP_ID).join("plugins"))
 }
