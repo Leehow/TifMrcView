@@ -96,6 +96,58 @@ pub struct Material {
     pub locked: bool,
 }
 
+/// Euclidean distance from every pixel to the nearest `true` one
+/// (Felzenszwalb & Huttenlocher); a large value when there is none.
+fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
+    const INF: f32 = 1e20;
+    let mut g: Vec<f32> = mask.iter().map(|&b| if b { 0.0 } else { INF }).collect();
+    let n = w.max(h);
+    let (mut f, mut d, mut v, mut z) = (vec![0f32; n], vec![0f32; n], vec![0usize; n], vec![0f32; n + 1]);
+    // Squared distances along one line of `len` samples.
+    let mut pass = |f: &mut [f32], d: &mut [f32], len: usize| {
+        let mut k = 0;
+        v[0] = 0;
+        z[0] = -INF;
+        z[1] = INF;
+        let cross = |f: &[f32], q: usize, p: usize| ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
+        for q in 1..len {
+            let mut s = cross(f, q, v[k]);
+            // z[0] is -INF, so this stops at k = 0.
+            while s <= z[k] {
+                k -= 1;
+                s = cross(f, q, v[k]);
+            }
+            k += 1;
+            v[k] = q;
+            z[k] = s;
+            z[k + 1] = INF;
+        }
+        k = 0;
+        for (q, out) in d.iter_mut().enumerate().take(len) {
+            while z[k + 1] < q as f32 {
+                k += 1;
+            }
+            let p = v[k];
+            *out = (q as f32 - p as f32).powi(2) + f[p];
+        }
+    };
+    for x in 0..w {
+        for y in 0..h {
+            f[y] = g[y * w + x];
+        }
+        pass(&mut f, &mut d, h);
+        for y in 0..h {
+            g[y * w + x] = d[y];
+        }
+    }
+    for y in 0..h {
+        f[..w].copy_from_slice(&g[y * w..(y + 1) * w]);
+        pass(&mut f, &mut d, w);
+        g[y * w..(y + 1) * w].copy_from_slice(&d[..w]);
+    }
+    g.iter().map(|&x| if x >= INF / 2.0 { (w + h) as f32 } else { x.sqrt() }).collect()
+}
+
 /// Key of the materials line in the label file's ImageJ description.
 const MATERIALS_KEY: &str = "tmv_materials=";
 
@@ -521,6 +573,85 @@ impl Labels {
     }
 
     /// Clears label `k` everywhere.
+    /// Fills the closed polygon `pts` (image coordinates) on slice `z`; a
+    /// pixel is inside when its centre is (even-odd rule). Label 0 erases.
+    pub fn polygon(&mut self, z: usize, pts: &[[f32; 2]], label: u16, guard: u16) -> Vec<usize> {
+        if z >= self.d || pts.len() < 3 {
+            return vec![];
+        }
+        let (w, h) = (self.w, self.h);
+        let locked = self.locked();
+        let mut edit = vec![];
+        let s = Self::touch(&mut self.slices, &mut edit, z, w * h);
+        let mut xs: Vec<f32> = vec![];
+        for y in 0..h {
+            let yc = y as f32 + 0.5;
+            xs.clear();
+            for (i, a) in pts.iter().enumerate() {
+                let b = pts[(i + 1) % pts.len()];
+                if (a[1] <= yc) != (b[1] <= yc) {
+                    xs.push(a[0] + (yc - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                }
+            }
+            xs.sort_by(f32::total_cmp);
+            for p in xs.chunks_exact(2) {
+                // Pixels whose centre x + 0.5 lies in p[0]..p[1].
+                let x0 = (p[0] - 0.5).ceil().max(0.0) as usize;
+                let x1 = ((p[1] - 0.5).ceil().max(0.0) as usize).min(w);
+                for v in &mut s[y * w + x0.min(x1)..y * w + x1] {
+                    if allowed(*v, label, guard, &locked) {
+                        *v = label;
+                    }
+                }
+            }
+        }
+        self.commit(edit)
+    }
+
+    /// Fills the slices between drawn slices of `label` by blending the
+    /// signed distance maps of the nearest drawn slice above and below
+    /// (shape-based interpolation, like Amira's Interpolate).
+    pub fn interpolate(&mut self, label: u16, guard: u16) -> Vec<usize> {
+        use rayon::prelude::*;
+        let (w, h) = (self.w, self.h);
+        let keys: Vec<usize> = (0..self.d)
+            .filter(|&z| self.slices[z].as_ref().is_some_and(|s| s.contains(&label)))
+            .collect();
+        let sdf = |z: usize| {
+            let s = self.slices[z].as_ref().unwrap();
+            let inside: Vec<bool> = s.iter().map(|&v| v == label).collect();
+            let outside: Vec<bool> = inside.iter().map(|&b| !b).collect();
+            let (a, b) = (edt(&inside, w, h), edt(&outside, w, h));
+            a.iter().zip(&b).map(|(a, b)| a - b).collect::<Vec<f32>>()
+        };
+        let maps: Vec<Vec<f32>> = keys.par_iter().map(|&z| sdf(z)).collect();
+        // New pixels of each in-between slice.
+        let fills: Vec<(usize, Vec<usize>)> = keys
+            .windows(2)
+            .zip(maps.windows(2))
+            .filter(|(k, _)| k[1] - k[0] > 1)
+            .flat_map(|(k, m)| (k[0] + 1..k[1]).map(move |z| (z, k[0], k[1], &m[0], &m[1])))
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|(z, a, b, ma, mb)| {
+                let t = (z - a) as f32 / (b - a) as f32;
+                let px = ma.iter().zip(mb).enumerate().filter(|(_, (x, y))| (1.0 - t) * **x + t * **y < 0.0).map(|(i, _)| i).collect();
+                (z, px)
+            })
+            .collect();
+        let locked = self.locked();
+        let mut edit = vec![];
+        for (z, px) in fills {
+            let s = Self::touch(&mut self.slices, &mut edit, z, w * h);
+            for i in px {
+                if allowed(s[i], label, guard, &locked) {
+                    s[i] = label;
+                }
+            }
+        }
+        self.commit(edit)
+    }
+
     pub fn delete_label(&mut self, k: u16) -> Vec<usize> {
         let n = self.w * self.h;
         let mut edit = vec![];
@@ -708,6 +839,45 @@ mod tests {
         l.stroke(0, &[[2.5, 2.5]], 3.0, 0, 0);
         assert_eq!(l.get(2, 2, 0), 1);
         assert_eq!(l.get(4, 2, 0), 0);
+    }
+
+    #[test]
+    fn distance_transform() {
+        let mut m = vec![false; 7 * 5];
+        m[2 * 7 + 3] = true;
+        let d = edt(&m, 7, 5);
+        assert_eq!(d[2 * 7 + 3], 0.0);
+        assert_eq!(d[2 * 7 + 6], 3.0);
+        assert!((d[0] - 13f32.sqrt()).abs() < 1e-5);
+        assert_eq!(edt(&[false; 4], 2, 2), vec![4.0; 4]);
+    }
+
+    #[test]
+    fn polygon_fills_inside() {
+        let mut l = Labels::new(10, 10, 1);
+        l.polygon(0, &[[2.0, 2.0], [8.0, 2.0], [8.0, 6.0], [2.0, 6.0]], 3, 0);
+        assert_eq!(l.counts()[3], 24);
+        assert_eq!(l.get(2, 2, 0), 3);
+        assert_eq!(l.get(7, 5, 0), 3);
+        assert_eq!(l.get(8, 2, 0), 0);
+        assert_eq!(l.get(2, 6, 0), 0);
+        l.polygon(0, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], 0, 0);
+        assert!(l.is_empty());
+    }
+
+    #[test]
+    fn interpolation_morphs_between_slices() {
+        let mut l = Labels::new(30, 30, 5);
+        // Small square on slice 0, big square on slice 4.
+        l.polygon(0, &[[10.0, 10.0], [14.0, 10.0], [14.0, 14.0], [10.0, 14.0]], 1, 0);
+        l.polygon(4, &[[6.0, 6.0], [22.0, 6.0], [22.0, 22.0], [6.0, 22.0]], 1, 0);
+        l.stroke(2, &[[28.5, 28.5]], 0.5, 2, 0);
+        let zs = l.interpolate(1, 0);
+        assert_eq!(zs, vec![1, 2, 3]);
+        let n = |z: usize| (0..900).filter(|&i| l.get(i % 30, i / 30, z) == 1).count();
+        assert!(n(0) < n(1) && n(1) < n(2) && n(2) < n(3) && n(3) < n(4), "{:?}", (0..5).map(n).collect::<Vec<_>>());
+        assert_eq!(l.get(28, 28, 2), 2, "other labels stay");
+        assert!(l.interpolate(1, 0).is_empty(), "nothing left to fill");
     }
 
     #[test]

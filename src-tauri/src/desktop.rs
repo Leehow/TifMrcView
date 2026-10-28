@@ -172,6 +172,8 @@ enum LabelOp {
     Wand { x: usize, y: usize, z: usize, c: usize, t: usize, tol: f32, label: u16, guard: u16, three_d: bool },
     Threshold { z0: usize, z1: usize, c: usize, t: usize, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize },
     Watershed { z0: usize, z1: usize, c: usize, t: usize },
+    Polygon { z: usize, pts: Vec<[f32; 2]>, label: u16, guard: u16 },
+    Interpolate { label: u16, guard: u16 },
     Delete { label: u16 },
     Materials { materials: Vec<crate::labels::Material> },
     Undo,
@@ -255,6 +257,8 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
                 l.threshold(&values(c, t), z0..z1, lo, hi, label, guard, split, min_size)?
             }
             LabelOp::Watershed { z0, z1, c, t } => l.watershed(&values(c, t), z0..z1)?,
+            LabelOp::Polygon { z, pts, label, guard } => l.polygon(z, &pts, label, guard),
+            LabelOp::Interpolate { label, guard } => l.interpolate(label, guard),
             LabelOp::Delete { label } => l.delete_label(label),
             LabelOp::Materials { materials } => {
                 l.set_materials(materials);

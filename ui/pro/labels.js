@@ -22,7 +22,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "brush",     // brush | eraser | wand
+    sub: "brush",     // brush | eraser | lasso | wand
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -34,6 +34,7 @@
     fetching: false,
     hover: null,      // pointer in image pixels
     stroke: null,
+    lasso: null,      // {z, pts, erase} while a lasso is drawn
     busy: false,
     saveTimer: 0,
   };
@@ -57,6 +58,7 @@
     <div class="row" id="lab-tools">
       <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg><span>画笔</span></button>
       <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg><span>橡皮</span></button>
+      <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg><span>套索</span></button>
       <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg><span>魔棒</span></button>
     </div>
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
@@ -66,6 +68,9 @@
       <label title="画笔和魔棒只涂没有标签的地方；橡皮只擦当前标签"><input type="checkbox" id="lab-guard" /> 不覆盖其他标签</label>
     </div>
     <div id="lab-list"></div>
+    <div class="row">
+      <button class="small" id="lab-interp" title="隔几层画一个轮廓，再按这里，把当前标签画过的层之间的层按形状自动补齐">隔层插值</button>
+    </div>
     <div class="row">
       <button class="small" id="lab-new" title="换一个新的标签号继续画">＋ 新标签</button>
       <label><input type="checkbox" id="lab-show" checked /> 显示</label>
@@ -108,7 +113,7 @@
 
   function syncPanel() {
     for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
-    $("lab-size-row").hidden = L.sub === "wand";
+    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso";
     $("lab-tol-row").hidden = L.sub !== "wand";
     $("lab-3d-row").hidden = L.sub !== "wand";
     $("lab-size").value = L.radius;
@@ -121,7 +126,7 @@
     $("lab-guard").checked = L.guard;
     $("lab-show").checked = L.show;
     $("lab-busy").textContent = L.busy ? "处理中…" : "";
-    for (const b of sec.querySelectorAll("#lab-th button, #lab-ws button")) b.disabled = L.busy || !L.token;
+    for (const b of sec.querySelectorAll("#lab-th button, #lab-ws button, #lab-interp")) b.disabled = L.busy || !L.token;
   }
 
   function renderList() {
@@ -330,8 +335,29 @@
       g.drawImage(canvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
       g.restore();
     }
+    if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
+      g.save();
+      g.beginPath();
+      L.lasso.pts.forEach(([x, y], i) => {
+        const [sx, sy] = toScreen(x, y);
+        if (i) g.lineTo(sx, sy);
+        else g.moveTo(sx, sy);
+      });
+      g.closePath();
+      if (!L.lasso.erase) {
+        g.globalAlpha = L.opacity * 0.6;
+        g.fillStyle = `rgb(${colorOf(L.active).join(",")})`;
+        g.fill();
+        g.globalAlpha = 1;
+      }
+      g.setLineDash([5, 4]);
+      g.lineWidth = 1.5;
+      g.strokeStyle = L.lasso.erase ? "#fff" : `rgb(${colorOf(L.active).join(",")})`;
+      g.stroke();
+      g.restore();
+    }
     // Brush outline under the pointer.
-    if (S.tool === "label" && L.sub !== "wand" && L.hover) {
+    if (S.tool === "label" && (L.sub === "brush" || L.sub === "eraser") && L.hover) {
       const [cx, cy] = toScreen(L.hover[0], L.hover[1]);
       g.save();
       g.beginPath();
@@ -398,6 +424,7 @@
       if (st.zs.length || op.kind === "materials") scheduleSave();
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
+      return st;
     } catch (e) {
       toast(String(e), 6000);
     } finally {
@@ -477,6 +504,11 @@
         edit({ kind: "wand", x, y, z: S.z, c: channel(), t: S.t, tol: L.tol * range, label: L.active, guard: L.guard ? L.active : 0, threeD: L.threeD });
         return;
       }
+      if (L.sub === "lasso") {
+        L.lasso = { z: S.z, pts: [p], erase: e.altKey };
+        draw();
+        return;
+      }
       if (!L.slice || L.z !== S.z) return;
       L.stroke = { z: S.z, pts: [p] };
       stampLocal(p[0], p[1]);
@@ -485,9 +517,22 @@
     move(e, p) {
       L.hover = p;
       if (L.stroke) strokeTo(p);
+      if (L.lasso) {
+        const a = L.lasso.pts[L.lasso.pts.length - 1];
+        if (Math.hypot(p[0] - a[0], p[1] - a[1]) * S.view.scale >= 2) L.lasso.pts.push(p);
+      }
       draw();
     },
     up() {
+      const la = L.lasso;
+      L.lasso = null;
+      if (la) {
+        if (la.pts.length < 3) return draw();
+        const pts = la.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
+        const label = la.erase ? 0 : L.active;
+        edit({ kind: "polygon", z: la.z, pts, label, guard: L.guard ? L.active : 0 });
+        return;
+      }
       const st = L.stroke;
       L.stroke = null;
       if (!st) return;
@@ -496,8 +541,8 @@
       const pts = st.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
       edit({ kind: "stroke", z: st.z, pts, radius: L.radius, label, guard });
     },
-    undo() { if (!L.busy && !L.stroke) edit({ kind: "undo" }); },
-    redo() { if (!L.busy && !L.stroke) edit({ kind: "redo" }); },
+    undo() { if (!L.busy && !L.stroke && !L.lasso) edit({ kind: "undo" }); },
+    redo() { if (!L.busy && !L.stroke && !L.lasso) edit({ kind: "redo" }); },
     active(on) {
       btn.classList.toggle("on", on);
       if (!on) {
@@ -554,6 +599,12 @@
   $("lab-3d").addEventListener("change", (e) => { L.threeD = e.target.checked; });
   $("lab-guard").addEventListener("change", (e) => { L.guard = e.target.checked; });
   $("lab-show").addEventListener("change", (e) => { L.show = e.target.checked; draw(); });
+  $("lab-interp").addEventListener("click", async () => {
+    if (!ready()) return;
+    if (!(L.counts[L.active] > 0)) return toast("先用画笔或套索隔几层画出当前标签的轮廓");
+    const st = await edit({ kind: "interpolate", label: L.active, guard: L.guard ? L.active : 0 });
+    if (st) toast(st.zs.length ? `补齐了 ${st.zs.length} 层` : "没有要补的层：当前标签画过的层之间没有空层");
+  });
   $("lab-new").addEventListener("click", () => {
     L.active = Math.max(maxUsed(), L.active) + 1;
     renderList();
