@@ -109,7 +109,7 @@
       ins.title = T('pl_install_tip');
       ins.addEventListener('click', function (e) { e.preventDefault(); launch(ins.href, hint); });
       var a = el('a', 'btn sec', T('pl_download'));
-      a.href = p.file;
+      a.href = '../get/plugins/' + p.file; // counted, then redirected to the zip
       a.setAttribute('download', '');
       act.appendChild(ins);
       act.appendChild(a);
