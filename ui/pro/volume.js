@@ -295,8 +295,10 @@ void main() {
   btn.title = "3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，滚轮缩放，双击复位）";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>';
   btn.disabled = true;
-  // Right after the tool buttons, so it stays visible in narrow windows.
-  $("toolbtns").after(btn);
+  // At the right end of the quick toolbar, after its own separator.
+  const sep = document.createElement("span");
+  sep.className = "sep";
+  $("quickbar").append(sep, btn);
 
   const stage = $("stage");
   const canvas3d = document.createElement("canvas");
