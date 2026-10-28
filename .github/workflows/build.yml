@@ -83,6 +83,7 @@ jobs:
         run: |
           cargo test --features pro --lib edition
           cargo check --features pro
+          cargo test -p tmv-sam
 
       - name: Headless thumbnail core
         working-directory: src-tauri

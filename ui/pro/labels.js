@@ -22,7 +22,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "brush",     // brush | eraser | lasso | wand
+    sub: "brush",     // brush | eraser | lasso | wand | sam
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -35,6 +35,7 @@
     hover: null,      // pointer in image pixels
     stroke: null,
     lasso: null,      // {z, pts, erase} while a lasso is drawn
+    sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null },
     busy: false,
     saveTimer: 0,
   };
@@ -59,6 +60,7 @@
       <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg><span>画笔</span></button>
       <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg><span>橡皮</span></button>
       <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg><span>套索</span></button>
+      <button class="small" data-sub="sam" title="SAM 点选：点一下物体自动分割（Alt+点击标背景，Shift+拖动拉框），回车写进当前标签"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.3L20 9l-4.4 3.8L17 18.5 12 15.6 7 18.5l1.4-5.7L4 9l5.8-.7z"/></svg><span>SAM</span></button>
       <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg><span>魔棒</span></button>
     </div>
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
@@ -66,6 +68,15 @@
     <div class="row">
       <label id="lab-3d-row" title="魔棒沿 Z 方向一起长到相邻的层"><input type="checkbox" id="lab-3d" /> 三维</label>
       <label title="画笔和魔棒只涂没有标签的地方；橡皮只擦当前标签"><input type="checkbox" id="lab-guard" /> 不覆盖其他标签</label>
+    </div>
+    <div id="lab-sam" hidden>
+      <div class="dim" id="lab-sam-text"></div>
+      <div class="dim" id="lab-sam-backend"></div>
+      <div class="row">
+        <button class="small" id="lab-sam-get">下载模型</button>
+        <button class="small" id="lab-sam-apply" title="把预览的分割写进当前标签（回车）">应用</button>
+        <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
+      </div>
     </div>
     <div id="lab-list"></div>
     <div class="row">
@@ -113,7 +124,8 @@
 
   function syncPanel() {
     for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
-    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso";
+    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam";
+    syncSam();
     $("lab-tol-row").hidden = L.sub !== "wand";
     $("lab-3d-row").hidden = L.sub !== "wand";
     $("lab-size").value = L.radius;
@@ -256,6 +268,7 @@
     try {
       const st = await invoke("labels_open", { token });
       if (token !== S.token) return;
+      Object.assign(L.sam, { points: [], box: null, mask: null, z: -1 });
       Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
@@ -335,6 +348,7 @@
       g.drawImage(canvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
       g.restore();
     }
+    drawSam(g);
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
       g.save();
       g.beginPath();
@@ -408,13 +422,17 @@
 
   // ---------- editing ----------
 
-  async function edit(op) {
+  const edit = (op) => editWith("labels_edit", { token: L.token, op });
+
+  /** Runs a label-changing command and takes over the new label state. */
+  async function editWith(cmd, args) {
     if (!L.token || L.error) return;
     const token = L.token;
+    const op = args.op || { kind: cmd };
     L.busy = true;
     syncPanel();
     try {
-      const st = await invoke("labels_edit", { token, op });
+      const st = await invoke(cmd, args);
       if (token !== L.token) return;
       L.counts = st.counts;
       L.slices = st.slices;
@@ -509,6 +527,7 @@
         draw();
         return;
       }
+      if (L.sub === "sam") return samDown(e, p);
       if (!L.slice || L.z !== S.z) return;
       L.stroke = { z: S.z, pts: [p] };
       stampLocal(p[0], p[1]);
@@ -517,6 +536,9 @@
     move(e, p) {
       L.hover = p;
       if (L.stroke) strokeTo(p);
+      if (L.sam.drag) {
+        L.sam.drag.b = p;
+      }
       if (L.lasso) {
         const a = L.lasso.pts[L.lasso.pts.length - 1];
         if (Math.hypot(p[0] - a[0], p[1] - a[1]) * S.view.scale >= 2) L.lasso.pts.push(p);
@@ -524,6 +546,7 @@
       draw();
     },
     up() {
+      if (L.sam.drag) return samUp();
       const la = L.lasso;
       L.lasso = null;
       if (la) {
@@ -571,6 +594,13 @@
     draw();
   });
 
+  // Enter applies the SAM preview, Esc drops it.
+  window.addEventListener("keydown", (e) => {
+    if (S.tool !== "label" || L.sub !== "sam" || e.target.tagName === "INPUT" && e.target.type === "text") return;
+    if (e.key === "Enter" && L.sam.mask) { samApply(); e.preventDefault(); }
+    if (e.key === "Escape" && (L.sam.points.length || L.sam.box)) { samClear(); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   // [ and ] change the brush size.
   window.addEventListener("keydown", (e) => {
     if (S.tool !== "label" || e.ctrlKey || e.metaKey) return;
@@ -582,6 +612,176 @@
     draw();
     e.preventDefault();
   });
+
+  // ---------- SAM click segmentation (labels.rs + sam.rs) ----------
+
+  const samCanvas = document.createElement("canvas");
+  const samCtx = samCanvas.getContext("2d");
+
+  async function samStatus() {
+    try {
+      L.sam.status = await invoke("sam_status");
+    } catch (e) {
+      L.sam.status = { available: false };
+    }
+    syncSam();
+  }
+
+  function syncSam() {
+    const box = $("lab-sam");
+    box.hidden = L.sub !== "sam";
+    if (box.hidden) return;
+    const st = L.sam.status;
+    if (!st) { samStatus(); return; }
+    const ready = st.downloaded;
+    $("lab-sam-get").hidden = ready || !st.available;
+    $("lab-sam-get").disabled = !!L.sam.progress;
+    $("lab-sam-apply").hidden = !ready;
+    $("lab-sam-clear").hidden = !ready;
+    $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
+    let text;
+    if (!st.available) text = "SAM 分割只在 TifMrcView Pro 里有";
+    else if (L.sam.progress) text = `正在下载模型 ${Math.round((L.sam.progress.done / L.sam.progress.total) * 100)}%`;
+    else if (!ready) text = `第一次使用要先下载 SAM 2.1 模型（约 ${Math.round(st.size / 1e6)} MB，只下载一次）`;
+    else if (L.sam.busy) text = st.loaded ? "SAM 计算中…" : "正在加载模型和计算图像特征…";
+    else if (L.sam.mask) text = `预测质量 ${Math.round(L.sam.iou * 100)}%：回车写进当前标签，Alt+点击去掉多余部分`;
+    else text = "点一下要分割的物体；Alt+点击标背景，Shift+拖动拉框";
+    $("lab-sam-text").textContent = text;
+    $("lab-sam-backend").textContent = st.backend && ready ? `后端：${st.backend}` : "";
+  }
+
+  function samClear() {
+    Object.assign(L.sam, { points: [], box: null, drag: null, mask: null, iou: 0 });
+    syncSam();
+    draw();
+  }
+
+  function samDown(e, p) {
+    const st = L.sam.status;
+    if (!st || !st.downloaded) return toast("请先在标签面板里下载 SAM 模型");
+    if (L.sam.busy) return;
+    if (L.sam.z !== S.z) { samClear(); L.sam.z = S.z; }
+    if (e.shiftKey) {
+      L.sam.drag = { a: p, b: p };
+      return;
+    }
+    L.sam.points.push({ x: p[0], y: p[1], positive: !e.altKey });
+    samRun();
+  }
+
+  function samUp() {
+    const d = L.sam.drag;
+    L.sam.drag = null;
+    if (Math.abs(d.b[0] - d.a[0]) < 2 || Math.abs(d.b[1] - d.a[1]) < 2) return draw();
+    L.sam.box = [Math.min(d.a[0], d.b[0]), Math.min(d.a[1], d.b[1]), Math.max(d.a[0], d.b[0]), Math.max(d.a[1], d.b[1])];
+    samRun();
+  }
+
+  async function samRun() {
+    const c = S.chans[channel()];
+    const req = {
+      token: S.token, z: S.z, c: channel(), t: S.t,
+      lo: c.min ?? 0, hi: c.max ?? 1,
+      points: L.sam.points, bbox: L.sam.box,
+    };
+    L.sam.busy = true;
+    syncSam();
+    draw();
+    try {
+      const buf = await invoke("sam_predict", { req });
+      if (req.token !== S.token || req.z !== S.z) return;
+      const dv = new DataView(buf);
+      const w = dv.getUint32(0, true), h = dv.getUint32(4, true);
+      L.sam.iou = dv.getFloat32(8, true);
+      L.sam.mask = new Uint8Array(buf, 12, w * h);
+      samPaint(w, h);
+    } catch (e) {
+      toast(String(e), 6000);
+      L.sam.points.pop();
+    } finally {
+      L.sam.busy = false;
+      if (!L.sam.status.loaded) samStatus();
+      syncSam();
+      draw();
+    }
+  }
+
+  function samPaint(w, h) {
+    samCanvas.width = w;
+    samCanvas.height = h;
+    const img = samCtx.createImageData(w, h);
+    const [r, g, b] = colorOf(L.active);
+    const m = L.sam.mask;
+    for (let i = 0; i < m.length; i++) {
+      if (!m[i]) continue;
+      const x = i % w, y = (i / w) | 0;
+      // Edge pixels opaque, inside translucent.
+      const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1 || !m[i - 1] || !m[i + 1] || !m[i - w] || !m[i + w];
+      const o = i * 4;
+      img.data[o] = edge ? 255 : r; img.data[o + 1] = edge ? 255 : g; img.data[o + 2] = edge ? 255 : b;
+      img.data[o + 3] = edge ? 255 : 150;
+    }
+    samCtx.putImageData(img, 0, 0);
+  }
+
+  function drawSam(g) {
+    if (S.tool !== "label" || L.sub !== "sam" || L.sam.z !== S.z && !L.sam.drag) return;
+    const [sx, sy] = toScreen(0, 0);
+    if (L.sam.mask && samCanvas.width === S.info.width) {
+      g.save();
+      g.imageSmoothingEnabled = false;
+      g.drawImage(samCanvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
+      g.restore();
+    }
+    const box = L.sam.drag ? [L.sam.drag.a[0], L.sam.drag.a[1], L.sam.drag.b[0], L.sam.drag.b[1]] : L.sam.box;
+    if (box) {
+      const [ax, ay] = toScreen(box[0], box[1]), [bx, by] = toScreen(box[2], box[3]);
+      g.save();
+      g.setLineDash([5, 4]);
+      g.strokeStyle = "#fff";
+      g.lineWidth = 1.5;
+      g.strokeRect(ax, ay, bx - ax, by - ay);
+      g.restore();
+    }
+    for (const pt of L.sam.points) {
+      const [cx, cy] = toScreen(pt.x, pt.y);
+      g.save();
+      g.beginPath();
+      g.arc(cx, cy, 5, 0, Math.PI * 2);
+      g.fillStyle = pt.positive ? "#2da44e" : "#cf222e";
+      g.fill();
+      g.lineWidth = 1.5;
+      g.strokeStyle = "#fff";
+      g.stroke();
+      g.restore();
+    }
+  }
+
+  async function samApply() {
+    if (!L.sam.mask || L.sam.busy) return;
+    const z = L.sam.z;
+    const st = await editWith("sam_apply", { token: L.token, z, label: L.active, guard: L.guard ? L.active : 0 });
+    if (st) samClear();
+  }
+
+  async function samDownload() {
+    L.sam.progress = { done: 0, total: L.sam.status.size };
+    syncSam();
+    const un = await T.event.listen("sam-download", (ev) => { L.sam.progress = ev.payload; syncSam(); });
+    try {
+      await invoke("sam_download");
+    } catch (e) {
+      toast(String(e), 8000);
+    } finally {
+      un();
+      L.sam.progress = null;
+      await samStatus();
+    }
+  }
+
+  $("lab-sam-get").addEventListener("click", samDownload);
+  $("lab-sam-apply").addEventListener("click", samApply);
+  $("lab-sam-clear").addEventListener("click", samClear);
 
   // ---------- panel controls ----------
 

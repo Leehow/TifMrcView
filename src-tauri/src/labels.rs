@@ -652,6 +652,22 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// Paints `label` (0 erases) wherever `mask` is set on slice `z`.
+    pub fn apply_mask(&mut self, z: usize, mask: &[bool], label: u16, guard: u16) -> Vec<usize> {
+        if z >= self.d || mask.len() != self.w * self.h {
+            return vec![];
+        }
+        let locked = self.locked();
+        let mut edit = vec![];
+        let s = Self::touch(&mut self.slices, &mut edit, z, mask.len());
+        for (v, &m) in s.iter_mut().zip(mask) {
+            if m && allowed(*v, label, guard, &locked) {
+                *v = label;
+            }
+        }
+        self.commit(edit)
+    }
+
     pub fn delete_label(&mut self, k: u16) -> Vec<usize> {
         let n = self.w * self.h;
         let mut edit = vec![];

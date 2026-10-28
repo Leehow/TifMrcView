@@ -17,6 +17,8 @@ pub mod reslice;
 pub mod volume;
 #[cfg(feature = "desktop")]
 mod update;
+#[cfg(feature = "desktop")]
+mod sam;
 pub mod thumb;
 
 #[cfg(feature = "desktop")]

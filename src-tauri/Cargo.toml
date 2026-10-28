@@ -7,7 +7,7 @@ edition = "2021"
 license = "Apache-2.0"
 
 [workspace]
-members = ["thumbnail-ffi", "thumbnail-win"]
+members = ["thumbnail-ffi", "thumbnail-win", "sam"]
 resolver = "2"
 
 [[bin]]
@@ -49,6 +49,8 @@ reqwest = { optional = true, version = "0.13", default-features = false, feature
 rustls = { optional = true, version = "0.23", default-features = false, features = ["ring"] }
 sha2 = "0.10"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# Pro: SAM 2.1 click segmentation on the GPU (wgpu), CPU when there is none.
+tmv-sam = { path = "sam", optional = true, default-features = false, features = ["wgpu", "flex"] }
 # Imaris LZ4 chunks (HDF5 filter 32004).
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
@@ -56,7 +58,7 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls"]
 # TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
-pro = []
+pro = ["dep:tmv-sam"]
 # MP4 recorder plugin (OpenH264, adds about 1 MB).
 recorder = ["desktop", "dep:openh264"]
 
