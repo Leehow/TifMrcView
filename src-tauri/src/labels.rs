@@ -127,6 +127,22 @@ impl Labels {
         n
     }
 
+    /// The most common label of each slice (0 for an empty slice).
+    pub fn slice_labels(&self) -> Vec<u16> {
+        let mut n = vec![0u32; self.max_label() as usize + 1];
+        self.slices
+            .iter()
+            .map(|s| {
+                let Some(s) = s else { return 0 };
+                n.iter_mut().for_each(|c| *c = 0);
+                for &v in s {
+                    n[v as usize] += 1;
+                }
+                (1..n.len()).max_by_key(|&k| n[k]).filter(|&k| n[k] > 0).unwrap_or(0) as u16
+            })
+            .collect()
+    }
+
     /// Mutable slice `z`, remembering its old contents in `edit` first.
     fn touch<'a>(slices: &'a mut [Option<Vec<u16>>], edit: &mut Edit, z: usize, n: usize) -> &'a mut Vec<u16> {
         if !edit.iter().any(|(k, _)| *k == z) {
@@ -675,6 +691,7 @@ mod tests {
         assert_eq!((w, h, d), (4, 4, 2));
         assert_eq!(v[0], 1);
         assert_eq!(v[16 + 3 * 4 + 3], 45, "300 wraps to 45");
+        assert_eq!(l.slice_labels(), vec![1, 0, 300, 0]);
         l.delete_label(300);
         assert_eq!(l.counts().len(), 2);
     }

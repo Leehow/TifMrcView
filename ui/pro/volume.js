@@ -3,6 +3,7 @@
 // Shares app.js globals: S (viewer state), invoke, $.
 (() => {
   const MAX_CHANNELS = 4;
+  const FOVY = 0.7; // vertical field of view of the 3D camera
   // Same order as labels.js, so a label has one colour in 2D and 3D.
   const LABEL_COLORS = window.TifMrcViewPro.LABEL_COLORS;
   const VOXEL_BUDGET = 96 << 20; // all channels together
@@ -262,6 +263,7 @@ void main() {
       this.yaw = 0.6;
       this.pitch = 0.35;
       this.dist = 2.6;
+      this.target = [0, 0, 0]; // point the camera orbits, moved by panning
       this.draw();
     }
 
@@ -344,7 +346,9 @@ void main() {
         this.dist * Math.sin(this.pitch),
         this.dist * Math.cos(this.pitch) * Math.cos(this.yaw),
       ];
-      const vp = mul(perspective(0.7, (w - x0) / h, 0.05, 20), lookAt(eye));
+      const t = this.target;
+      const pan = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0], -t[1], -t[2], 1]);
+      const vp = mul(perspective(FOVY, (w - x0) / h, 0.05, 20), mul(lookAt(eye), pan));
       gl.useProgram(this.prog);
       gl.uniformMatrix4fv(this.u.invViewProj, false, invert(vp));
       gl.uniform3fv(this.u.extent, this.extent());
@@ -367,6 +371,17 @@ void main() {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
+    /// Moves the view by (dx, dy) CSS pixels, so the volume follows the pointer.
+    panBy(dx, dy) {
+      const z = [Math.cos(this.pitch) * Math.sin(this.yaw), Math.sin(this.pitch), Math.cos(this.pitch) * Math.cos(this.yaw)];
+      const x = [z[2], 0, -z[0]];
+      const xl = Math.hypot(...x) || 1;
+      x.forEach((v, i) => (x[i] = v / xl));
+      const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+      const k = (2 * this.dist * Math.tan(FOVY / 2)) / Math.max(1, this.canvas.clientHeight);
+      this.target = this.target.map((v, i) => v - x[i] * dx * k + y[i] * dy * k);
+    }
+
     dispose() {
       this.textures.forEach((t) => this.gl.deleteTexture(t));
       this.textures = [];
@@ -378,7 +393,7 @@ void main() {
   // --- UI: quick toolbar button, overlay canvas and settings panel ---
   const btn = document.createElement("button");
   btn.id = "btn-3d";
-  btn.title = "3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，滚轮缩放，双击复位）";
+  btn.title = "3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，中键或 Shift+拖动平移，滚轮缩放，双击复位）";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>';
   btn.disabled = true;
   // At the right end of the quick toolbar, after its own separator.
@@ -634,17 +649,29 @@ void main() {
 
   // Drag to rotate, wheel to zoom, double-click to reset.
   let drag = null;
+  // Middle button or Shift + left drag pans.
   canvas3d.addEventListener("pointerdown", (e) => {
-    drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch };
+    if (e.button === 1) e.preventDefault();
+    const pan = e.button === 1 || (e.button === 0 && e.shiftKey);
+    drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, pan };
+    canvas3d.style.cursor = pan ? "move" : "";
     canvas3d.setPointerCapture(e.pointerId);
   });
+  canvas3d.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
+  canvas3d.addEventListener("auxclick", (e) => e.preventDefault());
   canvas3d.addEventListener("pointermove", (e) => {
     if (!drag) return;
-    view.yaw = drag.yaw - (e.clientX - drag.x) * 0.01;
-    view.pitch = Math.max(-1.55, Math.min(1.55, drag.pitch + (e.clientY - drag.y) * 0.01));
+    if (drag.pan) {
+      view.panBy(e.clientX - drag.x, e.clientY - drag.y);
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+    } else {
+      view.yaw = drag.yaw - (e.clientX - drag.x) * 0.01;
+      view.pitch = Math.max(-1.55, Math.min(1.55, drag.pitch + (e.clientY - drag.y) * 0.01));
+    }
     view.draw(true);
   });
-  const endDrag = () => { if (drag) { drag = null; view.draw(); } };
+  const endDrag = () => { if (drag) { drag = null; canvas3d.style.cursor = ""; view.draw(); } };
   canvas3d.addEventListener("pointerup", endDrag);
   canvas3d.addEventListener("pointercancel", endDrag);
   canvas3d.addEventListener("wheel", (e) => {

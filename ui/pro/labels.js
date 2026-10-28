@@ -14,6 +14,7 @@
     error: "",
     path: "",
     counts: [],
+    slices: [],       // main label of each slice, for the Z slider marks
     active: 1,
     sub: "brush",     // brush | eraser | wand
     radius: 6,        // brush radius in image pixels
@@ -176,15 +177,16 @@
     try {
       const st = await invoke("labels_open", { token });
       if (token !== S.token) return;
-      Object.assign(L, { token, path: st.path, counts: st.counts, error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
+      Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
-      Object.assign(L, { token, path: "", counts: [], error: `标签文件读取失败：${e}`, z: -1, slice: null });
+      Object.assign(L, { token, path: "", counts: [], slices: [], error: `标签文件读取失败：${e}`, z: -1, slice: null });
     } finally {
       if (L.opening === token) L.opening = 0;
     }
     $("lab-file").textContent = fileText();
     renderList();
+    renderZMarks();
     syncPanel();
     if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
     draw();
@@ -241,6 +243,7 @@
 
   function overlay(g) {
     if (!S.info) return;
+    renderZMarks();
     if (S.axis === "xy" && L.token !== S.token) ensure();
     const ready = S.axis === "xy" && L.token === S.token && !L.error;
     if (ready && L.z !== S.z && (any() || S.tool === "label")) fetchSlice();
@@ -269,6 +272,39 @@
   }
   ext.overlays.push(overlay);
 
+  // ---------- Z slider: which slices hold labels ----------
+
+  // A band under the slider, in each slice's main label colour; the
+  // annotation marks stay above it.
+  const zband = document.createElement("div");
+  zband.id = "zlabels";
+  $("zwrap").appendChild(zband);
+  let zbandKey = "";
+
+  function renderZMarks() {
+    const n = S.info ? S.info.sizeZ : 0;
+    const show = n > 1 && S.axis === "xy" && L.token === S.token && L.slices.length === n;
+    const key = show ? L.slices.join(",") : "";
+    if (key === zbandKey) return;
+    zbandKey = key;
+    zband.textContent = "";
+    if (!show) return;
+    for (let z = 0; z < n; ) {
+      const k = L.slices[z];
+      let e = z + 1;
+      while (e < n && L.slices[e] === k) e++;
+      if (k) {
+        const i = document.createElement("i");
+        i.style.left = `${(z / (n - 1)) * 100}%`;
+        i.style.width = `calc(${((e - 1 - z) / (n - 1)) * 100}% + 4px)`;
+        i.style.background = `rgb(${colorOf(k).join(",")})`;
+        i.title = e - z > 1 ? `标签 Z ${z + 1}–${e}` : `标签 Z ${z + 1}`;
+        zband.appendChild(i);
+      }
+      z = e;
+    }
+  }
+
   // ---------- editing ----------
 
   async function edit(op) {
@@ -280,6 +316,8 @@
       const st = await invoke("labels_edit", { token, op });
       if (token !== L.token) return;
       L.counts = st.counts;
+      L.slices = st.slices;
+      renderZMarks();
       if (st.zs.includes(S.z) || L.z !== S.z) L.z = -1;
       if (st.zs.length) scheduleSave();
       renderList();

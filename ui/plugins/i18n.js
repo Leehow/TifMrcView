@@ -400,7 +400,7 @@ const WORDS = [
   ["MRC 文件头不完整", "Incomplete MRC header", "Unvollständiger MRC-Header", "MRC ヘッダーが不完全です", "Cabecera MRC incompleta", "En-tête MRC incomplet", "Неполный заголовок MRC"],
   ["MRC 数据被截断", "The MRC data is truncated", "MRC-Daten abgeschnitten", "MRC データが途中で切れています", "Datos MRC truncados", "Données MRC tronquées", "Данные MRC обрезаны"],
   // TifMrcView Pro: 3D view.
-  ["3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，滚轮缩放，双击复位）", "3D view: show the Z stack as a volume you can rotate (drag to rotate, scroll to zoom, double-click to reset)", "3D-Ansicht: Z-Stapel als drehbares Volumen (ziehen zum Drehen, scrollen zum Zoomen, Doppelklick zum Zurücksetzen)", "3D 表示：Z スタックを回転できるボリュームとして表示（ドラッグで回転、スクロールでズーム、ダブルクリックでリセット）", "Vista 3D: muestra la pila Z como un volumen giratorio (arrastra para girar, rueda para zoom, doble clic para restablecer)", "Vue 3D : affiche la pile Z comme un volume orientable (glisser pour tourner, molette pour zoomer, double-clic pour réinitialiser)", "3D-вид: Z-стек как вращаемый объём (перетаскивание — вращение, колесо — масштаб, двойной щелчок — сброс)"],
+  ["3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，中键或 Shift+拖动平移，滚轮缩放，双击复位）", "3D view: show the Z stack as a volume you can rotate (drag to rotate, middle button or Shift+drag to pan, scroll to zoom, double-click to reset)", "3D-Ansicht: Z-Stapel als drehbares Volumen (ziehen zum Drehen, mittlere Taste oder Umschalt+Ziehen zum Verschieben, scrollen zum Zoomen, Doppelklick zum Zurücksetzen)", "3D 表示：Z スタックを回転できるボリュームとして表示（ドラッグで回転、中ボタンまたは Shift+ドラッグで移動、スクロールでズーム、ダブルクリックでリセット）", "Vista 3D: muestra la pila Z como un volumen giratorio (arrastra para girar, botón central o Mayús+arrastrar para desplazar, rueda para zoom, doble clic para restablecer)", "Vue 3D : affiche la pile Z comme un volume orientable (glisser pour tourner, bouton du milieu ou Maj+glisser pour déplacer, molette pour zoomer, double-clic pour réinitialiser)", "3D-вид: Z-стек как вращаемый объём (перетаскивание — вращение, средняя кнопка или Shift+перетаскивание — сдвиг, колесо — масштаб, двойной щелчок — сброс)"],
   ["显示方式", "Rendering", "Darstellung", "表示方法", "Representación", "Rendu", "Отображение"],
   ["最大强度投影", "Maximum intensity", "Maximumprojektion", "最大値投影", "Máxima intensidad", "Intensité maximale", "Максимальная проекция"],
   ["半透明", "Translucent", "Durchscheinend", "半透明", "Translúcido", "Translucide", "Полупрозрачно"],
@@ -464,6 +464,8 @@ const WORDS = [
 const PATTERNS = [
   [/^(\d+) × (\d+) × (\d+) 体素 · ([\d.]+) 秒$/, "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 Voxel · $4 s", "$1 × $2 × $3 ボクセル · $4 秒", "$1 × $2 × $3 vóxeles · $4 s", "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 вокселей · $4 с"],
   [/^(-?[\d.e+-]+) σ · 平均 (-?[\d.e+-]+) · σ (-?[\d.e+-]+)$/, "$1 σ · mean $2 · σ $3", "$1 σ · Mittel $2 · σ $3", "$1 σ · 平均 $2 · σ $3", "$1 σ · media $2 · σ $3", "$1 σ · moyenne $2 · σ $3", "$1 σ · среднее $2 · σ $3"],
+  [/^标签 Z (\d+)–(\d+)$/, "Labels Z $1–$2", "Labels Z $1–$2", "ラベル Z $1–$2", "Etiquetas Z $1–$2", "Étiquettes Z $1–$2", "Метки Z $1–$2"],
+  [/^标签 Z (\d+)$/, "Labels Z $1", "Labels Z $1", "ラベル Z $1", "Etiquetas Z $1", "Étiquettes Z $1", "Метки Z $1"],
   [/^标签 (\d+)$/, "Label $1", "Label $1", "ラベル $1", "Etiqueta $1", "Étiquette $1", "Метка $1"],
   [/^([\d,]+) 像素$/, "$1 px", "$1 px", "$1 px", "$1 px", "$1 px", "$1 пикс."],
   [/^([\d,]+) 像素 · (.+)$/, "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 пикс. · $2"],

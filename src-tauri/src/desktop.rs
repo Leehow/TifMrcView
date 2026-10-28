@@ -158,6 +158,8 @@ struct LabelsState {
     path: String,
     /// Voxels per label, indexed by label.
     counts: Vec<u64>,
+    /// Main label of each slice (0 = none), for the marks on the Z slider.
+    slices: Vec<u16>,
     /// Slices that changed.
     zs: Vec<usize>,
 }
@@ -203,7 +205,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
     prune_labels(&state);
     if let Ok(e) = labels_entry(&state, token) {
         let e = e.lock().unwrap();
-        return Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), zs: vec![] });
+        return Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), slices: e.labels.slice_labels(), zs: vec![] });
     }
     let img = state.current.lock().unwrap().values().find(|i| i.token == token).cloned().ok_or("stale")?;
     let entry = blocking(move || {
@@ -217,7 +219,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
         Ok(crate::labels::Entry { labels, path })
     })
     .await?;
-    let out = LabelsState { path: entry.path.clone(), counts: entry.labels.counts(), zs: vec![] };
+    let out = LabelsState { path: entry.path.clone(), counts: entry.labels.counts(), slices: entry.labels.slice_labels(), zs: vec![] };
     state.labels.lock().unwrap().entry(token).or_insert_with(|| Arc::new(Mutex::new(entry)));
     Ok(out)
 }
@@ -250,7 +252,7 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
             LabelOp::Undo => l.undo(),
             LabelOp::Redo => l.redo(),
         };
-        Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), zs })
+        Ok(LabelsState { path: e.path.clone(), counts: e.labels.counts(), slices: e.labels.slice_labels(), zs })
     })
     .await
 }
