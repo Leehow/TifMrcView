@@ -412,7 +412,7 @@
       if (k && !hidden(k)) {
         const i = document.createElement("i");
         i.style.left = `${(z / (n - 1)) * 100}%`;
-        i.style.width = `calc(${((e - 1 - z) / (n - 1)) * 100}% + 4px)`;
+        i.style.width = `calc(${((e - 1 - z) / (n - 1)) * 100}% + 6px)`;
         i.style.background = `rgb(${colorOf(k).join(",")})`;
         i.title = `${nameOf(k)} · ` + (e - z > 1 ? `Z ${z + 1}–${e}` : `Z ${z + 1}`);
         zband.appendChild(i);

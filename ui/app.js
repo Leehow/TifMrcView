@@ -2071,7 +2071,7 @@ function updateZMarks() {
     const f0 = a.z / (n - 1);
     const f1 = (a.z1 ?? a.z) / (n - 1);
     i.style.left = `${f0 * 100}%`;
-    i.style.width = `calc(${(f1 - f0) * 100}% + 4px)`;
+    i.style.width = `calc(${(f1 - f0) * 100}% + 6px)`;
     i.style.background = a.color;
     box.append(i);
   }

@@ -311,8 +311,8 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 /* Z slider with the Z ranges that carry annotations marked above the track. */
 #zwrap { position: relative; flex: 1; display: flex; align-items: center; }
 #zwrap input { flex: 1; width: 100%; margin: 0; }
-#zmarks { position: absolute; left: 8px; right: 8px; top: -3px; height: 4px; pointer-events: none; }
-#zmarks i { position: absolute; top: 0; height: 4px; margin-left: -2px; border-radius: 2px; }
+#zmarks { position: absolute; left: 8px; right: 8px; top: -5px; height: 6px; pointer-events: none; }
+#zmarks i { position: absolute; top: 0; height: 6px; min-width: 6px; margin-left: -3px; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3); }
 #tgroup { display: flex; align-items: center; gap: 8px; flex: 0 0 30%; }
 #zlabel, #tlabel { min-width: 64px; font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }

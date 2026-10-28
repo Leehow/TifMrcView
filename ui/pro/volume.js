@@ -25,8 +25,10 @@ uniform sampler3D vol[${MAX_CHANNELS}];
 uniform vec3 color[${MAX_CHANNELS}];
 uniform int nch;
 uniform int mode;         // 0 MIP, 1 translucent, 2 surface
-uniform float threshold;  // level: surface level, or where MIP / translucent start
-uniform float upper;      // where MIP / translucent reach full brightness
+// Per channel: the levels set on channel 0's histogram, moved to the same
+// number of standard deviations above each channel's own mean.
+uniform float threshold[${MAX_CHANNELS}]; // surface level, or where MIP / translucent start
+uniform float upper[${MAX_CHANNELS}];     // where MIP / translucent reach full brightness
 uniform float opacity;
 uniform float brightness;
 uniform int steps;
@@ -119,7 +121,7 @@ void main() {
       float a1 = 0.0;
       for (int c = 0; c < ${MAX_CHANNELS}; c++) {
         if (c >= nch) break;
-        float v = clamp((sampleCh(c, tc) - threshold) / max(upper - threshold, 1e-3), 0.0, 1.0);
+        float v = clamp((sampleCh(c, tc) - threshold[c]) / max(upper[c] - threshold[c], 1e-3), 0.0, 1.0);
         col += color[c] * v;
         a1 = max(a1, smoothstep(0.0, 1.0, v));
       }
@@ -130,7 +132,7 @@ void main() {
     } else {
       for (int c = 0; c < ${MAX_CHANNELS}; c++) {
         if (c >= nch) break;
-        if (sampleCh(c, tc) > threshold) {
+        if (sampleCh(c, tc) > threshold[c]) {
           vec3 g = vec3(
             sampleCh(c, tc + vec3(texel.x, 0, 0)) - sampleCh(c, tc - vec3(texel.x, 0, 0)),
             sampleCh(c, tc - vec3(0, texel.y, 0)) - sampleCh(c, tc + vec3(0, texel.y, 0)),
@@ -150,7 +152,7 @@ void main() {
   if (mode == 0) {
     base = vec3(0.0);
     for (int c = 0; c < ${MAX_CHANNELS}; c++) {
-      if (c < nch) base += color[c] * clamp((mx[c] - threshold) / max(upper - threshold, 1e-3), 0.0, 1.0);
+      if (c < nch) base += color[c] * clamp((mx[c] - threshold[c]) / max(upper[c] - threshold[c], 1e-3), 0.0, 1.0);
     }
     base *= brightness;
   } else if (mode == 1) {
@@ -592,8 +594,9 @@ void main() { outColor = vec4(1.0); }`;
       gl.uniform1i(this.u.nch, this.textures.length);
       gl.uniform1i(this.u.mode, s.mode);
       const [lo, hi] = s.levels[s.mode];
-      gl.uniform1f(this.u.threshold, lo);
-      gl.uniform1f(this.u.upper, hi);
+      const [thr, upp] = this.levelsPerChannel(lo, hi);
+      gl.uniform1fv(this.u.threshold, thr);
+      gl.uniform1fv(this.u.upper, upp);
       gl.uniform1f(this.u.opacity, s.opacity);
       gl.uniform1f(this.u.brightness, s.brightness);
       gl.uniform1i(this.u.hasLabels, this.hasLabels && s.showLabels ? 1 : 0);
@@ -607,6 +610,24 @@ void main() { outColor = vec4(1.0); }`;
       this.colors.forEach((rgb, i) => cols.set(rgb.map((x) => x / 255), i * 3));
       gl.uniform3fv(this.uColor, cols);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    /// Levels for each channel: channel 0 takes `lo`/`hi` as they are; the
+    /// others the same distance from their mean in their own standard
+    /// deviations, so a dim or sparse channel is not cut off by levels
+    /// chosen on a bright one. `this.stats` holds {m, sd} per channel in
+    /// 0..1 units before inverting.
+    levelsPerChannel(lo, hi) {
+      const thr = new Float32Array(MAX_CHANNELS).fill(lo), upp = new Float32Array(MAX_CHANNELS).fill(hi);
+      const st = (this.stats || []).map((x) => ({ m: this.settings.invert ? 1 - x.m : x.m, sd: x.sd })), s0 = st[0];
+      if (!s0 || !(s0.sd > 1e-3)) return [thr, upp];
+      const c01 = (x) => Math.max(0, Math.min(1, x));
+      for (let c = 1; c < Math.min(st.length, MAX_CHANNELS); c++) {
+        if (!(st[c] && st[c].sd > 1e-3)) continue;
+        thr[c] = c01(st[c].m + ((lo - s0.m) / s0.sd) * st[c].sd);
+        upp[c] = Math.max(c01(st[c].m + ((hi - s0.m) / s0.sd) * st[c].sd), thr[c] + 0.002);
+      }
+      return [thr, upp];
     }
 
     /// Moves the view by (dx, dy) CSS pixels, so the volume follows the pointer.
@@ -731,6 +752,23 @@ void main() { outColor = vec4(1.0); }`;
     const mean = s1 / Math.max(1, n);
     const sd = Math.sqrt(Math.max(0, s2 / Math.max(1, n) - mean * mean));
     hist = { counts, min, max, mean, sd };
+    // Mean and spread of every channel (0..1, before inverting), for per-channel levels.
+    view.stats = vol.chans.slice(0, MAX_CHANNELS).map((ch, i) => {
+      const k = i === 0 ? counts : view.gpu ? view.shownHistogram(i, 256) : (() => {
+        const h = new Float64Array(256);
+        for (const v of ch.data) h[v]++;
+        return h;
+      })();
+      let n = 0, a = 0, b = 0;
+      for (let j = 0; j < 256; j++) {
+        const x = j / 255;
+        n += k[j];
+        a += k[j] * x;
+        b += k[j] * x * x;
+      }
+      const m = a / Math.max(1, n);
+      return { m, sd: Math.sqrt(Math.max(0, b / Math.max(1, n) - m * m)) };
+    });
   }
 
   // With invert on, 0..1 runs from the brightest value down to the darkest.
