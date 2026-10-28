@@ -414,6 +414,10 @@ const WORDS = [
   ["正在读取整个 Z 堆栈…", "Reading the whole Z stack…", "Ganzer Z-Stapel wird gelesen…", "Z スタック全体を読み込み中…", "Leyendo toda la pila Z…", "Lecture de toute la pile Z…", "Чтение всего Z-стека…"],
   ["这张图只有一层，没有三维数据", "This image has a single slice, so there is no 3D data", "Dieses Bild hat nur eine Ebene, keine 3D-Daten", "この画像は 1 枚だけで、3D データがありません", "Esta imagen tiene una sola capa; no hay datos 3D", "Cette image n'a qu'une couche, pas de données 3D", "В изображении один слой, 3D-данных нет"],
   ["这台电脑的显卡不支持 WebGL2，无法显示 3D", "This computer's graphics do not support WebGL2, so 3D cannot be shown", "Die Grafik dieses Computers unterstützt kein WebGL2; 3D ist nicht möglich", "このコンピューターのグラフィックスは WebGL2 に対応していないため 3D を表示できません", "La gráfica de este equipo no admite WebGL2; no se puede mostrar 3D", "La carte graphique ne prend pas en charge WebGL2 ; impossible d'afficher la 3D", "Графика компьютера не поддерживает WebGL2, 3D недоступно"],
+  ["密度直方图：拖动竖线调整显示的密度范围", "Density histogram: drag the lines to set the shown density range", "Dichtehistogramm: Linien ziehen, um den angezeigten Dichtebereich festzulegen", "密度ヒストグラム：線をドラッグして表示する密度範囲を調整", "Histograma de densidad: arrastra las líneas para fijar el rango mostrado", "Histogramme de densité : faites glisser les lignes pour régler la plage affichée", "Гистограмма плотности: перетаскивайте линии, чтобы задать показываемый диапазон"],
+  ["等值面", "Level", "Schwelle", "等値面", "Nivel", "Niveau", "Уровень"],
+  ["范围", "Range", "Bereich", "範囲", "Rango", "Plage", "Диапазон"],
+  ["密度值", "Density value", "Dichtewert", "密度値", "Valor de densidad", "Valeur de densité", "Значение плотности"],
   // TifMrcView Pro: segmentation labels.
   ["显示标签", "Show labels", "Labels anzeigen", "ラベルを表示", "Mostrar etiquetas", "Afficher les étiquettes", "Показывать метки"],
   ["标签不透明度", "Label opacity", "Label-Deckkraft", "ラベルの不透明度", "Opacidad de etiquetas", "Opacité des étiquettes", "Непрозрачность меток"],
@@ -459,6 +463,7 @@ const WORDS = [
 // prettier-ignore
 const PATTERNS = [
   [/^(\d+) × (\d+) × (\d+) 体素 · ([\d.]+) 秒$/, "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 Voxel · $4 s", "$1 × $2 × $3 ボクセル · $4 秒", "$1 × $2 × $3 vóxeles · $4 s", "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 вокселей · $4 с"],
+  [/^(-?[\d.e+-]+) σ · 平均 (-?[\d.e+-]+) · σ (-?[\d.e+-]+)$/, "$1 σ · mean $2 · σ $3", "$1 σ · Mittel $2 · σ $3", "$1 σ · 平均 $2 · σ $3", "$1 σ · media $2 · σ $3", "$1 σ · moyenne $2 · σ $3", "$1 σ · среднее $2 · σ $3"],
   [/^标签 (\d+)$/, "Label $1", "Label $1", "ラベル $1", "Etiqueta $1", "Étiquette $1", "Метка $1"],
   [/^([\d,]+) 像素$/, "$1 px", "$1 px", "$1 px", "$1 px", "$1 px", "$1 пикс."],
   [/^([\d,]+) 像素 · (.+)$/, "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 px · $2", "$1 пикс. · $2"],

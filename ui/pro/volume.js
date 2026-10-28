@@ -24,7 +24,8 @@ uniform sampler3D vol[${MAX_CHANNELS}];
 uniform vec3 color[${MAX_CHANNELS}];
 uniform int nch;
 uniform int mode;         // 0 MIP, 1 translucent, 2 surface
-uniform float threshold;
+uniform float threshold;  // level: surface level, or where MIP / translucent start
+uniform float upper;      // where MIP / translucent reach full brightness
 uniform float opacity;
 uniform float brightness;
 uniform int steps;
@@ -106,10 +107,9 @@ void main() {
       float a1 = 0.0;
       for (int c = 0; c < ${MAX_CHANNELS}; c++) {
         if (c >= nch) break;
-        float v = sampleCh(c, tc);
-        float w = smoothstep(threshold, 1.0, v);
+        float v = clamp((sampleCh(c, tc) - threshold) / max(upper - threshold, 1e-3), 0.0, 1.0);
         col += color[c] * v;
-        a1 = max(a1, w);
+        a1 = max(a1, smoothstep(0.0, 1.0, v));
       }
       a1 = 1.0 - pow(1.0 - clamp(a1 * opacity, 0.0, 1.0), dt * 200.0);
       acc += (1.0 - alpha) * a1 * col * brightness;
@@ -137,7 +137,9 @@ void main() {
   vec3 base;
   if (mode == 0) {
     base = vec3(0.0);
-    for (int c = 0; c < ${MAX_CHANNELS}; c++) if (c < nch) base += color[c] * mx[c];
+    for (int c = 0; c < ${MAX_CHANNELS}; c++) {
+      if (c < nch) base += color[c] * clamp((mx[c] - threshold) / max(upper - threshold, 1e-3), 0.0, 1.0);
+    }
     base *= brightness;
   } else if (mode == 1) {
     base = acc;
@@ -239,7 +241,7 @@ void main() {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       this.u = {};
-      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity"]) {
+      for (const name of ["invViewProj", "extent", "nch", "mode", "threshold", "upper", "opacity", "brightness", "steps", "texel", "hasLabels", "labelOpacity"]) {
         this.u[name] = gl.getUniformLocation(prog, name);
       }
       gl.uniform1iv(gl.getUniformLocation(prog, "vol"), [0, 1, 2, 3]);
@@ -251,7 +253,8 @@ void main() {
       this.textures = [];
       this.labelTex = null;
       this.setLabels(null);
-      this.settings = { mode: 0, threshold: 0.25, opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7 };
+      // levels[mode] = [start, full] in 0..1 of the volume's value range (surface uses start only).
+      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7 };
       this.resetView();
     }
 
@@ -344,7 +347,9 @@ void main() {
       gl.uniform3fv(this.u.extent, this.extent());
       gl.uniform1i(this.u.nch, this.textures.length);
       gl.uniform1i(this.u.mode, s.mode);
-      gl.uniform1f(this.u.threshold, s.threshold);
+      const [lo, hi] = s.levels[s.mode];
+      gl.uniform1f(this.u.threshold, lo);
+      gl.uniform1f(this.u.upper, hi);
       gl.uniform1f(this.u.opacity, s.opacity);
       gl.uniform1f(this.u.brightness, s.brightness);
       gl.uniform1i(this.u.hasLabels, this.hasLabels && s.showLabels ? 1 : 0);
@@ -396,7 +401,15 @@ void main() {
         <option value="2">表面</option>
       </select>
     </label>
-    <label id="vp-th-row">阈值 <input type="range" id="vp-th" min="0" max="1" step="0.01" value="0.25"></label>
+    <div id="vp-levels">
+      <canvas id="vp-hist" title="密度直方图：拖动竖线调整显示的密度范围"></canvas>
+      <div class="vp-row vp-nums">
+        <span id="vp-lo-label">等值面</span>
+        <input type="number" id="vp-lo" step="any" title="密度值">
+        <input type="number" id="vp-hi" step="any" title="密度值">
+      </div>
+      <div class="vp-sigma" id="vp-sigma"></div>
+    </div>
     <label id="vp-op-row">不透明度 <input type="range" id="vp-op" min="0.02" max="1" step="0.01" value="0.2"></label>
     <label>亮度 <input type="range" id="vp-br" min="0.2" max="4" step="0.05" value="1.2"></label>
     <label>Z 比例 <input type="range" id="vp-z" min="0.1" max="5" step="0.05" value="1"></label>
@@ -417,8 +430,121 @@ void main() {
 
   function syncRows() {
     const mode = view ? view.settings.mode : 0;
-    $("vp-th-row").hidden = mode === 0;
     $("vp-op-row").hidden = mode !== 1;
+    $("vp-hi").hidden = mode === 2;
+    $("vp-lo-label").textContent = mode === 2 ? "等值面" : "范围";
+    syncLevels();
+  }
+
+  // --- density histogram with draggable levels (like ChimeraX's Volume Viewer) ---
+  // Values are shown in the file's units: v in 0..1 maps to the first channel's min..max.
+  const histCanvas = $("vp-hist");
+  let hist = null; // {counts, min, max, mean, sd}
+
+  function computeHist(vol) {
+    const c = vol.chans[0];
+    const counts = new Float64Array(256);
+    for (const v of c.data) counts[v]++;
+    let n = 0, s1 = 0, s2 = 0;
+    for (let b = 0; b < 256; b++) {
+      const x = c.min + (b / 255) * (c.max - c.min);
+      n += counts[b];
+      s1 += counts[b] * x;
+      s2 += counts[b] * x * x;
+    }
+    const mean = s1 / Math.max(1, n);
+    const sd = Math.sqrt(Math.max(0, s2 / Math.max(1, n) - mean * mean));
+    hist = { counts, min: c.min, max: c.max, mean, sd };
+  }
+
+  const toValue = (v) => hist.min + v * (hist.max - hist.min);
+  const fromValue = (x) => (hist.max > hist.min ? (x - hist.min) / (hist.max - hist.min) : 0);
+  const num = (x) => +x.toPrecision(4);
+
+  function drawHist() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = histCanvas.clientWidth, h = histCanvas.clientHeight;
+    if (!w) return;
+    histCanvas.width = Math.round(w * dpr);
+    histCanvas.height = Math.round(h * dpr);
+    const g = histCanvas.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    if (!hist || !view) return;
+    const logs = Array.from(hist.counts, (n) => Math.log1p(n));
+    const top = Math.max(...logs) || 1;
+    g.fillStyle = "#8c959f";
+    for (let b = 0; b < 256; b++) {
+      const bh = (logs[b] / top) * (h - 4);
+      g.fillRect((b / 256) * w, h - bh, Math.max(1, w / 256), bh);
+    }
+    const s = view.settings, [lo, hi] = s.levels[s.mode];
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e71316";
+    if (s.mode !== 2) {
+      // Ramp from "starts to show" to "full".
+      g.strokeStyle = accent;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(0, h - 1);
+      g.lineTo(lo * w, h - 1);
+      g.lineTo(hi * w, 1);
+      g.lineTo(w, 1);
+      g.stroke();
+    }
+    g.lineWidth = 2;
+    g.strokeStyle = accent;
+    for (const v of s.mode === 2 ? [lo] : [lo, hi]) {
+      g.beginPath();
+      g.moveTo(v * w, 0);
+      g.lineTo(v * w, h);
+      g.stroke();
+    }
+  }
+
+  function syncLevels() {
+    if (!view || !hist) { drawHist(); return; }
+    const s = view.settings, [lo, hi] = s.levels[s.mode];
+    if (document.activeElement !== $("vp-lo")) $("vp-lo").value = num(toValue(lo));
+    if (document.activeElement !== $("vp-hi")) $("vp-hi").value = num(toValue(hi));
+    $("vp-sigma").textContent = hist.sd > 0 ? `${num((toValue(lo) - hist.mean) / hist.sd)} σ · 平均 ${num(hist.mean)} · σ ${num(hist.sd)}` : "";
+    drawHist();
+  }
+
+  function setLevel(which, v) {
+    const s = view.settings, lv = s.levels[s.mode].slice();
+    v = Math.max(0, Math.min(1, v));
+    if (which === 0) lv[0] = s.mode === 2 ? v : Math.min(v, lv[1] - 0.002);
+    else lv[1] = Math.max(v, lv[0] + 0.002);
+    s.levels[s.mode] = lv;
+    syncLevels();
+    view.draw(true);
+    clearTimeout(view.settle);
+    view.settle = setTimeout(() => view.draw(), 150);
+  }
+
+  let levelDrag = -1;
+  histCanvas.addEventListener("pointerdown", (e) => {
+    if (!view || !hist) return;
+    const r = histCanvas.getBoundingClientRect();
+    const v = (e.clientX - r.left) / r.width;
+    const s = view.settings, [lo, hi] = s.levels[s.mode];
+    levelDrag = s.mode === 2 || Math.abs(v - lo) <= Math.abs(v - hi) ? 0 : 1;
+    histCanvas.setPointerCapture(e.pointerId);
+    setLevel(levelDrag, v);
+  });
+  histCanvas.addEventListener("pointermove", (e) => {
+    if (levelDrag < 0) return;
+    const r = histCanvas.getBoundingClientRect();
+    setLevel(levelDrag, (e.clientX - r.left) / r.width);
+  });
+  const endLevel = () => { levelDrag = -1; };
+  histCanvas.addEventListener("pointerup", endLevel);
+  histCanvas.addEventListener("pointercancel", endLevel);
+  for (const [id, which] of [["vp-lo", 0], ["vp-hi", 1]]) {
+    $(id).addEventListener("change", (e) => {
+      const x = parseFloat(e.target.value);
+      if (view && hist && Number.isFinite(x)) setLevel(which, fromValue(x));
+    });
   }
 
   async function load() {
@@ -436,6 +562,8 @@ void main() {
       const vol = parseVolume(await invoke("volume_data", { req }));
       if (token !== S.token || !view) return;
       view.setVolume(vol, chans.map(({ c }) => c.color));
+      computeHist(vol);
+      syncLevels();
       shownToken = token;
       lastBudget = req.maxVoxels;
       await loadLabels();
@@ -537,7 +665,6 @@ void main() {
     });
   };
   bind("vp-mode", "mode", (v) => +v);
-  bind("vp-th", "threshold", parseFloat);
   bind("vp-op", "opacity", parseFloat);
   bind("vp-br", "brightness", parseFloat);
   bind("vp-z", "zScale", parseFloat);
