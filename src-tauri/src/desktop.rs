@@ -139,6 +139,14 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .ok_or_else(|| "stale".to_string())
 }
 
+/// The current stack as an 8-bit volume for the Pro 3D view.
+#[tauri::command]
+async fn volume_data(state: State<'_, AppState>, req: crate::volume::VolumeReq) -> CmdResult<Response> {
+    let img = current(&state, req.token)?;
+    let bytes = blocking(move || crate::volume::volume(&img, &req)).await?;
+    Ok(Response::new(bytes))
+}
+
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
@@ -690,6 +698,7 @@ pub fn run() {
             open_reslice,
             load_progress,
             render_view,
+            volume_data,
             pixel_values,
             list_folder,
             thumbnail,

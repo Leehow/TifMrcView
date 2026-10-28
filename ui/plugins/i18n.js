@@ -21,6 +21,21 @@ const LANGS = [
 
 // prettier-ignore
 const WORDS = [
+  // TifMrcView Pro: 3D view.
+  ["3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，滚轮缩放，双击复位）", "3D view: show the Z stack as a volume you can rotate (drag to rotate, scroll to zoom, double-click to reset)", "3D-Ansicht: Z-Stapel als drehbares Volumen (ziehen zum Drehen, scrollen zum Zoomen, Doppelklick zum Zurücksetzen)", "3D 表示：Z スタックを回転できるボリュームとして表示（ドラッグで回転、スクロールでズーム、ダブルクリックでリセット）", "Vista 3D: muestra la pila Z como un volumen giratorio (arrastra para girar, rueda para zoom, doble clic para restablecer)", "Vue 3D : affiche la pile Z comme un volume orientable (glisser pour tourner, molette pour zoomer, double-clic pour réinitialiser)", "3D-вид: Z-стек как вращаемый объём (перетаскивание — вращение, колесо — масштаб, двойной щелчок — сброс)"],
+  ["显示方式", "Rendering", "Darstellung", "表示方法", "Representación", "Rendu", "Отображение"],
+  ["最大强度投影", "Maximum intensity", "Maximumprojektion", "最大値投影", "Máxima intensidad", "Intensité maximale", "Максимальная проекция"],
+  ["半透明", "Translucent", "Durchscheinend", "半透明", "Translúcido", "Translucide", "Полупрозрачно"],
+  ["表面", "Surface", "Oberfläche", "表面", "Superficie", "Surface", "Поверхность"],
+  ["阈值", "Threshold", "Schwelle", "しきい値", "Umbral", "Seuil", "Порог"],
+  ["不透明度", "Opacity", "Deckkraft", "不透明度", "Opacidad", "Opacité", "Непрозрачность"],
+  ["Z 比例", "Z scale", "Z-Skalierung", "Z 倍率", "Escala Z", "Échelle Z", "Масштаб Z"],
+  ["复位视角", "Reset view", "Ansicht zurücksetzen", "視点をリセット", "Restablecer vista", "Réinitialiser la vue", "Сбросить вид"],
+  ["按 2D 视图当前的通道和对比度重新读取", "Reload with the channels and contrast of the 2D view", "Mit Kanälen und Kontrast der 2D-Ansicht neu laden", "2D 表示のチャンネルとコントラストで再読み込み", "Recargar con los canales y el contraste de la vista 2D", "Recharger avec les canaux et le contraste de la vue 2D", "Перезагрузить с каналами и контрастом 2D-вида"],
+  ["没有显示中的通道", "No channel is shown", "Kein Kanal wird angezeigt", "表示中のチャンネルがありません", "No hay canales visibles", "Aucun canal affiché", "Нет видимых каналов"],
+  ["正在读取整个 Z 堆栈…", "Reading the whole Z stack…", "Ganzer Z-Stapel wird gelesen…", "Z スタック全体を読み込み中…", "Leyendo toda la pila Z…", "Lecture de toute la pile Z…", "Чтение всего Z-стека…"],
+  ["这张图只有一层，没有三维数据", "This image has a single slice, so there is no 3D data", "Dieses Bild hat nur eine Ebene, keine 3D-Daten", "この画像は 1 枚だけで、3D データがありません", "Esta imagen tiene una sola capa; no hay datos 3D", "Cette image n'a qu'une couche, pas de données 3D", "В изображении один слой, 3D-данных нет"],
+  ["这台电脑的显卡不支持 WebGL2，无法显示 3D", "This computer's graphics do not support WebGL2, so 3D cannot be shown", "Die Grafik dieses Computers unterstützt kein WebGL2; 3D ist nicht möglich", "このコンピューターのグラフィックスは WebGL2 に対応していないため 3D を表示できません", "La gráfica de este equipo no admite WebGL2; no se puede mostrar 3D", "La carte graphique ne prend pas en charge WebGL2 ; impossible d'afficher la 3D", "Графика компьютера не поддерживает WebGL2, 3D недоступно"],
   // Install-time permissions and package policy.
   ["插件权限", "Plugin permissions", "Plugin-Berechtigungen", "プラグインの権限", "Permisos del complemento", "Autorisations de l’extension", "Разрешения плагина"],
   ["无额外权限", "No additional permissions", "Keine zusätzlichen Berechtigungen", "追加の権限なし", "Sin permisos adicionales", "Aucune autorisation supplémentaire", "Без дополнительных разрешений"],
@@ -403,6 +418,7 @@ const WORDS = [
 
 // prettier-ignore
 const PATTERNS = [
+  [/^(\d+) × (\d+) × (\d+) 体素 · ([\d.]+) 秒$/, "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 Voxel · $4 s", "$1 × $2 × $3 ボクセル · $4 秒", "$1 × $2 × $3 vóxeles · $4 s", "$1 × $2 × $3 voxels · $4 s", "$1 × $2 × $3 вокселей · $4 с"],
   // image picker: "2/8  name"; the name is translated on its own
   [/^(\d+\/\d+)  (.+)$/, "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2"],
   [/^图像 (\d+)$/, "Image $1", "Bild $1", "画像 $1", "Imagen $1", "Image $1", "Изображение $1"],
