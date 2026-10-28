@@ -389,7 +389,7 @@ void main() {
 
   // Enable the button for stacks; leave 3D when another image opens.
   setInterval(() => {
-    const stack = !!(S.info && S.info.size_z > 1);
+    const stack = !!(S.info && S.info.sizeZ > 1);
     btn.disabled = !stack;
     if (!canvas3d.hidden && shownToken && S.token !== shownToken) close();
   }, 400);
