@@ -1,0 +1,89 @@
+{
+  "id": "tvips",
+  "name": "TVIPS",
+  "version": "1.0.0",
+  "description": "打开 TVIPS 相机录制的 .tvips 影像，并显示 EM-MENU 保存的 TIFF 里的显微镜、相机、放大倍数和像素尺寸等参数",
+  "main": "index.js",
+  "apiVersion": 2,
+  "permissions": [],
+  "minAppVersion": "0.6.0",
+  "author": "TifMrcView",
+  "wasm": "tvips.wasm",
+  "formats": [
+    {
+      "ext": [
+        "tvips"
+      ],
+      "name": "TVIPS"
+    }
+  ],
+  "metadata": {
+    "ext": [
+      "tif",
+      "tiff"
+    ]
+  },
+  "i18n": {
+    "en": {
+      "name": "TVIPS",
+      "description": "Opens .tvips movies recorded by TVIPS cameras, and shows the microscope, camera, magnification, pixel size and other settings EM-MENU stores in its TIFFs"
+    },
+    "de": {
+      "name": "TVIPS",
+      "description": "Öffnet mit TVIPS-Kameras aufgenommene .tvips-Filme und zeigt Mikroskop, Kamera, Vergrößerung, Pixelgröße und weitere Einstellungen, die EM-MENU in seinen TIFFs speichert"
+    },
+    "ja": {
+      "name": "TVIPS",
+      "description": "TVIPS カメラで記録した .tvips 動画を開き、EM-MENU が TIFF に保存した顕微鏡、カメラ、倍率、ピクセルサイズなどの設定を表示します"
+    },
+    "es": {
+      "name": "TVIPS",
+      "description": "Abre películas .tvips grabadas con cámaras TVIPS y muestra el microscopio, la cámara, el aumento, el tamaño de píxel y otros parámetros que EM-MENU guarda en sus TIFF"
+    },
+    "fr": {
+      "name": "TVIPS",
+      "description": "Ouvre les films .tvips enregistrés par les caméras TVIPS et affiche le microscope, la caméra, le grossissement, la taille de pixel et d’autres paramètres qu’EM-MENU enregistre dans ses TIFF"
+    },
+    "ru": {
+      "name": "TVIPS",
+      "description": "Открывает фильмы .tvips, записанные камерами TVIPS, и показывает микроскоп, камеру, увеличение, размер пикселя и другие параметры, которые EM-MENU сохраняет в своих TIFF"
+    }
+  },
+  "details": {
+    "zh": [
+      "打开 TVIPS 相机（TemCam、XF416、XF1000 等）用 EM-MENU / EMPLIfied 录制的 .tvips 影像流：8 位或 16 位，逐帧查看，像素尺寸、加速电压和放大倍数取自文件头，第 1 帧的时间、样品台位置和倾转角也会列出。长录像会接着写到 _001、_002… 文件里，插件只能读取打开的这个文件，所以只显示 _000 文件里的帧；直接打开后续文件会提示改开 _000 文件。",
+      "EM-MENU 保存的 TIFF 由应用自己打开，插件补充其中的 TemData 参数：图像名称、日期时间、显微镜、加速电压、放大倍数、相机、像素合并、曝光时间、增益、平场校正、备注等，并用像素尺寸设置比例尺。",
+      "插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件，不需要任何权限。安装后无需设置。需要 TifMrcView 0.6.0 或更新版本。"
+    ],
+    "en": [
+      "Opens .tvips movie streams recorded with EM-MENU / EMPLIfied on TVIPS cameras (TemCam, XF416, XF1000 and others): 8 or 16-bit, frame by frame, with the pixel size, high tension and magnification from the file header and the time, stage position and tilt of the first frame. Long recordings continue in _001, _002… files; the plugin can only read the file being opened, so it shows the frames of the _000 file, and opening a later part says to open the _000 file.",
+      "TIFFs saved by EM-MENU are opened by the app itself; the plugin adds their TemData settings: image name, date and time, microscope, high tension, magnification, camera, binning, exposure time, gain, flat-field correction, comment and more, and sets the scale bar from the pixel size.",
+      "The plugin runs sandboxed as WebAssembly, can only read the file being opened and needs no permissions. There is nothing to configure. Needs TifMrcView 0.6.0 or newer."
+    ],
+    "de": [
+      "Öffnet .tvips-Filmströme, die mit EM-MENU / EMPLIfied an TVIPS-Kameras (TemCam, XF416, XF1000 und andere) aufgenommen wurden: 8 oder 16 Bit, Bild für Bild, mit Pixelgröße, Hochspannung und Vergrößerung aus dem Dateikopf sowie Zeit, Tischposition und Kippung des ersten Bildes. Lange Aufnahmen werden in _001-, _002-… Dateien fortgesetzt; das Plugin kann nur die geöffnete Datei lesen und zeigt daher die Bilder der _000-Datei; beim Öffnen eines späteren Teils erscheint ein Hinweis.",
+      "Von EM-MENU gespeicherte TIFFs öffnet die App selbst; das Plugin ergänzt ihre TemData-Einstellungen: Bildname, Datum und Uhrzeit, Mikroskop, Hochspannung, Vergrößerung, Kamera, Binning, Belichtungszeit, Verstärkung, Flatfield-Korrektur, Kommentar und mehr, und setzt den Maßstabsbalken aus der Pixelgröße.",
+      "Das Plugin läuft als WebAssembly in einer Sandbox, kann nur die geöffnete Datei lesen und braucht keine Berechtigungen. Keine Konfiguration nötig. Benötigt TifMrcView 0.6.0 oder neuer."
+    ],
+    "ja": [
+      "TVIPS カメラ（TemCam、XF416、XF1000 など）で EM-MENU / EMPLIfied が記録した .tvips 動画ストリームを開きます。8 ビットまたは 16 ビットで、フレームごとに表示し、ファイルヘッダーのピクセルサイズ、加速電圧、倍率と、最初のフレームの時刻、ステージ位置、傾斜角も表示します。長い録画は _001、_002… のファイルに続きますが、プラグインは開いたファイルしか読めないため _000 ファイルのフレームを表示し、後続ファイルを開くと _000 を開くよう案内します。",
+      "EM-MENU が保存した TIFF はアプリ本体が開き、プラグインは TemData の設定（画像名、日時、顕微鏡、加速電圧、倍率、カメラ、ビニング、露光時間、ゲイン、フラットフィールド補正、コメントなど）を追加し、ピクセルサイズからスケールバーを設定します。",
+      "WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取り、権限は不要です。設定は不要です。TifMrcView 0.6.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre flujos de película .tvips grabados con EM-MENU / EMPLIfied en cámaras TVIPS (TemCam, XF416, XF1000 y otras): 8 o 16 bits, fotograma a fotograma, con el tamaño de píxel, la alta tensión y el aumento de la cabecera y la hora, posición de la platina e inclinación del primer fotograma. Las grabaciones largas continúan en archivos _001, _002…; el complemento solo puede leer el archivo abierto, así que muestra los fotogramas del archivo _000, y al abrir una parte posterior indica que se abra el _000.",
+      "Los TIFF guardados por EM-MENU los abre la propia aplicación; el complemento añade sus parámetros TemData: nombre de imagen, fecha y hora, microscopio, alta tensión, aumento, cámara, binning, tiempo de exposición, ganancia, corrección de campo plano, comentario y más, y fija la barra de escala con el tamaño de píxel.",
+      "Se ejecuta como WebAssembly en un entorno aislado, solo puede leer el archivo abierto y no necesita permisos. No requiere configuración. Requiere TifMrcView 0.6.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les flux de film .tvips enregistrés avec EM-MENU / EMPLIfied sur les caméras TVIPS (TemCam, XF416, XF1000 et autres) : 8 ou 16 bits, image par image, avec la taille de pixel, la haute tension et le grossissement de l’en-tête ainsi que l’heure, la position de la platine et l’inclinaison de la première image. Les longs enregistrements continuent dans des fichiers _001, _002… ; l’extension ne lit que le fichier ouvert et affiche donc les images du fichier _000 ; ouvrir une partie suivante indique d’ouvrir le _000.",
+      "Les TIFF enregistrés par EM-MENU sont ouverts par l’application ; l’extension ajoute leurs paramètres TemData : nom de l’image, date et heure, microscope, haute tension, grossissement, caméra, binning, temps d’exposition, gain, correction de champ plat, commentaire et plus, et règle la barre d’échelle avec la taille de pixel.",
+      "L’extension s’exécute en WebAssembly dans un environnement isolé, ne lit que le fichier ouvert et ne demande aucune autorisation. Aucune configuration nécessaire. Nécessite TifMrcView 0.6.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает потоки .tvips, записанные EM-MENU / EMPLIfied на камерах TVIPS (TemCam, XF416, XF1000 и других): 8 или 16 бит, покадрово, с размером пикселя, высоким напряжением и увеличением из заголовка, а также временем, положением столика и наклоном первого кадра. Длинные записи продолжаются в файлах _001, _002…; плагин читает только открываемый файл, поэтому показывает кадры файла _000, а при открытии следующей части предлагает открыть _000.",
+      "TIFF, сохранённые EM-MENU, открывает само приложение; плагин добавляет их параметры TemData: имя изображения, дату и время, микроскоп, высокое напряжение, увеличение, камеру, биннинг, выдержку, усиление, коррекцию плоского поля, комментарий и т. д., и задаёт масштабную линейку по размеру пикселя.",
+      "Плагин работает как WebAssembly в изолированной среде, читает только открываемый файл и не требует разрешений. Настройка не нужна. Требуется TifMrcView 0.6.0 или новее."
+    ]
+  }
+}

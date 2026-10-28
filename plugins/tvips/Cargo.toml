@@ -1,0 +1,24 @@
+[package]
+name = "tmv-plugin-tvips"
+version = "1.0.0"
+description = "TVIPS camera formats for TifMrcView: .tvips movie streams and EM-MENU TIFF metadata (WebAssembly format plugin)"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+tifmrcview-plugin-sdk = { path = "../sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Built on its own, never as part of the app.
+[workspace]

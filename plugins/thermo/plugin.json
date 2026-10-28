@@ -1,0 +1,113 @@
+{
+  "id": "thermo",
+  "name": "Thermo Fisher",
+  "version": "1.0.0",
+  "description": "打开赛默飞（FEI）电镜的 TIA .ser、Velox .emd 和 Falcon 相机的 .eer 文件，并显示赛默飞 TIFF 和 MRC 文件里的加速电压、放大倍数、像素尺寸、样品台等参数",
+  "main": "index.js",
+  "apiVersion": 2,
+  "permissions": [],
+  "minAppVersion": "0.6.0",
+  "author": "TifMrcView",
+  "wasm": "thermo.wasm",
+  "formats": [
+    {
+      "ext": [
+        "ser",
+        "emi"
+      ],
+      "name": "TIA SER"
+    },
+    {
+      "ext": [
+        "emd"
+      ],
+      "name": "Velox EMD"
+    },
+    {
+      "ext": [
+        "eer"
+      ],
+      "name": "Thermo Fisher EER"
+    }
+  ],
+  "metadata": {
+    "ext": [
+      "tif",
+      "tiff",
+      "mrc",
+      "mrcs",
+      "st",
+      "rec"
+    ]
+  },
+  "i18n": {
+    "en": {
+      "name": "Thermo Fisher",
+      "description": "Opens TIA .ser, Velox .emd and Falcon .eer files from Thermo Fisher (FEI) electron microscopes, and shows the accelerating voltage, magnification, pixel size, stage position and other settings stored in Thermo Fisher TIFF and MRC files"
+    },
+    "de": {
+      "name": "Thermo Fisher",
+      "description": "Öffnet TIA-.ser-, Velox-.emd- und Falcon-.eer-Dateien von Thermo-Fisher-(FEI-)Elektronenmikroskopen und zeigt Beschleunigungsspannung, Vergrößerung, Pixelgröße, Tischposition und weitere Einstellungen aus Thermo-Fisher-TIFF- und -MRC-Dateien"
+    },
+    "ja": {
+      "name": "Thermo Fisher",
+      "description": "Thermo Fisher（FEI）電子顕微鏡の TIA .ser、Velox .emd、Falcon .eer を開き、Thermo Fisher の TIFF・MRC に保存された加速電圧、倍率、ピクセルサイズ、ステージ位置などの設定を表示します"
+    },
+    "es": {
+      "name": "Thermo Fisher",
+      "description": "Abre archivos TIA .ser, Velox .emd y Falcon .eer de microscopios electrónicos Thermo Fisher (FEI) y muestra el voltaje de aceleración, el aumento, el tamaño de píxel, la posición de la platina y otros parámetros guardados en archivos TIFF y MRC de Thermo Fisher"
+    },
+    "fr": {
+      "name": "Thermo Fisher",
+      "description": "Ouvre les fichiers TIA .ser, Velox .emd et Falcon .eer des microscopes électroniques Thermo Fisher (FEI) et affiche la tension d’accélération, le grossissement, la taille de pixel, la position de la platine et d’autres paramètres enregistrés dans les TIFF et MRC Thermo Fisher"
+    },
+    "ru": {
+      "name": "Thermo Fisher",
+      "description": "Открывает файлы TIA .ser, Velox .emd и Falcon .eer электронных микроскопов Thermo Fisher (FEI) и показывает ускоряющее напряжение, увеличение, размер пикселя, положение столика и другие параметры из файлов TIFF и MRC Thermo Fisher"
+    }
+  },
+  "details": {
+    "zh": [
+      "打开赛默飞世尔（原 FEI）电镜软件保存的文件：Tecnai、Titan、Talos 上 TIA 保存的 .ser 图像（单张、序列和 STEM 扫描得到的图像组），Talos、Spectra、Themis 上 Velox 保存的 .emd（HAADF、BF、DF、相机等每个探测器的图像作为一个系列，多帧可逐帧查看），以及 Falcon 4 / 4i / C 相机记录的 .eer 电子计数影片。TifMrcView 本身不带这些格式的读取代码，装上这个插件即可打开。",
+      "EER 影片的单帧只有几十万个电子事件，默认把相邻帧相加，最多显示 60 页；在系列选择里可以切换为逐帧显示。电子按物理像素计数，不使用亚像素位置。TIA 的 .emi 文件只保存显微镜参数，图像在旁边的「名称_1.ser」里，打开 .emi 会提示改开 .ser。Velox 文件里的 EDS / EELS 谱图数据暂不显示。",
+      "插件还会读取应用自己打开的文件里赛默飞保存的参数：Helios、Quanta、Scios、Apreo 等扫描电镜和双束电镜 TIFF 里的设置（加速电压、束流、工作距离、视场、探测器、驻留时间、样品台位置等，按原有分组全部列出），以及 EPU、Tomography、Velox 写的 MRC 文件 FEI 扩展头（显微镜、加速电压、剂量、倾转角和倾转范围、散焦、相机、像素合并等）。像素尺寸会自动设置比例尺。",
+      "插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件，不需要任何权限。安装后无需设置。需要 TifMrcView 0.6.0 或更新版本。"
+    ],
+    "en": [
+      "Opens files saved by Thermo Fisher Scientific (formerly FEI) electron-microscope software: .ser images saved by TIA on Tecnai, Titan and Talos (single images, series and the image sets of STEM scans), .emd files saved by Velox on Talos, Spectra and Themis (each detector, such as HAADF, BF, DF or the camera, is a series; frames can be stepped through), and .eer electron-counting movies recorded by Falcon 4, 4i and C cameras. TifMrcView itself contains no code for these formats; install this plugin to open them.",
+      "A single EER frame holds only a few hundred thousand electron events, so neighbouring frames are summed by default, into at most 60 pages; the series picker switches to single frames. Electrons are counted at the physical pixel size, without the sub-pixel position. A TIA .emi file only holds microscope settings and the image is in the \"name_1.ser\" next to it; opening an .emi says so. EDS / EELS spectrum data in Velox files is not shown yet.",
+      "The plugin also reads the settings Thermo Fisher software stores in files the app opens itself: the settings in TIFFs from Helios, Quanta, Scios, Apreo and other SEMs and DualBeams (accelerating voltage, beam current, working distance, field width, detector, dwell time, stage position and more, every section listed), and the FEI extended header of MRC files written by EPU, Tomography and Velox (microscope, high tension, dose, tilt angle and tilt range, defocus, camera, binning and more). The pixel size sets the scale bar.",
+      "The plugin runs sandboxed as WebAssembly, can only read the file being opened and needs no permissions. There is nothing to configure. Needs TifMrcView 0.6.0 or newer."
+    ],
+    "de": [
+      "Öffnet Dateien der Elektronenmikroskop-Software von Thermo Fisher Scientific (früher FEI): von TIA auf Tecnai, Titan und Talos gespeicherte .ser-Bilder (Einzelbilder, Serien und Bildsätze von STEM-Scans), von Velox auf Talos, Spectra und Themis gespeicherte .emd-Dateien (jeder Detektor wie HAADF, BF, DF oder die Kamera ist eine Serie; Einzelbilder lassen sich durchblättern) sowie .eer-Elektronenzähl-Filme von Falcon-4-, 4i- und C-Kameras. TifMrcView selbst enthält keinen Code für diese Formate; mit diesem Plugin lassen sie sich öffnen.",
+      "Ein einzelnes EER-Bild enthält nur einige hunderttausend Elektronenereignisse, daher werden benachbarte Bilder standardmäßig zu höchstens 60 Seiten summiert; in der Serienauswahl lässt sich auf Einzelbilder umschalten. Gezählt wird mit der physikalischen Pixelgröße, ohne Subpixel-Position. Eine TIA-.emi-Datei enthält nur Mikroskopeinstellungen, das Bild liegt in der „Name_1.ser“ daneben; beim Öffnen einer .emi erscheint ein Hinweis. EDS-/EELS-Spektren in Velox-Dateien werden noch nicht angezeigt.",
+      "Das Plugin liest außerdem die Einstellungen, die Thermo-Fisher-Software in Dateien speichert, die die App selbst öffnet: die Einstellungen in TIFFs von Helios, Quanta, Scios, Apreo und anderen REMs und DualBeams (Beschleunigungsspannung, Strahlstrom, Arbeitsabstand, Bildfeldbreite, Detektor, Verweilzeit, Tischposition und mehr, alle Abschnitte) sowie den erweiterten FEI-Header von MRC-Dateien aus EPU, Tomography und Velox (Mikroskop, Hochspannung, Dosis, Kippwinkel und Kippbereich, Defokus, Kamera, Binning und mehr). Die Pixelgröße setzt den Maßstabsbalken.",
+      "Das Plugin läuft als WebAssembly in einer Sandbox, kann nur die geöffnete Datei lesen und braucht keine Berechtigungen. Keine Konfiguration nötig. Benötigt TifMrcView 0.6.0 oder neuer."
+    ],
+    "ja": [
+      "Thermo Fisher Scientific（旧 FEI）の電子顕微鏡ソフトウェアが保存したファイルを開きます。Tecnai・Titan・Talos の TIA が保存した .ser 画像（単一画像、シリーズ、STEM スキャンの画像セット）、Talos・Spectra・Themis の Velox が保存した .emd（HAADF、BF、DF、カメラなど検出器ごとにシリーズとして表示し、フレームを切り替え可能）、Falcon 4 / 4i / C カメラで記録した .eer 電子カウント動画に対応します。TifMrcView 本体にはこれらの形式のコードは含まれていません。このプラグインを入れると開けます。",
+      "EER の 1 フレームには数十万個の電子イベントしかないため、既定では隣接フレームを合計し、最大 60 ページで表示します。シリーズ選択で 1 フレームずつの表示に切り替えられます。電子は物理ピクセル単位で数え、サブピクセル位置は使いません。TIA の .emi は顕微鏡設定だけを保存し、画像は隣の「名前_1.ser」にあります。.emi を開くとその旨を表示します。Velox ファイル内の EDS / EELS スペクトルはまだ表示しません。",
+      "アプリ本体が開くファイルに Thermo Fisher のソフトウェアが保存した設定も読み取ります。Helios、Quanta、Scios、Apreo などの SEM・デュアルビームの TIFF の設定（加速電圧、ビーム電流、作動距離、視野幅、検出器、ドウェル時間、ステージ位置など、全セクション）と、EPU・Tomography・Velox が書いた MRC の FEI 拡張ヘッダー（顕微鏡、加速電圧、ドーズ、傾斜角と傾斜範囲、デフォーカス、カメラ、ビニングなど）です。ピクセルサイズからスケールバーを設定します。",
+      "WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取り、権限は不要です。設定は不要です。TifMrcView 0.6.0 以降が必要です。"
+    ],
+    "es": [
+      "Abre archivos guardados por el software de microscopía electrónica de Thermo Fisher Scientific (antes FEI): imágenes .ser guardadas por TIA en Tecnai, Titan y Talos (imágenes sueltas, series y los conjuntos de imágenes de barridos STEM), archivos .emd guardados por Velox en Talos, Spectra y Themis (cada detector, como HAADF, BF, DF o la cámara, es una serie; los fotogramas se pueden recorrer) y películas de conteo de electrones .eer grabadas con cámaras Falcon 4, 4i y C. TifMrcView no incluye código para estos formatos; este complemento permite abrirlos.",
+      "Un fotograma EER solo contiene unos cientos de miles de eventos, por lo que por defecto se suman fotogramas vecinos en un máximo de 60 páginas; el selector de series cambia a fotogramas individuales. Los electrones se cuentan al tamaño de píxel físico, sin la posición subpíxel. Un archivo .emi de TIA solo guarda parámetros del microscopio y la imagen está en el «nombre_1.ser» de al lado; al abrir un .emi se indica. Los espectros EDS / EELS de los archivos Velox aún no se muestran.",
+      "El complemento también lee los parámetros que el software de Thermo Fisher guarda en archivos que abre la propia aplicación: los de TIFF de Helios, Quanta, Scios, Apreo y otros SEM y DualBeam (voltaje, corriente del haz, distancia de trabajo, ancho de campo, detector, tiempo de permanencia, posición de la platina y más, todas las secciones) y la cabecera extendida FEI de archivos MRC escritos por EPU, Tomography y Velox (microscopio, alta tensión, dosis, ángulo e intervalo de inclinación, desenfoque, cámara, binning y más). El tamaño de píxel fija la barra de escala.",
+      "Se ejecuta como WebAssembly en un entorno aislado, solo puede leer el archivo abierto y no necesita permisos. No requiere configuración. Requiere TifMrcView 0.6.0 o posterior."
+    ],
+    "fr": [
+      "Ouvre les fichiers enregistrés par les logiciels de microscopie électronique de Thermo Fisher Scientific (anciennement FEI) : images .ser enregistrées par TIA sur Tecnai, Titan et Talos (images seules, séries et ensembles d’images de balayages STEM), fichiers .emd enregistrés par Velox sur Talos, Spectra et Themis (chaque détecteur, HAADF, BF, DF ou la caméra, est une série ; les images se parcourent une à une) et films .eer de comptage d’électrons des caméras Falcon 4, 4i et C. TifMrcView ne contient pas de code pour ces formats ; cette extension permet de les ouvrir.",
+      "Une image EER ne contient que quelques centaines de milliers d’événements ; par défaut, les images voisines sont donc additionnées, en 60 pages au plus ; le sélecteur de séries passe aux images individuelles. Les électrons sont comptés à la taille de pixel physique, sans position sous-pixel. Un fichier .emi de TIA ne contient que les paramètres du microscope ; l’image est dans le « nom_1.ser » voisin, ce qu’indique l’ouverture d’un .emi. Les spectres EDS / EELS des fichiers Velox ne sont pas encore affichés.",
+      "L’extension lit aussi les paramètres que les logiciels Thermo Fisher enregistrent dans des fichiers que l’application ouvre elle-même : ceux des TIFF des MEB et DualBeam Helios, Quanta, Scios, Apreo et autres (tension, courant du faisceau, distance de travail, largeur de champ, détecteur, temps de pause, position de la platine et plus, toutes les sections) et l’en-tête étendu FEI des fichiers MRC écrits par EPU, Tomography et Velox (microscope, haute tension, dose, angle et plage d’inclinaison, défocalisation, caméra, binning et plus). La taille de pixel règle la barre d’échelle.",
+      "L’extension s’exécute en WebAssembly dans un environnement isolé, ne lit que le fichier ouvert et ne demande aucune autorisation. Aucune configuration nécessaire. Nécessite TifMrcView 0.6.0 ou une version ultérieure."
+    ],
+    "ru": [
+      "Открывает файлы программ электронной микроскопии Thermo Fisher Scientific (ранее FEI): изображения .ser, сохранённые TIA на Tecnai, Titan и Talos (одиночные снимки, серии и наборы изображений STEM-сканирования), файлы .emd, сохранённые Velox на Talos, Spectra и Themis (каждый детектор — HAADF, BF, DF или камера — отдельная серия; кадры можно листать), и фильмы счёта электронов .eer с камер Falcon 4, 4i и C. В самом TifMrcView нет кода для этих форматов; плагин позволяет их открывать.",
+      "Один кадр EER содержит лишь несколько сотен тысяч событий, поэтому по умолчанию соседние кадры суммируются, не более чем в 60 страниц; в выборе серии можно переключиться на отдельные кадры. Электроны считаются по физическому размеру пикселя, без субпиксельного положения. Файл TIA .emi хранит только параметры микроскопа, а изображение лежит рядом в «имя_1.ser»; при открытии .emi выводится подсказка. Спектры EDS / EELS в файлах Velox пока не показываются.",
+      "Плагин также читает параметры, которые программы Thermo Fisher сохраняют в файлах, открываемых самим приложением: настройки в TIFF растровых и двулучевых микроскопов Helios, Quanta, Scios, Apreo и других (ускоряющее напряжение, ток пучка, рабочее расстояние, ширина поля, детектор, время задержки, положение столика и т. д., все разделы) и расширенный заголовок FEI в файлах MRC от EPU, Tomography и Velox (микроскоп, высокое напряжение, доза, угол и диапазон наклона, дефокус, камера, биннинг и т. д.). Размер пикселя задаёт масштабную линейку.",
+      "Плагин работает как WebAssembly в изолированной среде, читает только открываемый файл и не требует разрешений. Настройка не нужна. Требуется TifMrcView 0.6.0 или новее."
+    ]
+  }
+}

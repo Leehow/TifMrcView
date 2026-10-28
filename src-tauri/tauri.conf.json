@@ -220,6 +220,75 @@
             "public.image"
           ]
         }
+      },
+      {
+        "ext": [
+          "ser",
+          "emi"
+        ],
+        "name": "TIA Electron Microscopy Image",
+        "description": "Thermo Fisher (FEI) TIA SER / EMI Electron Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-fei-tia",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.tia",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "emd"
+        ],
+        "name": "Velox Electron Microscopy Image",
+        "description": "Thermo Fisher Velox EMD Electron Microscopy Image",
+        "role": "Viewer",
+        "mimeType": "application/x-velox-emd",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.emd",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "eer"
+        ],
+        "name": "EER Electron Event Movie",
+        "description": "Thermo Fisher EER Electron Event Representation Movie",
+        "role": "Viewer",
+        "mimeType": "application/x-thermo-eer",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.eer",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
+      },
+      {
+        "ext": [
+          "tvips"
+        ],
+        "name": "TVIPS Camera Movie",
+        "description": "TVIPS Camera Movie Stream",
+        "role": "Viewer",
+        "mimeType": "application/x-tvips",
+        "rank": "Alternate",
+        "exportedType": {
+          "identifier": "com.leehow.tifmrcview.tvips",
+          "conformsTo": [
+            "public.data",
+            "public.image"
+          ]
+        }
       }
     ],
     "macOS": {

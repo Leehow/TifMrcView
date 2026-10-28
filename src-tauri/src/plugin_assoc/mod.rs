@@ -76,8 +76,8 @@ mod tests {
             [
                 "tif",
                 "czi",
-                "EMD",
-                "emd",
+                "ZVI",
+                "zvi",
                 "png",
                 "../x",
                 "a;b",
@@ -86,7 +86,7 @@ mod tests {
             ]
             .map(str::to_string),
         );
-        assert_eq!(set, BTreeSet::from(["emd".into(), "png".into()]));
+        assert_eq!(set, BTreeSet::from(["png".into(), "zvi".into()]));
         assert!(extra_extensions(Vec::new()).is_empty());
     }
 }

@@ -9,4 +9,4 @@ Icon={{icon}}
 Name={{name}}
 Terminal=false
 Type=Application
-MimeType=image/tiff;application/x-mrc;application/x-czi;application/x-zeiss-lsm;application/x-leica-lif;application/x-nikon-nd2;application/x-olympus-fluoview;application/x-imaris;application/x-gatan-dm;x-scheme-handler/tifmrcview;
+MimeType=image/tiff;application/x-mrc;application/x-czi;application/x-zeiss-lsm;application/x-leica-lif;application/x-nikon-nd2;application/x-olympus-fluoview;application/x-imaris;application/x-gatan-dm;application/x-fei-tia;application/x-velox-emd;application/x-thermo-eer;application/x-tvips;x-scheme-handler/tifmrcview;

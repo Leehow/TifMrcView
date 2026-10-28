@@ -44,4 +44,21 @@
     <glob pattern="*.dm3"/>
     <glob pattern="*.dm4"/>
   </mime-type>
+  <mime-type type="application/x-fei-tia">
+    <comment>Thermo Fisher (FEI) TIA electron microscopy image</comment>
+    <glob pattern="*.ser"/>
+    <glob pattern="*.emi"/>
+  </mime-type>
+  <mime-type type="application/x-velox-emd">
+    <comment>Thermo Fisher Velox EMD electron microscopy image</comment>
+    <glob pattern="*.emd"/>
+  </mime-type>
+  <mime-type type="application/x-thermo-eer">
+    <comment>Thermo Fisher EER electron event movie</comment>
+    <glob pattern="*.eer"/>
+  </mime-type>
+  <mime-type type="application/x-tvips">
+    <comment>TVIPS camera movie</comment>
+    <glob pattern="*.tvips"/>
+  </mime-type>
 </mime-info>

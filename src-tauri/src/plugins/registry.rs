@@ -40,6 +40,11 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("ims", "imaris", "Imaris"),
     ("dm3", "gatan", "Gatan"),
     ("dm4", "gatan", "Gatan"),
+    ("ser", "thermo", "Thermo Fisher"),
+    ("emi", "thermo", "Thermo Fisher"),
+    ("emd", "thermo", "Thermo Fisher"),
+    ("eer", "thermo", "Thermo Fisher"),
+    ("tvips", "tvips", "TVIPS"),
 ];
 
 /// One installed package with a WebAssembly module.
