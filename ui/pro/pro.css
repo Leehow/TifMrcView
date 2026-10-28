@@ -53,3 +53,6 @@
 #vol-panel .vp-nums { align-items: center; color: var(--dim); font-size: 12px; }
 #vol-panel .vp-nums input { flex: 1; min-width: 0; width: 60px; }
 #vol-panel .vp-sigma { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* The tools panel stays usable over the 3D view. */
+#tools { z-index: 7; }
+#tools-resizer { z-index: 8; }
