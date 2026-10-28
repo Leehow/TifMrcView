@@ -1,4 +1,4 @@
 [Thumbnailer Entry]
 TryExec=tifmrcview
 Exec=tifmrcview --thumbnail %i %o --size %s
-MimeType=image/tiff;application/x-mrc;application/x-czi;application/x-zeiss-lsm;application/x-leica-lif;application/x-nikon-nd2;application/x-olympus-fluoview;application/x-imaris;application/x-gatan-dm;
+MimeType=image/tiff;application/x-mrc;application/x-czi;application/x-zeiss-lsm;application/x-leica-lif;application/x-nikon-nd2;application/x-olympus-fluoview;application/x-imaris;application/x-gatan-dm;application/x-fei-tia;application/x-velox-emd;application/x-thermo-eer;application/x-tvips;

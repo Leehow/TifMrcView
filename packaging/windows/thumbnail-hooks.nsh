@@ -44,6 +44,13 @@
   !insertmacro ${ACTION} oib
   !insertmacro ${ACTION} oir
   !insertmacro ${ACTION} ims
+  !insertmacro ${ACTION} dm3
+  !insertmacro ${ACTION} dm4
+  !insertmacro ${ACTION} ser
+  !insertmacro ${ACTION} emi
+  !insertmacro ${ACTION} emd
+  !insertmacro ${ACTION} eer
+  !insertmacro ${ACTION} tvips
 !macroend
 
 ; Runtime journals only entries it introduced. Do not remove whole extension keys.

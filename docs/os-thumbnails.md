@@ -188,7 +188,6 @@ Accepted extensions (none are currently declared by core or official plugins):
 
 | Extensions | Format / reason |
 | --- | --- |
-| emi, emd | FEI TIA / Velox, established EM metadata/container types |
 | zvi | Zeiss AxioVision |
 | vsi, ets | cellSens dataset and tile container |
 | oif | Olympus FluoView dataset |
@@ -202,7 +201,6 @@ Conservative omissions from the suggested set:
 
 | Extensions | Reason to omit static microscopy classification |
 | --- | --- |
-| ser | Also a widely used astronomy video format |
 | dv, r3d | DV and RED video collisions |
 | stk | Legacy generic stacks / HyperCard and other stack formats; also ambiguous between microscopy readers |
 | nd | QuickBooks network configuration |
