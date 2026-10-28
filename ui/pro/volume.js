@@ -335,13 +335,16 @@ void main() {
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (!this.vol) return;
+      // Centre the volume in the part not covered by the tools panel (app.js freeRect).
+      const x0 = Math.min(w - 1, Math.round(freeRect().x0 * dpr * scale));
+      gl.viewport(x0, 0, w - x0, h);
       const s = this.settings;
       const eye = [
         this.dist * Math.cos(this.pitch) * Math.sin(this.yaw),
         this.dist * Math.sin(this.pitch),
         this.dist * Math.cos(this.pitch) * Math.cos(this.yaw),
       ];
-      const vp = mul(perspective(0.7, w / h, 0.05, 20), lookAt(eye));
+      const vp = mul(perspective(0.7, (w - x0) / h, 0.05, 20), lookAt(eye));
       gl.useProgram(this.prog);
       gl.uniformMatrix4fv(this.u.invViewProj, false, invert(vp));
       gl.uniform3fv(this.u.extent, this.extent());
@@ -652,7 +655,11 @@ void main() {
     view.settle = setTimeout(() => view.draw(), 150);
   }, { passive: false });
   canvas3d.addEventListener("dblclick", () => view.resetView());
-  new ResizeObserver(() => { if (view && !canvas3d.hidden) view.draw(); }).observe(canvas3d);
+  const redraw = () => { if (view && !canvas3d.hidden) view.draw(); };
+  new ResizeObserver(redraw).observe(canvas3d);
+  // The volume is centred beside the tools panel, so follow it opening, closing and resizing.
+  new ResizeObserver(redraw).observe($("tools"));
+  new MutationObserver(redraw).observe($("tools"), { attributes: true, attributeFilter: ["hidden", "class"] });
 
   const bind = (id, key, parse) => {
     $(id).addEventListener("input", (e) => {
