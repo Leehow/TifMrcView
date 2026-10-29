@@ -21,14 +21,6 @@ const LANGS = [
 
 // prettier-ignore
 const WORDS = [
-  // About dialog.
-  ["关于", "About", "Über", "このアプリについて", "Acerca de", "À propos", "О программе"],
-  ["复制", "Copy", "Kopieren", "コピー", "Copiar", "Copier", "Копировать"],
-  ["作者", "Author", "Autor", "作者", "Autor", "Auteur", "Автор"],
-  ["引用", "Cite", "Zitieren", "引用", "Citar", "Citer", "Цитирование"],
-  ["官网", "Website", "Website", "公式サイト", "Sitio web", "Site web", "Сайт"],
-  ["已复制引用", "Citation copied", "Zitat kopiert", "引用をコピーしました", "Cita copiada", "Citation copiée", "Цитата скопирована"],
-  ["免费开源 · Apache-2.0", "Free and open source · Apache-2.0", "Kostenlos und quelloffen · Apache-2.0", "無料・オープンソース · Apache-2.0", "Gratis y de código abierto · Apache-2.0", "Gratuit et open source · Apache-2.0", "Бесплатно и с открытым кодом · Apache-2.0"],
   // Install-time permissions and package policy.
   ["插件权限", "Plugin permissions", "Plugin-Berechtigungen", "プラグインの権限", "Permisos del complemento", "Autorisations de l’extension", "Разрешения плагина"],
   ["无额外权限", "No additional permissions", "Keine zusätzlichen Berechtigungen", "追加の権限なし", "Sin permisos adicionales", "Aucune autorisation supplémentaire", "Без дополнительных разрешений"],
@@ -566,6 +558,14 @@ const WORDS = [
   ["图像文件夹", "Image folder", "Bildordner", "画像フォルダー", "Carpeta de imágenes", "Dossier d’images", "Папка изображений"],
   ["文件夹里没有能打开的图像", "The folder has no images that can be opened", "Der Ordner enthält keine Bilder, die sich öffnen lassen", "フォルダーに開ける画像がありません", "La carpeta no tiene imágenes que se puedan abrir", "Le dossier ne contient aucune image lisible", "В папке нет изображений, которые можно открыть"],
   ["文件夹里只有一张同名规则的图像，组不成堆叠", "The folder has only one image of each naming pattern, not enough for a stack", "Der Ordner enthält je Namensmuster nur ein Bild, zu wenig für einen Stapel", "フォルダーには同じ命名規則の画像が 1 枚しかなく、スタックにできません", "La carpeta solo tiene una imagen de cada patrón de nombre; no basta para una pila", "Le dossier ne contient qu’une image par motif de nom, pas assez pour une pile", "В папке только по одному изображению на шаблон имени — стек не собрать"],
+  // About dialog.
+  ["关于", "About", "Über", "このアプリについて", "Acerca de", "À propos", "О программе"],
+  ["复制", "Copy", "Kopieren", "コピー", "Copiar", "Copier", "Копировать"],
+  ["作者", "Author", "Autor", "作者", "Autor", "Auteur", "Автор"],
+  ["引用", "Cite", "Zitieren", "引用", "Citar", "Citer", "Цитирование"],
+  ["官网", "Website", "Website", "公式サイト", "Sitio web", "Site web", "Сайт"],
+  ["已复制引用", "Citation copied", "Zitat kopiert", "引用をコピーしました", "Cita copiada", "Citation copiée", "Цитата скопирована"],
+  ["免费开源 · Apache-2.0", "Free and open source · Apache-2.0", "Kostenlos und quelloffen · Apache-2.0", "無料・オープンソース · Apache-2.0", "Gratis y de código abierto · Apache-2.0", "Gratuit et open source · Apache-2.0", "Бесплатно и с открытым кодом · Apache-2.0"],
 ];
 
 // prettier-ignore
