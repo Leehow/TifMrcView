@@ -86,7 +86,7 @@ Plugins have the same permissions as the main program: only install plugins you 
 
 ## Automatic updates
 
-A few seconds after start, the app silently checks `https://dl.tifmrcview.com:9443/tifmrcview/latest-direct.json`, falling back to `https://tifmrcview.com/tifmrcview/latest.json` if the direct host fails. When a new version exists, a banner appears at the top; click "Update now and restart" to download it, verify the signature, install and restart. Update packages are signed with a Tauri minisign key; the public key is in `tauri.conf.json`.
+A few seconds after start, the app silently checks `https://dl.tifmrcview.com:9443/tifmrcview/latest-direct.json`, falling back to `https://tifmrcview.com/tifmrcview/latest.json` if the direct host fails. When a new version exists, a small red dot appears on the settings (gear) button — no banner or popup. Opening the gear menu shows "Version x.y.z available" and clears the dot for that version; it opens "Plugins and updates", where "Update to x.y.z" downloads it, verify the signature, install and restart. Update packages are signed with a Tauri minisign key; the public key is in `tauri.conf.json`.
 
 ## Keyboard shortcuts
 

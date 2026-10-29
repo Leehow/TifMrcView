@@ -105,6 +105,9 @@ const WORDS = [
   ["立即更新并重启", "Update and restart", "Aktualisieren und neu starten", "今すぐ更新して再起動", "Actualizar y reiniciar", "Mettre à jour et redémarrer", "Обновить и перезапустить"],
   ["忽略这个版本", "Skip this version", "Diese Version überspringen", "このバージョンをスキップ", "Omitir esta versión", "Ignorer cette version", "Пропустить эту версию"],
   // empty stage
+  ["双指捏合 缩放　拖动 平移　双击 适应屏幕", "Pinch zoom　Drag pan　Double-tap fit", "Zwei Finger zoomen　Ziehen verschiebt　Doppeltippen passt ein", "ピンチで拡大縮小　ドラッグで移動　ダブルタップで全体表示", "Pellizca para zoom　Arrastra para mover　Doble toque para ajustar", "Pincer pour zoomer　Glisser pour déplacer　Double-toucher pour ajuster", "Щипок — масштаб　Перетаскивание — сдвиг　Двойное касание — вписать"],
+  ["删除", "Delete", "Löschen", "削除", "Eliminar", "Supprimer", "Удалить"],
+  ["删除这个标注 (Delete)", "Delete this annotation (Delete)", "Diese Anmerkung löschen (Entf)", "この注釈を削除 (Delete)", "Eliminar esta anotación (Supr)", "Supprimer cette annotation (Suppr)", "Удалить эту пометку (Delete)"],
   ["拖入或双击打开图像", "Drop an image here or double-click to open", "Bild hierher ziehen oder doppelklicken", "画像をドロップするかダブルクリックで開く", "Arrastra una imagen o haz doble clic para abrir", "Déposez une image ou double-cliquez pour ouvrir", "Перетащите изображение или дважды щёлкните"],
   ["支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp；装上插件还能打开 czi 等格式", "Supports tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp; plugins add czi and more", "Unterstützt tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp; Plugins ergänzen czi und mehr", "対応形式 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp。プラグインで czi なども開けます", "Admite tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp; los complementos añaden czi y más", "Formats : tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp ; les extensions ajoutent czi et d'autres", "Форматы: tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp; плагины добавляют czi и другие"],
   ["↑ ↓ 切换文件　← → 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG",
@@ -702,6 +705,7 @@ const PATTERNS = [
   [/^选区 (\d+) × (\d+) px$/, "Selection $1 × $2 px", "Auswahl $1 × $2 px", "選択範囲 $1 × $2 px", "Selección $1 × $2 px", "Sélection $1 × $2 px", "Выделение $1 × $2 px"],
   [/^(x \S+  y \S+)  值 (.+)$/, "$1  value $2", "$1  Wert $2", "$1  値 $2", "$1  valor $2", "$1  valeur $2", "$1  значение $2"],
   [/^发现新版本 (\S+)（当前 (\S+)）$/, "Version $1 is available (you have $2)", "Version $1 verfügbar (installiert: $2)", "新しいバージョン $1 があります（現在 $2）", "Versión $1 disponible (tienes $2)", "Version $1 disponible (actuelle : $2)", "Доступна версия $1 (текущая $2)"],
+  [/^有新版本 (\S+)$/, "Version $1 available", "Version $1 verfügbar", "新しいバージョン $1", "Versión $1 disponible", "Version $1 disponible", "Доступна версия $1"],
   [/^可更新到 (\S+)（已忽略）$/, "$1 available (skipped)", "$1 verfügbar (übersprungen)", "$1 に更新可能（スキップ済み）", "$1 disponible (omitida)", "$1 disponible (ignorée)", "Доступна $1 (пропущена)"],
   [/^可更新到 (\S+)$/, "$1 available", "$1 verfügbar", "$1 に更新できます", "$1 disponible", "$1 disponible", "Доступна $1"],
   [/^检查更新失败：(.+)$/, "Update check failed: $1", "Update-Prüfung fehlgeschlagen: $1", "アップデートの確認に失敗しました：$1", "Error al buscar actualizaciones: $1", "Échec de la recherche de mises à jour : $1", "Не удалось проверить обновления: $1"],

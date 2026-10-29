@@ -86,7 +86,7 @@ Los plugins tienen los mismos permisos que el programa principal: instale solo p
 
 ## Actualizaciones automáticas
 
-Unos segundos después de iniciarse, la aplicación comprueba en segundo plano `https://tifmrcview.com/tifmrcview/latest.json`. Cuando hay una versión nueva aparece un aviso arriba; al pulsar «Actualizar ahora y reiniciar» se descarga, se verifica la firma, se instala y se reinicia. Los paquetes de actualización se firman con una clave minisign de Tauri; la clave pública está en `tauri.conf.json`.
+Unos segundos después de iniciarse, la aplicación comprueba en segundo plano `https://tifmrcview.com/tifmrcview/latest.json`. Cuando hay una versión nueva solo aparece un pequeño punto rojo en el engranaje (ajustes), sin avisos ni ventanas. Al abrir el menú del engranaje se ve «Versión x.y.z disponible» y el punto desaparece para esa versión; esa opción abre «Complementos y actualizaciones», donde «Actualizar a x.y.z» la descarga, se verifica la firma, se instala y se reinicia. Los paquetes de actualización se firman con una clave minisign de Tauri; la clave pública está en `tauri.conf.json`.
 
 ## Atajos de teclado
 
