@@ -358,6 +358,43 @@ impl Group {
     }
 }
 
+/// Where a spectrum's energy (or other signal) axis lies in the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectrumAxis {
+    /// Each image row is a spectrum (a single spectrum is one row).
+    X,
+    /// A spectrum image: each pixel's spectrum runs through the Z slices.
+    Z,
+}
+
+/// Marks the data as spectra (EELS, EDS…), so the app plots them.
+#[derive(Clone, Debug)]
+pub struct Spectrum {
+    pub axis: SpectrumAxis,
+    /// Axis value of the first channel, and the step per channel.
+    pub start: f64,
+    pub step: f64,
+    /// Axis unit, e.g. "eV" or "keV".
+    pub unit: String,
+    /// What it is, e.g. "EELS" or "EDS"; may be empty.
+    pub kind: String,
+}
+
+impl Spectrum {
+    fn to_json(&self) -> String {
+        let mut j = Json::object();
+        j.str("axis", match self.axis {
+            SpectrumAxis::X => "x",
+            SpectrumAxis::Z => "z",
+        });
+        j.num("start", self.start);
+        j.num("step", self.step);
+        j.str("unit", &self.unit);
+        j.str("kind", &self.kind);
+        j.finish()
+    }
+}
+
 /// What a format plugin says about an open file (`tmv_info`).
 #[derive(Clone, Debug)]
 pub struct Info {
@@ -387,6 +424,8 @@ pub struct Info {
     pub series: Vec<Series>,
     /// Which entry of `series` this is.
     pub series_index: u32,
+    /// Set when the pixels are spectra rather than a picture.
+    pub spectrum: Option<Spectrum>,
 }
 
 impl Info {
@@ -410,6 +449,7 @@ impl Info {
             metadata: vec![],
             series: vec![],
             series_index: 0,
+            spectrum: None,
         }
     }
 
@@ -430,6 +470,9 @@ impl Info {
         j.str("unit", &self.unit);
         j.str("format", &self.format);
         j.raw("metadata", &groups_json(&self.metadata));
+        if let Some(sp) = &self.spectrum {
+            j.raw("spectrum", &sp.to_json());
+        }
         if self.series.len() > 1 {
             let mut s = String::from("[");
             for (i, x) in self.series.iter().enumerate() {
@@ -474,6 +517,75 @@ impl Meta {
             j.str("unit", u);
         }
         j.raw("groups", &groups_json(&self.groups));
+        j.finish()
+    }
+}
+
+/// One image stack of an acquisition project (a detector, a region…).
+#[derive(Clone, Debug, Default)]
+pub struct StackSeries {
+    pub name: String,
+    /// A short description for the picker.
+    pub detail: String,
+    /// The folder holding its slices, relative to the project file; lets
+    /// the app pick this stack when the user opens that folder.
+    pub dir: String,
+}
+
+/// The image stack an acquisition project file describes (`tmv_stack`).
+#[derive(Clone, Debug, Default)]
+pub struct Stack {
+    /// Slice files in Z order, relative to the project file's folder, as
+    /// they appear in the listing the plugin was given.
+    pub files: Vec<String>,
+    /// Shown in the status bar, e.g. "Thermo Auto Slice & View".
+    pub format: Option<String>,
+    /// Distance between slices, in `unit` (`nm`, `µm`…).
+    pub z_spacing: Option<f64>,
+    pub unit: String,
+    /// Groups for the image-info panel, before the first slice's own.
+    pub metadata: Vec<Group>,
+    /// Every stack in the project when there are several, and which one this is.
+    pub series: Vec<StackSeries>,
+    pub series_index: u32,
+}
+
+impl Stack {
+    pub fn to_json(&self) -> String {
+        let mut j = Json::object();
+        let mut files = String::from("[");
+        for (i, f) in self.files.iter().enumerate() {
+            if i > 0 {
+                files.push(',');
+            }
+            json_str(&mut files, f);
+        }
+        files.push(']');
+        j.raw("files", &files);
+        if let Some(f) = &self.format {
+            j.str("format", f);
+        }
+        if let Some(z) = self.z_spacing {
+            j.num("zSpacing", z);
+            j.str("unit", &self.unit);
+        }
+        j.raw("metadata", &groups_json(&self.metadata));
+        if !self.series.is_empty() {
+            let mut s = String::from("[");
+            for (i, x) in self.series.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let mut o = Json::object();
+                o.str("name", &x.name);
+                o.str("detail", &x.detail);
+                o.str("dir", &x.dir);
+                s.push_str(&o.finish());
+            }
+            s.push(']');
+            j.raw("series", &s);
+            j.num("seriesIndex", self.series_index as f64);
+        }
         j.finish()
     }
 }
@@ -757,6 +869,14 @@ pub trait Metadata {
     fn metadata(path: &str) -> Result<Option<Meta>>;
 }
 
+/// Acquisition project files (Auto Slice & View, Atlas…) that describe a Z
+/// stack of separate slice images. The plugin reads only the project file
+/// (through [`file`]); `listing` holds the files around it, relative to its
+/// folder, `/`-separated, in natural order.
+pub trait Stacks {
+    fn stack(path: &str, listing: &[&str], series: u32) -> Result<Stack>;
+}
+
 // ------------------------------------------------------------------ runtime glue
 
 /// Global state for a single-threaded wasm instance.
@@ -933,6 +1053,27 @@ macro_rules! export_metadata {
             match <$t as $crate::Metadata>::metadata(path) {
                 Ok(Some(m)) => $crate::ret(m.to_json().into_bytes()),
                 Ok(None) => $crate::ret(b"null".to_vec()),
+                Err(e) => {
+                    $crate::fail(e);
+                    0
+                }
+            }
+        }
+    };
+}
+
+/// Exports a [`Stacks`] implementation as `tmv_stack`.
+#[macro_export]
+macro_rules! export_stack {
+    ($t:ty) => {
+        /// # Safety
+        /// Called by the host with buffers from `tmv_alloc`.
+        #[no_mangle]
+        pub unsafe extern "C" fn tmv_stack(ptr: *const u8, len: u32, lptr: *const u8, llen: u32, series: u32) -> u64 {
+            let path = $crate::str_arg(ptr, len);
+            let listing: $crate::__Vec<&str> = $crate::str_arg(lptr, llen).split('\n').filter(|l| !l.is_empty()).collect();
+            match <$t as $crate::Stacks>::stack(path, &listing, series) {
+                Ok(s) => $crate::ret(s.to_json().into_bytes()),
                 Err(e) => {
                     $crate::fail(e);
                     0

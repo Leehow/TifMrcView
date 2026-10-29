@@ -20,7 +20,7 @@ use wasmi::Module;
 use super::package::{self, Manifest};
 use super::recipe;
 use super::wasm::{self, Exports, Instance};
-use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source};
+use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source, SpectrumInfo};
 
 /// Largest page a plugin may describe (bytes).
 const MAX_PAGE_BYTES: u64 = 1 << 34;
@@ -74,6 +74,11 @@ impl Pkg {
     fn reads_metadata(&self, ext: &str) -> bool {
         self.manifest.metadata.iter().any(|e| e == ext)
     }
+
+    /// The `stacks` entry for a project file with this name.
+    fn stack_decl(&self, file_name: &str) -> Option<&package::StackDecl> {
+        self.manifest.stacks.iter().find(|d| d.matches(file_name))
+    }
 }
 
 #[derive(Default)]
@@ -97,6 +102,17 @@ impl Registry {
         let r = Registry::default();
         r.configure(dir, app_version);
         r
+    }
+
+    /// Another handle on the same plugins and switches, for a source that
+    /// opens more files later (an image sequence).
+    pub fn snapshot(&self) -> Registry {
+        Registry {
+            dir: RwLock::new(self.dir.read().unwrap().clone()),
+            app_version: RwLock::new(self.app_version.read().unwrap().clone()),
+            index: RwLock::new(Some(self.index())),
+            disabled: RwLock::new(self.disabled.read().unwrap().clone()),
+        }
     }
 
     /// The registry `formats::open` uses.
@@ -198,6 +214,44 @@ impl Registry {
         Some(WasmSource::open(&pkg, path, series).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
     }
 
+    fn stack_pkg(&self, path: &Path) -> Option<(Arc<Pkg>, String)> {
+        let name = path.file_name()?.to_str()?;
+        self.active().into_iter().find_map(|p| {
+            let d = p.stack_decl(name)?.name.clone();
+            Some((p, d))
+        })
+    }
+
+    /// Whether an enabled plugin reads `path` as an acquisition project file.
+    pub fn is_stack_file(&self, path: &Path) -> bool {
+        path.is_file() && self.stack_pkg(path).is_some()
+    }
+
+    /// A project file an enabled plugin reads, in `dir` or one or two
+    /// folders above it (programs keep the slices in subfolders).
+    pub fn find_stack_file(&self, dir: &Path) -> Option<PathBuf> {
+        if !self.active().iter().any(|p| !p.manifest.stacks.is_empty()) {
+            return None;
+        }
+        for d in dir.ancestors().take(3) {
+            let Ok(rd) = std::fs::read_dir(d) else { continue };
+            let mut found: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| self.is_stack_file(p)).collect();
+            found.sort();
+            if let Some(f) = found.into_iter().next() {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    /// Asks the plugin that reads project file `config` for image stack
+    /// `series`. When the stack is opened as folder `opened`, the series
+    /// whose slices are in that folder is picked instead.
+    pub fn stack(&self, config: &Path, series: usize, opened: Option<&Path>) -> Option<Result<StackPlan>> {
+        let (pkg, name) = self.stack_pkg(config)?;
+        Some(read_stack(self, &pkg, &name, config, series, opened))
+    }
+
     /// Why a file with this extension cannot be opened, when a plugin could help.
     pub fn missing(&self, ext: &str) -> Option<String> {
         let idx = self.index();
@@ -252,6 +306,9 @@ pub fn validate_package(dir: &Path, m: &Manifest) -> Result<()> {
     if !m.metadata.is_empty() && !ex.metadata {
         bail!("plugin.json 声明了 metadata，但 {w} 没有导出 tmv_metadata");
     }
+    if !m.stacks.is_empty() && !ex.stack {
+        bail!("plugin.json 声明了 stacks，但 {w} 没有导出 tmv_stack");
+    }
     Instance::new(&module, Arc::new(Vec::new()), &m.id)?;
     Ok(())
 }
@@ -299,6 +356,19 @@ struct InfoJson {
     series: Vec<SeriesJson>,
     #[serde(default)]
     series_index: usize,
+    spectrum: Option<SpectrumJson>,
+}
+
+#[derive(Deserialize)]
+struct SpectrumJson {
+    axis: String,
+    #[serde(default)]
+    start: f64,
+    step: f64,
+    #[serde(default)]
+    unit: String,
+    #[serde(default)]
+    kind: String,
 }
 
 #[derive(Deserialize)]
@@ -390,6 +460,11 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
         page_count,
         series: vec![],
         series_index: 0,
+        folder: None,
+        spectrum: j
+            .spectrum
+            .filter(|s| (s.axis == "x" || s.axis == "z") && s.start.is_finite() && s.step.is_finite() && s.step != 0.0)
+            .map(|s| SpectrumInfo { axis: s.axis, start: s.start, step: s.step, unit: s.unit, kind: s.kind }),
     };
     if j.series.len() > 1 && j.series_index < j.series.len() {
         info.series_index = j.series_index;
@@ -499,6 +574,105 @@ impl Drop for WasmSource {
     }
 }
 
+// ---------------------------------------------------------------- stacks
+
+/// What a plugin read from an acquisition project file: the slice files of
+/// one image stack, in Z order, and what to show about them.
+#[derive(Clone)]
+pub struct StackPlan {
+    pub config: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub format: Option<String>,
+    /// Distance between slices and its unit.
+    pub z_spacing: Option<(f64, String)>,
+    pub metadata: Vec<MetaGroup>,
+    pub series: Vec<SeriesInfo>,
+    pub series_index: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StackJson {
+    files: Vec<String>,
+    format: Option<String>,
+    z_spacing: Option<f64>,
+    #[serde(default)]
+    unit: String,
+    #[serde(default)]
+    metadata: Vec<GroupJson>,
+    #[serde(default)]
+    series: Vec<StackSeriesJson>,
+    #[serde(default)]
+    series_index: usize,
+}
+
+#[derive(Deserialize)]
+struct StackSeriesJson {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    detail: String,
+    /// The folder holding this series' slices, relative to the project file.
+    #[serde(default)]
+    dir: String,
+}
+
+fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usize, opened: Option<&Path>) -> Result<StackPlan> {
+    let base = config.parent().context("项目文件没有所在文件夹")?.to_path_buf();
+    let listing = crate::formats::sequence::list_tree(&base);
+    let mut inst = Instance::new(pkg.module()?, map_file(config)?, &pkg.manifest.id)?;
+    let path = config.to_string_lossy();
+    let joined = listing.join("\n");
+    let call = |inst: &mut Instance, series: usize| -> Result<StackJson> {
+        let json = inst.stack(&path, &joined, u32::try_from(series).context("图像序号太大")?)?;
+        serde_json::from_slice(&json).map_err(|e| anyhow!("插件返回的堆叠信息不对：{e}"))
+    };
+    let mut j = call(&mut inst, series)?;
+    // Opened as one of the project's folders: show that folder's stack.
+    if let (Some(dir), 0) = (opened, series) {
+        let same = |rel: &str| !rel.is_empty() && std::fs::canonicalize(base.join(rel)).ok() == std::fs::canonicalize(dir).ok();
+        if let Some(i) = j.series.iter().position(|s| same(&s.dir)) {
+            if i != j.series_index {
+                j = call(&mut inst, i)?;
+            }
+        }
+    }
+    let known: HashSet<&str> = listing.iter().map(String::as_str).collect();
+    let mut files = Vec::with_capacity(j.files.len());
+    for f in &j.files {
+        if !known.contains(f.as_str()) {
+            bail!("插件给出的切片文件不在项目文件夹里：{f}");
+        }
+        let p = base.join(f);
+        if !crate::formats::is_supported_with(&p, reg) {
+            bail!("插件给出的切片文件打不开：{f}");
+        }
+        files.push(p);
+    }
+    if files.is_empty() {
+        bail!("项目里没有找到切片图像");
+    }
+    let mut plan = StackPlan {
+        config: config.to_path_buf(),
+        files,
+        format: j.format.filter(|f| !f.is_empty()).or_else(|| (!name.is_empty()).then(|| name.to_string())),
+        z_spacing: j.z_spacing.filter(|z| z.is_finite() && *z > 0.0).map(|z| (z, j.unit.clone())),
+        metadata: j.metadata.into_iter().map(GroupJson::into_group).collect(),
+        series: vec![],
+        series_index: 0,
+    };
+    if j.series.len() > 1 && j.series_index < j.series.len() {
+        plan.series_index = j.series_index;
+        plan.series = j
+            .series
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| SeriesInfo { name: if s.name.is_empty() { format!("序列 {}", i + 1) } else { s.name }, detail: s.detail })
+            .collect();
+    }
+    Ok(plan)
+}
+
 // ---------------------------------------------------------------- metadata
 
 #[derive(Deserialize)]
@@ -576,6 +750,20 @@ mod tests {
         assert_eq!(i.channels[1].name, "C2");
         assert_eq!(i.metadata[0].items[0], ["k".to_string(), "v".to_string()]);
         assert_eq!(i.locate(1, 0, 0).0, 5, "ZCT order");
+        assert_eq!(i.spectrum, None);
+        let i = parse_info(
+            br#"{"width":2048,"height":1,"dtype":"f32","spectrum":{"axis":"x","start":-100,"step":0.5,"unit":"eV","kind":"EELS"}}"#,
+            p,
+            "ABC",
+        )
+        .unwrap();
+        let sp = i.spectrum.unwrap();
+        assert_eq!((sp.axis.as_str(), sp.start, sp.step, sp.unit.as_str(), sp.kind.as_str()), ("x", -100.0, 0.5, "eV", "EELS"));
+        // A spectrum axis the viewer cannot plot is dropped, not an error.
+        for odd in [r#"{"axis":"y","step":1}"#, r#"{"axis":"z","step":0}"#] {
+            let j = format!(r#"{{"width":4,"height":3,"dtype":"u8","spectrum":{odd}}}"#);
+            assert_eq!(parse_info(j.as_bytes(), p, "x").unwrap().spectrum, None, "{odd}");
+        }
         for bad in [
             &br#"{"width":0,"height":3,"dtype":"u8"}"#[..],
             br#"{"width":4,"height":3,"dtype":"u12"}"#,

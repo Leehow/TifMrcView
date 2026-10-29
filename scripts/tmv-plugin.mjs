@@ -16,6 +16,7 @@ const EXPORTS = {
   tmv_page: [[0x7f, 0x7f], [0x7e]],
   tmv_close: [[0x7f], []],
   tmv_metadata: [[0x7f, 0x7f], [0x7e]],
+  tmv_stack: [[0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7e]],
 };
 const IMPORTS = {
   file_size: [[], [0x7e]],
@@ -105,8 +106,10 @@ export function checkWasm(bytes, manifest) {
     const required = ["memory", "tmv_abi", "tmv_alloc", "tmv_free"];
     if (manifest.formats?.length) required.push(...FORMAT_EXPORTS);
     if (manifest.metadata) required.push("tmv_metadata");
-    if (!FORMAT_EXPORTS.every((n) => exports.some((e) => e.name === n)) && !exports.some((e) => e.name === "tmv_metadata")) {
-      errors.push("module needs format exports or tmv_metadata");
+    if (manifest.stacks?.length) required.push("tmv_stack");
+    const has = (n) => exports.some((e) => e.name === n);
+    if (!FORMAT_EXPORTS.every(has) && !has("tmv_metadata") && !has("tmv_stack")) {
+      errors.push("module needs format exports, tmv_metadata or tmv_stack");
     }
     for (const name of required) if (!exports.some((e) => e.name === name)) errors.push(`missing export ${name}`);
     for (const e of exports) {

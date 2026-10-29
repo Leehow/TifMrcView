@@ -17,6 +17,7 @@ mod tags;
 use tags::{path, Node, Tree};
 use tifmrcview_plugin_sdk::{
     bail, export_format, flags, Channel, Chunk, DType, Format, Group, Info, Recipe, Result, Series,
+    Spectrum, SpectrumAxis,
 };
 
 /// How the pixels of one image are stored.
@@ -182,7 +183,8 @@ fn image(img: &Dir, index: usize, le: bool) -> Result<Option<Image>> {
 
 // ------------------------------------------------------------- calibration
 
-/// Length units the viewer knows: (factor to nm, unit shown).
+/// Units the viewer knows: (factor to nm, or to 1/nm for reciprocal
+/// units, and the unit shown).
 fn length_unit(u: &str) -> Option<(f64, &'static str)> {
     Some(match u.trim() {
         "pm" => (1e-3, "Å"),
@@ -191,6 +193,12 @@ fn length_unit(u: &str) -> Option<(f64, &'static str)> {
         "µm" | "μm" | "um" | "micron" | "microns" => (1e3, "µm"),
         "mm" => (1e6, "mm"),
         "m" => (1e9, "mm"),
+        // Diffraction patterns.
+        "1/pm" => (1e3, "1/Å"),
+        "1/Å" | "1/A" => (10.0, "1/Å"),
+        "1/nm" => (1.0, "1/nm"),
+        "1/µm" | "1/μm" | "1/um" => (1e-3, "1/µm"),
+        "1/m" => (1e-9, "1/nm"),
         _ => return None,
     })
 }
@@ -198,10 +206,16 @@ fn length_unit(u: &str) -> Option<(f64, &'static str)> {
 fn unit_to_nm(u: &str) -> f64 {
     match u {
         "Å" => 0.1,
-        "nm" => 1.0,
+        "nm" | "1/nm" => 1.0,
         "µm" => 1e3,
+        "1/Å" => 10.0,
+        "1/µm" => 1e-3,
         _ => 1e6,
     }
+}
+
+fn reciprocal(u: &str) -> bool {
+    u.starts_with("1/")
 }
 
 /// Rounds away the noise of a value stored as f32.
@@ -235,7 +249,8 @@ fn calibrations(img: &Dir, le: bool) -> Vec<Option<Cal>> {
         .collect()
 }
 
-/// Pixel size (x, y, z) and its unit, when X is calibrated in a length.
+/// Pixel size (x, y, z) and its unit, when X is calibrated in a length
+/// (or a reciprocal length, for diffraction patterns).
 fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
     let cx = cals.first()?.as_ref()?;
     let (fx, unit) = length_unit(&cx.units)?;
@@ -244,10 +259,11 @@ fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
     }
     let per = unit_to_nm(unit);
     let axis = |i: usize| -> f64 {
-        cals.get(i)
-            .and_then(|c| c.as_ref())
-            .and_then(|c| length_unit(&c.units).map(|(f, _)| c.scale.abs() * f / per))
-            .unwrap_or(0.0)
+        let Some(c) = cals.get(i).and_then(|c| c.as_ref()) else { return 0.0 };
+        match length_unit(&c.units) {
+            Some((f, u)) if reciprocal(u) == reciprocal(unit) => c.scale.abs() * f / per,
+            _ => 0.0,
+        }
     };
     let x = cx.scale * fx / per;
     let y = match axis(1) {
@@ -255,6 +271,46 @@ fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
         y => y,
     };
     Some(([tidy(x), tidy(y), tidy(axis(2))], unit))
+}
+
+// ------------------------------------------------------------- spectra
+
+fn energy_unit(u: &str) -> bool {
+    matches!(u.trim(), "eV" | "keV" | "meV")
+}
+
+/// The spectrum axis, when the image holds spectra: DM marks them with
+/// `ImageTags.Meta Data.Format` ("Spectrum", "Spectrum image"); 1D data and
+/// data with an energy axis count too. Only a spectrum along X (each row a
+/// spectrum) or along Z (a spectrum image) can be plotted.
+fn spectrum(img: &Dir, le: bool, dims: &[u64], cals: &[Option<Cal>]) -> Option<Spectrum> {
+    let text = |p: &[&str]| path(img, p).and_then(|n| n.text(le)).unwrap_or_default();
+    let format = text(&["ImageTags", "Meta Data", "Format"]);
+    let signal = text(&["ImageTags", "Meta Data", "Signal"]);
+    let unit = |k: usize| cals.get(k).and_then(|c| c.as_ref()).map(|c| c.units.trim()).unwrap_or("");
+    let energy = (0..dims.len()).find(|&k| energy_unit(unit(k)));
+    let k = if format.eq_ignore_ascii_case("Spectrum") || dims.len() == 1 {
+        0
+    } else if format.eq_ignore_ascii_case("Spectrum image") {
+        // The spectral axis is the one in other units than the scan.
+        energy.unwrap_or(if dims.len() == 3 && unit(0) == unit(1) { 2 } else { 0 })
+    } else {
+        energy?
+    };
+    let axis = match (k, dims.len()) {
+        (0, _) => SpectrumAxis::X,
+        (2, 3) => SpectrumAxis::Z,
+        _ => return None,
+    };
+    let (start, step, units) = match cals.get(k).and_then(|c| c.as_ref()) {
+        Some(c) if c.scale != 0.0 => (tidy(-c.origin * c.scale), tidy(c.scale), c.units.trim().to_string()),
+        _ => (0.0, 1.0, String::new()),
+    };
+    let kind = match signal.as_str() {
+        "X-ray" | "EDS" | "EDX" => "EDS".to_string(),
+        s => s.to_string(),
+    };
+    Some(Spectrum { axis, start, step, unit: units, kind })
 }
 
 // ------------------------------------------------------------- metadata
@@ -459,9 +515,16 @@ impl Format for Gatan {
             info.channels = vec![Channel { name, color: [255, 255, 255] }];
         }
         let cals = calibrations(dir, le);
+        info.spectrum = match i.pixels {
+            Pixels::Gray(_) => spectrum(dir, le, &i.dims, &cals),
+            _ => None,
+        };
         if let Some((ps, unit)) = pixel_size(&cals) {
-            info.pixel_size = Some(ps);
-            info.unit = unit.into();
+            // Not when X is the spectrum's axis (a CL wavelength in nm, say).
+            if !matches!(&info.spectrum, Some(s) if s.axis == SpectrumAxis::X) {
+                info.pixel_size = Some(ps);
+                info.unit = unit.into();
+            }
         }
         image_group(&self.tree, dir, i, &cals).push_to(&mut info.metadata);
         microscope_group(dir, le).push_to(&mut info.metadata);

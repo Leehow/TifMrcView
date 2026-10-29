@@ -15,7 +15,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use tifmrcview_lib::formats;
-use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source};
+use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source, SpectrumInfo};
 use tifmrcview_lib::plugins::registry::Registry;
 
 macro_rules! thermo {
@@ -198,13 +198,13 @@ fn tia_ser_series_rows_flipped_and_calibrated() {
 }
 
 #[test]
-fn tia_diffraction_has_no_pixel_size_and_emi_and_spectra_explain() {
+fn tia_diffraction_in_reciprocal_units_and_emi_explains() {
     let p = thermo!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("diff_1.ser");
     ser(&path, 0x220, 4.2e7, &[img(2, 2, 0)]);
     let i = open(&p.registry, &path).info().clone();
-    assert_eq!(i.pixel_size, None);
+    px(&i, "1/nm", 0.042);
     assert_eq!(
         item(&i, "TIA 图像", "标定类型").as_deref(),
         Some("倒空间（衍射）")
@@ -214,10 +214,75 @@ fn tia_diffraction_has_no_pixel_size_and_emi_and_spectra_explain() {
     std::fs::write(&emi, b"anything").unwrap();
     assert!(open_err(&p.registry, &emi).contains("_1.ser"));
 
-    let mut spectra = std::fs::read(&path).unwrap();
-    spectra[6..10].copy_from_slice(&0x4120u32.to_le_bytes());
-    std::fs::write(&path, spectra).unwrap();
-    assert!(open_err(&p.registry, &path).contains("谱图"));
+}
+
+/// A TIA series of 1D elements (spectra) with `dims` series dimensions.
+fn ser_spectra(path: &Path, dims: &[u32], spectra: &[Vec<i32>]) {
+    let n = spectra.len() as u32;
+    let mut b = vec![];
+    b.extend(0x4949u16.to_le_bytes());
+    b.extend(0x0197u16.to_le_bytes());
+    b.extend(0x0220u16.to_le_bytes());
+    b.extend(0x4120u32.to_le_bytes());
+    b.extend(0x4152u32.to_le_bytes());
+    b.extend(n.to_le_bytes());
+    b.extend(n.to_le_bytes());
+    let arrays_at = b.len();
+    b.extend(0u64.to_le_bytes());
+    b.extend((dims.len() as u32).to_le_bytes());
+    for &d in dims {
+        b.extend(d.to_le_bytes());
+        b.extend(0f64.to_le_bytes());
+        b.extend(1e-9f64.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend(b"X");
+        b.extend(0u32.to_le_bytes());
+    }
+    let mut data = vec![];
+    for s in spectra {
+        data.push(b.len() as u64);
+        b.extend(100f64.to_le_bytes()); // value at the calibration element
+        b.extend(2.5f64.to_le_bytes()); // eV per channel
+        b.extend(4i32.to_le_bytes()); // calibration element
+        b.extend(6u16.to_le_bytes()); // i32
+        b.extend((s.len() as u32).to_le_bytes());
+        for v in s {
+            b.extend(v.to_le_bytes());
+        }
+    }
+    let arrays = b.len() as u64;
+    for v in data.iter().chain(&data) {
+        b.extend(v.to_le_bytes());
+    }
+    b[arrays_at..arrays_at + 8].copy_from_slice(&arrays.to_le_bytes());
+    std::fs::write(path, b).unwrap();
+}
+
+#[test]
+fn tia_spectra_become_rows() {
+    let p = thermo!();
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = |k: i32| (0..6).map(|i| i * 10 + k).collect::<Vec<i32>>();
+    // A single spectrum.
+    let path = tmp.path().join("eds_1.ser");
+    ser_spectra(&path, &[1], &[spec(0)]);
+    let src = open(&p.registry, &path);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.page_count, i.dtype), (6, 1, 1, DType::I32));
+    assert_eq!(
+        i.spectrum,
+        Some(SpectrumInfo { axis: "x".into(), start: 90.0, step: 2.5, unit: "eV".into(), kind: String::new() })
+    );
+    assert_eq!(page(&*src, 0), [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]);
+    // A 3 × 2 spectrum image: one scan line per page.
+    let path = tmp.path().join("si_1.ser");
+    ser_spectra(&path, &[3, 2], &(0..6).map(spec).collect::<Vec<_>>());
+    let src = open(&p.registry, &path);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.page_count), (6, 3, 2));
+    let row = |k: i32| spec(k).into_iter().map(f64::from).collect::<Vec<_>>();
+    assert_eq!(page(&*src, 1), [row(3), row(4), row(5)].concat());
 }
 
 // ---------------------------------------------------------------- Velox EMD
@@ -497,6 +562,61 @@ fn fei_tiff_settings_and_pixel_size() {
     let plain = tmp.path().join("plain.tif");
     tiff(&plain, 4, 4, &[]);
     assert_eq!(open(&p.registry, &plain).info().format, "TIFF");
+}
+
+/// An Auto Slice & View project: ProjectData.dat, two detectors' slices
+/// (FEI TIFFs, 3 nm pixels), log images and an overview.
+fn asv_project(root: &Path) {
+    let xml = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<ProjectData>\r\n  <Name>worm</Name>\r\n  <TimeCreated>2015-11-10T08:29:09</TimeCreated>\r\n  <ExecutionResult>Finished</ExecutionResult>\r\n  <Results>\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"9E-09\" />\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"1.1E-08\" />\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"NaN\" />\r\n  </Results>\r\n</ProjectData>\r\n";
+    std::fs::write(root.join("ProjectData.dat"), xml).unwrap();
+    let ini = "[System]\r\nSystemType=Helios NanoLab\" 650\r\n[Scan]\r\nPixelWidth=3e-09\r\nPixelHeight=3e-09\r\n\0";
+    let fei = [(34682u16, 2u16, ini.len() as u32, ini.as_bytes().to_vec())];
+    for (dir, n) in [("Images/SEM Image", 3), ("Images/SEM Image 2", 2), ("LogImages", 4)] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        for i in 1..=n {
+            tiff(&root.join(dir).join(format!("worm - SliceImage - {i:03}.tif")), 6, 4, &fei);
+        }
+    }
+    tiff(&root.join("Images/overview.tif"), 6, 4, &fei);
+}
+
+#[test]
+fn auto_slice_and_view_projects_are_z_stacks() {
+    let p = thermo!();
+    let tmp = tempfile::tempdir().unwrap();
+    asv_project(tmp.path());
+    let config = tmp.path().join("ProjectData.dat");
+    assert!(p.registry.is_stack_file(&config));
+    let src = open(&p.registry, &config);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.size_z, i.page_count), (6, 4, 3, 3));
+    assert!(i.format.starts_with("Thermo Auto Slice & View · "), "{}", i.format);
+    let ps = i.pixel_size.unwrap();
+    assert_eq!(i.unit, "nm");
+    assert!((ps[0] - 3.0).abs() < 1e-9 && (ps[2] - 10.0).abs() < 1e-9, "{ps:?}");
+    assert_eq!(item(&i, "Auto Slice & View 项目", "项目名称").as_deref(), Some("worm"));
+    assert_eq!(item(&i, "Auto Slice & View 项目", "切片数（项目记录）").as_deref(), Some("3"));
+    assert_eq!(item(&i, "Auto Slice & View 项目", "实测切片厚度").as_deref(), Some("10 nm ± 1 nm（2 片的平均）"));
+    assert_eq!(item(&i, "图像序列", "文件数").as_deref(), Some("3"));
+    assert!(item(&i, "图像序列", "Z 间距").unwrap().starts_with("10 nm"));
+    assert_eq!(i.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["SEM Image", "SEM Image 2"]);
+    assert_eq!(page(&*src, 2)[5], 5.0);
+    assert!(i.folder.as_deref().unwrap().ends_with("Images/SEM Image"));
+
+    // The other detector, through the series picker.
+    let second = formats::open_series_with(&config, 1, &p.registry).unwrap();
+    assert_eq!((second.info().size_z, second.info().series_index), (2, 1));
+
+    // Opening an image folder of the project finds the project file two
+    // levels up and shows that folder's stack.
+    let dir = tmp.path().join("Images/SEM Image 2");
+    let src = open(&p.registry, &dir);
+    assert_eq!((src.info().size_z, src.info().series_index), (2, 1));
+    assert_eq!(src.info().path, config.to_string_lossy());
+    // The log images are not part of any project stack: a plain sequence.
+    let logs = open(&p.registry, &tmp.path().join("LogImages"));
+    assert_eq!(logs.info().size_z, 4);
+    assert!(logs.info().format.starts_with("图像序列"), "{}", logs.info().format);
 }
 
 /// An MRC with an FEI2 extended header, `n` 2×2 i16 sections tilted by

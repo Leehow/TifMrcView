@@ -36,6 +36,7 @@ const MAX_DECOMPRESS: usize = 256 << 20;
 const REQUIRED: &[&str] = &["memory", "tmv_abi", "tmv_alloc", "tmv_free"];
 const FORMAT_EXPORTS: &[&str] = &["tmv_open", "tmv_info", "tmv_page", "tmv_close"];
 const METADATA_EXPORTS: &[&str] = &["tmv_metadata"];
+const STACK_EXPORTS: &[&str] = &["tmv_stack"];
 
 fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
@@ -51,6 +52,7 @@ fn engine() -> &'static Engine {
 pub struct Exports {
     pub format: bool,
     pub metadata: bool,
+    pub stack: bool,
 }
 
 /// Compiles (and validates) a plugin module.
@@ -69,10 +71,11 @@ pub fn compile(bytes: &[u8]) -> Result<(Module, Exports)> {
     }
     let format = FORMAT_EXPORTS.iter().all(|n| has(n));
     let metadata = METADATA_EXPORTS.iter().all(|n| has(n));
-    if !format && !metadata {
-        bail!("WebAssembly 模块既没有 tmv_open/tmv_info/tmv_page/tmv_close，也没有 tmv_metadata");
+    let stack = STACK_EXPORTS.iter().all(|n| has(n));
+    if !format && !metadata && !stack {
+        bail!("WebAssembly 模块既没有 tmv_open/tmv_info/tmv_page/tmv_close，也没有 tmv_metadata 或 tmv_stack");
     }
-    Ok((module, Exports { format, metadata }))
+    Ok((module, Exports { format, metadata, stack }))
 }
 
 const IMPORTS: &[&str] = &["file_size", "read", "decompress", "log", "error"];
@@ -272,6 +275,26 @@ impl Instance {
         let _ = self.call::<i32, ()>("tmv_close", handle, FUEL_CALL);
     }
 
+    /// Describes the image stack of an acquisition project file: `listing`
+    /// holds the files around it, one relative path per line.
+    pub fn stack(&mut self, path: &str, listing: &str, series: u32) -> Result<Vec<u8>> {
+        let arg = self.put(path)?;
+        let list = match self.put(listing) {
+            Ok(l) => l,
+            Err(e) => {
+                self.release(arg);
+                return Err(e);
+            }
+        };
+        let r = self.call::<(u32, u32, u32, u32, u32), u64>("tmv_stack", (arg.0, arg.1, list.0, list.1, series), FUEL_OPEN);
+        self.release(list);
+        self.release(arg);
+        match r? {
+            0 => Err(self.reported("读取这个项目文件")),
+            p => self.take(p),
+        }
+    }
+
     pub fn metadata(&mut self, path: &str) -> Result<Vec<u8>> {
         let arg = self.put(path)?;
         let r = self.call::<(u32, u32), u64>("tmv_metadata", arg, FUEL_OPEN);
@@ -401,7 +424,7 @@ mod tests {
         let spin: &[u8] = &[0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00];
         let m = asm::plugin(&[("tmv_metadata", &[asm::I32, asm::I32], &[asm::I64], spin)]);
         let (module, ex) = compile(&m).unwrap();
-        assert_eq!(ex, Exports { format: false, metadata: true });
+        assert_eq!(ex, Exports { format: false, metadata: true, stack: false });
         let mut inst = Instance::new(&module, file(), "spin").unwrap();
         // A smaller budget keeps the test quick; the mechanism is the same.
         let arg = inst.put("x").unwrap();

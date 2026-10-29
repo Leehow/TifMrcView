@@ -17,7 +17,8 @@
 
 use crate::{fmt, length, unix_time};
 use tifmrcview_plugin_sdk::{
-    bail, file, le_u16, le_u32, le_u64, Chunk, DType, Group, Info, Recipe, Result,
+    bail, file, le_u16, le_u32, le_u64, Chunk, DType, Group, Info, Recipe, Result, Spectrum,
+    SpectrumAxis,
 };
 
 const DATA_1D: u32 = 0x4120;
@@ -84,7 +85,13 @@ pub struct Ser {
     tag_type: u16,
     first_tag: Option<(u32, Option<(f64, f64)>)>,
     total: u32,
+    /// Spectra (EDS / EELS): each element is one row of `width` channels,
+    /// `height` of them per page.
+    spectra: bool,
 }
+
+/// Spectra per page: a scan line of a spectrum image, or all of them.
+const MAX_SPECTRUM_ROWS: u32 = 4096;
 
 fn text(b: &[u8]) -> String {
     b.iter()
@@ -119,10 +126,8 @@ impl Ser {
         } else {
             (le_u32(&h, 22) as u64, le_u32(&h, 26), 30)
         };
-        if data_type == DATA_1D {
-            bail!("这个 TIA 文件保存的是谱图（EDS / EELS 谱或谱图像），不是图像，暂不支持");
-        }
-        if data_type != DATA_2D {
+        let spectra = data_type == DATA_1D;
+        if data_type != DATA_2D && !spectra {
             bail!("不认识的 TIA 数据类型 0x{data_type:04x}");
         }
         if valid == 0 {
@@ -160,16 +165,31 @@ impl Ser {
         let data: Vec<u64> = (0..valid as usize).map(off).collect();
         let tag_at = off(total as usize);
         let e = file::read(data[0], 50)?;
-        let pixel = le_u16(&e, 40);
+        let (pixel, width, height, cal);
+        if spectra {
+            // Offset, delta, calibration element, pixel type, length.
+            pixel = le_u16(&e, 20);
+            width = le_u32(&e, 22);
+            let delta = f64_at(&e, 8);
+            let first = f64_at(&e, 0) - delta * le_u32(&e, 16) as i32 as f64;
+            cal = [(first, delta), (0.0, 0.0)];
+            height = match dims.first() {
+                Some(d) if dims.len() >= 2 && d.size > 0 => d.size,
+                _ => valid,
+            }
+            .min(MAX_SPECTRUM_ROWS);
+        } else {
+            pixel = le_u16(&e, 40);
+            (width, height) = (le_u32(&e, 42), le_u32(&e, 46));
+            cal = [
+                (f64_at(&e, 0), f64_at(&e, 8)),
+                (f64_at(&e, 20), f64_at(&e, 28)),
+            ];
+        }
         let dtype = pixel_type(pixel)?;
-        let (width, height) = (le_u32(&e, 42), le_u32(&e, 46));
         if width == 0 || height == 0 {
             bail!("TIA 图像尺寸不对（{width} × {height}）");
         }
-        let cal = [
-            (f64_at(&e, 0), f64_at(&e, 8)),
-            (f64_at(&e, 20), f64_at(&e, 28)),
-        ];
         let first_tag = file::read(tag_at, 24)
             .ok()
             .filter(|t| le_u16(t, 0) == tag_type)
@@ -189,10 +209,14 @@ impl Ser {
             tag_type,
             first_tag,
             total,
+            spectra,
         })
     }
 
     pub fn info(&mut self) -> Result<Info> {
+        if self.spectra {
+            return Ok(self.spectra_info());
+        }
         let mut info = Info::new(self.width, self.height, self.dtype, "TIA SER");
         info.size_t = self.data.len() as u32;
         info.page_count = info.size_t;
@@ -203,6 +227,11 @@ impl Ser {
             let (x, unit) = length(dx);
             let f = x / dx;
             info.pixel_size = Some([x, if dy > 0.0 { dy * f } else { x }, 0.0]);
+            info.unit = unit.into();
+        } else if dx > 0.0 {
+            let (x, unit) = crate::reciprocal(dx);
+            let y = if dy > 0.0 { crate::reciprocal(dy).0 } else { x };
+            info.pixel_size = Some([x, y, 0.0]);
             info.unit = unit.into();
         }
         let mut g = Group::new("TIA 图像");
@@ -276,7 +305,51 @@ impl Ser {
         Ok(info)
     }
 
+    /// Spectra as rows: a single spectrum, a line scan or one scan line of
+    /// a spectrum image per page.
+    fn spectra_info(&self) -> Info {
+        let mut info = Info::new(self.width, self.height, self.dtype, "TIA SER（谱图）");
+        info.size_t = (self.data.len() as u32).div_ceil(self.height);
+        info.page_count = info.size_t;
+        let (start, step) = self.cal[0];
+        info.spectrum = Some(Spectrum {
+            axis: SpectrumAxis::X,
+            start: crate::tidy(start),
+            step: crate::tidy(step),
+            // TIA calibrates spectra in eV; the unit itself is in the .emi.
+            unit: "eV".into(),
+            kind: String::new(),
+        });
+        let mut g = Group::new("TIA 谱图");
+        g.add_str(
+            "文件格式",
+            &format!("TIA SER（版本 0x{:04x}）", self.version),
+        );
+        g.add_str("通道数", &self.width.to_string());
+        g.add_str("谱的数量", &format!("{}（共预留 {}）", self.data.len(), self.total));
+        g.add_str("像素类型", pixel_type_name(self.pixel));
+        g.add_str("能量标定", &format!("起点 {} eV，每通道 {} eV", fmt(start), fmt(step)));
+        for (k, d) in self.dims.iter().enumerate() {
+            let name = if d.description.is_empty() { format!("序列维度 {}", k + 1) } else { d.description.clone() };
+            g.add_str(&format!("序列维度 {}：{name}", k + 1), &format!("{} 个", d.size));
+        }
+        if self.height > 1 {
+            g.add_str("显示", "每一行是一条谱；在图上点一行看那条谱");
+        }
+        g.push_to(&mut info.metadata);
+        info
+    }
+
     pub fn page(&self, page: u32) -> Result<Recipe> {
+        if self.spectra {
+            let row = self.width as u64 * self.dtype.size() as u64;
+            let mut r = Recipe::new();
+            let first = page as usize * self.height as usize;
+            for (y, &at) in self.data.iter().skip(first).take(self.height as usize).enumerate() {
+                r.push(Chunk::file(at + 26, row, [0, y as u32, self.width, 1]));
+            }
+            return Ok(r);
+        }
         let Some(&at) = self.data.get(page as usize) else {
             bail!("没有第 {} 张图像", page + 1)
         };

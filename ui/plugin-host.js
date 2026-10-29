@@ -195,7 +195,7 @@ function makeApi(rec) {
         renderMeta();
         return true;
       },
-      /** Sets the physical pixel size `{x, y, unit}` (unit Å / nm / µm / mm), as if the file said so. */
+      /** Sets the physical pixel size `{x, y, unit}` (unit Å / nm / µm / mm, or 1/µm / 1/nm / 1/Å for diffraction), as if the file said so. */
       setPixelSize(path, { x, y, unit }) {
         if (!S.info || S.info.path !== path || !(x > 0) || !UNIT_M[unit]) return false;
         S.px = { x, y: y > 0 ? y : x, unit };

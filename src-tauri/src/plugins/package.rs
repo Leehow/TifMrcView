@@ -83,6 +83,9 @@ pub struct Manifest {
     pub formats: Vec<FormatDecl>,
     /// Extensions whose files `tmv_metadata` should see.
     pub metadata: Vec<String>,
+    /// Project files of acquisition programs that `tmv_stack` turns into a
+    /// Z stack of the slice images around them.
+    pub stacks: Vec<StackDecl>,
     /// Older packages this one takes over (`replaces`), e.g. when several
     /// plugins of one brand merge. An installed package hides the ones it
     /// replaces; an official install from the market also removes them.
@@ -103,6 +106,58 @@ fn parse_exts(v: Option<&Value>, what: &str) -> Result<Vec<String>> {
     }
     if out.is_empty() {
         bail!("{what} 至少要有一个扩展名");
+    }
+    Ok(out)
+}
+
+/// `stacks` entry of plugin.json: file names (`*` matches any run of
+/// characters, case is ignored) and a display name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StackDecl {
+    pub files: Vec<String>,
+    pub name: String,
+}
+
+impl StackDecl {
+    pub fn matches(&self, file_name: &str) -> bool {
+        self.files.iter().any(|p| glob_match(&p.to_lowercase(), &file_name.to_lowercase()))
+    }
+}
+
+/// `*` matches any run of characters; everything else matches itself.
+fn glob_match(pat: &str, s: &str) -> bool {
+    let mut parts = pat.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = s.strip_prefix(first) else { return false };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else { return rest.is_empty() };
+    for m in middle {
+        match rest.find(m) {
+            Some(i) => rest = &rest[i + m.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
+    let Some(v) = v else { return Ok(vec![]) };
+    let mut out = vec![];
+    for d in v.as_array().ok_or_else(|| anyhow!("stacks 必须是列表"))? {
+        let files = d.get("files").and_then(Value::as_array).ok_or_else(|| anyhow!("stacks 的 files 必须是文件名列表"))?;
+        let mut names = vec![];
+        for f in files {
+            let f = f.as_str().unwrap_or("");
+            if f.is_empty() || f.len() > 64 || f.contains(['/', '\\']) || f.chars().all(|c| c == '*' || c == '.') {
+                bail!("stacks 里的文件名不对：{f}");
+            }
+            names.push(f.to_string());
+        }
+        if names.is_empty() {
+            bail!("stacks 至少要有一个文件名");
+        }
+        let name = d.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        out.push(StackDecl { files: names, name });
     }
     Ok(out)
 }
@@ -170,8 +225,9 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
         None => vec![],
         Some(m) => parse_exts(m.get("ext"), "metadata")?,
     };
-    if wasm.is_none() && (!formats.is_empty() || !metadata.is_empty()) {
-        bail!("声明了 formats 或 metadata 的插件必须有 wasm 模块");
+    let stacks = parse_stacks(raw.get("stacks"))?;
+    if wasm.is_none() && (!formats.is_empty() || !metadata.is_empty() || !stacks.is_empty()) {
+        bail!("声明了 formats、metadata 或 stacks 的插件必须有 wasm 模块");
     }
     let mut replaces = vec![];
     if let Some(r) = raw.get("replaces") {
@@ -184,7 +240,7 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
         }
     }
     let name = s("name").unwrap_or_default().to_string();
-    Ok(Manifest { id, name, main, wasm, formats, metadata, replaces, raw })
+    Ok(Manifest { id, name, main, wasm, formats, metadata, stacks, replaces, raw })
 }
 
 /// Reads and checks `<pkg>/plugin.json`, including that `main` exists.
@@ -592,6 +648,21 @@ mod tests {
         assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":[]}]"#).is_err());
         assert!(parse(r#""wasm":"f.wasm","metadata":{"ext":"tif"}"#).is_err());
         assert!(parse(r#""wasm":"f.wasm","metadata":{"ext":["tif"]}"#).is_ok());
+    }
+
+    #[test]
+    fn manifest_stacks() {
+        let base = r#""id":"vem","name":"V","version":"1.0.0""#;
+        let parse = |extra: &str| parse_manifest(format!("{{{base},{extra}}}").as_bytes(), "0.7.0");
+        let m = parse(r#""wasm":"v.wasm","stacks":[{"files":["ProjectData.dat","*.a3d"],"name":"ASV"}]"#).unwrap();
+        let d = &m.stacks[0];
+        assert_eq!(d.name, "ASV");
+        assert!(d.matches("projectdata.DAT") && d.matches("run.A3D") && !d.matches("ProjectData.dat.bak") && !d.matches("x.a3dx"));
+        assert!(parse(r#""stacks":[{"files":["a.dat"]}]"#).is_err(), "stacks without wasm");
+        for bad in [r#"[{"files":[]}]"#, r#"[{"files":["a/b.dat"]}]"#, r#"[{"files":["*"]}]"#, r#"{"files":["a"]}"#] {
+            assert!(parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).is_err(), "{bad}");
+        }
+        assert!(glob_match("a*b*c", "aXbYc") && glob_match("a*", "a") && !glob_match("a*b", "ab_") && glob_match("*.tif", ".tif"));
     }
 
     #[test]

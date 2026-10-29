@@ -323,6 +323,22 @@ pub struct ImageInfo {
     pub series: Vec<SeriesInfo>,
     /// Which entry of `series` is open.
     pub series_index: usize,
+    /// For a stack built from the slice images of a folder: that folder.
+    pub folder: Option<String>,
+    /// Set when the pixels are spectra (EELS, EDS…) for the viewer to plot.
+    pub spectrum: Option<SpectrumInfo>,
+}
+
+/// Where a spectrum's axis lies: `axis` "x" (each row is a spectrum) or "z"
+/// (a spectrum image, each pixel's spectrum through the slices); the value
+/// of channel `i` is `start + i * step` in `unit`.
+#[derive(Clone, Serialize, Debug, PartialEq)]
+pub struct SpectrumInfo {
+    pub axis: String,
+    pub start: f64,
+    pub step: f64,
+    pub unit: String,
+    pub kind: String,
 }
 
 pub const DEFAULT_COLORS: [[u8; 3]; 7] = [
@@ -600,6 +616,8 @@ mod prefetch_tests {
             page_count: 3,
             series: vec![],
             series_index: 0,
+            folder: None,
+            spectrum: None,
         };
         let reads: Arc<[AtomicUsize; 3]> = Arc::default();
         let img = OpenImage::new(1, Box::new(Flaky { info, reads: reads.clone() }), usize::MAX);
@@ -638,6 +656,8 @@ pub(crate) mod tests {
             page_count: c * z * t,
             series: vec![],
             series_index: 0,
+            folder: None,
+            spectrum: None,
         };
         info.fill_default_channels();
         info
