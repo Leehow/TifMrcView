@@ -28,7 +28,7 @@ mod update;
 #[cfg(all(feature = "desktop", target_os = "android"))]
 #[path = "update_android.rs"]
 mod update;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", feature = "pro"))]
 pub mod sam;
 pub mod thumb;
 
