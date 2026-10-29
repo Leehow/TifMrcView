@@ -1,0 +1,235 @@
+{
+ "files": [
+  {
+   "name": "100x-Airyscan Processing-06.czi",
+   "format": "Zeiss ZEN CZI (ZEN 3.7.97.06000)",
+   "width": 509,
+   "height": 509,
+   "sizeZ": 1,
+   "cols": 1,
+   "pixelSize": [
+    0.2079752604166664,
+    0.2079752604166664,
+    0.0
+   ],
+   "unit": "µm",
+   "bytes": 66899149,
+   "channels": [
+    {
+     "name": "EGFP-T1",
+     "color": [
+      0,
+      255,
+      91
+     ],
+     "atlas": "100x-airyscan-processing-06-c1.webp",
+     "lo": 9999.4090875,
+     "hi": 12467.880862500373
+    },
+    {
+     "name": "Ch3-T2",
+     "color": [
+      211,
+      211,
+      211
+     ],
+     "atlas": "100x-airyscan-processing-06-c2.webp",
+     "lo": 0.0,
+     "hi": 7145.1232000027085
+    }
+   ],
+   "metadata": [
+    {
+     "name": "ZEN 图像",
+     "items": [
+      [
+       "像素尺寸 X",
+       "0.2080 µm"
+      ],
+      [
+       "像素尺寸 Y",
+       "0.2080 µm"
+      ],
+      [
+       "网页示例",
+       "由原图 4072 × 4072 缩小 8 倍"
+      ]
+     ]
+    },
+    {
+     "name": "ZEN 显微镜",
+     "items": [
+      [
+       "显微镜",
+       "LSM 900"
+      ],
+      [
+       "物镜",
+       "LD EC Epiplan-Neofluar 100x/0.75 DIC"
+      ],
+      [
+       "总放大倍数",
+       "1000"
+      ],
+      [
+       "激发波长 (nm)",
+       "488"
+      ],
+      [
+       "发射波长 (nm)",
+       "509"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "name": "100x-Airyscan Processing-17.czi",
+   "format": "Zeiss ZEN CZI (ZEN 3.7.97.06000)",
+   "width": 491,
+   "height": 491,
+   "sizeZ": 1,
+   "cols": 1,
+   "pixelSize": [
+    0.15877236580516899,
+    0.15877236580516899,
+    0.0
+   ],
+   "unit": "µm",
+   "bytes": 2516582,
+   "channels": [
+    {
+     "name": "EGFP",
+     "color": [
+      0,
+      255,
+      91
+     ],
+     "atlas": "100x-airyscan-processing-17-c1.webp",
+     "lo": 9994.9554,
+     "hi": 14194.383400003586
+    }
+   ],
+   "metadata": [
+    {
+     "name": "ZEN 图像",
+     "items": [
+      [
+       "像素尺寸 X",
+       "0.1588 µm"
+      ],
+      [
+       "像素尺寸 Y",
+       "0.1588 µm"
+      ],
+      [
+       "网页示例",
+       "由原图 982 × 982 缩小 2 倍"
+      ]
+     ]
+    },
+    {
+     "name": "ZEN 显微镜",
+     "items": [
+      [
+       "显微镜",
+       "LSM 900"
+      ],
+      [
+       "物镜",
+       "LD EC Epiplan-Neofluar 100x/0.75 DIC"
+      ],
+      [
+       "总放大倍数",
+       "1000"
+      ],
+      [
+       "激发波长 (nm)",
+       "488"
+      ],
+      [
+       "发射波长 (nm)",
+       "509"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "name": "100x-Airyscan Processing-Zstack.czi",
+   "format": "Zeiss ZEN CZI (ZEN 3.7.97.06000)",
+   "width": 396,
+   "height": 396,
+   "sizeZ": 41,
+   "cols": 7,
+   "pixelSize": [
+    0.31746583850931676,
+    0.31746583850931676,
+    0.4399999999999999
+   ],
+   "unit": "µm",
+   "bytes": 206884045,
+   "channels": [
+    {
+     "name": "EGFP",
+     "color": [
+      0,
+      255,
+      91
+     ],
+     "atlas": "100x-airyscan-processing-zstack-c1.webp",
+     "lo": 9970.03681875,
+     "hi": 14759.988593752263
+    }
+   ],
+   "metadata": [
+    {
+     "name": "ZEN 图像",
+     "items": [
+      [
+       "像素尺寸 X",
+       "0.3175 µm"
+      ],
+      [
+       "像素尺寸 Y",
+       "0.3175 µm"
+      ],
+      [
+       "Z 步长",
+       "0.4400 µm"
+      ],
+      [
+       "网页示例",
+       "由原图 1586 × 1586 缩小 4 倍"
+      ]
+     ]
+    },
+    {
+     "name": "ZEN 显微镜",
+     "items": [
+      [
+       "显微镜",
+       "LSM 900"
+      ],
+      [
+       "物镜",
+       "LD EC Epiplan-Neofluar 100x/0.75 DIC"
+      ],
+      [
+       "总放大倍数",
+       "1000"
+      ],
+      [
+       "激发波长 (nm)",
+       "488"
+      ],
+      [
+       "发射波长 (nm)",
+       "509"
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}

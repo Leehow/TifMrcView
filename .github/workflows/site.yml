@@ -9,8 +9,10 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "ui/**"
       - "plugins/**"
       - "scripts/pack-plugins.mjs"
+      - "scripts/build-site-demo.mjs"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
@@ -46,6 +48,8 @@ jobs:
           mkdir -p stage
           node scripts/pack-plugins.mjs stage
           cp -R site/. stage/
+          # The live demo on the home page runs the current ui/ in the browser.
+          node scripts/build-site-demo.mjs stage
           find stage -type f | sort
 
       - name: Upload to download site
