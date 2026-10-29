@@ -1,6 +1,11 @@
 "use strict";
 
 const T = window.__TAURI__;
+// Fingers are blunter than a mouse: on touch screens annotations are easier
+// to hit and their grab points bigger.
+const TOUCH = matchMedia("(pointer: coarse)").matches;
+const HIT = TOUCH ? 14 : 6;
+const GRIP = TOUCH ? 9 : 5;
 const invoke = T.core.invoke;
 const $ = (id) => document.getElementById(id);
 
@@ -1290,15 +1295,24 @@ function drawHandles(a) {
     ctx.lineWidth = 1;
     ctx.strokeRect(sx - 3, sy - 3, (x1 - x0) * S.view.scale + 6, (y1 - y0) * S.view.scale + 6);
     ctx.setLineDash([]);
+  } else {
+    // A glow along a picked line, so the pick shows at a glance.
+    ctx.strokeStyle = "rgba(9, 105, 218, 0.35)";
+    ctx.lineWidth = GRIP * 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(...toScreen(...a.pts[0]));
+    ctx.lineTo(...toScreen(...a.pts[a.pts.length - 1]));
+    ctx.stroke();
   }
   for (const h of handles(a)) {
     const [x, y] = toScreen(...h.at);
     ctx.fillStyle = "#fff";
     ctx.strokeStyle = "#0969da";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = TOUCH ? 2.5 : 1.5;
     ctx.beginPath();
-    if (h.dir) ctx.rect(x - 4, y - 4, 8, 8);
-    else ctx.arc(x, y, 5, 0, Math.PI * 2);
+    if (h.dir) ctx.rect(x - GRIP + 1, y - GRIP + 1, 2 * GRIP - 2, 2 * GRIP - 2);
+    else ctx.arc(x, y, GRIP, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
@@ -2553,6 +2567,8 @@ function handleAt(a, p, tol) {
 }
 
 function inBox(a, p, tol) {
+  // A line's box is invisible and mostly empty: only the line itself counts.
+  if (TWO_POINT.has(a.type)) return hits(a, p, tol);
   const [x0, y0, x1, y1] = annBox(a);
   return p[0] >= x0 - tol && p[0] <= x1 + tol && p[1] >= y0 - tol && p[1] <= y1 + tol;
 }
@@ -2844,7 +2860,7 @@ function undoCrop() {
 function setCursor(p) {
   let c = "";
   if (S.tool === "select" || S.tool === "crop") {
-    const tol = 6 / S.view.scale;
+    const tol = HIT / S.view.scale;
     const target = S.tool === "crop" ? S.cropBox : S.picked;
     const h = target && handleAt(target, p, tol);
     // Ends of a line get a crosshair, so they read differently from moving the whole line.
@@ -2858,10 +2874,10 @@ function setCursor(p) {
       else if (a) c = "move";
     }
   } else if (S.tool === "measure") {
-    const tol = 6 / S.view.scale;
+    const tol = HIT / S.view.scale;
     if (S.ann.some((a) => a.type === "line" && onSlice(a) && handleAt(a, p, tol))) c = "crosshair";
   } else if (S.tool === "text") {
-    const a = annAt(p, 6 / S.view.scale);
+    const a = annAt(p, HIT / S.view.scale);
     c = a && a.type === "text" ? "pointer" : "text";
   }
   canvas.style.cursor = c;
@@ -2958,7 +2974,7 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const p = toImage(e);
-  const tol = 6 / S.view.scale;
+  const tol = HIT / S.view.scale;
   const snap = snapshot();
 
   // Handles and the body of the picked item (or of the crop box) come first.
@@ -3157,10 +3173,10 @@ window.addEventListener("pointerup", endPointer);
 canvas.addEventListener("lostpointercapture", endPointer);
 canvas.addEventListener("dblclick", (e) => {
   if (!S.info) return;
-  const hit = S.tool === "select" && annAt(toImage(e), 6 / S.view.scale);
+  const hit = S.tool === "select" && annAt(toImage(e), HIT / S.view.scale);
   if (S.cropBox && inBox(S.cropBox, toImage(e), 0)) applyCrop();
   else if (hit && hit.type === "text") editText(hit, false);
-  else if (S.tool === "pan" || (S.tool === "select" && !annAt(toImage(e), 6 / S.view.scale))) fit();
+  else if (S.tool === "pan" || (S.tool === "select" && !annAt(toImage(e), HIT / S.view.scale))) fit();
 });
 
 canvas.addEventListener(
