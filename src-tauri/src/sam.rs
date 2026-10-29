@@ -223,18 +223,28 @@ impl Sam {
                 let Some(prompt) = follow_prompt(&prev, w, h) else { break };
                 let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h);
                 let pts: Vec<tmv_sam::Point> = prompt.points.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: true }).collect();
-                let mask_in = prompt.use_mask.then(|| predictor.mask_prompt(&prev_low));
-                let r = predictor.predict(&enc, &pts, prompt.bbox, mask_in);
-                let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
-                let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
-                if !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) || grown > 3.0 {
-                    break;
+                // Encoding is the slow part; the decoder is cheap, so each
+                // way of prompting is tried and the one that keeps closest
+                // to the previous slice wins.
+                let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
+                for (bbox, use_mask) in prompt.variants() {
+                    let r = predictor.predict(&enc, &pts, bbox, use_mask.then(|| predictor.mask_prompt(&prev_low)));
+                    let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
+                    let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
+                    if grown > 3.0 || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
+                        continue;
+                    }
+                    let score = likeness(&prev, &mask, w, h);
+                    if best.as_ref().is_none_or(|b| score > b.0) {
+                        best = Some((score, mask, r.low_res_values()));
+                    }
                 }
+                let Some((_, mask, low)) = best else { break };
                 done += 1;
                 progress(done, total);
                 out.push((z, mask.clone()));
                 prev = mask;
-                prev_low = r.low_res_values();
+                prev_low = low;
             }
             // The slices left in this direction are skipped.
             done = base + steps;
@@ -317,6 +327,22 @@ pub struct Prompt {
     pub points: Vec<PromptPoint>,
     /// Give the previous slice's mask as a mask prompt too.
     pub use_mask: bool,
+}
+
+impl Prompt {
+    /// The (box, mask prompt) pairs worth trying: the preferred one first.
+    /// A thin outline that is nearly closed looks open, and its box then
+    /// asks for the whole cell, so thin objects also go without a box.
+    pub fn variants(&self) -> Vec<(Option<[f32; 4]>, bool)> {
+        let alt = if self.points.len() > 1 { vec![(None, true), (None, false), (self.bbox, true)] } else { vec![(self.bbox, true)] };
+        let mut v = vec![(self.bbox, self.use_mask)];
+        for a in alt {
+            if !v.iter().any(|b: &(Option<[f32; 4]>, bool)| (b.0.is_some(), b.1) == (a.0.is_some(), a.1)) {
+                v.push(a);
+            }
+        }
+        v
+    }
 }
 
 /// The prompt for the next slice from the mask on this one: its box grown
@@ -429,11 +455,17 @@ pub fn still_same(prev: &[bool], next: &[bool], w: usize, h: usize, iou_pred: f3
     if both as f32 / (a + b - both) as f32 >= 0.3 {
         return true;
     }
-    let near = |from: &[bool], to: &[bool], n: usize| {
+    likeness(prev, next, w, h) >= 0.6
+}
+
+/// The smaller of the shares of each mask lying within 2 px of the other.
+pub fn likeness(prev: &[bool], next: &[bool], w: usize, h: usize) -> f32 {
+    let near = |from: &[bool], to: &[bool]| {
+        let n = from.iter().filter(|m| **m).count().max(1);
         let dist = crate::labels::edt(to, w, h);
         from.iter().zip(&dist).filter(|(m, d)| **m && **d <= 2.0).count() as f32 / n as f32
     };
-    near(next, prev, b) >= 0.6 && near(prev, next, a) >= 0.6
+    near(next, prev).min(near(prev, next))
 }
 
 /// Checks a downloaded model file against the known size and SHA-256.
@@ -608,16 +640,40 @@ mod tests {
     /// A closed, noisy membrane (a cell outline) that shrinks away from the
     /// middle slice, segmented with denoising as tomograms are: its box holds
     /// the whole cell, so it must be followed by points and mask alone.
+    #[test]
+    fn thin_objects_try_more_prompts() {
+        let blob = Prompt { bbox: Some([0.0, 0.0, 9.0, 9.0]), points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }], use_mask: false };
+        assert_eq!(blob.variants().len(), 2);
+        let thin = Prompt { points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }; 3], ..blob };
+        let v = thin.variants();
+        assert_eq!(v.len(), 4);
+        assert!(v[0].0.is_some() && !v[0].1 && v[1].0.is_none() && v[1].1);
+    }
+
     #[cfg(feature = "pro")]
     #[test]
     #[ignore]
     fn closed_membrane_propagates() {
+        outline_propagates(false);
+    }
+
+    /// A cell outline with a gap on its left: not closed, but its box would
+    /// still ask for the whole cell.
+    #[cfg(feature = "pro")]
+    #[test]
+    #[ignore]
+    fn open_outline_propagates() {
+        outline_propagates(true);
+    }
+
+    #[cfg(feature = "pro")]
+    fn outline_propagates(gap: bool) {
         let path = std::env::var("TMV_SAM_MODEL").expect("TMV_SAM_MODEL");
         let (w, h, d) = (192, 128, 21);
         let ring = |z: usize, i: usize| {
             let s = 1.0 - (z as f32 - 10.0).abs() * 0.02;
             let (x, y) = (((i % w) as f32 + 0.5 - 96.0) / (60.0 * s), ((i / w) as f32 + 0.5 - 64.0) / (40.0 * s));
-            ((x * x + y * y).sqrt() - 1.0).abs() * 40.0 * s < 1.5
+            ((x * x + y * y).sqrt() - 1.0).abs() * 40.0 * s < 1.5 && !(gap && x < -0.7)
         };
         let slice = |z: usize| -> Vec<f32> {
             let mut seed = 0x9e37_79b9u32.wrapping_mul(z as u32 + 1);
