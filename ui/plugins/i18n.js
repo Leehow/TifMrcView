@@ -404,10 +404,42 @@ const WORDS = [
   ["模型文件被截断", "The model file is truncated", "Die Modelldatei ist abgeschnitten", "モデルファイルが途中で切れています", "El archivo de modelo está truncado", "Le fichier de modèle est tronqué", "Файл модели обрезан"],
   ["MRC 文件头不完整", "Incomplete MRC header", "Unvollständiger MRC-Header", "MRC ヘッダーが不完全です", "Cabecera MRC incompleta", "En-tête MRC incomplet", "Неполный заголовок MRC"],
   ["MRC 数据被截断", "The MRC data is truncated", "MRC-Daten abgeschnitten", "MRC データが途中で切れています", "Datos MRC truncados", "Données MRC tronquées", "Данные MRC обрезаны"],
+  // image sequences (volume EM)
+  ["打开文件夹为堆叠 (Ctrl/⌘+Shift+O)：把文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠；也可以直接把文件夹拖进窗口", "Open folder as stack (Ctrl/⌘+Shift+O): puts the slice images in a folder (FIB-SEM, serial sections…) in order into one Z stack; you can also drop the folder on the window", "Ordner als Stapel öffnen (Strg/⌘+Umschalt+O): fügt die Schnittbilder eines Ordners (FIB-SEM, Serienschnitte…) der Reihe nach zu einem Z-Stapel zusammen; den Ordner kann man auch ins Fenster ziehen", "フォルダーをスタックとして開く (Ctrl/⌘+Shift+O)：フォルダー内のスライス画像（FIB-SEM、連続切片など）を順番に 1 つの Z スタックにまとめます。フォルダーをウィンドウにドロップしても開けます", "Abrir carpeta como pila (Ctrl/⌘+Mayús+O): reúne en orden las imágenes de cortes de una carpeta (FIB-SEM, cortes seriados…) en una pila Z; también puedes arrastrar la carpeta a la ventana", "Ouvrir un dossier comme pile (Ctrl/⌘+Maj+O) : assemble dans l’ordre les images de coupes d’un dossier (FIB-SEM, coupes sériées…) en une pile Z ; vous pouvez aussi déposer le dossier sur la fenêtre", "Открыть папку как стек (Ctrl/⌘+Shift+O): по порядку собирает изображения срезов из папки (FIB-SEM, серийные срезы…) в один Z-стек; папку можно и перетащить в окно"],
+  ["Z 间距", "Z spacing", "Z-Abstand", "Z 間隔", "Espaciado Z", "Pas en Z", "Шаг по Z"],
+  ["相邻两层（切片）之间的距离，用于 XZ / YZ 侧视图的测量和比例", "Distance between neighbouring slices, used for measurements and scale in the XZ / YZ side views", "Abstand benachbarter Schnitte, für Messungen und Maßstab in den Seitenansichten XZ / YZ", "隣り合うスライスの間隔。XZ / YZ 側面ビューの計測とスケールに使います", "Distancia entre cortes vecinos, usada para medir y para la escala en las vistas laterales XZ / YZ", "Distance entre coupes voisines, utilisée pour les mesures et l’échelle dans les vues latérales XZ / YZ", "Расстояние между соседними срезами; используется для измерений и масштаба в боковых проекциях XZ / YZ"],
+  ["图像序列", "Image sequence", "Bildserie", "画像シーケンス", "Secuencia de imágenes", "Séquence d’images", "Серия изображений"],
+  ["项目文件", "Project file", "Projektdatei", "プロジェクトファイル", "Archivo de proyecto", "Fichier de projet", "Файл проекта"],
+  ["文件夹", "Folder", "Ordner", "フォルダー", "Carpeta", "Dossier", "Папка"],
+  ["文件数", "Files", "Dateien", "ファイル数", "Archivos", "Fichiers", "Файлов"],
+  ["每个文件的层数", "Slices per file", "Schnitte pro Datei", "ファイルあたりのスライス数", "Cortes por archivo", "Coupes par fichier", "Срезов в файле"],
+  ["第一张", "First", "Erstes", "最初", "Primero", "Premier", "Первый"],
+  ["最后一张", "Last", "Letztes", "最後", "Último", "Dernier", "Последний"],
+  ["未知（可在「工具」里填写）", "Unknown (can be entered under Tools)", "Unbekannt (unter Werkzeuge eintragbar)", "不明（「ツール」で入力できます）", "Desconocido (se puede escribir en Herramientas)", "Inconnu (à saisir dans Outils)", "Неизвестно (можно ввести в «Инструментах»)"],
+  ["Auto Slice & View 项目", "Auto Slice & View project", "Auto-Slice-&-View-Projekt", "Auto Slice & View プロジェクト", "Proyecto Auto Slice & View", "Projet Auto Slice & View", "Проект Auto Slice & View"],
+  ["项目名称", "Project name", "Projektname", "プロジェクト名", "Nombre del proyecto", "Nom du projet", "Название проекта"],
+  ["创建时间", "Created", "Erstellt", "作成日時", "Creado", "Créé le", "Создан"],
+  ["运行结果", "Result", "Ergebnis", "実行結果", "Resultado", "Résultat", "Результат"],
+  ["切片数（项目记录）", "Slices (project)", "Schnitte (Projekt)", "スライス数（プロジェクト）", "Cortes (proyecto)", "Coupes (projet)", "Срезов (по проекту)"],
+  ["目标切片厚度", "Target slice thickness", "Soll-Schnittdicke", "目標スライス厚", "Grosor de corte objetivo", "Épaisseur de coupe visée", "Заданная толщина среза"],
+  ["实测切片厚度", "Measured slice thickness", "Gemessene Schnittdicke", "実測スライス厚", "Grosor de corte medido", "Épaisseur de coupe mesurée", "Измеренная толщина среза"],
+  ["实测总深度", "Measured total depth", "Gemessene Gesamttiefe", "実測の総深さ", "Profundidad total medida", "Profondeur totale mesurée", "Измеренная общая глубина"],
+  ["图像文件夹", "Image folder", "Bildordner", "画像フォルダー", "Carpeta de imágenes", "Dossier d’images", "Папка изображений"],
+  ["文件夹里没有能打开的图像", "The folder has no images that can be opened", "Der Ordner enthält keine Bilder, die sich öffnen lassen", "フォルダーに開ける画像がありません", "La carpeta no tiene imágenes que se puedan abrir", "Le dossier ne contient aucune image lisible", "В папке нет изображений, которые можно открыть"],
+  ["文件夹里只有一张同名规则的图像，组不成堆叠", "The folder has only one image of each naming pattern, not enough for a stack", "Der Ordner enthält je Namensmuster nur ein Bild, zu wenig für einen Stapel", "フォルダーには同じ命名規則の画像が 1 枚しかなく、スタックにできません", "La carpeta solo tiene una imagen de cada patrón de nombre; no basta para una pila", "Le dossier ne contient qu’une image par motif de nom, pas assez pour une pile", "В папке только по одному изображению на шаблон имени — стек не собрать"],
 ];
 
 // prettier-ignore
 const PATTERNS = [
+  // image sequences (volume EM)
+  [/^堆叠 · (\d+) 层$/, "Stack · $1 slices", "Stapel · $1 Schnitte", "スタック · $1 枚", "Pila · $1 cortes", "Pile · $1 coupes", "Стек · $1 срезов"],
+  [/^堆叠 · (\d+)$/, "Stack · $1", "Stapel · $1", "スタック · $1", "Pila · $1", "Pile · $1", "Стек · $1"],
+  [/^图像序列 · (.+)$/, "Image sequence · $1", "Bildserie · $1", "画像シーケンス · $1", "Secuencia de imágenes · $1", "Séquence d’images · $1", "Серия изображений · $1"],
+  [/^(.+)（项目文件）$/, "$1 (project file)", "$1 (Projektdatei)", "$1（プロジェクトファイル）", "$1 (archivo de proyecto)", "$1 (fichier de projet)", "$1 (файл проекта)"],
+  [/^(.+)（文件）$/, "$1 (file)", "$1 (Datei)", "$1（ファイル）", "$1 (archivo)", "$1 (fichier)", "$1 (файл)"],
+  [/^(.+)：(\d+) 张切片组成的 Z 堆叠\n(.+)$/s, "$1: Z stack of $2 slices\n$3", "$1: Z-Stapel aus $2 Schnitten\n$3", "$1：$2 枚のスライスからなる Z スタック\n$3", "$1: pila Z de $2 cortes\n$3", "$1 : pile Z de $2 coupes\n$3", "$1: Z-стек из $2 срезов\n$3"],
+  [/^第 (\d+) 层（(.+)）：(.+)$/s, "Slice $1 ($2): $3", "Schnitt $1 ($2): $3", "スライス $1（$2）：$3", "Corte $1 ($2): $3", "Coupe $1 ($2) : $3", "Срез $1 ($2): $3"],
+  [/^(.+) ± (.+)（(\d+) 片的平均）$/, "$1 ± $2 (mean of $3 slices)", "$1 ± $2 (Mittel aus $3 Schnitten)", "$1 ± $2（$3 枚の平均）", "$1 ± $2 (media de $3 cortes)", "$1 ± $2 (moyenne de $3 coupes)", "$1 ± $2 (среднее по $3 срезам)"],
   // image picker: "2/8  name"; the name is translated on its own
   [/^(\d+\/\d+)  (.+)$/, "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2", "$1  $2"],
   [/^(\d+)×(\d+)，平均 (\d+) 块$/, "$1×$2, $3 tiles averaged", "$1×$2, $3 Kacheln gemittelt", "$1×$2、$3 タイル平均", "$1×$2, $3 bloques promediados", "$1×$2, $3 tuiles moyennées", "$1×$2, усреднено блоков: $3"],

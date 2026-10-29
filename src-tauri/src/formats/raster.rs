@@ -65,6 +65,7 @@ impl RasterSource {
             page_count: 1,
             series: vec![],
             series_index: 0,
+            folder: None,
         };
         Ok(RasterSource { path: path.to_path_buf(), info })
     }

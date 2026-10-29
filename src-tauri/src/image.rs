@@ -323,6 +323,8 @@ pub struct ImageInfo {
     pub series: Vec<SeriesInfo>,
     /// Which entry of `series` is open.
     pub series_index: usize,
+    /// For a stack built from the slice images of a folder: that folder.
+    pub folder: Option<String>,
 }
 
 pub const DEFAULT_COLORS: [[u8; 3]; 7] = [
@@ -600,6 +602,7 @@ mod prefetch_tests {
             page_count: 3,
             series: vec![],
             series_index: 0,
+            folder: None,
         };
         let reads: Arc<[AtomicUsize; 3]> = Arc::default();
         let img = OpenImage::new(1, Box::new(Flaky { info, reads: reads.clone() }), usize::MAX);
@@ -638,6 +641,7 @@ pub(crate) mod tests {
             page_count: c * z * t,
             series: vec![],
             series_index: 0,
+            folder: None,
         };
         info.fill_default_channels();
         info

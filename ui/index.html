@@ -10,6 +10,7 @@
   <header id="toolbar">
     <div class="group" id="file-group">
       <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
+      <button id="btn-open-folder" title="打开文件夹为堆叠 (Ctrl/⌘+Shift+O)：把文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠；也可以直接把文件夹拖进窗口"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 11h8M8 14h8M8 17h8"/></svg></button>
       <button id="btn-prev" title="上一个文件 (↑)" disabled>◀</button>
       <span id="file-pos">–</span>
       <select id="series" title="这个文件里有多个图像，选择要看的那个" hidden></select>
@@ -156,6 +157,11 @@
             <span class="dim">像素尺寸</span>
             <input type="number" id="px-size" step="any" min="0" placeholder="未知" />
             <select id="px-unit"><option>Å</option><option>nm</option><option selected>µm</option><option>mm</option><option>1/µm</option><option>1/nm</option><option>1/Å</option></select>
+          </div>
+          <div class="row" id="pz-row" hidden>
+            <span class="dim" title="相邻两层（切片）之间的距离，用于 XZ / YZ 侧视图的测量和比例">Z 间距</span>
+            <input type="number" id="pz-size" step="any" min="0" placeholder="未知" />
+            <span class="dim" id="pz-unit"></span>
           </div>
           <div id="px-src" class="dim"></div>
         </section>

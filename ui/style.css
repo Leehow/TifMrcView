@@ -297,6 +297,9 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .thumb .nm { width: 100%; margin-top: 4px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 .thumb.cur .nm { color: var(--accent); font-weight: 600; }
 .thumb .meta { font-size: 11px; color: var(--faint); }
+.thumb.stack canvas { box-shadow: 4px -4px 0 -1px var(--line-strong), 8px -8px 0 -2px var(--line); }
+.thumb.stack.cur canvas { box-shadow: 0 0 0 2px var(--accent), 5px -5px 0 0 var(--line-strong); }
+.thumb.stack .meta { color: var(--accent); }
 
 /* ---------- bottom bars ---------- */
 
