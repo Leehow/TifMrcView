@@ -4,6 +4,8 @@
 //! Points are in image pixels; `,-` marks a background point. `--slab N`
 //! averages N slices on each side, `--sigma` blurs before encoding. Writes
 //! gray.u8 (the encoded 8-bit image), mask.u8 and overlay.png to DIR.
+//! `--propagate` then carries the mask up and down the stack as the app
+//! does and prints each slice's area (and why it stopped).
 use std::time::{Duration, Instant};
 
 use tifmrcview_lib::image::OpenImage;
@@ -13,13 +15,14 @@ use tifmrcview_lib::{formats, sam};
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (model, file, z) = (&args[0], &args[1], args[2].parse::<usize>()?);
-    let (mut sigma, mut slab, mut out, mut pts) = (0.0f32, 0usize, std::path::PathBuf::from("sam-slice"), vec![]);
+    let (mut sigma, mut slab, mut out, mut pts, mut along) = (0.0f32, 0usize, std::path::PathBuf::from("sam-slice"), vec![], false);
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
             "--sigma" => { sigma = args[i + 1].parse()?; i += 1; }
             "--slab" => { slab = args[i + 1].parse()?; i += 1; }
             "--out" => { out = args[i + 1].clone().into(); i += 1; }
+            "--propagate" => along = true,
             p => {
                 let v: Vec<&str> = p.split(',').collect();
                 pts.push(tmv_sam::Point { x: v[0].parse()?, y: v[1].parse()?, positive: v.get(2) != Some(&"-") });
@@ -63,5 +66,20 @@ fn main() -> anyhow::Result<()> {
         }
     }
     rgb.save(out.join("overlay.png"))?;
+    if along {
+        let sam = sam::Sam::with_predictor(p);
+        let denoise = sam::Denoise { slab, sigma };
+        let points = pts.iter().map(|p| sam::PromptPoint { x: p.x, y: p.y, positive: p.positive }).collect();
+        let req = sam::PredictReq { token: 1, z, c: 0, t: 0, lo, hi, points, bbox: None, denoise };
+        sam.predict(&req, (w, h, d), |k| Ok(vals.slice(k)?))?;
+        let req = sam::PropagateReq { token: 1, z, c: 0, t: 0, lo, hi, up: true, down: true, max: d, denoise };
+        let t = Instant::now();
+        let mut masks = sam.propagate(&req, (w, h, d), |k| Ok(vals.slice(k)?), |_, _| {})?;
+        masks.sort_by_key(|m| m.0);
+        println!("propagated to {} slices in {:.2?}", masks.len() - 1, t.elapsed());
+        for (k, m) in &masks {
+            println!("z {k}: {} px", m.iter().filter(|v| **v).count());
+        }
+    }
     Ok(())
 }

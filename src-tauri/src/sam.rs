@@ -120,6 +120,14 @@ struct Inner {
 }
 
 impl Sam {
+    /// A Sam with an already loaded model (developer tools, tests).
+    #[cfg(feature = "pro")]
+    pub fn with_predictor(p: tmv_sam::Predictor) -> Self {
+        let sam = Sam::default();
+        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        sam
+    }
+
     pub fn status(&self) -> Status {
         let inner = self.inner.lock().unwrap();
         #[cfg(feature = "pro")]
@@ -227,11 +235,13 @@ impl Sam {
                 // way of prompting is tried and the one that keeps closest
                 // to the previous slice wins.
                 let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
+                let mut why = vec![];
                 for (bbox, use_mask) in prompt.variants() {
                     let r = predictor.predict(&enc, &pts, bbox, use_mask.then(|| predictor.mask_prompt(&prev_low)));
                     let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
                     let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
                     if grown > 3.0 || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
+                        why.push(format!("box {} mask {use_mask}: {}, grown {grown:.2}", bbox.is_some(), compare(&prev, &mask, w, h, r.iou)));
                         continue;
                     }
                     let score = likeness(&prev, &mask, w, h);
@@ -239,7 +249,10 @@ impl Sam {
                         best = Some((score, mask, r.low_res_values()));
                     }
                 }
-                let Some((_, mask, low)) = best else { break };
+                let Some((_, mask, low)) = best else {
+                    eprintln!("SAM: propagation stops at slice {z} (needs quality {:.2}): {}", min_iou(start_iou), why.join("; "));
+                    break;
+                };
                 done += 1;
                 progress(done, total);
                 out.push((z, mask.clone()));
@@ -460,6 +473,14 @@ pub fn still_same(prev: &[bool], next: &[bool], w: usize, h: usize, iou_pred: f3
     likeness(prev, next, w, h) >= 0.6
 }
 
+/// What `still_same` looks at, for the log.
+fn compare(prev: &[bool], next: &[bool], w: usize, h: usize, iou_pred: f32) -> String {
+    let (a, b) = (prev.iter().filter(|m| **m).count(), next.iter().filter(|m| **m).count());
+    let both = prev.iter().zip(next).filter(|(p, n)| **p && **n).count();
+    let iou = both as f32 / (a + b - both).max(1) as f32;
+    format!("quality {iou_pred:.2}, {b} px (x{:.2}), IoU {iou:.2}, near {:.2}", b as f32 / a.max(1) as f32, likeness(prev, next, w, h))
+}
+
 /// The smaller of the shares of each mask lying within 2 px of the other.
 pub fn likeness(prev: &[bool], next: &[bool], w: usize, h: usize) -> f32 {
     let near = |from: &[bool], to: &[bool]| {
@@ -619,9 +640,8 @@ mod tests {
             (y - (50.0 + (z as f32 - 10.0) * 1.5 + 8.0 * (x / 20.0).sin())).abs() < 1.5
         };
         let slice = |z: usize| -> Vec<f32> { (0..w * h).map(|i| if on(z, i) { 40.0 } else { 160.0 }).collect() };
-        let sam = Sam::default();
         let (p, _) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
-        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        let sam = Sam::with_predictor(p);
         let x = 96.0f32;
         let y = 50.0 + 8.0 * (x / 20.0).sin();
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x, y, positive: true }], bbox: None, denoise: Denoise::default() };
@@ -689,9 +709,8 @@ mod tests {
                 })
                 .collect()
         };
-        let sam = Sam::default();
         let (p, _) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
-        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        let sam = Sam::with_predictor(p);
         let denoise = Denoise { slab: 2, sigma: 1.5 };
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 96.0, y: 24.5, positive: true }], bbox: None, denoise };
         let (start, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
