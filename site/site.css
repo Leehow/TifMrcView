@@ -101,6 +101,7 @@ a:hover{text-decoration:underline}
 .htxt .h1{font-size:clamp(34px,3.6vw,48px)}
 .htxt .lede{font-size:17px;margin:0}
 .htxt .cta{justify-content:flex-start;margin-top:28px}
+.an{display:none}.has-apk .an{display:inline}
 .andr{margin:12px 0 0;font-size:14px;color:var(--mute)}
 .andr a{white-space:nowrap}
 .htxt .meta{margin-top:10px}
