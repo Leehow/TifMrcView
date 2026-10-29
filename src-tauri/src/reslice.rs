@@ -36,6 +36,8 @@ impl Reslice {
         };
         info.width = w;
         info.height = b.size_z;
+        // The spectrum axis no longer lies where the plot expects it.
+        info.spectrum = None;
         info.size_z = depth;
         info.pixel_size = b.pixel_size.map(|[x, y, z]| match axis {
             Axis::Xz => [x, z, y],

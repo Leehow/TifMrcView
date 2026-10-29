@@ -91,6 +91,7 @@ impl MrcSource {
             series: vec![],
             series_index: 0,
             folder: None,
+            spectrum: None,
         };
         info.fill_default_channels();
         Ok(MrcSource { mmap, info, data_offset, little, mode })

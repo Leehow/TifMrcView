@@ -13,6 +13,7 @@ pub mod plugins;
 mod plugin_assoc;
 pub mod render;
 pub mod reslice;
+pub mod spectrum;
 #[cfg(feature = "desktop")]
 mod update;
 pub mod thumb;
