@@ -70,6 +70,10 @@ tauri-plugin-updater = { version = "2.14", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 libc = "0.2"
+# NSOpenPanel for the folder button (choose an image or a folder in one panel).
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSResponder", "NSWindow"] }
 # SAM kernels compiled to Metal Shading Language: about 4x faster image
 # encoding than WGSL on an M1 Max (and faster than with kernel fusion).
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["metal", "flex"] }

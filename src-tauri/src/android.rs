@@ -43,3 +43,8 @@ pub fn pick_file<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 pub fn take_opened<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     call(app, "takeOpened")
 }
+
+/// Shows the system folder picker; the chosen folder's path.
+pub fn pick_folder<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    call(app, "pickFolder")
+}

@@ -89,6 +89,35 @@ class TmvPlugin(private val activity: Activity) : Plugin(activity) {
     reply(invoke, if (result.resultCode == Activity.RESULT_OK && uri != null) resolve(uri) else null)
   }
 
+  @Command
+  fun pickFolder(invoke: Invoke) {
+    startActivityForResult(invoke, Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), "pickedFolder")
+  }
+
+  @ActivityCallback
+  fun pickedFolder(invoke: Invoke, result: ActivityResult) {
+    val uri = result.data?.data
+    reply(invoke, if (result.resultCode == Activity.RESULT_OK && uri != null) resolveTree(uri) else null)
+  }
+
+  /** A folder from the tree picker as a path; only storage volumes have one. */
+  private fun resolveTree(uri: Uri): String? = try {
+    val parts = DocumentsContract.getTreeDocumentId(uri).split(":", limit = 2)
+    when {
+      uri.authority == "com.android.externalstorage.documents" -> {
+        val root = if (parts[0].equals("primary", true)) Environment.getExternalStorageDirectory().path
+          else "/storage/${parts[0]}"
+        File(root, parts.getOrElse(1) { "" }).takeIf { it.isDirectory }?.path
+      }
+      parts[0] == "raw" -> parts.getOrNull(1)
+      uri.authority == "com.android.providers.downloads.documents" ->
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).path
+      else -> null
+    }
+  } catch (e: Exception) {
+    null
+  }
+
   private fun resolve(uri: Uri): String? {
     if (uri.scheme == "file") return uri.path
     try {

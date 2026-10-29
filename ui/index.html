@@ -9,8 +9,8 @@
 <body>
   <header id="toolbar">
     <div class="group" id="file-group">
-      <button id="btn-open" title="打开文件 (Ctrl/⌘+O)">打开</button>
-      <button id="btn-open-folder" title="打开文件夹为堆叠 (Ctrl/⌘+Shift+O)：把文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠；也可以直接把文件夹拖进窗口"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 11h8M8 14h8M8 17h8"/></svg></button>
+      <button id="btn-open" title="打开图像或文件夹 (Ctrl/⌘+O)：文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+      <button id="btn-show-tools" title="展开左侧工具栏 (T)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
       <button id="btn-prev" title="上一个文件 (↑)" disabled>◀</button>
       <span id="file-pos">–</span>
       <select id="series" title="这个文件里有多个图像，选择要看的那个" hidden></select>
@@ -52,9 +52,8 @@
         <button id="btn-zoom" title="点击适应窗口 (F)；按 1 为 100%">100%</button>
         <button id="btn-zoomin" title="放大 (+)">+</button>
       </div>
-      <button id="btn-sidebar" class="toggle on" title="显示/收起右侧预览栏 (B)">预览栏</button>
-      <button id="btn-tools" class="toggle" title="工具：亮度对比度、标注、IMOD 模型、比例尺设置 (T)"><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>工具</span></button>
-      <button id="btn-plugins" class="toggle" title="插件与更新">插件</button>
+      <button id="btn-show-sidebar" title="展开右侧预览栏 (B)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+      <button id="btn-settings" title="设置：插件、语言、帮助"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     </div>
   </header>
 
@@ -71,9 +70,19 @@
     <main id="stage">
       <canvas id="view"></canvas>
       <div id="empty">
-        <div class="big desk-only">拖入或双击打开图像</div>
-        <div class="big touch-only">点击“打开”选择图像</div>
-        <div class="hint">支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp；装上插件还能打开 czi 等格式</div>
+        <div class="big desk-only">把图像或文件夹拖进来，或点左上角的文件夹图标打开</div>
+        <div class="big touch-only">点左上角的文件夹图标选择图像</div>
+        <div id="formats">
+          <div class="fmt-head">直接支持</div>
+          <div class="fmt-core">
+            <div class="fmt-item"><b>TIFF / OME-TIFF</b><span>.tif .tiff</span></div>
+            <div class="fmt-item"><b>MRC</b><span>.mrc .mrcs .rec .st .map .ali .preali</span></div>
+            <div class="fmt-item"><b>普通图片</b><span>.png .jpg .jpeg .gif .bmp .webp</span></div>
+            <div class="fmt-item"><b>图像文件夹</b><span>连续切片按顺序组成 Z 堆叠</span></div>
+          </div>
+          <div class="fmt-head">装上插件后支持 <span class="dim">点击即可安装</span></div>
+          <div id="fmt-plugins"></div>
+        </div>
         <div class="hint desk-only">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
         <div class="hint touch-only">双指捏合 缩放　拖动 平移　双击 适应屏幕</div>
       </div>
@@ -115,6 +124,7 @@
       <input id="text-edit" type="text" spellcheck="false" autocomplete="off" hidden />
       <div id="drop-hint" hidden><div>松开鼠标打开图像</div></div>
       <aside id="tools" hidden>
+        <button id="tools-close" class="panel-close" title="收起左侧工具栏 (T)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
         <section id="sec-contrast">
           <h3>亮度 / 对比度 <span id="tool-chan" class="dim"></span></h3>
           <canvas id="hist" width="256" height="64" title="在直方图上拖动可直接选择显示范围"></canvas>
@@ -209,10 +219,11 @@
 
     <div class="resizer" id="sidebar-resizer" title="拖动调整宽度"></div>
     <aside id="sidebar">
-      <div id="side-head" hidden>
+      <div id="side-head">
         <span id="folder-name"></span>
-        <button id="btn-reveal" class="small"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button id="btn-reveal" class="small" hidden><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
         <button id="btn-reveal-save" class="small" title="打开存图的文件夹" hidden><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9.5 13.5L12 16l2.5-2.5"/></svg></button>
+        <button id="sidebar-close" class="panel-close" title="收起右侧预览栏 (B)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
       </div>
       <div id="strip"></div>
     </aside>
@@ -237,7 +248,7 @@
     <span id="st-cache"></span>
   </footer>
 
-  <div id="plugin-dialog" hidden>
+  <div id="plugin-dialog" class="dialog" hidden>
     <div class="dlg-head">
       <h3>插件</h3>
       <button id="plugin-close" class="small" title="关闭 (Esc)">✕</button>
@@ -279,6 +290,31 @@
     <div class="row">
       <button id="update-check" class="small">检查更新</button>
       <label><input type="checkbox" id="update-auto" /> 启动时自动检查</label>
+    </div>
+  </div>
+
+  <div id="help-dialog" class="dialog" hidden>
+    <div class="dlg-head">
+      <h3>帮助</h3>
+      <button id="help-close" class="small" title="关闭 (Esc)">✕</button>
+    </div>
+    <table id="help-keys">
+      <tr><td>Ctrl/⌘+O</td><td>打开图像或文件夹</td></tr>
+      <tr><td>↑ ↓</td><td>上一个 / 下一个文件</td></tr>
+      <tr><td>← →　Ctrl/⌘+滚轮</td><td>切换 Z</td></tr>
+      <tr><td>空格</td><td>播放 Z</td></tr>
+      <tr><td>滚轮　+ −</td><td>缩放</td></tr>
+      <tr><td>F　1</td><td>适应窗口 / 原始大小</td></tr>
+      <tr><td>S V M P X C</td><td>选择、移动、测距、画笔、文字、裁剪</td></tr>
+      <tr><td>L A R E</td><td>直线、箭头、框、圆</td></tr>
+      <tr><td>H　I</td><td>显示/隐藏标注、IMOD 模型</td></tr>
+      <tr><td>T　B</td><td>左侧工具栏、右侧预览栏</td></tr>
+      <tr><td>Ctrl/⌘+S</td><td>存 PNG</td></tr>
+      <tr><td>Ctrl/⌘+Z</td><td>撤销（加 Shift 重做）</td></tr>
+    </table>
+    <div class="row">
+      <span id="help-version" class="dim"></span>
+      <button id="help-site" class="small primary" title="在浏览器里打开 tifmrcview.com">官网与使用说明</button>
     </div>
   </div>
 
