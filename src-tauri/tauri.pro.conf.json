@@ -35,7 +35,9 @@
           "/usr/share/mime/packages/tifmrcview-mrc.xml": null,
           "/usr/share/thumbnailers/tifmrcview.thumbnailer": null,
           "/usr/share/mime/packages/tifmrcview-pro-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
-          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer"
+          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer",
+          "/usr/lib/tifmrcview-pro/cuda/nvvm/libdevice/libdevice.10.bc": "target/pro/cuda/nvvm/libdevice/libdevice.10.bc",
+          "/usr/lib/tifmrcview-pro/cuda/LICENSE": "target/pro/cuda/LICENSE"
         }
       },
       "rpm": {
@@ -43,7 +45,15 @@
           "/usr/share/mime/packages/tifmrcview-mrc.xml": null,
           "/usr/share/thumbnailers/tifmrcview.thumbnailer": null,
           "/usr/share/mime/packages/tifmrcview-pro-mrc.xml": "../packaging/linux/tifmrcview-mrc.xml",
-          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer"
+          "/usr/share/thumbnailers/tifmrcview-pro.thumbnailer": "target/pro/tifmrcview-pro.thumbnailer",
+          "/usr/lib/tifmrcview-pro/cuda/nvvm/libdevice/libdevice.10.bc": "target/pro/cuda/nvvm/libdevice/libdevice.10.bc",
+          "/usr/lib/tifmrcview-pro/cuda/LICENSE": "target/pro/cuda/LICENSE"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/lib/tifmrcview-pro/cuda/nvvm/libdevice/libdevice.10.bc": "target/pro/cuda/nvvm/libdevice/libdevice.10.bc",
+          "/usr/lib/tifmrcview-pro/cuda/LICENSE": "target/pro/cuda/LICENSE"
         }
       }
     }
