@@ -171,6 +171,7 @@ A module importing anything else is refused.
 | `format` | Shown in the status bar; default: the `formats[].name`. |
 | `metadata` | Groups for the image-info panel. |
 | `series`, `seriesIndex` | Optional, for files that hold several images (a Leica LIF project, ND2 positions…): one `{ "name", "detail" }` per image, in order, and which one this is. With two or more entries the viewer shows a picker and reopens the file through `tmv_open_series`. Older versions of the app ignore them and show image 0. |
+| `spectrum` | Optional, for spectra (EELS, EDS, CL…): `{ "axis", "start", "step", "unit", "kind" }`. `axis` `"x"`: every image row is a spectrum (a single spectrum is a 1-pixel-high image); `"z"`: a spectrum image, each pixel's spectrum runs through the Z slices. Channel `i` is at `start + i·step` `unit`; `kind` names it (e.g. `EELS`). The viewer then plots the spectra; older versions ignore it. In Rust: `Info::spectrum`. |
 
 ### `tmv_metadata` JSON
 

@@ -13,7 +13,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use tifmrcview_lib::formats;
-use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source};
+use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source, SpectrumInfo};
 use tifmrcview_lib::plugins::registry::Registry;
 
 macro_rules! gatan {
@@ -284,6 +284,25 @@ fn samples_rosettasciio() {
     assert!(item(&i, "Gatan 图像", "X 标定").unwrap().contains("1/nm"));
     let i = open1("3D/EELS_SI.dm4").info().clone();
     assert_eq!((i.width, i.height, i.size_z), (2, 2, 2048));
+    let sp = |axis: &str, start: f64, step: f64, unit: &str, kind: &str| {
+        Some(SpectrumInfo { axis: axis.into(), start, step, unit: unit.into(), kind: kind.into() })
+    };
+    // Spectrum axes as rosettasciio reads them.
+    assert_eq!(i.spectrum, sp("z", 300.0, 1.0, "eV", "EELS"));
+    assert_eq!(i.unit, "µm");
+    let i = open1("1D/test-EELS_spectrum.dm3").info().clone();
+    assert_eq!((i.width, i.height, i.spectrum), (2048, 1, sp("x", -100.0, 0.5, "eV", "EELS")));
+    let i = open1("1D/test-EDS_spectrum.dm3").info().clone();
+    assert_eq!(i.spectrum, sp("x", -0.478, 0.005, "keV", "EDS"));
+    let i = open1("2D/test-MonoCL_spectrum-SI.dm4").info().clone();
+    assert_eq!((i.width, i.height), (1336, 67));
+    let s = i.spectrum.unwrap();
+    assert_eq!((s.axis.as_str(), s.unit.as_str(), s.kind.as_str()), ("x", "nm", "CL"));
+    assert!((s.start - 811.0256562658906).abs() < 1e-3 && (s.step - 0.0934361144900322).abs() < 1e-6, "{s:?}");
+    assert_eq!(i.pixel_size, None, "the wavelength axis is not a pixel size");
+    let i = open1("1D/test-1.dm3").info().clone();
+    assert_eq!(i.spectrum, sp("x", 0.0, 1.0, "", ""));
+    assert_eq!(open1("2D/test_STEM_image.dm3").info().spectrum, None);
     let i = open1("2D/multi_signal.dm3").info().clone();
     assert_eq!(i.series.len(), 2);
     assert_eq!(values(&open1("2D/test-23.dm4").read_page(0).unwrap()[0].data), [1.0, 2.0, 3.0, 4.0]);
