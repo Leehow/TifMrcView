@@ -237,4 +237,43 @@ mod bench {
             }
         }
     }
+
+    /// Fits real data, CPU and GPU: TMV_CTF_FILE=x.mrc [TMV_CTF_PIXEL=Å]
+    /// [TMV_CTF_KV=300] cargo test --release --features pro --lib ctf_gpu::bench::file -- --ignored --nocapture
+    /// Fits up to 5 slices spread through a stack (tilt series).
+    #[test]
+    #[ignore]
+    fn file() {
+        let path = std::env::var("TMV_CTF_FILE").unwrap();
+        let img = crate::image::OpenImage::new(1, crate::formats::open(std::path::Path::new(&path)).unwrap(), 1 << 30);
+        let info = img.info();
+        let unit_a = match info.unit.as_str() {
+            "nm" => 10.0,
+            "µm" | "um" => 1e4,
+            _ => 1.0,
+        };
+        let px = std::env::var("TMV_CTF_PIXEL").ok().and_then(|v| v.parse().ok()).or(info.pixel_size.map(|p| p[0] * unit_a)).expect("pixel size");
+        let mut p = crate::ctf::tests::params_pub();
+        p.pixel_a = px;
+        p.voltage_kv = std::env::var("TMV_CTF_KV").ok().and_then(|v| v.parse().ok()).unwrap_or(300.0);
+        p.res_high_a = (2.5 * px).max(4.0);
+        p.df_min_a = 3000.0;
+        eprintln!("{path}: {} × {} × {}, pixel {px:.3} Å", info.width, info.height, info.size_z);
+        let dev = device();
+        let zs: Vec<usize> = if info.size_z <= 5 { (0..info.size_z).collect() } else { (0..5).map(|i| i * (info.size_z - 1) / 4).collect() };
+        for z in zs {
+            for (name, cpu) in [("CPU", true), ("GPU", false)] {
+                if !cpu && dev.is_none() {
+                    continue;
+                }
+                let mut q = p.clone();
+                q.backend = cpu.then(|| "cpu".to_string());
+                let req = crate::ctf::FitReq { token: 1, z, t: 0, c: 0, region: [0.0, 0.0, info.width as f64, info.height as f64], n: 512, params: q };
+                match crate::ctf::fit_region(&img, &req) {
+                    Ok(f) => eprintln!("z {z} {name} ({}): {:.0} ms, df {:.0}/{:.0} Å {:.1}°, fit {:.2} Å, cc {:.3}", f.backend, f.ms, f.df1, f.df2, f.angle, f.fit_res, f.score),
+                    Err(e) => eprintln!("z {z} {name}: {e:#}"),
+                }
+            }
+        }
+    }
 }
