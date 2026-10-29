@@ -366,6 +366,13 @@
       pg4d: 'Gatan、赛默飞、TVIPS 电镜格式：DM3 / DM4、SER、Velox EMD、EER，读出电压、放大倍数和像素尺寸。',
       dl_h: '<span>下载 TifMrcView。</span>',
       dl_p: '免费。macOS、Windows、Linux 原生安装包<span class="an">，以及 Android APK</span>。',
+      pro_h: '<span>TifMrcView Pro：3D 与分割。</span>',
+      pro_p: '同样免费开源。包含基础版的全部功能，另加 3D 体视图、像 Amira 那样的分割标签和材料，以及 SAM 2.1 点击分割并沿 Z 传播。计算尽量放在 GPU 上（CUDA、Metal、DX12、Vulkan）。可以和基础版同时安装。',
+      pro_f1: '<b>3D 体视图</b>：最大强度投影、半透明和等值面，GPU 上平滑和统计直方图。',
+      pro_f2: '<b>分割标签</b>：画笔、魔棒、阈值、分水岭、套索和层间插值；材料可命名、配色、隐藏和锁定。',
+      pro_f3: '<b>SAM 2.1</b>：点一下就分出物体，再沿 Z 自动传播到整个物体；冷冻电镜断层也能用。',
+      pro_note: '第一次使用 SAM 时会下载约 156 MB 的模型。Linux 版自带 CUDA 支持。',
+      pro_mac_tip: '首次打开若被拦截：在终端运行 <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code>',
       k_tool: '选择 · 移动 · 测量 · 画笔 · 框 · 圆 · 裁剪', k_undo: '撤销 / 重做', k_annot: '显示 / 隐藏标注',
       st_h: '<span>开源，</span><span>免费。</span>',
       st_p: '喜欢的话，在 GitHub 上给个 ⭐。这是对作者最好的鼓励，也能让更多人找到它。',
@@ -430,6 +437,13 @@
       pg4d: 'EM formats from Gatan, Thermo Fisher and TVIPS: DM3 / DM4, SER, Velox EMD and EER, with voltage, magnification and pixel size.',
       dl_h: '<span>Download TifMrcView.</span>',
       dl_p: 'Free. Native installers for macOS, Windows and Linux<span class="an">, plus an Android APK</span>.',
+      pro_h: '<span>TifMrcView Pro: 3D and segmentation.</span>',
+      pro_p: 'Also free and open source. Everything in the standard app, plus a 3D volume view, Amira-style segmentation labels and materials, and SAM 2.1 click segmentation that propagates along Z. Computation runs on the GPU wherever possible (CUDA, Metal, DX12, Vulkan). Installs side by side with the standard app.',
+      pro_f1: '<b>3D volume view</b>: maximum intensity, translucent and surface rendering, with smoothing and histograms on the GPU.',
+      pro_f2: '<b>Segmentation labels</b>: brush, magic wand, threshold, watershed, lasso and slice interpolation; materials can be named, coloured, hidden and locked.',
+      pro_f3: '<b>SAM 2.1</b>: one click segments an object, then it is carried along Z through the whole object, cryo-ET tomograms included.',
+      pro_note: 'The first use of SAM downloads a model of about 156 MB. The Linux build includes CUDA support.',
+      pro_mac_tip: 'If macOS blocks the first launch, run <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code> in Terminal.',
       k_tool: 'Select · move · measure · pen · box · circle · crop', k_undo: 'Undo / redo', k_annot: 'Show / hide annotations',
       st_h: '<span>Open source.</span> <span>Free.</span>',
       st_p: 'If you like it, give it a ⭐ on GitHub. It means a lot to the author and helps others find it.',
@@ -494,6 +508,13 @@
       pg4d: 'EM-Formate von Gatan, Thermo Fisher und TVIPS: DM3 / DM4, SER, Velox EMD und EER, mit Spannung, Vergrößerung und Pixelgröße.',
       dl_h: '<span>TifMrcView herunterladen.</span>',
       dl_p: 'Kostenlos. Native Installer für macOS, Windows und Linux<span class="an">, dazu eine Android-APK</span>.',
+      pro_h: '<span>TifMrcView Pro: 3D und Segmentierung.</span>',
+      pro_p: 'Ebenfalls kostenlos und Open Source. Alles aus der Standard-App, dazu eine 3D-Volumenansicht, Segmentierungs-Labels und Materialien wie in Amira sowie SAM-2.1-Segmentierung per Klick, die sich entlang Z fortsetzt. Gerechnet wird wo möglich auf der GPU (CUDA, Metal, DX12, Vulkan). Lässt sich neben der Standard-App installieren.',
+      pro_f1: '<b>3D-Volumenansicht</b>: Maximumprojektion, transluzent und Oberfläche, Glättung und Histogramme auf der GPU.',
+      pro_f2: '<b>Segmentierungs-Labels</b>: Pinsel, Zauberstab, Schwelle, Watershed, Lasso und Interpolation zwischen Schichten; Materialien lassen sich benennen, einfärben, ausblenden und sperren.',
+      pro_f3: '<b>SAM 2.1</b>: Ein Klick segmentiert ein Objekt, das dann entlang Z durch das ganze Objekt verfolgt wird – auch in Kryo-ET-Tomogrammen.',
+      pro_note: 'Beim ersten Einsatz von SAM wird ein Modell von etwa 156 MB geladen. Die Linux-Version bringt CUDA-Unterstützung mit.',
+      pro_mac_tip: 'Blockiert macOS den ersten Start, im Terminal <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code> ausführen.',
       k_tool: 'Auswählen · Verschieben · Messen · Stift · Rahmen · Kreis · Zuschneiden', k_undo: 'Rückgängig / Wiederholen', k_annot: 'Annotationen ein- / ausblenden',
       st_h: '<span>Quelloffen.</span> <span>Kostenlos.</span>',
       st_p: 'Gefällt es Ihnen? Dann geben Sie ihm einen ⭐ auf GitHub. Das freut den Autor und hilft anderen, es zu finden.',
@@ -558,6 +579,13 @@
       pg4d: 'Gatan・Thermo Fisher・TVIPS の電子顕微鏡形式：DM3 / DM4、SER、Velox EMD、EER。加速電圧、倍率、ピクセルサイズも表示。',
       dl_h: '<span>TifMrcView を</span><span>ダウンロード。</span>',
       dl_p: '無料。macOS・Windows・Linux のネイティブインストーラ<span class="an">と Android APK</span>。',
+      pro_h: '<span>TifMrcView Pro：3D とセグメンテーション。</span>',
+      pro_p: 'こちらも無料・オープンソース。標準版の全機能に加え、3D ボリューム表示、Amira 風のセグメンテーションラベルとマテリアル、クリックで切り出して Z 方向へ伝播する SAM 2.1 を搭載。計算はできる限り GPU（CUDA・Metal・DX12・Vulkan）で行います。標準版と同時にインストールできます。',
+      pro_f1: '<b>3D ボリューム表示</b>：最大値投影・半透明・等値面。平滑化とヒストグラムは GPU で計算。',
+      pro_f2: '<b>セグメンテーションラベル</b>：ブラシ、マジックワンド、しきい値、ウォーターシェッド、投げ縄、スライス間補間。マテリアルは名前・色・表示・ロックを設定可能。',
+      pro_f3: '<b>SAM 2.1</b>：ワンクリックで物体を切り出し、Z 方向に物体全体へ伝播。クライオ電子線トモグラフィーにも対応。',
+      pro_note: 'SAM を初めて使うときに約 156 MB のモデルをダウンロードします。Linux 版は CUDA に対応しています。',
+      pro_mac_tip: '初回起動がブロックされたら、ターミナルで <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code> を実行してください。',
       k_tool: '選択 · 移動 · 計測 · ペン · 枠 · 円 · トリミング', k_undo: '取り消し / やり直し', k_annot: '注釈の表示 / 非表示',
       st_h: '<span>オープンソース。</span><span>無料。</span>',
       st_p: '気に入ったら GitHub で ⭐ をお願いします。作者の励みになり、ほかの人にも見つけてもらえます。',
@@ -622,6 +650,13 @@
       pg4d: 'Formatos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS: DM3 / DM4, SER, Velox EMD y EER, con voltaje, aumento y tamaño de píxel.',
       dl_h: '<span>Descarga TifMrcView.</span>',
       dl_p: 'Gratis. Instaladores nativos para macOS, Windows y Linux<span class="an">, y un APK para Android</span>.',
+      pro_h: '<span>TifMrcView Pro: 3D y segmentación.</span>',
+      pro_p: 'También gratis y de código abierto. Todo lo de la versión estándar, más una vista 3D de volumen, etiquetas y materiales de segmentación al estilo de Amira y segmentación SAM 2.1 con un clic que se propaga en Z. Los cálculos van en la GPU siempre que se puede (CUDA, Metal, DX12, Vulkan). Se instala junto a la versión estándar.',
+      pro_f1: '<b>Vista 3D de volumen</b>: proyección de máxima intensidad, translúcida y de superficie, con suavizado e histogramas en la GPU.',
+      pro_f2: '<b>Etiquetas de segmentación</b>: pincel, varita mágica, umbral, watershed, lazo e interpolación entre cortes; los materiales se pueden nombrar, colorear, ocultar y bloquear.',
+      pro_f3: '<b>SAM 2.1</b>: un clic segmenta un objeto y luego se propaga en Z por todo el objeto, también en tomogramas de crio-ET.',
+      pro_note: 'El primer uso de SAM descarga un modelo de unos 156 MB. La versión para Linux incluye soporte CUDA.',
+      pro_mac_tip: 'Si macOS bloquea la primera apertura, ejecuta <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code> en Terminal.',
       k_tool: 'Seleccionar · mover · medir · lápiz · recuadro · círculo · recortar', k_undo: 'Deshacer / rehacer', k_annot: 'Mostrar / ocultar anotaciones',
       st_h: '<span>Código abierto.</span> <span>Gratis.</span>',
       st_p: 'Si te gusta, dale una ⭐ en GitHub. Anima mucho al autor y ayuda a que otros lo encuentren.',
@@ -686,6 +721,13 @@
       pg4d: 'Formats de microscopie électronique Gatan, Thermo Fisher et TVIPS : DM3 / DM4, SER, Velox EMD et EER, avec tension, grandissement et taille de pixel.',
       dl_h: '<span>Téléchargez TifMrcView.</span>',
       dl_p: 'Gratuit. Installateurs natifs pour macOS, Windows et Linux<span class="an">, plus un APK Android</span>.',
+      pro_h: '<span>TifMrcView Pro : 3D et segmentation.</span>',
+      pro_p: 'Gratuit et open source lui aussi. Tout ce que fait la version standard, plus une vue 3D du volume, des étiquettes et matériaux de segmentation à la manière d’Amira, et la segmentation SAM 2.1 en un clic qui se propage en Z. Les calculs tournent sur le GPU partout où c’est possible (CUDA, Metal, DX12, Vulkan). S’installe à côté de la version standard.',
+      pro_f1: '<b>Vue 3D du volume</b> : projection d’intensité maximale, translucide et surface, avec lissage et histogrammes sur le GPU.',
+      pro_f2: '<b>Étiquettes de segmentation</b> : pinceau, baguette magique, seuil, ligne de partage des eaux, lasso et interpolation entre coupes ; les matériaux se nomment, se colorent, se masquent et se verrouillent.',
+      pro_f3: '<b>SAM 2.1</b> : un clic segmente un objet, puis il est suivi en Z sur tout l’objet, tomogrammes de cryo-ET compris.',
+      pro_note: 'La première utilisation de SAM télécharge un modèle d’environ 156 Mo. La version Linux prend en charge CUDA.',
+      pro_mac_tip: 'Si macOS bloque le premier lancement, exécutez <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code> dans le Terminal.',
       k_tool: 'Sélection · déplacer · mesurer · crayon · cadre · cercle · recadrer', k_undo: 'Annuler / rétablir', k_annot: 'Afficher / masquer les annotations',
       st_h: '<span>Open source.</span> <span>Gratuit.</span>',
       st_p: 'Vous l’aimez ? Offrez-lui une ⭐ sur GitHub. Cela encourage l’auteur et aide d’autres personnes à le découvrir.',
@@ -750,6 +792,13 @@
       pg4d: 'Форматы электронной микроскопии Gatan, Thermo Fisher и TVIPS: DM3 / DM4, SER, Velox EMD и EER — с напряжением, увеличением и размером пикселя.',
       dl_h: '<span>Скачать TifMrcView.</span>',
       dl_p: 'Бесплатно. Нативные установщики для macOS, Windows и Linux<span class="an">, а также APK для Android</span>.',
+      pro_h: '<span>TifMrcView Pro: 3D и сегментация.</span>',
+      pro_p: 'Тоже бесплатно и с открытым кодом. Всё из стандартной версии, а также 3D-просмотр объёма, метки и материалы сегментации в стиле Amira и сегментация SAM 2.1 по щелчку с распространением по Z. Вычисления по возможности идут на GPU (CUDA, Metal, DX12, Vulkan). Устанавливается рядом со стандартной версией.',
+      pro_f1: '<b>3D-просмотр объёма</b>: проекция максимальной интенсивности, полупрозрачный и поверхностный режимы, сглаживание и гистограммы на GPU.',
+      pro_f2: '<b>Метки сегментации</b>: кисть, волшебная палочка, порог, водораздел, лассо и интерполяция между срезами; материалам можно задать имя и цвет, скрыть и заблокировать их.',
+      pro_f3: '<b>SAM 2.1</b>: один щелчок выделяет объект, затем он прослеживается по Z через весь объект — в том числе в томограммах крио-ЭТ.',
+      pro_note: 'При первом запуске SAM загружается модель размером около 156 МБ. Версия для Linux поддерживает CUDA.',
+      pro_mac_tip: 'Если macOS блокирует первый запуск, выполните в Терминале <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code>.',
       k_tool: 'Выбор · перемещение · измерение · перо · рамка · круг · обрезка', k_undo: 'Отменить / повторить', k_annot: 'Показать / скрыть аннотации',
       st_h: '<span>Открытый код.</span> <span>Бесплатно.</span>',
       st_p: 'Если нравится — поставьте ⭐ на GitHub. Это лучшая поддержка автору, и так проект найдут другие.',
@@ -781,7 +830,7 @@
   // Downloads go through get/, which the server counts and redirects to the cached file.
   var DL = 'get/';
   var HOME = !!document.getElementById('cta');
-  var data = null, lang = pick(), sizes = {}, listeners = [];
+  var data = null, pro = null, lang = pick(), sizes = {}, listeners = [];
   function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; }
   function loadSizes(d) {
     var all = [];
@@ -846,7 +895,30 @@
       c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }
+    renderPro(t);
     document.dispatchEvent(new Event('downloads-rendered'));
+  }
+
+  // TifMrcView Pro: its own files (downloads-pro.json); the section stays
+  // hidden until they are listed.
+  function renderPro(t) {
+    var sec = document.getElementById('pro');
+    if (!sec || !pro || !pro.files) return;
+    ['mac', 'win', 'linux'].forEach(function (k) {
+      var box = sec.querySelector('[data-pro="' + k + '"] .dl');
+      box.innerHTML = '';
+      (pro.files[k] || []).forEach(function (f) {
+        var l = fileLabel(k, f, t);
+        var a = document.createElement('a');
+        a.href = DL + f.file; a.setAttribute('download', '');
+        var s = document.createElement('span'); s.textContent = l[0];
+        var n = document.createElement('small'); n.textContent = l[1];
+        if (f.size) { var b = document.createElement('b'); b.textContent = mb(f.size); n.appendChild(b); }
+        a.appendChild(s); a.appendChild(n); box.appendChild(a);
+      });
+    });
+    var v = document.getElementById('pro-ver'); if (v) v.textContent = t.version + ' ' + pro.version;
+    sec.hidden = false;
   }
 
   function apply(code) {
@@ -916,4 +988,6 @@
       return HOME ? loadSizes(d) : null;
     })
     .then(renderDownloads).catch(function () {});
+  if (HOME) fetch(BASE + 'downloads-pro.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { pro = d; renderDownloads(); }).catch(function () {});
 })();
