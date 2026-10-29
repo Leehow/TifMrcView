@@ -608,6 +608,22 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
     .await
 }
 
+/// Mean spectrum of a region; see `spectrum::values`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn spectrum_values(
+    state: State<'_, AppState>,
+    token: u64,
+    axis: String,
+    c: usize,
+    z: usize,
+    t: usize,
+    region: [f64; 4],
+) -> CmdResult<Vec<f64>> {
+    let img = current(&state, token)?;
+    blocking(move || spectrum::values(&img, &axis, c, z, t, region)).await
+}
+
 /// Power spectrum of a region of one slice; see `fft::power_spectrum`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1056,6 +1072,7 @@ pub fn run() {
             histogram,
             power_spectrum,
             ctf_fit,
+            spectrum_values,
             pick_save_path,
             pick_folder,
             open_folder,

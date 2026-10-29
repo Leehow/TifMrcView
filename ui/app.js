@@ -251,6 +251,7 @@ async function openPath(path, force = false, series = 0) {
     $("btn-info").disabled = false;
     $("meta-list").dataset.file = "";
     renderMeta();
+    specOpened();
     // Keep the zoom when flipping through images of the same size.
     if (sameSize) {
       clampView();
@@ -363,6 +364,7 @@ async function setAxis(axis) {
   setupSliders();
   syncScaleUi();
   updateInfo();
+  specOpened();
   fit();
   watchLoad();
 }
@@ -1257,6 +1259,7 @@ function draw() {
   const drawing = S.op && S.op.kind === "draw" && S.op.item.type !== "crop" ? [S.op.item] : [];
   drawAnnotations(ctx, toScreen, 1, items.concat(drawing));
   if (S.picked && S.annShow) drawHandles(S.picked);
+  drawSpecPick();
   ctx.restore();
   if (S.cropBox) drawCropBox(S.cropBox);
 
@@ -1442,6 +1445,7 @@ async function renderNow() {
     if (!S.scrubbing) refreshOverview();
     pluginEmit("render");
     scheduleFft();
+    scheduleSpec();
   } catch (e) {
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
     if (token === S.token) {
@@ -1474,7 +1478,7 @@ function fftChannel() {
 
 async function computeFft() {
   const region = visibleRegion();
-  if (!F.on || !S.info || !region) return;
+  if (!F.on || !S.info || !region || $("fft-panel").hidden) return;
   if (F.busy) {
     F.again = true;
     return;
@@ -1644,6 +1648,357 @@ for (const id of ["fft-img", "fft-prof"]) {
     drawFftProfile();
   });
 }
+
+// ---------- spectra (EELS, EDS…) ----------
+
+/**
+ * Plot of the spectra in the file. With `axis` "x" each image row is a
+ * spectrum; with "z" each pixel's spectrum runs through the slices. The
+ * plot shows the picked row / pixel, or the mean of the visible area.
+ */
+const P = { on: false, pick: null, mode: "view", data: null, key: "", busy: false, again: false, timer: 0, zoom: null, hover: null, drag: null, log: false };
+
+function specInfo() {
+  return S.info && S.info.spectrum;
+}
+
+function specOpened() {
+  const sp = specInfo();
+  $("btn-spec").hidden = !sp;
+  P.data = null;
+  P.key = "";
+  P.zoom = null;
+  P.pick = null;
+  // A single spectrum has only one row to show.
+  P.mode = sp && sp.axis === "x" && S.info.height === 1 ? "pick" : "view";
+  if (sp && sp.axis === "x" && S.info.height === 1) P.pick = [0, 0];
+  const title = sp ? `${sp.kind ? sp.kind + " " : ""}谱` : "";
+  $("spec-title").textContent = title;
+  $("spec-view").hidden = !!(sp && sp.axis === "x" && S.info.height === 1);
+  // Rows of spectra have no picture to Fourier transform.
+  if (F.on) $("fft-panel").hidden = !!(sp && sp.axis === "x");
+  setSpec(!!sp);
+}
+
+function setSpec(on) {
+  P.on = on && !!specInfo();
+  $("spec-panel").hidden = !P.on;
+  $("btn-spec").classList.toggle("on", P.on);
+  if (P.on) scheduleSpec();
+}
+
+function scheduleSpec() {
+  if (!P.on) return;
+  clearTimeout(P.timer);
+  P.timer = setTimeout(computeSpec, 120);
+}
+
+/** The pixels whose mean is plotted, in image pixels. */
+function specRegion() {
+  const sp = specInfo();
+  if (P.mode === "pick" && P.pick) {
+    const [x, y] = P.pick;
+    return sp.axis === "x" ? [0, y, S.info.width, 1] : [x, y, 1, 1];
+  }
+  const r = visibleRegion();
+  return r && (sp.axis === "x" ? [0, r[1], S.info.width, r[3]] : r);
+}
+
+function specSource() {
+  const sp = specInfo();
+  if (P.mode === "pick" && P.pick) {
+    if (sp.axis === "x") return S.info.height > 1 ? `第 ${P.pick[1] + 1} 行` : "";
+    return `像素 (${P.pick[0]}, ${P.pick[1]})`;
+  }
+  return "当前视图平均";
+}
+
+async function computeSpec() {
+  const sp = specInfo();
+  const region = sp && specRegion();
+  if (!P.on || !region) return;
+  if (P.busy) {
+    P.again = true;
+    return;
+  }
+  const c = fftChannel();
+  // A spectrum image's spectrum does not depend on the slice shown.
+  const key = JSON.stringify([S.token, sp.axis === "z" ? 0 : S.z, S.t, c, region, sp.axis]);
+  $("spec-src").textContent = specSource();
+  $("spec-view").classList.toggle("on", P.mode === "view");
+  if (key === P.key) return drawSpec();
+  const token = S.token;
+  P.busy = true;
+  try {
+    const v = await invoke("spectrum_values", { token, axis: sp.axis, c, z: S.z, t: S.t, region });
+    if (token !== S.token) return;
+    P.data = v;
+    P.key = key;
+    drawSpec();
+  } catch (e) {
+    if (String(e) !== "stale") toast(`读取谱失败：${e}`);
+  } finally {
+    P.busy = false;
+    if (P.again) {
+      P.again = false;
+      computeSpec();
+    }
+  }
+}
+
+function specClick(pt) {
+  const sp = specInfo();
+  if (!P.on || !sp) return;
+  const x = Math.floor(pt[0]);
+  const y = Math.floor(pt[1]);
+  if (x < 0 || y < 0 || x >= S.info.width || y >= S.info.height) return;
+  P.pick = [x, y];
+  P.mode = "pick";
+  computeSpec();
+  draw();
+}
+
+/** Marks the picked row or pixel on the image. */
+function drawSpecPick() {
+  const sp = specInfo();
+  if (!P.on || !sp || P.mode !== "pick" || !P.pick || S.axis !== "xy") return;
+  const [x, y] = P.pick;
+  ctx.save();
+  ctx.strokeStyle = "#cf222e";
+  ctx.lineWidth = 1.5;
+  if (sp.axis === "x") {
+    if (S.info.height === 1) return ctx.restore();
+    const [x0, y0] = toScreen(0, y);
+    const [x1, y1] = toScreen(S.info.width, y + 1);
+    ctx.strokeRect(x0, y0, x1 - x0, Math.max(2, y1 - y0));
+  } else {
+    const [x0, y0] = toScreen(x, y);
+    const [x1, y1] = toScreen(x + 1, y + 1);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const r = Math.max(6, (x1 - x0) / 2 + 3);
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.beginPath();
+    ctx.moveTo(cx - r - 6, cy); ctx.lineTo(cx - r, cy);
+    ctx.moveTo(cx + r, cy); ctx.lineTo(cx + r + 6, cy);
+    ctx.moveTo(cx, cy - r - 6); ctx.lineTo(cx, cy - r);
+    ctx.moveTo(cx, cy + r); ctx.lineTo(cx, cy + r + 6);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Axis value of channel i. */
+function specX(i) {
+  const sp = specInfo();
+  return sp.start + i * sp.step;
+}
+
+/** About `n` round tick values between lo and hi. */
+function ticks(lo, hi, n) {
+  const span = hi - lo;
+  if (!(span > 0)) return [lo];
+  const step0 = span / n;
+  const p = Math.pow(10, Math.floor(Math.log10(step0)));
+  const f = step0 / p;
+  const step = (f >= 5 ? 10 : f >= 2 ? 5 : f >= 1 ? 2 : 1) * p;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+
+const SPEC_PAD = { l: 52, r: 12, t: 8, b: 22 };
+
+/** Channel range shown: [i0, i1]. */
+function specRange() {
+  const n = P.data ? P.data.length : 1;
+  return P.zoom || [0, n - 1];
+}
+
+function drawSpec() {
+  const c = $("spec-plot");
+  const dpr = window.devicePixelRatio || 1;
+  const rect = c.getBoundingClientRect();
+  c.width = Math.max(1, Math.round(rect.width * dpr));
+  c.height = Math.max(1, Math.round(rect.height * dpr));
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+  g.clearRect(0, 0, W, H);
+  const sp = specInfo();
+  if (!P.data || !sp) return;
+  const v = P.data;
+  const [i0, i1] = specRange();
+  const tf = (y) => (P.log ? Math.log10(Math.max(y, 0) + 1) : y);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = Math.max(0, Math.floor(i0)); i <= Math.min(v.length - 1, Math.ceil(i1)); i++) {
+    const y = tf(v[i]);
+    if (y < lo) lo = y;
+    if (y > hi) hi = y;
+  }
+  if (!(hi > lo)) hi = lo + 1;
+  const pad = (hi - lo) * 0.05;
+  lo -= P.log ? 0 : pad;
+  hi += pad;
+  const { l, r, t, b } = SPEC_PAD;
+  const px = (i) => l + ((i - i0) / Math.max(1e-9, i1 - i0)) * (W - l - r);
+  const py = (y) => t + (1 - (y - lo) / (hi - lo)) * (H - t - b);
+  P.map = { px, i0, i1, l, r, W };
+  // Axes and ticks.
+  g.font = "11px -apple-system, 'Segoe UI', sans-serif";
+  g.fillStyle = "#59636e";
+  g.strokeStyle = "#d1d9e0";
+  g.lineWidth = 1;
+  const xa = specX(i0), xb = specX(i1);
+  g.textAlign = "center";
+  g.textBaseline = "top";
+  for (const tv of ticks(Math.min(xa, xb), Math.max(xa, xb), Math.max(2, Math.floor((W - l - r) / 80)))) {
+    const x = px((tv - sp.start) / sp.step);
+    g.beginPath();
+    g.moveTo(x, t);
+    g.lineTo(x, H - b);
+    g.stroke();
+    g.fillText(fmt(tv), x, H - b + 4);
+  }
+  g.textAlign = "right";
+  g.textBaseline = "middle";
+  for (const tv of ticks(lo, hi, 4)) {
+    const y = py(tv);
+    g.beginPath();
+    g.moveTo(l, y);
+    g.lineTo(W - r, y);
+    g.stroke();
+    g.fillText(P.log ? `1e${fmt(tv)}` : fmt(+tv.toPrecision(4)), l - 6, y);
+  }
+  if (sp.unit) {
+    g.textAlign = "right";
+    g.textBaseline = "top";
+    g.fillText(sp.unit, l - 6, H - b + 4);
+  }
+  // The spectrum.
+  g.save();
+  g.beginPath();
+  g.rect(l, t, W - l - r, H - t - b);
+  g.clip();
+  g.strokeStyle = "#0969da";
+  g.lineWidth = 1.25;
+  g.beginPath();
+  const a = Math.max(0, Math.floor(i0) - 1), z = Math.min(v.length - 1, Math.ceil(i1) + 1);
+  // Draw at most a few points per screen pixel: min and max of each column.
+  const perPx = (z - a) / Math.max(1, W - l - r);
+  if (perPx > 2) {
+    for (let x = l; x <= W - r; x++) {
+      const ia = Math.max(a, Math.floor(i0 + ((x - l) / (W - l - r)) * (i1 - i0)));
+      const ib = Math.min(z, Math.floor(i0 + ((x + 1 - l) / (W - l - r)) * (i1 - i0)));
+      let mn = Infinity, mx = -Infinity;
+      for (let i = ia; i <= Math.max(ia, ib); i++) {
+        const y = tf(v[i]);
+        if (y < mn) mn = y;
+        if (y > mx) mx = y;
+      }
+      g.moveTo(x, py(mx));
+      g.lineTo(x, py(mn) + 0.01);
+    }
+  } else {
+    for (let i = a; i <= z; i++) (i === a ? g.moveTo : g.lineTo).call(g, px(i), py(tf(v[i])));
+  }
+  g.stroke();
+  if (P.drag) {
+    g.fillStyle = "rgba(9, 105, 218, 0.12)";
+    const [d0, d1] = [Math.min(...P.drag), Math.max(...P.drag)];
+    g.fillRect(d0, t, d1 - d0, H - t - b);
+  }
+  if (sp.axis === "z") {
+    // The slice shown in the image.
+    g.strokeStyle = "#1a7f37";
+    g.setLineDash([4, 3]);
+    g.beginPath();
+    g.moveTo(px(S.z), t);
+    g.lineTo(px(S.z), H - b);
+    g.stroke();
+    g.setLineDash([]);
+  }
+  if (P.hover != null) {
+    g.strokeStyle = "#cf222e";
+    g.beginPath();
+    g.moveTo(px(P.hover), t);
+    g.lineTo(px(P.hover), H - b);
+    g.stroke();
+  }
+  g.restore();
+  showSpecHover();
+}
+
+function showSpecHover() {
+  const sp = specInfo();
+  const i = P.hover;
+  if (!P.data || !sp || i == null || i < 0 || i >= P.data.length) {
+    $("spec-read").textContent = P.zoom ? "拖动选择范围放大，双击还原" : "拖动选择范围放大";
+    return;
+  }
+  const val = P.data[i];
+  $("spec-read").textContent = `${fmt(+specX(i).toPrecision(6))}${sp.unit ? " " + sp.unit : ""} · ${fmt(+val.toPrecision(6))}（通道 ${i}）`;
+}
+
+/** Channel under the mouse. */
+function specIndex(e) {
+  const m = P.map;
+  if (!m) return null;
+  const x = e.clientX - $("spec-plot").getBoundingClientRect().left;
+  const i = m.i0 + ((x - m.l) / Math.max(1, m.W - m.l - m.r)) * (m.i1 - m.i0);
+  return Math.round(Math.max(0, Math.min(P.data.length - 1, i)));
+}
+
+$("btn-spec").addEventListener("click", () => setSpec(!P.on));
+$("spec-close").addEventListener("click", () => setSpec(false));
+$("spec-view").addEventListener("click", () => {
+  P.mode = P.mode === "view" ? "pick" : "view";
+  if (P.mode === "pick" && !P.pick) P.pick = [Math.floor(S.info.width / 2), Math.floor(S.info.height / 2)];
+  computeSpec();
+  draw();
+});
+$("spec-log").addEventListener("click", () => {
+  P.log = !P.log;
+  $("spec-log").classList.toggle("on", P.log);
+  drawSpec();
+});
+$("spec-plot").addEventListener("pointerdown", (e) => {
+  if (!P.data) return;
+  const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+  P.drag = [x, x];
+  e.currentTarget.setPointerCapture(e.pointerId);
+});
+$("spec-plot").addEventListener("pointermove", (e) => {
+  if (!P.data) return;
+  P.hover = specIndex(e);
+  if (P.drag) P.drag[1] = e.clientX - e.currentTarget.getBoundingClientRect().left;
+  drawSpec();
+});
+$("spec-plot").addEventListener("pointerup", (e) => {
+  if (!P.drag) return;
+  const [a, b] = P.drag;
+  P.drag = null;
+  if (Math.abs(b - a) > 6) {
+    const m = P.map;
+    const at = (x) => m.i0 + ((x - m.l) / Math.max(1, m.W - m.l - m.r)) * (m.i1 - m.i0);
+    const i0 = Math.max(0, Math.min(at(a), at(b)));
+    const i1 = Math.min(P.data.length - 1, Math.max(at(a), at(b)));
+    if (i1 - i0 >= 2) P.zoom = [i0, i1];
+  } else if (specInfo().axis === "z") {
+    // A click shows the image at that energy.
+    const i = specIndex(e);
+    if (i != null) setZ(i);
+  }
+  drawSpec();
+});
+$("spec-plot").addEventListener("dblclick", () => {
+  P.zoom = null;
+  drawSpec();
+});
+$("spec-plot").addEventListener("mouseleave", () => {
+  P.hover = null;
+  drawSpec();
+});
+window.addEventListener("resize", () => P.on && drawSpec());
 
 // ---------- saving ----------
 
@@ -2000,7 +2355,60 @@ function metaGroups() {
   const pz = S.axis === "xy" ? S.pz : null;
   if (S.px && pz) items.push(["Z 间距", `${fmt(pz)} ${S.px.unit}`]);
   items.push(["路径", i.path]);
-  return [{ name: "文件信息", items }, ...(i.metadata || []), ...S.pluginMeta];
+  const groups = [...(i.metadata || []), ...S.pluginMeta];
+  const common = commonParams(groups);
+  return [{ name: "文件信息", items }, ...(common ? [common] : []), ...groups];
+}
+
+/**
+ * The settings people look for first, in one fixed order whatever wrote
+ * the file: [label, names the readers use for it]. Readers should use the
+ * first name where they can (see docs/format-plugins.md).
+ */
+const COMMON_PARAMS = [
+  ["显微镜", ["显微镜", "系统类型", "仪器"]],
+  ["加速电压", ["加速电压", "EHT", "高压"]],
+  ["模式", ["操作模式", "模式", "TEM 子模式", "成像模式", "照明模式"]],
+  ["放大倍数", ["放大倍数", "标称放大倍数", "实际放大倍数", "总放大倍数", "Mag"]],
+  ["相机长度", ["相机长度"]],
+  ["视场", ["视野", "视场", "水平视场 (HFW)"]],
+  ["工作距离", ["工作距离", "WD"]],
+  ["探测器 / 相机", ["探测器", "相机", "相机型号", "检测器", "Signal A", "Signal"]],
+  ["曝光时间", ["曝光时间", "曝光时间 (ms)", "积分时间", "帧时间", "扫描帧时间"]],
+  ["驻留时间", ["驻留时间", "像素驻留 (µs)"]],
+  ["剂量", ["剂量", "总剂量", "剂量率"]],
+  ["散焦", ["散焦", "设定散焦"]],
+  ["球差 Cs", ["球差 Cs"]],
+  ["束斑", ["束斑", "聚光镜束斑", "探针尺寸", "Spot Size"]],
+  ["束流", ["探针电流", "束流", "发射电流", "I Probe", "Beam Current"]],
+  ["会聚半角", ["会聚半角"]],
+  ["倾转", ["α 倾转", "样品台 α", "样品台倾转", "α / β 倾转"]],
+  ["像素合并", ["像素合并"]],
+  ["采集时间", ["采集时间", "日期时间", "采集日期", "时间", "日期", "Date"]],
+];
+
+/** "常用参数": the COMMON_PARAMS the reader found, or null when it found few. */
+function commonParams(groups) {
+  const items = [];
+  for (const [label, names] of COMMON_PARAMS) {
+    let hit = null;
+    for (const n of names) {
+      for (const g of groups) {
+        const it = g.items.find(([k, v]) => k === n && String(v).trim() !== "");
+        if (it) {
+          hit = it[1];
+          // Readers that split the date from the time of day.
+          const date = n === "采集时间" && g.items.find(([k]) => k === "采集日期");
+          if (date && !hit.includes(date[1])) hit = `${date[1]} ${hit}`;
+          break;
+        }
+      }
+      if (hit != null) break;
+    }
+    if (hit != null) items.push([label, hit]);
+  }
+  if (S.px && items.length) items.splice(Math.min(items.length, 4), 0, ["像素尺寸", `${fmt(S.px.x)} ${S.px.unit}`]);
+  return items.length >= 2 ? { name: "常用参数", items } : null;
 }
 
 function renderMeta() {
@@ -2631,12 +3039,14 @@ canvas.addEventListener("pointermove", (e) => {
   draw();
 });
 
-function endPointer() {
+function endPointer(e) {
   const op = S.op;
   S.op = null;
   if (!op) return;
   if (op.kind === "pan") {
     canvas.classList.remove("drag");
+    // A click without dragging picks the spectrum shown in the plot.
+    if (e && e.type === "pointerup" && Math.hypot(e.clientX - op.x, e.clientY - op.y) < 4) specClick(toImage(e));
     return;
   }
   if (op.kind === "ext") {

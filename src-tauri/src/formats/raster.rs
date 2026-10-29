@@ -66,6 +66,7 @@ impl RasterSource {
             series: vec![],
             series_index: 0,
             folder: None,
+            spectrum: None,
         };
         Ok(RasterSource { path: path.to_path_buf(), info })
     }

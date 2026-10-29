@@ -18,6 +18,7 @@ pub mod plugins;
 mod plugin_assoc;
 pub mod render;
 pub mod reslice;
+pub mod spectrum;
 pub mod volume;
 #[cfg(feature = "desktop")]
 mod update;
