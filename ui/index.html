@@ -284,6 +284,32 @@
     </div>
   </div>
 
+  <div id="about-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="dlg-head">
+      <h3 id="about-title">关于</h3>
+      <button id="about-close" class="small" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="about-app">
+      <img src="about-icon.png" alt="" width="56" height="56" />
+      <div>
+        <div class="about-title" data-no-i18n>TifMrcView</div>
+        <div id="about-version" class="dim"></div>
+        <div id="about-project" class="about-links"></div>
+      </div>
+    </div>
+    <div class="about-sec">
+      <div class="dim">作者</div>
+      <div id="about-name" class="pl-name" data-no-i18n></div>
+      <div id="about-aff" class="dim" data-no-i18n></div>
+      <div id="about-links" class="about-links"></div>
+    </div>
+    <div id="about-cite-box" class="about-sec" hidden>
+      <div class="dlg-head"><span class="dim">引用</span><button id="about-cite-copy" class="small">复制</button></div>
+      <div id="about-cite" class="about-cite" data-no-i18n></div>
+    </div>
+    <div class="dim about-foot">免费开源 · Apache-2.0</div>
+  </div>
+
   <div id="help-dialog" class="dialog" hidden>
     <div class="dlg-head">
       <h3>帮助</h3>
@@ -317,5 +343,6 @@
   <script src="plugin-sandbox.js"></script>
   <script src="plugin-market.js"></script>
   <script src="plugin-dialog.js"></script>
+  <script src="about.js"></script>
 </body>
 </html>

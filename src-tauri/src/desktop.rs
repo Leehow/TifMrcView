@@ -1236,6 +1236,7 @@ pub fn run() {
             plugins::plugin_uninstall,
             plugins::plugin_set_disabled,
             plugins::open_market,
+            plugins::open_link,
             plugins::open_website,
             plugins::plugin_market_list,
             plugins::plugin_install_from_market,

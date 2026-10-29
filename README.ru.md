@@ -11,6 +11,8 @@
 
 **[Скачать](https://tifmrcview.com/tifmrcview/#download)** · **[Каталог плагинов](https://tifmrcview.com/tifmrcview/plugins/)** · [Сайт](https://tifmrcview.com/tifmrcview/)
 
+Автор: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Если TifMrcView оказался вам полезен, поставьте ему ⭐ на GitHub — это действительно помогает.
 
 ## Скриншоты
@@ -189,6 +191,16 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 ## Переводы
 
 README доступен на нескольких языках (см. строку выбора языка в самом верху). **Английский README (`README.md`) — основной источник**; в остальных файлах те же разделы в том же порядке. Если вы меняете `README.md`, обновите и переводы или создайте issue, если не получается.
+
+## Автор
+
+<!-- author -->
+Автор и сопровождающий: **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
+<!-- /author -->
+
+## Цитирование
+
+Если TifMrcView помогает в ваших исследованиях, пожалуйста, цитируйте его. GitHub показывает ссылку из [CITATION.cff](CITATION.cff) в разделе «Cite this repository» на странице репозитория.
 
 ## Лицензия
 

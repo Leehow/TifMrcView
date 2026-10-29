@@ -498,3 +498,15 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   #scroll-left, #quickbar, #scroll-right { order: 2; }
   #quickbar { flex: 1 1 calc(100% - 64px); height: 36px; }
 }
+
+/* ---------- about ---------- */
+
+.about-app { display: flex; gap: 12px; align-items: center; padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.about-title { font-size: 16px; font-weight: 600; }
+.about-sec { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.about-sec .pl-name { font-size: 14px; margin-top: 2px; }
+.about-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.about-links a { color: var(--accent); text-decoration: none; }
+.about-links a:hover { text-decoration: underline; }
+.about-cite { margin-top: 6px; padding: 8px; font-size: 12px; background: var(--subtle); border-radius: 6px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
+.about-foot { padding-top: 8px; font-size: 12px; }

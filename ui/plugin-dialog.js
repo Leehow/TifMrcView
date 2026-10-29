@@ -94,6 +94,7 @@ function togglePluginDialog(force) {
   const show = force ?? dlg.hidden;
   dlg.hidden = !show;
   if (show) toggleHelp(false);
+  if (show && typeof openAbout === "function") openAbout(false);
   if (show) {
     renderPluginList();
     if (market.list || market.loading) renderMarket();
@@ -241,6 +242,7 @@ function toggleHelp(force) {
   dlg.hidden = !show;
   if (show) {
     togglePluginDialog(false);
+    if (typeof openAbout === "function") openAbout(false);
     $("help-version").textContent = $("app-version").textContent;
   }
 }
