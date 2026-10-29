@@ -134,6 +134,9 @@ jobs:
 
   bundle:
     needs: version
+    # Installers take most of the CI time (Pro, macOS universal), so pull
+    # requests only run the tests; main, tags and manual runs still bundle.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
