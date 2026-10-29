@@ -313,6 +313,9 @@
       h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
       slogan: '又小、又快、又方便。免费开源。',
       lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用。',
+      an_t: '也有安卓版，手机和平板都能用。', an_a: '下载 APK',
+      demo_try: '点击试用：拖动 Z、测距、调亮度和对比度', demo_full: '全屏打开', demo_title: 'TifMrcView 在线示例',
+      demo_note: '真实界面，在网页里运行。示例是缩小过的蔡司 Airyscan 荧光图像。',
       a_hero: 'TifMrcView 主窗口：冷冻电镜断层 MRC 文件，测得线段长度 864.2 nm，左侧为对比度与标注面板，右侧为同目录缩略图',
       c1_eye: '冷冻电镜 · MRC',
       c1_h: '<span>GB 级断层，</span><span>拖动即达。</span>',
@@ -374,6 +377,9 @@
       h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
       slogan: 'Small. Fast. Effortless. Free and open source.',
       lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux.',
+      an_t: 'There is an Android version too, for phones and tablets.', an_a: 'Download APK',
+      demo_try: 'Click to try: drag Z, measure, adjust brightness and contrast', demo_full: 'Open full screen', demo_title: 'TifMrcView live demo',
+      demo_note: 'The real interface, running in your browser. The samples are downsized Zeiss Airyscan fluorescence images.',
       a_hero: 'TifMrcView main window showing a cryo-electron tomogram (MRC) with a measured line of 864.2 nm, the contrast and annotation panel on the left and folder thumbnails on the right',
       c1_eye: 'Cryo-ET · MRC',
       c1_h: '<span>Gigabyte tomograms.</span> <span>Zero wait.</span>',
@@ -435,6 +441,9 @@
       h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
       lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux.',
+      an_t: 'Es gibt auch eine Android-Version für Smartphones und Tablets.', an_a: 'APK herunterladen',
+      demo_try: 'Zum Ausprobieren klicken: Z ziehen, messen, Helligkeit und Kontrast anpassen', demo_full: 'Im Vollbild öffnen', demo_title: 'TifMrcView Live-Demo',
+      demo_note: 'Die echte Oberfläche, direkt im Browser. Die Beispiele sind verkleinerte Zeiss-Airyscan-Fluoreszenzbilder.',
       a_hero: 'TifMrcView-Hauptfenster mit einem Kryo-Elektronentomogramm (MRC) und einer gemessenen Linie von 864,2 nm, links der Kontrast- und Annotationsbereich, rechts die Miniaturen des Ordners',
       c1_eye: 'Kryo-ET · MRC',
       c1_h: '<span>Tomogramme in Gigabyte.</span> <span>Ohne Warten.</span>',
@@ -496,6 +505,9 @@
       h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
       slogan: '小さく、速く、使いやすく。無料のオープンソース。',
       lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux に対応。',
+      an_t: 'Android 版もあります。スマートフォンとタブレットで使えます。', an_a: 'APK をダウンロード',
+      demo_try: 'クリックして試す：Z の移動、計測、明るさとコントラストの調整', demo_full: '全画面で開く', demo_title: 'TifMrcView ライブデモ',
+      demo_note: '本物の画面をブラウザで動かしています。サンプルは縮小した Zeiss Airyscan 蛍光画像です。',
       a_hero: 'TifMrcView のメインウィンドウ。クライオ電子線トモグラム（MRC）に 864.2 nm の計測線、左にコントラストと注釈のパネル、右に同じフォルダのサムネイル',
       c1_eye: 'クライオ ET · MRC',
       c1_h: '<span>ギガバイト級のトモグラムも、</span><span>待たせない。</span>',
@@ -557,6 +569,9 @@
       h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
       slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
       lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux.',
+      an_t: 'También hay versión para Android, para móviles y tabletas.', an_a: 'Descargar APK',
+      demo_try: 'Haz clic para probar: mueve Z, mide, ajusta brillo y contraste', demo_full: 'Abrir a pantalla completa', demo_title: 'Demo en vivo de TifMrcView',
+      demo_note: 'La interfaz real, funcionando en el navegador. Las muestras son imágenes de fluorescencia Zeiss Airyscan reducidas.',
       a_hero: 'Ventana principal de TifMrcView con un tomograma de crio-microscopía electrónica (MRC) y una línea medida de 864,2 nm, el panel de contraste y anotaciones a la izquierda y las miniaturas de la carpeta a la derecha',
       c1_eye: 'Crio-ET · MRC',
       c1_h: '<span>Tomogramas de gigabytes.</span> <span>Sin esperas.</span>',
@@ -618,6 +633,9 @@
       h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
       lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux.',
+      an_t: 'Il existe aussi une version Android, pour téléphones et tablettes.', an_a: 'Télécharger l’APK',
+      demo_try: 'Cliquez pour essayer : déplacez Z, mesurez, réglez luminosité et contraste', demo_full: 'Ouvrir en plein écran', demo_title: 'Démo en direct de TifMrcView',
+      demo_note: 'La vraie interface, dans votre navigateur. Les exemples sont des images de fluorescence Zeiss Airyscan réduites.',
       a_hero: 'Fenêtre principale de TifMrcView avec un tomogramme de cryo-microscopie électronique (MRC) et une ligne mesurée de 864,2 nm, le panneau de contraste et d’annotation à gauche et les vignettes du dossier à droite',
       c1_eye: 'Cryo-ET · MRC',
       c1_h: '<span>Des tomogrammes de plusieurs Go.</span> <span>Sans attendre.</span>',
@@ -679,6 +697,9 @@
       h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
       slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
       lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux.',
+      an_t: 'Есть и версия для Android — для телефонов и планшетов.', an_a: 'Скачать APK',
+      demo_try: 'Нажмите, чтобы попробовать: Z, измерения, яркость и контраст', demo_full: 'Открыть на весь экран', demo_title: 'Живая демонстрация TifMrcView',
+      demo_note: 'Настоящий интерфейс прямо в браузере. Примеры — уменьшенные флуоресцентные снимки Zeiss Airyscan.',
       a_hero: 'Главное окно TifMrcView: криоэлектронная томограмма (MRC) с измеренной линией 864,2 нм, слева панель контраста и аннотаций, справа миниатюры папки',
       c1_eye: 'Крио-ЭТ · MRC',
       c1_h: '<span>Гигабайтные томограммы.</span> <span>Без ожидания.</span>',
@@ -805,10 +826,21 @@
       var f = (data.files[el.getAttribute('data-mb')] || [])[0];
       if (f && sizes[f.file]) el.textContent = mb(sizes[f.file]).replace(' MB', '');
     });
-    document.getElementById('meta').textContent = t.version + ' ' + data.version + ' · ' + data.date + ' · macOS · Windows · Linux';
+    var apk = (data.files.android || [])[0];
+    document.getElementById('meta').textContent = t.version + ' ' + data.version + ' · ' + data.date + ' · macOS · Windows · Linux' + (apk ? ' · Android' : '');
+    // A small line under the main button so people know there is an APK
+    // (on Android the main button is the APK already).
+    var an = document.getElementById('andr');
+    if (an && apk && !/Android/.test(ua)) {
+      document.getElementById('andr-a').href = DL + apk.file;
+      an.hidden = false;
+    }
     document.getElementById('ver').textContent = 'v' + data.version;
     var c = document.getElementById('cta');
-    if (os && data.files[os] && data.files[os][0]) {
+    if (/Android/.test(ua) && apk) {
+      c.href = DL + apk.file; c.setAttribute('download', '');
+      c.textContent = t.cta_os.replace('{os}', 'Android');
+    } else if (os && data.files[os] && data.files[os][0]) {
       c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
       c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');

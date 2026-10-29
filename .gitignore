@@ -10,3 +10,4 @@ src-tauri/tauri.ci.conf.json
 /target/
 plugins/*/target/
 plugins/sdk/Cargo.lock
+site/demo/app/
