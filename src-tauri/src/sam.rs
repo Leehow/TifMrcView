@@ -94,6 +94,8 @@ pub struct LastMask {
     pub mask: Vec<bool>,
     /// The model's own quality estimate for it.
     pub iou: f32,
+    /// The model's low-resolution logits, the mask prompt for the next slice.
+    pub low_res: Vec<f32>,
 }
 
 #[derive(Default)]
@@ -173,7 +175,7 @@ impl Sam {
         let r = predictor.predict(&encoded, &points, req.bbox, None);
         let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
         let bytes = mask.iter().map(|&m| m as u8).collect();
-        *self.last.lock().unwrap() = Some(LastMask { token: req.token, z: req.z, mask, iou: r.iou });
+        *self.last.lock().unwrap() = Some(LastMask { token: req.token, z: req.z, mask, iou: r.iou, low_res: r.low_res_values() });
         Ok((bytes, r.iou))
     }
 
@@ -189,14 +191,18 @@ impl Sam {
         progress: impl Fn(usize, usize),
     ) -> Result<Vec<(usize, Vec<bool>)>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let (start, start_iou) = match self.last.lock().unwrap().as_ref() {
-            Some(m) if m.token == req.token && m.z == req.z => (m.mask.clone(), m.iou),
+        let (start, start_iou, start_low) = match self.last.lock().unwrap().as_ref() {
+            Some(m) if m.token == req.token && m.z == req.z => (m.mask.clone(), m.iou, m.low_res.clone()),
             _ => bail!("先在这一层点出一个分割，再沿 Z 传播"),
         };
         if too_big(&start) {
             bail!("这个分割几乎盖满了整层，先用 Alt+点击去掉背景再传播");
         }
         let predictor = Self::predictor(&mut self.inner.lock().unwrap())?;
+        // A mask that has grown to three times the starting one has leaked
+        // into its surroundings a little at a time. (Shrinking is normal
+        // towards the ends of an object.)
+        let start_area = start.iter().filter(|m| **m).count() as f32;
         self.cancel.store(false, SeqCst);
         let mut dirs = vec![];
         if req.up {
@@ -208,24 +214,27 @@ impl Sam {
         let total: usize = dirs.iter().map(|d| d.1).sum();
         let (mut out, mut done) = (vec![(req.z, start.clone())], 0);
         for (dir, steps) in dirs {
-            let (mut prev, base) = (start.clone(), done);
+            let (mut prev, mut prev_low, base) = (start.clone(), start_low.clone(), done);
             for k in 1..=steps {
                 if self.cancel.load(SeqCst) {
                     return Ok(out);
                 }
                 let z = (req.z as isize + dir * k as isize) as usize;
-                let Some((bbox, pts)) = follow_prompt(&prev, w, h) else { break };
+                let Some(prompt) = follow_prompt(&prev, w, h) else { break };
                 let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h);
-                let pts: Vec<tmv_sam::Point> = pts.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: true }).collect();
-                let r = predictor.predict(&enc, &pts, Some(bbox), None);
+                let pts: Vec<tmv_sam::Point> = prompt.points.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: true }).collect();
+                let mask_in = prompt.use_mask.then(|| predictor.mask_prompt(&prev_low));
+                let r = predictor.predict(&enc, &pts, prompt.bbox, mask_in);
                 let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
-                if !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
+                let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
+                if !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) || grown > 3.0 {
                     break;
                 }
                 done += 1;
                 progress(done, total);
                 out.push((z, mask.clone()));
                 prev = mask;
+                prev_low = r.low_res_values();
             }
             // The slices left in this direction are skipped.
             done = base + steps;
@@ -302,11 +311,20 @@ pub fn denoise(slices: &[Vec<f32>], w: usize, h: usize, sigma: f32) -> Vec<f32> 
     a
 }
 
+/// What carries a mask on to the next slice.
+pub struct Prompt {
+    pub bbox: Option<[f32; 4]>,
+    pub points: Vec<PromptPoint>,
+    /// Give the previous slice's mask as a mask prompt too.
+    pub use_mask: bool,
+}
+
 /// The prompt for the next slice from the mask on this one: its box grown
 /// by 10 % and the innermost pixel. A thin object (a membrane, a filament)
-/// gets two more points spread along it, as its box alone mostly holds
-/// other things.
-pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<([f32; 4], Vec<PromptPoint>)> {
+/// gets two more points spread along it. A thin object that closes on
+/// itself (a cell outline) gets no box, which would ask for the whole cell,
+/// but five points along it plus the previous mask as a mask prompt.
+pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<Prompt> {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for (i, _) in mask.iter().enumerate().filter(|(_, m)| **m) {
         let (x, y) = (i % w, i / w);
@@ -318,6 +336,7 @@ pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<([f32; 4], Vec
     let outside: Vec<bool> = mask.iter().map(|m| !m).collect();
     let depth = crate::labels::edt(&outside, w, h);
     let (i, &deepest) = depth.iter().enumerate().filter(|(i, _)| mask[*i]).max_by(|a, b| a.1.total_cmp(b.1))?;
+    let point = |i: usize| PromptPoint { x: (i % w) as f32 + 0.5, y: (i / w) as f32 + 0.5, positive: true };
     let (gx, gy) = ((x1 - x0 + 1) as f32 * 0.1, (y1 - y0 + 1) as f32 * 0.1);
     let bbox = [
         (x0 as f32 - gx).max(0.0),
@@ -325,22 +344,43 @@ pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<([f32; 4], Vec
         ((x1 + 1) as f32 + gx).min(w as f32),
         ((y1 + 1) as f32 + gy).min(h as f32),
     ];
-    let point = |i: usize| PromptPoint { x: (i % w) as f32 + 0.5, y: (i / w) as f32 + 0.5, positive: true };
-    let mut pts = vec![i];
     let span = (x1 - x0 + 1).max(y1 - y0 + 1) as f32;
-    if span > 8.0 * deepest {
-        // Farthest-point picks among the pixels on the middle line.
-        let mid: Vec<usize> = (0..mask.len()).filter(|&j| mask[j] && depth[j] >= 0.5 * deepest).collect();
-        for _ in 0..2 {
-            let far = mid.iter().copied().max_by_key(|&j| {
-                pts.iter().map(|&p| (j % w).abs_diff(p % w).pow(2) + (j / w).abs_diff(p / w).pow(2)).min().unwrap_or(0)
-            });
-            if let Some(f) = far.filter(|f| !pts.contains(f)) {
-                pts.push(f);
-            }
+    if span <= 8.0 * deepest {
+        return Some(Prompt { bbox: Some(bbox), points: vec![point(i)], use_mask: false });
+    }
+    let closed = enclosed(mask, w, h) > 2 * mask.iter().filter(|m| **m).count();
+    // Farthest-point picks among the pixels on the middle line.
+    let mid: Vec<usize> = (0..mask.len()).filter(|&j| mask[j] && depth[j] >= 0.5 * deepest).collect();
+    let mut pts = vec![i];
+    for _ in 0..if closed { 4 } else { 2 } {
+        let far = mid.iter().copied().max_by_key(|&j| {
+            pts.iter().map(|&p| (j % w).abs_diff(p % w).pow(2) + (j / w).abs_diff(p / w).pow(2)).min().unwrap_or(0)
+        });
+        if let Some(f) = far.filter(|f| !pts.contains(f)) {
+            pts.push(f);
         }
     }
-    Some((bbox, pts.into_iter().map(point).collect()))
+    let points = pts.into_iter().map(point).collect();
+    Some(if closed { Prompt { bbox: None, points, use_mask: true } } else { Prompt { bbox: Some(bbox), points, use_mask: false } })
+}
+
+/// Pixels outside `mask` that the image border cannot reach: the holes a
+/// closed outline encloses.
+fn enclosed(mask: &[bool], w: usize, h: usize) -> usize {
+    let mut seen = mask.to_vec();
+    let mut stack: Vec<usize> = (0..w).flat_map(|x| [x, (h - 1) * w + x]).chain((0..h).flat_map(|y| [y * w, y * w + w - 1])).collect();
+    while let Some(i) = stack.pop() {
+        if seen[i] {
+            continue;
+        }
+        seen[i] = true;
+        let (x, y) = (i % w, i / w);
+        if x > 0 { stack.push(i - 1); }
+        if x + 1 < w { stack.push(i + 1); }
+        if y > 0 { stack.push(i - w); }
+        if y + 1 < h { stack.push(i + w); }
+    }
+    seen.iter().filter(|s| !**s).count()
 }
 
 /// Points the CUDA backend at the libdevice.10.bc that the Linux packages
@@ -425,7 +465,8 @@ mod tests {
     #[test]
     fn prompt_follows_the_mask() {
         let m = disc(64, 48, 30.0, 20.0, 10.0);
-        let (b, p) = follow_prompt(&m, 64, 48).unwrap();
+        let Prompt { bbox, points: p, .. } = follow_prompt(&m, 64, 48).unwrap();
+        let b = bbox.unwrap();
         assert_eq!(p.len(), 1);
         assert!((p[0].x - 30.0).abs() <= 1.0 && (p[0].y - 20.0).abs() <= 1.0);
         assert!(b[0] < 20.0 && b[0] > 16.0 && b[2] > 40.0 && b[2] < 44.0);
@@ -435,13 +476,27 @@ mod tests {
     #[test]
     fn thin_objects_get_points_along_them() {
         let m = band(96, 48, 0.0);
-        let (_, p) = follow_prompt(&m, 96, 48).unwrap();
+        let Prompt { bbox, points: p, use_mask } = follow_prompt(&m, 96, 48).unwrap();
+        assert!(bbox.is_some() && !use_mask);
         assert_eq!(p.len(), 3);
         let at = |q: &PromptPoint| m[q.y as usize * 96 + q.x as usize];
         assert!(p.iter().all(at), "{p:?}");
         let mut xs: Vec<f32> = p.iter().map(|q| q.x).collect();
         xs.sort_by(f32::total_cmp);
-        assert!(xs[1] - xs[0] > 20.0 && xs[2] - xs[1] > 20.0, "{xs:?}");
+        assert!(xs.windows(2).all(|p| p[1] - p[0] > 20.0), "{xs:?}");
+    }
+
+    #[test]
+    fn closed_outlines_go_on_by_points_and_mask() {
+        let (w, h) = (96, 64);
+        let ring: Vec<bool> = (0..w * h)
+            .map(|i| ((i % w) as f32 + 0.5 - 48.0).hypot((i / w) as f32 + 0.5 - 32.0) - 24.0)
+            .map(|r| r.abs() < 1.5)
+            .collect();
+        let Prompt { bbox, points, use_mask } = follow_prompt(&ring, w, h).unwrap();
+        assert!(bbox.is_none() && use_mask);
+        assert_eq!(points.len(), 5);
+        assert!(points.iter().all(|q| ring[q.y as usize * w + q.x as usize]));
     }
 
     #[test]
@@ -546,6 +601,53 @@ mod tests {
             let n = m.iter().filter(|v| **v).count();
             let hit = m.iter().enumerate().filter(|(i, v)| **v && on(*z, *i)).count();
             println!("z {z}: {n} px, {:.0} % on the membrane", 100.0 * hit as f32 / n as f32);
+        }
+        assert!(zs.len() >= 15, "{zs:?}");
+    }
+
+    /// A closed, noisy membrane (a cell outline) that shrinks away from the
+    /// middle slice, segmented with denoising as tomograms are: its box holds
+    /// the whole cell, so it must be followed by points and mask alone.
+    #[cfg(feature = "pro")]
+    #[test]
+    #[ignore]
+    fn closed_membrane_propagates() {
+        let path = std::env::var("TMV_SAM_MODEL").expect("TMV_SAM_MODEL");
+        let (w, h, d) = (192, 128, 21);
+        let ring = |z: usize, i: usize| {
+            let s = 1.0 - (z as f32 - 10.0).abs() * 0.02;
+            let (x, y) = (((i % w) as f32 + 0.5 - 96.0) / (60.0 * s), ((i / w) as f32 + 0.5 - 64.0) / (40.0 * s));
+            ((x * x + y * y).sqrt() - 1.0).abs() * 40.0 * s < 1.5
+        };
+        let slice = |z: usize| -> Vec<f32> {
+            let mut seed = 0x9e37_79b9u32.wrapping_mul(z as u32 + 1);
+            (0..w * h)
+                .map(|i| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    let noise = (seed % 1000) as f32 / 1000.0 * 120.0 - 60.0;
+                    (if ring(z, i) { 70.0 } else { 150.0 }) + noise
+                })
+                .collect()
+        };
+        let sam = Sam::default();
+        let (p, _) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
+        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        let denoise = Denoise { slab: 2, sigma: 1.5 };
+        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 96.0, y: 24.5, positive: true }], bbox: None, denoise };
+        let (start, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
+        let n = start.iter().filter(|v| **v != 0).count();
+        println!("start quality {iou:.2}, {n} px");
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise };
+        let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
+        let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
+        zs.sort();
+        println!("slices {zs:?}");
+        for (z, m) in &masks {
+            let n = m.iter().filter(|v| **v).count();
+            let near = m.iter().enumerate().filter(|(i, v)| **v && (0..9).any(|k| ring(*z, (*i + w * 4 + k).saturating_sub(4 + w * 4).min(w * h - 1)))).count();
+            println!("z {z}: {n} px, {:.0} % near the membrane", 100.0 * near as f32 / n as f32);
         }
         assert!(zs.len() >= 15, "{zs:?}");
     }
