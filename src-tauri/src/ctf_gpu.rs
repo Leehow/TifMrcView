@@ -9,11 +9,11 @@ use std::sync::OnceLock;
 use anyhow::{anyhow, Result};
 use burn::tensor::{Device, Tensor, TensorData};
 
-use crate::ctf::{Model, Optics, Px, Scorer};
+use crate::ctf::{CpuGrid, Grid, Model, Optics, Px};
 use crate::fft;
 
 /// Largest tensor the code builds, in elements (f32), to bound GPU memory.
-const MAX_ELEMS: usize = 1 << 23;
+const MAX_ELEMS: usize = 1 << 24;
 
 /// The GPU and its name, or None when only the CPU is available.
 pub fn device() -> Option<&'static (Device, &'static str)> {
@@ -95,80 +95,67 @@ pub fn spectrum(dev: &Device, values: impl Fn(usize, usize) -> f32 + Sync, regio
     Ok(fft::finish(&sum, n, origins.len()))
 }
 
-/// Pixel constants on the GPU, for scoring batches of models.
-pub struct GpuScorer {
-    dev: Device,
-    /// a·k², a·k²·cos 2θ, a·k²·sin 2θ, b·k⁴ − w: each [1, P].
-    ak2: Tensor<2>,
-    ac: Tensor<2>,
-    as_: Tensor<2>,
-    bk: Tensor<2>,
-    /// The spectrum values as a column [P, 1].
-    x: Tensor<2>,
-    count: f64,
-    sx: f64,
-    sxx: f64,
-}
+/// Grid search on the GPU. All spectra share the bin geometry, so each
+/// candidate's CTF² is computed once and scored against every spectrum
+/// with one matrix product: V [models × bins] · [w, w·x₁ … w·x_S]. Each
+/// spectrum then takes the best of everyone's candidates, which also
+/// helps a tilt whose own 1D search was misled.
+pub struct GpuGrid<'d>(pub &'d Device);
 
-impl GpuScorer {
-    /// With `full` false, every few pixels (about 30 000) like the CPU's grid search.
-    pub(crate) fn new(dev: &Device, px: &[Px], o: Optics, full: bool) -> GpuScorer {
-        let sub: Vec<Px>;
-        let px = if full {
-            px
-        } else {
-            sub = px.iter().step_by((px.len() / 30_000).max(1)).copied().collect();
-            &sub
-        };
-        let p = px.len();
-        let ak2: Vec<f32> = px.iter().map(|q| (o.a * q.k2 as f64) as f32).collect();
-        let ac = px.iter().zip(&ak2).map(|(q, &a)| a * q.c2).collect();
-        let as_ = px.iter().zip(&ak2).map(|(q, &a)| a * q.s2).collect();
-        let bk = px.iter().map(|q| (o.b * (q.k2 as f64).powi(2) - o.w) as f32).collect();
-        let xs: Vec<f32> = px.iter().map(|q| q.x).collect();
-        let sx = xs.iter().map(|&v| v as f64).sum();
-        let sxx = xs.iter().map(|&v| (v as f64).powi(2)).sum();
-        GpuScorer {
-            dev: dev.clone(),
-            ak2: upload(ak2, [1, p], dev),
-            ac: upload(ac, [1, p], dev),
-            as_: upload(as_, [1, p], dev),
-            bk: upload(bk, [1, p], dev),
-            x: upload(xs, [p, 1], dev),
-            count: p as f64,
-            sx,
-            sxx,
+impl Grid for GpuGrid<'_> {
+    fn best(&self, px: &[&[Px]], o: Optics, cands: &[Vec<Model>]) -> Vec<Model> {
+        let dev = self.0;
+        let b = px[0].len();
+        let same = px.iter().all(|q| q.len() == b && q.iter().zip(px[0]).all(|(a, c)| a.r == c.r && a.c2 == c.c2));
+        if !same || b == 0 {
+            return CpuGrid.best(px, o, cands);
         }
-    }
-
-    fn run(&self, models: &[Model]) -> Vec<f64> {
-        let m = models.len();
-        let col = |f: fn(&Model) -> f64| upload(models.iter().map(|x| f(x) as f32).collect(), [m, 1], &self.dev);
-        let (mean, p, q, ph) = (col(|x| x.mean), col(|x| x.p), col(|x| x.q), col(|x| x.phase));
-        // γ = a·Δf(θ)·k² − b·k⁴ + w + φ, reduced mod π (CTF² has period π)
-        // so the GPU's sin is only asked about small angles.
-        let g = mean * self.ak2.clone() + p * self.ac.clone() + q * self.as_.clone() - self.bk.clone() + ph;
-        let g = g.clone() - (g.div_scalar(PI as f32)).round().mul_scalar(PI as f32);
-        let s = g.sin();
-        let v = s.clone() * s;
-        // One read back per batch: [Σv, Σv², Σxv] per model.
-        let sums = download(Tensor::cat(vec![v.clone().sum_dim(1), (v.clone() * v.clone()).sum_dim(1), v.matmul(self.x.clone())], 1));
-        (0..m)
-            .map(|i| {
-                let r = &sums[i * 3..i * 3 + 3];
-                crate::ctf::corr(self.count, self.sx, r[0] as f64, self.sxx, r[1] as f64, r[2] as f64)
+        let g0 = px[0];
+        let ns = px.len();
+        let ak2: Vec<f32> = g0.iter().map(|q| (o.a * q.k2 as f64) as f32).collect();
+        let ac = g0.iter().zip(&ak2).map(|(q, &a)| a * q.c2).collect();
+        let as_ = g0.iter().zip(&ak2).map(|(q, &a)| a * q.s2).collect();
+        let bk = g0.iter().map(|q| (o.b * (q.k2 as f64).powi(2) - o.w) as f32).collect();
+        let (ak2, ac, as_, bk) = (upload(ak2, [1, b], dev), upload(ac, [1, b], dev), upload(as_, [1, b], dev), upload(bk, [1, b], dev));
+        // [w, w·x per spectrum], bins down the rows.
+        let mut wx = vec![0f32; b * (ns + 1)];
+        for i in 0..b {
+            wx[i * (ns + 1)] = g0[i].w;
+            for (s, q) in px.iter().enumerate() {
+                wx[i * (ns + 1) + s + 1] = q[i].w * q[i].x;
+            }
+        }
+        let wx = upload(wx, [b, ns + 1], dev);
+        let w = wx.clone().narrow(1, 0, 1);
+        let all: Vec<Model> = cands.iter().flatten().copied().collect();
+        let per = (MAX_ELEMS / b).max(1);
+        let mut parts = Vec::new();
+        for chunk in all.chunks(per) {
+            let m = chunk.len();
+            let col = |f: fn(&Model) -> f64| upload(chunk.iter().map(|x| f(x) as f32).collect(), [m, 1], dev);
+            let (mean, p, q, ph) = (col(|x| x.mean), col(|x| x.p), col(|x| x.q), col(|x| x.phase));
+            // γ = a·Δf(θ)·k² − b·k⁴ + w + φ, reduced mod π (CTF² has period π)
+            // so the GPU's sin is only asked about small angles.
+            let g = mean * ak2.clone() + p * ac.clone() + q * as_.clone() - bk.clone() + ph;
+            let g = g.clone() - (g.div_scalar(PI as f32)).round().mul_scalar(PI as f32);
+            let s = g.sin();
+            let v = s.clone() * s;
+            parts.push(Tensor::cat(vec![(v.clone() * v.clone()).matmul(w.clone()), v.matmul(wx.clone())], 1));
+        }
+        // One read back for everything: per model [Σwv², Σwv, Σwvx₁ … Σwvx_S].
+        let sums = download(Tensor::cat(parts, 0));
+        let cols = ns + 2;
+        let sw: f64 = g0.iter().map(|q| q.w as f64).sum();
+        (0..ns)
+            .map(|s| {
+                let (sx, sxx) = px[s].iter().fold((0f64, 0f64), |(a, c), q| (a + (q.w * q.x) as f64, c + (q.w * q.x * q.x) as f64));
+                let score = |i: usize| {
+                    let r = &sums[i * cols..(i + 1) * cols];
+                    crate::ctf::corr(sw, sx, r[1] as f64, sxx, r[0] as f64, r[s + 2] as f64)
+                };
+                all[(0..all.len()).max_by(|&a, &c| score(a).total_cmp(&score(c))).unwrap()]
             })
             .collect()
-    }
-}
-
-impl Scorer for GpuScorer {
-    fn scores(&self, models: &[Model]) -> Vec<f64> {
-        let per = (MAX_ELEMS / (self.count as usize).max(1)).max(1);
-        models.chunks(per).flat_map(|c| self.run(c)).collect()
-    }
-    fn batched(&self) -> bool {
-        true
     }
 }
 
@@ -207,7 +194,7 @@ mod tests {
             p.phase = phase;
             let s = synth_pub(256, &p, 13000.0, 12200.0, 70.0, if phase { 60.0 } else { 0.0 }, 60.0, 0.4, 21);
             let cpu = crate::ctf::fit_spectrum(&s, 256, &p).unwrap();
-            let gpu = crate::ctf::fit_with(&s, 256, &p, &|px, o, full| Box::new(GpuScorer::new(&dev, px, o, full))).unwrap();
+            let gpu = crate::ctf::fit_many(&[&s], 256, &p, &GpuGrid(&dev)).unwrap().pop().unwrap();
             assert!((cpu.df1 - gpu.df1).abs() < 30.0 && (cpu.df2 - gpu.df2).abs() < 30.0, "cpu {cpu:?} gpu {gpu:?}");
             assert!((cpu.angle - gpu.angle).abs() < 2.0 && (cpu.phase - gpu.phase).abs() < 3.0);
             assert!((cpu.df1 - 13000.0).abs() < 130.0 && (gpu.df2 - 12200.0).abs() < 130.0);
@@ -243,10 +230,30 @@ mod bench {
                     let t = Instant::now();
                     let s = spectrum(d, values, [0, 0, size, size], n).unwrap();
                     let ts = t.elapsed();
-                    let f = crate::ctf::fit_with(&s.log, s.n, &p, &|px, o, full| Box::new(GpuScorer::new(d, px, o, full))).unwrap();
+                    let f = crate::ctf::fit_many(&[&s.log], s.n, &p, &GpuGrid(d)).unwrap().pop().unwrap();
                     eprintln!("n {n} #{round} {name}: spectrum {ts:?}, total {:?}: df {:.0}/{:.0} {:.1}°", t.elapsed(), f.df1, f.df2, f.angle);
                 }
             }
+        }
+    }
+
+    /// A 41-slice tilt series of 512² spectra, grid search on the CPU and the GPU.
+    #[test]
+    #[ignore]
+    fn stack() {
+        let p = crate::ctf::tests::params_pub();
+        let specs: Vec<Vec<f32>> = (0..41).map(|i| crate::ctf::tests::synth_pub(512, &p, 15000.0 + 120.0 * (i as f64 - 20.0), 14400.0 + 120.0 * (i as f64 - 20.0), 40.0, 0.0, 60.0, 0.5, i)).collect();
+        let refs: Vec<&[f32]> = specs.iter().map(|s| &s[..]).collect();
+        let Some((d, name)) = device() else { return eprintln!("no GPU") };
+        for round in 0..3 {
+            let t = Instant::now();
+            let a = crate::ctf::fit_many(&refs, 512, &p, &crate::ctf::CpuGrid).unwrap();
+            let tc = t.elapsed();
+            let t = Instant::now();
+            let b = crate::ctf::fit_many(&refs, 512, &p, &GpuGrid(d)).unwrap();
+            let tg = t.elapsed();
+            let worst = a.iter().zip(&b).map(|(x, y)| (x.df1 - y.df1).abs().max((x.df2 - y.df2).abs())).fold(0f64, f64::max);
+            eprintln!("#{round} 41 slices: CPU {tc:?}, {name} {tg:?}, largest df difference {worst:.0} Å");
         }
     }
 

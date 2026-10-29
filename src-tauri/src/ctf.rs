@@ -29,6 +29,11 @@ use serde::{Deserialize, Serialize};
 use crate::fft;
 use crate::image::OpenImage;
 
+#[cfg(feature = "pro")]
+type Dev = burn::tensor::Device;
+#[cfg(not(feature = "pro"))]
+type Dev = ();
+
 /// Window correlation below which the Thon rings no longer follow the fit.
 const FIT_CC: f64 = 0.5;
 
@@ -151,7 +156,8 @@ impl Model {
     }
 }
 
-/// One spectrum pixel of the half plane.
+/// One polar bin of the half plane (1 FFT pixel in radius, `ANGLES` bins
+/// over 180°): the mean over its pixels, and how many there are.
 #[derive(Clone, Copy)]
 pub(crate) struct Px {
     pub k2: f32,
@@ -161,7 +167,14 @@ pub(crate) struct Px {
     pub x: f32,
     /// Radius in FFT pixels.
     pub r: f32,
+    /// Pixels in the bin.
+    pub w: f32,
 }
+
+/// Angular bins over the half plane. Within one 2° bin the astigmatic part
+/// of the defocus hardly changes, and the scores cost a fraction of the
+/// pixel count (about 6× fewer at n = 1024).
+const ANGLES: usize = 90;
 
 struct Prepared {
     /// Pixels inside the fitting band.
@@ -198,7 +211,7 @@ fn prepare(amp: &[f32], n: usize, pixel_a: f64, band: [f64; 2], boxw: usize) -> 
             // θ counterclockwise on screen: y up = −dv.
             let th = (-(dv as f64)).atan2(du as f64);
             let k = r / (n as f64 * pixel_a);
-            raw.push((r, ri, k * k, (2.0 * th).cos(), (2.0 * th).sin(), x));
+            raw.push((r, ri, k * k, (2.0 * th).cos(), (2.0 * th).sin(), x, th.rem_euclid(PI)));
         }
     }
     // Smooth the ring RMS over a few radii.
@@ -213,12 +226,22 @@ fn prepare(amp: &[f32], n: usize, pixel_a: f64, band: [f64; 2], boxw: usize) -> 
             }
         })
         .collect();
-    let mut out = Prepared { band: Vec::new(), outer: Vec::new() };
-    for (r, ri, k2, c2, s2, x) in raw {
+    // Sums per (radius, angle) bin: w, k², cos 2θ, sin 2θ, x, r.
+    let mut bins = vec![[0f64; 6]; (rmax + 2) * ANGLES];
+    for (r, ri, k2, c2, s2, x, th) in raw {
         // Clip outliers (crystal spots, hot pixels).
         let x = (x / rms[ri]).clamp(-4.0, 4.0);
-        let px = Px { k2: k2 as f32, c2: c2 as f32, s2: s2 as f32, x: x as f32, r: r as f32 };
-        if r <= band[1] {
+        let a = ((th / PI * ANGLES as f64) as usize).min(ANGLES - 1);
+        let b = &mut bins[ri * ANGLES + a];
+        for (o, v) in b.iter_mut().zip([1.0, k2, c2, s2, x, r]) {
+            *o += v;
+        }
+    }
+    let mut out = Prepared { band: Vec::new(), outer: Vec::new() };
+    for b in bins.iter().filter(|b| b[0] > 0.0) {
+        let w = b[0];
+        let px = Px { k2: (b[1] / w) as f32, c2: (b[2] / w) as f32, s2: (b[3] / w) as f32, x: (b[4] / w) as f32, r: (b[5] / w) as f32, w: w as f32 };
+        if px.r as f64 <= band[1] {
             out.band.push(px);
         }
         out.outer.push(px);
@@ -270,13 +293,13 @@ fn score(px: &[Px], o: &Optics, m: &Model, step: usize) -> f64 {
             for p in chunk.iter().step_by(step) {
                 let df = m.df(p.c2 as f64, p.s2 as f64);
                 let g = o.gamma(df, p.k2 as f64, m.phase).sin();
-                let (x, v) = (p.x as f64, g * g);
-                s[0] += 1.0;
-                s[1] += x;
-                s[2] += v;
-                s[3] += x * x;
-                s[4] += v * v;
-                s[5] += x * v;
+                let (x, v, w) = (p.x as f64, g * g, p.w as f64);
+                s[0] += w;
+                s[1] += w * x;
+                s[2] += w * v;
+                s[3] += w * x * x;
+                s[4] += w * v * v;
+                s[5] += w * x * v;
             }
             s
         })
@@ -289,8 +312,8 @@ fn ring_average(px: &[Px], len: usize) -> Vec<(f64, usize)> {
     let mut ring = vec![(0f64, 0usize); len];
     for p in px {
         let r = (p.r.round() as usize).min(len - 1);
-        ring[r].0 += p.x as f64;
-        ring[r].1 += 1;
+        ring[r].0 += (p.x * p.w) as f64;
+        ring[r].1 += p.w as usize;
     }
     ring.iter().map(|&(s, c)| (if c > 0 { s / c as f64 } else { 0.0 }, c)).collect()
 }
@@ -353,32 +376,32 @@ fn search_1d(px: &[Px], o: &Optics, p: &Params, n: usize) -> Vec<Model> {
     peaks.into_iter().map(|(_, m)| m).collect()
 }
 
-/// Scores many CTF models against one prepared set of pixels: on the CPU,
-/// or in batches on the GPU (`ctf_gpu`).
-pub(crate) trait Scorer {
-    fn scores(&self, models: &[Model]) -> Vec<f64>;
-    /// True when a whole batch costs about as much as one model (GPU), so
-    /// the refinement evaluates many points per step instead of walking.
-    fn batched(&self) -> bool;
+/// Picks the best grid model for each of several spectra with the same
+/// geometry (same n and band, so the same bins): on the CPU, or on the GPU
+/// (`ctf_gpu::GpuGrid`), where every spectrum is scored against the
+/// candidates of all of them at once.
+pub(crate) trait Grid: Sync {
+    /// `px[s]`: the bins of spectrum s; `cands[s]`: its candidates.
+    fn best(&self, px: &[&[Px]], o: Optics, cands: &[Vec<Model>]) -> Vec<Model>;
 }
 
-struct CpuScorer<'a> {
-    px: &'a [Px],
-    o: Optics,
-    step: usize,
-}
+pub(crate) struct CpuGrid;
 
-impl Scorer for CpuScorer<'_> {
-    fn scores(&self, models: &[Model]) -> Vec<f64> {
-        models.par_iter().map(|m| score(self.px, &self.o, m, self.step)).collect()
-    }
-    fn batched(&self) -> bool {
-        false
+impl Grid for CpuGrid {
+    fn best(&self, px: &[&[Px]], o: Optics, cands: &[Vec<Model>]) -> Vec<Model> {
+        px.par_iter()
+            .zip(cands)
+            .map(|(px, c)| {
+                let step = (px.len() / 30_000).max(1);
+                let v: Vec<f64> = c.par_iter().map(|m| score(px, &o, m, step)).collect();
+                c[(0..c.len()).max_by(|&a, &b| v[a].total_cmp(&v[b])).unwrap_or(0)]
+            })
+            .collect()
     }
 }
 
 /// Astigmatism grid around each 1D candidate.
-fn search_2d(sc: &dyn Scorer, p: &Params, starts: &[Model]) -> Model {
+fn grid_candidates(p: &Params, starts: &[Model]) -> Vec<Model> {
     let maxh = (p.max_astig_a / 2.0).max(0.0);
     let hs: Vec<f64> = (0..=8).map(|i| maxh * i as f64 / 8.0).collect();
     let mut cands = Vec::new();
@@ -394,54 +417,13 @@ fn search_2d(sc: &dyn Scorer, p: &Params, starts: &[Model]) -> Model {
             }
         }
     }
-    let v = sc.scores(&cands);
-    let best = (0..cands.len()).max_by(|&a, &b| v[a].total_cmp(&v[b])).unwrap_or(0);
-    cands.get(best).copied().unwrap_or(starts[0])
+    cands
 }
 
 /// Score minus a penalty for leaving the requested ranges.
 fn objective(p: &Params, m: &Model, score: f64) -> f64 {
     let over = (m.mean - p.df_max_a).max(p.df_min_a - m.mean).max(0.0) + (2.0 * m.half_diff() - p.max_astig_a).max(0.0);
     score - over * 1e-3
-}
-
-/// Refinement suited to batches: every combination of −step, 0, +step
-/// around the best point is scored at once; the best becomes the centre,
-/// and the steps halve when the centre stays best.
-fn refine_batched(sc: &dyn Scorer, p: &Params, start: Model) -> Model {
-    let dim = if p.phase { 4 } else { 3 };
-    let mut step = [(start.mean * 0.01).max(50.0), 50.0, 50.0, 0.1];
-    let mut best = start;
-    let mut best_v = objective(p, &best, sc.scores(&[best])[0]);
-    for _ in 0..60 {
-        let mut cands = Vec::with_capacity(81);
-        for code in 0..3usize.pow(dim as u32) {
-            if code == (3usize.pow(dim as u32) - 1) / 2 {
-                continue; // the centre itself
-            }
-            let d: Vec<f64> = (0..dim).map(|j| ((code / 3usize.pow(j as u32)) % 3) as f64 - 1.0).collect();
-            cands.push(Model {
-                mean: best.mean + d[0] * step[0],
-                p: best.p + d[1] * step[1],
-                q: best.q + d[2] * step[2],
-                phase: if dim == 4 { best.phase + d[3] * step[3] } else { best.phase },
-            });
-        }
-        let v = sc.scores(&cands);
-        let (i, vi) = v.iter().enumerate().map(|(i, &x)| (i, objective(p, &cands[i], x))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
-        if vi > best_v + 1e-9 {
-            best = cands[i];
-            best_v = vi;
-        } else {
-            for s in step.iter_mut() {
-                *s *= 0.5;
-            }
-            if step[0] < 0.5 && step[1] < 0.5 {
-                break;
-            }
-        }
-    }
-    best
 }
 
 /// Nelder–Mead maximisation of the score (dimensions 3, or 4 with phase).
@@ -527,11 +509,8 @@ fn box_width(o: &Optics, m: Option<&Model>, n: usize, pixel_a: f64, r_in: f64) -
 /// Fits the CTF to a centred n × n power spectrum (as `fft::Spectrum::log`, log10)
 /// on the CPU.
 pub fn fit_spectrum(log: &[f32], n: usize, p: &Params) -> Result<Fit> {
-    fit_with(log, n, p, &|px, o, full| Box::new(CpuScorer { px, o, step: if full { 1 } else { (px.len() / 30_000).max(1) } }))
+    Ok(fit_many(&[log], n, p, &CpuGrid)?.pop().unwrap())
 }
-
-/// Makes a scorer for a set of pixels; `full` false allows a subsample.
-pub(crate) type MakeScorer<'m> = dyn for<'a> Fn(&'a [Px], Optics, bool) -> Box<dyn Scorer + 'a> + 'm;
 
 /// Checks the parameters for an n × n spectrum; returns the fitting band in FFT pixels.
 fn check_params(n: usize, p: &Params) -> Result<[f64; 2]> {
@@ -550,48 +529,78 @@ fn check_params(n: usize, p: &Params) -> Result<[f64; 2]> {
     Ok(band)
 }
 
-pub(crate) fn fit_with(log: &[f32], n: usize, p: &Params, make: &MakeScorer) -> Result<Fit> {
+/// Fits several spectra of one size (a stack or tilt series), with the
+/// grid searches of all of them done together by `grid`.
+pub(crate) fn fit_many(logs: &[&[f32]], n: usize, p: &Params, grid: &dyn Grid) -> Result<Vec<Fit>> {
     let band = check_params(n, p)?;
     let o = Optics::new(p);
-    let amp: Vec<f32> = log.iter().map(|&l| 10f32.powf(l * 0.5)).collect();
-
-    let mut prep = prepare(&amp, n, p.pixel_a, band, box_width(&o, None, n, p.pixel_a, band[0]));
-    let mut best = search_2d(&*make(&prep.band, o, false), p, &search_1d(&prep.band, &o, p, n));
+    let amps: Vec<Vec<f32>> = logs.par_iter().map(|log| log.iter().map(|&l| 10f32.powf(l * 0.5)).collect()).collect();
+    let w0 = box_width(&o, None, n, p.pixel_a, band[0]);
+    let mut preps: Vec<Prepared> = amps.par_iter().map(|a| prepare(a, n, p.pixel_a, band, w0)).collect();
+    let cands: Vec<Vec<Model>> = preps.par_iter().map(|pr| grid_candidates(p, &search_1d(&pr.band, &o, p, n))).collect();
+    let mut best = grid.best(&bands(&preps), o, &cands);
     // Redo the background for the ring spacing found, then search again.
-    let w = box_width(&o, Some(&best), n, p.pixel_a, band[0]);
-    if w != box_width(&o, None, n, p.pixel_a, band[0]) {
-        prep = prepare(&amp, n, p.pixel_a, band, w);
-        let mut starts = search_1d(&prep.band, &o, p, n);
-        starts.push(Model { p: 0.0, q: 0.0, ..best });
-        best = search_2d(&*make(&prep.band, o, false), p, &starts);
+    let redo: Vec<Option<Prepared>> = (0..preps.len())
+        .into_par_iter()
+        .map(|s| {
+            let w = box_width(&o, Some(&best[s]), n, p.pixel_a, band[0]);
+            (w != w0).then(|| prepare(&amps[s], n, p.pixel_a, band, w))
+        })
+        .collect();
+    if redo.iter().any(Option::is_some) {
+        let cands: Vec<Vec<Model>> = redo
+            .par_iter()
+            .zip(&best)
+            .map(|(r, b)| match r {
+                Some(pr) => {
+                    let mut starts = search_1d(&pr.band, &o, p, n);
+                    starts.push(Model { p: 0.0, q: 0.0, ..*b });
+                    grid_candidates(p, &starts)
+                }
+                None => vec![*b],
+            })
+            .collect();
+        for (pr, r) in preps.iter_mut().zip(redo) {
+            if let Some(r) = r {
+                *pr = r;
+            }
+        }
+        best = grid.best(&bands(&preps), o, &cands);
     }
-    let full = make(&prep.band, o, true);
-    let m = if full.batched() { refine_batched(&*full, p, best) } else { refine(&prep.band, &o, p, best) };
-    let sc = full.scores(&[m])[0];
+    Ok(preps
+        .par_iter()
+        .zip(best)
+        .map(|(prep, start)| {
+            let m = refine(&prep.band, &o, p, start);
+            let sc = score(&prep.band, &o, &m, 1);
+            let h = m.half_diff();
+            let mut angle = 0.5 * m.q.atan2(m.p);
+            if angle < 0.0 {
+                angle += PI;
+            }
+            let (epa, model, cc, fit_r) = fit_resolution(&prep.outer, &o, &m, n, p.pixel_a, band);
+            Fit {
+                df1: m.mean + h,
+                df2: m.mean - h,
+                angle: if h < 1e-6 { 0.0 } else { angle.to_degrees() % 180.0 },
+                phase: if p.phase { m.phase.rem_euclid(PI).to_degrees() } else { 0.0 },
+                score: sc,
+                fit_res: n as f64 * p.pixel_a / fit_r,
+                n,
+                epa,
+                model,
+                cc,
+                band,
+                zeros: zeros(&o, &m, n, p.pixel_a),
+                backend: "CPU".into(),
+                ms: 0.0,
+            }
+        })
+        .collect())
+}
 
-    let h = m.half_diff();
-    let mut angle = 0.5 * m.q.atan2(m.p);
-    if angle < 0.0 {
-        angle += PI;
-    }
-    let phase = m.phase.rem_euclid(PI);
-    let (epa, model, cc, fit_r) = fit_resolution(&prep.outer, &o, &m, n, p.pixel_a, band);
-    Ok(Fit {
-        df1: m.mean + h,
-        df2: m.mean - h,
-        angle: if h < 1e-6 { 0.0 } else { angle.to_degrees() % 180.0 },
-        phase: if p.phase { phase.to_degrees() } else { 0.0 },
-        score: sc,
-        fit_res: n as f64 * p.pixel_a / fit_r,
-        n,
-        epa,
-        model,
-        cc,
-        band,
-        zeros: zeros(&o, &m, n, p.pixel_a),
-        backend: "CPU".into(),
-        ms: 0.0,
-    })
+fn bands(preps: &[Prepared]) -> Vec<&[Px]> {
+    preps.iter().map(|pr| &pr.band[..]).collect()
 }
 
 /// Equal-phase average, fitted CTF² on it, window correlations, and the
@@ -599,7 +608,7 @@ pub(crate) fn fit_with(log: &[f32], n: usize, p: &Params, make: &MakeScorer) -> 
 fn fit_resolution(px: &[Px], o: &Optics, m: &Model, n: usize, pixel_a: f64, band: [f64; 2]) -> (Vec<f32>, Vec<f32>, Vec<f32>, f64) {
     let len = n / 2 + 1;
     let scale = n as f64 * pixel_a; // radius in px = k × scale
-    let mut sum = vec![(0f64, 0usize); len];
+    let mut sum = vec![(0f64, 0f64); len];
     for p in px {
         // The radius at which the mean-defocus CTF has this pixel's phase.
         let df = m.df(p.c2 as f64, p.s2 as f64);
@@ -607,11 +616,11 @@ fn fit_resolution(px: &[Px], o: &Optics, m: &Model, n: usize, pixel_a: f64, band
         let Some(k2) = o.k2_at(m.mean, g - m.phase) else { continue };
         let r = (k2.sqrt() * scale).round() as usize;
         if r < len {
-            sum[r].0 += p.x as f64;
-            sum[r].1 += 1;
+            sum[r].0 += (p.x * p.w) as f64;
+            sum[r].1 += p.w as f64;
         }
     }
-    let epa: Vec<f64> = sum.iter().map(|&(s, c)| if c > 0 { s / c as f64 } else { f64::NAN }).collect();
+    let epa: Vec<f64> = sum.iter().map(|&(s, c)| if c > 0.0 { s / c } else { f64::NAN }).collect();
     let ctf2: Vec<f64> = (0..len)
         .map(|r| {
             let k = r as f64 / scale;
@@ -714,54 +723,153 @@ pub struct FitReq {
     pub params: Params,
 }
 
+/// Fit on the same region of many slices: a tilt series or a stack of
+/// micrographs. `zs` empty means every slice.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackReq {
+    pub token: u64,
+    #[serde(default)]
+    pub zs: Vec<usize>,
+    pub t: usize,
+    pub c: usize,
+    pub region: [f64; 4],
+    pub n: usize,
+    pub params: Params,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackFit {
+    pub zs: Vec<usize>,
+    /// Tilt angle per slice (degrees), from an IMOD .rawtlt/.tlt beside the file.
+    pub tilts: Option<Vec<f64>>,
+    /// Per slice, without the per-radius curves and zeros (ask `ctf_fit` for one).
+    pub fits: Vec<Fit>,
+    pub backend: String,
+    pub ms: f64,
+}
+
+/// Set to stop a running stack fit; cleared when one starts.
+pub static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn fit_region(img: &Arc<OpenImage>, req: &FitReq) -> Result<Fit> {
+    let (mut fits, backend, ms) = fit_slices(img, &[req.z], req.c, req.t, req.region, req.n, &req.params, &|_, _| ())?;
+    let mut f = fits.pop().unwrap();
+    f.backend = backend;
+    f.ms = ms;
+    Ok(f)
+}
+
+pub fn fit_stack(img: &Arc<OpenImage>, req: &StackReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<StackFit> {
+    let nz = img.info().size_z;
+    let zs: Vec<usize> = if req.zs.is_empty() { (0..nz).collect() } else { req.zs.iter().copied().filter(|&z| z < nz).collect() };
+    if zs.is_empty() {
+        bail!("没有可拟合的层");
+    }
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (mut fits, backend, ms) = fit_slices(img, &zs, req.c, req.t, req.region, req.n, &req.params, progress)?;
+    for f in &mut fits {
+        f.epa = Vec::new();
+        f.model = Vec::new();
+        f.cc = Vec::new();
+        f.zeros = Vec::new();
+    }
+    let tilts = tilt_angles(&img.info().path, nz).map(|t| zs.iter().map(|&z| t[z]).collect());
+    Ok(StackFit { zs, tilts, fits, backend, ms })
+}
+
+/// IMOD's tilt angle file next to a tilt series (`x.st` → `x.rawtlt` or
+/// `x.tlt`), one angle per line, when it has one per slice.
+pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
+    let p = std::path::Path::new(path);
+    ["rawtlt", "tlt"].iter().find_map(|ext| {
+        let text = std::fs::read_to_string(p.with_extension(ext)).ok()?;
+        let t: Vec<f64> = text.split_whitespace().map(|v| v.parse().ok()).collect::<Option<_>>()?;
+        (t.len() == nz).then_some(t)
+    })
+}
+
+/// Spectra of a region on each slice, then `fit_many`. The spectra run on
+/// the GPU when there is one; the grid search too for "gpu". Returns the
+/// fits, the backend's name and the time taken.
+#[allow(clippy::too_many_arguments)]
+fn fit_slices(
+    img: &Arc<OpenImage>,
+    zs: &[usize],
+    c: usize,
+    t: usize,
+    r: [f64; 4],
+    want_n: usize,
+    params: &Params,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<(Vec<Fit>, String, f64)> {
     let start = std::time::Instant::now();
     let info = img.info();
-    let (page, sample) = info.locate(req.c, req.z, req.t);
-    let planes = img.page(page)?;
-    let p = &planes[sample.min(planes.len() - 1)];
-    let r = req.region;
     let x0 = r[0].max(0.0).floor() as usize;
     let y0 = r[1].max(0.0).floor() as usize;
-    let x1 = ((r[0] + r[2]).ceil() as usize).min(p.w);
-    let y1 = ((r[1] + r[3]).ceil() as usize).min(p.h);
+    let x1 = ((r[0] + r[2]).ceil() as usize).min(info.width);
+    let y1 = ((r[1] + r[3]).ceil() as usize).min(info.height);
     if x1 <= x0 || y1 <= y0 {
         bail!("区域在图像外");
     }
     let region = [x0, y0, x1 - x0, y1 - y0];
-    let values = |x: usize, y: usize| p.data.get_f64(y * p.w + x) as f32;
     // Bad parameters fail here, before any GPU work.
-    let (n, _, _) = fft::tiling(region, req.n)?;
-    check_params(n, &req.params)?;
+    let (n, _, _) = fft::tiling(region, want_n)?;
+    check_params(n, params)?;
+    let total = zs.len() + 1;
+    let spectra = |gpu: Option<&Dev>| -> Result<Vec<Vec<f32>>> {
+        let mut out = Vec::with_capacity(zs.len());
+        for (i, &z) in zs.iter().enumerate() {
+            if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+                bail!("已取消");
+            }
+            let (page, sample) = info.locate(c, z, t);
+            let planes = img.page(page)?;
+            let p = &planes[sample.min(planes.len() - 1)];
+            let values = |x: usize, y: usize| p.data.get_f64(y * p.w + x) as f32;
+            out.push(match gpu {
+                #[cfg(feature = "pro")]
+                Some(d) => crate::ctf_gpu::spectrum(d, values, region, want_n)?.log,
+                _ => fft::spectrum(values, region, want_n)?.log,
+            });
+            progress(i + 1, total);
+        }
+        Ok(out)
+    };
+    let done = |logs: Vec<Vec<f32>>, grid: &dyn Grid| -> Result<Vec<Fit>> {
+        let refs: Vec<&[f32]> = logs.iter().map(|l| &l[..]).collect();
+        let fits = fit_many(&refs, n, params, grid)?;
+        progress(total, total);
+        Ok(fits)
+    };
     #[cfg(feature = "pro")]
-    if req.params.backend.as_deref() != Some("cpu") {
+    if params.backend.as_deref() != Some("cpu") {
         if let Some((dev, name)) = crate::ctf_gpu::device() {
-            // "auto": spectrum on the GPU, fit on the CPU, which measured
-            // faster for the fit (M1 Max: 0.2 s CPU vs 0.45–2.6 s Metal).
-            // "gpu": both on the GPU.
-            let all = req.params.backend.as_deref() == Some("gpu");
-            let tried = crate::ctf_gpu::guarded(|| -> Result<Fit> {
-                let s = crate::ctf_gpu::spectrum(dev, values, region, req.n)?;
+            // "auto": spectra on the GPU, fit on the CPU, which measured
+            // faster for one slice (M1 Max: 0.2 s CPU vs 0.45–2.6 s Metal).
+            // "gpu": the grid search on the GPU as well.
+            let all = params.backend.as_deref() == Some("gpu");
+            let tried = crate::ctf_gpu::guarded(|| -> Result<Vec<Fit>> {
+                let logs = spectra(Some(dev))?;
                 if all {
-                    fit_with(&s.log, s.n, &req.params, &|px, o, full| Box::new(crate::ctf_gpu::GpuScorer::new(dev, px, o, full)))
+                    done(logs, &crate::ctf_gpu::GpuGrid(dev))
                 } else {
-                    fit_spectrum(&s.log, s.n, &req.params)
+                    done(logs, &CpuGrid)
                 }
             });
             match tried.and_then(|r| r) {
-                Ok(mut f) => {
-                    f.backend = if all { (*name).into() } else { format!("{name} 谱 + CPU 拟合") };
-                    f.ms = start.elapsed().as_secs_f64() * 1e3;
-                    return Ok(f);
+                Ok(f) => {
+                    let backend = if all { (*name).into() } else { format!("{name} 谱 + CPU 拟合") };
+                    return Ok((f, backend, start.elapsed().as_secs_f64() * 1e3));
                 }
+                Err(e) if CANCEL.load(std::sync::atomic::Ordering::SeqCst) => return Err(e),
                 Err(e) => eprintln!("CTF on {name} failed, using the CPU: {e:#}"),
             }
         }
     }
-    let s = fft::spectrum(values, region, req.n)?;
-    let mut f = fit_spectrum(&s.log, s.n, &req.params)?;
-    f.ms = start.elapsed().as_secs_f64() * 1e3;
-    Ok(f)
+    let fits = done(spectra(None)?, &CpuGrid)?;
+    Ok((fits, "CPU".into(), start.elapsed().as_secs_f64() * 1e3))
 }
 
 #[cfg(test)]
@@ -872,6 +980,34 @@ pub(crate) mod tests {
             assert!(fit.score > 0.3, "score {}", fit.score);
             assert!(!fit.zeros.is_empty());
         }
+    }
+
+    /// A tilt series: defocus changes from slice to slice, one noisy slice.
+    #[test]
+    fn fits_a_series_together() {
+        let p = params();
+        let truth = [(14000.0, 13400.0, 40.0), (16500.0, 15900.0, 42.0), (11800.0, 11200.0, 38.0), (19000.0, 18400.0, 41.0)];
+        let specs: Vec<Vec<f32>> = truth.iter().enumerate().map(|(i, &(a, b, c))| synth(256, &p, a, b, c, 0.0, 60.0, if i == 2 { 0.9 } else { 0.4 }, 30 + i as u64)).collect();
+        let refs: Vec<&[f32]> = specs.iter().map(|s| &s[..]).collect();
+        let fits = fit_many(&refs, 256, &p, &CpuGrid).unwrap();
+        for ((f, &(a, b, c)), s) in fits.iter().zip(&truth).zip(&specs) {
+            check(f, a, b, c);
+            let one = fit_spectrum(s, 256, &p).unwrap();
+            assert!((one.df1 - f.df1).abs() < 60.0, "alone {one:?} together {f:?}");
+        }
+    }
+
+    #[test]
+    fn reads_imod_tilt_angles() {
+        let dir = std::env::temp_dir().join(format!("tmv-tlt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = dir.join("ts.st");
+        assert!(tilt_angles(st.to_str().unwrap(), 3).is_none());
+        std::fs::write(dir.join("ts.rawtlt"), "-3.0\n 0.0\n3.0\n").unwrap();
+        assert_eq!(tilt_angles(st.to_str().unwrap(), 3), Some(vec![-3.0, 0.0, 3.0]));
+        // Wrong count: not this series'.
+        assert!(tilt_angles(st.to_str().unwrap(), 4).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
