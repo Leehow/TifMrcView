@@ -220,9 +220,8 @@ figcaption{margin-top:18px;font-size:14px;color:var(--faint);text-align:center}
 @media (max-width:860px){.plugs{grid-template-columns:1fr}.plugs a{min-height:0}}
 
 /* ---------- download ---------- */
-.prol{display:inline-block;text-align:left;margin:22px auto 0;padding-left:1.2em;max-width:40em;color:var(--mute);font-size:16.5px;line-height:1.55}
-.prol li{margin:6px 0}
-.prol b{color:var(--ink);font-weight:600}
+.protease{margin:clamp(28px,3vw,40px) 0 0;text-align:center;font-size:17px}
+.protease b{color:var(--ink)}
 .dlg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:clamp(44px,5vw,64px)}
 .card{background:var(--card);border:1px solid var(--hair);border-radius:22px;padding:28px 26px}
 .dlg .card{display:flex;flex-direction:column;transition:box-shadow .3s}

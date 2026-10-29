@@ -37,6 +37,7 @@
     <a class="nl" href="#features" data-i="nav_features">功能</a>
     <a class="nl" href="#keys" data-i="nav_keys">快捷键</a>
     <a class="nl" href="plugins/" data-i="nav_plugins">插件</a>
+    <a class="nl" href="pro/" data-i="nav_pro">Pro 版</a>
     <a class="gh" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg></a>
     <div class="lang" id="lang"><button type="button" aria-haspopup="true" aria-expanded="false"><svg class="ti" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg><span></span><svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></button><ul role="menu"></ul></div>
     <a class="tap" href="#download"><span class="pill" data-i="nav_download">下载</span></a>
@@ -226,37 +227,7 @@
         <div class="tip" data-i="linux_tip">AppImage 自带运行库，下载后 <code>chmod +x</code> 即可运行。</div>
       </div>
     </div>
-  </div>
-</section>
-
-<section class="sec" id="pro" hidden>
-  <div class="wrap">
-    <div class="c">
-      <h2 class="h h2 rv" data-i="pro_h"><span>TifMrcView Pro：3D 与分割。</span></h2>
-      <p class="lede rv" data-i="pro_p">同样免费开源。包含基础版的全部功能，另加 3D 体视图、像 Amira 那样的分割标签和材料，以及 SAM 2.1 点击分割并沿 Z 传播。计算尽量放在 GPU 上（CUDA、Metal、DX12、Vulkan）。可以和基础版同时安装。</p>
-      <ul class="prol rv">
-        <li data-i="pro_f1"><b>3D 体视图</b>：最大强度投影、半透明和等值面，GPU 上平滑和统计直方图。</li>
-        <li data-i="pro_f2"><b>分割标签</b>：画笔、魔棒、阈值、分水岭、套索和层间插值；材料可命名、配色、隐藏和锁定。</li>
-        <li data-i="pro_f3"><b>SAM 2.1</b>：点一下就分出物体，再沿 Z 自动传播到整个物体；冷冻电镜断层也能用。</li>
-      </ul>
-      <p class="tip rv"><span data-i="pro_note">第一次使用 SAM 时会下载约 156 MB 的模型。Linux 版自带 CUDA 支持。</span> <span id="pro-ver"></span></p>
-    </div>
-    <div class="dlg">
-      <div class="card rv" data-pro="mac">
-        <div class="os">macOS</div>
-        <div class="dl"></div>
-        <div class="tip" data-i="pro_mac_tip">首次打开若被拦截：在终端运行 <code>xattr -dr com.apple.quarantine "/Applications/TifMrcView Pro.app"</code></div>
-      </div>
-      <div class="card rv d1" data-pro="win">
-        <div class="os">Windows</div>
-        <div class="dl"></div>
-      </div>
-      <div class="card rv d2" data-pro="linux">
-        <div class="os">Linux</div>
-        <div class="sub">x86_64 · deb · rpm · AppImage · CUDA</div>
-        <div class="dl"></div>
-      </div>
-    </div>
+    <p class="protease rv"><a href="pro/" data-i="pro_teaser">要做 3D、分割和电镜分析？看看 <b>TifMrcView Pro</b> →</a></p>
   </div>
 </section>
 
@@ -306,6 +277,7 @@
     <span data-i="free">免费开源</span>
     <span class="fauthor"><span data-i="by_author">作者</span> <a href="https://orcid.org/0009-0004-2696-3267" target="_blank" rel="noopener author">Hao Li</a> · <a href="mailto:lihao9x@iccas.ac.cn">lihao9x@iccas.ac.cn</a></span>
     <a href="plugins/" data-i="nav_plugins">插件</a>
+    <a href="pro/">TifMrcView Pro</a>
     <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener"><span data-i="star_foot">⭐ Star</span><span class="starn" id="starf"></span></a>
     <a href="https://github.com/Leehow/TifMrcView/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a>
@@ -314,7 +286,7 @@
 
 <div class="lb" id="lb" role="dialog" aria-modal="true" hidden><img alt=""><button type="button" data-i-alt="sc_close" data-i-aria="1" aria-label="关闭">×</button></div>
 
-<script src="i18n.js?v=10"></script>
+<script src="i18n.js?v=11"></script>
 <script src="site.js?v=3"></script>
 </body>
 </html>
