@@ -128,7 +128,72 @@ function marketButton(item) {
   return b;
 }
 
+/** The file types a market entry opens or reads, e.g. ".czi .lsm". */
+function entryExts(p) {
+  const exts = (p.formats || []).flatMap((f) => f.ext || []);
+  const meta = ((p.metadata && p.metadata.ext) || []).filter((e) => !exts.includes(e));
+  return { open: exts.map((e) => "." + e).join(" "), meta: meta.map((e) => "." + e).join(" ") };
+}
+
+/** The empty window lists what each format plugin adds, with an install button. */
+function renderEmptyFormats() {
+  const box = $("fmt-plugins");
+  if (!box || $("empty").hidden) return;
+  box.innerHTML = "";
+  const note = (text) => {
+    const d = document.createElement("div");
+    d.className = "dim";
+    d.textContent = text;
+    box.append(d);
+  };
+  if (!market.list) {
+    note(market.loading ? "正在读取插件市场…" : market.error ? `读不到插件市场：${market.error}` : "");
+    return;
+  }
+  const items = market.list.filter(({ entry: p }) => (p.formats || []).length || (p.metadata && p.metadata.ext));
+  if (!items.length) note("插件市场上暂时没有格式插件");
+  for (const item of items) {
+    const p = item.entry;
+    const row = document.createElement("div");
+    row.className = "fmt-plugin";
+    row.title = marketText(p, "description");
+    const name = document.createElement("b");
+    name.textContent = marketText(p, "name") || p.id;
+    const ext = document.createElement("span");
+    ext.className = "ext";
+    const { open, meta } = entryExts(p);
+    ext.textContent = open;
+    if (meta) {
+      const m = document.createElement("span");
+      m.textContent = `读取 ${meta} 的采集参数`;
+      ext.append(open ? "　" : "", m);
+    }
+    row.append(name, ext);
+    if (item.state === "installed" || item.state === "builtin") {
+      const done = document.createElement("span");
+      done.className = "done";
+      done.textContent = "已安装";
+      row.append(done);
+    } else {
+      const b = marketButton(item);
+      b.classList.remove("primary"); // a quiet list: the window is not a call to action
+      // Plugins that ask for no permissions install straight away; others show what they may do first.
+      const quiet = item.state === "install" && p.apiVersion === 2 && !(p.permissions || []).length;
+      if (quiet && !b.disabled) {
+        const fresh = b.cloneNode(true);
+        fresh.addEventListener("click", (e) => {
+          e.preventDefault();
+          installFromMarket(p.id, false, p);
+        });
+        row.append(fresh);
+      } else row.append(b);
+    }
+    box.append(row);
+  }
+}
+
 function renderMarket() {
+  renderEmptyFormats();
   const box = $("market-list");
   if (!box) return;
   box.innerHTML = "";

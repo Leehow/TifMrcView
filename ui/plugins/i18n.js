@@ -38,6 +38,44 @@ const WORDS = [
   ["插件市场的信息已改变，请重新确认安装", "The market listing has changed; confirm installation again", "Der Markteintrag wurde geändert; die Installation erneut bestätigen", "マーケットの情報が変更されました。インストールを再確認してください", "La ficha de la tienda ha cambiado; confirma de nuevo la instalación", "La fiche du catalogue a changé ; confirmez à nouveau l’installation", "Запись в каталоге изменилась; подтвердите установку заново"],
   ["只能保存当前窗口已打开图像的标注", "Annotations can only be saved for the image open in this window", "Anmerkungen können nur für das in diesem Fenster geöffnete Bild gespeichert werden", "このウィンドウで開いている画像の注釈のみ保存できます", "Solo se pueden guardar anotaciones de la imagen abierta en esta ventana", "Seules les annotations de l’image ouverte dans cette fenêtre peuvent être enregistrées", "Можно сохранять аннотации только для изображения, открытого в этом окне"],
 
+  // toolbar ⚙ menu, folder button, side panel tabs, empty window, help
+  ["打开图像或文件夹 (Ctrl/⌘+O)：文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠", "Open an image or a folder (Ctrl/⌘+O): the slices in a folder (FIB-SEM, serial sections…) become one Z stack, in order", "Bild oder Ordner öffnen (Strg/⌘+O): die Schnittbilder eines Ordners (FIB-SEM, Serienschnitte …) werden der Reihe nach zu einem Z-Stapel", "画像またはフォルダを開く (Ctrl/⌘+O)：フォルダ内のスライス画像（FIB-SEM、連続切片など）を順に 1 つの Z スタックにします", "Abrir una imagen o una carpeta (Ctrl/⌘+O): los cortes de una carpeta (FIB-SEM, cortes seriados…) forman una pila Z en orden", "Ouvrir une image ou un dossier (Ctrl/⌘+O) : les coupes d'un dossier (FIB-SEM, coupes sériées…) forment une pile Z, dans l'ordre", "Открыть изображение или папку (Ctrl/⌘+O): срезы из папки (FIB-SEM, серийные срезы…) по порядку собираются в один Z-стек"],
+  ["设置：插件、语言、帮助", "Settings: plugins, language, help", "Einstellungen: Plugins, Sprache, Hilfe", "設定：プラグイン、言語、ヘルプ", "Ajustes: complementos, idioma, ayuda", "Réglages : extensions, langue, aide", "Настройки: плагины, язык, справка"],
+  ["打开图像…", "Open image…", "Bild öffnen…", "画像を開く…", "Abrir imagen…", "Ouvrir une image…", "Открыть изображение…"],
+  ["打开文件夹…", "Open folder…", "Ordner öffnen…", "フォルダを開く…", "Abrir carpeta…", "Ouvrir un dossier…", "Открыть папку…"],
+  ["切片组成 Z 堆叠", "slices as a Z stack", "Schnitte als Z-Stapel", "スライスを Z スタックに", "cortes como pila Z", "coupes en pile Z", "срезы как Z-стек"],
+  ["展开左侧工具栏 (T)", "Show the left tools panel (T)", "Linkes Werkzeugfeld einblenden (T)", "左のツールパネルを表示 (T)", "Mostrar el panel de herramientas izquierdo (T)", "Afficher le panneau d'outils de gauche (T)", "Показать левую панель инструментов (T)"],
+  ["收起左侧工具栏 (T)", "Hide the left tools panel (T)", "Linkes Werkzeugfeld ausblenden (T)", "左のツールパネルを隠す (T)", "Ocultar el panel de herramientas izquierdo (T)", "Masquer le panneau d'outils de gauche (T)", "Скрыть левую панель инструментов (T)"],
+  ["展开右侧预览栏 (B)", "Show the thumbnail sidebar (B)", "Vorschauleiste einblenden (B)", "サムネイルバーを表示 (B)", "Mostrar la barra de miniaturas (B)", "Afficher la barre de vignettes (B)", "Показать панель миниатюр (B)"],
+  ["收起右侧预览栏 (B)", "Hide the thumbnail sidebar (B)", "Vorschauleiste ausblenden (B)", "サムネイルバーを隠す (B)", "Ocultar la barra de miniaturas (B)", "Masquer la barre de vignettes (B)", "Скрыть панель миниатюр (B)"],
+  ["把图像或文件夹拖进来，或点左上角的文件夹图标打开", "Drop an image or a folder here, or click the folder icon at the top left", "Bild oder Ordner hierher ziehen oder oben links auf das Ordnersymbol klicken", "画像やフォルダをここにドロップするか、左上のフォルダアイコンをクリック", "Arrastra aquí una imagen o una carpeta, o haz clic en el icono de carpeta arriba a la izquierda", "Déposez une image ou un dossier ici, ou cliquez sur l'icône de dossier en haut à gauche", "Перетащите сюда изображение или папку либо нажмите значок папки слева вверху"],
+  ["点左上角的文件夹图标选择图像", "Tap the folder icon at the top left to choose an image", "Tippen Sie oben links auf das Ordnersymbol, um ein Bild zu wählen", "左上のフォルダアイコンをタップして画像を選択", "Toca el icono de carpeta arriba a la izquierda para elegir una imagen", "Touchez l'icône de dossier en haut à gauche pour choisir une image", "Нажмите значок папки слева вверху, чтобы выбрать изображение"],
+  ["双指捏合 缩放　拖动 平移　双击 适应屏幕", "Pinch zoom　Drag pan　Double-tap fit", "Zwei Finger zoomen　Ziehen verschiebt　Doppeltippen passt ein", "ピンチで拡大縮小　ドラッグで移動　ダブルタップで全体表示", "Pellizca para zoom　Arrastra para mover　Doble toque para ajustar", "Pincer pour zoomer　Glisser pour déplacer　Double-toucher pour ajuster", "Щипок — масштаб　Перетаскивание — сдвиг　Двойное касание — вписать"],
+  ["直接支持", "Built in", "Integriert", "標準で対応", "Integrado", "Intégré", "Встроенная поддержка"],
+  ["普通图片", "Common images", "Gängige Bilder", "一般的な画像", "Imágenes comunes", "Images courantes", "Обычные изображения"],
+  ["连续切片按顺序组成 Z 堆叠", "serial slices become a Z stack, in order", "Serienschnitte werden der Reihe nach zum Z-Stapel", "連続スライスを順に Z スタックに", "los cortes seriados forman una pila Z en orden", "les coupes sériées forment une pile Z, dans l'ordre", "серийные срезы по порядку собираются в Z-стек"],
+  ["装上插件后支持", "With plugins", "Mit Plugins", "プラグインで対応", "Con complementos", "Avec des extensions", "С плагинами"],
+  ["点击即可安装", "click to install", "zum Installieren klicken", "クリックでインストール", "haz clic para instalar", "cliquez pour installer", "нажмите, чтобы установить"],
+  ["插件市场上暂时没有格式插件", "No format plugins in the market yet", "Noch keine Format-Plugins im Plugin-Markt", "マーケットにはまだ形式プラグインがありません", "Aún no hay complementos de formato en la tienda", "Aucune extension de format dans le catalogue pour l'instant", "В каталоге пока нет плагинов форматов"],
+  ["关于", "About", "Über", "情報", "Acerca de", "À propos", "О программе"],
+  ["帮助", "Help", "Hilfe", "ヘルプ", "Ayuda", "Aide", "Справка"],
+  ["打开图像或文件夹", "Open an image or a folder", "Bild oder Ordner öffnen", "画像またはフォルダを開く", "Abrir una imagen o una carpeta", "Ouvrir une image ou un dossier", "Открыть изображение или папку"],
+  ["上一个 / 下一个文件", "Previous / next file", "Vorherige / nächste Datei", "前 / 次のファイル", "Archivo anterior / siguiente", "Fichier précédent / suivant", "Предыдущий / следующий файл"],
+  ["← →　Ctrl/⌘+滚轮", "← →　Ctrl/⌘+wheel", "← →　Strg/⌘+Mausrad", "← →　Ctrl/⌘+ホイール", "← →　Ctrl/⌘+rueda", "← →　Ctrl/⌘+molette", "← →　Ctrl/⌘+колесо"],
+  ["切换 Z", "Change Z", "Z wechseln", "Z を切り替え", "Cambiar Z", "Changer de Z", "Сменить Z"],
+  ["空格", "Space", "Leertaste", "スペース", "Espacio", "Espace", "Пробел"],
+  ["播放 Z", "Play Z", "Z abspielen", "Z を再生", "Reproducir Z", "Lire Z", "Воспроизвести Z"],
+  ["滚轮　+ −", "Wheel　+ −", "Mausrad　+ −", "ホイール　+ −", "Rueda　+ −", "Molette　+ −", "Колесо　+ −"],
+  ["缩放", "Zoom", "Zoom", "拡大縮小", "Zoom", "Zoom", "Масштаб"],
+  ["适应窗口 / 原始大小", "Fit to window / actual size", "An Fenster anpassen / Originalgröße", "ウィンドウに合わせる / 原寸", "Ajustar a la ventana / tamaño real", "Ajuster à la fenêtre / taille réelle", "По размеру окна / реальный размер"],
+  ["选择、移动、测距、画笔、文字、裁剪", "Select, move, measure, pen, text, crop", "Auswählen, Verschieben, Messen, Stift, Text, Zuschneiden", "選択、移動、計測、ペン、テキスト、切り抜き", "Seleccionar, mover, medir, lápiz, texto, recortar", "Sélection, déplacement, mesure, crayon, texte, recadrage", "Выбор, перемещение, измерение, перо, текст, обрезка"],
+  ["直线、箭头、框、圆", "Line, arrow, box, circle", "Linie, Pfeil, Rechteck, Kreis", "直線、矢印、四角、円", "Línea, flecha, rectángulo, círculo", "Ligne, flèche, rectangle, cercle", "Линия, стрелка, рамка, круг"],
+  ["显示/隐藏标注、IMOD 模型", "Show/hide annotations, IMOD model", "Anmerkungen, IMOD-Modell ein-/ausblenden", "注釈、IMOD モデルの表示/非表示", "Mostrar/ocultar anotaciones, modelo IMOD", "Afficher/masquer les annotations, le modèle IMOD", "Показать/скрыть пометки, модель IMOD"],
+  ["左侧工具栏、右侧预览栏", "Left tools panel, thumbnail sidebar", "Linkes Werkzeugfeld, Vorschauleiste", "左のツールパネル、サムネイルバー", "Panel de herramientas, barra de miniaturas", "Panneau d'outils, barre de vignettes", "Панель инструментов, панель миниатюр"],
+  ["存 PNG", "Save PNG", "PNG speichern", "PNG を保存", "Guardar PNG", "Enregistrer en PNG", "Сохранить PNG"],
+  ["撤销（加 Shift 重做）", "Undo (with Shift: redo)", "Rückgängig (mit Umschalt: wiederholen)", "元に戻す（Shift でやり直し）", "Deshacer (con Mayús: rehacer)", "Annuler (avec Maj : rétablir)", "Отменить (с Shift — повторить)"],
+  ["官网与使用说明", "Website and manual", "Website und Anleitung", "公式サイトと使い方", "Sitio web y manual", "Site web et mode d'emploi", "Сайт и руководство"],
+  ["在浏览器里打开 tifmrcview.com", "Open tifmrcview.com in the browser", "tifmrcview.com im Browser öffnen", "ブラウザで tifmrcview.com を開く", "Abrir tifmrcview.com en el navegador", "Ouvrir tifmrcview.com dans le navigateur", "Открыть tifmrcview.com в браузере"],
   // toolbar
   ["打开", "Open", "Öffnen", "開く", "Abrir", "Ouvrir", "Открыть"],
   ["打开文件 (Ctrl/⌘+O)", "Open file (Ctrl/⌘+O)", "Datei öffnen (Strg/⌘+O)", "ファイルを開く (Ctrl/⌘+O)", "Abrir archivo (Ctrl/⌘+O)", "Ouvrir un fichier (Ctrl/⌘+O)", "Открыть файл (Ctrl/⌘+O)"],
@@ -605,6 +643,9 @@ const PATTERNS = [
   [/^图像 (\d+)$/, "Image $1", "Bild $1", "画像 $1", "Imagen $1", "Image $1", "Изображение $1"],
   [/^位置 (\d+)$/, "Position $1", "Position $1", "位置 $1", "Posición $1", "Position $1", "Позиция $1"],
   [/^拼块 (\d+) · 位置 (\d+)$/, "Tile $1 · position $2", "Kachel $1 · Position $2", "タイル $1 · 位置 $2", "Mosaico $1 · posición $2", "Tuile $1 · position $2", "Плитка $1 · позиция $2"],
+  // empty window
+  [/^读取 (.+) 的采集参数$/, "reads $1 acquisition settings", "liest Aufnahmeparameter aus $1", "$1 の取得パラメータを読む", "lee los parámetros de adquisición de $1", "lit les paramètres d'acquisition des $1", "читает параметры съёмки из $1"],
+  [/^读不到插件市场：(.+)$/, "Could not read the plugin market: $1", "Plugin-Markt nicht lesbar: $1", "プラグインマーケットを読めません：$1", "No se pudo leer la tienda de complementos: $1", "Impossible de lire le catalogue d'extensions : $1", "Не удалось прочитать каталог плагинов: $1"],
   // longer / more specific first
   // format plugins (WebAssembly)
   [/^需要安装「(.+)」插件才能打开 \.(\w+) 文件$/, "The “$1” plugin is needed to open .$2 files", "Zum Öffnen von .$2-Dateien wird das Plugin „$1“ benötigt", ".$2 ファイルを開くには「$1」プラグインが必要です", "Se necesita el complemento «$1» para abrir archivos .$2", "L'extension « $1 » est nécessaire pour ouvrir les fichiers .$2", "Для открытия файлов .$2 нужен плагин «$1»"],
@@ -828,11 +869,13 @@ TifMrcView.register({
       obs.takeRecords();
     }
 
-    app.ui.addToolbarSelect({
+    // In the ⚙ menu; older hosts only have a toolbar drop-down.
+    (app.ui.addSettingsSelect || app.ui.addToolbarSelect)({
       title: "界面语言",
       options: LANGS,
       value: lang,
       onChange(code) {
+        if (code === lang) return;
         app.settings.set("lang", code);
         setLang(code);
       },

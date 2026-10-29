@@ -151,7 +151,10 @@ const server = http.createServer((req, res) => {
   await panel.locator('input[type="checkbox"]').uncheck();
   await page.evaluate(() => TifMrcView.emit("slice", { z: 2, t: 1 }));
   await page.waitForFunction(() => ["toolbar-click", "panel-click", "number-change", "select-change", "checkbox-change", "slice-event", "open-event"].every((name) => S.pluginMeta.some((g) => g.name === name)));
-  await page.locator("#btn-plugins").click();
+  // Plugins, language and help live in the ⚙ menu.
+  await page.locator("#btn-settings").click();
+  assert.deepEqual(await page.locator("#dropmenu .mi-label").allTextContents(), ["插件与更新", "界面语言", "帮助"]);
+  await page.locator("#dropmenu button", { hasText: "插件与更新" }).click();
   await page.waitForFunction(() => market.list !== null);
   assert.equal(await page.locator("#plugin-dialog").isVisible(), true);
   await page.locator("#update-check").click();

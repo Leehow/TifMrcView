@@ -155,6 +155,19 @@ function makeApi(rec) {
         $("plugin-buttons").append(track(sel));
         return sel;
       },
+      /**
+       * Adds a choice to the ⚙ settings menu (e.g. the interface language).
+       * `options` = [[value, label], ...]. Returns {set(value)}.
+       */
+      addSettingsSelect({ title, options, value, onChange }) {
+        const entry = { plugin: id, title, options, value, onChange };
+        ext.settings.push(entry);
+        rec.cleanup.push(() => {
+          const i = ext.settings.indexOf(entry);
+          if (i >= 0) ext.settings.splice(i, 1);
+        });
+        return { set: (v) => (entry.value = v) };
+      },
       showTools: () => showPanel("all"),
       /** Shows a busy overlay with `text`; `null` hides it. */
       busy(text) {
