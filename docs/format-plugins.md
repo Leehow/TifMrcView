@@ -165,7 +165,7 @@ A module importing anything else is refused.
 | `order` | Page order of C, Z, T, fastest first (`CZT`, `CTZ`, `ZCT`, `ZTC`, `TCZ`, `TZC`), when `samplesPerPage` is 1. Default `CZT`. With `samplesPerPage` = `sizeC`, page = `z + sizeZ·t`. |
 | `pageCount` | Default `sizeC·sizeZ·sizeT` (or `sizeZ·sizeT`). |
 | `channels` | Names and colours; missing entries get defaults. |
-| `pixelSize`, `unit` | `[x, y, z]` in `Å`, `nm`, `µm` or `mm`; `null` or 0 when unknown. |
+| `pixelSize`, `unit` | `[x, y, z]` in `Å`, `nm`, `µm` or `mm`, or for diffraction patterns in `1/nm`, `1/Å` or `1/µm`; `null` or 0 when unknown. |
 | `format` | Shown in the status bar; default: the `formats[].name`. |
 | `metadata` | Groups for the image-info panel. |
 | `series`, `seriesIndex` | Optional, for files that hold several images (a Leica LIF project, ND2 positions…): one `{ "name", "detail" }` per image, in order, and which one this is. With two or more entries the viewer shows a picker and reopens the file through `tmv_open_series`. Older versions of the app ignore them and show image 0. |

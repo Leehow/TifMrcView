@@ -9,6 +9,10 @@ const COLORS = [
   [0, 0, 255], [0, 255, 255], [255, 255, 0],
 ];
 const UNIT_M = { "Å": 1e-10, nm: 1e-9, "µm": 1e-6, mm: 1e-3 };
+// Reciprocal (diffraction) units, per metre; lengths in them are |g|, d = 1/|g|.
+Object.assign(UNIT_M, { "1/µm": 1e6, "1/nm": 1e9, "1/Å": 1e10 });
+
+const isRecip = (u) => u.startsWith("1/");
 
 const S = {
   token: 0,
@@ -102,6 +106,7 @@ function fmtBytes(n) {
 }
 
 function lengthUnit(m) {
+  if (S.px && isRecip(S.px.unit)) return S.px.unit;
   if (S.px && S.px.unit === "Å" && m < 1e-8) return "Å";
   return m < 1e-6 ? "nm" : m < 1e-3 ? "µm" : "mm";
 }
@@ -385,6 +390,11 @@ function normUnit(u) {
   if (!u) return "";
   if (u === "um" || u === "micron" || u === "µm" || u === "μm") return "µm";
   if (u === "A" || u === "Å" || u === "angstrom") return "Å";
+  const r = /^(?:1\/(.+)|(.+?)(?:\^-1|⁻¹|-1))$/.exec(u.trim());
+  if (r) {
+    const base = normUnit(r[1] || r[2]);
+    if (base === "Å" || base === "nm" || base === "µm") return `1/${base}`;
+  }
   return u;
 }
 
@@ -882,6 +892,11 @@ function lineLength(a, b) {
   const px = Math.hypot(dx, dy);
   if (!S.px) return { px, text: `${fmt(+px.toFixed(1))} px` };
   const m = Math.hypot(dx * S.px.x, dy * S.px.y) * UNIT_M[S.px.unit];
+  if (isRecip(S.px.unit) && m > 0) {
+    // From the direct beam to a spot: the lattice spacing is d = 1/|g|.
+    const d = 1 / m;
+    return { px, text: `${fmtLength(m)} · d = ${fmtLength(d, d < 1e-9 ? "Å" : "nm")}  (${fmt(+px.toFixed(1))} px)` };
+  }
   return { px, text: `${fmtLength(m)}  (${fmt(+px.toFixed(1))} px)` };
 }
 

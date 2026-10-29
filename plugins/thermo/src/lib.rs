@@ -107,6 +107,11 @@ pub(crate) fn length(m: f64) -> (f64, &'static str) {
     (tidy(m * f), u)
 }
 
+/// A pixel size in 1/m (diffraction) as a value in 1/nm.
+pub(crate) fn reciprocal(per_m: f64) -> (f64, &'static str) {
+    (tidy(per_m * 1e-9), "1/nm")
+}
+
 /// A length in metres for display, e.g. "1.2 nm".
 pub(crate) fn show_length(m: f64) -> String {
     let (v, u) = length(m);

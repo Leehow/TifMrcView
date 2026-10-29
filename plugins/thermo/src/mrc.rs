@@ -205,13 +205,16 @@ pub fn metadata() -> Result<Option<Meta>> {
             }
         }
     }
-    let pixel = real.then(|| {
+    let pixel = if real {
         let (x, unit) = length(px);
-        (
-            [x, crate::tidy(if py > 0.0 { py * x / px } else { x }), 0.0],
-            unit,
-        )
-    });
+        Some(([x, crate::tidy(if py > 0.0 { py * x / px } else { x }), 0.0], unit))
+    } else if has1(14) && px > 0.0 {
+        // Diffraction: the header gives 1/m per pixel.
+        let (x, unit) = crate::reciprocal(px);
+        Some(([x, if py > 0.0 { crate::reciprocal(py).0 } else { x }, 0.0], unit))
+    } else {
+        None
+    };
     Ok(Some(Meta {
         format: None,
         pixel_size: pixel.map(|p| p.0),

@@ -112,13 +112,13 @@ fn dm4_f32_stack() {
 }
 
 #[test]
-fn dm3_complex_as_two_channels_without_pixel_size() {
+fn dm3_complex_as_two_channels_in_reciprocal_units() {
     let p = gatan!();
     let src = open(&p.registry, &fixture("gatan_complex.dm3"));
     let i = src.info().clone();
     assert_eq!((i.width, i.height, i.size_c, i.samples_per_page), (4, 3, 2, 2));
     assert_eq!(i.dtype, DType::F32);
-    assert_eq!(i.pixel_size, None);
+    assert_eq!((i.unit.as_str(), i.pixel_size), ("1/nm", Some([0.5, 0.5, 0.0])));
     assert_eq!(i.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["实部", "虚部"]);
     assert_eq!(item(&i, "Gatan 图像", "X 标定").as_deref(), Some("0.5 1/nm/像素"));
     let planes = src.read_page(0).unwrap();
@@ -280,7 +280,7 @@ fn samples_rosettasciio() {
     assert_eq!((i.width, i.dtype, i.unit.as_str()), (68, DType::U32, "nm"));
     assert_eq!(item(&i, "Gatan 图像", "GMS 版本").as_deref(), Some("2.31.734.0"));
     let i = open1("2D/test_diffraction_pattern.dm3").info().clone();
-    assert_eq!(i.pixel_size, None);
+    assert_eq!(i.unit, "1/nm");
     assert!(item(&i, "Gatan 图像", "X 标定").unwrap().contains("1/nm"));
     let i = open1("3D/EELS_SI.dm4").info().clone();
     assert_eq!((i.width, i.height, i.size_z), (2, 2, 2048));

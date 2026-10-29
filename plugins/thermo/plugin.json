@@ -1,7 +1,7 @@
 {
   "id": "thermo",
   "name": "Thermo Fisher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "打开赛默飞（FEI）电镜的 TIA .ser、Velox .emd 和 Falcon 相机的 .eer 文件，并显示赛默飞 TIFF 和 MRC 文件里的加速电压、放大倍数、像素尺寸、样品台等参数",
   "main": "index.js",
   "apiVersion": 2,
