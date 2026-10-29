@@ -309,7 +309,7 @@
   var HOME = {
     zh: {
       title: 'TifMrcView · 显微与电镜图像查看器',
-      desc: 'TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI。支持 macOS、Windows、Linux。',
+      desc: 'TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI。支持 macOS、Windows、Linux 和 Android。',
       h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
       slogan: '又小、又快、又方便。免费开源。',
       lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用。',
@@ -370,7 +370,7 @@
     },
     en: {
       title: 'TifMrcView · Microscopy & EM image viewer',
-      desc: 'TifMrcView: a small, fast and convenient viewer for microscopy and electron microscopy, free and open source. TIFF / OME-TIFF and cryo-EM MRC stacks of many gigabytes open on double-click; XY / XZ / YZ views, measurements in physical units, multichannel fluorescence; plugins add new formats such as Zeiss CZI. For macOS, Windows and Linux.',
+      desc: 'TifMrcView: a small, fast and convenient viewer for microscopy and electron microscopy, free and open source. TIFF / OME-TIFF and cryo-EM MRC stacks of many gigabytes open on double-click; XY / XZ / YZ views, measurements in physical units, multichannel fluorescence; plugins add new formats such as Zeiss CZI. For macOS, Windows, Linux and Android.',
       h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
       slogan: 'Small. Fast. Effortless. Free and open source.',
       lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux.',
@@ -431,7 +431,7 @@
     },
     de: {
       title: 'TifMrcView · Viewer für Mikroskopie- und EM-Bilder',
-      desc: 'TifMrcView: ein kleiner, schneller und einfacher Viewer für Licht- und Elektronenmikroskopie, kostenlos und quelloffen. TIFF / OME-TIFF und Kryo-EM-MRC mit vielen Gigabyte öffnen per Doppelklick; XY-/XZ-/YZ-Ansichten, Messungen in physikalischen Einheiten, Mehrkanal-Fluoreszenz; Plugins ergänzen neue Formate wie Zeiss CZI. Für macOS, Windows und Linux.',
+      desc: 'TifMrcView: ein kleiner, schneller und einfacher Viewer für Licht- und Elektronenmikroskopie, kostenlos und quelloffen. TIFF / OME-TIFF und Kryo-EM-MRC mit vielen Gigabyte öffnen per Doppelklick; XY-/XZ-/YZ-Ansichten, Messungen in physikalischen Einheiten, Mehrkanal-Fluoreszenz; Plugins ergänzen neue Formate wie Zeiss CZI. Für macOS, Windows, Linux und Android.',
       h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
       lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux.',
@@ -492,7 +492,7 @@
     },
     ja: {
       title: 'TifMrcView · 顕微鏡・電子顕微鏡画像ビューア',
-      desc: 'TifMrcView：顕微鏡と電子顕微鏡のための、小さく、速く、使いやすい無料のオープンソースビューア。TIFF / OME-TIFF とクライオ電顕の MRC は数 GB のスタックもダブルクリックで開きます。XY / XZ / YZ ビュー、物理単位での計測、マルチチャンネル蛍光。プラグインで Zeiss CZI などの新しい形式も追加できます。macOS・Windows・Linux 対応。',
+      desc: 'TifMrcView：顕微鏡と電子顕微鏡のための、小さく、速く、使いやすい無料のオープンソースビューア。TIFF / OME-TIFF とクライオ電顕の MRC は数 GB のスタックもダブルクリックで開きます。XY / XZ / YZ ビュー、物理単位での計測、マルチチャンネル蛍光。プラグインで Zeiss CZI などの新しい形式も追加できます。macOS・Windows・Linux・Android 対応。',
       h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
       slogan: '小さく、速く、使いやすく。無料のオープンソース。',
       lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux に対応。',
@@ -553,7 +553,7 @@
     },
     es: {
       title: 'TifMrcView · Visor de imágenes de microscopía y ME',
-      desc: 'TifMrcView: un visor pequeño, rápido y cómodo para microscopía óptica y electrónica, gratis y de código abierto. Pilas TIFF / OME-TIFF y MRC de crio-ME de varios GB se abren con doble clic; vistas XY / XZ / YZ, medidas en unidades físicas y fluorescencia multicanal; los complementos añaden formatos nuevos como Zeiss CZI. Para macOS, Windows y Linux.',
+      desc: 'TifMrcView: un visor pequeño, rápido y cómodo para microscopía óptica y electrónica, gratis y de código abierto. Pilas TIFF / OME-TIFF y MRC de crio-ME de varios GB se abren con doble clic; vistas XY / XZ / YZ, medidas en unidades físicas y fluorescencia multicanal; los complementos añaden formatos nuevos como Zeiss CZI. Para macOS, Windows, Linux y Android.',
       h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
       slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
       lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux.',
@@ -614,7 +614,7 @@
     },
     fr: {
       title: 'TifMrcView · Visionneuse d’images de microscopie et de ME',
-      desc: 'TifMrcView : une visionneuse légère, rapide et pratique pour la microscopie optique et électronique, gratuite et open source. Des piles TIFF / OME-TIFF et MRC de cryo-ME de plusieurs Go s’ouvrent d’un double-clic ; vues XY / XZ / YZ, mesures en unités physiques, fluorescence multicanal ; des extensions ajoutent de nouveaux formats comme Zeiss CZI. Pour macOS, Windows et Linux.',
+      desc: 'TifMrcView : une visionneuse légère, rapide et pratique pour la microscopie optique et électronique, gratuite et open source. Des piles TIFF / OME-TIFF et MRC de cryo-ME de plusieurs Go s’ouvrent d’un double-clic ; vues XY / XZ / YZ, mesures en unités physiques, fluorescence multicanal ; des extensions ajoutent de nouveaux formats comme Zeiss CZI. Pour macOS, Windows, Linux et Android.',
       h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
       lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux.',
@@ -675,7 +675,7 @@
     },
     ru: {
       title: 'TifMrcView · Просмотрщик изображений микроскопии и ЭМ',
-      desc: 'TifMrcView: маленький, быстрый и удобный просмотрщик для световой и электронной микроскопии, бесплатный и с открытым кодом. Стеки TIFF / OME-TIFF и MRC для крио-ЭМ в несколько ГБ открываются двойным щелчком; виды XY / XZ / YZ, измерения в физических единицах, многоканальная флуоресценция; плагины добавляют новые форматы, например Zeiss CZI. Для macOS, Windows и Linux.',
+      desc: 'TifMrcView: маленький, быстрый и удобный просмотрщик для световой и электронной микроскопии, бесплатный и с открытым кодом. Стеки TIFF / OME-TIFF и MRC для крио-ЭМ в несколько ГБ открываются двойным щелчком; виды XY / XZ / YZ, измерения в физических единицах, многоканальная флуоресценция; плагины добавляют новые форматы, например Zeiss CZI. Для macOS, Windows, Linux и Android.',
       h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
       slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
       lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux.',
