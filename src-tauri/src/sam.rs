@@ -519,6 +519,7 @@ mod tests {
     /// A dark, 3 px thick wavy membrane that drifts 1.5 px per slice, as a
     /// tilted membrane does in a tomogram, should be followed through the
     /// stack from one click.
+    #[cfg(feature = "pro")]
     #[test]
     #[ignore]
     fn membrane_propagates() {
