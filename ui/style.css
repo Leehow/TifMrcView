@@ -463,3 +463,12 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   border-radius: 10px; box-shadow: var(--shadow);
 }
 #ann-menu button { height: 40px; padding: 0 20px; font-size: 15px; color: #cf222e; border: 0; }
+
+/* Narrow windows (a tablet held upright): the tool buttons get a row of
+   their own instead of being squeezed between the file and view groups. */
+@media (max-width: 860px) {
+  #toolbar { flex-wrap: wrap; height: auto; padding: 4px 10px; row-gap: 4px; }
+  #file-group { flex: 1 1 auto; }
+  #scroll-left, #quickbar, #scroll-right { order: 2; }
+  #quickbar { flex: 1 1 calc(100% - 64px); height: 36px; }
+}
