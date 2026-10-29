@@ -7,6 +7,7 @@ use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use formats::sequence::natural_cmp;
 use image::{ImageInfo, OpenImage};
 
 #[derive(Default)]
@@ -170,38 +171,35 @@ struct Folder {
     files: Vec<String>,
     sizes: Vec<u64>,
     index: Option<usize>,
+    /// Z stacks an acquisition project file makes of this folder's slices.
+    stacks: Vec<StackEntry>,
 }
 
-/// Sorts "img2" before "img10".
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
-    loop {
-        match (a.first(), b.first()) {
-            (None, None) => return std::cmp::Ordering::Equal,
-            (None, _) => return std::cmp::Ordering::Less,
-            (_, None) => return std::cmp::Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let na = a.iter().take_while(|c| c.is_ascii_digit()).count();
-                let nb = b.iter().take_while(|c| c.is_ascii_digit()).count();
-                let (da, db) = (&a[..na], &b[..nb]);
-                let ta = da.iter().skip_while(|&&c| c == b'0').count();
-                let tb = db.iter().skip_while(|&&c| c == b'0').count();
-                let ord = ta.cmp(&tb).then_with(|| da[na - ta..].cmp(&db[nb - tb..]));
-                if ord != std::cmp::Ordering::Equal {
-                    return ord;
-                }
-                a = &a[na..];
-                b = &b[nb..];
-            }
-            (Some(x), Some(y)) => {
-                let ord = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
-                if ord != std::cmp::Ordering::Equal {
-                    return ord;
-                }
-                a = &a[1..];
-                b = &b[1..];
-            }
+#[derive(Serialize)]
+struct StackEntry {
+    /// What to open: the project file, or this folder when the project
+    /// file is in a folder above it.
+    path: String,
+    name: String,
+    slices: usize,
+}
+
+/// The stack a plugin reads from a project file for the slices in `dir`.
+fn folder_stacks(dir: &Path) -> Vec<StackEntry> {
+    let reg = plugins::registry::Registry::global();
+    let Some(config) = reg.find_stack_file(dir) else { return vec![] };
+    let here = config.parent() == Some(dir);
+    match reg.stack(&config, 0, Some(dir)) {
+        Some(Ok(plan)) if here || plan.files.iter().all(|f| f.parent() == Some(dir)) => {
+            let path = if here { config.clone() } else { dir.to_path_buf() };
+            let name = plan.format.clone().unwrap_or_else(|| "堆叠".into());
+            vec![StackEntry { path: path.to_string_lossy().into_owned(), name, slices: plan.files.len() }]
         }
+        Some(Err(e)) => {
+            eprintln!("{}: {e:#}", config.display());
+            vec![]
+        }
+        _ => vec![],
     }
 }
 
@@ -220,7 +218,8 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         files.sort_by(|a, b| natural_cmp(a, b));
         let index = files.iter().position(|f| Path::new(f) == p);
         let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
-        Ok(Folder { files, sizes, index })
+        let dir: PathBuf = dir.components().collect();
+        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir) })
     })
     .await
 }
@@ -517,7 +516,7 @@ fn paths_from_args(args: impl IntoIterator<Item = String>, cwd: Option<&Path>) -
                 _ => p,
             }
         })
-        .filter(|p| p.is_file())
+        .filter(|p| p.is_file() || p.is_dir())
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
 }
@@ -744,7 +743,7 @@ pub fn run() {
                     .into_iter()
                     .filter(|u| u.scheme() == "file")
                     .filter_map(|u| u.to_file_path().ok())
-                    .filter(|p| p.is_file())
+                    .filter(|p| p.is_file() || p.is_dir())
                     .map(|p| p.to_string_lossy().into_owned())
                     .collect();
                 queue_open(_app, paths);
@@ -899,7 +898,9 @@ mod tests {
             args(&["prog", "-x", "a.tif", &abs_b, "missing.tif", "--flag", "sub"]),
             Some(dir.path()),
         );
-        assert_eq!(got, vec![a.to_string_lossy(), b.to_string_lossy()]);
+        // A folder opens as an image sequence (a Z stack of its slices).
+        let sub = dir.path().join("sub");
+        assert_eq!(got, vec![a.to_string_lossy(), b.to_string_lossy(), sub.to_string_lossy()]);
     }
 
     #[test]

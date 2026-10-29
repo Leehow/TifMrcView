@@ -156,6 +156,7 @@ impl TiffSource {
             page_count: ifds.len(),
             series: vec![],
             series_index: 0,
+            folder: None,
         };
         let mut contiguous = None;
 

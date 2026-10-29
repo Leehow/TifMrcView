@@ -1,5 +1,6 @@
 pub mod mrc;
 pub mod raster;
+pub mod sequence;
 pub mod tiff;
 
 use std::path::Path;
@@ -59,7 +60,15 @@ pub fn open_series_with(path: &Path, series: usize, reg: &Registry) -> Result<Bo
 }
 
 /// The source, and the id of the plugin that opened it (if one did).
-fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
+pub(crate) fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
+    // A folder of slices, or an acquisition program's project file that
+    // lists them: one Z stack.
+    if path.is_dir() {
+        return Ok((Box::new(sequence::Sequence::open_dir(path, series, reg)?), None));
+    }
+    if reg.is_stack_file(path) {
+        return Ok((Box::new(sequence::Sequence::open_project(path, series, reg)?), None));
+    }
     let ext = ext_of(path);
     if series > 0 && CORE_EXTENSIONS.contains(&ext.as_str()) {
         bail!("这个文件只有一个图像");

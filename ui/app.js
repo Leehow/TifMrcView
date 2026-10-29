@@ -23,7 +23,7 @@ const S = {
   sel: 0,           // channel whose contrast the tools panel edits
   gamma: 1,
   view: { cx: 0, cy: 0, scale: 1 },
-  folder: { dir: null, files: [], sizes: [], index: -1 },
+  folder: { dir: null, files: [], sizes: [], stacks: {}, index: -1 },
   frame: null,      // last rendered bitmap and the image region it covers
   inflight: false,
   dirty: false,
@@ -44,6 +44,7 @@ const S = {
   crop: null,       // applied crop [x, y, w, h] in image pixels
   cropStack: [],    // earlier crops, for undo
   px: null,         // {x, y, unit} physical pixel size
+  pz: null,         // distance between Z slices, in px.unit
   pluginMeta: [],   // metadata groups plugins added for the open file
   pxSource: "",
   scaleBar: false,
@@ -217,6 +218,7 @@ async function openPath(path, force = false, series = 0) {
       S.px = null;
       S.pxSource = "";
     }
+    S.pz = S.px && ps && ps[2] > 0 && S.pxSource !== "手动" ? ps[2] : null;
     $("empty").hidden = true;
     $("st-pixel").textContent = "";
     T.window.getCurrentWindow().setTitle(`${res.info.name} — TifMrcView`).catch(() => {});
@@ -335,6 +337,7 @@ async function setAxis(axis) {
   if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)]) {
     S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
   }
+  applyZSpacing();
   const view = axis === "xy" ? "" : ` (${axis.toUpperCase()})`;
   T.window.getCurrentWindow().setTitle(`${info.name}${view} — TifMrcView`).catch(() => {});
   setupSliders();
@@ -398,19 +401,40 @@ function normUnit(u) {
   return u;
 }
 
+/** Where the open image is in the folder list: a stack's entry is its
+ * project file, or its folder when the project file is further up. */
+function folderIndex(path) {
+  const { files } = S.folder;
+  if (!(S.info && S.info.folder)) return files.indexOf(path);
+  const i = files.indexOf(S.info.path);
+  return i >= 0 ? i : files.indexOf(S.info.folder);
+}
+
 async function refreshFolder(path) {
-  const dir = dirname(path);
+  // A stack made of a folder's slices lists that folder; the stack itself
+  // is in the list when a project file describes it.
+  const stackDir = S.info && S.info.folder;
+  const dir = stackDir || dirname(path);
   if (dir !== S.folder.dir) {
-    const f = await invoke("list_folder", { path });
-    S.folder = { dir, files: f.files, sizes: f.sizes, index: f.index ?? -1 };
+    const f = await invoke("list_folder", { path: stackDir || path });
+    const stacks = f.stacks || [];
+    const files = [...stacks.map((s) => s.path), ...f.files];
+    S.folder = {
+      dir,
+      files,
+      sizes: [...stacks.map(() => 0), ...f.sizes],
+      stacks: Object.fromEntries(stacks.map((s) => [s.path, s])),
+      index: -1,
+    };
     $("folder-name").textContent = basename(dir) || dir;
     $("folder-name").title = dir;
     $("side-head").hidden = false;
+    S.folder.index = folderIndex(path);
     updateSaveDir();
     buildStrip();
   } else {
-    S.folder.index = S.folder.files.indexOf(path);
-    if (S.folder.index < 0) {
+    S.folder.index = folderIndex(path);
+    if (S.folder.index < 0 && !stackDir) {
       S.folder.dir = null;
       return refreshFolder(path);
     }
@@ -427,6 +451,12 @@ function step(delta) {
 async function pickFile() {
   const p = await invoke("pick_file");
   if (p) openPath(p);
+}
+
+/** Opens a folder of slices (FIB-SEM, serial sections…) as one Z stack. */
+async function pickStackFolder() {
+  const dir = await invoke("pick_folder", { dir: S.info ? dirname(S.info.folder || S.info.path) : "" });
+  if (dir) openPath(dir);
 }
 
 async function takePending() {
@@ -688,7 +718,7 @@ function updateInfo() {
   const px = S.px ? ` · ${fmt(S.px.x)} ${S.px.unit}/px` : "";
   $("st-info").textContent = `${i.format} · ${dims.join(" × ")} · ${i.dtype}${px}`;
   const { files, index } = S.folder;
-  $("file-pos").textContent = files.length ? `${index + 1} / ${files.length}` : "–";
+  $("file-pos").textContent = i.folder && index < 0 ? `堆叠 · ${files.length}` : files.length ? `${index + 1} / ${files.length}` : "–";
   $("btn-prev").disabled = index <= 0;
   $("btn-next").disabled = index < 0 || index >= files.length - 1;
 }
@@ -719,9 +749,33 @@ function syncScaleUi() {
     $("px-size").value = "";
   }
   $("px-src").textContent = S.px ? `像素尺寸${S.pxSource}` : "文件里没有像素尺寸，可以手动填写";
+  const stackInfo = S.base ? S.base.info : S.info;
+  $("pz-row").hidden = !(S.px && stackInfo && stackInfo.sizeZ > 1);
+  $("pz-size").value = S.pz ? fmt(S.pz) : "";
+  $("pz-unit").textContent = S.px ? S.px.unit : "";
   $("sb-show").checked = S.scaleBar;
   $("sb-show").disabled = !S.px;
   $("btn-scalebar").classList.toggle("on", S.scaleBar && !!S.px);
+}
+
+/** In a side view (XZ / YZ) the vertical axis is Z: its pixels are one slice apart. */
+function applyZSpacing() {
+  if (!S.px) return;
+  if (S.axis !== "xy") {
+    if (S.pz) S.px = { ...S.px, y: S.pz };
+  } else if (S.pxSource === "手动") {
+    S.px = { ...S.px, y: S.px.x };
+  }
+}
+
+function onPzInput() {
+  const v = parseFloat($("pz-size").value);
+  S.pz = Number.isFinite(v) && v > 0 ? v : null;
+  if (S.axis !== "xy" && S.px) S.px = { ...S.px, y: S.pz || S.px.x };
+  syncScaleUi();
+  updateInfo();
+  renderMeta();
+  draw();
 }
 
 function onPxInput() {
@@ -1729,6 +1783,8 @@ function metaGroups() {
     ["数据类型", i.dtype],
   ];
   if (S.px) items.push(["像素尺寸", `${fmt(S.px.x)} ${S.px.unit}`]);
+  const pz = S.axis === "xy" ? S.pz : null;
+  if (S.px && pz) items.push(["Z 间距", `${fmt(pz)} ${S.px.unit}`]);
   items.push(["路径", i.path]);
   return [{ name: "文件信息", items }, ...(i.metadata || []), ...S.pluginMeta];
 }
@@ -2470,7 +2526,7 @@ window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod) {
-    if (key === "o") pickFile();
+    if (key === "o") (e.shiftKey ? pickStackFolder : pickFile)();
     else if (key === "s") quickSave();
     else if (key === "z") (e.shiftKey ? redo : undo)();
     else if (key === "y") redo();
@@ -2570,6 +2626,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 $("btn-open").addEventListener("click", pickFile);
+$("btn-open-folder").addEventListener("click", pickStackFolder);
 $("btn-prev").addEventListener("click", () => step(-1));
 $("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
 $("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
@@ -2749,6 +2806,7 @@ $("sb-show").addEventListener("change", (e) => {
   draw();
 });
 $("px-size").addEventListener("change", onPxInput);
+$("pz-size").addEventListener("change", onPzInput);
 $("px-unit").addEventListener("change", onPxInput);
 $("mod-show").addEventListener("change", (e) => {
   S.modelShow = e.target.checked;
@@ -2795,9 +2853,17 @@ function buildStrip() {
     el.title = f;
     el.dataset.path = f;
     el.innerHTML = `<div class="box"></div><div class="nm"></div><div class="meta"></div>`;
-    el.querySelector(".nm").textContent = basename(f);
-    const ext = (f.match(/\.([^.\\/]+)$/) || [, ""])[1].toUpperCase();
-    el.querySelector(".meta").textContent = `${ext} · ${fmtBytes(S.folder.sizes[i] || 0)}`;
+    const stack = S.folder.stacks[f];
+    if (stack) {
+      el.classList.add("stack");
+      el.title = `${stack.name}：${stack.slices} 张切片组成的 Z 堆叠\n${f}`;
+      el.querySelector(".nm").textContent = stack.name;
+      el.querySelector(".meta").textContent = `堆叠 · ${stack.slices} 层`;
+    } else {
+      el.querySelector(".nm").textContent = basename(f);
+      const ext = (f.match(/\.([^.\\/]+)$/) || [, ""])[1].toUpperCase();
+      el.querySelector(".meta").textContent = `${ext} · ${fmtBytes(S.folder.sizes[i] || 0)}`;
+    }
     el.addEventListener("click", () => openPath(f));
     strip.append(el);
     thumbObserver.observe(el);
