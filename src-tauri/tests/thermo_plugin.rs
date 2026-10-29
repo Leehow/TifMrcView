@@ -198,13 +198,13 @@ fn tia_ser_series_rows_flipped_and_calibrated() {
 }
 
 #[test]
-fn tia_diffraction_has_no_pixel_size_and_emi_and_spectra_explain() {
+fn tia_diffraction_in_reciprocal_units_and_emi_and_spectra_explain() {
     let p = thermo!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("diff_1.ser");
     ser(&path, 0x220, 4.2e7, &[img(2, 2, 0)]);
     let i = open(&p.registry, &path).info().clone();
-    assert_eq!(i.pixel_size, None);
+    px(&i, "1/nm", 0.042);
     assert_eq!(
         item(&i, "TIA 图像", "标定类型").as_deref(),
         Some("倒空间（衍射）")

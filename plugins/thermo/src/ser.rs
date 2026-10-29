@@ -204,6 +204,11 @@ impl Ser {
             let f = x / dx;
             info.pixel_size = Some([x, if dy > 0.0 { dy * f } else { x }, 0.0]);
             info.unit = unit.into();
+        } else if dx > 0.0 {
+            let (x, unit) = crate::reciprocal(dx);
+            let y = if dy > 0.0 { crate::reciprocal(dy).0 } else { x };
+            info.pixel_size = Some([x, y, 0.0]);
+            info.unit = unit.into();
         }
         let mut g = Group::new("TIA 图像");
         g.add_str(
