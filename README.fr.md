@@ -84,7 +84,7 @@ Les plugins ont les mêmes permissions que le programme principal : n'installez 
 
 ## Mises à jour automatiques
 
-Quelques secondes après le démarrage, l'application vérifie discrètement `https://tifmrcview.com/tifmrcview/latest.json`. Lorsqu'une nouvelle version existe, une bannière apparaît en haut ; « Mettre à jour maintenant et redémarrer » télécharge, vérifie la signature, installe et redémarre. Les paquets de mise à jour sont signés avec une clé minisign de Tauri ; la clé publique figure dans `tauri.conf.json`.
+Quelques secondes après le démarrage, l'application vérifie discrètement `https://tifmrcview.com/tifmrcview/latest.json`. Lorsqu'une nouvelle version existe, seul un petit point rouge apparaît sur l'engrenage (réglages), sans bannière ni fenêtre. Ouvrir le menu de l'engrenage affiche « Version x.y.z disponible » et efface le point pour cette version ; cette entrée ouvre « Extensions et mises à jour », où « Mettre à jour vers x.y.z » télécharge, vérifie la signature, installe et redémarre. Les paquets de mise à jour sont signés avec une clé minisign de Tauri ; la clé publique figure dans `tauri.conf.json`.
 
 ## Raccourcis clavier
 

@@ -2217,6 +2217,7 @@ function openMenu(anchor, items, pick) {
     text.className = "mi-label";
     text.textContent = it.label;
     b.append(text);
+    if (it.dot) text.insertAdjacentHTML("beforeend", '<span class="mi-dot"></span>');
     if (it.hint) {
       const h = document.createElement("span");
       h.className = "mi-hint";
