@@ -451,7 +451,7 @@ async function refreshFolder(path) {
     };
     $("folder-name").textContent = basename(dir) || dir;
     $("folder-name").title = dir;
-    $("side-head").hidden = false;
+    $("btn-reveal").hidden = false;
     S.folder.index = folderIndex(path);
     updateSaveDir();
     buildStrip();
@@ -2352,8 +2352,7 @@ function showPanel(mode) {
   panel.hidden = !mode;
   panel.classList.toggle("only-contrast", mode === "contrast");
   panel.classList.toggle("only-info", mode === "info");
-  $("tools-tab").classList.toggle("flip", !!mode);
-  $("tools-tab").title = mode ? "收起左侧工具栏 (T)" : "展开左侧工具栏 (T)";
+  $("btn-show-tools").hidden = !!mode;
   $("btn-contrast").classList.toggle("on", mode === "contrast");
   $("btn-info").classList.toggle("on", mode === "info");
   pref.set("tools", mode);
@@ -2499,8 +2498,7 @@ function toggleSidebar(force) {
   const show = force ?? sb.classList.contains("collapsed");
   sb.classList.toggle("collapsed", !show);
   $("sidebar-resizer").hidden = !show;
-  $("sidebar-tab").classList.toggle("flip", !show);
-  $("sidebar-tab").title = show ? "收起右侧预览栏 (B)" : "展开右侧预览栏 (B)";
+  $("btn-show-sidebar").hidden = show;
   pref.set("sidebar", show);
   if (show) markStrip();
 }
@@ -3312,12 +3310,14 @@ $("btn-zoom").addEventListener("click", fit);
 $("btn-zoomin").addEventListener("click", () => zoomBy(1.25));
 $("btn-zoomout").addEventListener("click", () => zoomBy(0.8));
 $("btn-play").addEventListener("click", togglePlay);
-$("tools-tab").addEventListener("click", () => showPanel($("tools").hidden ? "all" : null));
+$("btn-show-tools").addEventListener("click", () => showPanel("all"));
+$("tools-close").addEventListener("click", () => showPanel(null));
 $("btn-contrast").addEventListener("click", () => showPanel("contrast"));
 $("btn-info").addEventListener("click", () => showPanel("info"));
 $("meta-filter").addEventListener("input", renderMeta);
 $("meta-copy").addEventListener("click", copyMeta);
-$("sidebar-tab").addEventListener("click", () => toggleSidebar());
+$("btn-show-sidebar").addEventListener("click", () => toggleSidebar(true));
+$("sidebar-close").addEventListener("click", () => toggleSidebar(false));
 $("btn-scalebar").addEventListener("click", () => {
   if (!S.px) {
     showPanel("all");

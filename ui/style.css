@@ -91,9 +91,9 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #file-group { min-width: 0; flex: 0 1 auto; }
 .spacer { flex: 1; }
 /* Icon-only buttons at both ends of the title bar. */
-#btn-open, #btn-settings { width: 30px; padding: 0; justify-content: center; color: var(--dim); }
-#btn-open:hover, #btn-settings:hover { color: var(--text); }
-#btn-open svg, #btn-settings svg { width: 18px; height: 18px; }
+#btn-open, #btn-settings, #btn-show-tools, #btn-show-sidebar { width: 30px; padding: 0; justify-content: center; color: var(--dim); }
+#btn-open:hover, #btn-settings:hover, #btn-show-tools:hover, #btn-show-sidebar:hover { color: var(--text); }
+#btn-open svg, #btn-settings svg, #btn-show-tools svg, #btn-show-sidebar svg { width: 18px; height: 18px; }
 #btn-open.open, #btn-settings.open { background: var(--muted); color: var(--text); }
 #btn-prev, #btn-next { width: 26px; padding: 0; justify-content: center; font-size: 11px; color: var(--dim); }
 #file-pos { color: var(--dim); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -291,30 +291,19 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .resizer:hover::after, .resizer.active::after { background: linear-gradient(90deg, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); }
 #tools-resizer { position: absolute; top: 22px; bottom: 22px; left: calc(10px + var(--tools-w, 288px)); }
 #tools[hidden] ~ #tools-resizer, #tools.only-contrast ~ #tools-resizer { display: none; }
-/* Small tabs on the edges of the image area that fold the side panels away and back. */
-.edge-tab {
-  position: absolute; top: 50%; z-index: 7;
-  width: 14px; height: 44px; padding: 0; justify-content: center;
-  transform: translateY(-50%);
-  background: var(--surface); color: var(--dim);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-sm);
-}
-.edge-tab:hover:not(:disabled) { background: var(--subtle); color: var(--text); }
-.edge-tab svg { width: 12px; height: 12px; stroke-width: 2.2; }
-.edge-tab.flip svg { transform: scaleX(-1); }
-#tools-tab { left: 0; border-left: none; border-radius: 0 6px 6px 0; }
-#tools:not([hidden]) ~ #tools-tab { left: calc(10px + var(--tools-w, 288px)); border-left: 1px solid var(--line); }
-#tools.only-contrast:not([hidden]) ~ #tools-tab { top: 34px; transform: none; }
-#sidebar-tab { right: 0; border-right: none; border-radius: 6px 0 0 6px; }
+/* Fold buttons inside the side panels; the matching show buttons sit in the title bar while a panel is folded. */
+.panel-close { width: 26px; height: 24px; padding: 0; justify-content: center; color: var(--dim); flex: none; }
+.panel-close:hover:not(:disabled) { color: var(--text); }
+.panel-close svg { width: 16px; height: 16px; }
+#tools-close { float: right; position: sticky; top: 8px; z-index: 1; margin: 7px -6px 0 4px; background: var(--surface); }
 #side-head {
   position: sticky; top: 0; z-index: 1;
   display: flex; align-items: center; gap: 6px;
   padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 #folder-name { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#side-head #btn-reveal { margin-left: auto; }
-#side-head button { padding: 0 6px; }
+#side-head button.small { padding: 0 6px; }
+#side-head .panel-close { margin-right: -4px; }
 #save-dir { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 #strip { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
 .thumb {
