@@ -2331,7 +2331,60 @@ function metaGroups() {
   const pz = S.axis === "xy" ? S.pz : null;
   if (S.px && pz) items.push(["Z 间距", `${fmt(pz)} ${S.px.unit}`]);
   items.push(["路径", i.path]);
-  return [{ name: "文件信息", items }, ...(i.metadata || []), ...S.pluginMeta];
+  const groups = [...(i.metadata || []), ...S.pluginMeta];
+  const common = commonParams(groups);
+  return [{ name: "文件信息", items }, ...(common ? [common] : []), ...groups];
+}
+
+/**
+ * The settings people look for first, in one fixed order whatever wrote
+ * the file: [label, names the readers use for it]. Readers should use the
+ * first name where they can (see docs/format-plugins.md).
+ */
+const COMMON_PARAMS = [
+  ["显微镜", ["显微镜", "系统类型", "仪器"]],
+  ["加速电压", ["加速电压", "EHT", "高压"]],
+  ["模式", ["操作模式", "模式", "TEM 子模式", "成像模式", "照明模式"]],
+  ["放大倍数", ["放大倍数", "标称放大倍数", "实际放大倍数", "总放大倍数", "Mag"]],
+  ["相机长度", ["相机长度"]],
+  ["视场", ["视野", "视场", "水平视场 (HFW)"]],
+  ["工作距离", ["工作距离", "WD"]],
+  ["探测器 / 相机", ["探测器", "相机", "相机型号", "检测器", "Signal A", "Signal"]],
+  ["曝光时间", ["曝光时间", "曝光时间 (ms)", "积分时间", "帧时间", "扫描帧时间"]],
+  ["驻留时间", ["驻留时间", "像素驻留 (µs)"]],
+  ["剂量", ["剂量", "总剂量", "剂量率"]],
+  ["散焦", ["散焦", "设定散焦"]],
+  ["球差 Cs", ["球差 Cs"]],
+  ["束斑", ["束斑", "聚光镜束斑", "探针尺寸", "Spot Size"]],
+  ["束流", ["探针电流", "束流", "发射电流", "I Probe", "Beam Current"]],
+  ["会聚半角", ["会聚半角"]],
+  ["倾转", ["α 倾转", "样品台 α", "样品台倾转", "α / β 倾转"]],
+  ["像素合并", ["像素合并"]],
+  ["采集时间", ["采集时间", "日期时间", "采集日期", "时间", "日期", "Date"]],
+];
+
+/** "常用参数": the COMMON_PARAMS the reader found, or null when it found few. */
+function commonParams(groups) {
+  const items = [];
+  for (const [label, names] of COMMON_PARAMS) {
+    let hit = null;
+    for (const n of names) {
+      for (const g of groups) {
+        const it = g.items.find(([k, v]) => k === n && String(v).trim() !== "");
+        if (it) {
+          hit = it[1];
+          // Readers that split the date from the time of day.
+          const date = n === "采集时间" && g.items.find(([k]) => k === "采集日期");
+          if (date && !hit.includes(date[1])) hit = `${date[1]} ${hit}`;
+          break;
+        }
+      }
+      if (hit != null) break;
+    }
+    if (hit != null) items.push([label, hit]);
+  }
+  if (S.px && items.length) items.splice(Math.min(items.length, 4), 0, ["像素尺寸", `${fmt(S.px.x)} ${S.px.unit}`]);
+  return items.length >= 2 ? { name: "常用参数", items } : null;
 }
 
 function renderMeta() {
