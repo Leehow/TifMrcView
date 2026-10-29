@@ -42,6 +42,8 @@ const CHUNK: usize = 64;
 /// Shift change (binned pixels) below which "movie" iterations stop.
 const SETTLED: f64 = 0.01;
 const MAX_ITER: usize = 12;
+/// Series steps with a peak below this fraction of the chunk's median are searched again near the step before.
+const LOW_STEP: f64 = 0.5;
 
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -424,9 +426,24 @@ fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spe
                 Some((start + k, pair_shift(a, &specs[k], g, &fft_m, max)))
             })
             .collect();
-        for (i, (s, v)) in steps {
+        // A step whose peak is much weaker than its neighbours' (high tilts,
+        // a damaged slice) is often a wrong peak tens of pixels away: look
+        // again only near the step before it, as a tracker would.
+        let mut good: Vec<f64> = steps.iter().map(|(_, (_, v))| *v).collect();
+        good.sort_by(f64::total_cmp);
+        let weak = good.get(good.len() / 2).copied().unwrap_or(0.0) * LOW_STEP;
+        for (i, (mut s, mut v)) in steps {
             // The squares were moved: the step measured is what is left of it.
             let moved = [(offs[i][0] - offs[i - 1][0]) as f64 / g.bin as f64, (offs[i][1] - offs[i - 1][1]) as f64 / g.bin as f64];
+            if v < weak && i >= 2 {
+                let k = i - start;
+                let a = if k == 0 { prev.as_ref().unwrap() } else { &specs[k - 1] };
+                let before = [d[i - 1][0] - d[i - 2][0] - moved[0], d[i - 1][1] - d[i - 2][1] - moved[1]];
+                let (pr, pi) = cross(&specs[k], &a.re, &a.im);
+                let (p, peak) = refine_peak(&pr, &pi, g, before);
+                s = p;
+                v = norm_cc(peak, a.energy, specs[k].energy);
+            }
             d[i] = [d[i - 1][0] + moved[0] + s[0], d[i - 1][1] + moved[1] + s[1]];
             cc[i] = v;
         }
@@ -784,6 +801,25 @@ mod tests {
         let (d, _) = estimate_frames(&fr, 300, 260, true, 256);
         // Errors add up along a series.
         check(&d, &truth, 0.35);
+    }
+
+    /// One slice buried in noise (a high tilt): its step stays near its neighbours'.
+    #[test]
+    fn tracks_through_a_weak_slice() {
+        let truth: Vec<[f64; 2]> = (0..9).map(|i| [5.0 * i as f64, -3.0 * i as f64]).collect();
+        let mut fr = frames(300, 300, &truth, 0.05);
+        let mut nz = noise(1234);
+        for v in &mut fr[6] {
+            *v = 0.04 * *v + 3.0 * nz();
+        }
+        let (d, cc) = estimate_frames(&fr, 300, 300, true, 256);
+        assert!(cc[6] < cc[5], "cc {cc:?}");
+        // The weak slice may be off by a few pixels, the rest must follow.
+        let mid = truth[4];
+        for (i, (g, t)) in d.iter().zip(&truth).enumerate() {
+            let e = (g[0] - (t[0] - mid[0])).hypot(g[1] - (t[1] - mid[1]));
+            assert!(e < if i == 6 { 4.0 } else { 0.5 }, "slice {i}: {g:?} vs {:?}", [t[0] - mid[0], t[1] - mid[1]]);
+        }
     }
 
     #[test]
