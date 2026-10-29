@@ -26,7 +26,7 @@
       <label>最大 µm <input type="number" id="ctf-dmax" step="0.1" min="0" /></label>
       <label>最大像散 µm <input type="number" id="ctf-astig" step="0.05" min="0" /></label>
       <label class="ctf-check ctf-wide"><input type="checkbox" id="ctf-phase" /> 相位板（拟合相移）</label>
-      <label class="ctf-wide">计算 <select id="ctf-backend"><option value="auto">自动（有 GPU 用 GPU）</option><option value="cpu">只用 CPU</option></select></label>
+      <label class="ctf-wide">计算 <select id="ctf-backend"><option value="auto">自动（GPU 算谱，CPU 拟合）</option><option value="gpu">全部用 GPU</option><option value="cpu">只用 CPU</option></select></label>
     </div>
     <div id="ctf-out" class="dim">按“拟合”在当前看到的区域上拟合 CTF</div>
     <canvas id="ctf-plot" title="蓝：等相位平均的谱；红：拟合的 CTF²；绿：逐环相关系数（0–1）"></canvas>`;

@@ -50,7 +50,8 @@ pub struct Params {
     pub max_astig_a: f64,
     /// Also fit a phase shift (phase plate).
     pub phase: bool,
-    /// "cpu" forces the CPU; otherwise the GPU is used when there is one (Pro).
+    /// "cpu": all on the CPU; "gpu": all on the GPU; otherwise (auto) the
+    /// spectrum on the GPU when there is one (Pro) and the fit on the CPU.
     #[serde(default)]
     pub backend: Option<String>,
 }
@@ -532,20 +533,26 @@ pub fn fit_spectrum(log: &[f32], n: usize, p: &Params) -> Result<Fit> {
 /// Makes a scorer for a set of pixels; `full` false allows a subsample.
 pub(crate) type MakeScorer<'m> = dyn for<'a> Fn(&'a [Px], Optics, bool) -> Box<dyn Scorer + 'a> + 'm;
 
-pub(crate) fn fit_with(log: &[f32], n: usize, p: &Params, make: &MakeScorer) -> Result<Fit> {
+/// Checks the parameters for an n × n spectrum; returns the fitting band in FFT pixels.
+fn check_params(n: usize, p: &Params) -> Result<[f64; 2]> {
     if !(p.pixel_a > 0.0) || !(p.voltage_kv > 0.0) {
         bail!("需要像素大小和加速电压");
     }
     if p.df_max_a <= p.df_min_a || p.df_min_a < 0.0 {
         bail!("离焦范围不对");
     }
-    let o = Optics::new(p);
     let nyq = n as f64 / 2.0;
     let to_px = |res: f64| n as f64 * p.pixel_a / res;
     let band = [to_px(p.res_low_a).max(2.0), to_px(p.res_high_a).min(nyq * 0.98)];
     if band[1] - band[0] < 4.0 {
         bail!("拟合范围太窄：低分辨率限要大于高分辨率限，且高分辨率限不能小于 2 倍像素（{:.2} Å）", 2.0 * p.pixel_a);
     }
+    Ok(band)
+}
+
+pub(crate) fn fit_with(log: &[f32], n: usize, p: &Params, make: &MakeScorer) -> Result<Fit> {
+    let band = check_params(n, p)?;
+    let o = Optics::new(p);
     let amp: Vec<f32> = log.iter().map(|&l| 10f32.powf(l * 0.5)).collect();
 
     let mut prep = prepare(&amp, n, p.pixel_a, band, box_width(&o, None, n, p.pixel_a, band[0]));
@@ -723,20 +730,30 @@ pub fn fit_region(img: &Arc<OpenImage>, req: &FitReq) -> Result<Fit> {
     }
     let region = [x0, y0, x1 - x0, y1 - y0];
     let values = |x: usize, y: usize| p.data.get_f64(y * p.w + x) as f32;
+    // Bad parameters fail here, before any GPU work.
+    let (n, _, _) = fft::tiling(region, req.n)?;
+    check_params(n, &req.params)?;
     #[cfg(feature = "pro")]
     if req.params.backend.as_deref() != Some("cpu") {
         if let Some((dev, name)) = crate::ctf_gpu::device() {
+            // "auto": spectrum on the GPU, fit on the CPU, which measured
+            // faster for the fit (M1 Max: 0.2 s CPU vs 0.45–2.6 s Metal).
+            // "gpu": both on the GPU.
+            let all = req.params.backend.as_deref() == Some("gpu");
             let tried = crate::ctf_gpu::guarded(|| -> Result<Fit> {
                 let s = crate::ctf_gpu::spectrum(dev, values, region, req.n)?;
-                fit_with(&s.log, s.n, &req.params, &|px, o, _| Box::new(crate::ctf_gpu::GpuScorer::new(dev, px, o)))
+                if all {
+                    fit_with(&s.log, s.n, &req.params, &|px, o, full| Box::new(crate::ctf_gpu::GpuScorer::new(dev, px, o, full)))
+                } else {
+                    fit_spectrum(&s.log, s.n, &req.params)
+                }
             });
             match tried.and_then(|r| r) {
                 Ok(mut f) => {
-                    f.backend = (*name).into();
+                    f.backend = if all { (*name).into() } else { format!("{name} 谱 + CPU 拟合") };
                     f.ms = start.elapsed().as_secs_f64() * 1e3;
                     return Ok(f);
                 }
-                // The CPU run below reports real input errors again.
                 Err(e) => eprintln!("CTF on {name} failed, using the CPU: {e:#}"),
             }
         }

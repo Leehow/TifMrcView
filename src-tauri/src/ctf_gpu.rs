@@ -111,7 +111,15 @@ pub struct GpuScorer {
 }
 
 impl GpuScorer {
-    pub(crate) fn new(dev: &Device, px: &[Px], o: Optics) -> GpuScorer {
+    /// With `full` false, every few pixels (about 30 000) like the CPU's grid search.
+    pub(crate) fn new(dev: &Device, px: &[Px], o: Optics, full: bool) -> GpuScorer {
+        let sub: Vec<Px>;
+        let px = if full {
+            px
+        } else {
+            sub = px.iter().step_by((px.len() / 30_000).max(1)).copied().collect();
+            &sub
+        };
         let p = px.len();
         let ak2: Vec<f32> = px.iter().map(|q| (o.a * q.k2 as f64) as f32).collect();
         let ac = px.iter().zip(&ak2).map(|(q, &a)| a * q.c2).collect();
@@ -143,10 +151,14 @@ impl GpuScorer {
         let g = g.clone() - (g.div_scalar(PI as f32)).round().mul_scalar(PI as f32);
         let s = g.sin();
         let v = s.clone() * s;
-        let sv = download(v.clone().sum_dim(1));
-        let svv = download((v.clone() * v.clone()).sum_dim(1));
-        let sxv = download(v.matmul(self.x.clone()));
-        (0..m).map(|i| crate::ctf::corr(self.count, self.sx, sv[i] as f64, self.sxx, svv[i] as f64, sxv[i] as f64)).collect()
+        // One read back per batch: [Σv, Σv², Σxv] per model.
+        let sums = download(Tensor::cat(vec![v.clone().sum_dim(1), (v.clone() * v.clone()).sum_dim(1), v.matmul(self.x.clone())], 1));
+        (0..m)
+            .map(|i| {
+                let r = &sums[i * 3..i * 3 + 3];
+                crate::ctf::corr(self.count, self.sx, r[0] as f64, self.sxx, r[1] as f64, r[2] as f64)
+            })
+            .collect()
     }
 }
 
@@ -195,7 +207,7 @@ mod tests {
             p.phase = phase;
             let s = synth_pub(256, &p, 13000.0, 12200.0, 70.0, if phase { 60.0 } else { 0.0 }, 60.0, 0.4, 21);
             let cpu = crate::ctf::fit_spectrum(&s, 256, &p).unwrap();
-            let gpu = crate::ctf::fit_with(&s, 256, &p, &|px, o, _| Box::new(GpuScorer::new(&dev, px, o))).unwrap();
+            let gpu = crate::ctf::fit_with(&s, 256, &p, &|px, o, full| Box::new(GpuScorer::new(&dev, px, o, full))).unwrap();
             assert!((cpu.df1 - gpu.df1).abs() < 30.0 && (cpu.df2 - gpu.df2).abs() < 30.0, "cpu {cpu:?} gpu {gpu:?}");
             assert!((cpu.angle - gpu.angle).abs() < 2.0 && (cpu.phase - gpu.phase).abs() < 3.0);
             assert!((cpu.df1 - 13000.0).abs() < 130.0 && (gpu.df2 - 12200.0).abs() < 130.0);
@@ -231,7 +243,7 @@ mod bench {
                     let t = Instant::now();
                     let s = spectrum(d, values, [0, 0, size, size], n).unwrap();
                     let ts = t.elapsed();
-                    let f = crate::ctf::fit_with(&s.log, s.n, &p, &|px, o, _| Box::new(GpuScorer::new(d, px, o))).unwrap();
+                    let f = crate::ctf::fit_with(&s.log, s.n, &p, &|px, o, full| Box::new(GpuScorer::new(d, px, o, full))).unwrap();
                     eprintln!("n {n} #{round} {name}: spectrum {ts:?}, total {:?}: df {:.0}/{:.0} {:.1}°", t.elapsed(), f.df1, f.df2, f.angle);
                 }
             }
@@ -262,12 +274,12 @@ mod bench {
         let dev = device();
         let zs: Vec<usize> = if info.size_z <= 5 { (0..info.size_z).collect() } else { (0..5).map(|i| i * (info.size_z - 1) / 4).collect() };
         for z in zs {
-            for (name, cpu) in [("CPU", true), ("GPU", false)] {
-                if !cpu && dev.is_none() {
+            for (name, backend) in [("CPU", "cpu"), ("auto", "auto"), ("GPU", "gpu")] {
+                if backend != "cpu" && dev.is_none() {
                     continue;
                 }
                 let mut q = p.clone();
-                q.backend = cpu.then(|| "cpu".to_string());
+                q.backend = Some(backend.to_string());
                 let req = crate::ctf::FitReq { token: 1, z, t: 0, c: 0, region: [0.0, 0.0, info.width as f64, info.height as f64], n: 512, params: q };
                 match crate::ctf::fit_region(&img, &req) {
                     Ok(f) => eprintln!("z {z} {name} ({}): {:.0} ms, df {:.0}/{:.0} Å {:.1}°, fit {:.2} Å, cc {:.3}", f.backend, f.ms, f.df1, f.df2, f.angle, f.fit_res, f.score),
