@@ -65,6 +65,9 @@ recorder = ["desktop", "dep:openh264"]
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 libc = "0.2"
+# SAM kernels compiled to Metal Shading Language: about 4x faster image
+# encoding than WGSL on an M1 Max (and faster than with kernel fusion).
+tmv-sam = { path = "sam", optional = true, default-features = false, features = ["metal", "flex"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Not used directly: tauri-plugin-deep-link 2.6.2 does not compile against
