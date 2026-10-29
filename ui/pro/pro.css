@@ -36,15 +36,17 @@
 
 /* Segmentation labels (labels.js). */
 #lab-tools button.on { background: var(--muted); color: var(--accent); border-color: var(--accent); }
-#lab-list { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 220px; overflow-y: auto; }
-#lab-list .lab-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+#lab-list { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 220px; overflow-y: auto; overflow-x: hidden; }
+#lab-list .lab-row { display: flex; align-items: center; gap: 4px; padding: 3px 4px; border-radius: 6px; cursor: pointer; font-size: 12px; min-width: 0; }
 #lab-list .lab-row:hover { background: var(--muted); }
 #lab-list .lab-row.on { background: var(--muted); box-shadow: inset 2px 0 0 var(--accent); }
-#lab-list .sw { flex: none; width: 12px; height: 12px; border-radius: 3px; cursor: pointer; position: relative; overflow: hidden; }
-#lab-list .sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; border: 0; padding: 0; }
-#lab-list .name { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#lab-list .name-edit { flex: none; width: 100px; font-size: 12px; padding: 1px 4px; }
-#lab-list .n { flex: 1; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#lab-list .sw { flex: none; width: 12px; height: 12px; min-height: 0; border-radius: 3px; cursor: pointer; padding: 0; border: 1px solid rgba(0, 0, 0, 0.2); margin-right: 4px; }
+/* One colour input for all rows, moved next to the swatch that was clicked,
+   so re-drawing the list does not close the colour picker. */
+#lab-color { position: fixed; width: 12px; height: 12px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+#lab-list .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lab-list .name-edit { flex: 1 1 auto; min-width: 0; width: 0; font-size: 12px; padding: 1px 4px; }
+#lab-list .n { flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #lab-list .del, #lab-list .eye, #lab-list .lock { flex: none; height: 18px; padding: 0 3px; font-size: 11px; color: var(--faint); background: none; border: 0; }
 #lab-list .eye svg, #lab-list .lock svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; }
 #lab-list .del:hover, #lab-list .eye:hover, #lab-list .lock:hover { color: var(--accent); }

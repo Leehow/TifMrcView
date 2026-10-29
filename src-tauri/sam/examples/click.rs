@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1).expect("checkpoint path");
     let out = std::env::args().nth(2).map(std::path::PathBuf::from);
     let t = Instant::now();
-    let (p, backend) = tmv_sam::load_best(path.as_ref(), &Sam2Config::tiny())?;
+    let (p, backend) = tmv_sam::load_best(path.as_ref(), &Sam2Config::tiny(), std::time::Duration::from_secs(600))?;
     println!("backend {backend}, load + warm-up {:.2?}", t.elapsed());
     let (w, h) = (800usize, 600usize);
     let mut img = vec![0u8; w * h];

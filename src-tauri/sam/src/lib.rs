@@ -63,19 +63,33 @@ pub fn pick_device() -> (Device, &'static str) {
 /// Loads the model on the fastest backend that can really run it: each
 /// candidate encodes a blank image and decodes one click first, so a GPU
 /// with too little memory or too small buffer limits falls through to the
-/// next one instead of failing on the user's first click.
-pub fn load_best(path: &Path, cfg: &Sam2Config) -> Result<(Predictor, &'static str)> {
+/// next one instead of failing on the user's first click. A GPU candidate
+/// that has not answered within `gpu_timeout` (a hung driver) is given up
+/// on as well; its thread is left behind.
+pub fn load_best(path: &Path, cfg: &Sam2Config, gpu_timeout: std::time::Duration) -> Result<(Predictor, &'static str)> {
     let mut last = anyhow!("no backend");
-    for (make, name) in candidates() {
-        let tried = guarded(|| -> Result<Predictor> {
-            let p = Predictor::load(path, cfg, &make())?;
-            let enc = p.encode_gray(&[0u8; 64 * 64], 64, 64);
-            p.predict(&enc, &[Point { x: 32.0, y: 32.0, positive: true }], None, None);
-            Ok(p)
+    let list = candidates();
+    let n = list.len();
+    for (i, (make, name)) in list.into_iter().enumerate() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (path, cfg) = (path.to_path_buf(), cfg.clone());
+        std::thread::spawn(move || {
+            let tried = guarded(|| -> Result<Predictor> {
+                let p = Predictor::load(&path, &cfg, &make())?;
+                let enc = p.encode_gray(&[0u8; 64 * 64], 64, 64);
+                p.predict(&enc, &[Point { x: 32.0, y: 32.0, positive: true }], None, None);
+                Ok(p)
+            });
+            let _ = tx.send(tried.and_then(|r| r));
         });
-        match tried {
-            Ok(Ok(p)) => return Ok((p, name)),
-            Ok(Err(e)) | Err(e) => last = e.context(format!("{name} backend")),
+        // The last candidate (the CPU) gets all the time it needs.
+        let got = if i + 1 < n { rx.recv_timeout(gpu_timeout).map_err(|_| anyhow!("no answer within {} s", gpu_timeout.as_secs())) } else { rx.recv().map_err(|e| anyhow!("{e}")) };
+        match got.and_then(|r| r) {
+            Ok(p) => return Ok((p, name)),
+            Err(e) => {
+                eprintln!("SAM: {name} backend failed: {e:#}");
+                last = e.context(format!("{name} backend"));
+            }
         }
     }
     Err(last)

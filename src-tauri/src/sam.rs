@@ -121,7 +121,9 @@ impl Sam {
     fn predictor(inner: &mut Inner) -> Result<Arc<tmv_sam::Predictor>> {
         if inner.predictor.is_none() {
             let Some(path) = model_path().filter(|p| p.exists()) else { bail!("还没有下载 SAM 模型") };
-            let (p, name) = tmv_sam::load_best(&path, &tmv_sam::Sam2Config::tiny())?;
+            let t = std::time::Instant::now();
+            let (p, name) = tmv_sam::load_best(&path, &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+            eprintln!("SAM: model ready on {name} in {:.1?}", t.elapsed());
             inner.predictor = Some(Arc::new(p));
             inner.backend = Some(name.to_string());
         }
@@ -137,8 +139,10 @@ impl Sam {
             let mut inner = self.inner.lock().unwrap();
             let p = Self::predictor(&mut inner)?;
             if inner.key != Some(key) {
+                let t = std::time::Instant::now();
                 let gray = to_gray(&values()?, req.lo, req.hi);
                 inner.encoded = Some(Arc::new(p.encode_gray(&gray, w, h)));
+                eprintln!("SAM: encoded slice {} ({w}x{h}) in {:.1?}", req.z, t.elapsed());
                 inner.key = Some(key);
             }
             (p, inner.encoded.clone().unwrap())
@@ -323,7 +327,7 @@ mod tests {
                 .collect()
         };
         let sam = Sam::default();
-        let (p, backend) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny()).unwrap();
+        let (p, backend) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         println!("backend {backend}");
         sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None };

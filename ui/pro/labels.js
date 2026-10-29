@@ -156,24 +156,19 @@
       row.className = "lab-row" + (k === L.active ? " on" : "");
       const n = L.counts[k] || 0;
       row.className += (hidden(k) ? " off" : "") + (locked(k) ? " locked" : "");
-      row.innerHTML = `<label class="sw" title="改颜色"><input type="color"></label><span class="name" title="双击改名"></span><span class="n dim"></span>`
+      row.innerHTML = `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span><span class="n dim"></span>`
         + `<button class="eye" title="显示 / 隐藏（2D 和 3D）">${hidden(k) ? EYE_OFF : EYE}</button>`
         + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
         + `<button class="del" title="删除这个标签">✕</button>`;
       const hex = "#" + colorOf(k).map((x) => x.toString(16).padStart(2, "0")).join("");
       row.querySelector(".sw").style.background = hex;
-      const pick = row.querySelector("input");
-      pick.value = hex;
-      pick.addEventListener("change", () => {
-        const v = pick.value;
-        setMaterial(k, { color: [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)) });
-      });
       row.querySelector(".name").textContent = nameOf(k);
       row.querySelector(".name").addEventListener("dblclick", () => rename(k, row.querySelector(".name")));
       row.querySelector(".n").textContent = n ? sizeText(n) : "";
       row.querySelector(".del").hidden = !n;
       row.addEventListener("click", (e) => {
         const b = e.target.closest("button, label, input");
+        if (b && b.classList.contains("sw")) return pickColor(k, b, hex);
         if (b && b.classList.contains("del")) return edit({ kind: "delete", label: k });
         if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
         if (b && b.classList.contains("lock")) return setMaterial(k, { locked: !locked(k) });
@@ -196,6 +191,35 @@
   const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
   const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+
+  // The colour picker: one input shared by all rows (see #lab-color in pro.css).
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.id = "lab-color";
+  colorInput.tabIndex = -1;
+  sec.appendChild(colorInput);
+  let colorFor = 0, colorTimer = 0;
+  function pickColor(k, swatch, hex) {
+    colorFor = k;
+    const r = swatch.getBoundingClientRect();
+    colorInput.style.left = `${r.left}px`;
+    colorInput.style.top = `${r.top}px`;
+    colorInput.value = hex;
+    colorInput.click();
+  }
+  function takeColor(now) {
+    clearTimeout(colorTimer);
+    const k = colorFor, v = colorInput.value;
+    const apply = () => {
+      const rgb = [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16));
+      if (k && rgb.join() !== colorOf(k).join()) setMaterial(k, { color: rgb });
+    };
+    if (now) apply();
+    else colorTimer = setTimeout(apply, 250);
+  }
+  // Live while dragging in the picker, at most every 250 ms; `change` when it closes.
+  colorInput.addEventListener("input", () => takeColor(false));
+  colorInput.addEventListener("change", () => takeColor(true));
 
   /** Changes one label's material and stores it with the label file. */
   function setMaterial(k, patch) {

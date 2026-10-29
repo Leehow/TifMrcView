@@ -11,13 +11,17 @@ default = ["flex"]
 # CPU fallback.
 flex = ["burn/flex"]
 ndarray = ["burn/ndarray"]
-# Metal / DX12 / Vulkan through wgpu. Kernel fusion and autotuning matter
-# a lot for speed (they are part of Burn's default features, which are off).
-wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
+# Metal / DX12 / Vulkan through wgpu.
+wgpu = ["burn/wgpu"]
+# Kernel fusion and autotuning (part of Burn's default features, which are
+# off here). Autotune made loading 15-20x slower on an M1 Max, so it is
+# kept separate for benchmarking.
+fusion = ["burn/fusion"]
+autotune = ["burn/autotune"]
 # On Apple GPUs, kernels compiled to Metal Shading Language instead of WGSL.
 metal = ["wgpu", "burn/metal"]
 # NVIDIA machines without Vulkan; needs the driver's libcuda and NVRTC at run time.
-cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
+cuda = ["burn/cuda"]
 
 [dependencies]
 anyhow = "1"
