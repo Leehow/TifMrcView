@@ -417,3 +417,34 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   margin-left: auto; padding-left: 16px;
   font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
 }
+
+#fft-panel {
+  position: absolute; top: 10px; right: 10px;
+  width: 300px;
+  padding: 8px 10px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.fft-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.fft-head b { flex: 1; }
+#fft-info { font-size: 11px; }
+#fft-img { width: 100%; aspect-ratio: 1; display: block; background: #000; border-radius: 6px; image-rendering: pixelated; cursor: crosshair; }
+#fft-prof { width: 100%; height: 90px; display: block; margin-top: 8px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; }
+#fft-read { min-height: 18px; margin-top: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+#spec-panel {
+  position: absolute; left: 10px; right: 10px; bottom: 10px;
+  height: 230px;
+  display: flex; flex-direction: column;
+  padding: 8px 10px 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.spec-head { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 4px; }
+.spec-head #spec-read { flex: 1; font-size: 12px; font-variant-numeric: tabular-nums; }
+.spec-head #spec-src { font-size: 12px; }
+#spec-plot { flex: 1; width: 100%; min-height: 0; display: block; cursor: crosshair; }

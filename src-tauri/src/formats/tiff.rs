@@ -157,6 +157,7 @@ impl TiffSource {
             series: vec![],
             series_index: 0,
             folder: None,
+            spectrum: None,
         };
         let mut contiguous = None;
 

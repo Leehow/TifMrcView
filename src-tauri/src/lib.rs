@@ -1,6 +1,7 @@
 #[cfg(feature = "desktop")]
 mod assoc;
 pub mod edition;
+pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
@@ -14,6 +15,7 @@ pub mod plugins;
 mod plugin_assoc;
 pub mod render;
 pub mod reslice;
+pub mod spectrum;
 pub mod volume;
 #[cfg(feature = "desktop")]
 mod update;

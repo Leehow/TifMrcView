@@ -17,6 +17,7 @@ mod tags;
 use tags::{path, Node, Tree};
 use tifmrcview_plugin_sdk::{
     bail, export_format, flags, Channel, Chunk, DType, Format, Group, Info, Recipe, Result, Series,
+    Spectrum, SpectrumAxis,
 };
 
 /// How the pixels of one image are stored.
@@ -272,6 +273,46 @@ fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
     Some(([tidy(x), tidy(y), tidy(axis(2))], unit))
 }
 
+// ------------------------------------------------------------- spectra
+
+fn energy_unit(u: &str) -> bool {
+    matches!(u.trim(), "eV" | "keV" | "meV")
+}
+
+/// The spectrum axis, when the image holds spectra: DM marks them with
+/// `ImageTags.Meta Data.Format` ("Spectrum", "Spectrum image"); 1D data and
+/// data with an energy axis count too. Only a spectrum along X (each row a
+/// spectrum) or along Z (a spectrum image) can be plotted.
+fn spectrum(img: &Dir, le: bool, dims: &[u64], cals: &[Option<Cal>]) -> Option<Spectrum> {
+    let text = |p: &[&str]| path(img, p).and_then(|n| n.text(le)).unwrap_or_default();
+    let format = text(&["ImageTags", "Meta Data", "Format"]);
+    let signal = text(&["ImageTags", "Meta Data", "Signal"]);
+    let unit = |k: usize| cals.get(k).and_then(|c| c.as_ref()).map(|c| c.units.trim()).unwrap_or("");
+    let energy = (0..dims.len()).find(|&k| energy_unit(unit(k)));
+    let k = if format.eq_ignore_ascii_case("Spectrum") || dims.len() == 1 {
+        0
+    } else if format.eq_ignore_ascii_case("Spectrum image") {
+        // The spectral axis is the one in other units than the scan.
+        energy.unwrap_or(if dims.len() == 3 && unit(0) == unit(1) { 2 } else { 0 })
+    } else {
+        energy?
+    };
+    let axis = match (k, dims.len()) {
+        (0, _) => SpectrumAxis::X,
+        (2, 3) => SpectrumAxis::Z,
+        _ => return None,
+    };
+    let (start, step, units) = match cals.get(k).and_then(|c| c.as_ref()) {
+        Some(c) if c.scale != 0.0 => (tidy(-c.origin * c.scale), tidy(c.scale), c.units.trim().to_string()),
+        _ => (0.0, 1.0, String::new()),
+    };
+    let kind = match signal.as_str() {
+        "X-ray" | "EDS" | "EDX" => "EDS".to_string(),
+        s => s.to_string(),
+    };
+    Some(Spectrum { axis, start, step, unit: units, kind })
+}
+
 // ------------------------------------------------------------- metadata
 
 const AXES: [&str; 4] = ["X", "Y", "Z", "第 4 维"];
@@ -474,9 +515,16 @@ impl Format for Gatan {
             info.channels = vec![Channel { name, color: [255, 255, 255] }];
         }
         let cals = calibrations(dir, le);
+        info.spectrum = match i.pixels {
+            Pixels::Gray(_) => spectrum(dir, le, &i.dims, &cals),
+            _ => None,
+        };
         if let Some((ps, unit)) = pixel_size(&cals) {
-            info.pixel_size = Some(ps);
-            info.unit = unit.into();
+            // Not when X is the spectrum's axis (a CL wavelength in nm, say).
+            if !matches!(&info.spectrum, Some(s) if s.axis == SpectrumAxis::X) {
+                info.pixel_size = Some(ps);
+                info.unit = unit.into();
+            }
         }
         image_group(&self.tree, dir, i, &cals).push_to(&mut info.metadata);
         microscope_group(dir, le).push_to(&mut info.metadata);

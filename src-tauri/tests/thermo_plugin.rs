@@ -15,7 +15,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use tifmrcview_lib::formats;
-use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source};
+use tifmrcview_lib::image::{DType, ImageInfo, PlaneData, Source, SpectrumInfo};
 use tifmrcview_lib::plugins::registry::Registry;
 
 macro_rules! thermo {
@@ -198,7 +198,7 @@ fn tia_ser_series_rows_flipped_and_calibrated() {
 }
 
 #[test]
-fn tia_diffraction_in_reciprocal_units_and_emi_and_spectra_explain() {
+fn tia_diffraction_in_reciprocal_units_and_emi_explains() {
     let p = thermo!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("diff_1.ser");
@@ -214,10 +214,75 @@ fn tia_diffraction_in_reciprocal_units_and_emi_and_spectra_explain() {
     std::fs::write(&emi, b"anything").unwrap();
     assert!(open_err(&p.registry, &emi).contains("_1.ser"));
 
-    let mut spectra = std::fs::read(&path).unwrap();
-    spectra[6..10].copy_from_slice(&0x4120u32.to_le_bytes());
-    std::fs::write(&path, spectra).unwrap();
-    assert!(open_err(&p.registry, &path).contains("谱图"));
+}
+
+/// A TIA series of 1D elements (spectra) with `dims` series dimensions.
+fn ser_spectra(path: &Path, dims: &[u32], spectra: &[Vec<i32>]) {
+    let n = spectra.len() as u32;
+    let mut b = vec![];
+    b.extend(0x4949u16.to_le_bytes());
+    b.extend(0x0197u16.to_le_bytes());
+    b.extend(0x0220u16.to_le_bytes());
+    b.extend(0x4120u32.to_le_bytes());
+    b.extend(0x4152u32.to_le_bytes());
+    b.extend(n.to_le_bytes());
+    b.extend(n.to_le_bytes());
+    let arrays_at = b.len();
+    b.extend(0u64.to_le_bytes());
+    b.extend((dims.len() as u32).to_le_bytes());
+    for &d in dims {
+        b.extend(d.to_le_bytes());
+        b.extend(0f64.to_le_bytes());
+        b.extend(1e-9f64.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend(b"X");
+        b.extend(0u32.to_le_bytes());
+    }
+    let mut data = vec![];
+    for s in spectra {
+        data.push(b.len() as u64);
+        b.extend(100f64.to_le_bytes()); // value at the calibration element
+        b.extend(2.5f64.to_le_bytes()); // eV per channel
+        b.extend(4i32.to_le_bytes()); // calibration element
+        b.extend(6u16.to_le_bytes()); // i32
+        b.extend((s.len() as u32).to_le_bytes());
+        for v in s {
+            b.extend(v.to_le_bytes());
+        }
+    }
+    let arrays = b.len() as u64;
+    for v in data.iter().chain(&data) {
+        b.extend(v.to_le_bytes());
+    }
+    b[arrays_at..arrays_at + 8].copy_from_slice(&arrays.to_le_bytes());
+    std::fs::write(path, b).unwrap();
+}
+
+#[test]
+fn tia_spectra_become_rows() {
+    let p = thermo!();
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = |k: i32| (0..6).map(|i| i * 10 + k).collect::<Vec<i32>>();
+    // A single spectrum.
+    let path = tmp.path().join("eds_1.ser");
+    ser_spectra(&path, &[1], &[spec(0)]);
+    let src = open(&p.registry, &path);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.page_count, i.dtype), (6, 1, 1, DType::I32));
+    assert_eq!(
+        i.spectrum,
+        Some(SpectrumInfo { axis: "x".into(), start: 90.0, step: 2.5, unit: "eV".into(), kind: String::new() })
+    );
+    assert_eq!(page(&*src, 0), [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]);
+    // A 3 × 2 spectrum image: one scan line per page.
+    let path = tmp.path().join("si_1.ser");
+    ser_spectra(&path, &[3, 2], &(0..6).map(spec).collect::<Vec<_>>());
+    let src = open(&p.registry, &path);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.page_count), (6, 3, 2));
+    let row = |k: i32| spec(k).into_iter().map(f64::from).collect::<Vec<_>>();
+    assert_eq!(page(&*src, 1), [row(3), row(4), row(5)].concat());
 }
 
 // ---------------------------------------------------------------- Velox EMD

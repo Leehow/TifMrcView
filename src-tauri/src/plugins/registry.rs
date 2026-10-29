@@ -20,7 +20,7 @@ use wasmi::Module;
 use super::package::{self, Manifest};
 use super::recipe;
 use super::wasm::{self, Exports, Instance};
-use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source};
+use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source, SpectrumInfo};
 
 /// Largest page a plugin may describe (bytes).
 const MAX_PAGE_BYTES: u64 = 1 << 34;
@@ -356,6 +356,19 @@ struct InfoJson {
     series: Vec<SeriesJson>,
     #[serde(default)]
     series_index: usize,
+    spectrum: Option<SpectrumJson>,
+}
+
+#[derive(Deserialize)]
+struct SpectrumJson {
+    axis: String,
+    #[serde(default)]
+    start: f64,
+    step: f64,
+    #[serde(default)]
+    unit: String,
+    #[serde(default)]
+    kind: String,
 }
 
 #[derive(Deserialize)]
@@ -448,6 +461,10 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
         series: vec![],
         series_index: 0,
         folder: None,
+        spectrum: j
+            .spectrum
+            .filter(|s| (s.axis == "x" || s.axis == "z") && s.start.is_finite() && s.step.is_finite() && s.step != 0.0)
+            .map(|s| SpectrumInfo { axis: s.axis, start: s.start, step: s.step, unit: s.unit, kind: s.kind }),
     };
     if j.series.len() > 1 && j.series_index < j.series.len() {
         info.series_index = j.series_index;
@@ -733,6 +750,20 @@ mod tests {
         assert_eq!(i.channels[1].name, "C2");
         assert_eq!(i.metadata[0].items[0], ["k".to_string(), "v".to_string()]);
         assert_eq!(i.locate(1, 0, 0).0, 5, "ZCT order");
+        assert_eq!(i.spectrum, None);
+        let i = parse_info(
+            br#"{"width":2048,"height":1,"dtype":"f32","spectrum":{"axis":"x","start":-100,"step":0.5,"unit":"eV","kind":"EELS"}}"#,
+            p,
+            "ABC",
+        )
+        .unwrap();
+        let sp = i.spectrum.unwrap();
+        assert_eq!((sp.axis.as_str(), sp.start, sp.step, sp.unit.as_str(), sp.kind.as_str()), ("x", -100.0, 0.5, "eV", "EELS"));
+        // A spectrum axis the viewer cannot plot is dropped, not an error.
+        for odd in [r#"{"axis":"y","step":1}"#, r#"{"axis":"z","step":0}"#] {
+            let j = format!(r#"{{"width":4,"height":3,"dtype":"u8","spectrum":{odd}}}"#);
+            assert_eq!(parse_info(j.as_bytes(), p, "x").unwrap().spectrum, None, "{odd}");
+        }
         for bad in [
             &br#"{"width":0,"height":3,"dtype":"u8"}"#[..],
             br#"{"width":4,"height":3,"dtype":"u12"}"#,

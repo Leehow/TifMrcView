@@ -171,6 +171,19 @@ A module importing anything else is refused.
 | `format` | Shown in the status bar; default: the `formats[].name`. |
 | `metadata` | Groups for the image-info panel. |
 | `series`, `seriesIndex` | Optional, for files that hold several images (a Leica LIF project, ND2 positions…): one `{ "name", "detail" }` per image, in order, and which one this is. With two or more entries the viewer shows a picker and reopens the file through `tmv_open_series`. Older versions of the app ignore them and show image 0. |
+| `spectrum` | Optional, for spectra (EELS, EDS, CL…): `{ "axis", "start", "step", "unit", "kind" }`. `axis` `"x"`: every image row is a spectrum (a single spectrum is a 1-pixel-high image); `"z"`: a spectrum image, each pixel's spectrum runs through the Z slices. Channel `i` is at `start + i·step` `unit`; `kind` names it (e.g. `EELS`). The viewer then plots the spectra; older versions ignore it. In Rust: `Info::spectrum`. |
+
+#### Common settings
+
+The info panel opens with a "常用参数" (key settings) group gathered from
+all groups by item name, in a fixed order, so every format shows the same
+summary. Name items as follows where they apply (the first name of each row
+is preferred; the others are also recognised): 显微镜; 加速电压 (EHT);
+操作模式 / 模式; 放大倍数 (标称放大倍数, 实际放大倍数); 相机长度; 视野 /
+视场; 工作距离; 探测器 / 相机; 曝光时间 (积分时间, 帧时间); 驻留时间; 剂量;
+散焦 (设定散焦); 球差 Cs; 束斑 (聚光镜束斑, 探针尺寸); 探针电流 / 束流;
+会聚半角; α 倾转 (样品台 α); 像素合并; 采集时间 (日期时间; 采集日期 is joined
+to it). The list is `COMMON_PARAMS` in `ui/app.js`.
 
 ### `tmv_metadata` JSON
 
