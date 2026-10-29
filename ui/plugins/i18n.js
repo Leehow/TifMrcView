@@ -57,6 +57,7 @@ const WORDS = [
   ["装上插件后支持", "With plugins", "Mit Plugins", "プラグインで対応", "Con complementos", "Avec des extensions", "С плагинами"],
   ["点击即可安装", "click to install", "zum Installieren klicken", "クリックでインストール", "haz clic para instalar", "cliquez pour installer", "нажмите, чтобы установить"],
   ["插件市场上暂时没有格式插件", "No format plugins in the market yet", "Noch keine Format-Plugins im Plugin-Markt", "マーケットにはまだ形式プラグインがありません", "Aún no hay complementos de formato en la tienda", "Aucune extension de format dans le catalogue pour l'instant", "В каталоге пока нет плагинов форматов"],
+  ["关于", "About", "Über", "情報", "Acerca de", "À propos", "О программе"],
   ["帮助", "Help", "Hilfe", "ヘルプ", "Ayuda", "Aide", "Справка"],
   ["打开图像或文件夹", "Open an image or a folder", "Bild oder Ordner öffnen", "画像またはフォルダを開く", "Abrir una imagen o una carpeta", "Ouvrir une image ou un dossier", "Открыть изображение или папку"],
   ["上一个 / 下一个文件", "Previous / next file", "Vorherige / nächste Datei", "前 / 次のファイル", "Archivo anterior / siguiente", "Fichier précédent / suivant", "Предыдущий / следующий файл"],

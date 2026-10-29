@@ -186,6 +186,7 @@ async function installUpdate() {
 const GEAR_ICONS = {
   plugins: '<path d="M4 7h5a2.5 2.5 0 1 1 5 0h4v5a2.5 2.5 0 1 1 0 5v4H4z"/>',
   lang: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><path d="M12 17.5v.5"/>',
 };
 
@@ -198,9 +199,12 @@ function openSettings() {
     items.push({ value: i, label: s.title, hint: cur ? cur[1] : "", icon: GEAR_ICONS.lang });
   });
   items.push({ value: "help", label: "帮助", icon: GEAR_ICONS.help, on: !$("help-dialog").hidden });
+  // The author's About dialog (ui/about.js), when the page has it.
+  if (typeof openAbout === "function") items.push({ value: "about", label: "关于", icon: GEAR_ICONS.about });
   openMenu(btn, items, (v) => {
     if (v === "plugins") togglePluginDialog();
     else if (v === "help") toggleHelp();
+    else if (v === "about") openAbout();
     else pickSetting(ext.settings[v]);
   });
   placeMenuRight(btn);
