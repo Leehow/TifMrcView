@@ -392,11 +392,12 @@ async fn sam_predict(app: AppHandle, req: crate::sam::PredictReq) -> CmdResult<R
         let sam = app2.state::<crate::sam::Sam>();
         let info = img.info();
         let (w, h) = (info.width, info.height);
-        let values = || {
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
             use crate::labels::Values;
-            crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t }.slice(req.z)
+            vals.slice(z)
         };
-        let (mask, iou) = sam.predict(&req, w, h, values)?;
+        let (mask, iou) = sam.predict(&req, (w, h, info.size_z), values)?;
         let mut out = Vec::with_capacity(12 + mask.len());
         out.extend_from_slice(&(w as u32).to_le_bytes());
         out.extend_from_slice(&(h as u32).to_le_bytes());

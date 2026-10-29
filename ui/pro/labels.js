@@ -78,6 +78,7 @@
         <button class="small" id="lab-sam-z" title="从这一层开始，逐层向上和向下自动分割同一个物体，直到找不到它为止（Esc 停止）">沿 Z 传播</button>
         <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
       </div>
+      <label id="lab-sam-dn-row" title="先把相邻几层平均再模糊一点，然后交给 SAM；噪声大的冷冻电镜断层会分得更完整"><input type="checkbox" id="lab-sam-dn" /> 去噪后再分割</label>
     </div>
     <div id="lab-list"></div>
     <div class="row">
@@ -294,7 +295,11 @@
     try {
       const st = await invoke("labels_open", { token });
       if (token !== S.token) return;
-      Object.assign(L.sam, { points: [], box: null, mask: null, z: -1 });
+      // Noisy tomograms segment better denoised (same rule as the 3D view's invert).
+      const i = S.info;
+      const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
+      Object.assign(L.sam, { points: [], box: null, mask: null, z: -1, denoise: tomo });
+      $("lab-sam-dn").checked = tomo;
       Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
@@ -665,6 +670,7 @@
     $("lab-sam-get").disabled = !!L.sam.progress;
     $("lab-sam-apply").hidden = !ready;
     $("lab-sam-clear").hidden = !ready;
+    $("lab-sam-dn-row").hidden = !ready;
     $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
     $("lab-sam-z").hidden = !ready || !(S.info.sizeZ > 1);
     $("lab-sam-z").disabled = !L.sam.mask || L.sam.busy;
@@ -712,7 +718,7 @@
     const req = {
       token: S.token, z: S.z, c: channel(), t: S.t,
       lo: c.min ?? 0, hi: c.max ?? 1,
-      points: L.sam.points, bbox: L.sam.box,
+      points: L.sam.points, bbox: L.sam.box, denoise: samDenoise(),
     };
     L.sam.busy = true;
     syncSam();
@@ -794,10 +800,12 @@
     if (st) samClear();
   }
 
+  const samDenoise = () => (L.sam.denoise ? { slab: 2, sigma: 1.5 } : { slab: 0, sigma: 0 });
+
   async function samAlong() {
     if (!L.sam.mask || L.sam.busy) return;
     const c = S.chans[channel()];
-    const req = { token: S.token, z: L.sam.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, up: true, down: true, max: 100000 };
+    const req = { token: S.token, z: L.sam.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, up: true, down: true, max: 100000, denoise: samDenoise() };
     L.sam.busy = true;
     L.sam.along = { done: 0, total: 0 };
     syncSam();
@@ -834,6 +842,11 @@
   $("lab-sam-get").addEventListener("click", samDownload);
   $("lab-sam-apply").addEventListener("click", samApply);
   $("lab-sam-z").addEventListener("click", samAlong);
+  $("lab-sam-dn").addEventListener("change", (e) => {
+    L.sam.denoise = e.target.checked;
+    // Redo the current prompt on the new image.
+    if (L.sam.z === S.z && (L.sam.points.length || L.sam.box) && !L.sam.busy) samRun();
+  });
   $("lab-sam-clear").addEventListener("click", samClear);
 
   // ---------- panel controls ----------

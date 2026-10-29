@@ -46,6 +46,18 @@ pub struct PredictReq {
     pub hi: f32,
     pub points: Vec<PromptPoint>,
     pub bbox: Option<[f32; 4]>,
+    #[serde(default)]
+    pub denoise: Denoise,
+}
+
+/// Denoising before encoding: average `slab` slices on each side, then a
+/// Gaussian blur of `sigma` pixels. On cryo-ET slices this makes SAM follow
+/// whole membranes instead of short straight pieces.
+#[derive(Deserialize, Default, Clone, Copy, PartialEq)]
+#[serde(default)]
+pub struct Denoise {
+    pub slab: usize,
+    pub sigma: f32,
 }
 
 #[derive(Serialize)]
@@ -71,6 +83,8 @@ pub struct PropagateReq {
     pub down: bool,
     /// Most slices to go in each direction.
     pub max: usize,
+    #[serde(default)]
+    pub denoise: Denoise,
 }
 
 /// The mask of the last prediction, kept for `sam_apply`.
@@ -94,9 +108,9 @@ struct Inner {
     #[cfg(feature = "pro")]
     predictor: Option<Arc<tmv_sam::Predictor>>,
     backend: Option<String>,
-    /// (token, z, c, t, lo, hi) of `encoded`.
+    /// (token, z, c, t, lo, hi, slab, sigma) of `encoded`.
     #[cfg(feature = "pro")]
-    key: Option<(u64, usize, usize, usize, u32, u32)>,
+    key: Option<(u64, usize, usize, usize, u32, u32, usize, u32)>,
     #[cfg(feature = "pro")]
     encoded: Option<Arc<tmv_sam::Encoded>>,
 }
@@ -131,16 +145,17 @@ impl Sam {
     }
 
     /// Mask of the prompt on slice `req.z` as one byte per pixel (1 = inside),
-    /// plus the predicted IoU. `values` reads the slice's raw values.
+    /// plus the predicted IoU. `values` reads a slice's raw values.
     #[cfg(feature = "pro")]
-    pub fn predict(&self, req: &PredictReq, w: usize, h: usize, values: impl FnOnce() -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
-        let key = (req.token, req.z, req.c, req.t, req.lo.to_bits(), req.hi.to_bits());
+    pub fn predict(&self, req: &PredictReq, (w, h, d): (usize, usize, usize), values: impl Fn(usize) -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
+        let dn = req.denoise;
+        let key = (req.token, req.z, req.c, req.t, req.lo.to_bits(), req.hi.to_bits(), dn.slab, dn.sigma.to_bits());
         let (predictor, encoded) = {
             let mut inner = self.inner.lock().unwrap();
             let p = Self::predictor(&mut inner)?;
             if inner.key != Some(key) {
                 let t = std::time::Instant::now();
-                let gray = to_gray(&values()?, req.lo, req.hi);
+                let gray = slice_gray(&values, req.z, (w, h, d), (req.lo, req.hi), dn)?;
                 inner.encoded = Some(Arc::new(p.encode_gray(&gray, w, h)));
                 eprintln!("SAM: encoded slice {} ({w}x{h}) in {:.1?}", req.z, t.elapsed());
                 inner.key = Some(key);
@@ -196,7 +211,7 @@ impl Sam {
                 }
                 let z = (req.z as isize + dir * k as isize) as usize;
                 let Some((bbox, pt)) = follow_prompt(&prev, w, h) else { break };
-                let enc = predictor.encode_gray(&to_gray(&values(z)?, req.lo, req.hi), w, h);
+                let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h);
                 let pt = tmv_sam::Point { x: pt.x, y: pt.y, positive: true };
                 let r = predictor.predict(&enc, &[pt], Some(bbox), None);
                 let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
@@ -216,7 +231,7 @@ impl Sam {
     }
 
     #[cfg(not(feature = "pro"))]
-    pub fn predict(&self, _: &PredictReq, _: usize, _: usize, _: impl FnOnce() -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
+    pub fn predict(&self, _: &PredictReq, _: (usize, usize, usize), _: impl Fn(usize) -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
         bail!("SAM 分割只在 TifMrcView Pro 里有")
     }
 
@@ -230,6 +245,15 @@ impl Sam {
     ) -> Result<Vec<(usize, Vec<bool>)>> {
         bail!("SAM 分割只在 TifMrcView Pro 里有")
     }
+}
+
+/// The 8-bit image SAM encodes for slice `z`, denoised as asked.
+fn slice_gray(values: &impl Fn(usize) -> Result<Vec<f32>>, z: usize, (w, h, d): (usize, usize, usize), (lo, hi): (f32, f32), dn: Denoise) -> Result<Vec<u8>> {
+    if dn.slab == 0 && dn.sigma <= 0.0 {
+        return Ok(to_gray(&values(z)?, lo, hi));
+    }
+    let slices = (z.saturating_sub(dn.slab)..=(z + dn.slab).min(d.max(1) - 1)).map(values).collect::<Result<Vec<_>>>()?;
+    Ok(to_gray(&denoise(&slices, w, h, dn.sigma), lo, hi))
 }
 
 /// Raw values to 0..255 over the display range.
@@ -382,9 +406,9 @@ mod tests {
         let (p, backend) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         println!("backend {backend}");
         sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
-        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None };
-        sam.predict(&req, w, h, || Ok(slice(10))).unwrap();
-        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100 };
+        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None, denoise: Denoise::default() };
+        sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default() };
         let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
