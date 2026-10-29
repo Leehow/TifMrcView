@@ -2020,8 +2020,12 @@ function pushHistory(snap) {
   if (S.history.length > 200) S.history.shift();
 }
 
+// A tool extension guards its own gestures; S.op "ext" can outlive a
+// pointerup the webview never delivered, and must not block undo then.
+const midGesture = () => S.op && !(S.op.kind === "ext" && ext.tools[S.tool]);
+
 function undo() {
-  if (S.op) return;
+  if (midGesture()) return;
   if (ext.tools[S.tool] && ext.tools[S.tool].undo) return ext.tools[S.tool].undo();
   const h = S.history.pop();
   if (!h) return;
@@ -2030,7 +2034,7 @@ function undo() {
 }
 
 function redo() {
-  if (S.op) return;
+  if (midGesture()) return;
   if (ext.tools[S.tool] && ext.tools[S.tool].redo) return ext.tools[S.tool].redo();
   const h = S.future.pop();
   if (!h) return;

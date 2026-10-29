@@ -595,8 +595,8 @@
       const pts = st.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
       edit({ kind: "stroke", z: st.z, pts, radius: L.radius, label, guard });
     },
-    undo() { if (!L.busy && !L.stroke && !L.lasso) edit({ kind: "undo" }); },
-    redo() { if (!L.busy && !L.stroke && !L.lasso) edit({ kind: "redo" }); },
+    undo() { if (!L.busy && !L.stroke && !L.lasso && !L.sam.drag) edit({ kind: "undo" }); },
+    redo() { if (!L.busy && !L.stroke && !L.lasso && !L.sam.drag) edit({ kind: "redo" }); },
     active(on) {
       btn.classList.toggle("on", on);
       if (!on) {
@@ -795,6 +795,15 @@
 
   async function samApply() {
     if (!L.sam.mask || L.sam.busy) return;
+    // A mask over most of the slice is nearly always background picked up
+    // by a stray point; it is written only on a second Enter.
+    let n = 0;
+    for (const v of L.sam.mask) n += v ? 1 : 0;
+    if (n > 0.6 * L.sam.mask.length && L.sam.bigOk !== L.sam.mask) {
+      L.sam.bigOk = L.sam.mask;
+      toast("这个分割几乎盖满了整层，多半选到了背景；确定要写入就再按一次回车", 6000);
+      return;
+    }
     const z = L.sam.z;
     const st = await editWith("sam_apply", { token: L.token, z, label: L.active, guard: L.guard ? L.active : 0 });
     if (st) samClear();

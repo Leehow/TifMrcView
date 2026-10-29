@@ -780,6 +780,11 @@ void main() { outColor = vec4(1.0); }`;
     return inv() ? 1 - f : f;
   };
   const num = (x) => +x.toPrecision(4);
+  // σ above the mean, without rounding noise such as -1.4e-16.
+  const sigmas = (v) => {
+    const k = (v - hist.mean) / hist.sd;
+    return Math.abs(k) < 1e-6 ? 0 : num(k);
+  };
 
   function drawHist() {
     const dpr = window.devicePixelRatio || 1;
@@ -827,7 +832,7 @@ void main() { outColor = vec4(1.0); }`;
     const s = view.settings, [lo, hi] = s.levels[s.mode];
     if (document.activeElement !== $("vp-lo")) $("vp-lo").value = num(toValue(lo));
     if (document.activeElement !== $("vp-hi")) $("vp-hi").value = num(toValue(hi));
-    $("vp-sigma").textContent = hist.sd > 0 ? `${num((toValue(lo) - hist.mean) / hist.sd)} σ · 平均 ${num(hist.mean)} · σ ${num(hist.sd)}` : "";
+    $("vp-sigma").textContent = hist.sd > 0 ? `${sigmas(toValue(lo))} σ · 平均 ${num(hist.mean)} · σ ${num(hist.sd)}` : "";
     drawHist();
   }
 
