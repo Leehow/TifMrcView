@@ -681,6 +681,44 @@ fn ctf_cancel() {
     crate::ctf::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Drift / motion correction (Pro): shifts of every slice; reports
+/// `align-progress` {done, total}.
+#[tauri::command]
+async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResult<crate::align::Aligned> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || {
+        let progress = |done, total| {
+            let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
+        };
+        crate::align::estimate(&img, &req, &progress)
+    })
+    .await
+}
+
+/// Writes the aligned stack or sum to a path from `pick_save_path`.
+#[tauri::command]
+async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()> {
+    let img = {
+        let state = app.state::<AppState>();
+        if !state.save_paths.allowed(&req.path) {
+            return Err(format!("不允许写入：{}", req.path));
+        }
+        current(&state, req.token)?
+    };
+    blocking(move || {
+        let progress = |done, total| {
+            let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
+        };
+        crate::align::save(&img, &req, &progress)
+    })
+    .await
+}
+
+#[tauri::command]
+fn align_cancel() {
+    crate::align::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -1177,6 +1215,9 @@ pub fn run() {
             ctf_fit,
             ctf_fit_stack,
             ctf_cancel,
+            align_estimate,
+            align_save,
+            align_cancel,
             spectrum_values,
             pick_save_path,
             pick_folder,

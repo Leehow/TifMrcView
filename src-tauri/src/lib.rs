@@ -2,6 +2,7 @@
 mod android;
 #[cfg(feature = "desktop")]
 mod assoc;
+pub mod align;
 pub mod ctf;
 #[cfg(feature = "pro")]
 pub mod ctf_gpu;
