@@ -247,6 +247,16 @@ pub fn open_market<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     open_in_browser(&market_url(app.config().plugins.0.get("updater")))
 }
 
+/// Opens a link from the About dialog. Only https: and mailto: links, so the
+/// page can never start a local program or open a file.
+#[tauri::command]
+pub fn open_link(url: String) -> Result<(), String> {
+    let ok = (url.starts_with("https://") || url.starts_with("mailto:"))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"');
+    if !ok { return Err("unsupported link".into()); }
+    open_in_browser(&url)
+}
+
 /// Opens the website (download, manual) from 帮助. Only ever that one URL.
 #[tauri::command]
 pub fn open_website() -> Result<(), String> {

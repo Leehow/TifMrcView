@@ -84,3 +84,28 @@
 #ctf-table tr.low td { color: var(--dim); }
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }
+
+#align-panel {
+  position: absolute; top: 10px; right: 10px; z-index: 6;
+  width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
+  padding: 8px 10px 10px; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
+}
+.al-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.al-head b { flex: 1; }
+.al-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin-bottom: 8px; }
+.al-opts label { display: flex; flex-direction: column; gap: 2px; color: var(--dim); font-size: 11px; }
+.al-opts select, .al-opts input[type="number"] { width: 100%; box-sizing: border-box; }
+.al-opts .al-wide { grid-column: 1 / -1; }
+.al-opts .al-check { flex-direction: row; align-items: center; gap: 6px; }
+.al-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.al-row #al-status, .al-row #al-saved-name { flex: 1; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#al-plot { width: 100%; height: 170px; display: block; margin-top: 8px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+#al-sum { margin-top: 4px; line-height: 1.4; }
+#al-table { max-height: 160px; overflow-y: auto; margin-top: 6px; }
+#al-table table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+#al-table th { position: sticky; top: 0; background: var(--surface); color: var(--dim); font-weight: 500; text-align: right; padding: 1px 4px; }
+#al-table td { text-align: right; padding: 1px 4px; border-top: 1px solid var(--line); }
+#al-table tbody tr { cursor: pointer; }
+#al-table tbody tr:hover { background: var(--subtle); }
+#al-table tr.low td { color: var(--dim); }

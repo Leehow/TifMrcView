@@ -100,4 +100,40 @@
       counters.forEach(function (c) { c.textContent = n; });
     }).catch(function () {});
   }
+
+  // Live demo in the hero: the real viewer UI (demo/app/, built from ui/ by
+  // scripts/build-site-demo.mjs) in an iframe. It is laid out at least
+  // MIN_W wide and scaled down to fit, and only takes the mouse after a
+  // click, so scrolling the page over it still scrolls the page.
+  var demo = document.getElementById('demo');
+  if (demo) {
+    var frame = document.getElementById('demo-frame');
+    var shield = document.getElementById('demo-shield');
+    var full = document.getElementById('demo-full');
+    var MIN_W = 940;
+    var demoLang = function () { return window.TMV ? window.TMV.lang() : 'en'; };
+    var src = function () { return 'demo/app/?lang=' + demoLang(); };
+    var fit = function () {
+      var w = demo.clientWidth, h = demo.clientHeight;
+      var k = Math.min(1, w / MIN_W);
+      frame.style.width = w / k + 'px';
+      frame.style.height = h / k + 'px';
+      frame.style.transform = k < 1 ? 'scale(' + k + ')' : '';
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    frame.addEventListener('load', function () { if (frame.src) frame.classList.add('ready'); });
+    var start = function () { frame.src = src(); };
+    if (document.readyState === 'complete') start(); else window.addEventListener('load', start);
+    if (window.TMV) window.TMV.onLang(function () {
+      full.href = src();
+      if (frame.src) { frame.classList.remove('ready'); frame.src = src(); }
+    });
+    shield.addEventListener('click', function () {
+      shield.hidden = true;
+      frame.tabIndex = 0;
+      frame.focus();
+    });
+    demo.addEventListener('mouseleave', function () { shield.hidden = false; });
+  }
 })();

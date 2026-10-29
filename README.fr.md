@@ -11,6 +11,8 @@ Une visionneuse petite, rapide et pratique pour les images de microscopie et de 
 
 **[Télécharger](https://tifmrcview.com/tifmrcview/#download)** · **[Marché de plugins](https://tifmrcview.com/tifmrcview/plugins/)** · [Site web](https://tifmrcview.com/tifmrcview/)
 
+Auteur: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Si TifMrcView vous est utile, merci de lui donner une ⭐ sur GitHub : cela aide vraiment.
 
 ## Captures d'écran
@@ -189,6 +191,16 @@ Chaque push sur `main` fait compiler des paquets par GitHub Actions sur macOS / 
 ## Traductions
 
 Le README est disponible en plusieurs langues (voir la ligne des langues tout en haut). **Le README anglais (`README.md`) fait foi** ; les autres fichiers conservent exactement les mêmes sections dans le même ordre. Quand vous modifiez `README.md`, mettez aussi à jour les traductions, ou ouvrez une issue si vous ne pouvez pas.
+
+## Auteur
+
+<!-- author -->
+Créé et maintenu par **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
+<!-- /author -->
+
+## Citer
+
+Si TifMrcView vous aide dans vos recherches, merci de le citer. GitHub affiche la citation issue de [CITATION.cff](CITATION.cff) sous « Cite this repository » sur la page du dépôt.
 
 ## Licence
 

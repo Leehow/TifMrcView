@@ -11,6 +11,8 @@
 
 **[下载](https://tifmrcview.com/tifmrcview/#download)** · **[插件市场](https://tifmrcview.com/tifmrcview/plugins/)** · [官网](https://tifmrcview.com/tifmrcview/)
 
+作者：**Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > 如果 TifMrcView 对你有帮助，请在 GitHub 上点个 ⭐，这对我们真的很有帮助。
 
 ## 截图
@@ -35,7 +37,7 @@
 - 多通道彩色合成：勾选框显示/隐藏通道，点名字调这个通道的对比度，点圆点换颜色
 - 亮度 / 对比度 / γ，直方图上拖动直接选显示范围；默认每层自动对比度（饱和 0.1%）
 - 工具栏 ⓘ 按钮显示图像信息：格式、尺寸、像素尺寸，以及插件读出的采集参数（可搜索、可复制）。Zeiss 插件读取蔡司 SmartSEM 电镜图的电压、工作距离、放大倍数、探测器、样品台位置、真空等全部参数，并按校准像素尺寸显示比例尺，以及 CZI 里的显微镜、物镜、激光、探测器、针孔、扫描和 Airyscan 处理参数
-- 右侧预览栏列出同一文件夹里的图像，显示文件名、格式和大小；左右两个侧栏顶部都有收起按钮，收起后顶栏会出现对应的侧栏图标，点它展开
+- 右侧预览栏列出同一文件夹里的图像，显示文件名、格式和大小；左右两个侧栏顶部都有收起按钮，收起后同一行的窗口边缘会出现这个侧栏的图标（工具 / 预览图），点它展开
 - 顶部图标工具栏（悬停显示名称）：存图、撤销、选择、移动、测距、画笔（点右边的小箭头选择 自由 / 直线 / 箭头 / 框 / 圆）、文字、裁剪、比例尺、亮度对比度
 - 测距按像素尺寸显示真实长度；框和圆在图上一直标着宽 × 高（正圆标直径）
 - 选择工具（默认）：拖空白处平移图像，点中标注后拖动、拖边框上的点缩放、拖测距线的端点重新测量，Delete 删除，可改颜色和线宽
@@ -189,6 +191,16 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 ## 翻译
 
 README 提供多种语言（见顶部的语言栏）。**英文版 README（`README.md`）是基准**；其他文件的章节和顺序与它完全一致。修改 `README.md` 时请同步更新各语言版本，做不到的话请提个 issue。
+
+## 作者
+
+<!-- author -->
+作者与维护者：**Hao Li**（[@Leehow](https://github.com/Leehow)），中国科学院化学研究所。ORCID：[0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
+<!-- /author -->
+
+## 引用
+
+如果 TifMrcView 对你的研究有帮助，请引用它。仓库页面右侧的 “Cite this repository” 会根据 [CITATION.cff](CITATION.cff) 给出引用格式。
 
 ## 许可证
 

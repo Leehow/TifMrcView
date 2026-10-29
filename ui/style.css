@@ -91,9 +91,9 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #file-group { min-width: 0; flex: 0 1 auto; }
 .spacer { flex: 1; }
 /* Icon-only buttons at both ends of the title bar. */
-#btn-open, #btn-settings, #btn-show-tools, #btn-show-sidebar { width: 30px; padding: 0; justify-content: center; color: var(--dim); }
-#btn-open:hover, #btn-settings:hover, #btn-show-tools:hover, #btn-show-sidebar:hover { color: var(--text); }
-#btn-open svg, #btn-settings svg, #btn-show-tools svg, #btn-show-sidebar svg { width: 18px; height: 18px; }
+#btn-open, #btn-settings { width: 30px; padding: 0; justify-content: center; color: var(--dim); }
+#btn-open:hover, #btn-settings:hover { color: var(--text); }
+#btn-open svg, #btn-settings svg { width: 18px; height: 18px; }
 #btn-open.open, #btn-settings.open { background: var(--muted); color: var(--text); }
 #btn-settings { position: relative; }
 /* A new version: a quiet dot, cleared once the ⚙ menu has been opened. */
@@ -301,6 +301,23 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 .panel-close { width: 26px; height: 24px; padding: 0; justify-content: center; color: var(--dim); flex: none; }
 .panel-close:hover:not(:disabled) { color: var(--text); }
 .panel-close svg { width: 16px; height: 16px; }
+/* While a panel is folded, its show button sits on the same row the fold button was on, at the window edge. */
+.panel-open {
+  position: absolute; z-index: 7;
+  width: 30px; height: 26px; padding: 0; justify-content: center;
+  color: var(--dim); background: var(--surface);
+  border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+}
+.panel-open:hover:not(:disabled) { background: var(--subtle); color: var(--text); }
+.panel-open svg { width: 16px; height: 16px; }
+/* Left edge: the tools panel and the parts of it that open on their own (brightness/contrast, image info). */
+.edge-rail { position: absolute; z-index: 7; top: 18px; left: 0; display: flex; flex-direction: column; gap: 4px; }
+.edge-rail .panel-open { position: static; border-left: none; border-radius: 0 6px 6px 0; }
+.edge-rail .panel-open:disabled { opacity: 1; color: var(--line-strong); }
+#btn-show-sidebar { top: 7px; right: 0; border-right: none; border-radius: 6px 0 0 6px; }
+/* Keep the floating panels at the top right clear of it. */
+#stage:has(#btn-show-sidebar:not([hidden])) #fft-panel,
+#stage:has(#btn-show-sidebar:not([hidden])) #vol-panel { right: 40px; }
 #tools-close { float: right; position: sticky; top: 8px; z-index: 1; margin: 7px -6px 0 4px; background: var(--surface); }
 #side-head {
   position: sticky; top: 0; z-index: 1;
@@ -498,3 +515,15 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   #scroll-left, #quickbar, #scroll-right { order: 2; }
   #quickbar { flex: 1 1 calc(100% - 64px); height: 36px; }
 }
+
+/* ---------- about ---------- */
+
+.about-app { display: flex; gap: 12px; align-items: center; padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.about-title { font-size: 16px; font-weight: 600; }
+.about-sec { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.about-sec .pl-name { font-size: 14px; margin-top: 2px; }
+.about-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.about-links a { color: var(--accent); text-decoration: none; }
+.about-links a:hover { text-decoration: underline; }
+.about-cite { margin-top: 6px; padding: 8px; font-size: 12px; background: var(--subtle); border-radius: 6px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
+.about-foot { padding-top: 8px; font-size: 12px; }

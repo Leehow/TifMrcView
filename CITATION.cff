@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use TifMrcView in your research, please cite it as below."
+type: software
+title: "TifMrcView"
+abstract: "A fast, lightweight viewer for microscopy and electron microscopy images (TIFF, OME-TIFF, MRC and vendor formats through plugins), built with Rust and Tauri."
+authors:
+  - family-names: "Li"
+    given-names: "Hao"
+    alias: "Leehow"
+    affiliation: "Institute of Chemistry, Chinese Academy of Sciences"
+    email: "lihao9x@iccas.ac.cn"
+    orcid: "https://orcid.org/0009-0004-2696-3267"
+version: "0.7.0"
+date-released: "2026-10-29"
+license: Apache-2.0
+repository-code: "https://github.com/Leehow/TifMrcView"
+url: "https://tifmrcview.com/tifmrcview/"
+keywords:
+  - microscopy
+  - electron microscopy
+  - cryo-EM
+  - TIFF
+  - MRC
+  - image viewer
