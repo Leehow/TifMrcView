@@ -750,6 +750,8 @@
   var ua = navigator.userAgent;
   var os = /iPhone|iPad|iPod|Android/.test(ua) ? null : /Mac/.test(ua) ? 'mac' : /Win/.test(ua) ? 'win' : /Linux|X11/.test(ua) ? 'linux' : null;
   var BASE = document.documentElement.getAttribute('data-base') || '';
+  // Downloads go through get/, which the server counts and redirects to the cached file.
+  var DL = 'get/';
   var HOME = !!document.getElementById('cta');
   var data = null, lang = pick(), sizes = {}, listeners = [];
   function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; }
@@ -784,7 +786,7 @@
       (data.files[k] || []).forEach(function (f) {
         var l = fileLabel(k, f, t);
         var a = document.createElement('a');
-        a.href = f.file; a.setAttribute('download', '');
+        a.href = DL + f.file; a.setAttribute('download', '');
         var s = document.createElement('span'); s.textContent = l[0];
         var n = document.createElement('small'); n.textContent = l[1];
         if (sizes[f.file]) { var b = document.createElement('b'); b.textContent = mb(sizes[f.file]); n.appendChild(b); }
@@ -800,7 +802,7 @@
     document.getElementById('ver').textContent = 'v' + data.version;
     var c = document.getElementById('cta');
     if (os && data.files[os] && data.files[os][0]) {
-      c.href = data.files[os][0].file; c.setAttribute('download', '');
+      c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
       c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }

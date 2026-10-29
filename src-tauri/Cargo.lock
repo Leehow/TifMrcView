@@ -8447,7 +8447,7 @@ dependencies = [
 
 [[package]]
 name = "tifmrcview"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",

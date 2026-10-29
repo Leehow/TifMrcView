@@ -7,7 +7,7 @@ declare namespace TmvPlugin {
     format: string;
     [key: string]: unknown;
   }
-  interface PixelSize { x: number; y?: number; unit: "Å" | "nm" | "µm" | "mm" }
+  interface PixelSize { x: number; y?: number; unit: "Å" | "nm" | "µm" | "mm" | "1/µm" | "1/nm" | "1/Å" }
   interface State {
     info: ImageInfo | null; path: string | null; z: number; t: number;
     sizeZ: number; sizeT: number; width: number; height: number;

@@ -327,6 +327,13 @@ impl Emd {
             let (x, unit) = length(px);
             info.pixel_size = Some([x, crate::tidy(py * x / px), 0.0]);
             info.unit = unit.into();
+        } else if get(m, "BinaryResult.PixelUnitX") == Some("1/m") {
+            // Diffraction patterns.
+            if let Some(px) = num(m, "BinaryResult.PixelSize.width").filter(|&v| v > 0.0) {
+                let py = num(m, "BinaryResult.PixelSize.height").filter(|&v| v > 0.0).unwrap_or(px);
+                info.pixel_size = Some([crate::reciprocal(px).0, crate::reciprocal(py).0, 0.0]);
+                info.unit = "1/nm".into();
+            }
         }
 
         let mut g = Group::new("Velox 图像");

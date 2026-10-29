@@ -182,7 +182,8 @@ fn image(img: &Dir, index: usize, le: bool) -> Result<Option<Image>> {
 
 // ------------------------------------------------------------- calibration
 
-/// Length units the viewer knows: (factor to nm, unit shown).
+/// Units the viewer knows: (factor to nm, or to 1/nm for reciprocal
+/// units, and the unit shown).
 fn length_unit(u: &str) -> Option<(f64, &'static str)> {
     Some(match u.trim() {
         "pm" => (1e-3, "Å"),
@@ -191,6 +192,12 @@ fn length_unit(u: &str) -> Option<(f64, &'static str)> {
         "µm" | "μm" | "um" | "micron" | "microns" => (1e3, "µm"),
         "mm" => (1e6, "mm"),
         "m" => (1e9, "mm"),
+        // Diffraction patterns.
+        "1/pm" => (1e3, "1/Å"),
+        "1/Å" | "1/A" => (10.0, "1/Å"),
+        "1/nm" => (1.0, "1/nm"),
+        "1/µm" | "1/μm" | "1/um" => (1e-3, "1/µm"),
+        "1/m" => (1e-9, "1/nm"),
         _ => return None,
     })
 }
@@ -198,10 +205,16 @@ fn length_unit(u: &str) -> Option<(f64, &'static str)> {
 fn unit_to_nm(u: &str) -> f64 {
     match u {
         "Å" => 0.1,
-        "nm" => 1.0,
+        "nm" | "1/nm" => 1.0,
         "µm" => 1e3,
+        "1/Å" => 10.0,
+        "1/µm" => 1e-3,
         _ => 1e6,
     }
+}
+
+fn reciprocal(u: &str) -> bool {
+    u.starts_with("1/")
 }
 
 /// Rounds away the noise of a value stored as f32.
@@ -235,7 +248,8 @@ fn calibrations(img: &Dir, le: bool) -> Vec<Option<Cal>> {
         .collect()
 }
 
-/// Pixel size (x, y, z) and its unit, when X is calibrated in a length.
+/// Pixel size (x, y, z) and its unit, when X is calibrated in a length
+/// (or a reciprocal length, for diffraction patterns).
 fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
     let cx = cals.first()?.as_ref()?;
     let (fx, unit) = length_unit(&cx.units)?;
@@ -244,10 +258,11 @@ fn pixel_size(cals: &[Option<Cal>]) -> Option<([f64; 3], &'static str)> {
     }
     let per = unit_to_nm(unit);
     let axis = |i: usize| -> f64 {
-        cals.get(i)
-            .and_then(|c| c.as_ref())
-            .and_then(|c| length_unit(&c.units).map(|(f, _)| c.scale.abs() * f / per))
-            .unwrap_or(0.0)
+        let Some(c) = cals.get(i).and_then(|c| c.as_ref()) else { return 0.0 };
+        match length_unit(&c.units) {
+            Some((f, u)) if reciprocal(u) == reciprocal(unit) => c.scale.abs() * f / per,
+            _ => 0.0,
+        }
     };
     let x = cx.scale * fx / per;
     let y = match axis(1) {
