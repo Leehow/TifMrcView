@@ -1,6 +1,7 @@
 node_modules/
 src-tauri/target/
-src-tauri/gen/
+src-tauri/gen/schemas/
+src-tauri/gen/android/app/src/main/assets/
 .DS_Store
 # local sample data
 fluorescence-tiff-*/
@@ -10,4 +11,7 @@ src-tauri/tauri.ci.conf.json
 /target/
 plugins/*/target/
 plugins/sdk/Cargo.lock
+# Android release signing key (kept on the Mac only; CI has it as secrets)
+/android-release/
+*.jks
 site/demo/app/

@@ -95,6 +95,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #btn-open:hover, #btn-settings:hover, #btn-show-tools:hover, #btn-show-sidebar:hover { color: var(--text); }
 #btn-open svg, #btn-settings svg, #btn-show-tools svg, #btn-show-sidebar svg { width: 18px; height: 18px; }
 #btn-open.open, #btn-settings.open { background: var(--muted); color: var(--text); }
+#btn-settings { position: relative; }
+/* A new version: a quiet dot, cleared once the ⚙ menu has been opened. */
+#update-dot, #dropmenu .mi-dot { width: 7px; height: 7px; border-radius: 50%; background: #e5534b; pointer-events: none; }
+#update-dot { position: absolute; top: 4px; right: 4px; box-shadow: 0 0 0 1.5px var(--surface); }
+#update-dot[hidden] { display: none; }
+#dropmenu .mi-dot { display: inline-block; margin-left: 6px; vertical-align: 2px; }
 #btn-prev, #btn-next { width: 26px; padding: 0; justify-content: center; font-size: 11px; color: var(--dim); }
 #file-pos { color: var(--dim); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 #series { max-width: 220px; margin-left: 4px; }
@@ -160,7 +166,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 
 #body { flex: 1; min-height: 0; display: flex; }
 #stage { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--stage); }
-#view { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 #view.drag { cursor: grabbing; }
 #view.cross { cursor: crosshair; }
 #view.text { cursor: text; }
@@ -371,19 +377,6 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 
 /* ---------- plugins and updates ---------- */
 
-#update-bar {
-  position: fixed; top: 52px; right: 12px; z-index: 9;
-  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
-  width: max-content; max-width: calc(100vw - 24px);
-  padding: 10px 12px;
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-}
-#update-text { min-width: 0; overflow-wrap: anywhere; }
-#update-close { color: var(--dim); }
-#update-bar .update-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
 
 #plugin-buttons:empty { display: none; }
 #plugin-buttons select { height: 28px; }
@@ -487,4 +480,21 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 @media (pointer: coarse) {
   .touch-only { display: block; }
   .desk-only { display: none; }
+}
+
+/* Long-press menu for an annotation on touch screens. */
+#ann-menu {
+  position: absolute; z-index: 30; transform: translate(-50%, -100%);
+  padding: 4px; background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 10px; box-shadow: var(--shadow);
+}
+#ann-menu button { height: 40px; padding: 0 20px; font-size: 15px; color: #cf222e; border: 0; }
+
+/* Narrow windows (a tablet held upright): the tool buttons get a row of
+   their own instead of being squeezed between the file and view groups. */
+@media (max-width: 860px) {
+  #toolbar { flex-wrap: wrap; height: auto; padding: 4px 10px; row-gap: 4px; }
+  #file-group { flex: 1 1 auto; }
+  #scroll-left, #quickbar, #scroll-right { order: 2; }
+  #quickbar { flex: 1 1 calc(100% - 64px); height: 36px; }
 }
