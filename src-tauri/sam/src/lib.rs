@@ -126,6 +126,13 @@ pub struct Prediction {
     pub low_res: Tensor<4>,
 }
 
+impl Prediction {
+    /// [`Prediction::low_res`] as plain numbers, to keep for a later mask prompt.
+    pub fn low_res_values(&self) -> Vec<f32> {
+        self.low_res.clone().into_data().convert::<f32>().try_into_vec::<f32>().unwrap()
+    }
+}
+
 /// A prompt point in image pixels; `positive` false marks background.
 #[derive(Clone, Copy, Debug)]
 pub struct Point {
@@ -173,6 +180,12 @@ impl Predictor {
         let std = [0.229f32, 0.224, 0.225];
         let chans: Vec<Tensor<4>> = (0..3).map(|c| (x.clone() - mean[c]) / std[c]).collect();
         self.encode_tensor(Tensor::cat(chans, 1), width, height)
+    }
+
+    /// A mask prompt from [`Prediction::low_res_values`] of an earlier
+    /// prediction, for `predict`'s `mask_input`.
+    pub fn mask_prompt(&self, low_res: &[f32]) -> Tensor<4> {
+        Tensor::<4>::from_data(TensorData::new(low_res.to_vec(), [1, 1, 256, 256]), &self.device)
     }
 
     /// Mask for clicks and/or a box (x0, y0, x1, y1), in image pixels.
