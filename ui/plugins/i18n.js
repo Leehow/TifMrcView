@@ -695,6 +695,7 @@ const PATTERNS = [
   [/^选区 (\d+) × (\d+) px$/, "Selection $1 × $2 px", "Auswahl $1 × $2 px", "選択範囲 $1 × $2 px", "Selección $1 × $2 px", "Sélection $1 × $2 px", "Выделение $1 × $2 px"],
   [/^(x \S+  y \S+)  值 (.+)$/, "$1  value $2", "$1  Wert $2", "$1  値 $2", "$1  valor $2", "$1  valeur $2", "$1  значение $2"],
   [/^发现新版本 (\S+)（当前 (\S+)）$/, "Version $1 is available (you have $2)", "Version $1 verfügbar (installiert: $2)", "新しいバージョン $1 があります（現在 $2）", "Versión $1 disponible (tienes $2)", "Version $1 disponible (actuelle : $2)", "Доступна версия $1 (текущая $2)"],
+  [/^有新版本 (\S+)$/, "Version $1 available", "Version $1 verfügbar", "新しいバージョン $1", "Versión $1 disponible", "Version $1 disponible", "Доступна версия $1"],
   [/^可更新到 (\S+)（已忽略）$/, "$1 available (skipped)", "$1 verfügbar (übersprungen)", "$1 に更新可能（スキップ済み）", "$1 disponible (omitida)", "$1 disponible (ignorée)", "Доступна $1 (пропущена)"],
   [/^可更新到 (\S+)$/, "$1 available", "$1 verfügbar", "$1 に更新できます", "$1 disponible", "$1 disponible", "Доступна $1"],
   [/^检查更新失败：(.+)$/, "Update check failed: $1", "Update-Prüfung fehlgeschlagen: $1", "アップデートの確認に失敗しました：$1", "Error al buscar actualizaciones: $1", "Échec de la recherche de mises à jour : $1", "Не удалось проверить обновления: $1"],

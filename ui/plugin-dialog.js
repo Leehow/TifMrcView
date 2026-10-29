@@ -103,7 +103,7 @@ function togglePluginDialog(force) {
 
 // ---------- updates ----------
 
-const updater = { info: null, busy: false, dismissed: false };
+const updater = { info: null, busy: false };
 
 function setUpdateStatus(text, info = null) {
   $("update-status").textContent = text;
@@ -115,18 +115,21 @@ function setUpdateStatus(text, info = null) {
   }
 }
 
+/**
+ * A new version only lights a small red dot on the ⚙ button: no bar, no toast.
+ * Opening the ⚙ menu shows it as an item and clears the dot for good for that
+ * version (remembered in "update.seen"), so the same version never nags twice.
+ */
+function updateUnseen() {
+  const v = updater.info?.version;
+  return !!v && pref.get("update.seen", "") !== v && pref.get("update.skip", "") !== v;
+}
+
 function showUpdate(info) {
   updater.info = info;
-  const bar = $("update-bar");
-  if (!info) {
-    bar.hidden = true;
-    setUpdateStatus("已是最新版本");
-    return;
-  }
-  $("update-text").textContent = `发现新版本 ${info.version}（当前 ${info.current}）`;
-  setUpdateStatus(`可更新到 ${info.version}`, info);
-  $("update-go").disabled = false;
-  bar.hidden = updater.dismissed;
+  $("update-dot").hidden = !updateUnseen();
+  if (!info) setUpdateStatus("已是最新版本");
+  else setUpdateStatus(`可更新到 ${info.version}`, info);
 }
 
 async function checkUpdate(manual) {
@@ -136,12 +139,7 @@ async function checkUpdate(manual) {
   try {
     const info = await invoke("check_update");
     updater.busy = false;
-    if (info && !manual && pref.get("update.skip", "") === info.version) {
-      updater.info = info;
-      setUpdateStatus(`可更新到 ${info.version}（已忽略）`, info);
-    } else {
-      showUpdate(info);
-    }
+    showUpdate(info);
   } catch (e) {
     // The updater says only this when every endpoint failed: offline, server
     // unreachable, or no (valid) latest.json published yet.
@@ -158,11 +156,7 @@ async function checkUpdate(manual) {
 async function installUpdate() {
   if (!updater.info || updater.busy) return;
   updater.busy = true;
-  const say = (text) => {
-    $("update-text").textContent = text;
-    $("update-status").textContent = text;
-  };
-  $("update-go").disabled = true;
+  const say = (text) => ($("update-status").textContent = text);
   $("update-install").disabled = true;
   say("正在下载更新…");
   const unlisten = await T.event.listen("update-progress", (e) => {
@@ -173,7 +167,6 @@ async function installUpdate() {
     await invoke("install_update"); // restarts the app on success
   } catch (e) {
     say(`更新失败：${e}`);
-    $("update-go").disabled = false;
     $("update-install").disabled = false;
   } finally {
     unlisten();
@@ -184,6 +177,7 @@ async function installUpdate() {
 // ---------- ⚙ settings menu and help ----------
 
 const GEAR_ICONS = {
+  update: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
   plugins: '<path d="M4 7h5a2.5 2.5 0 1 1 5 0h4v5a2.5 2.5 0 1 1 0 5v4H4z"/>',
   lang: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/>',
@@ -193,7 +187,14 @@ const GEAR_ICONS = {
 function openSettings() {
   const btn = $("btn-settings");
   if (closeMenu(btn)) return;
-  const items = [{ value: "plugins", label: "插件与更新", icon: GEAR_ICONS.plugins, on: !$("plugin-dialog").hidden }];
+  const items = [];
+  if (updater.info) {
+    // Dotted this once, the first time the version is seen; the item itself stays.
+    items.push({ value: "update", label: `有新版本 ${updater.info.version}`, icon: GEAR_ICONS.update, dot: updateUnseen() });
+    pref.set("update.seen", updater.info.version);
+    $("update-dot").hidden = true;
+  }
+  items.push({ value: "plugins", label: "插件与更新", icon: GEAR_ICONS.plugins, on: !$("plugin-dialog").hidden });
   ext.settings.forEach((s, i) => {
     const cur = s.options.find(([v]) => v === s.value);
     items.push({ value: i, label: s.title, hint: cur ? cur[1] : "", icon: GEAR_ICONS.lang });
@@ -202,7 +203,8 @@ function openSettings() {
   // The author's About dialog (ui/about.js), when the page has it.
   if (typeof openAbout === "function") items.push({ value: "about", label: "关于", icon: GEAR_ICONS.about });
   openMenu(btn, items, (v) => {
-    if (v === "plugins") togglePluginDialog();
+    if (v === "update") togglePluginDialog(true);
+    else if (v === "plugins") togglePluginDialog();
     else if (v === "help") toggleHelp();
     else if (v === "about") openAbout();
     else pickSetting(ext.settings[v]);
@@ -254,16 +256,7 @@ $("plugin-dir").addEventListener("click", () =>
 $("plugin-reload").addEventListener("click", () => location.reload());
 $("update-check").addEventListener("click", () => checkUpdate(true));
 $("update-auto").addEventListener("change", (e) => pref.set("update.auto", e.target.checked));
-$("update-go").addEventListener("click", installUpdate);
 $("update-install").addEventListener("click", installUpdate);
-$("update-close").addEventListener("click", () => {
-  updater.dismissed = true;
-  $("update-bar").hidden = true;
-});
-$("update-later").addEventListener("click", () => {
-  if (updater.info) pref.set("update.skip", updater.info.version);
-  $("update-bar").hidden = true;
-});
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("plugin-dialog").hidden) togglePluginDialog(false);
