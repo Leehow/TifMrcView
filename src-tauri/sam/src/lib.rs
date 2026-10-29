@@ -21,11 +21,17 @@ fn candidates() -> Vec<(fn() -> Device, &'static str)> {
     let mut v: Vec<(fn() -> Device, &'static str)> = vec![];
     #[cfg(feature = "cuda")]
     v.push((|| Device::cuda(0), "CUDA"));
+    // Real GPUs only, by kind: wgpu's default device can be a software
+    // renderer (lavapipe on Linux without a GPU Vulkan driver, as in WSL),
+    // which is slower than the CPU backend and fails on large buffers.
     #[cfg(feature = "wgpu")]
-    v.push((
-        || Device::wgpu(burn::tensor::DeviceKind::DefaultDevice),
-        if cfg!(target_os = "macos") { "Metal" } else if cfg!(windows) { "GPU (DX12/Vulkan)" } else { "GPU (Vulkan)" },
-    ));
+    {
+        use burn::tensor::DeviceKind;
+        let name = if cfg!(target_os = "macos") { "Metal" } else if cfg!(windows) { "GPU (DX12/Vulkan)" } else { "GPU (Vulkan)" };
+        v.push((|| Device::wgpu(DeviceKind::DiscreteGpu(0)), name));
+        v.push((|| Device::wgpu(DeviceKind::IntegratedGpu(0)), name));
+        v.push((|| Device::wgpu(DeviceKind::VirtualGpu(0)), name));
+    }
     #[cfg(feature = "flex")]
     v.push((Device::flex, "CPU"));
     if v.is_empty() {
