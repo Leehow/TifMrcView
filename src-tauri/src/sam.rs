@@ -333,8 +333,10 @@ impl Prompt {
     /// The (box, mask prompt) pairs worth trying: the preferred one first.
     /// A thin outline that is nearly closed looks open, and its box then
     /// asks for the whole cell, so thin objects also go without a box.
+    /// Blobs keep to their box: the previous mask would hold back the
+    /// shrinking towards their ends.
     pub fn variants(&self) -> Vec<(Option<[f32; 4]>, bool)> {
-        let alt = if self.points.len() > 1 { vec![(None, true), (None, false), (self.bbox, true)] } else { vec![(self.bbox, true)] };
+        let alt = if self.points.len() > 1 { vec![(None, true), (None, false), (self.bbox, true)] } else { vec![] };
         let mut v = vec![(self.bbox, self.use_mask)];
         for a in alt {
             if !v.iter().any(|b: &(Option<[f32; 4]>, bool)| (b.0.is_some(), b.1) == (a.0.is_some(), a.1)) {
@@ -643,7 +645,7 @@ mod tests {
     #[test]
     fn thin_objects_try_more_prompts() {
         let blob = Prompt { bbox: Some([0.0, 0.0, 9.0, 9.0]), points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }], use_mask: false };
-        assert_eq!(blob.variants().len(), 2);
+        assert_eq!(blob.variants().len(), 1);
         let thin = Prompt { points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }; 3], ..blob };
         let v = thin.variants();
         assert_eq!(v.len(), 4);
