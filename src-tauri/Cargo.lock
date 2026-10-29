@@ -8480,6 +8480,7 @@ dependencies = [
  "tiff",
  "tmv-sam",
  "wasmi",
+ "webpki-root-certs",
  "weezl",
  "windows-sys 0.59.0",
  "zip 4.6.1",

@@ -38,6 +38,7 @@ const kinds = [
   { id: "nsis", re: /-setup\.exe$/, name: `${product}_${version}_x64-setup.exe`, os: "win", label: "下载安装程序", note: "Windows 10 / 11，64 位", updater: ["windows-x86_64", "windows-x86_64-nsis"] },
   { id: "deb", re: /\.deb$/, name: `${product}_${version}_amd64.deb`, os: "linux", label: ".deb", note: "Debian / Ubuntu", updater: ["linux-x86_64-deb"] },
   { id: "rpm", re: /\.rpm$/, name: `${product}-${version}-1.x86_64.rpm`, os: "linux", label: ".rpm", note: "Fedora / openSUSE", updater: ["linux-x86_64-rpm"] },
+  { id: "apk", re: /_arm64\.apk$/, name: `${product}_${version}_arm64.apk`, os: "android", label: "下载 APK", note: "Android 7 及以上，arm64 手机和平板" },
   { id: "appimage", re: /\.AppImage$/, name: `${product}_${version}_amd64.AppImage`, os: "linux", label: ".AppImage", note: "其它发行版，免安装", updater: ["linux-x86_64", "linux-x86_64-appimage"] },
 ];
 
@@ -46,7 +47,7 @@ const verDir = path.join(out, version);
 fs.mkdirSync(verDir, { recursive: true });
 
 const platforms = {};
-const downloads = { mac: [], win: [], linux: [] };
+const downloads = { mac: [], win: [], linux: [], android: [] };
 for (const k of kinds) {
   const f = files.find((p) => k.re.test(p));
   if (!f) {

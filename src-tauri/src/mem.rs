@@ -20,13 +20,13 @@ pub fn cache_budget() -> usize {
 }
 
 /// Total physical memory in bytes.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn total_ram() -> Option<u64> {
     parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
 }
 
 /// Reads `MemTotal:  16314544 kB` from /proc/meminfo.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "android", test))]
 fn parse_meminfo(s: &str) -> Option<u64> {
     let line = s.lines().find(|l| l.starts_with("MemTotal:"))?;
     let mut it = line["MemTotal:".len()..].split_whitespace();
@@ -66,7 +66,7 @@ fn total_ram() -> Option<u64> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 fn total_ram() -> Option<u64> {
     None
 }

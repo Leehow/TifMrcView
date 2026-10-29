@@ -222,8 +222,80 @@ jobs:
             src-tauri/target/**/release/bundle/appimage/*.AppImage*
           if-no-files-found: error
 
+  # Android (arm64 phones and tablets). Signed when the release keystore is
+  # set up as secrets; otherwise the artifact is an unsigned APK.
+  android:
+    needs: version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The runner image ships the Android SDK; add the NDK and platform.
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: android
+
+      - run: npm ci || npm install
+
+      - name: Build APK
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          node -e 'require("fs").writeFileSync("src-tauri/tauri.ci.conf.json", JSON.stringify({ version: process.env.VERSION }))'
+          npx tauri android build --apk --target aarch64 --config src-tauri/tauri.ci.conf.json
+
+      - name: Sign APK
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          apk=$(ls src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk | head -1)
+          mkdir -p out
+          if [ -z "$ANDROID_KEYSTORE" ]; then
+            echo "::warning::ANDROID_KEYSTORE not set; uploading an unsigned APK"
+            cp "$apk" "out/TifMrcView_${VERSION}_arm64-unsigned.apk"
+            exit 0
+          fi
+          printf '%s' "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          "$tools/zipalign" -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" --out "out/TifMrcView_${VERSION}_arm64.apk" "$RUNNER_TEMP/aligned.apk"
+          rm "$RUNNER_TEMP/release.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TifMrcView-android-arm64
+          path: out/*.apk
+          if-no-files-found: error
+
   publish:
-    needs: [version, bundle]
+    needs: [version, bundle, android]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     env:
@@ -250,6 +322,12 @@ jobs:
         with:
           pattern: TifMrcView-pro-*
           path: artifacts/pro
+
+      # Only a signed APK (TifMrcView_<version>_arm64.apk) is published.
+      - uses: actions/download-artifact@v4
+        with:
+          name: TifMrcView-android-arm64
+          path: artifacts/standard/android
 
       - name: Assemble release
         env:
