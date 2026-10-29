@@ -25,8 +25,8 @@
       <label>离焦 最小 µm <input type="number" id="ctf-dmin" step="0.1" min="0" /></label>
       <label>最大 µm <input type="number" id="ctf-dmax" step="0.1" min="0" /></label>
       <label>最大像散 µm <input type="number" id="ctf-astig" step="0.05" min="0" /></label>
-      <label class="ctf-check"><input type="checkbox" id="ctf-phase" /> 相位板（拟合相移）</label>
-      <label>计算 <select id="ctf-backend"><option value="auto">自动（有 GPU 用 GPU）</option><option value="cpu">只用 CPU</option></select></label>
+      <label class="ctf-check ctf-wide"><input type="checkbox" id="ctf-phase" /> 相位板（拟合相移）</label>
+      <label class="ctf-wide">计算 <select id="ctf-backend"><option value="auto">自动（有 GPU 用 GPU）</option><option value="cpu">只用 CPU</option></select></label>
     </div>
     <div id="ctf-out" class="dim">按“拟合”在当前看到的区域上拟合 CTF</div>
     <canvas id="ctf-plot" title="蓝：等相位平均的谱；红：拟合的 CTF²；绿：逐环相关系数（0–1）"></canvas>`;
@@ -176,7 +176,8 @@
     drawPlot();
   }
 
-  /** CTF zeros on the spectrum: solid inside the fit resolution, faint beyond. */
+  /** CTF zeros on the right half of the spectrum (the left half stays bare
+   * to compare), out to the fit resolution, plus the fitting band. */
   function drawOverlay() {
     const f = C.fit;
     const fresh = f && F.data && C.key && F.key === C.key && F.data.n === f.n;
@@ -186,21 +187,37 @@
     if (!fresh) return;
     const n = f.n;
     const rFit = (n * +$("ctf-px").value) / f.fitRes;
-    g.lineWidth = Math.max(1, n / 400);
+    g.lineWidth = Math.max(1, 1.5 * (n / Math.max(1, img.getBoundingClientRect().width)));
+    g.strokeStyle = "rgba(46, 204, 64, 0.85)";
+    // Pixels of the spectrum per screen pixel.
+    const per = n / Math.max(1, img.getBoundingClientRect().width);
+    let prev = 0;
     for (const ring of f.zeros) {
-      const r = Math.hypot(ring[0][0], ring[0][1]);
-      g.strokeStyle = r <= rFit ? "rgba(46, 204, 64, 0.9)" : "rgba(46, 204, 64, 0.3)";
+      const r = Math.min(...ring.map(([u, v]) => Math.hypot(u, v)));
+      // Stop where rings come closer than 4 screen pixels or the fit no longer holds.
+      if (r > rFit || r - prev < 4 * per) break;
+      prev = r;
       g.beginPath();
-      ring.forEach(([u, v], i) => (i ? g.lineTo : g.moveTo).call(g, n / 2 + u, n / 2 + v));
-      g.closePath();
+      let pen = false;
+      for (const [u, v] of ring) {
+        if (u < 0) {
+          pen = false;
+          continue;
+        }
+        (pen ? g.lineTo : g.moveTo).call(g, n / 2 + u, n / 2 + v);
+        pen = true;
+      }
       g.stroke();
     }
-    // Fitting band.
     g.setLineDash([n / 100, n / 100]);
-    g.strokeStyle = "rgba(255, 210, 0, 0.6)";
+    g.strokeStyle = "rgba(255, 210, 0, 0.7)";
+    g.beginPath();
+    g.moveTo(n / 2, 0);
+    g.lineTo(n / 2, n);
+    g.stroke();
     for (const r of f.band) {
       g.beginPath();
-      g.arc(n / 2, n / 2, r, 0, 2 * Math.PI);
+      g.arc(n / 2, n / 2, r, -Math.PI / 2, Math.PI / 2);
       g.stroke();
     }
   }

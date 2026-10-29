@@ -202,3 +202,39 @@ mod tests {
         }
     }
 }
+
+/// CPU against GPU on a 4096² synthetic micrograph:
+/// cargo test --release --features pro --lib ctf_gpu::bench -- --ignored --nocapture
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore]
+    fn bench() {
+        let p = crate::ctf::tests::params_pub();
+        let size = 4096;
+        let img = crate::ctf::tests::ctf_image(size, &p, 14000.0, 400.0, 50.0, 7);
+        let values = |x: usize, y: usize| img[y * size + x];
+        let t = Instant::now();
+        let dev = device();
+        eprintln!("device: {:?} in {:?}", dev.map(|d| d.1), t.elapsed());
+        for n in [512, 1024] {
+            for round in 0..3 {
+                let t = Instant::now();
+                let s = fft::spectrum(values, [0, 0, size, size], n).unwrap();
+                let ts = t.elapsed();
+                let f = crate::ctf::fit_spectrum(&s.log, s.n, &p).unwrap();
+                eprintln!("n {n} #{round} CPU: spectrum {ts:?}, total {:?}: df {:.0}/{:.0} {:.1}°", t.elapsed(), f.df1, f.df2, f.angle);
+                if let Some((d, name)) = dev {
+                    let t = Instant::now();
+                    let s = spectrum(d, values, [0, 0, size, size], n).unwrap();
+                    let ts = t.elapsed();
+                    let f = crate::ctf::fit_with(&s.log, s.n, &p, &|px, o, _| Box::new(GpuScorer::new(d, px, o))).unwrap();
+                    eprintln!("n {n} #{round} {name}: spectrum {ts:?}, total {:?}: df {:.0}/{:.0} {:.1}°", t.elapsed(), f.df1, f.df2, f.angle);
+                }
+            }
+        }
+    }
+}

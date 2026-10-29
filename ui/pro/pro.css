@@ -79,7 +79,8 @@
 #ctf-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin-bottom: 6px; }
 #ctf-opts label { display: flex; flex-direction: column; gap: 2px; color: var(--dim); font-size: 11px; }
 #ctf-opts input[type="number"], #ctf-opts select { width: 100%; box-sizing: border-box; }
-#ctf-opts .ctf-check, #ctf-opts label:last-child { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 6px; }
+#ctf-opts .ctf-wide { grid-column: 1 / -1; }
+#ctf-opts .ctf-check { flex-direction: row; align-items: center; gap: 6px; }
 #ctf-out { line-height: 1.5; font-variant-numeric: tabular-nums; }
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }

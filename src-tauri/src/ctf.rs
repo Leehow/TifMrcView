@@ -878,25 +878,26 @@ pub(crate) mod tests {
         assert!(soft.fit_res < 20.0, "soft {}", soft.fit_res);
     }
 
-    /// Whole path: an image whose Fourier transform is CTF-filtered noise,
-    /// through the FFT panel's spectrum.
-    #[test]
-    fn fits_an_image() {
-        let p = params();
-        let (n, size) = (256usize, 512usize);
-        let o = Optics::new(&p);
-        let m = Model::from_astig(14000.0, 400.0, 50f64.to_radians(), 0.0);
+    /// An image whose Fourier transform is CTF-filtered noise (astigmatism
+    /// `half` Å at `angle_deg`).
+    pub fn ctf_image(size: usize, p: &Params, mean: f64, half: f64, angle_deg: f64, seed: u64) -> Vec<f32> {
+        let o = Optics::new(p);
+        let m = Model::from_astig(mean, half, angle_deg.to_radians(), 0.0);
         let f = fft::Fft::new(size);
-        let mut rng = Rng(5);
+        let mut rng = Rng(seed);
         let mut re: Vec<f32> = (0..size * size).map(|_| rng.gauss() as f32).collect();
         let mut im = vec![0f32; size * size];
         let fft2 = |re: &mut Vec<f32>, im: &mut Vec<f32>| {
-            for y in 0..size {
-                f.run(&mut re[y * size..(y + 1) * size], &mut im[y * size..(y + 1) * size]);
-            }
-            for x in 0..size {
-                let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = (0..size).map(|y| (re[y * size + x], im[y * size + x])).unzip();
-                f.run(&mut cr, &mut ci);
+            re.par_chunks_mut(size).zip(im.par_chunks_mut(size)).for_each(|(r, i)| f.run(r, i));
+            let cols: Vec<(Vec<f32>, Vec<f32>)> = (0..size)
+                .into_par_iter()
+                .map(|x| {
+                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = (0..size).map(|y| (re[y * size + x], im[y * size + x])).unzip();
+                    f.run(&mut cr, &mut ci);
+                    (cr, ci)
+                })
+                .collect();
+            for (x, (cr, ci)) in cols.into_iter().enumerate() {
                 for y in 0..size {
                     re[y * size + x] = cr[y];
                     im[y * size + x] = ci[y];
@@ -917,13 +918,20 @@ pub(crate) mod tests {
                 im[i] *= ctf as f32;
             }
         }
-        // Inverse by conjugating: the real part is all that is kept.
+        // Inverse by conjugating: only the real part is kept.
         for v in im.iter_mut() {
             *v = -*v;
         }
         fft2(&mut re, &mut im);
-        let img = re;
-        let s = fft::spectrum(|x, y| img[y * size + x], [0, 0, size, size], n).unwrap();
+        re
+    }
+
+    /// Whole path: a CTF-filtered image through the FFT panel's spectrum.
+    #[test]
+    fn fits_an_image() {
+        let p = params();
+        let img = ctf_image(512, &p, 14000.0, 400.0, 50.0, 5);
+        let s = fft::spectrum(|x, y| img[y * 512 + x], [0, 0, 512, 512], 256).unwrap();
         let fit = fit_spectrum(&s.log, s.n, &p).unwrap();
         check(&fit, 14400.0, 13600.0, 50.0);
     }
