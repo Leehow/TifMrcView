@@ -22,6 +22,7 @@ const LANGS = [
 // prettier-ignore
 const WORDS = [
   // About dialog.
+  ["关于", "About", "Über", "このアプリについて", "Acerca de", "À propos", "О программе"],
   ["复制", "Copy", "Kopieren", "コピー", "Copiar", "Copier", "Копировать"],
   ["作者", "Author", "Autor", "作者", "Autor", "Auteur", "Автор"],
   ["引用", "Cite", "Zitieren", "引用", "Citar", "Citer", "Цитирование"],
