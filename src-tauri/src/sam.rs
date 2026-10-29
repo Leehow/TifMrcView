@@ -207,9 +207,10 @@ impl Sam {
             bail!("这个分割几乎盖满了整层，先用 Alt+点击去掉背景再传播");
         }
         let predictor = Self::predictor(&mut self.inner.lock().unwrap())?;
-        // A mask that has grown to three times the starting one has leaked
-        // into its surroundings a little at a time. (Shrinking is normal
-        // towards the ends of an object.)
+        // A thin mask that has grown to three times the starting one has
+        // leaked into its surroundings a little at a time. (Shrinking is
+        // normal towards the ends of an object, and a blob such as a lumen
+        // may widen a lot from a narrow start.)
         let start_area = start.iter().filter(|m| **m).count() as f32;
         self.cancel.store(false, SeqCst);
         let mut dirs = vec![];
@@ -236,11 +237,12 @@ impl Sam {
                 // to the previous slice wins.
                 let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
                 let mut why = vec![];
+                let max_growth = if prompt.points.len() > 1 { 3.0 } else { f32::INFINITY };
                 for (bbox, use_mask) in prompt.variants() {
                     let r = predictor.predict(&enc, &pts, bbox, use_mask.then(|| predictor.mask_prompt(&prev_low)));
                     let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
                     let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
-                    if grown > 3.0 || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
+                    if grown > max_growth || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
                         why.push(format!("box {} mask {use_mask}: {}, grown {grown:.2}", bbox.is_some(), compare(&prev, &mask, w, h, r.iou)));
                         continue;
                     }
