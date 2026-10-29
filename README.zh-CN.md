@@ -84,7 +84,7 @@ TifMrcView.register({
 
 ## 自动更新
 
-应用启动几秒后会静默检查 `https://tifmrcview.com/tifmrcview/latest.json`，有新版本时顶部出现提示条，点「立即更新并重启」会下载、校验签名、安装并重启。更新包用 Tauri 的 minisign 密钥签名，公钥写在 `tauri.conf.json` 里。
+应用启动几秒后会静默检查 `https://tifmrcview.com/tifmrcview/latest.json`，有新版本时只在右上角齿轮（设置）上显示一个小红点，不弹窗。打开齿轮菜单会看到「有新版本 x.y.z」，小红点随即消失（同一版本不会再出现）；点它打开「插件与更新」，点「更新到 x.y.z」会下载、校验签名、安装并重启。更新包用 Tauri 的 minisign 密钥签名，公钥写在 `tauri.conf.json` 里。
 
 ## 快捷键
 

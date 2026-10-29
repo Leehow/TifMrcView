@@ -15,6 +15,7 @@ struct AppState {
     /// The file shown in each window, by window label.
     current: Mutex<HashMap<String, Arc<OpenImage>>>,
     next_token: AtomicU64,
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     next_window: AtomicU64,
     /// Files the OS asked us to open that a window has not picked up yet.
     pending: Mutex<HashMap<String, Vec<String>>>,
@@ -66,6 +67,10 @@ struct Opened {
 
 #[tauri::command]
 fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Option<String> {
+    #[cfg(target_os = "android")]
+    if let Some(path) = android::take_opened(window.app_handle()) {
+        state.pending.lock().unwrap().entry(window.label().to_string()).or_default().push(path);
+    }
     let mut p = state.pending.lock().unwrap();
     let path = p.remove(window.label())?.into_iter().last()?;
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
@@ -578,6 +583,14 @@ async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> Cmd
 
 #[tauri::command]
 async fn pick_file(app: AppHandle) -> Option<String> {
+    // Android: the system picker hands out content:// links; the Kotlin side
+    // turns them into paths the readers can open and map.
+    #[cfg(target_os = "android")]
+    {
+        android::pick_file(&app)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     use tauri_plugin_dialog::DialogExt;
     let exts = formats::extensions();
     let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
@@ -587,6 +600,7 @@ async fn pick_file(app: AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|f| f.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+    }
 }
 
 #[derive(Serialize)]
@@ -648,6 +662,25 @@ async fn ctf_fit(state: State<'_, AppState>, req: crate::ctf::FitReq) -> CmdResu
     blocking(move || crate::ctf::fit_region(&img, &req)).await
 }
 
+/// CTF fit (Pro) on the same region of every slice (tilt series, stack);
+/// reports `ctf-stack` {done, total}.
+#[tauri::command]
+async fn ctf_fit_stack(app: AppHandle, req: crate::ctf::StackReq) -> CmdResult<crate::ctf::StackFit> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || {
+        let progress = |done, total| {
+            let _ = app.emit("ctf-stack", serde_json::json!({ "done": done, "total": total }));
+        };
+        crate::ctf::fit_stack(&img, &req, &progress)
+    })
+    .await
+}
+
+#[tauri::command]
+fn ctf_cancel() {
+    crate::ctf::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -677,6 +710,14 @@ async fn pick_save_path(
 
 #[tauri::command]
 async fn pick_folder(app: AppHandle, dir: String) -> Option<String> {
+    // Android: the system tree picker; the Kotlin side turns it into a path.
+    #[cfg(target_os = "android")]
+    {
+        let _ = dir;
+        android::pick_folder(&app)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     use tauri_plugin_dialog::DialogExt;
     app.dialog()
         .file()
@@ -684,6 +725,7 @@ async fn pick_folder(app: AppHandle, dir: String) -> Option<String> {
         .blocking_pick_folder()
         .and_then(|f| f.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+    }
 }
 
 /// The folder button: an image or a folder of slices from one panel. Only the
@@ -926,6 +968,7 @@ fn paths_from_args(args: impl IntoIterator<Item = String>, cwd: Option<&Path>) -
 /// Opens files the OS handed us. A file goes to the window that already
 /// shows it or another file from its folder, else to a window with nothing
 /// open yet, else to a new window.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn queue_open(app: &AppHandle, paths: Vec<String>) {
     for path in paths {
         let label = target_window(app, &path);
@@ -934,6 +977,7 @@ fn queue_open(app: &AppHandle, paths: Vec<String>) {
         match app.get_webview_window(&label) {
             Some(w) => {
                 let _ = app.emit_to(&label, "open-pending", ());
+                #[cfg(not(target_os = "android"))]
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
@@ -949,6 +993,7 @@ fn queue_open(app: &AppHandle, paths: Vec<String>) {
     }
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn target_window(app: &AppHandle, path: &str) -> String {
     let state = app.state::<AppState>();
     let dir = Path::new(path).parent();
@@ -956,8 +1001,9 @@ fn target_window(app: &AppHandle, path: &str) -> String {
     let pending = state.pending.lock().unwrap();
     let windows = app.webview_windows();
     // On a cold start macOS hands over the file before the main window
-    // exists; it is about to be created, so give the file to it.
-    if windows.is_empty() {
+    // exists; it is about to be created, so give the file to it. Android
+    // shows a single window.
+    if windows.is_empty() || cfg!(target_os = "android") {
         return "main".into();
     }
     let mut labels: Vec<&String> = windows.keys().collect();
@@ -997,12 +1043,20 @@ fn handle_links(app: &AppHandle, urls: impl IntoIterator<Item = String>) {
     // With no window yet, the main window picks the link up when it loads.
     if let Some(w) = labels.first().and_then(|l| windows.get(*l)) {
         let _ = app.emit_to(w.label(), "install-request", ());
+        #[cfg(not(target_os = "android"))]
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
 }
 
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into())).build()
+}
+
+#[cfg(not(target_os = "android"))]
 fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     // Cascade from the window in front so the new one doesn't hide it.
     let pos = app
@@ -1031,18 +1085,26 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android")))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = paths_from_args(args, Some(Path::new(&cwd)));
             queue_open(app, paths);
         }));
     }
-    builder
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder = builder
         // After single-instance: it forwards a second instance's link here.
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(android::init());
+    }
+    builder
         .manage(state)
         .manage(update::Pending::default())
         .manage(InstallRequest::default())
@@ -1113,6 +1175,8 @@ pub fn run() {
             histogram,
             power_spectrum,
             ctf_fit,
+            ctf_fit_stack,
+            ctf_cancel,
             spectrum_values,
             pick_save_path,
             pick_folder,

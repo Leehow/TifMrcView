@@ -328,9 +328,12 @@ pub async fn http_get(url: String, max: u64, https_only: bool, user_agent: &str)
         .connect_timeout(Duration::from_secs(if direct { 5 } else { 20 }))
         .read_timeout(Duration::from_secs(if direct { 15 } else { 60 }))
         // The loop below owns retries, including response-body timeouts.
-        .retry(reqwest::retry::never())
-        .build()
-        .map_err(offline)?;
+        .retry(reqwest::retry::never());
+    #[cfg(target_os = "android")]
+    let client = client.tls_certs_only(
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().filter_map(|c| reqwest::Certificate::from_der(c).ok()),
+    );
+    let client = client.build().map_err(offline)?;
     // One direct attempt lets a blocked port fall back after ~5 seconds.
     // Keep #25's longer budget and retries for the Cloudflare route.
     if direct {

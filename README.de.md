@@ -84,7 +84,7 @@ Plugins haben dieselben Rechte wie das Hauptprogramm: Installieren Sie nur Plugi
 
 ## Automatische Updates
 
-Wenige Sekunden nach dem Start prüft die App im Hintergrund `https://tifmrcview.com/tifmrcview/latest.json`. Gibt es eine neue Version, erscheint oben eine Hinweisleiste; „Jetzt aktualisieren und neu starten“ lädt das Update herunter, prüft die Signatur, installiert es und startet neu. Update-Pakete sind mit einem Tauri-minisign-Schlüssel signiert; der öffentliche Schlüssel steht in `tauri.conf.json`.
+Wenige Sekunden nach dem Start prüft die App im Hintergrund `https://tifmrcview.com/tifmrcview/latest.json`. Gibt es eine neue Version, erscheint nur ein kleiner roter Punkt am Zahnrad (Einstellungen), ohne Leiste oder Popup. Beim Öffnen des Zahnradmenüs steht dort „Version x.y.z verfügbar“ und der Punkt verschwindet für diese Version; der Eintrag öffnet „Plugins und Updates“, wo „Auf x.y.z aktualisieren“ das Update herunterlädt, prüft die Signatur, installiert es und startet neu. Update-Pakete sind mit einem Tauri-minisign-Schlüssel signiert; der öffentliche Schlüssel steht in `tauri.conf.json`.
 
 ## Tastenkürzel
 
