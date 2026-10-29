@@ -2354,7 +2354,7 @@ function showPanel(mode) {
   panel.hidden = !mode;
   panel.classList.toggle("only-contrast", mode === "contrast");
   panel.classList.toggle("only-info", mode === "info");
-  $("btn-show-tools").hidden = !!mode;
+  $("left-rail").hidden = !!mode;
   $("btn-contrast").classList.toggle("on", mode === "contrast");
   $("btn-info").classList.toggle("on", mode === "info");
   pref.set("tools", mode);

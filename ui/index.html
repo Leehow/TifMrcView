@@ -35,10 +35,8 @@
       </div>
       <span class="sep"></span>
       <button id="btn-scalebar" class="toggle" title="显示/隐藏比例尺（像素尺寸在「工具」里改）"><svg viewBox="0 0 24 24"><path d="M3 16h18M3 12v8M21 12v8M12 14v4"/></svg></button>
-      <button id="btn-contrast" class="toggle" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
       <button id="btn-fft" class="toggle" title="FFT 功率谱：对当前看到的区域计算，看晶格间距和 CTF 的 Thon 环"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5.5"/><circle cx="12" cy="12" r="1.5"/></svg></button>
       <button id="btn-spec" class="toggle" hidden title="谱图：显示文件里的 EELS / EDS 等谱；在图上点一下看那一点（或那一行）的谱，谱图像在曲线上点一下看那个能量的图"><svg viewBox="0 0 24 24"><path d="M3 20h18"/><path d="M3 18l3-6 2 3 3-10 2 9 2-4 2 5 2-2 3 3"/></svg></button>
-      <button id="btn-info" class="toggle" title="图像信息：格式、尺寸、像素尺寸，以及插件读出的显微镜采集参数" disabled><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/></svg></button>
       <button id="btn-annshow" class="toggle on" title="显示/隐藏标注 (H)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <span class="sep" id="axis-sep" hidden></span>
       <button id="btn-axis" hidden title="切换视图：XY 正常看每一层，XZ、YZ 从侧面看"><span id="axis-label">XY</span><svg viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg></button>
@@ -211,7 +209,11 @@
 
       </aside>
       <div class="resizer" id="tools-resizer" title="拖动调整宽度"></div>
-      <button id="btn-show-tools" class="panel-open" title="展开左侧工具栏 (T)" hidden><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      <div id="left-rail" class="edge-rail" hidden>
+        <button id="btn-show-tools" class="panel-open" title="展开左侧工具栏 (T)"><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+        <button id="btn-contrast" class="panel-open" title="亮度 / 对比度"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
+        <button id="btn-info" class="panel-open" title="图像信息：格式、尺寸、像素尺寸，以及插件读出的显微镜采集参数" disabled><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/></svg></button>
+      </div>
       <button id="btn-show-sidebar" class="panel-open" title="展开右侧预览栏 (B)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg></button>
     </main>
 
