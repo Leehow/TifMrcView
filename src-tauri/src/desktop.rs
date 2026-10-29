@@ -24,6 +24,8 @@ struct AppState {
     showing: Mutex<HashMap<String, String>>,
     thumbs: Mutex<HashMap<String, Arc<Vec<u8>>>>,
     save_paths: SavePaths,
+    /// Pro label maps of the open images.
+    labels: crate::labels::Store,
 }
 
 /// Paths the user chose (or quick-save picked) to write to; `save_file`
@@ -140,6 +142,325 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .ok_or_else(|| "stale".to_string())
 }
 
+/// The current stack as an 8-bit volume for the Pro 3D view.
+#[tauri::command]
+async fn volume_data(state: State<'_, AppState>, req: crate::volume::VolumeReq) -> CmdResult<Response> {
+    let img = current(&state, req.token)?;
+    let bytes = blocking(move || crate::volume::volume(&img, &req)).await?;
+    Ok(Response::new(bytes))
+}
+
+// ---------- Pro label maps ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelsState {
+    /// The label file next to the image.
+    path: String,
+    /// Voxels per label, indexed by label.
+    counts: Vec<u64>,
+    /// Main label of each slice (0 = none), for the marks on the Z slider.
+    slices: Vec<u16>,
+    /// Slices that changed.
+    zs: Vec<usize>,
+    materials: Vec<crate::labels::Material>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum LabelOp {
+    Stroke { z: usize, pts: Vec<[f32; 2]>, radius: f32, label: u16, guard: u16 },
+    Wand { x: usize, y: usize, z: usize, c: usize, t: usize, tol: f32, label: u16, guard: u16, three_d: bool },
+    Threshold { z0: usize, z1: usize, c: usize, t: usize, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize },
+    Watershed { z0: usize, z1: usize, c: usize, t: usize },
+    Polygon { z: usize, pts: Vec<[f32; 2]>, label: u16, guard: u16 },
+    Interpolate { label: u16, guard: u16 },
+    Delete { label: u16 },
+    Materials { materials: Vec<crate::labels::Material> },
+    Undo,
+    Redo,
+}
+
+/// Saves and drops the label maps of images no window shows any more.
+fn prune_labels(state: &AppState) {
+    let open: HashSet<u64> = state.current.lock().unwrap().values().map(|i| i.token).collect();
+    let gone: Vec<_> = {
+        let mut store = state.labels.lock().unwrap();
+        let tokens: Vec<u64> = store.keys().copied().filter(|t| !open.contains(t)).collect();
+        tokens.into_iter().filter_map(|t| store.remove(&t)).collect()
+    };
+    for e in gone {
+        let mut e = e.lock().unwrap();
+        if e.labels.dirty {
+            let path = PathBuf::from(&e.path);
+            if let Err(err) = e.labels.save(&path) {
+                eprintln!("saving {}: {err}", path.display());
+            }
+        }
+    }
+}
+
+fn labels_state(e: &crate::labels::Entry, zs: Vec<usize>) -> LabelsState {
+    let l = &e.labels;
+    LabelsState { path: e.path.clone(), counts: l.counts(), slices: l.slice_labels(), zs, materials: l.materials.clone() }
+}
+
+fn labels_entry(state: &AppState, token: u64) -> CmdResult<Arc<Mutex<crate::labels::Entry>>> {
+    state.labels.lock().unwrap().get(&token).cloned().ok_or_else(|| "stale".to_string())
+}
+
+/// Loads (or starts) the label map of an open image.
+#[tauri::command]
+async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<LabelsState> {
+    prune_labels(&state);
+    if let Ok(e) = labels_entry(&state, token) {
+        let e = e.lock().unwrap();
+        return Ok(labels_state(&e, vec![]));
+    }
+    let img = state.current.lock().unwrap().values().find(|i| i.token == token).cloned().ok_or("stale")?;
+    let entry = blocking(move || {
+        let info = img.info();
+        let path = crate::labels::labels_path(&info.path, info.series_index);
+        let labels = if Path::new(&path).exists() {
+            crate::labels::Labels::load(Path::new(&path), info.width, info.height, info.size_z)?
+        } else {
+            crate::labels::Labels::new(info.width, info.height, info.size_z)
+        };
+        Ok(crate::labels::Entry { labels, path })
+    })
+    .await?;
+    let out = labels_state(&entry, vec![]);
+    state.labels.lock().unwrap().entry(token).or_insert_with(|| Arc::new(Mutex::new(entry)));
+    Ok(out)
+}
+
+/// One slice of the label map as little-endian u16.
+#[tauri::command]
+async fn labels_slice(state: State<'_, AppState>, token: u64, z: usize) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || Ok(e.lock().unwrap().labels.slice_bytes(z))).await?;
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> CmdResult<LabelsState> {
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    blocking(move || {
+        use crate::labels::ChannelValues;
+        let mut e = e.lock().unwrap();
+        let values = |c, t| ChannelValues { img: img.clone(), c, t };
+        let l = &mut e.labels;
+        let zs = match op {
+            LabelOp::Stroke { z, pts, radius, label, guard } => l.stroke(z, &pts, radius, label, guard),
+            LabelOp::Wand { x, y, z, c, t, tol, label, guard, three_d } => l.wand(&values(c, t), x, y, z, tol, label, guard, three_d)?,
+            LabelOp::Threshold { z0, z1, c, t, lo, hi, label, guard, split, min_size } => {
+                l.threshold(&values(c, t), z0..z1, lo, hi, label, guard, split, min_size)?
+            }
+            LabelOp::Watershed { z0, z1, c, t } => l.watershed(&values(c, t), z0..z1)?,
+            LabelOp::Polygon { z, pts, label, guard } => l.polygon(z, &pts, label, guard),
+            LabelOp::Interpolate { label, guard } => l.interpolate(label, guard),
+            LabelOp::Delete { label } => l.delete_label(label),
+            LabelOp::Materials { materials } => {
+                l.set_materials(materials);
+                vec![]
+            }
+            LabelOp::Undo => l.undo(),
+            LabelOp::Redo => l.redo(),
+        };
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+/// Writes the label file when it changed; returns whether a file exists now.
+#[tauri::command]
+async fn labels_save(state: State<'_, AppState>, token: u64) -> CmdResult<bool> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let mut e = e.lock().unwrap();
+        let path = PathBuf::from(&e.path);
+        if !e.labels.dirty {
+            return Ok(path.exists());
+        }
+        e.labels.save(&path)
+    })
+    .await
+}
+
+/// The label map reduced like `volume_data` for the 3D view: u32 width,
+/// height, depth, then one byte per voxel.
+#[tauri::command]
+async fn labels_volume(state: State<'_, AppState>, token: u64, max_voxels: usize) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || {
+        let e = e.lock().unwrap();
+        let l = &e.labels;
+        let (f, fz) = crate::volume::factors(l.w, l.h, l.d, max_voxels);
+        let (w, h, d, v) = l.reduced(f, fz);
+        let mut out = Vec::with_capacity(12 + v.len());
+        for n in [w, h, d] {
+            out.extend_from_slice(&(n as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&v);
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+// ---------- Pro SAM segmentation ----------
+
+#[tauri::command]
+fn sam_status(sam: State<'_, crate::sam::Sam>) -> crate::sam::Status {
+    sam.status()
+}
+
+/// Downloads the SAM model once, reporting `sam-download` {done, total}.
+#[tauri::command]
+async fn sam_download(app: AppHandle) -> CmdResult<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    use std::sync::atomic::Ordering::SeqCst;
+    let sam = app.state::<crate::sam::Sam>();
+    if !crate::edition::PRO {
+        return Err("SAM 分割只在 TifMrcView Pro 里有".into());
+    }
+    if sam.downloading.swap(true, SeqCst) {
+        return Err("模型正在下载".into());
+    }
+    let result = async {
+        let path = crate::sam::model_path().ok_or("找不到存放模型的文件夹")?;
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
+        let part = path.with_extension("part");
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+        let client = reqwest::Client::builder()
+            .user_agent(format!("{}/{}", crate::edition::NAME, env!("CARGO_PKG_VERSION")))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .read_timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(err)?;
+        let mut last_err = String::new();
+        for url in crate::sam::MODEL_URLS {
+            let attempt = async {
+                let mut resp = client.get(url).send().await.map_err(err)?;
+                if !resp.status().is_success() {
+                    return Err(format!("服务器返回 {}", resp.status().as_u16()));
+                }
+                let total = resp.content_length().unwrap_or(crate::sam::MODEL_SIZE);
+                let mut file = std::io::BufWriter::new(std::fs::File::create(&part).map_err(err)?);
+                let mut hash = Sha256::new();
+                let (mut done, mut shown) = (0u64, 0u64);
+                while let Some(chunk) = resp.chunk().await.map_err(err)? {
+                    file.write_all(&chunk).map_err(err)?;
+                    hash.update(&chunk);
+                    done += chunk.len() as u64;
+                    if done - shown > 1 << 20 || done == total {
+                        shown = done;
+                        let _ = app.emit("sam-download", serde_json::json!({ "done": done, "total": total }));
+                    }
+                }
+                file.flush().map_err(err)?;
+                drop(file);
+                let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+                crate::sam::verify(done, &hex).map_err(err)?;
+                std::fs::rename(&part, &path).map_err(err)
+            };
+            match attempt.await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&part);
+                    last_err = e;
+                }
+            }
+        }
+        Err(format!("模型下载失败：{last_err}"))
+    }
+    .await;
+    sam.downloading.store(false, SeqCst);
+    result
+}
+
+/// Segments the object under the prompt on one slice. Reply: u32 width,
+/// u32 height, f32 predicted IoU, then one byte per pixel (1 = inside).
+#[tauri::command]
+async fn sam_predict(app: AppHandle, req: crate::sam::PredictReq) -> CmdResult<Response> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let app2 = app.clone();
+    let bytes = blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let info = img.info();
+        let (w, h) = (info.width, info.height);
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
+            use crate::labels::Values;
+            vals.slice(z)
+        };
+        let (mask, iou) = sam.predict(&req, (w, h, info.size_z), values)?;
+        let mut out = Vec::with_capacity(12 + mask.len());
+        out.extend_from_slice(&(w as u32).to_le_bytes());
+        out.extend_from_slice(&(h as u32).to_le_bytes());
+        out.extend_from_slice(&iou.to_le_bytes());
+        out.extend_from_slice(&mask);
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Paints the last SAM mask into the label map.
+#[tauri::command]
+async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16) -> CmdResult<LabelsState> {
+    let e = labels_entry(&app.state::<AppState>(), token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let last = sam.last.lock().unwrap();
+        let Some(m) = last.as_ref().filter(|m| m.token == token && m.z == z) else {
+            anyhow::bail!("没有可以应用的分割结果");
+        };
+        let mut e = e.lock().unwrap();
+        let zs = e.labels.apply_mask(z, &m.mask, label, guard);
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+/// Carries the last SAM mask along Z and paints every slice it reaches,
+/// as one undo step; reports `sam-propagate` {done, total}.
+#[tauri::command]
+async fn sam_propagate(app: AppHandle, req: crate::sam::PropagateReq, label: u16, guard: u16) -> CmdResult<LabelsState> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let e = labels_entry(&app.state::<AppState>(), req.token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let info = img.info();
+        let d = e.lock().unwrap().labels.d;
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
+            use crate::labels::Values;
+            vals.slice(z)
+        };
+        let progress = |done, total| {
+            let _ = app2.emit("sam-propagate", serde_json::json!({ "done": done, "total": total }));
+        };
+        let masks = sam.propagate(&req, (info.width, info.height, d), values, progress)?;
+        let refs: Vec<(usize, &[bool])> = masks.iter().map(|(z, m)| (*z, m.as_slice())).collect();
+        let mut e = e.lock().unwrap();
+        let zs = e.labels.apply_masks(&refs, label, guard);
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+#[tauri::command]
+fn sam_cancel(sam: State<'_, crate::sam::Sam>) {
+    sam.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
@@ -211,7 +532,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.is_file() && formats::is_supported(p))
+            .filter(|p| p.is_file() && formats::is_supported(p) && !crate::labels::is_labels_file(p))
             .filter(|p| !p.file_name().map(|n| n.to_string_lossy().starts_with("._")).unwrap_or(false))
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
@@ -642,7 +963,7 @@ fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .find(|w| w.is_focused().unwrap_or(false))
         .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)));
     let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
-        .title("TifMrcView")
+        .title(crate::edition::NAME)
         .inner_size(1280.0, 800.0)
         .min_inner_size(640.0, 480.0);
     b = match pos {
@@ -678,6 +999,7 @@ pub fn run() {
         .manage(update::Pending::default())
         .manage(InstallRequest::default())
         .manage(plugins::MarketCache::default())
+        .manage(crate::sam::Sam::default())
         .register_uri_scheme_protocol("tmvplugin", plugins::serve)
         .setup(|app| {
             let dir = plugins::user_dir(app.handle());
@@ -722,6 +1044,18 @@ pub fn run() {
             open_reslice,
             load_progress,
             render_view,
+            volume_data,
+            labels_open,
+            labels_slice,
+            labels_edit,
+            labels_save,
+            labels_volume,
+            sam_status,
+            sam_download,
+            sam_predict,
+            sam_apply,
+            sam_propagate,
+            sam_cancel,
             pixel_values,
             list_folder,
             thumbnail,
@@ -768,6 +1102,12 @@ pub fn run() {
                 state.pending.lock().unwrap().remove(label);
                 state.showing.lock().unwrap().remove(label);
                 state.side.lock().unwrap().remove(label);
+                prune_labels(&state);
+            }
+            if let tauri::RunEvent::Exit = &_event {
+                let state = _app.state::<AppState>();
+                state.current.lock().unwrap().clear();
+                prune_labels(&state);
             }
             // macOS delivers double-clicked files as an event, not as argv.
             // tifmrcview:// links arrive here too; the deep-link plugin

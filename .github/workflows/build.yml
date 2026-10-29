@@ -78,6 +78,13 @@ jobs:
           cargo build --target x86_64-pc-windows-msvc -p tmv-thumbnail-win
           cargo test --target x86_64-pc-windows-msvc -p tmv-thumbnail-win
 
+      - name: Pro edition
+        working-directory: src-tauri
+        run: |
+          cargo test --features pro --lib
+          cargo check --features pro
+          cargo test -p tmv-sam
+
       - name: Headless thumbnail core
         working-directory: src-tauri
         run: |
@@ -130,16 +137,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # standard = TifMrcView, pro = TifMrcView Pro (tauri.pro.conf.json).
+        edition: [standard, pro]
+        name: [macos-universal, windows-x64, linux-x64]
         include:
-          - platform: macos-latest
+          - name: macos-universal
+            platform: macos-latest
             args: --target universal-apple-darwin
-            name: macos-universal
-          - platform: windows-latest
+          - name: windows-x64
+            platform: windows-latest
             args: ""
-            name: windows-x64
-          - platform: ubuntu-22.04
+          - name: linux-x64
+            platform: ubuntu-22.04
             args: ""
-            name: linux-x64
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -161,24 +171,30 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ matrix.edition }}
 
       - run: npm ci || npm install
 
       # Version, update feed and (when the signing key is available) signed
-      # updater packages are passed as a config overlay.
+      # updater packages are passed as a config overlay; Pro starts from
+      # tauri.pro.conf.json and reads latest-pro*.json from the same folder.
       - name: Build config
         shell: bash
         env:
           VERSION: ${{ needs.version.outputs.version }}
           HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          EDITION: ${{ matrix.edition }}
         run: |
           node -e '
-            const c = { version: process.env.VERSION,
-              plugins: { updater: { endpoints: [
-                process.env.DIRECT_BASE_URL.replace(/\/+$/, "") + "/latest-direct.json",
-                process.env.UPDATE_BASE_URL.replace(/\/+$/, "") + "/latest.json"
-              ] } } };
-            if (process.env.HAS_KEY === "true") c.bundle = { createUpdaterArtifacts: true };
+            const pro = process.env.EDITION === "pro";
+            const feed = pro ? "latest-pro" : "latest";
+            const c = pro ? JSON.parse(require("fs").readFileSync("src-tauri/tauri.pro.conf.json", "utf8")) : {};
+            c.version = process.env.VERSION;
+            c.plugins = { updater: { endpoints: [
+                process.env.DIRECT_BASE_URL.replace(/\/+$/, "") + `/${feed}-direct.json`,
+                process.env.UPDATE_BASE_URL.replace(/\/+$/, "") + `/${feed}.json`
+              ] } };
+            if (process.env.HAS_KEY === "true") c.bundle = { ...c.bundle, createUpdaterArtifacts: true };
             require("fs").writeFileSync("src-tauri/tauri.ci.conf.json", JSON.stringify(c, null, 2));
           '
           cat src-tauri/tauri.ci.conf.json
@@ -193,7 +209,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: TifMrcView-${{ matrix.name }}
+          name: TifMrcView-${{ matrix.edition }}-${{ matrix.name }}
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg
             src-tauri/target/**/release/bundle/macos/*.app.tar.gz*
@@ -224,13 +240,20 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: TifMrcView-standard-*
+          path: artifacts/standard
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: TifMrcView-pro-*
+          path: artifacts/pro
 
       - name: Assemble release
         env:
           NOTES: ${{ needs.version.outputs.notes }}
         run: |
-          node scripts/make-release.mjs artifacts release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
+          node scripts/make-release.mjs artifacts/standard release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
+          TMV_EDITION=pro node scripts/make-release.mjs artifacts/pro release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
           ls -lR release
           node scripts/pack-plugins.mjs release
 
@@ -255,7 +278,7 @@ jobs:
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$VERSION" "$dest/"
           # Plugin market packages and index (served at /plugins/).
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" release/plugins/ "$dest/plugins/"
-          for f in latest.json latest-direct.json downloads.json; do
+          for f in latest.json latest-direct.json downloads.json latest-pro.json latest-pro-direct.json downloads-pro.json; do
             [ -f "release/$f" ] && rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$f" "$dest/$f"
           done
 

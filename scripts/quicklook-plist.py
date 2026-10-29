@@ -1,5 +1,6 @@
 """Generate macOS app and helper declarations from shared format lists."""
 import json
+import os
 import plistlib
 import sys
 from pathlib import Path
@@ -55,7 +56,8 @@ def generate(kind):
     else:
         attrs["QLIsDataBasedPreview"] = True
     return {
-        "CFBundleIdentifier": f"com.leehow.tifmrcview.quicklook.{kind.lower()}",
+        # Extension ids must start with the app's bundle id (Pro has its own).
+        "CFBundleIdentifier": f"{os.environ.get('TMV_APP_ID', 'com.leehow.tifmrcview')}.quicklook.{kind.lower()}",
         "CFBundleExecutable": f"Tmv{kind}", "CFBundleName": f"Tmv{kind}",
         "CFBundlePackageType": "XPC!", "CFBundleVersion": config["version"],
         "CFBundleShortVersionString": config["version"],

@@ -4,6 +4,20 @@ const T = window.__TAURI__;
 const invoke = T.core.invoke;
 const $ = (id) => document.getElementById(id);
 
+// Standard or Pro build (same code; the Pro build has its own product name).
+// Pro loads its extra tools from pro/pro.js.
+const EDITION = { name: "TifMrcView", pro: false };
+T.app.getName().then((name) => {
+  EDITION.name = name;
+  EDITION.pro = name !== "TifMrcView";
+  document.title = name;
+  if (!EDITION.pro) return;
+  document.documentElement.dataset.edition = "pro";
+  const s = document.createElement("script");
+  s.src = "pro/pro.js";
+  document.body.appendChild(s);
+}).catch(() => {});
+
 const COLORS = [
   [255, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0],
   [0, 0, 255], [0, 255, 255], [255, 255, 0],
@@ -52,6 +66,12 @@ const S = {
   model: null,      // IMOD model loaded for this image
   modelShow: true,
 };
+
+// Tools and overlays added from outside this file (the Pro label tools):
+// tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on)},
+// where p is the pointer in image pixels; overlays are f(ctx) drawn over the
+// image in screen coordinates, under the annotations.
+const ext = { tools: {}, overlays: [] };
 
 const canvas = $("view");
 const ctx = canvas.getContext("2d");
@@ -221,7 +241,7 @@ async function openPath(path, force = false, series = 0) {
     S.pz = S.px && ps && ps[2] > 0 && S.pxSource !== "手动" ? ps[2] : null;
     $("empty").hidden = true;
     $("st-pixel").textContent = "";
-    T.window.getCurrentWindow().setTitle(`${res.info.name} — TifMrcView`).catch(() => {});
+    T.window.getCurrentWindow().setTitle(`${res.info.name} — ${EDITION.name}`).catch(() => {});
     buildChannels();
     buildSeries();
     setupSliders();
@@ -340,7 +360,7 @@ async function setAxis(axis) {
   }
   applyZSpacing();
   const view = axis === "xy" ? "" : ` (${axis.toUpperCase()})`;
-  T.window.getCurrentWindow().setTitle(`${info.name}${view} — TifMrcView`).catch(() => {});
+  T.window.getCurrentWindow().setTitle(`${info.name}${view} — ${EDITION.name}`).catch(() => {});
   setupSliders();
   syncScaleUi();
   updateInfo();
@@ -1233,6 +1253,7 @@ function draw() {
 
   // Model coordinates are pixel indices; +0.5 puts them on pixel centres.
   drawModel(ctx, (x, y) => toScreen(x + 0.5, y + 0.5), S.view.scale, 1);
+  for (const f of ext.overlays) f(ctx);
 
   const items = S.annShow ? S.ann.filter((a) => onSlice(a)) : [];
   const drawing = S.op && S.op.kind === "draw" && S.op.item.type !== "crop" ? [S.op.item] : [];
@@ -2139,6 +2160,7 @@ function setTool(t) {
   canvas.classList.toggle("text", t === "text");
   if (t !== "select") S.picked = null;
   if (t !== "crop") S.cropBox = null;
+  for (const [name, x] of Object.entries(ext.tools)) if (x.active) x.active(name === t);
   draw();
 }
 
@@ -2596,8 +2618,13 @@ function pushHistory(snap) {
   if (S.history.length > 200) S.history.shift();
 }
 
+// A tool extension guards its own gestures; S.op "ext" can outlive a
+// pointerup the webview never delivered, and must not block undo then.
+const midGesture = () => S.op && !(S.op.kind === "ext" && ext.tools[S.tool]);
+
 function undo() {
-  if (S.op) return;
+  if (midGesture()) return;
+  if (ext.tools[S.tool] && ext.tools[S.tool].undo) return ext.tools[S.tool].undo();
   const h = S.history.pop();
   if (!h) return;
   S.future.push(snapshot());
@@ -2605,7 +2632,8 @@ function undo() {
 }
 
 function redo() {
-  if (S.op) return;
+  if (midGesture()) return;
+  if (ext.tools[S.tool] && ext.tools[S.tool].redo) return ext.tools[S.tool].redo();
   const h = S.future.pop();
   if (!h) return;
   S.history.push(snapshot());
@@ -2716,7 +2744,7 @@ function updateZMarks() {
     const f0 = a.z / (n - 1);
     const f1 = (a.z1 ?? a.z) / (n - 1);
     i.style.left = `${f0 * 100}%`;
-    i.style.width = `calc(${(f1 - f0) * 100}% + 4px)`;
+    i.style.width = `calc(${(f1 - f0) * 100}% + 6px)`;
     i.style.background = a.color;
     box.append(i);
   }
@@ -2859,6 +2887,11 @@ canvas.addEventListener("pointerdown", (e) => {
     canvas.classList.add("drag");
     return;
   }
+  if (ext.tools[S.tool]) {
+    S.op = { kind: "ext" };
+    ext.tools[S.tool].down(e, toImage(e));
+    return;
+  }
   const p = toImage(e);
   const tol = 6 / S.view.scale;
   const snap = snapshot();
@@ -2951,6 +2984,10 @@ canvas.addEventListener("pointermove", (e) => {
     requestRender();
     return;
   }
+  if (op.kind === "ext") {
+    if (ext.tools[S.tool]) ext.tools[S.tool].move(e, toImage(e));
+    return;
+  }
   let p = toImage(e);
   const it = op.item;
   if (it.type === "crop") p = clampToImage(p);
@@ -3008,6 +3045,10 @@ function endPointer(e) {
     canvas.classList.remove("drag");
     // A click without dragging picks the spectrum shown in the plot.
     if (e && e.type === "pointerup" && Math.hypot(e.clientX - op.x, e.clientY - op.y) < 4) specClick(toImage(e));
+    return;
+  }
+  if (op.kind === "ext") {
+    if (ext.tools[S.tool]) ext.tools[S.tool].up();
     return;
   }
   const it = op.item;

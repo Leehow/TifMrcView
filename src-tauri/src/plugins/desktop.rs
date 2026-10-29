@@ -215,7 +215,10 @@ fn market_urls(updater: Option<&Value>) -> Vec<String> {
     let mut bases = Vec::new();
     if let Some(endpoints) = updater.and_then(|u| u["endpoints"].as_array()) {
         for endpoint in endpoints.iter().filter_map(Value::as_str) {
-            let base = endpoint.strip_suffix("latest.json").or_else(|| endpoint.strip_suffix("latest-direct.json"));
+            // latest.json, latest-direct.json, and Pro's latest-pro(-direct).json share one folder.
+            let base = ["latest.json", "latest-direct.json", "latest-pro.json", "latest-pro-direct.json"]
+                .iter()
+                .find_map(|feed| endpoint.strip_suffix(feed));
             if let Some(base) = base.filter(|b| b.starts_with("https://") && b.ends_with('/')) {
                 let url = format!("{base}plugins/");
                 if !bases.contains(&url) { bases.push(url); }
@@ -402,6 +405,9 @@ mod tests {
         assert_eq!(market_urls(conf["plugins"].get("updater")), vec![
             "https://dl.tifmrcview.com:9443/tifmrcview/plugins/", MARKET_URL,
         ]);
+        // Pro uses the same market.
+        let pro: Value = serde_json::from_str(include_str!("../../tauri.pro.conf.json")).unwrap();
+        assert_eq!(market_urls(pro["plugins"].get("updater")), market_urls(conf["plugins"].get("updater")));
         let repeated = serde_json::json!({"endpoints": [
             "https://direct.test/latest-direct.json", "https://direct.test/latest.json",
             "http://evil/latest.json", "https://main.test/latest.json",

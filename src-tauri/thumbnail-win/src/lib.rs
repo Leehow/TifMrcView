@@ -18,7 +18,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::PropertiesSystem::{IInitializeWithStream, IInitializeWithStream_Impl};
 use windows::Win32::UI::Shell::{IThumbnailProvider, IThumbnailProvider_Impl, WTSAT_RGB, WTS_ALPHATYPE};
 
-const CLSID: GUID = GUID::from_u128(0x926e1d8f_eb25_48d9_a251_9d27bf165d8a);
+const CLSID: GUID = GUID::from_u128(tifmrcview_lib::edition::THUMB_CLSID);
 const MAX_STREAM: u64 = 512 << 20;
 static OBJECTS: AtomicUsize = AtomicUsize::new(0);
 static LOCKS: AtomicUsize = AtomicUsize::new(0);

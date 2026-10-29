@@ -1,0 +1,29 @@
+[package]
+name = "tmv-sam"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SAM 2.1 segmentation in Burn for TifMrcView Pro"
+publish = false
+
+[features]
+default = ["flex"]
+# CPU fallback.
+flex = ["burn/flex"]
+ndarray = ["burn/ndarray"]
+# Metal / DX12 / Vulkan through wgpu.
+wgpu = ["burn/wgpu"]
+# Kernel fusion and autotuning (part of Burn's default features, which are
+# off here). Autotune made loading 15-20x slower on an M1 Max, so it is
+# kept separate for benchmarking.
+fusion = ["burn/fusion"]
+autotune = ["burn/autotune"]
+# On Apple GPUs, kernels compiled to Metal Shading Language instead of WGSL.
+metal = ["wgpu", "burn/metal"]
+# NVIDIA machines without Vulkan; needs the driver's libcuda and NVRTC at run time.
+cuda = ["burn/cuda"]
+
+[dependencies]
+anyhow = "1"
+burn = { version = "0.22.1", default-features = false, features = ["std"] }
+burn-store = { version = "0.22.1", default-features = false, features = ["std", "pytorch"] }
