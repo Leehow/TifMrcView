@@ -71,7 +71,8 @@ const S = {
 // tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on)},
 // where p is the pointer in image pixels; overlays are f(ctx) drawn over the
 // image in screen coordinates, under the annotations.
-const ext = { tools: {}, overlays: [] };
+// settings: entries plugins add to the ⚙ menu (see plugin-host.js addSettingsSelect).
+const ext = { tools: {}, overlays: [], settings: [] };
 
 const canvas = $("view");
 const ctx = canvas.getContext("2d");
@@ -479,6 +480,35 @@ async function pickFile() {
 async function pickStackFolder() {
   const dir = await invoke("pick_folder", { dir: S.info ? dirname(S.info.folder || S.info.path) : "" });
   if (dir) openPath(dir);
+}
+
+/**
+ * The folder button: one dialog for an image or a folder of slices on macOS,
+ * where the system panel can choose both. The Windows and Linux dialogs pick
+ * either files or folders, so there the button asks which first.
+ */
+function openAny() {
+  if (IS_MAC) {
+    invoke("pick_open", { dir: S.info ? dirname(S.info.folder || S.info.path) : "" })
+      .then((p) => p && openPath(p))
+      .catch((e) => toast(`${e}`));
+    return;
+  }
+  if (closeMenu($("btn-open"))) return;
+  openMenu(
+    $("btn-open"),
+    [
+      { value: "file", label: "打开图像…", key: "Ctrl+O", icon: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>' },
+      {
+        value: "folder",
+        label: "打开文件夹…",
+        hint: "切片组成 Z 堆叠",
+        key: "Ctrl+Shift+O",
+        icon: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+      },
+    ],
+    (v) => (v === "folder" ? pickStackFolder : pickFile)(),
+  );
 }
 
 async function takePending() {
@@ -2207,6 +2237,7 @@ function openMenu(anchor, items, pick) {
   m.hidden = false;
   const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 6}px`;
+  m.style.right = "";
   m.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8))}px`;
 }
 
@@ -2321,7 +2352,8 @@ function showPanel(mode) {
   panel.hidden = !mode;
   panel.classList.toggle("only-contrast", mode === "contrast");
   panel.classList.toggle("only-info", mode === "info");
-  $("btn-tools").classList.toggle("on", mode === "all");
+  $("tools-tab").classList.toggle("flip", !!mode);
+  $("tools-tab").title = mode ? "收起左侧工具栏 (T)" : "展开左侧工具栏 (T)";
   $("btn-contrast").classList.toggle("on", mode === "contrast");
   $("btn-info").classList.toggle("on", mode === "info");
   pref.set("tools", mode);
@@ -2467,7 +2499,8 @@ function toggleSidebar(force) {
   const show = force ?? sb.classList.contains("collapsed");
   sb.classList.toggle("collapsed", !show);
   $("sidebar-resizer").hidden = !show;
-  $("btn-sidebar").classList.toggle("on", show);
+  $("sidebar-tab").classList.toggle("flip", !show);
+  $("sidebar-tab").title = show ? "收起右侧预览栏 (B)" : "展开右侧预览栏 (B)";
   pref.set("sidebar", show);
   if (show) markStrip();
 }
@@ -3167,7 +3200,7 @@ window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod) {
-    if (key === "o") (e.shiftKey ? pickStackFolder : pickFile)();
+    if (key === "o") (e.shiftKey ? pickStackFolder : IS_MAC ? openAny : pickFile)();
     else if (key === "s") quickSave();
     else if (key === "z") (e.shiftKey ? redo : undo)();
     else if (key === "y") redo();
@@ -3266,8 +3299,7 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-$("btn-open").addEventListener("click", pickFile);
-$("btn-open-folder").addEventListener("click", pickStackFolder);
+$("btn-open").addEventListener("click", openAny);
 $("btn-prev").addEventListener("click", () => step(-1));
 $("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
 $("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
@@ -3280,12 +3312,12 @@ $("btn-zoom").addEventListener("click", fit);
 $("btn-zoomin").addEventListener("click", () => zoomBy(1.25));
 $("btn-zoomout").addEventListener("click", () => zoomBy(0.8));
 $("btn-play").addEventListener("click", togglePlay);
-$("btn-tools").addEventListener("click", () => showPanel("all"));
+$("tools-tab").addEventListener("click", () => showPanel($("tools").hidden ? "all" : null));
 $("btn-contrast").addEventListener("click", () => showPanel("contrast"));
 $("btn-info").addEventListener("click", () => showPanel("info"));
 $("meta-filter").addEventListener("input", renderMeta);
 $("meta-copy").addEventListener("click", copyMeta);
-$("btn-sidebar").addEventListener("click", () => toggleSidebar());
+$("sidebar-tab").addEventListener("click", () => toggleSidebar());
 $("btn-scalebar").addEventListener("click", () => {
   if (!S.px) {
     showPanel("all");

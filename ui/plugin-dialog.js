@@ -93,7 +93,7 @@ function togglePluginDialog(force) {
   const dlg = $("plugin-dialog");
   const show = force ?? dlg.hidden;
   dlg.hidden = !show;
-  $("btn-plugins").classList.toggle("on", show);
+  if (show) toggleHelp(false);
   if (show) {
     renderPluginList();
     if (market.list || market.loading) renderMarket();
@@ -181,7 +181,67 @@ async function installUpdate() {
   }
 }
 
-$("btn-plugins").addEventListener("click", () => togglePluginDialog());
+// ---------- ⚙ settings menu and help ----------
+
+const GEAR_ICONS = {
+  plugins: '<path d="M4 7h5a2.5 2.5 0 1 1 5 0h4v5a2.5 2.5 0 1 1 0 5v4H4z"/>',
+  lang: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><path d="M12 17.5v.5"/>',
+};
+
+function openSettings() {
+  const btn = $("btn-settings");
+  if (closeMenu(btn)) return;
+  const items = [{ value: "plugins", label: "插件与更新", icon: GEAR_ICONS.plugins, on: !$("plugin-dialog").hidden }];
+  ext.settings.forEach((s, i) => {
+    const cur = s.options.find(([v]) => v === s.value);
+    items.push({ value: i, label: s.title, hint: cur ? cur[1] : "", icon: GEAR_ICONS.lang });
+  });
+  items.push({ value: "help", label: "帮助", icon: GEAR_ICONS.help, on: !$("help-dialog").hidden });
+  openMenu(btn, items, (v) => {
+    if (v === "plugins") togglePluginDialog();
+    else if (v === "help") toggleHelp();
+    else pickSetting(ext.settings[v]);
+  });
+  placeMenuRight(btn);
+}
+
+/** The options of one settings entry, as a second menu in the same place. */
+function pickSetting(s) {
+  if (!s) return;
+  const btn = $("btn-settings");
+  openMenu(
+    btn,
+    s.options.map(([value, label]) => ({ value, label, on: value === s.value })),
+    (v) => {
+      s.value = v;
+      s.onChange(v);
+    },
+  );
+  placeMenuRight(btn);
+}
+
+/** The ⚙ button sits at the right edge: line the menu up with it on the right. */
+function placeMenuRight(btn) {
+  const m = $("dropmenu");
+  // Anchored by its right edge, so it stays on screen when translated labels widen it.
+  m.style.left = "auto";
+  m.style.right = `${Math.max(8, window.innerWidth - btn.getBoundingClientRect().right)}px`;
+}
+
+function toggleHelp(force) {
+  const dlg = $("help-dialog");
+  const show = force ?? dlg.hidden;
+  dlg.hidden = !show;
+  if (show) {
+    togglePluginDialog(false);
+    $("help-version").textContent = $("app-version").textContent;
+  }
+}
+
+$("btn-settings").addEventListener("click", openSettings);
+$("help-close").addEventListener("click", () => toggleHelp(false));
+$("help-site").addEventListener("click", () => invoke("open_website").catch((e) => toast(`${e}`)));
 $("plugin-close").addEventListener("click", () => togglePluginDialog(false));
 $("plugin-install").addEventListener("click", () => installPackage().catch((e) => toast(`安装失败：${e}`, 6000)));
 $("plugin-dir").addEventListener("click", () =>
@@ -201,7 +261,9 @@ $("update-later").addEventListener("click", () => {
   $("update-bar").hidden = true;
 });
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("plugin-dialog").hidden) togglePluginDialog(false);
+  if (e.key !== "Escape") return;
+  if (!$("plugin-dialog").hidden) togglePluginDialog(false);
+  if (!$("help-dialog").hidden) toggleHelp(false);
 });
 
 (async () => {
@@ -213,6 +275,8 @@ window.addEventListener("keydown", (e) => {
   $("app-version").textContent = pluginHost.appVersion ? `${name} ${pluginHost.appVersion}` : name;
   $("update-auto").checked = pref.get("update.auto", true);
   await loadPlugins();
+  // The empty window lists the format plugins from the market.
+  if (!$("empty").hidden) loadMarket();
   // Opened (or started) by a tifmrcview://install-plugin link.
   await takeInstallRequest();
   // Check quietly a little after start so opening a file is never delayed.
