@@ -42,7 +42,7 @@ const CHUNK: usize = 64;
 /// Shift change (binned pixels) below which "movie" iterations stop.
 const SETTLED: f64 = 0.01;
 const MAX_ITER: usize = 12;
-/// Series steps with a peak below this fraction of the chunk's median are searched again near the step before.
+/// Series steps with a peak below this fraction of the chunk's median are not trusted.
 const LOW_STEP: f64 = 0.5;
 
 #[derive(Deserialize, Clone)]
@@ -80,6 +80,7 @@ pub struct Aligned {
 }
 
 /// Kept frequencies of one binned slice: m × m, row = ky + m/2, column = kx + m/2.
+#[derive(Clone)]
 struct Spec {
     re: Vec<f32>,
     im: Vec<f32>,
@@ -417,8 +418,13 @@ fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spe
     let mut d = vec![[0f64; 2]; count];
     let mut cc = vec![1f64; count];
     let mut prev: Option<Spec> = None;
+    // The last slice placed by a good step, for bridging weak ones.
+    let mut anchor: Option<(usize, Spec)> = None;
     for start in (0..count).step_by(CHUNK) {
         let specs: Vec<Spec> = (start..(start + CHUNK).min(count)).map(get).collect::<Result<_>>()?;
+        if start == 0 {
+            anchor = Some((0, specs[0].clone()));
+        }
         let steps: Vec<(usize, ([f64; 2], f64))> = (0..specs.len())
             .into_par_iter()
             .filter_map(|k| {
@@ -426,26 +432,47 @@ fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spe
                 Some((start + k, pair_shift(a, &specs[k], g, &fft_m, max)))
             })
             .collect();
-        // A step whose peak is much weaker than its neighbours' (high tilts,
-        // a damaged slice) is often a wrong peak tens of pixels away: look
-        // again only near the step before it, as a tracker would.
+        // A step whose peak is much weaker than the others' (a slice at high
+        // tilt, or damaged) is often a wrong peak tens of pixels away. Then
+        // measure from the last slice that was placed by a good step (the
+        // anchor) straight to this one, and place the slices between on the
+        // line; if that is weak too, keep the slice where its neighbour is
+        // and leave its correlation low so the panel flags it.
         let mut good: Vec<f64> = steps.iter().map(|(_, (_, v))| *v).collect();
         good.sort_by(f64::total_cmp);
         let weak = good.get(good.len() / 2).copied().unwrap_or(0.0) * LOW_STEP;
-        for (i, (mut s, mut v)) in steps {
-            // The squares were moved: the step measured is what is left of it.
-            let moved = [(offs[i][0] - offs[i - 1][0]) as f64 / g.bin as f64, (offs[i][1] - offs[i - 1][1]) as f64 / g.bin as f64];
-            if v < weak && i >= 2 {
-                let k = i - start;
-                let a = if k == 0 { prev.as_ref().unwrap() } else { &specs[k - 1] };
-                let before = [d[i - 1][0] - d[i - 2][0] - moved[0], d[i - 1][1] - d[i - 2][1] - moved[1]];
-                let (pr, pi) = cross(&specs[k], &a.re, &a.im);
-                let (p, peak) = refine_peak(&pr, &pi, g, before);
-                s = p;
-                v = norm_cc(peak, a.energy, specs[k].energy);
+        let moved = |a: usize, b: usize| [(offs[b][0] - offs[a][0]) as f64 / g.bin as f64, (offs[b][1] - offs[a][1]) as f64 / g.bin as f64];
+        for (i, (s, v)) in steps {
+            let k = i - start;
+            let held_before = anchor.as_ref().is_some_and(|(a, _)| *a + 1 < i);
+            let mut placed = None;
+            if v < weak || held_before {
+                if let Some((a, sa)) = anchor.as_ref().filter(|(a, _)| *a + 1 < i) {
+                    let (bs, bv) = pair_shift(sa, &specs[k], g, &fft_m, max);
+                    if bv >= weak {
+                        let m = moved(*a, i);
+                        let end = [d[*a][0] + m[0] + bs[0], d[*a][1] + m[1] + bs[1]];
+                        for j in *a + 1..i {
+                            let f = (j - a) as f64 / (i - a) as f64;
+                            d[j] = [d[*a][0] + f * (end[0] - d[*a][0]), d[*a][1] + f * (end[1] - d[*a][1])];
+                        }
+                        placed = Some((end, bv));
+                    }
+                }
             }
-            d[i] = [d[i - 1][0] + moved[0] + s[0], d[i - 1][1] + moved[1] + s[1]];
-            cc[i] = v;
+            let (pos, c) = match placed {
+                Some(p) => p,
+                None if v < weak => (d[i - 1], v),
+                None => {
+                    let m = moved(i - 1, i);
+                    ([d[i - 1][0] + m[0] + s[0], d[i - 1][1] + m[1] + s[1]], v)
+                }
+            };
+            d[i] = pos;
+            cc[i] = c;
+            if c >= weak {
+                anchor = Some((i, specs[k].clone()));
+            }
         }
         prev = specs.into_iter().last();
     }
@@ -819,6 +846,26 @@ mod tests {
         for (i, (g, t)) in d.iter().zip(&truth).enumerate() {
             let e = (g[0] - (t[0] - mid[0])).hypot(g[1] - (t[1] - mid[1]));
             assert!(e < if i == 6 { 4.0 } else { 0.5 }, "slice {i}: {g:?} vs {:?}", [t[0] - mid[0], t[1] - mid[1]]);
+        }
+    }
+
+    /// The last slices all buried in noise (the highest tilts): they stay
+    /// put instead of running off on wrong peaks.
+    #[test]
+    fn holds_weak_slices_at_the_end() {
+        let truth: Vec<[f64; 2]> = (0..9).map(|i| [5.0 * i as f64, -3.0 * i as f64]).collect();
+        let mut fr = frames(300, 300, &truth, 0.05);
+        for (k, f) in fr.iter_mut().enumerate().skip(6) {
+            let mut nz = noise(500 + k as u64);
+            for v in f.iter_mut() {
+                *v = 0.04 * *v + 3.0 * nz();
+            }
+        }
+        let (d, cc) = estimate_frames(&fr, 300, 300, true, 256);
+        for i in 6..9 {
+            let step = (d[i][0] - d[i - 1][0]).hypot(d[i][1] - d[i - 1][1]);
+            assert!(step < 8.0, "slice {i} jumped {step:.1} px: {d:?}");
+            assert!(cc[i] < cc[4], "cc {cc:?}");
         }
     }
 
