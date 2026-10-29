@@ -455,3 +455,11 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   .touch-only { display: block; }
   .desk-only { display: none; }
 }
+
+/* Long-press menu for an annotation on touch screens. */
+#ann-menu {
+  position: absolute; z-index: 30; transform: translate(-50%, -100%);
+  padding: 4px; background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 10px; box-shadow: var(--shadow);
+}
+#ann-menu button { height: 40px; padding: 0 20px; font-size: 15px; color: #cf222e; border: 0; }
