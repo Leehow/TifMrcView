@@ -10,7 +10,6 @@
   <header id="toolbar">
     <div class="group" id="file-group">
       <button id="btn-open" title="打开图像或文件夹 (Ctrl/⌘+O)：文件夹里的切片图像（FIB-SEM、连续切片等）按顺序组成一个 Z 堆叠"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
-      <button id="btn-show-tools" title="展开左侧工具栏 (T)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
       <button id="btn-prev" title="上一个文件 (↑)" disabled>◀</button>
       <span id="file-pos">–</span>
       <select id="series" title="这个文件里有多个图像，选择要看的那个" hidden></select>
@@ -52,7 +51,6 @@
         <button id="btn-zoom" title="点击适应窗口 (F)；按 1 为 100%">100%</button>
         <button id="btn-zoomin" title="放大 (+)">+</button>
       </div>
-      <button id="btn-show-sidebar" title="展开右侧预览栏 (B)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
       <button id="btn-settings" title="设置：插件、语言、帮助"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     </div>
   </header>
@@ -213,6 +211,8 @@
 
       </aside>
       <div class="resizer" id="tools-resizer" title="拖动调整宽度"></div>
+      <button id="btn-show-tools" class="panel-open" title="展开左侧工具栏 (T)" hidden><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      <button id="btn-show-sidebar" class="panel-open" title="展开右侧预览栏 (B)" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg></button>
     </main>
 
     <div class="resizer" id="sidebar-resizer" title="拖动调整宽度"></div>
