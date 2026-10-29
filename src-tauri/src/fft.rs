@@ -104,7 +104,7 @@ fn transpose(a: &[f32], n: usize) -> Vec<f32> {
     out
 }
 
-fn hann(n: usize) -> Vec<f32> {
+pub(crate) fn hann(n: usize) -> Vec<f32> {
     (0..n).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos()) as f32).collect()
 }
 
@@ -130,20 +130,24 @@ pub struct Spectrum {
     pub radial: Vec<f32>,
 }
 
-/// Power spectrum of `values` (w × h, row major) inside `region`.
-pub fn spectrum(values: impl Fn(usize, usize) -> f32 + Sync, region: [usize; 4], want_n: usize) -> Result<Spectrum> {
+/// Tile size and tile origins along X and Y for `region` = [x0, y0, w, h].
+pub(crate) fn tiling(region: [usize; 4], want_n: usize) -> Result<(usize, Vec<usize>, Vec<usize>)> {
     let [x0, y0, w, h] = region;
     let side = w.min(h);
     if side < MIN_N {
         bail!("区域太小（至少 {MIN_N} × {MIN_N} 像素）");
     }
     let n = want_n.clamp(MIN_N, MAX_N).min(1 << side.ilog2());
-    let fft = Fft::new(n);
-    let win = hann(n);
     // Keep the work about that of 64 tiles of 512: fewer tiles when they are larger.
     let per_axis = (((MAX_TILES * 512 * 512) / (n * n)) as f64).sqrt().max(2.0) as usize;
-    let xs = origins(x0, w, n, per_axis);
-    let ys = origins(y0, h, n, per_axis);
+    Ok((n, origins(x0, w, n, per_axis), origins(y0, h, n, per_axis)))
+}
+
+/// Power spectrum of `values` (w × h, row major) inside `region`.
+pub fn spectrum(values: impl Fn(usize, usize) -> f32 + Sync, region: [usize; 4], want_n: usize) -> Result<Spectrum> {
+    let (n, xs, ys) = tiling(region, want_n)?;
+    let fft = Fft::new(n);
+    let win = hann(n);
     let mut sum = vec![0f64; n * n];
     for &ty in &ys {
         for &tx in &xs {
@@ -165,9 +169,13 @@ pub fn spectrum(values: impl Fn(usize, usize) -> f32 + Sync, region: [usize; 4],
             }
         }
     }
-    let tiles = xs.len() * ys.len();
+    Ok(finish(&sum, n, xs.len() * ys.len()))
+}
+
+/// Centres the summed (unshifted) power of `tiles` tiles, takes log10 and
+/// the ring average.
+pub(crate) fn finish(sum: &[f64], n: usize, tiles: usize) -> Spectrum {
     let half = n / 2;
-    // Centre zero frequency and average rings.
     let mut log = vec![0f32; n * n];
     let mut ring = vec![(0f64, 0usize); half + 1];
     for v in 0..n {
@@ -184,7 +192,7 @@ pub fn spectrum(values: impl Fn(usize, usize) -> f32 + Sync, region: [usize; 4],
         }
     }
     let radial = ring.iter().map(|&(s, c)| (s / c.max(1) as f64 + 1e-12).log10() as f32).collect();
-    Ok(Spectrum { n, tiles, log, radial })
+    Spectrum { n, tiles, log, radial }
 }
 
 /// Reply of the `power_spectrum` command: `u32 n, u32 tiles`, then n × n
