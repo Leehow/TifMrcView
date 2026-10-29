@@ -180,7 +180,7 @@ figcaption{margin-top:18px;font-size:14px;color:var(--faint);text-align:center}
 @media (max-width:540px){.grid3{grid-template-columns:1fr}}
 
 /* ---------- plugins ---------- */
-.plugs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:clamp(40px,5vw,64px)}
+.plugs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:clamp(40px,5vw,64px)}
 .plugs a{display:flex;flex-direction:column;gap:10px;padding:28px 26px 26px;border-radius:22px;background:var(--card);color:var(--ink);border:1px solid var(--hair);transition:transform .35s var(--ease),box-shadow .35s var(--ease);min-height:200px}
 .plugs a:hover{text-decoration:none;transform:translateY(-3px);box-shadow:0 18px 40px -18px rgba(0,0,0,.28)}
 .plugs b{font-size:21px;letter-spacing:-.015em}

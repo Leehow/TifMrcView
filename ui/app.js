@@ -1551,6 +1551,8 @@ function drawFft(error) {
   $("fft-info").textContent = `${n}×${n}，平均 ${d.tiles} 块`;
   drawFftProfile();
   showFftHover();
+  // Pro's CTF fit redraws its overlay on this.
+  document.dispatchEvent(new CustomEvent("tmv-fft"));
 }
 
 /** Spatial frequency (1/m per FFT pixel along x and y), or null without a length calibration. */

@@ -20,8 +20,8 @@ window.TifMrcViewPro = {
   badge.textContent = "Pro";
   badge.title = "TifMrcView Pro";
   document.getElementById("toolbar").prepend(badge);
-  // Segmentation labels, and the 3D view of Z stacks (in this order).
-  for (const src of ["pro/labels.js", "pro/volume.js"]) {
+  // Segmentation labels, the 3D view of Z stacks, and CTF fitting in the FFT panel (in this order).
+  for (const src of ["pro/labels.js", "pro/volume.js", "pro/ctf.js"]) {
     const s = document.createElement("script");
     s.src = src;
     s.async = false;
