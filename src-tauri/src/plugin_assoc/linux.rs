@@ -323,18 +323,20 @@ mod tests {
         let xml = mime_xml(&types);
         assert!(xml.contains("<mime-type type=\"image/png\"><glob pattern=\"*.png\"/>"));
         assert!(thumbnailer(&types.values().cloned().collect())
-            .contains("Exec=tifmrcview --thumbnail %i %o --size %s\n"));
+            .contains(&format!("Exec={} --thumbnail %i %o --size %s\n", crate::edition::BIN)));
     }
     #[test]
     fn added_associations_preserve_defaults_order_and_user_entries() {
-        let original = "# keep\n[Default Applications]\nimage/png=other.desktop;\n[Added Associations]\nimage/png=before.desktop;tifmrcview.desktop;after.desktop;\napplication/x-tifmrcview-dm3=other.desktop;\n[Removed Associations]\nimage/jpeg=tifmrcview.desktop;\n";
+        // This edition's desktop file (tifmrcview-pro.desktop in Pro).
+        let original = "# keep\n[Default Applications]\nimage/png=other.desktop;\n[Added Associations]\nimage/png=before.desktop;tifmrcview.desktop;after.desktop;\napplication/x-tifmrcview-dm3=other.desktop;\n[Removed Associations]\nimage/jpeg=tifmrcview.desktop;\n"
+            .replace("tifmrcview.desktop", DESKTOP);
         let (out, owned) = mimeapps(
-            original,
+            &original,
             &set(&["image/png", "application/x-tifmrcview-dm4", "image/jpeg"]),
             &set(&["application/x-tifmrcview-dm3"]),
         );
         assert!(out.starts_with("# keep\n[Default Applications]\nimage/png=other.desktop;\n"));
-        assert!(out.contains("image/png=before.desktop;tifmrcview.desktop;after.desktop;"));
+        assert!(out.contains(&format!("image/png=before.desktop;{DESKTOP};after.desktop;")));
         assert!(out.contains("application/x-tifmrcview-dm3=other.desktop;"));
         assert_eq!(owned, set(&["application/x-tifmrcview-dm4"]));
         assert_eq!(
@@ -361,24 +363,20 @@ mod tests {
         run(&["dm3", "dm4"]);
         assert_eq!(std::fs::read(config.join("mimeapps.list")).unwrap(), apps);
         run(&["dm4"]);
-        let xml =
-            std::fs::read_to_string(data.join("mime/packages/tifmrcview-plugins.xml")).unwrap();
+        let bin = crate::edition::BIN;
+        let xml = std::fs::read_to_string(data.join(format!("mime/packages/{bin}-plugins.xml"))).unwrap();
         assert!(!xml.contains("dm3"));
         assert!(xml.contains("dm4"));
         run(&[]);
-        assert!(!data
-            .join("thumbnailers/tifmrcview-plugins.thumbnailer")
-            .exists());
-        assert!(!data.join("mime/packages/tifmrcview-plugins.xml").exists());
-        assert!(!data.join("applications/tifmrcview.desktop").exists());
-        assert!(!data
-            .join("com.leehow.tifmrcview/plugin-formats.json")
-            .exists());
+        assert!(!data.join(format!("thumbnailers/{bin}-plugins.thumbnailer")).exists());
+        assert!(!data.join(format!("mime/packages/{bin}-plugins.xml")).exists());
+        assert!(!data.join("applications").join(DESKTOP).exists());
+        assert!(!data.join(crate::edition::APP_ID).join("plugin-formats.json").exists());
         assert_eq!(
             std::fs::read_to_string(config.join("mimeapps.list")).unwrap(),
             "[Added Associations]\n"
         );
-        let launcher = data.join("applications/tifmrcview.desktop");
+        let launcher = data.join("applications").join(DESKTOP);
         std::fs::write(&launcher, "[Desktop Entry]\nName=User launcher\n").unwrap();
         run(&["dm4"]);
         run(&[]);

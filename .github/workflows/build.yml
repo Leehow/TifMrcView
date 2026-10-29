@@ -81,7 +81,7 @@ jobs:
       - name: Pro edition
         working-directory: src-tauri
         run: |
-          cargo test --features pro --lib edition
+          cargo test --features pro --lib
           cargo check --features pro
           cargo test -p tmv-sam
 
