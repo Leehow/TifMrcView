@@ -165,6 +165,7 @@
       row.querySelector(".name").textContent = nameOf(k);
       row.querySelector(".name").addEventListener("dblclick", () => rename(k, row.querySelector(".name")));
       row.querySelector(".n").textContent = n ? sizeText(n) : "";
+      row.querySelector(".n").title = n ? sizeText(n) : "";
       row.querySelector(".del").hidden = !n;
       row.addEventListener("click", (e) => {
         const b = e.target.closest("button, label, input");
@@ -671,7 +672,7 @@
     if (!st.available) text = "SAM 分割只在 TifMrcView Pro 里有";
     else if (L.sam.progress) text = `正在下载模型 ${Math.round((L.sam.progress.done / L.sam.progress.total) * 100)}%`;
     else if (!ready) text = `第一次使用要先下载 SAM 2.1 模型（约 ${Math.round(st.size / 1e6)} MB，只下载一次）`;
-    else if (L.sam.along) text = `正在沿 Z 传播 ${L.sam.along.done}/${L.sam.along.total} 层（Esc 停止）`;
+    else if (L.sam.along) text = L.sam.along.total ? `正在沿 Z 传播 ${L.sam.along.done}/${L.sam.along.total} 层（Esc 停止）` : "正在沿 Z 传播…（Esc 停止）";
     else if (L.sam.busy) text = st.loaded ? "SAM 计算中…" : "正在加载模型和计算图像特征…";
     else if (L.sam.mask) text = `预测质量 ${Math.round(L.sam.iou * 100)}%：回车写进当前标签，Alt+点击去掉多余部分`;
     else text = "点一下要分割的物体；Alt+点击标背景，Shift+拖动拉框";
@@ -805,7 +806,7 @@
       const st = await editWith("sam_propagate", { req, label: L.active, guard: L.guard ? L.active : 0 });
       if (st) {
         samClear();
-        toast(`沿 Z 分割了 ${st.zs.length} 层`, 3000);
+        toast(`沿 Z 分割了 ${st.zs.filter((z) => z !== req.z).length} 层`, 3000);
       }
     } finally {
       un();

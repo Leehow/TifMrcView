@@ -174,6 +174,9 @@ impl Sam {
             Some(m) if m.token == req.token && m.z == req.z => m.mask.clone(),
             _ => bail!("先在这一层点出一个分割，再沿 Z 传播"),
         };
+        if too_big(&start) {
+            bail!("这个分割几乎盖满了整层，先用 Alt+点击去掉背景再传播");
+        }
         let predictor = Self::predictor(&mut self.inner.lock().unwrap())?;
         self.cancel.store(false, SeqCst);
         let mut dirs = vec![];
@@ -230,10 +233,45 @@ impl Sam {
 }
 
 /// Raw values to 0..255 over the display range.
-fn to_gray(v: &[f32], lo: f32, hi: f32) -> Vec<u8> {
+pub fn to_gray(v: &[f32], lo: f32, hi: f32) -> Vec<u8> {
     let span = (hi - lo).abs().max(f32::MIN_POSITIVE);
     let lo = lo.min(hi);
     v.iter().map(|&x| ((x - lo) / span * 255.0).clamp(0.0, 255.0) as u8).collect()
+}
+
+/// Denoising for noisy slices (cryo-ET): the mean of the given neighbouring
+/// slices, then a 2D Gaussian blur of `sigma` pixels (0 = none).
+pub fn denoise(slices: &[Vec<f32>], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+    let n = slices.len().max(1) as f32;
+    let mut a = vec![0f32; w * h];
+    for s in slices {
+        for (o, v) in a.iter_mut().zip(s) {
+            *o += v / n;
+        }
+    }
+    if sigma <= 0.0 {
+        return a;
+    }
+    let r = (sigma * 3.0).ceil() as isize;
+    let k: Vec<f32> = (-r..=r).map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f32 = k.iter().sum();
+    let mut b = vec![0f32; w * h];
+    // Rows, then columns: (samples per line, stride along it, lines, line step).
+    for (len, stride, lines, step) in [(w, 1, h, w), (h, w, w, 1)] {
+        for line in 0..lines {
+            let base = line * step;
+            for i in 0..len {
+                let mut acc = 0.0;
+                for (j, kv) in k.iter().enumerate() {
+                    let p = (i as isize + j as isize - r).clamp(0, len as isize - 1) as usize;
+                    acc += kv * a[base + p * stride];
+                }
+                b[base + i * stride] = acc / sum;
+            }
+        }
+        std::mem::swap(&mut a, &mut b);
+    }
+    a
 }
 
 /// Prompt for the next slice from a mask on this one: the mask's box grown
@@ -260,12 +298,17 @@ pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<([f32; 4], Pro
     Some((bbox, PromptPoint { x: (i % w) as f32 + 0.5, y: (i / w) as f32 + 0.5, positive: true }))
 }
 
+/// More than 60 % of the slice: background, not an object worth carrying on.
+fn too_big(mask: &[bool]) -> bool {
+    mask.iter().filter(|m| **m).count() * 10 > mask.len() * 6
+}
+
 /// Whether `next` still looks like the object of `prev` on the slice before:
 /// confident, of similar size, and overlapping it.
 pub fn still_same(prev: &[bool], next: &[bool], iou_pred: f32) -> bool {
     let (a, b) = (prev.iter().filter(|m| **m).count(), next.iter().filter(|m| **m).count());
     let both = prev.iter().zip(next).filter(|(p, n)| **p && **n).count();
-    if b == 0 || iou_pred < 0.5 {
+    if b == 0 || iou_pred < 0.5 || too_big(next) {
         return false;
     }
     let ratio = b as f32 / a.max(1) as f32;
@@ -305,6 +348,15 @@ mod tests {
         assert!(!still_same(&a, &disc(64, 48, 31.0, 20.0, 3.0), 0.9));
         assert!(!still_same(&a, &disc(64, 48, 55.0, 40.0, 10.0), 0.9));
         assert!(!still_same(&a, &vec![false; 64 * 48], 0.9));
+        assert!(!still_same(&vec![true; 64 * 48], &vec![true; 64 * 48], 0.9));
+    }
+
+    #[test]
+    fn denoise_averages_and_blurs() {
+        let a = vec![vec![0.0, 0.0, 9.0, 0.0, 0.0], vec![0.0, 0.0, 3.0, 0.0, 0.0]];
+        assert_eq!(denoise(&a, 5, 1, 0.0), vec![0.0, 0.0, 6.0, 0.0, 0.0]);
+        let b = denoise(&a, 5, 1, 1.0);
+        assert!(b[2] < 6.0 && b[1] > 0.0 && b[2] > b[1] && b[1] > b[0]);
     }
 
     /// A sphere in a 160x120x21 stack: one click on the middle slice, then

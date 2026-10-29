@@ -86,6 +86,10 @@ strip = true
 [profile.dev.package."*"]
 opt-level = 2
 
+[[example]]
+name = "sam_slice"
+required-features = ["pro"]
+
 [dev-dependencies]
 tempfile = "3"
 # Tests write LZ4 blocks.
