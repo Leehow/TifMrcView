@@ -1,5 +1,8 @@
 #[cfg(feature = "desktop")]
 mod assoc;
+pub mod ctf;
+#[cfg(feature = "pro")]
+pub mod ctf_gpu;
 pub mod edition;
 pub mod fft;
 pub mod formats;

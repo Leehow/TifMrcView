@@ -641,6 +641,13 @@ async fn power_spectrum(
     Ok(Response::new(bytes))
 }
 
+/// CTF fit (Pro) on the power spectrum of a region; see `ctf::fit_region`.
+#[tauri::command]
+async fn ctf_fit(state: State<'_, AppState>, req: crate::ctf::FitReq) -> CmdResult<crate::ctf::Fit> {
+    let img = current(&state, req.token)?;
+    blocking(move || crate::ctf::fit_region(&img, &req)).await
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -1064,6 +1071,7 @@ pub fn run() {
             reveal_in_folder,
             histogram,
             power_spectrum,
+            ctf_fit,
             spectrum_values,
             pick_save_path,
             pick_folder,
