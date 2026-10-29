@@ -757,6 +757,221 @@
     }
   };
   Object.keys(HOME).forEach(function (c) { for (var k in HOME[c]) T[c][k] = HOME[c][k]; });
+  // TifMrcView Pro page (site/pro/) and the links to it.
+  var PRO = {
+    zh: {
+      nav_pro: "Pro 版",
+      pro_teaser: "要做 3D、分割和电镜分析？看看 <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D、分割与电镜分析",
+      pro_desc: "TifMrcView Pro：免费开源的显微与电镜图像分析工具。3D 体视图、分割标签与材料、SAM 2.1 点击分割并沿 Z 传播、CTF 拟合、漂移校正，计算尽量在 GPU 上。",
+      pro_h1: "<span>不只是看，</span><span>还能分析。</span>",
+      pro_lead: "TifMrcView Pro 是在查看器之上做成的分析工具：3D 体视图、分割、SAM 2.1 智能分割、CTF 拟合和漂移校正。同样免费开源，计算尽量放在 GPU 上（CUDA、Metal、DX12、Vulkan）。",
+      pro_cta: "下载 Pro",
+      pro_f1h: "3D 体视图",
+      pro_f1p: "最大强度投影、半透明和等值面渲染。像 ChimeraX 那样按 σ 调阈值，平滑和直方图都在 GPU 上算。冷冻电镜断层可一键反相。",
+      pro_f2h: "分割标签与材料",
+      pro_f2p: "画笔、魔棒、阈值、分水岭、套索和层间插值。材料像 Amira 那样可命名、配色、隐藏和锁定，存成 Fiji / napari 能读的 16 位 TIFF。",
+      pro_f3h: "SAM 2.1 智能分割",
+      pro_f3p: "点一下就分出物体，再沿 Z 自动传播到整个物体，细膜和闭合轮廓也能跟住。模型用 Rust 重写，在你的显卡上本地运行，数据不出电脑。",
+      pro_f4h: "CTF 拟合",
+      pro_f4p: "在功率谱上拟合离焦、像散和相位板相移，把拟合出的 CTF 零点画在谱上，并给出一维拟合曲线。",
+      pro_f5h: "漂移校正",
+      pro_f5p: "测出影片、倾转系列和连续切片每一层的位移，画出轨迹，保存对齐后的栈或叠加图（MRC）。",
+      pro_cmp_h: "两个版本，各有侧重",
+      pro_b_h: "基础版：轻巧的查看器",
+      pro_b_p: "小而快，双击就开数 GB 的 TIFF / MRC。手动测量、标注、FFT 和能谱查看都有。适合日常浏览和快速检查，也有安卓版。",
+      pro_p_h: "Pro：分析工具",
+      pro_p_p: "包含基础版的全部功能，另加 3D、分割、SAM、CTF 拟合和漂移校正。适合要出结果的分析工作。可以和基础版同时安装。",
+      pro_b_a: "基础版介绍",
+      pro_dl_h: "<span>下载 TifMrcView Pro。</span>",
+      pro_dl_p: "免费开源。macOS、Windows、Linux 原生安装包。",
+      pro_note: "第一次使用 SAM 时会下载约 156 MB 的模型。Linux 版自带 CUDA 支持（NVIDIA 显卡）。",
+      pro_mac_tip: "首次打开若被拦截：在终端运行 <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code>",
+      pro_soon: "Pro 安装包即将发布。"
+    },
+    en: {
+      nav_pro: "Pro",
+      pro_teaser: "Need 3D, segmentation and EM analysis? See <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D, segmentation and EM analysis",
+      pro_desc: "TifMrcView Pro: a free, open-source analysis tool for microscopy and EM images. 3D volume view, segmentation labels and materials, SAM 2.1 click segmentation along Z, CTF fitting and drift correction, computed on the GPU wherever possible.",
+      pro_h1: "<span>Not just viewing.</span> <span>Analysis.</span>",
+      pro_lead: "TifMrcView Pro builds an analysis tool on top of the viewer: 3D volume view, segmentation, SAM 2.1 smart segmentation, CTF fitting and drift correction. Also free and open source, computed on the GPU wherever possible (CUDA, Metal, DX12, Vulkan).",
+      pro_cta: "Download Pro",
+      pro_f1h: "3D volume view",
+      pro_f1p: "Maximum intensity, translucent and surface rendering. Levels in σ like ChimeraX, with smoothing and histograms computed on the GPU. Cryo-ET tomograms invert in one click.",
+      pro_f2h: "Segmentation labels and materials",
+      pro_f2p: "Brush, magic wand, threshold, watershed, lasso and slice interpolation. Materials as in Amira: named, coloured, hidden and locked, saved as a 16-bit TIFF that Fiji and napari read.",
+      pro_f3h: "SAM 2.1 smart segmentation",
+      pro_f3p: "One click segments an object, then it is carried along Z through the whole object, thin membranes and closed outlines included. The model is rewritten in Rust and runs locally on your GPU; your data never leaves your computer.",
+      pro_f4h: "CTF fitting",
+      pro_f4p: "Fits defocus, astigmatism and phase-plate shift to the power spectrum, draws the fitted CTF zeros over it and shows the 1D fit.",
+      pro_f5h: "Drift correction",
+      pro_f5p: "Measures how far each frame of a movie, tilt series or serial section stack moved, plots the trajectory, and saves the aligned stack or its sum as MRC.",
+      pro_cmp_h: "Two editions, two jobs",
+      pro_b_h: "Standard: a light viewer",
+      pro_b_p: "Small and fast; multi-GB TIFF / MRC files open with a double-click. Manual measurement, annotation, FFT and spectrum viewing included. Made for everyday browsing and quick checks, also on Android.",
+      pro_p_h: "Pro: an analysis tool",
+      pro_p_p: "Everything in the standard app, plus 3D, segmentation, SAM, CTF fitting and drift correction. Made for analysis that has to produce results. Installs side by side with the standard app.",
+      pro_b_a: "About the standard app",
+      pro_dl_h: "<span>Download TifMrcView Pro.</span>",
+      pro_dl_p: "Free and open source. Native installers for macOS, Windows and Linux.",
+      pro_note: "The first use of SAM downloads a model of about 156 MB. The Linux build includes CUDA support (NVIDIA GPUs).",
+      pro_mac_tip: "If macOS blocks the first launch, run <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code> in Terminal.",
+      pro_soon: "Pro installers are coming shortly."
+    },
+    de: {
+      nav_pro: "Pro",
+      pro_teaser: "3D, Segmentierung und EM-Analyse gefragt? Zu <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D, Segmentierung und EM-Analyse",
+      pro_desc: "TifMrcView Pro: kostenloses Open-Source-Analysewerkzeug für Mikroskopie- und EM-Bilder. 3D-Volumenansicht, Segmentierungs-Labels und Materialien, SAM-2.1-Segmentierung per Klick entlang Z, CTF-Fit und Driftkorrektur, wo möglich auf der GPU.",
+      pro_h1: "<span>Nicht nur ansehen.</span> <span>Analysieren.</span>",
+      pro_lead: "TifMrcView Pro macht aus dem Viewer ein Analysewerkzeug: 3D-Volumenansicht, Segmentierung, intelligente Segmentierung mit SAM 2.1, CTF-Fit und Driftkorrektur. Ebenfalls kostenlos und Open Source, gerechnet wo möglich auf der GPU (CUDA, Metal, DX12, Vulkan).",
+      pro_cta: "Pro herunterladen",
+      pro_f1h: "3D-Volumenansicht",
+      pro_f1p: "Maximumprojektion, transluzente und Oberflächendarstellung. Schwellen in σ wie in ChimeraX, Glättung und Histogramme auf der GPU. Kryo-ET-Tomogramme lassen sich mit einem Klick invertieren.",
+      pro_f2h: "Segmentierungs-Labels und Materialien",
+      pro_f2p: "Pinsel, Zauberstab, Schwelle, Watershed, Lasso und Interpolation zwischen Schichten. Materialien wie in Amira: benennen, einfärben, ausblenden, sperren; gespeichert als 16-Bit-TIFF, das Fiji und napari lesen.",
+      pro_f3h: "Intelligente Segmentierung mit SAM 2.1",
+      pro_f3p: "Ein Klick segmentiert ein Objekt, das dann entlang Z durch das ganze Objekt verfolgt wird – auch dünne Membranen und geschlossene Umrisse. Das Modell ist in Rust neu geschrieben und läuft lokal auf Ihrer GPU; die Daten verlassen den Rechner nicht.",
+      pro_f4h: "CTF-Fit",
+      pro_f4p: "Passt Defokus, Astigmatismus und Phasenplatten-Verschiebung an das Leistungsspektrum an, zeichnet die CTF-Nullstellen ein und zeigt den 1D-Fit.",
+      pro_f5h: "Driftkorrektur",
+      pro_f5p: "Misst, wie weit sich jedes Bild eines Films, einer Kippserie oder eines Serienschnitt-Stapels verschoben hat, zeigt die Trajektorie und speichert den ausgerichteten Stapel oder seine Summe als MRC.",
+      pro_cmp_h: "Zwei Editionen, zwei Aufgaben",
+      pro_b_h: "Standard: ein leichter Viewer",
+      pro_b_p: "Klein und schnell; mehrere GB große TIFF / MRC öffnen per Doppelklick. Manuelles Messen, Annotationen, FFT und Spektrenansicht inklusive. Für den Alltag und schnelle Kontrollen, auch für Android.",
+      pro_p_h: "Pro: ein Analysewerkzeug",
+      pro_p_p: "Alles aus der Standard-App, dazu 3D, Segmentierung, SAM, CTF-Fit und Driftkorrektur. Für Analysen, die Ergebnisse liefern sollen. Lässt sich neben der Standard-App installieren.",
+      pro_b_a: "Zur Standard-App",
+      pro_dl_h: "<span>TifMrcView Pro herunterladen.</span>",
+      pro_dl_p: "Kostenlos und Open Source. Native Installer für macOS, Windows und Linux.",
+      pro_note: "Beim ersten Einsatz von SAM wird ein Modell von etwa 156 MB geladen. Die Linux-Version bringt CUDA-Unterstützung mit (NVIDIA-GPUs).",
+      pro_mac_tip: "Blockiert macOS den ersten Start, im Terminal <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code> ausführen.",
+      pro_soon: "Die Pro-Installer erscheinen in Kürze."
+    },
+    ja: {
+      nav_pro: "Pro 版",
+      pro_teaser: "3D・セグメンテーション・電顕解析が必要なら <b>TifMrcView Pro</b> へ →",
+      pro_title: "TifMrcView Pro · 3D・セグメンテーション・電顕解析",
+      pro_desc: "TifMrcView Pro：顕微鏡・電子顕微鏡画像のための無料オープンソース解析ツール。3D ボリューム表示、セグメンテーションラベルとマテリアル、Z 方向に伝播する SAM 2.1 クリックセグメンテーション、CTF フィッティング、ドリフト補正。計算はできる限り GPU で。",
+      pro_h1: "<span>見るだけでなく、</span><span>解析まで。</span>",
+      pro_lead: "TifMrcView Pro はビューアの上に作った解析ツールです。3D ボリューム表示、セグメンテーション、SAM 2.1 によるスマートセグメンテーション、CTF フィッティング、ドリフト補正。こちらも無料・オープンソースで、計算はできる限り GPU（CUDA・Metal・DX12・Vulkan）で行います。",
+      pro_cta: "Pro をダウンロード",
+      pro_f1h: "3D ボリューム表示",
+      pro_f1p: "最大値投影・半透明・等値面レンダリング。ChimeraX のように σ でしきい値を調整し、平滑化とヒストグラムは GPU で計算。クライオ ET トモグラムはワンクリックで反転。",
+      pro_f2h: "セグメンテーションラベルとマテリアル",
+      pro_f2p: "ブラシ、マジックワンド、しきい値、ウォーターシェッド、投げ縄、スライス間補間。Amira のようにマテリアルの名前・色・表示・ロックを設定でき、Fiji や napari で読める 16 ビット TIFF に保存。",
+      pro_f3h: "SAM 2.1 スマートセグメンテーション",
+      pro_f3p: "ワンクリックで物体を切り出し、Z 方向に物体全体へ自動伝播。薄い膜や閉じた輪郭にも追従します。モデルは Rust で書き直され、お使いの GPU 上でローカルに動作。データは PC の外に出ません。",
+      pro_f4h: "CTF フィッティング",
+      pro_f4p: "パワースペクトルにデフォーカス・非点収差・位相板シフトをフィットし、CTF のゼロ点をスペクトル上に描画、1 次元フィットも表示します。",
+      pro_f5h: "ドリフト補正",
+      pro_f5p: "ムービー、傾斜シリーズ、連続切片の各フレームのずれを測ってトラジェクトリを描き、位置合わせしたスタックまたは積算像を MRC で保存します。",
+      pro_cmp_h: "ふたつの版、それぞれの役割",
+      pro_b_h: "標準版：軽快なビューア",
+      pro_b_p: "小さく速く、数 GB の TIFF / MRC もダブルクリックで開きます。手動計測、注釈、FFT、スペクトル表示つき。日常の閲覧や手早い確認に。Android 版もあります。",
+      pro_p_h: "Pro：解析ツール",
+      pro_p_p: "標準版の全機能に加え、3D、セグメンテーション、SAM、CTF フィッティング、ドリフト補正。結果を出す解析作業に。標準版と同時にインストールできます。",
+      pro_b_a: "標準版の紹介",
+      pro_dl_h: "<span>TifMrcView Pro をダウンロード。</span>",
+      pro_dl_p: "無料・オープンソース。macOS・Windows・Linux のネイティブインストーラ。",
+      pro_note: "SAM を初めて使うときに約 156 MB のモデルをダウンロードします。Linux 版は CUDA（NVIDIA GPU）に対応しています。",
+      pro_mac_tip: "初回起動がブロックされたら、ターミナルで <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code> を実行してください。",
+      pro_soon: "Pro のインストーラはまもなく公開します。"
+    },
+    es: {
+      nav_pro: "Pro",
+      pro_teaser: "¿Necesitas 3D, segmentación y análisis de ME? Mira <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D, segmentación y análisis de ME",
+      pro_desc: "TifMrcView Pro: herramienta de análisis gratuita y de código abierto para imágenes de microscopía y ME. Vista 3D de volumen, etiquetas y materiales de segmentación, segmentación SAM 2.1 con un clic a lo largo de Z, ajuste de CTF y corrección de deriva, en la GPU siempre que se puede.",
+      pro_h1: "<span>No solo ver.</span> <span>Analizar.</span>",
+      pro_lead: "TifMrcView Pro convierte el visor en una herramienta de análisis: vista 3D de volumen, segmentación, segmentación inteligente con SAM 2.1, ajuste de CTF y corrección de deriva. También gratis y de código abierto, con los cálculos en la GPU siempre que se puede (CUDA, Metal, DX12, Vulkan).",
+      pro_cta: "Descargar Pro",
+      pro_f1h: "Vista 3D de volumen",
+      pro_f1p: "Proyección de máxima intensidad, renderizado translúcido y de superficie. Umbrales en σ como en ChimeraX, con suavizado e histogramas en la GPU. Los tomogramas de crio-ET se invierten con un clic.",
+      pro_f2h: "Etiquetas y materiales de segmentación",
+      pro_f2p: "Pincel, varita mágica, umbral, watershed, lazo e interpolación entre cortes. Materiales como en Amira: con nombre, color, ocultables y bloqueables, guardados como TIFF de 16 bits que leen Fiji y napari.",
+      pro_f3h: "Segmentación inteligente con SAM 2.1",
+      pro_f3p: "Un clic segmenta un objeto y luego se propaga en Z por todo el objeto, incluidas membranas finas y contornos cerrados. El modelo está reescrito en Rust y corre localmente en tu GPU; tus datos no salen del ordenador.",
+      pro_f4h: "Ajuste de CTF",
+      pro_f4p: "Ajusta desenfoque, astigmatismo y desfase de placa de fase al espectro de potencia, dibuja los ceros de la CTF sobre él y muestra el ajuste 1D.",
+      pro_f5h: "Corrección de deriva",
+      pro_f5p: "Mide cuánto se movió cada fotograma de una película, serie de inclinación o cortes seriados, dibuja la trayectoria y guarda la pila alineada o su suma en MRC.",
+      pro_cmp_h: "Dos ediciones, dos tareas",
+      pro_b_h: "Estándar: un visor ligero",
+      pro_b_p: "Pequeño y rápido; archivos TIFF / MRC de varios GB se abren con doble clic. Incluye medición manual, anotaciones, FFT y visor de espectros. Para el día a día y comprobaciones rápidas, también en Android.",
+      pro_p_h: "Pro: una herramienta de análisis",
+      pro_p_p: "Todo lo de la versión estándar, más 3D, segmentación, SAM, ajuste de CTF y corrección de deriva. Para análisis que deben dar resultados. Se instala junto a la versión estándar.",
+      pro_b_a: "Sobre la versión estándar",
+      pro_dl_h: "<span>Descargar TifMrcView Pro.</span>",
+      pro_dl_p: "Gratis y de código abierto. Instaladores nativos para macOS, Windows y Linux.",
+      pro_note: "El primer uso de SAM descarga un modelo de unos 156 MB. La versión para Linux incluye soporte CUDA (GPU NVIDIA).",
+      pro_mac_tip: "Si macOS bloquea la primera apertura, ejecuta <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code> en Terminal.",
+      pro_soon: "Los instaladores de Pro llegan en breve."
+    },
+    fr: {
+      nav_pro: "Pro",
+      pro_teaser: "Besoin de 3D, de segmentation et d’analyse MET ? Voir <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D, segmentation et analyse MET",
+      pro_desc: "TifMrcView Pro : outil d’analyse gratuit et open source pour les images de microscopie et de MET. Vue 3D du volume, étiquettes et matériaux de segmentation, segmentation SAM 2.1 en un clic le long de Z, ajustement de la CTF et correction de dérive, sur le GPU autant que possible.",
+      pro_h1: "<span>Pas seulement voir.</span> <span>Analyser.</span>",
+      pro_lead: "TifMrcView Pro fait du visualiseur un outil d’analyse : vue 3D du volume, segmentation, segmentation intelligente avec SAM 2.1, ajustement de la CTF et correction de dérive. Gratuit et open source lui aussi, avec les calculs sur le GPU autant que possible (CUDA, Metal, DX12, Vulkan).",
+      pro_cta: "Télécharger Pro",
+      pro_f1h: "Vue 3D du volume",
+      pro_f1p: "Projection d’intensité maximale, rendu translucide et de surface. Seuils en σ comme dans ChimeraX, lissage et histogrammes calculés sur le GPU. Les tomogrammes de cryo-ET s’inversent en un clic.",
+      pro_f2h: "Étiquettes et matériaux de segmentation",
+      pro_f2p: "Pinceau, baguette magique, seuil, ligne de partage des eaux, lasso et interpolation entre coupes. Matériaux comme dans Amira : nommés, colorés, masqués et verrouillés, enregistrés en TIFF 16 bits lisible par Fiji et napari.",
+      pro_f3h: "Segmentation intelligente avec SAM 2.1",
+      pro_f3p: "Un clic segmente un objet, puis il est suivi en Z sur tout l’objet, membranes fines et contours fermés compris. Le modèle est réécrit en Rust et tourne localement sur votre GPU ; vos données ne quittent pas l’ordinateur.",
+      pro_f4h: "Ajustement de la CTF",
+      pro_f4p: "Ajuste la défocalisation, l’astigmatisme et le déphasage de lame de phase au spectre de puissance, trace les zéros de la CTF ajustée et affiche l’ajustement 1D.",
+      pro_f5h: "Correction de dérive",
+      pro_f5p: "Mesure le déplacement de chaque image d’un film, d’une série d’inclinaison ou de coupes sériées, trace la trajectoire et enregistre la pile alignée ou sa somme en MRC.",
+      pro_cmp_h: "Deux éditions, deux usages",
+      pro_b_h: "Standard : un visualiseur léger",
+      pro_b_p: "Petit et rapide ; des TIFF / MRC de plusieurs Go s’ouvrent d’un double-clic. Mesure manuelle, annotations, FFT et affichage des spectres inclus. Pour le quotidien et les vérifications rapides, aussi sur Android.",
+      pro_p_h: "Pro : un outil d’analyse",
+      pro_p_p: "Tout ce que fait la version standard, plus 3D, segmentation, SAM, ajustement de la CTF et correction de dérive. Pour les analyses qui doivent aboutir à des résultats. S’installe à côté de la version standard.",
+      pro_b_a: "Découvrir la version standard",
+      pro_dl_h: "<span>Télécharger TifMrcView Pro.</span>",
+      pro_dl_p: "Gratuit et open source. Installateurs natifs pour macOS, Windows et Linux.",
+      pro_note: "La première utilisation de SAM télécharge un modèle d’environ 156 Mo. La version Linux prend en charge CUDA (GPU NVIDIA).",
+      pro_mac_tip: "Si macOS bloque le premier lancement, exécutez <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code> dans le Terminal.",
+      pro_soon: "Les installateurs Pro arrivent bientôt."
+    },
+    ru: {
+      nav_pro: "Pro",
+      pro_teaser: "Нужны 3D, сегментация и анализ ЭМ? Смотрите <b>TifMrcView Pro</b> →",
+      pro_title: "TifMrcView Pro · 3D, сегментация и анализ ЭМ",
+      pro_desc: "TifMrcView Pro: бесплатный инструмент анализа с открытым кодом для изображений световой и электронной микроскопии. 3D-просмотр объёма, метки и материалы сегментации, сегментация SAM 2.1 по щелчку вдоль Z, подгонка CTF и коррекция дрейфа, по возможности на GPU.",
+      pro_h1: "<span>Не только смотреть.</span> <span>Анализировать.</span>",
+      pro_lead: "TifMrcView Pro превращает просмотрщик в инструмент анализа: 3D-просмотр объёма, сегментация, умная сегментация SAM 2.1, подгонка CTF и коррекция дрейфа. Тоже бесплатно и с открытым кодом, вычисления по возможности на GPU (CUDA, Metal, DX12, Vulkan).",
+      pro_cta: "Скачать Pro",
+      pro_f1h: "3D-просмотр объёма",
+      pro_f1p: "Проекция максимальной интенсивности, полупрозрачный и поверхностный рендеринг. Пороги в σ, как в ChimeraX, сглаживание и гистограммы считаются на GPU. Томограммы крио-ЭТ инвертируются одним щелчком.",
+      pro_f2h: "Метки и материалы сегментации",
+      pro_f2p: "Кисть, волшебная палочка, порог, водораздел, лассо и интерполяция между срезами. Материалы, как в Amira: имя, цвет, скрытие и блокировка; сохраняются в 16-битный TIFF, который читают Fiji и napari.",
+      pro_f3h: "Умная сегментация SAM 2.1",
+      pro_f3p: "Один щелчок выделяет объект, затем он прослеживается по Z через весь объект, включая тонкие мембраны и замкнутые контуры. Модель переписана на Rust и работает локально на вашей видеокарте; данные не покидают компьютер.",
+      pro_f4h: "Подгонка CTF",
+      pro_f4p: "Подгоняет дефокус, астигматизм и сдвиг фазовой пластинки по спектру мощности, рисует нули CTF поверх спектра и показывает одномерную подгонку.",
+      pro_f5h: "Коррекция дрейфа",
+      pro_f5p: "Измеряет сдвиг каждого кадра фильма, серии наклонов или серийных срезов, строит траекторию и сохраняет выровненный стек или его сумму в MRC.",
+      pro_cmp_h: "Две версии, две задачи",
+      pro_b_h: "Стандартная: лёгкий просмотрщик",
+      pro_b_p: "Маленький и быстрый: TIFF / MRC размером в несколько гигабайт открываются двойным щелчком. Ручные измерения, аннотации, FFT и просмотр спектров включены. Для повседневного просмотра и быстрых проверок, есть версия для Android.",
+      pro_p_h: "Pro: инструмент анализа",
+      pro_p_p: "Всё из стандартной версии плюс 3D, сегментация, SAM, подгонка CTF и коррекция дрейфа. Для анализа, который должен дать результат. Устанавливается рядом со стандартной версией.",
+      pro_b_a: "О стандартной версии",
+      pro_dl_h: "<span>Скачать TifMrcView Pro.</span>",
+      pro_dl_p: "Бесплатно и с открытым кодом. Нативные установщики для macOS, Windows и Linux.",
+      pro_note: "При первом запуске SAM загружается модель размером около 156 МБ. Версия для Linux поддерживает CUDA (видеокарты NVIDIA).",
+      pro_mac_tip: "Если macOS блокирует первый запуск, выполните в Терминале <code>xattr -dr com.apple.quarantine \"/Applications/TifMrcView Pro.app\"</code>.",
+      pro_soon: "Установщики Pro скоро появятся."
+    }
+  };
+  Object.keys(PRO).forEach(function (c) { for (var k in PRO[c]) T[c][k] = PRO[c][k]; });
+
   // Developer docs (site/plugins/docs.js) exist in Chinese and English only.
   if (window.TMV_DOCS) { T.zh.docs = window.TMV_DOCS.zh; T.en.docs = window.TMV_DOCS.en; }
 
@@ -781,7 +996,7 @@
   // Downloads go through get/, which the server counts and redirects to the cached file.
   var DL = 'get/';
   var HOME = !!document.getElementById('cta');
-  var data = null, lang = pick(), sizes = {}, listeners = [];
+  var data = null, pro = null, lang = pick(), sizes = {}, listeners = [];
   function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; }
   function loadSizes(d) {
     var all = [];
@@ -849,13 +1064,42 @@
     document.dispatchEvent(new Event('downloads-rendered'));
   }
 
+  // The Pro page lists its own files (downloads-pro.json); until they are
+  // published it says they are coming.
+  function renderPro() {
+    var sec = document.getElementById('pro-dl');
+    if (!sec || !pro || !pro.files) return;
+    var t = T[lang];
+    ['mac', 'win', 'linux'].forEach(function (k) {
+      var box = sec.querySelector('[data-pro="' + k + '"] .dl');
+      box.innerHTML = '';
+      (pro.files[k] || []).forEach(function (f) {
+        var l = fileLabel(k, f, t);
+        var a = document.createElement('a');
+        a.href = BASE + DL + f.file; a.setAttribute('download', '');
+        var s = document.createElement('span'); s.textContent = l[0];
+        var n = document.createElement('small'); n.textContent = l[1];
+        if (f.size) { var b = document.createElement('b'); b.textContent = mb(f.size); n.appendChild(b); }
+        a.appendChild(s); a.appendChild(n); box.appendChild(a);
+      });
+    });
+    document.getElementById('pro-soon').hidden = true;
+    document.getElementById('pro-meta').textContent = t.version + ' ' + pro.version + ' · ' + pro.date;
+    var c = document.getElementById('pro-cta');
+    if (os && pro.files[os] && pro.files[os][0]) {
+      c.href = BASE + DL + pro.files[os][0].file; c.setAttribute('download', '');
+      c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
+      sec.querySelector('[data-pro="' + os + '"]').classList.add('hl');
+    }
+  }
+
   function apply(code) {
     lang = code;
     var t = T[code];
     document.documentElement.lang = HTML_LANG[code];
     var page = document.documentElement.getAttribute('data-page');
-    document.title = page === 'plugins' ? t.pl_title : t.title;
-    var md = document.querySelector('meta[name="description"]'); if (md) md.content = page === 'plugins' ? t.pl_desc : t.desc;
+    document.title = page === 'plugins' ? t.pl_title : page === 'pro' ? t.pro_title : t.title;
+    var md = document.querySelector('meta[name="description"]'); if (md) md.content = page === 'plugins' ? t.pl_desc : page === 'pro' ? t.pro_desc : t.desc;
     document.querySelectorAll('[data-i]').forEach(function (el) {
       var key = el.getAttribute('data-i');
       var v = t[key];
@@ -874,6 +1118,7 @@
       b.setAttribute('aria-current', b.dataset.lang === code ? 'true' : 'false');
     });
     renderDownloads();
+    renderPro();
     listeners.forEach(function (fn) { fn(code); });
   }
 
@@ -916,4 +1161,6 @@
       return HOME ? loadSizes(d) : null;
     })
     .then(renderDownloads).catch(function () {});
+  if (document.getElementById('pro-dl')) fetch(BASE + 'downloads-pro.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { pro = d; renderPro(); }).catch(function () {});
 })();
