@@ -11,6 +11,8 @@
 
 **[下载](https://tifmrcview.com/tifmrcview/#download)** · **[插件市场](https://tifmrcview.com/tifmrcview/plugins/)** · [官网](https://tifmrcview.com/tifmrcview/)
 
+作者：**Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > 如果 TifMrcView 对你有帮助，请在 GitHub 上点个 ⭐，这对我们真的很有帮助。
 
 ## 截图
@@ -193,7 +195,7 @@ README 提供多种语言（见顶部的语言栏）。**英文版 README（`REA
 ## 作者
 
 <!-- author -->
-作者与维护者： **[Leehow](https://github.com/Leehow)**.
+作者与维护者：**Hao Li**（[@Leehow](https://github.com/Leehow)），中国科学院化学研究所。ORCID：[0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## 引用

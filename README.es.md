@@ -11,6 +11,8 @@ Un visor pequeño, rápido y cómodo para imágenes de microscopía y microscop�
 
 **[Descargar](https://tifmrcview.com/tifmrcview/#download)** · **[Mercado de plugins](https://tifmrcview.com/tifmrcview/plugins/)** · [Sitio web](https://tifmrcview.com/tifmrcview/)
 
+Autor: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Si TifMrcView le resulta útil, dele una ⭐ en GitHub: ayuda de verdad.
 
 ## Capturas de pantalla
@@ -193,7 +195,7 @@ El README está disponible en varios idiomas (vea la línea de idiomas al princi
 ## Autor
 
 <!-- author -->
-Creado y mantenido por **[Leehow](https://github.com/Leehow)**.
+Creado y mantenido por **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## Cómo citar

@@ -11,6 +11,8 @@ A small, fast and convenient viewer for microscopy and electron microscopy image
 
 **[Download](https://tifmrcview.com/tifmrcview/#download)** · **[Plugin market](https://tifmrcview.com/tifmrcview/plugins/)** · [Website](https://tifmrcview.com/tifmrcview/)
 
+Author: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > If you find TifMrcView useful, please give it a ⭐ on GitHub — it really helps.
 
 ## Screenshots
@@ -199,7 +201,7 @@ The README is available in several languages (see the language line at the top).
 ## Author
 
 <!-- author -->
-Created and maintained by **[Leehow](https://github.com/Leehow)**.
+Created and maintained by **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## Citation

@@ -11,6 +11,8 @@ Une visionneuse petite, rapide et pratique pour les images de microscopie et de 
 
 **[Télécharger](https://tifmrcview.com/tifmrcview/#download)** · **[Marché de plugins](https://tifmrcview.com/tifmrcview/plugins/)** · [Site web](https://tifmrcview.com/tifmrcview/)
 
+Auteur: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Si TifMrcView vous est utile, merci de lui donner une ⭐ sur GitHub : cela aide vraiment.
 
 ## Captures d'écran
@@ -193,7 +195,7 @@ Le README est disponible en plusieurs langues (voir la ligne des langues tout en
 ## Auteur
 
 <!-- author -->
-Créé et maintenu par **[Leehow](https://github.com/Leehow)**.
+Créé et maintenu par **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## Citer

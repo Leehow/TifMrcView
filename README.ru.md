@@ -11,6 +11,8 @@
 
 **[Скачать](https://tifmrcview.com/tifmrcview/#download)** · **[Каталог плагинов](https://tifmrcview.com/tifmrcview/plugins/)** · [Сайт](https://tifmrcview.com/tifmrcview/)
 
+Автор: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Если TifMrcView оказался вам полезен, поставьте ему ⭐ на GitHub — это действительно помогает.
 
 ## Скриншоты
@@ -193,7 +195,7 @@ README доступен на нескольких языках (см. строк
 ## Автор
 
 <!-- author -->
-Автор и сопровождающий: **[Leehow](https://github.com/Leehow)**.
+Автор и сопровождающий: **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## Цитирование

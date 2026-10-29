@@ -11,6 +11,8 @@
 
 **[ダウンロード](https://tifmrcview.com/tifmrcview/#download)** · **[プラグインマーケット](https://tifmrcview.com/tifmrcview/plugins/)** · [ウェブサイト](https://tifmrcview.com/tifmrcview/)
 
+作者：**Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > TifMrcView が役に立ったら、GitHub で ⭐ を付けていただけるととても励みになります。
 
 ## スクリーンショット
@@ -193,7 +195,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 ## 作者
 
 <!-- author -->
-作者・メンテナー： **[Leehow](https://github.com/Leehow)**.
+作者・メンテナー：**Hao Li**（[@Leehow](https://github.com/Leehow)）、Institute of Chemistry, Chinese Academy of Sciences。ORCID：[0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## 引用

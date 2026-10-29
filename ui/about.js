@@ -4,15 +4,16 @@
 // shown; empty fields are left out. Links open in the system browser.
 
 const AUTHOR = {
-  name: "Leehow",
-  affiliation: "",
-  email: "",
+  name: "Hao Li",
+  affiliation: "Institute of Chemistry, Chinese Academy of Sciences",
+  email: "lihao9x@iccas.ac.cn",
   links: [
     // [label, url]; https:// and mailto: only.
     ["GitHub", "https://github.com/Leehow"],
+    ["ORCID", "https://orcid.org/0009-0004-2696-3267"],
   ],
   // Shown under "引用" with a copy button; empty hides the section.
-  citation: "",
+  citation: "Li, H. TifMrcView (software). https://github.com/Leehow/TifMrcView",
 };
 
 const REPO_URL = "https://github.com/Leehow/TifMrcView";

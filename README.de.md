@@ -11,6 +11,8 @@ Ein kleiner, schneller und bequemer Viewer für Mikroskopie- und Elektronenmikro
 
 **[Download](https://tifmrcview.com/tifmrcview/#download)** · **[Plugin-Markt](https://tifmrcview.com/tifmrcview/plugins/)** · [Website](https://tifmrcview.com/tifmrcview/)
 
+Autor: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow](https://github.com/Leehow) · [lihao9x@iccas.ac.cn](mailto:lihao9x@iccas.ac.cn)
+
 > Wenn Ihnen TifMrcView gefällt, geben Sie dem Projekt bitte einen ⭐ auf GitHub – das hilft wirklich.
 
 ## Screenshots
@@ -193,7 +195,7 @@ Die README gibt es in mehreren Sprachen (siehe die Sprachzeile ganz oben). **Die
 ## Autor
 
 <!-- author -->
-Entwickelt und gepflegt von **[Leehow](https://github.com/Leehow)**.
+Entwickelt und gepflegt von **Hao Li** ([@Leehow](https://github.com/Leehow)), Institute of Chemistry, Chinese Academy of Sciences. ORCID: [0009-0004-2696-3267](https://orcid.org/0009-0004-2696-3267)
 <!-- /author -->
 
 ## Zitieren

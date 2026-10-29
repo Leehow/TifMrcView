@@ -4,8 +4,12 @@ type: software
 title: "TifMrcView"
 abstract: "A fast, lightweight viewer for microscopy and electron microscopy images (TIFF, OME-TIFF, MRC and vendor formats through plugins), built with Rust and Tauri."
 authors:
-  - alias: "Leehow"
-    # TODO: family-names / given-names / affiliation / orcid
+  - family-names: "Li"
+    given-names: "Hao"
+    alias: "Leehow"
+    affiliation: "Institute of Chemistry, Chinese Academy of Sciences"
+    email: "lihao9x@iccas.ac.cn"
+    orcid: "https://orcid.org/0009-0004-2696-3267"
 version: "0.7.0"
 date-released: "2026-10-29"
 license: Apache-2.0
