@@ -1,6 +1,7 @@
 #[cfg(feature = "desktop")]
 mod assoc;
 pub mod edition;
+pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
