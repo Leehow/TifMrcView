@@ -2184,9 +2184,10 @@ let menuAnchor = null;
 
 /**
  * Opens the drop-down menu under `anchor`. Items are {value, label, icon?,
- * hint?, key?, on?}; `pick` gets the chosen value.
+ * hint?, key?, on?}; `pick` gets the chosen value. `point` anchors it at the pointer instead.
  */
-function openMenu(anchor, items, pick) {
+function openMenu(anchor, items, pick, point) {
+  closeMenu();
   const m = $("dropmenu");
   m.innerHTML = "";
   for (const it of items) {
@@ -2220,8 +2221,8 @@ function openMenu(anchor, items, pick) {
   anchor.classList.add("open");
   m.hidden = false;
   const r = anchor.getBoundingClientRect();
-  m.style.top = `${r.bottom + 6}px`;
-  m.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8))}px`;
+  m.style.top = `${Math.max(8, Math.min(point ? point.y : r.bottom + 6, window.innerHeight - m.offsetHeight - 8))}px`;
+  m.style.left = `${Math.max(8, Math.min(point ? point.x : r.left, window.innerWidth - m.offsetWidth - 8))}px`;
 }
 
 /** Closes the menu; true if one was open (for `anchor`, when given, so a second click toggles it shut). */
@@ -2237,7 +2238,7 @@ function closeMenu(anchor) {
 document.addEventListener(
   "pointerdown",
   (e) => {
-    if (menuAnchor && !$("dropmenu").contains(e.target) && !menuAnchor.contains(e.target)) closeMenu();
+    if (menuAnchor && !$("dropmenu").contains(e.target) && (menuAnchor === canvas || !menuAnchor.contains(e.target))) closeMenu();
   },
   true,
 );
@@ -2888,6 +2889,86 @@ function setCursor(p) {
 // second finger can take over from whatever the first one started.
 const touches = new Map();
 let pinch = null;
+let longPress = null;
+let menuPointer = null;
+let swallowClick = false;
+
+function annotationAt(p) {
+  const tol = HIT / S.view.scale;
+  return S.picked && onSlice(S.picked) && handleAt(S.picked, p, tol) ? S.picked : annAt(p, tol);
+}
+
+function annotationMenu(item, x, y) {
+  S.picked = item;
+  showSize(item);
+  draw();
+  const items = [{ value: "delete", label: "删除" }];
+  if (item.type === "text") items.push({ value: "edit", label: "编辑文字" });
+  openMenu(canvas, items, (value) => {
+    if (!S.ann.includes(item) || !onSlice(item)) return;
+    S.picked = item;
+    if (value === "delete") deletePicked();
+    else editText(item, false);
+  }, { x, y });
+}
+
+function cancelLongPress() {
+  if (longPress) clearTimeout(longPress.timer);
+  longPress = null;
+}
+
+function startLongPress(e, item) {
+  cancelLongPress();
+  const press = { id: e.pointerId, x: e.clientX, y: e.clientY, tool: S.tool };
+  longPress = press;
+  press.timer = setTimeout(() => {
+    longPress = null;
+    if (touches.size !== 1 || pinch || !S.op || S.tool !== press.tool || !S.ann.includes(item) || !onSlice(item)) return;
+    const op = S.op;
+    // Drags change points in place; a new stroke has not entered S.ann yet.
+    if (op && op.snap && ["move", "point", "scale"].includes(op.kind)) {
+      const saved = JSON.parse(op.snap.ann)[S.ann.indexOf(op.item)];
+      if (saved) op.item.pts = saved.pts;
+    }
+    if (op && op.kind === "draw" && op.item === S.cropBox) S.cropBox = null;
+    S.op = null;
+    canvas.classList.remove("drag");
+    menuPointer = press.id;
+    swallowClick = true;
+    annotationMenu(item, press.x, press.y);
+    try { navigator.vibrate?.(20); } catch (_) { /* optional hint */ }
+  }, 500);
+}
+
+// Keep the opening finger captured, and eat its release and synthetic click.
+window.addEventListener("pointerdown", () => {
+  if (menuPointer === null) swallowClick = false;
+  cancelLongPress();
+}, true);
+window.addEventListener("pointermove", (e) => {
+  if (longPress && e.pointerId === longPress.id && Math.hypot(e.clientX - longPress.x, e.clientY - longPress.y) > 10) cancelLongPress();
+  if (e.pointerId === menuPointer) e.stopImmediatePropagation();
+}, true);
+for (const type of ["pointerup", "pointercancel"]) {
+  window.addEventListener(type, (e) => {
+    if (longPress && e.pointerId === longPress.id) cancelLongPress();
+    if (type === "pointercancel" && S.op && S.op.kind === "text") S.op = null;
+    if (e.pointerId !== menuPointer) return;
+    touches.delete(e.pointerId);
+    menuPointer = null;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+}
+for (const type of ["click", "dblclick"]) {
+  window.addEventListener(type, (e) => {
+    if (!swallowClick) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+}
+window.addEventListener("blur", cancelLongPress);
+canvas.addEventListener("lostpointercapture", cancelLongPress);
 
 function pinchCentre() {
   const [a, b] = [...touches.values()];
@@ -2899,6 +2980,7 @@ canvas.addEventListener(
   "pointerdown",
   (e) => {
     if (e.pointerType !== "touch") return;
+    if (menuPointer !== null) return e.stopImmediatePropagation();
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size !== 2 || !S.info) return;
     e.stopImmediatePropagation();
@@ -2963,6 +3045,12 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   canvas.setPointerCapture(e.pointerId);
+  const hit = annotationAt(toImage(e));
+  if (e.button === 2 && S.tool === "select" && hit) {
+    annotationMenu(hit, e.clientX, e.clientY);
+    return;
+  }
+  if (e.pointerType === "touch" && touches.size === 1 && hit && !ext.tools[S.tool]) startLongPress(e, hit);
   if (S.tool === "pan" || e.button === 1 || e.button === 2) {
     S.op = { kind: "pan", x: e.clientX, y: e.clientY, cx: S.view.cx, cy: S.view.cy };
     canvas.classList.add("drag");
@@ -3026,6 +3114,12 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (S.tool === "text") {
     const a = annAt(p, tol);
+    // A short touch still edits; holding it gets the annotation menu first.
+    if (longPress) {
+      S.op = { kind: "text", item: a, p, x: e.clientX, y: e.clientY };
+      e.preventDefault();
+      return;
+    }
     if (a && a.type === "text") editText(a, false);
     else {
       toggleAnn(true);
@@ -3055,6 +3149,10 @@ canvas.addEventListener("pointermove", (e) => {
   showPixel(e);
   if (!op) {
     if (S.info) setCursor(toImage(e));
+    return;
+  }
+  if (op.kind === "text") {
+    if (Math.hypot(e.clientX - op.x, e.clientY - op.y) > 10) op.moved = true;
     return;
   }
   if (op.kind === "pan") {
@@ -3122,6 +3220,16 @@ function endPointer(e) {
   const op = S.op;
   S.op = null;
   if (!op) return;
+  if (op.kind === "text") {
+    if (e.type === "pointerup" && !op.moved) {
+      if (op.item && op.item.type === "text") editText(op.item, false);
+      else {
+        toggleAnn(true);
+        editText({ type: "text", pts: [op.p], text: "", color: $("ann-color").value, width: +$("ann-width").value, z: S.z }, true);
+      }
+    }
+    return;
+  }
   if (op.kind === "pan") {
     canvas.classList.remove("drag");
     // A click without dragging picks the spectrum shown in the plot.

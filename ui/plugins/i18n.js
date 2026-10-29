@@ -21,6 +21,8 @@ const LANGS = [
 
 // prettier-ignore
 const WORDS = [
+  ["删除", "Delete", "Löschen", "削除", "Eliminar", "Supprimer", "Удалить"],
+  ["编辑文字", "Edit text", "Text bearbeiten", "テキストを編集", "Editar texto", "Modifier le texte", "Изменить текст"],
   // Install-time permissions and package policy.
   ["插件权限", "Plugin permissions", "Plugin-Berechtigungen", "プラグインの権限", "Permisos del complemento", "Autorisations de l’extension", "Разрешения плагина"],
   ["无额外权限", "No additional permissions", "Keine zusätzlichen Berechtigungen", "追加の権限なし", "Sin permisos adicionales", "Aucune autorisation supplémentaire", "Без дополнительных разрешений"],
