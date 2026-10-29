@@ -499,6 +499,61 @@ fn fei_tiff_settings_and_pixel_size() {
     assert_eq!(open(&p.registry, &plain).info().format, "TIFF");
 }
 
+/// An Auto Slice & View project: ProjectData.dat, two detectors' slices
+/// (FEI TIFFs, 3 nm pixels), log images and an overview.
+fn asv_project(root: &Path) {
+    let xml = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<ProjectData>\r\n  <Name>worm</Name>\r\n  <TimeCreated>2015-11-10T08:29:09</TimeCreated>\r\n  <ExecutionResult>Finished</ExecutionResult>\r\n  <Results>\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"9E-09\" />\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"1.1E-08\" />\r\n    <Slice TargetThickness=\"1E-08\" MeasuredThickness=\"NaN\" />\r\n  </Results>\r\n</ProjectData>\r\n";
+    std::fs::write(root.join("ProjectData.dat"), xml).unwrap();
+    let ini = "[System]\r\nSystemType=Helios NanoLab\" 650\r\n[Scan]\r\nPixelWidth=3e-09\r\nPixelHeight=3e-09\r\n\0";
+    let fei = [(34682u16, 2u16, ini.len() as u32, ini.as_bytes().to_vec())];
+    for (dir, n) in [("Images/SEM Image", 3), ("Images/SEM Image 2", 2), ("LogImages", 4)] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        for i in 1..=n {
+            tiff(&root.join(dir).join(format!("worm - SliceImage - {i:03}.tif")), 6, 4, &fei);
+        }
+    }
+    tiff(&root.join("Images/overview.tif"), 6, 4, &fei);
+}
+
+#[test]
+fn auto_slice_and_view_projects_are_z_stacks() {
+    let p = thermo!();
+    let tmp = tempfile::tempdir().unwrap();
+    asv_project(tmp.path());
+    let config = tmp.path().join("ProjectData.dat");
+    assert!(p.registry.is_stack_file(&config));
+    let src = open(&p.registry, &config);
+    let i = src.info().clone();
+    assert_eq!((i.width, i.height, i.size_z, i.page_count), (6, 4, 3, 3));
+    assert!(i.format.starts_with("Thermo Auto Slice & View · "), "{}", i.format);
+    let ps = i.pixel_size.unwrap();
+    assert_eq!(i.unit, "nm");
+    assert!((ps[0] - 3.0).abs() < 1e-9 && (ps[2] - 10.0).abs() < 1e-9, "{ps:?}");
+    assert_eq!(item(&i, "Auto Slice & View 项目", "项目名称").as_deref(), Some("worm"));
+    assert_eq!(item(&i, "Auto Slice & View 项目", "切片数（项目记录）").as_deref(), Some("3"));
+    assert_eq!(item(&i, "Auto Slice & View 项目", "实测切片厚度").as_deref(), Some("10 nm ± 1 nm（2 片的平均）"));
+    assert_eq!(item(&i, "图像序列", "文件数").as_deref(), Some("3"));
+    assert!(item(&i, "图像序列", "Z 间距").unwrap().starts_with("10 nm"));
+    assert_eq!(i.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["SEM Image", "SEM Image 2"]);
+    assert_eq!(page(&*src, 2)[5], 5.0);
+    assert!(i.folder.as_deref().unwrap().ends_with("Images/SEM Image"));
+
+    // The other detector, through the series picker.
+    let second = formats::open_series_with(&config, 1, &p.registry).unwrap();
+    assert_eq!((second.info().size_z, second.info().series_index), (2, 1));
+
+    // Opening an image folder of the project finds the project file two
+    // levels up and shows that folder's stack.
+    let dir = tmp.path().join("Images/SEM Image 2");
+    let src = open(&p.registry, &dir);
+    assert_eq!((src.info().size_z, src.info().series_index), (2, 1));
+    assert_eq!(src.info().path, config.to_string_lossy());
+    // The log images are not part of any project stack: a plain sequence.
+    let logs = open(&p.registry, &tmp.path().join("LogImages"));
+    assert_eq!(logs.info().size_z, 4);
+    assert!(logs.info().format.starts_with("图像序列"), "{}", logs.info().format);
+}
+
 /// An MRC with an FEI2 extended header, `n` 2×2 i16 sections tilted by
 /// 10° steps.
 fn fei_mrc(path: &Path, n: usize) {

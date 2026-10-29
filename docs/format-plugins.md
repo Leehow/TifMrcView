@@ -77,6 +77,7 @@ plugin market) with a `.wasm` file and three more fields in `plugin.json`:
 | `wasm` | Path of the module inside the package. |
 | `formats` | File types the module opens: `ext` (lower-case, no dot, `[a-z0-9]{1,16}`) and a display `name` (used as the format name when the plugin gives none). Needs the format exports. |
 | `metadata` | Extensions whose files `tmv_metadata` should see. Needs the metadata export. |
+| `stacks` | Optional. Project files of acquisition programs that describe a Z stack of separate slice images (FIB-SEM, serial sections): `[{ "files": ["ProjectData.dat"], "name": "Thermo Auto Slice & View" }]`. `files` are file names, `*` matches any run of characters, case is ignored. Needs the stack export (below) and app 0.7.0. |
 | `replaces` | Optional ids of older plugins this one takes over, e.g. when several plugins merge into one. While both are installed the old ones never run. Installing the official market package (from the market, or the same zip by hand) also removes them, and at start-up the app installs such a replacement for users who have the old plugins, when it asks for no permissions. The market entry must list the same ids. |
 
 `main` (a JavaScript file) is still required: it registers the plugin so it
@@ -120,6 +121,7 @@ English is fine too).
 | `tmv_page` | `(handle: i32, page: i32) -> i64` | Recipe for one page (below). `page` is `0 … pageCount-1`. |
 | `tmv_close` | `(handle: i32)` | The file was closed. |
 | `tmv_metadata` | `(path_ptr: i32, path_len: i32) -> i64` | Metadata JSON for a file another reader opened, or `null`. |
+| `tmv_stack` | `(path_ptr: i32, path_len: i32, list_ptr: i32, list_len: i32, series: i32) -> i64` | Stack JSON for a project file named in `stacks` (below). |
 
 `tmv_open`, `tmv_info`, `tmv_page` and `tmv_close` are needed for
 `formats`; `tmv_metadata` for `metadata`. A module may have both.
@@ -183,6 +185,44 @@ All fields are optional. `format` replaces the format name, `pixelSize`
 (with `unit`) replaces the pixel size, `groups` are appended after the
 groups the opener found. Errors from `tmv_metadata` are logged and
 otherwise ignored: the image still opens.
+
+### Image stacks from project files (`tmv_stack`)
+
+Volume-EM programs write one image per slice and keep what ties them
+together (order, slice thickness, detectors) in a project file. The app
+always opens a folder of slices as one Z stack by itself (the largest
+group of alike-named images, in natural order); a plugin adds what the
+project file knows.
+
+The plugin is bound to the project file (the `read` import reads it) and
+gets the files around it as text: one path per line, relative to the
+project file's folder, `/`-separated, in natural order, hidden files
+skipped, up to four folders deep and 200 000 files. It returns:
+
+```json
+{
+  "files": ["Images/SEM Image/run - SliceImage - 001.tif", "…"],
+  "format": "Thermo Auto Slice & View",
+  "zSpacing": 10, "unit": "nm",
+  "metadata": [{ "name": "Auto Slice & View 项目", "items": [["项目名称", "worm"]] }],
+  "series": [{ "name": "SEM Image", "detail": "320 张", "dir": "Images/SEM Image" }],
+  "seriesIndex": 0
+}
+```
+
+| Field | |
+| --- | --- |
+| `files` | The slices in Z order, each one a line of the listing; the app opens them with the core or other plugins, so they can be in any format it reads. Required. |
+| `zSpacing`, `unit` | Distance between slices; the X/Y pixel size comes from the slices. |
+| `format`, `metadata` | Status-bar name (default: the `stacks` entry's `name`) and groups shown before the first slice's own. |
+| `series`, `seriesIndex` | Several stacks in one project (one per detector…): the picker reopens with `series`. `dir` is the folder of that stack's slices, so opening that folder picks it. |
+
+The app asks for it when the user opens the project file, opens a folder
+that holds one or whose project file is one or two folders up (and the
+stack is that folder's slices), and when it lists a folder for the
+thumbnails: the stack then shows as an extra entry at the top. With the
+SDK, implement `Stacks` and use `export_stack!` (see
+`plugins/thermo/src/asv.rs`).
 
 ### Page recipes (`tmv_page`)
 

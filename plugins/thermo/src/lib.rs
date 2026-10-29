@@ -6,10 +6,13 @@
 //! - EER electron-event movies of Falcon cameras, `.eer` ([`eer`]),
 //! - the settings xT / Helios / Quanta / Scios write into their TIFFs
 //!   ([`feitiff`]) and the FEI extended header of MRC files written by EPU,
-//!   Tomography and Velox ([`mrc`]), added to files the core opens.
+//!   Tomography and Velox ([`mrc`]), added to files the core opens,
+//! - Auto Slice & View projects (`ProjectData.dat`), whose slice images the
+//!   app shows as one Z stack ([`asv`]).
 //!
 //! The extension of the path picks the reader.
 
+mod asv;
 mod eer;
 mod emd;
 mod feitiff;
@@ -20,7 +23,8 @@ mod mrc;
 mod ser;
 
 use tifmrcview_plugin_sdk::{
-    export_format, export_metadata, Format, Info, Meta, Metadata, Recipe, Result,
+    export_format, export_metadata, export_stack, Format, Info, Meta, Metadata, Recipe, Result,
+    Stack, Stacks,
 };
 
 pub enum Thermo {
@@ -75,8 +79,18 @@ impl Metadata for ThermoMeta {
     }
 }
 
+/// Acquisition projects whose slices are separate images.
+pub struct ThermoStacks;
+
+impl Stacks for ThermoStacks {
+    fn stack(_path: &str, listing: &[&str], series: u32) -> Result<Stack> {
+        asv::stack(listing, series)
+    }
+}
+
 export_format!(Thermo);
 export_metadata!(ThermoMeta);
+export_stack!(ThermoStacks);
 
 // ---------------------------------------------------------------- helpers
 
