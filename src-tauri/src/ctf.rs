@@ -846,10 +846,11 @@ fn fit_slices(
     #[cfg(feature = "pro")]
     if params.backend.as_deref() != Some("cpu") {
         if let Some((dev, name)) = crate::ctf_gpu::device() {
-            // "auto": spectra on the GPU, fit on the CPU, which measured
-            // faster for one slice (M1 Max: 0.2 s CPU vs 0.45–2.6 s Metal).
-            // "gpu": the grid search on the GPU as well.
-            let all = params.backend.as_deref() == Some("gpu");
+            // "auto": spectra on the GPU; the grid search too for several
+            // slices, on the CPU for one. Measured on an M1 Max: one slice
+            // 0.18 s either way (Metal slower until warmed up), 41 slices
+            // 1.4 s CPU vs 0.75–0.84 s Metal. "gpu": always on the GPU.
+            let all = params.backend.as_deref() == Some("gpu") || zs.len() > 1;
             let tried = crate::ctf_gpu::guarded(|| -> Result<Vec<Fit>> {
                 let logs = spectra(Some(dev))?;
                 if all {
