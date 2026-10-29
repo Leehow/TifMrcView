@@ -2867,6 +2867,71 @@ function setCursor(p) {
   canvas.style.cursor = c;
 }
 
+// ---------- touch: two fingers pinch to zoom and drag to pan ----------
+// Capture listeners on the canvas run before the tool handlers below, so a
+// second finger can take over from whatever the first one started.
+const touches = new Map();
+let pinch = null;
+
+function pinchCentre() {
+  const [a, b] = [...touches.values()];
+  const r = canvas.getBoundingClientRect();
+  return { mx: (a.x + b.x) / 2 - r.left, my: (a.y + b.y) / 2 - r.top, d: Math.hypot(a.x - b.x, a.y - b.y) || 1 };
+}
+
+canvas.addEventListener(
+  "pointerdown",
+  (e) => {
+    if (e.pointerType !== "touch") return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size !== 2 || !S.info) return;
+    e.stopImmediatePropagation();
+    // Drop the stroke or drag the first finger began.
+    if (S.op && S.op.kind === "draw" && S.op.item === S.cropBox) S.cropBox = null;
+    S.op = null;
+    canvas.classList.remove("drag");
+    const c = pinchCentre();
+    const { cw, ch } = cssSize();
+    pinch = { ...c, scale: S.view.scale, ix: S.view.cx + (c.mx - cw / 2) / S.view.scale, iy: S.view.cy + (c.my - ch / 2) / S.view.scale };
+    draw();
+  },
+  true,
+);
+
+canvas.addEventListener(
+  "pointermove",
+  (e) => {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pinch) return;
+    e.stopImmediatePropagation();
+    if (touches.size < 2) return;
+    const c = pinchCentre();
+    const { cw, ch } = cssSize();
+    S.view.scale = (pinch.scale * c.d) / pinch.d;
+    clampView();
+    S.view.cx = pinch.ix - (c.mx - cw / 2) / S.view.scale;
+    S.view.cy = pinch.iy - (c.my - ch / 2) / S.view.scale;
+    clampView();
+    draw();
+    requestRender();
+  },
+  true,
+);
+
+for (const type of ["pointerup", "pointercancel"]) {
+  canvas.addEventListener(
+    type,
+    (e) => {
+      if (!touches.delete(e.pointerId) || !pinch) return;
+      e.stopImmediatePropagation();
+      // The finger left on the glass does nothing until it is lifted too.
+      if (touches.size === 0) pinch = null;
+    },
+    true,
+  );
+}
+
 canvas.addEventListener("pointerdown", (e) => {
   if (!S.info) return;
   // A click beside the text being typed finishes it.

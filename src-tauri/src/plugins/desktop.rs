@@ -41,6 +41,13 @@ impl Plugins {
 
 /// Folder for user plugins, created on demand.
 pub fn user_dir<R: Runtime>(_app: &AppHandle<R>) -> Option<PathBuf> {
+    // Android has no XDG data folder; plugins live in the app's private data.
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        return _app.path().app_data_dir().ok().map(|d| d.join("plugins"));
+    }
+    #[cfg(not(target_os = "android"))]
     paths::user_dir()
 }
 

@@ -24,7 +24,6 @@ tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
 tauri = { optional = true, version = "2.12", features = [] }
-tauri-plugin-single-instance = { optional = true, version = "2.5", features = ["deep-link"] }
 # tifmrcview:// links (one-click plugin install from the market page).
 tauri-plugin-deep-link = { version = "2.6", optional = true }
 tauri-plugin-dialog = { version = "2.8", optional = true }
@@ -43,7 +42,6 @@ ruzstd = "0.8"
 # tail-call dispatch overflows the stack when LLVM does not optimise it (debug).
 wasmi = { version = "2", default-features = false, features = ["std", "stable", "validate", "portable-dispatch"] }
 openh264 = { version = "0.9", optional = true }
-tauri-plugin-updater = { version = "2.14", optional = true }
 # Market downloads reuse the updater's HTTP stack (reqwest + rustls/ring).
 reqwest = { optional = true, version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { optional = true, version = "0.23", default-features = false, features = ["ring"] }
@@ -61,6 +59,11 @@ desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "
 pro = ["dep:tmv-sam"]
 # MP4 recorder plugin (OpenH264, adds about 1 MB).
 recorder = ["desktop", "dep:openh264"]
+
+# Desktop only: Android has one instance per app and updates through the APK.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-single-instance = { optional = true, version = "2.5", features = ["deep-link"] }
+tauri-plugin-updater = { version = "2.14", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

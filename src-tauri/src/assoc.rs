@@ -4,6 +4,7 @@
 //! (see `bundle.fileAssociations`). What each OS lets an app do beyond that
 //! differs, so this module does the most each platform allows.
 
+#[cfg(not(target_os = "android"))]
 use crate::edition::NAME;
 
 #[cfg(target_os = "macos")]

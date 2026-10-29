@@ -1,3 +1,5 @@
+#[cfg(all(feature = "desktop", target_os = "android"))]
+mod android;
 #[cfg(feature = "desktop")]
 mod assoc;
 pub mod edition;
@@ -17,7 +19,10 @@ pub mod render;
 pub mod reslice;
 pub mod spectrum;
 pub mod volume;
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", not(target_os = "android")))]
+mod update;
+#[cfg(all(feature = "desktop", target_os = "android"))]
+#[path = "update_android.rs"]
 mod update;
 #[cfg(feature = "desktop")]
 pub mod sam;

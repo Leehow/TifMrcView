@@ -71,9 +71,11 @@
     <main id="stage">
       <canvas id="view"></canvas>
       <div id="empty">
-        <div class="big">拖入或双击打开图像</div>
+        <div class="big desk-only">拖入或双击打开图像</div>
+        <div class="big touch-only">点击“打开”选择图像</div>
         <div class="hint">支持 tif / tiff / mrc / mrcs / png / jpg / bmp / gif / webp；装上插件还能打开 czi 等格式</div>
-        <div class="hint">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
+        <div class="hint desk-only">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
+        <div class="hint touch-only">双指捏合 缩放　拖动 平移　双击 适应屏幕</div>
       </div>
       <div id="loading" hidden></div>
       <div id="size-out" hidden>

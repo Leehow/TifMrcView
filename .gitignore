@@ -1,6 +1,7 @@
 node_modules/
 src-tauri/target/
-src-tauri/gen/
+src-tauri/gen/schemas/
+src-tauri/gen/android/app/src/main/assets/
 .DS_Store
 # local sample data
 fluorescence-tiff-*/
