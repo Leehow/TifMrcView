@@ -190,6 +190,16 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 README 提供多种语言（见顶部的语言栏）。**英文版 README（`README.md`）是基准**；其他文件的章节和顺序与它完全一致。修改 `README.md` 时请同步更新各语言版本，做不到的话请提个 issue。
 
+## 作者
+
+<!-- author -->
+作者与维护者： **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## 引用
+
+如果 TifMrcView 对你的研究有帮助，请引用它。仓库页面右侧的 “Cite this repository” 会根据 [CITATION.cff](CITATION.cff) 给出引用格式。
+
 ## 许可证
 
 本项目以 [Apache License 2.0](LICENSE) 开源。

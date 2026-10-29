@@ -21,6 +21,13 @@ const LANGS = [
 
 // prettier-ignore
 const WORDS = [
+  // About dialog.
+  ["复制", "Copy", "Kopieren", "コピー", "Copiar", "Copier", "Копировать"],
+  ["作者", "Author", "Autor", "作者", "Autor", "Auteur", "Автор"],
+  ["引用", "Cite", "Zitieren", "引用", "Citar", "Citer", "Цитирование"],
+  ["官网", "Website", "Website", "公式サイト", "Sitio web", "Site web", "Сайт"],
+  ["已复制引用", "Citation copied", "Zitat kopiert", "引用をコピーしました", "Cita copiada", "Citation copiée", "Цитата скопирована"],
+  ["免费开源 · Apache-2.0", "Free and open source · Apache-2.0", "Kostenlos und quelloffen · Apache-2.0", "無料・オープンソース · Apache-2.0", "Gratis y de código abierto · Apache-2.0", "Gratuit et open source · Apache-2.0", "Бесплатно и с открытым кодом · Apache-2.0"],
   // Install-time permissions and package policy.
   ["插件权限", "Plugin permissions", "Plugin-Berechtigungen", "プラグインの権限", "Permisos del complemento", "Autorisations de l’extension", "Разрешения плагина"],
   ["无额外权限", "No additional permissions", "Keine zusätzlichen Berechtigungen", "追加の権限なし", "Sin permisos adicionales", "Aucune autorisation supplémentaire", "Без дополнительных разрешений"],

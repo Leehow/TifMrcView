@@ -196,6 +196,16 @@ When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a
 
 The README is available in several languages (see the language line at the top). **The English README (`README.md`) is the source of truth**; the other files keep exactly the same sections in the same order. When you change `README.md`, please update the translations too, or open an issue if you cannot.
 
+## Author
+
+<!-- author -->
+Created and maintained by **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## Citation
+
+If TifMrcView helps your research, please cite it. GitHub shows the citation from [CITATION.cff](CITATION.cff) under "Cite this repository" on the repository page.
+
 ## License
 
 This project is open source under the [Apache License 2.0](LICENSE).

@@ -20,7 +20,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: '其它发行版',
       k_file: '上一个 / 下一个文件', k_z: '切换 Z 层', space: '空格', k_play: '播放 / 暂停 Z',
       or_dbl: '或双击', k_fit: '适应窗口', k_save: '保存 PNG 到当前目录', k_open: '打开文件',
-      free: '免费开源'
+      free: '免费开源', by_author: '作者'
     },
     en: {
       def_h: 'Make it the default app', def_lead: 'TifMrcView normally becomes the default for .tif / .tiff / .mrc when installed. If another app still opens them, or you want .rec, .st, .map and .czi (needs the Zeiss plugin) to open in it too:',
@@ -38,7 +38,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Other distributions',
       k_file: 'Previous / next file', k_z: 'Change Z slice', space: 'Space', k_play: 'Play / pause Z',
       or_dbl: 'or double-click', k_fit: 'Fit to window', k_save: 'Save PNG to current folder', k_open: 'Open file',
-      free: 'Free and open source'
+      free: 'Free and open source', by_author: 'Author'
     },
     de: {
       def_h: 'Als Standard-App festlegen', def_lead: 'Nach der Installation ist TifMrcView normalerweise Standard für .tif / .tiff / .mrc. Öffnet trotzdem ein anderes Programm sie, oder sollen auch .rec, .st, .map und .czi (mit dem Zeiss-Plugin) damit öffnen:',
@@ -56,7 +56,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Andere Distributionen',
       k_file: 'Vorherige / nächste Datei', k_z: 'Z-Ebene wechseln', space: 'Leertaste', k_play: 'Z abspielen / pausieren',
       or_dbl: 'oder Doppelklick', k_fit: 'An Fenster anpassen', k_save: 'PNG im aktuellen Ordner speichern', k_open: 'Datei öffnen',
-      free: 'Kostenlos und quelloffen'
+      free: 'Kostenlos und quelloffen', by_author: 'Autor'
     },
     ja: {
       def_h: '既定のアプリにする', def_lead: '通常はインストールすると TifMrcView が .tif / .tiff / .mrc の既定アプリになります。それでも別のアプリで開く場合や、.rec・.st・.map、.czi（Zeiss プラグインが必要）も TifMrcView で開きたい場合は：',
@@ -74,7 +74,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'その他のディストリビューション',
       k_file: '前 / 次のファイル', k_z: 'Z 層を切り替え', space: 'スペース', k_play: 'Z の再生 / 一時停止',
       or_dbl: 'またはダブルクリック', k_fit: 'ウィンドウに合わせる', k_save: '現在のフォルダに PNG を保存', k_open: 'ファイルを開く',
-      free: '無料・オープンソース'
+      free: '無料・オープンソース', by_author: '作者'
     },
     es: {
       def_h: 'Usarlo como aplicación predeterminada', def_lead: 'Al instalarlo, TifMrcView suele quedar como predeterminado para .tif / .tiff / .mrc. Si otra aplicación los sigue abriendo, o quieres abrir también .rec, .st, .map y .czi (requiere el complemento Zeiss) con él:',
@@ -92,7 +92,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Otras distribuciones',
       k_file: 'Archivo anterior / siguiente', k_z: 'Cambiar corte Z', space: 'Espacio', k_play: 'Reproducir / pausar Z',
       or_dbl: 'o doble clic', k_fit: 'Ajustar a la ventana', k_save: 'Guardar PNG en la carpeta actual', k_open: 'Abrir archivo',
-      free: 'Gratis y de código abierto'
+      free: 'Gratis y de código abierto', by_author: 'Autor'
     },
     fr: {
       def_h: 'En faire l’application par défaut', def_lead: 'À l’installation, TifMrcView devient normalement l’application par défaut pour .tif / .tiff / .mrc. Si une autre application les ouvre encore, ou pour ouvrir aussi .rec, .st, .map et .czi (avec l’extension Zeiss) :',
@@ -110,7 +110,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Autres distributions',
       k_file: 'Fichier précédent / suivant', k_z: 'Changer de plan Z', space: 'Espace', k_play: 'Lire / mettre en pause Z',
       or_dbl: 'ou double-clic', k_fit: 'Ajuster à la fenêtre', k_save: 'Enregistrer en PNG dans le dossier courant', k_open: 'Ouvrir un fichier',
-      free: 'Gratuit et open source'
+      free: 'Gratuit et open source', by_author: 'Auteur'
     },
     ru: {
       def_h: 'Сделать приложением по умолчанию', def_lead: 'Обычно после установки TifMrcView становится программой по умолчанию для .tif / .tiff / .mrc. Если файлы всё равно открывает другая программа или нужно открывать в нём ещё .rec, .st, .map и .czi (нужен плагин Zeiss):',
@@ -128,7 +128,7 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Другие дистрибутивы',
       k_file: 'Предыдущий / следующий файл', k_z: 'Сменить слой Z', space: 'Пробел', k_play: 'Воспроизвести / пауза Z',
       or_dbl: 'или двойной щелчок', k_fit: 'По размеру окна', k_save: 'Сохранить PNG в текущую папку', k_open: 'Открыть файл',
-      free: 'Бесплатно и с открытым кодом'
+      free: 'Бесплатно и с открытым кодом', by_author: 'Автор'
     }
   };
   // Strings for the plugin market (site/plugins/) and the teaser on the home page.

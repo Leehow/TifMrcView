@@ -190,6 +190,16 @@ Al publicar, la CI coloca los instaladores y los paquetes de actualización en e
 
 El README está disponible en varios idiomas (vea la línea de idiomas al principio). **El README en inglés (`README.md`) es la fuente de referencia**; los demás archivos mantienen exactamente las mismas secciones en el mismo orden. Cuando cambie `README.md`, actualice también las traducciones o abra un issue si no puede.
 
+## Autor
+
+<!-- author -->
+Creado y mantenido por **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## Cómo citar
+
+Si TifMrcView le resulta útil en su investigación, cítelo. GitHub muestra la cita de [CITATION.cff](CITATION.cff) en «Cite this repository» en la página del repositorio.
+
 ## Licencia
 
 Este proyecto es de código abierto bajo la [Apache License 2.0](LICENSE).

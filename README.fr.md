@@ -190,6 +190,16 @@ Chaque push sur `main` fait compiler des paquets par GitHub Actions sur macOS / 
 
 Le README est disponible en plusieurs langues (voir la ligne des langues tout en haut). **Le README anglais (`README.md`) fait foi** ; les autres fichiers conservent exactement les mêmes sections dans le même ordre. Quand vous modifiez `README.md`, mettez aussi à jour les traductions, ou ouvrez une issue si vous ne pouvez pas.
 
+## Auteur
+
+<!-- author -->
+Créé et maintenu par **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## Citer
+
+Si TifMrcView vous aide dans vos recherches, merci de le citer. GitHub affiche la citation issue de [CITATION.cff](CITATION.cff) sous « Cite this repository » sur la page du dépôt.
+
 ## Licence
 
 Ce projet est open source sous [Apache License 2.0](LICENSE).

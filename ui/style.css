@@ -448,3 +448,18 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .spec-head #spec-read { flex: 1; font-size: 12px; font-variant-numeric: tabular-nums; }
 .spec-head #spec-src { font-size: 12px; }
 #spec-plot { flex: 1; width: 100%; min-height: 0; display: block; cursor: crosshair; }
+
+/* ---------- about ---------- */
+
+#about-dialog { width: 340px; }
+#about-dialog .dlg-head { display: flex; align-items: center; justify-content: space-between; }
+#about-dialog h3 { margin: 6px 0; font-size: 13px; }
+.about-app { display: flex; gap: 12px; align-items: center; padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.about-title { font-size: 16px; font-weight: 600; }
+.about-sec { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.about-sec .pl-name { font-size: 14px; margin-top: 2px; }
+.about-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.about-links a { color: var(--accent); text-decoration: none; }
+.about-links a:hover { text-decoration: underline; }
+.about-cite { margin-top: 6px; padding: 8px; font-size: 12px; background: var(--subtle); border-radius: 6px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
+.about-foot { padding-top: 8px; font-size: 12px; }

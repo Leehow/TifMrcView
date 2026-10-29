@@ -190,6 +190,16 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 
 この README は複数の言語で提供されています（先頭の言語切替行を参照）。**英語版 README（`README.md`）が基準です**。他のファイルは同じセクションを同じ順序で保っています。`README.md` を変更したときは翻訳も更新してください。難しい場合は issue を立ててください。
 
+## 作者
+
+<!-- author -->
+作者・メンテナー： **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## 引用
+
+TifMrcView が研究の役に立った場合は、引用をお願いします。リポジトリページの「Cite this repository」に [CITATION.cff](CITATION.cff) から作られた引用形式が表示されます。
+
 ## ライセンス
 
 このプロジェクトは [Apache License 2.0](LICENSE) のオープンソースです。

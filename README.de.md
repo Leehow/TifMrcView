@@ -190,6 +190,16 @@ Beim Veröffentlichen legt die CI Installations- und Update-Pakete im Verzeichni
 
 Die README gibt es in mehreren Sprachen (siehe die Sprachzeile ganz oben). **Die englische README (`README.md`) ist die maßgebliche Quelle**; die anderen Dateien behalten exakt dieselben Abschnitte in derselben Reihenfolge. Wenn Sie `README.md` ändern, aktualisieren Sie bitte auch die Übersetzungen oder eröffnen Sie ein Issue, falls Ihnen das nicht möglich ist.
 
+## Autor
+
+<!-- author -->
+Entwickelt und gepflegt von **[Leehow](https://github.com/Leehow)**.
+<!-- /author -->
+
+## Zitieren
+
+Wenn TifMrcView Ihrer Forschung hilft, zitieren Sie es bitte. GitHub zeigt das Zitat aus [CITATION.cff](CITATION.cff) unter „Cite this repository“ auf der Repository-Seite.
+
 ## Lizenz
 
 Dieses Projekt ist unter der [Apache License 2.0](LICENSE) quelloffen.
