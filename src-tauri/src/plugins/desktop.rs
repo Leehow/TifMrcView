@@ -250,6 +250,12 @@ pub fn open_link(url: String) -> Result<(), String> {
     open_in_browser(&url)
 }
 
+/// Opens the website (download, manual) from 帮助. Only ever that one URL.
+#[tauri::command]
+pub fn open_website() -> Result<(), String> {
+    open_in_browser("https://tifmrcview.com/")
+}
+
 fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");

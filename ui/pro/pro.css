@@ -6,16 +6,6 @@
 :root[data-edition="pro"] input[type="number"]:focus,
 :root[data-edition="pro"] select:focus { outline-color: rgba(231, 19, 22, 0.3); }
 :root[data-edition="pro"] #toolbar { box-shadow: inset 0 2px 0 var(--accent); }
-#pro-badge {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
 
 /* 3D view: covers the 2D view inside the stage. */
 #vol3d { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; background: #000; cursor: grab; touch-action: none; }
@@ -69,3 +59,18 @@
 #vol-panel .vp-pre { align-items: center; justify-content: space-between; }
 #vol-panel label.vp-inline { flex-direction: row; align-items: center; gap: 6px; }
 #vol-panel label.vp-inline select { width: auto; }
+
+/* CTF fitting, in the FFT panel. */
+#ctf-wrap { position: relative; }
+#ctf-over { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#ctf-box { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
+.ctf-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ctf-head b { flex: 1; font-size: 13px; }
+#ctf-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin-bottom: 6px; }
+#ctf-opts label { display: flex; flex-direction: column; gap: 2px; color: var(--dim); font-size: 11px; }
+#ctf-opts input[type="number"], #ctf-opts select { width: 100%; box-sizing: border-box; }
+#ctf-opts .ctf-wide { grid-column: 1 / -1; }
+#ctf-opts .ctf-check { flex-direction: row; align-items: center; gap: 6px; }
+#ctf-out { line-height: 1.5; font-variant-numeric: tabular-nums; }
+#ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
+#fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }

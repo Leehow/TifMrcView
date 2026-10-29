@@ -641,6 +641,13 @@ async fn power_spectrum(
     Ok(Response::new(bytes))
 }
 
+/// CTF fit (Pro) on the power spectrum of a region; see `ctf::fit_region`.
+#[tauri::command]
+async fn ctf_fit(state: State<'_, AppState>, req: crate::ctf::FitReq) -> CmdResult<crate::ctf::Fit> {
+    let img = current(&state, req.token)?;
+    blocking(move || crate::ctf::fit_region(&img, &req)).await
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -677,6 +684,47 @@ async fn pick_folder(app: AppHandle, dir: String) -> Option<String> {
         .blocking_pick_folder()
         .and_then(|f| f.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// The folder button: an image or a folder of slices from one panel. Only the
+/// macOS panel can choose both; elsewhere the UI asks first and this is the
+/// plain file dialog.
+#[tauri::command]
+async fn pick_open(app: AppHandle, dir: String) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return pick_open_mac(&app, dir);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = dir;
+        pick_file(app).await
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pick_open_mac(app: &AppHandle, dir: String) -> Option<String> {
+    let exts = formats::extensions();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSModalResponseOK, NSOpenPanel};
+        use objc2_foundation::{NSArray, NSString, NSURL};
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        // Only image files are selectable; every folder stays selectable too.
+        let types: Vec<_> = exts.iter().map(|e| NSString::from_str(e)).collect();
+        #[allow(deprecated)]
+        panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&types)));
+        if !dir.is_empty() {
+            panel.setDirectoryURL(Some(&NSURL::fileURLWithPath(&NSString::from_str(&dir))));
+        }
+        let picked = if panel.runModal() == NSModalResponseOK { panel.URL() } else { None };
+        let _ = tx.send(picked.and_then(|u| u.path()).map(|p| p.to_string()));
+    })
+    .ok()?;
+    rx.recv().ok().flatten()
 }
 
 /// Opens a folder in Finder / Explorer / the file manager.
@@ -1064,9 +1112,11 @@ pub fn run() {
             reveal_in_folder,
             histogram,
             power_spectrum,
+            ctf_fit,
             spectrum_values,
             pick_save_path,
             pick_folder,
+            pick_open,
             open_folder,
             free_path,
             save_file,
@@ -1082,6 +1132,7 @@ pub fn run() {
             plugins::plugin_set_disabled,
             plugins::open_market,
             plugins::open_link,
+            plugins::open_website,
             plugins::plugin_market_list,
             plugins::plugin_install_from_market,
             take_install_request,

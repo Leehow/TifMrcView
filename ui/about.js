@@ -48,7 +48,11 @@ function renderAbout() {
 function openAbout(force) {
   const dlg = $("about-dialog");
   const show = force ?? dlg.hidden;
-  if (show) renderAbout();
+  if (show) {
+    togglePluginDialog(false);
+    toggleHelp(false);
+    renderAbout();
+  }
   dlg.hidden = !show;
 }
 

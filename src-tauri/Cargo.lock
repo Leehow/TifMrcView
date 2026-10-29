@@ -8450,6 +8450,7 @@ name = "tifmrcview"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "burn",
  "core-foundation 0.10.1",
  "dirs 7.0.0",
  "flate2",
@@ -8457,6 +8458,9 @@ dependencies = [
  "libc",
  "lz4_flex",
  "memmap2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "openh264",
  "rayon",
  "reqwest",
