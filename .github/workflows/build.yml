@@ -226,6 +226,7 @@ jobs:
   # set up as secrets; otherwise the artifact is an unsigned APK.
   android:
     needs: version
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       NDK_VERSION: 27.2.12479018
@@ -294,7 +295,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, bundle]
+    needs: [version, bundle, android]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     env:
@@ -321,6 +322,12 @@ jobs:
         with:
           pattern: TifMrcView-pro-*
           path: artifacts/pro
+
+      # Only a signed APK (TifMrcView_<version>_arm64.apk) is published.
+      - uses: actions/download-artifact@v4
+        with:
+          name: TifMrcView-android-arm64
+          path: artifacts/standard/android
 
       - name: Assemble release
         env:
