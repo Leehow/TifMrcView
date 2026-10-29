@@ -8450,6 +8450,7 @@ name = "tifmrcview"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "burn",
  "core-foundation 0.10.1",
  "dirs 7.0.0",
  "flate2",
