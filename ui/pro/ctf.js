@@ -2,7 +2,7 @@
 // Pro CTF fitting, inside the FFT panel: fits defocus, astigmatism and
 // phase shift to the panel's power spectrum (ctf.rs) and draws the fitted
 // CTF zeros over the spectrum plus the 1D fit below it.
-// Shares app.js globals: S, F, invoke, $, pref, visibleRegion, fftChannel, metaGroups, UNIT_M, isRecip.
+// Shares app.js globals: S, F, T, invoke, $, pref, visibleRegion, fftChannel, metaGroups, UNIT_M, isRecip, setZ, toast.
 (() => {
   const C = { busy: false, fit: null, key: "" };
   const panel = $("fft-panel");
@@ -13,6 +13,7 @@
     <div class="ctf-head">
       <b>CTF 拟合</b>
       <button id="ctf-run" class="small primary" title="对当前 FFT 区域拟合离焦、像散（和相位板相移）">拟合</button>
+      <button id="ctf-stack" class="small" title="在每一层的同一区域拟合（倾转序列、多张照片），给出离焦随倾转角 / 层的变化" hidden>全部层</button>
       <button id="ctf-opts-btn" class="small" title="显微镜参数和搜索范围">参数</button>
     </div>
     <div id="ctf-opts" hidden>
@@ -26,10 +27,15 @@
       <label>最大 µm <input type="number" id="ctf-dmax" step="0.1" min="0" /></label>
       <label>最大像散 µm <input type="number" id="ctf-astig" step="0.05" min="0" /></label>
       <label class="ctf-check ctf-wide"><input type="checkbox" id="ctf-phase" /> 相位板（拟合相移）</label>
-      <label class="ctf-wide">计算 <select id="ctf-backend"><option value="auto">自动（GPU 算谱，CPU 拟合）</option><option value="gpu">全部用 GPU</option><option value="cpu">只用 CPU</option></select></label>
+      <label class="ctf-wide">计算 <select id="ctf-backend"><option value="auto">自动（单层 GPU 算谱 + CPU 拟合，全部层都用 GPU）</option><option value="gpu">全部用 GPU</option><option value="cpu">只用 CPU</option></select></label>
     </div>
     <div id="ctf-out" class="dim">按“拟合”在当前看到的区域上拟合 CTF</div>
-    <canvas id="ctf-plot" title="蓝：等相位平均的谱；红：拟合的 CTF²；绿：逐环相关系数（0–1）"></canvas>`;
+    <canvas id="ctf-plot" title="蓝：等相位平均的谱；红：拟合的 CTF²；绿：逐环相关系数（0–1）"></canvas>
+    <div id="ctf-series" hidden>
+      <div class="ctf-head"><span id="ctf-series-sum" class="dim"></span><button id="ctf-copy" class="small" title="复制每层结果（制表符分隔，可贴到 Excel）">复制</button></div>
+      <canvas id="ctf-trend" title="平均离焦（线）和 Δf1/Δf2（阴影）随倾转角或层变化；空心点为相关较低的层。点一下跳到那一层"></canvas>
+      <div id="ctf-table"></div>
+    </div>`;
   panel.appendChild(box);
 
   // The zeros are drawn on a canvas laid over the spectrum.
@@ -107,19 +113,8 @@
     $("ctf-out").textContent = msg || "按“拟合”在当前看到的区域上拟合 CTF";
   }
 
-  async function run() {
-    fillFromFile();
-    const region = visibleRegion();
-    if (!S.info || !region || C.busy) return;
-    const px = +$("ctf-px").value;
-    if (!(px > 0)) {
-      $("ctf-out").textContent = "需要像素尺寸：在参数里填像素 Å，或先给图像设定像素尺寸";
-      $("ctf-opts").hidden = false;
-      return;
-    }
-    const n = +$("fft-n").value;
-    const c = fftChannel();
-    const params = {
+  function readParams(px) {
+    return {
       voltageKv: +$("ctf-kv").value,
       csMm: +$("ctf-cs").value,
       ampContrast: +$("ctf-amp").value,
@@ -132,6 +127,26 @@
       phase: $("ctf-phase").checked,
       backend: $("ctf-backend").value,
     };
+  }
+
+  /** The pixel size to fit with, or null after telling the user to set one. */
+  function needPixel() {
+    const px = +$("ctf-px").value;
+    if (px > 0) return px;
+    $("ctf-out").textContent = "需要像素尺寸：在参数里填像素 Å，或先给图像设定像素尺寸";
+    $("ctf-opts").hidden = false;
+    return null;
+  }
+
+  async function run() {
+    fillFromFile();
+    const region = visibleRegion();
+    if (!S.info || !region || C.busy) return;
+    const px = needPixel();
+    if (!px) return;
+    const n = +$("fft-n").value;
+    const c = fftChannel();
+    const params = readParams(px);
     const key = JSON.stringify([S.token, S.z, S.t, c, region, n]);
     const token = S.token;
     C.busy = true;
@@ -267,11 +282,201 @@
     g.setLineDash([]);
   }
 
+  // ---- Every slice: tilt series and stacks of micrographs ----
+
+  const SER = { busy: false, res: null, token: null };
+
+  function syncStackButton() {
+    const show = !!S.info && S.info.sizeZ > 1 && S.axis === "xy";
+    $("ctf-stack").hidden = !show;
+    if (SER.res && SER.token !== S.token) {
+      SER.res = null;
+      $("ctf-series").hidden = true;
+    }
+  }
+
+  async function runStack() {
+    if (SER.busy) {
+      invoke("ctf_cancel");
+      return;
+    }
+    fillFromFile();
+    const region = visibleRegion();
+    if (!S.info || !region || C.busy) return;
+    const px = needPixel();
+    if (!px) return;
+    const token = S.token;
+    const req = { token, zs: [], t: S.t, c: fftChannel(), region, n: +$("fft-n").value, params: readParams(px) };
+    SER.busy = true;
+    $("ctf-stack").textContent = "取消";
+    $("ctf-run").disabled = true;
+    $("ctf-out").textContent = `拟合全部 ${S.info.sizeZ} 层…`;
+    const un = await T.event.listen("ctf-stack", (ev) => {
+      const { done, total } = ev.payload;
+      $("ctf-out").textContent = done < total ? `算谱 ${done} / ${total - 1} 层…` : "拟合中…";
+    });
+    try {
+      const res = await invoke("ctf_fit_stack", { req });
+      if (token !== S.token) return;
+      SER.res = res;
+      SER.token = token;
+      showStack();
+      $("ctf-out").textContent = `${res.fits.length} 层 · ${res.backend} · ${(res.ms / 1000).toFixed(1)} s`;
+      $("ctf-out").classList.add("dim");
+    } catch (e) {
+      $("ctf-out").textContent = String(e).includes("已取消") ? "已取消" : "拟合失败：" + e;
+    } finally {
+      un();
+      SER.busy = false;
+      $("ctf-stack").textContent = "全部层";
+      $("ctf-run").disabled = false;
+    }
+  }
+
+  /** Per slice: [x value, label for x]. Tilt angle when known, else Z. */
+  function xAxis() {
+    const r = SER.res;
+    return r.tilts ? { name: "倾转角 °", v: r.tilts } : { name: "层", v: r.zs.map((z) => z + 1) };
+  }
+
+  // Fits below this correlation are drawn hollow and flagged in the table.
+  const LOW_CC = 0.1;
+
+  function showStack() {
+    const r = SER.res;
+    $("ctf-series").hidden = !r;
+    if (!r) return;
+    const mean = r.fits.map((f) => (f.df1 + f.df2) / 2);
+    const lo = Math.min(...mean), hi = Math.max(...mean);
+    const good = r.fits.filter((f) => f.score >= LOW_CC).length;
+    $("ctf-series-sum").textContent = `离焦 ${um(lo)}–${um(hi)} µm · ${good}/${r.fits.length} 层相关 ≥ ${LOW_CC}`;
+    const ax = xAxis();
+    const t = document.createElement("table");
+    t.innerHTML = `<thead><tr><th>${r.tilts ? "倾转 °" : "层"}</th><th>离焦 µm</th><th>像散 nm</th><th>角 °</th>${$("ctf-phase").checked ? "<th>相移 °</th>" : ""}<th>可信 Å</th><th>相关</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    r.fits.forEach((f, i) => {
+      const tr = document.createElement("tr");
+      tr.dataset.z = r.zs[i];
+      if (f.score < LOW_CC) tr.className = "low";
+      const cells = [
+        r.tilts ? ax.v[i].toFixed(1) : String(ax.v[i]),
+        um(mean[i]),
+        ((f.df1 - f.df2) / 10).toFixed(1),
+        f.angle.toFixed(0),
+        ...($("ctf-phase").checked ? [f.phase.toFixed(0)] : []),
+        f.fitRes.toFixed(1),
+        f.score.toFixed(3),
+      ];
+      for (const v of cells) {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    t.addEventListener("click", (e) => {
+      const tr = e.target.closest("tr[data-z]");
+      if (tr) setZ(+tr.dataset.z);
+    });
+    $("ctf-table").replaceChildren(t);
+    drawTrend();
+  }
+
+  // Plot geometry, kept for clicks.
+  let trendX = null;
+
+  function drawTrend() {
+    const c = $("ctf-trend");
+    const r = SER.res;
+    if (!r || $("ctf-series").hidden) return;
+    const dpr = window.devicePixelRatio || 1;
+    const b = c.getBoundingClientRect();
+    c.width = Math.max(1, Math.round(b.width * dpr));
+    c.height = Math.max(1, Math.round(b.height * dpr));
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = b.width, H = b.height, L = 34, B = 14;
+    g.clearRect(0, 0, W, H);
+    const xs = xAxis().v;
+    const order = xs.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
+    const ys = r.fits.flatMap((f) => [f.df1, f.df2]);
+    let ylo = Math.min(...ys), yhi = Math.max(...ys);
+    if (yhi - ylo < 100) { ylo -= 50; yhi += 50; }
+    const xlo = Math.min(...xs), xhi = Math.max(...xs);
+    const X = (v) => L + ((v - xlo) / Math.max(1e-9, xhi - xlo)) * (W - L - 6);
+    const Y = (v) => 4 + (1 - (v - ylo) / (yhi - ylo)) * (H - B - 8);
+    trendX = { X, xs };
+    g.font = "10px system-ui, sans-serif";
+    g.fillStyle = "#57606a";
+    g.textAlign = "right";
+    g.fillText(um(yhi), L - 3, 12);
+    g.fillText(um(ylo), L - 3, H - B);
+    g.textAlign = "center";
+    g.fillText(`${xlo.toFixed(r.tilts ? 0 : 0)}`, L + 6, H - 2);
+    g.fillText(xAxis().name, (L + W) / 2, H - 2);
+    g.fillText(`${xhi.toFixed(0)}`, W - 10, H - 2);
+    // Δf1..Δf2 band, then the mean.
+    g.fillStyle = "rgba(9, 105, 218, 0.15)";
+    g.beginPath();
+    order.forEach((i, k) => (k ? g.lineTo : g.moveTo).call(g, X(xs[i]), Y(r.fits[i].df1)));
+    [...order].reverse().forEach((i) => g.lineTo(X(xs[i]), Y(r.fits[i].df2)));
+    g.fill();
+    g.strokeStyle = "#0969da";
+    g.lineWidth = 1.2;
+    g.beginPath();
+    order.forEach((i, k) => (k ? g.lineTo : g.moveTo).call(g, X(xs[i]), Y((r.fits[i].df1 + r.fits[i].df2) / 2)));
+    g.stroke();
+    for (const i of order) {
+      const f = r.fits[i];
+      g.beginPath();
+      g.arc(X(xs[i]), Y((f.df1 + f.df2) / 2), r.zs[i] === S.z ? 3.5 : 2.2, 0, 2 * Math.PI);
+      if (f.score < LOW_CC) {
+        g.fillStyle = "#fff";
+        g.fill();
+        g.strokeStyle = "#cf222e";
+        g.stroke();
+      } else {
+        g.fillStyle = r.zs[i] === S.z ? "#cf222e" : "#0969da";
+        g.fill();
+      }
+    }
+  }
+
+  $("ctf-trend").addEventListener("click", (e) => {
+    if (!trendX || !SER.res) return;
+    const x = e.clientX - $("ctf-trend").getBoundingClientRect().left;
+    let best = 0;
+    trendX.xs.forEach((v, i) => {
+      if (Math.abs(trendX.X(v) - x) < Math.abs(trendX.X(trendX.xs[best]) - x)) best = i;
+    });
+    setZ(SER.res.zs[best]);
+  });
+
+  $("ctf-copy").addEventListener("click", () => {
+    const r = SER.res;
+    if (!r) return;
+    const head = ["z", ...(r.tilts ? ["tilt_deg"] : []), "df1_A", "df2_A", "angle_deg", "phase_deg", "fit_res_A", "cc"];
+    const rows = r.fits.map((f, i) =>
+      [r.zs[i] + 1, ...(r.tilts ? [r.tilts[i]] : []), f.df1.toFixed(1), f.df2.toFixed(1), f.angle.toFixed(2), f.phase.toFixed(2), f.fitRes.toFixed(2), f.score.toFixed(4)].join("\t"),
+    );
+    navigator.clipboard.writeText([head.join("\t"), ...rows].join("\n")).then(
+      () => toast("已复制每层 CTF 结果"),
+      (e) => toast(`复制失败：${e}`),
+    );
+  });
+
+  $("ctf-stack").addEventListener("click", runStack);
   $("ctf-run").addEventListener("click", run);
   // The spectrum was redrawn: the overlay only stays while it is the same one.
   document.addEventListener("tmv-fft", () => {
     fillFromFile();
     drawOverlay();
+    syncStackButton();
+    drawTrend();
   });
-  window.addEventListener("resize", drawPlot);
+  window.addEventListener("resize", () => {
+    drawPlot();
+    drawTrend();
+  });
 })();

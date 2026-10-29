@@ -648,6 +648,25 @@ async fn ctf_fit(state: State<'_, AppState>, req: crate::ctf::FitReq) -> CmdResu
     blocking(move || crate::ctf::fit_region(&img, &req)).await
 }
 
+/// CTF fit (Pro) on the same region of every slice (tilt series, stack);
+/// reports `ctf-stack` {done, total}.
+#[tauri::command]
+async fn ctf_fit_stack(app: AppHandle, req: crate::ctf::StackReq) -> CmdResult<crate::ctf::StackFit> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || {
+        let progress = |done, total| {
+            let _ = app.emit("ctf-stack", serde_json::json!({ "done": done, "total": total }));
+        };
+        crate::ctf::fit_stack(&img, &req, &progress)
+    })
+    .await
+}
+
+#[tauri::command]
+fn ctf_cancel() {
+    crate::ctf::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -1113,6 +1132,8 @@ pub fn run() {
             histogram,
             power_spectrum,
             ctf_fit,
+            ctf_fit_stack,
+            ctf_cancel,
             spectrum_values,
             pick_save_path,
             pick_folder,
