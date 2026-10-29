@@ -1366,6 +1366,7 @@ async function renderNow() {
     loadHist();
     if (!S.scrubbing) refreshOverview();
     pluginEmit("render");
+    scheduleFft();
   } catch (e) {
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
     if (token === S.token) {
@@ -1376,6 +1377,195 @@ async function renderNow() {
     S.inflight = false;
     if (S.dirty) requestRender();
   }
+}
+
+// ---------- FFT / power spectrum ----------
+
+/** Power spectrum of the visible region, for lattice spacings and Thon rings. */
+const F = { on: false, timer: 0, busy: false, again: false, key: "", data: null, hover: null };
+
+function scheduleFft() {
+  if (!F.on || !S.info) return;
+  clearTimeout(F.timer);
+  F.timer = setTimeout(computeFft, 150);
+}
+
+/** The channel the spectrum is computed from: the selected one if shown. */
+function fftChannel() {
+  if (S.chans[S.sel] && S.chans[S.sel].visible) return S.sel;
+  const i = S.chans.findIndex((c) => c.visible);
+  return i < 0 ? 0 : i;
+}
+
+async function computeFft() {
+  const region = visibleRegion();
+  if (!F.on || !S.info || !region) return;
+  if (F.busy) {
+    F.again = true;
+    return;
+  }
+  const n = +$("fft-n").value;
+  const c = fftChannel();
+  const key = JSON.stringify([S.token, S.z, S.t, c, region, n]);
+  if (key === F.key) return;
+  const token = S.token;
+  F.busy = true;
+  try {
+    const buf = await invoke("power_spectrum", { token, z: S.z, t: S.t, c, region, n });
+    if (token !== S.token) return;
+    const dv = new DataView(buf);
+    const size = dv.getUint32(0, true);
+    const all = new Float32Array(buf.slice(8));
+    F.data = { n: size, tiles: dv.getUint32(4, true), log: all.subarray(0, size * size), radial: all.subarray(size * size) };
+    F.key = key;
+    drawFft();
+  } catch (e) {
+    if (String(e) !== "stale") {
+      F.data = null;
+      F.key = key;
+      drawFft(String(e));
+    }
+  } finally {
+    F.busy = false;
+    if (F.again) {
+      F.again = false;
+      computeFft();
+    }
+  }
+}
+
+/** Display range of the spectrum: a percentile window that ignores the centre. */
+function fftRange(log, n) {
+  const sample = [];
+  const step = Math.max(1, Math.floor((n * n) / 40000));
+  for (let i = 0; i < n * n; i += step) {
+    const x = (i % n) - n / 2;
+    const y = Math.floor(i / n) - n / 2;
+    if (x * x + y * y > 4) sample.push(log[i]);
+  }
+  sample.sort((a, b) => a - b);
+  const at = (q) => sample[Math.min(sample.length - 1, Math.floor(q * sample.length))];
+  return [at(0.02), at(0.998)];
+}
+
+function drawFft(error) {
+  const img = $("fft-img");
+  const g = img.getContext("2d");
+  const d = F.data;
+  if (!d) {
+    g.clearRect(0, 0, img.width, img.height);
+    $("fft-prof").getContext("2d").clearRect(0, 0, 9999, 9999);
+    $("fft-info").textContent = error || "";
+    return;
+  }
+  const { n, log } = d;
+  img.width = img.height = n;
+  const [lo, hi] = fftRange(log, n);
+  const k = 255 / Math.max(1e-6, hi - lo);
+  const im = g.createImageData(n, n);
+  for (let i = 0; i < n * n; i++) {
+    const v = Math.max(0, Math.min(255, (log[i] - lo) * k));
+    im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = v;
+    im.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(im, 0, 0);
+  $("fft-info").textContent = `${n}×${n}，平均 ${d.tiles} 块`;
+  drawFftProfile();
+  showFftHover();
+}
+
+/** Spatial frequency (1/m per FFT pixel along x and y), or null without a length calibration. */
+function fftFreqStep() {
+  if (!S.px || isRecip(S.px.unit) || !F.data) return null;
+  const m = UNIT_M[S.px.unit];
+  return [1 / (F.data.n * S.px.x * m), 1 / (F.data.n * S.px.y * m)];
+}
+
+/** "f = … 1/nm · d = … nm" for an offset of (du, dv) FFT pixels from the centre. */
+function fftReadout(du, dv) {
+  const r = Math.hypot(du, dv);
+  if (r < 0.5) return "";
+  const step = fftFreqStep();
+  if (!step) return `r = ${fmt(+r.toFixed(1))} · 周期 ${fmt(+(F.data.n / r).toPrecision(3))} px`;
+  const f = Math.hypot(du * step[0], dv * step[1]);
+  const per = 1 / f;
+  return `${fmtLength(f, "1/nm")} · d = ${fmtLength(per, per < 1e-9 ? "Å" : per < 1e-6 ? "nm" : "µm")}`;
+}
+
+function drawFftProfile() {
+  const c = $("fft-prof");
+  const dpr = window.devicePixelRatio || 1;
+  const r = c.getBoundingClientRect();
+  c.width = Math.max(1, Math.round(r.width * dpr));
+  c.height = Math.max(1, Math.round(r.height * dpr));
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = r.width, H = r.height;
+  g.clearRect(0, 0, W, H);
+  if (!F.data) return;
+  const p = F.data.radial;
+  // Skip the centre, which only says how bright the image is.
+  const vals = Array.from(p.subarray(2));
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const x = (i) => (i / (p.length - 1)) * W;
+  const y = (v) => H - 4 - ((v - lo) / Math.max(1e-6, hi - lo)) * (H - 8);
+  g.strokeStyle = "#0969da";
+  g.lineWidth = 1.25;
+  g.beginPath();
+  for (let i = 2; i < p.length; i++) (i === 2 ? g.moveTo : g.lineTo).call(g, x(i), y(p[i]));
+  g.stroke();
+  if (F.hover) {
+    const rr = Math.hypot(F.hover[0], F.hover[1]);
+    g.strokeStyle = "#cf222e";
+    g.beginPath();
+    g.moveTo(x(rr), 0);
+    g.lineTo(x(rr), H);
+    g.stroke();
+  }
+}
+
+function showFftHover() {
+  $("fft-read").textContent = F.hover && F.data ? fftReadout(F.hover[0], F.hover[1]) : "移动鼠标查看频率和间距";
+}
+
+function setFft(on) {
+  F.on = on;
+  $("fft-panel").hidden = !on;
+  $("btn-fft").classList.toggle("on", on);
+  pref.set("fft-on", on);
+  if (on) {
+    F.key = "";
+    scheduleFft();
+  }
+}
+
+$("btn-fft").addEventListener("click", () => setFft(!F.on));
+$("fft-close").addEventListener("click", () => setFft(false));
+$("fft-n").addEventListener("change", () => {
+  pref.set("fft-n", $("fft-n").value);
+  scheduleFft();
+});
+$("fft-img").addEventListener("mousemove", (e) => {
+  if (!F.data) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const n = F.data.n;
+  F.hover = [((e.clientX - r.left) / r.width) * n - n / 2, ((e.clientY - r.top) / r.height) * n - n / 2];
+  showFftHover();
+  drawFftProfile();
+});
+$("fft-prof").addEventListener("mousemove", (e) => {
+  if (!F.data) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  F.hover = [((e.clientX - r.left) / r.width) * (F.data.radial.length - 1), 0];
+  showFftHover();
+  drawFftProfile();
+});
+for (const id of ["fft-img", "fft-prof"]) {
+  $(id).addEventListener("mouseleave", () => {
+    F.hover = null;
+    showFftHover();
+    drawFftProfile();
+  });
 }
 
 // ---------- saving ----------
@@ -2848,6 +3038,8 @@ function markStrip() {
 // ---------- startup ----------
 
 S.scaleBar = pref.get("scalebar-on", true);
+$("fft-n").value = String(pref.get("fft-n", "512"));
+if (pref.get("fft-on", false)) setFft(true);
 toggleSidebar(pref.get("sidebar", true));
 {
   const t = pref.get("tools", null);

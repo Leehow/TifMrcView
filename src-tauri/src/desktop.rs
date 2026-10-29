@@ -288,6 +288,23 @@ async fn histogram(state: State<'_, AppState>, token: u64, z: usize, t: usize, c
     .await
 }
 
+/// Power spectrum of a region of one slice; see `fft::power_spectrum`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn power_spectrum(
+    state: State<'_, AppState>,
+    token: u64,
+    z: usize,
+    t: usize,
+    c: usize,
+    region: [f64; 4],
+    n: usize,
+) -> CmdResult<Response> {
+    let img = current(&state, token)?;
+    let bytes = blocking(move || fft::power_spectrum(&img, c, z, t, region, n)).await?;
+    Ok(Response::new(bytes))
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -697,6 +714,7 @@ pub fn run() {
             set_default_app,
             reveal_in_folder,
             histogram,
+            power_spectrum,
             pick_save_path,
             pick_folder,
             open_folder,
