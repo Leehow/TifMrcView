@@ -44,9 +44,24 @@ function loadEnv(file) {
   }
 }
 
+// Windows needs a shell to run npx.cmd; quote the arguments for it.
 function run(cmd, args, opts = {}) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
-  return execFileSync(cmd, args, { cwd: root, stdio: "inherit", shell: process.platform === "win32", ...opts });
+  if (process.platform !== "win32") return execFileSync(cmd, args, { cwd: root, stdio: "inherit", ...opts });
+  const q = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
+  return execFileSync([cmd, ...args].map(q).join(" "), { cwd: root, stdio: "inherit", shell: true, ...opts });
+}
+
+// The universal Quick Look extension links Swift compatibility libraries that
+// the Command Line Tools ship for arm64 only, so use Xcode when it is there.
+function useXcode() {
+  if (process.platform !== "darwin" || process.env.DEVELOPER_DIR) return;
+  const selected = execFileSync("xcode-select", ["-p"], { encoding: "utf8" }).trim();
+  const xcode = "/Applications/Xcode.app/Contents/Developer";
+  if (selected.includes("CommandLineTools") && fs.existsSync(xcode)) {
+    console.log(`using ${xcode} (xcode-select points at ${selected})`);
+    process.env.DEVELOPER_DIR = xcode;
+  }
 }
 
 function git(...args) {
@@ -96,6 +111,7 @@ function build(which, out) {
   if (!platform) throw new Error(`no desktop bundle for ${process.platform}`);
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY) console.warn("warning: TAURI_SIGNING_PRIVATE_KEY not set; no updater packages, so installed apps won't see this release");
   clean();
+  useXcode();
   const v = version();
   const editions = which === "all" ? ["standard", "pro"] : [which];
   const target = process.platform === "darwin" ? ["--target", "universal-apple-darwin"] : [];
