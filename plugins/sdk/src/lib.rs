@@ -165,7 +165,7 @@ pub mod file {
 
     /// Reads up to `len` bytes at `offset`.
     pub fn read_at_most(offset: u64, len: usize) -> Result<Vec<u8>> {
-        let len = len.min(size().saturating_sub(offset) as usize);
+        let len = len.min(usize::try_from(size().saturating_sub(offset)).unwrap_or(usize::MAX));
         let mut v = vec![0u8; len];
         let n = read_into(offset, &mut v)?;
         v.truncate(n);

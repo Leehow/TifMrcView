@@ -1,7 +1,7 @@
 {
   "id": "tvips",
   "name": "TVIPS",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "打开 TVIPS 相机录制的 .tvips 影像，并显示 EM-MENU 保存的 TIFF 里的显微镜、相机、放大倍数和像素尺寸等参数",
   "main": "index.js",
   "apiVersion": 2,

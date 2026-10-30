@@ -129,6 +129,9 @@ fn find_block(c: &Container, version: u32, id: &str) -> Result<(u64, u64)> {
         let size = if size_len == 8 { le_u64(&b, 9) } else { le_u32(&b, 9) as u64 };
         let id_len = le_u32(&b, 10 + size_len) as u64 * 2;
         let data = pos + hdr as u64 + id_len;
+        if data.checked_add(size).is_none_or(|e| e > fsize) {
+            bail!("LIF 文件被截断：这个图像的像素数据不完整");
+        }
         if id_len == want.len() as u64 && b.len() >= hdr + want.len() && b[hdr..] == want[..] {
             return Ok((data, size));
         }

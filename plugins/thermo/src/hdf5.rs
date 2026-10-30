@@ -102,7 +102,7 @@ impl<S: Source> Cache<S> {
 
     /// Up to `len` bytes, fewer at the end of the file.
     fn read_most(&self, off: u64, len: usize) -> Result<Vec<u8>> {
-        let len = len.min(self.src.size().saturating_sub(off) as usize);
+        let len = len.min(usize::try_from(self.src.size().saturating_sub(off)).unwrap_or(usize::MAX));
         self.read(off, len)
     }
 }
