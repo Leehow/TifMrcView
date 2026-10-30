@@ -14,7 +14,8 @@ plugins/sdk/Cargo.lock
 # Android release signing key (kept on the Mac only; CI has it as secrets)
 /android-release/
 *.jks
-site/demo/app/
 # local release builds (scripts/local-release.mjs)
 /release-artifacts/
 scripts/local-release.env
+# the website lives in a private repo; never commit local leftovers (e.g. site/deploy_key)
+/site/

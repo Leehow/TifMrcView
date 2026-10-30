@@ -19,12 +19,12 @@
 
 <table>
   <tr>
-    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="Крио-ЭТ томограмма в формате MRC с измерением длины"></a><br><sub>Крио-ЭТ томограмма (MRC) с измерением длины и инструментами аннотирования.</sub></td>
-    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="Боковой вид XZ с прямоугольником"></a><br><sub>Боковой вид XZ с прямоугольником, показывающим ширину × высоту.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-tomogram-line.webp"><img src="docs/shots/mrc-tomogram-line-1200.webp" alt="Крио-ЭТ томограмма в формате MRC с измерением длины"></a><br><sub>Крио-ЭТ томограмма (MRC) с измерением длины и инструментами аннотирования.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-xz-view-box.webp"><img src="docs/shots/mrc-xz-view-box-1200.webp" alt="Боковой вид XZ с прямоугольником"></a><br><sub>Боковой вид XZ с прямоугольником, показывающим ширину × высоту.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="Z-стек Zeiss CZI Airyscan с измерением"></a><br><sub>Z-стек Zeiss CZI Airyscan с измерением и масштабной линейкой.</sub></td>
-    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="Трёхканальный флуоресцентный TIFF"></a><br><sub>Трёхканальный флуоресцентный TIFF с переключением каналов.</sub></td>
+    <td width="50%"><a href="docs/shots/czi-airyscan-measure.webp"><img src="docs/shots/czi-airyscan-measure-1200.webp" alt="Z-стек Zeiss CZI Airyscan с измерением"></a><br><sub>Z-стек Zeiss CZI Airyscan с измерением и масштабной линейкой.</sub></td>
+    <td width="50%"><a href="docs/shots/tiff-multichannel.webp"><img src="docs/shots/tiff-multichannel-1200.webp" alt="Трёхканальный флуоресцентный TIFF"></a><br><sub>Трёхканальный флуоресцентный TIFF с переключением каналов.</sub></td>
   </tr>
 </table>
 
@@ -162,7 +162,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 - отправить тег, начинающийся с `v`: `git tag v0.3.0 && git push origin v0.3.0` выгружает на сайт загрузок и создаёт GitHub Release;
 - или вручную запустить build в Actions, отметив «опубликовать на сайте загрузок»: публикация пойдёт с автоматическим номером версии.
 
-При публикации CI кладёт установщики и пакеты обновлений в каталог `<версия>/` сайта загрузок и в конце обновляет `latest.json` (для автообновления) и `downloads.json` (для страницы загрузки). Страница загрузки и каталог плагинов (`site/`, `plugins/`) также разворачиваются отдельным workflow (`.github/workflows/site.yml`) при любом изменении в `main`. Нужно настроить в репозитории в Settings → Secrets and variables → Actions:
+При публикации CI кладёт установщики и пакеты обновлений в каталог `<версия>/` сайта загрузок и в конце обновляет `latest.json` (для автообновления) и `downloads.json` (для страницы загрузки). Пакеты каталога плагинов (`plugins/`) также разворачиваются отдельным workflow (`.github/workflows/plugins.yml`) при любом изменении в `main`; сами страницы сайта хранятся в отдельном репозитории. Нужно настроить в репозитории в Settings → Secrets and variables → Actions:
 
 | Имя | Тип | Описание |
 | --- | --- | --- |
@@ -184,9 +184,9 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `ui/` | Фронтенд на чистом HTML/JS: `index.html`, `app.js`, `style.css`, `plugin-host.js`; встроенный языковой плагин — `ui/plugins/i18n.js` |
 | `plugins/<id>/` | Исходники устанавливаемых плагинов (`recorder` и плагины форматов `zeiss`, `lasx`, `nis`, `fluoview`, `imaris`, `gatan`, `thermo` и `tvips`, по одному на производителя, — крейты Rust, собираемые в WebAssembly) и SDK плагинов (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (собирает zip-файлы плагинов и индекс каталога), `make-release.mjs` |
-| `site/` | Сайт и каталог плагинов, скриншоты в `site/shots/` |
+| `docs/shots/` | Скриншоты для этого README |
 | `packaging/linux/` | Файлы упаковки для Linux (MIME-тип для .mrc) |
-| `.github/workflows/` | `build.yml` (сборка и релиз), `site.yml` (развёртывание сайта и каталога плагинов) |
+| `.github/workflows/` | `build.yml` (сборка и релиз), `plugins.yml` (пакеты каталога плагинов) |
 
 ## Переводы
 
