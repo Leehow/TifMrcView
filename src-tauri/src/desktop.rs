@@ -181,6 +181,8 @@ enum LabelOp {
     Polygon { z: usize, pts: Vec<[f32; 2]>, label: u16, guard: u16 },
     Interpolate { label: u16, guard: u16 },
     Delete { label: u16 },
+    MoveRegion { x: usize, y: usize, z: usize, dx: i64, dy: i64, three_d: bool },
+    DeleteRegion { x: usize, y: usize, z: usize, three_d: bool },
     Materials { materials: Vec<crate::labels::Material> },
     Undo,
     Redo,
@@ -266,6 +268,8 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
             LabelOp::Polygon { z, pts, label, guard } => l.polygon(z, &pts, label, guard),
             LabelOp::Interpolate { label, guard } => l.interpolate(label, guard),
             LabelOp::Delete { label } => l.delete_label(label),
+            LabelOp::MoveRegion { x, y, z, dx, dy, three_d } => l.move_region(x, y, z, dx, dy, three_d),
+            LabelOp::DeleteRegion { x, y, z, three_d } => l.delete_region(x, y, z, three_d),
             LabelOp::Materials { materials } => {
                 l.set_materials(materials);
                 vec![]
@@ -417,7 +421,7 @@ async fn sam_predict(app: AppHandle, req: crate::sam::PredictReq) -> CmdResult<R
 
 /// Paints the last SAM mask into the label map.
 #[tauri::command]
-async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16) -> CmdResult<LabelsState> {
+async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16, trim: Option<bool>) -> CmdResult<LabelsState> {
     let e = labels_entry(&app.state::<AppState>(), token)?;
     let app2 = app.clone();
     blocking(move || {
@@ -427,7 +431,7 @@ async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16)
             anyhow::bail!("没有可以应用的分割结果");
         };
         let mut e = e.lock().unwrap();
-        let zs = e.labels.apply_mask(z, &m.mask, label, guard);
+        let zs = e.labels.apply_mask(z, &m.mask, label, guard, trim.unwrap_or(false));
         Ok(labels_state(&e, zs))
     })
     .await
@@ -455,7 +459,7 @@ async fn sam_propagate(app: AppHandle, req: crate::sam::PropagateReq, label: u16
         let masks = sam.propagate(&req, (info.width, info.height, d), values, progress)?;
         let refs: Vec<(usize, &[bool])> = masks.iter().map(|(z, m)| (*z, m.as_slice())).collect();
         let mut e = e.lock().unwrap();
-        let zs = e.labels.apply_masks(&refs, label, guard);
+        let zs = e.labels.apply_masks(&refs, label, guard, false);
         Ok(labels_state(&e, zs))
     })
     .await

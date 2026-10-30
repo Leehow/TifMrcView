@@ -85,6 +85,10 @@ pub struct PropagateReq {
     pub max: usize,
     #[serde(default)]
     pub denoise: Denoise,
+    /// Prompt each slice from the mask on the one before (box and points)
+    /// instead of tracking with SAM 2's memory.
+    #[serde(default)]
+    pub follow_prompts: bool,
 }
 
 /// The mask of the last prediction, kept for `sam_apply`.
@@ -222,6 +226,45 @@ impl Sam {
         }
         let total: usize = dirs.iter().map(|d| d.1).sum();
         let (mut out, mut done) = (vec![(req.z, start.clone())], 0);
+        if !req.follow_prompts {
+            // SAM 2's video tracking: each slice attends to the memories of
+            // the start slice and the slices since, so no prompt is needed.
+            let gray = |z: usize| slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise);
+            let first = predictor.track_start(&predictor.encode_gray(&gray(req.z)?, w, h), &start);
+            for (dir, steps) in dirs {
+                let (mut prev, mut prev_mask, base) = (Vec::new(), start.clone(), done);
+                for k in 1..=steps {
+                    if self.cancel.load(SeqCst) {
+                        return Ok(out);
+                    }
+                    let z = (req.z as isize + dir * k as isize) as usize;
+                    let t = predictor.track_next(&predictor.encode_gray(&gray(z)?, w, h), &first, &prev, k, d);
+                    let mask: Vec<bool> = t.prediction.logits.iter().map(|&v| v > 0.0).collect();
+                    let area = mask.iter().filter(|m| **m).count();
+                    if std::env::var_os("TMV_SAM_TRACE").is_some() {
+                        eprintln!("SAM: slice {z}: object score {:.2}, quality {:.2}, {area} px, {}", t.obj_score, t.prediction.iou, compare(&prev_mask, &mask, w, h, t.prediction.iou));
+                    }
+                    // The object score alone stays positive while a thin
+                    // object frays or the mask slides onto a neighbour at
+                    // the ends, so the slice-to-slice checks apply too.
+                    if t.obj_score <= 0.0 || area == 0 || too_big(&mask) || !still_same(&prev_mask, &mask, w, h, t.prediction.iou, min_iou(start_iou)) {
+                        eprintln!("SAM: tracking stops at slice {z}: object score {:.2}, {}", t.obj_score, compare(&prev_mask, &mask, w, h, t.prediction.iou));
+                        break;
+                    }
+                    done += 1;
+                    progress(done, total);
+                    prev_mask = mask.clone();
+                    out.push((z, mask));
+                    prev.push(t.memory);
+                    if prev.len() > tmv_sam::memory::MAX_OBJ_PTRS {
+                        prev.remove(0);
+                    }
+                }
+                done = base + steps;
+                progress(done, total);
+            }
+            return Ok(out);
+        }
         for (dir, steps) in dirs {
             let (mut prev, mut prev_low, base) = (start.clone(), start_low.clone(), done);
             for k in 1..=steps {
@@ -611,7 +654,7 @@ mod tests {
         sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None, denoise: Denoise::default() };
         sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
-        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default() };
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default(), follow_prompts: false };
         let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
@@ -647,7 +690,7 @@ mod tests {
         let y = 50.0 + 8.0 * (x / 20.0).sin();
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x, y, positive: true }], bbox: None, denoise: Denoise::default() };
         let (_, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
-        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default() };
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default(), follow_prompts: false };
         let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
@@ -717,7 +760,7 @@ mod tests {
         let (start, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
         let n = start.iter().filter(|v| **v != 0).count();
         println!("start quality {iou:.2}, {n} px");
-        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise };
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise, follow_prompts: false };
         let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();

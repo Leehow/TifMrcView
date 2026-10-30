@@ -653,12 +653,14 @@ impl Labels {
     }
 
     /// Paints `label` (0 erases) wherever `mask` is set on slice `z`.
-    pub fn apply_mask(&mut self, z: usize, mask: &[bool], label: u16, guard: u16) -> Vec<usize> {
-        self.apply_masks(&[(z, mask)], label, guard)
+    /// With `trim`, pixels of `label` outside the mask on that slice are
+    /// cleared too (a rough brush outline refined by SAM).
+    pub fn apply_mask(&mut self, z: usize, mask: &[bool], label: u16, guard: u16, trim: bool) -> Vec<usize> {
+        self.apply_masks(&[(z, mask)], label, guard, trim)
     }
 
     /// `apply_mask` on several slices as one undo step.
-    pub fn apply_masks(&mut self, masks: &[(usize, &[bool])], label: u16, guard: u16) -> Vec<usize> {
+    pub fn apply_masks(&mut self, masks: &[(usize, &[bool])], label: u16, guard: u16, trim: bool) -> Vec<usize> {
         let locked = self.locked();
         let mut edit = vec![];
         for &(z, mask) in masks {
@@ -669,6 +671,91 @@ impl Labels {
             for (v, &m) in s.iter_mut().zip(mask) {
                 if m && allowed(*v, label, guard, &locked) {
                     *v = label;
+                } else if !m && trim && label != 0 && *v == label {
+                    *v = 0;
+                }
+            }
+        }
+        self.commit(edit)
+    }
+
+    /// The pixels of the label at (x, y, z) connected to it, by slice:
+    /// 4-connected within a slice and, with `three_d`, through Z as well.
+    fn region(&self, x: usize, y: usize, z: usize, three_d: bool) -> (u16, BTreeMap<usize, Vec<usize>>) {
+        let (w, h, d) = (self.w, self.h, self.d);
+        let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        if x >= w || y >= h || z >= d {
+            return (0, out);
+        }
+        let k = self.get(x, y, z);
+        if k == 0 {
+            return (0, out);
+        }
+        let n = w * h;
+        let mut seen: HashMap<usize, Bits> = HashMap::new();
+        let mut stack = vec![(z, y * w + x)];
+        while let Some((cz, i)) = stack.pop() {
+            let Some(s) = self.slices[cz].as_ref() else { continue };
+            let bits = seen.entry(cz).or_insert_with(|| Bits::new(n));
+            if bits.get(i) || s[i] != k {
+                continue;
+            }
+            bits.set(i);
+            out.entry(cz).or_default().push(i);
+            let (px, py) = (i % w, i / w);
+            if px > 0 { stack.push((cz, i - 1)) }
+            if px + 1 < w { stack.push((cz, i + 1)) }
+            if py > 0 { stack.push((cz, i - w)) }
+            if py + 1 < h { stack.push((cz, i + w)) }
+            if three_d {
+                if cz > 0 { stack.push((cz - 1, i)) }
+                if cz + 1 < d { stack.push((cz + 1, i)) }
+            }
+        }
+        (k, out)
+    }
+
+    /// Clears the region at (x, y, z) (see `region`), unless its label is locked.
+    pub fn delete_region(&mut self, x: usize, y: usize, z: usize, three_d: bool) -> Vec<usize> {
+        let (k, region) = self.region(x, y, z, three_d);
+        if k == 0 || self.locked().contains(&k) {
+            return vec![];
+        }
+        let n = self.w * self.h;
+        let mut edit = vec![];
+        for (cz, pix) in region {
+            let s = Self::touch(&mut self.slices, &mut edit, cz, n);
+            for i in pix {
+                s[i] = 0;
+            }
+        }
+        self.commit(edit)
+    }
+
+    /// Moves the region at (x, y, z) by (dx, dy) pixels within its slices.
+    /// Pixels moved off the image are lost; it covers other labels except
+    /// locked ones.
+    pub fn move_region(&mut self, x: usize, y: usize, z: usize, dx: i64, dy: i64, three_d: bool) -> Vec<usize> {
+        let (k, region) = self.region(x, y, z, three_d);
+        let locked = self.locked();
+        if k == 0 || locked.contains(&k) || (dx == 0 && dy == 0) {
+            return vec![];
+        }
+        let (w, h) = (self.w as i64, self.h as i64);
+        let mut edit = vec![];
+        for (cz, pix) in region {
+            let s = Self::touch(&mut self.slices, &mut edit, cz, (w * h) as usize);
+            for &i in &pix {
+                s[i] = 0;
+            }
+            for &i in &pix {
+                let (nx, ny) = ((i as i64 % w) + dx, (i as i64 / w) + dy);
+                if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                    continue;
+                }
+                let j = (ny * w + nx) as usize;
+                if allowed(s[j], k, 0, &locked) {
+                    s[j] = k;
                 }
             }
         }
@@ -849,6 +936,34 @@ mod tests {
         assert_eq!(l.get(2, 2, 0), 1);
         l.stroke(0, &[[2.5, 2.5]], 1.0, 0, 1);
         assert_eq!(l.get(2, 2, 0), 0);
+    }
+
+    #[test]
+    fn regions_move_and_go() {
+        let mut l = Labels::new(10, 10, 3);
+        for z in 0..2 {
+            l.stroke(z, &[[2.5, 2.5]], 1.0, 1, 0);
+        }
+        l.stroke(0, &[[7.5, 7.5]], 1.0, 1, 0);
+        // Only the touched blob moves; the other one of the same label stays.
+        assert_eq!(l.move_region(2, 2, 0, 3, 0, false), vec![0]);
+        assert_eq!((l.get(2, 2, 0), l.get(5, 2, 0), l.get(7, 7, 0), l.get(2, 2, 1)), (0, 1, 1, 1));
+        // Through Z: the blob on slice 1 is joined to nothing at (5, 2) any more.
+        assert_eq!(l.delete_region(5, 2, 0, true), vec![0]);
+        assert_eq!((l.get(5, 2, 0), l.get(2, 2, 1)), (0, 1));
+        l.stroke(0, &[[2.5, 2.5]], 1.0, 1, 0);
+        assert_eq!(l.delete_region(2, 2, 1, true), vec![0, 1]);
+        assert_eq!(l.get(7, 7, 0), 1);
+        l.undo();
+        assert_eq!((l.get(2, 2, 0), l.get(2, 2, 1)), (1, 1));
+    }
+
+    #[test]
+    fn trimmed_mask_clears_the_rest_of_the_label() {
+        let mut l = Labels::new(4, 1, 1);
+        l.stroke(0, &[[0.5, 0.5], [3.5, 0.5]], 0.6, 2, 0);
+        l.apply_mask(0, &[false, true, true, false], 2, 0, true);
+        assert_eq!((0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(), vec![0, 2, 2, 0]);
     }
 
     #[test]
