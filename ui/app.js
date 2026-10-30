@@ -446,11 +446,17 @@ async function refreshFolder(path) {
   if (dir !== S.folder.dir) {
     const f = await invoke("list_folder", { path: stackDir || path });
     const stacks = f.stacks || [];
-    const files = [...stacks.map((s) => s.path), ...f.files];
+    // List the files group by group, in the order the side panel shows them.
+    const all = [
+      ...stacks.map((s) => ({ path: s.path, size: 0, group: STACK_GROUP })),
+      ...f.files.map((p, i) => ({ path: p, size: f.sizes[i], group: fileGroup(p) })),
+    ];
+    all.sort((a, b) => a.group.order - b.group.order);
     S.folder = {
       dir,
-      files,
-      sizes: [...stacks.map(() => 0), ...f.sizes],
+      files: all.map((e) => e.path),
+      sizes: all.map((e) => e.size),
+      groups: all.map((e) => e.group),
       stacks: Object.fromEntries(stacks.map((s) => [s.path, s])),
       index: -1,
     };
@@ -471,8 +477,10 @@ async function refreshFolder(path) {
 }
 
 function step(delta) {
-  const { files, index } = S.folder;
-  const next = index + delta;
+  const { files, index, groups } = S.folder;
+  // Skip the groups folded away in the side panel.
+  let next = index + delta;
+  while (next >= 0 && next < files.length && groups && stripFolded(groups[next])) next += delta;
   if (next >= 0 && next < files.length) openPath(files[next]);
 }
 
@@ -3626,6 +3634,54 @@ let thumbActive = 0;
 const THUMB_PARALLEL = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
 let thumbObserver = null;
 
+// The side panel groups a folder's files by format; groups of formats that
+// are not electron microscopy start folded.
+const STACK_GROUP = { id: "stack", name: "Z 堆叠", em: true };
+const FILE_GROUPS = [
+  STACK_GROUP,
+  { id: "mrc", name: "MRC", em: true, ext: ["mrc", "mrcs", "rec", "st", "map", "ali", "preali"] },
+  { id: "tiff", name: "TIFF", em: true, ext: ["tif", "tiff"] },
+  { id: "gatan", name: "Gatan DM3/DM4", em: true, ext: ["dm3", "dm4"] },
+  { id: "thermo", name: "Thermo Fisher SER/EMD/EER", em: true, ext: ["ser", "emi", "emd", "eer"] },
+  { id: "tvips", name: "TVIPS", em: true, ext: ["tvips"] },
+  { id: "zeiss", name: "Zeiss CZI/LSM", em: false, ext: ["czi", "lsm"] },
+  { id: "leica", name: "Leica LIF/LOF", em: false, ext: ["lif", "lof"] },
+  { id: "nikon", name: "Nikon ND2", em: false, ext: ["nd2"] },
+  { id: "olympus", name: "Olympus OIB/OIR", em: false, ext: ["oib", "oir"] },
+  { id: "imaris", name: "Imaris IMS", em: false, ext: ["ims"] },
+  { id: "image", name: "普通图片", em: false, ext: ["png", "jpg", "jpeg", "gif", "bmp", "webp"] },
+];
+FILE_GROUPS.forEach((g, i) => (g.order = i));
+const otherGroups = {};
+
+/** The side panel group of a file, by its extension. Formats we don't know
+ * (third-party plugins) get a group of their own and stay open. */
+function fileGroup(path) {
+  const ext = ((path.match(/\.([^.\\/]+)$/) || [, ""])[1] || "").toLowerCase();
+  const g = FILE_GROUPS.find((g) => g.ext && g.ext.includes(ext));
+  if (g) return g;
+  return (otherGroups[ext] ||= { id: `ext:${ext}`, name: ext.toUpperCase() || "其他", em: true, order: FILE_GROUPS.length });
+}
+
+// Folds the user chose (kept), and groups opened because the image shown is
+// in them (this session only).
+const stripFold = pref.get("strip-fold", {});
+const stripOpened = new Set();
+
+function stripFolded(g) {
+  if (stripOpened.has(g.id)) return false;
+  return g.id in stripFold ? stripFold[g.id] : !g.em;
+}
+
+function setStripFold(g, folded) {
+  stripOpened.delete(g.id);
+  stripFold[g.id] = folded;
+  pref.set("strip-fold", stripFold);
+  $("strip")
+    .querySelectorAll(`.strip-group[data-group="${CSS.escape(g.id)}"]`)
+    .forEach((el) => el.classList.toggle("folded", folded));
+}
+
 function buildStrip() {
   const strip = $("strip");
   strip.innerHTML = "";
@@ -3643,7 +3699,27 @@ function buildStrip() {
     },
     { root: $("sidebar"), rootMargin: "600px 0px" },
   );
+  let body = null;
+  let group = null;
   S.folder.files.forEach((f, i) => {
+    const g = S.folder.groups[i];
+    if (g !== group) {
+      group = g;
+      const sec = document.createElement("section");
+      sec.className = "strip-group";
+      sec.dataset.group = g.id;
+      sec.classList.toggle("folded", stripFolded(g));
+      const head = document.createElement("button");
+      head.className = "strip-head";
+      head.innerHTML = `<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="gn"></span><span class="gc"></span>`;
+      head.querySelector(".gn").textContent = g.name;
+      head.querySelector(".gc").textContent = String(S.folder.groups.filter((x) => x === g).length);
+      head.addEventListener("click", () => setStripFold(g, !sec.classList.contains("folded")));
+      body = document.createElement("div");
+      body.className = "strip-body";
+      sec.append(head, body);
+      strip.append(sec);
+    }
     const el = document.createElement("div");
     el.className = "thumb";
     el.title = f;
@@ -3661,7 +3737,7 @@ function buildStrip() {
       el.querySelector(".meta").textContent = `${ext} · ${fmtBytes(S.folder.sizes[i] || 0)}`;
     }
     el.addEventListener("click", () => openPath(f));
-    strip.append(el);
+    body.append(el);
     thumbObserver.observe(el);
   });
 }
@@ -3699,9 +3775,15 @@ function pumpThumbs() {
 
 function markStrip() {
   updateInfo();
-  const strip = $("strip");
-  [...strip.children].forEach((el, i) => el.classList.toggle("cur", i === S.folder.index));
-  const cur = strip.children[S.folder.index];
+  const thumbs = [...$("strip").querySelectorAll(".thumb")];
+  thumbs.forEach((el, i) => el.classList.toggle("cur", i === S.folder.index));
+  const cur = thumbs[S.folder.index];
+  // Open the folded group the image shown is in.
+  const sec = cur && cur.closest(".strip-group.folded");
+  if (sec) {
+    stripOpened.add(sec.dataset.group);
+    sec.classList.remove("folded");
+  }
   if (cur && !$("sidebar").classList.contains("collapsed")) {
     cur.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }
