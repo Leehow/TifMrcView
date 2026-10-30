@@ -1004,6 +1004,42 @@ mod tests {
     }
 
     #[test]
+    fn preview_matches_the_whole_volume() {
+        let dev = Device::flex();
+        let net = Net::new(4, 2, &dev);
+        // A trained-looking net: perturb the zero head so the output differs from the input.
+        let mut rng = Rng(3);
+        let n = [40, 36, 30];
+        let vol = Vol { n, v: (0..n[0] * n[1] * n[2]).map(|_| rng.gauss()).collect() };
+        let net = {
+            let mut net = net;
+            net.head.weight = net.head.weight.map(|w| w.ones_like() * 0.3);
+            net
+        };
+        let full = apply(&dev, &net, &vol, [0; 3], n, &mut |_, _| Ok(())).unwrap();
+        let m = Trained { net, vol: Arc::new(vol), geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None }, bin: 1, mean: 0.0, std: 1.0, loss: 0.0, token: 7, c: 0, t: 0 };
+        for (axis, index) in [("xy", 11), ("xz", 17), ("yz", 5)] {
+            let req = PreviewReq { token: 7, axis: axis.into(), index, region: [0, 0, 1000, 1000] };
+            let bytes = preview(&m, &req).unwrap();
+            let u32_at = |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
+            let (w, h) = (u32_at(4), u32_at(5));
+            let vals: Vec<f32> = bytes[44..].chunks(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+            assert_eq!(vals.len(), w * h);
+            for j in 0..h {
+                for i in 0..w {
+                    let p = match axis {
+                        "xy" => [i, j, index],
+                        "xz" => [i, index, j],
+                        _ => [index, i, j],
+                    };
+                    let want = full[(p[2] * n[1] + p[1]) * n[0] + p[0]];
+                    assert!((vals[j * w + i] - want).abs() < 1e-3, "{axis} ({i},{j}): {} vs {want}", vals[j * w + i]);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn apply_tiles_any_box() {
         let dev = Device::flex();
         let net = Net::new(4, 2, &dev);
@@ -1057,6 +1093,22 @@ mod bench {
         let ((net, loss), backend) = crate::classify::on_device(|dev| train(dev, &vol, &d.geometry, &cfg, |_| {})).unwrap();
         println!("  trained on {backend}: {} it × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t1.elapsed().as_secs_f64());
         let m = Trained { net, vol: Arc::new(vol), geometry: d.geometry, bin, mean, std, loss, token: 1, c: 0, t: 0 };
+        // The preview must show what saving writes: compare a slice per view.
+        let n = m.vol.n;
+        let (full, b) = crate::classify::on_device(|dev| apply(dev, &m.net.clone().to_device(dev), &m.vol, [0; 3], n, &mut |_, _| Ok(()))).unwrap();
+        for (axis, index) in [("xy", n[2] / 2), ("xz", n[1] / 2), ("yz", n[0] / 2)] {
+            let bytes = preview(&m, &PreviewReq { token: 1, axis: axis.into(), index: index * bin, region: [0, 0, 1 << 20, 1 << 20] }).unwrap();
+            let at = |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
+            let (w, h, x0, y0) = (at(4), at(5), at(0) / bin, at(1) / bin);
+            let mut worst = 0f32;
+            for (k, c) in bytes[44..].chunks(4).enumerate() {
+                let (i, j) = (x0 + k % w, y0 + k / w);
+                let p = match axis { "xy" => [i, j, index], "xz" => [i, index, j], _ => [index, i, j] };
+                let want = full[(p[2] * n[1] + p[1]) * n[0] + p[0]] * m.std + m.mean;
+                worst = worst.max((f32::from_le_bytes(c.try_into().unwrap()) - want).abs());
+            }
+            println!("  preview {axis} {w}×{h} vs whole volume on {b}: max difference {worst:.2e} (data spread {:.3})", m.std);
+        }
         if let Ok(out) = std::env::var("TMV_WEDGE_OUT") {
             let t2 = std::time::Instant::now();
             let b = save(&m, &out, crate::align::pixel_a(img.info()), &|_, _| {}).unwrap();
