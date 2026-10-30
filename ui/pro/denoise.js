@@ -58,7 +58,7 @@
         </select>
       </label>
       <label class="dn-learn" title="训练和降噪前先把 k×k 像素平均成一个，结果再放大回原尺寸。计数模式的电影帧每像素电子太少，建议 2–4">合并像素 <select id="dn-bin"><option value="1">不合并</option><option value="2">2×2</option><option value="3">3×3</option><option value="4">4×4</option></select></label>
-      <label class="dn-learn">训练步数 <select id="dn-steps" title="越多越好也越慢；GPU 上 1000 步通常一两分钟"><option>500</option><option>1000</option><option>2000</option><option>4000</option></select></label>
+      <label class="dn-learn">训练步数 <select id="dn-steps" title="越多越好也越慢；用时取决于步数而不是图像大小，GPU 上 1000 步通常一两分钟（Mac 稍慢）"><option>500</option><option>1000</option><option>2000</option><option>4000</option></select></label>
       <span class="dn-learn dn-trainrow"><button id="dn-train" class="small primary">训练</button></span>
       <span class="al-wide dn-learn dim" id="dn-model"></span>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
@@ -192,6 +192,8 @@
       const r = await invoke("denoise_train", { req });
       const name = { n2v: "Noise2Void", frames: "Noise2Noise 奇偶帧", neighbours: "Noise2Noise 相邻层" }[r.mode];
       N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步${req.bin > 1 ? ` · 合并 ${req.bin}×${req.bin}` : ""} · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
+      N.frames = r.mode === "frames";
+      N.modelToken = req.token;
       $("dn-model").textContent = `已训练：${N.model}` + (r.warning ? `\n⚠ ${r.warning}` : "");
       // Show the new model's result.
       N.key = "";
@@ -284,12 +286,24 @@
     return Math.abs(v) >= 100 || v === 0 ? v.toFixed(1) : v.toPrecision(3);
   }
 
+  /** 0.5 and 99.5 percentiles of the preview's values. */
+  function ownRange(r) {
+    if (!r.range) {
+      const step = Math.max(1, Math.floor(r.values.length / 200000));
+      const v = [];
+      for (let i = 0; i < r.values.length; i += step) if (Number.isFinite(r.values[i])) v.push(r.values[i]);
+      v.sort((a, b) => a - b);
+      r.range = v.length ? [v[Math.floor(v.length * 0.005)], v[Math.min(v.length - 1, Math.floor(v.length * 0.995))]] : [0, 1];
+    }
+    return r.range;
+  }
+
   /** The preview as an image, with the channel's current contrast. */
   function previewCanvas() {
     const r = N.res;
     const ch = S.chans[r.c] || {};
-    const lo = ch.min ?? 0;
-    const hi = ch.max ?? 1;
+    // A movie's result is a mean of many frames, far from one frame's range.
+    const [lo, hi] = N.frames && S.info.sizeZ > 1 && $("dn-method").value === "learned" ? ownRange(r) : [ch.min ?? 0, ch.max ?? 1];
     const color = ch.color || [255, 255, 255];
     const key = JSON.stringify([lo, hi, S.gamma, color, r.ms, r.rect]);
     if (N.img && N.imgKey === key) return N.img;
@@ -388,9 +402,24 @@
   $("dn-save-all").addEventListener("click", () => save(true));
   $("dn-open").addEventListener("click", () => N.saved && openPath(N.saved));
 
+  // Another image: the save line belongs to the old one, the training mode
+  // must suit the new one, and the model is marked as trained elsewhere.
+  function imageChanged() {
+    const first = N.token === undefined;
+    N.token = S.token;
+    if (first || !S.info) return;
+    N.saved = null;
+    $("dn-saved").hidden = true;
+    const before = $("dn-mode").value;
+    syncMode();
+    if ($("dn-mode").value !== before) $("dn-bin").value = 1;
+    if (N.model) $("dn-model").textContent = (N.modelToken === S.token ? "已训练：" : "已训练（在另一张图上）：") + N.model;
+  }
+
   // Enable in the XY view (not for RGB pictures); recompute the preview a
   // moment after the view, slice or settings stop changing.
   setInterval(() => {
+    if (S.token !== N.token) imageChanged();
     const ok = !!(S.info && S.axis === "xy" && !S.info.isRgb);
     btn.disabled = !ok;
     if (!ok && !panel.hidden && !N.saving) close();
