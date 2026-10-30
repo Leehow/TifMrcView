@@ -309,10 +309,10 @@
   var HOME = {
     zh: {
       title: 'TifMrcView · 显微与电镜图像查看器',
-      desc: 'TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI。支持 macOS、Windows、Linux 和 Android。',
-      h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
-      slogan: '又小、又快、又方便。免费开源。',
-      lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用<span class="an">，也有 Android 版</span>。',
+      desc: 'TifMrcView：看显微和电镜图片的一个小软件，免费开源。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD 等格式下载装上就能打开，数 GB 的栈双击即开；尺子测量，XY / XZ / YZ 三个方向，衍射、FFT 和能谱，体电镜文件夹自动叠成 Z 栈。支持 macOS、Windows、Linux 和 Android。',
+      h1: '<span>看显微电镜图片，</span><span>一个小软件就够了。</span>',
+      slogan: '又小、又快、又简单。免费开源。',
+      lead: '光镜、共聚焦、电镜的各种格式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD……），下载装上就能打开，数 GB 的栈也是双击即开。尺子直接测量，XY / XZ / YZ 三个方向切着看，衍射和 FFT 上量 d 间距，EDS / EELS 能谱一眼看清，体电镜文件夹自动叠成 Z 栈。不用装一堆软件，也不用学复杂操作。macOS、Windows、Linux 通用<span class=\"an\">，也有 Android 版</span>。',
       an_a: '下载安卓版 APK', pro_line: '分割和三维查看：<b>TifMrcView Pro</b> →',
       dl_apk: '下载 APK', note_apk: 'Android 7 及以上，arm64',
       an_tip: '手机和平板都能用的基础版查看器（不含 Pro 功能）。安装时按提示允许「安装未知应用」。双指缩放，长按标注可删除。',
@@ -375,10 +375,10 @@
     },
     en: {
       title: 'TifMrcView · Microscopy & EM image viewer',
-      desc: 'TifMrcView: a small, fast and convenient viewer for microscopy and electron microscopy, free and open source. TIFF / OME-TIFF and cryo-EM MRC stacks of many gigabytes open on double-click; XY / XZ / YZ views, measurements in physical units, multichannel fluorescence; plugins add new formats such as Zeiss CZI. For macOS, Windows, Linux and Android.',
-      h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
-      slogan: 'Small. Fast. Effortless. Free and open source.',
-      lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux<span class="an">, and Android</span>.',
+      desc: 'TifMrcView: one small app for microscopy and EM images, free and open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more open right after install, multi-gigabyte stacks with a double-click; ruler measurements, XY / XZ / YZ views, diffraction, FFT and spectra, volume-EM folders stacked into Z automatically. For macOS, Windows, Linux and Android.',
+      h1: '<span>Microscopy and EM images.</span> <span>One small app.</span>',
+      slogan: 'Small. Fast. Simple. Free and open source.',
+      lead: 'Light, confocal and electron microscopy formats (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more) open right after install, multi-gigabyte stacks with a double-click. Measure with a ruler, slice through XY, XZ and YZ, read d-spacings on diffraction and FFT, see EDS / EELS spectra at a glance, and get volume-EM folders stacked into Z automatically. No pile of programs, nothing complicated to learn. On macOS, Windows and Linux<span class=\"an\">, and Android</span>.',
       an_a: 'Download the Android APK', pro_line: 'Segmentation and 3D viewing: <b>TifMrcView Pro</b> →',
       dl_apk: 'Download APK', note_apk: 'Android 7+, arm64',
       an_tip: 'The basic viewer for phones and tablets (no Pro features). Allow “Install unknown apps” when asked. Pinch to zoom; long-press an annotation to delete it.',
@@ -441,10 +441,10 @@
     },
     de: {
       title: 'TifMrcView · Viewer für Mikroskopie- und EM-Bilder',
-      desc: 'TifMrcView: ein kleiner, schneller und einfacher Viewer für Licht- und Elektronenmikroskopie, kostenlos und quelloffen. TIFF / OME-TIFF und Kryo-EM-MRC mit vielen Gigabyte öffnen per Doppelklick; XY-/XZ-/YZ-Ansichten, Messungen in physikalischen Einheiten, Mehrkanal-Fluoreszenz; Plugins ergänzen neue Formate wie Zeiss CZI. Für macOS, Windows, Linux und Android.',
-      h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
+      desc: 'TifMrcView: eine kleine App für Mikroskopie- und EM-Bilder, kostenlos und quelloffen. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick; Lineal-Messung, XY-/XZ-/YZ-Ansichten, Beugung, FFT und Spektren, Volumen-EM-Ordner automatisch als Z-Stapel. Für macOS, Windows, Linux und Android.',
+      h1: '<span>Mikroskopie- und EM-Bilder.</span> <span>Eine kleine App.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
-      lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux<span class="an"> sowie Android</span>.',
+      lead: 'Formate aus Licht-, Konfokal- und Elektronenmikroskopie (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr) öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick. Mit dem Lineal messen, in XY, XZ und YZ schneiden, d-Abstände in Beugung und FFT ablesen, EDS-/EELS-Spektren auf einen Blick sehen, Volumen-EM-Ordner automatisch als Z-Stapel. Kein Programm-Sammelsurium, nichts Kompliziertes zu lernen. Für macOS, Windows und Linux<span class=\"an\"> sowie Android</span>.',
       an_a: 'Android-APK herunterladen', pro_line: 'Segmentierung und 3D-Ansicht: <b>TifMrcView Pro</b> →',
       dl_apk: 'APK herunterladen', note_apk: 'Ab Android 7, arm64',
       an_tip: 'Der Basis-Viewer für Smartphones und Tablets (ohne Pro-Funktionen). Bei Nachfrage „Unbekannte Apps installieren“ erlauben. Mit zwei Fingern zoomen; Anmerkung lange drücken zum Löschen.',
@@ -507,10 +507,10 @@
     },
     ja: {
       title: 'TifMrcView · 顕微鏡・電子顕微鏡画像ビューア',
-      desc: 'TifMrcView：顕微鏡と電子顕微鏡のための、小さく、速く、使いやすい無料のオープンソースビューア。TIFF / OME-TIFF とクライオ電顕の MRC は数 GB のスタックもダブルクリックで開きます。XY / XZ / YZ ビュー、物理単位での計測、マルチチャンネル蛍光。プラグインで Zeiss CZI などの新しい形式も追加できます。macOS・Windows・Linux・Android 対応。',
-      h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
-      slogan: '小さく、速く、使いやすく。無料のオープンソース。',
-      lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux<span class="an">・Android</span> に対応。',
+      desc: 'TifMrcView：顕微鏡・電子顕微鏡画像を見るための小さなアプリ。無料のオープンソース。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD などをインストール直後から開け、数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ 表示、回折・FFT・スペクトル、ボリューム EM フォルダは自動で Z スタックに。macOS、Windows、Linux、Android に対応。',
+      h1: '<span>顕微鏡・電顕の画像は、</span><span>小さなアプリひとつで。</span>',
+      slogan: '小さく、速く、シンプルに。無料のオープンソース。',
+      lead: '光学・共焦点・電子顕微鏡のさまざまな形式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD など）を、インストールしてすぐ開けます。数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ の三方向で断面表示、回折や FFT で d 間隔を測定、EDS / EELS スペクトルもひと目で、ボリューム EM のフォルダは自動で Z スタックに。ソフトをいくつも入れる必要も、難しい操作を覚える必要もありません。macOS、Windows、Linux に対応<span class=\"an\">、Android 版もあります</span>。',
       an_a: 'Android 版 APK をダウンロード', pro_line: 'セグメンテーションと 3D 表示は <b>TifMrcView Pro</b> へ →',
       dl_apk: 'APK をダウンロード', note_apk: 'Android 7 以降、arm64',
       an_tip: 'スマートフォン・タブレット向けの基本ビューア（Pro 機能なし）。インストール時に「不明なアプリのインストール」を許可してください。2 本指でズーム、注釈を長押しで削除。',
@@ -573,10 +573,10 @@
     },
     es: {
       title: 'TifMrcView · Visor de imágenes de microscopía y ME',
-      desc: 'TifMrcView: un visor pequeño, rápido y cómodo para microscopía óptica y electrónica, gratis y de código abierto. Pilas TIFF / OME-TIFF y MRC de crio-ME de varios GB se abren con doble clic; vistas XY / XZ / YZ, medidas en unidades físicas y fluorescencia multicanal; los complementos añaden formatos nuevos como Zeiss CZI. Para macOS, Windows, Linux y Android.',
-      h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
-      slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
-      lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux<span class="an">, y también Android</span>.',
+      desc: 'TifMrcView: una sola aplicación pequeña para imágenes de microscopía y ME, gratis y de código abierto. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más se abren nada más instalar, pilas de varios GB con doble clic; medición con regla, vistas XY / XZ / YZ, difracción, FFT y espectros, carpetas de ME de volumen apiladas en Z automáticamente. Para macOS, Windows, Linux y Android.',
+      h1: '<span>Imágenes de microscopía y ME.</span> <span>Una sola app pequeña.</span>',
+      slogan: 'Ligera. Rápida. Sencilla. Gratis y de código abierto.',
+      lead: 'Formatos de microscopía óptica, confocal y electrónica (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más) se abren nada más instalar, incluso pilas de varios gigabytes con doble clic. Mide con una regla, corta en XY, XZ y YZ, lee distancias d en difracción y FFT, ve espectros EDS / EELS de un vistazo, y las carpetas de ME de volumen se apilan en Z solas. Sin montones de programas ni nada complicado que aprender. Para macOS, Windows y Linux<span class=\"an\">, y Android</span>.',
       an_a: 'Descargar el APK para Android', pro_line: 'Segmentación y vista 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Descargar APK', note_apk: 'Android 7 o posterior, arm64',
       an_tip: 'El visor básico para móviles y tabletas (sin funciones Pro). Permite «Instalar apps desconocidas» cuando se pida. Pellizca para hacer zoom; mantén pulsada una anotación para borrarla.',
@@ -639,10 +639,10 @@
     },
     fr: {
       title: 'TifMrcView · Visionneuse d’images de microscopie et de ME',
-      desc: 'TifMrcView : une visionneuse légère, rapide et pratique pour la microscopie optique et électronique, gratuite et open source. Des piles TIFF / OME-TIFF et MRC de cryo-ME de plusieurs Go s’ouvrent d’un double-clic ; vues XY / XZ / YZ, mesures en unités physiques, fluorescence multicanal ; des extensions ajoutent de nouveaux formats comme Zeiss CZI. Pour macOS, Windows, Linux et Android.',
-      h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
+      desc: 'TifMrcView : une seule petite application pour les images de microscopie et de ME, gratuite et open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus s’ouvrent dès l’installation, des piles de plusieurs Go d’un double-clic ; mesure à la règle, vues XY / XZ / YZ, diffraction, FFT et spectres, dossiers de ME en volume empilés en Z automatiquement. Pour macOS, Windows, Linux et Android.',
+      h1: '<span>Images de microscopie et de ME.</span> <span>Une seule petite app.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
-      lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux<span class="an">, et aussi Android</span>.',
+      lead: 'Les formats de microscopie optique, confocale et électronique (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus) s’ouvrent dès l’installation, même des piles de plusieurs gigaoctets d’un double-clic. Mesurez à la règle, coupez en XY, XZ et YZ, lisez les distances d en diffraction et en FFT, voyez les spectres EDS / EELS d’un coup d’œil, et les dossiers de ME en volume s’empilent en Z tout seuls. Pas de pile de logiciels, rien de compliqué à apprendre. Sur macOS, Windows et Linux<span class=\"an\">, et Android</span>.',
       an_a: 'Télécharger l’APK Android', pro_line: 'Segmentation et vue 3D : <b>TifMrcView Pro</b> →',
       dl_apk: 'Télécharger l’APK', note_apk: 'Android 7 ou plus, arm64',
       an_tip: 'La visionneuse de base pour téléphones et tablettes (sans les fonctions Pro). Autorisez « Installer des applis inconnues » si demandé. Pincez pour zoomer ; appui long sur une annotation pour la supprimer.',
@@ -705,10 +705,10 @@
     },
     ru: {
       title: 'TifMrcView · Просмотрщик изображений микроскопии и ЭМ',
-      desc: 'TifMrcView: маленький, быстрый и удобный просмотрщик для световой и электронной микроскопии, бесплатный и с открытым кодом. Стеки TIFF / OME-TIFF и MRC для крио-ЭМ в несколько ГБ открываются двойным щелчком; виды XY / XZ / YZ, измерения в физических единицах, многоканальная флуоресценция; плагины добавляют новые форматы, например Zeiss CZI. Для macOS, Windows, Linux и Android.',
-      h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
-      slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
-      lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux<span class="an">, а также Android</span>.',
+      desc: 'TifMrcView: одно маленькое приложение для изображений микроскопии и ЭМ, бесплатное и с открытым кодом. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие открываются сразу после установки, стеки в несколько ГБ — двойным щелчком; измерения линейкой, виды XY / XZ / YZ, дифракция, FFT и спектры, папки объёмной ЭМ автоматически собираются в Z-стек. Для macOS, Windows, Linux и Android.',
+      h1: '<span>Микроскопия и ЭМ —</span> <span>одно маленькое приложение.</span>',
+      slogan: 'Лёгкий. Быстрый. Простой. Бесплатный, с открытым кодом.',
+      lead: 'Форматы световой, конфокальной и электронной микроскопии (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие) открываются сразу после установки, даже стеки в несколько гигабайт — двойным щелчком. Измеряйте линейкой, смотрите срезы XY, XZ и YZ, определяйте межплоскостные расстояния на дифракции и FFT, смотрите спектры EDS / EELS, а папки объёмной ЭМ сами собираются в Z-стек. Не нужно ставить кучу программ и учить сложные действия. Для macOS, Windows и Linux<span class=\"an\">, а также Android</span>.',
       an_a: 'Скачать APK для Android', pro_line: 'Сегментация и 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Скачать APK', note_apk: 'Android 7 и новее, arm64',
       an_tip: 'Базовый просмотрщик для телефонов и планшетов (без функций Pro). Разрешите «Установку неизвестных приложений», когда попросят. Масштаб — двумя пальцами; долгое нажатие на пометку удаляет её.',
@@ -1344,6 +1344,12 @@
     return [f.label || f.file, f.note || ''];
   }
 
+  // A download link's text plus the file size, to show how small the app is.
+  function withSize(el, text, f) {
+    el.textContent = text;
+    if (sizes[f.file]) { var s = document.createElement('span'); s.className = 'sz'; s.textContent = mb(sizes[f.file]); el.appendChild(s); }
+  }
+
   function renderDownloads() {
     if (!data || !HOME) return;
     var t = T[lang];
@@ -1377,16 +1383,17 @@
     if (an && apk && !/Android/.test(ua)) {
       an.href = DL + apk.file;
       an.hidden = false;
+      withSize(an, t.an_a, apk);
     }
     document.getElementById('ver').textContent = 'v' + data.version;
     var c = document.getElementById('cta');
     if (/Android/.test(ua) && apk) {
       c.href = DL + apk.file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', 'Android');
+      withSize(c, t.cta_os.replace('{os}', 'Android'), apk);
       if (card) card.classList.add('hl');
     } else if (os && data.files[os] && data.files[os][0]) {
       c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
+      withSize(c, t.cta_os.replace('{os}', OS_NAMES[os]), data.files[os][0]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }
     document.dispatchEvent(new Event('downloads-rendered'));

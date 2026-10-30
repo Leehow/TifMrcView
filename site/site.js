@@ -6,6 +6,36 @@
     var onScroll = function () { nav.classList.toggle('stuck', window.scrollY > 8); };
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
+
+    // Phones hide the page links in the bar; a menu button lists them in a
+    // drop-down instead (built when opened, so it follows the language).
+    var links = nav.querySelectorAll('a.nl');
+    var langBox = nav.querySelector('.lang');
+    if (links.length && langBox) {
+      var mb = document.createElement('div');
+      mb.className = 'mnu';
+      mb.innerHTML = '<button type="button" aria-haspopup="true" aria-expanded="false" aria-label="Menu">' +
+        '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14"/></svg></button><ul role="menu"></ul>';
+      langBox.parentNode.insertBefore(mb, langBox);
+      var mbtn = mb.querySelector('button'), mul = mb.querySelector('ul');
+      var close = function () { mb.classList.remove('open'); mbtn.setAttribute('aria-expanded', 'false'); };
+      mbtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (mb.classList.contains('open')) { close(); return; }
+        mul.innerHTML = '';
+        links.forEach(function (a) {
+          var li = document.createElement('li'), c = document.createElement('a');
+          c.href = a.getAttribute('href'); c.textContent = a.textContent; c.setAttribute('role', 'menuitem');
+          li.appendChild(c); mul.appendChild(li);
+        });
+        langBox.classList.remove('open');
+        mb.classList.add('open'); mbtn.setAttribute('aria-expanded', 'true');
+      });
+      langBox.querySelector('button').addEventListener('click', close);
+      mul.addEventListener('click', close);
+      document.addEventListener('click', close);
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    }
   }
 
   // Fade/slide up once an element enters the viewport. Without JS (or without
