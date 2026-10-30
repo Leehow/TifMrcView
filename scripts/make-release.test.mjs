@@ -75,3 +75,14 @@ test("Pro writes its own feeds and file names next to the standard ones", (t) =>
     "1.2.3/TifMrcViewPro_1.2.3_amd64.deb", "1.2.3/TifMrcViewPro-1.2.3-1.x86_64.rpm", "1.2.3/TifMrcViewPro_1.2.3_amd64.AppImage",
   ]);
 });
+
+test("the Windows installer is also offered inside a .zip", (t) => {
+  const { out, read } = release(t);
+  const win = read("downloads.json").files.win;
+  assert.deepEqual(win.map((f) => f.file), ["1.2.3/TifMrcView_1.2.3_x64-setup.exe", "1.2.3/TifMrcView_1.2.3_x64-setup.zip"]);
+  const listing = execFileSync("unzip", ["-l", path.join(out, win[1].file)], { encoding: "utf8" });
+  assert.match(listing, /TifMrcView_1\.2\.3_x64-setup\.exe/);
+  const exe = execFileSync("unzip", ["-p", path.join(out, win[1].file)]);
+  assert.equal(exe.toString(), "payload of test-setup.exe");
+  assert.equal(fs.statSync(path.join(out, win[1].file)).size, win[1].size);
+});
