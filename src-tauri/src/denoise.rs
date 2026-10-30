@@ -39,6 +39,10 @@ use crate::image::OpenImage;
 /// Set to stop a running save; cleared when one starts.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// Pixels the self-supervised network reads around a region
+/// (`denoise_learn::MARGIN`).
+const LEARNED_MARGIN: usize = 32;
+
 /// Largest preview side, in image pixels (the middle of the view).
 const PREVIEW_MAX: usize = 2048;
 
@@ -49,6 +53,9 @@ pub enum Method {
     Median,
     Diffusion,
     Nlm,
+    /// The self-supervised network last trained (`denoise_learn`, Pro);
+    /// `strength` mixes its result with the input (1 = all network).
+    Learned,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -94,6 +101,7 @@ impl Params {
             Method::Median => self.median_radius(),
             Method::Diffusion => self.iterations.min(200) + 1,
             Method::Nlm => self.search.min(20) + self.patch.min(5) + 1,
+            Method::Learned => LEARNED_MARGIN,
         }
     }
 
@@ -168,7 +176,7 @@ fn plane(img: &OpenImage, c: usize, z: usize, t: usize) -> Result<Vec<f32>> {
 }
 
 /// Slice `z`, averaged with `slab` slices on each side that exist.
-fn input(img: &OpenImage, c: usize, z: usize, t: usize, slab: usize) -> Result<Vec<f32>> {
+pub(crate) fn input(img: &OpenImage, c: usize, z: usize, t: usize, slab: usize) -> Result<Vec<f32>> {
     let nz = img.info().size_z;
     let (a, b) = (z.saturating_sub(slab), (z + slab).min(nz - 1));
     let mut acc = plane(img, c, a, t)?;
@@ -206,16 +214,68 @@ pub fn preview(img: &Arc<OpenImage>, req: &PreviewReq) -> Result<Denoised> {
     }
     let (cw, ch) = ((x1 - x0).min(PREVIEW_MAX), (y1 - y0).min(PREVIEW_MAX));
     let (cx, cy) = (x0 + (x1 - x0 - cw) / 2, y0 + (y1 - y0 - ch) / 2);
-    let full = input(img, req.c, req.z, req.t, req.params.slab)?;
-    let sigma = noise_sigma(&full, w, h);
-    // The region plus the margin the filter reads, inside the image.
-    let m = req.params.margin();
+    let (values, sigma, backend) = run(img, req.c, req.z, req.t, &req.params, [cx, cy, cw, ch])?;
+    Ok(Denoised { rect: [cx, cy, cw, ch], values, sigma, ms: t0.elapsed().as_secs_f64() * 1e3, backend })
+}
+
+/// Whether the method is the trained network in movie mode, whose input is
+/// the even and odd frame means rather than one slice.
+fn uses_frames(p: &Params) -> bool {
+    #[cfg(feature = "pro")]
+    if p.method == Method::Learned {
+        if let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().as_ref() {
+            return m.mode == crate::denoise_learn::Mode::Frames;
+        }
+    }
+    let _ = p;
+    false
+}
+
+/// Means of the even and of the odd slices (frames 1, 3, 5… and 2, 4, 6…).
+pub fn frame_halves(img: &OpenImage, c: usize, t: usize) -> Result<[Vec<f32>; 2]> {
+    let nz = img.info().size_z;
+    if nz < 2 {
+        bail!("需要至少两帧");
+    }
+    let mut out = [Vec::new(), Vec::new()];
+    for (k, half) in out.iter_mut().enumerate() {
+        let zs: Vec<usize> = (k..nz).step_by(2).collect();
+        let mut acc = plane(img, c, zs[0], t)?;
+        for &z in &zs[1..] {
+            let v = plane(img, c, z, t)?;
+            acc.par_iter_mut().zip(&v).for_each(|(a, &v)| *a += v);
+        }
+        let n = zs.len() as f32;
+        acc.par_iter_mut().for_each(|a| *a /= n);
+        *half = acc;
+    }
+    Ok(out)
+}
+
+/// Denoises the `rect` of slice `z` (of the movie in frames mode): the
+/// input with the margin the method reads, each part filtered, the parts
+/// averaged. Returns the values, the noise σ and the backend.
+fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 4]) -> Result<(Vec<f32>, f32, &'static str)> {
+    let info = img.info();
+    let (w, h) = (info.width, info.height);
+    let parts: Vec<Vec<f32>> = if uses_frames(p) { frame_halves(img, c, t)?.into() } else { vec![input(img, c, z, t, p.slab)?] };
+    let sigma = noise_sigma(&parts[0], w, h);
+    let [cx, cy, cw, ch] = rect;
+    let m = p.margin();
     let (ex, ey) = (cx.saturating_sub(m), cy.saturating_sub(m));
     let (ew, eh) = ((cx + cw + m).min(w) - ex, (cy + ch + m).min(h) - ey);
-    let part = crop(&full, w, [ex, ey, ew, eh]);
-    let (out, backend) = filter(part, ew, eh, &req.params, sigma)?;
-    let values = crop(&out, ew, [cx - ex, cy - ey, cw, ch]);
-    Ok(Denoised { rect: [cx, cy, cw, ch], values, sigma, ms: t0.elapsed().as_secs_f64() * 1e3, backend })
+    let (mut sum, mut backend) = (vec![0f32; cw * ch], "CPU");
+    for full in &parts {
+        let part = if [ex, ey, ew, eh] == [0, 0, w, h] { full.clone() } else { crop(full, w, [ex, ey, ew, eh]) };
+        let (out, b) = filter(part, ew, eh, p, sigma)?;
+        backend = b;
+        sum.par_iter_mut().zip(crop(&out, ew, [cx - ex, cy - ey, cw, ch])).for_each(|(s, v)| *s += v);
+    }
+    let n = parts.len() as f32;
+    if n > 1.0 {
+        sum.par_iter_mut().for_each(|s| *s /= n);
+    }
+    Ok((sum, sigma, backend))
 }
 
 /// Denoises one whole image of `w` × `h` with noise level `sigma`; returns
@@ -236,13 +296,40 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
             }
         }
     }
+    if p.method == Method::Learned {
+        return learned(v, w, h, p);
+    }
     let out = match p.method {
+        Method::Learned => unreachable!(),
         Method::Gaussian => gaussian(&v, w, h, p.strength),
         Method::Median => median(&v, w, h, p.median_radius()),
         Method::Diffusion => diffusion(v, w, h, p.strength * sigma, p.iterations.min(200)),
         Method::Nlm => nlm(&v, w, h, p.patch.min(5), p.search.min(20), p.strength * sigma, sigma),
     };
     Ok((out, "CPU"))
+}
+
+/// The trained network's result, mixed with the input by `strength`.
+fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'static str)> {
+    #[cfg(feature = "pro")]
+    {
+        let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().clone() else { bail!("先训练自监督模型") };
+        let (mut out, backend) = if p.device == "cpu" {
+            (m.apply(&burn::tensor::Device::flex(), &v, w, h), "CPU")
+        } else {
+            crate::classify::on_device(|dev| Ok(m.apply(dev, &v, w, h)))?
+        };
+        let k = p.strength.clamp(0.0, 1.0);
+        if k < 1.0 {
+            out.par_iter_mut().zip(&v).for_each(|(o, &x)| *o = k * *o + (1.0 - k) * x);
+        }
+        Ok((out, backend))
+    }
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (v, w, h, p);
+        bail!("自监督降噪只在 Pro 版里有")
+    }
 }
 
 /// NLM on the GPU in tiles of at most 1024² pixels plus the margin they
@@ -295,6 +382,41 @@ pub fn noise_sigma(v: &[f32], w: usize, h: usize) -> f32 {
     let k = r.len() / 2;
     let (_, med, _) = r.select_nth_unstable_by(k, f32::total_cmp);
     1.4826 * *med / 6.0
+}
+
+/// How far the noise departs from independent pixels: the correlation of
+/// horizontally neighbouring high-pass residuals (value minus the mean of
+/// its 3 × 3 neighbourhood), minus what white noise gives (−1/6).
+/// Filtered or binned-with-interpolation data shows values far from 0,
+/// which defeats Noise2Void.
+pub fn noise_correlation(v: &[f32], w: usize, h: usize) -> f32 {
+    if w < 4 || h < 3 {
+        return 0.0;
+    }
+    let step = (((w - 2) * (h - 2)) as f64 / 1e6).sqrt().ceil().max(1.0) as usize;
+    let res = |x: usize, y: usize| {
+        let mut s = 0f32;
+        for dy in 0..3 {
+            for dx in 0..3 {
+                s += v[(y + dy - 1) * w + x + dx - 1];
+            }
+        }
+        v[y * w + x] - s / 9.0
+    };
+    let (mut sab, mut saa, mut sbb) = (0f64, 0f64, 0f64);
+    for y in (1..h - 1).step_by(step) {
+        for x in (1..w - 2).step_by(step) {
+            let (a, b) = (res(x, y) as f64, res(x + 1, y) as f64);
+            if a.is_finite() && b.is_finite() {
+                sab += a * b;
+                saa += a * a;
+                sbb += b * b;
+            }
+        }
+    }
+    let r = if saa > 0.0 && sbb > 0.0 { (sab / (saa * sbb).sqrt()) as f32 } else { -1.0 / 6.0 };
+    // White noise gives −12/81 ÷ 72/81 = −1/6.
+    r + 1.0 / 6.0
 }
 
 pub fn kernel_radius(sigma: f32) -> usize {
@@ -429,7 +551,14 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
     CANCEL.store(false, Ordering::SeqCst);
     let info = img.info();
     let (w, h) = (info.width, info.height);
-    let zs: Vec<usize> = if req.zs.is_empty() { (0..info.size_z).collect() } else { req.zs.clone() };
+    // A movie denoised from its frame halves gives one image.
+    let zs: Vec<usize> = if uses_frames(&req.params) {
+        vec![0]
+    } else if req.zs.is_empty() {
+        (0..info.size_z).collect()
+    } else {
+        req.zs.clone()
+    };
     if zs.iter().any(|&z| z >= info.size_z) {
         bail!("层号超出范围");
     }
@@ -444,9 +573,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
             let _ = std::fs::remove_file(&tmp);
             bail!("已取消");
         }
-        let v = input(img, req.c, z, req.t, req.params.slab)?;
-        let sigma = noise_sigma(&v, w, h);
-        let (out, b) = filter(v, w, h, &req.params, sigma)?;
+        let (out, _, b) = run(img, req.c, z, req.t, &req.params, [0, 0, w, h])?;
         backend = b;
         let (a, b, c, d) = out
             .par_iter()
@@ -473,6 +600,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
         Method::Median => format!("TifMrcView: denoised, median r {}", p.median_radius()),
         Method::Diffusion => format!("TifMrcView: denoised, diffusion K {:.2} sd x{}", p.strength, p.iterations),
         Method::Nlm => format!("TifMrcView: denoised, NLM h {:.2} sd p{} s{}", p.strength, p.patch, p.search),
+        Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(p) { " N2N frames" } else { "" }, p.strength),
     } + &if p.slab > 0 { format!(" z+-{}", p.slab) } else { String::new() };
     f.seek(SeekFrom::Start(0))?;
     f.write_all(&crate::align::mrc_header(w, h, zs.len(), crate::align::pixel_a(info), [lo as f32, hi as f32, mean as f32, rms as f32], &label))?;
@@ -572,6 +700,21 @@ pub(crate) mod tests {
         let parts = tiled(&dev, &noisy, w, h, &p, 0.3, 16);
         let worst = whole.iter().zip(&parts).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-5, "{worst}");
+    }
+
+    #[test]
+    fn correlated_noise_is_flagged() {
+        let (w, h) = (128, 128);
+        let mut seed = 1u64;
+        let noisy: Vec<f32> = (0..w * h)
+            .map(|_| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 40) as f32 / (1u64 << 24) as f32
+            })
+            .collect();
+        assert!(noise_correlation(&noisy, w, h).abs() < 0.08, "{}", noise_correlation(&noisy, w, h));
+        let blurred = gaussian(&noisy, w, h, 1.0);
+        assert!(noise_correlation(&blurred, w, h) > 0.2, "{}", noise_correlation(&blurred, w, h));
     }
 
     #[test]

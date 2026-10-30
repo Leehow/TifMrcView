@@ -10,6 +10,8 @@ pub mod diffraction;
 pub mod ctf_gpu;
 #[cfg(feature = "pro")]
 pub mod denoise_gpu;
+#[cfg(feature = "pro")]
+pub mod denoise_learn;
 pub mod edition;
 pub mod fft;
 pub mod formats;

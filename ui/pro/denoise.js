@@ -1,6 +1,8 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, NLM on the GPU). Previews the middle of the
+// means (denoise.rs, NLM on the GPU), and a self-supervised network
+// (Noise2Void / Noise2Noise, denoise_learn.rs) trained on the image itself.
+// Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
 // Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
@@ -13,6 +15,7 @@
     diffusion: ["边缘阈值 K（× 噪声 σ）", 0.5, 8, 0.1, 2, "各向异性扩散：沿边缘平滑、不跨边缘；越大越平滑"],
     gaussian: ["σ px", 0.3, 6, 0.1, 1, "高斯模糊：最快，细节和边缘也一起变模糊"],
     median: ["半径 px", 1, 7, 1, 1, "中值：去掉坏点和椒盐噪声"],
+    learned: ["混合比例（1 = 全用网络结果）", 0, 1, 0.05, 1, "自监督学习：在这张图本身上训练一个小网络，不需要干净图像；先选训练方式，点「训练」"],
   };
 
   const btn = document.createElement("button");
@@ -39,6 +42,7 @@
           <option value="diffusion">各向异性扩散</option>
           <option value="gaussian">高斯</option>
           <option value="median">中值</option>
+          <option value="learned">自监督学习（Noise2Void / Noise2Noise）</option>
         </select>
       </label>
       <label class="al-wide"><span id="dn-slabel">强度</span>
@@ -46,6 +50,16 @@
       </label>
       <label class="dn-nlm">块半径 px <select id="dn-patch" title="比较相似度用的小块大小；噪声越大可以越大"><option>1</option><option>2</option><option>3</option></select></label>
       <label class="dn-nlm">搜索半径 px <select id="dn-search" title="在多大范围里找相似的块；越大越平滑也越慢"><option>5</option><option>7</option><option>10</option><option>15</option></select></label>
+      <label class="al-wide dn-learn">训练方式
+        <select id="dn-mode">
+          <option value="n2v">Noise2Void：任意图像，只需一份数据</option>
+          <option value="frames">Noise2Noise：电影帧（奇数帧对偶数帧）</option>
+          <option value="neighbours">Noise2Noise：相邻层（断层、连续切片）</option>
+        </select>
+      </label>
+      <label class="dn-learn">训练步数 <select id="dn-steps" title="越多越好也越慢；GPU 上 1000 步通常一两分钟"><option>500</option><option>1000</option><option>2000</option><option>4000</option></select></label>
+      <span class="dn-learn dn-trainrow"><button id="dn-train" class="small primary">训练</button></span>
+      <span class="al-wide dn-learn dim" id="dn-model"></span>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
       <label class="al-check al-wide"><input type="checkbox" id="dn-cpu" /> 只用 CPU</label>
@@ -80,6 +94,22 @@
     $("dn-sval").textContent = (+s.value).toFixed(step < 1 ? 2 : 0);
     for (const el of panel.querySelectorAll(".dn-nlm")) el.hidden = m !== "nlm";
     for (const el of panel.querySelectorAll(".dn-diff")) el.hidden = m !== "diffusion";
+    for (const el of panel.querySelectorAll(".dn-learn")) el.hidden = m !== "learned";
+    syncMode();
+  }
+
+  const MODE_HINT = {
+    n2v: "把每块里少数像素换成邻近像素，让网络从周围猜出它们；适合任何单张图或叠层。要用没滤过波的原始数据，噪声在相邻像素间相关时效果会变差",
+    frames: "用奇数帧的平均去预测偶数帧的平均（反过来也一样），两半信号相同、噪声独立；结果是一张图。电影帧要先做漂移校正",
+    neighbours: "用每一层去预测相邻的一层；适合层厚比细节小的断层和连续切片，不适合倾转系列",
+  };
+
+  function syncMode() {
+    const mode = $("dn-mode").value;
+    $("dn-mode").title = MODE_HINT[mode];
+    const stack = !!(S.info && S.info.sizeZ > 1);
+    for (const o of $("dn-mode").options) o.disabled = o.value !== "n2v" && !stack;
+    if (!stack && mode !== "n2v") $("dn-mode").value = "n2v";
   }
 
   $("dn-method").value = P.method;
@@ -90,6 +120,8 @@
   $("dn-cpu").checked = !!P.cpu;
   $("dn-split").value = P.split;
   $("dn-preview").checked = P.preview !== false;
+  $("dn-mode").value = P.mode || "n2v";
+  $("dn-steps").value = P.steps || 1000;
   syncMethod();
 
   function store() {
@@ -102,6 +134,8 @@
     P.cpu = $("dn-cpu").checked;
     P.split = +$("dn-split").value;
     P.preview = $("dn-preview").checked;
+    P.mode = $("dn-mode").value;
+    P.steps = +$("dn-steps").value;
     pref.set("denoise-params", P);
   }
 
@@ -127,7 +161,44 @@
     $("dn-sval").textContent = (+$("dn-strength").value).toFixed(step < 1 ? 2 : 0);
     store();
   });
-  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview"]) $(id).addEventListener("change", store);
+  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview", "dn-steps"]) $(id).addEventListener("change", store);
+  $("dn-mode").addEventListener("change", () => {
+    syncMode();
+    store();
+  });
+
+  // ---- Self-supervised training ----
+
+  async function train() {
+    if (N.training) {
+      invoke("denoise_cancel");
+      return;
+    }
+    if (!S.info) return;
+    const req = { token: S.token, c: fftChannel(), t: S.t, mode: $("dn-mode").value, steps: +$("dn-steps").value, slab: S.info.sizeZ > 1 ? P.slab : 0 };
+    const un = await T.event.listen("denoise-train", (ev) => {
+      const { step, steps, loss } = ev.payload;
+      $("dn-model").textContent = `训练中 ${step}/${steps} · 损失 ${loss.toPrecision(3)}`;
+    });
+    N.training = true;
+    $("dn-train").textContent = "取消";
+    $("dn-model").textContent = "准备训练数据…";
+    try {
+      const r = await invoke("denoise_train", { req });
+      const name = { n2v: "Noise2Void", frames: "Noise2Noise 奇偶帧", neighbours: "Noise2Noise 相邻层" }[r.mode];
+      N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步 · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
+      $("dn-model").textContent = `已训练：${N.model}` + (r.warning ? `\n⚠ ${r.warning}` : "");
+      // Show the new model's result.
+      N.key = "";
+    } catch (e) {
+      $("dn-model").textContent = String(e).includes("已取消") ? "已取消训练" : "训练失败：" + e;
+    } finally {
+      un();
+      N.training = false;
+      $("dn-train").textContent = "训练";
+    }
+  }
+  $("dn-train").addEventListener("click", train);
   $("dn-split").addEventListener("input", () => {
     store();
     requestRender();
@@ -140,6 +211,7 @@
     if (F.on) setFft(false);
     document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
     for (const el of panel.querySelectorAll(".dn-z")) el.hidden = !(S.info && S.info.sizeZ > 1);
+    syncMode();
     $("dn-save-all").hidden = !(S.info && S.info.sizeZ > 1);
   }
 
@@ -179,7 +251,7 @@
   }
 
   async function runPreview() {
-    if (N.busy || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
+    if (N.busy || N.training || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
     const req = previewReq();
     if (!req) return;
     const key = JSON.stringify(req);

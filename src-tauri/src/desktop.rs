@@ -1161,6 +1161,97 @@ async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq) -> CmdResult
 #[tauri::command]
 fn denoise_cancel() {
     crate::denoise::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(feature = "pro")]
+    crate::denoise_learn::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DenoiseTrainReq {
+    token: u64,
+    c: usize,
+    t: usize,
+    /// "n2v", "frames" or "neighbours".
+    mode: String,
+    steps: usize,
+    /// Slices averaged on each side first (n2v only).
+    #[serde(default)]
+    slab: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DenoiseTrained {
+    mode: String,
+    /// Images (or pairs) it was trained on.
+    images: usize,
+    loss: f32,
+    backend: String,
+    seconds: f32,
+    /// Set when the data does not suit the method (correlated noise).
+    warning: Option<String>,
+}
+
+/// Trains the self-supervised denoiser (Pro) on the open image; reports
+/// `denoise-train` {step, steps, loss}. The model then serves the
+/// "learned" method of `denoise_preview` and `denoise_save`.
+#[tauri::command]
+async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<DenoiseTrained> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        use crate::denoise_learn::{Mode, CANCEL, MODEL};
+        let img = current(&app.state::<AppState>(), req.token)?;
+        CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        blocking(move || {
+            let started = std::time::Instant::now();
+            let info = img.info();
+            let (w, h, nz) = (info.width, info.height, info.size_z);
+            let mode = match req.mode.as_str() {
+                "n2v" => Mode::N2v,
+                "frames" => Mode::Frames,
+                "neighbours" => Mode::Neighbours,
+                m => anyhow::bail!("未知的训练方式 {m}"),
+            };
+            if mode != Mode::N2v && nz < 2 {
+                anyhow::bail!("这种方式需要叠层（至少两层）");
+            }
+            // At most 16 slices and about 64 M pixels, spread over the stack.
+            let most = (64_000_000 / (w * h).max(1)).clamp(1, 16);
+            let spread = |n: usize| -> Vec<usize> { let k = n.min(most); (0..k).map(|i| i * n / k).collect() };
+            let pairs: Vec<(Vec<f32>, Option<Vec<f32>>)> = match mode {
+                Mode::N2v => spread(nz).into_iter().map(|z| Ok((crate::denoise::input(&img, req.c, z, req.t, req.slab)?, None))).collect::<anyhow::Result<_>>()?,
+                Mode::Frames => {
+                    let [a, b] = crate::denoise::frame_halves(&img, req.c, req.t)?;
+                    vec![(a, Some(b))]
+                }
+                // Neighbouring slices, unaveraged so that their noise stays independent.
+                Mode::Neighbours => spread(nz - 1)
+                    .into_iter()
+                    .map(|z| Ok((crate::denoise::input(&img, req.c, z, req.t, 0)?, Some(crate::denoise::input(&img, req.c, z + 1, req.t, 0)?))))
+                    .collect::<anyhow::Result<_>>()?,
+            };
+            let cfg = crate::denoise_learn::TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
+            let app2 = app.clone();
+            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| {
+                crate::denoise_learn::train(dev, &pairs, w, h, mode, &cfg, |step, steps, loss| {
+                    let _ = app2.emit("denoise-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
+                })
+            })?;
+            *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone() }));
+            // Self-supervision assumes noise independent from pixel to pixel.
+            let corr = crate::denoise::noise_correlation(&pairs[0].0, w, h);
+            let warning = (corr.abs() > 0.15).then(|| format!("这份数据的噪声在相邻像素间相关（{corr:+.2}），可能已经滤过波或插值过；自监督降噪对这种数据效果有限"));
+            let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning };
+            eprintln!("denoise_train: {} on {} images, loss {:.4}, {} in {:.1} s", out.mode, out.images, out.loss, out.backend, out.seconds);
+            Ok(out)
+        })
+        .await
+    }
 }
 
 #[tauri::command]
@@ -1682,6 +1773,7 @@ pub fn run() {
             denoise_preview,
             denoise_save,
             denoise_cancel,
+            denoise_train,
             spectrum_values,
             pick_save_path,
             pick_folder,
