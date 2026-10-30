@@ -679,6 +679,36 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// Writes per-pixel labels on several slices as one undo step (a
+    /// classifier result); 0 in `classes` leaves the pixel as it is.
+    pub fn apply_classes(&mut self, slices: &[(usize, Vec<u16>)], guard: u16) -> Vec<usize> {
+        let locked = self.locked();
+        let n = self.w * self.h;
+        let mut edit = vec![];
+        for (z, classes) in slices {
+            if *z >= self.d || classes.len() != n {
+                continue;
+            }
+            let s = Self::touch(&mut self.slices, &mut edit, *z, n);
+            for (v, &k) in s.iter_mut().zip(classes) {
+                if k != 0 && allowed(*v, k, guard, &locked) {
+                    *v = k;
+                }
+            }
+        }
+        self.commit(edit)
+    }
+
+    /// Slice `z`, or None when it is empty.
+    pub fn slice(&self, z: usize) -> Option<&[u16]> {
+        self.slices.get(z).and_then(|s| s.as_deref())
+    }
+
+    /// Slices that hold any label.
+    pub fn used_slices(&self) -> Vec<usize> {
+        (0..self.d).filter(|&z| self.slices[z].is_some()).collect()
+    }
+
     /// The pixels of the label at (x, y, z) connected to it, by slice:
     /// 4-connected within a slice and, with `three_d`, through Z as well.
     fn region(&self, x: usize, y: usize, z: usize, three_d: bool) -> (u16, BTreeMap<usize, Vec<usize>>) {
@@ -894,6 +924,32 @@ pub fn is_labels_file(path: &Path) -> bool {
 pub struct Entry {
     pub labels: Labels,
     pub path: String,
+    /// Pixel classifier training strokes (same size as `labels`, not saved).
+    pub scribbles: Option<Labels>,
+    #[cfg(feature = "pro")]
+    pub classifier: Option<Arc<crate::classify::Classifier>>,
+    #[cfg(feature = "pro")]
+    pub unet: Option<Arc<crate::unet::Trained>>,
+}
+
+impl Entry {
+    pub fn new(labels: Labels, path: String) -> Entry {
+        Entry {
+            labels,
+            path,
+            scribbles: None,
+            #[cfg(feature = "pro")]
+            classifier: None,
+            #[cfg(feature = "pro")]
+            unet: None,
+        }
+    }
+
+    /// The scribble layer, made on first use.
+    pub fn scribbles(&mut self) -> &mut Labels {
+        let (w, h, d) = (self.labels.w, self.labels.h, self.labels.d);
+        self.scribbles.get_or_insert_with(|| Labels::new(w, h, d))
+    }
 }
 
 pub type Store = Mutex<HashMap<u64, Arc<Mutex<Entry>>>>;
@@ -908,6 +964,20 @@ mod tests {
         fn slice(&self, z: usize) -> Result<Vec<f32>> {
             Ok((0..self.0 * self.1).map(|i| (self.2)(i % self.0, i / self.0, z)).collect())
         }
+    }
+
+    #[test]
+    fn classes_respect_locks_and_undo() {
+        let mut l = Labels::new(4, 2, 2);
+        l.stroke(0, &[[0.5, 0.5]], 0.5, 5, 0);
+        l.set_materials(vec![Material { label: 5, locked: true, ..Default::default() }]);
+        let classes = vec![1, 2, 2, 0, 1, 1, 2, 2];
+        assert_eq!(l.apply_classes(&[(0, classes.clone())], 0), vec![0]);
+        // Locked label 5 stays, 0 leaves the pixel alone.
+        assert_eq!((0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(), vec![5, 2, 2, 0]);
+        assert_eq!(l.get(3, 1, 0), 2);
+        assert_eq!(l.undo(), vec![0]);
+        assert_eq!(l.get(1, 0, 0), 0);
     }
 
     #[test]
