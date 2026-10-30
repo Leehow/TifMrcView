@@ -15,7 +15,7 @@ window.TifMrcViewPro = {
   css.rel = "stylesheet";
   css.href = "pro/pro.css";
   document.head.appendChild(css);
-  // Segmentation labels, the 3D view of Z stacks, CTF fitting in the FFT panel, drift correction, diffraction indexing, denoising and spectrum quantification (in this order).
+  // Segmentation labels, the 3D view of Z stacks, CTF fitting in the FFT panel, drift correction, diffraction indexing, denoising, spectrum quantification, 4D-STEM and particle statistics (in this order).
   for (const src of ["pro/labels.js", "pro/volume.js", "pro/ctf.js", "pro/align.js", "pro/diffraction.js", "pro/denoise.js", "pro/spectro.js", "pro/stem4d.js", "pro/particles.js"]) {
     const s = document.createElement("script");
     s.src = src;
