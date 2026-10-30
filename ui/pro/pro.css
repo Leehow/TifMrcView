@@ -201,3 +201,5 @@
 #pa-table tr.sel td { background: rgba(207, 34, 46, 0.12); }
 #pa-table tr.off td { color: var(--dim); text-decoration: line-through; }
 #pa-table tr.off td:first-child { text-decoration: none; }
+.dn-trainrow { display: flex; align-items: flex-end; }
+#dn-model { font-size: 11px; line-height: 1.4; }
