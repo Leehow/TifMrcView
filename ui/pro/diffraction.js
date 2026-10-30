@@ -90,6 +90,9 @@
     panel.hidden = false;
     btn.classList.add("on");
     if (D.token !== S.token) reset();
+    // The right-hand panels share one spot: one at a time.
+    if (F.on) setFft(false);
+    document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
   };
   const close = () => {
     panel.hidden = true;
@@ -109,6 +112,8 @@
   }
   btn.addEventListener("click", () => (panel.hidden ? open() : close()));
   $("df-close").addEventListener("click", close);
+  document.addEventListener("pro-panel", (e) => e.detail !== panel.id && !panel.hidden && close());
+  $("btn-fft").addEventListener("click", () => F.on && !panel.hidden && close());
 
   // ---- Calibration: image pixels → reciprocal space ----
 
@@ -188,7 +193,7 @@
       line(`a* ${fmt(l.a, ga)}`);
       line(`b* ${fmt(l.b, gb)}`);
       line(`夹角 γ* ${ang.toFixed(2)}° · ${l.inliers}/${r.spots.length} 个斑点在晶格上 · 残差 ${l.rms.toFixed(2)} px`);
-      if (!ga) line("像素大小不是倒易单位（1/nm），只能给出像素长度；在图像信息里设置像素大小后可得到 d 值", "dim");
+      if (!ga) line("像素大小不是倒易单位（1/nm），只能给出像素长度；在左侧工具栏的比例尺里把像素大小设成 1/nm 后可得到 d 值", "dim");
     }
     const t = document.createElement("table");
     t.innerHTML = "<thead><tr><th>#</th><th>h k</th><th>|g| px</th><th>d</th><th>强度 σ</th></tr></thead>";
@@ -222,7 +227,7 @@
     if (!l) return;
     let ga = recip(l.a), gb = recip(l.b);
     if (!ga) {
-      $("df-zstatus").textContent = "需要先把像素大小设成倒易单位（1/nm）";
+      $("df-zstatus").textContent = "需要先在左侧工具栏的比例尺里把像素大小设成倒易单位（1/nm）";
       return;
     }
     if (len(gb) < len(ga)) [ga, gb] = [gb, ga];
@@ -242,13 +247,20 @@
     }
     $("df-zstatus").textContent = D.zones.length ? "按长度和夹角误差排序" : "没有可比的带轴";
     const t = document.createElement("table");
-    t.innerHTML = "<thead><tr><th>[uvw]</th><th>g₁</th><th>g₂</th><th>夹角</th><th>长度误差</th><th>角度误差</th></tr></thead>";
+    t.innerHTML = "<thead><tr><th>[uvw]</th><th>g₁</th><th>g₂</th><th>夹角</th><th>长度差</th><th>角度差</th></tr></thead>";
     const tb = document.createElement("tbody");
     const hkl = (h) => `(${h.join(" ")})`;
+    // Symmetry-equivalent axes give the same lengths and angle: one row each, with a count.
+    const groups = [];
     for (const z of D.zones) {
+      const g = groups.find((g) => Math.abs(g[0].g1Len - z.g1Len) < 1e-6 && Math.abs(g[0].g2Len - z.g2Len) < 1e-6 && Math.abs(g[0].angle - z.angle) < 1e-3);
+      g ? g.push(z) : groups.push([z]);
+    }
+    for (const g of groups) {
+      const z = g[0];
       const tr = document.createElement("tr");
       if (z.lenErr > 0.05 || z.angleErr > 3) tr.className = "low";
-      for (const v of [`[${z.uvw.join(" ")}]`, hkl(z.g1), hkl(z.g2), `${z.angle.toFixed(1)}°`, `${(z.lenErr * 100).toFixed(1)}%`, `${z.angleErr.toFixed(1)}°`]) {
+      for (const v of [`[${z.uvw.join(" ")}]` + (g.length > 1 ? ` ×${g.length}` : ""), hkl(z.g1), hkl(z.g2), `${z.angle.toFixed(1)}°`, `${(z.lenErr * 100).toFixed(1)}%`, `${z.angleErr.toFixed(1)}°`]) {
         const td = document.createElement("td");
         td.textContent = v;
         tr.appendChild(td);
@@ -287,6 +299,7 @@
     const labels = l && Math.min(len(l.a), len(l.b)) * S.view.scale > 34;
     g.save();
     g.lineWidth = 1.5;
+    g.lineJoin = "round";
     g.font = "11px system-ui, sans-serif";
     g.textAlign = "center";
     g.textBaseline = "top";

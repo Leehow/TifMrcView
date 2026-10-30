@@ -156,6 +156,7 @@
       const fit = await invoke("ctf_fit", { req: { token, z: S.z, t: S.t, c, region, n, params } });
       if (token !== S.token) return;
       C.fit = fit;
+      C.fitParams = params;
       C.key = key;
       showFit();
     } catch (e) {
@@ -167,6 +168,19 @@
   }
 
   const um = (a) => (a / 1e4).toFixed(3);
+
+  /** Why a fit can't be trusted: it stopped at the edge of the search, or
+   * the spectrum barely follows any CTF (no visible Thon rings). */
+  function atEdge(f, p) {
+    const df = (f.df1 + f.df2) / 2;
+    return !!p && (df >= p.dfMaxA * 0.99 || df <= p.dfMinA * 1.01 || (p.maxAstigA > 0 && f.df1 - f.df2 >= p.maxAstigA * 0.99));
+  }
+
+  function boundWarning(f, p) {
+    if (atEdge(f, p)) return "拟合停在搜索范围的边界上，结果不可信：调大离焦或像散范围再试；如果功率谱里看不到 Thon 环，就拟合不出来";
+    if (f.score < 0.1) return "相关很低，功率谱里可能没有可见的 Thon 环，结果仅供参考";
+    return "";
+  }
 
   function showFit() {
     const f = C.fit;
@@ -186,6 +200,13 @@
       out.appendChild(d);
     }
     out.lastChild.className = "dim";
+    const warn = boundWarning(f, C.fitParams);
+    if (warn) {
+      const d = document.createElement("div");
+      d.className = "ctf-warn";
+      d.textContent = warn;
+      out.appendChild(d);
+    }
     out.classList.remove("dim");
     drawOverlay();
     drawPlot();
@@ -319,6 +340,7 @@
       const res = await invoke("ctf_fit_stack", { req });
       if (token !== S.token) return;
       SER.res = res;
+      SER.params = req.params;
       SER.token = token;
       showStack();
       $("ctf-out").textContent = `${res.fits.length} 层 · ${res.backend} · ${(res.ms / 1000).toFixed(1)} s`;
@@ -349,7 +371,10 @@
     const mean = r.fits.map((f) => (f.df1 + f.df2) / 2);
     const lo = Math.min(...mean), hi = Math.max(...mean);
     const good = r.fits.filter((f) => f.score >= LOW_CC).length;
-    $("ctf-series-sum").textContent = `离焦 ${um(lo)}–${um(hi)} µm · ${good}/${r.fits.length} 层相关 ≥ ${LOW_CC}`;
+    const edges = r.fits.filter((f) => atEdge(f, SER.params)).length;
+    $("ctf-series-sum").textContent =
+      `离焦 ${um(lo)}–${um(hi)} µm · ${good}/${r.fits.length} 层相关 ≥ ${LOW_CC}` +
+      (edges ? ` · ${edges} 层停在搜索边界（标黄），调整离焦范围后再试` : "");
     const ax = xAxis();
     const t = document.createElement("table");
     t.innerHTML = `<thead><tr><th>${r.tilts ? "倾转 °" : "层"}</th><th>离焦 µm</th><th>像散 nm</th><th>角 °</th>${$("ctf-phase").checked ? "<th>相移 °</th>" : ""}<th>可信 Å</th><th>相关</th></tr></thead>`;
@@ -358,6 +383,7 @@
       const tr = document.createElement("tr");
       tr.dataset.z = r.zs[i];
       if (f.score < LOW_CC) tr.className = "low";
+      if (atEdge(f, SER.params)) tr.classList.add("edge");
       const cells = [
         r.tilts ? ax.v[i].toFixed(1) : String(ax.v[i]),
         um(mean[i]),
