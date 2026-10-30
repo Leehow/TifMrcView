@@ -41,13 +41,13 @@ impl Sam2Config {
 }
 
 pub const IMAGE_SIZE: usize = 1024;
-const D_MODEL: usize = 256;
+pub(crate) const D_MODEL: usize = 256;
 
-fn linear(i: usize, o: usize, dev: &Device) -> Linear {
+pub(crate) fn linear(i: usize, o: usize, dev: &Device) -> Linear {
     LinearConfig::new(i, o).init(dev)
 }
 
-fn conv(i: usize, o: usize, k: usize, s: usize, p: usize, dev: &Device) -> Conv2d {
+pub(crate) fn conv(i: usize, o: usize, k: usize, s: usize, p: usize, dev: &Device) -> Conv2d {
     Conv2dConfig::new([i, o], [k, k]).with_stride([s, s]).with_padding(PaddingConfig2d::Explicit(p, p, p, p)).init(dev)
 }
 
@@ -66,12 +66,12 @@ pub struct Mlp {
 }
 
 impl Mlp {
-    fn new(i: usize, h: usize, o: usize, n: usize, gelu: bool, sigmoid: bool, dev: &Device) -> Self {
+    pub(crate) fn new(i: usize, h: usize, o: usize, n: usize, gelu: bool, sigmoid: bool, dev: &Device) -> Self {
         let dims: Vec<usize> = std::iter::once(i).chain(std::iter::repeat_n(h, n - 1)).chain(std::iter::once(o)).collect();
         Mlp { layers: dims.windows(2).map(|d| linear(d[0], d[1], dev)).collect(), gelu, sigmoid }
     }
 
-    fn forward<const D: usize>(&self, mut x: Tensor<D>) -> Tensor<D> {
+    pub(crate) fn forward<const D: usize>(&self, mut x: Tensor<D>) -> Tensor<D> {
         let n = self.layers.len();
         for (i, l) in self.layers.iter().enumerate() {
             x = l.forward(x);
@@ -91,11 +91,11 @@ pub struct LayerNorm2d {
 }
 
 impl LayerNorm2d {
-    fn new(c: usize, dev: &Device) -> Self {
+    pub(crate) fn new(c: usize, dev: &Device) -> Self {
         LayerNorm2d { weight: Param::from_tensor(Tensor::ones([c], dev)), bias: Param::from_tensor(Tensor::zeros([c], dev)) }
     }
 
-    fn forward(&self, x: Tensor<4>) -> Tensor<4> {
+    pub(crate) fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let c = x.dims()[1];
         let u = x.clone().mean_dim(1);
         let x = x - u;
@@ -595,10 +595,14 @@ pub struct MaskDecoder {
     pred_obj_score_head: Mlp,
 }
 
-/// Mask logits [1, n, 256, 256] and predicted IoU [1, n].
+/// Mask logits [1, n, 256, 256] and predicted IoU [1, n], with the mask
+/// token outputs [1, n, 256] (object pointers come from them) and the
+/// object score logit [1, 1] (> 0: the object is there).
 pub struct Masks {
     pub logits: Tensor<4>,
     pub iou: Tensor<2>,
+    pub tokens: Tensor<3>,
+    pub obj_score: Tensor<2>,
 }
 
 impl MaskDecoder {
@@ -629,6 +633,7 @@ impl MaskDecoder {
         let src = image + dense;
         let [b, c, h, w] = src.dims();
         let (hs, src) = self.transformer.forward(src, pe, tokens);
+        let obj_out = hs.clone().narrow(1, 0, 1).reshape([b, c]);
         let iou_out = hs.clone().narrow(1, 1, 1).reshape([b, c]);
         let mask_out = hs.narrow(1, 2, 4);
         let src = src.swap_dims(1, 2).reshape([b, c, h, w]);
@@ -640,7 +645,8 @@ impl MaskDecoder {
         let [_, uc, uh, uw] = up.dims();
         let logits = hyper.matmul(up.reshape([b, uc, uh * uw])).reshape([b, 4, uh, uw]);
         let iou = self.iou_prediction_head.forward(iou_out);
-        Masks { logits, iou }
+        let obj_score = self.pred_obj_score_head.forward(obj_out);
+        Masks { logits, iou, tokens: mask_out, obj_score }
     }
 }
 
@@ -652,12 +658,24 @@ pub struct Sam2 {
     pub sam_prompt_encoder: PromptEncoder,
     pub sam_mask_decoder: MaskDecoder,
     pub no_mem_embed: Param<Tensor<3>>,
+    // Video tracking (memory) parts, see memory.rs.
+    pub memory_attention: crate::memory::MemoryAttention,
+    pub memory_encoder: crate::memory::MemoryEncoder,
+    pub maskmem_tpos_enc: Param<Tensor<4>>,
+    pub no_obj_ptr: Param<Tensor<2>>,
+    pub no_obj_embed_spatial: Param<Tensor<2>>,
+    pub obj_ptr_proj: Mlp,
+    pub obj_ptr_tpos_proj: Linear,
+    pub mask_downsample: Conv2d,
 }
 
-/// Image features for prompting: the 64x64 embedding and two high-res maps.
+/// Image features for prompting: the 64x64 embedding (with the no-memory
+/// embedding added, as for a single image), the same without it (for
+/// tracking with memory) and two high-res maps.
 #[derive(Clone)]
 pub struct Features {
     pub embed: Tensor<4>,
+    pub raw: Tensor<4>,
     pub s0: Tensor<4>,
     pub s1: Tensor<4>,
 }
@@ -672,6 +690,14 @@ impl Sam2 {
             sam_prompt_encoder: PromptEncoder::new(dev),
             sam_mask_decoder: MaskDecoder::new(dev),
             no_mem_embed: Param::from_tensor(Tensor::zeros([1, 1, D_MODEL], dev)),
+            memory_attention: crate::memory::MemoryAttention::new(dev),
+            memory_encoder: crate::memory::MemoryEncoder::new(dev),
+            maskmem_tpos_enc: Param::from_tensor(Tensor::zeros([crate::memory::NUM_MASKMEM, 1, 1, crate::memory::MEM_DIM], dev)),
+            no_obj_ptr: Param::from_tensor(Tensor::zeros([1, D_MODEL], dev)),
+            no_obj_embed_spatial: Param::from_tensor(Tensor::zeros([1, crate::memory::MEM_DIM], dev)),
+            obj_ptr_proj: Mlp::new(D_MODEL, D_MODEL, D_MODEL, 3, false, false, dev),
+            obj_ptr_tpos_proj: linear(D_MODEL, crate::memory::MEM_DIM, dev),
+            mask_downsample: conv(1, 1, 4, 4, 0, dev),
         }
     }
 
@@ -706,8 +732,9 @@ impl Sam2 {
         let s1 = self.sam_mask_decoder.conv_s1.forward(f.pop().unwrap());
         let s0 = self.sam_mask_decoder.conv_s0.forward(f.pop().unwrap());
         let [b, c, h, w] = embed.dims();
+        let raw = embed.clone();
         let embed = embed + self.no_mem_embed.val().reshape([1, c, 1, 1]).expand([b, c, h, w]);
-        Features { embed, s0, s1 }
+        Features { embed, raw, s0, s1 }
     }
 }
 
