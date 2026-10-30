@@ -1177,6 +1177,9 @@ struct DenoiseTrainReq {
     /// Slices averaged on each side first (n2v only).
     #[serde(default)]
     slab: usize,
+    /// Pixels averaged in each direction first (1 = none).
+    #[serde(default)]
+    bin: usize,
 }
 
 #[derive(Serialize)]
@@ -1235,16 +1238,20 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
                     .map(|z| Ok((crate::denoise::input(&img, req.c, z, req.t, 0)?, Some(crate::denoise::input(&img, req.c, z + 1, req.t, 0)?))))
                     .collect::<anyhow::Result<_>>()?,
             };
+            let k = req.bin.clamp(1, 8);
+            let (bw, bh) = ((w / k).max(1), (h / k).max(1));
+            let shrink = |v: Vec<f32>| crate::denoise_learn::bin(&v, w, h, k).0;
+            let pairs: Vec<_> = pairs.into_iter().map(|(a, b)| (shrink(a), b.map(shrink))).collect();
             let cfg = crate::denoise_learn::TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
             let app2 = app.clone();
             let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| {
-                crate::denoise_learn::train(dev, &pairs, w, h, mode, &cfg, |step, steps, loss| {
+                crate::denoise_learn::train(dev, &pairs, bw, bh, mode, &cfg, |step, steps, loss| {
                     let _ = app2.emit("denoise-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
                 })
             })?;
-            *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone() }));
+            *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone(), bin: k }));
             // Self-supervision assumes noise independent from pixel to pixel.
-            let corr = crate::denoise::noise_correlation(&pairs[0].0, w, h);
+            let corr = crate::denoise::noise_correlation(&pairs[0].0, bw, bh);
             let warning = (corr.abs() > 0.15).then(|| format!("这份数据的噪声在相邻像素间相关（{corr:+.2}），可能已经滤过波或插值过；自监督降噪对这种数据效果有限"));
             let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning };
             eprintln!("denoise_train: {} on {} images, loss {:.4}, {} in {:.1} s", out.mode, out.images, out.loss, out.backend, out.seconds);

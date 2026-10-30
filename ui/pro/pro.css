@@ -162,7 +162,8 @@
 .dn-slider output { width: 36px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
 .dn-split { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--dim); font-size: 11px; }
 .dn-split input { flex: 1; min-width: 0; }
-#dn-status, #dn-saved-name { flex: 1; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dn-status { flex: 1; font-variant-numeric: tabular-nums; }
+#dn-saved-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #denoise-panel [hidden] { display: none; }
 
 /* 4D-STEM maps. */

@@ -101,7 +101,7 @@ impl Params {
             Method::Median => self.median_radius(),
             Method::Diffusion => self.iterations.min(200) + 1,
             Method::Nlm => self.search.min(20) + self.patch.min(5) + 1,
-            Method::Learned => LEARNED_MARGIN,
+            Method::Learned => LEARNED_MARGIN * learned_bin(),
         }
     }
 
@@ -219,15 +219,16 @@ pub fn preview(img: &Arc<OpenImage>, req: &PreviewReq) -> Result<Denoised> {
 }
 
 /// Whether the method is the trained network in movie mode, whose input is
-/// the even and odd frame means rather than one slice.
-fn uses_frames(p: &Params) -> bool {
+/// the even and odd frame means rather than one slice. A single image (a
+/// movie's saved result, say) goes through the same network as it is.
+fn uses_frames(img: &OpenImage, p: &Params) -> bool {
     #[cfg(feature = "pro")]
-    if p.method == Method::Learned {
+    if p.method == Method::Learned && img.info().size_z > 1 {
         if let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().as_ref() {
             return m.mode == crate::denoise_learn::Mode::Frames;
         }
     }
-    let _ = p;
+    let _ = (img, p);
     false
 }
 
@@ -258,7 +259,7 @@ pub fn frame_halves(img: &OpenImage, c: usize, t: usize) -> Result<[Vec<f32>; 2]
 fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 4]) -> Result<(Vec<f32>, f32, &'static str)> {
     let info = img.info();
     let (w, h) = (info.width, info.height);
-    let parts: Vec<Vec<f32>> = if uses_frames(p) { frame_halves(img, c, t)?.into() } else { vec![input(img, c, z, t, p.slab)?] };
+    let parts: Vec<Vec<f32>> = if uses_frames(img, p) { frame_halves(img, c, t)?.into() } else { vec![input(img, c, z, t, p.slab)?] };
     let sigma = noise_sigma(&parts[0], w, h);
     let [cx, cy, cw, ch] = rect;
     let m = p.margin();
@@ -310,6 +311,15 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
 }
 
 /// The trained network's result, mixed with the input by `strength`.
+/// How much the trained model bins first (its margin grows by as much).
+fn learned_bin() -> usize {
+    #[cfg(feature = "pro")]
+    if let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().as_ref() {
+        return m.bin.max(1);
+    }
+    1
+}
+
 fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'static str)> {
     #[cfg(feature = "pro")]
     {
@@ -552,7 +562,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
     let info = img.info();
     let (w, h) = (info.width, info.height);
     // A movie denoised from its frame halves gives one image.
-    let zs: Vec<usize> = if uses_frames(&req.params) {
+    let zs: Vec<usize> = if uses_frames(img, &req.params) {
         vec![0]
     } else if req.zs.is_empty() {
         (0..info.size_z).collect()
@@ -600,7 +610,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
         Method::Median => format!("TifMrcView: denoised, median r {}", p.median_radius()),
         Method::Diffusion => format!("TifMrcView: denoised, diffusion K {:.2} sd x{}", p.strength, p.iterations),
         Method::Nlm => format!("TifMrcView: denoised, NLM h {:.2} sd p{} s{}", p.strength, p.patch, p.search),
-        Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(p) { " N2N frames" } else { "" }, p.strength),
+        Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(img, p) { " N2N frames" } else { "" }, p.strength),
     } + &if p.slab > 0 { format!(" z+-{}", p.slab) } else { String::new() };
     f.seek(SeekFrom::Start(0))?;
     f.write_all(&crate::align::mrc_header(w, h, zs.len(), crate::align::pixel_a(info), [lo as f32, hi as f32, mean as f32, rms as f32], &label))?;
