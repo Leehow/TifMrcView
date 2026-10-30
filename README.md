@@ -210,7 +210,7 @@ If TifMrcView helps your research, please cite it. GitHub shows the citation fro
 
 ## Code signing and privacy
 
-Windows installers are built and signed by GitHub Actions from this repository. See the [code signing policy](docs/code-signing.md) for who can sign, what is signed and what the app sends over the network (only update checks, the plugin list and, in Pro, the one-time SAM model download). Participation follows the [code of conduct](CODE_OF_CONDUCT.md).
+Windows installers are built by GitHub Actions from this repository (not yet code-signed). See the [code signing policy](docs/code-signing.md) for who can sign, what is signed and what the app sends over the network (only update checks, the plugin list and, in Pro, the one-time SAM model download). Participation follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
