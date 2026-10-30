@@ -928,6 +928,8 @@ pub struct Entry {
     pub scribbles: Option<Labels>,
     #[cfg(feature = "pro")]
     pub classifier: Option<Arc<crate::classify::Classifier>>,
+    #[cfg(feature = "pro")]
+    pub unet: Option<Arc<crate::unet::Trained>>,
 }
 
 impl Entry {
@@ -938,6 +940,8 @@ impl Entry {
             scribbles: None,
             #[cfg(feature = "pro")]
             classifier: None,
+            #[cfg(feature = "pro")]
+            unet: None,
         }
     }
 

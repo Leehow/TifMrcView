@@ -65,7 +65,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
   <div class="wrap">
     <div class="pfg">
       <div class="card pf rv d1"><h3 data-i="pro_f1h">3D 体视图</h3><p data-i="pro_f1p">最大强度投影、半透明和等值面渲染。像 ChimeraX 那样按 σ 调阈值，平滑和直方图都在 GPU 上算。冷冻电镜断层可一键反相。</p></div>
-      <div class="card pf rv d2"><h3 data-i="pro_f2h">分割标签与材料</h3><p data-i="pro_f2p">画笔、魔棒、阈值、分水岭、套索、层间插值，还有像 ilastik 那样画几笔就自动分类的像素分类器（随机森林，特征在 GPU 上算）。材料像 Amira 那样可命名、配色、隐藏和锁定，存成 Fiji / napari 能读的 16 位 TIFF。</p></div>
+      <div class="card pf rv d2"><h3 data-i="pro_f2h">分割标签与材料</h3><p data-i="pro_f2p">画笔、魔棒、阈值、分水岭、套索、层间插值，还有像 ilastik 那样画几笔就自动分类的像素分类器（随机森林，特征在 GPU 上算），以及在本机 GPU 上训练的 U-Net：标好几层，它分割其余的层。材料像 Amira 那样可命名、配色、隐藏和锁定，存成 Fiji / napari 能读的 16 位 TIFF。</p></div>
       <div class="card pf rv"><h3 data-i="pro_f3h">SAM 2.1 智能分割</h3><p data-i="pro_f3p">点一下就分出物体，再沿 Z 自动传播到整个物体，细膜和闭合轮廓也能跟住。模型用 Rust 重写，在你的显卡上本地运行，数据不出电脑。</p></div>
       <div class="card pf rv d1"><h3 data-i="pro_f4h">CTF 拟合</h3><p data-i="pro_f4p">在功率谱上拟合离焦、像散和相位板相移，把拟合出的 CTF 零点画在谱上，并给出一维拟合曲线。</p></div>
       <div class="card pf rv d2"><h3 data-i="pro_f5h">漂移校正</h3><p data-i="pro_f5p">测出影片、倾转系列和连续切片每一层的位移，画出轨迹，保存对齐后的栈或叠加图（MRC）。</p></div>
@@ -118,6 +118,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
           <tr><th data-i="pr_sam">AI 点击分割（SAM 2.1，本地运行）</th><td class="n">—</td><td class="me y">✓</td><td class="p"></td><td class="n">—</td></tr>
           <tr><th data-i="pr_prop">分割结果沿 Z 自动传播</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
           <tr><th data-i="pr_rf">像素分类器（画几笔自动分割）</th><td class="n">—</td><td class="me y">✓</td><td class="p"></td><td class="n">—</td></tr>
+          <tr><th data-i="pr_unet">U-Net 深度学习分割（本机 GPU 训练）</th><td class="n">—</td><td class="me y">✓</td><td class="p"></td><td class="n">—</td></tr>
           <tr class="grp"><th data-i="pg_em">电镜分析</th><td></td><td class="me"></td><td></td><td></td></tr>
           <tr><th data-i="pr_ctf">CTF 拟合</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="y">✓</td></tr>
           <tr><th data-i="pr_drift">漂移校正、对齐</th><td class="n">—</td><td class="me y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
@@ -174,7 +175,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
   </div>
 </footer>
 
-<script src="../i18n.js?v=15"></script>
+<script src="../i18n.js?v=16"></script>
 <script src="../site.js?v=3"></script>
 </body>
 </html>

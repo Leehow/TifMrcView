@@ -41,6 +41,8 @@
     // Pixel classifier: scribbles of the shown slice, the trained forest's
     // summary and the prediction of the shown slice.
     cls: { z: -1, scribbles: null, stroke: null, info: null, preview: true, pred: null, predZ: -1, minConf: 0, busy: false, fetching: false, along: null },
+    // U-Net trained on the labelled slices (unet.rs).
+    unet: { info: null, preview: true, pred: null, predZ: -1, minConf: 0.5, busy: false, train: null, along: null },
     busy: false,
     saveTimer: 0,
   };
@@ -134,6 +136,20 @@
         <button class="small" id="lab-ws-all">全部层</button>
       </div>
     </details>
+    <details id="lab-unet">
+      <summary>深度学习 U-Net</summary>
+      <div class="dim" id="lab-unet-text"></div>
+      <div class="row">
+        <label title="训练步数，越多越准也越慢">步数 <input type="number" id="lab-unet-steps" min="50" max="20000" step="50" value="400" style="width: 72px" /></label>
+        <button class="small" id="lab-unet-train" title="用已经画好标签的层训练 U-Net（Esc 停止）">训练</button>
+        <label title="在当前层上显示 U-Net 的结果"><input type="checkbox" id="lab-unet-preview" checked /> 预览</label>
+      </div>
+      <label class="slider" title="把握不到这个程度的像素不写入标签">最低把握 <input type="range" id="lab-unet-conf" min="0" max="0.95" step="0.05" value="0.5" /><span id="lab-unet-conf-v"></span></label>
+      <div class="row">
+        <button class="small" id="lab-unet-z" title="把当前层的结果写进标签">应用到本层</button>
+        <button class="small" id="lab-unet-all" title="对所有还没有标签的层分割并写进标签，一步就能撤回（Esc 停止）">应用到其余层</button>
+      </div>
+    </details>
     <div id="lab-file" class="dim"></div>`;
   $("sec-ann").after(sec);
 
@@ -151,6 +167,7 @@
     $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam" || L.sub === "select";
     syncSam();
     syncCls();
+    syncUnet();
     $("lab-tol-row").hidden = L.sub !== "wand";
     $("lab-3d-row").hidden = L.sub !== "wand" && L.sub !== "select";
     $("lab-3d-text").textContent = L.sub === "select" ? "整个物体（所有层）" : "三维";
@@ -328,6 +345,7 @@
       Object.assign(L.sam, { points: [], box: null, mask: null, z: -1, denoise: tomo });
       $("lab-sam-dn").checked = tomo;
       Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
+      Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
       Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
@@ -408,6 +426,7 @@
       g.restore();
     }
     drawCls(g);
+    drawUnet(g);
     drawSam(g);
     drawSelection(g);
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
@@ -1251,6 +1270,130 @@
   $("lab-cls-all").addEventListener("click", () => clsApply(true));
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && L.cls.along) { invoke("classify_cancel"); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
+  // ---------- U-Net (unet.rs) ----------
+
+  const unetCanvas = document.createElement("canvas");
+  const unetCtx = unetCanvas.getContext("2d");
+  const unetOpen = () => $("lab-unet").open;
+
+  function syncUnet() {
+    const U = L.unet, info = U.info;
+    let text;
+    if (U.train) text = `正在训练 ${U.train.step}/${U.train.steps} 步，损失 ${U.train.loss.toFixed(3)}（Esc 停止）`;
+    else if (U.along) text = `正在分割 ${U.along.done}/${U.along.total || "?"} 层（Esc 停止）`;
+    else if (U.busy) text = "计算中…";
+    else if (info) text = `已用 ${info.slices} 层、${info.labels.length} 种标签训练（准确率 ${Math.round(info.accuracy * 100)}%，${info.backend}，${info.seconds.toFixed(0)} 秒）。多标几层再训练可以改进。`;
+    else text = "先在几层上把物体和背景都画上标签（比如用画笔、SAM 或分类），再按“训练”；训练好的网络会分割其余的层。";
+    $("lab-unet-text").textContent = text;
+    $("lab-unet-preview").checked = U.preview;
+    $("lab-unet-conf").value = U.minConf;
+    $("lab-unet-conf-v").textContent = `${Math.round(U.minConf * 100)}%`;
+    $("lab-unet-train").disabled = U.busy || L.busy || !L.token;
+    for (const id of ["lab-unet-z", "lab-unet-all"]) $(id).disabled = !info || U.busy || L.busy;
+    $("lab-unet-all").hidden = !(S.info && S.info.sizeZ > 1);
+  }
+
+  function unetPaint() {
+    const P = L.unet.pred, min = Math.round(L.unet.minConf * 255), alpha = new Uint8Array(P.conf.length);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = P.conf[i] >= min ? 255 : 0;
+    paintLabels(unetCanvas, unetCtx, P.labels, alpha);
+  }
+
+  async function unetPredict() {
+    const U = L.unet;
+    if (!U.info || U.busy) return;
+    const z = S.z;
+    U.busy = true;
+    syncUnet();
+    try {
+      const buf = await invoke("unet_predict", { req: clsReq(), z });
+      const dv = new DataView(buf), w = dv.getUint32(0, true), h = dv.getUint32(4, true);
+      U.pred = { labels: new Uint16Array(buf.slice(8, 8 + w * h * 2)), conf: new Uint8Array(buf, 8 + w * h * 2, w * h) };
+      U.predZ = z;
+      unetPaint();
+    } catch (e) {
+      toast(String(e), 6000);
+      U.predZ = z;
+    } finally {
+      U.busy = false;
+      syncUnet();
+      draw();
+    }
+  }
+
+  function drawUnet(g) {
+    const U = L.unet;
+    if (S.tool !== "label" || !unetOpen() || !U.info || !U.preview || S.axis !== "xy" || L.token !== S.token) return;
+    if (U.predZ !== S.z) {
+      if (!U.busy) unetPredict();
+      return;
+    }
+    if (!U.pred) return;
+    const [sx, sy] = toScreen(0, 0);
+    g.save();
+    g.imageSmoothingEnabled = false;
+    g.globalAlpha = L.opacity;
+    g.drawImage(unetCanvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
+    g.restore();
+  }
+
+  async function unetTrain() {
+    const U = L.unet;
+    if (!ready() || U.busy) return;
+    await flush();
+    U.busy = true;
+    U.train = { step: 0, steps: +$("lab-unet-steps").value || 400, loss: 0 };
+    syncUnet();
+    const un = await T.event.listen("unet-train", (ev) => { if (U.train) { U.train = ev.payload; syncUnet(); } });
+    try {
+      U.info = await invoke("unet_train", { req: clsReq(), steps: U.train.steps });
+      Object.assign(U, { pred: null, predZ: -1 });
+    } catch (e) {
+      toast(String(e), 6000);
+    } finally {
+      un();
+      U.busy = false;
+      U.train = null;
+      syncUnet();
+      draw();
+    }
+  }
+
+  async function unetApply(all) {
+    const U = L.unet;
+    if (!ready() || !U.info || U.busy) return;
+    const [z0, z1] = all ? [0, S.info.sizeZ] : [S.z, S.z + 1];
+    U.busy = true;
+    if (all) U.along = { done: 0, total: 0 };
+    syncUnet();
+    const un = await T.event.listen("unet-apply", (ev) => { if (U.along) { U.along = ev.payload; syncUnet(); } });
+    try {
+      const st = await editWith("unet_apply", { req: clsReq(), z0, z1, guard: L.guard ? L.active : 0, minConf: U.minConf, onlyEmpty: all });
+      if (st && all) toast(`U-Net 写入了 ${st.zs.length} 层`, 3000);
+      U.predZ = -1;
+    } finally {
+      un();
+      U.busy = false;
+      U.along = null;
+      syncUnet();
+      draw();
+    }
+  }
+
+  $("lab-unet").addEventListener("toggle", () => { syncUnet(); draw(); });
+  $("lab-unet-train").addEventListener("click", unetTrain);
+  $("lab-unet-preview").addEventListener("change", (e) => { L.unet.preview = e.target.checked; draw(); });
+  $("lab-unet-conf").addEventListener("input", (e) => {
+    L.unet.minConf = +e.target.value;
+    syncUnet();
+    if (L.unet.pred && L.unet.predZ === S.z) { unetPaint(); draw(); }
+  });
+  $("lab-unet-z").addEventListener("click", () => unetApply(false));
+  $("lab-unet-all").addEventListener("click", () => unetApply(true));
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && (L.unet.train || L.unet.along)) { invoke("unet_cancel"); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   // ---------- panel controls ----------
