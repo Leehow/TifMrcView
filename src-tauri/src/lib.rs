@@ -50,3 +50,6 @@ pub mod thumb;
 
 #[cfg(feature = "desktop")]
 include!("desktop.rs");
+
+#[cfg(feature = "pro")]
+pub mod tomo;

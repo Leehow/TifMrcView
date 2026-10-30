@@ -1066,6 +1066,79 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
     .await
 }
 
+/// Tomography commands exist only in Pro builds.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_geometry(state: State<'_, AppState>, token: u64) -> CmdResult<crate::tomo::geometry::Metadata> {
+    let img = current(&state, token)?;
+    blocking(move || crate::tomo::geometry::metadata(&img.info().path, img.info().size_z)).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_align(app: AppHandle, req: crate::tomo::AlignReq) -> CmdResult<crate::tomo::Alignment> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        crate::tomo::align(&img, &req, &|done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"done":done,"total":total})); })
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_save_aligned(app: AppHandle, req: crate::tomo::output::SaveReq) -> CmdResult<()> {
+    let img = {
+        let state = app.state::<AppState>();
+        if !state.save_paths.allowed(&req.path) { return Err("输出路径必须由保存对话框选择".into()); }
+        current(&state, req.token)?
+    };
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        crate::tomo::output::save(&img, &req, &|done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"done":done,"total":total})); })
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_reconstruct(app: AppHandle, req: crate::tomo::output::ReconReq) -> CmdResult<crate::tomo::output::ReconResult> {
+    let imgs = {
+        let state = app.state::<AppState>();
+        if req.paths.iter().any(|p| !state.save_paths.allowed(p)) { return Err("输出路径必须由保存对话框选择".into()); }
+        let mut imgs = vec![current(&state, req.token)?];
+        for &token in &req.additional_tokens { imgs.push(current(&state, token)?); }
+        imgs
+    };
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        crate::tomo::output::reconstruct(&imgs, &req, &|done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"done":done,"total":total})); })
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn tomo_cancel() { crate::tomo::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst); }
+
+#[cfg(feature = "pro")]
+static TOMO_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct TomoJob;
+#[cfg(feature = "pro")]
+impl TomoJob {
+    fn begin() -> CmdResult<Self> {
+        use std::sync::atomic::Ordering;
+        TOMO_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "断层任务正在运行".to_string())?;
+        crate::tomo::CANCEL.store(false, Ordering::SeqCst);
+        Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for TomoJob {
+    fn drop(&mut self) { TOMO_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
 /// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
 #[tauri::command]
 async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<crate::stem4d::Result4d> {
@@ -1895,6 +1968,11 @@ pub fn run() {
             ctf_fit_stack,
             ctf_cancel,
             align_estimate,
+            #[cfg(feature = "pro")] tomo_geometry,
+            #[cfg(feature = "pro")] tomo_align,
+            #[cfg(feature = "pro")] tomo_save_aligned,
+            #[cfg(feature = "pro")] tomo_reconstruct,
+            #[cfg(feature = "pro")] tomo_cancel,
             diffraction_find,
             diffraction_zones,
             eds_quant,

@@ -1011,3 +1011,44 @@ mod bench {
         eprintln!("sum written to {} in {:?}", out.display(), t.elapsed());
     }
 }
+
+/// Cross-correlation of two already sampled square patches. Shared by tilt
+/// tracking; the returned displacement takes a centre in `a` to one in `b`.
+#[cfg(feature = "pro")]
+struct PatchPlan { g: Geom, fft: Fft, small: Fft, filter: Vec<f32> }
+#[cfg(feature = "pro")]
+impl PatchPlan {
+    fn new(n: usize) -> Self {
+        Self { g: Geom { x0: 0, y0: 0, bin: 1, n, m: n / 2, w: n, h: n }, fft: Fft::new(n), small: Fft::new(n/2), filter: make_filter(n/2) }
+    }
+}
+#[cfg(feature = "pro")]
+thread_local! { static PATCH_PLANS: std::cell::RefCell<std::collections::HashMap<usize, Arc<PatchPlan>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
+
+#[cfg(feature = "pro")]
+fn patch_plan(n: usize) -> Arc<PatchPlan> {
+    PATCH_PLANS.with(|plans| plans.borrow_mut().entry(n).or_insert_with(|| Arc::new(PatchPlan::new(n))).clone())
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_shift(a: &[f32], b: &[f32], n: usize, max: f64) -> ([f64; 2], f64) {
+    let plan=patch_plan(n);
+    let sa=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|a[y*n+x]);
+    let sb=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|b[y*n+x]);
+    pair_shift(&sa,&sb,&plan.g,&plan.small,max)
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_cross_peak(pr: &[f32], pi: &[f32], n: usize, energies: [f64;2], max: f64) -> ([f64;2],f64) {
+    let p=patch_plan(n);
+    let start=coarse_peak(pr,pi,&p.g,&p.small,max);
+    let (d,v)=refine_peak(pr,pi,&p.g,start);
+    (d,norm_cc(v,energies[0],energies[1]))
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_window(n: usize) -> (Vec<f32>, Vec<f32>) {
+    let edge=(n/16).max(2);
+    let win:Vec<f32>=(0..n).map(|i| {let d=i.min(n-1-i); if d>=edge {1.0} else {(0.5-0.5*(PI*(d as f64+0.5)/edge as f64).cos()) as f32}}).collect();
+    ((0..n*n).map(|i|win[i/n]*win[i%n]).collect(), make_filter(n/2))
+}
