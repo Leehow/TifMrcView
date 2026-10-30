@@ -162,8 +162,18 @@ fn find_spots(v: &[f32], w: usize, h: usize, min_dist: f64, sigma: f64) -> Vec<(
         .collect();
     let mut peaks = peaks;
     peaks.sort_by(|a, b| b.2.total_cmp(&a.2));
-    peaks.truncate(MAX_SPOTS);
-    peaks
+    // A saturated spot is a plateau wider than the window, with a maximum
+    // at each corner: keep only the strongest within the spot spacing.
+    let mut kept: Vec<(f64, f64, f64)> = Vec::new();
+    for p in peaks {
+        if kept.iter().all(|k| (k.0 - p.0).hypot(k.1 - p.1) >= min_dist) {
+            kept.push(p);
+            if kept.len() == MAX_SPOTS {
+                break;
+            }
+        }
+    }
+    kept
 }
 
 /// The point the spot pattern is most symmetric about: the densest
@@ -246,42 +256,134 @@ fn index(g: [f64; 2], a: [f64; 2], b: [f64; 2]) -> ([i32; 2], f64) {
     ([hi as i32, ki as i32], norm([g[0] - p[0], g[1] - p[1]]))
 }
 
+/// How far a spot may sit from its lattice point and still be on it: a
+/// tenth of the shorter basis vector, but no more than the spot position
+/// can be off (a third of the spot spacing), so stray spots don't count.
+fn tolerance(a: [f64; 2], b: [f64; 2], spot_tol: f64) -> f64 {
+    (0.1 * norm(a).min(norm(b))).min(spot_tol).max(1.0)
+}
+
+/// Short vectors that recur between spots: lattice vectors show up as the
+/// difference of many spot pairs even when the central beam is blocked.
+fn frequent_differences(g: &[([f64; 2], f64)], min_len: f64, keep: usize) -> Vec<[f64; 2]> {
+    let mut top: Vec<usize> = (0..g.len()).collect();
+    top.sort_by(|&i, &j| g[j].1.total_cmp(&g[i].1));
+    top.truncate(60);
+    let mut d: Vec<([f64; 2], f64)> = Vec::new();
+    for (x, &i) in top.iter().enumerate() {
+        for &j in &top[x + 1..] {
+            let mut v = [g[j].0[0] - g[i].0[0], g[j].0[1] - g[i].0[1]];
+            // ±v are the same lattice vector; keep one half plane.
+            if v[1] < 0.0 || (v[1] == 0.0 && v[0] < 0.0) {
+                v = [-v[0], -v[1]];
+            }
+            if norm(v) >= min_len {
+                d.push((v, (g[i].1 * g[j].1).sqrt()));
+            }
+        }
+    }
+    let near = |a: [f64; 2], b: [f64; 2]| norm([a[0] - b[0], a[1] - b[1]]) < (0.06 * norm(a)).max(1.5);
+    let votes: Vec<f64> = d.par_iter().map(|(v, _)| d.iter().filter(|(u, _)| near(*v, *u)).map(|(_, w)| w).sum()).collect();
+    let mut order: Vec<usize> = (0..d.len()).collect();
+    // Many votes first; among equals, the shorter.
+    order.sort_by(|&i, &j| (votes[j] / norm(d[j].0).sqrt()).total_cmp(&(votes[i] / norm(d[i].0).sqrt())));
+    let mut out: Vec<[f64; 2]> = Vec::new();
+    for i in order {
+        let v = d[i].0;
+        if out.iter().any(|u| near(*u, v) || near(*u, [-v[0], -v[1]])) {
+            continue;
+        }
+        // Average the cluster, for a steadier vector.
+        let (mut sx, mut sy, mut sw) = (0.0, 0.0, 0.0);
+        for (u, w) in d.iter().filter(|(u, _)| near(v, *u)) {
+            sx += u[0] * w;
+            sy += u[1] * w;
+            sw += w;
+        }
+        out.push([sx / sw, sy / sw]);
+        if out.len() == keep {
+            break;
+        }
+    }
+    out
+}
+
+/// How well a basis explains the spots: the weight of the spots on its
+/// lattice, less a penalty for each of its points inside the indexed
+/// disc that has no spot. A basis of half the spacing indexes every spot
+/// but leaves three empty points for each full one; a superlattice of
+/// weak spots leaves many.
+fn lattice_score(g: &[([f64; 2], f64)], a: [f64; 2], b: [f64; 2], penalty: f64, spot_tol: f64) -> f64 {
+    let det = cross(a, b).abs();
+    let tol = tolerance(a, b, spot_tol);
+    let mut fit = 0.0;
+    let mut radii = Vec::new();
+    for (v, w) in g {
+        if index(*v, a, b).1 < tol {
+            fit += w;
+            radii.push(norm(*v));
+        }
+    }
+    if radii.len() < 3 {
+        return f64::NEG_INFINITY;
+    }
+    radii.sort_by(f64::total_cmp);
+    let r = radii[radii.len() * 9 / 10];
+    if std::f64::consts::PI * r * r / det > 4000.0 {
+        return f64::NEG_INFINITY;
+    }
+    let hmax = (r * norm(b) / det).ceil() as i32 + 1;
+    let kmax = (r * norm(a) / det).ceil() as i32 + 1;
+    let mut empty = 0usize;
+    for h in -hmax..=hmax {
+        for k in -kmax..=kmax {
+            let p = [h as f64 * a[0] + k as f64 * b[0], h as f64 * a[1] + k as f64 * b[1]];
+            if (h, k) == (0, 0) || norm(p) > r {
+                continue;
+            }
+            if !g.iter().any(|(v, _)| norm([v[0] - p[0], v[1] - p[1]]) < tol) {
+                empty += 1;
+            }
+        }
+    }
+    fit - penalty * empty as f64
+}
+
 /// Best lattice for spot vectors g (relative to the centre) with weights.
-fn fit_lattice(g: &[([f64; 2], f64)], min_len: f64) -> Option<([f64; 2], [f64; 2])> {
+fn fit_lattice(g: &[([f64; 2], f64)], min_len: f64, spot_tol: f64) -> Option<([f64; 2], [f64; 2])> {
+    // Candidate lattice vectors: the shortest spot vectors from the centre,
+    // and the differences that recur between strong spots.
     let mut by_len: Vec<usize> = (0..g.len()).filter(|&i| norm(g[i].0) >= min_len).collect();
     by_len.sort_by(|&i, &j| norm(g[i].0).total_cmp(&norm(g[j].0)));
-    by_len.truncate(24);
-    if by_len.len() < 2 {
+    by_len.truncate(16);
+    let mut vecs: Vec<[f64; 2]> = by_len.iter().map(|&i| g[i].0).collect();
+    vecs.extend(frequent_differences(g, min_len, 12));
+    if vecs.len() < 2 {
         return None;
     }
-    let tol_of = |a: [f64; 2], b: [f64; 2]| (0.12 * norm(a).min(norm(b))).max(1.0);
-    let score = |a: [f64; 2], b: [f64; 2]| -> f64 {
-        let tol = tol_of(a, b);
-        g.iter().filter(|(v, _)| index(*v, a, b).1 < tol).map(|(_, w)| w).sum()
-    };
     let mut cands: Vec<([f64; 2], [f64; 2])> = Vec::new();
-    for (x, &i) in by_len.iter().enumerate() {
-        for &j in &by_len[x + 1..] {
-            let (u, v) = (g[i].0, g[j].0);
+    for (x, &u) in vecs.iter().enumerate() {
+        for &v in &vecs[x + 1..] {
             if cross(u, v).abs() > 0.2 * norm(u) * norm(v) {
                 cands.push(reduce(u, v));
             }
         }
     }
-    let scored: Vec<(f64, f64, ([f64; 2], [f64; 2]))> = cands.into_par_iter().map(|(a, b)| (score(a, b), cross(a, b).abs(), (a, b))).collect();
-    let best = scored.iter().map(|s| s.0).fold(0f64, f64::max);
-    if best <= 0.0 {
-        return None;
-    }
-    // Among bases that index nearly as much, the largest cell: a basis of
-    // half the spacing would index every spot too, with empty points between.
-    scored.iter().filter(|s| s.0 >= 0.95 * best).max_by(|a, b| a.1.total_cmp(&b.1)).map(|s| s.2)
+    let mut w: Vec<f64> = g.iter().map(|p| p.1).collect();
+    w.sort_by(f64::total_cmp);
+    let penalty = w[w.len() / 2];
+    cands
+        .into_par_iter()
+        .map(|(a, b)| (lattice_score(g, a, b, penalty, spot_tol), (a, b)))
+        .filter(|s| s.0 > 0.0)
+        .max_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|s| s.1)
 }
 
 /// Least squares for centre and basis together: p = c + h·a + k·b, over
 /// the spots that index within tolerance.
-fn refine(spots: &[(f64, f64, f64)], c: [f64; 2], a: [f64; 2], b: [f64; 2]) -> ([f64; 2], [f64; 2], [f64; 2]) {
-    let tol = (0.12 * norm(a).min(norm(b))).max(1.0);
+fn refine(spots: &[(f64, f64, f64)], c: [f64; 2], a: [f64; 2], b: [f64; 2], spot_tol: f64) -> ([f64; 2], [f64; 2], [f64; 2]) {
+    let tol = tolerance(a, b, spot_tol);
     let rows: Vec<([f64; 3], [f64; 2])> = spots
         .iter()
         .filter_map(|s| {
@@ -330,19 +432,20 @@ fn analyse(spots: Vec<(f64, f64, f64)>, center: Option<[f64; 2]>, min_dist: f64)
         bail!("没有找到斑点：把阈值调低一些，或检查最小间距");
     }
     let tol = (min_dist / 3.0).max(1.0);
+    let spot_tol = tol.max(1.5);
     let mut c = match center {
         Some(c) => c,
         None => friedel_center(&spots, tol).unwrap_or([spots[0].0, spots[0].1]),
     };
     let g: Vec<([f64; 2], f64)> = spots.iter().map(|s| ([s.0 - c[0], s.1 - c[1]], s.2.sqrt())).collect();
     let mut lattice = None;
-    if let Some((a0, b0)) = fit_lattice(&g, min_dist * 0.75) {
-        let (c1, a1, b1) = refine(&spots, c, a0, b0);
+    if let Some((a0, b0)) = fit_lattice(&g, min_dist * 0.75, spot_tol) {
+        let (c1, a1, b1) = refine(&spots, c, a0, b0, spot_tol);
         let (a, b) = reduce(a1, b1);
         if center.is_none() {
             c = c1;
         }
-        let tol = (0.12 * norm(a).min(norm(b))).max(1.0);
+        let tol = tolerance(a, b, spot_tol);
         let errs: Vec<f64> = spots.iter().map(|s| index([s.0 - c[0], s.1 - c[1]], a, b).1).filter(|&e| e < tol).collect();
         let rms = (errs.iter().map(|e| e * e).sum::<f64>() / errs.len().max(1) as f64).sqrt();
         lattice = Some(Lattice { a, b, inliers: errs.len(), rms });
@@ -352,7 +455,7 @@ fn analyse(spots: Vec<(f64, f64, f64)>, center: Option<[f64; 2]>, min_dist: f64)
         .map(|s| {
             let hk = lattice.as_ref().and_then(|l| {
                 let (hk, e) = index([s.0 - c[0], s.1 - c[1]], l.a, l.b);
-                (e < (0.12 * norm(l.a).min(norm(l.b))).max(1.0)).then_some(hk)
+                (e < tolerance(l.a, l.b, spot_tol)).then_some(hk)
             });
             Spot { x: s.0, y: s.1, snr: s.2, hk }
         })
@@ -648,7 +751,12 @@ mod bench {
         let t = std::time::Instant::now();
         let spots = super::find_spots(&v, w, h, min_dist, 5.0);
         match super::analyse(spots, None, min_dist) {
-            Ok((s, c, l)) => println!("{} spots, centre {c:?}, lattice {l:?}, {:?}", s.len(), t.elapsed()),
+            Ok((s, c, l)) => {
+                println!("{} spots, centre {c:?}, lattice {l:?}, {:?}", s.len(), t.elapsed());
+                if let Ok(out) = std::env::var("TMV_DIFF_JSON") {
+                    std::fs::write(out, serde_json::to_string(&serde_json::json!({ "center": c, "spots": s, "lattice": l })).unwrap()).unwrap();
+                }
+            }
             Err(e) => println!("{e}"),
         }
     }
