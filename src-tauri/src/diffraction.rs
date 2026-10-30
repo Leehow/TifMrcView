@@ -614,7 +614,8 @@ pub fn zones(req: &ZoneReq) -> Result<Vec<Zone>> {
     }
     // A 1% length error weighs like 1° of angle.
     out.sort_by(|a, b| (a.len_err * 100.0 + a.angle_err).total_cmp(&(b.len_err * 100.0 + b.angle_err)));
-    out.truncate(12);
+    // Enough for the UI to fold symmetry-equivalent axes and still list a few.
+    out.truncate(60);
     Ok(out)
 }
 

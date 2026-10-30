@@ -160,6 +160,10 @@ jobs:
           node templates/format-plugin/build.mjs
           node scripts/tmv-plugin.mjs check templates/format-plugin/dist/*.zip
 
+      - name: Release script tests
+        if: runner.os == 'Linux'
+        run: node --test scripts/make-release.test.mjs
+
   bundle:
     needs: [version, reuse]
     # Installers take most of the CI time (Pro, macOS universal), so pull
@@ -382,6 +386,11 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/tifmrcview' }}
+          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+          MIRROR_HOST: ${{ secrets.MIRROR_HOST }}
+          MIRROR_USER: ${{ secrets.MIRROR_USER }}
+          MIRROR_PORT: ${{ vars.MIRROR_PORT || '22' }}
+          MIRROR_PATH: ${{ vars.MIRROR_PATH || '/var/www/tifmrcview' }}
         run: |
           if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
             echo "::warning::DEPLOY_SSH_KEY / DEPLOY_HOST / DEPLOY_USER not set; skipping upload"
@@ -395,6 +404,21 @@ jobs:
           dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
           # Version folder first, feeds last, so clients never see a half-uploaded release.
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" "release/$VERSION" "$dest/"
+          # Mirror in mainland China (get/ sends visitors from China there). It
+          # gets the version folder before the feeds announce it; if it fails the
+          # release still goes out and the mirror sends misses back to the site.
+          if [ -n "$MIRROR_SSH_KEY" ] && [ -n "$MIRROR_HOST" ] && [ -n "$MIRROR_USER" ]; then
+            printf '%s\n' "$MIRROR_SSH_KEY" > ~/.ssh/mirror
+            chmod 600 ~/.ssh/mirror
+            ssh-keyscan -p "${MIRROR_PORT:-22}" -H "$MIRROR_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            mirror_ssh="ssh -i $HOME/.ssh/mirror -p ${MIRROR_PORT:-22} -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=15"
+            mdest="$MIRROR_USER@$MIRROR_HOST:${MIRROR_PATH%/}"
+            { timeout 15m rsync -av --partial --chmod=D755,F644 -e "$mirror_ssh" "release/$VERSION" "$mdest/" \
+              && timeout 5m rsync -av --checksum --chmod=D755,F644 -e "$mirror_ssh" release/plugins/ "$mdest/plugins/"; } \
+              || echo "::warning::China mirror upload failed; China downloads fall back to the main site"
+          else
+            echo "::notice::MIRROR_SSH_KEY / MIRROR_HOST / MIRROR_USER not set; skipping the China mirror"
+          fi
           # Plugin market packages and index (served at /plugins/).
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" release/plugins/ "$dest/plugins/"
           for f in latest.json latest-direct.json downloads.json latest-pro.json latest-pro-direct.json downloads-pro.json; do

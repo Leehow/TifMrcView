@@ -3,7 +3,7 @@
 // means (denoise.rs, NLM on the GPU). Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
-// Shares app.js globals: S, T, invoke, $, pref, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
+// Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
 (() => {
   const N = { busy: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null };
 
@@ -136,6 +136,9 @@
   function open() {
     panel.hidden = false;
     btn.classList.add("on");
+    // The right-hand panels share one spot: one at a time.
+    if (F.on) setFft(false);
+    document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
     for (const el of panel.querySelectorAll(".dn-z")) el.hidden = !(S.info && S.info.sizeZ > 1);
     $("dn-save-all").hidden = !(S.info && S.info.sizeZ > 1);
   }
@@ -150,6 +153,8 @@
 
   btn.addEventListener("click", () => (panel.hidden ? open() : close()));
   $("dn-close").addEventListener("click", close);
+  document.addEventListener("pro-panel", (e) => e.detail !== panel.id && !panel.hidden && close());
+  $("btn-fft").addEventListener("click", () => F.on && !panel.hidden && close());
 
   function status(t) {
     $("dn-status").textContent = t;

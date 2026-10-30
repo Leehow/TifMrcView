@@ -64,6 +64,9 @@
   function open() {
     panel.hidden = false;
     btn.classList.add("on");
+    // The right-hand panels share one spot: one at a time.
+    if (F.on) setFft(false);
+    document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
     if (A.token !== S.token) reset();
     // A guess at the kind of stack, until the user picks one for this file.
     if (!A.res && S.info) {
@@ -90,6 +93,8 @@
 
   btn.addEventListener("click", () => (panel.hidden ? open() : close()));
   $("al-close").addEventListener("click", close);
+  document.addEventListener("pro-panel", (e) => e.detail !== panel.id && !panel.hidden && close());
+  $("btn-fft").addEventListener("click", () => F.on && !panel.hidden && close());
 
   async function withProgress(label, run) {
     const un = await T.event.listen("align-progress", (ev) => {
@@ -131,11 +136,19 @@
       if (token !== S.token) return;
       A.res = { ...res, c: req.c, t: req.t };
       A.token = token;
-      $("al-status").textContent = `${res.zs.length} 层 · 缩小 ${res.bin}× 到 ${res.n}² · ${(res.ms / 1000).toFixed(1)} s`;
+      $("al-status").textContent = `${res.zs.length} 层 · ${res.bin > 1 ? `缩小 ${res.bin}× 后用 ${res.n}²` : `用中间 ${res.n}²（原分辨率）`} · ${(res.ms / 1000).toFixed(1)} s`;
       show();
     } catch (e) {
       $("al-status").textContent = String(e).includes("已取消") ? "已取消" : "失败：" + e;
     }
+  }
+
+  /** A length in the image's unit, moved to a unit that reads well (4220 Å → 422 nm). */
+  function physical(v, unit) {
+    const m = UNIT_M[unit];
+    if (!m || isRecip(unit)) return `${v.toPrecision(3)} ${unit}`;
+    const u = ["Å", "nm", "µm", "mm"].filter((u) => v * m >= UNIT_M[u]).pop() || "Å";
+    return `${((v * m) / UNIT_M[u]).toPrecision(3)} ${u}`;
   }
 
   function show() {
@@ -145,7 +158,7 @@
     const len = r.shifts.map(([x, y]) => Math.hypot(x, y));
     let path = 0;
     for (let i = 1; i < r.shifts.length; i++) path += Math.hypot(r.shifts[i][0] - r.shifts[i - 1][0], r.shifts[i][1] - r.shifts[i - 1][1]);
-    const px = S.px && S.px.unit ? ` (${(path * S.px.x).toPrecision(3)} ${S.px.unit})` : "";
+    const px = S.px && S.px.unit ? ` (${physical(path * S.px.x, S.px.unit)})` : "";
     const low = r.cc.filter((c) => c < 0.05).length;
     $("al-sum").textContent = `总漂移 ${path.toFixed(1)} px${px} · 最大偏离 ${Math.max(...len).toFixed(1)} px` + (low ? ` · ${low} 层相关很低，位移可能不准` : "");
     const t = document.createElement("table");
