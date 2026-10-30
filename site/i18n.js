@@ -1011,7 +1011,7 @@
       pr_ctf: 'CTF 拟合', pr_drift: '漂移校正、对齐',
       pr_gpu: 'GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: '断层重建',
       pcmp_foot: "依据各软件官方文档（2026 年 10 月），比较装好就有的功能。厂商格式在基础版和 Pro 里由官方插件提供。",
-      cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。", cr_env: "不用另装 Java、Python 或 Cygwin"
+      cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。", cr_env: "运行环境", ce_tmv: "无需", ce_fiji: "自带 Java", ce_imod: "要另装 Python 或 Cygwin"
     },
     en: {
       cmp_eye: 'Compared', cmp_h: '<span>Small and fast.</span> <span>Measured.</span>',
@@ -1037,7 +1037,7 @@
       pr_ctf: 'CTF fitting', pr_drift: 'Drift correction and alignment',
       pr_gpu: 'GPU compute <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomographic reconstruction',
       pcmp_foot: "Based on each program’s documentation (October 2026), comparing what you get out of the box. Vendor formats come from official plugins in both editions.",
-      cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app.", cr_env: "No Java, Python or Cygwin to install first"
+      cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app.", cr_env: "Runtime needed", ce_tmv: "none", ce_fiji: "bundles Java", ce_imod: "needs Python or Cygwin"
     },
     de: {
       cmp_eye: 'Im Vergleich', cmp_h: '<span>Klein und schnell.</span> <span>Gemessen.</span>',
@@ -1063,7 +1063,7 @@
       pr_ctf: 'CTF-Anpassung', pr_drift: 'Driftkorrektur und Ausrichtung',
       pr_gpu: 'GPU-Berechnung <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomografische Rekonstruktion',
       pcmp_foot: "Nach der Dokumentation der Programme (Oktober 2026), verglichen wird, was nach der Installation dabei ist. Herstellerformate kommen in beiden Versionen aus offiziellen Plugins.",
-      cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert.", cr_env: "Kein Java, Python oder Cygwin vorher installieren"
+      cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert.", cr_env: "Laufzeitumgebung", ce_tmv: "keine", ce_fiji: "Java mitgeliefert", ce_imod: "braucht Python oder Cygwin"
     },
     ja: {
       cmp_eye: '比較', cmp_h: '<span>小さく、速い。</span><span>実測で。</span>',
@@ -1089,7 +1089,7 @@
       pr_ctf: 'CTF フィッティング', pr_drift: 'ドリフト補正・位置合わせ',
       pr_gpu: 'GPU 計算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'トモグラム再構成',
       pcmp_foot: "各ソフトの公式ドキュメント（2026 年 10 月）に基づき、インストール直後に使える機能を比べています。各社フォーマットはどちらの版でも公式プラグインで対応します。",
-      cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。", cr_env: "Java・Python・Cygwin を別途インストール不要"
+      cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。", cr_env: "実行環境", ce_tmv: "不要", ce_fiji: "Java 同梱", ce_imod: "Python か Cygwin が別途必要"
     },
     es: {
       cmp_eye: 'Comparativa', cmp_h: '<span>Pequeño y rápido.</span> <span>Medido.</span>',
@@ -1115,7 +1115,7 @@
       pr_ctf: 'Ajuste de CTF', pr_drift: 'Corrección de deriva y alineación',
       pr_gpu: 'Cálculo en GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstrucción tomográfica',
       pcmp_foot: "Según la documentación de cada programa (octubre de 2026); se compara lo que trae cada uno al instalarlo. En ambas ediciones los formatos de fabricantes llegan con plugins oficiales.",
-      cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app.", cr_env: "Sin instalar antes Java, Python ni Cygwin"
+      cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app.", cr_env: "Entorno necesario", ce_tmv: "ninguno", ce_fiji: "incluye Java", ce_imod: "requiere Python o Cygwin"
     },
     fr: {
       cmp_eye: 'Comparaison', cmp_h: '<span>Léger et rapide.</span> <span>Mesuré.</span>',
@@ -1141,7 +1141,7 @@
       pr_ctf: 'Ajustement de la CTF', pr_drift: 'Correction de dérive et alignement',
       pr_gpu: 'Calcul sur GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstruction tomographique',
       pcmp_foot: "D’après la documentation de chaque logiciel (octobre 2026), en comparant ce qui est disponible dès l’installation. Dans les deux éditions, les formats des fabricants viennent de plugins officiels.",
-      cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app.", cr_env: "Ni Java, ni Python, ni Cygwin à installer avant"
+      cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app.", cr_env: "Environnement requis", ce_tmv: "aucun", ce_fiji: "Java inclus", ce_imod: "requiert Python ou Cygwin"
     },
     ru: {
       cmp_eye: 'Сравнение', cmp_h: '<span>Маленький и быстрый.</span> <span>Измерено.</span>',
@@ -1167,7 +1167,7 @@
       pr_ctf: 'Подгонка CTF', pr_drift: 'Коррекция дрейфа и выравнивание',
       pr_gpu: 'Вычисления на GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Томографическая реконструкция',
       pcmp_foot: "По документации программ (октябрь 2026); сравнивается то, что есть сразу после установки. Форматы производителей в обеих версиях дают официальные плагины.",
-      cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком.", cr_env: "Не нужно ставить Java, Python или Cygwin"
+      cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком.", cr_env: "Среда выполнения", ce_tmv: "не нужна", ce_fiji: "Java в комплекте", ce_imod: "нужен Python или Cygwin"
     }
   };
   Object.keys(CMP).forEach(function (c) { for (var k in CMP[c]) T[c][k] = CMP[c][k]; });
