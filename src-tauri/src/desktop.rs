@@ -233,7 +233,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
         } else {
             crate::labels::Labels::new(info.width, info.height, info.size_z)
         };
-        Ok(crate::labels::Entry { labels, path })
+        Ok(crate::labels::Entry::new(labels, path))
     })
     .await?;
     let out = labels_state(&entry, vec![]);
@@ -468,6 +468,373 @@ async fn sam_propagate(app: AppHandle, req: crate::sam::PropagateReq, label: u16
 #[tauri::command]
 fn sam_cancel(sam: State<'_, crate::sam::Sam>) {
     sam.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+// ---------- Pro pixel classifier ----------
+
+/// Which channel the classifier reads and the contrast it scales it with.
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(feature = "pro"), allow(dead_code))]
+struct ClassifyReq {
+    token: u64,
+    c: usize,
+    t: usize,
+    lo: f32,
+    hi: f32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClassifierInfo {
+    /// Labels it was trained on.
+    labels: Vec<u16>,
+    samples: usize,
+    /// Out-of-bag accuracy, 0..1.
+    accuracy: f32,
+    backend: String,
+    seconds: f32,
+}
+
+#[cfg(not(feature = "pro"))]
+fn pro_only<T>() -> CmdResult<T> {
+    Err("仅 Pro 版提供".into())
+}
+
+/// Paints (label 0: erases) a classifier training stroke; returns the
+/// scribble slice as little-endian u16.
+#[tauri::command]
+async fn classify_scribble(state: State<'_, AppState>, token: u64, z: usize, pts: Vec<[f32; 2]>, radius: f32, label: u16) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || {
+        let mut e = e.lock().unwrap();
+        let s = e.scribbles();
+        s.stroke(z, &pts, radius, label, 0);
+        Ok(s.slice_bytes(z))
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// One scribble slice as little-endian u16 (zeros when there are none).
+#[tauri::command]
+async fn classify_scribbles(state: State<'_, AppState>, token: u64, z: usize) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || {
+        let e = e.lock().unwrap();
+        Ok(match &e.scribbles {
+            Some(s) => s.slice_bytes(z),
+            None => vec![0; e.labels.w * e.labels.h * 2],
+        })
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Drops all scribbles and the trained classifier.
+#[tauri::command]
+async fn classify_clear(state: State<'_, AppState>, token: u64) -> CmdResult<()> {
+    let e = labels_entry(&state, token)?;
+    let mut e = e.lock().unwrap();
+    e.scribbles = None;
+    #[cfg(feature = "pro")]
+    {
+        e.classifier = None;
+    }
+    Ok(())
+}
+
+/// Trains a random forest on the scribbled pixels of every slice.
+#[tauri::command]
+async fn classify_train(state: State<'_, AppState>, req: ClassifyReq) -> CmdResult<ClassifierInfo> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (state, req);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        blocking(move || {
+            use crate::labels::Values;
+            let started = std::time::Instant::now();
+            let scrib: Vec<(usize, Vec<u16>)> = {
+                let e = e.lock().unwrap();
+                let Some(s) = &e.scribbles else { anyhow::bail!("先用画笔在图上标几笔，至少两种标签") };
+                s.used_slices().into_iter().filter_map(|z| s.slice(z).map(|v| (z, v.to_vec()))).collect()
+            };
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+            let mut slices = Vec::with_capacity(scrib.len());
+            for (z, s) in &scrib {
+                slices.push((vals.slice(*z)?, s.as_slice()));
+            }
+            let cfg = crate::classify::ForestConfig::default();
+            let (c, backend) = crate::classify::on_device(|dev| crate::classify::train(dev, &slices, w, h, req.lo, req.hi, &cfg))?;
+            let out = ClassifierInfo {
+                labels: c.labels.clone(),
+                samples: c.samples,
+                accuracy: c.forest.oob_accuracy,
+                backend: backend.to_string(),
+                seconds: started.elapsed().as_secs_f32(),
+            };
+            eprintln!("classifier: {} samples, {} labels, oob {:.3}, {} in {:.2} s", out.samples, out.labels.len(), out.accuracy, out.backend, out.seconds);
+            e.lock().unwrap().classifier = Some(Arc::new(c));
+            Ok(out)
+        })
+        .await
+    }
+}
+
+/// Classifies one slice. Reply: u32 width, u32 height, then u16 label per
+/// pixel (little-endian), then one byte of confidence (0..255) per pixel.
+#[tauri::command]
+async fn classify_predict(state: State<'_, AppState>, req: ClassifyReq, z: usize) -> CmdResult<Response> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (state, req, z);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        let bytes = blocking(move || {
+            use crate::labels::Values;
+            let Some(c) = e.lock().unwrap().classifier.clone() else { anyhow::bail!("还没有训练分类器") };
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let values = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t }.slice(z)?;
+            let ((labels, conf), _) = crate::classify::on_device(|dev| Ok(c.predict(dev, &values, w, h)))?;
+            let mut out = Vec::with_capacity(8 + labels.len() * 3);
+            out.extend_from_slice(&(w as u32).to_le_bytes());
+            out.extend_from_slice(&(h as u32).to_le_bytes());
+            for v in &labels {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend(conf.iter().map(|p| (p.clamp(0.0, 1.0) * 255.0).round() as u8));
+            Ok(out)
+        })
+        .await?;
+        Ok(Response::new(bytes))
+    }
+}
+
+/// Classifies slices `z0..z1` and writes the result into the label map as
+/// one undo step, skipping pixels below `min_conf`; reports
+/// `classify-apply` {done, total}.
+#[tauri::command]
+async fn classify_apply(app: AppHandle, req: ClassifyReq, z0: usize, z1: usize, guard: u16, min_conf: f32) -> CmdResult<LabelsState> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req, z0, z1, guard, min_conf);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let state = app.state::<AppState>();
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        let app2 = app.clone();
+        crate::classify::CANCEL.store(false, Ordering::SeqCst);
+        blocking(move || {
+            use crate::labels::Values;
+            let Some(c) = e.lock().unwrap().classifier.clone() else { anyhow::bail!("还没有训练分类器") };
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let z1 = z1.min(info.size_z);
+            let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+            let total = z1.saturating_sub(z0);
+            let mut out = Vec::with_capacity(total);
+            for (i, z) in (z0..z1).enumerate() {
+                if crate::classify::CANCEL.load(Ordering::SeqCst) {
+                    anyhow::bail!("已取消");
+                }
+                let values = vals.slice(z)?;
+                let ((mut labels, conf), _) = crate::classify::on_device(|dev| Ok(c.predict(dev, &values, w, h)))?;
+                for (l, p) in labels.iter_mut().zip(&conf) {
+                    if *p < min_conf {
+                        *l = 0;
+                    }
+                }
+                out.push((z, labels));
+                let _ = app2.emit("classify-apply", serde_json::json!({ "done": i + 1, "total": total }));
+            }
+            let mut e = e.lock().unwrap();
+            let zs = e.labels.apply_classes(&out, guard);
+            Ok(labels_state(&e, zs))
+        })
+        .await
+    }
+}
+
+// ---------- Pro U-Net ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnetInfo {
+    labels: Vec<u16>,
+    /// Labelled slices it was trained on.
+    slices: usize,
+    loss: f32,
+    accuracy: f32,
+    backend: String,
+    seconds: f32,
+}
+
+/// Trains a U-Net on the slices of the label map that hold labels;
+/// reports `unet-train` {step, steps, loss}.
+#[tauri::command]
+async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult<UnetInfo> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req, steps);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let state = app.state::<AppState>();
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        let app2 = app.clone();
+        crate::unet::CANCEL.store(false, Ordering::SeqCst);
+        blocking(move || {
+            use crate::labels::Values;
+            let started = std::time::Instant::now();
+            let labelled: Vec<(usize, Vec<u16>)> = {
+                let e = e.lock().unwrap();
+                e.labels.used_slices().into_iter().filter_map(|z| e.labels.slice(z).map(|v| (z, v.to_vec()))).collect()
+            };
+            if labelled.is_empty() {
+                anyhow::bail!("先在几层上画出至少两种标签（比如物体和背景），再训练");
+            }
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+            let mut slices = Vec::with_capacity(labelled.len());
+            for (z, l) in labelled {
+                slices.push((vals.slice(z)?, l));
+            }
+            let cfg = crate::unet::TrainConfig { steps: steps.clamp(10, 20000), ..Default::default() };
+            let (t, backend) = crate::classify::on_device(|dev| {
+                crate::unet::train(dev, &slices, w, h, req.lo, req.hi, &cfg, |step, steps, loss| {
+                    let _ = app2.emit("unet-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
+                })
+            })?;
+            let out = UnetInfo {
+                labels: t.labels.clone(),
+                slices: slices.len(),
+                loss: t.loss,
+                accuracy: t.accuracy,
+                backend: backend.to_string(),
+                seconds: started.elapsed().as_secs_f32(),
+            };
+            eprintln!("unet: {} slices, {} labels, loss {:.3}, acc {:.3}, {} in {:.1} s", out.slices, out.labels.len(), out.loss, out.accuracy, out.backend, out.seconds);
+            e.lock().unwrap().unet = Some(Arc::new(t));
+            Ok(out)
+        })
+        .await
+    }
+}
+
+/// Like `classify_predict`, with the trained U-Net.
+#[tauri::command]
+async fn unet_predict(state: State<'_, AppState>, req: ClassifyReq, z: usize) -> CmdResult<Response> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (state, req, z);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        let bytes = blocking(move || {
+            use crate::labels::Values;
+            let Some(t) = e.lock().unwrap().unet.clone() else { anyhow::bail!("还没有训练 U-Net") };
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let values = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t }.slice(z)?;
+            let ((labels, conf), _) = crate::classify::on_device(|dev| Ok(t.predict(dev, &values, w, h)))?;
+            let mut out = Vec::with_capacity(8 + labels.len() * 3);
+            out.extend_from_slice(&(w as u32).to_le_bytes());
+            out.extend_from_slice(&(h as u32).to_le_bytes());
+            for v in &labels {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend(conf.iter().map(|p| (p.clamp(0.0, 1.0) * 255.0).round() as u8));
+            Ok(out)
+        })
+        .await?;
+        Ok(Response::new(bytes))
+    }
+}
+
+/// Labels slices `z0..z1` with the U-Net as one undo step; with
+/// `only_empty`, slices that already hold labels are left alone. Reports
+/// `unet-apply` {done, total}.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn unet_apply(app: AppHandle, req: ClassifyReq, z0: usize, z1: usize, guard: u16, min_conf: f32, only_empty: bool) -> CmdResult<LabelsState> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req, z0, z1, guard, min_conf, only_empty);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let state = app.state::<AppState>();
+        let e = labels_entry(&state, req.token)?;
+        let img = current(&state, req.token)?;
+        let app2 = app.clone();
+        crate::unet::CANCEL.store(false, Ordering::SeqCst);
+        blocking(move || {
+            use crate::labels::Values;
+            let (t, skip) = {
+                let e = e.lock().unwrap();
+                let Some(t) = e.unet.clone() else { anyhow::bail!("还没有训练 U-Net") };
+                let skip: HashSet<usize> = if only_empty { e.labels.used_slices().into_iter().collect() } else { HashSet::new() };
+                (t, skip)
+            };
+            let info = img.info();
+            let (w, h) = (info.width, info.height);
+            let zs: Vec<usize> = (z0..z1.min(info.size_z)).filter(|z| !skip.contains(z)).collect();
+            let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+            let mut out = Vec::with_capacity(zs.len());
+            for (i, &z) in zs.iter().enumerate() {
+                if crate::unet::CANCEL.load(Ordering::SeqCst) {
+                    anyhow::bail!("已取消");
+                }
+                let values = vals.slice(z)?;
+                let ((mut labels, conf), _) = crate::classify::on_device(|dev| Ok(t.predict(dev, &values, w, h)))?;
+                for (l, p) in labels.iter_mut().zip(&conf) {
+                    if *p < min_conf {
+                        *l = 0;
+                    }
+                }
+                out.push((z, labels));
+                let _ = app2.emit("unet-apply", serde_json::json!({ "done": i + 1, "total": zs.len() }));
+            }
+            let mut e = e.lock().unwrap();
+            let zs = e.labels.apply_classes(&out, guard);
+            Ok(labels_state(&e, zs))
+        })
+        .await
+    }
+}
+
+#[tauri::command]
+fn unet_cancel() {
+    #[cfg(feature = "pro")]
+    crate::unet::CANCEL.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn classify_cancel() {
+    #[cfg(feature = "pro")]
+    crate::classify::CANCEL.store(true, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -1233,6 +1600,17 @@ pub fn run() {
             sam_apply,
             sam_propagate,
             sam_cancel,
+            classify_scribble,
+            classify_scribbles,
+            classify_clear,
+            classify_train,
+            classify_predict,
+            classify_apply,
+            classify_cancel,
+            unet_train,
+            unet_predict,
+            unet_apply,
+            unet_cancel,
             pixel_values,
             list_folder,
             thumbnail,
