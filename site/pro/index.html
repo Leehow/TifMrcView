@@ -14,7 +14,7 @@
 <meta property="og:description" content="TifMrcView Pro：免费开源的显微与电镜图像分析工具。3D 体视图、分割标签与材料、SAM 2.1 点击分割并沿 Z 传播、CTF 拟合、漂移校正，计算尽量在 GPU 上。">
 <link rel="icon" type="image/png" href="icon-pro.png">
 <link rel="apple-touch-icon" href="icon-pro.png">
-<link rel="stylesheet" href="../site.css?v=4">
+<link rel="stylesheet" href="../site.css?v=5">
 <script>document.documentElement.className+=' js'</script>
 <style>
 html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
@@ -80,6 +80,25 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
       <div class="card rv"><h3 data-i="pro_b_h">基础版：轻巧的查看器</h3><p data-i="pro_b_p">小而快，双击就开数 GB 的 TIFF / MRC。手动测量、标注、FFT 和能谱查看都有。适合日常浏览和快速检查，也有安卓版。</p><a href="../" data-i="pro_b_a">基础版介绍</a></div>
       <div class="card pro rv d1"><h3 data-i="pro_p_h">Pro：分析工具</h3><p data-i="pro_p_p">包含基础版的全部功能，另加 3D、分割、SAM、CTF 拟合和漂移校正。适合要出结果的分析工作。可以和基础版同时安装。</p></div>
     </div>
+    <div class="c" style="margin-top:clamp(72px,9vw,120px)"><h2 class="h h3 rv" data-i="pbench_h">同样很快</h2><p class="lede rv" data-i="pbench_p">Pro 在同一台电脑上，和 Fiji、IMOD 实测对比。</p></div>
+    <div class="bench rv">
+      <div><h3 data-i="bt_start">冷启动</h3><p data-i="bs_start">从启动到窗口出现，不打开文件。</p>
+        <div class="bar me" style="--v:10.7"><span>Pro</span><i></i><b>0.93 s</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>8.70 s</b></div>
+        <div class="bar" style="--v:8.4"><span>IMOD 3dmod</span><i></i><b>0.73 s</b></div>
+      </div>
+      <div><h3 data-i="bt_mrc">打开 2 GB 的 MRC 断层</h3><p data-i="bs_mrc">1024 × 1024 × 512，float32。从发出打开命令到第一张图出现。</p>
+        <div class="bar me" style="--v:9.2"><span>Pro</span><i></i><b>1.30 s</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>14.17 s</b></div>
+        <div class="bar" style="--v:17.0"><span>IMOD 3dmod</span><i></i><b>2.41 s</b></div>
+      </div>
+      <div><h3 data-i="bt_mem">打开 2 GB MRC 后的内存</h3><p data-i="bs_mem">所有进程的物理内存合计。3dmod 默认把数据转成 8 位，所以更少。</p>
+        <div class="bar me" style="--v:57.9"><span>Pro</span><i></i><b>2202 MB</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>3803 MB</b></div>
+        <div class="bar" style="--v:18.4"><span>IMOD 3dmod</span><i></i><b>701 MB</b></div>
+      </div>
+    </div>
+    <p class="bench-m rv" data-i="pbench_m">测试机：MacBook Pro（M1 Max，32 GB 内存，macOS 27），2026 年 10 月。TifMrcView Pro 0.7.56、Fiji（ImageJ 2.16.0 / 1.54p）、IMOD 5.1.13。每项取多次运行的中位数，磁盘缓存是热的，越短越好。3dmod 默认把数据转成 8 位，所以内存更少。</p>
     <div class="c" style="margin-top:clamp(72px,9vw,120px)"><h2 class="h h3 rv" data-i="pcmp_h">功能对比</h2><p class="lede rv" data-i="pcmp_p">Pro 和基础版，以及常用的 ImageJ / Fiji、IMOD。</p></div>
     <div class="ctw rv">
       <table class="ctab">
@@ -154,7 +173,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
   </div>
 </footer>
 
-<script src="../i18n.js?v=12"></script>
+<script src="../i18n.js?v=13"></script>
 <script src="../site.js?v=3"></script>
 </body>
 </html>
