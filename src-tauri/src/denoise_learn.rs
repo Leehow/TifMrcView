@@ -132,6 +132,52 @@ pub struct Learned {
     pub loss: f32,
     /// File it was trained on, to show.
     pub source: String,
+    /// Pixels averaged in each direction before the network (1 = none):
+    /// counting-mode movies have too few electrons per pixel to denoise at
+    /// full resolution.
+    pub bin: usize,
+}
+
+/// Averages `k` × `k` blocks (the remainder at the right and bottom is dropped).
+pub fn bin(v: &[f32], w: usize, h: usize, k: usize) -> (Vec<f32>, usize, usize) {
+    if k <= 1 {
+        return (v.to_vec(), w, h);
+    }
+    let (bw, bh) = ((w / k).max(1), (h / k).max(1));
+    let mut out = vec![0f32; bw * bh];
+    for by in 0..bh {
+        for bx in 0..bw {
+            let (mut s, mut n) = (0f32, 0f32);
+            for y in by * k..((by + 1) * k).min(h) {
+                for x in bx * k..((bx + 1) * k).min(w) {
+                    s += v[y * w + x];
+                    n += 1.0;
+                }
+            }
+            out[by * bw + bx] = s / n.max(1.0);
+        }
+    }
+    (out, bw, bh)
+}
+
+/// Bilinear enlargement of a `bin`-binned image back to `w` × `h`.
+fn unbin(v: &[f32], bw: usize, bh: usize, k: usize, w: usize, h: usize) -> Vec<f32> {
+    let src = |i: usize, n: usize| {
+        let f = ((i as f32 + 0.5) / k as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+        let a = (f as usize).min(n.saturating_sub(2));
+        (a, (a + 1).min(n - 1), f - a as f32)
+    };
+    let xs: Vec<_> = (0..w).map(|x| src(x, bw)).collect();
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        let (y0, y1, fy) = src(y, bh);
+        for (x, &(x0, x1, fx)) in xs.iter().enumerate() {
+            let top = v[y0 * bw + x0] * (1.0 - fx) + v[y0 * bw + x1] * fx;
+            let bot = v[y1 * bw + x0] * (1.0 - fx) + v[y1 * bw + x1] * fx;
+            out[y * w + x] = top * (1.0 - fy) + bot * fy;
+        }
+    }
+    out
 }
 
 /// Pixels around a region that the network's result depends on (enough
@@ -280,6 +326,14 @@ impl Learned {
     /// Denoises one w × h image in overlapping tiles (edges reflected to a
     /// multiple of ALIGN).
     pub fn apply(&self, dev: &Device, values: &[f32], w: usize, h: usize) -> Vec<f32> {
+        if self.bin > 1 {
+            let (b, bw, bh) = bin(values, w, h, self.bin);
+            return unbin(&self.tiles(dev, &b, bw, bh), bw, bh, self.bin, w, h);
+        }
+        self.tiles(dev, values, w, h)
+    }
+
+    fn tiles(&self, dev: &Device, values: &[f32], w: usize, h: usize) -> Vec<f32> {
         const TILE: usize = 512;
         let v = standardise(values, self.mean, self.std);
         let net = self.net.clone().to_device(dev);
@@ -328,7 +382,7 @@ mod tests {
         };
         let cfg = TrainConfig { steps, batch: 4, patch: 32, lr: 2e-3, seed: 7 };
         let (net, mean, std, loss) = train(&dev, &pairs, w, h, mode, &cfg, |_, _, _| {}).unwrap();
-        let l = Learned { net, mode, mean, std, loss, source: String::new() };
+        let l = Learned { net, mode, mean, std, loss, source: String::new(), bin: 1 };
         let out = match mode {
             Mode::N2v => l.apply(&dev, &noisy, w, h),
             _ => {
@@ -356,9 +410,25 @@ mod tests {
     }
 
     #[test]
+    fn binning_round_trips_smooth_images() {
+        let (w, h) = (37, 29);
+        let v: Vec<f32> = (0..w * h).map(|i| (i % w) as f32 * 0.5 + (i / w) as f32).collect();
+        let (b, bw, bh) = bin(&v, w, h, 2);
+        assert_eq!((bw, bh), (18, 14));
+        assert!((b[0] - (0.0 + 0.5 + 1.0 + 1.5) / 4.0).abs() < 1e-6);
+        let back = unbin(&b, bw, bh, 2, w, h);
+        // A linear ramp survives inside the binned area.
+        for y in 1..2 * bh - 1 {
+            for x in 1..2 * bw - 1 {
+                assert!((back[y * w + x] - v[y * w + x]).abs() < 1e-4, "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
     fn apply_covers_odd_sizes_and_tiles() {
         let dev = Device::flex();
-        let l = Learned { net: Net::new(&dev), mode: Mode::N2v, mean: 3.0, std: 2.0, loss: 0.0, source: String::new() };
+        let l = Learned { net: Net::new(&dev), mode: Mode::N2v, mean: 3.0, std: 2.0, loss: 0.0, source: String::new(), bin: 1 };
         let (w, h) = (601, 21);
         let out = l.apply(&dev, &vec![1.0; w * h], w, h);
         assert_eq!(out.len(), w * h);
@@ -371,7 +441,9 @@ mod tests {
 
 /// Training time and result on a real stack:
 /// TMV_DENOISE_FILE=<stack> cargo test --release --features pro --lib denoise_learn::bench -- --ignored --nocapture
-/// (TMV_DENOISE_STEPS sets the steps, default 1000). Reports the noise σ
+/// (TMV_DENOISE_STEPS sets the steps, default 1000; TMV_DENOISE_BIN bins
+/// first; TMV_DENOISE_MOVIE=1 treats the stack as frames of one exposure
+/// and works on their mean). Reports the noise σ
 /// estimate of the middle slice before and after, per mode.
 #[cfg(test)]
 mod bench {
@@ -388,14 +460,23 @@ mod bench {
         let info = img.info().clone();
         let (w, h, nz) = (info.width, info.height, info.size_z);
         let mid = nz / 2;
-        let slice = crate::denoise::input(&img, 0, mid, 0, 0).unwrap();
+        let k: usize = std::env::var("TMV_DENOISE_BIN").ok().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+        // A movie: everything works on the frame mean, and neighbours make no sense.
+        let movie = std::env::var("TMV_DENOISE_MOVIE").is_ok();
+        let slice = if movie {
+            let [a, b] = crate::denoise::frame_halves(&img, 0, 0).unwrap();
+            a.iter().zip(&b).map(|(a, b)| 0.5 * (a + b)).collect()
+        } else {
+            crate::denoise::input(&img, 0, mid, 0, 0).unwrap()
+        };
         println!("{path}: {w}×{h}×{nz}, slice {mid} noise σ {:.4}", noise_sigma(&slice, w, h));
         let spread: Vec<usize> = (0..nz.min(16)).map(|i| i * nz / nz.min(16)).collect();
         for mode in [Mode::N2v, Mode::Neighbours, Mode::Frames] {
-            if mode != Mode::N2v && nz < 2 {
+            if (mode != Mode::N2v && nz < 2) || (movie && mode == Mode::Neighbours) {
                 continue;
             }
             let pairs: Vec<(Vec<f32>, Option<Vec<f32>>)> = match mode {
+                Mode::N2v if movie => vec![(slice.clone(), None)],
                 Mode::N2v => spread.iter().map(|&z| (crate::denoise::input(&img, 0, z, 0, 0).unwrap(), None)).collect(),
                 Mode::Neighbours => spread.iter().filter(|&&z| z + 1 < nz).map(|&z| (crate::denoise::input(&img, 0, z, 0, 0).unwrap(), Some(crate::denoise::input(&img, 0, z + 1, 0, 0).unwrap()))).collect(),
                 Mode::Frames => {
@@ -403,11 +484,13 @@ mod bench {
                     vec![(a, Some(b))]
                 }
             };
+            let (bw, bh) = ((w / k).max(1), (h / k).max(1));
+            let pairs: Vec<_> = pairs.into_iter().map(|(a, b)| (bin(&a, w, h, k).0, b.map(|b| bin(&b, w, h, k).0))).collect();
             let t0 = std::time::Instant::now();
             let cfg = TrainConfig { steps, ..Default::default() };
-            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| train(dev, &pairs, w, h, mode, &cfg, |_, _, _| {})).unwrap();
+            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| train(dev, &pairs, bw, bh, mode, &cfg, |_, _, _| {})).unwrap();
             let trained = t0.elapsed().as_secs_f64();
-            let l = Learned { net, mode, mean, std, loss, source: String::new() };
+            let l = Learned { net, mode, mean, std, loss, source: String::new(), bin: k };
             let t1 = std::time::Instant::now();
             let (out, _) = crate::classify::on_device(|dev| Ok(l.apply(dev, &slice, w, h))).unwrap();
             println!("  {mode:?} on {backend}: train {trained:.1} s ({steps} steps, loss {loss:.4}), apply {:.0} ms, σ left {:.4}", t1.elapsed().as_secs_f64() * 1e3, noise_sigma(&out, w, h));

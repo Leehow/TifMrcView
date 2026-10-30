@@ -101,7 +101,7 @@ impl Params {
             Method::Median => self.median_radius(),
             Method::Diffusion => self.iterations.min(200) + 1,
             Method::Nlm => self.search.min(20) + self.patch.min(5) + 1,
-            Method::Learned => LEARNED_MARGIN,
+            Method::Learned => LEARNED_MARGIN * learned_bin(),
         }
     }
 
@@ -310,6 +310,15 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
 }
 
 /// The trained network's result, mixed with the input by `strength`.
+/// How much the trained model bins first (its margin grows by as much).
+fn learned_bin() -> usize {
+    #[cfg(feature = "pro")]
+    if let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().as_ref() {
+        return m.bin.max(1);
+    }
+    1
+}
+
 fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'static str)> {
     #[cfg(feature = "pro")]
     {

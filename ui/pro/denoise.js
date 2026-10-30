@@ -57,6 +57,7 @@
           <option value="neighbours">Noise2Noise：相邻层（断层、连续切片）</option>
         </select>
       </label>
+      <label class="dn-learn" title="训练和降噪前先把 k×k 像素平均成一个，结果再放大回原尺寸。计数模式的电影帧每像素电子太少，建议 2–4">合并像素 <select id="dn-bin"><option value="1">不合并</option><option value="2">2×2</option><option value="3">3×3</option><option value="4">4×4</option></select></label>
       <label class="dn-learn">训练步数 <select id="dn-steps" title="越多越好也越慢；GPU 上 1000 步通常一两分钟"><option>500</option><option>1000</option><option>2000</option><option>4000</option></select></label>
       <span class="dn-learn dn-trainrow"><button id="dn-train" class="small primary">训练</button></span>
       <span class="al-wide dn-learn dim" id="dn-model"></span>
@@ -122,6 +123,7 @@
   $("dn-preview").checked = P.preview !== false;
   $("dn-mode").value = P.mode || "n2v";
   $("dn-steps").value = P.steps || 1000;
+  $("dn-bin").value = P.bin || 1;
   syncMethod();
 
   function store() {
@@ -136,6 +138,7 @@
     P.preview = $("dn-preview").checked;
     P.mode = $("dn-mode").value;
     P.steps = +$("dn-steps").value;
+    P.bin = +$("dn-bin").value;
     pref.set("denoise-params", P);
   }
 
@@ -161,9 +164,11 @@
     $("dn-sval").textContent = (+$("dn-strength").value).toFixed(step < 1 ? 2 : 0);
     store();
   });
-  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview", "dn-steps"]) $(id).addEventListener("change", store);
+  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview", "dn-steps", "dn-bin"]) $(id).addEventListener("change", store);
   $("dn-mode").addEventListener("change", () => {
     syncMode();
+    // Frame halves of counting-mode movies are too sparse at full resolution.
+    $("dn-bin").value = $("dn-mode").value === "frames" ? 2 : 1;
     store();
   });
 
@@ -175,7 +180,7 @@
       return;
     }
     if (!S.info) return;
-    const req = { token: S.token, c: fftChannel(), t: S.t, mode: $("dn-mode").value, steps: +$("dn-steps").value, slab: S.info.sizeZ > 1 ? P.slab : 0 };
+    const req = { token: S.token, c: fftChannel(), t: S.t, mode: $("dn-mode").value, steps: +$("dn-steps").value, bin: +$("dn-bin").value, slab: S.info.sizeZ > 1 ? P.slab : 0 };
     const un = await T.event.listen("denoise-train", (ev) => {
       const { step, steps, loss } = ev.payload;
       $("dn-model").textContent = `训练中 ${step}/${steps} · 损失 ${loss.toPrecision(3)}`;
@@ -186,7 +191,7 @@
     try {
       const r = await invoke("denoise_train", { req });
       const name = { n2v: "Noise2Void", frames: "Noise2Noise 奇偶帧", neighbours: "Noise2Noise 相邻层" }[r.mode];
-      N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步 · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
+      N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步${req.bin > 1 ? ` · 合并 ${req.bin}×${req.bin}` : ""} · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
       $("dn-model").textContent = `已训练：${N.model}` + (r.warning ? `\n⚠ ${r.warning}` : "");
       // Show the new model's result.
       N.key = "";
