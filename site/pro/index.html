@@ -69,6 +69,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
       <div class="card pf rv"><h3 data-i="pro_f3h">SAM 2.1 智能分割</h3><p data-i="pro_f3p">点一下就分出物体，再沿 Z 自动传播到整个物体，细膜和闭合轮廓也能跟住。模型用 Rust 重写，在你的显卡上本地运行，数据不出电脑。</p></div>
       <div class="card pf rv d1"><h3 data-i="pro_f4h">CTF 拟合</h3><p data-i="pro_f4p">在功率谱上拟合离焦、像散和相位板相移，把拟合出的 CTF 零点画在谱上，并给出一维拟合曲线。</p></div>
       <div class="card pf rv d2"><h3 data-i="pro_f5h">漂移校正</h3><p data-i="pro_f5p">测出影片、倾转系列和连续切片每一层的位移，画出轨迹，保存对齐后的栈或叠加图（MRC）。</p></div>
+      <div class="card pf rv"><h3 data-i="pro_f6h">衍射标定</h3><p data-i="pro_f6p">自动找出单晶衍射的斑点和中心，拟合二维倒易晶格，在图上标出每个斑点的 (hk) 和 d 值；给出晶胞参数还能按带轴匹配。</p></div>
     </div>
   </div>
 </section>
@@ -120,6 +121,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
           <tr class="grp"><th data-i="pg_em">电镜分析</th><td></td><td class="me"></td><td></td><td></td></tr>
           <tr><th data-i="pr_ctf">CTF 拟合</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="y">✓</td></tr>
           <tr><th data-i="pr_drift">漂移校正、对齐</th><td class="n">—</td><td class="me y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th data-i="pr_diff">衍射斑点标定、带轴匹配</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
           <tr><th data-i="pr_gpu">GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small></th><td class="n">—</td><td class="me y">✓</td><td class="p"></td><td class="p"></td></tr>
           <tr><th data-i="pr_recon">断层重建</th><td class="n">—</td><td class="me n">—</td><td class="n">—</td><td class="y">✓</td></tr>
           <tr><th data-i="cr_macro">宏、脚本和批处理</th><td class="n">—</td><td class="me n">—</td><td class="y">✓</td><td class="y">✓</td></tr>

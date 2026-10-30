@@ -85,7 +85,7 @@
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }
 
-#align-panel {
+#align-panel, #diff-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
   width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
   padding: 8px 10px 10px; font-size: 12px;
@@ -109,3 +109,18 @@
 #al-table tbody tr { cursor: pointer; }
 #al-table tbody tr:hover { background: var(--subtle); }
 #al-table tr.low td { color: var(--dim); }
+
+/* Diffraction indexing */
+#df-sum { margin: 2px 0 6px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+#diff-panel .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+#diff-panel .pro-table { max-height: 180px; overflow-y: auto; margin-top: 6px; }
+#diff-panel .pro-table table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+#diff-panel .pro-table th { position: sticky; top: 0; background: var(--surface); color: var(--dim); font-weight: 500; text-align: right; padding: 1px 4px; }
+#diff-panel .pro-table td { text-align: right; padding: 1px 4px; border-top: 1px solid var(--line); white-space: nowrap; }
+#diff-panel .pro-table tbody tr { cursor: pointer; }
+#diff-panel .pro-table tbody tr:hover { background: var(--subtle); }
+#diff-panel .pro-table tr.on td { background: #ffebe9; }
+#diff-panel .pro-table tr.low td { color: var(--dim); }
+#df-zone { margin-top: 8px; }
+#df-zone summary { cursor: pointer; font-size: 12px; margin-bottom: 6px; }
+.df-cell { grid-template-columns: 1fr 1fr 1fr; }
