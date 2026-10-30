@@ -33,6 +33,16 @@ Object.assign(UNIT_M, { "1/µm": 1e6, "1/nm": 1e9, "1/Å": 1e10 });
 
 const isRecip = (u) => u.startsWith("1/");
 
+/** A pixel size from a file header that no instrument gives (under 0.01 Å or
+ * over 1 cm, usually a header written in the wrong unit) is not used. */
+function plausiblePixel(v, unit, quiet) {
+  if (isRecip(unit)) return true;
+  const m = v * UNIT_M[unit];
+  if (m >= 1e-12 && m <= 1e-2) return true;
+  if (!quiet) toast(`文件里的像素大小（${v.toPrecision(3)} ${unit}）不合理，没有采用；可在比例尺里手动设置`);
+  return false;
+}
+
 const S = {
   token: 0,
   info: null,
@@ -247,7 +257,7 @@ async function openPath(path, force = false, series = 0) {
       auto: true,
     }));
     const ps = res.info.pixelSize;
-    if (ps && ps[0] > 0 && UNIT_M[normUnit(res.info.unit)]) {
+    if (ps && ps[0] > 0 && UNIT_M[normUnit(res.info.unit)] && plausiblePixel(ps[0], normUnit(res.info.unit))) {
       S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(res.info.unit) };
       S.pxSource = "来自文件";
     } else if (!(S.px && S.pxSource === "手动")) {
@@ -371,7 +381,7 @@ async function setAxis(axis) {
     Object.assign(S, { ann: [], history: [], future: [], model: null, crop: null, cropStack: [] });
   }
   const ps = info.pixelSize;
-  if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)]) {
+  if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)] && plausiblePixel(ps[0], normUnit(info.unit), true)) {
     S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
   }
   applyZSpacing();

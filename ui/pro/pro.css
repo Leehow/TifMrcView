@@ -130,3 +130,4 @@
 #df-zones { overflow-x: auto; }
 #df-zones table { table-layout: auto; }
 #df-zones td, #df-zones th { padding: 1px 3px; }
+#ctf-table tr.edge td { background: #fff8c5; }
