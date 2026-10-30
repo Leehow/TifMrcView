@@ -540,7 +540,9 @@ pub(crate) mod tests {
 
 /// Error and time of every method on a noisy synthetic image:
 /// cargo test --release --lib denoise::bench -- --ignored --nocapture
-/// (TMV_DENOISE_N sets the size, default 1024).
+/// (TMV_DENOISE_N sets the size, default 1024). With TMV_DENOISE_FILE=<image>
+/// it times the middle slice of that file instead and reports the noise σ
+/// left in each result.
 #[cfg(test)]
 mod bench {
     use super::tests::{phantom, rmse};
@@ -549,6 +551,32 @@ mod bench {
     #[test]
     #[ignore]
     fn bench() {
+        if let Ok(path) = std::env::var("TMV_DENOISE_FILE") {
+            let src = crate::formats::open(std::path::Path::new(&path)).unwrap();
+            let info = src.info().clone();
+            let (w, h) = (info.width, info.height);
+            let (page, s) = info.locate(0, info.size_z / 2, 0);
+            let planes = src.read_page(page).unwrap();
+            let p = &planes[s.min(planes.len() - 1)];
+            let v: Vec<f32> = (0..w * h).map(|i| p.data.get_f64(i) as f32).collect();
+            let sigma = noise_sigma(&v, w, h);
+            println!("{path}: {w}×{h}, slice {} of {}, noise σ {sigma:.4}", info.size_z / 2, info.size_z);
+            for (m, s, it) in [(Method::Gaussian, 1.5, 0), (Method::Median, 2.0, 0), (Method::Diffusion, 2.0, 20), (Method::Nlm, 0.8, 0)] {
+                for device in ["cpu", "auto"] {
+                    if device == "auto" && matches!(m, Method::Gaussian | Method::Median) {
+                        continue;
+                    }
+                    let p = Params { method: m, strength: s, iterations: it, patch: 2, search: 7, slab: 0, device: device.into() };
+                    // Twice: the first GPU call includes compiling the kernels.
+                    for run in 0..2 {
+                        let t0 = Instant::now();
+                        let (out, b) = filter(v.clone(), w, h, &p, sigma).unwrap();
+                        println!("  {m:?} {s} on {b} (run {run}): {:.0} ms, σ left {:.4}", t0.elapsed().as_secs_f64() * 1e3, noise_sigma(&out, w, h));
+                    }
+                }
+            }
+            return;
+        }
         let n: usize = std::env::var("TMV_DENOISE_N").ok().and_then(|s| s.parse().ok()).unwrap_or(1024);
         for noise in [0.3f32, 1.0] {
             let (clean, noisy) = phantom(n, n, noise);
