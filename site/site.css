@@ -40,7 +40,7 @@ a:hover{text-decoration:underline}
 .brand:hover{text-decoration:none}
 .brand img{width:26px;height:26px;border-radius:6px;transition:transform .3s var(--ease)}
 .nav.stuck .brand img{transform:scale(.88)}
-.nav a.nl{color:var(--ink);opacity:.8;font-size:13.5px;padding:0 10px;min-height:44px;display:inline-flex;align-items:center}
+.nav a.nl{color:var(--ink);opacity:.8;font-size:13.5px;padding:0 10px;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center}
 .nav a.nl:hover{opacity:1;text-decoration:none}
 .nav a.nl.cur{opacity:1;font-weight:600}
 .nav .gh{display:inline-flex;align-items:center;justify-content:center;width:40px;min-height:44px;color:var(--ink);opacity:.8}
@@ -335,3 +335,8 @@ footer.dkf{background:#000;border-top-color:rgba(255,255,255,.1);--mute:#a1a1a6;
 .ctab td.p::before,.ckey b.p::before{content:"";display:inline-block;vertical-align:-2px;width:11px;height:11px;border-radius:50%;border:2px solid currentColor;background:linear-gradient(90deg,currentColor 50%,transparent 50%)}
 .ckey b.p{color:var(--mute)}
 @media (max-width:640px){.ctab{min-width:0;font-size:14px}.ctab th,.ctab td{padding:11px 4px}.ctab thead th{white-space:normal;font-size:12.5px}.ctab tbody th{padding-right:8px}.ctab .pl{font-size:11px}}
+
+.about .lede{margin-left:auto;margin-right:auto;max-width:36em}
+.about .lede+.lede{margin-top:14px}
+.alinks{display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;align-items:center;margin:28px 0 0}
+.alinks .pill{font-size:15px;padding:0 20px;min-height:42px}

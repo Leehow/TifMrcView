@@ -20,7 +20,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: '其它发行版',
       k_file: '上一个 / 下一个文件', k_z: '切换 Z 层', space: '空格', k_play: '播放 / 暂停 Z',
       or_dbl: '或双击', k_fit: '适应窗口', k_save: '保存 PNG 到当前目录', k_open: '打开文件',
-      free: '免费开源', by_author: '作者'
+      free: '免费开源', by_author: '作者',
+      nav_about: '关于作者', about_h: '关于作者', about_p1: '<b>Hao Li</b>，独立开发者，从事冷冻电镜与 AI 开发相关工作，来自中国科学院化学研究所。', about_p2: '如果 TifMrcView 用着顺手，欢迎推荐给更多人，也可以在文章致谢里提一下。有建议，或者想要支持更多格式、更多功能，请给我发邮件：'
     },
     en: {
       def_h: 'Make it the default app', def_lead: 'TifMrcView normally becomes the default for .tif / .tiff / .mrc when installed. If another app still opens them, or you want .rec, .st, .map and .czi (needs the Zeiss plugin) to open in it too:',
@@ -38,7 +39,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Other distributions',
       k_file: 'Previous / next file', k_z: 'Change Z slice', space: 'Space', k_play: 'Play / pause Z',
       or_dbl: 'or double-click', k_fit: 'Fit to window', k_save: 'Save PNG to current folder', k_open: 'Open file',
-      free: 'Free and open source', by_author: 'Author'
+      free: 'Free and open source', by_author: 'Author',
+      nav_about: 'About', about_h: 'About the author', about_p1: '<b>Hao Li</b> is an independent developer working on cryo-EM and AI development, at the Institute of Chemistry, Chinese Academy of Sciences.', about_p2: 'If TifMrcView works well for you, please recommend it to others, or mention it in the acknowledgements of your paper. For suggestions, or to ask for more formats and features, email me at'
     },
     de: {
       def_h: 'Als Standard-App festlegen', def_lead: 'Nach der Installation ist TifMrcView normalerweise Standard für .tif / .tiff / .mrc. Öffnet trotzdem ein anderes Programm sie, oder sollen auch .rec, .st, .map und .czi (mit dem Zeiss-Plugin) damit öffnen:',
@@ -56,7 +58,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Andere Distributionen',
       k_file: 'Vorherige / nächste Datei', k_z: 'Z-Ebene wechseln', space: 'Leertaste', k_play: 'Z abspielen / pausieren',
       or_dbl: 'oder Doppelklick', k_fit: 'An Fenster anpassen', k_save: 'PNG im aktuellen Ordner speichern', k_open: 'Datei öffnen',
-      free: 'Kostenlos und quelloffen', by_author: 'Autor'
+      free: 'Kostenlos und quelloffen', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Über den Autor', about_p1: '<b>Hao Li</b> ist unabhängiger Entwickler und arbeitet an Kryo-EM und KI-Entwicklung, am Institut für Chemie der Chinesischen Akademie der Wissenschaften.', about_p2: 'Wenn Ihnen TifMrcView gefällt, empfehlen Sie es gern weiter oder erwähnen Sie es in der Danksagung Ihrer Veröffentlichung. Für Vorschläge oder Wünsche nach weiteren Formaten und Funktionen schreiben Sie mir:'
     },
     ja: {
       def_h: '既定のアプリにする', def_lead: '通常はインストールすると TifMrcView が .tif / .tiff / .mrc の既定アプリになります。それでも別のアプリで開く場合や、.rec・.st・.map、.czi（Zeiss プラグインが必要）も TifMrcView で開きたい場合は：',
@@ -74,7 +77,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'その他のディストリビューション',
       k_file: '前 / 次のファイル', k_z: 'Z 層を切り替え', space: 'スペース', k_play: 'Z の再生 / 一時停止',
       or_dbl: 'またはダブルクリック', k_fit: 'ウィンドウに合わせる', k_save: '現在のフォルダに PNG を保存', k_open: 'ファイルを開く',
-      free: '無料・オープンソース', by_author: '作者'
+      free: '無料・オープンソース', by_author: '作者',
+      nav_about: '作者について', about_h: '作者について', about_p1: '<b>Hao Li</b>：独立系開発者。クライオ電顕と AI 開発に携わっています。中国科学院化学研究所所属。', about_p2: 'TifMrcView が役に立ったら、ぜひ周りの方に勧めたり、論文の謝辞で触れたりしてください。ご意見や、対応してほしい形式・機能があれば、メールでお知らせください：'
     },
     es: {
       def_h: 'Usarlo como aplicación predeterminada', def_lead: 'Al instalarlo, TifMrcView suele quedar como predeterminado para .tif / .tiff / .mrc. Si otra aplicación los sigue abriendo, o quieres abrir también .rec, .st, .map y .czi (requiere el complemento Zeiss) con él:',
@@ -92,7 +96,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Otras distribuciones',
       k_file: 'Archivo anterior / siguiente', k_z: 'Cambiar corte Z', space: 'Espacio', k_play: 'Reproducir / pausar Z',
       or_dbl: 'o doble clic', k_fit: 'Ajustar a la ventana', k_save: 'Guardar PNG en la carpeta actual', k_open: 'Abrir archivo',
-      free: 'Gratis y de código abierto', by_author: 'Autor'
+      free: 'Gratis y de código abierto', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Sobre el autor', about_p1: '<b>Hao Li</b> es un desarrollador independiente que trabaja en crio-ME y desarrollo de IA, en el Instituto de Química de la Academia China de Ciencias.', about_p2: 'Si TifMrcView te resulta útil, recomiéndalo a otras personas o menciónalo en los agradecimientos de tu artículo. Para sugerencias, o si quieres más formatos y funciones, escríbeme a'
     },
     fr: {
       def_h: 'En faire l’application par défaut', def_lead: 'À l’installation, TifMrcView devient normalement l’application par défaut pour .tif / .tiff / .mrc. Si une autre application les ouvre encore, ou pour ouvrir aussi .rec, .st, .map et .czi (avec l’extension Zeiss) :',
@@ -110,7 +115,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Autres distributions',
       k_file: 'Fichier précédent / suivant', k_z: 'Changer de plan Z', space: 'Espace', k_play: 'Lire / mettre en pause Z',
       or_dbl: 'ou double-clic', k_fit: 'Ajuster à la fenêtre', k_save: 'Enregistrer en PNG dans le dossier courant', k_open: 'Ouvrir un fichier',
-      free: 'Gratuit et open source', by_author: 'Auteur'
+      free: 'Gratuit et open source', by_author: 'Auteur',
+      nav_about: 'L’auteur', about_h: 'À propos de l’auteur', about_p1: '<b>Hao Li</b> est un développeur indépendant qui travaille sur la cryo-ME et le développement d’IA, à l’Institut de chimie de l’Académie chinoise des sciences.', about_p2: 'Si TifMrcView vous est utile, recommandez-le autour de vous ou mentionnez-le dans les remerciements de votre article. Pour une suggestion, ou pour demander d’autres formats et fonctions, écrivez-moi à'
     },
     ru: {
       def_h: 'Сделать приложением по умолчанию', def_lead: 'Обычно после установки TifMrcView становится программой по умолчанию для .tif / .tiff / .mrc. Если файлы всё равно открывает другая программа или нужно открывать в нём ещё .rec, .st, .map и .czi (нужен плагин Zeiss):',
@@ -128,7 +134,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Другие дистрибутивы',
       k_file: 'Предыдущий / следующий файл', k_z: 'Сменить слой Z', space: 'Пробел', k_play: 'Воспроизвести / пауза Z',
       or_dbl: 'или двойной щелчок', k_fit: 'По размеру окна', k_save: 'Сохранить PNG в текущую папку', k_open: 'Открыть файл',
-      free: 'Бесплатно и с открытым кодом', by_author: 'Автор'
+      free: 'Бесплатно и с открытым кодом', by_author: 'Автор',
+      nav_about: 'Об авторе', about_h: 'Об авторе', about_p1: '<b>Hao Li</b> — независимый разработчик, занимается крио-ЭМ и разработкой ИИ; Институт химии Китайской академии наук.', about_p2: 'Если TifMrcView вам пригодился, расскажите о нём коллегам или упомяните его в благодарностях статьи. С предложениями и пожеланиями о новых форматах и функциях пишите на'
     }
   };
   // Strings for the plugin market (site/plugins/) and the teaser on the home page.
