@@ -632,3 +632,24 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod bench {
+    /// TMV_DIFF_RAW=path.f32 TMV_DIFF_W=w TMV_DIFF_H=h cargo test --release --lib diffraction::bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn file() {
+        let path = std::env::var("TMV_DIFF_RAW").unwrap();
+        let w: usize = std::env::var("TMV_DIFF_W").unwrap().parse().unwrap();
+        let h: usize = std::env::var("TMV_DIFF_H").unwrap().parse().unwrap();
+        let min_dist: f64 = std::env::var("TMV_DIFF_DIST").ok().and_then(|v| v.parse().ok()).unwrap_or(12.0);
+        let b = std::fs::read(path).unwrap();
+        let v: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let t = std::time::Instant::now();
+        let spots = super::find_spots(&v, w, h, min_dist, 5.0);
+        match super::analyse(spots, None, min_dist) {
+            Ok((s, c, l)) => println!("{} spots, centre {c:?}, lattice {l:?}, {:?}", s.len(), t.elapsed()),
+            Err(e) => println!("{e}"),
+        }
+    }
+}
