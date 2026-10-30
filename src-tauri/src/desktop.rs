@@ -1103,6 +1103,40 @@ fn align_cancel() {
     crate::align::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Denoising (Pro): the middle of the visible region of one slice, as
+/// `denoise::Denoised::to_bytes`.
+#[tauri::command]
+async fn denoise_preview(state: State<'_, AppState>, req: crate::denoise::PreviewReq) -> CmdResult<Response> {
+    let img = current(&state, req.token)?;
+    let d = blocking(move || crate::denoise::preview(&img, &req)).await?;
+    Ok(Response::new(d.to_bytes()))
+}
+
+/// Writes the denoised slices to a path from `pick_save_path`; reports
+/// `denoise-progress` {done, total} and returns the backend used.
+#[tauri::command]
+async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq) -> CmdResult<String> {
+    let img = {
+        let state = app.state::<AppState>();
+        if !state.save_paths.allowed(&req.path) {
+            return Err(format!("不允许写入：{}", req.path));
+        }
+        current(&state, req.token)?
+    };
+    blocking(move || {
+        let progress = |done, total| {
+            let _ = app.emit("denoise-progress", serde_json::json!({ "done": done, "total": total }));
+        };
+        crate::denoise::save(&img, &req, &progress).map(String::from)
+    })
+    .await
+}
+
+#[tauri::command]
+fn denoise_cancel() {
+    crate::denoise::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -1615,6 +1649,9 @@ pub fn run() {
             diffraction_zones,
             align_save,
             align_cancel,
+            denoise_preview,
+            denoise_save,
+            denoise_cancel,
             spectrum_values,
             pick_save_path,
             pick_folder,

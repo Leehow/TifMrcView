@@ -85,7 +85,7 @@
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
 
-#align-panel, #diff-panel {
+#align-panel, #diff-panel, #denoise-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
   width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
   padding: 8px 10px 10px; font-size: 12px;
@@ -126,8 +126,18 @@
 .df-cell { grid-template-columns: 1fr 1fr 1fr; }
 .ctf-warn { margin-top: 4px; color: #9a6700; line-height: 1.4; }
 /* Right-hand panels move left of the show-sidebar button while the sidebar is folded. */
-#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel) { right: 40px; }
+#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel, #denoise-panel) { right: 40px; }
 #df-zones { overflow-x: auto; }
 #df-zones table { table-layout: auto; }
 #df-zones td, #df-zones th { padding: 1px 3px; }
 #ctf-table tr.edge td { background: #fff8c5; }
+
+/* Denoising */
+#denoise-panel .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+.dn-slider { display: flex; align-items: center; gap: 6px; }
+.dn-slider input { flex: 1; min-width: 0; }
+.dn-slider output { width: 36px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.dn-split { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--dim); font-size: 11px; }
+.dn-split input { flex: 1; min-width: 0; }
+#dn-status, #dn-saved-name { flex: 1; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#denoise-panel [hidden] { display: none; }
