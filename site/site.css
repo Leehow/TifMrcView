@@ -65,6 +65,7 @@ a:hover{text-decoration:underline}
 .mnu li a{display:flex;align-items:center;padding:0 12px;min-height:44px;border-radius:9px;color:var(--ink);font-size:15px}
 .mnu li a:hover{background:color-mix(in srgb,var(--accent) 12%,transparent);text-decoration:none}
 @media (max-width:760px){.nav a.nl{display:none}.lang>button span{display:none}.mnu{display:block}}
+@media (max-width:420px){.nav .gh{display:none}}
 
 /* ---------- type ---------- */
 .h{margin:0;font-weight:700;letter-spacing:-.022em;line-height:1.07;text-wrap:balance}
