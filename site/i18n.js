@@ -313,7 +313,9 @@
       h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
       slogan: '又小、又快、又方便。免费开源。',
       lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用<span class="an">，也有 Android 版</span>。',
-      an_t: '也有安卓版（基础版，Android 7 及以上的 arm64 手机和平板）。', an_a: '下载 APK',
+      an_a: '下载安卓版 APK', pro_line: '分割和三维查看：<b>TifMrcView Pro</b> →',
+      dl_apk: '下载 APK', note_apk: 'Android 7 及以上，arm64',
+      an_tip: '手机和平板都能用的基础版查看器（不含 Pro 功能）。安装时按提示允许「安装未知应用」。双指缩放，长按标注可删除。',
       demo_try: '点击试用：拖动 Z、测距、调亮度和对比度', demo_full: '全屏打开', demo_title: 'TifMrcView 在线示例',
       demo_note: '真实界面，在网页里运行。示例是缩小过的蔡司 Airyscan 荧光图像。',
       a_hero: 'TifMrcView 主窗口：冷冻电镜断层 MRC 文件，测得线段长度 864.2 nm，左侧为对比度与标注面板，右侧为同目录缩略图',
@@ -377,7 +379,9 @@
       h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
       slogan: 'Small. Fast. Effortless. Free and open source.',
       lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux<span class="an">, and Android</span>.',
-      an_t: 'There is also an Android version (basic viewer, arm64 phones and tablets, Android 7+).', an_a: 'Download APK',
+      an_a: 'Download the Android APK', pro_line: 'Segmentation and 3D viewing: <b>TifMrcView Pro</b> →',
+      dl_apk: 'Download APK', note_apk: 'Android 7+, arm64',
+      an_tip: 'The basic viewer for phones and tablets (no Pro features). Allow “Install unknown apps” when asked. Pinch to zoom; long-press an annotation to delete it.',
       demo_try: 'Click to try: drag Z, measure, adjust brightness and contrast', demo_full: 'Open full screen', demo_title: 'TifMrcView live demo',
       demo_note: 'The real interface, running in your browser. The samples are downsized Zeiss Airyscan fluorescence images.',
       a_hero: 'TifMrcView main window showing a cryo-electron tomogram (MRC) with a measured line of 864.2 nm, the contrast and annotation panel on the left and folder thumbnails on the right',
@@ -441,7 +445,9 @@
       h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
       lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux<span class="an"> sowie Android</span>.',
-      an_t: 'Es gibt auch eine Android-Version (Basis-Viewer, arm64-Smartphones und -Tablets, ab Android 7).', an_a: 'APK herunterladen',
+      an_a: 'Android-APK herunterladen', pro_line: 'Segmentierung und 3D-Ansicht: <b>TifMrcView Pro</b> →',
+      dl_apk: 'APK herunterladen', note_apk: 'Ab Android 7, arm64',
+      an_tip: 'Der Basis-Viewer für Smartphones und Tablets (ohne Pro-Funktionen). Bei Nachfrage „Unbekannte Apps installieren“ erlauben. Mit zwei Fingern zoomen; Anmerkung lange drücken zum Löschen.',
       demo_try: 'Zum Ausprobieren klicken: Z ziehen, messen, Helligkeit und Kontrast anpassen', demo_full: 'Im Vollbild öffnen', demo_title: 'TifMrcView Live-Demo',
       demo_note: 'Die echte Oberfläche, direkt im Browser. Die Beispiele sind verkleinerte Zeiss-Airyscan-Fluoreszenzbilder.',
       a_hero: 'TifMrcView-Hauptfenster mit einem Kryo-Elektronentomogramm (MRC) und einer gemessenen Linie von 864,2 nm, links der Kontrast- und Annotationsbereich, rechts die Miniaturen des Ordners',
@@ -505,7 +511,9 @@
       h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
       slogan: '小さく、速く、使いやすく。無料のオープンソース。',
       lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux<span class="an">・Android</span> に対応。',
-      an_t: 'Android 版もあります（基本ビューア、arm64 のスマートフォン・タブレット、Android 7 以降）。', an_a: 'APK をダウンロード',
+      an_a: 'Android 版 APK をダウンロード', pro_line: 'セグメンテーションと 3D 表示は <b>TifMrcView Pro</b> へ →',
+      dl_apk: 'APK をダウンロード', note_apk: 'Android 7 以降、arm64',
+      an_tip: 'スマートフォン・タブレット向けの基本ビューア（Pro 機能なし）。インストール時に「不明なアプリのインストール」を許可してください。2 本指でズーム、注釈を長押しで削除。',
       demo_try: 'クリックして試す：Z の移動、計測、明るさとコントラストの調整', demo_full: '全画面で開く', demo_title: 'TifMrcView ライブデモ',
       demo_note: '本物の画面をブラウザで動かしています。サンプルは縮小した Zeiss Airyscan 蛍光画像です。',
       a_hero: 'TifMrcView のメインウィンドウ。クライオ電子線トモグラム（MRC）に 864.2 nm の計測線、左にコントラストと注釈のパネル、右に同じフォルダのサムネイル',
@@ -569,7 +577,9 @@
       h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
       slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
       lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux<span class="an">, y también Android</span>.',
-      an_t: 'También hay versión para Android (visor básico, móviles y tabletas arm64, Android 7 o posterior).', an_a: 'Descargar APK',
+      an_a: 'Descargar el APK para Android', pro_line: 'Segmentación y vista 3D: <b>TifMrcView Pro</b> →',
+      dl_apk: 'Descargar APK', note_apk: 'Android 7 o posterior, arm64',
+      an_tip: 'El visor básico para móviles y tabletas (sin funciones Pro). Permite «Instalar apps desconocidas» cuando se pida. Pellizca para hacer zoom; mantén pulsada una anotación para borrarla.',
       demo_try: 'Haz clic para probar: mueve Z, mide, ajusta brillo y contraste', demo_full: 'Abrir a pantalla completa', demo_title: 'Demo en vivo de TifMrcView',
       demo_note: 'La interfaz real, funcionando en el navegador. Las muestras son imágenes de fluorescencia Zeiss Airyscan reducidas.',
       a_hero: 'Ventana principal de TifMrcView con un tomograma de crio-microscopía electrónica (MRC) y una línea medida de 864,2 nm, el panel de contraste y anotaciones a la izquierda y las miniaturas de la carpeta a la derecha',
@@ -633,7 +643,9 @@
       h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
       lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux<span class="an">, et aussi Android</span>.',
-      an_t: 'Il existe aussi une version Android (visionneuse de base, téléphones et tablettes arm64, Android 7 ou plus).', an_a: 'Télécharger l’APK',
+      an_a: 'Télécharger l’APK Android', pro_line: 'Segmentation et vue 3D : <b>TifMrcView Pro</b> →',
+      dl_apk: 'Télécharger l’APK', note_apk: 'Android 7 ou plus, arm64',
+      an_tip: 'La visionneuse de base pour téléphones et tablettes (sans les fonctions Pro). Autorisez « Installer des applis inconnues » si demandé. Pincez pour zoomer ; appui long sur une annotation pour la supprimer.',
       demo_try: 'Cliquez pour essayer : déplacez Z, mesurez, réglez luminosité et contraste', demo_full: 'Ouvrir en plein écran', demo_title: 'Démo en direct de TifMrcView',
       demo_note: 'La vraie interface, dans votre navigateur. Les exemples sont des images de fluorescence Zeiss Airyscan réduites.',
       a_hero: 'Fenêtre principale de TifMrcView avec un tomogramme de cryo-microscopie électronique (MRC) et une ligne mesurée de 864,2 nm, le panneau de contraste et d’annotation à gauche et les vignettes du dossier à droite',
@@ -697,7 +709,9 @@
       h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
       slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
       lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux<span class="an">, а также Android</span>.',
-      an_t: 'Есть и версия для Android (базовый просмотрщик, телефоны и планшеты arm64, Android 7 и новее).', an_a: 'Скачать APK',
+      an_a: 'Скачать APK для Android', pro_line: 'Сегментация и 3D: <b>TifMrcView Pro</b> →',
+      dl_apk: 'Скачать APK', note_apk: 'Android 7 и новее, arm64',
+      an_tip: 'Базовый просмотрщик для телефонов и планшетов (без функций Pro). Разрешите «Установку неизвестных приложений», когда попросят. Масштаб — двумя пальцами; долгое нажатие на пометку удаляет её.',
       demo_try: 'Нажмите, чтобы попробовать: Z, измерения, яркость и контраст', demo_full: 'Открыть на весь экран', demo_title: 'Живая демонстрация TifMrcView',
       demo_note: 'Настоящий интерфейс прямо в браузере. Примеры — уменьшенные флуоресцентные снимки Zeiss Airyscan.',
       a_hero: 'Главное окно TifMrcView: криоэлектронная томограмма (MRC) с измеренной линией 864,2 нм, слева панель контраста и аннотаций, справа миниатюры папки',
@@ -1000,7 +1014,7 @@
   function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; }
   function loadSizes(d) {
     var all = [];
-    ['mac', 'win', 'linux'].forEach(function (k) { (d.files[k] || []).forEach(function (f) { all.push(f); }); });
+    ['mac', 'win', 'linux', 'android'].forEach(function (k) { (d.files[k] || []).forEach(function (f) { all.push(f); }); });
     return Promise.all(all.map(function (f) {
       if (f.size) { sizes[f.file] = f.size; return null; }
       return fetch(f.file, { method: 'HEAD' }).then(function (r) {
@@ -1017,14 +1031,16 @@
     if (ext === 'deb') return ['.deb', t.note_deb];
     if (ext === 'rpm') return ['.rpm', t.note_rpm];
     if (ext === 'appimage') return ['.AppImage', t.note_appimage];
+    if (ext === 'apk') return [t.dl_apk || 'APK', t.note_apk || ''];
     return [f.label || f.file, f.note || ''];
   }
 
   function renderDownloads() {
     if (!data || !HOME) return;
     var t = T[lang];
-    ['mac', 'win', 'linux'].forEach(function (k) {
+    ['mac', 'win', 'linux', 'android'].forEach(function (k) {
       var box = document.querySelector('[data-os="' + k + '"] .dl');
+      if (!box) return;
       box.innerHTML = '';
       (data.files[k] || []).forEach(function (f) {
         var l = fileLabel(k, f, t);
@@ -1043,12 +1059,14 @@
     });
     var apk = (data.files.android || [])[0];
     document.getElementById('meta').textContent = t.version + ' ' + data.version + ' · ' + data.date + ' · macOS · Windows · Linux' + (apk ? ' · Android' : '');
-    // A small line under the main button so people know there is an APK
-    // (on Android the main button is the APK already).
+    // The Android card in the download grid, and a one-link line under the
+    // main button (on Android the main button is the APK already).
     document.documentElement.classList.toggle('has-apk', !!apk);
+    var card = document.querySelector('[data-os="android"]');
+    if (card) card.hidden = !apk;
     var an = document.getElementById('andr');
     if (an && apk && !/Android/.test(ua)) {
-      document.getElementById('andr-a').href = DL + apk.file;
+      an.href = DL + apk.file;
       an.hidden = false;
     }
     document.getElementById('ver').textContent = 'v' + data.version;
@@ -1056,6 +1074,7 @@
     if (/Android/.test(ua) && apk) {
       c.href = DL + apk.file; c.setAttribute('download', '');
       c.textContent = t.cta_os.replace('{os}', 'Android');
+      if (card) card.classList.add('hl');
     } else if (os && data.files[os] && data.files[os][0]) {
       c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
       c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
