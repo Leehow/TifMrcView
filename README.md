@@ -208,6 +208,10 @@ Created and maintained by **Hao Li** ([@Leehow](https://github.com/Leehow)), Ins
 
 If TifMrcView helps your research, please cite it. GitHub shows the citation from [CITATION.cff](CITATION.cff) under "Cite this repository" on the repository page.
 
+## Code signing and privacy
+
+Windows installers are built and signed by GitHub Actions from this repository. See the [code signing policy](docs/code-signing.md) for who can sign, what is signed and what the app sends over the network (only update checks, the plugin list and, in Pro, the one-time SAM model download). Participation follows the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 This project is open source under the [Apache License 2.0](LICENSE).
