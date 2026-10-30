@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { zip } from "./plugin-zip.mjs";
 
 const [src, out, version, baseUrl, notes = "", directBaseUrl = process.env.DIRECT_BASE_URL] = process.argv.slice(2);
 if (!src || !out || !version || !baseUrl) {
@@ -59,6 +60,14 @@ for (const k of kinds) {
   const url = `${base}/${rel}`;
   console.log(`${k.id}: ${path.basename(f)} -> ${rel}`);
   if (k.os) downloads[k.os].push({ label: k.label, file: rel, note: k.note, size: fs.statSync(f).size });
+  // Some browsers and mail filters block a bare unsigned .exe; offer the same
+  // installer inside a .zip as a second Windows download.
+  if (k.id === "nsis") {
+    const zipName = k.name.replace(/\.exe$/, ".zip");
+    fs.writeFileSync(path.join(verDir, zipName), zip([{ name: k.name, data: fs.readFileSync(f) }]));
+    const size = fs.statSync(path.join(verDir, zipName)).size;
+    downloads.win.push({ label: "下载 .zip（内含安装程序）", file: `${version}/${zipName}`, note: "浏览器拦截 .exe 时用这个", size });
+  }
   const sig = f + ".sig";
   if (k.updater && fs.existsSync(sig)) {
     fs.copyFileSync(sig, path.join(verDir, k.name + ".sig"));
