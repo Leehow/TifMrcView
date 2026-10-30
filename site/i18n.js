@@ -1000,7 +1000,7 @@
       cr_fft: 'FFT 功率谱、衍射 1/nm 标尺', cr_spec: 'EELS / EDS 能谱查看', cr_upd: '自动更新',
       cr_android: '安卓版', cr_macro: '宏、脚本和批处理',
       cmp_plug: '插件', ck_y: "支持", ck_p: "部分支持，或要另找插件 / 手动设置", ck_n: '没有', ck_pl: '官方插件，在应用内一键安装',
-      cmp_foot: '依据各软件官方文档和我们的实测（2026 年 10 月）。Fiji 和 IMOD 是功能全面的分析平台，宏脚本、海量插件和断层重建是它们的长项；TifMrcView 专注于又快又方便地看图。要做分析，请看 <a href="pro/">TifMrcView Pro</a>。',
+      cmp_foot: "依据各软件官方文档和我们的实测（2026 年 10 月）。要做 3D、分割和电镜分析，请看 <a href=\"pro/\">TifMrcView Pro</a>。",
       pcmp_h: '功能对比', pcmp_p: 'Pro 和基础版，以及常用的 ImageJ / Fiji、IMOD。', pcmp_basic: '基础版',
       pg_view: '看图', pg_3d: '3D 与分割', pg_em: '电镜分析',
       pr_fmt: 'TIFF、MRC 和各家显微镜、电镜厂商格式', pr_meas: '三视角、测量、FFT、能谱查看',
@@ -1010,8 +1010,8 @@
       pr_sam: 'AI 点击分割（SAM 2.1，本地运行）', pr_prop: '分割结果沿 Z 自动传播',
       pr_ctf: 'CTF 拟合', pr_drift: '漂移校正、对齐',
       pr_gpu: 'GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: '断层重建',
-      pcmp_foot: '依据各软件官方文档（2026 年 10 月）。厂商格式在基础版和 Pro 里由官方插件提供。Fiji 和 IMOD 有大量插件和命令行程序，这里只比较装好就有的功能。',
-      cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。"
+      pcmp_foot: "依据各软件官方文档（2026 年 10 月），比较装好就有的功能。厂商格式在基础版和 Pro 里由官方插件提供。",
+      cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。", cr_env: "不用另装 Java、Python 或 Cygwin"
     },
     en: {
       cmp_eye: 'Compared', cmp_h: '<span>Small and fast.</span> <span>Measured.</span>',
@@ -1026,7 +1026,7 @@
       cr_fft: 'FFT power spectrum, 1/nm diffraction scale', cr_spec: 'EELS / EDS spectrum viewer', cr_upd: 'Automatic updates',
       cr_android: 'Android app', cr_macro: 'Macros, scripting and batch processing',
       cmp_plug: 'plugin', ck_y: "supported", ck_p: "partly, or needs a third-party plugin / manual setup", ck_n: 'no', ck_pl: 'official plugin, one-click install in the app',
-      cmp_foot: 'Based on each program’s documentation and our own measurements (October 2026). Fiji and IMOD are full analysis platforms: macros, a huge plugin ecosystem and tomographic reconstruction are their strengths. TifMrcView focuses on viewing images quickly and easily. For analysis, see <a href="pro/">TifMrcView Pro</a>.',
+      cmp_foot: "Based on each program’s documentation and our own measurements (October 2026). For 3D, segmentation and EM analysis, see <a href=\"pro/\">TifMrcView Pro</a>.",
       pcmp_h: 'Feature comparison', pcmp_p: 'Pro and the basic edition, next to ImageJ / Fiji and IMOD.', pcmp_basic: 'Basic',
       pg_view: 'Viewing', pg_3d: '3D and segmentation', pg_em: 'EM analysis',
       pr_fmt: 'TIFF, MRC and microscope / EM vendor formats', pr_meas: 'Orthogonal views, measuring, FFT, spectra',
@@ -1036,8 +1036,8 @@
       pr_sam: 'AI click segmentation (SAM 2.1, runs locally)', pr_prop: 'Propagate segmentation along Z',
       pr_ctf: 'CTF fitting', pr_drift: 'Drift correction and alignment',
       pr_gpu: 'GPU compute <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomographic reconstruction',
-      pcmp_foot: 'Based on each program’s documentation (October 2026). Vendor formats come from official plugins in both editions. Fiji and IMOD have many plugins and command-line programs; this table compares what you get out of the box.',
-      cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app."
+      pcmp_foot: "Based on each program’s documentation (October 2026), comparing what you get out of the box. Vendor formats come from official plugins in both editions.",
+      cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app.", cr_env: "No Java, Python or Cygwin to install first"
     },
     de: {
       cmp_eye: 'Im Vergleich', cmp_h: '<span>Klein und schnell.</span> <span>Gemessen.</span>',
@@ -1052,7 +1052,7 @@
       cr_fft: 'FFT-Leistungsspektrum, 1/nm-Beugungsskala', cr_spec: 'EELS- / EDS-Spektrenansicht', cr_upd: 'Automatische Updates',
       cr_android: 'Android-App', cr_macro: 'Makros, Skripte und Stapelverarbeitung',
       cmp_plug: 'Plugin', ck_y: "unterstützt", ck_p: "teilweise, oder mit Fremd-Plugin / manueller Einstellung", ck_n: 'nein', ck_pl: 'offizielles Plugin, mit einem Klick in der App installiert',
-      cmp_foot: 'Nach der Dokumentation der Programme und eigenen Messungen (Oktober 2026). Fiji und IMOD sind vollständige Analyseplattformen: Makros, unzählige Plugins und tomografische Rekonstruktion sind ihre Stärken. TifMrcView konzentriert sich darauf, Bilder schnell und bequem anzusehen. Für Analysen siehe <a href="pro/">TifMrcView Pro</a>.',
+      cmp_foot: "Nach der Dokumentation der Programme und eigenen Messungen (Oktober 2026). Für 3D, Segmentierung und EM-Analyse siehe <a href=\"pro/\">TifMrcView Pro</a>.",
       pcmp_h: 'Funktionsvergleich', pcmp_p: 'Pro und die Basisversion, neben ImageJ / Fiji und IMOD.', pcmp_basic: 'Basis',
       pg_view: 'Ansehen', pg_3d: '3D und Segmentierung', pg_em: 'EM-Analyse',
       pr_fmt: 'TIFF, MRC und Formate der Mikroskop- und EM-Hersteller', pr_meas: 'Orthogonalansichten, Messen, FFT, Spektren',
@@ -1062,8 +1062,8 @@
       pr_sam: 'KI-Segmentierung per Klick (SAM 2.1, lokal)', pr_prop: 'Segmentierung entlang Z fortsetzen',
       pr_ctf: 'CTF-Anpassung', pr_drift: 'Driftkorrektur und Ausrichtung',
       pr_gpu: 'GPU-Berechnung <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomografische Rekonstruktion',
-      pcmp_foot: 'Nach der Dokumentation der Programme (Oktober 2026). Herstellerformate kommen in beiden Versionen aus offiziellen Plugins. Fiji und IMOD haben viele Plugins und Kommandozeilenprogramme; verglichen wird, was nach der Installation dabei ist.',
-      cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert."
+      pcmp_foot: "Nach der Dokumentation der Programme (Oktober 2026), verglichen wird, was nach der Installation dabei ist. Herstellerformate kommen in beiden Versionen aus offiziellen Plugins.",
+      cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert.", cr_env: "Kein Java, Python oder Cygwin vorher installieren"
     },
     ja: {
       cmp_eye: '比較', cmp_h: '<span>小さく、速い。</span><span>実測で。</span>',
@@ -1078,7 +1078,7 @@
       cr_fft: 'FFT パワースペクトル、回折の 1/nm スケール', cr_spec: 'EELS / EDS スペクトルビューア', cr_upd: '自動アップデート',
       cr_android: 'Android 版', cr_macro: 'マクロ・スクリプト・バッチ処理',
       cmp_plug: 'プラグイン', ck_y: "対応", ck_p: "一部対応、または別途プラグイン / 手動設定が必要", ck_n: 'なし', ck_pl: '公式プラグイン、アプリ内でワンクリック導入',
-      cmp_foot: '各ソフトの公式ドキュメントと私たちの実測（2026 年 10 月）に基づきます。Fiji と IMOD は総合的な解析プラットフォームで、マクロ、膨大なプラグイン、トモグラム再構成が強みです。TifMrcView は画像を速く手軽に見ることに特化しています。解析には <a href="pro/">TifMrcView Pro</a> をどうぞ。',
+      cmp_foot: "各ソフトの公式ドキュメントと私たちの実測（2026 年 10 月）に基づきます。3D、セグメンテーション、電顕解析には <a href=\"pro/\">TifMrcView Pro</a> をどうぞ。",
       pcmp_h: '機能比較', pcmp_p: 'Pro と基本版、そして ImageJ / Fiji、IMOD。', pcmp_basic: '基本版',
       pg_view: '閲覧', pg_3d: '3D とセグメンテーション', pg_em: '電顕解析',
       pr_fmt: 'TIFF、MRC、各社の顕微鏡・電顕フォーマット', pr_meas: '直交ビュー、計測、FFT、スペクトル',
@@ -1088,8 +1088,8 @@
       pr_sam: 'AI クリックセグメンテーション（SAM 2.1、ローカル実行）', pr_prop: 'セグメンテーションを Z 方向に自動伝播',
       pr_ctf: 'CTF フィッティング', pr_drift: 'ドリフト補正・位置合わせ',
       pr_gpu: 'GPU 計算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'トモグラム再構成',
-      pcmp_foot: '各ソフトの公式ドキュメント（2026 年 10 月）に基づきます。各社フォーマットはどちらの版でも公式プラグインで対応します。Fiji と IMOD には多数のプラグインやコマンドラインプログラムがありますが、ここではインストール直後に使える機能を比べています。',
-      cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。"
+      pcmp_foot: "各ソフトの公式ドキュメント（2026 年 10 月）に基づき、インストール直後に使える機能を比べています。各社フォーマットはどちらの版でも公式プラグインで対応します。",
+      cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。", cr_env: "Java・Python・Cygwin を別途インストール不要"
     },
     es: {
       cmp_eye: 'Comparativa', cmp_h: '<span>Pequeño y rápido.</span> <span>Medido.</span>',
@@ -1104,7 +1104,7 @@
       cr_fft: 'Espectro de potencia FFT, escala de difracción en 1/nm', cr_spec: 'Visor de espectros EELS / EDS', cr_upd: 'Actualizaciones automáticas',
       cr_android: 'App para Android', cr_macro: 'Macros, scripts y procesamiento por lotes',
       cmp_plug: 'plugin', ck_y: "compatible", ck_p: "en parte, o requiere un plugin de terceros / ajuste manual", ck_n: 'no', ck_pl: 'plugin oficial, se instala con un clic en la app',
-      cmp_foot: 'Según la documentación de cada programa y nuestras propias mediciones (octubre de 2026). Fiji e IMOD son plataformas de análisis completas: las macros, su enorme ecosistema de plugins y la reconstrucción tomográfica son sus puntos fuertes. TifMrcView se centra en ver imágenes de forma rápida y cómoda. Para análisis, consulta <a href="pro/">TifMrcView Pro</a>.',
+      cmp_foot: "Según la documentación de cada programa y nuestras propias mediciones (octubre de 2026). Para 3D, segmentación y análisis de ME, consulta <a href=\"pro/\">TifMrcView Pro</a>.",
       pcmp_h: 'Comparativa de funciones', pcmp_p: 'Pro y la edición básica, junto a ImageJ / Fiji e IMOD.', pcmp_basic: 'Básica',
       pg_view: 'Visualización', pg_3d: '3D y segmentación', pg_em: 'Análisis de ME',
       pr_fmt: 'TIFF, MRC y formatos de fabricantes de microscopios y ME', pr_meas: 'Vistas ortogonales, medición, FFT, espectros',
@@ -1114,8 +1114,8 @@
       pr_sam: 'Segmentación con IA por clic (SAM 2.1, en local)', pr_prop: 'Propagar la segmentación a lo largo de Z',
       pr_ctf: 'Ajuste de CTF', pr_drift: 'Corrección de deriva y alineación',
       pr_gpu: 'Cálculo en GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstrucción tomográfica',
-      pcmp_foot: 'Según la documentación de cada programa (octubre de 2026). En ambas ediciones los formatos de fabricantes llegan con plugins oficiales. Fiji e IMOD tienen muchos plugins y programas de línea de comandos; aquí se compara lo que trae cada uno al instalarlo.',
-      cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app."
+      pcmp_foot: "Según la documentación de cada programa (octubre de 2026); se compara lo que trae cada uno al instalarlo. En ambas ediciones los formatos de fabricantes llegan con plugins oficiales.",
+      cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app.", cr_env: "Sin instalar antes Java, Python ni Cygwin"
     },
     fr: {
       cmp_eye: 'Comparaison', cmp_h: '<span>Léger et rapide.</span> <span>Mesuré.</span>',
@@ -1130,7 +1130,7 @@
       cr_fft: 'Spectre de puissance FFT, échelle de diffraction en 1/nm', cr_spec: 'Visionneuse de spectres EELS / EDS', cr_upd: 'Mises à jour automatiques',
       cr_android: 'Application Android', cr_macro: 'Macros, scripts et traitement par lots',
       cmp_plug: 'plugin', ck_y: "pris en charge", ck_p: "en partie, ou avec un plugin tiers / réglage manuel", ck_n: 'non', ck_pl: 'plugin officiel, installé en un clic dans l’app',
-      cmp_foot: 'D’après la documentation de chaque logiciel et nos propres mesures (octobre 2026). Fiji et IMOD sont des plateformes d’analyse complètes : macros, immense écosystème de plugins et reconstruction tomographique sont leurs points forts. TifMrcView se concentre sur la visualisation rapide et simple. Pour l’analyse, voir <a href="pro/">TifMrcView Pro</a>.',
+      cmp_foot: "D’après la documentation de chaque logiciel et nos propres mesures (octobre 2026). Pour la 3D, la segmentation et l’analyse de ME, voir <a href=\"pro/\">TifMrcView Pro</a>.",
       pcmp_h: 'Comparaison des fonctions', pcmp_p: 'Pro et l’édition de base, face à ImageJ / Fiji et IMOD.', pcmp_basic: 'Base',
       pg_view: 'Visualisation', pg_3d: '3D et segmentation', pg_em: 'Analyse de ME',
       pr_fmt: 'TIFF, MRC et formats des fabricants de microscopes et de ME', pr_meas: 'Vues orthogonales, mesures, FFT, spectres',
@@ -1140,8 +1140,8 @@
       pr_sam: 'Segmentation IA au clic (SAM 2.1, en local)', pr_prop: 'Propager la segmentation le long de Z',
       pr_ctf: 'Ajustement de la CTF', pr_drift: 'Correction de dérive et alignement',
       pr_gpu: 'Calcul sur GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstruction tomographique',
-      pcmp_foot: 'D’après la documentation de chaque logiciel (octobre 2026). Dans les deux éditions, les formats des fabricants viennent de plugins officiels. Fiji et IMOD ont de nombreux plugins et programmes en ligne de commande ; on compare ici ce qui est disponible dès l’installation.',
-      cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app."
+      pcmp_foot: "D’après la documentation de chaque logiciel (octobre 2026), en comparant ce qui est disponible dès l’installation. Dans les deux éditions, les formats des fabricants viennent de plugins officiels.",
+      cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app.", cr_env: "Ni Java, ni Python, ni Cygwin à installer avant"
     },
     ru: {
       cmp_eye: 'Сравнение', cmp_h: '<span>Маленький и быстрый.</span> <span>Измерено.</span>',
@@ -1156,7 +1156,7 @@
       cr_fft: 'Спектр мощности FFT, шкала дифракции в 1/нм', cr_spec: 'Просмотр спектров EELS / EDS', cr_upd: 'Автообновление',
       cr_android: 'Приложение для Android', cr_macro: 'Макросы, скрипты и пакетная обработка',
       cmp_plug: 'плагин', ck_y: "есть", ck_p: "частично, или нужен сторонний плагин / ручная настройка", ck_n: 'нет', ck_pl: 'официальный плагин, ставится в приложении одним щелчком',
-      cmp_foot: 'По документации программ и нашим собственным измерениям (октябрь 2026). Fiji и IMOD — полноценные платформы анализа: макросы, огромное число плагинов и томографическая реконструкция — их сильные стороны. TifMrcView сосредоточен на быстром и удобном просмотре. Для анализа см. <a href="pro/">TifMrcView Pro</a>.',
+      cmp_foot: "По документации программ и нашим собственным измерениям (октябрь 2026). Для 3D, сегментации и анализа ЭМ см. <a href=\"pro/\">TifMrcView Pro</a>.",
       pcmp_h: 'Сравнение возможностей', pcmp_p: 'Pro и базовая версия рядом с ImageJ / Fiji и IMOD.', pcmp_basic: 'Базовая',
       pg_view: 'Просмотр', pg_3d: '3D и сегментация', pg_em: 'Анализ ЭМ',
       pr_fmt: 'TIFF, MRC и форматы производителей микроскопов и ЭМ', pr_meas: 'Ортогональные проекции, измерения, FFT, спектры',
@@ -1166,16 +1166,16 @@
       pr_sam: 'ИИ-сегментация щелчком (SAM 2.1, локально)', pr_prop: 'Распространение сегментации по Z',
       pr_ctf: 'Подгонка CTF', pr_drift: 'Коррекция дрейфа и выравнивание',
       pr_gpu: 'Вычисления на GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Томографическая реконструкция',
-      pcmp_foot: 'По документации программ (октябрь 2026). Форматы производителей в обеих версиях дают официальные плагины. У Fiji и IMOD много плагинов и программ командной строки; здесь сравнивается то, что есть сразу после установки.',
-      cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком."
+      pcmp_foot: "По документации программ (октябрь 2026); сравнивается то, что есть сразу после установки. Форматы производителей в обеих версиях дают официальные плагины.",
+      cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком.", cr_env: "Не нужно ставить Java, Python или Cygwin"
     }
   };
   Object.keys(CMP).forEach(function (c) { for (var k in CMP[c]) T[c][k] = CMP[c][k]; });
   // Measured timings (MacBook Pro M1 Max, October 2026; raw runs kept outside the repo).
   var BENCH = {
     zh: {
-      bt_dl: "下载大小",
-      bs_dl: "macOS 安装包。Fiji 为官方 Apple 芯片版（自带 Java）。",
+      bt_dl: "Windows 安装包大小",
+      bs_dl: "64 位版本，2026 年 10 月官网最新。Fiji 自带 Java；IMOD 取不带 CUDA 的版本，安装前还要先装 Python 或 Cygwin。",
       bt_start: "冷启动",
       bs_start: "从启动到窗口出现，不打开文件。",
       bt_mrc: "启动并打开 2 GB 的 MRC",
@@ -1192,8 +1192,8 @@
       pbench_m: "测试机：MacBook Pro（M1 Max，32 GB 内存，macOS 27），2026 年 10 月。TifMrcView Pro 0.7.56、Fiji（ImageJ 2.16.0 / 1.54p）、IMOD 5.1.13。每项取多次运行的中位数，磁盘缓存是热的，越短越好，打开时间含程序启动。Pro 的内存里包括后台预读的层（最多用内存的 1/4）；3dmod 默认把数据转成 8 位，所以内存更少。"
     },
     en: {
-      bt_dl: "Download size",
-      bs_dl: "macOS package. Fiji: the official Apple silicon build with bundled Java.",
+      bt_dl: "Windows download size",
+      bs_dl: "64-bit builds, latest on each website, October 2026. Fiji bundles Java; IMOD without CUDA, which also needs Python or Cygwin installed first.",
       bt_start: "Cold start",
       bs_start: "From launch to the window appearing, no file.",
       bt_mrc: "Launch and open a 2 GB MRC",
@@ -1210,8 +1210,8 @@
       pbench_m: "Test machine: MacBook Pro (M1 Max, 32 GB RAM, macOS 27), October 2026. TifMrcView Pro 0.7.56, Fiji (ImageJ 2.16.0 / 1.54p), IMOD 5.1.13. Median of several runs, warm disk cache; shorter is better; open times include app start. Pro’s memory includes slices read ahead in the background (at most a quarter of RAM); 3dmod converts to 8-bit by default, hence its lower memory."
     },
     de: {
-      bt_dl: "Downloadgröße",
-      bs_dl: "macOS-Paket. Fiji: offizielle Apple-Silicon-Version mit Java.",
+      bt_dl: "Downloadgröße unter Windows",
+      bs_dl: "64-Bit-Versionen, jeweils aktuell im Oktober 2026. Fiji bringt Java mit; IMOD ohne CUDA, das zusätzlich vorher Python oder Cygwin braucht.",
       bt_start: "Kaltstart",
       bs_start: "Vom Start bis zum Fenster, ohne Datei.",
       bt_mrc: "Starten und 2-GB-MRC öffnen",
@@ -1228,8 +1228,8 @@
       pbench_m: "Testrechner: MacBook Pro (M1 Max, 32 GB RAM, macOS 27), Oktober 2026. TifMrcView Pro 0.7.56, Fiji (ImageJ 2.16.0 / 1.54p), IMOD 5.1.13. Median mehrerer Läufe, warmer Plattencache; kürzer ist besser; Öffnungszeiten inklusive App-Start. Der Speicher von Pro enthält im Hintergrund vorgelesene Schichten (höchstens ein Viertel des RAM); 3dmod wandelt standardmäßig in 8 Bit um, daher weniger Speicher."
     },
     ja: {
-      bt_dl: "ダウンロードサイズ",
-      bs_dl: "macOS 版パッケージ。Fiji は Java 同梱の公式 Apple シリコン版。",
+      bt_dl: "Windows 版のダウンロードサイズ",
+      bs_dl: "64 ビット版、2026 年 10 月時点の各公式最新版。Fiji は Java 同梱。IMOD は CUDA なし版で、先に Python か Cygwin のインストールが必要です。",
       bt_start: "コールドスタート",
       bs_start: "起動からウィンドウ表示まで（ファイルなし）。",
       bt_mrc: "起動して 2 GB の MRC を開く",
@@ -1246,8 +1246,8 @@
       pbench_m: "テスト機：MacBook Pro（M1 Max、メモリ 32 GB、macOS 27）、2026 年 10 月。TifMrcView Pro 0.7.56、Fiji（ImageJ 2.16.0 / 1.54p）、IMOD 5.1.13。複数回の中央値、ディスクキャッシュは温まった状態、短いほど良好、開く時間は起動を含みます。Pro のメモリにはバックグラウンドで先読みしたスライス（上限はメモリの 1/4）が含まれます。3dmod は既定で 8 ビットに変換するためメモリが少なめです。"
     },
     es: {
-      bt_dl: "Tamaño de descarga",
-      bs_dl: "Paquete para macOS. Fiji: versión oficial para Apple silicon con Java incluido.",
+      bt_dl: "Tamaño de descarga en Windows",
+      bs_dl: "Versiones de 64 bits, las últimas de cada web en octubre de 2026. Fiji incluye Java; IMOD sin CUDA, que además requiere instalar antes Python o Cygwin.",
       bt_start: "Arranque en frío",
       bs_start: "Desde el inicio hasta que aparece la ventana, sin archivo.",
       bt_mrc: "Iniciar y abrir un MRC de 2 GB",
@@ -1264,8 +1264,8 @@
       pbench_m: "Equipo de prueba: MacBook Pro (M1 Max, 32 GB de RAM, macOS 27), octubre de 2026. TifMrcView Pro 0.7.56, Fiji (ImageJ 2.16.0 / 1.54p), IMOD 5.1.13. Mediana de varias ejecuciones, caché de disco caliente; menos es mejor; los tiempos de apertura incluyen el arranque. La memoria de Pro incluye cortes leídos por adelantado (como mucho una cuarta parte de la RAM); 3dmod convierte a 8 bits por defecto, por eso usa menos memoria."
     },
     fr: {
-      bt_dl: "Taille du téléchargement",
-      bs_dl: "Paquet macOS. Fiji : version officielle Apple silicon avec Java intégré.",
+      bt_dl: "Taille du téléchargement sous Windows",
+      bs_dl: "Versions 64 bits, les plus récentes de chaque site en octobre 2026. Fiji inclut Java ; IMOD sans CUDA, qui demande en plus d’installer Python ou Cygwin au préalable.",
       bt_start: "Démarrage à froid",
       bs_start: "Du lancement à l’apparition de la fenêtre, sans fichier.",
       bt_mrc: "Lancer et ouvrir un MRC de 2 Go",
@@ -1282,8 +1282,8 @@
       pbench_m: "Machine de test : MacBook Pro (M1 Max, 32 Go de RAM, macOS 27), octobre 2026. TifMrcView Pro 0.7.56, Fiji (ImageJ 2.16.0 / 1.54p), IMOD 5.1.13. Médiane de plusieurs exécutions, cache disque chaud ; plus court est meilleur ; temps d’ouverture démarrage compris. La mémoire de Pro inclut les coupes lues en arrière-plan (au plus un quart de la RAM) ; 3dmod convertit en 8 bits par défaut, d’où sa mémoire plus faible."
     },
     ru: {
-      bt_dl: "Размер загрузки",
-      bs_dl: "Пакет для macOS. Fiji — официальная сборка для Apple silicon со встроенной Java.",
+      bt_dl: "Размер загрузки для Windows",
+      bs_dl: "64-битные версии, последние на сайтах в октябре 2026. Fiji включает Java; IMOD без CUDA, для которого ещё нужно заранее установить Python или Cygwin.",
       bt_start: "Холодный запуск",
       bs_start: "От запуска до появления окна, без файла.",
       bt_mrc: "Запуск и открытие MRC на 2 ГБ",

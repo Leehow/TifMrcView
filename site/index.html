@@ -180,10 +180,10 @@
       <p class="lede rv" data-i="cmp_p">同一台电脑、同一批文件，和 ImageJ / Fiji、IMOD 实测对比。</p>
     </div>
     <div class="bench rv" id="bench">
-      <div><h3 data-i="bt_dl">下载大小</h3><p data-i="bs_dl">macOS 安装包。Fiji 为官方 Apple 芯片版（自带 Java）。</p>
-        <div class="bar me" style="--v:3.1"><span>TifMrcView</span><i></i><b>20.5 MB</b></div>
-        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>670 MB</b></div>
-        <div class="bar" style="--v:6.6"><span>IMOD</span><i></i><b>44 MB</b></div>
+      <div><h3 data-i="bt_dl">Windows 安装包大小</h3><p data-i="bs_dl">64 位版本，2026 年 10 月官网最新。Fiji 自带 Java；IMOD 取不带 CUDA 的版本，安装前还要先装 Python 或 Cygwin。</p>
+        <div class="bar me" style="--v:1"><span>TifMrcView</span><i></i><b>6.1 MB</b></div>
+        <div class="bar" style="--v:100"><span>Fiji</span><i></i><b>706 MB</b></div>
+        <div class="bar" style="--v:8.7"><span>IMOD</span><i></i><b>61 MB</b></div>
       </div>
       <div><h3 data-i="bt_start">冷启动</h3><p data-i="bs_start">从启动到窗口出现，不打开文件。</p>
         <div class="bar me" style="--v:7.9"><span>TifMrcView</span><i></i><b>0.69 s</b></div>
@@ -218,6 +218,7 @@
         <tbody>
           <tr><th data-i="cr_free">免费开源</th><td class="me y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
           <tr><th data-i="cr_assoc">原生安装包，双击图像就打开</th><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
+          <tr><th data-i="cr_env">不用另装 Java、Python 或 Cygwin</th><td class="me y">✓</td><td class="y">✓</td><td class="n">—</td></tr>
           <tr><th data-i="cr_big">数 GB 的栈不用整个读进内存，打开就能翻</th><td class="me y">✓</td><td class="p"></td><td class="p"></td></tr>
           <tr><th data-i="cr_lossless">按原始精度显示（float32 / 16 位），不降成 8 位</th><td class="me y">✓</td><td class="y">✓</td><td class="p"></td></tr>
           <tr><th data-i="cr_folder">同目录缩略图，↑ ↓ 切换文件</th><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
@@ -233,13 +234,12 @@
           <tr><th data-i="cr_spec">EELS / EDS 能谱查看</th><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
           <tr><th data-i="cr_upd">自动更新</th><td class="me y">✓</td><td class="y">✓</td><td class="n">—</td></tr>
           <tr><th data-i="cr_android">安卓版</th><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
-          <tr><th data-i="cr_macro">宏、脚本和批处理</th><td class="me n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
         </tbody>
       </table>
     </div>
     <p class="ckey"><span><b class="y">✓</b><span data-i="ck_y">支持</span></span><span><b class="p"></b><span data-i="ck_p">部分支持，或要另找插件 / 手动设置</span></span><span><b>—</b><span data-i="ck_n">没有</span></span></p>
     <p class="cfoot" data-i="cmp_plnote">TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。</p>
-    <p class="cfoot" data-i="cmp_foot">依据各软件官方文档和我们的实测（2026 年 10 月）。Fiji 和 IMOD 是功能全面的分析平台，宏脚本、海量插件和断层重建是它们的长项；TifMrcView 专注于又快又方便地看图。要做分析，请看 <a href="pro/">TifMrcView Pro</a>。</p>
+    <p class="cfoot" data-i="cmp_foot">依据各软件官方文档和我们的实测（2026 年 10 月）。要做 3D、分割和电镜分析，请看 <a href="pro/">TifMrcView Pro</a>。</p>
   </div>
 </section>
 
@@ -363,7 +363,7 @@
 
 <div class="lb" id="lb" role="dialog" aria-modal="true" hidden><img alt=""><button type="button" data-i-alt="sc_close" data-i-aria="1" aria-label="关闭">×</button></div>
 
-<script src="i18n.js?v=15"></script>
+<script src="i18n.js?v=17"></script>
 <script src="site.js?v=3"></script>
 </body>
 </html>
