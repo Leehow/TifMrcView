@@ -464,11 +464,21 @@ impl OpenImage {
         self.cache.lock().unwrap().get(&page).cloned()
     }
 
+    /// Whether pages sit uncompressed in a mapped file. Decoding one is then
+    /// a plain copy, so decoded pages are not kept: the OS file cache holds
+    /// the bytes, and gives them back when other programs need the memory.
+    fn direct(&self) -> bool {
+        self.source.raw_page(0).is_some()
+    }
+
     pub fn page(&self, page: usize) -> Result<Page> {
         if let Some(p) = self.cached(page) {
             return Ok(p);
         }
         let planes: Page = Arc::new(self.source.read_page(page)?);
+        if self.direct() {
+            return Ok(planes);
+        }
         let bytes: usize = planes.iter().map(|p| p.data.byte_len()).sum();
         let mut cache = self.cache.lock().unwrap();
         if let Some(p) = cache.get(&page) {
@@ -502,6 +512,11 @@ impl OpenImage {
             return (done, total, true);
         }
         let n = self.info().page_count;
+        if self.direct() {
+            // Read ahead into the OS file cache: count the pages visited.
+            let seen = self.stats.lock().unwrap().keys().filter(|k| k.1 == 0).count();
+            return (seen, n, true);
+        }
         let fits = self.info().page_bytes().saturating_mul(n) <= self.budget;
         (self.cache.lock().unwrap().len(), n, fits)
     }
@@ -521,19 +536,24 @@ impl OpenImage {
         std::thread::spawn(move || {
             let n = me.info().page_count;
             let per_page = me.info().page_bytes().max(1);
+            // Uncompressed mapped files keep no decoded pages: the reader only
+            // warms the OS file cache and computes statistics, for every page.
+            let direct = me.direct();
             // Pages kept on each side of the focus.
-            let reach = (me.budget / per_page).max(1).min(n) / 2;
+            let reach = if direct { n } else { (me.budget / per_page).max(1).min(n) / 2 };
             let busy = Mutex::new(std::collections::HashSet::new());
             // Pages that failed to decode; never retried in the background.
             let failed = Mutex::new(std::collections::HashSet::new());
             let next = || -> Option<usize> {
                 let f = me.focus.load(Ordering::Relaxed).min(n - 1);
                 let cache = me.cache.lock().unwrap();
+                let stats = me.stats.lock().unwrap();
                 let mut busy = busy.lock().unwrap();
                 let failed = failed.lock().unwrap();
+                let done = |p: usize| if direct { stats.contains_key(&(p, 0)) } else { cache.contains_key(&p) };
                 for d in 0..=reach {
                     for p in [f.checked_add(d), f.checked_sub(d)].into_iter().flatten() {
-                        if p < n && !cache.contains_key(&p) && !busy.contains(&p) && !failed.contains(&p) {
+                        if p < n && !done(p) && !busy.contains(&p) && !failed.contains(&p) {
                             busy.insert(p);
                             return Some(p);
                         }
@@ -966,6 +986,43 @@ pub(crate) mod tests {
         assert_eq!(p[0].data.get_f64(0), 1.0);
         img.page(2).unwrap();
         assert!(img.cached(1).is_none() && img.cached(2).is_some());
+    }
+
+    /// `FakeSource` whose pages count as uncompressed in a mapped file.
+    struct Mapped(FakeSource);
+
+    impl Source for Mapped {
+        fn info(&self) -> &ImageInfo {
+            self.0.info()
+        }
+        fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
+            self.0.read_page(page)
+        }
+        fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
+            Some((&self.0.pages.get(page)?[0], true))
+        }
+    }
+
+    #[test]
+    fn mapped_pages_are_not_cached_but_read_ahead() {
+        let n = 5;
+        let pages = (0..n).map(|i| vec![vec![i as u8; 4]]).collect();
+        let (src, reads) = FakeSource::new(fake_info(2, 2, 1, n, 1, DType::U8), pages);
+        let img = OpenImage::new(1, Box::new(Mapped(src)), usize::MAX);
+        assert_eq!(img.page(3).unwrap()[0].data.get_f64(0), 3.0);
+        assert!(img.cached(3).is_none());
+        img.prefetch(2);
+        for _ in 0..100 {
+            if img.load_progress().0 == n {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        img.cancelled.store(true, Ordering::Relaxed);
+        assert_eq!(img.load_progress(), (n, n, true));
+        assert!(img.cached(0).is_none());
+        // Every page visited once by the reader, plus the one read above.
+        assert_eq!(reads.load(Ordering::Relaxed), n + 1);
     }
 
     #[test]
