@@ -1,6 +1,6 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, the last two on the GPU). Previews the middle of the
+// means (denoise.rs, NLM on the GPU). Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
 // Shares app.js globals: S, T, invoke, $, pref, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
