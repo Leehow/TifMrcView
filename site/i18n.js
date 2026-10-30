@@ -999,7 +999,7 @@
       cr_chan: '多通道分别开关、换色、调对比度', cr_mod: '自动叠加 IMOD 模型（.mod / .fid）',
       cr_fft: 'FFT 功率谱、衍射 1/nm 标尺', cr_spec: 'EELS / EDS 能谱查看', cr_upd: '自动更新',
       cr_android: '安卓版', cr_macro: '宏、脚本和批处理',
-      cmp_plug: '插件', ck_y: '自带', ck_p: '部分支持，或要另装插件 / 手动设置', ck_n: '没有', ck_pl: '官方插件，在应用内一键安装',
+      cmp_plug: '插件', ck_y: "支持", ck_p: "部分支持，或要另找插件 / 手动设置", ck_n: '没有', ck_pl: '官方插件，在应用内一键安装',
       cmp_foot: '依据各软件官方文档和我们的实测（2026 年 10 月）。Fiji 和 IMOD 是功能全面的分析平台，宏脚本、海量插件和断层重建是它们的长项；TifMrcView 专注于又快又方便地看图。要做分析，请看 <a href="pro/">TifMrcView Pro</a>。',
       pcmp_h: '功能对比', pcmp_p: 'Pro 和基础版，以及常用的 ImageJ / Fiji、IMOD。', pcmp_basic: '基础版',
       pg_view: '看图', pg_3d: '3D 与分割', pg_em: '电镜分析',
@@ -1010,7 +1010,8 @@
       pr_sam: 'AI 点击分割（SAM 2.1，本地运行）', pr_prop: '分割结果沿 Z 自动传播',
       pr_ctf: 'CTF 拟合', pr_drift: '漂移校正、对齐',
       pr_gpu: 'GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: '断层重建',
-      pcmp_foot: '依据各软件官方文档（2026 年 10 月）。厂商格式在基础版和 Pro 里由官方插件提供。Fiji 和 IMOD 有大量插件和命令行程序，这里只比较装好就有的功能。'
+      pcmp_foot: '依据各软件官方文档（2026 年 10 月）。厂商格式在基础版和 Pro 里由官方插件提供。Fiji 和 IMOD 有大量插件和命令行程序，这里只比较装好就有的功能。',
+      cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。"
     },
     en: {
       cmp_eye: 'Compared', cmp_h: '<span>Small and fast.</span> <span>Measured.</span>',
@@ -1024,7 +1025,7 @@
       cr_chan: 'Per-channel on/off, colour and contrast', cr_mod: 'IMOD models (.mod / .fid) overlaid automatically',
       cr_fft: 'FFT power spectrum, 1/nm diffraction scale', cr_spec: 'EELS / EDS spectrum viewer', cr_upd: 'Automatic updates',
       cr_android: 'Android app', cr_macro: 'Macros, scripting and batch processing',
-      cmp_plug: 'plugin', ck_y: 'built in', ck_p: 'partly, or needs an extra plugin / manual setup', ck_n: 'no', ck_pl: 'official plugin, one-click install in the app',
+      cmp_plug: 'plugin', ck_y: "supported", ck_p: "partly, or needs a third-party plugin / manual setup", ck_n: 'no', ck_pl: 'official plugin, one-click install in the app',
       cmp_foot: 'Based on each program’s documentation and our own measurements (October 2026). Fiji and IMOD are full analysis platforms: macros, a huge plugin ecosystem and tomographic reconstruction are their strengths. TifMrcView focuses on viewing images quickly and easily. For analysis, see <a href="pro/">TifMrcView Pro</a>.',
       pcmp_h: 'Feature comparison', pcmp_p: 'Pro and the basic edition, next to ImageJ / Fiji and IMOD.', pcmp_basic: 'Basic',
       pg_view: 'Viewing', pg_3d: '3D and segmentation', pg_em: 'EM analysis',
@@ -1035,7 +1036,8 @@
       pr_sam: 'AI click segmentation (SAM 2.1, runs locally)', pr_prop: 'Propagate segmentation along Z',
       pr_ctf: 'CTF fitting', pr_drift: 'Drift correction and alignment',
       pr_gpu: 'GPU compute <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomographic reconstruction',
-      pcmp_foot: 'Based on each program’s documentation (October 2026). Vendor formats come from official plugins in both editions. Fiji and IMOD have many plugins and command-line programs; this table compares what you get out of the box.'
+      pcmp_foot: 'Based on each program’s documentation (October 2026). Vendor formats come from official plugins in both editions. Fiji and IMOD have many plugins and command-line programs; this table compares what you get out of the box.',
+      cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app."
     },
     de: {
       cmp_eye: 'Im Vergleich', cmp_h: '<span>Klein und schnell.</span> <span>Gemessen.</span>',
@@ -1049,7 +1051,7 @@
       cr_chan: 'Kanäle einzeln ein/aus, Farbe und Kontrast', cr_mod: 'IMOD-Modelle (.mod / .fid) automatisch eingeblendet',
       cr_fft: 'FFT-Leistungsspektrum, 1/nm-Beugungsskala', cr_spec: 'EELS- / EDS-Spektrenansicht', cr_upd: 'Automatische Updates',
       cr_android: 'Android-App', cr_macro: 'Makros, Skripte und Stapelverarbeitung',
-      cmp_plug: 'Plugin', ck_y: 'eingebaut', ck_p: 'teilweise, oder mit Zusatz-Plugin / manueller Einstellung', ck_n: 'nein', ck_pl: 'offizielles Plugin, mit einem Klick in der App installiert',
+      cmp_plug: 'Plugin', ck_y: "unterstützt", ck_p: "teilweise, oder mit Fremd-Plugin / manueller Einstellung", ck_n: 'nein', ck_pl: 'offizielles Plugin, mit einem Klick in der App installiert',
       cmp_foot: 'Nach der Dokumentation der Programme und eigenen Messungen (Oktober 2026). Fiji und IMOD sind vollständige Analyseplattformen: Makros, unzählige Plugins und tomografische Rekonstruktion sind ihre Stärken. TifMrcView konzentriert sich darauf, Bilder schnell und bequem anzusehen. Für Analysen siehe <a href="pro/">TifMrcView Pro</a>.',
       pcmp_h: 'Funktionsvergleich', pcmp_p: 'Pro und die Basisversion, neben ImageJ / Fiji und IMOD.', pcmp_basic: 'Basis',
       pg_view: 'Ansehen', pg_3d: '3D und Segmentierung', pg_em: 'EM-Analyse',
@@ -1060,7 +1062,8 @@
       pr_sam: 'KI-Segmentierung per Klick (SAM 2.1, lokal)', pr_prop: 'Segmentierung entlang Z fortsetzen',
       pr_ctf: 'CTF-Anpassung', pr_drift: 'Driftkorrektur und Ausrichtung',
       pr_gpu: 'GPU-Berechnung <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomografische Rekonstruktion',
-      pcmp_foot: 'Nach der Dokumentation der Programme (Oktober 2026). Herstellerformate kommen in beiden Versionen aus offiziellen Plugins. Fiji und IMOD haben viele Plugins und Kommandozeilenprogramme; verglichen wird, was nach der Installation dabei ist.'
+      pcmp_foot: 'Nach der Dokumentation der Programme (Oktober 2026). Herstellerformate kommen in beiden Versionen aus offiziellen Plugins. Fiji und IMOD haben viele Plugins und Kommandozeilenprogramme; verglichen wird, was nach der Installation dabei ist.',
+      cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert."
     },
     ja: {
       cmp_eye: '比較', cmp_h: '<span>小さく、速い。</span><span>実測で。</span>',
@@ -1074,7 +1077,7 @@
       cr_chan: 'チャンネルごとの表示切替・色・コントラスト', cr_mod: 'IMOD モデル（.mod / .fid）を自動で重ねて表示',
       cr_fft: 'FFT パワースペクトル、回折の 1/nm スケール', cr_spec: 'EELS / EDS スペクトルビューア', cr_upd: '自動アップデート',
       cr_android: 'Android 版', cr_macro: 'マクロ・スクリプト・バッチ処理',
-      cmp_plug: 'プラグイン', ck_y: '標準搭載', ck_p: '一部対応、または追加プラグイン / 手動設定が必要', ck_n: 'なし', ck_pl: '公式プラグイン、アプリ内でワンクリック導入',
+      cmp_plug: 'プラグイン', ck_y: "対応", ck_p: "一部対応、または別途プラグイン / 手動設定が必要", ck_n: 'なし', ck_pl: '公式プラグイン、アプリ内でワンクリック導入',
       cmp_foot: '各ソフトの公式ドキュメントと私たちの実測（2026 年 10 月）に基づきます。Fiji と IMOD は総合的な解析プラットフォームで、マクロ、膨大なプラグイン、トモグラム再構成が強みです。TifMrcView は画像を速く手軽に見ることに特化しています。解析には <a href="pro/">TifMrcView Pro</a> をどうぞ。',
       pcmp_h: '機能比較', pcmp_p: 'Pro と基本版、そして ImageJ / Fiji、IMOD。', pcmp_basic: '基本版',
       pg_view: '閲覧', pg_3d: '3D とセグメンテーション', pg_em: '電顕解析',
@@ -1085,7 +1088,8 @@
       pr_sam: 'AI クリックセグメンテーション（SAM 2.1、ローカル実行）', pr_prop: 'セグメンテーションを Z 方向に自動伝播',
       pr_ctf: 'CTF フィッティング', pr_drift: 'ドリフト補正・位置合わせ',
       pr_gpu: 'GPU 計算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'トモグラム再構成',
-      pcmp_foot: '各ソフトの公式ドキュメント（2026 年 10 月）に基づきます。各社フォーマットはどちらの版でも公式プラグインで対応します。Fiji と IMOD には多数のプラグインやコマンドラインプログラムがありますが、ここではインストール直後に使える機能を比べています。'
+      pcmp_foot: '各ソフトの公式ドキュメント（2026 年 10 月）に基づきます。各社フォーマットはどちらの版でも公式プラグインで対応します。Fiji と IMOD には多数のプラグインやコマンドラインプログラムがありますが、ここではインストール直後に使える機能を比べています。',
+      cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。"
     },
     es: {
       cmp_eye: 'Comparativa', cmp_h: '<span>Pequeño y rápido.</span> <span>Medido.</span>',
@@ -1099,7 +1103,7 @@
       cr_chan: 'Canales por separado: activar, color y contraste', cr_mod: 'Modelos de IMOD (.mod / .fid) superpuestos automáticamente',
       cr_fft: 'Espectro de potencia FFT, escala de difracción en 1/nm', cr_spec: 'Visor de espectros EELS / EDS', cr_upd: 'Actualizaciones automáticas',
       cr_android: 'App para Android', cr_macro: 'Macros, scripts y procesamiento por lotes',
-      cmp_plug: 'plugin', ck_y: 'incluido', ck_p: 'en parte, o requiere otro plugin / ajuste manual', ck_n: 'no', ck_pl: 'plugin oficial, se instala con un clic en la app',
+      cmp_plug: 'plugin', ck_y: "compatible", ck_p: "en parte, o requiere un plugin de terceros / ajuste manual", ck_n: 'no', ck_pl: 'plugin oficial, se instala con un clic en la app',
       cmp_foot: 'Según la documentación de cada programa y nuestras propias mediciones (octubre de 2026). Fiji e IMOD son plataformas de análisis completas: las macros, su enorme ecosistema de plugins y la reconstrucción tomográfica son sus puntos fuertes. TifMrcView se centra en ver imágenes de forma rápida y cómoda. Para análisis, consulta <a href="pro/">TifMrcView Pro</a>.',
       pcmp_h: 'Comparativa de funciones', pcmp_p: 'Pro y la edición básica, junto a ImageJ / Fiji e IMOD.', pcmp_basic: 'Básica',
       pg_view: 'Visualización', pg_3d: '3D y segmentación', pg_em: 'Análisis de ME',
@@ -1110,7 +1114,8 @@
       pr_sam: 'Segmentación con IA por clic (SAM 2.1, en local)', pr_prop: 'Propagar la segmentación a lo largo de Z',
       pr_ctf: 'Ajuste de CTF', pr_drift: 'Corrección de deriva y alineación',
       pr_gpu: 'Cálculo en GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstrucción tomográfica',
-      pcmp_foot: 'Según la documentación de cada programa (octubre de 2026). En ambas ediciones los formatos de fabricantes llegan con plugins oficiales. Fiji e IMOD tienen muchos plugins y programas de línea de comandos; aquí se compara lo que trae cada uno al instalarlo.'
+      pcmp_foot: 'Según la documentación de cada programa (octubre de 2026). En ambas ediciones los formatos de fabricantes llegan con plugins oficiales. Fiji e IMOD tienen muchos plugins y programas de línea de comandos; aquí se compara lo que trae cada uno al instalarlo.',
+      cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app."
     },
     fr: {
       cmp_eye: 'Comparaison', cmp_h: '<span>Léger et rapide.</span> <span>Mesuré.</span>',
@@ -1124,7 +1129,7 @@
       cr_chan: 'Canaux séparés : affichage, couleur et contraste', cr_mod: 'Modèles IMOD (.mod / .fid) superposés automatiquement',
       cr_fft: 'Spectre de puissance FFT, échelle de diffraction en 1/nm', cr_spec: 'Visionneuse de spectres EELS / EDS', cr_upd: 'Mises à jour automatiques',
       cr_android: 'Application Android', cr_macro: 'Macros, scripts et traitement par lots',
-      cmp_plug: 'plugin', ck_y: 'intégré', ck_p: 'en partie, ou avec un plugin / réglage supplémentaire', ck_n: 'non', ck_pl: 'plugin officiel, installé en un clic dans l’app',
+      cmp_plug: 'plugin', ck_y: "pris en charge", ck_p: "en partie, ou avec un plugin tiers / réglage manuel", ck_n: 'non', ck_pl: 'plugin officiel, installé en un clic dans l’app',
       cmp_foot: 'D’après la documentation de chaque logiciel et nos propres mesures (octobre 2026). Fiji et IMOD sont des plateformes d’analyse complètes : macros, immense écosystème de plugins et reconstruction tomographique sont leurs points forts. TifMrcView se concentre sur la visualisation rapide et simple. Pour l’analyse, voir <a href="pro/">TifMrcView Pro</a>.',
       pcmp_h: 'Comparaison des fonctions', pcmp_p: 'Pro et l’édition de base, face à ImageJ / Fiji et IMOD.', pcmp_basic: 'Base',
       pg_view: 'Visualisation', pg_3d: '3D et segmentation', pg_em: 'Analyse de ME',
@@ -1135,7 +1140,8 @@
       pr_sam: 'Segmentation IA au clic (SAM 2.1, en local)', pr_prop: 'Propager la segmentation le long de Z',
       pr_ctf: 'Ajustement de la CTF', pr_drift: 'Correction de dérive et alignement',
       pr_gpu: 'Calcul sur GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstruction tomographique',
-      pcmp_foot: 'D’après la documentation de chaque logiciel (octobre 2026). Dans les deux éditions, les formats des fabricants viennent de plugins officiels. Fiji et IMOD ont de nombreux plugins et programmes en ligne de commande ; on compare ici ce qui est disponible dès l’installation.'
+      pcmp_foot: 'D’après la documentation de chaque logiciel (octobre 2026). Dans les deux éditions, les formats des fabricants viennent de plugins officiels. Fiji et IMOD ont de nombreux plugins et programmes en ligne de commande ; on compare ici ce qui est disponible dès l’installation.',
+      cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app."
     },
     ru: {
       cmp_eye: 'Сравнение', cmp_h: '<span>Маленький и быстрый.</span> <span>Измерено.</span>',
@@ -1149,7 +1155,7 @@
       cr_chan: 'Каналы по отдельности: показ, цвет, контраст', cr_mod: 'Модели IMOD (.mod / .fid) накладываются автоматически',
       cr_fft: 'Спектр мощности FFT, шкала дифракции в 1/нм', cr_spec: 'Просмотр спектров EELS / EDS', cr_upd: 'Автообновление',
       cr_android: 'Приложение для Android', cr_macro: 'Макросы, скрипты и пакетная обработка',
-      cmp_plug: 'плагин', ck_y: 'встроено', ck_p: 'частично, или нужен доп. плагин / ручная настройка', ck_n: 'нет', ck_pl: 'официальный плагин, ставится в приложении одним щелчком',
+      cmp_plug: 'плагин', ck_y: "есть", ck_p: "частично, или нужен сторонний плагин / ручная настройка", ck_n: 'нет', ck_pl: 'официальный плагин, ставится в приложении одним щелчком',
       cmp_foot: 'По документации программ и нашим собственным измерениям (октябрь 2026). Fiji и IMOD — полноценные платформы анализа: макросы, огромное число плагинов и томографическая реконструкция — их сильные стороны. TifMrcView сосредоточен на быстром и удобном просмотре. Для анализа см. <a href="pro/">TifMrcView Pro</a>.',
       pcmp_h: 'Сравнение возможностей', pcmp_p: 'Pro и базовая версия рядом с ImageJ / Fiji и IMOD.', pcmp_basic: 'Базовая',
       pg_view: 'Просмотр', pg_3d: '3D и сегментация', pg_em: 'Анализ ЭМ',
@@ -1160,7 +1166,8 @@
       pr_sam: 'ИИ-сегментация щелчком (SAM 2.1, локально)', pr_prop: 'Распространение сегментации по Z',
       pr_ctf: 'Подгонка CTF', pr_drift: 'Коррекция дрейфа и выравнивание',
       pr_gpu: 'Вычисления на GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Томографическая реконструкция',
-      pcmp_foot: 'По документации программ (октябрь 2026). Форматы производителей в обеих версиях дают официальные плагины. У Fiji и IMOD много плагинов и программ командной строки; здесь сравнивается то, что есть сразу после установки.'
+      pcmp_foot: 'По документации программ (октябрь 2026). Форматы производителей в обеих версиях дают официальные плагины. У Fiji и IMOD много плагинов и программ командной строки; здесь сравнивается то, что есть сразу после установки.',
+      cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком."
     }
   };
   Object.keys(CMP).forEach(function (c) { for (var k in CMP[c]) T[c][k] = CMP[c][k]; });
