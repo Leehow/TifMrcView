@@ -4,9 +4,12 @@ mod android;
 mod assoc;
 pub mod align;
 pub mod ctf;
+pub mod denoise;
 pub mod diffraction;
 #[cfg(feature = "pro")]
 pub mod ctf_gpu;
+#[cfg(feature = "pro")]
+pub mod denoise_gpu;
 pub mod edition;
 pub mod fft;
 pub mod formats;

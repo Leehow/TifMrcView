@@ -85,7 +85,7 @@
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }
 
-#align-panel, #diff-panel {
+#align-panel, #diff-panel, #denoise-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
   width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
   padding: 8px 10px 10px; font-size: 12px;
@@ -124,3 +124,13 @@
 #df-zone { margin-top: 8px; }
 #df-zone summary { cursor: pointer; font-size: 12px; margin-bottom: 6px; }
 .df-cell { grid-template-columns: 1fr 1fr 1fr; }
+
+/* Denoising */
+#denoise-panel .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+.dn-slider { display: flex; align-items: center; gap: 6px; }
+.dn-slider input { flex: 1; min-width: 0; }
+.dn-slider output { width: 36px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.dn-split { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--dim); font-size: 11px; }
+.dn-split input { flex: 1; min-width: 0; }
+#dn-status, #dn-saved-name { flex: 1; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#denoise-panel [hidden] { display: none; }

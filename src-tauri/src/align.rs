@@ -632,13 +632,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
         "stack" => false,
         x => bail!("未知的输出 {x}"),
     };
-    let unit_a = match info.unit.as_str() {
-        "nm" => 10.0,
-        "µm" | "um" => 1e4,
-        "Å" | "A" | "angstrom" => 1.0,
-        _ => 0.0,
-    };
-    let px = info.pixel_size.map(|p| p[0] * unit_a).filter(|&p| p > 0.0).unwrap_or(1.0);
+    let px = pixel_a(info);
     let nz = if sum { 1 } else { req.zs.len() };
     let tmp = format!("{}.part", req.path);
     let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
@@ -696,15 +690,29 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
     let mean = total / count;
     let rms = (total2 / count - mean * mean).max(0.0).sqrt();
     f.seek(SeekFrom::Start(0))?;
-    f.write_all(&mrc_header(w, h, nz, px, [lo as f32, hi as f32, mean as f32, rms as f32], sum, req.zs.len()))?;
+    let frames = req.zs.len();
+    let label = if sum { format!("TifMrcView: aligned sum of {frames} frames") } else { format!("TifMrcView: aligned stack of {frames} slices") };
+    f.write_all(&mrc_header(w, h, nz, px, [lo as f32, hi as f32, mean as f32, rms as f32], &label))?;
     f.flush()?;
     drop(f);
     std::fs::rename(&tmp, &req.path)?;
     Ok(())
 }
 
-/// MRC2014 header for 32-bit floats (mode 2), little-endian.
-fn mrc_header(w: usize, h: usize, nz: usize, pixel_a: f64, stats: [f32; 4], sum: bool, frames: usize) -> Vec<u8> {
+/// Pixel size in Å, or 1 when the file does not say.
+pub(crate) fn pixel_a(info: &crate::image::ImageInfo) -> f64 {
+    let unit_a = match info.unit.as_str() {
+        "nm" => 10.0,
+        "µm" | "um" => 1e4,
+        "Å" | "A" | "angstrom" => 1.0,
+        _ => 0.0,
+    };
+    info.pixel_size.map(|p| p[0] * unit_a).filter(|&p| p > 0.0).unwrap_or(1.0)
+}
+
+/// MRC2014 header for 32-bit floats (mode 2), little-endian; `stats` is
+/// min, max, mean, rms; `label` goes into the first of the ten labels.
+pub(crate) fn mrc_header(w: usize, h: usize, nz: usize, pixel_a: f64, stats: [f32; 4], label: &str) -> Vec<u8> {
     let mut b = vec![0u8; 1024];
     let mut put_i = |off: usize, v: i32| b[off..off + 4].copy_from_slice(&v.to_le_bytes());
     for (k, v) in [w as i32, h as i32, nz as i32, 2, 0, 0, 0, w as i32, h as i32, nz as i32].into_iter().enumerate() {
@@ -731,7 +739,6 @@ fn mrc_header(w: usize, h: usize, nz: usize, pixel_a: f64, stats: [f32; 4], sum:
     put_f(216, stats[3]);
     b[208..212].copy_from_slice(b"MAP ");
     b[212..216].copy_from_slice(&[0x44, 0x44, 0, 0]);
-    let label = if sum { format!("TifMrcView: aligned sum of {frames} frames") } else { format!("TifMrcView: aligned stack of {frames} slices") };
     let l = label.as_bytes();
     b[224..224 + l.len().min(80)].copy_from_slice(&l[..l.len().min(80)]);
     b
@@ -900,7 +907,7 @@ mod tests {
     fn writes_a_readable_mrc() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.mrc");
-        let mut bytes = mrc_header(3, 2, 1, 1.5, [0.0, 5.0, 2.5, 1.0], true, 4);
+        let mut bytes = mrc_header(3, 2, 1, 1.5, [0.0, 5.0, 2.5, 1.0], "TifMrcView: aligned sum of 4 frames");
         for v in 0..6 {
             bytes.extend_from_slice(&(v as f32).to_le_bytes());
         }
@@ -928,7 +935,7 @@ mod bench {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("movie.mrc");
         let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-        f.write_all(&mrc_header(w, w, frames, 1.0, [0.0, 1.0, 0.5, 0.2], false, frames)).unwrap();
+        f.write_all(&mrc_header(w, w, frames, 1.0, [0.0, 1.0, 0.5, 0.2], "test")).unwrap();
         let t = Instant::now();
         // A blurred noise image, sampled at moving positions, plus fresh noise.
         let bw = w + 128;
