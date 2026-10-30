@@ -232,7 +232,7 @@ impl Sam {
             let gray = |z: usize| slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise);
             let first = predictor.track_start(&predictor.encode_gray(&gray(req.z)?, w, h), &start);
             for (dir, steps) in dirs {
-                let (mut prev, base) = (Vec::new(), done);
+                let (mut prev, mut prev_mask, base) = (Vec::new(), start.clone(), done);
                 for k in 1..=steps {
                     if self.cancel.load(SeqCst) {
                         return Ok(out);
@@ -241,12 +241,19 @@ impl Sam {
                     let t = predictor.track_next(&predictor.encode_gray(&gray(z)?, w, h), &first, &prev, k, d);
                     let mask: Vec<bool> = t.prediction.logits.iter().map(|&v| v > 0.0).collect();
                     let area = mask.iter().filter(|m| **m).count();
-                    if t.obj_score <= 0.0 || area == 0 || too_big(&mask) {
-                        eprintln!("SAM: tracking stops at slice {z}: object score {:.2}, {area} px, quality {:.2}", t.obj_score, t.prediction.iou);
+                    if std::env::var_os("TMV_SAM_TRACE").is_some() {
+                        eprintln!("SAM: slice {z}: object score {:.2}, quality {:.2}, {area} px, {}", t.obj_score, t.prediction.iou, compare(&prev_mask, &mask, w, h, t.prediction.iou));
+                    }
+                    // The object score alone stays positive while a thin
+                    // object frays or the mask slides onto a neighbour at
+                    // the ends, so the slice-to-slice checks apply too.
+                    if t.obj_score <= 0.0 || area == 0 || too_big(&mask) || !still_same(&prev_mask, &mask, w, h, t.prediction.iou, min_iou(start_iou)) {
+                        eprintln!("SAM: tracking stops at slice {z}: object score {:.2}, {}", t.obj_score, compare(&prev_mask, &mask, w, h, t.prediction.iou));
                         break;
                     }
                     done += 1;
                     progress(done, total);
+                    prev_mask = mask.clone();
                     out.push((z, mask));
                     prev.push(t.memory);
                     if prev.len() > tmv_sam::memory::MAX_OBJ_PTRS {
