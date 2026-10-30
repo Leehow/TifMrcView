@@ -4,6 +4,7 @@ mod android;
 mod assoc;
 pub mod align;
 pub mod ctf;
+pub mod diffraction;
 #[cfg(feature = "pro")]
 pub mod ctf_gpu;
 pub mod edition;
