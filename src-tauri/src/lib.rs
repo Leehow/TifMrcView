@@ -21,6 +21,8 @@ pub mod labels;
 pub mod classify;
 #[cfg(feature = "pro")]
 pub mod unet;
+#[cfg(feature = "pro")]
+pub mod wedge;
 pub mod image;
 #[cfg(feature = "desktop")]
 mod mem;

@@ -1261,6 +1261,132 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(feature = "pro"), allow(dead_code))]
+struct WedgeReq {
+    token: u64,
+    c: usize,
+    t: usize,
+    bin: usize,
+    #[cfg(feature = "pro")]
+    #[serde(default)]
+    geometry: Option<crate::wedge::Geometry>,
+    #[cfg(feature = "pro")]
+    #[serde(default)]
+    config: Option<crate::wedge::TrainConfig>,
+}
+
+/// Missing-wedge correction (Pro): measures the beam axis, tilt axis and
+/// tilt range from the open stack's power spectrum.
+#[tauri::command]
+async fn wedge_detect(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Value> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let img = current(&app.state::<AppState>(), req.token)?;
+        crate::wedge::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        blocking(move || {
+            let (vol, _, _) = crate::wedge::volume(&img, req.c, req.t, req.bin)?;
+            Ok(serde_json::to_value(crate::wedge::detect(&vol))?)
+        })
+        .await
+    }
+}
+
+/// Trains the missing-wedge network on the open stack; reports
+/// `wedge-train` (`wedge::Progress`). Then `wedge_preview` and `wedge_save`.
+#[tauri::command]
+async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Value> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, req);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        use crate::wedge::{CANCEL, MODEL};
+        let img = current(&app.state::<AppState>(), req.token)?;
+        CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        blocking(move || {
+            let started = std::time::Instant::now();
+            let Some(g) = req.geometry else { anyhow::bail!("缺少倾转几何") };
+            let cfg = req.config.unwrap_or_default();
+            let (vol, mean, std) = crate::wedge::volume(&img, req.c, req.t, req.bin)?;
+            let vol = if cfg.smooth > 0.0 { Arc::new(crate::wedge::smooth(&vol, cfg.smooth)) } else { vol };
+            // Cubes no larger than the volume's thinnest side allows.
+            let mut cfg = cfg;
+            while cfg.cube > 16 && vol.n.iter().any(|&k| k < cfg.cube) {
+                cfg.cube /= 2;
+            }
+            let app2 = app.clone();
+            let ((net, loss), backend) = crate::classify::on_device(|dev| {
+                crate::wedge::train(dev, &vol, &g, &cfg, |p| {
+                    let _ = app2.emit("wedge-train", p);
+                })
+            })?;
+            *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, c: req.c, t: req.t }));
+            let seconds = started.elapsed().as_secs_f32();
+            eprintln!("wedge_train: {:?} cube {} × {} {} it × {} steps, loss {loss:.4}, {backend} in {seconds:.1} s", vol.n, cfg.cube, cfg.count, cfg.iterations, cfg.steps);
+            Ok(serde_json::json!({ "loss": loss, "backend": backend, "seconds": seconds, "dims": vol.n, "cube": cfg.cube }))
+        })
+        .await
+    }
+}
+
+/// A corrected slice of the trained stack, as `wedge::preview` lays it out.
+#[tauri::command]
+async fn wedge_preview(req: serde_json::Value) -> CmdResult<Response> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = req;
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let req: crate::wedge::PreviewReq = serde_json::from_value(req).map_err(err)?;
+        let Some(m) = crate::wedge::MODEL.lock().unwrap().clone() else { return Err("还没有训练网络".into()) };
+        let bytes = blocking(move || crate::wedge::preview(&m, &req)).await?;
+        Ok(Response::new(bytes))
+    }
+}
+
+/// Writes the whole corrected volume to a path from `pick_save_path`;
+/// reports `wedge-progress` {done, total}; returns the backend.
+#[tauri::command]
+async fn wedge_save(app: AppHandle, path: String) -> CmdResult<String> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, path);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        if !app.state::<AppState>().save_paths.allowed(&path) {
+            return Err(format!("不允许写入：{path}"));
+        }
+        let Some(m) = crate::wedge::MODEL.lock().unwrap().clone() else { return Err("还没有训练网络".into()) };
+        let pixel_a = current(&app.state::<AppState>(), m.token).map(|img| crate::align::pixel_a(img.info())).unwrap_or(1.0);
+        blocking(move || {
+            let progress = |done, total| {
+                let _ = app.emit("wedge-progress", serde_json::json!({ "done": done, "total": total }));
+            };
+            crate::wedge::save(&m, &path, pixel_a, &progress).map(String::from)
+        })
+        .await
+    }
+}
+
+#[tauri::command]
+fn wedge_cancel() {
+    #[cfg(feature = "pro")]
+    crate::wedge::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn pick_save_path(
     app: AppHandle,
@@ -1781,6 +1907,11 @@ pub fn run() {
             denoise_save,
             denoise_cancel,
             denoise_train,
+            wedge_detect,
+            wedge_train,
+            wedge_preview,
+            wedge_save,
+            wedge_cancel,
             spectrum_values,
             pick_save_path,
             pick_folder,
