@@ -413,7 +413,7 @@
     const before = $("dn-mode").value;
     syncMode();
     if ($("dn-mode").value !== before) $("dn-bin").value = 1;
-    if (N.model) $("dn-model").textContent = (N.modelToken === S.token ? "已训练：" : "已训练（在另一张图上）：") + N.model;
+    if (N.model) $("dn-model").textContent = (N.modelToken === S.token ? "已训练：" + N.model : `已训练（在另一张图上）：${N.model}\n数据类型不同时效果可能较差，最好在这张图上重新训练`);
   }
 
   // Enable in the XY view (not for RGB pictures); recompute the preview a
