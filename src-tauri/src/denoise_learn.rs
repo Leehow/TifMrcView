@@ -333,9 +333,33 @@ impl Learned {
         self.tiles(dev, values, w, h)
     }
 
+    /// The training data's scale, unless `values` are on a clearly different
+    /// one (a model trained on another image): then their own mean and
+    /// standard deviation, so the network sees what it was trained on.
+    fn scale_for(&self, values: &[f32]) -> (f32, f32) {
+        let (mut n, mut s, mut s2) = (0f64, 0f64, 0f64);
+        for &x in values.iter().filter(|x| x.is_finite()) {
+            n += 1.0;
+            s += x as f64;
+            s2 += x as f64 * x as f64;
+        }
+        if n < 2.0 {
+            return (self.mean, self.std);
+        }
+        let mean = (s / n) as f32;
+        let std = ((s2 / n - (s / n).powi(2)).max(0.0).sqrt() as f32).max(f32::MIN_POSITIVE);
+        let ratio = std / self.std;
+        if (0.25..=4.0).contains(&ratio) && (mean - self.mean).abs() <= 4.0 * self.std {
+            (self.mean, self.std)
+        } else {
+            (mean, std)
+        }
+    }
+
     fn tiles(&self, dev: &Device, values: &[f32], w: usize, h: usize) -> Vec<f32> {
         const TILE: usize = 512;
-        let v = standardise(values, self.mean, self.std);
+        let (mean, std) = self.scale_for(values);
+        let v = standardise(values, mean, std);
         let net = self.net.clone().to_device(dev);
         let mut out = vec![0f32; w * h];
         let step = TILE - 2 * MARGIN;
@@ -357,7 +381,7 @@ impl Learned {
                 let r = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
                 for y in y0..(y0 + step).min(h) {
                     for x in x0..(x0 + step).min(w) {
-                        out[y * w + x] = r[(y - ay) * pw + (x - ax)] * self.std + self.mean;
+                        out[y * w + x] = r[(y - ay) * pw + (x - ax)] * std + mean;
                     }
                 }
             }
@@ -407,6 +431,17 @@ mod tests {
     fn noise2void_learns_the_signal() {
         let (before, after) = denoised(Mode::N2v, 120);
         assert!(after < before * 0.8, "{after} vs {before}");
+    }
+
+    #[test]
+    fn other_scales_get_their_own_standardisation() {
+        let dev = Device::flex();
+        let l = Learned { net: Net::new(&dev), mode: Mode::N2v, mean: 0.5, std: 0.1, loss: 0.0, source: String::new(), bin: 1 };
+        let near: Vec<f32> = (0..100).map(|i| 0.5 + 0.1 * ((i % 7) as f32 - 3.0) / 2.0).collect();
+        assert_eq!(l.scale_for(&near), (0.5, 0.1));
+        let far: Vec<f32> = near.iter().map(|x| 1000.0 + 300.0 * x).collect();
+        let (m, s) = l.scale_for(&far);
+        assert!((m - 1150.0).abs() < 1.0 && s > 10.0, "{m} {s}");
     }
 
     #[test]
