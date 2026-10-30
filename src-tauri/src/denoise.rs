@@ -22,8 +22,8 @@
 //! `slab` > 0, each slice is first averaged with `slab` neighbours on each
 //! side (stacks of thin slices, tomograms).
 //!
-//! Diffusion and NLM run on the GPU (Burn, `denoise_gpu`) when there is one
-//! and the CPU code here is the reference and fallback.
+//! NLM runs on the GPU (Burn, `denoise_gpu`) when there is one, in tiles;
+//! the CPU code here is the reference and fallback.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -221,10 +221,12 @@ pub fn preview(img: &Arc<OpenImage>, req: &PreviewReq) -> Result<Denoised> {
 /// the result and the backend that made it.
 pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result<(Vec<f32>, &'static str)> {
     let sigma = sigma.max(f32::MIN_POSITIVE);
+    // Only NLM goes to the GPU: diffusion is a few cheap passes that run as
+    // fast on the CPU (RTX 5080 even, M1 Max Metal 10–30× slower).
     #[cfg(feature = "pro")]
-    if p.device != "cpu" && matches!(p.method, Method::Diffusion | Method::Nlm) {
+    if p.device != "cpu" && p.method == Method::Nlm {
         if let Some((dev, name)) = crate::ctf_gpu::device() {
-            match crate::ctf_gpu::guarded(|| crate::denoise_gpu::filter(dev, &v, w, h, p, sigma)) {
+            match crate::ctf_gpu::guarded(|| nlm_gpu_tiled(dev, &v, w, h, p, sigma)) {
                 Ok(out) => return Ok((out, name)),
                 Err(e) => eprintln!("denoise: GPU failed, using the CPU: {e:#}"),
             }
@@ -237,6 +239,34 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
         Method::Nlm => nlm(&v, w, h, p.patch.min(5), p.search.min(20), p.strength * sigma, sigma),
     };
     Ok((out, "CPU"))
+}
+
+/// NLM on the GPU in tiles of at most 1024² pixels plus the margin they
+/// read, so each tile batches many offsets: one offset at a time over a
+/// 4096² image made Metal (M1 Max) 3× slower than the CPU.
+#[cfg(feature = "pro")]
+fn nlm_gpu_tiled(dev: &burn::tensor::Device, v: &[f32], w: usize, h: usize, p: &Params, sigma: f32) -> Vec<f32> {
+    tiled(dev, v, w, h, p, sigma, 1024)
+}
+
+#[cfg(feature = "pro")]
+fn tiled(dev: &burn::tensor::Device, v: &[f32], w: usize, h: usize, p: &Params, sigma: f32, tile: usize) -> Vec<f32> {
+    let m = p.margin();
+    let mut out = vec![0f32; w * h];
+    for ty in (0..h).step_by(tile) {
+        for tx in (0..w).step_by(tile) {
+            let (cw, ch) = (tile.min(w - tx), tile.min(h - ty));
+            let (ex, ey) = (tx.saturating_sub(m), ty.saturating_sub(m));
+            let (ew, eh) = ((tx + cw + m).min(w) - ex, (ty + ch + m).min(h) - ey);
+            let part = crop(v, w, [ex, ey, ew, eh]);
+            let res = crate::denoise_gpu::filter(dev, &part, ew, eh, p, sigma);
+            for r in 0..ch {
+                let src = (ty - ey + r) * ew + (tx - ex);
+                out[(ty + r) * w + tx..(ty + r) * w + tx + cw].copy_from_slice(&res[src..src + cw]);
+            }
+        }
+    }
+    out
 }
 
 /// Noise σ from the median absolute Laplacian-difference response (whose
@@ -526,6 +556,20 @@ pub(crate) mod tests {
         assert_eq!(out[55], 2.5);
     }
 
+    /// Tiles see the margin they read, so they join without seams.
+    #[cfg(feature = "pro")]
+    #[test]
+    fn gpu_tiles_match_the_whole_image() {
+        let dev = burn::tensor::Device::flex();
+        let (w, h) = (50, 37);
+        let (_, noisy) = phantom(w, h, 0.3);
+        let p = Params { method: Method::Nlm, strength: 0.8, iterations: 0, patch: 1, search: 3, slab: 0, device: String::new() };
+        let whole = crate::denoise_gpu::filter(&dev, &noisy, w, h, &p, 0.3);
+        let parts = tiled(&dev, &noisy, w, h, &p, 0.3, 16);
+        let worst = whole.iter().zip(&parts).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-5, "{worst}");
+    }
+
     #[test]
     fn preview_bytes_have_the_documented_layout() {
         let d = Denoised { rect: [1, 2, 2, 1], values: vec![0.5, -1.0], sigma: 0.25, ms: 3.0, backend: "CPU" };
@@ -563,7 +607,7 @@ mod bench {
             println!("{path}: {w}×{h}, slice {} of {}, noise σ {sigma:.4}", info.size_z / 2, info.size_z);
             for (m, s, it) in [(Method::Gaussian, 1.5, 0), (Method::Median, 2.0, 0), (Method::Diffusion, 2.0, 20), (Method::Nlm, 0.8, 0)] {
                 for device in ["cpu", "auto"] {
-                    if device == "auto" && matches!(m, Method::Gaussian | Method::Median) {
+                    if device == "auto" && m != Method::Nlm {
                         continue;
                     }
                     let p = Params { method: m, strength: s, iterations: it, patch: 2, search: 7, slab: 0, device: device.into() };
@@ -584,7 +628,7 @@ mod bench {
             println!("{n}² noise σ {noise} (estimated {sigma:.3}): input RMSE {:.3}", rmse(&clean, &noisy));
             for (m, s, it) in [(Method::Gaussian, 1.5, 0), (Method::Median, 2.0, 0), (Method::Diffusion, 2.0, 20), (Method::Nlm, 0.8, 0)] {
                 for device in ["cpu", "auto"] {
-                    if device == "auto" && matches!(m, Method::Gaussian | Method::Median) {
+                    if device == "auto" && m != Method::Nlm {
                         continue;
                     }
                     let p = Params { method: m, strength: s, iterations: it, patch: 2, search: 7, slab: 0, device: device.into() };

@@ -1,5 +1,4 @@
-//! GPU side of denoising (Pro): anisotropic diffusion and non-local means
-//! with Burn on the device SAM uses (Metal, DX12, Vulkan or CUDA). The
+//! GPU side of denoising (Pro): non-local means with Burn on the device SAM uses (Metal, DX12, Vulkan or CUDA). The
 //! arithmetic is that of the CPU code in `denoise`, which is the fallback
 //! when there is no GPU or a kernel fails.
 
@@ -12,31 +11,14 @@ use crate::denoise::{Method, Params};
 /// Largest batch of shifted images NLM builds at once, in elements (f32).
 const MAX_ELEMS: usize = 1 << 24;
 
-/// Denoises a `w` × `h` image; only for diffusion and NLM.
+/// Denoises a `w` × `h` image; only for NLM.
 pub fn filter(dev: &Device, v: &[f32], w: usize, h: usize, p: &Params, sigma: f32) -> Vec<f32> {
     let x = Tensor::<2>::from_data(TensorData::new(v.to_vec(), [h, w]), dev);
     let out = match p.method {
-        Method::Diffusion => diffusion(x, w, h, p.strength * sigma, p.iterations.min(200)),
         Method::Nlm => nlm(x, w, h, p.patch.min(5), p.search.min(20), p.strength * sigma, sigma),
         m => panic!("{m:?} has no GPU version"),
     };
     out.into_data().convert::<f32>().try_into_vec::<f32>().unwrap()
-}
-
-fn diffusion(mut u: Tensor<2>, w: usize, h: usize, k: f32, iterations: usize) -> Tensor<2> {
-    const DT: f32 = 0.2;
-    let inv_k2 = 1.0 / (k * k).max(f32::MIN_POSITIVE);
-    let flow = |d: Tensor<2>| d.clone() / (d.clone() * d).mul_scalar(inv_k2).add_scalar(1.0);
-    for _ in 0..iterations {
-        // Repeated edges: no flow across the image border.
-        let p = u.clone().pad([(1, 1), (1, 1)], PadMode::Edge);
-        let up = p.clone().slice([0..h, 1..w + 1]) - u.clone();
-        let dn = p.clone().slice([2..h + 2, 1..w + 1]) - u.clone();
-        let l = p.clone().slice([1..h + 1, 0..w]) - u.clone();
-        let r = p.slice([1..h + 1, 2..w + 2]) - u.clone();
-        u = u + (flow(up) + flow(dn) + flow(l) + flow(r)).mul_scalar(DT);
-    }
-    u
 }
 
 fn nlm(v: Tensor<2>, w: usize, h: usize, patch: usize, search: usize, hh: f32, sigma: f32) -> Tensor<2> {
@@ -87,7 +69,7 @@ mod tests {
         let (w, h) = (48, 40);
         let (_, noisy) = phantom(w, h, 0.3);
         let sigma = denoise::noise_sigma(&noisy, w, h);
-        for (method, strength) in [(Method::Diffusion, 2.0), (Method::Nlm, 0.8)] {
+        for (method, strength) in [(Method::Nlm, 0.8)] {
             let p = Params { method, strength, iterations: 8, patch: 1, search: 4, slab: 0, device: String::new() };
             let gpu = filter(&dev, &noisy, w, h, &p, sigma);
             let (cpu, _) = denoise::filter(noisy.clone(), w, h, &Params { device: "cpu".into(), ..p.clone() }, sigma).unwrap();
