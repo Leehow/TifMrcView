@@ -384,6 +384,41 @@ pub fn noise_sigma(v: &[f32], w: usize, h: usize) -> f32 {
     1.4826 * *med / 6.0
 }
 
+/// How far the noise departs from independent pixels: the correlation of
+/// horizontally neighbouring high-pass residuals (value minus the mean of
+/// its 3 × 3 neighbourhood), minus what white noise gives (−1/6).
+/// Filtered or binned-with-interpolation data shows values far from 0,
+/// which defeats Noise2Void.
+pub fn noise_correlation(v: &[f32], w: usize, h: usize) -> f32 {
+    if w < 4 || h < 3 {
+        return 0.0;
+    }
+    let step = (((w - 2) * (h - 2)) as f64 / 1e6).sqrt().ceil().max(1.0) as usize;
+    let res = |x: usize, y: usize| {
+        let mut s = 0f32;
+        for dy in 0..3 {
+            for dx in 0..3 {
+                s += v[(y + dy - 1) * w + x + dx - 1];
+            }
+        }
+        v[y * w + x] - s / 9.0
+    };
+    let (mut sab, mut saa, mut sbb) = (0f64, 0f64, 0f64);
+    for y in (1..h - 1).step_by(step) {
+        for x in (1..w - 2).step_by(step) {
+            let (a, b) = (res(x, y) as f64, res(x + 1, y) as f64);
+            if a.is_finite() && b.is_finite() {
+                sab += a * b;
+                saa += a * a;
+                sbb += b * b;
+            }
+        }
+    }
+    let r = if saa > 0.0 && sbb > 0.0 { (sab / (saa * sbb).sqrt()) as f32 } else { -1.0 / 6.0 };
+    // White noise gives −12/81 ÷ 72/81 = −1/6.
+    r + 1.0 / 6.0
+}
+
 pub fn kernel_radius(sigma: f32) -> usize {
     ((3.0 * sigma).ceil() as usize).clamp(1, 64)
 }
@@ -665,6 +700,21 @@ pub(crate) mod tests {
         let parts = tiled(&dev, &noisy, w, h, &p, 0.3, 16);
         let worst = whole.iter().zip(&parts).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-5, "{worst}");
+    }
+
+    #[test]
+    fn correlated_noise_is_flagged() {
+        let (w, h) = (128, 128);
+        let mut seed = 1u64;
+        let noisy: Vec<f32> = (0..w * h)
+            .map(|_| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 40) as f32 / (1u64 << 24) as f32
+            })
+            .collect();
+        assert!(noise_correlation(&noisy, w, h).abs() < 0.08, "{}", noise_correlation(&noisy, w, h));
+        let blurred = gaussian(&noisy, w, h, 1.0);
+        assert!(noise_correlation(&blurred, w, h) > 0.2, "{}", noise_correlation(&blurred, w, h));
     }
 
     #[test]

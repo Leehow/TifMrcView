@@ -1188,6 +1188,8 @@ struct DenoiseTrained {
     loss: f32,
     backend: String,
     seconds: f32,
+    /// Set when the data does not suit the method (correlated noise).
+    warning: Option<String>,
 }
 
 /// Trains the self-supervised denoiser (Pro) on the open image; reports
@@ -1241,7 +1243,10 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
                 })
             })?;
             *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone() }));
-            let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32() };
+            // Self-supervision assumes noise independent from pixel to pixel.
+            let corr = crate::denoise::noise_correlation(&pairs[0].0, w, h);
+            let warning = (corr.abs() > 0.15).then(|| format!("这份数据的噪声在相邻像素间相关（{corr:+.2}），可能已经滤过波或插值过；自监督降噪对这种数据效果有限"));
+            let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning };
             eprintln!("denoise_train: {} on {} images, loss {:.4}, {} in {:.1} s", out.mode, out.images, out.loss, out.backend, out.seconds);
             Ok(out)
         })

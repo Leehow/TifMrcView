@@ -99,9 +99,9 @@
   }
 
   const MODE_HINT = {
-    n2v: "把每块里少数像素换成邻近像素，让网络从周围猜出它们；适合任何单张图或叠层。噪声在相邻像素间相关时效果会变差",
+    n2v: "把每块里少数像素换成邻近像素，让网络从周围猜出它们；适合任何单张图或叠层。要用没滤过波的原始数据，噪声在相邻像素间相关时效果会变差",
     frames: "用奇数帧的平均去预测偶数帧的平均（反过来也一样），两半信号相同、噪声独立；结果是一张图。电影帧要先做漂移校正",
-    neighbours: "用每一层去预测相邻的一层；适合层厚比细节小的断层和连续切片",
+    neighbours: "用每一层去预测相邻的一层；适合层厚比细节小的断层和连续切片，不适合倾转系列",
   };
 
   function syncMode() {
@@ -187,7 +187,7 @@
       const r = await invoke("denoise_train", { req });
       const name = { n2v: "Noise2Void", frames: "Noise2Noise 奇偶帧", neighbours: "Noise2Noise 相邻层" }[r.mode];
       N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步 · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
-      $("dn-model").textContent = `已训练：${N.model}`;
+      $("dn-model").textContent = `已训练：${N.model}` + (r.warning ? `\n⚠ ${r.warning}` : "");
       // Show the new model's result.
       N.key = "";
     } catch (e) {
