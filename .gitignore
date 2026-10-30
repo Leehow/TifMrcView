@@ -17,3 +17,5 @@ plugins/sdk/Cargo.lock
 # local release builds (scripts/local-release.mjs)
 /release-artifacts/
 scripts/local-release.env
+# the website lives in a private repo; never commit local leftovers (e.g. site/deploy_key)
+/site/
