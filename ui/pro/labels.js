@@ -22,7 +22,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "brush",     // select | brush | eraser | lasso | wand | sam
+    sub: "brush",     // select | brush | eraser | lasso | wand | sam | classify
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -38,6 +38,9 @@
     sel: null,        // picked region {z, x, y} (a pixel in it) for the select tool
     selDrag: null,    // {a: pointer at press, dx, dy} while it is dragged
     sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null, along: null },
+    // Pixel classifier: scribbles of the shown slice, the trained forest's
+    // summary and the prediction of the shown slice.
+    cls: { z: -1, scribbles: null, stroke: null, info: null, preview: true, pred: null, predZ: -1, minConf: 0, busy: false, fetching: false, along: null },
     busy: false,
     saveTimer: 0,
   };
@@ -64,6 +67,7 @@
       <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg><span>橡皮</span></button>
       <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg><span>套索</span></button>
       <button class="small" data-sub="sam" title="SAM 点选：点一下物体自动分割（Alt+点击标背景，Shift+拖动拉框），回车写进当前标签"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.3L20 9l-4.4 3.8L17 18.5 12 15.6 7 18.5l1.4-5.7L4 9l5.8-.7z"/></svg><span>SAM</span></button>
+      <button class="small" data-sub="classify" title="像素分类：用画笔给每种结构（包括背景）各画几笔不同的标签，训练后自动分出整层或整个栈（按住 Alt 擦掉标注）"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 17h6M17 14v6"/></svg><span>分类</span></button>
       <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg><span>魔棒</span></button>
     </div>
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
@@ -84,6 +88,19 @@
         <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
       </div>
       <label id="lab-sam-dn-row" title="先把相邻几层平均再模糊一点，然后交给 SAM；噪声大的冷冻电镜断层会分得更完整"><input type="checkbox" id="lab-sam-dn" /> 去噪后再分割</label>
+    </div>
+    <div id="lab-cls" hidden>
+      <div class="dim" id="lab-cls-text"></div>
+      <div class="row">
+        <button class="small" id="lab-cls-train" title="用所有层上的标注训练分类器">训练</button>
+        <label title="在当前层上显示分类结果"><input type="checkbox" id="lab-cls-preview" /> 预览</label>
+        <button class="small" id="lab-cls-clear" title="清除所有标注和训练好的分类器">清除标注</button>
+      </div>
+      <label class="slider" title="把握不到这个程度的像素不写入标签">最低把握 <input type="range" id="lab-cls-conf" min="0" max="0.95" step="0.05" /><span id="lab-cls-conf-v"></span></label>
+      <div class="row">
+        <button class="small" id="lab-cls-z" title="把当前层的分类结果写进标签">应用到本层</button>
+        <button class="small" id="lab-cls-all" title="对每一层分类并写进标签，一步就能撤回（Esc 停止）">应用到所有层</button>
+      </div>
     </div>
     <div id="lab-list"></div>
     <div class="row">
@@ -133,6 +150,7 @@
     for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
     $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam" || L.sub === "select";
     syncSam();
+    syncCls();
     $("lab-tol-row").hidden = L.sub !== "wand";
     $("lab-3d-row").hidden = L.sub !== "wand" && L.sub !== "select";
     $("lab-3d-text").textContent = L.sub === "select" ? "整个物体（所有层）" : "三维";
@@ -309,6 +327,7 @@
       const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
       Object.assign(L.sam, { points: [], box: null, mask: null, z: -1, denoise: tomo });
       $("lab-sam-dn").checked = tomo;
+      Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
       Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
     } catch (e) {
       if (token !== S.token) return;
@@ -388,6 +407,7 @@
       g.drawImage(canvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
       g.restore();
     }
+    drawCls(g);
     drawSam(g);
     drawSelection(g);
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
@@ -412,7 +432,7 @@
       g.restore();
     }
     // Brush outline under the pointer.
-    if (S.tool === "label" && (L.sub === "brush" || L.sub === "eraser") && L.hover) {
+    if (S.tool === "label" && (L.sub === "brush" || L.sub === "eraser" || L.sub === "classify") && L.hover) {
       const [cx, cy] = toScreen(L.hover[0], L.hover[1]);
       g.save();
       g.beginPath();
@@ -667,6 +687,7 @@
         return;
       }
       if (L.sub === "sam") return samDown(e, p);
+      if (L.sub === "classify") return clsDown(e, p);
       if (!L.slice || L.z !== S.z) return;
       if (L.sub === "select") return selectDown(p);
       L.stroke = { z: S.z, pts: [p] };
@@ -680,6 +701,7 @@
         L.selDrag.dy = Math.round(p[1] - L.selDrag.a[1]);
       }
       if (L.stroke) strokeTo(p);
+      if (L.cls.stroke) clsStrokeTo(p);
       if (L.sam.drag) {
         L.sam.drag.b = p;
       }
@@ -691,6 +713,7 @@
     },
     up() {
       if (L.sam.drag) return samUp();
+      if (L.cls.stroke) return clsUp();
       if (L.selDrag) return selectUp();
       const la = L.lasso;
       L.lasso = null;
@@ -711,11 +734,11 @@
     },
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
     undo() {
-      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag) return false;
+      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return false;
       edit({ kind: "undo" });
     },
     redo() {
-      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag) return false;
+      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return false;
       edit({ kind: "redo" });
     },
     // SAM clicks not written yet come off one at a time before the label steps.
@@ -729,7 +752,7 @@
     },
     // Right-click undoes, as the label tool has no other use for it.
     context() {
-      if (L.stroke || L.lasso || L.sam.drag || L.selDrag) return;
+      if (L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return;
       undo();
     },
     active(on) {
@@ -1006,6 +1029,229 @@
     if (L.sam.z === S.z && (L.sam.points.length || L.sam.box) && !L.sam.busy) samRun();
   });
   $("lab-sam-clear").addEventListener("click", samClear);
+
+
+  // ---------- pixel classifier (classify.rs) ----------
+
+  const clsCanvas = document.createElement("canvas");
+  const clsCtx = clsCanvas.getContext("2d");
+  const predCanvas = document.createElement("canvas");
+  const predCtx = predCanvas.getContext("2d");
+
+  const clsReq = () => {
+    const c = S.chans[channel()];
+    return { token: L.token, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1 };
+  };
+
+  function syncCls() {
+    const box = $("lab-cls");
+    box.hidden = L.sub !== "classify";
+    if (box.hidden) return;
+    const C = L.cls, info = C.info;
+    let text;
+    if (C.along) text = `正在分类 ${C.along.done}/${C.along.total || "?"} 层（Esc 停止）`;
+    else if (C.busy) text = "计算中…";
+    else if (info) text = `已用 ${info.labels.length} 种标签、${info.samples} 个像素训练（自检准确率 ${Math.round(info.accuracy * 100)}%，${info.backend}，${info.seconds.toFixed(1)} 秒）。补几笔再训练可以改进。`;
+    else text = "用画笔给每种结构和背景各画几笔不同的标签（换标签点下面的列表或“新标签”），然后按“训练”。";
+    $("lab-cls-text").textContent = text;
+    $("lab-cls-preview").checked = C.preview;
+    $("lab-cls-conf").value = C.minConf;
+    $("lab-cls-conf-v").textContent = `${Math.round(C.minConf * 100)}%`;
+    $("lab-cls-train").disabled = C.busy || L.busy;
+    for (const id of ["lab-cls-z", "lab-cls-all"]) $(id).disabled = !info || C.busy || L.busy;
+    $("lab-cls-all").hidden = !(S.info && S.info.sizeZ > 1);
+  }
+
+  /** Colours a u16 label slice into a canvas (alpha from `alpha`, or opaque). */
+  function paintLabels(cv, cx, src, alpha) {
+    const w = S.info.width, h = S.info.height;
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const img = cx.createImageData(w, h), px = img.data;
+    for (let i = 0; i < w * h; i++) {
+      const k = src[i];
+      if (!k) continue;
+      const c = colorOf(k), o = i * 4;
+      px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = alpha ? alpha[i] : 255;
+    }
+    cx.putImageData(img, 0, 0);
+  }
+
+  async function clsFetch() {
+    const C = L.cls;
+    if (C.fetching || !L.token) return;
+    const token = L.token, z = S.z;
+    C.fetching = true;
+    try {
+      C.scribbles = new Uint16Array(await invoke("classify_scribbles", { token, z }));
+      C.z = z;
+      paintLabels(clsCanvas, clsCtx, C.scribbles);
+      if (C.info && C.preview && C.predZ !== z) clsPredict();
+    } catch (_) {
+      // Image changed; the next draw asks again.
+    } finally {
+      C.fetching = false;
+    }
+    if (token === L.token) draw();
+  }
+
+  async function clsPredict() {
+    const C = L.cls;
+    if (!C.info || C.busy) return;
+    const z = S.z;
+    C.busy = true;
+    syncCls();
+    try {
+      const buf = await invoke("classify_predict", { req: clsReq(), z });
+      const dv = new DataView(buf), w = dv.getUint32(0, true), h = dv.getUint32(4, true);
+      const labels = new Uint16Array(buf.slice(8, 8 + w * h * 2));
+      const conf = new Uint8Array(buf, 8 + w * h * 2, w * h);
+      const min = Math.round(C.minConf * 255);
+      const alpha = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) alpha[i] = conf[i] >= min ? 255 : 0;
+      paintLabels(predCanvas, predCtx, labels, alpha);
+      C.pred = { labels, conf };
+      C.predZ = z;
+    } catch (e) {
+      toast(String(e), 6000);
+    } finally {
+      C.busy = false;
+      syncCls();
+      draw();
+    }
+  }
+
+  function drawCls(g) {
+    if (S.tool !== "label" || L.sub !== "classify" || S.axis !== "xy" || L.token !== S.token) return;
+    const C = L.cls;
+    if (C.z !== S.z && !C.stroke) clsFetch();
+    const [sx, sy] = toScreen(0, 0);
+    const sw = S.info.width * S.view.scale, sh = S.info.height * S.view.scale;
+    g.save();
+    g.imageSmoothingEnabled = false;
+    if (C.preview && C.pred && C.predZ === S.z) {
+      g.globalAlpha = L.opacity;
+      g.drawImage(predCanvas, sx, sy, sw, sh);
+    }
+    if (C.scribbles && C.z === S.z) {
+      g.globalAlpha = 0.9;
+      g.drawImage(clsCanvas, sx, sy, sw, sh);
+    }
+    g.restore();
+  }
+
+  /** Paints into the local scribble copy right away (classify.rs repeats it). */
+  function clsStamp(cx, cy, label) {
+    const w = S.info.width, h = S.info.height, r = Math.max(0.5, L.radius), s = L.cls.scribbles;
+    const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r));
+    const x1 = Math.min(w, Math.ceil(cx + r)), y1 = Math.min(h, Math.ceil(cy + r));
+    for (let y = y0; y < y1; y++) {
+      const dy = y + 0.5 - cy;
+      for (let x = x0; x < x1; x++) {
+        const dx = x + 0.5 - cx;
+        if (dx * dx + dy * dy <= r * r) s[y * w + x] = label;
+      }
+    }
+  }
+
+  function clsDown(e, p) {
+    const C = L.cls;
+    if (!C.scribbles || C.z !== S.z) return;
+    C.stroke = { z: S.z, pts: [p], label: e.altKey ? 0 : L.active };
+    clsStamp(p[0], p[1], C.stroke.label);
+    paintLabels(clsCanvas, clsCtx, C.scribbles);
+    draw();
+  }
+
+  function clsStrokeTo(p) {
+    const st = L.cls.stroke, a = st.pts[st.pts.length - 1];
+    const n = Math.max(1, Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1]) / Math.max(0.5, L.radius / 2)));
+    for (let i = 1; i <= n; i++) clsStamp(a[0] + ((p[0] - a[0]) * i) / n, a[1] + ((p[1] - a[1]) * i) / n, st.label);
+    st.pts.push(p);
+    paintLabels(clsCanvas, clsCtx, L.cls.scribbles);
+  }
+
+  async function clsUp() {
+    const C = L.cls, st = C.stroke;
+    C.stroke = null;
+    const pts = st.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
+    try {
+      const buf = await invoke("classify_scribble", { token: L.token, z: st.z, pts, radius: L.radius, label: st.label });
+      if (st.z === C.z) {
+        C.scribbles = new Uint16Array(buf);
+        paintLabels(clsCanvas, clsCtx, C.scribbles);
+      }
+    } catch (e) {
+      toast(String(e), 6000);
+    }
+    draw();
+  }
+
+  async function clsTrain() {
+    const C = L.cls;
+    if (!ready() || C.busy) return;
+    C.busy = true;
+    syncCls();
+    try {
+      C.info = await invoke("classify_train", { req: clsReq() });
+      C.predZ = -1;
+    } catch (e) {
+      toast(String(e), 6000);
+    } finally {
+      C.busy = false;
+      syncCls();
+    }
+    if (C.info && C.preview) clsPredict();
+  }
+
+  async function clsApply(all) {
+    const C = L.cls;
+    if (!ready() || !C.info || C.busy) return;
+    const [z0, z1] = all ? [0, S.info.sizeZ] : [S.z, S.z + 1];
+    C.busy = true;
+    if (all) C.along = { done: 0, total: z1 - z0 };
+    syncCls();
+    const un = await T.event.listen("classify-apply", (ev) => { if (C.along) { C.along = ev.payload; syncCls(); } });
+    try {
+      const st = await editWith("classify_apply", { req: clsReq(), z0, z1, guard: L.guard ? L.active : 0, minConf: C.minConf });
+      if (st && all) toast(`分类写入了 ${st.zs.length} 层`, 3000);
+    } finally {
+      un();
+      C.busy = false;
+      C.along = null;
+      syncCls();
+    }
+  }
+
+  $("lab-cls-train").addEventListener("click", clsTrain);
+  $("lab-cls-preview").addEventListener("change", (e) => {
+    L.cls.preview = e.target.checked;
+    if (L.cls.preview && L.cls.predZ !== S.z) clsPredict();
+    draw();
+  });
+  $("lab-cls-conf").addEventListener("input", (e) => {
+    L.cls.minConf = +e.target.value;
+    syncCls();
+    const P = L.cls.pred;
+    if (P && L.cls.predZ === S.z) {
+      const min = Math.round(L.cls.minConf * 255), alpha = new Uint8Array(P.conf.length);
+      for (let i = 0; i < alpha.length; i++) alpha[i] = P.conf[i] >= min ? 255 : 0;
+      paintLabels(predCanvas, predCtx, P.labels, alpha);
+      draw();
+    }
+  });
+  $("lab-cls-clear").addEventListener("click", async () => {
+    try {
+      await invoke("classify_clear", { token: L.token });
+    } catch (_) {}
+    Object.assign(L.cls, { z: -1, scribbles: null, info: null, pred: null, predZ: -1 });
+    syncCls();
+    draw();
+  });
+  $("lab-cls-z").addEventListener("click", () => clsApply(false));
+  $("lab-cls-all").addEventListener("click", () => clsApply(true));
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && L.cls.along) { invoke("classify_cancel"); e.preventDefault(); e.stopPropagation(); }
+  }, true);
 
   // ---------- panel controls ----------
 

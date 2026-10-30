@@ -11,6 +11,8 @@ pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
+#[cfg(feature = "pro")]
+pub mod classify;
 pub mod image;
 #[cfg(feature = "desktop")]
 mod mem;
