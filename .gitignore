@@ -15,3 +15,6 @@ plugins/sdk/Cargo.lock
 /android-release/
 *.jks
 site/demo/app/
+# local release builds (scripts/local-release.mjs)
+/release-artifacts/
+scripts/local-release.env
