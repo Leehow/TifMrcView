@@ -1,26 +1,26 @@
-name: site
+name: plugins
 
-# Publishes the download site and the plugin market without a full release.
-# Never uses --delete: the server also holds release folders, latest.json
-# and downloads.json.
+# Publishes the plugin market packages (plugins/*.zip, plugins.json) without
+# a full release. The website pages live in a separate repository with their
+# own deploy. Never uses --delete: the server also holds the site, release
+# folders, latest.json and downloads.json.
 
 on:
   push:
     branches: [main]
     paths:
-      - "site/**"
-      - "ui/**"
       - "plugins/**"
       - "scripts/pack-plugins.mjs"
-      - "scripts/build-site-demo.mjs"
-      - ".github/workflows/site.yml"
+      - "scripts/plugin-zip.mjs"
+      - "scripts/plugin-manifest.mjs"
+      - ".github/workflows/plugins.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: site-deploy
+  group: plugins-deploy
   cancel-in-progress: false
 
 jobs:
@@ -43,13 +43,10 @@ jobs:
           workspaces: |
             plugins/zeiss -> ../../target/wasm-plugins
 
-      - name: Stage site and plugins
+      - name: Pack plugins
         run: |
           mkdir -p stage
           node scripts/pack-plugins.mjs stage
-          cp -R site/. stage/
-          # The live demo on the home page runs the current ui/ in the browser.
-          node scripts/build-site-demo.mjs stage
           find stage -type f | sort
 
       - name: Upload to download site
@@ -70,10 +67,10 @@ jobs:
           ssh_cmd="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
           dest="$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_PATH%/}"
           # No --delete on purpose.
-          rsync -av --chmod=D755,F644 -e "$ssh_cmd" stage/ "$dest/"
+          rsync -av --chmod=D755,F644 -e "$ssh_cmd" stage/plugins/ "$dest/plugins/"
 
-      # Deploys rewrite files in place (plugin zips are rebuilt every time), and
-      # Cloudflare keeps versioned files for 30 days, so drop its copies.
+      # Plugin zips are rewritten in place and Cloudflare keeps versioned
+      # files for 30 days, so drop its copies.
       - name: Purge Cloudflare cache
         env:
           CF_ZONE_ID: ${{ vars.CF_ZONE_ID || '3dc3af1d7361be94d38608f6e7c642d9' }}

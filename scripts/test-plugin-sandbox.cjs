@@ -23,13 +23,7 @@ const server = http.createServer((req, res) => {
   requests.push(req.url);
   const url = new URL(req.url, origin);
   let file;
-  if (url.pathname === "/site/plugins/permission-test.html") {
-    res.setHeader("Content-Type", "text/html");
-    res.end('<!doctype html><meta charset="utf-8"><div id="plugins"></div><script src="/site/plugins/market.js"></script>');
-    return;
-  }
-  if (url.pathname.startsWith("/site/")) file = path.join(root, url.pathname);
-  else if (url.pathname === "/tmvplugin/__sandbox/runtime.js") file = path.join(ui, "sandbox/tmv-plugin-api.js");
+  if (url.pathname === "/tmvplugin/__sandbox/runtime.js") file = path.join(ui, "sandbox/tmv-plugin-api.js");
   else if (url.pathname.startsWith("/tmvplugin/__sandbox/")) {
     res.writeHead(404).end(); return;
   } else if (url.pathname.startsWith("/tmvplugin/")) {
@@ -372,42 +366,7 @@ const server = http.createServer((req, res) => {
   }
   await page.locator("#mc-cancel").click();
   console.log("PASS: market/deep-link/zip permission confirmation, cancel/install boundaries, API 1 warning, empty permissions, seven languages");
-  // The website card uses Chinese/English descriptions and English fallback.
-  const website = await browser.newPage();
-  website.on("pageerror", (e) => errors.push(String(e)));
-  await website.addInitScript(() => {
-    window.siteLang = "zh";
-    window.TMV = { t: (key) => key, lang: () => window.siteLang, onLang: (fn) => { window.renderSite = fn; } };
-  });
-  await website.route("**/*", (route) => {
-    const url = route.request().url();
-    if (!url.startsWith(origin + "/")) { external.push(url); return route.abort(); }
-    if (url.endsWith("/site/plugins/plugins.json")) return route.fulfill({ json: { plugins: [
-      { id: "web-v2", name: "Web demo", version: "1.0.0", apiVersion: 2, permissions: ["state", "ui", "metadata", "export", "settings"] },
-      { id: "web-empty", name: "Web empty", version: "1.0.0", apiVersion: 2, permissions: [] },
-      { id: "web-legacy", name: "Web legacy", version: "1.0.0" },
-    ] } });
-    return route.continue();
-  });
-  await website.goto(origin + "/site/plugins/permission-test.html");
-  await website.waitForFunction(() => document.querySelectorAll("#plugins article").length === 3);
-  assert.deepEqual(await website.locator(".permissions").first().locator("li").allTextContents(), permissionTexts);
-  assert.equal(await website.locator("#plugins article").nth(1).locator(".permissions").textContent(), "无额外权限");
-  assert.equal(await website.locator("#plugins article").nth(2).locator(".permissions").count(), 0);
-  let english;
-  for (const lang of ["en", "ja", "de", "es", "fr", "ru"]) {
-    await website.evaluate((lang) => { siteLang = lang; renderSite(); }, lang);
-    const texts = await website.locator(".permissions").first().locator("li").allTextContents();
-    if (lang === "en") {
-      english = texts;
-      assert.equal(texts[0], "Read image information and change slices and frames");
-      assert.equal(texts[4], "Save its own settings");
-    } else assert.deepEqual(texts, english);
-    assert.equal(await website.locator("#plugins article").nth(1).locator(".permissions").textContent(), "No additional permissions");
-  }
-  await website.close();
   assert.deepEqual(external, [], "All browser tests must stay offline");
-  console.log("PASS: website API 2 permissions in Chinese/English with English fallback");
   assert.deepEqual(errors, [], "Unexpected uncaught errors");
   assert(requests.includes("/tmvplugin/__sandbox/runtime.js"));
   assert(!requests.some((url) => url.startsWith("/tmvplugin/__sandbox/") && url !== "/tmvplugin/__sandbox/runtime.js"), "no protocol-served sandbox documents");

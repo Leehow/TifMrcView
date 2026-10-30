@@ -19,12 +19,12 @@
 
 <table>
   <tr>
-    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="MRC 格式的冷冻电子断层图，带长度测量"></a><br><sub>MRC 格式的冷冻电子断层图，带长度测量和标注工具。</sub></td>
-    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="带框的 XZ 侧视图"></a><br><sub>XZ 侧视图，框上标出宽 × 高。</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-tomogram-line.webp"><img src="docs/shots/mrc-tomogram-line-1200.webp" alt="MRC 格式的冷冻电子断层图，带长度测量"></a><br><sub>MRC 格式的冷冻电子断层图，带长度测量和标注工具。</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-xz-view-box.webp"><img src="docs/shots/mrc-xz-view-box-1200.webp" alt="带框的 XZ 侧视图"></a><br><sub>XZ 侧视图，框上标出宽 × 高。</sub></td>
   </tr>
   <tr>
-    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="蔡司 CZI Airyscan Z 栈，带测量"></a><br><sub>蔡司 CZI Airyscan Z 栈，带测量和比例尺。</sub></td>
-    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="三通道荧光 TIFF"></a><br><sub>三通道荧光 TIFF，可逐通道开关。</sub></td>
+    <td width="50%"><a href="docs/shots/czi-airyscan-measure.webp"><img src="docs/shots/czi-airyscan-measure-1200.webp" alt="蔡司 CZI Airyscan Z 栈，带测量"></a><br><sub>蔡司 CZI Airyscan Z 栈，带测量和比例尺。</sub></td>
+    <td width="50%"><a href="docs/shots/tiff-multichannel.webp"><img src="docs/shots/tiff-multichannel-1200.webp" alt="三通道荧光 TIFF"></a><br><sub>三通道荧光 TIFF，可逐通道开关。</sub></td>
   </tr>
 </table>
 
@@ -162,7 +162,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 - 打一个 `v` 开头的 tag：`git tag v0.3.0 && git push origin v0.3.0`，会上传到下载站并建 GitHub Release；
 - 或在 Actions 里手动运行 build，勾选「发布到下载站」，用自动版本号发布。
 
-发布时 CI 把安装包和更新包放到下载站的 `<版本>/` 目录，最后更新 `latest.json`（给自动更新用）和 `downloads.json`（给下载页用）。下载页和插件市场（`site/`、`plugins/`）另有独立的工作流（`.github/workflows/site.yml`），`main` 上这些文件有改动时自动部署。需要在仓库 Settings → Secrets and variables → Actions 里配置：
+发布时 CI 把安装包和更新包放到下载站的 `<版本>/` 目录，最后更新 `latest.json`（给自动更新用）和 `downloads.json`（给下载页用）。插件市场的插件包（`plugins/`）另有独立的工作流（`.github/workflows/plugins.yml`），`main` 上有改动时自动部署；官网页面本身放在单独的仓库里。需要在仓库 Settings → Secrets and variables → Actions 里配置：
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
@@ -184,9 +184,9 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `ui/` | 纯 HTML/JS 前端：`index.html`、`app.js`、`style.css`、`plugin-host.js`；内置语言插件在 `ui/plugins/i18n.js` |
 | `plugins/<id>/` | 可安装插件的源码（`recorder`，以及编译成 WebAssembly 的 Rust crate 格式插件（每个厂商一个）`zeiss`、`lasx`、`nis`、`fluoview`、`imaris`、`gatan`、`thermo`、`tvips`）和插件 SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（打包插件 zip 并生成市场索引）、`make-release.mjs` |
-| `site/` | 官网和插件市场，截图在 `site/shots/` |
+| `docs/shots/` | 本 README 用的截图 |
 | `packaging/linux/` | Linux 打包文件（.mrc 的 MIME 类型） |
-| `.github/workflows/` | `build.yml`（构建和发布）、`site.yml`（官网和插件市场部署） |
+| `.github/workflows/` | `build.yml`（构建和发布）、`plugins.yml`（插件市场的插件包） |
 
 ## 翻译
 

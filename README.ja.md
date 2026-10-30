@@ -19,12 +19,12 @@
 
 <table>
   <tr>
-    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="長さ計測付きの MRC クライオ電子線トモグラム"></a><br><sub>MRC 形式のクライオ電子線トモグラム。長さ計測とアノテーションツール。</sub></td>
-    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="矩形付きの XZ 側面ビュー"></a><br><sub>XZ 側面ビュー。矩形に幅 × 高さを表示。</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-tomogram-line.webp"><img src="docs/shots/mrc-tomogram-line-1200.webp" alt="長さ計測付きの MRC クライオ電子線トモグラム"></a><br><sub>MRC 形式のクライオ電子線トモグラム。長さ計測とアノテーションツール。</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-xz-view-box.webp"><img src="docs/shots/mrc-xz-view-box-1200.webp" alt="矩形付きの XZ 側面ビュー"></a><br><sub>XZ 側面ビュー。矩形に幅 × 高さを表示。</sub></td>
   </tr>
   <tr>
-    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="計測付きの Zeiss CZI Airyscan Z スタック"></a><br><sub>Zeiss CZI Airyscan の Z スタック。計測とスケールバー付き。</sub></td>
-    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="3 チャンネル蛍光 TIFF"></a><br><sub>3 チャンネル蛍光 TIFF。チャンネルごとに表示を切り替え可能。</sub></td>
+    <td width="50%"><a href="docs/shots/czi-airyscan-measure.webp"><img src="docs/shots/czi-airyscan-measure-1200.webp" alt="計測付きの Zeiss CZI Airyscan Z スタック"></a><br><sub>Zeiss CZI Airyscan の Z スタック。計測とスケールバー付き。</sub></td>
+    <td width="50%"><a href="docs/shots/tiff-multichannel.webp"><img src="docs/shots/tiff-multichannel-1200.webp" alt="3 チャンネル蛍光 TIFF"></a><br><sub>3 チャンネル蛍光 TIFF。チャンネルごとに表示を切り替え可能。</sub></td>
   </tr>
 </table>
 
@@ -162,7 +162,7 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 - `v` で始まるタグをプッシュする：`git tag v0.3.0 && git push origin v0.3.0` で、ダウンロードサイトへアップロードされ、GitHub Release が作成されます。
 - または Actions で build を手動実行し、「ダウンロードサイトに公開」にチェックを入れる：自動のバージョン番号で公開されます。
 
-公開時、CI はインストーラーと更新パッケージをダウンロードサイトの `<バージョン>/` ディレクトリに置き、最後に `latest.json`（自動更新用）と `downloads.json`（ダウンロードページ用）を更新します。ダウンロードページとプラグインマーケット（`site/`、`plugins/`）は、`main` で変更されるたびに独立したワークフロー（`.github/workflows/site.yml`）でもデプロイされます。リポジトリの Settings → Secrets and variables → Actions で次を設定してください。
+公開時、CI はインストーラーと更新パッケージをダウンロードサイトの `<バージョン>/` ディレクトリに置き、最後に `latest.json`（自動更新用）と `downloads.json`（ダウンロードページ用）を更新します。プラグインマーケットのパッケージ（`plugins/`）は、`main` で変更されるたびに独立したワークフロー（`.github/workflows/plugins.yml`）でもデプロイされます。ウェブサイトのページは別のリポジトリで管理しています。リポジトリの Settings → Secrets and variables → Actions で次を設定してください。
 
 | 名前 | 種類 | 説明 |
 | --- | --- | --- |
@@ -184,9 +184,9 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `ui/` | 素の HTML/JS フロントエンド：`index.html`、`app.js`、`style.css`、`plugin-host.js`。組み込みの言語プラグインは `ui/plugins/i18n.js` |
 | `plugins/<id>/` | インストール可能なプラグインのソース（`recorder` と、メーカーごとのフォーマットプラグイン `zeiss`、`lasx`、`nis`、`fluoview`、`imaris`、`gatan`、`thermo`、`tvips`。後者は WebAssembly にビルドする Rust クレート）とプラグイン SDK（`sdk`） |
 | `scripts/` | `pack-plugins.mjs`（プラグインの zip とマーケットの索引を作成）、`make-release.mjs` |
-| `site/` | ウェブサイトとプラグインマーケット。スクリーンショットは `site/shots/` |
+| `docs/shots/` | この README で使うスクリーンショット |
 | `packaging/linux/` | Linux のパッケージング用ファイル（.mrc の MIME タイプ） |
-| `.github/workflows/` | `build.yml`（ビルドとリリース）、`site.yml`（サイトとプラグインマーケットのデプロイ） |
+| `.github/workflows/` | `build.yml`（ビルドとリリース）、`plugins.yml`（プラグインマーケットのパッケージ） |
 
 ## 翻訳
 
