@@ -459,7 +459,9 @@ impl Net {
         let bottom = Block::new(w(levels - 1), w(levels), dev);
         let raise = (0..levels).rev().map(|l| ConvTranspose3dConfig::new([w(l + 1), w(l)], [2, 2, 2]).with_stride([2, 2, 2]).init(dev)).collect();
         let up = (0..levels).rev().map(|l| Block::new(2 * w(l), w(l), dev)).collect();
-        Net { down, pool, bottom, raise, up, head: Conv3dConfig::new([base, 1], [1, 1, 1]).init(dev) }
+        // The head starts at zero: the network starts as the identity.
+        let head = Conv3dConfig::new([base, 1], [1, 1, 1]).with_initializer(burn::nn::Initializer::Zeros).init(dev);
+        Net { down, pool, bottom, raise, up, head }
     }
 
     /// Sides fed in are multiples of this.
@@ -560,6 +562,11 @@ pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progr
     let mut rng = Rng(cfg.seed | 1);
     let total = cfg.iterations * cfg.steps;
     let mut loss_avg = 0f32;
+    let edge = n / 8;
+    let inside = |i: usize| (edge..n - edge).contains(&i);
+    let w: Vec<f32> = (0..n * n * n).map(|i| if inside(i % n) && inside((i / n) % n) && inside(i / (n * n)) { 1.0 } else { 0.0 }).collect();
+    let inner_n = w.iter().sum::<f32>() * cfg.batch as f32;
+    let inner = Tensor::<5>::from_data(TensorData::new(w.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
     for it in 0..cfg.iterations {
         let noise = if cfg.noise > 0.0 && cfg.iterations > 1 {
             let start = cfg.iterations / 2;
@@ -592,7 +599,8 @@ pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progr
             let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
             let x = Tensor::<5>::from_data(TensorData::new(xs.concat(), [b, 1, n, n, n]), &ad);
             let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [b, 1, n, n, n]), &ad);
-            let loss = (net.forward(x) - t).abs().mean();
+            // Fourier cuts ring at the cube's faces: score the middle only.
+            let loss = ((net.forward(x) - t).abs() * inner.clone()).sum() / inner_n;
             let lv: f32 = loss.clone().into_scalar();
             loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
             let grads = GradientsParams::from_grads(loss.backward(), &net);
@@ -911,7 +919,8 @@ mod tests {
     #[ignore]
     fn learns_to_fill_the_wedge() {
         let dev = Device::flex();
-        let n = 32;
+        let n = std::env::var("WN").ok().and_then(|s| s.parse().ok()).unwrap_or(32);
+        let cube = std::env::var("WC").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
         let truth = phantom(n, 21);
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
@@ -920,8 +929,8 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube: 16, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9 };
-        let (net, _) = train(&dev, &vol, &g, &cfg, |_| {}).unwrap();
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9 };
+        let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
         let wedge = |v: &[f32]| -> f32 {
