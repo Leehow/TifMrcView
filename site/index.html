@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TifMrcView · 显微与电镜图像查看器</title>
-<meta name="description" content="TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI、徕卡 LIF、尼康 ND2。支持 macOS、Windows、Linux 和 Android。">
+<meta name="description" content="TifMrcView：看显微和电镜图片的一个小软件，免费开源。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD 等格式下载装上就能打开，数 GB 的栈双击即开；尺子测量，XY / XZ / YZ 三个方向，衍射、FFT 和能谱，体电镜文件夹自动叠成 Z 栈。支持 macOS、Windows、Linux 和 Android。">
 <meta name="author" content="Hao Li">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
@@ -12,8 +12,8 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TifMrcView">
 <meta property="og:url" content="https://tifmrcview.com/tifmrcview/">
-<meta property="og:title" content="TifMrcView · 又小、又快、又方便的 TIFF / MRC 查看器，免费开源">
-<meta property="og:description" content="又小、又快、又方便的 TIFF / MRC 查看器，免费开源。数 GB 的栈双击即开，XY / XZ / YZ 三视角，按物理单位测量，多通道荧光。macOS、Windows、Linux、Android 通用。">
+<meta property="og:title" content="TifMrcView · 看显微电镜图片，一个小软件就够了">
+<meta property="og:description" content="又小、又快、又简单，免费开源。各种光镜和电镜格式下载装上就能打开；尺子测量，XY / XZ / YZ 三个方向，衍射、FFT 和能谱，体电镜文件夹自动叠成 Z 栈。macOS、Windows、Linux、Android 通用。">
 <meta property="og:image" content="https://tifmrcview.com/tifmrcview/shots/og-1200x630.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -21,13 +21,13 @@
 <meta property="og:locale" content="zh_CN">
 <meta property="og:locale:alternate" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="TifMrcView · A small, fast, free and open-source TIFF / MRC viewer">
-<meta name="twitter:description" content="A small, fast, free and open-source TIFF / MRC viewer. Multi-GB stacks open on double-click; XY / XZ / YZ views, physical-unit measurements, multichannel fluorescence. macOS, Windows, Linux and Android.">
+<meta name="twitter:title" content="TifMrcView · Microscopy and EM images, one small app">
+<meta name="twitter:description" content="Small, fast, simple, free and open source. Light and electron microscopy formats open right after install; ruler measurements, XY / XZ / YZ views, diffraction, FFT and spectra, volume-EM folders stacked into Z. macOS, Windows, Linux and Android.">
 <meta name="twitter:image" content="https://tifmrcview.com/tifmrcview/shots/og-1200x630.jpg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3">
 <link rel="icon" href="/favicon.ico?v=3" sizes="any">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
-<link rel="stylesheet" href="site.css?v=6">
+<link rel="stylesheet" href="site.css?v=8">
 <script>document.documentElement.className+=' js'</script>
 </head>
 <body>
@@ -38,6 +38,7 @@
     <a class="nl" href="#keys" data-i="nav_keys">快捷键</a>
     <a class="nl" href="plugins/" data-i="nav_plugins">插件</a>
     <a class="nl" href="pro/" data-i="nav_pro">Pro 版</a>
+    <a class="nl" href="#about" data-i="nav_about">关于作者</a>
     <a class="gh" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg></a>
     <div class="lang" id="lang"><button type="button" aria-haspopup="true" aria-expanded="false"><svg class="ti" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg><span></span><svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></button><ul role="menu"></ul></div>
     <a class="tap" href="#download"><span class="pill" data-i="nav_download">下载</span></a>
@@ -50,9 +51,9 @@
     <div class="htxt">
       <img class="icon rv" src="icon.png?v=2" alt="" width="72" height="72">
       <p class="eye rv">TifMrcView</p>
-      <h1 class="h h1 rv d1" data-i="h1"><span>看 TIFF 和 MRC，</span><span>就该这么快。</span></h1>
-      <p class="slogan rv d2" data-i="slogan">又小、又快、又方便。免费开源。</p>
-      <p class="lede rv d2" data-i="lead">显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用<span class="an">，也有 Android 版</span>。</p>
+      <h1 class="h h1 rv d1" data-i="h1"><span>看显微电镜图片，</span><span>一个小软件就够了。</span></h1>
+      <p class="slogan rv d2" data-i="slogan">又小、又快、又简单。免费开源。</p>
+      <p class="lede rv d2" data-i="lead">光镜、共聚焦、电镜的各种格式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD……），下载装上就能打开，数 GB 的栈也是双击即开。尺子直接测量，XY / XZ / YZ 三个方向切着看，衍射和 FFT 上量 d 间距，EDS / EELS 能谱一眼看清，体电镜文件夹自动叠成 Z 栈。不用装一堆软件，也不用学复杂操作。macOS、Windows、Linux 通用<span class=\"an\">，也有 Android 版</span>。</p>
       <div class="cta rv d3">
         <a class="pill" id="cta" href="#download" data-i="cta">免费下载</a>
         <a class="more" href="#download" data-i="all">所有版本</a>
@@ -333,6 +334,15 @@
   </div>
 </section>
 
+<section class="sec tight alt" id="about">
+  <div class="wrap c about">
+    <h2 class="h h3 rv" data-i="about_h">关于作者</h2>
+    <p class="lede rv" data-i="about_p1"><b>Hao Li</b>，独立开发者，从事冷冻电镜与 AI 开发相关工作，来自中国科学院化学研究所。</p>
+    <p class="lede rv"><span data-i="about_p2">如果 TifMrcView 用着顺手，欢迎推荐给更多人，也可以在文章致谢里提一下。有建议，或者想要支持更多格式、更多功能，请给我发邮件：</span></p>
+    <p class="alinks rv"><a href="mailto:lihao9x@iccas.ac.cn" class="pill">✉ lihao9x@iccas.ac.cn</a><a href="https://orcid.org/0009-0004-2696-3267" target="_blank" rel="noopener author">ORCID</a><a href="https://github.com/Leehow" target="_blank" rel="noopener">GitHub @Leehow</a></p>
+  </div>
+</section>
+
 <section class="sec dk close" id="star">
   <div class="wrap">
     <h2 class="h h1 rv" data-i="st_h"><span>开源，</span><span>免费。</span></h2>
@@ -357,7 +367,7 @@
 
 <div class="lb" id="lb" role="dialog" aria-modal="true" hidden><img alt=""><button type="button" data-i-alt="sc_close" data-i-aria="1" aria-label="关闭">×</button></div>
 
-<script src="i18n.js?v=19"></script>
-<script src="site.js?v=3"></script>
+<script src="i18n.js?v=20"></script>
+<script src="site.js?v=4"></script>
 </body>
 </html>

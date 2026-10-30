@@ -14,7 +14,7 @@
 <meta property="og:description" content="TifMrcView Pro：免费开源的显微与电镜图像分析工具。3D 体视图、分割标签与材料、SAM 2.1 点击分割并沿 Z 传播、CTF 拟合、漂移校正，计算尽量在 GPU 上。">
 <link rel="icon" type="image/png" href="icon-pro.png">
 <link rel="apple-touch-icon" href="icon-pro.png">
-<link rel="stylesheet" href="../site.css?v=6">
+<link rel="stylesheet" href="../site.css?v=8">
 <script>document.documentElement.className+=' js'</script>
 <style>
 html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
@@ -41,6 +41,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
     <a class="nl" href="#features" data-i="nav_features">功能</a>
     <a class="nl" href="../" data-i="pro_b_a">基础版介绍</a>
     <a class="nl" href="../plugins/" data-i="nav_plugins">插件</a>
+    <a class="nl" href="../#about" data-i="nav_about">关于作者</a>
     <a class="gh" href="https://github.com/Leehow/TifMrcView" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.540 2.290 6.530 5.470 7.590.4.070.55-.17.55-.38 0-.19-.01-.82-.01-1.490-2.010.37-2.530-.49-2.690-.94-.09-.23-.48-.94-.82-1.130-.28-.15-.68-.52-.01-.53.63-.01 1.080.58 1.230.82.72 1.210 1.870.87 2.330.66.07-.52.28-.87.51-1.070-1.780-.2-3.640-.89-3.640-3.950 0-.87.31-1.590.82-2.150-.08-.2-.36-1.020.08-2.120 0 0 .67-.21 2.200.82.64-.18 1.320-.27 2-.27.68 0 1.360.09 2 .27 1.530-1.040 2.200-.82 2.200-.82.44 1.100.16 1.920.08 2.120.51.56.82 1.270.82 2.150 0 3.070-1.870 3.750-3.650 3.950.29.25.54.73.54 1.480 0 1.070-.01 1.930-.01 2.200 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.420-3.580-8-8-8z"/></svg></a>
     <div class="lang" id="lang"><button type="button" aria-haspopup="true" aria-expanded="false"><svg class="ti" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg><span></span><svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></button><ul role="menu"></ul></div>
     <a class="tap" href="#pro-dl"><span class="pill" data-i="nav_download">下载</span></a>
@@ -69,6 +70,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
       <div class="card pf rv"><h3 data-i="pro_f3h">SAM 2.1 智能分割</h3><p data-i="pro_f3p">点一下就分出物体，再沿 Z 自动传播到整个物体，细膜和闭合轮廓也能跟住。模型用 Rust 重写，在你的显卡上本地运行，数据不出电脑。</p></div>
       <div class="card pf rv d1"><h3 data-i="pro_f4h">CTF 拟合</h3><p data-i="pro_f4p">在功率谱上拟合离焦、像散和相位板相移，把拟合出的 CTF 零点画在谱上，并给出一维拟合曲线。</p></div>
       <div class="card pf rv d2"><h3 data-i="pro_f5h">漂移校正</h3><p data-i="pro_f5p">测出影片、倾转系列和连续切片每一层的位移，画出轨迹，保存对齐后的栈或叠加图（MRC）。</p></div>
+      <div class="card pf rv"><h3 data-i="pro_f6h">衍射标定</h3><p data-i="pro_f6p">自动找出单晶衍射的斑点和中心，拟合二维倒易晶格，在图上标出每个斑点的 (hk) 和 d 值；给出晶胞参数还能按带轴匹配。</p></div>
     </div>
   </div>
 </section>
@@ -101,6 +103,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
           <tr class="grp"><th data-i="pg_em">电镜分析</th><td></td><td class="me"></td><td></td><td></td></tr>
           <tr><th data-i="pr_ctf">CTF 拟合</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="y">✓</td></tr>
           <tr><th data-i="pr_drift">漂移校正、对齐</th><td class="n">—</td><td class="me y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th data-i="pr_diff">衍射斑点标定、带轴匹配</th><td class="n">—</td><td class="me y">✓</td><td class="n">—</td><td class="n">—</td></tr>
           <tr><th data-i="pr_gpu">GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small></th><td class="n">—</td><td class="me y">✓</td><td class="p"></td><td class="p"></td></tr>
         </tbody>
       </table>
@@ -152,7 +155,7 @@ html[data-page="pro"]{--accent:#d4202c;--accent2:#b0171f}
   </div>
 </footer>
 
-<script src="../i18n.js?v=19"></script>
-<script src="../site.js?v=3"></script>
+<script src="../i18n.js?v=20"></script>
+<script src="../site.js?v=4"></script>
 </body>
 </html>

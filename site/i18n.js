@@ -20,7 +20,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: '其它发行版',
       k_file: '上一个 / 下一个文件', k_z: '切换 Z 层', space: '空格', k_play: '播放 / 暂停 Z',
       or_dbl: '或双击', k_fit: '适应窗口', k_save: '保存 PNG 到当前目录', k_open: '打开文件',
-      free: '免费开源', by_author: '作者'
+      free: '免费开源', by_author: '作者',
+      nav_about: '关于作者', about_h: '关于作者', about_p1: '<b>Hao Li</b>，独立开发者，从事冷冻电镜与 AI 开发相关工作，来自中国科学院化学研究所。', about_p2: '如果 TifMrcView 用着顺手，欢迎推荐给更多人，也可以在文章致谢里提一下。有建议，或者想要支持更多格式、更多功能，请给我发邮件：'
     },
     en: {
       def_h: 'Make it the default app', def_lead: 'TifMrcView normally becomes the default for .tif / .tiff / .mrc when installed. If another app still opens them, or you want .rec, .st, .map and .czi (needs the Zeiss plugin) to open in it too:',
@@ -38,7 +39,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Other distributions',
       k_file: 'Previous / next file', k_z: 'Change Z slice', space: 'Space', k_play: 'Play / pause Z',
       or_dbl: 'or double-click', k_fit: 'Fit to window', k_save: 'Save PNG to current folder', k_open: 'Open file',
-      free: 'Free and open source', by_author: 'Author'
+      free: 'Free and open source', by_author: 'Author',
+      nav_about: 'About', about_h: 'About the author', about_p1: '<b>Hao Li</b> is an independent developer working on cryo-EM and AI development, at the Institute of Chemistry, Chinese Academy of Sciences.', about_p2: 'If TifMrcView works well for you, please recommend it to others, or mention it in the acknowledgements of your paper. For suggestions, or to ask for more formats and features, email me at'
     },
     de: {
       def_h: 'Als Standard-App festlegen', def_lead: 'Nach der Installation ist TifMrcView normalerweise Standard für .tif / .tiff / .mrc. Öffnet trotzdem ein anderes Programm sie, oder sollen auch .rec, .st, .map und .czi (mit dem Zeiss-Plugin) damit öffnen:',
@@ -56,7 +58,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Andere Distributionen',
       k_file: 'Vorherige / nächste Datei', k_z: 'Z-Ebene wechseln', space: 'Leertaste', k_play: 'Z abspielen / pausieren',
       or_dbl: 'oder Doppelklick', k_fit: 'An Fenster anpassen', k_save: 'PNG im aktuellen Ordner speichern', k_open: 'Datei öffnen',
-      free: 'Kostenlos und quelloffen', by_author: 'Autor'
+      free: 'Kostenlos und quelloffen', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Über den Autor', about_p1: '<b>Hao Li</b> ist unabhängiger Entwickler und arbeitet an Kryo-EM und KI-Entwicklung, am Institut für Chemie der Chinesischen Akademie der Wissenschaften.', about_p2: 'Wenn Ihnen TifMrcView gefällt, empfehlen Sie es gern weiter oder erwähnen Sie es in der Danksagung Ihrer Veröffentlichung. Für Vorschläge oder Wünsche nach weiteren Formaten und Funktionen schreiben Sie mir:'
     },
     ja: {
       def_h: '既定のアプリにする', def_lead: '通常はインストールすると TifMrcView が .tif / .tiff / .mrc の既定アプリになります。それでも別のアプリで開く場合や、.rec・.st・.map、.czi（Zeiss プラグインが必要）も TifMrcView で開きたい場合は：',
@@ -74,7 +77,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'その他のディストリビューション',
       k_file: '前 / 次のファイル', k_z: 'Z 層を切り替え', space: 'スペース', k_play: 'Z の再生 / 一時停止',
       or_dbl: 'またはダブルクリック', k_fit: 'ウィンドウに合わせる', k_save: '現在のフォルダに PNG を保存', k_open: 'ファイルを開く',
-      free: '無料・オープンソース', by_author: '作者'
+      free: '無料・オープンソース', by_author: '作者',
+      nav_about: '作者について', about_h: '作者について', about_p1: '<b>Hao Li</b>：独立系開発者。クライオ電顕と AI 開発に携わっています。中国科学院化学研究所所属。', about_p2: 'TifMrcView が役に立ったら、ぜひ周りの方に勧めたり、論文の謝辞で触れたりしてください。ご意見や、対応してほしい形式・機能があれば、メールでお知らせください：'
     },
     es: {
       def_h: 'Usarlo como aplicación predeterminada', def_lead: 'Al instalarlo, TifMrcView suele quedar como predeterminado para .tif / .tiff / .mrc. Si otra aplicación los sigue abriendo, o quieres abrir también .rec, .st, .map y .czi (requiere el complemento Zeiss) con él:',
@@ -92,7 +96,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Otras distribuciones',
       k_file: 'Archivo anterior / siguiente', k_z: 'Cambiar corte Z', space: 'Espacio', k_play: 'Reproducir / pausar Z',
       or_dbl: 'o doble clic', k_fit: 'Ajustar a la ventana', k_save: 'Guardar PNG en la carpeta actual', k_open: 'Abrir archivo',
-      free: 'Gratis y de código abierto', by_author: 'Autor'
+      free: 'Gratis y de código abierto', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Sobre el autor', about_p1: '<b>Hao Li</b> es un desarrollador independiente que trabaja en crio-ME y desarrollo de IA, en el Instituto de Química de la Academia China de Ciencias.', about_p2: 'Si TifMrcView te resulta útil, recomiéndalo a otras personas o menciónalo en los agradecimientos de tu artículo. Para sugerencias, o si quieres más formatos y funciones, escríbeme a'
     },
     fr: {
       def_h: 'En faire l’application par défaut', def_lead: 'À l’installation, TifMrcView devient normalement l’application par défaut pour .tif / .tiff / .mrc. Si une autre application les ouvre encore, ou pour ouvrir aussi .rec, .st, .map et .czi (avec l’extension Zeiss) :',
@@ -110,7 +115,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Autres distributions',
       k_file: 'Fichier précédent / suivant', k_z: 'Changer de plan Z', space: 'Espace', k_play: 'Lire / mettre en pause Z',
       or_dbl: 'ou double-clic', k_fit: 'Ajuster à la fenêtre', k_save: 'Enregistrer en PNG dans le dossier courant', k_open: 'Ouvrir un fichier',
-      free: 'Gratuit et open source', by_author: 'Auteur'
+      free: 'Gratuit et open source', by_author: 'Auteur',
+      nav_about: 'L’auteur', about_h: 'À propos de l’auteur', about_p1: '<b>Hao Li</b> est un développeur indépendant qui travaille sur la cryo-ME et le développement d’IA, à l’Institut de chimie de l’Académie chinoise des sciences.', about_p2: 'Si TifMrcView vous est utile, recommandez-le autour de vous ou mentionnez-le dans les remerciements de votre article. Pour une suggestion, ou pour demander d’autres formats et fonctions, écrivez-moi à'
     },
     ru: {
       def_h: 'Сделать приложением по умолчанию', def_lead: 'Обычно после установки TifMrcView становится программой по умолчанию для .tif / .tiff / .mrc. Если файлы всё равно открывает другая программа или нужно открывать в нём ещё .rec, .st, .map и .czi (нужен плагин Zeiss):',
@@ -128,7 +134,8 @@
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Другие дистрибутивы',
       k_file: 'Предыдущий / следующий файл', k_z: 'Сменить слой Z', space: 'Пробел', k_play: 'Воспроизвести / пауза Z',
       or_dbl: 'или двойной щелчок', k_fit: 'По размеру окна', k_save: 'Сохранить PNG в текущую папку', k_open: 'Открыть файл',
-      free: 'Бесплатно и с открытым кодом', by_author: 'Автор'
+      free: 'Бесплатно и с открытым кодом', by_author: 'Автор',
+      nav_about: 'Об авторе', about_h: 'Об авторе', about_p1: '<b>Hao Li</b> — независимый разработчик, занимается крио-ЭМ и разработкой ИИ; Институт химии Китайской академии наук.', about_p2: 'Если TifMrcView вам пригодился, расскажите о нём коллегам или упомяните его в благодарностях статьи. С предложениями и пожеланиями о новых форматах и функциях пишите на'
     }
   };
   // Strings for the plugin market (site/plugins/) and the teaser on the home page.
@@ -309,10 +316,10 @@
   var HOME = {
     zh: {
       title: 'TifMrcView · 显微与电镜图像查看器',
-      desc: 'TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI。支持 macOS、Windows、Linux 和 Android。',
-      h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
-      slogan: '又小、又快、又方便。免费开源。',
-      lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用<span class="an">，也有 Android 版</span>。',
+      desc: 'TifMrcView：看显微和电镜图片的一个小软件，免费开源。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD 等格式下载装上就能打开，数 GB 的栈双击即开；尺子测量，XY / XZ / YZ 三个方向，衍射、FFT 和能谱，体电镜文件夹自动叠成 Z 栈。支持 macOS、Windows、Linux 和 Android。',
+      h1: '<span>看显微电镜图片，</span><span>一个小软件就够了。</span>',
+      slogan: '又小、又快、又简单。免费开源。',
+      lead: '光镜、共聚焦、电镜的各种格式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD……），下载装上就能打开，数 GB 的栈也是双击即开。尺子直接测量，XY / XZ / YZ 三个方向切着看，衍射和 FFT 上量 d 间距，EDS / EELS 能谱一眼看清，体电镜文件夹自动叠成 Z 栈。不用装一堆软件，也不用学复杂操作。macOS、Windows、Linux 通用<span class=\"an\">，也有 Android 版</span>。',
       an_a: '下载安卓版 APK', pro_line: '分割和三维查看：<b>TifMrcView Pro</b> →',
       dl_apk: '下载 APK', note_apk: 'Android 7 及以上，arm64',
       an_tip: '手机和平板都能用的基础版查看器（不含 Pro 功能）。安装时按提示允许「安装未知应用」。双指缩放，长按标注可删除。',
@@ -375,10 +382,10 @@
     },
     en: {
       title: 'TifMrcView · Microscopy & EM image viewer',
-      desc: 'TifMrcView: a small, fast and convenient viewer for microscopy and electron microscopy, free and open source. TIFF / OME-TIFF and cryo-EM MRC stacks of many gigabytes open on double-click; XY / XZ / YZ views, measurements in physical units, multichannel fluorescence; plugins add new formats such as Zeiss CZI. For macOS, Windows, Linux and Android.',
-      h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
-      slogan: 'Small. Fast. Effortless. Free and open source.',
-      lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux<span class="an">, and Android</span>.',
+      desc: 'TifMrcView: one small app for microscopy and EM images, free and open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more open right after install, multi-gigabyte stacks with a double-click; ruler measurements, XY / XZ / YZ views, diffraction, FFT and spectra, volume-EM folders stacked into Z automatically. For macOS, Windows, Linux and Android.',
+      h1: '<span>Microscopy and EM images.</span> <span>One small app.</span>',
+      slogan: 'Small. Fast. Simple. Free and open source.',
+      lead: 'Light, confocal and electron microscopy formats (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more) open right after install, multi-gigabyte stacks with a double-click. Measure with a ruler, slice through XY, XZ and YZ, read d-spacings on diffraction and FFT, see EDS / EELS spectra at a glance, and get volume-EM folders stacked into Z automatically. No pile of programs, nothing complicated to learn. On macOS, Windows and Linux<span class=\"an\">, and Android</span>.',
       an_a: 'Download the Android APK', pro_line: 'Segmentation and 3D viewing: <b>TifMrcView Pro</b> →',
       dl_apk: 'Download APK', note_apk: 'Android 7+, arm64',
       an_tip: 'The basic viewer for phones and tablets (no Pro features). Allow “Install unknown apps” when asked. Pinch to zoom; long-press an annotation to delete it.',
@@ -441,10 +448,10 @@
     },
     de: {
       title: 'TifMrcView · Viewer für Mikroskopie- und EM-Bilder',
-      desc: 'TifMrcView: ein kleiner, schneller und einfacher Viewer für Licht- und Elektronenmikroskopie, kostenlos und quelloffen. TIFF / OME-TIFF und Kryo-EM-MRC mit vielen Gigabyte öffnen per Doppelklick; XY-/XZ-/YZ-Ansichten, Messungen in physikalischen Einheiten, Mehrkanal-Fluoreszenz; Plugins ergänzen neue Formate wie Zeiss CZI. Für macOS, Windows, Linux und Android.',
-      h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
+      desc: 'TifMrcView: eine kleine App für Mikroskopie- und EM-Bilder, kostenlos und quelloffen. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick; Lineal-Messung, XY-/XZ-/YZ-Ansichten, Beugung, FFT und Spektren, Volumen-EM-Ordner automatisch als Z-Stapel. Für macOS, Windows, Linux und Android.',
+      h1: '<span>Mikroskopie- und EM-Bilder.</span> <span>Eine kleine App.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
-      lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux<span class="an"> sowie Android</span>.',
+      lead: 'Formate aus Licht-, Konfokal- und Elektronenmikroskopie (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr) öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick. Mit dem Lineal messen, in XY, XZ und YZ schneiden, d-Abstände in Beugung und FFT ablesen, EDS-/EELS-Spektren auf einen Blick sehen, Volumen-EM-Ordner automatisch als Z-Stapel. Kein Programm-Sammelsurium, nichts Kompliziertes zu lernen. Für macOS, Windows und Linux<span class=\"an\"> sowie Android</span>.',
       an_a: 'Android-APK herunterladen', pro_line: 'Segmentierung und 3D-Ansicht: <b>TifMrcView Pro</b> →',
       dl_apk: 'APK herunterladen', note_apk: 'Ab Android 7, arm64',
       an_tip: 'Der Basis-Viewer für Smartphones und Tablets (ohne Pro-Funktionen). Bei Nachfrage „Unbekannte Apps installieren“ erlauben. Mit zwei Fingern zoomen; Anmerkung lange drücken zum Löschen.',
@@ -507,10 +514,10 @@
     },
     ja: {
       title: 'TifMrcView · 顕微鏡・電子顕微鏡画像ビューア',
-      desc: 'TifMrcView：顕微鏡と電子顕微鏡のための、小さく、速く、使いやすい無料のオープンソースビューア。TIFF / OME-TIFF とクライオ電顕の MRC は数 GB のスタックもダブルクリックで開きます。XY / XZ / YZ ビュー、物理単位での計測、マルチチャンネル蛍光。プラグインで Zeiss CZI などの新しい形式も追加できます。macOS・Windows・Linux・Android 対応。',
-      h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
-      slogan: '小さく、速く、使いやすく。無料のオープンソース。',
-      lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux<span class="an">・Android</span> に対応。',
+      desc: 'TifMrcView：顕微鏡・電子顕微鏡画像を見るための小さなアプリ。無料のオープンソース。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD などをインストール直後から開け、数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ 表示、回折・FFT・スペクトル、ボリューム EM フォルダは自動で Z スタックに。macOS、Windows、Linux、Android に対応。',
+      h1: '<span>顕微鏡・電顕の画像は、</span><span>小さなアプリひとつで。</span>',
+      slogan: '小さく、速く、シンプルに。無料のオープンソース。',
+      lead: '光学・共焦点・電子顕微鏡のさまざまな形式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD など）を、インストールしてすぐ開けます。数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ の三方向で断面表示、回折や FFT で d 間隔を測定、EDS / EELS スペクトルもひと目で、ボリューム EM のフォルダは自動で Z スタックに。ソフトをいくつも入れる必要も、難しい操作を覚える必要もありません。macOS、Windows、Linux に対応<span class=\"an\">、Android 版もあります</span>。',
       an_a: 'Android 版 APK をダウンロード', pro_line: 'セグメンテーションと 3D 表示は <b>TifMrcView Pro</b> へ →',
       dl_apk: 'APK をダウンロード', note_apk: 'Android 7 以降、arm64',
       an_tip: 'スマートフォン・タブレット向けの基本ビューア（Pro 機能なし）。インストール時に「不明なアプリのインストール」を許可してください。2 本指でズーム、注釈を長押しで削除。',
@@ -573,10 +580,10 @@
     },
     es: {
       title: 'TifMrcView · Visor de imágenes de microscopía y ME',
-      desc: 'TifMrcView: un visor pequeño, rápido y cómodo para microscopía óptica y electrónica, gratis y de código abierto. Pilas TIFF / OME-TIFF y MRC de crio-ME de varios GB se abren con doble clic; vistas XY / XZ / YZ, medidas en unidades físicas y fluorescencia multicanal; los complementos añaden formatos nuevos como Zeiss CZI. Para macOS, Windows, Linux y Android.',
-      h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
-      slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
-      lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux<span class="an">, y también Android</span>.',
+      desc: 'TifMrcView: una sola aplicación pequeña para imágenes de microscopía y ME, gratis y de código abierto. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más se abren nada más instalar, pilas de varios GB con doble clic; medición con regla, vistas XY / XZ / YZ, difracción, FFT y espectros, carpetas de ME de volumen apiladas en Z automáticamente. Para macOS, Windows, Linux y Android.',
+      h1: '<span>Imágenes de microscopía y ME.</span> <span>Una sola app pequeña.</span>',
+      slogan: 'Ligera. Rápida. Sencilla. Gratis y de código abierto.',
+      lead: 'Formatos de microscopía óptica, confocal y electrónica (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más) se abren nada más instalar, incluso pilas de varios gigabytes con doble clic. Mide con una regla, corta en XY, XZ y YZ, lee distancias d en difracción y FFT, ve espectros EDS / EELS de un vistazo, y las carpetas de ME de volumen se apilan en Z solas. Sin montones de programas ni nada complicado que aprender. Para macOS, Windows y Linux<span class=\"an\">, y Android</span>.',
       an_a: 'Descargar el APK para Android', pro_line: 'Segmentación y vista 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Descargar APK', note_apk: 'Android 7 o posterior, arm64',
       an_tip: 'El visor básico para móviles y tabletas (sin funciones Pro). Permite «Instalar apps desconocidas» cuando se pida. Pellizca para hacer zoom; mantén pulsada una anotación para borrarla.',
@@ -639,10 +646,10 @@
     },
     fr: {
       title: 'TifMrcView · Visionneuse d’images de microscopie et de ME',
-      desc: 'TifMrcView : une visionneuse légère, rapide et pratique pour la microscopie optique et électronique, gratuite et open source. Des piles TIFF / OME-TIFF et MRC de cryo-ME de plusieurs Go s’ouvrent d’un double-clic ; vues XY / XZ / YZ, mesures en unités physiques, fluorescence multicanal ; des extensions ajoutent de nouveaux formats comme Zeiss CZI. Pour macOS, Windows, Linux et Android.',
-      h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
+      desc: 'TifMrcView : une seule petite application pour les images de microscopie et de ME, gratuite et open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus s’ouvrent dès l’installation, des piles de plusieurs Go d’un double-clic ; mesure à la règle, vues XY / XZ / YZ, diffraction, FFT et spectres, dossiers de ME en volume empilés en Z automatiquement. Pour macOS, Windows, Linux et Android.',
+      h1: '<span>Images de microscopie et de ME.</span> <span>Une seule petite app.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
-      lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux<span class="an">, et aussi Android</span>.',
+      lead: 'Les formats de microscopie optique, confocale et électronique (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus) s’ouvrent dès l’installation, même des piles de plusieurs gigaoctets d’un double-clic. Mesurez à la règle, coupez en XY, XZ et YZ, lisez les distances d en diffraction et en FFT, voyez les spectres EDS / EELS d’un coup d’œil, et les dossiers de ME en volume s’empilent en Z tout seuls. Pas de pile de logiciels, rien de compliqué à apprendre. Sur macOS, Windows et Linux<span class=\"an\">, et Android</span>.',
       an_a: 'Télécharger l’APK Android', pro_line: 'Segmentation et vue 3D : <b>TifMrcView Pro</b> →',
       dl_apk: 'Télécharger l’APK', note_apk: 'Android 7 ou plus, arm64',
       an_tip: 'La visionneuse de base pour téléphones et tablettes (sans les fonctions Pro). Autorisez « Installer des applis inconnues » si demandé. Pincez pour zoomer ; appui long sur une annotation pour la supprimer.',
@@ -705,10 +712,10 @@
     },
     ru: {
       title: 'TifMrcView · Просмотрщик изображений микроскопии и ЭМ',
-      desc: 'TifMrcView: маленький, быстрый и удобный просмотрщик для световой и электронной микроскопии, бесплатный и с открытым кодом. Стеки TIFF / OME-TIFF и MRC для крио-ЭМ в несколько ГБ открываются двойным щелчком; виды XY / XZ / YZ, измерения в физических единицах, многоканальная флуоресценция; плагины добавляют новые форматы, например Zeiss CZI. Для macOS, Windows, Linux и Android.',
-      h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
-      slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
-      lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux<span class="an">, а также Android</span>.',
+      desc: 'TifMrcView: одно маленькое приложение для изображений микроскопии и ЭМ, бесплатное и с открытым кодом. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие открываются сразу после установки, стеки в несколько ГБ — двойным щелчком; измерения линейкой, виды XY / XZ / YZ, дифракция, FFT и спектры, папки объёмной ЭМ автоматически собираются в Z-стек. Для macOS, Windows, Linux и Android.',
+      h1: '<span>Микроскопия и ЭМ —</span> <span>одно маленькое приложение.</span>',
+      slogan: 'Лёгкий. Быстрый. Простой. Бесплатный, с открытым кодом.',
+      lead: 'Форматы световой, конфокальной и электронной микроскопии (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие) открываются сразу после установки, даже стеки в несколько гигабайт — двойным щелчком. Измеряйте линейкой, смотрите срезы XY, XZ и YZ, определяйте межплоскостные расстояния на дифракции и FFT, смотрите спектры EDS / EELS, а папки объёмной ЭМ сами собираются в Z-стек. Не нужно ставить кучу программ и учить сложные действия. Для macOS, Windows и Linux<span class=\"an\">, а также Android</span>.',
       an_a: 'Скачать APK для Android', pro_line: 'Сегментация и 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Скачать APK', note_apk: 'Android 7 и новее, arm64',
       an_tip: 'Базовый просмотрщик для телефонов и планшетов (без функций Pro). Разрешите «Установку неизвестных приложений», когда попросят. Масштаб — двумя пальцами; долгое нажатие на пометку удаляет её.',
@@ -791,6 +798,8 @@
       pro_f4p: "在功率谱上拟合离焦、像散和相位板相移，把拟合出的 CTF 零点画在谱上，并给出一维拟合曲线。",
       pro_f5h: "漂移校正",
       pro_f5p: "测出影片、倾转系列和连续切片每一层的位移，画出轨迹，保存对齐后的栈或叠加图（MRC）。",
+      pro_f6h: "衍射标定",
+      pro_f6p: "自动找出单晶衍射的斑点和中心，拟合二维倒易晶格，在图上标出每个斑点的 (hk) 和 d 值；给出晶胞参数还能按带轴匹配。",
       pro_cmp_h: "两个版本，各有侧重",
       pro_b_h: "基础版：轻巧的查看器",
       pro_b_p: "小而快，双击就开数 GB 的 TIFF / MRC。手动测量、标注、FFT 和能谱查看都有。适合日常浏览和快速检查，也有安卓版。",
@@ -821,6 +830,8 @@
       pro_f4p: "Fits defocus, astigmatism and phase-plate shift to the power spectrum, draws the fitted CTF zeros over it and shows the 1D fit.",
       pro_f5h: "Drift correction",
       pro_f5p: "Measures how far each frame of a movie, tilt series or serial section stack moved, plots the trajectory, and saves the aligned stack or its sum as MRC.",
+      pro_f6h: "Diffraction indexing",
+      pro_f6p: "Finds the spots and centre of a single-crystal diffraction pattern, fits the 2D reciprocal lattice, and labels each spot with its (hk) and d spacing; given a unit cell, it also matches zone axes.",
       pro_cmp_h: "Two editions, two jobs",
       pro_b_h: "Standard: a light viewer",
       pro_b_p: "Small and fast; multi-GB TIFF / MRC files open with a double-click. Manual measurement, annotation, FFT and spectrum viewing included. Made for everyday browsing and quick checks, also on Android.",
@@ -851,6 +862,8 @@
       pro_f4p: "Passt Defokus, Astigmatismus und Phasenplatten-Verschiebung an das Leistungsspektrum an, zeichnet die CTF-Nullstellen ein und zeigt den 1D-Fit.",
       pro_f5h: "Driftkorrektur",
       pro_f5p: "Misst, wie weit sich jedes Bild eines Films, einer Kippserie oder eines Serienschnitt-Stapels verschoben hat, zeigt die Trajektorie und speichert den ausgerichteten Stapel oder seine Summe als MRC.",
+      pro_f6h: "Beugungsindizierung",
+      pro_f6p: "Findet Reflexe und Zentrum eines Einkristall-Beugungsbilds, passt das 2D-reziproke Gitter an und beschriftet jeden Reflex mit (hk) und Netzebenenabstand d; mit Elementarzelle werden auch Zonenachsen zugeordnet.",
       pro_cmp_h: "Zwei Editionen, zwei Aufgaben",
       pro_b_h: "Standard: ein leichter Viewer",
       pro_b_p: "Klein und schnell; mehrere GB große TIFF / MRC öffnen per Doppelklick. Manuelles Messen, Annotationen, FFT und Spektrenansicht inklusive. Für den Alltag und schnelle Kontrollen, auch für Android.",
@@ -881,6 +894,8 @@
       pro_f4p: "パワースペクトルにデフォーカス・非点収差・位相板シフトをフィットし、CTF のゼロ点をスペクトル上に描画、1 次元フィットも表示します。",
       pro_f5h: "ドリフト補正",
       pro_f5p: "ムービー、傾斜シリーズ、連続切片の各フレームのずれを測ってトラジェクトリを描き、位置合わせしたスタックまたは積算像を MRC で保存します。",
+      pro_f6h: "回折パターンの指数付け",
+      pro_f6p: "単結晶回折パターンのスポットと中心を見つけ、2 次元逆格子をフィットして各スポットに (hk) と d 値を表示します。格子定数を入れれば晶帯軸も照合します。",
       pro_cmp_h: "ふたつの版、それぞれの役割",
       pro_b_h: "標準版：軽快なビューア",
       pro_b_p: "小さく速く、数 GB の TIFF / MRC もダブルクリックで開きます。手動計測、注釈、FFT、スペクトル表示つき。日常の閲覧や手早い確認に。Android 版もあります。",
@@ -911,6 +926,8 @@
       pro_f4p: "Ajusta desenfoque, astigmatismo y desfase de placa de fase al espectro de potencia, dibuja los ceros de la CTF sobre él y muestra el ajuste 1D.",
       pro_f5h: "Corrección de deriva",
       pro_f5p: "Mide cuánto se movió cada fotograma de una película, serie de inclinación o cortes seriados, dibuja la trayectoria y guarda la pila alineada o su suma en MRC.",
+      pro_f6h: "Indexado de difracción",
+      pro_f6p: "Encuentra los puntos y el centro de un patrón de difracción de monocristal, ajusta la red recíproca 2D y etiqueta cada punto con su (hk) y espaciado d; con una celda unidad también identifica ejes de zona.",
       pro_cmp_h: "Dos ediciones, dos tareas",
       pro_b_h: "Estándar: un visor ligero",
       pro_b_p: "Pequeño y rápido; archivos TIFF / MRC de varios GB se abren con doble clic. Incluye medición manual, anotaciones, FFT y visor de espectros. Para el día a día y comprobaciones rápidas, también en Android.",
@@ -941,6 +958,8 @@
       pro_f4p: "Ajuste la défocalisation, l’astigmatisme et le déphasage de lame de phase au spectre de puissance, trace les zéros de la CTF ajustée et affiche l’ajustement 1D.",
       pro_f5h: "Correction de dérive",
       pro_f5p: "Mesure le déplacement de chaque image d’un film, d’une série d’inclinaison ou de coupes sériées, trace la trajectoire et enregistre la pile alignée ou sa somme en MRC.",
+      pro_f6h: "Indexation de diffraction",
+      pro_f6p: "Trouve les taches et le centre d’un cliché de diffraction de monocristal, ajuste le réseau réciproque 2D et marque chaque tache de ses indices (hk) et de sa distance d ; avec une maille, il identifie aussi les axes de zone.",
       pro_cmp_h: "Deux éditions, deux usages",
       pro_b_h: "Standard : un visualiseur léger",
       pro_b_p: "Petit et rapide ; des TIFF / MRC de plusieurs Go s’ouvrent d’un double-clic. Mesure manuelle, annotations, FFT et affichage des spectres inclus. Pour le quotidien et les vérifications rapides, aussi sur Android.",
@@ -971,6 +990,8 @@
       pro_f4p: "Подгоняет дефокус, астигматизм и сдвиг фазовой пластинки по спектру мощности, рисует нули CTF поверх спектра и показывает одномерную подгонку.",
       pro_f5h: "Коррекция дрейфа",
       pro_f5p: "Измеряет сдвиг каждого кадра фильма, серии наклонов или серийных срезов, строит траекторию и сохраняет выровненный стек или его сумму в MRC.",
+      pro_f6h: "Индицирование дифракции",
+      pro_f6p: "Находит рефлексы и центр монокристальной дифракционной картины, подгоняет двумерную обратную решётку и подписывает у каждого рефлекса (hk) и межплоскостное расстояние d; по параметрам ячейки подбирает оси зон.",
       pro_cmp_h: "Две версии, две задачи",
       pro_b_h: "Стандартная: лёгкий просмотрщик",
       pro_b_p: "Маленький и быстрый: TIFF / MRC размером в несколько гигабайт открываются двойным щелчком. Ручные измерения, аннотации, FFT и просмотр спектров включены. Для повседневного просмотра и быстрых проверок, есть версия для Android.",
@@ -1008,7 +1029,7 @@
       pr_lab: '分割标签 <small>画笔 · 魔棒 · 阈值 · 分水岭 · 套索</small>',
       pr_mat: '材料：命名、配色、隐藏、锁定', pr_interp: '层间插值',
       pr_sam: 'AI 点击分割（SAM 2.1，本地运行）', pr_prop: '分割结果沿 Z 自动传播',
-      pr_ctf: 'CTF 拟合', pr_drift: '漂移校正、对齐',
+      pr_ctf: 'CTF 拟合', pr_drift: '漂移校正、对齐', pr_diff: '衍射斑点标定、带轴匹配',
       pr_gpu: 'GPU 计算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: '断层重建',
       pcmp_foot: "依据各软件官方文档（2026 年 10 月），比较装好就有的功能。厂商格式在基础版和 Pro 里由官方插件提供。",
       cr_lossless: "按原始精度显示（float32 / 16 位），不降成 8 位", cmp_plnote: "TifMrcView 的共聚焦和电镜厂商格式由官方插件提供，免费，在应用内一键安装。", cr_env: "运行环境", ce_tmv: "无需", ce_fiji: "自带 Java", ce_imod: "要另装 Python 或 Cygwin"
@@ -1034,7 +1055,7 @@
       pr_lab: 'Segmentation labels <small>brush · wand · threshold · watershed · lasso</small>',
       pr_mat: 'Materials: name, colour, hide, lock', pr_interp: 'Interpolation between slices',
       pr_sam: 'AI click segmentation (SAM 2.1, runs locally)', pr_prop: 'Propagate segmentation along Z',
-      pr_ctf: 'CTF fitting', pr_drift: 'Drift correction and alignment',
+      pr_ctf: 'CTF fitting', pr_drift: 'Drift correction and alignment', pr_diff: 'Diffraction spot indexing, zone-axis matching',
       pr_gpu: 'GPU compute <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomographic reconstruction',
       pcmp_foot: "Based on each program’s documentation (October 2026), comparing what you get out of the box. Vendor formats come from official plugins in both editions.",
       cr_lossless: "Shown at full precision (float32 / 16-bit), not reduced to 8-bit", cmp_plnote: "In TifMrcView, the confocal and EM vendor formats come from official plugins: free, one click to install in the app.", cr_env: "Runtime needed", ce_tmv: "none", ce_fiji: "bundles Java", ce_imod: "needs Python or Cygwin"
@@ -1060,7 +1081,7 @@
       pr_lab: 'Segmentierungs-Labels <small>Pinsel · Zauberstab · Schwelle · Watershed · Lasso</small>',
       pr_mat: 'Materialien: benennen, färben, ausblenden, sperren', pr_interp: 'Interpolation zwischen Schichten',
       pr_sam: 'KI-Segmentierung per Klick (SAM 2.1, lokal)', pr_prop: 'Segmentierung entlang Z fortsetzen',
-      pr_ctf: 'CTF-Anpassung', pr_drift: 'Driftkorrektur und Ausrichtung',
+      pr_ctf: 'CTF-Anpassung', pr_drift: 'Driftkorrektur und Ausrichtung', pr_diff: 'Indizierung von Beugungsreflexen, Zonenachsen',
       pr_gpu: 'GPU-Berechnung <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Tomografische Rekonstruktion',
       pcmp_foot: "Nach der Dokumentation der Programme (Oktober 2026), verglichen wird, was nach der Installation dabei ist. Herstellerformate kommen in beiden Versionen aus offiziellen Plugins.",
       cr_lossless: "Anzeige in voller Genauigkeit (float32 / 16 Bit), nicht auf 8 Bit reduziert", cmp_plnote: "In TifMrcView kommen die Konfokal- und EM-Herstellerformate aus offiziellen Plugins: kostenlos, mit einem Klick in der App installiert.", cr_env: "Laufzeitumgebung", ce_tmv: "keine", ce_fiji: "Java mitgeliefert", ce_imod: "braucht Python oder Cygwin"
@@ -1086,7 +1107,7 @@
       pr_lab: 'セグメンテーションラベル <small>ブラシ · 魔法の杖 · しきい値 · 分水嶺 · 投げ縄</small>',
       pr_mat: 'マテリアル：名前・色・非表示・ロック', pr_interp: 'スライス間補間',
       pr_sam: 'AI クリックセグメンテーション（SAM 2.1、ローカル実行）', pr_prop: 'セグメンテーションを Z 方向に自動伝播',
-      pr_ctf: 'CTF フィッティング', pr_drift: 'ドリフト補正・位置合わせ',
+      pr_ctf: 'CTF フィッティング', pr_drift: 'ドリフト補正・位置合わせ', pr_diff: '回折スポットの指数付け・晶帯軸照合',
       pr_gpu: 'GPU 計算 <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'トモグラム再構成',
       pcmp_foot: "各ソフトの公式ドキュメント（2026 年 10 月）に基づき、インストール直後に使える機能を比べています。各社フォーマットはどちらの版でも公式プラグインで対応します。",
       cr_lossless: "元の精度（float32 / 16 ビット）で表示、8 ビットに落とさない", cmp_plnote: "TifMrcView の共焦点・電顕メーカーフォーマットは公式プラグインで対応します。無料で、アプリ内からワンクリックで導入できます。", cr_env: "実行環境", ce_tmv: "不要", ce_fiji: "Java 同梱", ce_imod: "Python か Cygwin が別途必要"
@@ -1112,7 +1133,7 @@
       pr_lab: 'Etiquetas de segmentación <small>pincel · varita · umbral · watershed · lazo</small>',
       pr_mat: 'Materiales: nombre, color, ocultar, bloquear', pr_interp: 'Interpolación entre cortes',
       pr_sam: 'Segmentación con IA por clic (SAM 2.1, en local)', pr_prop: 'Propagar la segmentación a lo largo de Z',
-      pr_ctf: 'Ajuste de CTF', pr_drift: 'Corrección de deriva y alineación',
+      pr_ctf: 'Ajuste de CTF', pr_drift: 'Corrección de deriva y alineación', pr_diff: 'Indexado de difracción y ejes de zona',
       pr_gpu: 'Cálculo en GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstrucción tomográfica',
       pcmp_foot: "Según la documentación de cada programa (octubre de 2026); se compara lo que trae cada uno al instalarlo. En ambas ediciones los formatos de fabricantes llegan con plugins oficiales.",
       cr_lossless: "Se muestra con la precisión original (float32 / 16 bits), sin reducir a 8 bits", cmp_plnote: "En TifMrcView, los formatos de fabricantes confocales y de ME llegan con plugins oficiales: gratis y se instalan con un clic en la app.", cr_env: "Entorno necesario", ce_tmv: "ninguno", ce_fiji: "incluye Java", ce_imod: "requiere Python o Cygwin"
@@ -1138,7 +1159,7 @@
       pr_lab: 'Étiquettes de segmentation <small>pinceau · baguette · seuil · watershed · lasso</small>',
       pr_mat: 'Matériaux : nom, couleur, masquer, verrouiller', pr_interp: 'Interpolation entre coupes',
       pr_sam: 'Segmentation IA au clic (SAM 2.1, en local)', pr_prop: 'Propager la segmentation le long de Z',
-      pr_ctf: 'Ajustement de la CTF', pr_drift: 'Correction de dérive et alignement',
+      pr_ctf: 'Ajustement de la CTF', pr_drift: 'Correction de dérive et alignement', pr_diff: 'Indexation des taches de diffraction, axes de zone',
       pr_gpu: 'Calcul sur GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Reconstruction tomographique',
       pcmp_foot: "D’après la documentation de chaque logiciel (octobre 2026), en comparant ce qui est disponible dès l’installation. Dans les deux éditions, les formats des fabricants viennent de plugins officiels.",
       cr_lossless: "Affichage en précision d’origine (float32 / 16 bits), sans réduction à 8 bits", cmp_plnote: "Dans TifMrcView, les formats des fabricants (confocal et ME) viennent de plugins officiels : gratuits, installés en un clic dans l’app.", cr_env: "Environnement requis", ce_tmv: "aucun", ce_fiji: "Java inclus", ce_imod: "requiert Python ou Cygwin"
@@ -1164,7 +1185,7 @@
       pr_lab: 'Метки сегментации <small>кисть · волшебная палочка · порог · водораздел · лассо</small>',
       pr_mat: 'Материалы: имя, цвет, скрытие, блокировка', pr_interp: 'Интерполяция между срезами',
       pr_sam: 'ИИ-сегментация щелчком (SAM 2.1, локально)', pr_prop: 'Распространение сегментации по Z',
-      pr_ctf: 'Подгонка CTF', pr_drift: 'Коррекция дрейфа и выравнивание',
+      pr_ctf: 'Подгонка CTF', pr_drift: 'Коррекция дрейфа и выравнивание', pr_diff: 'Индицирование рефлексов, подбор осей зон',
       pr_gpu: 'Вычисления на GPU <small>CUDA · Metal · DX12 · Vulkan</small>', pr_recon: 'Томографическая реконструкция',
       pcmp_foot: "По документации программ (октябрь 2026); сравнивается то, что есть сразу после установки. Форматы производителей в обеих версиях дают официальные плагины.",
       cr_lossless: "Показ с исходной точностью (float32 / 16 бит), без понижения до 8 бит", cmp_plnote: "В TifMrcView конфокальные и ЭМ-форматы производителей дают официальные плагины: бесплатно, ставятся в приложении одним щелчком.", cr_env: "Среда выполнения", ce_tmv: "не нужна", ce_fiji: "Java в комплекте", ce_imod: "нужен Python или Cygwin"
@@ -1379,6 +1400,12 @@
     return [f.label || f.file, f.note || ''];
   }
 
+  // A download link's text plus the file size, to show how small the app is.
+  function withSize(el, text, f) {
+    el.textContent = text;
+    if (sizes[f.file]) { var s = document.createElement('span'); s.className = 'sz'; s.textContent = mb(sizes[f.file]); el.appendChild(s); }
+  }
+
   function renderDownloads() {
     if (!data || !HOME) return;
     var t = T[lang];
@@ -1412,16 +1439,17 @@
     if (an && apk && !/Android/.test(ua)) {
       an.href = DL + apk.file;
       an.hidden = false;
+      withSize(an, t.an_a, apk);
     }
     document.getElementById('ver').textContent = 'v' + data.version;
     var c = document.getElementById('cta');
     if (/Android/.test(ua) && apk) {
       c.href = DL + apk.file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', 'Android');
+      withSize(c, t.cta_os.replace('{os}', 'Android'), apk);
       if (card) card.classList.add('hl');
     } else if (os && data.files[os] && data.files[os][0]) {
       c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
+      withSize(c, t.cta_os.replace('{os}', OS_NAMES[os]), data.files[os][0]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }
     document.dispatchEvent(new Event('downloads-rendered'));
