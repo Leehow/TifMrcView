@@ -19,12 +19,12 @@ Author: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow
 
 <table>
   <tr>
-    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="Cryo-ET tomogram in MRC with a length measurement"></a><br><sub>Cryo-ET tomogram (MRC) with a length measurement and the annotation tools.</sub></td>
-    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="XZ side view with a box"></a><br><sub>XZ side view with a box showing width × height.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-tomogram-line.webp"><img src="docs/shots/mrc-tomogram-line-1200.webp" alt="Cryo-ET tomogram in MRC with a length measurement"></a><br><sub>Cryo-ET tomogram (MRC) with a length measurement and the annotation tools.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-xz-view-box.webp"><img src="docs/shots/mrc-xz-view-box-1200.webp" alt="XZ side view with a box"></a><br><sub>XZ side view with a box showing width × height.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="Zeiss CZI Airyscan Z-stack with measurement"></a><br><sub>Zeiss CZI Airyscan Z-stack with a measurement and scale bar.</sub></td>
-    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="3-channel fluorescence TIFF"></a><br><sub>3-channel fluorescence TIFF with per-channel toggles.</sub></td>
+    <td width="50%"><a href="docs/shots/czi-airyscan-measure.webp"><img src="docs/shots/czi-airyscan-measure-1200.webp" alt="Zeiss CZI Airyscan Z-stack with measurement"></a><br><sub>Zeiss CZI Airyscan Z-stack with a measurement and scale bar.</sub></td>
+    <td width="50%"><a href="docs/shots/tiff-multichannel.webp"><img src="docs/shots/tiff-multichannel-1200.webp" alt="3-channel fluorescence TIFF"></a><br><sub>3-channel fluorescence TIFF with per-channel toggles.</sub></td>
   </tr>
 </table>
 
@@ -162,7 +162,7 @@ Every push to `main` makes GitHub Actions build packages on macOS / Windows / Li
 - Push a tag starting with `v`: `git tag v0.3.0 && git push origin v0.3.0` uploads to the download site and creates a GitHub Release;
 - or run the build manually in Actions with "publish to the download site" ticked, which publishes with the automatic version number.
 
-When publishing, CI puts the installers and update packages in the download site's `<version>/` directory and finally updates `latest.json` and `latest-direct.json` (for auto-update) and `downloads.json` (for the download page). The download page and the plugin market (`site/`, `plugins/`) are also deployed by their own workflow (`.github/workflows/site.yml`) whenever they change on `main`. Configure these in the repository under Settings → Secrets and variables → Actions:
+When publishing, CI puts the installers and update packages in the download site's `<version>/` directory and finally updates `latest.json` and `latest-direct.json` (for auto-update) and `downloads.json` (for the download page). The plugin market packages (`plugins/`) are also deployed by their own workflow (`.github/workflows/plugins.yml`) whenever they change on `main`; the website pages themselves are kept in a separate repository. Configure these in the repository under Settings → Secrets and variables → Actions:
 
 | Name | Type | Description |
 | --- | --- | --- |
@@ -190,9 +190,9 @@ When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a
 | `ui/` | Plain HTML/JS frontend: `index.html`, `app.js`, `style.css`, `plugin-host.js`; built-in language plugin in `ui/plugins/i18n.js` |
 | `plugins/<id>/` | Sources of the installable plugins (`recorder`, and the format plugins `zeiss`, `lasx`, `nis`, `fluoview`, `imaris`, `gatan`, `thermo` and `tvips`, one per vendor, which are Rust crates built to WebAssembly) and the plugin SDK (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (builds plugin zips and the market index), `make-release.mjs` |
-| `site/` | The website and plugin market, with screenshots in `site/shots/` |
+| `docs/shots/` | Screenshots used in this README |
 | `packaging/linux/` | Linux packaging files (MIME type for .mrc) |
-| `.github/workflows/` | `build.yml` (build and release), `site.yml` (site and plugin market deploy) |
+| `.github/workflows/` | `build.yml` (build and release), `plugins.yml` (plugin market packages) |
 
 ## Translations
 
