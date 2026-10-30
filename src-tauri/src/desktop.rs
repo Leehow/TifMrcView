@@ -1066,6 +1066,13 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
     .await
 }
 
+/// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
+#[tauri::command]
+async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<crate::stem4d::Result4d> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || crate::stem4d::analyze(&crate::stem4d::ImageFrames { img, c: req.c }, &req)).await
+}
+
 /// EDS quantification (Pro) of a spectrum; see `spectro::eds`.
 #[tauri::command]
 async fn eds_quant(req: crate::spectro::EdsReq) -> CmdResult<crate::spectro::EdsResult> {
@@ -1660,6 +1667,7 @@ pub fn run() {
             diffraction_find,
             diffraction_zones,
             eds_quant,
+            stem4d_analyze,
             eels_quant,
             align_save,
             align_cancel,
