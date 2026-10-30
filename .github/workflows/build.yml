@@ -371,6 +371,67 @@ jobs:
           run-id: ${{ env.ARTIFACT_RUN }}
           github-token: ${{ github.token }}
 
+      # Authenticode signing of the Windows installers through SignPath
+      # (free certificate for open source, https://signpath.org). Skipped until
+      # SIGNPATH_API_TOKEN is set. Both editions go in one signing request,
+      # which a maintainer approves on signpath.io; the updater signatures
+      # (.sig) are then made again for the signed files.
+      - name: Collect Windows installers for signing
+        id: to-sign
+        env:
+          HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        run: |
+          if [ "$HAS_SIGNPATH" != "true" ]; then
+            echo "::warning::SIGNPATH_API_TOKEN not set; Windows installers stay unsigned"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          find artifacts -path '*/nsis/*-setup.exe' -exec cp {} "$RUNNER_TEMP/unsigned/" \;
+          ls -l "$RUNNER_TEMP/unsigned"
+          echo "sign=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned Windows installers
+        id: unsigned
+        if: steps.to-sign.outputs.sign == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: ${{ runner.temp }}/unsigned/*-setup.exe
+          if-no-files-found: error
+
+      - name: Sign Windows installers (SignPath)
+        if: steps.to-sign.outputs.sign == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'TifMrcView' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG || 'windows-installers' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          # Waits for the manual approval on signpath.io.
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: ${{ runner.temp }}/signed
+
+      - run: npm ci || npm install
+        if: steps.to-sign.outputs.sign == 'true'
+
+      - name: Use the signed installers
+        if: steps.to-sign.outputs.sign == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          find artifacts -path '*/nsis/*-setup.exe' | while read -r f; do
+            signed="$RUNNER_TEMP/signed/$(basename "$f")"
+            test -f "$signed" || { echo "::error::SignPath returned no $(basename "$f")"; exit 1; }
+            cp "$signed" "$f"
+            if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              rm -f "$f.sig"
+              npx tauri signer sign "$f"
+            fi
+          done
+
       - name: Assemble release
         env:
           NOTES: ${{ needs.version.outputs.notes }}
