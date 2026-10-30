@@ -69,28 +69,6 @@ jobs:
           # No --delete on purpose.
           rsync -av --chmod=D755,F644 -e "$ssh_cmd" stage/plugins/ "$dest/plugins/"
 
-      # Plugin packages also go to the mirror in mainland China, which the
-      # main server sends visitors from China to. Optional; a failure only warns.
-      - name: Upload plugins to the China mirror
-        env:
-          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
-          MIRROR_HOST: ${{ secrets.MIRROR_HOST }}
-          MIRROR_USER: ${{ secrets.MIRROR_USER }}
-          MIRROR_PORT: ${{ vars.MIRROR_PORT || '22' }}
-          MIRROR_PATH: ${{ vars.MIRROR_PATH || '/var/www/tifmrcview' }}
-        run: |
-          if [ -z "$MIRROR_SSH_KEY" ] || [ -z "$MIRROR_HOST" ] || [ -z "$MIRROR_USER" ]; then
-            echo "::notice::MIRROR_SSH_KEY / MIRROR_HOST / MIRROR_USER not set; skipping the China mirror"
-            exit 0
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$MIRROR_SSH_KEY" > ~/.ssh/mirror
-          chmod 600 ~/.ssh/mirror
-          ssh-keyscan -p "$MIRROR_PORT" -H "$MIRROR_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          mirror_ssh="ssh -i $HOME/.ssh/mirror -p $MIRROR_PORT -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=15"
-          timeout 5m rsync -av --checksum --chmod=D755,F644 -e "$mirror_ssh" stage/plugins/ "$MIRROR_USER@$MIRROR_HOST:${MIRROR_PATH%/}/plugins/" \
-            || echo "::warning::China mirror upload failed; plugin downloads from China fall back to the main site"
-
       # Plugin zips are rewritten in place and Cloudflare keeps versioned
       # files for 30 days, so drop its copies.
       - name: Purge Cloudflare cache
