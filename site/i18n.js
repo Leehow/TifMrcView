@@ -13,14 +13,15 @@
       cta: '免费下载', cta_os: '下载 {os} 版', all: '所有版本', version: '版本',
       mac_sub: 'macOS 10.15 及以上', win_sub: '无需管理员权限',
       mac_tip: '首次打开若被拦截：到「系统设置 → 隐私与安全性」点「仍要打开」，或在终端运行 ' + XATTR + '。首次启动会自动设为 .tif / .tiff / .mrc 的默认打开方式。',
-      win_tip: '如果出现「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」。这是因为安装包还没有付费代码签名，文件本身是安全的。安装时会自动关联 .tif / .tiff / .mrc。如果双击仍用别的程序打开：右键图片 →「打开方式」→「选择其他应用」→ 选 TifMrcView，勾选「始终使用此应用」。',
+      win_tip: '安装时会自动关联 .tif / .tiff / .mrc。如果双击仍用别的程序打开：右键图片 →「打开方式」→「选择其他应用」→ 选 TifMrcView，勾选「始终使用此应用」。',
       linux_tip: 'AppImage 自带运行库，下载后 <code>chmod +x</code> 即可运行。首次启动会自动设为默认打开方式。',
       dl_mac: '下载 .dmg（通用）', note_mac: 'Apple 芯片与 Intel 通用',
-      dl_win: '下载安装程序', note_win: 'Windows 10 / 11，64 位', dl_winzip: '下载 .zip（内含安装程序）', note_winzip: '浏览器拦截 .exe 时用这个',
+      dl_win: '下载安装程序', note_win: 'Windows 10 / 11，64 位',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: '其它发行版',
       k_file: '上一个 / 下一个文件', k_z: '切换 Z 层', space: '空格', k_play: '播放 / 暂停 Z',
       or_dbl: '或双击', k_fit: '适应窗口', k_save: '保存 PNG 到当前目录', k_open: '打开文件',
-      free: '免费开源', by_author: '作者'
+      free: '免费开源', by_author: '作者',
+      nav_about: '关于作者', about_h: '关于作者', about_p1: '<b>Hao Li</b>，独立开发者，从事冷冻电镜与 AI 开发相关工作，来自中国科学院化学研究所。', about_p2: '如果 TifMrcView 用着顺手，欢迎推荐给更多人，也可以在文章致谢里提一下。有建议，或者想要支持更多格式、更多功能，请给我发邮件：'
     },
     en: {
       def_h: 'Make it the default app', def_lead: 'TifMrcView normally becomes the default for .tif / .tiff / .mrc when installed. If another app still opens them, or you want .rec, .st, .map and .czi (needs the Zeiss plugin) to open in it too:',
@@ -31,14 +32,15 @@
       cta: 'Free download', cta_os: 'Download for {os}', all: 'All versions', version: 'Version',
       mac_sub: 'macOS 10.15 or later', win_sub: 'No admin rights needed',
       mac_tip: 'If macOS blocks the first launch, go to System Settings → Privacy & Security and click “Open Anyway”, or run ' + XATTR + ' in Terminal.' + ' On first launch it makes itself the default app for .tif / .tiff / .mrc.',
-      win_tip: 'If you see “Windows protected your PC”, click More info → Run anyway. The installer is not yet code-signed; the file itself is safe. The installer associates .tif / .tiff / .mrc for you. If another app still opens them, right-click an image → Open with → Choose another app → TifMrcView, and tick “Always use this app”.',
+      win_tip: 'The installer associates .tif / .tiff / .mrc for you. If another app still opens them, right-click an image → Open with → Choose another app → TifMrcView, and tick “Always use this app”.',
       linux_tip: 'The AppImage bundles its libraries: run <code>chmod +x</code> on it and start it. On first launch it sets itself as the default viewer.',
       dl_mac: 'Download .dmg (Universal)', note_mac: 'Apple silicon and Intel',
-      dl_win: 'Download installer', note_win: 'Windows 10 / 11, 64-bit', dl_winzip: 'Download .zip (installer inside)', note_winzip: 'Use this if your browser blocks the .exe',
+      dl_win: 'Download installer', note_win: 'Windows 10 / 11, 64-bit',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Other distributions',
       k_file: 'Previous / next file', k_z: 'Change Z slice', space: 'Space', k_play: 'Play / pause Z',
       or_dbl: 'or double-click', k_fit: 'Fit to window', k_save: 'Save PNG to current folder', k_open: 'Open file',
-      free: 'Free and open source', by_author: 'Author'
+      free: 'Free and open source', by_author: 'Author',
+      nav_about: 'About', about_h: 'About the author', about_p1: '<b>Hao Li</b> is an independent developer working on cryo-EM and AI development, at the Institute of Chemistry, Chinese Academy of Sciences.', about_p2: 'If TifMrcView works well for you, please recommend it to others, or mention it in the acknowledgements of your paper. For suggestions, or to ask for more formats and features, email me at'
     },
     de: {
       def_h: 'Als Standard-App festlegen', def_lead: 'Nach der Installation ist TifMrcView normalerweise Standard für .tif / .tiff / .mrc. Öffnet trotzdem ein anderes Programm sie, oder sollen auch .rec, .st, .map und .czi (mit dem Zeiss-Plugin) damit öffnen:',
@@ -49,14 +51,15 @@
       cta: 'Kostenlos herunterladen', cta_os: 'Für {os} herunterladen', all: 'Alle Versionen', version: 'Version',
       mac_sub: 'macOS 10.15 oder neuer', win_sub: 'Keine Administratorrechte nötig',
       mac_tip: 'Blockiert macOS den ersten Start, unter Systemeinstellungen → Datenschutz & Sicherheit auf „Dennoch öffnen“ klicken oder im Terminal ' + XATTR + ' ausführen.' + ' Beim ersten Start wird es Standard-App für .tif / .tiff / .mrc.',
-      win_tip: 'Erscheint „Der Computer wurde durch Windows geschützt“: Weitere Informationen → Trotzdem ausführen. Der Installer ist noch nicht codesigniert; die Datei selbst ist sicher. Der Installer verknüpft .tif / .tiff / .mrc automatisch. Öffnet trotzdem ein anderes Programm sie: Rechtsklick auf ein Bild → Öffnen mit → Andere App auswählen → TifMrcView, und „Immer diese App verwenden“ anhaken.',
+      win_tip: 'Der Installer verknüpft .tif / .tiff / .mrc automatisch. Öffnet trotzdem ein anderes Programm sie: Rechtsklick auf ein Bild → Öffnen mit → Andere App auswählen → TifMrcView, und „Immer diese App verwenden“ anhaken.',
       linux_tip: 'Das AppImage bringt seine Bibliotheken mit: <code>chmod +x</code> ausführen und starten. Beim ersten Start wird es Standardbetrachter.',
       dl_mac: '.dmg herunterladen (Universal)', note_mac: 'Apple Silicon und Intel',
-      dl_win: 'Installer herunterladen', note_win: 'Windows 10 / 11, 64-Bit', dl_winzip: '.zip herunterladen (mit Installer)', note_winzip: 'Falls der Browser die .exe blockiert',
+      dl_win: 'Installer herunterladen', note_win: 'Windows 10 / 11, 64-Bit',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Andere Distributionen',
       k_file: 'Vorherige / nächste Datei', k_z: 'Z-Ebene wechseln', space: 'Leertaste', k_play: 'Z abspielen / pausieren',
       or_dbl: 'oder Doppelklick', k_fit: 'An Fenster anpassen', k_save: 'PNG im aktuellen Ordner speichern', k_open: 'Datei öffnen',
-      free: 'Kostenlos und quelloffen', by_author: 'Autor'
+      free: 'Kostenlos und quelloffen', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Über den Autor', about_p1: '<b>Hao Li</b> ist unabhängiger Entwickler und arbeitet an Kryo-EM und KI-Entwicklung, am Institut für Chemie der Chinesischen Akademie der Wissenschaften.', about_p2: 'Wenn Ihnen TifMrcView gefällt, empfehlen Sie es gern weiter oder erwähnen Sie es in der Danksagung Ihrer Veröffentlichung. Für Vorschläge oder Wünsche nach weiteren Formaten und Funktionen schreiben Sie mir:'
     },
     ja: {
       def_h: '既定のアプリにする', def_lead: '通常はインストールすると TifMrcView が .tif / .tiff / .mrc の既定アプリになります。それでも別のアプリで開く場合や、.rec・.st・.map、.czi（Zeiss プラグインが必要）も TifMrcView で開きたい場合は：',
@@ -67,14 +70,15 @@
       cta: '無料ダウンロード', cta_os: '{os} 版をダウンロード', all: 'すべてのバージョン', version: 'バージョン',
       mac_sub: 'macOS 10.15 以降', win_sub: '管理者権限は不要',
       mac_tip: '初回起動がブロックされた場合は「システム設定 → プライバシーとセキュリティ」で「このまま開く」を押すか、ターミナルで ' + XATTR + ' を実行してください。' + ' 初回起動時に .tif / .tiff / .mrc の既定アプリに自動設定されます。',
-      win_tip: '「Windows によって PC が保護されました」と出たら、「詳細情報」→「実行」をクリックしてください。インストーラはまだコード署名されていませんが、ファイル自体は安全です。インストール時に .tif / .tiff / .mrc が自動で関連付けられます。それでも別のアプリで開く場合は、画像を右クリック →「プログラムから開く」→「別のプログラムを選択」→ TifMrcView を選び、「常にこのアプリを使う」にチェックしてください。',
+      win_tip: 'インストール時に .tif / .tiff / .mrc が自動で関連付けられます。それでも別のアプリで開く場合は、画像を右クリック →「プログラムから開く」→「別のプログラムを選択」→ TifMrcView を選び、「常にこのアプリを使う」にチェックしてください。',
       linux_tip: 'AppImage は必要なライブラリを同梱しています。<code>chmod +x</code> してから実行してください。初回起動時に既定のビューアに設定されます。',
       dl_mac: '.dmg をダウンロード（Universal）', note_mac: 'Apple シリコン / Intel 両対応',
-      dl_win: 'インストーラをダウンロード', note_win: 'Windows 10 / 11（64 ビット）', dl_winzip: '.zip をダウンロード（インストーラ入り）', note_winzip: 'ブラウザが .exe をブロックする場合はこちら',
+      dl_win: 'インストーラをダウンロード', note_win: 'Windows 10 / 11（64 ビット）',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'その他のディストリビューション',
       k_file: '前 / 次のファイル', k_z: 'Z 層を切り替え', space: 'スペース', k_play: 'Z の再生 / 一時停止',
       or_dbl: 'またはダブルクリック', k_fit: 'ウィンドウに合わせる', k_save: '現在のフォルダに PNG を保存', k_open: 'ファイルを開く',
-      free: '無料・オープンソース', by_author: '作者'
+      free: '無料・オープンソース', by_author: '作者',
+      nav_about: '作者について', about_h: '作者について', about_p1: '<b>Hao Li</b>：独立系開発者。クライオ電顕と AI 開発に携わっています。中国科学院化学研究所所属。', about_p2: 'TifMrcView が役に立ったら、ぜひ周りの方に勧めたり、論文の謝辞で触れたりしてください。ご意見や、対応してほしい形式・機能があれば、メールでお知らせください：'
     },
     es: {
       def_h: 'Usarlo como aplicación predeterminada', def_lead: 'Al instalarlo, TifMrcView suele quedar como predeterminado para .tif / .tiff / .mrc. Si otra aplicación los sigue abriendo, o quieres abrir también .rec, .st, .map y .czi (requiere el complemento Zeiss) con él:',
@@ -85,14 +89,15 @@
       cta: 'Descarga gratuita', cta_os: 'Descargar para {os}', all: 'Todas las versiones', version: 'Versión',
       mac_sub: 'macOS 10.15 o posterior', win_sub: 'No requiere permisos de administrador',
       mac_tip: 'Si macOS bloquea el primer inicio, ve a Ajustes del Sistema → Privacidad y seguridad y pulsa «Abrir igualmente», o ejecuta ' + XATTR + ' en Terminal.' + ' En el primer inicio se convierte en la aplicación predeterminada para .tif / .tiff / .mrc.',
-      win_tip: 'Si aparece «Windows protegió su PC», haz clic en Más información → Ejecutar de todas formas. El instalador aún no tiene firma de código; el archivo es seguro. El instalador asocia .tif / .tiff / .mrc automáticamente. Si otra aplicación los sigue abriendo: clic derecho en una imagen → Abrir con → Elegir otra aplicación → TifMrcView, y marca «Usar siempre esta aplicación».',
+      win_tip: 'El instalador asocia .tif / .tiff / .mrc automáticamente. Si otra aplicación los sigue abriendo: clic derecho en una imagen → Abrir con → Elegir otra aplicación → TifMrcView, y marca «Usar siempre esta aplicación».',
       linux_tip: 'El AppImage incluye sus bibliotecas: ejecuta <code>chmod +x</code> y ábrelo. En el primer inicio se establece como visor predeterminado.',
       dl_mac: 'Descargar .dmg (Universal)', note_mac: 'Apple Silicon e Intel',
-      dl_win: 'Descargar instalador', note_win: 'Windows 10 / 11, 64 bits', dl_winzip: 'Descargar .zip (con el instalador)', note_winzip: 'Úsalo si el navegador bloquea el .exe',
+      dl_win: 'Descargar instalador', note_win: 'Windows 10 / 11, 64 bits',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Otras distribuciones',
       k_file: 'Archivo anterior / siguiente', k_z: 'Cambiar corte Z', space: 'Espacio', k_play: 'Reproducir / pausar Z',
       or_dbl: 'o doble clic', k_fit: 'Ajustar a la ventana', k_save: 'Guardar PNG en la carpeta actual', k_open: 'Abrir archivo',
-      free: 'Gratis y de código abierto', by_author: 'Autor'
+      free: 'Gratis y de código abierto', by_author: 'Autor',
+      nav_about: 'Autor', about_h: 'Sobre el autor', about_p1: '<b>Hao Li</b> es un desarrollador independiente que trabaja en crio-ME y desarrollo de IA, en el Instituto de Química de la Academia China de Ciencias.', about_p2: 'Si TifMrcView te resulta útil, recomiéndalo a otras personas o menciónalo en los agradecimientos de tu artículo. Para sugerencias, o si quieres más formatos y funciones, escríbeme a'
     },
     fr: {
       def_h: 'En faire l’application par défaut', def_lead: 'À l’installation, TifMrcView devient normalement l’application par défaut pour .tif / .tiff / .mrc. Si une autre application les ouvre encore, ou pour ouvrir aussi .rec, .st, .map et .czi (avec l’extension Zeiss) :',
@@ -103,14 +108,15 @@
       cta: 'Téléchargement gratuit', cta_os: 'Télécharger pour {os}', all: 'Toutes les versions', version: 'Version',
       mac_sub: 'macOS 10.15 ou ultérieur', win_sub: 'Aucun droit administrateur requis',
       mac_tip: 'Si macOS bloque le premier lancement, allez dans Réglages Système → Confidentialité et sécurité et cliquez sur « Ouvrir quand même », ou exécutez ' + XATTR + ' dans le Terminal.' + ' Au premier lancement, elle devient l’application par défaut pour .tif / .tiff / .mrc.',
-      win_tip: 'Si « Windows a protégé votre ordinateur » s’affiche, cliquez sur Informations complémentaires → Exécuter quand même. L’installateur n’est pas encore signé ; le fichier est sûr. L’installateur associe .tif / .tiff / .mrc automatiquement. Si une autre application les ouvre encore : clic droit sur une image → Ouvrir avec → Choisir une autre application → TifMrcView, et cochez « Toujours utiliser cette application ».',
+      win_tip: 'L’installateur associe .tif / .tiff / .mrc automatiquement. Si une autre application les ouvre encore : clic droit sur une image → Ouvrir avec → Choisir une autre application → TifMrcView, et cochez « Toujours utiliser cette application ».',
       linux_tip: 'L’AppImage embarque ses bibliothèques : faites <code>chmod +x</code> puis lancez-la. Au premier lancement, elle devient la visionneuse par défaut.',
       dl_mac: 'Télécharger le .dmg (Universel)', note_mac: 'Puces Apple et Intel',
-      dl_win: 'Télécharger l’installateur', note_win: 'Windows 10 / 11, 64 bits', dl_winzip: 'Télécharger le .zip (installateur inclus)', note_winzip: 'Si votre navigateur bloque le .exe',
+      dl_win: 'Télécharger l’installateur', note_win: 'Windows 10 / 11, 64 bits',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Autres distributions',
       k_file: 'Fichier précédent / suivant', k_z: 'Changer de plan Z', space: 'Espace', k_play: 'Lire / mettre en pause Z',
       or_dbl: 'ou double-clic', k_fit: 'Ajuster à la fenêtre', k_save: 'Enregistrer en PNG dans le dossier courant', k_open: 'Ouvrir un fichier',
-      free: 'Gratuit et open source', by_author: 'Auteur'
+      free: 'Gratuit et open source', by_author: 'Auteur',
+      nav_about: 'L’auteur', about_h: 'À propos de l’auteur', about_p1: '<b>Hao Li</b> est un développeur indépendant qui travaille sur la cryo-ME et le développement d’IA, à l’Institut de chimie de l’Académie chinoise des sciences.', about_p2: 'Si TifMrcView vous est utile, recommandez-le autour de vous ou mentionnez-le dans les remerciements de votre article. Pour une suggestion, ou pour demander d’autres formats et fonctions, écrivez-moi à'
     },
     ru: {
       def_h: 'Сделать приложением по умолчанию', def_lead: 'Обычно после установки TifMrcView становится программой по умолчанию для .tif / .tiff / .mrc. Если файлы всё равно открывает другая программа или нужно открывать в нём ещё .rec, .st, .map и .czi (нужен плагин Zeiss):',
@@ -121,14 +127,15 @@
       cta: 'Скачать бесплатно', cta_os: 'Скачать для {os}', all: 'Все версии', version: 'Версия',
       mac_sub: 'macOS 10.15 и новее', win_sub: 'Права администратора не нужны',
       mac_tip: 'Если macOS блокирует первый запуск, откройте «Системные настройки → Конфиденциальность и безопасность» и нажмите «Всё равно открыть» или выполните в Терминале ' + XATTR + '. При первом запуске становится приложением по умолчанию для .tif / .tiff / .mrc.',
-      win_tip: 'Если появится «Система Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае». Установщик пока не подписан; сам файл безопасен. Установщик сам связывает .tif / .tiff / .mrc. Если их всё равно открывает другая программа: щёлкните изображение правой кнопкой → «Открыть с помощью» → «Выбрать другое приложение» → TifMrcView и отметьте «Всегда использовать это приложение».',
+      win_tip: 'Установщик сам связывает .tif / .tiff / .mrc. Если их всё равно открывает другая программа: щёлкните изображение правой кнопкой → «Открыть с помощью» → «Выбрать другое приложение» → TifMrcView и отметьте «Всегда использовать это приложение».',
       linux_tip: 'AppImage содержит все библиотеки: выполните <code>chmod +x</code> и запустите. При первом запуске становится просмотрщиком по умолчанию.',
       dl_mac: 'Скачать .dmg (Universal)', note_mac: 'Apple Silicon и Intel',
-      dl_win: 'Скачать установщик', note_win: 'Windows 10 / 11, 64 бит', dl_winzip: 'Скачать .zip (внутри установщик)', note_winzip: 'Если браузер блокирует .exe',
+      dl_win: 'Скачать установщик', note_win: 'Windows 10 / 11, 64 бит',
       note_deb: 'Debian / Ubuntu', note_rpm: 'Fedora / RHEL', note_appimage: 'Другие дистрибутивы',
       k_file: 'Предыдущий / следующий файл', k_z: 'Сменить слой Z', space: 'Пробел', k_play: 'Воспроизвести / пауза Z',
       or_dbl: 'или двойной щелчок', k_fit: 'По размеру окна', k_save: 'Сохранить PNG в текущую папку', k_open: 'Открыть файл',
-      free: 'Бесплатно и с открытым кодом', by_author: 'Автор'
+      free: 'Бесплатно и с открытым кодом', by_author: 'Автор',
+      nav_about: 'Об авторе', about_h: 'Об авторе', about_p1: '<b>Hao Li</b> — независимый разработчик, занимается крио-ЭМ и разработкой ИИ; Институт химии Китайской академии наук.', about_p2: 'Если TifMrcView вам пригодился, расскажите о нём коллегам или упомяните его в благодарностях статьи. С предложениями и пожеланиями о новых форматах и функциях пишите на'
     }
   };
   // Strings for the plugin market (site/plugins/) and the teaser on the home page.
@@ -309,10 +316,10 @@
   var HOME = {
     zh: {
       title: 'TifMrcView · 显微与电镜图像查看器',
-      desc: 'TifMrcView：又小、又快、又方便的显微与电镜图像查看器，免费开源。TIFF / OME-TIFF、冷冻电镜 MRC，数 GB 的栈双击即开；XY / XZ / YZ 三视角，按物理单位测量，多通道荧光；插件可加入新格式，例如蔡司 CZI。支持 macOS、Windows、Linux 和 Android。',
-      h1: '<span>看 TIFF 和 MRC，</span><span>就该这么快。</span>',
-      slogan: '又小、又快、又方便。免费开源。',
-      lead: '显微与电镜图像查看器：TIFF、OME‑TIFF、MRC，数 GB 的栈双击即开。装上插件，还能打开蔡司、徕卡、尼康、奥林巴斯的共聚焦格式（CZI、LSM、LIF、ND2、OIR）和 Imaris IMS，以及 Gatan、赛默飞、TVIPS 的电镜格式（DM3 / DM4、SER、EMD、EER），并读出采集参数。macOS、Windows、Linux 通用<span class="an">，也有 Android 版</span>。',
+      desc: 'TifMrcView：看显微和电镜图片的一个小软件，免费开源。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD 等格式下载装上就能打开，数 GB 的栈双击即开；尺子测量，XY / XZ / YZ 三个方向，衍射、FFT 和能谱，体电镜文件夹自动叠成 Z 栈。支持 macOS、Windows、Linux 和 Android。',
+      h1: '<span>看显微电镜图片，</span><span>一个小软件就够了。</span>',
+      slogan: '又小、又快、又简单。免费开源。',
+      lead: '光镜、共聚焦、电镜的各种格式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD……），下载装上就能打开，数 GB 的栈也是双击即开。尺子直接测量，XY / XZ / YZ 三个方向切着看，衍射和 FFT 上量 d 间距，EDS / EELS 能谱一眼看清，体电镜文件夹自动叠成 Z 栈。不用装一堆软件，也不用学复杂操作。macOS、Windows、Linux 通用<span class=\"an\">，也有 Android 版</span>。',
       an_a: '下载安卓版 APK', pro_line: '分割和三维查看：<b>TifMrcView Pro</b> →',
       dl_apk: '下载 APK', note_apk: 'Android 7 及以上，arm64',
       an_tip: '手机和平板都能用的基础版查看器（不含 Pro 功能）。安装时按提示允许「安装未知应用」。双指缩放，长按标注可删除。',
@@ -375,10 +382,10 @@
     },
     en: {
       title: 'TifMrcView · Microscopy & EM image viewer',
-      desc: 'TifMrcView: a small, fast and convenient viewer for microscopy and electron microscopy, free and open source. TIFF / OME-TIFF and cryo-EM MRC stacks of many gigabytes open on double-click; XY / XZ / YZ views, measurements in physical units, multichannel fluorescence; plugins add new formats such as Zeiss CZI. For macOS, Windows, Linux and Android.',
-      h1: '<span>TIFF and MRC,</span> <span>as fast as they should be.</span>',
-      slogan: 'Small. Fast. Effortless. Free and open source.',
-      lead: 'A viewer for microscopy and EM images: TIFF, OME‑TIFF and MRC stacks of many gigabytes open with a double-click. Add plugins to open confocal files from Zeiss, Leica, Nikon and Olympus (CZI, LSM, LIF, ND2, OIR) and Imaris IMS, EM files from Gatan, Thermo Fisher and TVIPS (DM3 / DM4, SER, EMD, EER), and to read their acquisition settings. On macOS, Windows and Linux<span class="an">, and Android</span>.',
+      desc: 'TifMrcView: one small app for microscopy and EM images, free and open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more open right after install, multi-gigabyte stacks with a double-click; ruler measurements, XY / XZ / YZ views, diffraction, FFT and spectra, volume-EM folders stacked into Z automatically. For macOS, Windows, Linux and Android.',
+      h1: '<span>Microscopy and EM images.</span> <span>One small app.</span>',
+      slogan: 'Small. Fast. Simple. Free and open source.',
+      lead: 'Light, confocal and electron microscopy formats (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD and more) open right after install, multi-gigabyte stacks with a double-click. Measure with a ruler, slice through XY, XZ and YZ, read d-spacings on diffraction and FFT, see EDS / EELS spectra at a glance, and get volume-EM folders stacked into Z automatically. No pile of programs, nothing complicated to learn. On macOS, Windows and Linux<span class=\"an\">, and Android</span>.',
       an_a: 'Download the Android APK', pro_line: 'Segmentation and 3D viewing: <b>TifMrcView Pro</b> →',
       dl_apk: 'Download APK', note_apk: 'Android 7+, arm64',
       an_tip: 'The basic viewer for phones and tablets (no Pro features). Allow “Install unknown apps” when asked. Pinch to zoom; long-press an annotation to delete it.',
@@ -441,10 +448,10 @@
     },
     de: {
       title: 'TifMrcView · Viewer für Mikroskopie- und EM-Bilder',
-      desc: 'TifMrcView: ein kleiner, schneller und einfacher Viewer für Licht- und Elektronenmikroskopie, kostenlos und quelloffen. TIFF / OME-TIFF und Kryo-EM-MRC mit vielen Gigabyte öffnen per Doppelklick; XY-/XZ-/YZ-Ansichten, Messungen in physikalischen Einheiten, Mehrkanal-Fluoreszenz; Plugins ergänzen neue Formate wie Zeiss CZI. Für macOS, Windows, Linux und Android.',
-      h1: '<span>TIFF und MRC –</span> <span>endlich schnell.</span>',
+      desc: 'TifMrcView: eine kleine App für Mikroskopie- und EM-Bilder, kostenlos und quelloffen. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick; Lineal-Messung, XY-/XZ-/YZ-Ansichten, Beugung, FFT und Spektren, Volumen-EM-Ordner automatisch als Z-Stapel. Für macOS, Windows, Linux und Android.',
+      h1: '<span>Mikroskopie- und EM-Bilder.</span> <span>Eine kleine App.</span>',
       slogan: 'Klein. Schnell. Einfach. Kostenlos und Open Source.',
-      lead: 'Ein Viewer für Mikroskopie- und EM-Bilder: TIFF-, OME‑TIFF- und MRC-Stapel mit vielen Gigabyte öffnen per Doppelklick. Mit Plugins öffnen Sie auch Konfokaldateien von Zeiss, Leica, Nikon und Olympus (CZI, LSM, LIF, ND2, OIR) sowie Imaris IMS und EM-Dateien von Gatan, Thermo Fisher und TVIPS (DM3 / DM4, SER, EMD, EER) und sehen deren Aufnahmeparameter. Auf macOS, Windows und Linux<span class="an"> sowie Android</span>.',
+      lead: 'Formate aus Licht-, Konfokal- und Elektronenmikroskopie (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD und mehr) öffnen direkt nach der Installation, Stapel mit vielen Gigabyte per Doppelklick. Mit dem Lineal messen, in XY, XZ und YZ schneiden, d-Abstände in Beugung und FFT ablesen, EDS-/EELS-Spektren auf einen Blick sehen, Volumen-EM-Ordner automatisch als Z-Stapel. Kein Programm-Sammelsurium, nichts Kompliziertes zu lernen. Für macOS, Windows und Linux<span class=\"an\"> sowie Android</span>.',
       an_a: 'Android-APK herunterladen', pro_line: 'Segmentierung und 3D-Ansicht: <b>TifMrcView Pro</b> →',
       dl_apk: 'APK herunterladen', note_apk: 'Ab Android 7, arm64',
       an_tip: 'Der Basis-Viewer für Smartphones und Tablets (ohne Pro-Funktionen). Bei Nachfrage „Unbekannte Apps installieren“ erlauben. Mit zwei Fingern zoomen; Anmerkung lange drücken zum Löschen.',
@@ -507,10 +514,10 @@
     },
     ja: {
       title: 'TifMrcView · 顕微鏡・電子顕微鏡画像ビューア',
-      desc: 'TifMrcView：顕微鏡と電子顕微鏡のための、小さく、速く、使いやすい無料のオープンソースビューア。TIFF / OME-TIFF とクライオ電顕の MRC は数 GB のスタックもダブルクリックで開きます。XY / XZ / YZ ビュー、物理単位での計測、マルチチャンネル蛍光。プラグインで Zeiss CZI などの新しい形式も追加できます。macOS・Windows・Linux・Android 対応。',
-      h1: '<span>TIFF と MRC を、</span><span>もっと速く。</span>',
-      slogan: '小さく、速く、使いやすく。無料のオープンソース。',
-      lead: '顕微鏡・電子顕微鏡画像のビューア。TIFF、OME‑TIFF、MRC は数 GB のスタックもダブルクリックで開きます。プラグインを入れれば Zeiss・Leica・Nikon・Olympus の共焦点ファイル（CZI、LSM、LIF、ND2、OIR）や Imaris IMS、Gatan・Thermo Fisher・TVIPS の電子顕微鏡ファイル（DM3 / DM4、SER、EMD、EER）も開け、取得パラメータも読めます。macOS・Windows・Linux<span class="an">・Android</span> に対応。',
+      desc: 'TifMrcView：顕微鏡・電子顕微鏡画像を見るための小さなアプリ。無料のオープンソース。TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD などをインストール直後から開け、数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ 表示、回折・FFT・スペクトル、ボリューム EM フォルダは自動で Z スタックに。macOS、Windows、Linux、Android に対応。',
+      h1: '<span>顕微鏡・電顕の画像は、</span><span>小さなアプリひとつで。</span>',
+      slogan: '小さく、速く、シンプルに。無料のオープンソース。',
+      lead: '光学・共焦点・電子顕微鏡のさまざまな形式（TIFF、MRC、CZI、LIF、ND2、DM4、SER、EMD など）を、インストールしてすぐ開けます。数 GB のスタックもダブルクリックで。定規で計測、XY / XZ / YZ の三方向で断面表示、回折や FFT で d 間隔を測定、EDS / EELS スペクトルもひと目で、ボリューム EM のフォルダは自動で Z スタックに。ソフトをいくつも入れる必要も、難しい操作を覚える必要もありません。macOS、Windows、Linux に対応<span class=\"an\">、Android 版もあります</span>。',
       an_a: 'Android 版 APK をダウンロード', pro_line: 'セグメンテーションと 3D 表示は <b>TifMrcView Pro</b> へ →',
       dl_apk: 'APK をダウンロード', note_apk: 'Android 7 以降、arm64',
       an_tip: 'スマートフォン・タブレット向けの基本ビューア（Pro 機能なし）。インストール時に「不明なアプリのインストール」を許可してください。2 本指でズーム、注釈を長押しで削除。',
@@ -573,10 +580,10 @@
     },
     es: {
       title: 'TifMrcView · Visor de imágenes de microscopía y ME',
-      desc: 'TifMrcView: un visor pequeño, rápido y cómodo para microscopía óptica y electrónica, gratis y de código abierto. Pilas TIFF / OME-TIFF y MRC de crio-ME de varios GB se abren con doble clic; vistas XY / XZ / YZ, medidas en unidades físicas y fluorescencia multicanal; los complementos añaden formatos nuevos como Zeiss CZI. Para macOS, Windows, Linux y Android.',
-      h1: '<span>TIFF y MRC,</span> <span>tan rápido como debe ser.</span>',
-      slogan: 'Ligero. Rápido. Sencillo. Gratis y de código abierto.',
-      lead: 'Un visor para imágenes de microscopía óptica y electrónica: pilas TIFF, OME‑TIFF y MRC de varios gigabytes se abren con doble clic. Con complementos, también abre archivos confocales de Zeiss, Leica, Nikon y Olympus (CZI, LSM, LIF, ND2, OIR) e Imaris IMS, archivos de microscopía electrónica de Gatan, Thermo Fisher y TVIPS (DM3 / DM4, SER, EMD, EER), y lee sus parámetros de adquisición. En macOS, Windows y Linux<span class="an">, y también Android</span>.',
+      desc: 'TifMrcView: una sola aplicación pequeña para imágenes de microscopía y ME, gratis y de código abierto. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más se abren nada más instalar, pilas de varios GB con doble clic; medición con regla, vistas XY / XZ / YZ, difracción, FFT y espectros, carpetas de ME de volumen apiladas en Z automáticamente. Para macOS, Windows, Linux y Android.',
+      h1: '<span>Imágenes de microscopía y ME.</span> <span>Una sola app pequeña.</span>',
+      slogan: 'Ligera. Rápida. Sencilla. Gratis y de código abierto.',
+      lead: 'Formatos de microscopía óptica, confocal y electrónica (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD y más) se abren nada más instalar, incluso pilas de varios gigabytes con doble clic. Mide con una regla, corta en XY, XZ y YZ, lee distancias d en difracción y FFT, ve espectros EDS / EELS de un vistazo, y las carpetas de ME de volumen se apilan en Z solas. Sin montones de programas ni nada complicado que aprender. Para macOS, Windows y Linux<span class=\"an\">, y Android</span>.',
       an_a: 'Descargar el APK para Android', pro_line: 'Segmentación y vista 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Descargar APK', note_apk: 'Android 7 o posterior, arm64',
       an_tip: 'El visor básico para móviles y tabletas (sin funciones Pro). Permite «Instalar apps desconocidas» cuando se pida. Pellizca para hacer zoom; mantén pulsada una anotación para borrarla.',
@@ -639,10 +646,10 @@
     },
     fr: {
       title: 'TifMrcView · Visionneuse d’images de microscopie et de ME',
-      desc: 'TifMrcView : une visionneuse légère, rapide et pratique pour la microscopie optique et électronique, gratuite et open source. Des piles TIFF / OME-TIFF et MRC de cryo-ME de plusieurs Go s’ouvrent d’un double-clic ; vues XY / XZ / YZ, mesures en unités physiques, fluorescence multicanal ; des extensions ajoutent de nouveaux formats comme Zeiss CZI. Pour macOS, Windows, Linux et Android.',
-      h1: '<span>TIFF et MRC,</span> <span>enfin rapides.</span>',
+      desc: 'TifMrcView : une seule petite application pour les images de microscopie et de ME, gratuite et open source. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus s’ouvrent dès l’installation, des piles de plusieurs Go d’un double-clic ; mesure à la règle, vues XY / XZ / YZ, diffraction, FFT et spectres, dossiers de ME en volume empilés en Z automatiquement. Pour macOS, Windows, Linux et Android.',
+      h1: '<span>Images de microscopie et de ME.</span> <span>Une seule petite app.</span>',
       slogan: 'Léger. Rapide. Simple. Gratuit et open source.',
-      lead: 'Une visionneuse pour la microscopie optique et électronique : des piles TIFF, OME‑TIFF et MRC de plusieurs gigaoctets s’ouvrent d’un double-clic. Avec des extensions, ouvrez aussi les fichiers confocaux de Zeiss, Leica, Nikon et Olympus (CZI, LSM, LIF, ND2, OIR) et Imaris IMS, les fichiers de microscopie électronique Gatan, Thermo Fisher et TVIPS (DM3 / DM4, SER, EMD, EER), et lisez leurs paramètres d’acquisition. Sur macOS, Windows et Linux<span class="an">, et aussi Android</span>.',
+      lead: 'Les formats de microscopie optique, confocale et électronique (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD et plus) s’ouvrent dès l’installation, même des piles de plusieurs gigaoctets d’un double-clic. Mesurez à la règle, coupez en XY, XZ et YZ, lisez les distances d en diffraction et en FFT, voyez les spectres EDS / EELS d’un coup d’œil, et les dossiers de ME en volume s’empilent en Z tout seuls. Pas de pile de logiciels, rien de compliqué à apprendre. Sur macOS, Windows et Linux<span class=\"an\">, et Android</span>.',
       an_a: 'Télécharger l’APK Android', pro_line: 'Segmentation et vue 3D : <b>TifMrcView Pro</b> →',
       dl_apk: 'Télécharger l’APK', note_apk: 'Android 7 ou plus, arm64',
       an_tip: 'La visionneuse de base pour téléphones et tablettes (sans les fonctions Pro). Autorisez « Installer des applis inconnues » si demandé. Pincez pour zoomer ; appui long sur une annotation pour la supprimer.',
@@ -705,10 +712,10 @@
     },
     ru: {
       title: 'TifMrcView · Просмотрщик изображений микроскопии и ЭМ',
-      desc: 'TifMrcView: маленький, быстрый и удобный просмотрщик для световой и электронной микроскопии, бесплатный и с открытым кодом. Стеки TIFF / OME-TIFF и MRC для крио-ЭМ в несколько ГБ открываются двойным щелчком; виды XY / XZ / YZ, измерения в физических единицах, многоканальная флуоресценция; плагины добавляют новые форматы, например Zeiss CZI. Для macOS, Windows, Linux и Android.',
-      h1: '<span>TIFF и MRC —</span> <span>так быстро, как нужно.</span>',
-      slogan: 'Лёгкий. Быстрый. Удобный. Бесплатный, с открытым кодом.',
-      lead: 'Просмотрщик изображений световой и электронной микроскопии: стеки TIFF, OME‑TIFF и MRC в несколько гигабайт открываются двойным щелчком. С плагинами открываются конфокальные файлы Zeiss, Leica, Nikon и Olympus (CZI, LSM, LIF, ND2, OIR) и Imaris IMS, файлы электронной микроскопии Gatan, Thermo Fisher и TVIPS (DM3 / DM4, SER, EMD, EER), а также читаются параметры съёмки. На macOS, Windows и Linux<span class="an">, а также Android</span>.',
+      desc: 'TifMrcView: одно маленькое приложение для изображений микроскопии и ЭМ, бесплатное и с открытым кодом. TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие открываются сразу после установки, стеки в несколько ГБ — двойным щелчком; измерения линейкой, виды XY / XZ / YZ, дифракция, FFT и спектры, папки объёмной ЭМ автоматически собираются в Z-стек. Для macOS, Windows, Linux и Android.',
+      h1: '<span>Микроскопия и ЭМ —</span> <span>одно маленькое приложение.</span>',
+      slogan: 'Лёгкий. Быстрый. Простой. Бесплатный, с открытым кодом.',
+      lead: 'Форматы световой, конфокальной и электронной микроскопии (TIFF, MRC, CZI, LIF, ND2, DM4, SER, EMD и другие) открываются сразу после установки, даже стеки в несколько гигабайт — двойным щелчком. Измеряйте линейкой, смотрите срезы XY, XZ и YZ, определяйте межплоскостные расстояния на дифракции и FFT, смотрите спектры EDS / EELS, а папки объёмной ЭМ сами собираются в Z-стек. Не нужно ставить кучу программ и учить сложные действия. Для macOS, Windows и Linux<span class=\"an\">, а также Android</span>.',
       an_a: 'Скачать APK для Android', pro_line: 'Сегментация и 3D: <b>TifMrcView Pro</b> →',
       dl_apk: 'Скачать APK', note_apk: 'Android 7 и новее, arm64',
       an_tip: 'Базовый просмотрщик для телефонов и планшетов (без функций Pro). Разрешите «Установку неизвестных приложений», когда попросят. Масштаб — двумя пальцами; долгое нажатие на пометку удаляет её.',
@@ -1350,12 +1357,18 @@
     var ext = (f.file.match(/\.(\w+)$/) || [])[1] || '';
     ext = ext.toLowerCase();
     if (k === 'mac') return [t.dl_mac, t.note_mac];
-    if (k === 'win') return ext === 'zip' ? [t.dl_winzip, t.note_winzip] : [t.dl_win, t.note_win];
+    if (k === 'win') return [t.dl_win, t.note_win];
     if (ext === 'deb') return ['.deb', t.note_deb];
     if (ext === 'rpm') return ['.rpm', t.note_rpm];
     if (ext === 'appimage') return ['.AppImage', t.note_appimage];
     if (ext === 'apk') return [t.dl_apk || 'APK', t.note_apk || ''];
     return [f.label || f.file, f.note || ''];
+  }
+
+  // A download link's text plus the file size, to show how small the app is.
+  function withSize(el, text, f) {
+    el.textContent = text;
+    if (sizes[f.file]) { var s = document.createElement('span'); s.className = 'sz'; s.textContent = mb(sizes[f.file]); el.appendChild(s); }
   }
 
   function renderDownloads() {
@@ -1391,16 +1404,17 @@
     if (an && apk && !/Android/.test(ua)) {
       an.href = DL + apk.file;
       an.hidden = false;
+      withSize(an, t.an_a, apk);
     }
     document.getElementById('ver').textContent = 'v' + data.version;
     var c = document.getElementById('cta');
     if (/Android/.test(ua) && apk) {
       c.href = DL + apk.file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', 'Android');
+      withSize(c, t.cta_os.replace('{os}', 'Android'), apk);
       if (card) card.classList.add('hl');
     } else if (os && data.files[os] && data.files[os][0]) {
       c.href = DL + data.files[os][0].file; c.setAttribute('download', '');
-      c.textContent = t.cta_os.replace('{os}', OS_NAMES[os]);
+      withSize(c, t.cta_os.replace('{os}', OS_NAMES[os]), data.files[os][0]);
       document.querySelector('[data-os="' + os + '"]').classList.add('hl');
     }
     document.dispatchEvent(new Event('downloads-rendered'));
