@@ -1066,6 +1066,32 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
     .await
 }
 
+/// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
+#[tauri::command]
+async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<crate::stem4d::Result4d> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || crate::stem4d::analyze(&crate::stem4d::ImageFrames { img, c: req.c }, &req)).await
+}
+
+/// Finds and measures the particles of one image (Pro); see `particles`.
+#[tauri::command]
+async fn particles_analyze(app: AppHandle, req: crate::particles::Req) -> CmdResult<crate::particles::Result2> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || crate::particles::analyze(&img, &req)).await
+}
+
+/// EDS quantification (Pro) of a spectrum; see `spectro::eds`.
+#[tauri::command]
+async fn eds_quant(req: crate::spectro::EdsReq) -> CmdResult<crate::spectro::EdsResult> {
+    blocking(move || crate::spectro::eds(&req)).await
+}
+
+/// EELS edge quantification (Pro) of a spectrum; see `spectro::eels`.
+#[tauri::command]
+async fn eels_quant(req: crate::spectro::EelsReq) -> CmdResult<crate::spectro::EelsResult> {
+    blocking(move || crate::spectro::eels(&req)).await
+}
+
 /// Finds the spots, centre and 2D lattice of a diffraction pattern.
 #[tauri::command]
 async fn diffraction_find(app: AppHandle, req: crate::diffraction::FindReq) -> CmdResult<crate::diffraction::Pattern> {
@@ -1647,6 +1673,10 @@ pub fn run() {
             align_estimate,
             diffraction_find,
             diffraction_zones,
+            eds_quant,
+            stem4d_analyze,
+            particles_analyze,
+            eels_quant,
             align_save,
             align_cancel,
             denoise_preview,

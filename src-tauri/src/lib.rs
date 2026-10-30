@@ -29,8 +29,12 @@ pub mod plugins;
 mod plugin_assoc;
 pub mod render;
 pub mod reslice;
+pub mod spectro;
+pub mod particles;
+pub mod stem4d;
 pub mod spectrum;
 pub mod volume;
+pub mod xray_data;
 #[cfg(all(feature = "desktop", not(target_os = "android")))]
 mod update;
 #[cfg(all(feature = "desktop", target_os = "android"))]

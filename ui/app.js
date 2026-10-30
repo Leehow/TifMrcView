@@ -90,7 +90,7 @@ const S = {
 // where p is the pointer in image pixels; overlays are f(ctx) drawn over the
 // image in screen coordinates, under the annotations.
 // settings: entries plugins add to the ⚙ menu (see plugin-host.js addSettingsSelect).
-const ext = { tools: {}, overlays: [], settings: [] };
+const ext = { tools: {}, overlays: [], settings: [], specOverlays: [] };
 // Undo steps of tool extensions go into the shared history as markers, so
 // undo and redo follow the order things happened whatever tool is active.
 ext.pushUndo = (name) => {
@@ -1914,7 +1914,7 @@ function drawSpec() {
   const { l, r, t, b } = SPEC_PAD;
   const px = (i) => l + ((i - i0) / Math.max(1e-9, i1 - i0)) * (W - l - r);
   const py = (y) => t + (1 - (y - lo) / (hi - lo)) * (H - t - b);
-  P.map = { px, i0, i1, l, r, W };
+  P.map = { px, py, tf, i0, i1, l, r, t, b, W, H };
   // Axes and ticks.
   g.font = "11px -apple-system, 'Segoe UI', sans-serif";
   g.fillStyle = "#59636e";
@@ -1996,6 +1996,8 @@ function drawSpec() {
     g.lineTo(px(P.hover), H - b);
     g.stroke();
   }
+  // Pro draws fitted backgrounds and line labels here.
+  for (const f of ext.specOverlays) f(g, P.map);
   g.restore();
   showSpecHover();
 }

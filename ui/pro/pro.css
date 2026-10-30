@@ -85,7 +85,7 @@
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
 
-#align-panel, #diff-panel, #denoise-panel {
+#align-panel, #diff-panel, #denoise-panel, #stem-panel, #part-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
   width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
   padding: 8px 10px 10px; font-size: 12px;
@@ -126,11 +126,34 @@
 .df-cell { grid-template-columns: 1fr 1fr 1fr; }
 .ctf-warn { margin-top: 4px; color: #9a6700; line-height: 1.4; }
 /* Right-hand panels move left of the show-sidebar button while the sidebar is folded. */
-#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel, #denoise-panel) { right: 40px; }
+#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel, #denoise-panel, #stem-panel, #part-panel) { right: 40px; }
 #df-zones { overflow-x: auto; }
 #df-zones table { table-layout: auto; }
 #df-zones td, #df-zones th { padding: 1px 3px; }
 #ctf-table tr.edge td { background: #fff8c5; }
+
+/* Spectrum quantification beside the spectrum plot. */
+.sq-body { flex: 1; display: flex; gap: 10px; min-height: 0; }
+.sq-body #spec-plot { flex: 1; min-width: 0; width: auto; }
+#spec-panel.sq-open { height: 340px; }
+#sq-side { width: 340px; flex: none; overflow-y: auto; font-size: 12px; border-left: 1px solid var(--line); padding-left: 10px; }
+#sq-side .sq-top { margin-top: 0; margin-bottom: 6px; }
+#sq-side .sq-top #sq-status { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sq-side .al-opts input[type="text"] { width: 100%; box-sizing: border-box; }
+#sq-side .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; flex: 1; }
+#sq-side .pro-table { margin-top: 4px; }
+#sq-side .pro-table table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+#sq-side .pro-table th { position: sticky; top: 0; background: var(--surface); color: var(--dim); font-weight: 500; text-align: right; padding: 1px 4px; }
+#sq-side .pro-table th:first-child, #sq-side .pro-table td:first-child { text-align: left; }
+#sq-side .pro-table td { text-align: right; padding: 1px 4px; border-top: 1px solid var(--line); white-space: nowrap; }
+#sq-side .pro-table tr.edge td { background: #fff8c5; }
+#sq-note { margin-top: 6px; font-size: 11px; line-height: 1.4; }
+#sq-sum { margin-top: 2px; }
+@media (max-width: 720px) {
+  .sq-body { flex-direction: column; }
+  #spec-panel.sq-open { height: 70vh; }
+  #sq-side { width: auto; border-left: 0; padding-left: 0; }
+}
 
 /* Denoising */
 #denoise-panel .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
@@ -141,3 +164,40 @@
 .dn-split input { flex: 1; min-width: 0; }
 #dn-status, #dn-saved-name { flex: 1; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #denoise-panel [hidden] { display: none; }
+
+/* 4D-STEM maps. */
+#stem-panel { width: 300px; }
+#stem-panel select { flex: 1; min-width: 0; }
+#st-canvas, #st-dp { display: block; width: 100%; height: auto; margin-top: 6px; image-rendering: pixelated; border-radius: 6px; background: #000; cursor: crosshair; }
+#st-dp { width: 60%; margin: 6px auto 8px; }
+#st-pick { margin-top: 4px; font-variant-numeric: tabular-nums; min-height: 1.3em; }
+#st-det, #st-rot { margin-top: 8px; }
+#st-det summary, #st-rot summary { cursor: pointer; font-size: 12px; margin-bottom: 4px; }
+.st-det3 { grid-template-columns: 1fr 1fr 1fr; }
+#stem-panel .al-check { display: flex; flex-direction: row; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+#st-rotnote { line-height: 1.4; }
+
+/* Particle statistics. */
+#part-panel { width: 300px; }
+#part-panel select { flex: 1; min-width: 0; }
+#part-panel .al-check { display: flex; flex-direction: row; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+#part-panel .al-row label { display: flex; align-items: center; gap: 4px; color: var(--dim); font-size: 11px; }
+#pa-t { width: 80px; }
+#pa-thr { margin-bottom: 6px; }
+#pa-thr summary { cursor: pointer; font-size: 12px; margin-bottom: 4px; }
+#pa-hist, #pa-dist { display: block; width: 100%; height: auto; margin: 4px 0; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
+#pa-hist { aspect-ratio: 280 / 70; cursor: crosshair; }
+#pa-dist { aspect-ratio: 280 / 150; }
+.pa-sum { display: grid; gap: 2px; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+.pa-sum div { display: flex; justify-content: space-between; gap: 8px; }
+.pa-sum span { color: var(--dim); }
+.pa-sum b { font-weight: 600; text-align: right; }
+#pa-fit { margin-bottom: 6px; line-height: 1.4; }
+.pa-table-wrap { max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; }
+#pa-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 11px; }
+#pa-table th { position: sticky; top: 0; background: var(--subtle); font-weight: 600; text-align: right; padding: 3px 4px; }
+#pa-table td { text-align: right; padding: 2px 4px; border-top: 1px solid var(--line); cursor: pointer; }
+#pa-table td:first-child, #pa-table th:first-child { text-align: center; width: 18px; }
+#pa-table tr.sel td { background: rgba(207, 34, 46, 0.12); }
+#pa-table tr.off td { color: var(--dim); text-decoration: line-through; }
+#pa-table tr.off td:first-child { text-decoration: none; }
