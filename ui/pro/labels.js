@@ -22,7 +22,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "brush",     // brush | eraser | lasso | wand | sam
+    sub: "brush",     // select | brush | eraser | lasso | wand | sam
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -35,6 +35,8 @@
     hover: null,      // pointer in image pixels
     stroke: null,
     lasso: null,      // {z, pts, erase} while a lasso is drawn
+    sel: null,        // picked region {z, x, y} (a pixel in it) for the select tool
+    selDrag: null,    // {a: pointer at press, dx, dy} while it is dragged
     sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null, along: null },
     busy: false,
     saveTimer: 0,
@@ -57,6 +59,7 @@
   sec.innerHTML = `
     <h3>标签分割 <span class="dim" id="lab-busy"></span></h3>
     <div class="row" id="lab-tools">
+      <button class="small" data-sub="select" title="选择：点一块分割区域选中它，拖动挪位置，Delete 删除（勾上“整个物体”就连同其他层一起）"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg><span>选择</span></button>
       <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg><span>画笔</span></button>
       <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg><span>橡皮</span></button>
       <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg><span>套索</span></button>
@@ -66,7 +69,8 @@
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
     <label class="slider" id="lab-tol-row">容差 <input type="range" id="lab-tol" min="0" max="0.5" step="0.005" /><span id="lab-tol-v"></span></label>
     <div class="row">
-      <label id="lab-3d-row" title="魔棒沿 Z 方向一起长到相邻的层"><input type="checkbox" id="lab-3d" /> 三维</label>
+      <label id="lab-3d-row" title="魔棒沿 Z 方向一起长到相邻的层"><input type="checkbox" id="lab-3d" /> <span id="lab-3d-text">三维</span></label>
+      <button class="small" id="lab-sel-del" title="删除选中的区域（Delete）">删除选中</button>
       <label title="画笔和魔棒只涂没有标签的地方；橡皮只擦当前标签"><input type="checkbox" id="lab-guard" /> 不覆盖其他标签</label>
     </div>
     <div id="lab-sam" hidden>
@@ -75,6 +79,7 @@
       <div class="row">
         <button class="small" id="lab-sam-get">下载模型</button>
         <button class="small" id="lab-sam-apply" title="把预览的分割写进当前标签（回车）">应用</button>
+        <button class="small" id="lab-sam-trim" title="写入预览的分割，并清掉这一层里当前标签在分割以外的部分（先用画笔粗涂、再用 SAM 精修时用）">清除外围</button>
         <button class="small" id="lab-sam-z" title="从这一层开始，逐层向上和向下自动分割同一个物体，直到找不到它为止（Esc 停止）">沿 Z 传播</button>
         <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
       </div>
@@ -126,10 +131,14 @@
 
   function syncPanel() {
     for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
-    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam";
+    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam" || L.sub === "select";
     syncSam();
     $("lab-tol-row").hidden = L.sub !== "wand";
-    $("lab-3d-row").hidden = L.sub !== "wand";
+    $("lab-3d-row").hidden = L.sub !== "wand" && L.sub !== "select";
+    $("lab-3d-text").textContent = L.sub === "select" ? "整个物体（所有层）" : "三维";
+    $("lab-3d-row").title = L.sub === "select" ? "挪动和删除时连同相邻层里连着的部分一起" : "魔棒沿 Z 方向一起长到相邻的层";
+    $("lab-sel-del").hidden = L.sub !== "select";
+    $("lab-sel-del").disabled = !L.sel || L.busy;
     $("lab-size").value = L.radius;
     $("lab-size-v").textContent = `${L.radius * 2}`;
     $("lab-tol").value = L.tol;
@@ -380,6 +389,7 @@
       g.restore();
     }
     drawSam(g);
+    drawSelection(g);
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
       g.save();
       g.beginPath();
@@ -471,6 +481,8 @@
       renderZMarks();
       if (st.zs.includes(S.z) || L.z !== S.z) L.z = -1;
       if (st.zs.length || op.kind === "materials") scheduleSave();
+      // A step labels.rs can undo goes into the app's shared history.
+      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials") ext.pushUndo("label");
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
       return st;
@@ -542,6 +554,102 @@
     return L.token === S.token && !L.busy;
   }
 
+  // ---------- select tool: pick, drag and delete a region ----------
+
+  /** Pixels of the 4-connected region of one label containing (x, y) on the shown slice. */
+  function regionAt(x, y) {
+    const w = S.info.width, h = S.info.height, s = L.slice;
+    if (!s || x < 0 || y < 0 || x >= w || y >= h) return null;
+    const k = s[y * w + x];
+    if (!k) return null;
+    const seen = new Uint8Array(w * h), out = [], stack = [y * w + x];
+    seen[y * w + x] = 1;
+    while (stack.length) {
+      const i = stack.pop();
+      out.push(i);
+      const px = i % w;
+      for (const j of [px > 0 ? i - 1 : -1, px + 1 < w ? i + 1 : -1, i - w, i + w]) {
+        if (j >= 0 && j < w * h && !seen[j] && s[j] === k) { seen[j] = 1; stack.push(j); }
+      }
+    }
+    return { k, pix: out };
+  }
+  let selCache = { key: "", r: null };
+  function selRegion() {
+    if (!L.sel || L.sel.z !== S.z || L.z !== S.z || !L.slice) return null;
+    const key = `${L.sel.x},${L.sel.y},${L.sel.z}`;
+    if (selCache.key !== key || selCache.slice !== L.slice) selCache = { key, slice: L.slice, r: regionAt(L.sel.x, L.sel.y) };
+    return selCache.r;
+  }
+
+  function selectDown(p) {
+    const x = Math.floor(p[0]), y = Math.floor(p[1]);
+    const r = regionAt(x, y);
+    if (!r || locked(r.k)) {
+      L.sel = null;
+      if (r) toast("这个标签锁定了");
+    } else {
+      L.sel = { z: S.z, x, y };
+      L.selDrag = { a: p, dx: 0, dy: 0 };
+    }
+    syncPanel();
+    draw();
+  }
+
+  async function selectUp() {
+    const d = L.selDrag;
+    L.selDrag = null;
+    if (!d || !L.sel || (!d.dx && !d.dy)) return draw();
+    const { x, y, z } = L.sel;
+    const st = await edit({ kind: "moveRegion", x, y, z, dx: d.dx, dy: d.dy, threeD: L.threeD });
+    if (st) L.sel = { z, x: Math.min(S.info.width - 1, Math.max(0, x + d.dx)), y: Math.min(S.info.height - 1, Math.max(0, y + d.dy)) };
+    syncPanel();
+  }
+
+  async function selectDelete() {
+    if (!L.sel || L.busy) return;
+    const { x, y, z } = L.sel;
+    L.sel = null;
+    await edit({ kind: "deleteRegion", x, y, z, threeD: L.threeD });
+    syncPanel();
+  }
+
+  /** Dashed outline of the picked region, moved with the drag. */
+  function drawSelection(g) {
+    if (S.tool !== "label" || L.sub !== "select") return;
+    const r = selRegion();
+    if (!r) return;
+    const w = S.info.width, dx = L.selDrag ? L.selDrag.dx : 0, dy = L.selDrag ? L.selDrag.dy : 0;
+    const inside = new Set(r.pix);
+    const sc = S.view.scale;
+    g.save();
+    g.beginPath();
+    for (const i of r.pix) {
+      const x = i % w, y = (i / w) | 0;
+      const [sx, sy] = toScreen(x + dx, y + dy);
+      if (!inside.has(i - w) || y === 0) { g.moveTo(sx, sy); g.lineTo(sx + sc, sy); }
+      if (!inside.has(i + w)) { g.moveTo(sx, sy + sc); g.lineTo(sx + sc, sy + sc); }
+      if (x === 0 || !inside.has(i - 1)) { g.moveTo(sx, sy); g.lineTo(sx, sy + sc); }
+      if (x === w - 1 || !inside.has(i + 1)) { g.moveTo(sx + sc, sy); g.lineTo(sx + sc, sy + sc); }
+    }
+    g.lineWidth = 2;
+    g.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    g.stroke();
+    g.setLineDash([4, 3]);
+    g.lineWidth = 1.2;
+    g.strokeStyle = "#fff";
+    g.stroke();
+    if (dx || dy) {
+      g.globalAlpha = L.opacity;
+      g.fillStyle = `rgb(${colorOf(r.k).join(",")})`;
+      for (const i of r.pix) {
+        const [sx, sy] = toScreen((i % w) + dx, ((i / w) | 0) + dy);
+        g.fillRect(sx, sy, sc, sc);
+      }
+    }
+    g.restore();
+  }
+
   ext.tools.label = {
     down(e, p) {
       if (!ready()) return;
@@ -560,12 +668,17 @@
       }
       if (L.sub === "sam") return samDown(e, p);
       if (!L.slice || L.z !== S.z) return;
+      if (L.sub === "select") return selectDown(p);
       L.stroke = { z: S.z, pts: [p] };
       stampLocal(p[0], p[1]);
       draw();
     },
     move(e, p) {
       L.hover = p;
+      if (L.selDrag) {
+        L.selDrag.dx = Math.round(p[0] - L.selDrag.a[0]);
+        L.selDrag.dy = Math.round(p[1] - L.selDrag.a[1]);
+      }
       if (L.stroke) strokeTo(p);
       if (L.sam.drag) {
         L.sam.drag.b = p;
@@ -578,6 +691,7 @@
     },
     up() {
       if (L.sam.drag) return samUp();
+      if (L.selDrag) return selectUp();
       const la = L.lasso;
       L.lasso = null;
       if (la) {
@@ -595,8 +709,29 @@
       const pts = st.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
       edit({ kind: "stroke", z: st.z, pts, radius: L.radius, label, guard });
     },
-    undo() { if (!L.busy && !L.stroke && !L.lasso && !L.sam.drag) edit({ kind: "undo" }); },
-    redo() { if (!L.busy && !L.stroke && !L.lasso && !L.sam.drag) edit({ kind: "redo" }); },
+    // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
+    undo() {
+      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag) return false;
+      edit({ kind: "undo" });
+    },
+    redo() {
+      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag) return false;
+      edit({ kind: "redo" });
+    },
+    // SAM clicks not written yet come off one at a time before the label steps.
+    undoLocal() {
+      if (L.sub !== "sam" || L.sam.busy || !(L.sam.points.length || L.sam.box)) return false;
+      if (L.sam.points.length) L.sam.points.pop();
+      else L.sam.box = null;
+      if (L.sam.points.length || L.sam.box) samRun();
+      else samClear();
+      return true;
+    },
+    // Right-click undoes, as the label tool has no other use for it.
+    context() {
+      if (L.stroke || L.lasso || L.sam.drag || L.selDrag) return;
+      undo();
+    },
     active(on) {
       btn.classList.toggle("on", on);
       if (!on) {
@@ -628,9 +763,19 @@
   // Enter applies the SAM preview, Esc drops it.
   window.addEventListener("keydown", (e) => {
     if (S.tool !== "label" || L.sub !== "sam" || e.target.tagName === "INPUT" && e.target.type === "text") return;
-    if (e.key === "Enter" && L.sam.mask) { samApply(); e.preventDefault(); }
+    if (e.key === "Enter" && L.sam.mask) { samApply(false); e.preventDefault(); }
     if (e.key === "Escape" && L.sam.along) { invoke("sam_cancel"); e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === "Escape" && (L.sam.points.length || L.sam.box)) { samClear(); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
+  // Delete / Backspace remove the region picked with the select tool.
+  window.addEventListener("keydown", (e) => {
+    if (S.tool !== "label" || L.sub !== "select" || !L.sel) return;
+    if (e.target.tagName === "INPUT" && e.target.type === "text" || e.target.tagName === "TEXTAREA") return;
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    selectDelete();
+    e.preventDefault();
+    e.stopPropagation();
   }, true);
 
   // [ and ] change the brush size.
@@ -669,6 +814,8 @@
     $("lab-sam-get").hidden = ready || !st.available;
     $("lab-sam-get").disabled = !!L.sam.progress;
     $("lab-sam-apply").hidden = !ready;
+    $("lab-sam-trim").hidden = !ready;
+    $("lab-sam-trim").disabled = !L.sam.mask || L.sam.busy;
     $("lab-sam-clear").hidden = !ready;
     $("lab-sam-dn-row").hidden = !ready;
     $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
@@ -793,7 +940,7 @@
     }
   }
 
-  async function samApply() {
+  async function samApply(trim = false) {
     if (!L.sam.mask || L.sam.busy) return;
     // A mask over most of the slice is nearly always background picked up
     // by a stray point; it is written only on a second Enter.
@@ -805,7 +952,7 @@
       return;
     }
     const z = L.sam.z;
-    const st = await editWith("sam_apply", { token: L.token, z, label: L.active, guard: L.guard ? L.active : 0 });
+    const st = await editWith("sam_apply", { token: L.token, z, label: L.active, guard: L.guard ? L.active : 0, trim });
     if (st) samClear();
   }
 
@@ -849,7 +996,9 @@
   }
 
   $("lab-sam-get").addEventListener("click", samDownload);
-  $("lab-sam-apply").addEventListener("click", samApply);
+  $("lab-sam-apply").addEventListener("click", () => samApply(false));
+  $("lab-sam-trim").addEventListener("click", () => samApply(true));
+  $("lab-sel-del").addEventListener("click", selectDelete);
   $("lab-sam-z").addEventListener("click", samAlong);
   $("lab-sam-dn").addEventListener("change", (e) => {
     L.sam.denoise = e.target.checked;

@@ -73,11 +73,21 @@ const S = {
 };
 
 // Tools and overlays added from outside this file (the Pro label tools):
-// tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on)},
+// tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on),
+// undoLocal(), context(e)}: undo/redo take back a step the tool recorded
+// with ext.pushUndo(name) (false: not now), undoLocal() a step of its own
+// that is not in the shared history yet, context(e) a right-click,
 // where p is the pointer in image pixels; overlays are f(ctx) drawn over the
 // image in screen coordinates, under the annotations.
 // settings: entries plugins add to the ⚙ menu (see plugin-host.js addSettingsSelect).
 const ext = { tools: {}, overlays: [], settings: [] };
+// Undo steps of tool extensions go into the shared history as markers, so
+// undo and redo follow the order things happened whatever tool is active.
+ext.pushUndo = (name) => {
+  S.future = [];
+  S.history.push({ ext: name });
+  if (S.history.length > 200) S.history.shift();
+};
 
 const canvas = $("view");
 const ctx = canvas.getContext("2d");
@@ -2676,18 +2686,28 @@ const midGesture = () => S.op && !(S.op.kind === "ext" && ext.tools[S.tool]);
 
 function undo() {
   if (midGesture()) return;
-  if (ext.tools[S.tool] && ext.tools[S.tool].undo) return ext.tools[S.tool].undo();
+  const tool = ext.tools[S.tool];
+  if (tool && tool.undoLocal && tool.undoLocal()) return;
   const h = S.history.pop();
   if (!h) return;
+  if (h.ext) {
+    if (ext.tools[h.ext].undo() === false) S.history.push(h);
+    else S.future.push(h);
+    return;
+  }
   S.future.push(snapshot());
   restore(h);
 }
 
 function redo() {
   if (midGesture()) return;
-  if (ext.tools[S.tool] && ext.tools[S.tool].redo) return ext.tools[S.tool].redo();
   const h = S.future.pop();
   if (!h) return;
+  if (h.ext) {
+    if (ext.tools[h.ext].redo() === false) S.future.push(h);
+    else S.history.push(h);
+    return;
+  }
   S.history.push(snapshot());
   restore(h);
 }
@@ -3028,7 +3048,13 @@ canvas.addEventListener("pointerdown", (e) => {
     finishText(true);
     if (e.button === 0) return;
   }
-  // Right-click with any other tool goes back to the select tool.
+  // Right-click with any other tool goes back to the select tool, unless
+  // the tool has its own use for it (the label tool undoes).
+  if (e.button === 2 && ext.tools[S.tool] && ext.tools[S.tool].context) {
+    S.op = null;
+    ext.tools[S.tool].context(e);
+    return;
+  }
   if (e.button === 2 && S.tool !== "select") {
     S.op = null;
     setTool("select");
