@@ -185,28 +185,27 @@
         <div class="bar" style="--v:100"><span>Fiji</span><i></i><b>706 MB</b></div>
         <div class="bar" style="--v:8.7"><span>IMOD</span><i></i><b>61 MB</b></div>
       </div>
-      <div><h3 data-i="bt_start">冷启动</h3><p data-i="bs_start">从启动到窗口出现，不打开文件。</p>
-        <div class="bar me" style="--v:7.9"><span>TifMrcView</span><i></i><b>0.69 s</b></div>
-        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>8.70 s</b></div>
-        <div class="bar" style="--v:8.4"><span>IMOD 3dmod</span><i></i><b>0.73 s</b></div>
+      <div><h3 data-i="bt_open">双击打开 2 GB 的 MRC</h3><p data-i="bs_open">1024 × 1024 × 512，float32。从双击文件到图像真正画在窗口里，含程序启动。</p>
+        <div class="bar me" style="--v:9.7"><span>TifMrcView</span><i></i><b>1.27 s</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>13.13 s</b></div>
+        <div class="bar" style="--v:26.2"><span>IMOD 3dmod</span><i></i><b>3.44 s</b></div>
       </div>
-      <div><h3 data-i="bt_mrc">启动并打开 2 GB 的 MRC</h3><p data-i="bs_mrc">1024 × 1024 × 512，float32。程序没在运行时双击文件，到第一张图出现，含程序启动。</p>
-        <div class="bar me" style="--v:7.8"><span>TifMrcView</span><i></i><b>1.11 s</b></div>
-        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>14.17 s</b></div>
-        <div class="bar" style="--v:17.0"><span>IMOD 3dmod</span><i></i><b>2.41 s</b></div>
+      <div><h3 data-i="bt_reopen">软件开着时，再打开它</h3><p data-i="bs_reopen">同一个 2 GB 的 MRC。3dmod 每次打开都要重新启动程序，见上图。</p>
+        <div class="bar me" style="--v:11.5"><span>TifMrcView</span><i></i><b>0.43 s</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>3.75 s</b></div>
       </div>
-      <div><h3 data-i="bt_ome">启动并打开压缩的 OME-TIFF</h3><p data-i="bs_ome">蔡司 Airyscan Z 栈，41 层，Deflate 压缩，100 MB。同样含程序启动。</p>
-        <div class="bar me" style="--v:8.7"><span>TifMrcView</span><i></i><b>1.34 s</b></div>
-        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>15.35 s</b></div>
-        <div class="bar" style="--v:16.2"><span>IMOD 3dmod</span><i></i><b>2.48 s</b></div>
+      <div><h3 data-i="bt_ome">双击打开压缩的 OME-TIFF</h3><p data-i="bs_ome">蔡司 Airyscan Z 栈，41 层，16 位，Deflate 压缩，100 MB。含程序启动。</p>
+        <div class="bar me" style="--v:22.3"><span>TifMrcView</span><i></i><b>1.60 s</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>7.19 s</b></div>
+        <div class="bar" style="--v:34.2"><span>IMOD 3dmod</span><i></i><b>2.46 s</b></div>
       </div>
-      <div><h3 data-i="bt_mem">打开 2 GB MRC 后的内存</h3><p data-i="bs_mem">所有进程的物理内存合计。TifMrcView 不会一次读入整个文件，而是先显示当前层，再在后台预读附近的层，最多用内存的 1/4；这台 32 GB 的电脑放得下整个文件，所以全部预读了。3dmod 默认把数据转成 8 位，所以更少。</p>
-        <div class="bar me" style="--v:57.7"><span>TifMrcView</span><i></i><b>2196 MB</b></div>
-        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>3803 MB</b></div>
-        <div class="bar" style="--v:18.4"><span>IMOD 3dmod</span><i></i><b>701 MB</b></div>
+      <div><h3 data-i="bt_mem">打开 2 GB MRC 后的内存</h3><p data-i="bs_mem">打开 30 秒后，所有进程合计。TifMrcView 直接映射原文件、按需读取，不另存副本，显示的仍是 float32 原值；3dmod 内存小，是因为默认把数据量化成 8 位（有损）。</p>
+        <div class="bar me" style="--v:6.4"><span>TifMrcView</span><i></i><b>205 MB</b></div>
+        <div class="bar" style="--v:100.0"><span>Fiji</span><i></i><b>3221 MB</b></div>
+        <div class="bar" style="--v:21.5"><span>IMOD 3dmod</span><i></i><b>694 MB</b></div>
       </div>
     </div>
-    <p class="bench-m rv" data-i="bench_m">测试机：MacBook Pro（M1 Max，32 GB 内存，macOS 27），2026 年 10 月。版本：TifMrcView 0.7.63、Fiji（ImageJ 2.16.0 / 1.54p）、IMOD 5.1.13。每项取 2–6 次运行的中位数，磁盘缓存是热的，越短越好。打开时间都从启动程序算起（TifMrcView 自身启动约 0.7 秒）。TifMrcView 打开时只读当前层，其余层在后台预读，不影响翻看；Fiji 要整栈读完才显示；3dmod 显示的是转成 8 位的数据，TifMrcView 保留 float32 原始数值。</p>
+    <p class="bench-m rv" data-i="bench_m">测试机：MacBook Pro（M1 Max，32 GB 内存，macOS 27），2026 年 10 月。Fiji 为 ImageJ 2.16.0 / 1.54p，IMOD 为 5.1.13。计时以窗口里的图像真正画出来、不再变化为准，每项取 5 次以上的中位数。TifMrcView 打开时只读要显示的那一层，所以快。</p>
     <div class="ctw rv">
       <table class="ctab">
         <thead><tr><th></th><th class="me">TifMrcView</th><th>ImageJ / Fiji</th><th>IMOD (3dmod)</th></tr></thead>
@@ -358,7 +357,7 @@
 
 <div class="lb" id="lb" role="dialog" aria-modal="true" hidden><img alt=""><button type="button" data-i-alt="sc_close" data-i-aria="1" aria-label="关闭">×</button></div>
 
-<script src="i18n.js?v=18"></script>
+<script src="i18n.js?v=19"></script>
 <script src="site.js?v=3"></script>
 </body>
 </html>
