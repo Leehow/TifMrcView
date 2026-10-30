@@ -70,7 +70,8 @@ pub struct Params {
     /// Slices averaged on each side first (0 = none).
     #[serde(default)]
     pub slab: usize,
-    /// "cpu" keeps everything on the CPU; anything else uses the GPU when there is one.
+    /// "cpu" keeps everything on the CPU, "gpu" uses the GPU for NLM whenever
+    /// there is one, anything else ("auto") where it is faster.
     #[serde(default)]
     pub device: String,
 }
@@ -225,7 +226,10 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
     // fast on the CPU (RTX 5080 even, M1 Max Metal 10–30× slower).
     #[cfg(feature = "pro")]
     if p.device != "cpu" && p.method == Method::Nlm {
-        if let Some((dev, name)) = crate::ctf_gpu::device() {
+        // On Apple GPUs (M1 Max) these unfused tensor passes are 1.5–2×
+        // slower than the CPU code, so "auto" keeps NLM on the CPU there;
+        // "gpu" forces it.
+        if let Some((dev, name)) = crate::ctf_gpu::device().filter(|(_, n)| p.device == "gpu" || *n != "Metal") {
             match crate::ctf_gpu::guarded(|| nlm_gpu_tiled(dev, &v, w, h, p, sigma)) {
                 Ok(out) => return Ok((out, name)),
                 Err(e) => eprintln!("denoise: GPU failed, using the CPU: {e:#}"),
