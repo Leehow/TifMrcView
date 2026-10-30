@@ -274,11 +274,13 @@ pub struct Dataset {
     pub filters: Vec<Filter>,
 }
 
-/// One stored chunk: its first element, absolute file offset, stored size
-/// and filter mask (bit i set: filter i was not applied).
+/// One stored chunk of a three-dimensional dataset: its first element,
+/// absolute file offset, stored size and filter mask (bit i set: filter i
+/// was not applied). A fixed array, not a Vec: big images have 100 000+
+/// chunks, and an allocation each cost about half the index time.
 #[derive(Clone, Debug)]
 pub struct ChunkRef {
-    pub start: Vec<u64>,
+    pub start: [u64; 3],
     pub addr: u64,
     pub size: u64,
     pub mask: u32,
@@ -930,12 +932,15 @@ impl<S: Source> H5<S> {
     pub fn chunks(&self, ds: &Dataset) -> Result<Vec<ChunkRef>> {
         let Layout::Chunked(cd, index) = &ds.layout else { bail!("数据集不是分块存储") };
         let rank = ds.dims.len();
+        if rank != 3 {
+            bail!("只支持三维的分块数据集（这里是 {rank} 维）");
+        }
         let elem = ds.dtype.size as u64;
         let chunk_bytes = cd.iter().product::<u64>() * elem;
         // Row-major grid of chunks, for the indexes that store them in order.
         let grid: Vec<u64> = ds.dims.iter().zip(cd).map(|(&d, &c)| d.div_ceil(c.max(1))).collect();
-        let start_of = |mut k: u64| -> Vec<u64> {
-            let mut s = vec![0; rank];
+        let start_of = |mut k: u64| -> [u64; 3] {
+            let mut s = [0; 3];
             for i in (0..rank).rev() {
                 s[i] = k % grid[i].max(1) * cd[i];
                 k /= grid[i].max(1);
@@ -948,24 +953,21 @@ impl<S: Source> H5<S> {
                 if self.undef(a) {
                     return Ok(out);
                 }
-                let mut err = None;
+                // Keys are 4-byte size, 4-byte filter mask, then one 8-byte
+                // offset per dimension (btree1 hands over exactly that many
+                // bytes); decoded directly, as a big image has 100 000+ chunks.
                 self.btree1(a, 1, rank + 1, &mut |key, child| {
-                    let mut c = Cur::new(key);
-                    let (Ok(size), Ok(mask)) = (c.u32(), c.u32()) else { return };
-                    let start: Result<Vec<u64>> = (0..rank).map(|_| c.uv(8)).collect();
-                    match start {
-                        Ok(start) => out.push(ChunkRef { start, addr: self.abs(child), size: size as u64, mask }),
-                        Err(e) => err = Some(e),
-                    }
+                    let le = |i: usize| u64::from_le_bytes(key[i..i + 8].try_into().unwrap());
+                    let size = u32::from_le_bytes(key[0..4].try_into().unwrap());
+                    let mask = u32::from_le_bytes(key[4..8].try_into().unwrap());
+                    let start = [le(8), le(16), le(24)];
+                    out.push(ChunkRef { start, addr: self.abs(child), size: size as u64, mask });
                 })?;
-                if let Some(e) = err {
-                    return Err(e);
-                }
             }
             Index::Single(a, size, mask) => {
                 if !self.undef(a) {
                     let size = if size == 0 { chunk_bytes } else { size };
-                    out.push(ChunkRef { start: vec![0; rank], addr: self.abs(a), size, mask });
+                    out.push(ChunkRef { start: [0; 3], addr: self.abs(a), size, mask });
                 }
             }
             Index::Implicit(a) => {
