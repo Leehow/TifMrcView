@@ -156,6 +156,7 @@
       const fit = await invoke("ctf_fit", { req: { token, z: S.z, t: S.t, c, region, n, params } });
       if (token !== S.token) return;
       C.fit = fit;
+      C.fitParams = params;
       C.key = key;
       showFit();
     } catch (e) {
@@ -167,6 +168,16 @@
   }
 
   const um = (a) => (a / 1e4).toFixed(3);
+
+  /** Why a fit can't be trusted: it stopped at the edge of the search, or
+   * the spectrum barely follows any CTF (no visible Thon rings). */
+  function boundWarning(f, p) {
+    const df = (f.df1 + f.df2) / 2;
+    const edge = p && (df >= p.dfMaxA * 0.99 || df <= p.dfMinA * 1.01 || (p.maxAstigA > 0 && f.df1 - f.df2 >= p.maxAstigA * 0.99));
+    if (edge) return "拟合停在搜索范围的边界上，结果不可信：调大离焦或像散范围再试；如果功率谱里看不到 Thon 环，就拟合不出来";
+    if (f.score < 0.1) return "相关很低，功率谱里可能没有可见的 Thon 环，结果仅供参考";
+    return "";
+  }
 
   function showFit() {
     const f = C.fit;
@@ -186,6 +197,13 @@
       out.appendChild(d);
     }
     out.lastChild.className = "dim";
+    const warn = boundWarning(f, C.fitParams);
+    if (warn) {
+      const d = document.createElement("div");
+      d.className = "ctf-warn";
+      d.textContent = warn;
+      out.appendChild(d);
+    }
     out.classList.remove("dim");
     drawOverlay();
     drawPlot();

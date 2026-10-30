@@ -83,7 +83,7 @@
 #ctf-table tbody tr:hover { background: var(--subtle); }
 #ctf-table tr.low td { color: var(--dim); }
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
-#fft-panel { max-height: calc(100% - 20px); overflow-y: auto; }
+#fft-panel { max-height: calc(100% - 20px); overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
 
 #align-panel, #diff-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
@@ -124,3 +124,9 @@
 #df-zone { margin-top: 8px; }
 #df-zone summary { cursor: pointer; font-size: 12px; margin-bottom: 6px; }
 .df-cell { grid-template-columns: 1fr 1fr 1fr; }
+.ctf-warn { margin-top: 4px; color: #9a6700; line-height: 1.4; }
+/* Right-hand panels move left of the show-sidebar button while the sidebar is folded. */
+#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel) { right: 40px; }
+#df-zones { overflow-x: auto; }
+#df-zones table { table-layout: auto; }
+#df-zones td, #df-zones th { padding: 1px 3px; }

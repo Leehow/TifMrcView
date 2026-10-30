@@ -783,11 +783,29 @@ pub fn fit_stack(img: &Arc<OpenImage>, req: &StackReq, progress: &(dyn Fn(usize,
 /// `x.tlt`), one angle per line, when it has one per slice.
 pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
     let p = std::path::Path::new(path);
-    ["rawtlt", "tlt"].iter().find_map(|ext| {
-        let text = std::fs::read_to_string(p.with_extension(ext)).ok()?;
+    let read = |f: &std::path::Path| -> Option<Vec<f64>> {
+        let text = std::fs::read_to_string(f).ok()?;
         let t: Vec<f64> = text.split_whitespace().map(|v| v.parse().ok()).collect::<Option<_>>()?;
         (t.len() == nz).then_some(t)
-    })
+    };
+    if let Some(t) = ["rawtlt", "tlt"].iter().find_map(|ext| read(&p.with_extension(ext))) {
+        return Some(t);
+    }
+    // A binned or aligned copy (TS21_bin2.mrc) next to the series' own
+    // angle file (TS21.tlt): the longest name the stack's name starts with.
+    let stem = p.file_stem()?.to_str()?;
+    let mut found: Vec<(usize, std::path::PathBuf)> = std::fs::read_dir(p.parent()?)
+        .ok()?
+        .filter_map(|e| {
+            let f = e.ok()?.path();
+            let ext = f.extension()?.to_str()?;
+            let s = f.file_stem()?.to_str()?;
+            let len = s.len();
+            (matches!(ext, "rawtlt" | "tlt") && len > 0 && stem.starts_with(s)).then_some(len).map(|l| (l, f.clone()))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.iter().find_map(|(_, f)| read(f))
 }
 
 /// Spectra of a region on each slice, then `fit_many`. The spectra run on
@@ -1008,6 +1026,10 @@ pub(crate) mod tests {
         assert_eq!(tilt_angles(st.to_str().unwrap(), 3), Some(vec![-3.0, 0.0, 3.0]));
         // Wrong count: not this series'.
         assert!(tilt_angles(st.to_str().unwrap(), 4).is_none());
+        // A binned copy finds the series' own file by its name's start.
+        std::fs::write(dir.join("TS21.tlt"), "-2\n0\n2\n4\n").unwrap();
+        let bin = dir.join("TS21_bin2.mrc");
+        assert_eq!(tilt_angles(bin.to_str().unwrap(), 4), Some(vec![-2.0, 0.0, 2.0, 4.0]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
