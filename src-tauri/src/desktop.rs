@@ -1066,6 +1066,19 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
     .await
 }
 
+/// Finds the spots, centre and 2D lattice of a diffraction pattern.
+#[tauri::command]
+async fn diffraction_find(app: AppHandle, req: crate::diffraction::FindReq) -> CmdResult<crate::diffraction::Pattern> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || crate::diffraction::find(&img, &req)).await
+}
+
+/// Zone axes of a unit cell whose spot pattern matches a measured lattice.
+#[tauri::command]
+async fn diffraction_zones(req: crate::diffraction::ZoneReq) -> CmdResult<Vec<crate::diffraction::Zone>> {
+    blocking(move || crate::diffraction::zones(&req)).await
+}
+
 /// Writes the aligned stack or sum to a path from `pick_save_path`.
 #[tauri::command]
 async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()> {
@@ -1598,6 +1611,8 @@ pub fn run() {
             ctf_fit_stack,
             ctf_cancel,
             align_estimate,
+            diffraction_find,
+            diffraction_zones,
             align_save,
             align_cancel,
             spectrum_values,
