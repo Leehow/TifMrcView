@@ -30,6 +30,7 @@ mod plugin_assoc;
 pub mod render;
 pub mod reslice;
 pub mod spectro;
+pub mod particles;
 pub mod stem4d;
 pub mod spectrum;
 pub mod volume;

@@ -1073,6 +1073,13 @@ async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<cr
     blocking(move || crate::stem4d::analyze(&crate::stem4d::ImageFrames { img, c: req.c }, &req)).await
 }
 
+/// Finds and measures the particles of one image (Pro); see `particles`.
+#[tauri::command]
+async fn particles_analyze(app: AppHandle, req: crate::particles::Req) -> CmdResult<crate::particles::Result2> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    blocking(move || crate::particles::analyze(&img, &req)).await
+}
+
 /// EDS quantification (Pro) of a spectrum; see `spectro::eds`.
 #[tauri::command]
 async fn eds_quant(req: crate::spectro::EdsReq) -> CmdResult<crate::spectro::EdsResult> {
@@ -1668,6 +1675,7 @@ pub fn run() {
             diffraction_zones,
             eds_quant,
             stem4d_analyze,
+            particles_analyze,
             eels_quant,
             align_save,
             align_cancel,
