@@ -201,7 +201,9 @@ function publish(artifacts, dryRun) {
   if (mHost) {
     const mSsh = `ssh -p ${mPort} -o StrictHostKeyChecking=yes -o ConnectTimeout=30${mKey ? ` -i ${mKey}` : ""}`;
     try {
-      run("rsync", ["-av", "--partial", "--chmod=D755,F644", "-e", mSsh, path.join(release, v), `${mUser}@${mHost}:${mDir.replace(/\/+$/, "")}/`]);
+      const mDest = `${mUser}@${mHost}:${mDir.replace(/\/+$/, "")}`;
+      run("rsync", ["-av", "--partial", "--chmod=D755,F644", "-e", mSsh, path.join(release, v), `${mDest}/`]);
+      run("rsync", ["-av", "--checksum", "--chmod=D755,F644", "-e", mSsh, path.join(release, "plugins") + "/", `${mDest}/plugins/`]);
     } catch {
       console.warn("warning: China mirror upload failed; China downloads fall back to the main site");
     }
