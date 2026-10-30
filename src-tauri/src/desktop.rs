@@ -699,6 +699,18 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
     .await
 }
 
+/// EDS quantification (Pro) of a spectrum; see `spectro::eds`.
+#[tauri::command]
+async fn eds_quant(req: crate::spectro::EdsReq) -> CmdResult<crate::spectro::EdsResult> {
+    blocking(move || crate::spectro::eds(&req)).await
+}
+
+/// EELS edge quantification (Pro) of a spectrum; see `spectro::eels`.
+#[tauri::command]
+async fn eels_quant(req: crate::spectro::EelsReq) -> CmdResult<crate::spectro::EelsResult> {
+    blocking(move || crate::spectro::eels(&req)).await
+}
+
 /// Finds the spots, centre and 2D lattice of a diffraction pattern.
 #[tauri::command]
 async fn diffraction_find(app: AppHandle, req: crate::diffraction::FindReq) -> CmdResult<crate::diffraction::Pattern> {
@@ -1235,6 +1247,8 @@ pub fn run() {
             align_estimate,
             diffraction_find,
             diffraction_zones,
+            eds_quant,
+            eels_quant,
             align_save,
             align_cancel,
             spectrum_values,

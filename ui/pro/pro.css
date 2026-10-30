@@ -131,3 +131,26 @@
 #df-zones table { table-layout: auto; }
 #df-zones td, #df-zones th { padding: 1px 3px; }
 #ctf-table tr.edge td { background: #fff8c5; }
+
+/* Spectrum quantification beside the spectrum plot. */
+.sq-body { flex: 1; display: flex; gap: 10px; min-height: 0; }
+.sq-body #spec-plot { flex: 1; min-width: 0; width: auto; }
+#spec-panel.sq-open { height: 340px; }
+#sq-side { width: 340px; flex: none; overflow-y: auto; font-size: 12px; border-left: 1px solid var(--line); padding-left: 10px; }
+#sq-side .sq-top { margin-top: 0; margin-bottom: 6px; }
+#sq-side .sq-top #sq-status { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sq-side .al-opts input[type="text"] { width: 100%; box-sizing: border-box; }
+#sq-side .al-check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; flex: 1; }
+#sq-side .pro-table { margin-top: 4px; }
+#sq-side .pro-table table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+#sq-side .pro-table th { position: sticky; top: 0; background: var(--surface); color: var(--dim); font-weight: 500; text-align: right; padding: 1px 4px; }
+#sq-side .pro-table th:first-child, #sq-side .pro-table td:first-child { text-align: left; }
+#sq-side .pro-table td { text-align: right; padding: 1px 4px; border-top: 1px solid var(--line); white-space: nowrap; }
+#sq-side .pro-table tr.edge td { background: #fff8c5; }
+#sq-note { margin-top: 6px; font-size: 11px; line-height: 1.4; }
+#sq-sum { margin-top: 2px; }
+@media (max-width: 720px) {
+  .sq-body { flex-direction: column; }
+  #spec-panel.sq-open { height: 70vh; }
+  #sq-side { width: auto; border-left: 0; padding-left: 0; }
+}
