@@ -16,6 +16,9 @@
 //          purges the Cloudflare cache. Copy the other machines' DIR/<edition>/
 //          folders into the same DIR first.
 //
+// The Windows installers from here are not Authenticode-signed: SignPath
+// signs only what CI builds from the public source (build.yml, publish job).
+//
 // All machines must build the same commit (the version is
 // <major.minor>.<commit count>, as in CI). Secrets come from the environment
 // or from scripts/local-release.env (gitignored, KEY=value lines):
