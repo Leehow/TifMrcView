@@ -1310,6 +1310,7 @@ async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Val
             let Some(g) = req.geometry else { anyhow::bail!("缺少倾转几何") };
             let cfg = req.config.unwrap_or_default();
             let (vol, mean, std) = crate::wedge::volume(&img, req.c, req.t, req.bin)?;
+            let vol = if cfg.smooth > 0.0 { Arc::new(crate::wedge::smooth(&vol, cfg.smooth)) } else { vol };
             // Cubes no larger than the volume's thinnest side allows.
             let mut cfg = cfg;
             while cfg.cube > 16 && vol.n.iter().any(|&k| k < cfg.cube) {

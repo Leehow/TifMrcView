@@ -42,7 +42,10 @@
       <label title="从结构最丰富的地方切多少块">子块数 <select id="wg-count"><option>60</option><option>120</option><option>240</option></select></label>
       <label title="每一轮用上一轮的结果补楔再训练；越多越好也越慢">迭代轮数 <select id="wg-iter"><option>5</option><option>10</option><option>15</option><option>20</option></select></label>
       <label>每轮步数 <select id="wg-steps"><option>100</option><option>200</option><option>400</option></select></label>
-      <label class="al-wide" title="后半程在输入上加缺楔形状的噪声，网络同时学会去噪（IsoNet 的做法）">同时去噪
+      <label title="先对体数据做高斯低通，噪声大的断层图（尤其 bin 1）否则会把噪声纹理填进缺失楔">预滤波
+        <select id="wg-smooth"><option value="0">不滤</option><option value="0.7">弱</option><option value="1">中</option><option value="1.5">强</option></select>
+      </label>
+      <label title="后半程在输入上加缺楔形状的噪声，网络同时学会去噪（IsoNet 的做法）">同时去噪
         <select id="wg-noise"><option value="0">不去噪</option><option value="0.05">弱</option><option value="0.1">中</option><option value="0.2">强</option></select>
       </label>
       <span class="al-wide"><button id="wg-train" class="small primary">训练</button></span>
@@ -57,7 +60,7 @@
     <div class="al-row" id="wg-saved" hidden><span id="wg-saved-name" class="dim"></span><button id="wg-open" class="small">打开</button></div>`;
   $("stage").appendChild(panel);
 
-  const P = { geom: 0, min: -60, max: 60, bin: 0, cube: 64, count: 120, iterations: 10, steps: 200, noise: 0, split: 50, preview: true, ...pref.get("wedge-params", {}) };
+  const P = { geom: 0, min: -60, max: 60, bin: 0, cube: 64, count: 120, iterations: 10, steps: 200, noise: 0, smooth: 1, split: 50, preview: true, ...pref.get("wedge-params", {}) };
   $("wg-geom").value = P.geom;
   $("wg-min").value = P.min;
   $("wg-max").value = P.max;
@@ -66,6 +69,7 @@
   $("wg-iter").value = P.iterations;
   $("wg-steps").value = P.steps;
   $("wg-noise").value = P.noise;
+  $("wg-smooth").value = P.smooth;
   $("wg-split").value = P.split;
   $("wg-preview").checked = P.preview !== false;
 
@@ -78,11 +82,12 @@
     P.iterations = +$("wg-iter").value;
     P.steps = +$("wg-steps").value;
     P.noise = +$("wg-noise").value;
+    P.smooth = +$("wg-smooth").value;
     P.split = +$("wg-split").value;
     P.preview = $("wg-preview").checked;
     pref.set("wedge-params", P);
   }
-  for (const id of ["wg-geom", "wg-min", "wg-max", "wg-cube", "wg-count", "wg-iter", "wg-steps", "wg-noise", "wg-preview"]) $(id).addEventListener("change", store);
+  for (const id of ["wg-geom", "wg-min", "wg-max", "wg-cube", "wg-count", "wg-iter", "wg-steps", "wg-noise", "wg-smooth", "wg-preview"]) $(id).addEventListener("change", store);
   $("wg-bin").addEventListener("change", () => (W.binPath = baseInfo() && baseInfo().path));
   $("wg-split").addEventListener("input", () => {
     store();
@@ -98,10 +103,11 @@
     return S.axis === "xy" ? S.token : S.base && S.base.token;
   }
 
-  /** Bin that keeps the volume around 100 M voxels at most. */
+  /** Bin that keeps the volume around 60 M voxels at most (training
+   *  time hardly depends on it, applying and memory do). */
   function autoBin(info) {
     const v = info.width * info.height * info.sizeZ;
-    return v > 800e6 ? 4 : v > 200e6 ? 3 : v > 100e6 ? 2 : 1;
+    return v > 1.9e9 ? 4 : v > 500e6 ? 3 : v > 60e6 ? 2 : 1;
   }
 
   function geometry() {
@@ -147,7 +153,7 @@
     }
     if (!baseInfo()) return;
     store();
-    const req = { ...baseReq(), geometry: geometry(), config: { cube: P.cube, count: P.count, iterations: P.iterations, steps: P.steps, noise: P.noise } };
+    const req = { ...baseReq(), geometry: geometry(), config: { cube: P.cube, count: P.count, iterations: P.iterations, steps: P.steps, noise: P.noise, smooth: P.smooth } };
     const un = await T.event.listen("wedge-train", (ev) => {
       const p = ev.payload;
       $("wg-model").textContent = `训练中 第 ${p.iteration}/${p.iterations} 轮 · ${p.step}/${p.steps} 步 · 损失 ${p.loss.toPrecision(3)}`;

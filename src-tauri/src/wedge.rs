@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
 use burn::module::Module;
-use burn::nn::conv::{Conv3d, Conv3dConfig, ConvTranspose3d, ConvTranspose3dConfig};
+use burn::nn::conv::{Conv3d, Conv3dConfig};
 use burn::nn::PaddingConfig3d;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::activation::leaky_relu;
@@ -128,6 +128,31 @@ fn stats(v: &[f32]) -> (f32, f32) {
     let mean = s / k.max(1.0);
     let sd = (s2 / k.max(1.0) - mean * mean).max(0.0).sqrt();
     (mean as f32, if sd > 1e-12 { sd as f32 } else { 1.0 })
+}
+
+/// Gaussian blur of σ voxels (separable, mirrored edges): a gentle
+/// low-pass so that very noisy tomograms do not teach the network to fill
+/// the wedge with noise.
+pub fn smooth(vol: &Vol, sigma: f32) -> Vol {
+    if sigma <= 0.0 {
+        return Vol { n: vol.n, v: vol.v.clone() };
+    }
+    let r = (3.0 * sigma).ceil() as isize;
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f32 = k.iter().sum();
+    let k: Vec<f32> = k.iter().map(|v| v / sum).collect();
+    let n = vol.n;
+    let mut v = vol.v.clone();
+    for axis in 0..3 {
+        let stride = [1, n[0], n[0] * n[1]][axis];
+        let src = v.clone();
+        v.par_iter_mut().enumerate().for_each(|(i, o)| {
+            let c = (i / stride) % n[axis];
+            let base = i - c * stride;
+            *o = k.iter().enumerate().map(|(j, w)| w * src[base + reflect(c as isize + j as isize - r, n[axis]) * stride]).sum();
+        });
+    }
+    Vol { n, v }
 }
 
 // ---- Geometry and Fourier masks ----
@@ -446,7 +471,7 @@ pub struct Net {
     down: Vec<Block>,
     pool: Vec<Conv3d>,
     bottom: Block,
-    raise: Vec<ConvTranspose3d>,
+    raise: Vec<Conv3d>,
     up: Vec<Block>,
     head: Conv3d,
 }
@@ -457,7 +482,9 @@ impl Net {
         let down = (0..levels).map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev)).collect();
         let pool = (0..levels).map(|l| Conv3dConfig::new([w(l), w(l)], [2, 2, 2]).with_stride([2, 2, 2]).init(dev)).collect();
         let bottom = Block::new(w(levels - 1), w(levels), dev);
-        let raise = (0..levels).rev().map(|l| ConvTranspose3dConfig::new([w(l + 1), w(l)], [2, 2, 2]).with_stride([2, 2, 2]).init(dev)).collect();
+        // Nearest-neighbour doubling then a 3×3×3 convolution: no checkerboard,
+        // which transposed convolutions leave.
+        let raise = (0..levels).rev().map(|l| Conv3dConfig::new([w(l + 1), w(l)], [3, 3, 3]).with_padding(PaddingConfig3d::Same).init(dev)).collect();
         let up = (0..levels).rev().map(|l| Block::new(2 * w(l), w(l), dev)).collect();
         // The head starts at zero: the network starts as the identity.
         let head = Conv3dConfig::new([base, 1], [1, 1, 1]).with_initializer(burn::nn::Initializer::Zeros).init(dev);
@@ -481,11 +508,20 @@ impl Net {
         }
         x = self.bottom.forward(x);
         for (r, b) in self.raise.iter().zip(&self.up) {
-            x = leaky_relu(r.forward(x), 0.1);
+            x = leaky_relu(r.forward(double(x)), 0.1);
             x = b.forward(Tensor::cat(vec![x, skips.pop().unwrap()], 1));
         }
         input + self.head.forward(x)
     }
+}
+
+/// [B, C, D, H, W] → [B, C, 2D, 2H, 2W], each voxel repeated.
+fn double(x: Tensor<5>) -> Tensor<5> {
+    let [b, c, d, h, w] = x.dims();
+    let x: Tensor<6> = x.reshape([b, c, d, h, w, 1]).repeat_dim(5, 2);
+    let x: Tensor<6> = x.reshape([b, c, d, h, 1, 2 * w]).repeat_dim(4, 2);
+    let x: Tensor<6> = x.reshape([b, c, d, 1, 2 * h, 2 * w]).repeat_dim(3, 2);
+    x.reshape([b, c, 2 * d, 2 * h, 2 * w])
 }
 
 // ---- Training ----
@@ -508,11 +544,13 @@ pub struct TrainConfig {
     pub base: usize,
     pub levels: usize,
     pub seed: u64,
+    /// Gaussian low-pass of the volume first (σ in voxels, 0 = none).
+    pub smooth: f32,
 }
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503 }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0 }
     }
 }
 
@@ -636,7 +674,7 @@ pub fn train_and_apply(dev: &Device, values: &[f32], dims: [usize; 3], tilt_rang
         bail!("体数据大小和尺寸不符");
     }
     let (mean, std) = stats(values);
-    let vol = Vol { n: dims, v: values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
+    let vol = smooth(&Vol { n: dims, v: values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() }, cfg.smooth);
     let g = Geometry { beam: 2, tilt: 1, max_tilt: tilt_range[1], min_tilt: Some(tilt_range[0]) };
     let (net, _) = train(dev, &vol, &g, cfg, &mut progress)?;
     let it = cfg.iterations + 1;
@@ -652,35 +690,56 @@ pub fn train_and_apply(dev: &Device, values: &[f32], dims: [usize; 3], tilt_rang
 
 // ---- Applying ----
 
-/// Overlap of neighbouring tiles on each side, and the tile side.
-const MARGIN: usize = 16;
-const TILE: usize = 96;
+/// Context read around each tile, the part of it where neighbouring tiles
+/// are blended (so no seams show), and the tile side.
+const MARGIN: usize = 24;
+const BLEND: usize = 8;
+const TILE: usize = 112;
 
 /// The network's result for the box [origin, origin + size) of `vol`, in
 /// overlapping tiles that read past the box (mirrored at the volume's
-/// edges). `tick(done, total)` after each tile.
+/// edges) and are cross-faded where they meet. `tick(done, total)` after
+/// each tile.
 pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<Vec<f32>> {
     let al = net.align();
     let step = TILE - 2 * MARGIN;
     let starts: [Vec<usize>; 3] = std::array::from_fn(|a| (0..size[a]).step_by(step).collect());
     let total = starts.iter().map(Vec::len).product();
-    let mut out = vec![0f32; size[0] * size[1] * size[2]];
+    let len = size[0] * size[1] * size[2];
+    let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
     let mut done = 0;
     for &z0 in &starts[2] {
         for &y0 in &starts[1] {
             for &x0 in &starts[0] {
                 let o = [x0, y0, z0];
-                let inner: [usize; 3] = std::array::from_fn(|a| step.min(size[a] - o[a]));
-                let side: [usize; 3] = std::array::from_fn(|a| (inner[a] + 2 * MARGIN).div_ceil(al) * al);
-                let corner: [isize; 3] = std::array::from_fn(|a| (origin[a] + o[a]) as isize - MARGIN as isize);
+                // Output span of this tile along each axis: its step plus
+                // BLEND on each side, inside the box.
+                let lo: [usize; 3] = std::array::from_fn(|a| o[a].saturating_sub(BLEND));
+                let hi: [usize; 3] = std::array::from_fn(|a| (o[a] + step + BLEND).min(size[a]));
+                let side: [usize; 3] = std::array::from_fn(|a| (hi[a] - lo[a] + 2 * (MARGIN - BLEND)).div_ceil(al) * al);
+                let pad = MARGIN - BLEND;
+                let corner: [isize; 3] = std::array::from_fn(|a| (origin[a] + lo[a]) as isize - pad as isize);
                 let tile = vol.cube(corner, side);
                 let x = Tensor::<5>::from_data(TensorData::new(tile, [1, 1, side[2], side[1], side[0]]), dev);
                 let r = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
-                for z in 0..inner[2] {
-                    for y in 0..inner[1] {
-                        let src = ((z + MARGIN) * side[1] + y + MARGIN) * side[0] + MARGIN;
-                        let dst = ((o[2] + z) * size[1] + o[1] + y) * size[0] + o[0];
-                        out[dst..dst + inner[0]].copy_from_slice(&r[src..src + inner[0]]);
+                // Weight ramps from 0 to 1 across the 2·BLEND overlap.
+                let ramp = |a: usize, i: usize| -> f32 {
+                    let rise = if o[a] == 0 { 1.0 } else { ((i + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
+                    let left = hi[a] - lo[a] - 1 - i;
+                    let fall = if hi[a] == size[a] { 1.0 } else { ((left + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
+                    rise.min(fall)
+                };
+                for z in 0..hi[2] - lo[2] {
+                    let wz = ramp(2, z);
+                    for y in 0..hi[1] - lo[1] {
+                        let wzy = wz * ramp(1, y);
+                        let src = ((z + pad) * side[1] + y + pad) * side[0] + pad;
+                        let dst = ((lo[2] + z) * size[1] + lo[1] + y) * size[0] + lo[0];
+                        for x in 0..hi[0] - lo[0] {
+                            let w = wzy * ramp(0, x);
+                            acc[dst + x] += w * r[src + x];
+                            wsum[dst + x] += w;
+                        }
                     }
                 }
                 done += 1;
@@ -688,7 +747,8 @@ pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usiz
             }
         }
     }
-    Ok(out)
+    acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
+    Ok(acc)
 }
 
 /// A trained network with the volume it was trained on.
@@ -903,7 +963,7 @@ mod tests {
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
         let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1 };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0 };
         let mut last = None;
         let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
@@ -929,7 +989,7 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9 };
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0 };
         let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
@@ -957,7 +1017,7 @@ mod tests {
 
 /// Time and result on a real tomogram:
 /// TMV_WEDGE_FILE=<tomogram> cargo test --release --features pro --lib wedge::bench -- --ignored --nocapture
-/// TMV_WEDGE_BIN (default 1), TMV_WEDGE_ITER / TMV_WEDGE_STEPS / TMV_WEDGE_NOISE override the
+/// TMV_WEDGE_BIN (default 1), TMV_WEDGE_ITER / TMV_WEDGE_STEPS / TMV_WEDGE_NOISE / TMV_WEDGE_SMOOTH override the
 /// defaults; TMV_WEDGE_OUT=<file.mrc> saves the corrected volume.
 #[cfg(test)]
 mod bench {
@@ -986,6 +1046,10 @@ mod bench {
         if let Some(v) = env("TMV_WEDGE_NOISE") {
             cfg.noise = v as f32;
         }
+        if let Some(v) = env("TMV_WEDGE_SMOOTH") {
+            cfg.smooth = v as f32;
+        }
+        let vol = smooth(&vol, cfg.smooth);
         while vol.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
             cfg.cube /= 2;
         }
