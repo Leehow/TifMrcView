@@ -284,7 +284,8 @@
     g.beginPath();
     g.rect(split, sy, ex - split, ey - sy);
     g.clip();
-    g.imageSmoothingEnabled = true;
+    // As the original is drawn: smooth only when a preview pixel is under a screen pixel.
+    g.imageSmoothingEnabled = S.view.scale * (window.devicePixelRatio || 1) * (w / r.w) < 1;
     g.drawImage(previewCanvas(), sx, sy, ex - sx, ey - sy);
     g.restore();
     g.save();
