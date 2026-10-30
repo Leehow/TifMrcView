@@ -41,7 +41,7 @@
       <label title="训练用的立方块边长">子块 px <select id="wg-cube"><option>32</option><option>64</option></select></label>
       <label title="从结构最丰富的地方切多少块">子块数 <select id="wg-count"><option>60</option><option>120</option><option>240</option></select></label>
       <label title="每一轮用上一轮的结果补楔再训练；越多越好也越慢">迭代轮数 <select id="wg-iter"><option>5</option><option>10</option><option>15</option><option>20</option></select></label>
-      <label>每轮步数 <select id="wg-steps"><option>100</option><option>200</option><option>400</option></select></label>
+      <label title="RTX 5080 上约 1 秒一步，Mac 上慢约 4 倍">每轮步数 <select id="wg-steps"><option>100</option><option>200</option><option>400</option></select></label>
       <label title="先对体数据做高斯低通，噪声大的断层图（尤其 bin 1）否则会把噪声纹理填进缺失楔">预滤波
         <select id="wg-smooth"><option value="0">不滤</option><option value="0.7">弱</option><option value="1">中</option><option value="1.5">强</option></select>
       </label>
@@ -60,7 +60,7 @@
     <div class="al-row" id="wg-saved" hidden><span id="wg-saved-name" class="dim"></span><button id="wg-open" class="small">打开</button></div>`;
   $("stage").appendChild(panel);
 
-  const P = { geom: 0, min: -60, max: 60, bin: 0, cube: 64, count: 120, iterations: 10, steps: 200, noise: 0, smooth: 1, split: 50, preview: true, ...pref.get("wedge-params", {}) };
+  const P = { geom: 0, min: -60, max: 60, bin: 0, cube: 64, count: 120, iterations: 10, steps: 100, noise: 0, smooth: 1, split: 50, preview: true, ...pref.get("wedge-params", {}) };
   $("wg-geom").value = P.geom;
   $("wg-min").value = P.min;
   $("wg-max").value = P.max;
