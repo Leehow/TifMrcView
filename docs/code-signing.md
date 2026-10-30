@@ -1,13 +1,12 @@
 # Code signing policy
 
 Windows installers of TifMrcView and TifMrcView Pro are built from this
-repository by GitHub Actions (`.github/workflows/build.yml`) and signed in
-that workflow.
+repository by GitHub Actions (`.github/workflows/build.yml`). They are
+**not yet Authenticode-signed**, so Windows SmartScreen may warn on first
+run. The workflow has a signing step that stays off until a certificate is
+set up; this page will name the certificate then.
 
-Free code signing provided by [SignPath.io](https://signpath.io),
-certificate by [SignPath Foundation](https://signpath.org).
-
-## What is signed
+## What will be signed
 
 Only binaries built by the workflow above from a commit on `main`: the
 NSIS installers (`TifMrcView_<version>_x64-setup.exe`,
@@ -25,7 +24,7 @@ The project currently has one maintainer, who holds every role:
 | Reviewers (review every outside contribution) | [Hao Li (@Leehow)](https://github.com/Leehow) |
 | Approvers (approve each signing request) | [Hao Li (@Leehow)](https://github.com/Leehow) |
 
-All of them use multi-factor authentication for GitHub and SignPath.
+All of them use multi-factor authentication for GitHub.
 Contributions from anyone else arrive as pull requests and are reviewed
 before they are merged.
 
