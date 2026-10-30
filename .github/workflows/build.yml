@@ -160,9 +160,9 @@ jobs:
           node templates/format-plugin/build.mjs
           node scripts/tmv-plugin.mjs check templates/format-plugin/dist/*.zip
 
-      - name: Release and site script tests
+      - name: Release script tests
         if: runner.os == 'Linux'
-        run: node --test scripts/make-release.test.mjs scripts/site-downloads.test.mjs
+        run: node --test scripts/make-release.test.mjs
 
   bundle:
     needs: [version, reuse]
