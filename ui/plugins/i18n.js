@@ -52,6 +52,8 @@ const WORDS = [
   ["点左上角的文件夹图标选择图像", "Tap the folder icon at the top left to choose an image", "Tippen Sie oben links auf das Ordnersymbol, um ein Bild zu wählen", "左上のフォルダアイコンをタップして画像を選択", "Toca el icono de carpeta arriba a la izquierda para elegir una imagen", "Touchez l'icône de dossier en haut à gauche pour choisir une image", "Нажмите значок папки слева вверху, чтобы выбрать изображение"],
   ["双指捏合 缩放　拖动 平移　双击 适应屏幕", "Pinch zoom　Drag pan　Double-tap fit", "Zwei Finger zoomen　Ziehen verschiebt　Doppeltippen passt ein", "ピンチで拡大縮小　ドラッグで移動　ダブルタップで全体表示", "Pellizca para zoom　Arrastra para mover　Doble toque para ajustar", "Pincer pour zoomer　Glisser pour déplacer　Double-toucher pour ajuster", "Щипок — масштаб　Перетаскивание — сдвиг　Двойное касание — вписать"],
   ["直接支持", "Built in", "Integriert", "標準で対応", "Integrado", "Intégré", "Встроенная поддержка"],
+  ["Z 堆叠", "Z stacks", "Z-Stapel", "Z スタック", "Pilas Z", "Piles Z", "Z-стеки"],
+  ["其他", "Other", "Andere", "その他", "Otros", "Autres", "Другое"],
   ["普通图片", "Common images", "Gängige Bilder", "一般的な画像", "Imágenes comunes", "Images courantes", "Обычные изображения"],
   ["连续切片按顺序组成 Z 堆叠", "serial slices become a Z stack, in order", "Serienschnitte werden der Reihe nach zum Z-Stapel", "連続スライスを順に Z スタックに", "los cortes seriados forman una pila Z en orden", "les coupes sériées forment une pile Z, dans l'ordre", "серийные срезы по порядку собираются в Z-стек"],
   ["装上插件后支持", "With plugins", "Mit Plugins", "プラグインで対応", "Con complementos", "Avec des extensions", "С плагинами"],

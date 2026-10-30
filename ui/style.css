@@ -328,7 +328,19 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #side-head button.small { padding: 0 6px; }
 #side-head .panel-close { margin-right: -4px; }
 #save-dir { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-#strip { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
+#strip { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px 8px; }
+.strip-head {
+  width: 100%; height: 26px; padding: 0 4px; gap: 4px;
+  background: none; border: none; box-shadow: none;
+  color: var(--dim); font-size: 12px; font-weight: 600;
+}
+.strip-head:hover:not(:disabled) { background: var(--subtle); color: var(--text); }
+.strip-head svg { width: 14px; height: 14px; flex: none; transition: transform 0.12s; transform: rotate(90deg); }
+.strip-group.folded .strip-head svg { transform: none; }
+.strip-head .gn { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-head .gc { color: var(--faint); font-weight: 400; }
+.strip-body { display: flex; flex-direction: column; gap: 2px; }
+.strip-group.folded .strip-body { display: none; }
 .thumb {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 8px 6px 6px;

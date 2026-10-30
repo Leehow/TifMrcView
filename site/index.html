@@ -27,7 +27,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3">
 <link rel="icon" href="/favicon.ico?v=3" sizes="any">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
-<link rel="stylesheet" href="site.css?v=3">
+<link rel="stylesheet" href="site.css?v=4">
 <script>document.documentElement.className+=' js'</script>
 </head>
 <body>
@@ -57,7 +57,7 @@
         <a class="pill" id="cta" href="#download" data-i="cta">免费下载</a>
         <a class="more" href="#download" data-i="all">所有版本</a>
       </div>
-      <p class="andr rv d3" id="andr" hidden><span data-i="an_t">也有安卓版（基础版，Android 7 及以上的 arm64 手机和平板）。</span> <a id="andr-a" href="#download" download data-i="an_a">下载 APK</a></p>
+      <p class="hlinks rv d3"><a id="andr" href="#download" download hidden data-i="an_a">下载安卓版 APK</a><a href="pro/" data-i="pro_line">分割和三维查看：<b>TifMrcView Pro</b> →</a></p>
       <div class="meta rv d3" id="meta">macOS · Windows · Linux</div>
     </div>
     <div class="hdemo rv d2">
@@ -176,7 +176,7 @@
   <div class="wrap">
     <h2 class="h h2 rv" data-i="mo_h">还有更多。</h2>
     <div class="grid3">
-      <div class="rv"><h3 data-i="mo1t">文件夹缩略图</h3><p data-i="mo1d">同目录的图像排在侧栏，↑ ↓ 切换文件。</p></div>
+      <div class="rv"><h3 data-i="mo1t">文件夹缩略图</h3><p data-i="mo1d">同目录的图像按格式分组排在侧栏，非电镜格式默认折叠，↑ ↓ 切换文件。</p></div>
       <div class="rv d1"><h3 data-i="mo2t">逐层自动对比度</h3><p data-i="mo2d">默认 0.1% 饱和自动拉伸，也可以在直方图上直接拖选。</p></div>
       <div class="rv d2"><h3 data-i="mo3t">Z / T 播放</h3><p data-i="mo3d">空格播放 Z 层；带时间维度的数据另有 T 拉条。</p></div>
       <div class="rv"><h3 data-i="mo4t">裁剪与导出</h3><p data-i="mo4d">框出局部单独查看，按原始分辨率导出 PNG。</p></div>
@@ -225,6 +225,12 @@
         <div class="sub">x86_64 · deb · rpm · AppImage</div>
         <div class="dl"></div>
         <div class="tip" data-i="linux_tip">AppImage 自带运行库，下载后 <code>chmod +x</code> 即可运行。</div>
+      </div>
+      <div class="card rv d3" data-os="android" hidden>
+        <div class="os"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.38.38 0 0 0-.66-.38l-1.86 3.22A11.4 11.4 0 0 0 12 8.1c-1.770 0-3.430.4-4.920 1.040L5.220 5.920a.38.38 0 0 0-.66.38L6.400 9.480C3.240 11.200 1.080 14.400.8 18.200h22.400c-.28-3.800-2.440-7-5.600-8.720zM7 15.250a1.250 1.250 0 1 1 0-2.500 1.250 1.250 0 0 1 0 2.500zm10 0a1.250 1.250 0 1 1 0-2.500 1.250 1.250 0 0 1 0 2.500z"/></svg>Android</div>
+        <div class="sub">Android 7+ · arm64 · APK</div>
+        <div class="dl"></div>
+        <div class="tip" data-i="an_tip">手机和平板都能用的基础版查看器（不含 Pro 功能）。安装时按提示允许「安装未知应用」。双指缩放，长按标注可删除。</div>
       </div>
     </div>
     <p class="protease rv"><a href="pro/" data-i="pro_teaser">要做 3D、分割和电镜分析？看看 <b>TifMrcView Pro</b> →</a></p>
