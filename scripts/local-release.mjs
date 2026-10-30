@@ -22,7 +22,6 @@
 //   TAURI_SIGNING_PRIVATE_KEY (key text or path), TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 //   ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS
 //   DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, DEPLOY_KEY_FILE, CF_PURGE_TOKEN
-//   MIRROR_HOST, MIRROR_USER, MIRROR_PORT, MIRROR_PATH, MIRROR_KEY_FILE (China mirror, optional)
 
 import fs from "node:fs";
 import os from "node:os";
@@ -195,19 +194,6 @@ function publish(artifacts, dryRun) {
   const rsync = (from, to) => run("rsync", ["-av", "--chmod=D755,F644", "-e", ssh, from, to]);
   // Version folder first, feeds last, so clients never see a half-uploaded release.
   rsync(path.join(release, v), `${dest}/`);
-  // China mirror: version folder only, before the feeds announce it. A failure
-  // is not fatal; the mirror sends files it lacks back to the main site.
-  const { MIRROR_HOST: mHost, MIRROR_USER: mUser = "tifdeploy", MIRROR_PORT: mPort = "22", MIRROR_PATH: mDir = "/var/www/tifmrcview", MIRROR_KEY_FILE: mKey } = process.env;
-  if (mHost) {
-    const mSsh = `ssh -p ${mPort} -o StrictHostKeyChecking=yes -o ConnectTimeout=30${mKey ? ` -i ${mKey}` : ""}`;
-    try {
-      const mDest = `${mUser}@${mHost}:${mDir.replace(/\/+$/, "")}`;
-      run("rsync", ["-av", "--partial", "--chmod=D755,F644", "-e", mSsh, path.join(release, v), `${mDest}/`]);
-      run("rsync", ["-av", "--checksum", "--chmod=D755,F644", "-e", mSsh, path.join(release, "plugins") + "/", `${mDest}/plugins/`]);
-    } catch {
-      console.warn("warning: China mirror upload failed; China downloads fall back to the main site");
-    }
-  }
   rsync(path.join(release, "plugins") + "/", `${dest}/plugins/`);
   for (const f of ["latest.json", "latest-direct.json", "downloads.json", "latest-pro.json", "latest-pro-direct.json", "downloads-pro.json"]) {
     if (fs.existsSync(path.join(release, f))) rsync(path.join(release, f), `${dest}/${f}`);
