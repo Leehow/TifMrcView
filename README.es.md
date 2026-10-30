@@ -19,12 +19,12 @@ Autor: **Hao Li** · [ORCID](https://orcid.org/0009-0004-2696-3267) · [@Leehow]
 
 <table>
   <tr>
-    <td width="50%"><a href="site/shots/mrc-tomogram-line.webp"><img src="site/shots/mrc-tomogram-line-1200.webp" alt="Tomograma crio-ET en MRC con medición de longitud"></a><br><sub>Tomograma crio-ET (MRC) con medición de longitud y las herramientas de anotación.</sub></td>
-    <td width="50%"><a href="site/shots/mrc-xz-view-box.webp"><img src="site/shots/mrc-xz-view-box-1200.webp" alt="Vista lateral XZ con un rectángulo"></a><br><sub>Vista lateral XZ con un rectángulo que muestra ancho × alto.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-tomogram-line.webp"><img src="docs/shots/mrc-tomogram-line-1200.webp" alt="Tomograma crio-ET en MRC con medición de longitud"></a><br><sub>Tomograma crio-ET (MRC) con medición de longitud y las herramientas de anotación.</sub></td>
+    <td width="50%"><a href="docs/shots/mrc-xz-view-box.webp"><img src="docs/shots/mrc-xz-view-box-1200.webp" alt="Vista lateral XZ con un rectángulo"></a><br><sub>Vista lateral XZ con un rectángulo que muestra ancho × alto.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><a href="site/shots/czi-airyscan-measure.webp"><img src="site/shots/czi-airyscan-measure-1200.webp" alt="Pila Z Airyscan de Zeiss CZI con medición"></a><br><sub>Pila Z Airyscan de Zeiss CZI con medición y barra de escala.</sub></td>
-    <td width="50%"><a href="site/shots/tiff-multichannel.webp"><img src="site/shots/tiff-multichannel-1200.webp" alt="TIFF de fluorescencia de 3 canales"></a><br><sub>TIFF de fluorescencia de 3 canales con activación por canal.</sub></td>
+    <td width="50%"><a href="docs/shots/czi-airyscan-measure.webp"><img src="docs/shots/czi-airyscan-measure-1200.webp" alt="Pila Z Airyscan de Zeiss CZI con medición"></a><br><sub>Pila Z Airyscan de Zeiss CZI con medición y barra de escala.</sub></td>
+    <td width="50%"><a href="docs/shots/tiff-multichannel.webp"><img src="docs/shots/tiff-multichannel-1200.webp" alt="TIFF de fluorescencia de 3 canales"></a><br><sub>TIFF de fluorescencia de 3 canales con activación por canal.</sub></td>
   </tr>
 </table>
 
@@ -162,7 +162,7 @@ Cada push a `main` hace que GitHub Actions compile paquetes en macOS / Windows /
 - Subir una etiqueta que empiece por `v`: `git tag v0.3.0 && git push origin v0.3.0` sube al sitio de descargas y crea un GitHub Release;
 - o ejecutar manualmente el build en Actions marcando «publicar en el sitio de descargas», lo que publica con el número de versión automático.
 
-Al publicar, la CI coloca los instaladores y los paquetes de actualización en el directorio `<versión>/` del sitio de descargas y, por último, actualiza `latest.json` (para la actualización automática) y `downloads.json` (para la página de descargas). La página de descargas y el mercado de plugins (`site/`, `plugins/`) también se despliegan con su propio workflow (`.github/workflows/site.yml`) cuando cambian en `main`. Configure lo siguiente en el repositorio, en Settings → Secrets and variables → Actions:
+Al publicar, la CI coloca los instaladores y los paquetes de actualización en el directorio `<versión>/` del sitio de descargas y, por último, actualiza `latest.json` (para la actualización automática) y `downloads.json` (para la página de descargas). Los paquetes del mercado de plugins (`plugins/`) también se despliegan con su propio workflow (`.github/workflows/plugins.yml`) cuando cambian en `main`; las páginas del sitio web están en un repositorio aparte. Configure lo siguiente en el repositorio, en Settings → Secrets and variables → Actions:
 
 | Nombre | Tipo | Descripción |
 | --- | --- | --- |
@@ -184,9 +184,9 @@ Al publicar, la CI coloca los instaladores y los paquetes de actualización en e
 | `ui/` | Frontend en HTML/JS puro: `index.html`, `app.js`, `style.css`, `plugin-host.js`; plugin de idioma integrado en `ui/plugins/i18n.js` |
 | `plugins/<id>/` | Código fuente de los plugins instalables (`recorder` y los plugins de formato `zeiss`, `lasx`, `nis`, `fluoview`, `imaris`, `gatan`, `thermo` y `tvips`, uno por fabricante, crates de Rust compilados a WebAssembly) y el SDK de plugins (`sdk`) |
 | `scripts/` | `pack-plugins.mjs` (genera los zip de plugins y el índice del mercado), `make-release.mjs` |
-| `site/` | El sitio web y el mercado de plugins, con capturas en `site/shots/` |
+| `docs/shots/` | Capturas usadas en este README |
 | `packaging/linux/` | Archivos de empaquetado para Linux (tipo MIME de .mrc) |
-| `.github/workflows/` | `build.yml` (compilación y publicación), `site.yml` (despliegue del sitio y del mercado de plugins) |
+| `.github/workflows/` | `build.yml` (compilación y publicación), `plugins.yml` (paquetes del mercado de plugins) |
 
 ## Traducciones
 
