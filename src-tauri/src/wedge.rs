@@ -802,11 +802,12 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     if a.n != b.n {
         bail!("两个半断层尺寸不同");
     }
+    // Any side the network takes (the transforms here are plain DFTs).
     let n = cfg.cube;
-    if !n.is_power_of_two() || n < 16 || !n.is_multiple_of(1 << cfg.levels) {
-        bail!("子块边长须为 2 的幂");
+    if n < 16 || !n.is_multiple_of(1 << cfg.levels) {
+        bail!("子块边长须为 {} 的倍数", 1 << cfg.levels);
     }
-    let sp = Spectral { n, fft: Fft::new(n), keep: tilt_mask(n, g, tilts) };
+    let keep = tilt_mask(n, g, tilts);
     let rots = rotations(g);
     // Loss weights for each rotation: the part both input and target
     // measured (denoising) and the part only the target measured (the
@@ -814,10 +815,10 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let weights: Vec<Vec<f32>> = rots
         .iter()
         .map(|r| {
-            let target = turn_mask(&sp.keep, n, r);
-            let both = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k > 0.0).count().max(1) as f32;
-            let new = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k == 0.0).count().max(1) as f32;
-            let w: Vec<f32> = target.iter().zip(&sp.keep).map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new }).collect();
+            let target = turn_mask(&keep, n, r);
+            let both = target.iter().zip(&keep).filter(|(&t, &k)| t > 0.0 && k > 0.0).count().max(1) as f32;
+            let new = target.iter().zip(&keep).filter(|(&t, &k)| t > 0.0 && k == 0.0).count().max(1) as f32;
+            let w: Vec<f32> = target.iter().zip(&keep).map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new }).collect();
             w
         })
         .collect();
@@ -833,7 +834,7 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let ad = dev.clone().autodiff();
     let (c, s) = dft(n, &ad);
     let (c0, s0) = dft(n, dev);
-    let keep = Tensor::<4>::from_data(TensorData::new(sp.keep.clone(), [1, n, n, n]), dev);
+    let keep = Tensor::<4>::from_data(TensorData::new(keep, [1, n, n, n]), dev);
     let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
@@ -1231,7 +1232,7 @@ mod tests {
         let half = |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
         let (a, b) = (half(&mut rng), half(&mut rng));
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
+        let cfg = TrainConfig { cube: 20, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
         let mut last = None;
         let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), a.len());
