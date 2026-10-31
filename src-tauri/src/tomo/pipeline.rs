@@ -108,38 +108,11 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         output::validate(&img, &a, req.bin)?;
         let stage = format!("重构 {}", match kind { "even" => "偶数帧半", "odd" => "奇数帧半", _ => "全部" });
         let path = output_path(d, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
-        let thickness = req.params.thickness;
-        if three_d {
-            let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
-            let ctf = flip.as_ref().unwrap();
-            let px_out = px * req.bin as f64;
-            // Slabs thin enough that the defocus changes by at most SLAB_DEFOCUS
-            // across one, even at the steepest tilt kept.
-            let steep = angles.iter().map(|t| t.to_radians().cos()).fold(1.0, f64::min);
-            let slab = ((SLAB_DEFOCUS * steep / px_out).floor() as usize).clamp(1, thickness);
-            let mut out = output::VolumeFile::create(&path, [w, h, thickness], px_out)?;
-            let slabs: Vec<usize> = (0..thickness).step_by(slab).collect();
-            for (k, &z0) in slabs.iter().enumerate() {
-                check_cancel()?;
-                let nz = slab.min(thickness - z0);
-                // Depth of this slab's centre and its offset in the slab's own geometry.
-                let centre = z0 as f64 + (nz as f64 - 1.0) / 2.0 - (thickness as f64 - 1.0) / 2.0 + req.params.z_offset;
-                let mut flipped = stack.clone();
-                output::flip_views(&mut flipped, w, h, &a, req.bin, (ctf, &d.optics, px), centre);
-                let g = recon::Geometry::new(w, nz, &angles, centre)?;
-                let views = recon::Views { data: &flipped, w, h, views: angles.len() };
-                let label = format!("{stage}：3D CTF 第 {}/{} 层", k + 1, slabs.len());
-                backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, block| out.write_block(y0, n, z0, nz, &block), &|i, n| progress(&label, i, n))?;
-            }
-            out.finish()?;
-        } else {
-            let (stack, w, h, angles) = output::aligned_flipped(&img, &a, req.bin, 0, 0, flip.as_ref().map(|c| (c, &d.optics, px)), &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
-            let g = recon::Geometry::new(w, thickness, &angles, req.params.z_offset)?;
-            let views = recon::Views { data: &stack, w, h, views: angles.len() };
-            let mut out = output::VolumeFile::create(&path, [w, h, thickness], px * req.bin as f64)?;
-            backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, slab| out.write_rows(y0, n, &slab), &|i, n| progress(&stage, i, n))?;
-            out.finish()?;
-        }
+        let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
+        let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
+        let how = Build { alignment: &a, bin: req.bin, params: &req.params, ctf: flip.as_ref().map(|c| (c, &d.optics, px)), ctf_3d: three_d };
+        backend = build(&how, stack, w, h, &angles, &mut |y0, n, z0, nz, block| out.write_block(y0, n, z0, nz, block), &|label, i, n| progress(&format!("{stage}{label}"), i, n))?;
+        out.finish()?;
         made.push(Tomogram {
             path,
             kind: kind.into(),
@@ -178,6 +151,99 @@ pub fn ctf(d: &mut Dataset, params: &crate::ctf::Params, n: usize, progress: Pro
     d.ctf = Some(fits.clone());
     d.save()?;
     Ok(fits)
+}
+
+/// How a tomogram is built from aligned views.
+pub struct Build<'a> {
+    pub alignment: &'a super::Alignment,
+    pub bin: usize,
+    pub params: &'a recon::Params,
+    /// Phase flip with this CTF (2D, or 3D with `ctf_3d`).
+    pub ctf: Option<output::FlipWith<'a>>,
+    pub ctf_3d: bool,
+}
+
+/// Reconstructs aligned, unflipped views (`output::aligned`); blocks of
+/// [n rows][nz sections][w] go to `sink(y0, n, z0, nz, block)`.
+pub fn build(
+    how: &Build,
+    mut stack: Vec<f32>,
+    w: usize,
+    h: usize,
+    angles: &[f64],
+    sink: &mut dyn FnMut(usize, usize, usize, usize, &[f32]) -> Result<()>,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<String> {
+    let p = how.params;
+    let thickness = p.thickness;
+    match how.ctf {
+        Some(ctf) if how.ctf_3d => {
+            let px_out = ctf.2 * how.bin as f64;
+            // Slabs thin enough that the defocus changes by at most SLAB_DEFOCUS
+            // across one, even at the steepest tilt kept.
+            let steep = angles.iter().map(|t| t.to_radians().cos()).fold(1.0, f64::min);
+            let slab = ((SLAB_DEFOCUS * steep / px_out).floor() as usize).clamp(1, thickness);
+            let slabs: Vec<usize> = (0..thickness).step_by(slab).collect();
+            let mut backend = String::new();
+            for (k, &z0) in slabs.iter().enumerate() {
+                check_cancel()?;
+                let nz = slab.min(thickness - z0);
+                // Depth of this slab's centre: its offset in the slab's own geometry.
+                let centre = z0 as f64 + (nz as f64 - 1.0) / 2.0 - (thickness as f64 - 1.0) / 2.0 + p.z_offset;
+                let mut flipped = stack.clone();
+                output::flip_views(&mut flipped, w, h, how.alignment, how.bin, ctf, centre);
+                let g = recon::Geometry::new(w, nz, angles, centre)?;
+                let views = recon::Views { data: &flipped, w, h, views: angles.len() };
+                let label = format!("：3D CTF 第 {}/{} 层", k + 1, slabs.len());
+                backend = recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, z0, nz, &block), &|i, n| progress(&label, i, n))?;
+            }
+            Ok(backend)
+        }
+        ctf => {
+            if let Some(ctf) = ctf {
+                output::flip_views(&mut stack, w, h, how.alignment, how.bin, ctf, 0.0);
+            }
+            let g = recon::Geometry::new(w, thickness, angles, p.z_offset)?;
+            let views = recon::Views { data: &stack, w, h, views: angles.len() };
+            recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, 0, thickness, &block), &|i, n| progress("", i, n))
+        }
+    }
+}
+
+/// A tomogram in memory as [z][y][x] (sections along Z), for comparisons.
+pub fn volume(how: &Build, stack: Vec<f32>, w: usize, h: usize, angles: &[f64]) -> Result<Vec<f32>> {
+    let z = how.params.thickness;
+    let mut v = vec![0f32; w * h * z];
+    build(how, stack, w, h, angles, &mut |y0, n, z0, nz, block| {
+        for y in 0..n {
+            for k in 0..nz {
+                let dst = ((z0 + k) * h + y0 + y) * w;
+                v[dst..dst + w].copy_from_slice(&block[(y * nz + k) * w..(y * nz + k + 1) * w]);
+            }
+        }
+        Ok(())
+    }, &|_, _, _| {})?;
+    Ok(v)
+}
+
+/// Wiener-like deconvolution (`deconv`) of a phase-flipped tomogram at the
+/// series' median defocus; written as `<name>_deconv.mrc`.
+pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
+    let now = std::time::Instant::now();
+    let src = self::source(d, source)?.clone();
+    let Some(ctf) = d.ctf.as_ref() else { bail!("先完成 CTF 估计") };
+    let mut df: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
+    df.sort_by(f64::total_cmp);
+    progress("反卷积", 0, 1);
+    let (mut v, shape, px) = load(&src.path)?;
+    let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
+    super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics);
+    let path = output_path(d, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
+    output::write_mrc(&path, &v, shape, px, false)?;
+    progress("反卷积", 1, 1);
+    d.add_tomogram(Tomogram { path: path.clone(), kind: "deconvolved".into(), method: "wiener".into(), halves: None, ..src });
+    d.save()?;
+    Ok(Made { paths: vec![path], backend: "CPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// All sections of a volume, [z][y][x], with its shape and pixel size.

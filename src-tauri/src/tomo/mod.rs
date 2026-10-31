@@ -5,14 +5,17 @@
 //! This is an independent Rust implementation, not translated software.
 //! See geometry for axis conventions, model for gauges, recon for A/Aᵀ.
 
+pub mod auto;
 pub mod correlation_gpu;
 pub mod ctf;
 pub mod dataset;
+pub mod deconv;
 pub mod export;
 pub mod geometry;
 pub mod model;
 pub mod output;
 pub mod pipeline;
+pub mod quality;
 pub mod recon;
 pub mod recon_gpu;
 #[cfg(test)]

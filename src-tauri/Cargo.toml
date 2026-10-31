@@ -136,3 +136,7 @@ required-features = ["pro"]
 [[example]]
 name = "wedge_holdout"
 required-features = ["pro"]
+
+[[example]]
+name = "cryoet_quality"
+required-features = ["pro"]
