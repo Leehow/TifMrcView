@@ -596,7 +596,10 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
     if n < 100 {
         bail!("只挑到 {n} 个颗粒，太少了");
     }
-    extract_all(p, 128, true, progress)?;
+    // A box up to 256 when 128 would cap the resolution above 4 Å.
+    let (big, _) = extract::boxes(p.diameter_a, p.optics.pixel_a, 128);
+    let max_box = if p.optics.pixel_a * big as f64 / 128.0 > 2.0 { 256 } else { 128 };
+    extract_all(p, max_box, true, progress)?;
     let c = class2d(p, &Class2dParams::default(), progress)?;
     let sym = if a.symmetry.trim().is_empty() {
         let (v, dims, _) = data::read_volume(&c.path)?;
