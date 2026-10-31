@@ -1,7 +1,7 @@
 {
   "id": "gatan",
   "name": "Gatan",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "打开 Gatan DigitalMicrograph / GMS 保存的 DM3 和 DM4 电镜图像，并显示像素标定、加速电压、放大倍数、相机和曝光时间等参数",
   "main": "index.js",
   "apiVersion": 2,

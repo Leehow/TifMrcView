@@ -1,7 +1,7 @@
 {
   "id": "fluoview",
   "name": "Olympus FluoView",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "打开奥林巴斯 / Evident FluoView 共聚焦的 OIB 和 OIR 文件，并显示物镜、扫描、激光、探测器和针孔等采集参数",
   "main": "index.js",
   "apiVersion": 1,

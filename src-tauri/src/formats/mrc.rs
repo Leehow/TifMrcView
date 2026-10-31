@@ -15,6 +15,12 @@ pub struct MrcSource {
     data_offset: usize,
     little: bool,
     mode: i32,
+    /// Extended header (bytes 1024 .. 1024 + NSYMBT).
+    ext: std::ops::Range<usize>,
+    /// SerialEM extended header: bytes per section and field flags.
+    serial_em: Option<(usize, i32)>,
+    /// DMEAN from the header.
+    mean: f32,
 }
 
 impl MrcSource {
@@ -94,7 +100,40 @@ impl MrcSource {
             spectrum: None,
         };
         info.fill_default_channels();
-        Ok(MrcSource { mmap, info, data_offset, little, mode })
+        let rs = |off: usize| {
+            let b = [mmap[off], mmap[off + 1]];
+            if little { i16::from_le_bytes(b) } else { i16::from_be_bytes(b) }
+        };
+        let serial_em = (&mmap[104..108] == b"SERI").then(|| (rs(128).max(0) as usize, rs(130) as i32));
+        let ext = 1024..data_offset.min(mmap.len());
+        let mean = rf(84);
+        Ok(MrcSource { mmap, info, data_offset, little, mode, ext, serial_em, mean })
+    }
+
+    /// Sections in the file.
+    pub fn stack_depth(&self) -> usize {
+        self.info.size_z
+    }
+
+    pub fn extended_header(&self) -> &[u8] {
+        &self.mmap[self.ext.clone()]
+    }
+
+    /// (bytes per section, flags) of a SerialEM extended header.
+    pub fn serial_em_fields(&self) -> Option<(usize, i32)> {
+        self.serial_em
+    }
+
+    pub fn little(&self) -> bool {
+        self.little
+    }
+
+    pub fn header_mean(&self) -> f64 {
+        self.mean as f64
+    }
+
+    pub fn info_mut(&mut self) -> &mut ImageInfo {
+        &mut self.info
     }
 }
 

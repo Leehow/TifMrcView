@@ -1,7 +1,7 @@
 {
   "id": "zeiss",
   "name": "Zeiss",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "蔡司的全部格式：打开 ZEN 保存的 CZI 和 ZEN black 保存的 LSM，读取 SmartSEM 电镜 TIF 的采集参数，并显示物镜、激光、探测器、针孔、电压、工作距离等参数",
   "main": "index.js",
   "apiVersion": 2,
