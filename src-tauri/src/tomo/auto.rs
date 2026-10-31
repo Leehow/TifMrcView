@@ -76,6 +76,9 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     if d.angles.len() != img.info().size_z || d.angles.len() < 3 {
         bail!("没有找到倾转角（.mdoc / .tlt / .rawtlt），请在高级设置里给出起始角和步长");
     }
+    // Each step's own counter restarts; the label says which step of all.
+    let total = 6 + req.wedge as usize;
+    let stage = |k: usize| move |label: &str, i: usize, n: usize| progress(&format!("第 {k}/{total} 步 · {label}"), i, n);
     if req.fresh {
         d.alignment = None;
         d.ctf = None;
@@ -84,7 +87,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         let a = super::align(
             &img,
             &super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None },
-            &|i, n| progress("倾转对齐", i, n),
+            &|i, n| stage(1)("倾转对齐", i, n),
         )?;
         d.alignment = Some(a);
         d.save()?;
@@ -104,24 +107,24 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             phase: false,
             backend: None,
         };
-        pipeline::ctf(d, &params, 512, progress)?;
+        pipeline::ctf(d, &params, 512, &stage(2))?;
     }
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
     let bin = output_bin(w, h, px);
-    let (thickness, z_offset) = estimate_thickness(&img, &a, px, bin, progress)?;
+    let (thickness, z_offset) = estimate_thickness(&img, &a, px, bin, &stage(3))?;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset, ..Default::default() };
-    let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, progress)?;
+    let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, &stage(4))?;
     let raw = made.paths[0].clone();
     check_cancel()?;
-    let denoised = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(raw.clone()), steps: 1000 }, progress)?;
+    let denoised = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(raw.clone()), steps: 1000 }, &stage(5))?;
     check_cancel()?;
-    let deconvolved = pipeline::deconvolve(d, Some(&denoised.paths[0]), progress)?;
+    let deconvolved = pipeline::deconvolve(d, Some(&denoised.paths[0]), &stage(6))?;
     let mut path = deconvolved.paths[0].clone();
     if req.wedge {
         check_cancel()?;
-        let w = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path.clone()), cfg: crate::wedge::TrainConfig::default(), single: false }, progress)?;
+        let w = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path.clone()), cfg: crate::wedge::TrainConfig::default(), single: false }, &stage(7))?;
         path = w.paths[0].clone();
     }
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
