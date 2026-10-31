@@ -105,11 +105,8 @@ pub fn fit_series(
     // Gradient direction: the steeper half of the tilts decides.
     let steep: Vec<usize> = (0..d.angles.len()).filter(|&z| d.angles[z].abs() >= 20.0).collect();
     let score = |sign: f64| -> Result<f64> {
-        let mut total = 0.0;
-        for &z in &steep {
-            total += refine(&powers[z], d.angles[z], start[z], sign, params)?.score;
-        }
-        Ok(total)
+        let scores = steep.par_iter().map(|&z| refine(&powers[z], d.angles[z], start[z], sign, params).map(|f| f.score)).collect::<Result<Vec<_>>>()?;
+        Ok(scores.iter().sum())
     };
     let gradient = if steep.is_empty() {
         0i8
@@ -118,6 +115,7 @@ pub fn fit_series(
         if up >= down { 1 } else { -1 }
     };
     let tilts = (0..d.angles.len())
+        .into_par_iter()
         .map(|z| {
             let first = refine(&powers[z], d.angles[z], start[z], gradient as f64, params)?;
             let f = refine(&powers[z], d.angles[z], 0.5 * (first.df1 + first.df2), gradient as f64, params)?;
