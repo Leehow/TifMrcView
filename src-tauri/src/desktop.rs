@@ -1255,6 +1255,17 @@ async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::De
     }).await
 }
 
+/// One-button reconstruction (`tomo::auto`): alignment, CTF, reconstruction
+/// and denoising with the choices made, the result opened by the UI.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| {
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        crate::ctf_gpu::guarded(|| crate::tomo::auto::run(dev, d, s, p))?
+    }).await
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>) -> CmdResult<serde_json::Value> {
@@ -2319,6 +2330,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_denoise,
             #[cfg(feature = "pro")] tomo_wedge,
             #[cfg(feature = "pro")] tomo_export,
+            #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,

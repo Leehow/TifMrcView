@@ -105,11 +105,8 @@ pub fn fit_series(
     // Gradient direction: the steeper half of the tilts decides.
     let steep: Vec<usize> = (0..d.angles.len()).filter(|&z| d.angles[z].abs() >= 20.0).collect();
     let score = |sign: f64| -> Result<f64> {
-        let mut total = 0.0;
-        for &z in &steep {
-            total += refine(&powers[z], d.angles[z], start[z], sign, params)?.score;
-        }
-        Ok(total)
+        let scores = steep.par_iter().map(|&z| refine(&powers[z], d.angles[z], start[z], sign, params).map(|f| f.score)).collect::<Result<Vec<_>>>()?;
+        Ok(scores.iter().sum())
     };
     let gradient = if steep.is_empty() {
         0i8
@@ -118,6 +115,7 @@ pub fn fit_series(
         if up >= down { 1 } else { -1 }
     };
     let tilts = (0..d.angles.len())
+        .into_par_iter()
         .map(|z| {
             let first = refine(&powers[z], d.angles[z], start[z], gradient as f64, params)?;
             let f = refine(&powers[z], d.angles[z], 0.5 * (first.df1 + first.df2), gradient as f64, params)?;
@@ -213,6 +211,19 @@ pub(crate) struct Flip {
     pub gradient: i8,
     /// Pixel size of the aligned view, Å.
     pub pixel_a: f64,
+    /// Defocus added everywhere, Å: for 3D CTF correction, the depth of the
+    /// slab being reconstructed seen along the beam (see `depth_defocus`).
+    pub offset: f64,
+}
+
+/// Defocus change (Å) of a point `depth` output pixels above the mid-plane
+/// in a view tilted by θ, at the same detector position. A point at detector
+/// position d and depth v sits at height h = −d·tan θ + v / cos θ along the
+/// beam; the strip flip takes care of the first term (as `gradient`), this
+/// is the second, with the same sign convention (defocus grows with −h when
+/// the gradient is +1).
+pub fn depth_defocus(depth: f64, theta: f64, gradient: i8, pixel_a: f64) -> f64 {
+    -(gradient as f64) * depth * pixel_a / theta.to_radians().cos()
 }
 
 /// Phase flips an aligned view (axis vertical) in strips along the axis.
@@ -244,7 +255,7 @@ pub(crate) fn flip(plane: &mut [f32], w: usize, h: usize, f: &Flip) {
             }
             fft.transform(&mut re, &mut im, false);
             let centre = x0 as f64 + width as f64 / 2.0 - (w as f64 - 1.0) / 2.0;
-            let shift = slope * centre;
+            let shift = slope * centre + f.offset;
             for ky in 0..th {
                 let fy = crate::motion::sum::freq(ky, th) / (th as f64 * f.pixel_a);
                 for kx in 0..tile {
