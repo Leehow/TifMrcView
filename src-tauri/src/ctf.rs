@@ -121,6 +121,7 @@ impl Optics {
         Optics { a: PI * l, b: 0.5 * PI * cs_mm * 1e7 * l * l * l, w: (amp / (1.0 - amp * amp).sqrt()).atan() }
     }
 
+    #[cfg(feature = "pro")]
     /// Sign of sin γ at spatial frequency (kx, ky) in 1/Å for defocus df1
     /// along `angle` (radians) and df2 across it: what phase flipping
     /// multiplies by (+1 at low frequencies, where γ ≈ the amplitude phase).
@@ -822,6 +823,7 @@ pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
     found.iter().find_map(|(_, f)| read(f))
 }
 
+#[cfg(feature = "pro")]
 /// Fits per slice, each on its own region (slices sharing a region share
 /// one batch): what the tilt-series CTF uses, with strips along the axis.
 pub(crate) fn fit_regions(
