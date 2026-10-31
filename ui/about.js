@@ -50,6 +50,7 @@ function openAbout(force) {
   const show = force ?? dlg.hidden;
   if (show) {
     togglePluginDialog(false);
+    toggleUpdateDialog(false);
     toggleHelp(false);
     renderAbout();
   }

@@ -112,7 +112,7 @@ function marketButton(item) {
       break;
     case "needsApp":
       b.textContent = `需要 TifMrcView ${p.minAppVersion}`;
-      b.title = "请先在下面「检查更新」";
+      b.title = "请先在 ⚙ 菜单的「更新」里检查更新";
       b.disabled = true;
       return b;
     default:
@@ -324,7 +324,7 @@ async function confirmInstall(req) {
   if (item.state === "builtin") return confirmMsg(`${p.id} 是内置插件，不能另外安装`, true);
   if (item.state === "needsApp") {
     const cur = pluginHost.appVersion;
-    return confirmMsg(`「${name}」需要 TifMrcView ${p.minAppVersion} 或更新版本（当前 ${cur}），请先在下面「检查更新」`, true);
+    return confirmMsg(`「${name}」需要 TifMrcView ${p.minAppVersion} 或更新版本（当前 ${cur}），请先在 ⚙ 菜单的「更新」里检查更新`, true);
   }
   if (item.state === "installed") return confirmMsg(`已安装 ${name}  v${item.installed}，已是最新版本`);
   if (item.state === "replace") confirmMsg(`将取代已安装的 ${replacedNames(item)}`);
