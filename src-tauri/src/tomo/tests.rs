@@ -267,7 +267,14 @@ fn streaming_slabs_match_one_slab() {
         Ok(())
     }, &|_, _| {})
     .unwrap();
-    assert_eq!(out, recon::cpu_slab(&g, &b, &p).unwrap());
+    // Streaming subtracts each view's mean over all rows first.
+    let mut means = vec![0f64; g.views()];
+    for (i, v) in b.iter().enumerate() {
+        means[(i / g.w) % g.views()] += *v as f64 / (rows * g.w) as f64;
+    }
+    let centred: Vec<f32> = b.iter().enumerate().map(|(i, v)| v - means[(i / g.w) % g.views()] as f32).collect();
+    let want = recon::cpu_slab(&g, &centred, &p).unwrap();
+    assert!(out.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-5));
 }
 
 #[test]

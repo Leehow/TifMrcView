@@ -5,10 +5,16 @@
 //! defocus changes by x·tan θ at a distance x from the axis. Each tilt is
 //! fitted on a strip along the axis, narrow enough that the defocus spans
 //! at most `SPREAD` Å over it, so its rings do not blur; the fit is the
-//! defocus at the axis. Which way the gradient runs depends on the
-//! microscope and camera, so it is measured: on the most tilted views, two
-//! strips on either side of the axis are fitted and the sign of their
-//! difference (against tan θ) is voted on.
+//! defocus at the axis.
+//!
+//! The strip fit is then refined on the whole image, as CTFFIND5 does
+//! for tilted specimens: every tile's power spectrum is stretched to the
+//! defocus at the axis (a tile at defocus D shows at frequency k what the
+//! axis shows at k·√(D/D₀)), the stretched spectra are averaged and fitted
+//! again, twice, in a band around the strip's value (outliers in the strip
+//! fit are first replaced by the median of their neighbouring tilts). Both
+//! gradient directions are tried on the steep tilts; the one that fits
+//! better is the gradient.
 //!
 //! Phase flipping works on the aligned views (axis vertical): strips
 //! parallel to the axis, narrow enough that the defocus changes by at most
@@ -79,49 +85,121 @@ pub fn fit_series(
             (z, r)
         })
         .collect();
-    let fits = crate::ctf::fit_regions(img, &items, 0, 0, n, params, progress)?;
-    let tilts: Vec<TiltCtf> = fits
-        .iter()
-        .enumerate()
-        .map(|(z, f)| TiltCtf { z, df1: f.df1, df2: f.df2, angle: f.angle, fit_res: f.fit_res, score: f.score })
+    let fits = crate::ctf::fit_regions(img, &items, 0, 0, n, params, &|i, total| progress(i, 2 * total))?;
+    let strip_df: Vec<f64> = fits.iter().map(|f| 0.5 * (f.df1 + f.df2)).collect();
+    // Strip fits far from their neighbours' median are replaced by it.
+    let start: Vec<f64> = (0..strip_df.len())
+        .map(|i| {
+            let mut near: Vec<f64> = (i.saturating_sub(3)..(i + 4).min(strip_df.len())).map(|j| strip_df[j]).collect();
+            near.sort_by(f64::total_cmp);
+            let m = near[near.len() / 2];
+            if (strip_df[i] - m).abs() > 0.2 * m { m } else { strip_df[i] }
+        })
         .collect();
-    Ok(Ctf { gradient: gradient(img, d, params, n, axis)?, tilts })
+    let powers: Vec<TilePowers> = (0..d.angles.len())
+        .map(|z| {
+            progress(d.angles.len() + z, 2 * d.angles.len());
+            tile_powers(img, z, n, dir)
+        })
+        .collect::<Result<_>>()?;
+    // Gradient direction: the steeper half of the tilts decides.
+    let steep: Vec<usize> = (0..d.angles.len()).filter(|&z| d.angles[z].abs() >= 20.0).collect();
+    let score = |sign: f64| -> Result<f64> {
+        let mut total = 0.0;
+        for &z in &steep {
+            total += refine(&powers[z], d.angles[z], start[z], sign, params)?.score;
+        }
+        Ok(total)
+    };
+    let gradient = if steep.is_empty() {
+        0i8
+    } else {
+        let (up, down) = (score(1.0)?, score(-1.0)?);
+        if up >= down { 1 } else { -1 }
+    };
+    let tilts = (0..d.angles.len())
+        .map(|z| {
+            let first = refine(&powers[z], d.angles[z], start[z], gradient as f64, params)?;
+            let f = refine(&powers[z], d.angles[z], 0.5 * (first.df1 + first.df2), gradient as f64, params)?;
+            Ok(TiltCtf { z, df1: f.df1, df2: f.df2, angle: f.angle, fit_res: f.fit_res, score: f.score })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Ctf { gradient, tilts })
 }
 
-/// The sign of the defocus gradient, from the most tilted views.
-fn gradient(img: &Arc<OpenImage>, d: &Dataset, params: &Params, n: usize, axis: f64) -> Result<i8> {
+/// Power spectra (unshifted, n × n) of tiles over the whole of one tilt,
+/// with each tile centre's distance from the axis (pixels, along `dir`).
+struct TilePowers {
+    n: usize,
+    tiles: Vec<(f64, Vec<f32>)>,
+}
+
+fn tile_powers(img: &Arc<OpenImage>, z: usize, n: usize, dir: [f64; 2]) -> Result<TilePowers> {
     let info = img.info();
     let (w, h) = (info.width, info.height);
-    let dir = across(axis);
-    let offset = (w.min(h) as f64 / 4.0).max(n as f64 * 0.75);
-    let mut order: Vec<usize> = (0..d.angles.len()).filter(|&z| d.angles[z].abs() >= 30.0).collect();
-    order.sort_by(|&a, &b| d.angles[b].abs().total_cmp(&d.angles[a].abs()));
-    order.truncate(4);
-    if order.is_empty() {
-        return Ok(0);
-    }
-    let mut items = Vec::new();
-    for &z in &order {
-        for side in [-1.0, 1.0] {
-            let (x, y) = (w as f64 / 2.0 + side * offset * dir[0], h as f64 / 2.0 + side * offset * dir[1]);
-            items.push((z, region(x, y, n as f64, n as f64, w, h)));
+    let n = n.min(1 << w.min(h).ilog2());
+    let (page, sample) = info.locate(0, z, 0);
+    let planes = img.page(page)?;
+    let p = &planes[sample.min(planes.len() - 1)];
+    let (lo, hi) = crate::ctf::clip_range(|i| p.data.get_f64(i) as f32, p.w * p.h);
+    let fft = crate::fft::Fft::new(n);
+    let win = crate::fft::hann(n);
+    let starts = |len: usize| -> Vec<usize> { (0..=(len - n) / (n / 2)).map(|k| k * n / 2).collect() };
+    let corners: Vec<(usize, usize)> = starts(h).into_iter().flat_map(|y| starts(w).into_iter().map(move |x| (x, y))).collect();
+    let tiles = corners
+        .par_iter()
+        .map(|&(x0, y0)| {
+            let mut tile: Vec<f32> = (0..n * n).map(|i| crate::ctf::clip(p.data.get_f64((y0 + i / n) * p.w + x0 + i % n) as f32, lo, hi)).collect();
+            let mean = tile.iter().map(|&v| v as f64).sum::<f64>() / (n * n) as f64;
+            for (i, v) in tile.iter_mut().enumerate() {
+                *v = (*v - mean as f32) * win[i % n] * win[i / n];
+            }
+            let c = [x0 as f64 + n as f64 / 2.0 - w as f64 / 2.0, y0 as f64 + n as f64 / 2.0 - h as f64 / 2.0];
+            (c[0] * dir[0] + c[1] * dir[1], crate::fft::power_2d(&fft, &tile))
+        })
+        .collect();
+    Ok(TilePowers { n, tiles })
+}
+
+/// Fits the average of the tiles' spectra stretched to defocus `df0` at the
+/// axis, the gradient running `sign`, searching `df0` ± 25 %.
+fn refine(t: &TilePowers, theta: f64, df0: f64, sign: f64, params: &Params) -> Result<crate::ctf::Fit> {
+    let n = t.n;
+    let slope = sign * params.pixel_a * theta.to_radians().tan();
+    let mut sum = vec![0f64; n * n];
+    let half = n as f64 / 2.0;
+    for (offset, power) in &t.tiles {
+        let d = (df0 + slope * offset).max(df0 * 0.2);
+        let s = (df0 / d).sqrt();
+        // Bilinear lookup in the centred spectrum, unshifted storage.
+        let at = |u: f64, v: f64| -> f64 {
+            let (u0, v0) = (u.floor(), v.floor());
+            let (fu, fv) = (u - u0, v - v0);
+            let get = |a: f64, b: f64| -> f64 {
+                if a < -half || a >= half || b < -half || b >= half {
+                    return 0.0;
+                }
+                let (iu, iv) = (((a as isize).rem_euclid(n as isize)) as usize, ((b as isize).rem_euclid(n as isize)) as usize);
+                power[iv * n + iu] as f64
+            };
+            (1.0 - fv) * ((1.0 - fu) * get(u0, v0) + fu * get(u0 + 1.0, v0)) + fv * ((1.0 - fu) * get(u0, v0 + 1.0) + fu * get(u0 + 1.0, v0 + 1.0))
+        };
+        for v in 0..n {
+            for u in 0..n {
+                let (fu, fv) = (crate::motion::sum::freq(u, n), crate::motion::sum::freq(v, n));
+                sum[v * n + u] += at(fu * s, fv * s);
+            }
         }
     }
-    let fits = crate::ctf::fit_regions(img, &items, 0, 0, n, params, &|_, _| {})?;
-    let mut vote = 0i32;
-    for (k, &z) in order.iter().enumerate() {
-        let (a, b) = (&fits[2 * k], &fits[2 * k + 1]);
-        if a.score <= 0.0 || b.score <= 0.0 {
-            continue;
-        }
-        let diff = 0.5 * (b.df1 + b.df2) - 0.5 * (a.df1 + a.df2);
-        let expected = 2.0 * offset * params.pixel_a * d.angles[z].to_radians().tan();
-        // Count a vote only when the difference is at least a third of the geometry's.
-        if diff.abs() >= expected.abs() / 3.0 {
-            vote += if diff.signum() == expected.signum() { 1 } else { -1 };
-        }
+    let spectrum = crate::fft::finish(&sum, n, t.tiles.len());
+    let mut p = params.clone();
+    p.df_min_a = (df0 * 0.75).max(params.df_min_a);
+    p.df_max_a = (df0 * 1.25).min(params.df_max_a);
+    if p.df_max_a <= p.df_min_a {
+        p.df_min_a = params.df_min_a;
+        p.df_max_a = params.df_max_a;
     }
-    Ok(vote.signum() as i8)
+    Ok(crate::ctf::fit_many(&[&spectrum.log], n, &p, &crate::ctf::CpuGrid)?.remove(0))
 }
 
 /// What phase flipping needs for one aligned view.

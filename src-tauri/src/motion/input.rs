@@ -117,8 +117,41 @@ impl Movie {
     }
 }
 
+/// A full-size frame kept for the final sum: in memory, as counts when
+/// they are whole numbers (EER and counting movies without gain: one or
+/// two bytes a pixel), else as floats; on disk once the memory budget is used.
+enum Stored {
+    U8(Vec<u8>),
+    U16(Vec<u16>),
+    F32(Vec<f32>),
+    Disk,
+}
+
+/// Memory for full-size frames before they go to disk.
+const MEMORY: usize = 6 << 30;
+
+impl Stored {
+    fn new(frame: &[f32], used: &mut usize) -> Stored {
+        let whole = |max: f32| frame.par_iter().all(|v| *v >= 0.0 && *v <= max && v.fract() == 0.0);
+        let (s, bytes) = if whole(255.0) {
+            (Stored::U8(frame.par_iter().map(|v| *v as u8).collect()), frame.len())
+        } else if whole(65535.0) {
+            (Stored::U16(frame.par_iter().map(|v| *v as u16).collect()), 2 * frame.len())
+        } else {
+            (Stored::F32(frame.to_vec()), 4 * frame.len())
+        };
+        if *used + bytes > MEMORY {
+            return Stored::Disk;
+        }
+        *used += bytes;
+        s
+    }
+}
+
 pub struct Spool {
     dir: PathBuf,
+    stored: Vec<Stored>,
+    used: usize,
     pub w: usize,
     pub h: usize,
     pub frames: Vec<Vec<f32>>,
@@ -136,6 +169,12 @@ impl Drop for Spool {
 }
 impl Spool {
     pub fn read(&self, i: usize) -> Result<Vec<f32>> {
+        match &self.stored[i] {
+            Stored::U8(v) => return Ok(v.par_iter().map(|&x| x as f32).collect()),
+            Stored::U16(v) => return Ok(v.par_iter().map(|&x| x as f32).collect()),
+            Stored::F32(v) => return Ok(v.clone()),
+            Stored::Disk => {}
+        }
         let bytes = fs::read(self.dir.join(format!("frame-{i}.f32")))?;
         if bytes.len() != self.w * self.h * 4 {
             bail!("电影缓存截断");
@@ -196,9 +235,10 @@ impl Spool {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir(&dir).context("无法创建电影临时目录")?;
         let mut spool = Self {
             dir,
+            stored: Vec::new(),
+            used: 0,
             w,
             h,
             bin,
@@ -240,11 +280,15 @@ impl Spool {
                 .par_iter_mut()
                 .zip(&frame)
                 .for_each(|(o, v)| *o += v);
-            let bytes: Vec<u8> = frame
-                .par_chunks(4096)
-                .flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes()))
-                .collect();
-            fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
+            let stored = Stored::new(&frame, &mut spool.used);
+            if matches!(stored, Stored::Disk) {
+                if !spool.dir.exists() {
+                    fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+                }
+                let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
+                fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
+            }
+            spool.stored.push(stored);
             let mut work = vec![0.0; ww * hh];
             work.par_chunks_mut(ww).enumerate().for_each(|(y, row)| {
                 for (x, o) in row.iter_mut().enumerate() {
