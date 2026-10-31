@@ -1217,11 +1217,13 @@ mod tests {
 
     /// Halves against one tomogram, on a noisy phantom (slow on the CPU):
     /// cargo test --release --features pro --lib wedge::tests::halves_beat -- --ignored --nocapture
-    /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half).
+    /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half, WO omega,
+    /// WONE set = skip the one-tomogram run). Runs on the GPU when there is one.
     #[test]
     #[ignore]
     fn halves_beat_one_tomogram() {
-        let dev = Device::flex();
+        let (dev, name) = crate::classify::device();
+        eprintln!("device {name}");
         let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
         let n = env("WN", 64.0) as usize;
         let truth = phantom(n, 21);
