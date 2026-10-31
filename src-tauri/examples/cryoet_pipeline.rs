@@ -48,15 +48,15 @@ fn main() -> Result<()> {
         }
     }
     if steps.contains("rec") {
-        for flip in [false, true] {
+        for (flip, ctf_3d) in [(false, false), (true, false), (true, true)] {
             if flip && d.ctf.is_none() {
                 continue;
             }
             let t = Instant::now();
-            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip };
+            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip, ctf_3d };
             let m = pipeline::reconstruct(&mut d, &step, &progress)?;
             eprintln!();
-            println!("rec (flip {flip}): {} on {}, {:.1} s", m.paths.join(", "), m.backend, t.elapsed().as_secs_f64());
+            println!("rec (flip {flip}, 3D {ctf_3d}): {} on {}, {:.1} s", m.paths.join(", "), m.backend, t.elapsed().as_secs_f64());
             png(&m.paths[0])?;
         }
     }

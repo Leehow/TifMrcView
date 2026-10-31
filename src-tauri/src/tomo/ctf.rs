@@ -211,6 +211,19 @@ pub(crate) struct Flip {
     pub gradient: i8,
     /// Pixel size of the aligned view, Å.
     pub pixel_a: f64,
+    /// Defocus added everywhere, Å: for 3D CTF correction, the depth of the
+    /// slab being reconstructed seen along the beam (see `depth_defocus`).
+    pub offset: f64,
+}
+
+/// Defocus change (Å) of a point `depth` output pixels above the mid-plane
+/// in a view tilted by θ, at the same detector position. A point at detector
+/// position d and depth v sits at height h = −d·tan θ + v / cos θ along the
+/// beam; the strip flip takes care of the first term (as `gradient`), this
+/// is the second, with the same sign convention (defocus grows with −h when
+/// the gradient is +1).
+pub fn depth_defocus(depth: f64, theta: f64, gradient: i8, pixel_a: f64) -> f64 {
+    -(gradient as f64) * depth * pixel_a / theta.to_radians().cos()
 }
 
 /// Phase flips an aligned view (axis vertical) in strips along the axis.
@@ -242,7 +255,7 @@ pub(crate) fn flip(plane: &mut [f32], w: usize, h: usize, f: &Flip) {
             }
             fft.transform(&mut re, &mut im, false);
             let centre = x0 as f64 + width as f64 / 2.0 - (w as f64 - 1.0) / 2.0;
-            let shift = slope * centre;
+            let shift = slope * centre + f.offset;
             for ky in 0..th {
                 let fy = crate::motion::sum::freq(ky, th) / (th as f64 * f.pixel_a);
                 for kx in 0..tile {

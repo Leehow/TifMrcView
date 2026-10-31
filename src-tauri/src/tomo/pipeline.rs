@@ -52,7 +52,14 @@ pub struct ReconStep {
     /// Also reconstruct the even and odd halves (for Noise2Noise).
     pub halves: bool,
     pub phase_flip: bool,
+    /// 3D CTF correction (WBP only): the volume is built in slabs along the
+    /// depth, each from views phase flipped for that depth.
+    #[serde(default)]
+    pub ctf_3d: bool,
 }
+
+/// Largest defocus change across one 3D-CTF slab, Å.
+const SLAB_DEFOCUS: f64 = 150.0;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +90,14 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         recon::Method::Wbp => "wbp".to_string(),
         recon::Method::Sirt => format!("sirt{}", req.params.iterations),
     };
-    let tag = format!("{method}_b{}{}", req.bin, if flip.is_some() { "_flip" } else { "" });
+    let three_d = req.ctf_3d && flip.is_some();
+    if req.ctf_3d && req.params.method != recon::Method::Wbp {
+        bail!("3D CTF 校正只用于 WBP（SIRT 的正投影要整块体积）");
+    }
+    if req.ctf_3d && flip.is_none() {
+        bail!("3D CTF 校正需要先完成 CTF 估计并勾选相位翻转");
+    }
+    let tag = format!("{method}_b{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" });
     let mut made: Vec<Tomogram> = Vec::new();
     let mut backend = String::new();
     for (kind, src) in sources {
@@ -92,19 +106,45 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         let px = pixel_a(d, &img);
         output::validate(&img, &a, req.bin)?;
         let stage = format!("重构 {}", match kind { "even" => "偶数帧半", "odd" => "奇数帧半", _ => "全部" });
-        let (stack, w, h, angles) = output::aligned_flipped(&img, &a, req.bin, 0, 0, flip.as_ref().map(|c| (c, &d.optics, px)), &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
-        let g = recon::Geometry::new(w, req.params.thickness, &angles, req.params.z_offset)?;
-        let views = recon::Views { data: &stack, w, h, views: angles.len() };
         let path = output_path(d, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
-        let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
-        backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, slab| out.write_rows(y0, n, &slab), &|i, n| progress(&stage, i, n))?;
-        out.finish()?;
+        let thickness = req.params.thickness;
+        if three_d {
+            let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
+            let ctf = flip.as_ref().unwrap();
+            let px_out = px * req.bin as f64;
+            // Slabs thin enough that the defocus changes by at most SLAB_DEFOCUS
+            // across one, even at the steepest tilt kept.
+            let steep = angles.iter().map(|t| t.to_radians().cos()).fold(1.0, f64::min);
+            let slab = ((SLAB_DEFOCUS * steep / px_out).floor() as usize).clamp(1, thickness);
+            let mut out = output::VolumeFile::create(&path, [w, h, thickness], px_out)?;
+            let slabs: Vec<usize> = (0..thickness).step_by(slab).collect();
+            for (k, &z0) in slabs.iter().enumerate() {
+                check_cancel()?;
+                let nz = slab.min(thickness - z0);
+                // Depth of this slab's centre and its offset in the slab's own geometry.
+                let centre = z0 as f64 + (nz as f64 - 1.0) / 2.0 - (thickness as f64 - 1.0) / 2.0 + req.params.z_offset;
+                let mut flipped = stack.clone();
+                output::flip_views(&mut flipped, w, h, &a, req.bin, (ctf, &d.optics, px), centre);
+                let g = recon::Geometry::new(w, nz, &angles, centre)?;
+                let views = recon::Views { data: &flipped, w, h, views: angles.len() };
+                let label = format!("{stage}：3D CTF 第 {}/{} 层", k + 1, slabs.len());
+                backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, block| out.write_block(y0, n, z0, nz, &block), &|i, n| progress(&label, i, n))?;
+            }
+            out.finish()?;
+        } else {
+            let (stack, w, h, angles) = output::aligned_flipped(&img, &a, req.bin, 0, 0, flip.as_ref().map(|c| (c, &d.optics, px)), &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
+            let g = recon::Geometry::new(w, thickness, &angles, req.params.z_offset)?;
+            let views = recon::Views { data: &stack, w, h, views: angles.len() };
+            let mut out = output::VolumeFile::create(&path, [w, h, thickness], px * req.bin as f64)?;
+            backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, slab| out.write_rows(y0, n, &slab), &|i, n| progress(&stage, i, n))?;
+            out.finish()?;
+        }
         made.push(Tomogram {
             path,
             kind: kind.into(),
             bin: req.bin,
             thickness: req.params.thickness,
-            method: format!("{:?}", req.params.method).to_lowercase(),
+            method: format!("{:?}{}", req.params.method, if three_d { "+ctf3d" } else { "" }).to_lowercase(),
             phase_flipped: flip.is_some(),
             halves: None,
         });

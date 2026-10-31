@@ -398,6 +398,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
         params: Params { thickness: 8, backend: "cpu".into(), ..Default::default() },
         halves: true,
         phase_flip: false,
+        ctf_3d: false,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
@@ -566,8 +567,24 @@ fn phase_flip_turns_the_ctf_into_its_magnitude() {
         theta: 0.0,
         gradient: 0,
         pixel_a: pixel,
+        offset: 0.0,
     });
     let err = seen.iter().zip(&want).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>();
     let norm = want.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
     assert!((err / norm).sqrt() < 1e-4, "relative error {}", (err / norm).sqrt());
+}
+
+#[test]
+fn depth_and_strip_defocus_make_the_beam_height() {
+    // A point at lateral u, depth v (specimen frame) in a view tilted by θ sits
+    // at detector d = u cos θ + v sin θ and height h = −u sin θ + v cos θ;
+    // strip gradient at d plus the slab's depth term is −gradient·h (pixels → Å).
+    for &(u, v, theta, g) in &[(12.0, 5.0, 40.0, 1i8), (-30.0, -8.0, -55.0, -1), (7.0, 20.0, 10.0, 1)] {
+        let (s, c) = f64::to_radians(theta).sin_cos();
+        let d = u * c + v * s;
+        let h = -u * s + v * c;
+        let strip = g as f64 * 2.0 * f64::to_radians(theta).tan() * d;
+        let total = strip + ctf::depth_defocus(v, theta, g, 2.0);
+        assert!((total + g as f64 * 2.0 * h).abs() < 1e-9, "{total} vs {}", -(g as f64) * 2.0 * h);
+    }
 }
