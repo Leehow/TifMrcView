@@ -111,13 +111,31 @@ pub fn pick(img: &[f32], w: usize, h: usize, px: f64, p: &PickParams) -> Vec<[f3
     }
     let (med, sd) = robust(&b);
     let sign = if p.dark { -1.0 } else { 1.0 };
-    b.par_iter_mut().for_each(|v| *v = sign * (*v - med) / sd);
+    // Clipped so that small, very dark specks (ice crystals, gold) do not
+    // outshine the particles.
+    b.par_iter_mut().for_each(|v| *v = (sign * (*v - med) / sd).clamp(-4.0, 4.0));
     let r = r_px / f as f64;
     let sigma = r / std::f64::consts::SQRT_2;
     let g1 = gauss(&b, bw, bh, sigma / 1.3);
     let g2 = gauss(&b, bw, bh, sigma * 1.3);
     let resp: Vec<f32> = g1.iter().zip(&g2).map(|(a, c)| a - c).collect();
-    let (rm, rs) = robust(&resp);
+    // The z-scores are against the noise alone: in a crowded field the
+    // spread of the response is mostly particles, which would raise the
+    // threshold until only the outliers are left. Shot noise is white, so
+    // its level follows from neighbour differences, and the filter's gain
+    // on white noise from its response to an impulse.
+    let diffs: Vec<f32> = b.chunks(bw).flat_map(|row| row.windows(2).map(|p| p[1] - p[0])).collect();
+    let noise = robust(&diffs).1 / std::f32::consts::SQRT_2;
+    let gain = {
+        let n = (8.0 * sigma).ceil() as usize * 2 + 1;
+        let mut d = vec![0f32; n * n];
+        d[n / 2 * n + n / 2] = 1.0;
+        let g1 = gauss(&d, n, n, sigma / 1.3);
+        let g2 = gauss(&d, n, n, sigma * 1.3);
+        g1.iter().zip(&g2).map(|(a, c)| (a - c) * (a - c)).sum::<f32>().sqrt()
+    };
+    let rs = (noise * gain).max(1e-12);
+    let rm = robust(&resp).0.min(0.0);
     let z: Vec<f32> = resp.iter().map(|v| (v - rm) / rs).collect();
     // Large-scale background, for contamination.
     let big = if p.contamination > 0.0 {

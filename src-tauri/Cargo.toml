@@ -128,3 +128,7 @@ required-features = ["pro"]
 [[example]]
 name = "spa_run"
 required-features = ["pro"]
+
+[[example]]
+name = "spa_probe"
+required-features = ["pro"]

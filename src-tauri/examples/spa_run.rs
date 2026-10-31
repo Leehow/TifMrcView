@@ -29,14 +29,26 @@ fn main() -> anyhow::Result<()> {
     }
     let px = p.optics.pixel_a;
     let cp = tifmrcview_lib::ctf::Params { voltage_kv: p.optics.kv, cs_mm: p.optics.cs_mm, amp_contrast: p.optics.amplitude, pixel_a: px, res_low_a: 30.0, res_high_a: (px * 2.5).max(4.0), df_min_a: 3000.0, df_max_a: 50000.0, max_astig_a: 2000.0, phase: false, backend: None };
-    project::ctf(&mut p, &cp, 512, &log)?;
-    let n = project::pick_all(&mut p, &pick::PickParams { diameter_a: p.diameter_a, ..Default::default() }, &log)?;
-    eprintln!("picked {n}");
-    let s = project::extract_all(&mut p, 128, true, &log)?;
-    eprintln!("extracted {} at {} px, {:.2} Å/px", s.count, s.box_px, s.pixel_a);
-    let c = project::class2d(&mut p, &class2d::Class2dParams::default(), &log)?;
-    eprintln!("2D classes {:?}", c.counts);
-    project::initial(&mut p, &refine::InitialParams { symmetry: sym.clone(), ..Default::default() }, &log)?;
+    // Steps already done are kept; SPA_FROM=ctf|pick|class2d|initial|refine redoes from there.
+    let from = std::env::var("SPA_FROM").unwrap_or_default();
+    let redo = |step: &str| ["ctf", "pick", "class2d", "initial", "refine"].iter().position(|s| *s == step) >= ["ctf", "pick", "class2d", "initial", "refine"].iter().position(|s| *s == from.as_str());
+    if redo("ctf") && !from.is_empty() || p.mics.iter().any(|m| m.ctf.is_none() && !m.excluded) {
+        project::ctf(&mut p, &cp, 512, &log)?;
+    }
+    if (redo("pick") && !from.is_empty()) || p.stack.is_none() {
+        let d = p.diameter_a;
+        let n = project::pick_all(&mut p, &pick::PickParams { diameter_a: d, ..Default::default() }, &log)?;
+        eprintln!("picked {n}");
+        let s = project::extract_all(&mut p, 128, true, &log)?;
+        eprintln!("extracted {} at {} px, {:.2} Å/px", s.count, s.box_px, s.pixel_a);
+    }
+    if (redo("class2d") && !from.is_empty()) || p.class2d.is_none() {
+        let c = project::class2d(&mut p, &class2d::Class2dParams::default(), &log)?;
+        eprintln!("2D classes {:?}", c.counts);
+    }
+    if (redo("initial") && !from.is_empty()) || p.initial.is_none() {
+        project::initial(&mut p, &refine::InitialParams { symmetry: sym.clone(), ..Default::default() }, &log)?;
+    }
     let r = project::refine(&mut p, &refine::RefineParams { symmetry: sym, ..Default::default() }, None, &log)?;
     println!("{}", serde_json::to_string_pretty(&serde_json::json!({
         "resolution": r.res, "resolutionMasked": r.res_masked, "bfactor": r.bfactor,
