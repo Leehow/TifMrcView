@@ -134,7 +134,8 @@ pub fn read_mic(path: &str) -> Result<(Vec<f32>, usize, usize)> {
     let info = img.info().clone();
     let p = img.page(info.locate(0, 0, 0).0)?;
     let (w, h) = (p[0].w, p[0].h);
-    Ok(((0..w * h).map(|i| p[0].data.get_f64(i) as f32).collect(), w, h))
+    let (lo, hi) = crate::ctf::clip_range(|i| p[0].data.get_f64(i) as f32, w * h);
+    Ok(((0..w * h).map(|i| crate::ctf::clip(p[0].data.get_f64(i) as f32, lo, hi)).collect(), w, h))
 }
 
 impl Project {
@@ -291,7 +292,12 @@ pub fn ctf(p: &mut Project, params: &crate::ctf::Params, n_fft: usize, progress:
         let (w, h) = (img.info().width, img.info().height);
         let req = crate::ctf::FitReq { token: 0, z: 0, t: 0, c: 0, region: [0.0, 0.0, w as f64, h as f64], n: n_fft, params: params.clone() };
         match crate::ctf::fit_region(&img, &req) {
-            Ok(f) => p.mics[i].ctf = Some(MicCtf { df1: f.df1, df2: f.df2, angle: f.angle, score: f.score, fit_res: f.fit_res }),
+            Ok(f) if f.score.is_finite() => p.mics[i].ctf = Some(MicCtf { df1: f.df1, df2: f.df2, angle: f.angle, score: f.score, fit_res: f.fit_res }),
+            Ok(_) => {
+                p.mics[i].ctf = None;
+                p.mics[i].excluded = true;
+                eprintln!("CTF {}: no fit", p.mics[i].path);
+            }
             Err(e) => {
                 p.mics[i].ctf = None;
                 p.mics[i].excluded = true;
