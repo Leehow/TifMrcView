@@ -1232,7 +1232,7 @@ mod tests {
         let half = |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
         let (a, b) = (half(&mut rng), half(&mut rng));
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
-        let cfg = TrainConfig { cube: 20, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
         let mut last = None;
         let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), a.len());
