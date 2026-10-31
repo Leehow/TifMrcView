@@ -124,7 +124,12 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
 pub fn ctf(d: &mut Dataset, params: &crate::ctf::Params, n: usize, progress: Progress) -> Result<super::dataset::Ctf> {
     let img = open(&d.stack)?;
     let mut params = params.clone();
-    params.pixel_a = pixel_a(d, &img);
+    // The pixel size given with the request wins (and is kept); else the dataset's or the header's.
+    if params.pixel_a > 0.0 {
+        d.optics.pixel_a = Some(params.pixel_a);
+    } else {
+        params.pixel_a = pixel_a(d, &img);
+    }
     d.optics.kv = params.voltage_kv;
     d.optics.cs_mm = params.cs_mm;
     d.optics.amplitude = params.amp_contrast;

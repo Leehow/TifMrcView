@@ -11,6 +11,7 @@ pub mod output;
 pub mod series;
 pub mod sum;
 pub mod sum_gpu;
+pub mod tiles;
 #[cfg(test)]
 mod tests;
 use crate::image::OpenImage;
@@ -24,6 +25,60 @@ use std::{
     },
 };
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
+/// How strongly the global trajectory is smoothed (see `smooth`).
+const SMOOTHING: f64 = 4.0;
+
+/// A smooth trajectory through the measured shifts (Whittaker smoother):
+/// minimises Σ wᵢ|sᵢ − dᵢ|² + λ Σ |sᵢ₋₁ − 2sᵢ + sᵢ₊₁|², weights wᵢ from the
+/// correlation peaks (mean 1). Specimen drift is smooth in time; frame to
+/// frame jumps of a fraction of a pixel are measurement noise on groups of
+/// a few electrons per pixel, and summing along them blurs the image.
+pub fn smooth(d: &[[f64; 2]], cc: &[f64], lambda: f64) -> Vec<[f64; 2]> {
+    let n = d.len();
+    if n < 3 {
+        return d.to_vec();
+    }
+    let mean = cc.iter().map(|c| c.max(1e-3)).sum::<f64>() / n as f64;
+    let w: Vec<f64> = cc.iter().map(|c| (c.max(1e-3) / mean).powi(2)).collect();
+    // (W + λ DᵀD) s = W d, D the second-difference operator.
+    let mut a = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        a[i][i] += w[i];
+    }
+    for i in 1..n - 1 {
+        let idx = [i - 1, i, i + 1];
+        let coef = [1.0, -2.0, 1.0];
+        for (p, cp) in idx.iter().zip(coef) {
+            for (q, cq) in idx.iter().zip(coef) {
+                a[*p][*q] += lambda * cp * cq;
+            }
+        }
+    }
+    let solve = |k: usize| -> Vec<f64> {
+        let mut m = a.clone();
+        let mut b: Vec<f64> = (0..n).map(|i| w[i] * d[i][k]).collect();
+        for i in 0..n {
+            let p = m[i][i];
+            for j in i + 1..n {
+                let f = m[j][i] / p;
+                if f != 0.0 {
+                    for c in i..n {
+                        m[j][c] -= f * m[i][c];
+                    }
+                    b[j] -= f * b[i];
+                }
+            }
+        }
+        let mut x = vec![0.0; n];
+        for i in (0..n).rev() {
+            x[i] = (b[i] - (i + 1..n).map(|c| m[i][c] * x[c]).sum::<f64>()) / m[i][i];
+        }
+        x
+    };
+    let (x, y) = (solve(0), solve(1));
+    (0..n).map(|i| [x[i], y[i]]).collect()
+}
+
 pub fn check_cancel() -> Result<()> {
     if CANCEL.load(Ordering::Relaxed) {
         bail!("已取消");
@@ -273,7 +328,8 @@ fn run_movie(
     });
     let (global, local, cc) = match g {
         Ok(g) => {
-            let global: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
+            let measured: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
+            let global = smooth(&measured, &g.cc, SMOOTHING);
             let local = local::estimate(&sp, &global, p, progress)?;
             (global, local, g.cc)
         }
