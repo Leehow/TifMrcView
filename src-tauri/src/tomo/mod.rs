@@ -66,8 +66,9 @@ pub struct AlignReq {
     pub patch: Option<PatchConfig>,
     #[serde(default)]
     pub excluded: Vec<usize>,
+    /// Shared rotation / tilt / magnification groups; None picks them from the series length.
     #[serde(default)]
-    pub mag_group: usize,
+    pub groups: Option<model::Groups>,
     /// Reuse measured contours when only exclusions change.
     pub previous: Option<Alignment>,
 }
@@ -79,6 +80,12 @@ pub struct View {
     pub residual: f64,
     pub shift: [f64; 2],
     pub mag: f64,
+    /// In-plane rotation added to the axis (°).
+    #[serde(default)]
+    pub rotation: f64,
+    /// Refined tilt angle (°), used for reconstruction.
+    #[serde(default)]
+    pub tilt: f64,
     pub cc: f64,
     pub contours: usize,
     pub flagged: bool,
@@ -97,6 +104,13 @@ pub struct Alignment {
     pub views: Vec<View>,
     pub tracks: Tracks,
     pub ms: f64,
+}
+
+impl View {
+    /// The refined tilt angle (alignments saved before refinement have none).
+    pub fn refined(&self) -> f64 {
+        if self.tilt != 0.0 { self.tilt } else { self.angle }
+    }
 }
 
 pub fn quality(r: f64) -> &'static str {
@@ -254,6 +268,7 @@ pub fn align(
         req.bin
     };
     let st = read_stack(img, req.c, req.t, bin, &angles)?;
+    let groups = req.groups.unwrap_or_else(|| model::Groups::default_for(st.angles.len()));
     if st
         .file_order
         .iter()
@@ -283,21 +298,33 @@ pub fn align(
             &filtered_tracks(&tracks, &st.file_order, &req.excluded)?,
             &st.angles,
             prev.axis,
-            req.mag_group,
+            groups,
         )?;
     } else {
         chosen = req
             .patch
             .unwrap_or_else(|| PatchConfig::default_for(st.w, st.h));
-        (tracks, solution) = track_and_solve(
-            &st,
-            axis,
-            chosen,
-            &req.excluded,
-            req.mag_group,
-            req.sweep,
-            progress,
-        )?;
+        // Starting axes: the one asked for; else the mdoc's under both
+        // conventions in use (they differ by a mirror, see geometry); else a
+        // coarse turn through 180°. The lowest residual wins.
+        let starts: Vec<f64> = match (req.axis, meta.axis) {
+            (Some(a), _) => vec![a],
+            (None, Some(a)) if req.sweep => vec![a, -a],
+            (None, Some(a)) => vec![a],
+            (None, None) if req.sweep => (0..12).map(|i| i as f64 * 15.0).collect(),
+            (None, None) => vec![axis],
+        };
+        let mut best: Option<(Tracks, model::Solution)> = None;
+        for start in starts {
+            check_cancel()?;
+            match track_and_solve(&st, start, chosen, &req.excluded, groups, req.sweep, progress) {
+                Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < b.1.residual) => best = Some(r),
+                Ok(_) => {}
+                Err(e) if CANCEL.load(Ordering::Relaxed) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        (tracks, solution) = best.ok_or_else(|| anyhow::anyhow!("各起始轴角都无法对齐，请检查倾转角或手动给出轴角"))?;
         if req.sweep {
             let fixed_axis = solution.axis;
             for patch in PatchConfig::candidates(st.w, st.h) {
@@ -313,7 +340,7 @@ pub fn align(
                 if fit.observations.len() < 12 {
                     continue;
                 }
-                let s = model::solve(&fit, &st.angles, fixed_axis, req.mag_group)?;
+                let s = model::solve(&fit, &st.angles, fixed_axis, groups)?;
                 if s.residual < solution.residual {
                     solution = s;
                     chosen = patch;
@@ -340,6 +367,8 @@ pub fn align(
             residual: solution.per_view[i] * bin as f64,
             shift: solution.shifts[i].map(|v| v * bin as f64),
             mag: solution.magnifications[i],
+            rotation: solution.rotations[i],
+            tilt: st.angles[i] + solution.tilts[i],
             cc: tracks.cc[i],
             contours: tracks.counts[i],
             flagged: solution.per_view[i] > (3.0 * med).max(0.5)
@@ -370,22 +399,22 @@ pub fn track_and_solve(
     axis: f64,
     patch: PatchConfig,
     excluded: &[usize],
-    mag_group: usize,
+    groups: model::Groups,
     automatic: bool,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(Tracks, model::Solution)> {
     let mut tr = track::track(st, axis, patch, progress)?;
     let fit = filtered_tracks(&tr, &st.file_order, excluded)?;
     let mut s = if automatic {
-        model::sweep(&fit, &st.angles, axis, mag_group)?
+        model::sweep(&fit, &st.angles, axis, groups)?
     } else {
-        model::solve(&fit, &st.angles, axis, mag_group)?
+        model::solve(&fit, &st.angles, axis, groups)?
     };
     if automatic && (s.axis - axis).abs() > 0.2 {
         let current = s.axis;
         tr = track::track(st, current, patch, progress)?;
         let fit = filtered_tracks(&tr, &st.file_order, excluded)?;
-        s = model::refine(&fit, &st.angles, current, mag_group)?;
+        s = model::refine(&fit, &st.angles, current, groups)?;
     }
     Ok((tr, s))
 }

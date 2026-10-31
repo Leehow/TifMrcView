@@ -93,11 +93,11 @@ pub fn aligned(
     if w.saturating_mul(h).saturating_mul(info.size_z) > 1 << 29 {
         bail!("对齐叠层超过 2 GiB，请提高 binning");
     }
-    let r = geometry::rotation(a.axis);
     let mut stack = Vec::new();
     let mut angles = Vec::new();
     for (i, v) in a.views.iter().filter(|v| !v.excluded).enumerate() {
         check_cancel()?;
+        let r = geometry::rotation(a.axis + v.rotation);
         let (page, s) = info.locate(c, v.file_index, t);
         let pp = img.page(page)?;
         let pp = &pp[s.min(pp.len() - 1)];
@@ -139,7 +139,7 @@ pub fn aligned(
             }
         });
         stack.extend(plane);
-        angles.push(v.angle);
+        angles.push(v.refined());
         progress(i + 1, info.size_z);
     }
     Ok((stack, w, h, angles))
@@ -220,11 +220,11 @@ pub fn write_mrc(
 }
 
 pub fn export(a: &Alignment, path: &str) -> Result<()> {
-    let r = geometry::rotation(a.axis);
     let mut xf = String::new();
     let mut tlt = String::new();
     let mut map = String::new();
     for v in a.views.iter().filter(|v| !v.excluded) {
+        let r = geometry::rotation(a.axis + v.rotation);
         let aa = [
             r[0][0] / v.mag,
             r[1][0] / v.mag,
@@ -237,7 +237,7 @@ pub fn export(a: &Alignment, path: &str) -> Result<()> {
             "{:.9} {:.9} {:.9} {:.9} {:.6} {:.6}\n",
             aa[0], aa[1], aa[2], aa[3], dx, dy
         ));
-        tlt.push_str(&format!("{:.6}\n", v.angle));
+        tlt.push_str(&format!("{:.6}\n", v.refined()));
         map.push_str(&format!("{}\n", v.file_index));
     }
     for (ext, txt) in [("xf", xf), ("tlt", tlt), ("views", map)] {

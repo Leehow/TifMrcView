@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         sweep: true,
         patch: None,
         excluded: vec![],
-        mag_group: 0,
+        groups: None,
         previous: None,
     };
     let a = tomo::align(&img, &req, &|_, _| {})?;

@@ -28,6 +28,12 @@ fn bead_series() -> (Stack, Vec<[f64; 2]>) {
 }
 
 fn bead_series_shape(w: usize, h: usize) -> (Stack, Vec<[f64; 2]>) {
+    bead_series_with(w, h, &|_, _| (0.0, 0.0, 1.0))
+}
+
+/// Beads seen through per-view distortions `(rotation °, tilt error °, mag)`
+/// given by the view index and its nominal angle.
+fn bead_series_with(w: usize, h: usize, distort: &dyn Fn(usize, f64) -> (f64, f64, f64)) -> (Stack, Vec<[f64; 2]>) {
     let mut seed = 20261030;
     let angles: Vec<f64> = (-20..=20).map(|i| i as f64 * 3.0).collect();
     let mut beads = Vec::new();
@@ -55,11 +61,12 @@ fn bead_series_shape(w: usize, h: usize) -> (Stack, Vec<[f64; 2]>) {
         .collect();
     let mut views = Vec::new();
     for (i, &a) in angles.iter().enumerate() {
-        let p = geometry::projection(a, 84.6);
+        let (rot, err, mag) = distort(i, a);
+        let p = geometry::projection(a + err, 84.6 + rot);
         let mut v = vec![0.0; w * h];
         for (x, amp) in &beads {
             let q: [f64; 2] = std::array::from_fn(|k| {
-                (0..3).map(|j| p[k][j] * x[j]).sum::<f64>()
+                mag * (0..3).map(|j| p[k][j] * x[j]).sum::<f64>()
                     + ([w, h][k] - 1) as f64 / 2.0
                     + shifts[i][k]
             });
@@ -99,6 +106,32 @@ fn bead_series_shape(w: usize, h: usize) -> (Stack, Vec<[f64; 2]>) {
 }
 
 #[test]
+fn grouped_rotation_tilt_and_magnification() {
+    // A slow in-plane rotation drift, a tilt scale error and a magnification
+    // step in the positive half: what the shared groups are for.
+    let distort = |i: usize, a: f64| (0.04 * i as f64 - 0.8, 0.02 * a, if a > 20.0 { 1.01 } else { 1.0 });
+    let (st, _) = bead_series_with(256, 128, &distort);
+    let patch = track::PatchConfig { nx: 8, ny: 4, size: 30 };
+    let tr = track::track(&st, 84.6, patch, &|_, _| {}).unwrap();
+    let plain = model::solve(&tr, &st.angles, 84.6, model::Groups::NONE).unwrap();
+    let groups = model::Groups { rotation: 3, tilt: 3, mag: 3 };
+    let s = model::solve(&tr, &st.angles, 84.6, groups).unwrap();
+    eprintln!("residual plain {:.3} grouped {:.3}", plain.residual, s.residual);
+    assert!(s.residual < 0.5 * plain.residual, "{} vs {}", s.residual, plain.residual);
+    assert!(s.residual < 0.3, "grouped residual {}", s.residual);
+    let zero = 20;
+    for (i, &a) in st.angles.iter().enumerate() {
+        // A tilt scale error trades with the depth scale of the points (a
+        // gauge at small angles), so only the fit shows it, not the angles.
+        let (rot, _, mag) = distort(i, a);
+        let (rot0, _, _) = distort(zero, 0.0);
+        // Within a group of three the truth varies by up to ±0.04°.
+        assert!((s.rotations[i] - (rot - rot0)).abs() < 0.2, "view {i} rotation {} vs {}", s.rotations[i], rot - rot0);
+        assert!((s.magnifications[i] - mag).abs() < 0.004, "view {i} mag {} vs {mag}", s.magnifications[i]);
+    }
+}
+
+#[test]
 fn phantom_tracking_axis_sweep_and_shifts() {
     let (st, truth) = bead_series();
     let (tr, s) = track_and_solve(
@@ -110,7 +143,7 @@ fn phantom_tracking_axis_sweep_and_shifts() {
             size: 30,
         },
         &[],
-        0,
+        model::Groups::NONE,
         true,
         &|_, _| {},
     )
@@ -327,6 +360,8 @@ fn sorted_input_and_shared_even_odd_geometry() {
                 residual: 0.0,
                 shift: [0.0; 2],
                 mag: 1.0,
+                rotation: 0.0,
+                tilt: angle,
                 cc: 1.0,
                 contours: 10,
                 flagged: false,
@@ -409,7 +444,7 @@ fn rectangular_tracking_and_working_pixel_configs() {
         ny: 4,
         size: 30,
     };
-    let (_, s) = track_and_solve(&st, 88.6, patch, &[], 0, true, &|_, _| {}).unwrap();
+    let (_, s) = track_and_solve(&st, 88.6, patch, &[], model::Groups::NONE, true, &|_, _| {}).unwrap();
     assert!((s.axis - 84.6).abs() <= 0.3, "rectangular axis {}", s.axis);
     assert!(s.residual < 0.5, "rectangular residual {}", s.residual);
     let p = track::PatchConfig::default_for(959, 256);
