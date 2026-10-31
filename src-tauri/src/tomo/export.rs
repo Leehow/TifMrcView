@@ -12,6 +12,18 @@
 //!   at the chosen binning, excluded views left out, sorted by tilt) and
 //!   their refined angles (`<name>_ali.tlt`), for programs that start from
 //!   an aligned tilt series (AreTomo with alignment off, EMAN2, Dynamo …).
+//! - "relion5": a RELION 5 tomography project start, `<name>_relion5/`:
+//!   `tilt_series.star` (the global table) and `tilt_series/<name>.star`
+//!   (one row per tilt kept, with CTF and alignment), plus each tilt as its
+//!   own MRC in `frames/` (and the even/odd halves when there are some, as
+//!   rlnMicrographNameEven/Odd). The alignment follows RELION 5's own
+//!   conversion of IMOD results (relion `align_tilt_series/imod`):
+//!   XTilt 0, YTilt the refined tilt, ZRot the in-plane angle of the `.xf`
+//!   matrix (atan2(−A21, A11), i.e. IMOD's rotation angle), and the shifts
+//!   the specimen shifts −A⁻¹·(DX, DY) in Å. RELION has no per-tilt
+//!   magnification, so it is left out (ours stay within a percent).
+//!   rlnTomoHand is written as −1, RELION's usual value for Krios data;
+//!   check it against one tomogram before averaging.
 //! - "table": `<name>_cryoet.csv`, one row per view with everything the
 //!   dataset knows about it, for scripts and spreadsheets.
 
@@ -145,8 +157,126 @@ pub fn aligned(d: &Dataset, dir: &str, bin: usize, progress: &(dyn Fn(usize, usi
     Ok(vec![mrc, tlt.to_string_lossy().into_owned()])
 }
 
+/// RELION 5's view of one tilt: (ZRot °, X and Y specimen shifts in Å).
+pub fn relion_pose(a: &Alignment, v: &View, pixel_a: f64) -> [f64; 3] {
+    let x = xf_row(a, v);
+    let z = (-x[2]).atan2(x[0]).to_degrees();
+    // −A⁻¹·D, with A = R/m: our stored shift, in Å.
+    [z, v.shift[0] * pixel_a, v.shift[1] * pixel_a]
+}
+
+/// A STAR loop: `data_<block>`, the labels, the rows.
+fn star(block: &str, labels: &[&str], rows: &[Vec<String>]) -> String {
+    let mut s = format!("# version 50001\n\ndata_{block}\n\nloop_\n");
+    for (i, l) in labels.iter().enumerate() {
+        let _ = writeln!(s, "_{l} #{}", i + 1);
+    }
+    for r in rows {
+        s.push_str(&r.join("  "));
+        s.push('\n');
+    }
+    s.push('\n');
+    s
+}
+
+pub fn relion5(d: &Dataset, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
+    let Some(px) = d.optics.pixel_a else { bail!("先在 CTF 一步填上像素大小") };
+    let name = stem(d);
+    let root = PathBuf::from(dir).join(format!("{name}_relion5"));
+    std::fs::create_dir_all(root.join("frames"))?;
+    std::fs::create_dir_all(root.join("tilt_series"))?;
+    let sources: Vec<(&str, String)> = std::iter::once(("", d.stack.clone()))
+        .chain(d.even.clone().map(|p| ("_even", p)))
+        .chain(d.odd.clone().map(|p| ("_odd", p)))
+        .filter(|(_, p)| Path::new(p).exists())
+        .collect();
+    let kept: Vec<&View> = by_section(a).into_iter().filter(|v| !v.excluded).collect();
+    let frame = |v: &View, suffix: &str| format!("frames/{name}_{:03}_{:.1}{suffix}.mrc", v.file_index, v.angle);
+    let total = kept.len() * sources.len();
+    let mut done = 0;
+    for (suffix, path) in &sources {
+        let img = super::pipeline::open(path)?;
+        let info = img.info();
+        for v in &kept {
+            super::check_cancel()?;
+            let (page, s) = info.locate(0, v.file_index, 0);
+            let p = img.page(page)?;
+            let p = &p[s.min(p.len() - 1)];
+            let data: Vec<f32> = (0..p.w * p.h).map(|i| p.data.get_f64(i) as f32).collect();
+            super::output::write_mrc(&root.join(frame(v, suffix)).to_string_lossy(), &data, [p.w, p.h, 1], px, false)?;
+            done += 1;
+            progress(done, total);
+        }
+    }
+    let halves = sources.len() == 3;
+    let mut labels = vec![
+        "rlnMicrographName", "rlnTomoNominalStageTiltAngle", "rlnTomoNominalTiltAxisAngle", "rlnMicrographPreExposure",
+        "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", "rlnCtfMaxResolution",
+        "rlnTomoXTilt", "rlnTomoYTilt", "rlnTomoZRot", "rlnTomoXShiftAngst", "rlnTomoYShiftAngst",
+    ];
+    if halves {
+        labels.extend(["rlnMicrographNameEven", "rlnMicrographNameOdd"]);
+    }
+    let rows: Vec<Vec<String>> = kept
+        .iter()
+        .map(|v| {
+            let [z, sx, sy] = relion_pose(a, v, px);
+            let ctf = d.ctf.as_ref().and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
+            let (du, dv, da, res) = ctf.map_or((0.0, 0.0, 0.0, 0.0), |f| (f.df1, f.df2, f.angle, f.fit_res));
+            let mut r = vec![
+                frame(v, ""),
+                format!("{:.3}", v.angle),
+                format!("{z:.3}"),
+                // The dataset keeps no dose; RELION's dose weighting then does nothing.
+                "0.000".into(),
+                format!("{du:.1}"),
+                format!("{dv:.1}"),
+                format!("{da:.2}"),
+                format!("{res:.2}"),
+                "0.000".into(),
+                format!("{:.3}", v.refined()),
+                format!("{z:.3}"),
+                format!("{sx:.2}"),
+                format!("{sy:.2}"),
+            ];
+            if halves {
+                r.extend([frame(v, "_even"), frame(v, "_odd")]);
+            }
+            r
+        })
+        .collect();
+    let series = root.join("tilt_series").join(format!("{name}.star"));
+    std::fs::write(&series, star(&name, &labels, &rows))?;
+    let img = super::pipeline::open(&d.stack)?;
+    let (w, h) = (img.info().width, img.info().height);
+    let depth = d.tomograms.iter().rev().find(|t| t.kind == "full").map_or(w.min(h) / 4, |t| t.thickness * t.bin);
+    let global = star(
+        "global",
+        &["rlnTomoName", "rlnTomoTiltSeriesStarFile", "rlnVoltage", "rlnSphericalAberration", "rlnAmplitudeContrast", "rlnMicrographOriginalPixelSize", "rlnTomoHand", "rlnOpticsGroupName", "rlnTomoTiltSeriesPixelSize", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"],
+        &[vec![
+            name.clone(),
+            format!("tilt_series/{name}.star"),
+            format!("{:.3}", d.optics.kv),
+            format!("{:.3}", d.optics.cs_mm),
+            format!("{:.3}", d.optics.amplitude),
+            format!("{px:.4}"),
+            "-1".into(),
+            "optics1".into(),
+            format!("{px:.4}"),
+            w.to_string(),
+            h.to_string(),
+            depth.to_string(),
+        ]],
+    );
+    let top = root.join("tilt_series.star");
+    std::fs::write(&top, global)?;
+    Ok(vec![top.to_string_lossy().into_owned(), series.to_string_lossy().into_owned()])
+}
+
 pub fn run(d: &Dataset, format: &str, dir: &str, bin: usize, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
     match format {
+        "relion5" => relion5(d, dir, progress),
         "imod" => imod(d, dir),
         "aligned" => aligned(d, dir, bin, progress),
         "table" => table(d, dir),
