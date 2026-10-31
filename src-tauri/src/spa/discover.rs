@@ -458,6 +458,11 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
 /// Correlation of an image with itself rotated by 360°/n, over a ring
 /// between 0.15 and 0.9 of `radius` (pixels) around the centre.
 pub(crate) fn rot_corr(img: &[f32], b: usize, radius: f64, n: usize) -> f64 {
+    rot_corr_deg(img, b, radius, 360.0 / n as f64)
+}
+
+/// Correlation of an image with itself rotated by `deg` (see `rot_corr`).
+fn rot_corr_deg(img: &[f32], b: usize, radius: f64, deg: f64) -> f64 {
     let c = b as f64 / 2.0;
     let angles = 360;
     let rings: Vec<f64> = (0..16).map(|i| radius * (0.15 + 0.75 * i as f64 / 15.0)).collect();
@@ -471,7 +476,7 @@ pub(crate) fn rot_corr(img: &[f32], b: usize, radius: f64, n: usize) -> f64 {
         let m = row.iter().sum::<f64>() / angles as f64;
         row.iter_mut().for_each(|v| *v -= m);
     }
-    let shift = angles / n;
+    let shift = (deg / 360.0 * angles as f64).round() as usize % angles;
     let (mut num, mut den) = (0f64, 0f64);
     for ri in 0..rings.len() {
         let row = &polar[ri * angles..(ri + 1) * angles];
@@ -494,21 +499,37 @@ pub struct SymmetryGuess {
     pub two_fold: f64,
 }
 
+/// The n of an average's rotational symmetry: the angular
+/// autocorrelation (1° steps, rings weighted by radius) must dip and then
+/// rise to a clear peak at 360°/n, between 25° and 130° (n = 3 … 14). A
+/// featureless disc or ring stays high at every angle and has no dip.
+/// Returns (n, peak height) or None.
+pub(crate) fn rotational_order(img: &[f32], b: usize, radius: f64) -> Option<(usize, f64)> {
+    let rho: Vec<f64> = (0..=180).map(|t| if t == 0 { 1.0 } else { rot_corr_deg(img, b, radius, t as f64) }).collect();
+    let (mut peak_t, mut peak) = (0usize, f64::MIN);
+    for (t, &r) in rho.iter().enumerate().take(131).skip(25) {
+        if r > peak {
+            (peak_t, peak) = (t, r);
+        }
+    }
+    let valley = rho[..peak_t].iter().copied().fold(f64::MAX, f64::min);
+    let n = (360.0 / peak_t as f64).round() as usize;
+    let fits = n >= 3 && (360.0 / n as f64 - peak_t as f64).abs() <= 3.0;
+    (fits && peak >= 0.3 && peak - valley >= 0.3).then_some((n, peak))
+}
+
 /// Point group suggested by class averages (`b` × `b`, particle radius in
 /// pixels), from those in `use_classes`. Each average is centred on its
-/// mass first. A top view of Cn or Dn correlates with itself turned by
-/// 360°/n clearly more than by 360°/(n ± 1); a featureless disc or ring
-/// correlates more and more as the angle shrinks, with no such peak. Dn
-/// also has side views with a 2-fold axis in the plane.
+/// mass first; a top view of Cn or Dn shows n-fold rotational symmetry
+/// (`rotational_order`). Dn also has side views with a 2-fold axis in the
+/// plane (only used when clear; the refined map decides otherwise).
 pub fn symmetry(avgs: &[Vec<f32>], b: usize, radius: f64, use_classes: &[usize]) -> SymmetryGuess {
     let centred: Vec<Vec<f32>> = avgs.iter().map(|a| super::plane::shift(a, b, super::plane::centre_of_mass(a, b))).collect();
     let mut best = (1usize, 0f64, usize::MAX);
     for &c in use_classes {
-        let s: Vec<f64> = (0..=13).map(|n| if n < 2 { 1.0 } else { rot_corr(&centred[c], b, radius, n) }).collect();
-        for n in 3..=12 {
-            let peak = s[n] - s[n - 1].max(s[n + 1]);
-            if s[n] >= 0.5 && peak >= 0.1 && s[n] > best.1 {
-                best = (n, s[n], c);
+        if let Some((n, peak)) = rotational_order(&centred[c], b, radius) {
+            if peak > best.1 {
+                best = (n, peak, c);
             }
         }
     }

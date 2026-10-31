@@ -3,6 +3,10 @@
 //!
 //!   cargo run --release --features pro --example spa_run -- <folder> <diameter Å> [symmetry] [pixel Å]
 //!
+//! With `auto` as the diameter it runs the one-click mode: the particle
+//! kinds are found and kind `SPA_KIND` (1-based, default 1) is taken;
+//! a symmetry of `auto` (or none) is guessed.
+//!
 //! Writes everything into <folder>/tifmrcview-spa and prints a summary.
 use tifmrcview_lib::spa::{class2d, pick, project, refine};
 
@@ -22,7 +26,10 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let mut p = project::Project::open(&args[1])?;
-    p.diameter_a = args[2].parse()?;
+    let one_click = args[2] == "auto";
+    if !one_click {
+        p.diameter_a = args[2].parse()?;
+    }
     if let Some(px) = args.get(4) {
         p.optics.pixel_a = px.parse()?;
     }
@@ -37,6 +44,21 @@ fn main() -> anyhow::Result<()> {
     let redo = |step: &str| ["ctf", "pick", "class2d", "initial", "refine"].iter().position(|s| *s == step) >= ["ctf", "pick", "class2d", "initial", "refine"].iter().position(|s| *s == from.as_str());
     if redo("ctf") && !from.is_empty() || p.mics.iter().any(|m| m.ctf.is_none() && !m.excluded) {
         project::ctf(&mut p, &cp, 512, &log)?;
+    }
+    if one_click {
+        let d = project::discover(&mut p, None, &log)?;
+        for (i, k) in d.kinds.iter().enumerate() {
+            eprintln!("kind {}: {:.0} Å, {:.0}%, {}", i + 1, k.diameter_a, k.share * 100.0, k.png);
+        }
+        let k: usize = std::env::var("SPA_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+        eprintln!("diameter {} Å", project::choose(&mut p, vec![k - 1])?);
+        let symmetry = if sym == "auto" || args.get(3).is_none() { String::new() } else { sym.clone() };
+        let r = project::auto(&mut p, &project::AutoParams { symmetry }, &log)?;
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "resolution": r.res, "resolutionMasked": r.res_masked, "bfactor": r.bfactor, "symmetry": r.params.symmetry,
+            "particles": r.particles, "map": r.sharpened, "seconds": t0.elapsed().as_secs_f64(),
+        }))?);
+        return Ok(());
     }
     if (redo("pick") && !from.is_empty()) || p.stack.is_none() {
         let d = p.diameter_a;
