@@ -124,7 +124,7 @@
     if (A.dirty) return W.status("请先重新求解");
     if (S.info?.path !== d.stack) return W.status("导出需要先打开这个倾转序列");
     const stem = W.name(d.stack).replace(/\.[^.]+$/, "");
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_ali.mrc`, filter: "MRC", exts: ["mrc"] });
+    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_ali.xf`, filter: "IMOD .xf", exts: ["xf"] });
     if (!path) return;
     setSaveDir(dirname(path));
     const token = S.token;

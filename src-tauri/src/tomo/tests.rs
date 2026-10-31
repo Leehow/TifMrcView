@@ -394,7 +394,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
-    assert!(out.paths[0].ends_with("ts_rec_b2.mrc") && out.paths[1].ends_with("ts_rec_b2_even.mrc"));
+    assert!(out.paths[0].ends_with("ts_wbp_b2.mrc") && out.paths[1].ends_with("ts_wbp_b2_even.mrc"));
     let open = |path: &str| OpenImage::new(9, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
     use std::path::Path;
     let e = open(&out.paths[1]);

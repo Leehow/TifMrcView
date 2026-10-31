@@ -78,7 +78,12 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
             _ => bail!("没有奇偶帧半叠层（运动校正时生成），无法重构两半"),
         }
     }
-    let tag = format!("rec_b{}{}", req.bin, if flip.is_some() { "_flip" } else { "" });
+    // The method is in the name, so WBP and SIRT of the same data both stay.
+    let method = match req.params.method {
+        recon::Method::Wbp => "wbp".to_string(),
+        recon::Method::Sirt => format!("sirt{}", req.params.iterations),
+    };
+    let tag = format!("{method}_b{}{}", req.bin, if flip.is_some() { "_flip" } else { "" });
     let mut made: Vec<Tomogram> = Vec::new();
     let mut backend = String::new();
     for (kind, src) in sources {
