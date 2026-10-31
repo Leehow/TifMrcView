@@ -13,7 +13,7 @@ use super::class2d::{self, Class2dParams};
 use super::data::{self, Optics, Particle, Stack, StackWriter};
 use super::pick::{self, PickParams};
 use super::refine::{self, InitialParams, Map, RefineParams};
-use super::{check_cancel, extract, post, Progress};
+use super::{check_cancel, discover, extract, post, Progress};
 use crate::image::OpenImage;
 
 pub const DIR: &str = "tifmrcview-spa";
@@ -126,6 +126,12 @@ pub struct Project {
     pub initial: Option<MapInfo>,
     #[serde(default)]
     pub refine: Option<RefineInfo>,
+    /// Kinds of particle found on a few micrographs (one-click mode).
+    #[serde(default)]
+    pub discovery: Option<discover::Discovery>,
+    /// Point group suggested by the 2D classes.
+    #[serde(default)]
+    pub symmetry: Option<discover::SymmetryGuess>,
 }
 
 const MIC_EXT: [&str; 6] = ["mrc", "mrcs", "tif", "tiff", "eer", "dm4"];
@@ -217,6 +223,8 @@ impl Project {
             class2d: None,
             initial: None,
             refine: None,
+            discovery: None,
+            symmetry: None,
         };
         p.save()?;
         Ok(p)
@@ -533,4 +541,92 @@ pub fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f6
     }
     std::fs::write(out, s)?;
     Ok(())
+}
+
+/// Finds the kinds of particle (`discover::run`) and keeps them.
+pub fn discover(p: &mut Project, outline: Option<discover::Outliner>, progress: Progress) -> Result<discover::Discovery> {
+    let cfg = discover::Config { dark: p.pick.as_ref().map(|q| q.dark).unwrap_or(true), ..Default::default() };
+    let d = discover::run(p, &cfg, outline, progress)?;
+    p.discovery = Some(d.clone());
+    p.save()?;
+    Ok(d)
+}
+
+/// The user's choice of kinds: the particle diameter becomes their size.
+pub fn choose(p: &mut Project, kinds: Vec<usize>) -> Result<f64> {
+    let d = p.discovery.as_mut().context("还没有寻找颗粒类型")?;
+    let chosen: Vec<&discover::Kind> = kinds.iter().filter_map(|&i| d.kinds.get(i)).collect();
+    if chosen.is_empty() {
+        bail!("请选择至少一种颗粒");
+    }
+    // Count-weighted median of the chosen sizes.
+    let mut v: Vec<(f64, usize)> = chosen.iter().map(|k| (k.diameter_a, k.count)).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total: usize = v.iter().map(|x| x.1).sum();
+    let mut acc = 0;
+    let mut dia = v[0].0;
+    for (x, c) in &v {
+        acc += c;
+        dia = *x;
+        if 2 * acc >= total {
+            break;
+        }
+    }
+    d.chosen = kinds;
+    // The blob size is about the particle's width; the mask and the box
+    // need its longest dimension (side views), so a third more.
+    p.diameter_a = (1.3 * dia / 5.0).round() * 5.0;
+    p.save()?;
+    Ok(p.diameter_a)
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoParams {
+    /// Point group; empty: the one the 2D classes suggest.
+    pub symmetry: String,
+}
+
+/// Everything after the choice of particle: picking, extraction, 2D
+/// classification with the sharp classes kept, the point group, the
+/// initial model and the refinement.
+pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<RefineInfo> {
+    let pick = PickParams { diameter_a: p.diameter_a, ..p.pick.clone().unwrap_or_default() };
+    let n = pick_all(p, &pick, progress)?;
+    if n < 100 {
+        bail!("只挑到 {n} 个颗粒，太少了");
+    }
+    extract_all(p, 128, true, progress)?;
+    let c = class2d(p, &Class2dParams::default(), progress)?;
+    let sym = if a.symmetry.trim().is_empty() {
+        let (v, dims, _) = data::read_volume(&c.path)?;
+        let b = dims[0];
+        let avgs: Vec<Vec<f32>> = v.chunks(b * b).map(|x| x.to_vec()).collect();
+        let g = discover::symmetry(&avgs, b, p.diameter_a / 2.0 / c.pixel_a, &c.selected);
+        p.symmetry = Some(g.clone());
+        p.save()?;
+        g.symmetry
+    } else {
+        a.symmetry.trim().to_uppercase()
+    };
+    let m = initial(p, &InitialParams { symmetry: sym.clone(), ..Default::default() }, progress)?;
+    // A Cn guess from the 2D classes may be Dn: the initial model tells.
+    let mut sym = sym;
+    if a.symmetry.trim().is_empty() && sym.starts_with('C') {
+        let n: usize = sym[1..].parse().unwrap_or(1);
+        if n >= 2 {
+            let (v, dims, px) = data::read_volume(&m.path)?;
+            if let Some((phi, c)) = discover::dihedral(&v, dims[0], n) {
+                let aligned = discover::align_dihedral(&v, dims[0], phi);
+                data::write_mrc(Path::new(&m.path), &aligned, dims, px, "TifMrcView Pro: ab initio model")?;
+                sym = format!("D{n}");
+                if let Some(g) = p.symmetry.as_mut() {
+                    g.symmetry = sym.clone();
+                    g.two_fold = c;
+                }
+                p.save()?;
+            }
+        }
+    }
+    refine(p, &RefineParams { symmetry: sym, ..Default::default() }, None, progress)
 }

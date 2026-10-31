@@ -1381,6 +1381,16 @@ async fn spa_run(app: AppHandle, req: SpaStep) -> CmdResult<serde_json::Value> {
             "select" => serde_json::json!(sp::select(&mut p, serde_json::from_value(v)?)?),
             "initial" => serde_json::to_value(sp::initial(&mut p, &serde_json::from_value(v)?, &emit)?)?,
             "flip" => { sp::flip_initial(&mut p)?; serde_json::Value::Null }
+            "discover" => {
+                // SAM outlines the blobs when its model is on this computer (no download here).
+                let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(true);
+                let sam = app.state::<crate::sam::Sam>();
+                let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.outline(img, w, h, pts);
+                let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
+                serde_json::to_value(sp::discover(&mut p, outliner, &emit)?)?
+            }
+            "choose" => serde_json::json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
+            "auto" => serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, &emit)?)?,
             "refine" => {
                 let reference = v.get("reference").and_then(|r| r.as_str()).map(str::to_string);
                 serde_json::to_value(sp::refine(&mut p, &serde_json::from_value(v["params"].clone())?, reference.as_deref(), &emit)?)?
@@ -1423,6 +1433,21 @@ async fn spa_classes(dir: String) -> CmdResult<serde_json::Value> {
         let cell = 72;
         let png = crate::spa::render::gallery(&avgs, b, cols, cell)?;
         Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "res": c.res, "selected": c.selected}))
+    }).await
+}
+
+/// The particle kinds found by `discover`, each with its strip as base64 PNG.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_kinds(dir: String) -> CmdResult<Vec<serde_json::Value>> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let d = p.discovery.ok_or_else(|| anyhow::anyhow!("还没有寻找颗粒类型"))?;
+        d.kinds.iter().map(|k| {
+            let mut v = serde_json::to_value(k)?;
+            v["png"] = serde_json::json!(base64(&std::fs::read(&k.png)?));
+            Ok(v)
+        }).collect()
     }).await
 }
 
@@ -2329,6 +2354,7 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_preview,
             #[cfg(feature = "pro")] spa_classes,
             #[cfg(feature = "pro")] spa_export,
+            #[cfg(feature = "pro")] spa_kinds,
             #[cfg(feature = "pro")] spa_cancel,
             diffraction_find,
             diffraction_zones,

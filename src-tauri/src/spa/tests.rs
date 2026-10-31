@@ -471,3 +471,99 @@ fn export_of_folder() {
         eprintln!("{f}");
     }
 }
+
+/// Particle kinds of a real project (`TMV_SPA_DIR`), printed; the strips
+/// are left as kind*.png in the project, the denoised images cached as
+/// dn.bin and shown as dn*.png there.
+#[test]
+#[ignore]
+fn discover_folder() {
+    use super::discover;
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    let t = std::time::Instant::now();
+    let pr = |s: &str, i: usize, n: usize| if i == n { eprintln!("{s} {n} {:.0?}", t.elapsed()) };
+    let cfg = discover::Config::default();
+    let cache = format!("{dir}/dn.bin");
+    let d = if let Ok(b) = std::fs::read(&cache) {
+        let h: Vec<f64> = b[..32].chunks(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
+        let (w, hh, px, n) = (h[0] as usize, h[1] as usize, h[2], h[3] as usize);
+        let v: Vec<f32> = b[32..].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        discover::Denoised { images: v.chunks(w * hh).take(n).map(|c| c.to_vec()).collect(), w, h: hh, px, backend: "cache".into() }
+    } else {
+        let d = discover::denoised(&p, &cfg, &pr).unwrap();
+        let mut b: Vec<u8> = [d.w as f64, d.h as f64, d.px, d.images.len() as f64].iter().flat_map(|x| x.to_le_bytes()).collect();
+        for im in &d.images {
+            b.extend(im.iter().flat_map(|x| x.to_le_bytes()));
+        }
+        std::fs::write(&cache, b).unwrap();
+        for (i, im) in d.images.iter().enumerate() {
+            std::fs::write(format!("{dir}/dn{i}.png"), super::render::gallery(std::slice::from_ref(im), d.w.min(d.h), 1, 900).unwrap()).unwrap();
+        }
+        d
+    };
+    let r = discover::kinds(&p, &cfg, &d, None, &pr).unwrap();
+    for (i, k) in r.kinds.iter().enumerate() {
+        eprintln!("kind {}: {:.0} Å, {} ({:.0}%), elongation {:.2}, contrast {:.2}", i + 1, k.diameter_a, k.count, k.share * 100.0, k.elongation, k.contrast);
+    }
+    let mut p = p;
+    p.discovery = Some(r);
+    p.save().unwrap();
+}
+
+/// The one-click run on a real project after `discover_folder`:
+/// `TMV_SPA_KIND` (1-based, default 1) chosen, the point group guessed.
+#[test]
+#[ignore]
+fn auto_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let mut p = super::project::Project::load(&dir).unwrap();
+    let k: usize = std::env::var("TMV_SPA_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let d = super::project::choose(&mut p, vec![k - 1]).unwrap();
+    eprintln!("diameter {d} Å");
+    let t = std::time::Instant::now();
+    let last = std::sync::Mutex::new(String::new());
+    let pr = |s: &str, i: usize, n: usize| {
+        let mut l = last.lock().unwrap();
+        if *l != s || i == n {
+            eprintln!("[{:>7.1} s] {s} {i}/{n}", t.elapsed().as_secs_f64());
+            *l = s.to_string();
+        }
+    };
+    let r = super::project::auto(&mut p, &Default::default(), &pr).unwrap();
+    eprintln!("symmetry {:?}", p.symmetry);
+    eprintln!("selected classes {:?}", p.class2d.as_ref().map(|c| &c.selected));
+    eprintln!("{} particles, {:.2} Å, masked {:.2} Å, B {:.0}, {:.0} s", r.particles, r.res, r.res_masked, r.bfactor, t.elapsed().as_secs_f64());
+}
+
+/// n-fold rotational correlations of a project's 2D classes (`TMV_SPA_DIR`).
+#[test]
+#[ignore]
+fn symmetry_of_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    let c = p.class2d.as_ref().unwrap();
+    let (v, dims, _) = data::read_volume(&c.path).unwrap();
+    let b = dims[0];
+    let avgs: Vec<Vec<f32>> = v.chunks(b * b).map(|x| x.to_vec()).collect();
+    let radius = p.diameter_a / 2.0 / c.pixel_a;
+    for (i, a) in avgs.iter().enumerate() {
+        let a = &super::plane::shift(a, b, super::plane::centre_of_mass(a, b));
+        let r: Vec<String> = (2..=15).map(|n| format!("{n}:{:.2}", super::discover::rot_corr(a, b, radius, n))).collect();
+        eprintln!("class {i} ({}) {}", c.counts[i], r.join(" "));
+    }
+    eprintln!("{:?}", super::discover::symmetry(&avgs, b, radius, &c.selected));
+}
+
+/// The dihedral test on a project's initial model (`TMV_SPA_DIR`, `TMV_SPA_N`).
+#[test]
+#[ignore]
+fn dihedral_of_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+    let p = super::project::Project::load(&dir).unwrap();
+    let (v, dims, _) = data::read_volume(&p.initial.as_ref().unwrap().path).unwrap();
+    eprintln!("{:?}", super::discover::dihedral(&v, dims[0], n));
+    let (v, dims, _) = data::read_volume(&p.refine.as_ref().unwrap().map).unwrap();
+    eprintln!("refined: {:?}", super::discover::dihedral(&v, dims[0], n));
+}
