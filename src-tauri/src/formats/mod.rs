@@ -1,3 +1,4 @@
+pub mod montage;
 pub mod mrc;
 pub mod raster;
 pub mod sequence;
@@ -47,6 +48,9 @@ pub fn open_series(path: &Path, series: usize) -> Result<Box<dyn Source>> {
 
 /// Opens a file for its pixels only (thumbnails): metadata plugins are skipped.
 pub fn open_pixels(path: &Path) -> Result<Box<dyn Source>> {
+    if matches!(ext_of(path).as_str(), "mrc" | "mrcs" | "map" | "st") && path.is_file() {
+        return montage::open_preview(path, crate::thumb::MAX_SIZE as usize);
+    }
     open_pixels_with(path, 0, Registry::global()).map(|(s, _)| s)
 }
 
@@ -70,11 +74,13 @@ pub(crate) fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Re
         return Ok((Box::new(sequence::Sequence::open_project(path, series, reg)?), None));
     }
     let ext = ext_of(path);
-    if series > 0 && CORE_EXTENSIONS.contains(&ext.as_str()) {
+    let montage = matches!(ext.as_str(), "mrc" | "mrcs" | "map" | "st");
+    if series > 0 && CORE_EXTENSIONS.contains(&ext.as_str()) && !montage {
         bail!("这个文件只有一个图像");
     }
     let core: Box<dyn Source> = match ext.as_str() {
         "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
+        _ if montage => montage::open(path, series)?,
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" | "preali" => Box::new(mrc::MrcSource::open(path)?),
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),
         _ => {
