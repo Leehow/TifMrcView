@@ -20,6 +20,7 @@
       <label>每轮步数<input id="pp-wsteps" type="number" min="10" max="2000" value="200"></label>
       <label>立方体数<input id="pp-cubes" type="number" min="8" max="1000" value="120"></label>
       <label>立方体边长<select id="pp-cube"><option>32</option><option title="仅奇偶两半模式">48</option><option selected>64</option></select></label>
+      <label id="pp-equi-row" hidden title="网络自己的结果旋转后再切楔，必须还原成另一半的旋转结果（ICECREAM 方法）。留出倾转角验证三组里两组补楔更准、一组不如半体；训练慢约 4 倍。"><input id="pp-equi" type="checkbox">等变约束（ICECREAM，慢约 4 倍）</label>
       <label>去噪强度<input id="pp-noise" type="number" min="0" max="1" step="0.05" value="0" title="最后几轮给输入加噪，0 为不去噪"></label>
     </div>
     <div class="al-row"><button id="pp-wedge" class="small primary">缺失楔补偿并打开</button></div>`;
@@ -50,6 +51,7 @@
     $("pp-wedge-note").textContent = t?.halves
       ? "有奇偶两半：缺失楔补偿同时去噪，一个网络把一半旋转后补回另一半（DeepDeWedge 方法），不需要另做 Noise2Noise；「去噪强度」不起作用。立方体 32 快约 10 倍。"
       : "";
+    $("pp-equi-row").hidden = !t?.halves;
     if (t?.halves && !$("pp-cube").dataset.touched) $("pp-cube").value = "32";
   }
   $("pp-source").onchange = note;
@@ -69,6 +71,7 @@
       count: +$("pp-cubes").value,
       cube: +$("pp-cube").value,
       noise: +$("pp-noise").value,
+      equivariant: $("pp-equi").checked && !$("pp-equi-row").hidden ? 2 : 0,
     };
     const r = await W.step("缺失楔补偿", "tomo_wedge", { source: $("pp-source").value, cfg });
     if (!r) return;
