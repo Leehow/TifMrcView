@@ -103,7 +103,7 @@
       <label>最终分辨率 Å<input id="spa-res2" type="number" min="2" value="8"></label>
     </div>
     <div class="al-row"><button id="spa-run-2d" class="small primary">二维分类</button><button id="spa-keep" class="small" disabled>保留选中的类</button></div>
-    <p class="dim">点类平均选择要保留的类（蓝框）；后面的步骤只用选中类的颗粒。不选则全部使用。</p>
+    <p class="dim">点类平均选择要保留的类（高亮框）；后面的步骤只用选中类的颗粒。不选则全部使用。</p>
     <div id="spa-gallery" class="ws-gallery"></div>
     <p id="spa-2d-summary" class="dim"></p>`;
 

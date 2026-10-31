@@ -368,13 +368,17 @@ fn synth_mics(dir: &std::path::Path, truth: &[f32], b: usize, px: f64, count: us
 #[ignore]
 fn workflow_from_micrographs() {
     use super::project;
-    let dir = tempfile::tempdir().unwrap();
+    // TMV_SPA_KEEP=<empty folder> keeps the micrographs and the project.
+    let tmp = tempfile::tempdir().unwrap();
+    let keep = std::env::var("TMV_SPA_KEEP").ok().map(std::path::PathBuf::from);
+    let dir = keep.as_deref().unwrap_or(tmp.path());
+    std::fs::create_dir_all(dir).unwrap();
     let (b, px) = (64, 3.0);
     let truth = phantom(b);
     let n_mics: usize = std::env::var("TMV_SPA_MICS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
-    let made = synth_mics(dir.path(), &truth, b, px, n_mics, 1024);
+    let made = synth_mics(dir, &truth, b, px, n_mics, 1024);
     let log = |s: &str, d: usize, t: usize| if d == t { eprintln!("{s} done ({t})") };
-    let mut p = project::Project::open(&dir.path().to_string_lossy()).unwrap();
+    let mut p = project::Project::open(&dir.to_string_lossy()).unwrap();
     assert_eq!(p.mics.len(), n_mics);
     assert!((p.optics.pixel_a - px).abs() < 1e-3, "pixel {}", p.optics.pixel_a);
     p.diameter_a = 110.0;
