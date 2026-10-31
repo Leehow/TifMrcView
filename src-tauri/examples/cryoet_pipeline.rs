@@ -28,6 +28,22 @@ fn main() -> Result<()> {
         d.alignment = Some(a);
         d.save()?;
     }
+    if steps.contains("thick") {
+        let a = d.alignment.clone().context("align first")?;
+        let bin = tomo::auto::output_bin(img.info().width, img.info().height, d.optics.pixel_a.unwrap_or(1.0));
+        println!("thickness, offset: {:?} at bin {bin}", tomo::auto::estimate_thickness(&img, &a, d.optics.pixel_a.unwrap_or(1.0), bin, &progress)?);
+        return Ok(());
+    }
+    if steps.contains("auto") {
+        let (dev, _) = tifmrcview_lib::ctf_gpu::device().context("GPU")?;
+        let t = Instant::now();
+        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, wedge: steps.contains("wedge"), fresh: true }, &progress)?;
+        eprintln!();
+        println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        png(&r.raw)?;
+        png(&r.path)?;
+        return Ok(());
+    }
     if steps.contains("export") {
         let dir = Path::new(stack).parent().unwrap().join("export");
         std::fs::create_dir_all(&dir)?;

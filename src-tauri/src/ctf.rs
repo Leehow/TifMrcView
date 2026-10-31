@@ -132,7 +132,7 @@ impl Optics {
         if self.gamma(df, k2, 0.0).sin() >= 0.0 { 1.0 } else { -1.0 }
     }
 
-    fn gamma(&self, df: f64, k2: f64, phase: f64) -> f64 {
+    pub(crate) fn gamma(&self, df: f64, k2: f64, phase: f64) -> f64 {
         self.a * df * k2 - self.b * k2 * k2 + self.w + phase
     }
 
