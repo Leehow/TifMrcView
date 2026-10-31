@@ -8,7 +8,8 @@
 //! the measured views there (Fourier ring correlation in frequency bands,
 //! middle half of the width, where rays stay inside the slab). Without
 //! movie frames the halves are the kept views alternately.
-//! Methods: WBP, WBP + Gaussian σ1, IsoNet on the one tomogram, halves.
+//! Methods: WBP, WBP + Gaussian σ1, IsoNet on the one tomogram, halves,
+//! ICECREAM-style halves (skip with HOLDOUT_NO_ICECREAM=1).
 use anyhow::{bail, Context, Result};
 use std::{path::Path, time::Instant};
 use tifmrcview_lib::{fft::Fft, formats, image::OpenImage, tomo::recon, wedge};
@@ -82,6 +83,12 @@ fn main() -> Result<()> {
     let halves_cfg = wedge::TrainConfig { cube, iterations: 3, steps: steps / 3, ..Default::default() };
     methods.push(("halves", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &halves_cfg, |_| {})?));
     println!("halves in {:.0} s", t2.elapsed().as_secs_f64());
+    if std::env::var("HOLDOUT_NO_ICECREAM").is_err() {
+        let t3 = Instant::now();
+        let cfg = wedge::TrainConfig { equivariant: 2.0, ..halves_cfg };
+        methods.push(("ICECREAM", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &cfg, |_| {})?));
+        println!("ICECREAM in {:.0} s", t3.elapsed().as_secs_f64());
+    }
 
     // Project each result to the left-out tilts and compare.
     let held_angles: Vec<f64> = held.iter().map(|&v| angles[v]).collect();

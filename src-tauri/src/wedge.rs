@@ -549,11 +549,17 @@ pub struct TrainConfig {
     /// With two half tomograms: weight of the missing wedge against the
     /// measured part in the loss.
     pub omega: f32,
+    /// With two half tomograms: 0 = DeepDeWedge-style training (turned
+    /// halves predict each other); above 0 = ICECREAM-style (each half
+    /// predicts the other where measured, plus this weight × the
+    /// equivariance loss: the network's own result, turned and cut again,
+    /// must come back as the turned result of the other half).
+    pub equivariant: f32,
 }
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0 }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0 }
     }
 }
 
@@ -834,8 +840,14 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let ad = dev.clone().autodiff();
     let (c, s) = dft(n, &ad);
     let (c0, s0) = dft(n, dev);
+    let keep_v = keep.clone();
     let keep = Tensor::<4>::from_data(TensorData::new(keep, [1, n, n, n]), dev);
-    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
+    let eq = cfg.equivariant > 0.0;
+    let bb = if eq { 2 * cfg.batch } else { cfg.batch };
+    let n3 = n * n * n;
+    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
+    let measured = keep_v.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
+    let keep_w = Tensor::<4>::from_data(TensorData::new(keep_v.iter().map(|&k| k / measured).collect::<Vec<f32>>().repeat(bb), [bb, n, n, n]), &ad);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
@@ -846,6 +858,30 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
+            let loss = if eq {
+                // ICECREAM: u = f(y) for both halves; the data term asks
+                // u of one half to match the other half where measured;
+                // the equivariance term turns u (held fixed), cuts the
+                // wedge again and asks the network to give back the turned
+                // u of the other half, where that turned half was measured.
+                let picks: Vec<(usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()))).collect();
+                let orig = &orig;
+                let y: Vec<f32> = (0..2).flat_map(|h| picks.iter().flat_map(move |&(i, _)| orig[h][i].iter().copied())).collect();
+                let other: Vec<f32> = y[cfg.batch * n3..].iter().chain(&y[..cfg.batch * n3]).copied().collect();
+                let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [bb, 1, n, n, n]), &ad));
+                let target = Tensor::<5>::from_data(TensorData::new(other, [bb, 1, n, n, n]), &ad);
+                let data = spectral_error((u.clone() - target) * window.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
+                let held = u.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+                let turned: Vec<Vec<f32>> = (0..bb).into_par_iter().map(|k| rots[picks[k % cfg.batch].1].apply(&held[k * n3..(k + 1) * n3], n)).collect();
+                let z = Tensor::<4>::from_data(TensorData::new(turned.concat(), [bb, n, n, n]), dev);
+                let z = Tensor::<5>::from_data(spectral_cut(z, &c0, &s0, &keep).reshape([bb, 1, n, n, n]).into_data(), &ad);
+                let goal: Vec<f32> = (0..bb).flat_map(|k| turned[(k + cfg.batch) % bb].iter().copied()).collect();
+                let goal = Tensor::<5>::from_data(TensorData::new(goal, [bb, 1, n, n, n]), &ad);
+                let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % cfg.batch].1].iter().copied()).collect();
+                let w = Tensor::<4>::from_data(TensorData::new(w, [bb, n, n, n]), &ad);
+                let equi = spectral_error((net.forward(z) - goal) * window.clone(), &c, &s, w) / ((bb * n3) as f32 * (1.0 + cfg.omega));
+                data + equi * cfg.equivariant
+            } else {
             let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
             let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
                 .par_iter()
@@ -859,7 +895,8 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
             let x = Tensor::<5>::from_data(spectral_cut(x, &c0, &s0, &keep).reshape([cfg.batch, 1, n, n, n]).into_data(), &ad);
             let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]), &ad);
             let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
-            let loss = spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm;
+            spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm
+            };
             let lv: f32 = loss.clone().into_scalar();
             loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
             let grads = GradientsParams::from_grads(loss.backward(), &net);
@@ -1239,11 +1276,15 @@ mod tests {
         assert!(out.iter().all(|v| v.is_finite()));
         let p = last.unwrap();
         assert_eq!((p.iteration, p.step, p.steps), (3, 2, 2));
+        // ICECREAM-style training runs too.
+        let cfg = TrainConfig { equivariant: 2.0, ..cfg };
+        let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |_| {}).unwrap();
+        assert!(out.iter().all(|v| v.is_finite()));
     }
 
     /// Halves against one tomogram, on a noisy phantom (slow on the CPU):
     /// cargo test --release --features pro --lib wedge::tests::halves_beat -- --ignored --nocapture
-    /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half, WO omega,
+    /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half, WO omega, WE ICECREAM weight,
     /// WONE set = skip the one-tomogram run). Runs on the GPU when there is one.
     #[test]
     #[ignore]
@@ -1272,6 +1313,7 @@ mod tests {
             levels: 2,
             seed: 9,
             omega: env("WO", 2.0) as f32,
+            equivariant: env("WE", 0.0) as f32,
             ..Default::default()
         };
         // Correlation with the truth, overall and inside the wedge only.
@@ -1307,7 +1349,7 @@ mod tests {
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
         let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0 };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0 };
         let mut last = None;
         let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
@@ -1333,7 +1375,7 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0 };
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0 };
         let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
@@ -1405,7 +1447,7 @@ mod bench {
 
     /// Even/odd half tomograms (e.g. from the cryo-ET pipeline):
     /// TMV_HALF_EVEN=… TMV_HALF_ODD=… [TMV_HALF_TILTS=x.tlt] [TMV_HALF_BIN=2]
-    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_CUBE=64] [TMV_HALF_OUT=x.mrc]
+    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_EQUI=0 (ICECREAM weight, e.g. 2)] [TMV_HALF_CUBE=64] [TMV_HALF_OUT=x.mrc]
     /// cargo test --release --features pro --lib wedge::bench::halves -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -1430,7 +1472,7 @@ mod bench {
             g.min_tilt = Some(tilts.iter().cloned().fold(f32::MAX, f32::min));
             println!("  {} tilts {:?}..{:?}", tilts.len(), g.min_tilt, g.max_tilt);
         }
-        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
+        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, equivariant: env("TMV_HALF_EQUI").unwrap_or(0.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
         while a.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
             cfg.cube /= 2;
         }
