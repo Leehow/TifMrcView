@@ -268,16 +268,33 @@ fn run_movie(
     let sp = input::Spool::prepare(&movie, p, parent, progress)?;
     let raw = sp.counts.iter().sum::<usize>();
     let alignment_start = std::time::Instant::now();
-    let g =
-        crate::align::movie_planes(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
-            progress("全局对齐", done, total)
-        })?;
-    let global: Vec<_> = g
-        .shifts
-        .iter()
-        .map(|d| d.map(|v| v * sp.bin as f64))
-        .collect();
-    let local = local::estimate(&sp, &global, p, progress)?;
+    let g = crate::align::movie_planes(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
+        progress("全局对齐", done, total)
+    });
+    let (global, local, cc) = match g {
+        Ok(g) => {
+            let global: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
+            let local = local::estimate(&sp, &global, p, progress)?;
+            (global, local, g.cc)
+        }
+        // Frames with no measurable signal (an empty hole, a blank tilt):
+        // any peak would be noise, so the frames are summed as recorded.
+        Err(e) if e.downcast_ref::<crate::align::NoSignal>().is_some() => {
+            warnings.push(format!("{e}；按未校正直接求和"));
+            let local = local::Local {
+                model: local::Model::zero(&sp.times),
+                patches: Vec::new(),
+                global_residual: 0.0,
+                local_residual: 0.0,
+                rejected: 0,
+                backend: String::new(),
+                cpu_pair_ms: 0.0,
+                gpu_pair_ms: None,
+            };
+            (vec![[0.0; 2]; sp.len()], local, vec![0.0; sp.len()])
+        }
+        Err(e) => return Err(e),
+    };
     let alignment_ms = alignment_start.elapsed().as_secs_f64() * 1000.0;
     let fraction_dose = p
         .total_dose
@@ -476,7 +493,7 @@ fn run_movie(
         raw_fractions: raw,
         pixel_a: pixel,
         global,
-        cc: g.cc,
+        cc,
         local,
         total_drift,
         mean_local_motion,

@@ -1053,6 +1053,21 @@ pub(crate) fn patch_window(n: usize) -> (Vec<f32>, Vec<f32>) {
     ((0..n*n).map(|i|win[i/n]*win[i%n]).collect(), make_filter(n/2))
 }
 
+/// A movie whose frames do not correlate: nothing to measure motion on.
+#[cfg(feature = "pro")]
+#[derive(Debug)]
+pub(crate) struct NoSignal(pub f64);
+
+#[cfg(feature = "pro")]
+impl std::fmt::Display for NoSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "电影全局相关度过低（中位 CC={:.3}），无法可靠测量运动；请增加分组或核对原始电影", self.0)
+    }
+}
+
+#[cfg(feature = "pro")]
+impl std::error::Error for NoSignal {}
+
 /// Motion workspace: the same iterative movie solver on reduced groups.
 #[cfg(feature = "pro")]
 pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {
@@ -1079,7 +1094,7 @@ pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(
             for v in &mut d{for k in 0..2{v[k]=(v[k]-mean[k])*bin as f64;}}
             shifts=d;cc=c;iterations+=it;
         }
-        if median(&cc)<0.12{bail!("电影全局相关度过低（中位 CC={:.3}），无法可靠测量运动；请增加分组或核对原始电影",median(&cc));}
+        if median(&cc)<0.12{return Err(NoSignal(median(&cc)).into());}
     }
     Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0})
 }
