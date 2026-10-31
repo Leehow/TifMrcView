@@ -1422,7 +1422,7 @@ async fn spa_classes(dir: String) -> CmdResult<serde_json::Value> {
         let cols = 8;
         let cell = 72;
         let png = crate::spa::render::gallery(&avgs, b, cols, cell)?;
-        Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "selected": c.selected}))
+        Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "res": c.res, "selected": c.selected}))
     }).await
 }
 

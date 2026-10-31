@@ -48,6 +48,9 @@ pub struct Class2dResult {
     pub counts: Vec<usize>,
     /// Mean correlation of each class's particles.
     pub scores: Vec<f32>,
+    /// Resolution of each average, Å: where the FRC of the averages of
+    /// its even and odd particles falls below 0.143.
+    pub res: Vec<f64>,
 }
 
 /// Runs the classification on `ids` (indices into `parts`), updating their
@@ -79,6 +82,7 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
     let mut scores = vec![0f32; k_classes];
     let iters = p.iterations.max(1);
     let total = iters + 1;
+    let mut halves: Vec<Accum2> = vec![];
     for it in 0..=iters {
         check_cancel()?;
         // Resolution: from res_start to res_end over the first two thirds.
@@ -112,6 +116,10 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
         let range = if it <= 2 { 3 } else { 1 };
         let offs = data::offsets(range);
         let mut acc = vec![Accum2::new(bw); k_classes];
+        // In the last pass also the averages of even and odd particles.
+        if it == iters {
+            halves = vec![Accum2::new(bw); 2 * k_classes];
+        }
         let mut sums = vec![0f64; k_classes];
         let block = 512;
         for (bi, chunk) in ids.chunks(block).enumerate() {
@@ -143,6 +151,10 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
             let sh: Vec<[f32; 2]> = ps.iter().map(|q| q.shift2d).collect();
             let c = data::coeffs(optics, px, b, &full, &noise, &ps, &fts, &sh, &[]);
             insert_all(&mut acc, &c, &full, &ps);
+            if !halves.is_empty() {
+                let parity: Vec<usize> = chunk.iter().map(|&i| i % 2).collect();
+                insert_halves(&mut halves, &c, &full, &ps, &parity);
+            }
             progress("二维分类", it * 1000 + (bi + 1) * 1000 * block / ids.len().max(1), total * 1000);
         }
         // New averages; empty or tiny classes restart from a split of the largest.
@@ -175,6 +187,17 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
         }
         progress("二维分类", (it + 1) * 1000, total * 1000);
     }
+    let res: Vec<f64> = (0..k_classes)
+        .into_par_iter()
+        .map(|c| {
+            let (a, b) = (&halves[2 * c], &halves[2 * c + 1]);
+            if a.count < 3 || b.count < 3 {
+                return UNRESOLVED;
+            }
+            let r = bw as f64 / 2.0 - 1.0;
+            frc_res(&a.average(0.2, r, radius), &b.average(0.2, r, radius), bw, pxw)
+        })
+        .collect();
     // Sort by size; renumber the particles.
     let mut order: Vec<usize> = (0..k_classes).collect();
     order.sort_by_key(|&c| std::cmp::Reverse(counts[c]));
@@ -194,6 +217,7 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
         averages: order.iter().map(|&c| averages[c].clone()).collect(),
         counts: order.iter().map(|&c| counts[c]).collect(),
         scores: order.iter().map(|&c| scores[c]).collect(),
+        res: order.iter().map(|&c| res[c]).collect(),
     })
 }
 
@@ -207,6 +231,61 @@ fn insert_all(acc: &mut [Accum2], c: &Coeffs, half: &Half, ps: &[&Particle]) {
             }
         }
     });
+}
+
+/// Resolution of a class without signal (finite, so it survives JSON).
+pub const UNRESOLVED: f64 = 999.0;
+
+/// Like `insert_all`, into the even (`2·class`) or odd (`2·class + 1`) average.
+fn insert_halves(acc: &mut [Accum2], c: &Coeffs, half: &Half, ps: &[&Particle], parity: &[usize]) {
+    let k = c.k;
+    acc.par_iter_mut().enumerate().for_each(|(slot, a)| {
+        for (j, q) in ps.iter().enumerate() {
+            if q.class2d as usize * 2 + parity[j] == slot {
+                a.insert(q.psi2d as f64, half, &c.x[j * 2 * k..(j + 1) * 2 * k], &c.c2[j * k..(j + 1) * k]);
+            }
+        }
+    });
+}
+
+/// Resolution (Å) where the Fourier ring correlation of two images falls
+/// below 0.143; `UNRESOLVED` when it never rises above it.
+pub fn frc_res(a: &[f32], b: &[f32], n: usize, px: f64) -> f64 {
+    let fft = crate::fft::Fft::new(n);
+    let (ar, ai) = super::fourier::ft2(&fft, n, a);
+    let (br, bi) = super::fourier::ft2(&fft, n, b);
+    let shells = n / 2;
+    let (mut x, mut p, mut q) = (vec![0f64; shells], vec![0f64; shells], vec![0f64; shells]);
+    for y in 0..n {
+        for xx in 0..n {
+            let (fx, fy) = (super::fourier::freq(xx, n), super::fourier::freq(y, n));
+            let r = ((fx * fx + fy * fy) as f64).sqrt().round() as usize;
+            if r < shells {
+                let j = y * n + xx;
+                x[r] += (ar[j] * br[j] + ai[j] * bi[j]) as f64;
+                p[r] += (ar[j] * ar[j] + ai[j] * ai[j]) as f64;
+                q[r] += (br[j] * br[j] + bi[j] * bi[j]) as f64;
+            }
+        }
+    }
+    match (1..shells).find(|&r| x[r] / (p[r] * q[r]).sqrt().max(1e-30) < 0.143) {
+        Some(1) => UNRESOLVED,
+        Some(r) => n as f64 * px / (r as f64 - 0.5),
+        None => 2.0 * px,
+    }
+}
+
+/// The classes to keep by default: those whose average resolves within
+/// `slack` × the best class's resolution (among classes holding at least
+/// 1 % of the particles), as junk and blurred classes resolve much less.
+pub fn auto_select(counts: &[usize], res: &[f64], slack: f64) -> Vec<usize> {
+    let total: usize = counts.iter().sum();
+    let big = |c: usize| counts[c] * 100 >= total;
+    let best = (0..counts.len()).filter(|&c| big(c)).map(|c| res[c]).fold(f64::INFINITY, f64::min);
+    if best >= UNRESOLVED {
+        return vec![];
+    }
+    (0..counts.len()).filter(|&c| big(c) && res[c] <= best * slack).collect()
 }
 
 /// Real-space image from half-plane coefficients.

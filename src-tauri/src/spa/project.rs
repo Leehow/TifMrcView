@@ -65,6 +65,9 @@ pub struct Class2dInfo {
     pub pixel_a: f64,
     pub counts: Vec<usize>,
     pub scores: Vec<f32>,
+    /// Resolution of each average (even/odd FRC), Å.
+    #[serde(default)]
+    pub res: Vec<f64>,
     pub selected: Vec<usize>,
     pub params: Class2dParams,
 }
@@ -403,7 +406,9 @@ pub fn class2d(p: &mut Project, params: &Class2dParams, progress: Progress) -> R
     }
     data::write_mrc(Path::new(&path), &all, [r.b, r.b, r.averages.len()], r.pixel_a, "TifMrcView Pro: 2D classes")?;
     p.save_particles(&parts)?;
-    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, selected: vec![], params: params.clone() };
+    // The sharp classes are kept by default; the user can change the choice.
+    let selected = class2d::auto_select(&r.counts, &r.res, 1.5);
+    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, res: r.res, selected, params: params.clone() };
     p.class2d = Some(info.clone());
     p.save()?;
     Ok(info)
@@ -457,7 +462,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
     let b = r.full.b;
     let px = r.full.px;
     let mask = post::auto_mask(&r.full.v, b, px, p.diameter_a / 2.0 / px * 1.2);
-    let (sharp, s) = post::sharpen(&r.full.v, &r.half1.v, &r.half2.v, &mask, b, px, None);
+    let (sharp, s) = post::sharpen(&r.half1.v, &r.half2.v, &mask, b, px, None);
     let names = ["refine_map.mrc", "refine_sharp.mrc", "refine_half1.mrc", "refine_half2.mrc", "refine_mask.mrc"];
     for (name, v, label) in [
         (names[0], &r.full.v, "TifMrcView Pro: refined map"),

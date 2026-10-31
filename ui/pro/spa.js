@@ -342,9 +342,10 @@
           c.getContext("2d").drawImage(img, (i % r.cols) * r.cell, Math.floor(i / r.cols) * r.cell, r.cell, r.cell, 0, 0, r.cell, r.cell);
           const cell = document.createElement("figure");
           cell.className = P.classes.chosen.has(i) ? "on" : "";
-          cell.title = `类 ${i + 1}：${n} 个颗粒 · 相关 ${fmt(r.scores[i], 2)}`;
+          const res = r.res && r.res[i] < 999 ? `${fmt(r.res[i], 0)} Å` : "";
+          cell.title = `类 ${i + 1}：${n} 个颗粒 · 相关 ${fmt(r.scores[i], 2)}${res ? ` · 分辨率 ${res}` : ""}`;
           const cap = document.createElement("figcaption");
-          cap.textContent = `${i + 1} · ${n}`;
+          cap.textContent = res ? `${n} · ${res}` : `${i + 1} · ${n}`;
           cell.append(c, cap);
           cell.onclick = () => {
             P.classes.chosen.has(i) ? P.classes.chosen.delete(i) : P.classes.chosen.add(i);
