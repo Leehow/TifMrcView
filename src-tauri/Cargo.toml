@@ -115,3 +115,7 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 [[example]]
 name = "tomo_run"
 required-features = ["pro"]
+
+[[example]]
+name = "motion_run"
+required-features = ["pro"]

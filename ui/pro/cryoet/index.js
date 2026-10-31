@@ -32,5 +32,5 @@
   $("btn-fft").addEventListener("click",()=>{if(F.on)close();});
   window.TifMrcViewPro.cryoet={sections,panel,select,active:()=>current,register:(i,h)=>hooks.set(i,h),status:s=>{$("cryo-status").textContent=s;}};
   select(current);
-  setInterval(()=>{button.disabled=!S.info;},400);
+  setInterval(()=>{button.disabled=false;},400);
 })();

@@ -1056,15 +1056,67 @@ fn ctf_cancel() {
 /// `align-progress` {done, total}.
 #[tauri::command]
 async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResult<crate::align::Aligned> {
+    #[cfg(feature = "pro")] let job=MotionJob::begin(false)?;
     let img = current(&app.state::<AppState>(), req.token)?;
     blocking(move || {
         let progress = |done, total| {
             let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
         };
+        #[cfg(feature = "pro")] let _job=job;
         crate::align::estimate(&img, &req, &progress)
     })
     .await
 }
+
+/// Beam-induced movie correction, sharing the global movie solver.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_run(app: AppHandle, req: crate::motion::RunReq) -> CmdResult<crate::motion::MotionResult> {
+    let img = {
+        let state=app.state::<AppState>();
+        if !state.save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
+        req.token.map(|token|current(&state,token)).transpose()?
+    };
+    let job=MotionJob::begin(true)?;
+    blocking(move || {let _job=job;crate::motion::run(&req,img,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_series(app: AppHandle, req: crate::motion::series::SeriesReq) -> CmdResult<crate::motion::series::SeriesResult> {
+    if !app.state::<AppState>().save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
+    let job=MotionJob::begin(true)?;
+    blocking(move || {let _job=job;crate::motion::series::run(&req,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn motion_cancel() {if MOTION_RUNNING.load(Ordering::SeqCst){crate::motion::cancel();}}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_pick(app:AppHandle,dir:String,kind:String)->Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let exts=match kind.as_str(){"mdoc"=>vec!["mdoc"],"gain"=>vec!["mrc","mrcs","tif","tiff"],_=>vec!["eer","mrc","mrcs","tif","tiff"]};
+    app.dialog().file().set_directory(dir).add_filter("Cryo-ET",&exts).blocking_pick_file().and_then(|f|f.into_path().ok()).map(|p|p.to_string_lossy().into_owned())
+}
+
+#[cfg(feature = "pro")]
+static MOTION_ALIGN_BUSY:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+static MOTION_RUNNING:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct MotionJob;
+#[cfg(feature = "pro")]
+impl MotionJob {
+    fn begin(motion:bool)->CmdResult<Self> {
+        MOTION_ALIGN_BUSY.compare_exchange(false,true,Ordering::SeqCst,Ordering::SeqCst).map_err(|_|"电影/漂移校正正在运行".to_string())?;
+        MOTION_RUNNING.store(motion,Ordering::SeqCst);
+        if motion {crate::motion::begin();}Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for MotionJob {fn drop(&mut self){MOTION_RUNNING.store(false,Ordering::SeqCst);MOTION_ALIGN_BUSY.store(false,Ordering::SeqCst);}}
 
 /// Tomography commands exist only in Pro builds.
 #[cfg(feature = "pro")]
@@ -1181,6 +1233,7 @@ async fn diffraction_zones(req: crate::diffraction::ZoneReq) -> CmdResult<Vec<cr
 /// Writes the aligned stack or sum to a path from `pick_save_path`.
 #[tauri::command]
 async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()> {
+    #[cfg(feature = "pro")] let job=MotionJob::begin(false)?;
     let img = {
         let state = app.state::<AppState>();
         if !state.save_paths.allowed(&req.path) {
@@ -1192,6 +1245,7 @@ async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()>
         let progress = |done, total| {
             let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
         };
+        #[cfg(feature = "pro")] let _job=job;
         crate::align::save(&img, &req, &progress)
     })
     .await
@@ -1199,6 +1253,7 @@ async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()>
 
 #[tauri::command]
 fn align_cancel() {
+    #[cfg(feature = "pro")] if MOTION_RUNNING.load(Ordering::SeqCst) {return;}
     crate::align::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -1968,6 +2023,10 @@ pub fn run() {
             ctf_fit_stack,
             ctf_cancel,
             align_estimate,
+            #[cfg(feature = "pro")] motion_run,
+            #[cfg(feature = "pro")] motion_series,
+            #[cfg(feature = "pro")] motion_cancel,
+            #[cfg(feature = "pro")] motion_pick,
             #[cfg(feature = "pro")] tomo_geometry,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,

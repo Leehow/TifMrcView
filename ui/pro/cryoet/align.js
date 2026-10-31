@@ -46,7 +46,7 @@
       const m = await invoke("tomo_geometry", { token });
       if (token !== S.token) return;
       $("tm-axis").value = m.axis ?? 90;
-      status(m.angles.length ? `已读取 ${m.angles.length} 个倾角` : "未找到倾角文件，请输入起始角 / 步长");
+      status(m.angles.length ? `已读取 ${m.angles.length} 个倾角`+(m.angles.length<3?"；倾转对齐至少需要 3 个可用倾角":"") : "未找到倾角文件，请输入起始角 / 步长");
       if (!m.angles.length) $("tm-source").value = "manual";
     } catch (e) { if (token === S.token) status(String(e)); }
   }

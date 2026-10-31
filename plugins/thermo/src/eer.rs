@@ -86,49 +86,15 @@ fn item_num(items: &[(String, String, String)], name: &str) -> Option<f64> {
 
 /// Adds the events of one strip to `out`, the rows of the strip as
 /// little-endian u16 counts (kept as bytes so the page needs no conversion).
-pub fn decode(
-    src: &[u8],
-    out: &mut [u8],
-    (skip_bits, h_bits, v_bits): (u32, u32, u32),
-) -> Result<()> {
-    let nbits = (skip_bits + h_bits + v_bits) as usize;
-    if !(9..=16).contains(&nbits) || skip_bits < 4 {
-        bail!("EER 文件的位宽不对（{skip_bits}+{h_bits}+{v_bits}）");
-    }
-    let mask = (1u32 << skip_bits) - 1;
-    let total = src.len() * 8;
-    let end = total.saturating_sub(nbits);
-    let n = out.len() / 2;
-    let mut bit = 0usize;
-    let mut px = 0usize;
-    while bit < end {
-        let b = bit >> 3;
-        // Little-endian word from byte `b`; zero past the end.
-        let word = if b + 4 <= src.len() {
-            u32::from_le_bytes([src[b], src[b + 1], src[b + 2], src[b + 3]])
-        } else {
-            let mut w = [0u8; 4];
-            w[..src.len() - b].copy_from_slice(&src[b..]);
-            u32::from_le_bytes(w)
-        } >> (bit & 7);
-        let skip = word & mask;
-        px += skip as usize;
-        if px >= n {
-            if px == n {
-                break;
-            }
-            bail!("EER 帧数据损坏（事件位置超出图像）");
-        }
-        if skip == mask {
-            bit += skip_bits as usize;
-            continue;
-        }
-        let c = u16::from_le_bytes([out[2 * px], out[2 * px + 1]]).saturating_add(1);
-        out[2 * px..2 * px + 2].copy_from_slice(&c.to_le_bytes());
-        px += 1;
-        bit += nbits;
-    }
-    Ok(())
+#[path = "eer_decode.rs"]
+mod event_stream;
+
+pub fn decode(src: &[u8], out: &mut [u8], bits: (u32,u32,u32)) -> Result<()> {
+    event_stream::events(src,out.len()/2,bits,|pixel,_,_| {
+        let i=2*pixel;
+        let c=u16::from_le_bytes([out[i],out[i+1]]).saturating_add(1);
+        out[i..i+2].copy_from_slice(&c.to_le_bytes());
+    }).map_err(Into::into)
 }
 
 impl Eer {
