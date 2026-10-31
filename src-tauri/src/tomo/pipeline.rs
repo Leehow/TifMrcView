@@ -89,6 +89,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
     let method = match req.params.method {
         recon::Method::Wbp => "wbp".to_string(),
         recon::Method::Sirt => format!("sirt{}", req.params.iterations),
+        recon::Method::Sart => format!("sart{}", req.params.iterations),
     };
     let three_d = req.ctf_3d && flip.is_some();
     if req.ctf_3d && req.params.method != recon::Method::Wbp {

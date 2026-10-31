@@ -232,8 +232,8 @@ fn projector_geometry_and_reconstruction_quality() {
         let want = c * (30.0 - 23.5) + s * (g.depth(g.z / 2 + 6)) + 23.5;
         assert!((centroid - want).abs() < 0.05, "view {v}: {centroid} vs {want}");
     }
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, backend: "cpu".into(), ..Default::default() };
+    for (method, iterations) in [(Method::Wbp, 15), (Method::Sirt, 15), (Method::Sart, 3)] {
+        let p = Params { thickness: g.z, method, iterations, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, backend: "cpu".into(), ..Default::default() };
         let x = recon::cpu_slab(&g, &b, &p).unwrap();
         let cc = corr(&x, &truth);
         eprintln!("{method:?} phantom cc={cc}");
@@ -284,8 +284,8 @@ fn gpu_matches_cpu() {
         return;
     };
     let (g, _, b, rows) = recon_phantom();
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, ..Default::default() };
+    for method in [Method::Wbp, Method::Sirt, Method::Sart] {
+        let p = Params { thickness: g.z, method, iterations: if method == Method::Sart { 3 } else { 15 }, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, ..Default::default() };
         let cpu = recon::cpu_slab(&g, &b, &p).unwrap();
         let gpu = crate::ctf_gpu::guarded(|| recon_gpu::Plan::new(dev, &g, &p)?.slab(&b, rows)).unwrap().unwrap();
         let e = cpu.iter().zip(&gpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();

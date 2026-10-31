@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 pub enum Method {
     Wbp,
     Sirt,
+    /// Simultaneous algebraic reconstruction (Andersen & Kak, 1984): the
+    /// SIRT update made one view at a time, views taken far apart in turn.
+    Sart,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +252,42 @@ pub fn forward(g: &Geometry, slice: &[f32]) -> Vec<f32> {
     out
 }
 
+/// B for one view: row [w] → slice [z][w].
+pub fn back_view(g: &Geometry, v: usize, row: &[f32]) -> Vec<f32> {
+    let w = g.w;
+    let mut out = vec![0.0; g.z * w];
+    for (z, r) in out.chunks_mut(w).enumerate() {
+        for (x, o) in r.iter_mut().enumerate() {
+            *o = lerp(row, g.detector(v, x, z));
+        }
+    }
+    out
+}
+
+/// A for one view: slice [z][w] → row [w].
+pub fn forward_view(g: &Geometry, v: usize, slice: &[f32]) -> Vec<f32> {
+    let mut one = g.clone();
+    one.trig = vec![g.trig[v]];
+    one.weight = vec![1.0];
+    forward(&one, slice)
+}
+
+/// The order SART visits views in: each next view far from the last
+/// (steps of about 0.618 of the series), so consecutive updates are
+/// nearly independent.
+pub fn sart_order(n: usize) -> Vec<usize> {
+    let step = ((n as f64 * 0.618).round() as usize).max(1);
+    let mut step = step;
+    while gcd(step, n) != 1 {
+        step += 1;
+    }
+    (0..n).map(|k| k * step % n).collect()
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 /// A1 and B1 for one row (they do not depend on Y).
 pub fn normalisers(g: &Geometry) -> (Vec<f32>, Vec<f32>) {
     let rows = forward(g, &vec![1.0; g.z * g.w]);
@@ -290,6 +329,7 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
     let most = cs.iter().copied().fold(0.0, f32::max);
     inverse(&mut cs, SEEN * most);
     let ones = vec![1.0; nv];
+    let order = sart_order(nv);
     let slabs: Vec<Vec<f32>> = sino
         .par_chunks(nv * w)
         .map(|b| {
@@ -297,6 +337,20 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
             for _ in 0..p.iterations {
                 if check_cancel().is_err() {
                     break;
+                }
+                if p.method == Method::Sart {
+                    for &v in &order {
+                        let ax = forward_view(g, v, &x);
+                        let e: Vec<f32> = (0..w).map(|j| (b[v * w + j] - ax[j]) * rs[v * w + j]).collect();
+                        let step = back_view(g, v, &e);
+                        for (x, s) in x.iter_mut().zip(&step) {
+                            *x += p.lambda * s;
+                            if p.non_negative {
+                                *x = x.max(0.0);
+                            }
+                        }
+                    }
+                    continue;
                 }
                 let ax = forward(g, &x);
                 let e: Vec<f32> = b.iter().zip(&ax).zip(&rs).map(|((b, a), r)| (b - a) * r).collect();
