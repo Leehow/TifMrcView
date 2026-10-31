@@ -65,6 +65,12 @@ pub struct Class2dInfo {
     pub pixel_a: f64,
     pub counts: Vec<usize>,
     pub scores: Vec<f32>,
+    /// Resolution of each average (even/odd FRC), Å.
+    #[serde(default)]
+    pub res: Vec<f64>,
+    /// Mean even/odd FRC from 20 Å to Nyquist (what the default choice uses).
+    #[serde(default)]
+    pub quality: Vec<f64>,
     pub selected: Vec<usize>,
     pub params: Class2dParams,
 }
@@ -368,7 +374,7 @@ pub fn extract_all(p: &mut Project, max_box: usize, invert: bool, progress: Prog
     let count = w.finish()?;
     p.save_particles(&parts)?;
     let star = p.path("particles.star");
-    write_star(p, &parts, &path, out, px_out, None, Path::new(&star))?;
+    write_star(p, &parts, &path, out, px_out, None, false, Path::new(&star))?;
     let info = StackInfo { path, box_px: out, pixel_a: px_out, count, star };
     p.stack = Some(info.clone());
     p.class2d = None;
@@ -384,7 +390,7 @@ fn stack_of(p: &Project) -> Result<Stack> {
 }
 
 /// Particles to use: those in the selected 2D classes, or all.
-fn selected(p: &Project, parts: &[Particle]) -> Vec<usize> {
+pub fn selected(p: &Project, parts: &[Particle]) -> Vec<usize> {
     match &p.class2d {
         Some(c) if !c.selected.is_empty() => (0..parts.len()).filter(|&i| parts[i].class2d >= 0 && c.selected.contains(&(parts[i].class2d as usize))).collect(),
         _ => (0..parts.len()).collect(),
@@ -403,7 +409,9 @@ pub fn class2d(p: &mut Project, params: &Class2dParams, progress: Progress) -> R
     }
     data::write_mrc(Path::new(&path), &all, [r.b, r.b, r.averages.len()], r.pixel_a, "TifMrcView Pro: 2D classes")?;
     p.save_particles(&parts)?;
-    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, selected: vec![], params: params.clone() };
+    // The sharp classes are kept by default; the user can change the choice.
+    let selected = class2d::auto_select(&r.counts, &r.quality, 0.6);
+    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, res: r.res, quality: r.quality, selected, params: params.clone() };
     p.class2d = Some(info.clone());
     p.save()?;
     Ok(info)
@@ -457,7 +465,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
     let b = r.full.b;
     let px = r.full.px;
     let mask = post::auto_mask(&r.full.v, b, px, p.diameter_a / 2.0 / px * 1.2);
-    let (sharp, s) = post::sharpen(&r.full.v, &r.half1.v, &r.half2.v, &mask, b, px, None);
+    let (sharp, s) = post::sharpen(&r.half1.v, &r.half2.v, &mask, b, px, None);
     let names = ["refine_map.mrc", "refine_sharp.mrc", "refine_half1.mrc", "refine_half2.mrc", "refine_mask.mrc"];
     for (name, v, label) in [
         (names[0], &r.full.v, "TifMrcView Pro: refined map"),
@@ -473,7 +481,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
     let stack_path = p.stack.as_ref().unwrap().path.clone();
     let used: Vec<Particle> = ids.iter().map(|&i| parts[i].clone()).collect();
     let idx: Vec<usize> = ids.clone();
-    write_star(p, &used, &stack_path, b, px, Some(&idx), Path::new(&star))?;
+    write_star(p, &used, &stack_path, b, px, Some(&idx), true, Path::new(&star))?;
     let info = RefineInfo {
         map: p.path(names[0]),
         sharpened: p.path(names[1]),
@@ -499,14 +507,14 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
 }
 
 /// RELION 3.1-style STAR file (optics group + particles). `index` maps
-/// rows to stack positions when only some particles are written.
-fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f64, index: Option<&[usize]>, out: &Path) -> Result<()> {
+/// rows to stack positions when only some particles are written;
+/// `oriented` adds the angles, origins and half sets of the refinement.
+pub fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f64, index: Option<&[usize]>, oriented: bool, out: &Path) -> Result<()> {
     use std::fmt::Write as _;
     let o = &p.optics;
     let mut s = String::new();
     writeln!(s, "# TifMrcView Pro\n\ndata_optics\n\nloop_\n_rlnOpticsGroup #1\n_rlnOpticsGroupName #2\n_rlnAmplitudeContrast #3\n_rlnSphericalAberration #4\n_rlnVoltage #5\n_rlnImagePixelSize #6\n_rlnImageSize #7\n_rlnImageDimensionality #8")?;
     writeln!(s, "1 opticsGroup1 {:.4} {:.3} {:.1} {:.5} {} 2\n", o.amplitude, o.cs_mm, o.kv, px, b)?;
-    let oriented = index.is_some();
     writeln!(s, "\ndata_particles\n\nloop_\n_rlnCoordinateX #1\n_rlnCoordinateY #2\n_rlnMicrographName #3\n_rlnImageName #4\n_rlnDefocusU #5\n_rlnDefocusV #6\n_rlnDefocusAngle #7\n_rlnOpticsGroup #8\n_rlnAutopickFigureOfMerit #9\n_rlnClassNumber #10")?;
     if oriented {
         writeln!(s, "_rlnAngleRot #11\n_rlnAngleTilt #12\n_rlnAnglePsi #13\n_rlnOriginXAngst #14\n_rlnOriginYAngst #15\n_rlnRandomSubset #16")?;

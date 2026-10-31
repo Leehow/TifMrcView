@@ -35,7 +35,8 @@
     </div>
     <div id="cryo-export-box" class="al-opts" hidden>
       <label class="al-wide">格式<select id="cryo-export-format">
-        <option value="imod">IMOD / etomo 文件夹（.st .xf .tlt .defocus）——IMOD、Warp、RELION 5 都能导入</option>
+        <option value="relion5">RELION 5 断层项目（tilt_series.star + 每张倾转图）——直接接着做子断层平均</option>
+        <option value="imod">IMOD / etomo 文件夹（.st .xf .tlt .defocus）——IMOD、Warp 都能导入</option>
         <option value="aligned">对齐后的倾转序列（MRC + .tlt）——AreTomo、EMAN2、Dynamo 等</option>
         <option value="table">表格 CSV（每张的倾角、平移、旋转、放大率、离焦）</option>
       </select></label>

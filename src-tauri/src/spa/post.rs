@@ -178,11 +178,14 @@ pub struct Sharpened {
 
 /// Masked FSC and sharpening: returns the sharpened map (FSC-weighted,
 /// B-factor applied, low-passed at the resolution) and the numbers.
-pub fn sharpen(full: &[f32], h1: &[f32], h2: &[f32], mask: &[f32], b: usize, px: f64, bfactor: Option<f64>) -> (Vec<f32>, Sharpened) {
+/// Sharpens the average of the unfiltered half maps `h1`, `h2` (a map
+/// already filtered by its FSC would have its fall-off counted twice in
+/// the B factor).
+pub fn sharpen(h1: &[f32], h2: &[f32], mask: &[f32], b: usize, px: f64, bfactor: Option<f64>) -> (Vec<f32>, Sharpened) {
     let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(mask).map(|(a, m)| a * m).collect() };
     let f = corrected_fsc(h1, h2, &masked, b);
     let res = resolution(&f, b, px, 0.143);
-    let mf: Vec<f32> = full.iter().zip(mask).map(|(a, m)| a * m).collect();
+    let mf: Vec<f32> = h1.iter().zip(h2).zip(mask).map(|((a, c), m)| 0.5 * (a + c) * m).collect();
     let (mut re, mut im) = fourier::ft3(b, &mf);
     // Guinier fit of ln|F| against 1/d² from 10 Å to the resolution.
     let shells = b / 2 + 1;
@@ -207,7 +210,7 @@ pub fn sharpen(full: &[f32], h1: &[f32], h2: &[f32], mask: &[f32], b: usize, px:
             .filter(|&r| amp[r] > 0.0)
             .map(|r| ((r as f64 / (b as f64 * px)).powi(2), (amp[r] / cnt[r]).ln()))
             .collect();
-        if pts.len() >= 3 {
+        if pts.len() >= 5 {
             let n = pts.len() as f64;
             let (sx, sy) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
             let (mx, my) = (sx / n, sy / n);

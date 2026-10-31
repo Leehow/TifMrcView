@@ -475,6 +475,16 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
         let v1 = accs[0].reconstruct(Some(&f));
         let v2 = accs[1].reconstruct(Some(&f));
         maps = [fourier::resample3(&v1, bw, b), fourier::resample3(&v2, bw, b)];
+        // From the local search on, flatten the solvent of the references
+        // with a soft mask around the molecule (as RELION and cryoSPARC do):
+        // the noise outside it otherwise pulls the alignments.
+        if it + 1 >= p.global_iterations {
+            let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
+            let m = post::auto_mask(&avg, b, px, mask_r);
+            for map in &mut maps {
+                map.iter_mut().zip(&m).for_each(|(v, w)| *v *= w);
+            }
+        }
         if new_res < best_res * 0.98 {
             best_res = new_res;
             stalls = 0;

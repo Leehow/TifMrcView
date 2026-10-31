@@ -16,7 +16,7 @@ window.TifMrcViewPro = {
   css.href = "pro/pro.css";
   document.head.appendChild(css);
   // Segmentation labels, the 3D view of Z stacks, CTF fitting in the FFT panel, drift correction, the Cryo-ET workspace, the single-particle workspace, diffraction indexing, denoising, missing-wedge correction, spectrum quantification, 4D-STEM and particle statistics (in this order).
-  for (const src of ["pro/labels.js", "pro/volume.js", "pro/ctf.js", "pro/align.js", "pro/cryoet/index.js", "pro/cryoet/motion.js", "pro/cryoet/ctf.js", "pro/cryoet/align.js", "pro/cryoet/recon.js", "pro/cryoet/post.js", "pro/spa.js", "pro/diffraction.js", "pro/denoise.js", "pro/wedge.js", "pro/spectro.js", "pro/stem4d.js", "pro/particles.js"]) {
+  for (const src of ["pro/labels.js", "pro/volume.js", "pro/ctf.js", "pro/align.js", "pro/cryoet/index.js", "pro/cryoet/motion.js", "pro/cryoet/ctf.js", "pro/cryoet/align.js", "pro/cryoet/recon.js", "pro/cryoet/post.js", "pro/spa/index.js", "pro/spa/mics.js", "pro/spa/ctf.js", "pro/spa/pick.js", "pro/spa/class2d.js", "pro/spa/initial.js", "pro/spa/refine.js", "pro/diffraction.js", "pro/denoise.js", "pro/wedge.js", "pro/spectro.js", "pro/stem4d.js", "pro/particles.js"]) {
     const s = document.createElement("script");
     s.src = src;
     s.async = false;
