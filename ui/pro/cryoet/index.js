@@ -5,7 +5,7 @@
 // stack's path, so the workspace keeps it while its tomograms are open.
 // The step modules (motion.js, ctf.js, align.js, recon.js, post.js) fill
 // `sections` and call `register` with their hooks.
-// Shares app.js globals: S, T, F, invoke, $, setFft, openPath.
+// Shares app.js globals: S, T, F, invoke, $, setFft, openPath, saveDir.
 (() => {
   const STEPS = ["① 运动校正", "② CTF", "③ 倾转对齐", "④ 重构", "⑤ 去噪 / 去伪影"];
   const W = window.TifMrcViewPro.cryoet = {
@@ -31,6 +31,16 @@
     <div id="cryo-dataset">
       <span id="cryo-dataset-name" class="dim">还没有倾转序列</span>
       <button id="cryo-use" class="small" title="把当前打开的倾转序列作为工作区的数据集">使用当前叠层</button>
+      <button id="cryo-export" class="small" title="把对齐、CTF 等结果导出给其他软件" disabled>导出…</button>
+    </div>
+    <div id="cryo-export-box" class="al-opts" hidden>
+      <label class="al-wide">格式<select id="cryo-export-format">
+        <option value="imod">IMOD / etomo 文件夹（.st .xf .tlt .defocus）——IMOD、Warp、RELION 5 都能导入</option>
+        <option value="aligned">对齐后的倾转序列（MRC + .tlt）——AreTomo、EMAN2、Dynamo 等</option>
+        <option value="table">表格 CSV（每张的倾角、平移、旋转、放大率、离焦）</option>
+      </select></label>
+      <label>对齐叠层 binning<select id="cryo-export-bin"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
+      <div class="al-row"><button id="cryo-export-go" class="small primary">选择文件夹并导出…</button></div>
     </div>
     <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
     <div id="cryo-body"></div>
@@ -81,8 +91,20 @@
   W.setDataset = (d) => {
     W.dataset = d;
     $("cryo-dataset-name").textContent = d ? `数据集：${W.name(d.stack)} · ${d.angles.length} 个倾角` : "还没有倾转序列";
+    $("cryo-export").disabled = !d?.alignment;
     marks();
     for (const h of W.hooks.values()) h.dataset?.(d);
+  };
+
+  $("cryo-export").onclick = () => { $("cryo-export-box").hidden = !$("cryo-export-box").hidden; };
+  $("cryo-export-format").onchange = () => { $("cryo-export-bin").parentElement.hidden = $("cryo-export-format").value !== "aligned"; };
+  $("cryo-export-format").onchange();
+  $("cryo-export-go").onclick = async () => {
+    if (!W.dataset?.alignment) return W.status("先完成③倾转对齐再导出");
+    const dir = await invoke("pick_folder", { dir: saveDir() });
+    if (!dir) return;
+    const files = await W.step("导出", "tomo_export", { format: $("cryo-export-format").value, dir, bin: +$("cryo-export-bin").value });
+    if (files) W.status(`已导出 ${files.length} 个文件到 ${dir}`);
   };
 
   // Loads the dataset of a tilt series by its path.

@@ -28,6 +28,14 @@ fn main() -> Result<()> {
         d.alignment = Some(a);
         d.save()?;
     }
+    if steps.contains("export") {
+        let dir = Path::new(stack).parent().unwrap().join("export");
+        std::fs::create_dir_all(&dir)?;
+        for format in ["imod", "aligned", "table"] {
+            let files = tomo::export::run(&d, format, dir.to_str().unwrap(), bin, &|_, _| {})?;
+            println!("export {format}: {}", files.join(", "));
+        }
+    }
     if steps.contains("ctf") {
         let t = Instant::now();
         let params = tifmrcview_lib::ctf::Params { voltage_kv: d.optics.kv, cs_mm: d.optics.cs_mm, amp_contrast: d.optics.amplitude, pixel_a: px, res_low_a: 30.0, res_high_a: (px * 2.5).max(5.0), df_min_a: 5000.0, df_max_a: 80000.0, max_astig_a: 2000.0, phase: false, backend: None };

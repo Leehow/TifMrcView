@@ -233,19 +233,8 @@ pub fn export(a: &Alignment, path: &str) -> Result<()> {
     let mut tlt = String::new();
     let mut map = String::new();
     for v in a.views.iter().filter(|v| !v.excluded) {
-        let r = geometry::rotation(a.axis + v.rotation);
-        let aa = [
-            r[0][0] / v.mag,
-            r[1][0] / v.mag,
-            r[0][1] / v.mag,
-            r[1][1] / v.mag,
-        ];
-        let dx = -aa[0] * v.shift[0] - aa[1] * v.shift[1];
-        let dy = -aa[2] * v.shift[0] - aa[3] * v.shift[1];
-        xf.push_str(&format!(
-            "{:.9} {:.9} {:.9} {:.9} {:.6} {:.6}\n",
-            aa[0], aa[1], aa[2], aa[3], dx, dy
-        ));
+        let x = super::export::xf_row(a, v);
+        xf.push_str(&format!("{:.9} {:.9} {:.9} {:.9} {:.6} {:.6}\n", x[0], x[1], x[2], x[3], x[4], x[5]));
         tlt.push_str(&format!("{:.6}\n", v.refined()));
         map.push_str(&format!("{}\n", v.file_index));
     }

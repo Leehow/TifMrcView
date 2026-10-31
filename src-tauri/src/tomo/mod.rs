@@ -8,6 +8,7 @@
 pub mod correlation_gpu;
 pub mod ctf;
 pub mod dataset;
+pub mod export;
 pub mod geometry;
 pub mod model;
 pub mod output;

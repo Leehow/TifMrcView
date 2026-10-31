@@ -411,6 +411,11 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let again = dataset::Dataset::open(&imgs[0].info().path, 5, None).unwrap();
     assert_eq!(again.tomograms.len(), 3);
     assert_eq!(again.tomograms[0].halves.as_ref().unwrap()[1], out.paths[2]);
+    let files = export::run(&d, "imod", dir.path().to_str().unwrap(), 1, &|_, _| {}).unwrap();
+    let xf = std::fs::read_to_string(files.iter().find(|f| f.ends_with(".xf")).unwrap()).unwrap();
+    assert_eq!(xf.lines().count(), 5);
+    assert_eq!(std::fs::read_to_string(dir.path().join("ts/ts_exclude.txt")).unwrap(), "5\n");
+    assert!(dir.path().join("ts/ts.st").exists());
     // Running again replaces its own outputs instead of numbering new ones.
     let out2 = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out2.paths, out.paths);

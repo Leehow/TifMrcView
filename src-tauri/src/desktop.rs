@@ -1218,6 +1218,21 @@ async fn tomo_ctf(app: AppHandle, req: TomoStepReq<TomoCtfStep>) -> CmdResult<se
 }
 
 #[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoExportStep { format: String, dir: String, #[serde(default = "one")] bin: usize }
+
+#[cfg(feature = "pro")]
+fn one() -> usize { 1 }
+
+/// Writes the dataset for other software (`tomo::export`) into a folder the user picked.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
+}
+
+#[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>) -> CmdResult<serde_json::Value> {
     tomo_step(app, req, |d, s, p| crate::tomo::pipeline::reconstruct(d, s, p)).await
@@ -2125,6 +2140,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_ctf,
             #[cfg(feature = "pro")] tomo_denoise,
             #[cfg(feature = "pro")] tomo_wedge,
+            #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,

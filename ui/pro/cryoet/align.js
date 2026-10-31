@@ -23,8 +23,8 @@
       <div id="ta-summary"></div>
       <canvas id="ta-plot" width="580" height="200" title="每张倾转图的加权残差（原始像素）；红点为可疑视图"></canvas>
       <div id="ta-table"></div>
-      <div class="al-row"><button id="ta-resolve" class="small" title="用已有轮廓、去掉勾选的视图重新求解">重新求解</button><button id="ta-export" class="small" title="IMOD 的 .xf / .tlt 和原始层号 .views">导出 .xf / .tlt…</button></div>
-      <p class="dim">红色为可疑视图（残差或跟踪明显差于中位数），只作提示；勾选「排除」后重新求解。</p>
+      <div class="al-row"><button id="ta-resolve" class="small" title="用已有轮廓、去掉勾选的视图重新求解">重新求解</button></div>
+      <p class="dim">红色为可疑视图（残差或跟踪明显差于中位数），只作提示；勾选「排除」后重新求解。给 IMOD、Warp、RELION 用：工作区顶部的「导出…」。</p>
     </div>`;
 
   const A = { dirty: false };
@@ -118,19 +118,5 @@
 
   $("ta-run").onclick = () => align(null);
   $("ta-resolve").onclick = () => W.dataset?.alignment && align(W.dataset.alignment);
-  $("ta-export").onclick = async () => {
-    const d = W.dataset;
-    if (!d?.alignment) return;
-    if (A.dirty) return W.status("请先重新求解");
-    if (S.info?.path !== d.stack) return W.status("导出需要先打开这个倾转序列");
-    const stem = W.name(d.stack).replace(/\.[^.]+$/, "");
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_ali.xf`, filter: "IMOD .xf", exts: ["xf"] });
-    if (!path) return;
-    setSaveDir(dirname(path));
-    const token = S.token;
-    await W.run("导出", () => invoke("tomo_save_aligned", { req: { token, c: 0, t: 0, alignment: d.alignment, bin: d.alignment.bin, path, transformsOnly: true } }));
-    W.status(`已导出 .xf / .tlt / .views：${dirname(path)}`);
-  };
-
   W.register(2, { dataset: show });
 })();
