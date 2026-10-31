@@ -21,6 +21,26 @@
   color-scheme: light;
 }
 * { box-sizing: border-box; }
+
+/*
+ * Thin overlay-style scrollbars, identical on WKWebView, WebView2 and
+ * WebKitGTK: no track or arrows, only a slim rounded thumb. Uses the
+ * ::-webkit-scrollbar family only (the standard scrollbar-width/color
+ * properties would switch Chromium to its own look and override this).
+ */
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb {
+  background-color: rgba(31, 35, 40, 0.22);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+  min-height: 28px;
+  min-width: 28px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(31, 35, 40, 0.4); }
+::-webkit-scrollbar-thumb:active { background-color: rgba(31, 35, 40, 0.55); }
 html, body {
   margin: 0;
   height: 100%;
