@@ -546,11 +546,14 @@ pub struct TrainConfig {
     pub seed: u64,
     /// Gaussian low-pass of the volume first (σ in voxels, 0 = none).
     pub smooth: f32,
+    /// With two half tomograms: weight of the missing wedge against the
+    /// measured part in the loss.
+    pub omega: f32,
 }
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0 }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0 }
     }
 }
 
@@ -686,6 +689,205 @@ pub fn train_and_apply(dev: &Device, values: &[f32], dims: [usize; 3], tilt_rang
         Ok(())
     })?;
     Ok(out.into_par_iter().map(|v| v * std + mean).collect())
+}
+
+// ---- Two half tomograms ----
+//
+// With tomograms from the even and odd frames of each movie, the two halves
+// see the same specimen through independent noise. The network then maps a
+// turned, twice-cut cube of one half to the same turned cube of the other
+// (after DeepDeWedge, Wiedemann & Heckel 2024, and IsoNet2): the error is
+// scored in Fourier space, only where the target was measured; where the
+// input was measured too it learns to denoise, where the input lacks it
+// (the original wedge, turned away in the target) it learns to fill the
+// wedge, weighted by `omega`. Noise in the target averages out, so no
+// pre-smoothing is needed. The wedge of the inputs is not refilled with the
+// network's guesses between rounds (that feeds its errors back).
+
+/// The measured components for a tilt series with these tilts (degrees),
+/// for a cube of side n: inside the tilt range, and within about a voxel of
+/// some tilt's central section (so wide gaps in the series stay empty).
+fn tilt_mask(n: usize, g: &Geometry, tilts: &[f32]) -> Vec<f32> {
+    let mut range = g.mask(n);
+    if tilts.len() < 2 {
+        return range;
+    }
+    let f = |i: usize| if i <= n / 2 { i as f64 } else { i as f64 - n as f64 };
+    range.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+        for (i, m) in plane.iter_mut().enumerate() {
+            if *m == 0.0 {
+                continue;
+            }
+            let k = [f(i % n), f(i / n), f(z)];
+            let (mut b, mut a) = (k[g.beam], k[g.across()]);
+            if a < 0.0 || (a == 0.0 && b < 0.0) {
+                (b, a) = (-b, -a);
+            }
+            let angle = b.atan2(a);
+            let r = a.hypot(b);
+            let near = tilts.iter().map(|&t| (angle - (t as f64).to_radians()).abs()).fold(f64::MAX, f64::min);
+            if r * near.sin() > 1.0 {
+                *m = 0.0;
+            }
+        }
+    });
+    range
+}
+
+/// `mask` (unshifted frequencies of a cube of side n) turned with the cube.
+fn turn_mask(mask: &[f32], n: usize, r: &Rot) -> Vec<f32> {
+    let mut out = vec![0f32; n * n * n];
+    out.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+        for (i, o) in plane.iter_mut().enumerate() {
+            let c = [i % n, i / n, z];
+            let mut s = [0usize; 3];
+            for a in 0..3 {
+                s[r.perm[a]] = if r.flip[a] { (n - c[a]) % n } else { c[a] };
+            }
+            *o = mask[(s[2] * n + s[1]) * n + s[0]];
+        }
+    });
+    out
+}
+
+/// Cosine and −sine DFT matrices of side n.
+fn dft(n: usize, dev: &Device) -> (Tensor<2>, Tensor<2>) {
+    let at = |f: fn(f64) -> f64| -> Vec<f32> { (0..n * n).map(|i| f(2.0 * std::f64::consts::PI * ((i / n) * (i % n) % n) as f64 / n as f64) as f32).collect() };
+    let c = Tensor::<2>::from_data(TensorData::new(at(f64::cos), [n, n]), dev);
+    let s = Tensor::<2>::from_data(TensorData::new(at(|x| -x.sin()), [n, n]), dev);
+    (c, s)
+}
+
+/// Σ w·|F e|² for e [B, 1, n, n, n] (Z, Y, X), with the weights in the
+/// order the transform leaves the axes: [B, kY, kX, kZ].
+fn spectral_error(e: Tensor<5>, c: &Tensor<2>, s: &Tensor<2>, w: Tensor<4>) -> Tensor<1> {
+    let [b, _, n, _, _] = e.dims();
+    let rows = b * n * n;
+    let x = e.reshape([rows, n]);
+    let (mut re, mut im) = (x.clone().matmul(c.clone()), x.matmul(s.clone()));
+    for swap in [(2, 3), (1, 3)] {
+        let turn = |t: Tensor<2>| -> Tensor<2> { t.reshape([b, n, n, n]).swap_dims(swap.0, swap.1).reshape([rows, n]) };
+        let (r, i) = (turn(re), turn(im));
+        re = r.clone().matmul(c.clone()) - i.clone().matmul(s.clone());
+        im = r.matmul(s.clone()) + i.matmul(c.clone());
+    }
+    let p = re.clone() * re + im.clone() * im;
+    (p.reshape([b, n, n, n]) * w).sum()
+}
+
+/// [kZ][kY][kX] → [kY][kX][kZ], the order `spectral_error` reads.
+fn spectral_order(w: &[f32], n: usize) -> Vec<f32> {
+    (0..n * n * n).map(|i| {
+        let (y, x, z) = (i / (n * n), (i / n) % n, i % n);
+        w[(z * n + y) * n + x]
+    }).collect()
+}
+
+/// Trains on the two half tomograms `a` and `b` (standardised alike).
+pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
+    g.check()?;
+    if a.n != b.n {
+        bail!("两个半断层尺寸不同");
+    }
+    let n = cfg.cube;
+    if !n.is_power_of_two() || n < 16 || !n.is_multiple_of(1 << cfg.levels) {
+        bail!("子块边长须为 2 的幂");
+    }
+    let sp = Spectral { n, fft: Fft::new(n), keep: tilt_mask(n, g, tilts) };
+    let rots = rotations(g);
+    // Loss weights for each rotation: the part both input and target
+    // measured (denoising) and the part only the target measured (the
+    // wedge), each averaged over its own size, the wedge × omega.
+    let weights: Vec<Vec<f32>> = rots
+        .iter()
+        .map(|r| {
+            let target = turn_mask(&sp.keep, n, r);
+            let both = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k > 0.0).count().max(1) as f32;
+            let new = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k == 0.0).count().max(1) as f32;
+            let w: Vec<f32> = target.iter().zip(&sp.keep).map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new }).collect();
+            spectral_order(&w, n)
+        })
+        .collect();
+    let edge = (n / 8).max(1);
+    let taper1: Vec<f32> = (0..n).map(|i| {
+        let d = i.min(n - 1 - i);
+        if d >= edge { 1.0 } else { (0.5 - 0.5 * (std::f32::consts::PI * (d as f32 + 0.5) / edge as f32).cos()).max(0.0) }
+    }).collect();
+    let taper: Vec<f32> = (0..n * n * n).map(|i| taper1[i % n] * taper1[(i / n) % n] * taper1[i / (n * n)]).collect();
+    let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+    let origins = busiest(&mean, n, cfg.count.max(1), cfg.seed);
+    let orig: [Vec<Vec<f32>>; 2] = [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
+    let ad = dev.clone().autodiff();
+    let (c, s) = dft(n, &ad);
+    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
+    let mut net = Net::new(cfg.base, cfg.levels, &ad);
+    let mut opt = AdamConfig::new().init();
+    let mut rng = Rng(cfg.seed | 1);
+    let total = cfg.iterations * cfg.steps;
+    let mut loss_avg = 0f32;
+    for it in 0..cfg.iterations {
+        for step in 0..cfg.steps {
+            if CANCEL.load(Ordering::SeqCst) {
+                bail!("已取消");
+            }
+            let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
+            let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
+                .par_iter()
+                .map(|&(i, r, from)| (sp.cut(&rots[r].apply(&orig[from][i], n)), rots[r].apply(&orig[1 - from][i], n)))
+                .collect();
+            let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
+            let w: Vec<f32> = picks.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
+            let norm = (cfg.batch * n * n * n) as f32 * (1.0 + cfg.omega);
+            let x = Tensor::<5>::from_data(TensorData::new(xs.concat(), [cfg.batch, 1, n, n, n]), &ad);
+            let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]), &ad);
+            let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
+            let loss = spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm;
+            let lv: f32 = loss.clone().into_scalar();
+            loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
+            let grads = GradientsParams::from_grads(loss.backward(), &net);
+            let k = it * cfg.steps + step;
+            let lr = cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
+            net = opt.step(lr, net, grads);
+            if step % 5 == 4 || step + 1 == cfg.steps {
+                progress(Progress { iteration: it + 1, iterations: cfg.iterations, step: step + 1, steps: cfg.steps, loss: loss_avg });
+            }
+        }
+    }
+    Ok((net.valid(), loss_avg))
+}
+
+/// For a reconstruction pipeline with even/odd half tomograms (same layout
+/// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
+/// and fills the wedge in one network, and returns the mean of its results
+/// for both halves, in the halves' units.
+pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
+    let len = dims[0] * dims[1] * dims[2];
+    if even.len() != len || odd.len() != len {
+        bail!("体数据大小和尺寸不符");
+    }
+    let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
+    if tilts.len() < 2 {
+        bail!("缺少倾转角");
+    }
+    let (m0, s0) = stats(even);
+    let (m1, s1) = stats(odd);
+    let (mean, std) = (0.5 * (m0 + m1), 0.5 * (s0 + s1));
+    let std_vol = |v: &[f32]| Vol { n: dims, v: v.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
+    let (a, b) = (std_vol(even), std_vol(odd));
+    let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
+    let (net, _) = train_halves(dev, &a, &b, &g, tilts, cfg, &mut progress)?;
+    let it = cfg.iterations + 1;
+    let mut outs = vec![];
+    for (h, vol) in [&a, &b].into_iter().enumerate() {
+        outs.push(apply(dev, &net, vol, [0; 3], dims, &mut |done, total| {
+            if CANCEL.load(Ordering::SeqCst) {
+                bail!("已取消");
+            }
+            progress(Progress { iteration: it, iterations: cfg.iterations, step: h * total + done, steps: 2 * total, loss: 0.0 });
+            Ok(())
+        })?);
+    }
+    Ok(outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect())
 }
 
 // ---- Applying ----
@@ -958,12 +1160,126 @@ mod tests {
     }
 
     #[test]
+    fn spectral_error_matches_the_cpu_transform() {
+        let n = 8;
+        let dev = Device::flex();
+        let mut rng = Rng(17);
+        let e: Vec<f32> = (0..n * n * n).map(|_| rng.gauss()).collect();
+        let w: Vec<f32> = (0..n * n * n).map(|_| rng.below(3) as f32).collect();
+        let (mut re, mut im) = (e.clone(), vec![0f32; e.len()]);
+        fft3(&Fft::new(n), n, &mut re, &mut im, false);
+        let cpu: f32 = (0..e.len()).map(|i| w[i] * (re[i] * re[i] + im[i] * im[i])).sum();
+        let (c, s) = dft(n, &dev);
+        let x = Tensor::<5>::from_data(TensorData::new(e, [1, 1, n, n, n]), &dev);
+        let wt = Tensor::<4>::from_data(TensorData::new(spectral_order(&w, n), [1, n, n, n]), &dev);
+        let gpu: f32 = spectral_error(x, &c, &s, wt).into_scalar();
+        assert!((gpu - cpu).abs() < 1e-3 * cpu, "{gpu} {cpu}");
+    }
+
+    #[test]
+    fn turned_masks_match_turned_cubes() {
+        let n = 16;
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-50.0) };
+        let sp = Spectral::new(n, &g);
+        let v = sp.cut(&phantom(n, 8).v);
+        for r in rotations(&g) {
+            // A turned cut cube has only the turned mask's components.
+            let turned = r.apply(&v, n);
+            let worst = |m: &[f32]| sp.filter(&turned, m).iter().zip(&turned).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            // (Nyquist components of an asymmetric range leave a little.)
+            let (right, wrong) = (worst(&turn_mask(&sp.keep, n, &r)), worst(&sp.keep));
+            assert!(right < 1e-2 && wrong > 10.0 * right, "{r:?} {right} {wrong}");
+        }
+        // A dense series measures the whole range; a gap leaves a hole.
+        let dense: Vec<f32> = (-25..=30).map(|i| i as f32 * 2.0).collect();
+        assert_eq!(tilt_mask(n, &g, &dense), sp.keep);
+        let gappy: Vec<f32> = dense.iter().copied().filter(|t| !(10.0..30.0).contains(t)).collect();
+        let holes = tilt_mask(n, &g, &gappy).iter().zip(&sp.keep).filter(|(a, b)| a != b).count();
+        assert!(holes > 0);
+    }
+
+    #[test]
+    fn trains_on_halves() {
+        let dev = Device::flex();
+        let truth = phantom(24, 4);
+        let mut rng = Rng(2);
+        let half = |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
+        let (a, b) = (half(&mut rng), half(&mut rng));
+        let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
+        let mut last = None;
+        let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| last = Some(p)).unwrap();
+        assert_eq!(out.len(), a.len());
+        assert!(out.iter().all(|v| v.is_finite()));
+        let p = last.unwrap();
+        assert_eq!((p.iteration, p.step, p.steps), (3, 2, 2));
+    }
+
+    /// Halves against one tomogram, on a noisy phantom (slow on the CPU):
+    /// cargo test --release --features pro --lib wedge::tests::halves_beat -- --ignored --nocapture
+    /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half).
+    #[test]
+    #[ignore]
+    fn halves_beat_one_tomogram() {
+        let dev = Device::flex();
+        let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+        let n = env("WN", 64.0) as usize;
+        let truth = phantom(n, 21);
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
+        let sp = Spectral::new(n, &g);
+        let sigma = env("WNOISE", 1.0) as f32;
+        let mut rng = Rng(77);
+        // Each half: the specimen plus its own noise, both wedge-cut.
+        let mut half = || -> Vec<f32> { sp.cut(&truth.v.iter().map(|v| v + sigma * rng.gauss()).collect::<Vec<f32>>()) };
+        let (a, b) = (half(), half());
+        let full: Vec<f32> = a.iter().zip(&b).map(|(x, y)| 0.5 * (x + y)).collect();
+        let cfg = TrainConfig {
+            cube: env("WC", 32.0) as usize,
+            count: 32,
+            iterations: env("WI", 3.0) as usize,
+            steps: env("WS", 150.0) as usize,
+            batch: 4,
+            lr: env("WL", 1e-3),
+            base: env("WB", 8.0) as usize,
+            levels: 2,
+            seed: 9,
+            omega: env("WO", 2.0) as f32,
+            ..Default::default()
+        };
+        // Correlation with the truth, overall and inside the wedge only.
+        let score = |v: &[f32]| -> (f32, f32) {
+            let corr = |x: &[f32], y: &[f32]| {
+                let (mx, my) = (x.iter().sum::<f32>() / x.len() as f32, y.iter().sum::<f32>() / y.len() as f32);
+                let (mut sxy, mut sxx, mut syy) = (0f32, 0f32, 0f32);
+                for (p, q) in x.iter().zip(y) {
+                    sxy += (p - mx) * (q - my);
+                    sxx += (p - mx).powi(2);
+                    syy += (q - my).powi(2);
+                }
+                sxy / (sxx * syy).sqrt().max(1e-12)
+            };
+            let wedge = |x: &[f32]| -> Vec<f32> { x.iter().zip(sp.cut(x)).map(|(a, b)| a - b).collect() };
+            (corr(v, &truth.v), corr(&wedge(v), &wedge(&truth.v)))
+        };
+        eprintln!("input (mean of halves): {:?}", score(&full));
+        if std::env::var("WONE").is_err() {
+        let t0 = std::time::Instant::now();
+        let one = train_and_apply(&dev, &full, truth.n, [-60.0, 60.0], &TrainConfig { smooth: 1.0, ..cfg.clone() }, |_| {}).unwrap();
+        eprintln!("one tomogram, σ1 pre-smooth: {:?} in {:.0?}", score(&one), t0.elapsed());
+        }
+        let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
+        let t0 = std::time::Instant::now();
+        let two = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
+        eprintln!("halves: {:?} in {:.0?}", score(&two), t0.elapsed());
+    }
+
+    #[test]
     fn trains_and_fills() {
         let dev = Device::flex();
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
         let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0 };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0 };
         let mut last = None;
         let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
@@ -989,7 +1305,7 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0 };
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0 };
         let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
