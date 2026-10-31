@@ -14,11 +14,12 @@
     </div>
     <div class="al-row"><button id="pp-n2n" class="small primary">Noise2Noise 去噪并打开</button></div>
     <p class="dim">缺失楔补偿（IsoNet 方法）：在断层里切小立方体，旋转后让网络学会补回倾转角之外缺失的频率，迭代多轮。倾角范围取对齐里实际使用的倾角。</p>
+    <p id="pp-wedge-note" class="dim"></p>
     <div class="al-opts">
       <label>迭代轮数<input id="pp-iters" type="number" min="1" max="30" value="10"></label>
       <label>每轮步数<input id="pp-wsteps" type="number" min="10" max="2000" value="200"></label>
       <label>立方体数<input id="pp-cubes" type="number" min="8" max="1000" value="120"></label>
-      <label>立方体边长<select id="pp-cube"><option>32</option><option selected>64</option></select></label>
+      <label>立方体边长<select id="pp-cube"><option>32</option><option title="仅奇偶两半模式">48</option><option selected>64</option></select></label>
       <label>去噪强度<input id="pp-noise" type="number" min="0" max="1" step="0.05" value="0" title="最后几轮给输入加噪，0 为不去噪"></label>
     </div>
     <div class="al-row"><button id="pp-wedge" class="small primary">缺失楔补偿并打开</button></div>`;
@@ -46,8 +47,13 @@
       : t.halves
         ? "Noise2Noise：用这次重构的奇偶两半断层互为训练目标（信号相同、噪声独立），两半都去噪后取平均。"
         : "这个断层没有奇偶两半（运动校正时写出奇偶帧并在④勾选重构两半即可），改用相邻切片互为训练目标。";
+    $("pp-wedge-note").textContent = t?.halves
+      ? "有奇偶两半：缺失楔补偿同时去噪，一个网络把一半旋转后补回另一半（DeepDeWedge 方法），不需要另做 Noise2Noise；「去噪强度」不起作用。立方体 32 快约 10 倍。"
+      : "";
+    if (t?.halves && !$("pp-cube").dataset.touched) $("pp-cube").value = "32";
   }
   $("pp-source").onchange = note;
+  $("pp-cube").onchange = () => ($("pp-cube").dataset.touched = "1");
 
   $("pp-n2n").onclick = async () => {
     const r = await W.step("Noise2Noise", "tomo_denoise", { source: $("pp-source").value, steps: +$("pp-steps").value });
