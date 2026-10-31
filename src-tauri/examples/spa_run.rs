@@ -46,6 +46,11 @@ fn main() -> anyhow::Result<()> {
         let c = project::class2d(&mut p, &class2d::Class2dParams::default(), &log)?;
         eprintln!("2D classes {:?}", c.counts);
     }
+    // SPA_SELECT=0,1,2 keeps those 2D classes (by rank) for the 3D steps.
+    if let Ok(sel) = std::env::var("SPA_SELECT") {
+        let n = project::select(&mut p, sel.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?)?;
+        eprintln!("selected {n} particles");
+    }
     if (redo("initial") && !from.is_empty()) || p.initial.is_none() {
         project::initial(&mut p, &refine::InitialParams { symmetry: sym.clone(), ..Default::default() }, &log)?;
     }
