@@ -245,11 +245,25 @@ fn stem_suffix(path: &str, stack: &str) -> String {
 pub struct WedgeStep {
     #[serde(default)]
     pub source: Option<String>,
+    /// Training settings; None = chosen here (the UI sends none: one
+    /// button, the settings that did best in the held-out-tilt tests).
     #[serde(default)]
-    pub cfg: crate::wedge::TrainConfig,
+    pub cfg: Option<crate::wedge::TrainConfig>,
     /// Train on the tomogram alone even when it has even/odd halves.
     #[serde(default)]
     pub single: bool,
+}
+
+/// Even/odd halves: cube 48 did best in the held-out-tilt tests
+/// (EMPIAR-10045); about 20 min on an RTX 5080.
+fn halves_config() -> crate::wedge::TrainConfig {
+    crate::wedge::TrainConfig { cube: 48, iterations: 3, steps: 1000, ..Default::default() }
+}
+
+/// One tomogram: the IsoNet method with a σ1 pre-smooth (noise is not
+/// filled into the wedge).
+fn single_config() -> crate::wedge::TrainConfig {
+    crate::wedge::TrainConfig { smooth: 1.0, ..Default::default() }
 }
 
 pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progress: Progress) -> Result<Made> {
@@ -273,12 +287,14 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
             let (a, shape, px) = load(even)?;
             let (b, ..) = load(odd)?;
             let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
-            let method = if req.cfg.equivariant > 0.0 { "icecream" } else { "halves" };
-            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &req.cfg, tick)?, shape, px, method)
+            let cfg = req.cfg.clone().unwrap_or_else(halves_config);
+            let method = if cfg.equivariant > 0.0 { "icecream" } else { "halves" };
+            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &cfg, tick)?, shape, px, method)
         }
         _ => {
             let (v, shape, px) = load(&src.path)?;
-            (crate::wedge::train_and_apply(dev, &v, shape, range, &req.cfg, tick)?, shape, px, "isonet")
+            let cfg = req.cfg.clone().unwrap_or_else(single_config);
+            (crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?, shape, px, "isonet")
         }
     };
     if CANCEL.load(Ordering::SeqCst) {
