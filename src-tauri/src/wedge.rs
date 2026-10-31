@@ -1377,6 +1377,65 @@ mod tests {
 mod bench {
     use super::*;
 
+    /// Even/odd half tomograms (e.g. from the cryo-ET pipeline):
+    /// TMV_HALF_EVEN=… TMV_HALF_ODD=… [TMV_HALF_TILTS=x.tlt] [TMV_HALF_BIN=2]
+    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_OUT=x.mrc]
+    /// cargo test --release --features pro --lib wedge::bench::halves -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn halves() {
+        let (Ok(even), Ok(odd)) = (std::env::var("TMV_HALF_EVEN"), std::env::var("TMV_HALF_ODD")) else { return };
+        let env = |k: &str| std::env::var(k).ok().and_then(|s| s.parse::<f64>().ok());
+        let bin = env("TMV_HALF_BIN").unwrap_or(1.0) as usize;
+        let read = |p: &str| {
+            let img = OpenImage::new(1, crate::formats::open(std::path::Path::new(p)).unwrap(), 1 << 30);
+            let (v, mean, std) = load(&img, 0, 0, bin).unwrap();
+            (v, mean, std, crate::align::pixel_a(img.info()))
+        };
+        let (a, mean, std, pixel_a) = read(&even);
+        let (b, ..) = read(&odd);
+        let both = Vol { n: a.n, v: a.v.iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        let d = detect(&both);
+        println!("{:?} after bin {bin}; detected {:?}, contrast {:.2}", a.n, d.geometry, d.contrast);
+        let tilts: Vec<f32> = std::env::var("TMV_HALF_TILTS").map(|p| std::fs::read_to_string(p).unwrap().split_whitespace().filter_map(|s| s.parse().ok()).collect()).unwrap_or_default();
+        let mut g = d.geometry;
+        if tilts.len() > 1 {
+            g.max_tilt = tilts.iter().cloned().fold(f32::MIN, f32::max);
+            g.min_tilt = Some(tilts.iter().cloned().fold(f32::MAX, f32::min));
+            println!("  {} tilts {:?}..{:?}", tilts.len(), g.min_tilt, g.max_tilt);
+        }
+        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, ..Default::default() };
+        while a.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
+            cfg.cube /= 2;
+        }
+        let t0 = std::time::Instant::now();
+        let ((net, loss), backend) = crate::classify::on_device(|dev| train_halves(dev, &a, &b, &g, &tilts, &cfg, |_| {})).unwrap();
+        println!("  trained on {backend}: {} × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t0.elapsed().as_secs_f64());
+        if let Ok(out) = std::env::var("TMV_HALF_OUT") {
+            let n = a.n;
+            let (vals, _) = crate::classify::on_device(|dev| {
+                let net = net.clone().to_device(dev);
+                let x = apply(dev, &net, &a, [0; 3], n, &mut |_, _| Ok(()))?;
+                let y = apply(dev, &net, &b, [0; 3], n, &mut |_, _| Ok(()))?;
+                Ok(x.iter().zip(&y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>())
+            })
+            .unwrap();
+            write_mrc(&out, n, &vals.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
+            println!("  saved {out}");
+        }
+    }
+
+    fn write_mrc(path: &str, n: [usize; 3], v: &[f32], pixel_a: f64) {
+        use std::io::Write;
+        let (m, s) = stats(v);
+        let (lo, hi) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+        f.write_all(&crate::align::mrc_header(n[0], n[1], n[2], pixel_a, [lo, hi, m, s], "TifMrcView: wedge from even/odd halves")).unwrap();
+        for x in v {
+            f.write_all(&x.to_le_bytes()).unwrap();
+        }
+    }
+
     #[test]
     #[ignore]
     fn bench() {
