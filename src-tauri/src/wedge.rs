@@ -1434,7 +1434,11 @@ mod bench {
             cfg.cube /= 2;
         }
         let t0 = std::time::Instant::now();
-        let ((net, loss), backend) = crate::classify::on_device(|dev| train_halves(dev, &a, &b, &g, &tilts, &cfg, |_| {})).unwrap();
+        let ((net, loss), backend) = crate::classify::on_device(|dev| train_halves(dev, &a, &b, &g, &tilts, &cfg, |p| {
+            if p.step % 100 == 0 {
+                println!("  round {} step {} loss {:.4} at {:.0} s", p.iteration, p.step, p.loss, t0.elapsed().as_secs_f64());
+            }
+        })).unwrap();
         println!("  trained on {backend}: {} × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t0.elapsed().as_secs_f64());
         if let Ok(out) = std::env::var("TMV_HALF_OUT") {
             let n = a.n;
