@@ -420,3 +420,13 @@ fn frames_on_t_and_oriented_gain() {
     let expected = 1.0 + 24.0 / 127.0 + 80.0 / 127.0;
     assert!((first[24 * w + 40] as f64 - expected).abs() < 1e-6);
 }
+
+#[test]
+fn mdoc_pixel_is_rescaled_to_the_frames() {
+    // EMPIAR-10164: binned images 924×958 at 5.4 Å, super-resolution frames 7420×7676.
+    let doc = series::parse("PixelSpacing = 5.4\nImageSize = 924 958\n[ZValue = 0]\nTiltAngle = 0\nPixelSpacing = 5.4\n").unwrap();
+    assert_eq!(doc.image_size, Some([924, 958]));
+    assert!((doc.frame_pixel(5.4, (7420, 7676)) - 0.675).abs() < 1e-9);
+    assert_eq!(doc.frame_pixel(5.4, (924, 958)), 5.4);
+    assert!((doc.frame_pixel(5.4, (3710, 3838)) - 1.35).abs() < 1e-9);
+}
