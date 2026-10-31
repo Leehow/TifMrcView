@@ -547,8 +547,9 @@ fn at3(v: &[f32], b: usize, x: f64, y: f64, z: f64) -> f32 {
 }
 
 /// The map turned by 180° about the axis in the xy plane at `phi` degrees
-/// from x (or, with `about_z`, turned by `phi` about z).
-fn turned(v: &[f32], b: usize, phi: f64, about_z: bool) -> Vec<f32> {
+/// from x, `dz` voxels above the centre (or, with `about_z`, turned by
+/// `phi` about z and moved by −dz along z).
+fn turned(v: &[f32], b: usize, phi: f64, dz: f64, about_z: bool) -> Vec<f32> {
     let c = b as f64 / 2.0;
     let (s, co) = phi.to_radians().sin_cos();
     let mut out = vec![0f32; b * b * b];
@@ -558,11 +559,11 @@ fn turned(v: &[f32], b: usize, phi: f64, about_z: bool) -> Vec<f32> {
                 let (px, py, pz) = (x as f64 - c, y as f64 - c, z as f64 - c);
                 let (qx, qy, qz) = if about_z {
                     // Sample at R(−phi)·p, so the map turns by +phi.
-                    (co * px + s * py, -s * px + co * py, pz)
+                    (co * px + s * py, -s * px + co * py, pz + dz)
                 } else {
                     // R = 2uuᵀ − I with u = (cos, sin, 0): its own inverse.
                     let d = co * px + s * py;
-                    (2.0 * d * co - px, 2.0 * d * s - py, -pz)
+                    (2.0 * d * co - px, 2.0 * d * s - py, 2.0 * dz - pz)
                 };
                 plane[y * b + x] = at3(v, b, qx + c, qy + c, qz + c);
             }
@@ -584,25 +585,200 @@ fn corr3(a: &[f32], b: &[f32]) -> f64 {
     sab / (saa * sbb).sqrt().max(1e-30)
 }
 
-/// Whether a Cn map (axis z) is in fact Dn: the best 2-fold axis in the xy
-/// plane (degrees from x) if the map turned about it matches itself
-/// (correlation ≥ 0.8, and ≥ 0.15 above the worst axis).
-pub fn dihedral(v: &[f32], b: usize, n: usize) -> Option<(f64, f64)> {
+/// Whether a Cn map (axis z) is in fact Dn: the best 2-fold axis in the
+/// xy plane (degrees from x, and its height in voxels: a Cn refinement
+/// leaves the particle anywhere along z) if the map turned about it
+/// matches itself: correlation ≥ 0.85 and well above the worst angle
+/// (by 0.05 and by half of what the worst one lacks; low-pass maps all
+/// correlate highly, so the margin is relative).
+pub fn dihedral(v: &[f32], b: usize, n: usize) -> Option<(f64, f64, f64)> {
     let span = 180.0 / n.max(1) as f64;
+    let reach = (b as f64 / 8.0).round();
+    // Height first at a coarse angle step, then the angle at that height.
+    let mut best = (0.0, 0.0, f64::MIN);
+    let mut dz = -reach;
+    while dz <= reach {
+        let mut phi = 0.0;
+        while phi < span {
+            let c = corr3(v, &turned(v, b, phi, dz, false));
+            if c > best.2 {
+                best = (phi, dz, c);
+            }
+            phi += 4.0;
+        }
+        dz += 1.0;
+    }
+    let dz = best.1;
     let mut scores = vec![];
     let mut phi = 0.0;
     while phi < span {
-        scores.push((phi, corr3(v, &turned(v, b, phi, false))));
+        scores.push((phi, corr3(v, &turned(v, b, phi, dz, false))));
         phi += 1.0;
     }
-    let best = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let top = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1))?;
     let worst = scores.iter().map(|s| s.1).fold(f64::MAX, f64::min);
-    eprintln!("dihedral test D{n}: best {:.2} at {:.0}°, worst {:.2}", best.1, best.0, worst);
-    (best.1 >= 0.8 && best.1 - worst >= 0.15).then_some(best)
+    eprintln!("dihedral test D{n}: best {:.2} at {:.0}°, {dz:+.0} voxels; worst {:.2}", top.1, top.0, worst);
+    let gap = top.1 - worst;
+    (top.1 >= 0.85 && gap >= 0.05 && gap >= 0.5 * (1.0 - worst)).then_some((top.0, dz, top.1))
 }
 
-/// The map turned about z so that the 2-fold at `phi` lies along x (the
-/// Dn convention of `geom::symmetry`).
-pub fn align_dihedral(v: &[f32], b: usize, phi: f64) -> Vec<f32> {
-    turned(v, b, -phi, true)
+/// The map turned about z and moved along z so that the 2-fold at `phi`,
+/// `dz` lies along x through the centre (the Dn convention of
+/// `geom::symmetry`).
+pub fn align_dihedral(v: &[f32], b: usize, phi: f64, dz: f64) -> Vec<f32> {
+    turned(v, b, -phi, dz, true)
+}
+
+/// Correlation of a map with itself turned by `deg` about axis `ax` (0 x, 1 y, 2 z) — a check.
+pub fn axis_corr(v: &[f32], b: usize, ax: usize, deg: f64) -> f64 {
+    let c = b as f64 / 2.0;
+    let (s, co) = deg.to_radians().sin_cos();
+    let mut out = vec![0f32; b * b * b];
+    for z in 0..b {
+        for y in 0..b {
+            for x in 0..b {
+                let p = [x as f64 - c, y as f64 - c, z as f64 - c];
+                let (i, j) = match ax { 0 => (1, 2), 1 => (2, 0), _ => (0, 1) };
+                let mut q = p;
+                q[i] = co * p[i] + s * p[j];
+                q[j] = -s * p[i] + co * p[j];
+                out[(z * b + y) * b + x] = at3(v, b, q[0] + c, q[1] + c, q[2] + c);
+            }
+        }
+    }
+    corr3(v, &out)
+}
+
+type M3 = [[f64; 3]; 3];
+
+/// out(p) = v(m·p + t) about the box centre (trilinear).
+fn sample_by(v: &[f32], b: usize, m: &M3, t: [f64; 3]) -> Vec<f32> {
+    let c = b as f64 / 2.0;
+    let mut out = vec![0f32; b * b * b];
+    out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
+        for y in 0..b {
+            for x in 0..b {
+                let p = [x as f64 - c, y as f64 - c, z as f64 - c];
+                let q: Vec<f64> = (0..3).map(|i| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + t[i] + c).collect();
+                plane[y * b + x] = at3(v, b, q[0], q[1], q[2]);
+            }
+        }
+    });
+    out
+}
+
+/// Rotation by `deg` about the unit axis `a` (Rodrigues).
+fn rot(a: [f64; 3], deg: f64) -> M3 {
+    let (s, c) = deg.to_radians().sin_cos();
+    let t = 1.0 - c;
+    let [x, y, z] = a;
+    [[t * x * x + c, t * x * y - s * z, t * x * z + s * y], [t * x * y + s * z, t * y * y + c, t * y * z - s * x], [t * x * z - s * y, t * y * z + s * x, t * z * z + c]]
+}
+
+fn transpose(m: &M3) -> M3 {
+    [[m[0][0], m[1][0], m[2][0]], [m[0][1], m[1][1], m[2][1]], [m[0][2], m[1][2], m[2][2]]]
+}
+
+/// The map moved so that its centre of (positive) mass is at the box centre.
+pub fn centred3(v: &[f32], b: usize) -> Vec<f32> {
+    let c = b as f64 / 2.0;
+    let (mut s, mut m) = ([0f64; 3], 0f64);
+    for z in 0..b {
+        for y in 0..b {
+            for x in 0..b {
+                let w = v[(z * b + y) * b + x].max(0.0) as f64;
+                s[0] += w * (x as f64 - c);
+                s[1] += w * (y as f64 - c);
+                s[2] += w * (z as f64 - c);
+                m += w;
+            }
+        }
+    }
+    if m <= 0.0 {
+        return v.to_vec();
+    }
+    let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    sample_by(v, b, &id, [s[0] / m, s[1] / m, s[2] / m])
+}
+
+/// The n-fold axis of a C1 map (centred first): the direction whose
+/// 360°/n turn matches the map best, searched on a 32³ copy over the
+/// hemisphere, then refined at full size. Returns (axis, correlation,
+/// correlation of the half-way turn) or None when nothing matches.
+pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> {
+    let small = if b > 32 { super::fourier::resample3(v, b, 32) } else { v.to_vec() };
+    let bs = (small.len() as f64).cbrt().round() as usize;
+    let step = 360.0 / n as f64;
+    // Fibonacci points on the upper hemisphere, about 3° apart.
+    let count = 2400;
+    let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    let dirs: Vec<[f64; 3]> = (0..count)
+        .map(|i| {
+            let z = 1.0 - i as f64 / count as f64;
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let t = golden * i as f64;
+            [r * t.cos(), r * t.sin(), z]
+        })
+        .collect();
+    let score = |vol: &[f32], bb: usize, a: [f64; 3], deg: f64| corr3(vol, &sample_by(vol, bb, &rot(a, deg), [0.0; 3]));
+    let mut coarse: Vec<([f64; 3], f64)> = dirs.iter().map(|&a| (a, score(&small, bs, a, step))).collect();
+    coarse.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // Refine the best few at full size on a ±3° grid.
+    let mut best = ([0.0, 0.0, 1.0], f64::MIN);
+    for &(a, _) in coarse.iter().take(4) {
+        let (mut cur, mut cs) = (a, score(v, b, a, step));
+        for d in [2.0f64, 1.0, 0.5] {
+            loop {
+                let mut moved = false;
+                // Two directions perpendicular to the axis.
+                let u = if cur[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                let e1 = norm(cross(cur, u));
+                let e2 = cross(cur, e1);
+                for (p, q) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    let t = d.to_radians();
+                    let cand = norm([cur[0] + t * (p * e1[0] + q * e2[0]), cur[1] + t * (p * e1[1] + q * e2[1]), cur[2] + t * (p * e1[2] + q * e2[2])]);
+                    let s = score(v, b, cand, step);
+                    if s > cs {
+                        (cur, cs) = (cand, s);
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    break;
+                }
+            }
+        }
+        if cs > best.1 {
+            best = (cur, cs);
+        }
+    }
+    let half = score(v, b, best.0, step / 2.0);
+    eprintln!("axis search C{n}: {:.2} (half turn {:.2}) along {:.2?}", best.1, half, best.0);
+    // The n comes from the 2D classes; at low resolution the n-fold turn
+    // hardly beats a half-way one (the map is mostly a cylinder), but the
+    // best direction is still the axis. A poor match means no axis.
+    (best.1 >= 0.75).then_some((best.0, best.1, half))
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn norm(a: [f64; 3]) -> [f64; 3] {
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-12);
+    [a[0] / l, a[1] / l, a[2] / l]
+}
+
+/// The map turned so that `axis` points along z.
+pub fn align_axis(v: &[f32], b: usize, axis: [f64; 3]) -> Vec<f32> {
+    let z = [0.0, 0.0, 1.0];
+    let k = cross(axis, z);
+    let s = (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]).sqrt();
+    if s < 1e-9 {
+        return if axis[2] > 0.0 { v.to_vec() } else { sample_by(v, b, &rot([1.0, 0.0, 0.0], 180.0), [0.0; 3]) };
+    }
+    let angle = s.atan2(axis[2]).to_degrees();
+    // R takes axis to z; out(p) = v(Rᵀ p).
+    let r = rot(norm(k), angle);
+    sample_by(v, b, &transpose(&r), [0.0; 3])
 }

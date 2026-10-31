@@ -566,4 +566,28 @@ fn dihedral_of_folder() {
     eprintln!("{:?}", super::discover::dihedral(&v, dims[0], n));
     let (v, dims, _) = data::read_volume(&p.refine.as_ref().unwrap().map).unwrap();
     eprintln!("refined: {:?}", super::discover::dihedral(&v, dims[0], n));
+    for ax in 0..3 {
+        eprintln!("axis {ax}: {n}-fold corr {:.2}, 25° corr {:.2}", super::discover::axis_corr(&v, dims[0], ax, 360.0 / n as f64), super::discover::axis_corr(&v, dims[0], ax, 25.0));
+    }
+}
+
+/// Axis search on a C1 map (`TMV_SPA_MAP`, `TMV_SPA_N`).
+#[test]
+#[ignore]
+fn axis_of_map() {
+    let Ok(path) = std::env::var("TMV_SPA_MAP") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+    let (v, dims, _) = data::read_volume(&path).unwrap();
+    let b = dims[0];
+    // Tilted by 40° about an oblique axis (TMV_SPA_TILT) to test the search.
+    let v = if std::env::var("TMV_SPA_TILT").is_ok() { super::discover::align_axis(&v, b, [0.3f64.sin() * 0.6, 0.3f64.sin() * 0.8, 0.3f64.cos()]) } else { v };
+    let t = std::time::Instant::now();
+    let v = super::discover::centred3(&v, b);
+    let r = super::discover::find_axis(&v, b, n);
+    eprintln!("{r:?} in {:.1?}", t.elapsed());
+    if let Some((a, _, _)) = r {
+        let al = super::discover::align_axis(&v, b, a);
+        eprintln!("aligned: {n}-fold about z {:.2}", super::discover::axis_corr(&al, b, 2, 360.0 / n as f64));
+        eprintln!("{:?}", super::discover::dihedral(&al, b, n));
+    }
 }

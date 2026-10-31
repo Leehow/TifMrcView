@@ -609,24 +609,56 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
     } else {
         a.symmetry.trim().to_uppercase()
     };
-    let m = initial(p, &InitialParams { symmetry: sym.clone(), ..Default::default() }, progress)?;
-    // A Cn guess from the 2D classes may be Dn: the initial model tells.
+    // Ab initio in C1 when the point group is a guess (with a wrong or
+    // misplaced axis it can settle on a symmetrised mixture); the n-fold
+    // axis is then found in the map and put along z, and a Dn tested.
+    let guessed = a.symmetry.trim().is_empty();
+    let m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
     let mut sym = sym;
-    if a.symmetry.trim().is_empty() && sym.starts_with('C') {
+    if guessed && sym != "C1" {
         let n: usize = sym[1..].parse().unwrap_or(1);
-        if n >= 2 {
-            let (v, dims, px) = data::read_volume(&m.path)?;
-            if let Some((phi, c)) = discover::dihedral(&v, dims[0], n) {
-                let aligned = discover::align_dihedral(&v, dims[0], phi);
-                data::write_mrc(Path::new(&m.path), &aligned, dims, px, "TifMrcView Pro: ab initio model")?;
-                sym = format!("D{n}");
-                if let Some(g) = p.symmetry.as_mut() {
-                    g.symmetry = sym.clone();
-                    g.two_fold = c;
+        let (v, dims, px) = data::read_volume(&m.path)?;
+        let b = dims[0];
+        let v = discover::centred3(&v, b);
+        match discover::find_axis(&v, b, n) {
+            Some((axis, _, _)) => {
+                let mut v = discover::align_axis(&v, b, axis);
+                sym = format!("C{n}");
+                if let Some((phi, dz, c)) = discover::dihedral(&v, b, n) {
+                    v = discover::align_dihedral(&v, b, phi, dz);
+                    sym = format!("D{n}");
+                    if let Some(g) = p.symmetry.as_mut() {
+                        g.two_fold = c;
+                    }
                 }
-                p.save()?;
+                data::write_mrc(Path::new(&m.path), &v, dims, px, "TifMrcView Pro: ab initio model (symmetry axis along z)")?;
             }
+            None => sym = "C1".into(),
+        }
+        if let Some(g) = p.symmetry.as_mut() {
+            g.symmetry = sym.clone();
+        }
+        p.save()?;
+    }
+    let r = refine(p, &RefineParams { symmetry: sym.clone(), ..Default::default() }, None, progress)?;
+    // At the refined resolution a Dn shows clearly where the initial model
+    // could not tell: refine once more with it, from the aligned map.
+    if guessed && sym.starts_with('C') && sym != "C1" {
+        let n: usize = sym[1..].parse().unwrap_or(1);
+        let (v, dims, px) = data::read_volume(&r.map)?;
+        if let Some((phi, dz, c)) = discover::dihedral(&v, dims[0], n) {
+            let aligned = discover::align_dihedral(&v, dims[0], phi, dz);
+            let start = p.path("refine_cn_aligned.mrc");
+            data::write_mrc(Path::new(&start), &aligned, dims, px, "TifMrcView Pro: Cn map, 2-fold along x")?;
+            let dn = format!("D{n}");
+            if let Some(g) = p.symmetry.as_mut() {
+                g.symmetry = dn.clone();
+                g.two_fold = c;
+            }
+            p.save()?;
+            let res_init = (2.0 * r.res).max(15.0);
+            return refine(p, &RefineParams { symmetry: dn, res_init, ..Default::default() }, Some(&start), progress);
         }
     }
-    refine(p, &RefineParams { symmetry: sym, ..Default::default() }, None, progress)
+    Ok(r)
 }
