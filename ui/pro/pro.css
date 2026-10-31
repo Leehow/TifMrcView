@@ -274,5 +274,11 @@
 #spa-workspace .ws-gallery figure.on { border-color:var(--accent); }
 #spa-workspace .ws-gallery canvas { display:block; width:72px; height:72px; border-radius:4px; }
 #spa-workspace .ws-gallery figcaption { font-size:10px; color:var(--dim); font-variant-numeric:tabular-nums; }
+#spa-workspace .ws-kinds { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+#spa-workspace .ws-kinds figure { margin:0; padding:3px; border:2px solid var(--line); border-radius:8px; cursor:pointer; }
+#spa-workspace .ws-kinds figure.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+#spa-workspace .ws-kinds img { display:block; width:100%; max-width:576px; image-rendering:auto; border-radius:4px; }
+#spa-workspace .ws-kinds figcaption { font-size:12px; margin-top:2px; font-variant-numeric:tabular-nums; }
+#spa-workspace .ws-steps button.ws-auto { font-weight:600; }
 #spa-fsc { width:100%; height:auto; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
 #spa-workspace input[type="text"] { width:100%; box-sizing:border-box; }
