@@ -50,7 +50,7 @@ zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 # Pro: SAM 2.1 click segmentation on the GPU (wgpu), CPU when there is none.
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["wgpu", "flex"] }
 # Pro: the CTF fit on the same GPU backend (features come from tmv-sam).
-burn = { version = "0.22.1", optional = true, default-features = false, features = ["std", "autodiff", "optim"] }
+burn = { version = "0.22.1", optional = true, default-features = false, features = ["std", "autodiff", "optim", "signal"] }
 # Imaris LZ4 chunks (HDF5 filter 32004).
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
@@ -111,3 +111,16 @@ required-features = ["pro"]
 tempfile = "3"
 # Tests write LZ4 blocks.
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode", "safe-encode", "alloc"] }
+
+[[example]]
+name = "tomo_run"
+required-features = ["pro"]
+
+[[example]]
+name = "motion_run"
+required-features = ["pro"]
+
+
+[[example]]
+name = "cryoet_pipeline"
+required-features = ["pro"]

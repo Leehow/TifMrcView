@@ -1011,3 +1011,94 @@ mod bench {
         eprintln!("sum written to {} in {:?}", out.display(), t.elapsed());
     }
 }
+
+/// Cross-correlation of two already sampled square patches. Shared by tilt
+/// tracking; the returned displacement takes a centre in `a` to one in `b`.
+#[cfg(feature = "pro")]
+struct PatchPlan { g: Geom, fft: Fft, small: Fft, filter: Vec<f32> }
+#[cfg(feature = "pro")]
+impl PatchPlan {
+    fn new(n: usize) -> Self {
+        Self { g: Geom { x0: 0, y0: 0, bin: 1, n, m: n / 2, w: n, h: n }, fft: Fft::new(n), small: Fft::new(n/2), filter: make_filter(n/2) }
+    }
+}
+#[cfg(feature = "pro")]
+thread_local! { static PATCH_PLANS: std::cell::RefCell<std::collections::HashMap<usize, Arc<PatchPlan>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
+
+#[cfg(feature = "pro")]
+fn patch_plan(n: usize) -> Arc<PatchPlan> {
+    PATCH_PLANS.with(|plans| plans.borrow_mut().entry(n).or_insert_with(|| Arc::new(PatchPlan::new(n))).clone())
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_shift(a: &[f32], b: &[f32], n: usize, max: f64) -> ([f64; 2], f64) {
+    let plan=patch_plan(n);
+    let sa=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|a[y*n+x]);
+    let sb=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|b[y*n+x]);
+    pair_shift(&sa,&sb,&plan.g,&plan.small,max)
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_cross_peak(pr: &[f32], pi: &[f32], n: usize, energies: [f64;2], max: f64) -> ([f64;2],f64) {
+    let p=patch_plan(n);
+    let start=coarse_peak(pr,pi,&p.g,&p.small,max);
+    let (d,v)=refine_peak(pr,pi,&p.g,start);
+    (d,norm_cc(v,energies[0],energies[1]))
+}
+
+#[cfg(feature = "pro")]
+pub(crate) fn patch_window(n: usize) -> (Vec<f32>, Vec<f32>) {
+    let edge=(n/16).max(2);
+    let win:Vec<f32>=(0..n).map(|i| {let d=i.min(n-1-i); if d>=edge {1.0} else {(0.5-0.5*(PI*(d as f64+0.5)/edge as f64).cos()) as f32}}).collect();
+    ((0..n*n).map(|i|win[i/n]*win[i%n]).collect(), make_filter(n/2))
+}
+
+/// A movie whose frames do not correlate: nothing to measure motion on.
+#[cfg(feature = "pro")]
+#[derive(Debug)]
+pub(crate) struct NoSignal(pub f64);
+
+#[cfg(feature = "pro")]
+impl std::fmt::Display for NoSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "电影全局相关度过低（中位 CC={:.3}），无法可靠测量运动；请增加分组或核对原始电影", self.0)
+    }
+}
+
+#[cfg(feature = "pro")]
+impl std::error::Error for NoSignal {}
+
+/// Motion workspace: the same iterative movie solver on reduced groups.
+#[cfg(feature = "pro")]
+pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {
+    let start=std::time::Instant::now();
+    if frames.len()<2||frames.iter().any(|v|v.len()!=w*h){bail!("电影尺寸不一致");}
+    let g=Geom::new([0,0,w,h],1024,w,h)?;let f=Fft::new(g.n);let filter=make_filter(g.m);
+    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{
+        if CANCEL.load(Ordering::SeqCst){bail!("已取消");}
+        Ok(spectrum(&g,&f,&filter,off,|x,y|frames[i][y*w+x]))
+    };
+    let done=std::sync::atomic::AtomicUsize::new(0);let total=2*frames.len()+24;
+    let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
+    let median=|v:&[f64]| {let mut a=v.to_vec();a.sort_by(f64::total_cmp);a[a.len()/2]};
+    if median(&cc)<0.08 {
+        // Low-contrast movies need the full field and a narrower frequency band.
+        let n=(1usize<<w.min(h).ilog2()).min(1024);let bin=w.min(h)/n;
+        let wide=Geom{x0:(w-n*bin)/2,y0:(h-n*bin)/2,bin,n,m:n/2,w,h};
+        let fft=Fft::new(n);let mut low=make_filter(n/2);
+        for (i,v) in low.iter_mut().enumerate(){let x=(i%(n/2)) as f64-(n/4) as f64;let y=(i/(n/2)) as f64-(n/4) as f64;*v*=(-0.5*(x*x+y*y)/(n as f64*0.04).powi(2)).exp() as f32;}
+        let specs:Vec<_>=frames.par_iter().map(|v|spectrum(&wide,&fft,&low,[0,0],|x,y|v[y*w+x])).collect();
+        let (mut d,c,it)=align_movie(&specs,&wide,&Fft::new(n/2),n as f64/16.0,&|i|progress(i,MAX_ITER))?;
+        if median(&c)>median(&cc){
+            let mean:[f64;2]=std::array::from_fn(|k|d.iter().map(|v|v[k]).sum::<f64>()/d.len() as f64);
+            for v in &mut d{for k in 0..2{v[k]=(v[k]-mean[k])*bin as f64;}}
+            shifts=d;cc=c;iterations+=it;
+        }
+        if median(&cc)<0.12{return Err(NoSignal(median(&cc)).into());}
+    }
+    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0})
+}
+
+/// Untapered image warping shared with native motion correction.
+#[cfg(feature = "pro")]
+pub(crate) fn movie_shift(v:&[f32],w:usize,h:usize,d:[f64;2])->Vec<f32> {shift_plane(v,w,h,d,0.0)}

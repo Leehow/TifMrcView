@@ -1056,14 +1056,255 @@ fn ctf_cancel() {
 /// `align-progress` {done, total}.
 #[tauri::command]
 async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResult<crate::align::Aligned> {
+    #[cfg(feature = "pro")] let job=MotionJob::begin(false)?;
     let img = current(&app.state::<AppState>(), req.token)?;
     blocking(move || {
         let progress = |done, total| {
             let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
         };
+        #[cfg(feature = "pro")] let _job=job;
         crate::align::estimate(&img, &req, &progress)
     })
     .await
+}
+
+/// Beam-induced movie correction, sharing the global movie solver.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_run(app: AppHandle, req: crate::motion::RunReq) -> CmdResult<crate::motion::MotionResult> {
+    let img = {
+        let state=app.state::<AppState>();
+        if !state.save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
+        req.token.map(|token|current(&state,token)).transpose()?
+    };
+    let job=MotionJob::begin(true)?;
+    blocking(move || {let _job=job;crate::motion::run(&req,img,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_series(app: AppHandle, req: crate::motion::series::SeriesReq) -> CmdResult<crate::motion::series::SeriesResult> {
+    if !app.state::<AppState>().save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
+    let job=MotionJob::begin(true)?;
+    blocking(move || {let _job=job;crate::motion::series::run(&req,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn motion_cancel() {if MOTION_RUNNING.load(Ordering::SeqCst){crate::motion::cancel();}}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn motion_pick(app:AppHandle,dir:String,kind:String)->Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let exts=match kind.as_str(){"mdoc"=>vec!["mdoc"],"gain"=>vec!["mrc","mrcs","tif","tiff"],_=>vec!["eer","mrc","mrcs","tif","tiff"]};
+    app.dialog().file().set_directory(dir).add_filter("Cryo-ET",&exts).blocking_pick_file().and_then(|f|f.into_path().ok()).map(|p|p.to_string_lossy().into_owned())
+}
+
+#[cfg(feature = "pro")]
+static MOTION_ALIGN_BUSY:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+static MOTION_RUNNING:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct MotionJob;
+#[cfg(feature = "pro")]
+impl MotionJob {
+    fn begin(motion:bool)->CmdResult<Self> {
+        MOTION_ALIGN_BUSY.compare_exchange(false,true,Ordering::SeqCst,Ordering::SeqCst).map_err(|_|"电影/漂移校正正在运行".to_string())?;
+        MOTION_RUNNING.store(motion,Ordering::SeqCst);
+        if motion {crate::motion::begin();}Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for MotionJob {fn drop(&mut self){MOTION_RUNNING.store(false,Ordering::SeqCst);MOTION_ALIGN_BUSY.store(false,Ordering::SeqCst);}}
+
+/// Tomography commands exist only in Pro builds.
+
+/// The Cryo-ET dataset of a tilt series (`tomo::dataset`): read from
+/// beside the stack, or started from its metadata. The workspace keeps
+/// working on it by path while other files (its tomograms) are open.
+#[cfg(feature = "pro")]
+fn tomo_open(stack: &str) -> anyhow::Result<(Arc<OpenImage>, crate::tomo::dataset::Dataset)> {
+    let img = crate::tomo::pipeline::open(stack)?;
+    let info = img.info();
+    let px = info.pixel_size.is_some().then(|| crate::align::pixel_a(info));
+    let d = crate::tomo::dataset::Dataset::open(&info.path, info.size_z, px)?;
+    Ok((img, d))
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_dataset(stack: String) -> CmdResult<crate::tomo::dataset::Dataset> {
+    blocking(move || Ok(tomo_open(&stack)?.1)).await
+}
+
+/// Saves edits made in the workspace (angles, optics).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_dataset_save(dataset: crate::tomo::dataset::Dataset) -> CmdResult<()> {
+    blocking(move || {
+        let (_, mut d) = tomo_open(&dataset.stack)?;
+        if dataset.angles.len() != d.angles.len() && !d.angles.is_empty() {
+            anyhow::bail!("倾转角数与叠层不一致");
+        }
+        d.angles = dataset.angles;
+        d.optics = dataset.optics;
+        d.axis_hint = dataset.axis_hint;
+        d.save()
+    }).await
+}
+
+#[cfg(feature = "pro")]
+fn tomo_emit(app: &AppHandle) -> impl Fn(&str, usize, usize) + Sync + '_ {
+    move |stage, done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"stage":stage,"done":done,"total":total})); }
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_align(app: AppHandle, stack: String, req: crate::tomo::AlignReq) -> CmdResult<crate::tomo::dataset::Dataset> {
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        let (img, mut d) = tomo_open(&stack)?;
+        let emit = tomo_emit(&app);
+        let mut req = req;
+        if req.angles.is_empty() && req.start.is_none() {
+            req.angles = d.angles.clone();
+        }
+        if req.axis.is_none() && req.previous.is_none() {
+            req.axis = d.axis_hint;
+        }
+        // Tracking runs once per starting axis and patch configuration, each
+        // counting views from the start: number the rounds.
+        let round = std::sync::atomic::AtomicUsize::new(0);
+        let last = std::sync::atomic::AtomicUsize::new(usize::MAX);
+        let a = crate::tomo::align(&img, &req, &|done, total| {
+            use std::sync::atomic::Ordering::Relaxed;
+            if done < last.swap(done, Relaxed) { round.fetch_add(1, Relaxed); }
+            emit(&format!("倾转对齐 · 第 {} 轮跟踪", round.load(Relaxed)), done, total)
+        })?;
+        let mut angles = vec![0.0; a.views.len()];
+        for v in &a.views { angles[v.file_index] = v.angle; }
+        d.angles = angles;
+        d.alignment = Some(a);
+        d.save()?;
+        Ok(d)
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoStepReq<T> { stack: String, #[serde(flatten)] step: T }
+
+/// Runs a step on a tilt series' dataset; returns its result and the dataset after it.
+#[cfg(feature = "pro")]
+async fn tomo_step<T: Send + 'static, R: Serialize + Send + 'static>(
+    app: AppHandle,
+    req: TomoStepReq<T>,
+    run: impl FnOnce(&mut crate::tomo::dataset::Dataset, &T, &(dyn Fn(&str, usize, usize) + Sync)) -> anyhow::Result<R> + Send + 'static,
+) -> CmdResult<serde_json::Value> {
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        let (_, mut d) = tomo_open(&req.stack)?;
+        let emit = tomo_emit(&app);
+        let r = run(&mut d, &req.step, &emit)?;
+        Ok(serde_json::json!({ "result": r, "dataset": d }))
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoCtfStep { n: usize, params: crate::ctf::Params }
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_ctf(app: AppHandle, req: TomoStepReq<TomoCtfStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| crate::tomo::pipeline::ctf(d, &s.params, s.n, p)).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoExportStep { format: String, dir: String, #[serde(default = "one")] bin: usize }
+
+#[cfg(feature = "pro")]
+fn one() -> usize { 1 }
+
+/// Writes the dataset for other software (`tomo::export`) into a folder the user picked.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| crate::tomo::pipeline::reconstruct(d, s, p)).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::DenoiseStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| {
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        crate::ctf_gpu::guarded(|| crate::tomo::pipeline::denoise(dev, d, s, p))?
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| {
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        crate::ctf_gpu::guarded(|| crate::tomo::pipeline::wedge(dev, d, s, p))?
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_save_aligned(app: AppHandle, req: crate::tomo::output::SaveReq) -> CmdResult<()> {
+    let img = {
+        let state = app.state::<AppState>();
+        if !state.save_paths.allowed(&req.path) { return Err("输出路径必须由保存对话框选择".into()); }
+        current(&state, req.token)?
+    };
+    let _job = TomoJob::begin()?;
+    blocking(move || {
+        let _job = _job;
+        crate::tomo::output::save(&img, &req, &|done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"done":done,"total":total})); })
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn tomo_cancel() {
+    use std::sync::atomic::Ordering;
+    crate::tomo::CANCEL.store(true, Ordering::SeqCst);
+    crate::denoise_learn::CANCEL.store(true, Ordering::SeqCst);
+    crate::wedge::CANCEL.store(true, Ordering::SeqCst);
+    crate::ctf::CANCEL.store(true, Ordering::SeqCst);
+}
+
+#[cfg(feature = "pro")]
+static TOMO_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct TomoJob;
+#[cfg(feature = "pro")]
+impl TomoJob {
+    fn begin() -> CmdResult<Self> {
+        use std::sync::atomic::Ordering;
+        TOMO_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "断层任务正在运行".to_string())?;
+        crate::tomo::CANCEL.store(false, Ordering::SeqCst);
+        Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for TomoJob {
+    fn drop(&mut self) { TOMO_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
 }
 
 /// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
@@ -1108,6 +1349,7 @@ async fn diffraction_zones(req: crate::diffraction::ZoneReq) -> CmdResult<Vec<cr
 /// Writes the aligned stack or sum to a path from `pick_save_path`.
 #[tauri::command]
 async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()> {
+    #[cfg(feature = "pro")] let job=MotionJob::begin(false)?;
     let img = {
         let state = app.state::<AppState>();
         if !state.save_paths.allowed(&req.path) {
@@ -1119,6 +1361,7 @@ async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()>
         let progress = |done, total| {
             let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
         };
+        #[cfg(feature = "pro")] let _job=job;
         crate::align::save(&img, &req, &progress)
     })
     .await
@@ -1126,6 +1369,7 @@ async fn align_save(app: AppHandle, req: crate::align::SaveReq) -> CmdResult<()>
 
 #[tauri::command]
 fn align_cancel() {
+    #[cfg(feature = "pro")] if MOTION_RUNNING.load(Ordering::SeqCst) {return;}
     crate::align::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -1895,6 +2139,20 @@ pub fn run() {
             ctf_fit_stack,
             ctf_cancel,
             align_estimate,
+            #[cfg(feature = "pro")] motion_run,
+            #[cfg(feature = "pro")] motion_series,
+            #[cfg(feature = "pro")] motion_cancel,
+            #[cfg(feature = "pro")] motion_pick,
+            #[cfg(feature = "pro")] tomo_dataset,
+            #[cfg(feature = "pro")] tomo_dataset_save,
+            #[cfg(feature = "pro")] tomo_ctf,
+            #[cfg(feature = "pro")] tomo_denoise,
+            #[cfg(feature = "pro")] tomo_wedge,
+            #[cfg(feature = "pro")] tomo_export,
+            #[cfg(feature = "pro")] tomo_align,
+            #[cfg(feature = "pro")] tomo_save_aligned,
+            #[cfg(feature = "pro")] tomo_reconstruct,
+            #[cfg(feature = "pro")] tomo_cancel,
             diffraction_find,
             diffraction_zones,
             eds_quant,
