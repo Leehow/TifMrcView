@@ -1,7 +1,7 @@
 {
   "id": "nis",
   "name": "Nikon NIS-Elements",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "打开尼康 NIS-Elements 保存的 ND2，支持多位置、Z 栈、时间序列和多通道，并显示物镜、相机、激光和滤镜等采集参数",
   "main": "index.js",
   "apiVersion": 1,
