@@ -211,7 +211,7 @@ pub fn cpu(
         progress("变形求和 CPU", i + 1, sp.len());
     }
     let b = border(&shifts);
-    let mut back = |mut re: Vec<f32>, mut im: Vec<f32>| -> Vec<f32> {
+    let back = |mut re: Vec<f32>, mut im: Vec<f32>| -> Vec<f32> {
         fft.transform(&mut re, &mut im, true);
         let mut out: Vec<f32> = (0..h).flat_map(|y| re[y * fw..y * fw + w].iter().copied()).collect();
         fill_border(&mut out, w, h, b);

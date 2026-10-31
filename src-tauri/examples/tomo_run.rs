@@ -80,71 +80,40 @@ fn main() -> Result<()> {
     }
     let now = Instant::now();
     let (stack, w, h, angles) = output::aligned(&img, &a, a.bin, 0, 0, &|_, _| {})?;
-    let nv = angles.len();
-    let mut sino = vec![0.0; stack.len()];
-    for y in 0..h {
-        for i in 0..nv {
-            sino[(y * nv + i) * w..(y * nv + i + 1) * w]
-                .copy_from_slice(&stack[(i * h + y) * w..(i * h + y + 1) * w]);
-        }
-    }
-    println!(
-        "resample={:.3}s shape={w}x{h}x{z}",
-        now.elapsed().as_secs_f64()
-    );
-    let op = recon::Operator::new(w, z, &angles, 0.0)?;
+    println!("resample={:.3}s shape={w}x{h}x{z}", now.elapsed().as_secs_f64());
+    let g = recon::Geometry::new(w, z, &angles, 0.0)?;
+    let views = recon::Views { data: &stack, w, h, views: angles.len() };
     for method in [recon::Method::Wbp, recon::Method::Sirt] {
-        let p = recon::Params {
-            thickness: z,
-            method,
-            ..Default::default()
-        };
-        let now = Instant::now();
-        let cpu = recon::cpu(&sino, h, &op, &p, &|_, _| {})?;
-        println!(
-            "{method:?} CPU={:.3}s residuals={:?}",
-            now.elapsed().as_secs_f64(),
-            cpu.residuals
-        );
-        if let Some((dev, name)) = tifmrcview_lib::ctf_gpu::device() {
+        let mut results = vec![];
+        for backend in ["cpu", "gpu"] {
+            let p = recon::Params { thickness: z, method, backend: backend.into(), ..Default::default() };
+            let mut out = vec![0.0f32; h * z * w];
             let now = Instant::now();
-            let gpu = tifmrcview_lib::ctf_gpu::guarded(|| {
-                tomo::recon_gpu::reconstruct(dev, &sino, h, &op, &p, &|_, _| {})
-            })??;
-            let diff = gpu
-                .data
-                .iter()
-                .zip(&cpu.data)
-                .map(|(a, b)| (*a as f64 - *b as f64).powi(2))
-                .sum::<f64>();
-            let norm = cpu.data.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
-            println!(
-                "{method:?} {name}={:.3}s relL2={:.6}",
-                now.elapsed().as_secs_f64(),
-                (diff / norm.max(1e-20)).sqrt()
-            );
-        } else {
-            println!("GPU: unavailable (skipped)");
+            let name = match recon::reconstruct(&views, &g, &p, &mut |y0, n, slab| {
+                out[y0 * z * w..(y0 + n) * z * w].copy_from_slice(&slab);
+                Ok(())
+            }, &|_, _| {}) {
+                Ok(name) => name,
+                Err(e) => {
+                    println!("{method:?} {backend}: {e}");
+                    continue;
+                }
+            };
+            println!("{method:?} {name}={:.3}s", now.elapsed().as_secs_f64());
+            results.push(out);
         }
-        if method == recon::Method::Wbp {
-            if let Some(path) = args.get(5) {
-                output::write_mrc(
-                    path,
-                    &cpu.data,
-                    [w, h, z],
-                    output::pixel_a(&img) * bin as f64,
-                    true,
-                )?;
-                output::export(&a, path)?;
-                let xy = cpu
-                    .data
-                    .chunks(w * z)
-                    .flat_map(|row| row[(z / 2) * w..(z / 2 + 1) * w].iter().copied())
-                    .collect::<Vec<_>>();
-                let xz = cpu.data[(h / 2) * w * z..(h / 2 + 1) * w * z].to_vec();
-                save_png(&format!("{path}.xy.png"), &xy, w, h)?;
-                save_png(&format!("{path}.xz.png"), &xz, w, z)?;
-            }
+        if let [cpu, gpu] = &results[..] {
+            let diff = gpu.iter().zip(cpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();
+            let norm = cpu.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
+            println!("{method:?} relL2={:.6}", (diff / norm.max(1e-20)).sqrt());
+        }
+        if let (Some(path), Some(data)) = (args.get(5), results.first()) {
+            let stem = format!("{path}.{}", if method == recon::Method::Wbp { "wbp" } else { "sirt" });
+            // [y][z][x] slabs: XY section at mid Z, XZ slice at mid Y.
+            let xy: Vec<f32> = (0..h).flat_map(|y| data[(y * z + z / 2) * w..(y * z + z / 2 + 1) * w].iter().copied()).collect();
+            let xz = data[(h / 2) * z * w..(h / 2 + 1) * z * w].to_vec();
+            save_png(&format!("{stem}.xy.png"), &xy, w, h)?;
+            save_png(&format!("{stem}.xz.png"), &xz, w, z)?;
         }
     }
     Ok(())

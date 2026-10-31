@@ -104,6 +104,16 @@ pub fn aligned(
         let src: Vec<f32> = (0..pp.w * pp.h)
             .map(|i| pp.data.get_f64(i) as f32)
             .collect();
+        // Outside the recorded image: the view's mean, so moved image edges
+        // do not become steps that back-project into streaks along Y.
+        let mean = (src.iter().map(|&v| v as f64).sum::<f64>() / src.len() as f64) as f32;
+        let fill = |x: f64, y: f64| {
+            if x < 0.0 || y < 0.0 || x > (pp.w - 1) as f64 || y > (pp.h - 1) as f64 {
+                mean
+            } else {
+                sample(&src, pp.w, pp.h, x, y)
+            }
+        };
         let mut plane = vec![0.0; w * h];
         use rayon::prelude::*;
         plane.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
@@ -122,7 +132,7 @@ pub fn aligned(
                         let sy = v.mag * (r[1][0] * u + r[1][1] * vv)
                             + v.shift[1]
                             + (info.height - 1) as f64 / 2.0;
-                        sum += sample(&src, pp.w, pp.h, sx, sy);
+                        sum += fill(sx, sy);
                     }
                 }
                 *o = sum / (bin * bin) as f32;
@@ -283,6 +293,88 @@ pub fn save(
     export(&req.alignment, &req.path)
 }
 
+/// A float32 MRC volume written slab by slab: XY sections along Z, filled
+/// one band of Y rows at a time. Statistics go into the header at the end.
+pub struct VolumeFile {
+    file: std::fs::File,
+    part: PathBuf,
+    path: PathBuf,
+    shape: [usize; 3],
+    pixel_a: f64,
+    stats: [f64; 4],
+    count: usize,
+    done: bool,
+}
+
+const HEADER: u64 = 1024;
+
+impl VolumeFile {
+    pub fn create(path: &str, shape: [usize; 3], pixel_a: f64) -> Result<VolumeFile> {
+        let path = PathBuf::from(path);
+        let part = path.with_extension(format!("{}.tomo-part", path.extension().and_then(|s| s.to_str()).unwrap_or("out")));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&part)?;
+        let [w, h, z] = shape;
+        file.set_len(HEADER + (w * h * z * 4) as u64)?;
+        Ok(VolumeFile { file, part, path, shape, pixel_a, stats: [f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0], count: 0, done: false })
+    }
+
+    /// Rows y0..y0+n of every section, given as [n][z][w].
+    pub fn write_rows(&mut self, y0: usize, n: usize, slab: &[f32]) -> Result<()> {
+        use std::io::{Seek, SeekFrom};
+        let [w, h, z] = self.shape;
+        if slab.len() != n * z * w || y0 + n > h {
+            bail!("重构分块尺寸不一致");
+        }
+        let mut band = vec![0u8; n * w * 4];
+        for k in 0..z {
+            for y in 0..n {
+                for x in 0..w {
+                    let v = slab[(y * z + k) * w + x];
+                    if !v.is_finite() {
+                        bail!("重构结果含 NaN/Inf");
+                    }
+                    let d = v as f64;
+                    self.stats[0] = self.stats[0].min(d);
+                    self.stats[1] = self.stats[1].max(d);
+                    self.stats[2] += d;
+                    self.stats[3] += d * d;
+                    band[(y * w + x) * 4..(y * w + x + 1) * 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+            self.file.seek(SeekFrom::Start(HEADER + ((k * h + y0) * w * 4) as u64))?;
+            self.file.write_all(&band)?;
+        }
+        self.count += n * z * w;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<String> {
+        use std::io::{Seek, SeekFrom};
+        let [w, h, z] = self.shape;
+        if self.count != w * h * z {
+            bail!("重构未写完");
+        }
+        let n = self.count as f64;
+        let mean = self.stats[2] / n;
+        let rms = (self.stats[3] / n - mean * mean).max(0.0).sqrt();
+        let header = crate::align::mrc_header(w, h, z, self.pixel_a, [self.stats[0] as f32, self.stats[1] as f32, mean as f32, rms as f32], "TifMrcView Pro: single-axis tomography");
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(&header)?;
+        self.file.sync_all()?;
+        std::fs::rename(&self.part, &self.path)?;
+        self.done = true;
+        Ok(self.path.to_string_lossy().into_owned())
+    }
+}
+
+impl Drop for VolumeFile {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = std::fs::remove_file(&self.part);
+        }
+    }
+}
+
 pub fn reconstruct(
     imgs: &[Arc<OpenImage>],
     req: &ReconReq,
@@ -304,26 +396,13 @@ pub fn reconstruct(
     for (img, path) in imgs.iter().zip(&req.paths) {
         validate(img, &req.alignment, req.bin)?;
         let (stack, w, h, angles) = aligned(img, &req.alignment, req.bin, req.c, req.t, progress)?;
-        let nv = angles.len();
-        let mut sino = vec![0.0; stack.len()];
-        for y in 0..h {
-            for i in 0..nv {
-                sino[(y * nv + i) * w..(y * nv + i + 1) * w]
-                    .copy_from_slice(&stack[(i * h + y) * w..(i * h + y + 1) * w]);
-            }
-        }
-        drop(stack);
-        let op = recon::Operator::new(w, req.params.thickness, &angles, req.params.z_offset)?;
-        let r = recon::reconstruct(&sino, h, &op, &req.params, progress)?;
-        write_mrc(
-            path,
-            &r.data,
-            [w, h, req.params.thickness],
-            pixel_a(img) * req.bin as f64,
-            true,
-        )?;
+        let g = recon::Geometry::new(w, req.params.thickness, &angles, req.params.z_offset)?;
+        let views = recon::Views { data: &stack, w, h, views: angles.len() };
+        let mut out = VolumeFile::create(path, [w, h, req.params.thickness], pixel_a(img) * req.bin as f64)?;
+        let backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, slab| out.write_rows(y0, n, &slab), progress)?;
+        out.finish()?;
         export(&req.alignment, path)?;
-        backends.push(r.backend);
+        backends.push(backend);
     }
     Ok(ReconResult {
         paths: req.paths.clone(),

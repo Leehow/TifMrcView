@@ -1,7 +1,7 @@
 //! Deterministic phantoms exercise image tracking, model fitting, the
 //! transpose identity, reconstruction quality and the actual GPU backend.
 use super::*;
-use recon::{Filter, Method, Operator, Params};
+use recon::{Filter, Geometry, Method, Params};
 
 fn rng(state: &mut u64) -> f64 {
     *state = state
@@ -150,10 +150,12 @@ fn phantom_tracking_axis_sweep_and_shifts() {
     assert!(rms < 0.5, "shift rms {rms}");
 }
 
-fn recon_phantom() -> (Operator, Vec<f32>, Vec<f32>, usize) {
+/// Three Gaussian blobs per XZ slice, slightly different on each row;
+/// returns the geometry, the truth [rows][z][w] and its sinograms.
+fn recon_phantom() -> (Geometry, Vec<f32>, Vec<f32>, usize) {
     let (w, z, rows) = (48, 40, 5);
     let angles: Vec<_> = (-20..=20).map(|i| i as f64 * 3.0).collect();
-    let op = Operator::new(w, z, &angles, 0.0).unwrap();
+    let g = Geometry::new(w, z, &angles, 0.0).unwrap();
     let mut truth = vec![0.0; rows * w * z];
     for y in 0..rows {
         for k in 0..w * z {
@@ -168,53 +170,72 @@ fn recon_phantom() -> (Operator, Vec<f32>, Vec<f32>, usize) {
                 * (1.0 + y as f32 * 0.1);
         }
     }
-    let b = truth.chunks(w * z).flat_map(|x| op.forward(x)).collect();
-    (op, truth, b, rows)
+    let b = truth.chunks(w * z).flat_map(|x| recon::forward(&g, x)).collect();
+    (g, truth, b, rows)
+}
+
+fn sirt_error(g: &Geometry, b: &[f32], x: &[f32]) -> f64 {
+    let n = g.views() * g.w;
+    b.chunks(n)
+        .zip(x.chunks(g.z * g.w))
+        .map(|(b, x)| recon::forward(g, x).iter().zip(b).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>())
+        .sum::<f64>()
+        .sqrt()
 }
 
 #[test]
-fn matched_adjoint_and_reconstruction_quality() {
-    let (op, truth, b, rows) = recon_phantom();
-    let mut seed = 17;
-    let x: Vec<f32> = (0..op.w * op.z)
-        .map(|_| rng(&mut seed) as f32 - 0.5)
+fn projector_geometry_and_reconstruction_quality() {
+    let (g, truth, b, _) = recon_phantom();
+    // A blob at (x, depth v) projects to (w−1)/2 + cos θ·(x − (w−1)/2) + sin θ·v.
+    let slice: Vec<f32> = (0..g.z * g.w)
+        .map(|i| {
+            let (x, z) = ((i % g.w) as f32 - 30.0, (i / g.w) as f32 - (g.z / 2 + 6) as f32);
+            (-(x * x + z * z) / 4.5).exp()
+        })
         .collect();
-    let q: Vec<f32> = (0..op.w * op.views)
-        .map(|_| rng(&mut seed) as f32 - 0.5)
-        .collect();
-    let lhs = op
-        .forward(&x)
-        .iter()
-        .zip(&q)
-        .map(|(a, b)| *a as f64 * *b as f64)
-        .sum::<f64>();
-    let rhs = x
-        .iter()
-        .zip(op.back(&q))
-        .map(|(a, b)| *a as f64 * b as f64)
-        .sum::<f64>();
-    assert!((lhs - rhs).abs() < 1e-4, "adjoint {lhs} {rhs}");
+    let sino = recon::forward(&g, &slice);
+    for (v, [c, s]) in g.trig.iter().enumerate() {
+        let row = &sino[v * g.w..(v + 1) * g.w];
+        let centroid = row.iter().enumerate().map(|(j, a)| j as f64 * *a as f64).sum::<f64>() / row.iter().map(|&a| a as f64).sum::<f64>();
+        let want = c * (30.0 - 23.5) + s * (g.depth(g.z / 2 + 6)) + 23.5;
+        assert!((centroid - want).abs() < 0.05, "view {v}: {centroid} vs {want}");
+    }
     for method in [Method::Wbp, Method::Sirt] {
-        let p = Params {
-            thickness: op.z,
-            method,
-            backend: "cpu".into(),
-            ..Default::default()
-        };
-        let r = recon::cpu(&b, rows, &op, &p, &|_, _| {}).unwrap();
-        let cc = corr(&r.data, &truth);
-        eprintln!("{method:?} phantom cc={cc} residuals={:?}", r.residuals);
-        assert!(
-            cc > if method == Method::Wbp { 0.80 } else { 0.85 },
-            "{method:?} cc {cc}"
-        );
-        assert!(r.residuals.windows(2).all(|v| v[1] <= v[0] + 1e-6));
+        let p = Params { thickness: g.z, method, backend: "cpu".into(), ..Default::default() };
+        let x = recon::cpu_slab(&g, &b, &p).unwrap();
+        let cc = corr(&x, &truth);
+        eprintln!("{method:?} phantom cc={cc}");
+        assert!(cc > if method == Method::Wbp { 0.80 } else { 0.85 }, "{method:?} cc {cc}");
     }
-    for f in [Filter::Cosine, Filter::Hamming, Filter::SirtLike] {
-        assert!(recon::filtered(&b, op.w, f, 15)
-            .iter()
-            .all(|v| v.is_finite()));
+    let errors: Vec<f64> = [2, 5, 15]
+        .iter()
+        .map(|&iterations| {
+            let p = Params { thickness: g.z, method: Method::Sirt, iterations, backend: "cpu".into(), ..Default::default() };
+            sirt_error(&g, &b, &recon::cpu_slab(&g, &b, &p).unwrap())
+        })
+        .collect();
+    assert!(errors.windows(2).all(|e| e[1] < e[0]), "SIRT residuals {errors:?}");
+    for f in [Filter::Cosine, Filter::Hamming] {
+        assert!(recon::filtered(&b, g.w, f).iter().all(|v| v.is_finite()));
     }
+}
+
+#[test]
+fn streaming_slabs_match_one_slab() {
+    let (g, _, b, rows) = recon_phantom();
+    let data: Vec<f32> = (0..g.views())
+        .flat_map(|v| (0..rows).flat_map(move |y| (0..g.w).map(move |x| (y, v, x))))
+        .map(|(y, v, x)| b[(y * g.views() + v) * g.w + x])
+        .collect();
+    let views = recon::Views { data: &data, w: g.w, h: rows, views: g.views() };
+    let p = Params { thickness: g.z, backend: "cpu".into(), ..Default::default() };
+    let mut out = vec![0.0; rows * g.z * g.w];
+    recon::reconstruct(&views, &g, &p, &mut |y0, n, slab| {
+        out[y0 * g.z * g.w..(y0 + n) * g.z * g.w].copy_from_slice(&slab);
+        Ok(())
+    }, &|_, _| {})
+    .unwrap();
+    assert_eq!(out, recon::cpu_slab(&g, &b, &p).unwrap());
 }
 
 #[test]
@@ -223,28 +244,16 @@ fn gpu_matches_cpu() {
         eprintln!("SKIP: no GPU device");
         return;
     };
-    let (op, _, b, rows) = recon_phantom();
+    let (g, _, b, rows) = recon_phantom();
     for method in [Method::Wbp, Method::Sirt] {
-        let p = Params {
-            thickness: op.z,
-            method,
-            ..Default::default()
-        };
-        let cpu = recon::cpu(&b, rows, &op, &p, &|_, _| {}).unwrap();
-        let gpu =
-            crate::ctf_gpu::guarded(|| recon_gpu::reconstruct(dev, &b, rows, &op, &p, &|_, _| {}))
-                .unwrap()
-                .unwrap();
-        let e = cpu
-            .data
-            .iter()
-            .zip(&gpu.data)
-            .map(|(a, b)| (*a as f64 - *b as f64).powi(2))
-            .sum::<f64>();
-        let n = cpu.data.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
+        let p = Params { thickness: g.z, method, ..Default::default() };
+        let cpu = recon::cpu_slab(&g, &b, &p).unwrap();
+        let gpu = crate::ctf_gpu::guarded(|| recon_gpu::Plan::new(dev, &g, &p)?.slab(&b, rows)).unwrap().unwrap();
+        let e = cpu.iter().zip(&gpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();
+        let n = cpu.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
         let rel = (e / n).sqrt();
         eprintln!("{method:?} {name} relative L2={rel}");
-        assert!(rel < 1e-3);
+        assert!(rel < 1e-4);
     }
 }
 
@@ -390,21 +399,6 @@ fn sorted_input_and_shared_even_odd_geometry() {
         &|_, _| {}
     )
     .is_err());
-}
-
-#[test]
-fn sirt_like_filter_suppresses_high_frequencies_first() {
-    let w = 256;
-    let attenuation = |period: f32, iters: usize| {
-        let row: Vec<f32> = (0..w)
-            .map(|i| (std::f32::consts::TAU * i as f32 / period).sin())
-            .collect();
-        let power = |v: Vec<f32>| v.iter().map(|v| v * v).sum::<f32>();
-        power(recon::filtered(&row, w, Filter::SirtLike, iters))
-            / power(recon::filtered(&row, w, Filter::Ramp, iters))
-    };
-    assert!(attenuation(64.0, 15) > 2.0 * attenuation(4.0, 15));
-    assert!(attenuation(4.0, 30) > attenuation(4.0, 15));
 }
 
 #[test]
