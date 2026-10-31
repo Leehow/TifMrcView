@@ -95,6 +95,28 @@ fn fourier_slices_match_real_projections() {
 }
 
 #[test]
+fn mask_correlation_is_removed_from_fsc() {
+    // Half maps: the phantom low-passed to about 1/4 Nyquist plus
+    // independent noise; a hard mask makes the noise correlate.
+    let b = 64;
+    let truth = super::refine::lowpass(&phantom(b), b, 1.0, 10.0);
+    let mut rng = super::Rng(5);
+    let sd = std_of(&truth) * 2.0;
+    let h1: Vec<f32> = truth.iter().map(|v| v + sd * rng.gauss() as f32).collect();
+    let h2: Vec<f32> = truth.iter().map(|v| v + sd * rng.gauss() as f32).collect();
+    let mut mask = vec![1f32; b * b * b];
+    volume::mask_sphere(&mut mask, b, 14.0, 0.0);
+    let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(&mask).map(|(a, m)| a * m).collect() };
+    let raw = super::post::fsc_raw(&masked(&h1), &masked(&h2), b);
+    let fixed = super::post::corrected_fsc(&h1, &h2, &masked, b);
+    let high = |f: &[f64]| f[16..30].iter().sum::<f64>() / 14.0;
+    assert!(fixed[2] > 0.8, "low shells kept: {:.3}", fixed[2]);
+    eprintln!("mask FSC beyond the signal: raw {:.3}, corrected {:.3}", high(&raw), high(&fixed));
+    assert!(high(&raw) > 0.04, "the hard mask should correlate the noise: {:.3}", high(&raw));
+    assert!(high(&fixed).abs() < 0.03, "corrected FSC beyond the signal {:.3} (raw {:.3})", high(&fixed), high(&raw));
+}
+
+#[test]
 fn reconstructs_from_projections() {
     let b = 32;
     let v = phantom(b);
