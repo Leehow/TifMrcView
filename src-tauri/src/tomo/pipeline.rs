@@ -242,6 +242,9 @@ pub struct WedgeStep {
     pub source: Option<String>,
     #[serde(default)]
     pub cfg: crate::wedge::TrainConfig,
+    /// Train on the tomogram alone even when it has even/odd halves.
+    #[serde(default)]
+    pub single: bool,
 }
 
 pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progress: Progress) -> Result<Made> {
@@ -250,21 +253,34 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     let used: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
     let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
-    let (v, shape, px) = load(&src.path)?;
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
-    let out = crate::wedge::train_and_apply(dev, &v, shape, range, &req.cfg, |p| {
+    let tick = |p: crate::wedge::Progress| {
         if p.iteration > p.iterations {
             progress("缺失楔补偿：应用", p.step, p.steps)
         } else {
             progress(&format!("缺失楔补偿：第 {}/{} 轮", p.iteration, p.iterations), p.step, p.steps)
         }
-    })?;
+    };
+    // With even/odd halves one network denoises and fills the wedge
+    // (Noise2Noise across the halves); else the IsoNet method on the one.
+    let (out, shape, px, method) = match (&src.halves, req.single) {
+        (Some([even, odd]), false) => {
+            let (a, shape, px) = load(even)?;
+            let (b, ..) = load(odd)?;
+            let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
+            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &req.cfg, tick)?, shape, px, "halves")
+        }
+        _ => {
+            let (v, shape, px) = load(&src.path)?;
+            (crate::wedge::train_and_apply(dev, &v, shape, range, &req.cfg, tick)?, shape, px, "isonet")
+        }
+    };
     if CANCEL.load(Ordering::SeqCst) {
         bail!("已取消");
     }
     let path = output_path(d, &format!("{}_wedge", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
-    d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: "isonet".into(), halves: None, ..src });
+    d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
