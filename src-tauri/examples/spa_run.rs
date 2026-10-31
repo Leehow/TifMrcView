@@ -13,8 +13,11 @@ fn main() -> anyhow::Result<()> {
     }
     let sym = args.get(3).cloned().unwrap_or_else(|| "C1".into());
     let t0 = std::time::Instant::now();
+    // About every 5 % of each stage.
+    let last = std::sync::atomic::AtomicUsize::new(usize::MAX);
     let log = |s: &str, d: usize, t: usize| {
-        if d == t || d % 10 == 0 {
+        let tick = d * 20 / t.max(1);
+        if last.swap(tick, std::sync::atomic::Ordering::Relaxed) != tick || d == t {
             eprintln!("[{:7.1} s] {s} {d}/{t}", t0.elapsed().as_secs_f64());
         }
     };

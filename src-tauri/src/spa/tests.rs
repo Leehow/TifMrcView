@@ -443,3 +443,17 @@ fn workflow_from_micrographs() {
     eprintln!("refined map vs truth (20 Å): {cc:.3} / flipped {ccf:.3}");
     assert!(r.res < 25.0);
 }
+
+/// Masked FSC of a refinement folder (`TMV_SPA_DIR=<…>/tifmrcview-spa`).
+#[test]
+#[ignore]
+fn masked_fsc_of_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let read = |n: &str| data::read_volume(&format!("{dir}/{n}")).unwrap();
+    let (h1, d, _) = read("refine_half1.mrc");
+    let (h2, _, _) = read("refine_half2.mrc");
+    let (mask, _, _) = read("refine_mask.mrc");
+    let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(&mask).map(|(a, m)| a * m).collect() };
+    let f = super::post::corrected_fsc(&h1, &h2, &masked, d[0]);
+    eprintln!("{:?}", f.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
+}

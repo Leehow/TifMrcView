@@ -239,25 +239,32 @@ pub fn sharpen(full: &[f32], h1: &[f32], h2: &[f32], mask: &[f32], b: usize, px:
 }
 
 /// Flips the hand (mirror along z).
+/// Shells after the first randomised one where the soft mask still mixes
+/// in unrandomised signal from below, so FSC_n there is not noise alone.
+const LEAK: usize = 3;
+
 /// Masked FSC corrected for the correlation the mask itself brings, by
 /// phase randomisation (Chen et al., Ultramicroscopy 2013): beyond where
-/// the unmasked FSC falls below 0.8 the half maps' phases are randomised,
+/// the masked FSC falls below 0.8 the half maps' phases are randomised,
 /// masked the same way, and FSC = (FSC_t − FSC_n) / (1 − FSC_n).
 pub fn corrected_fsc(h1: &[f32], h2: &[f32], masked: &dyn Fn(&[f32]) -> Vec<f32>, b: usize) -> Vec<f64> {
     let f_t = fsc_raw(&masked(h1), &masked(h2), b);
-    let unmasked = fsc_raw(h1, h2, b);
-    let Some(r_rand) = (1..unmasked.len()).find(|&r| unmasked[r] < 0.8) else {
+    // From where the masked FSC itself falls below 0.8: the unmasked one
+    // falls much earlier (solvent noise), and real signal leaking through
+    // the mask into the first randomised shells would then be subtracted.
+    let Some(r_rand) = (1..f_t.len()).find(|&r| f_t[r] < 0.8) else {
         return f_t;
     };
     let f_n = fsc_raw(&masked(&randomise_phases(h1, b, r_rand as f64, 1)), &masked(&randomise_phases(h2, b, r_rand as f64, 2)), b);
     f_t.iter()
         .zip(&f_n)
         .enumerate()
-        .map(|(r, (&t, &n))| if r < r_rand || n >= 0.999 { t } else { (t - n) / (1.0 - n) })
+        .map(|(r, (&t, &n))| if r <= r_rand + LEAK || n >= 0.999 { t } else { (t - n) / (1.0 - n) })
         .collect()
 }
 
-/// The map with random phases beyond shell `r_from` (Hermitian pairs kept).
+/// The map with random phases in the shells beyond `r_from` (whole shells,
+/// as `fsc_raw` bins them; Hermitian pairs kept).
 fn randomise_phases(v: &[f32], b: usize, r_from: f64, seed: u64) -> Vec<f32> {
     let (mut re, mut im) = fourier::ft3(b, v);
     let mut rng = super::Rng(seed);
@@ -267,7 +274,7 @@ fn randomise_phases(v: &[f32], b: usize, r_from: f64, seed: u64) -> Vec<f32> {
                 let j = (z * b + y) * b + x;
                 let (fx, fy, fz) = (fourier::freq(x, b), fourier::freq(y, b), fourier::freq(z, b));
                 let m = (fourier::index(-fz, b) * b + fourier::index(-fy, b)) * b + fourier::index(-fx, b);
-                if m <= j || shell_of(z, y, x, b) <= r_from {
+                if m <= j || shell_of(z, y, x, b).round() <= r_from {
                     continue;
                 }
                 let a = 2.0 * std::f64::consts::PI * rng.unit();
