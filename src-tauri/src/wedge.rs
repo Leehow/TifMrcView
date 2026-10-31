@@ -758,29 +758,42 @@ fn dft(n: usize, dev: &Device) -> (Tensor<2>, Tensor<2>) {
     (c, s)
 }
 
-/// Σ w·|F e|² for e [B, 1, n, n, n] (Z, Y, X), with the weights in the
-/// order the transform leaves the axes: [B, kY, kX, kZ].
-fn spectral_error(e: Tensor<5>, c: &Tensor<2>, s: &Tensor<2>, w: Tensor<4>) -> Tensor<1> {
-    let [b, _, n, _, _] = e.dims();
+/// 3D DFT of [B, n, n, n] (real, imaginary) on the device: along the last
+/// axis, then the axes turned (Z, Y, X) → (X, Z, Y), three times, so they
+/// end where they began. Inverse with −s (and divide by n³).
+fn dft3(re: Tensor<4>, im: Option<Tensor<4>>, c: &Tensor<2>, s: &Tensor<2>) -> (Tensor<4>, Tensor<4>) {
+    let [b, n, _, _] = re.dims();
     let rows = b * n * n;
-    let x = e.reshape([rows, n]);
-    let (mut re, mut im) = (x.clone().matmul(c.clone()), x.matmul(s.clone()));
-    for swap in [(2, 3), (1, 3)] {
-        let turn = |t: Tensor<2>| -> Tensor<2> { t.reshape([b, n, n, n]).swap_dims(swap.0, swap.1).reshape([rows, n]) };
-        let (r, i) = (turn(re), turn(im));
-        re = r.clone().matmul(c.clone()) - i.clone().matmul(s.clone());
-        im = r.matmul(s.clone()) + i.matmul(c.clone());
+    let mut re = re;
+    let mut im = im;
+    for _ in 0..3 {
+        let r = re.reshape([rows, n]);
+        let (nr, ni) = match im {
+            None => (r.clone().matmul(c.clone()), r.matmul(s.clone())),
+            Some(i) => {
+                let i = i.reshape([rows, n]);
+                (r.clone().matmul(c.clone()) - i.clone().matmul(s.clone()), r.matmul(s.clone()) + i.matmul(c.clone()))
+            }
+        };
+        re = nr.reshape([b, n, n, n]).permute([0, 3, 1, 2]);
+        im = Some(ni.reshape([b, n, n, n]).permute([0, 3, 1, 2]));
     }
-    let p = re.clone() * re + im.clone() * im;
-    (p.reshape([b, n, n, n]) * w).sum()
+    (re, im.unwrap())
 }
 
-/// [kZ][kY][kX] → [kY][kX][kZ], the order `spectral_error` reads.
-fn spectral_order(w: &[f32], n: usize) -> Vec<f32> {
-    (0..n * n * n).map(|i| {
-        let (y, x, z) = (i / (n * n), (i / n) % n, i % n);
-        w[(z * n + y) * n + x]
-    }).collect()
+/// Σ w·|F e|² for e [B, 1, n, n, n], w [B, n, n, n] (unshifted frequencies).
+fn spectral_error(e: Tensor<5>, c: &Tensor<2>, s: &Tensor<2>, w: Tensor<4>) -> Tensor<1> {
+    let [b, _, n, _, _] = e.dims();
+    let (re, im) = dft3(e.reshape([b, n, n, n]), None, c, s);
+    ((re.clone() * re + im.clone() * im) * w).sum()
+}
+
+/// x [B, n, n, n] with only the Fourier components where `mask` [1, n, n, n] is 1.
+fn spectral_cut(x: Tensor<4>, c: &Tensor<2>, s: &Tensor<2>, mask: &Tensor<4>) -> Tensor<4> {
+    let n = x.dims()[1];
+    let (re, im) = dft3(x, None, c, s);
+    let (re, _) = dft3(re * mask.clone(), Some(im * mask.clone()), c, &s.clone().neg());
+    re / (n * n * n) as f32
 }
 
 /// Trains on the two half tomograms `a` and `b` (standardised alike).
@@ -805,7 +818,7 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
             let both = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k > 0.0).count().max(1) as f32;
             let new = target.iter().zip(&sp.keep).filter(|(&t, &k)| t > 0.0 && k == 0.0).count().max(1) as f32;
             let w: Vec<f32> = target.iter().zip(&sp.keep).map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new }).collect();
-            spectral_order(&w, n)
+            w
         })
         .collect();
     let edge = (n / 8).max(1);
@@ -819,6 +832,8 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let orig: [Vec<Vec<f32>>; 2] = [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
     let ad = dev.clone().autodiff();
     let (c, s) = dft(n, &ad);
+    let (c0, s0) = dft(n, dev);
+    let keep = Tensor::<4>::from_data(TensorData::new(sp.keep.clone(), [1, n, n, n]), dev);
     let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
@@ -833,12 +848,14 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
             let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
             let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
                 .par_iter()
-                .map(|&(i, r, from)| (sp.cut(&rots[r].apply(&orig[from][i], n)), rots[r].apply(&orig[1 - from][i], n)))
+                .map(|&(i, r, from)| (rots[r].apply(&orig[from][i], n), rots[r].apply(&orig[1 - from][i], n)))
                 .collect();
             let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
             let w: Vec<f32> = picks.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
             let norm = (cfg.batch * n * n * n) as f32 * (1.0 + cfg.omega);
-            let x = Tensor::<5>::from_data(TensorData::new(xs.concat(), [cfg.batch, 1, n, n, n]), &ad);
+            // The wedge is cut from the inputs on the device.
+            let x = Tensor::<4>::from_data(TensorData::new(xs.concat(), [cfg.batch, n, n, n]), dev);
+            let x = Tensor::<5>::from_data(spectral_cut(x, &c0, &s0, &keep).reshape([cfg.batch, 1, n, n, n]).into_data(), &ad);
             let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]), &ad);
             let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
             let loss = spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm;
@@ -1166,14 +1183,22 @@ mod tests {
         let mut rng = Rng(17);
         let e: Vec<f32> = (0..n * n * n).map(|_| rng.gauss()).collect();
         let w: Vec<f32> = (0..n * n * n).map(|_| rng.below(3) as f32).collect();
+        let e0 = e.clone();
         let (mut re, mut im) = (e.clone(), vec![0f32; e.len()]);
         fft3(&Fft::new(n), n, &mut re, &mut im, false);
         let cpu: f32 = (0..e.len()).map(|i| w[i] * (re[i] * re[i] + im[i] * im[i])).sum();
         let (c, s) = dft(n, &dev);
         let x = Tensor::<5>::from_data(TensorData::new(e, [1, 1, n, n, n]), &dev);
-        let wt = Tensor::<4>::from_data(TensorData::new(spectral_order(&w, n), [1, n, n, n]), &dev);
-        let gpu: f32 = spectral_error(x, &c, &s, wt).into_scalar();
+        let wt = Tensor::<4>::from_data(TensorData::new(w, [1, n, n, n]), &dev);
+        let gpu: f32 = spectral_error(x.clone(), &c, &s, wt).into_scalar();
         assert!((gpu - cpu).abs() < 1e-3 * cpu, "{gpu} {cpu}");
+        // The device cut matches the CPU one.
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
+        let sp = Spectral::new(n, &g);
+        let keep = Tensor::<4>::from_data(TensorData::new(sp.keep.clone(), [1, n, n, n]), &dev);
+        let on_dev = spectral_cut(x.reshape([1, n, n, n]), &c, &s, &keep).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let worst = on_dev.iter().zip(sp.cut(&e0)).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-3, "{worst}");
     }
 
     #[test]
