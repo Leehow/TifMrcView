@@ -51,6 +51,9 @@ pub struct Class2dResult {
     /// Resolution of each average, Å: where the FRC of the averages of
     /// its even and odd particles falls below 0.143.
     pub res: Vec<f64>,
+    /// Mean of that FRC from 20 Å to Nyquist: how much detail the class
+    /// shares between its halves even where `res` hits Nyquist.
+    pub quality: Vec<f64>,
 }
 
 /// Runs the classification on `ids` (indices into `parts`), updating their
@@ -187,17 +190,19 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
         }
         progress("二维分类", (it + 1) * 1000, total * 1000);
     }
-    let res: Vec<f64> = (0..k_classes)
+    let (res, quality): (Vec<f64>, Vec<f64>) = (0..k_classes)
         .into_par_iter()
         .map(|c| {
             let (a, b) = (&halves[2 * c], &halves[2 * c + 1]);
             if a.count < 3 || b.count < 3 {
-                return UNRESOLVED;
+                return (UNRESOLVED, 0.0);
             }
             let r = bw as f64 / 2.0 - 1.0;
-            frc_res(&a.average(0.2, r, radius), &b.average(0.2, r, radius), bw, pxw)
+            let f = frc(&a.average(0.2, r, radius), &b.average(0.2, r, radius), bw);
+            let from = ((bw as f64 * pxw / 20.0).round() as usize).clamp(1, f.len() - 1);
+            (frc_res(&f, bw, pxw), f[from..].iter().sum::<f64>() / (f.len() - from) as f64)
         })
-        .collect();
+        .unzip();
     // Sort by size; renumber the particles.
     let mut order: Vec<usize> = (0..k_classes).collect();
     order.sort_by_key(|&c| std::cmp::Reverse(counts[c]));
@@ -218,6 +223,7 @@ pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics
         counts: order.iter().map(|&c| counts[c]).collect(),
         scores: order.iter().map(|&c| scores[c]).collect(),
         res: order.iter().map(|&c| res[c]).collect(),
+        quality: order.iter().map(|&c| quality[c]).collect(),
     })
 }
 
@@ -248,9 +254,8 @@ fn insert_halves(acc: &mut [Accum2], c: &Coeffs, half: &Half, ps: &[&Particle], 
     });
 }
 
-/// Resolution (Å) where the Fourier ring correlation of two images falls
-/// below 0.143; `UNRESOLVED` when it never rises above it.
-pub fn frc_res(a: &[f32], b: &[f32], n: usize, px: f64) -> f64 {
+/// Fourier ring correlation of two n × n images, shells 0..n/2.
+pub fn frc(a: &[f32], b: &[f32], n: usize) -> Vec<f64> {
     let fft = crate::fft::Fft::new(n);
     let (ar, ai) = super::fourier::ft2(&fft, n, a);
     let (br, bi) = super::fourier::ft2(&fft, n, b);
@@ -268,24 +273,32 @@ pub fn frc_res(a: &[f32], b: &[f32], n: usize, px: f64) -> f64 {
             }
         }
     }
-    match (1..shells).find(|&r| x[r] / (p[r] * q[r]).sqrt().max(1e-30) < 0.143) {
+    (0..shells).map(|r| x[r] / (p[r] * q[r]).sqrt().max(1e-30)).collect()
+}
+
+/// Resolution (Å) where an FRC falls below 0.143; `UNRESOLVED` when it
+/// never rises above it.
+pub fn frc_res(f: &[f64], n: usize, px: f64) -> f64 {
+    let shells = f.len();
+    match (1..shells).find(|&r| f[r] < 0.143) {
         Some(1) => UNRESOLVED,
         Some(r) => n as f64 * px / (r as f64 - 0.5),
         None => 2.0 * px,
     }
 }
 
-/// The classes to keep by default: those whose average resolves within
-/// `slack` × the best class's resolution (among classes holding at least
-/// 1 % of the particles), as junk and blurred classes resolve much less.
-pub fn auto_select(counts: &[usize], res: &[f64], slack: f64) -> Vec<usize> {
+/// The classes to keep by default: those whose `quality` (high-frequency
+/// FRC between halves) reaches `share` of the best class's (among classes
+/// holding at least 1 % of the particles); junk and blurred classes share
+/// little detail between their halves.
+pub fn auto_select(counts: &[usize], quality: &[f64], share: f64) -> Vec<usize> {
     let total: usize = counts.iter().sum();
     let big = |c: usize| counts[c] * 100 >= total;
-    let best = (0..counts.len()).filter(|&c| big(c)).map(|c| res[c]).fold(f64::INFINITY, f64::min);
-    if best >= UNRESOLVED {
+    let best = (0..counts.len()).filter(|&c| big(c)).map(|c| quality[c]).fold(0.0, f64::max);
+    if best <= 0.0 {
         return vec![];
     }
-    (0..counts.len()).filter(|&c| big(c) && res[c] <= best * slack).collect()
+    (0..counts.len()).filter(|&c| big(c) && quality[c] >= best * share).collect()
 }
 
 /// Real-space image from half-plane coefficients.

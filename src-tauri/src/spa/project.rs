@@ -68,6 +68,9 @@ pub struct Class2dInfo {
     /// Resolution of each average (even/odd FRC), Å.
     #[serde(default)]
     pub res: Vec<f64>,
+    /// Mean even/odd FRC from 20 Å to Nyquist (what the default choice uses).
+    #[serde(default)]
+    pub quality: Vec<f64>,
     pub selected: Vec<usize>,
     pub params: Class2dParams,
 }
@@ -407,8 +410,8 @@ pub fn class2d(p: &mut Project, params: &Class2dParams, progress: Progress) -> R
     data::write_mrc(Path::new(&path), &all, [r.b, r.b, r.averages.len()], r.pixel_a, "TifMrcView Pro: 2D classes")?;
     p.save_particles(&parts)?;
     // The sharp classes are kept by default; the user can change the choice.
-    let selected = class2d::auto_select(&r.counts, &r.res, 1.5);
-    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, res: r.res, selected, params: params.clone() };
+    let selected = class2d::auto_select(&r.counts, &r.quality, 0.6);
+    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, res: r.res, quality: r.quality, selected, params: params.clone() };
     p.class2d = Some(info.clone());
     p.save()?;
     Ok(info)
