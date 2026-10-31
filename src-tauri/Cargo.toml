@@ -124,3 +124,7 @@ required-features = ["pro"]
 [[example]]
 name = "cryoet_pipeline"
 required-features = ["pro"]
+
+[[example]]
+name = "spa_run"
+required-features = ["pro"]
