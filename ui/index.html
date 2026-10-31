@@ -272,16 +272,28 @@
     </div>
     <input id="market-search" type="search" placeholder="搜索插件" aria-label="搜索插件" />
     <div id="market-list"></div>
+  </div>
+
+  <div id="update-dialog" class="dialog" hidden>
     <div class="dlg-head">
       <h3>更新</h3>
+      <button id="update-close" class="small" title="关闭 (Esc)">✕</button>
     </div>
     <div class="row">
       <span id="app-version"></span>
-      <span id="update-status" class="dim"></span>
-      <button id="update-install" class="small primary" hidden></button>
     </div>
     <div class="row">
+      <span id="update-status" class="dim"></span>
+    </div>
+    <div id="update-notes-box" hidden>
+      <div class="dim">更新内容</div>
+      <pre id="update-notes"></pre>
+    </div>
+    <div class="row">
+      <button id="update-install" class="small primary" hidden></button>
       <button id="update-check" class="small">检查更新</button>
+    </div>
+    <div class="row">
       <label><input type="checkbox" id="update-auto" /> 启动时自动检查</label>
     </div>
   </div>

@@ -559,3 +559,5 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .about-links a:hover { text-decoration: underline; }
 .about-cite { margin-top: 6px; padding: 8px; font-size: 12px; background: var(--subtle); border-radius: 6px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 .about-foot { padding-top: 8px; font-size: 12px; }
+
+#update-notes { margin: 4px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font: inherit; font-size: 12px; }
