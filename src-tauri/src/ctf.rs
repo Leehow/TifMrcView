@@ -768,6 +768,34 @@ pub struct StackFit {
 /// Set to stop a running stack fit; cleared when one starts.
 pub static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Limits for hot and dead pixels: the median ± 12 robust σ of a sample
+/// (a few such pixels in a micrograph otherwise swamp its power spectrum).
+pub fn clip_range(get: impl Fn(usize) -> f32, n: usize) -> (f32, f32) {
+    let step = (n / 100_000).max(1);
+    let mut s: Vec<f32> = (0..n).step_by(step).map(&get).filter(|v| v.is_finite()).collect();
+    if s.is_empty() {
+        return (f32::MIN, f32::MAX);
+    }
+    s.sort_by(f32::total_cmp);
+    let med = s[s.len() / 2];
+    let mut d: Vec<f32> = s.iter().map(|v| (v - med).abs()).collect();
+    d.sort_by(f32::total_cmp);
+    let sd = d[d.len() / 2] * 1.4826;
+    if sd <= 0.0 {
+        return (f32::MIN, f32::MAX);
+    }
+    (med - 12.0 * sd, med + 12.0 * sd)
+}
+
+/// A value clipped to `clip_range`; not-a-number becomes the midpoint.
+pub fn clip(v: f32, lo: f32, hi: f32) -> f32 {
+    if v.is_nan() {
+        0.5 * (lo + hi)
+    } else {
+        v.clamp(lo, hi)
+    }
+}
+
 pub fn fit_region(img: &Arc<OpenImage>, req: &FitReq) -> Result<Fit> {
     let (mut fits, backend, ms) = fit_slices(img, &[req.z], req.c, req.t, req.region, req.n, &req.params, &|_, _| ())?;
     let mut f = fits.pop().unwrap();
@@ -890,7 +918,8 @@ fn fit_slices(
             let (page, sample) = info.locate(c, z, t);
             let planes = img.page(page)?;
             let p = &planes[sample.min(planes.len() - 1)];
-            let values = |x: usize, y: usize| p.data.get_f64(y * p.w + x) as f32;
+            let (lo, hi) = clip_range(|i| p.data.get_f64(i) as f32, p.w * p.h);
+            let values = |x: usize, y: usize| clip(p.data.get_f64(y * p.w + x) as f32, lo, hi);
             out.push(match gpu {
                 #[cfg(feature = "pro")]
                 Some(d) => crate::ctf_gpu::spectrum(d, values, region, want_n)?.log,

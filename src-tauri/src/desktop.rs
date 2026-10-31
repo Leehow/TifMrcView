@@ -1307,6 +1307,165 @@ impl Drop for TomoJob {
     fn drop(&mut self) { TOMO_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
 }
 
+/// Single-particle analysis (Pro): a project folder next to the
+/// micrographs (`spa::project`); each step runs on it by path.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_open(source: String) -> CmdResult<crate::spa::project::Project> {
+    blocking(move || crate::spa::project::Project::open(&source)).await
+}
+
+/// Settings edited in the workspace: particle diameter, pixel size, excluded micrographs.
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpaSettings {
+    dir: String,
+    diameter_a: Option<f64>,
+    pixel_a: Option<f64>,
+    excluded: Option<Vec<usize>>,
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_settings(req: SpaSettings) -> CmdResult<crate::spa::project::Project> {
+    blocking(move || {
+        let mut p = crate::spa::project::Project::load(&req.dir)?;
+        if let Some(d) = req.diameter_a.filter(|d| *d > 0.0) { p.diameter_a = d; }
+        if let Some(px) = req.pixel_a.filter(|v| *v > 0.0) { p.optics.pixel_a = px; }
+        if let Some(ex) = req.excluded {
+            for (i, m) in p.mics.iter_mut().enumerate() { m.excluded = ex.contains(&i); }
+        }
+        p.save()?;
+        Ok(p)
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpaStep {
+    dir: String,
+    step: String,
+    #[serde(default)]
+    params: serde_json::Value,
+}
+
+/// Runs one step; reports `spa-progress` {stage, done, total} and returns
+/// {project, result}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_run(app: AppHandle, req: SpaStep) -> CmdResult<serde_json::Value> {
+    use crate::spa::project as sp;
+    let job = SpaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |stage: &str, done: usize, total: usize| { let _ = app.emit("spa-progress", serde_json::json!({"stage":stage,"done":done,"total":total})); };
+        let mut p = sp::Project::load(&req.dir)?;
+        let v = req.params;
+        let result = match req.step.as_str() {
+            "motion" => { let _m = MotionJob::begin(true).map_err(anyhow::Error::msg)?; sp::motion(&mut p, &serde_json::from_value(v)?, &emit)?; serde_json::Value::Null }
+            "ctf" => {
+                let n = v.get("n").and_then(|n| n.as_u64()).unwrap_or(512) as usize;
+                crate::ctf::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+                sp::ctf(&mut p, &serde_json::from_value(v["params"].clone())?, n, &emit)?;
+                serde_json::Value::Null
+            }
+            "pick" => serde_json::json!(sp::pick_all(&mut p, &serde_json::from_value(v)?, &emit)?),
+            "extract" => {
+                let max_box = v.get("maxBox").and_then(|n| n.as_u64()).unwrap_or(256) as usize;
+                let invert = v.get("invert").and_then(|n| n.as_bool()).unwrap_or(true);
+                serde_json::to_value(sp::extract_all(&mut p, max_box, invert, &emit)?)?
+            }
+            "class2d" => serde_json::to_value(sp::class2d(&mut p, &serde_json::from_value(v)?, &emit)?)?,
+            "select" => serde_json::json!(sp::select(&mut p, serde_json::from_value(v)?)?),
+            "initial" => serde_json::to_value(sp::initial(&mut p, &serde_json::from_value(v)?, &emit)?)?,
+            "flip" => { sp::flip_initial(&mut p)?; serde_json::Value::Null }
+            "refine" => {
+                let reference = v.get("reference").and_then(|r| r.as_str()).map(str::to_string);
+                serde_json::to_value(sp::refine(&mut p, &serde_json::from_value(v["params"].clone())?, reference.as_deref(), &emit)?)?
+            }
+            other => anyhow::bail!("未知步骤 {other}"),
+        };
+        Ok(serde_json::json!({"project": p, "result": result}))
+    }).await
+}
+
+/// A micrograph with picks circled: {png (base64), picks, scale}; with
+/// `params` the picks are made now (preview), otherwise the saved ones.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_preview(dir: String, mic: usize, params: Option<crate::spa::pick::PickParams>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let picks = match params {
+            Some(pp) => crate::spa::project::pick_one(&p, mic, &pp)?,
+            None => p.picks()?.get(mic).cloned().unwrap_or_default(),
+        };
+        let m = p.mics.get(mic).ok_or_else(|| anyhow::anyhow!("没有这张显微图"))?;
+        let (img, w, h) = crate::spa::project::read_mic(&m.path)?;
+        let (png, scale) = crate::spa::render::mic_preview(&img, w, h, &picks, p.diameter_a / 2.0 / p.optics.pixel_a, 900)?;
+        Ok(serde_json::json!({"png": base64(&png), "picks": picks.len(), "scale": scale}))
+    }).await
+}
+
+/// The 2D class averages as one PNG grid: {png, cols, cell, counts, scores}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_classes(dir: String) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let c = p.class2d.as_ref().ok_or_else(|| anyhow::anyhow!("还没有二维分类"))?;
+        let (v, dims, _) = crate::spa::data::read_volume(&c.path)?;
+        let b = dims[0];
+        let avgs: Vec<Vec<f32>> = v.chunks(b * b).map(|a| a.to_vec()).collect();
+        let cols = 8;
+        let cell = 72;
+        let png = crate::spa::render::gallery(&avgs, b, cols, cell)?;
+        Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "selected": c.selected}))
+    }).await
+}
+
+#[cfg(feature = "pro")]
+fn base64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() { s.push(T[(n >> (18 - 6 * i) & 63) as usize] as char); } else { s.push('='); }
+        }
+    }
+    s
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn spa_cancel() {
+    use std::sync::atomic::Ordering;
+    crate::spa::CANCEL.store(true, Ordering::SeqCst);
+    crate::ctf::CANCEL.store(true, Ordering::SeqCst);
+    if SPA_BUSY.load(Ordering::SeqCst) && MOTION_RUNNING.load(Ordering::SeqCst) { crate::motion::cancel(); }
+}
+
+#[cfg(feature = "pro")]
+static SPA_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct SpaJob;
+#[cfg(feature = "pro")]
+impl SpaJob {
+    fn begin() -> CmdResult<Self> {
+        use std::sync::atomic::Ordering;
+        SPA_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "单颗粒任务正在运行".to_string())?;
+        crate::spa::CANCEL.store(false, Ordering::SeqCst);
+        Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for SpaJob {
+    fn drop(&mut self) { SPA_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
 /// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
 #[tauri::command]
 async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<crate::stem4d::Result4d> {
@@ -2153,6 +2312,12 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,
             #[cfg(feature = "pro")] tomo_cancel,
+            #[cfg(feature = "pro")] spa_open,
+            #[cfg(feature = "pro")] spa_settings,
+            #[cfg(feature = "pro")] spa_run,
+            #[cfg(feature = "pro")] spa_preview,
+            #[cfg(feature = "pro")] spa_classes,
+            #[cfg(feature = "pro")] spa_cancel,
             diffraction_find,
             diffraction_zones,
             eds_quant,

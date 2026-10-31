@@ -56,3 +56,6 @@ pub mod tomo;
 
 #[cfg(feature = "pro")]
 pub mod motion;
+
+#[cfg(feature = "pro")]
+pub mod spa;
