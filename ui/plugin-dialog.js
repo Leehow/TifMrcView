@@ -94,6 +94,7 @@ function togglePluginDialog(force) {
   const show = force ?? dlg.hidden;
   dlg.hidden = !show;
   if (show) toggleHelp(false);
+  if (show) toggleUpdateDialog(false);
   if (show && typeof openAbout === "function") openAbout(false);
   if (show) {
     renderPluginList();
@@ -104,10 +105,13 @@ function togglePluginDialog(force) {
 
 // ---------- updates ----------
 
-const updater = { info: null, busy: false };
+const updater = { info: null, busy: false, checked: false };
 
 function setUpdateStatus(text, info = null) {
   $("update-status").textContent = text;
+  const notes = (info?.notes || "").trim();
+  $("update-notes-box").hidden = !notes;
+  $("update-notes").textContent = notes;
   const b = $("update-install");
   b.hidden = !info;
   if (info) {
@@ -126,7 +130,21 @@ function updateUnseen() {
   return !!v && pref.get("update.seen", "") !== v && pref.get("update.skip", "") !== v;
 }
 
+function toggleUpdateDialog(force) {
+  const dlg = $("update-dialog");
+  const show = force ?? dlg.hidden;
+  dlg.hidden = !show;
+  if (show) {
+    togglePluginDialog(false);
+    toggleHelp(false);
+    if (typeof openAbout === "function") openAbout(false);
+    // Nothing checked yet this session (auto-check off): look now.
+    if (!updater.checked && !updater.busy) checkUpdate(false);
+  }
+}
+
 function showUpdate(info) {
+  updater.checked = true;
   updater.info = info;
   $("update-dot").hidden = !updateUnseen();
   if (!info) setUpdateStatus("已是最新版本");
@@ -195,7 +213,8 @@ function openSettings() {
     pref.set("update.seen", updater.info.version);
     $("update-dot").hidden = true;
   }
-  items.push({ value: "plugins", label: "插件与更新", icon: GEAR_ICONS.plugins, on: !$("plugin-dialog").hidden });
+  else items.push({ value: "update", label: "更新", icon: GEAR_ICONS.update, on: !$("update-dialog").hidden });
+  items.push({ value: "plugins", label: "插件", icon: GEAR_ICONS.plugins, on: !$("plugin-dialog").hidden });
   ext.settings.forEach((s, i) => {
     const cur = s.options.find(([v]) => v === s.value);
     items.push({ value: i, label: s.title, hint: cur ? cur[1] : "", icon: GEAR_ICONS.lang });
@@ -204,7 +223,7 @@ function openSettings() {
   // The author's About dialog (ui/about.js), when the page has it.
   if (typeof openAbout === "function") items.push({ value: "about", label: "关于", icon: GEAR_ICONS.about });
   openMenu(btn, items, (v) => {
-    if (v === "update") togglePluginDialog(true);
+    if (v === "update") toggleUpdateDialog(true);
     else if (v === "plugins") togglePluginDialog();
     else if (v === "help") toggleHelp();
     else if (v === "about") openAbout();
@@ -242,6 +261,7 @@ function toggleHelp(force) {
   dlg.hidden = !show;
   if (show) {
     togglePluginDialog(false);
+    toggleUpdateDialog(false);
     if (typeof openAbout === "function") openAbout(false);
     $("help-version").textContent = $("app-version").textContent;
   }
@@ -250,6 +270,7 @@ function toggleHelp(force) {
 $("btn-settings").addEventListener("click", openSettings);
 $("help-close").addEventListener("click", () => toggleHelp(false));
 $("help-site").addEventListener("click", () => invoke("open_website").catch((e) => toast(`${e}`)));
+$("update-close").addEventListener("click", () => toggleUpdateDialog(false));
 $("plugin-close").addEventListener("click", () => togglePluginDialog(false));
 $("plugin-install").addEventListener("click", () => installPackage().catch((e) => toast(`安装失败：${e}`, 6000)));
 $("plugin-dir").addEventListener("click", () =>
@@ -263,6 +284,7 @@ window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("plugin-dialog").hidden) togglePluginDialog(false);
   if (!$("help-dialog").hidden) toggleHelp(false);
+  if (!$("update-dialog").hidden) toggleUpdateDialog(false);
 });
 
 (async () => {
