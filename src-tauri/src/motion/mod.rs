@@ -118,6 +118,10 @@ pub struct Params {
     pub backend: String,
     pub benchmark: bool,
     pub diagnostics: bool,
+    /// ImageSize of the mdoc that `pixel_a` came from (frames of another
+    /// size get it rescaled).
+    #[serde(skip)]
+    pub mdoc_size: Option<[usize; 2]>,
 }
 impl Default for Params {
     fn default() -> Self {
@@ -144,6 +148,7 @@ impl Default for Params {
             backend: "auto".into(),
             benchmark: false,
             diagnostics: false,
+            mdoc_size: None,
         }
     }
 }
@@ -239,6 +244,7 @@ pub fn run(
         if let Some((view, pre)) = doc.for_movie(&path) {
             if p.pixel_a.is_none() {
                 p.pixel_a = view.pixel_a.or(doc.pixel_a);
+                p.mdoc_size = doc.image_size;
             }
             if p.total_dose.is_none() && p.dose_per_frame.is_none() {
                 p.total_dose = view.dose.filter(|v| *v > 0.0);
@@ -302,8 +308,12 @@ fn run_movie(
     {
         bail!("剂量加权需要真实像素尺寸（Å），请填写或关联 mdoc");
     }
-    let pixel = p
-        .pixel_a
+    let from_mdoc = p.pixel_a.map(|v| {
+        let (w, h, _) = movie.shape();
+        let doc = series::Doc { image_size: p.mdoc_size, ..Default::default() };
+        doc.frame_pixel(v, (w, h))
+    });
+    let pixel = from_mdoc
         .or(movie.pixel_a())
         .map(|v| {
             if matches!(movie, input::Movie::Eer(_)) {

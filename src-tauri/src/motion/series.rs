@@ -20,6 +20,24 @@ pub struct Doc {
     pub views: Vec<View>,
     pub pixel_a: Option<f64>,
     pub kv: Option<f64>,
+    /// ImageSize of the recorded (often binned) images that PixelSpacing
+    /// describes; the frames may be larger (unbinned or super-resolution).
+    pub image_size: Option<[usize; 2]>,
+}
+
+impl Doc {
+    /// PixelSpacing for frames of this size: the mdoc's spacing is for its
+    /// ImageSize, so frames 8× as wide have 1/8 of it.
+    pub fn frame_pixel(&self, spacing: f64, frame: (usize, usize)) -> f64 {
+        let Some([w, h]) = self.image_size.filter(|[w, h]| *w > 0 && *h > 0) else { return spacing };
+        let r = frame.0.max(frame.1) as f64 / w.max(h) as f64;
+        if (0.9..=1.1).contains(&r) {
+            return spacing;
+        }
+        // Frames are usually a power-of-two binning apart (maybe cropped a little).
+        let p = 2f64.powf(r.log2().round());
+        spacing / if (r / p - 1.0).abs() < 0.05 { p } else { r }
+    }
 }
 fn number(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
@@ -59,6 +77,12 @@ pub fn parse(text: &str) -> Result<Doc> {
             match key.trim() {
                 "PixelSpacing" => d.pixel_a = number(v).filter(|v| *v > 0.0),
                 "Voltage" => d.kv = number(v),
+                "ImageSize" => {
+                    let n: Vec<usize> = v.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 2 {
+                        d.image_size = Some([n[0], n[1]]);
+                    }
+                }
                 _ => {}
             }
         }
@@ -273,7 +297,10 @@ pub fn run(
             if p.total_dose.is_none() && p.dose_per_frame.is_none() {
                 p.total_dose = dose.filter(|v| *v > 0.0);
             }
-            p.pixel_a = p.pixel_a.or(v.pixel_a).or(doc.pixel_a);
+            if p.pixel_a.is_none() {
+                p.pixel_a = v.pixel_a.or(doc.pixel_a);
+                p.mdoc_size = doc.image_size;
+            }
             if p.voltage_auto {
                 p.voltage_kv = doc.kv.unwrap_or(p.voltage_kv);
             }
