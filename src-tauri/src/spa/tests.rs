@@ -444,16 +444,30 @@ fn workflow_from_micrographs() {
     assert!(r.res < 25.0);
 }
 
-/// Masked FSC of a refinement folder (`TMV_SPA_DIR=<…>/tifmrcview-spa`).
+/// Masked FSC and B factor of a refinement folder (`TMV_SPA_DIR=<…>/tifmrcview-spa`).
 #[test]
 #[ignore]
 fn masked_fsc_of_folder() {
     let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
     let read = |n: &str| data::read_volume(&format!("{dir}/{n}")).unwrap();
-    let (h1, d, _) = read("refine_half1.mrc");
+    let (h1, d, px) = read("refine_half1.mrc");
     let (h2, _, _) = read("refine_half2.mrc");
     let (mask, _, _) = read("refine_mask.mrc");
     let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(&mask).map(|(a, m)| a * m).collect() };
     let f = super::post::corrected_fsc(&h1, &h2, &masked, d[0]);
     eprintln!("{:?}", f.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
+    let (_, s) = super::post::sharpen(&h1, &h2, &mask, d[0], px, None);
+    eprintln!("B {:.0} Å², masked {:.2} Å", s.bfactor, s.res_masked);
+}
+
+/// Writes a real project's RELION export and CSV to `TMV_SPA_OUT`
+/// (`TMV_SPA_DIR` = its tifmrcview-spa folder).
+#[test]
+#[ignore]
+fn export_of_folder() {
+    let (Ok(dir), Ok(out)) = (std::env::var("TMV_SPA_DIR"), std::env::var("TMV_SPA_OUT")) else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    for f in super::export::run(&p, "relion", &out, &|_, _| {}).unwrap().into_iter().chain(super::export::run(&p, "table", &out, &|_, _| {}).unwrap()) {
+        eprintln!("{f}");
+    }
 }

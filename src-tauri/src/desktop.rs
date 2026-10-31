@@ -1422,7 +1422,18 @@ async fn spa_classes(dir: String) -> CmdResult<serde_json::Value> {
         let cols = 8;
         let cell = 72;
         let png = crate::spa::render::gallery(&avgs, b, cols, cell)?;
-        Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "selected": c.selected}))
+        Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "res": c.res, "selected": c.selected}))
+    }).await
+}
+
+/// Writes the project for other software (`spa::export`: "relion" or
+/// "table") into a folder the user picked; returns the files written.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_export(app: AppHandle, dir: String, format: String, out: String) -> CmdResult<Vec<String>> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        crate::spa::export::run(&p, &format, &out, &|done, total| { let _ = app.emit("spa-progress", serde_json::json!({"stage":"导出","done":done,"total":total})); })
     }).await
 }
 
@@ -2317,6 +2328,7 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_run,
             #[cfg(feature = "pro")] spa_preview,
             #[cfg(feature = "pro")] spa_classes,
+            #[cfg(feature = "pro")] spa_export,
             #[cfg(feature = "pro")] spa_cancel,
             diffraction_find,
             diffraction_zones,

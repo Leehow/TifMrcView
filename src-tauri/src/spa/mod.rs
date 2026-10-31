@@ -5,6 +5,7 @@
 
 pub mod class2d;
 pub mod data;
+pub mod export;
 pub mod extract;
 pub mod fourier;
 pub mod geom;
