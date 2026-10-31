@@ -1168,6 +1168,8 @@ dependencies = [
  "burn-flex",
  "burn-fusion",
  "burn-std",
+ "burn-tch",
+ "tch",
 ]
 
 [[package]]
@@ -8451,6 +8453,7 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "burn",
+ "burn-store",
  "core-foundation 0.10.1",
  "dirs 7.0.0",
  "flate2",

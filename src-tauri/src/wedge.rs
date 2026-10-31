@@ -53,7 +53,7 @@ impl Vol {
     }
 
     /// The `side`³ cube at `origin`, mirrored where it leaves the volume.
-    fn cube(&self, origin: [isize; 3], side: [usize; 3]) -> Vec<f32> {
+    pub fn cube(&self, origin: [isize; 3], side: [usize; 3]) -> Vec<f32> {
         let idx: [Vec<usize>; 3] = std::array::from_fn(|a| (0..side[a]).map(|i| reflect(origin[a] + i as isize, self.n[a])).collect());
         let mut out = vec![0f32; side[0] * side[1] * side[2]];
         out.par_chunks_mut(side[0] * side[1]).enumerate().for_each(|(z, plane)| {
@@ -67,7 +67,7 @@ impl Vol {
     }
 }
 
-fn reflect(i: isize, n: usize) -> usize {
+pub(crate) fn reflect(i: isize, n: usize) -> usize {
     if n == 1 {
         return 0;
     }
@@ -117,7 +117,7 @@ pub fn load(img: &OpenImage, c: usize, t: usize, bin: usize) -> Result<(Vol, f32
     Ok((Vol { n, v }, mean, std))
 }
 
-fn stats(v: &[f32]) -> (f32, f32) {
+pub(crate) fn stats(v: &[f32]) -> (f32, f32) {
     let step = (v.len() / 2_000_000).max(1);
     let (mut k, mut s, mut s2) = (0f64, 0f64, 0f64);
     for &x in v.iter().step_by(step) {

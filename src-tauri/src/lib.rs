@@ -23,6 +23,8 @@ pub mod classify;
 pub mod unet;
 #[cfg(feature = "pro")]
 pub mod wedge;
+#[cfg(feature = "pro")]
+pub mod membrane;
 pub mod image;
 #[cfg(feature = "desktop")]
 mod mem;
