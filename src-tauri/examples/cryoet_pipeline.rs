@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     if steps.contains("export") {
         let dir = Path::new(stack).parent().unwrap().join("export");
         std::fs::create_dir_all(&dir)?;
-        for format in ["imod", "aligned", "table"] {
+        for format in ["relion5", "imod", "aligned", "table"] {
             let files = tomo::export::run(&d, format, dir.to_str().unwrap(), bin, &|_, _| {})?;
             println!("export {format}: {}", files.join(", "));
         }
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         let t = Instant::now();
         let cfg = tifmrcview_lib::wedge::TrainConfig { iterations: 3, steps: 60, count: 40, ..Default::default() };
         let source = d.tomograms.iter().rev().find(|t| t.kind == "denoised").map(|t| t.path.clone());
-        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg }, &progress)?;
+        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg, single: false }, &progress)?;
         eprintln!();
         println!("wedge (short schedule): {} {:.1} s", m.paths[0], t.elapsed().as_secs_f64());
         png(&m.paths[0])?;

@@ -411,6 +411,14 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let again = dataset::Dataset::open(&imgs[0].info().path, 5, None).unwrap();
     assert_eq!(again.tomograms.len(), 3);
     assert_eq!(again.tomograms[0].halves.as_ref().unwrap()[1], out.paths[2]);
+    d.optics.pixel_a = Some(2.276);
+    let files = export::run(&d, "relion5", dir.path().to_str().unwrap(), 1, &|_, _| {}).unwrap();
+    let series = std::fs::read_to_string(&files[1]).unwrap();
+    // Four tilts kept (one excluded), each with its frame and the halves.
+    assert_eq!(series.lines().filter(|l| l.starts_with("frames/")).count(), 4);
+    assert!(series.contains("_rlnTomoZRot #11") && series.contains("_rlnMicrographNameOdd #15"));
+    assert!(dir.path().join("ts_relion5/frames/ts_001_-30.0.mrc").exists());
+    assert!(std::fs::read_to_string(&files[0]).unwrap().contains("tilt_series/ts.star"));
     let files = export::run(&d, "imod", dir.path().to_str().unwrap(), 1, &|_, _| {}).unwrap();
     let xf = std::fs::read_to_string(files.iter().find(|f| f.ends_with(".xf")).unwrap()).unwrap();
     assert_eq!(xf.lines().count(), 5);
@@ -499,6 +507,23 @@ fn batched_patch_cc_matches_cached_cpu() {
         assert!((c.0[0] - g.0[0]).hypot(c.0[1] - g.0[1]) < 0.01);
         assert!((c.1 - g.1).abs() < 1e-4);
     }
+}
+
+#[test]
+fn relion_pose_is_the_relion_projection() {
+    // RELION 5 projects X to Rz(ZRot)·[cos YTilt·x + sin YTilt·z, y] + shift
+    // (its rlnTomoProjX/Y rows); ours is m·R(axis + ρ)·[…] + shift.
+    let v = View { file_index: 0, angle: 30.0, residual: 0.0, shift: [3.5, -2.0], mag: 1.0, rotation: 0.7, tilt: 30.4, cc: 1.0, contours: 1, flagged: false, excluded: false };
+    let a = Alignment { width: 64, height: 64, bin: 1, axis: 84.6, patch: track::PatchConfig { nx: 2, ny: 2, size: 8 }, residual: 0.0, quality: String::new(), views: vec![v.clone()], tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() }, ms: 0.0 };
+    let [z, sx, sy] = export::relion_pose(&a, &v, 2.0);
+    let x = [10.0, -7.0, 4.0];
+    let (s, c) = v.tilt.to_radians().sin_cos();
+    let q = [c * x[0] + s * x[2], x[1]];
+    let (zs, zc) = z.to_radians().sin_cos();
+    let relion = [zc * q[0] - zs * q[1] + sx / 2.0, zs * q[0] + zc * q[1] + sy / 2.0];
+    let p = geometry::projection(v.tilt, a.axis + v.rotation);
+    let ours: [f64; 2] = std::array::from_fn(|k| (0..3).map(|j| p[k][j] * x[j]).sum::<f64>() + v.shift[k]);
+    assert!((relion[0] - ours[0]).abs() < 1e-9 && (relion[1] - ours[1]).abs() < 1e-9, "{relion:?} vs {ours:?}");
 }
 
 #[test]
