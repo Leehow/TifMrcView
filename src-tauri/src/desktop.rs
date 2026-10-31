@@ -1174,7 +1174,15 @@ async fn tomo_align(app: AppHandle, stack: String, req: crate::tomo::AlignReq) -
         if req.axis.is_none() && req.previous.is_none() {
             req.axis = d.axis_hint;
         }
-        let a = crate::tomo::align(&img, &req, &|done, total| emit("倾转对齐", done, total))?;
+        // Tracking runs once per starting axis and patch configuration, each
+        // counting views from the start: number the rounds.
+        let round = std::sync::atomic::AtomicUsize::new(0);
+        let last = std::sync::atomic::AtomicUsize::new(usize::MAX);
+        let a = crate::tomo::align(&img, &req, &|done, total| {
+            use std::sync::atomic::Ordering::Relaxed;
+            if done < last.swap(done, Relaxed) { round.fetch_add(1, Relaxed); }
+            emit(&format!("倾转对齐 · 第 {} 轮跟踪", round.load(Relaxed)), done, total)
+        })?;
         let mut angles = vec![0.0; a.views.len()];
         for v in &a.views { angles[v.file_index] = v.angle; }
         d.angles = angles;

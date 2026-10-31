@@ -844,7 +844,7 @@ pub(crate) fn fit_regions(
         let idx: Vec<usize> = (0..items.len()).filter(|&i| items[i].1 == r).collect();
         let zs: Vec<usize> = idx.iter().map(|&i| items[i].0).collect();
         let before = done.load(std::sync::atomic::Ordering::Relaxed);
-        let (fits, _, _) = fit_slices(img, &zs, c, t, r, n, params, &|k, _| progress(before + k, items.len()))?;
+        let (fits, _, _) = fit_slices(img, &zs, c, t, r, n, params, &|k, _| progress((before + k).min(items.len()), items.len()))?;
         done.fetch_add(zs.len(), std::sync::atomic::Ordering::Relaxed);
         for (i, f) in idx.into_iter().zip(fits) {
             out[i] = Some(f);
