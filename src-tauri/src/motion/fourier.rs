@@ -1,7 +1,7 @@
-//! In-house radix-2 Fourier transforms. CPU reference uses the viewer's
-//! FFT plans. Burn uses batched gather butterflies, with no stage readbacks.
+//! 2D Fourier transforms: the CPU reference uses the viewer's FFT plans,
+//! the GPU path Burn's native FFT kernels.
 use crate::fft::Fft;
-use burn::tensor::{Device, Int, Tensor, TensorData};
+use burn::tensor::{Device, Tensor};
 use rayon::prelude::*;
 
 pub struct Cpu {
@@ -56,95 +56,39 @@ impl Cpu {
         }
     }
 }
-struct Stage {
-    low: Tensor<1, Int>,
-    high: Tensor<1, Int>,
-    wr: Tensor<1>,
-    wi: Tensor<1>,
-}
-struct Axis {
-    reverse: Tensor<1, Int>,
-    stages: Vec<Stage>,
-    n: usize,
-}
-impl Axis {
-    fn new(n: usize, dev: &Device) -> Self {
-        let rev = (0..n)
-            .map(|i| (i.reverse_bits() >> (usize::BITS - n.ilog2())) as i32)
-            .collect();
-        let reverse = Tensor::from_data(TensorData::new(rev, [n]), dev);
-        let mut stages = vec![];
-        for b in 1..=n.ilog2() {
-            let len = 1 << b;
-            let half = len / 2;
-            let low: Vec<i32> = (0..n).map(|i| (i / len * len + i % half) as i32).collect();
-            let high = low.iter().map(|i| *i + half as i32).collect();
-            let phase = |i: usize| -std::f64::consts::TAU * (i % half) as f64 / len as f64;
-            let sign = |i: usize| if i % len < half { 1.0 } else { -1.0 };
-            stages.push(Stage {
-                low: Tensor::from_data(TensorData::new(low, [n]), dev),
-                high: Tensor::from_data(TensorData::new(high, [n]), dev),
-                wr: Tensor::from_data(
-                    TensorData::new(
-                        (0..n).map(|i| (sign(i) * phase(i).cos()) as f32).collect(),
-                        [n],
-                    ),
-                    dev,
-                ),
-                wi: Tensor::from_data(
-                    TensorData::new(
-                        (0..n).map(|i| (sign(i) * phase(i).sin()) as f32).collect(),
-                        [n],
-                    ),
-                    dev,
-                ),
-            });
-        }
-        Self { reverse, stages, n }
-    }
-    fn run(&self, re: Tensor<2>, im: Tensor<2>, dim: usize) -> (Tensor<2>, Tensor<2>) {
-        let mut re = re.select(dim, self.reverse.clone());
-        let mut im = im.select(dim, self.reverse.clone());
-        let shape = if dim == 1 { [1, self.n] } else { [self.n, 1] };
-        for s in &self.stages {
-            let ar = re.clone().select(dim, s.low.clone());
-            let ai = im.clone().select(dim, s.low.clone());
-            let br = re.select(dim, s.high.clone());
-            let bi = im.select(dim, s.high.clone());
-            let wr = s.wr.clone().reshape(shape);
-            let wi = s.wi.clone().reshape(shape);
-            re = ar + br.clone() * wr.clone() - bi.clone() * wi.clone();
-            im = ai + br * wi + bi * wr;
-        }
-        (re, im)
-    }
-}
+/// Burn's native FFT kernels (burn-signal, cubek): radix kernels on the
+/// device, no per-stage launches from here. Inverse uses ifft(z) =
+/// conj(fft(conj z)) / N.
 pub struct Gpu {
-    x: Axis,
-    y: Axis,
     w: usize,
     h: usize,
 }
 impl Gpu {
-    pub fn new(w: usize, h: usize, dev: &Device) -> Self {
-        Self {
-            x: Axis::new(w, dev),
-            y: Axis::new(h, dev),
-            w,
-            h,
-        }
+    pub fn new(w: usize, h: usize, _dev: &Device) -> Self {
+        Self { w, h }
     }
     pub fn transform(&self, re: Tensor<2>, im: Tensor<2>, inverse: bool) -> (Tensor<2>, Tensor<2>) {
         let im = if inverse { im.neg() } else { im };
-        let (re, im) = self.x.run(re, im, 1);
-        let (re, im) = self.y.run(re, im, 0);
+        let (re, im) = burn::signal::cfft(re, im, 1, None);
+        let (re, im) = burn::signal::cfft(re, im, 0, None);
         if inverse {
-            (
-                re.div_scalar((self.w * self.h) as f32),
-                im.div_scalar(-((self.w * self.h) as f32)),
-            )
+            let n = (self.w * self.h) as f32;
+            (re.div_scalar(n), im.div_scalar(-n))
         } else {
             (re, im)
         }
     }
+}
+
+/// Half-plane 2D transform of a real image (width w/2 + 1 along x).
+pub fn rfft2(v: Tensor<2>) -> (Tensor<2>, Tensor<2>) {
+    let (re, im) = burn::signal::rfft(v, 1, None);
+    burn::signal::cfft(re, im, 0, None)
+}
+
+/// Inverse of `rfft2`, back to a real h × w image.
+pub fn irfft2(re: Tensor<2>, im: Tensor<2>, w: usize) -> Tensor<2> {
+    let h = re.dims()[0] as f32;
+    let (re, im) = burn::signal::cfft(re, im.neg(), 0, None);
+    burn::signal::irfft(re.div_scalar(h), im.div_scalar(-h), 1, Some(w))
 }

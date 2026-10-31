@@ -306,7 +306,7 @@ fn cpu_gpu_fourier_warp_and_dose_sums() {
     ] {
         let r = rel(a, b);
         eprintln!("sum relative {r}");
-        assert!(r < 1e-3);
+        assert!(r < 1e-5);
     }
 }
 

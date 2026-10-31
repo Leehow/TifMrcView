@@ -371,51 +371,8 @@ fn run_movie(
         } else {
             None
         };
-        let mut selected_gpu = p.backend == "gpu";
-        if p.backend == "auto" {
-            if let Some((dev, _)) = gpu {
-                let t = std::time::Instant::now();
-                let _ = sum::cpu(
-                    &sp,
-                    &global[..1],
-                    &local.model,
-                    exposure.as_deref(),
-                    pixel,
-                    p.voltage_kv,
-                    &|_, _, _| {},
-                )?;
-                let tc = t.elapsed().as_secs_f64() * 1000.0;
-                if let Ok(Ok(())) = crate::ctf_gpu::guarded(|| -> Result<()> {
-                    let _ = sum_gpu::run(
-                        dev,
-                        &sp,
-                        &global[..1],
-                        &local.model,
-                        exposure.as_deref(),
-                        pixel,
-                        p.voltage_kv,
-                        &|_, _, _| {},
-                    )?;
-                    Ok(())
-                }) {
-                    let t = std::time::Instant::now();
-                    if let Ok(Ok(_)) = crate::ctf_gpu::guarded(|| {
-                        sum_gpu::run(
-                            dev,
-                            &sp,
-                            &global[..1],
-                            &local.model,
-                            exposure.as_deref(),
-                            pixel,
-                            p.voltage_kv,
-                            &|_, _, _| {},
-                        )
-                    }) {
-                        selected_gpu = t.elapsed().as_secs_f64() * 1000.0 < tc;
-                    }
-                }
-            }
-        }
+        // GPU first; the CPU path is the fallback and the reference.
+        let selected_gpu = p.backend == "gpu" || (p.backend == "auto" && gpu.is_some());
         if selected_gpu {
             if let Some((dev, name)) = gpu {
                 match crate::ctf_gpu::guarded(|| {

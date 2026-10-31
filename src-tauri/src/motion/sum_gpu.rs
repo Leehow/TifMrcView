@@ -1,8 +1,15 @@
-//! Burn polynomial gather-warp and streaming sums. One group upload, no
-//! per-pixel/FFT-stage readback, and final sum downloads only. Slab warping
-//! bounds 8K intermediates; frequency weighting stays entirely on device.
-use super::{check_cancel, dose, fourier, input::Spool, local::Model, sum::Sums};
+//! The method of `sum.rs` on the GPU. Per frame: one upload, the varying
+//! part of the local model resampled with Burn's grid sampler, a half-plane
+//! FFT (native kernels), the phase shift and dose weight as elementwise ops
+//! added into device accumulators. Only the final sums come back.
+use super::{
+    check_cancel, dose, fourier,
+    input::Spool,
+    local::Model,
+    sum::{border, fill_border, fractional, freq, nyquist, split, varies, Sums},
+};
 use anyhow::Result;
+use burn::tensor::ops::{GridSampleOptions, GridSamplePaddingMode, InterpolateMode};
 use burn::tensor::{Device, Tensor, TensorData};
 
 pub fn download(t: Tensor<2>) -> Vec<f32> {
@@ -11,79 +18,40 @@ pub fn download(t: Tensor<2>) -> Vec<f32> {
         .try_into_vec::<f32>()
         .unwrap()
 }
-pub fn warp(
-    dev: &Device,
-    v: &[f32],
-    w: usize,
-    h: usize,
-    g: [f64; 2],
-    model: &Model,
-    time: f64,
-) -> Tensor<2> {
-    let source = Tensor::<1>::from_data(TensorData::new(v.to_vec(), [w * h]), dev);
-    let c = model.spatial(time);
-    let x = Tensor::<2>::from_data(
-        TensorData::new((0..w).map(|x| x as f32).collect(), [1, w]),
-        dev,
-    );
-    let xx = x
-        .clone()
-        .div_scalar((w - 1) as f32)
-        .mul_scalar(2.0)
-        .sub_scalar(1.0);
-    let mut slabs = vec![];
-    let rows = ((1usize << 22) / w).max(1).min(h);
-    for start in (0..h).step_by(rows) {
-        let n = rows.min(h - start);
-        let y = Tensor::<2>::from_data(
-            TensorData::new((start..start + n).map(|y| y as f32).collect(), [n, 1]),
-            dev,
-        );
-        let yy = y
-            .clone()
-            .div_scalar((h - 1) as f32)
-            .mul_scalar(2.0)
-            .sub_scalar(1.0);
-        let poly = |k: usize| {
-            xx.clone().mul_scalar(c[k][1])
-                + yy.clone().mul_scalar(c[k][2])
-                + (xx.clone() * xx.clone()).mul_scalar(c[k][3])
-                + (xx.clone() * yy.clone()).mul_scalar(c[k][4])
-                + (yy.clone() * yy.clone()).mul_scalar(c[k][5])
-                + c[k][0]
-                + g[k] as f32
-        };
-        let sx = x.clone() + poly(0);
-        let sy = y + poly(1);
-        let valid = sx
-            .clone()
-            .greater_equal_elem(0.0)
-            .bool_and(sx.clone().lower_equal_elem((w - 1) as f32))
-            .bool_and(sy.clone().greater_equal_elem(0.0))
-            .bool_and(sy.clone().lower_equal_elem((h - 1) as f32));
-        let sx = sx.clamp(0.0, (w - 1) as f32);
-        let sy = sy.clamp(0.0, (h - 1) as f32);
-        let ix = sx.clone().floor();
-        let iy = sy.clone().floor();
-        let fx = sx - ix.clone();
-        let fy = sy - iy.clone();
-        let jx = (ix.clone() + 1.0).clamp_max((w - 1) as f32);
-        let jy = (iy.clone() + 1.0).clamp_max((h - 1) as f32);
-        let get = |x: Tensor<2>, y: Tensor<2>| {
-            source
-                .clone()
-                .select(0, (y.int().mul_scalar(w as i32) + x.int()).reshape([n * w]))
-                .reshape([n, w])
-        };
-        let a = get(ix.clone(), iy.clone());
-        let b = get(jx.clone(), iy);
-        let cc = get(ix, jy.clone());
-        let d = get(jx, jy);
-        let top = a * (fx.clone().neg() + 1.0) + b * fx.clone();
-        let bottom = cc * (fx.clone().neg() + 1.0) + d * fx;
-        slabs.push((top * (fy.clone().neg() + 1.0) + bottom * fy) * valid.float());
+
+/// Normalised sampling coordinates of every pixel, x then y, [-1, 1].
+struct Coords {
+    x: Tensor<2>,
+    y: Tensor<2>,
+}
+
+impl Coords {
+    fn new(w: usize, h: usize, dev: &Device) -> Coords {
+        let line = |n: usize| (0..n).map(|i| 2.0 * i as f32 / (n - 1) as f32 - 1.0).collect::<Vec<_>>();
+        let x = Tensor::<2>::from_data(TensorData::new(line(w), [1, w]), dev).expand([h, w]);
+        let y = Tensor::<2>::from_data(TensorData::new(line(h), [h, 1]), dev).expand([h, w]);
+        Coords { x, y }
     }
-    Tensor::cat(slabs, 0)
+
+    /// Resamples v at x + l(x), l the polynomial in pixels.
+    fn warp(&self, v: Tensor<2>, c: &[[f32; 6]; 2], w: usize, h: usize) -> Tensor<2> {
+        let (x, y) = (self.x.clone(), self.y.clone());
+        let poly = |c: &[f32; 6]| {
+            x.clone().mul_scalar(c[1])
+                + y.clone().mul_scalar(c[2])
+                + (x.clone() * x.clone()).mul_scalar(c[3])
+                + (x.clone() * y.clone()).mul_scalar(c[4])
+                + (y.clone() * y.clone()).mul_scalar(c[5])
+        };
+        // Pixels to normalised units (align_corners: ±1 are the edge pixel centres).
+        let gx = x.clone() + poly(&c[0]).mul_scalar(2.0 / (w - 1) as f32);
+        let gy = y.clone() + poly(&c[1]).mul_scalar(2.0 / (h - 1) as f32);
+        let grid = Tensor::stack::<3>(vec![gx, gy], 2).unsqueeze_dim::<4>(0);
+        let options = GridSampleOptions::new(InterpolateMode::Bilinear)
+            .with_padding_mode(GridSamplePaddingMode::Zeros)
+            .with_align_corners(true);
+        v.reshape([1, 1, h, w]).grid_sample_2d(grid, options).reshape([h, w])
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -99,77 +67,88 @@ pub fn run(
 ) -> Result<Sums> {
     let (w, h) = (sp.w, sp.h);
     let (fw, fh) = (w.next_power_of_two(), h.next_power_of_two());
-    let mut even = Tensor::<2>::zeros([h, w], dev);
-    let mut odd = even.clone();
-    let mut sr = Tensor::<2>::zeros([fh, fw], dev);
-    let mut si = sr.clone();
-    let mut norm = sr.clone();
-    let fft = exposures.map(|_| fourier::Gpu::new(fw, fh, dev));
+    let hw = fw / 2 + 1;
+    let coords = Coords::new(w, h, dev);
+    let kx = Tensor::<2>::from_data(TensorData::new((0..hw).map(|i| i as f32).collect(), [1, hw]), dev);
+    let ky = Tensor::<2>::from_data(TensorData::new((0..fh).map(|i| freq(i, fh) as f32).collect(), [fh, 1]), dev);
+    // Per axis: all ones, or zero at the Nyquist bin (fractional shifts).
+    let mask = |n: usize, len: usize, shape: [usize; 2]| {
+        [false, true].map(|drop| {
+            let v = (0..len).map(|i| if drop && nyquist(i, n) { 0.0f32 } else { 1.0 }).collect();
+            Tensor::<2>::from_data(TensorData::new(v, shape), dev)
+        })
+    };
+    let (keep_x, keep_y) = (mask(fw, hw, [1, hw]), mask(fh, fh, [fh, 1]));
     let rates = if exposures.is_some() {
-        let v = (0..fw * fh)
+        let v = (0..fh * hw)
             .map(|i| {
-                let (x, y) = (i % fw, i / fw);
-                let k = (x.min(fw - x) as f64 / fw as f64).hypot(y.min(fh - y) as f64 / fh as f64)
-                    / pixel;
+                let k = (freq(i % hw, fw) / fw as f64).hypot(freq(i / hw, fh) / fh as f64) / pixel;
                 dose::critical(k, kv).map(|n| (0.5 / n) as f32)
             })
             .collect::<Result<Vec<_>>>()?;
-        Some(Tensor::<2>::from_data(TensorData::new(v, [fh, fw]), dev))
+        Some(Tensor::<2>::from_data(TensorData::new(v, [fh, hw]), dev))
     } else {
         None
     };
+    let zeros = || Tensor::<2>::zeros([fh, hw], dev);
+    let (mut er, mut ei, mut or, mut oi) = (zeros(), zeros(), zeros(), zeros());
+    let (mut wr, mut wi, mut norm) = (zeros(), zeros(), zeros());
+    let mut shifts = vec![];
     for (i, &g) in global.iter().enumerate() {
         check_cancel()?;
         let frame = sp.read(i)?;
-        let v = warp(dev, &frame, w, h, g, model, sp.times[i]);
-        if i % 2 == 0 {
-            even = even + v.clone();
-        } else {
-            odd = odd + v.clone();
+        let mean = (frame.iter().map(|&a| a as f64).sum::<f64>() / frame.len() as f64) as f32;
+        let (c, s) = split(model, sp.times[i], g);
+        shifts.push(s);
+        let mut v = Tensor::<2>::from_data(TensorData::new(frame, [h, w]), dev);
+        if varies(&c) {
+            v = coords.warp(v, &c, w, h);
         }
-        if let Some(exposure) = exposures {
-            let v = if w != fw || h != fh {
-                v.pad(
-                    [(0, fh - h), (0, fw - w)],
-                    burn::tensor::ops::PadMode::Constant(0.0),
-                )
-            } else {
-                v
-            };
-            let (re, im) = fft
-                .as_ref()
-                .unwrap()
-                .transform(v, Tensor::zeros([fh, fw], dev), false);
+        if w != fw || h != fh {
+            v = v.pad([(0, fh - h), (0, fw - w)], burn::tensor::ops::PadMode::Constant(mean));
+        }
+        let (re, im) = fourier::rfft2(v);
+        let theta = kx.clone().mul_scalar((std::f64::consts::TAU * s[0] / fw as f64) as f32)
+            + ky.clone().mul_scalar((std::f64::consts::TAU * s[1] / fh as f64) as f32);
+        let keep = keep_x[fractional(s[0]) as usize].clone() * keep_y[fractional(s[1]) as usize].clone();
+        let (sn, cs) = (theta.clone().sin() * keep.clone(), theta.cos() * keep);
+        let r = re.clone() * cs.clone() - im.clone() * sn.clone();
+        let m = re * sn + im * cs;
+        if let (Some(exposure), Some(rate)) = (exposures, &rates) {
             let (start, d) = exposure[i];
-            let rate = rates.as_ref().unwrap().clone();
             let z = rate.clone().mul_scalar(d as f32);
             let exact = (z.clone().neg().exp().neg() + 1.0) / z.clone().clamp_min(1e-20);
-            let approx = z.clone().mul_scalar(-0.5) + 1.0 + (z.clone() * z.clone()).div_scalar(6.0)
-                - (z.clone() * z.clone() * z.clone()).div_scalar(24.0);
-            let q =
-                rate.mul_scalar(-start as f32).exp() * exact.mask_where(z.lower_elem(1e-3), approx);
-            sr = sr + re * q.clone();
-            si = si + im * q.clone();
+            let approx = z.clone().mul_scalar(-0.5) + 1.0 + (z.clone() * z.clone()).div_scalar(6.0);
+            let q = rate.clone().mul_scalar(-start as f32).exp() * exact.mask_where(z.lower_elem(1e-3), approx);
+            wr = wr + r.clone() * q.clone();
+            wi = wi + m.clone() * q.clone();
             norm = norm + q.clone() * q;
+        }
+        if i % 2 == 0 {
+            er = er + r;
+            ei = ei + m;
+        } else {
+            or = or + r;
+            oi = oi + m;
         }
         progress("变形求和 GPU", i + 1, sp.len());
     }
-    let weighted = if let Some(fft) = fft {
-        let scale = norm
-            .sqrt()
-            .clamp_min(1e-12)
-            .recip()
-            .mul_scalar((sp.len() as f32).sqrt());
-        let (re, _) = fft.transform(sr * scale.clone(), si * scale, true);
-        Some(download(re.slice([0..h, 0..w])))
+    let b = border(&shifts);
+    let back = |re: Tensor<2>, im: Tensor<2>| {
+        let mut out = download(fourier::irfft2(re, im, fw).slice([0..h, 0..w]));
+        fill_border(&mut out, w, h, b);
+        out
+    };
+    let weighted = if exposures.is_some() {
+        let scale = norm.sqrt().clamp_min(1e-12).recip().mul_scalar((sp.len() as f32).sqrt());
+        Some(back(wr * scale.clone(), wi * scale))
     } else {
         None
     };
-    let unweighted = download(even.clone() + odd.clone());
     Ok(Sums {
-        unweighted,
-        even: download(even),
-        odd: download(odd),
+        unweighted: back(er.clone() + or.clone(), ei.clone() + oi.clone()),
+        even: back(er, ei),
+        odd: back(or, oi),
         weighted,
     })
 }
