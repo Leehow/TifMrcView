@@ -1404,7 +1404,7 @@ mod bench {
 
     /// Even/odd half tomograms (e.g. from the cryo-ET pipeline):
     /// TMV_HALF_EVEN=… TMV_HALF_ODD=… [TMV_HALF_TILTS=x.tlt] [TMV_HALF_BIN=2]
-    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_OUT=x.mrc]
+    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_CUBE=64] [TMV_HALF_OUT=x.mrc]
     /// cargo test --release --features pro --lib wedge::bench::halves -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -1429,7 +1429,7 @@ mod bench {
             g.min_tilt = Some(tilts.iter().cloned().fold(f32::MAX, f32::min));
             println!("  {} tilts {:?}..{:?}", tilts.len(), g.min_tilt, g.max_tilt);
         }
-        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, ..Default::default() };
+        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
         while a.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
             cfg.cube /= 2;
         }
