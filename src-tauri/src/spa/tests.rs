@@ -459,3 +459,15 @@ fn masked_fsc_of_folder() {
     let (_, s) = super::post::sharpen(&h1, &h2, &mask, d[0], px, None);
     eprintln!("B {:.0} Å², masked {:.2} Å", s.bfactor, s.res_masked);
 }
+
+/// Writes a real project's RELION export and CSV to `TMV_SPA_OUT`
+/// (`TMV_SPA_DIR` = its tifmrcview-spa folder).
+#[test]
+#[ignore]
+fn export_of_folder() {
+    let (Ok(dir), Ok(out)) = (std::env::var("TMV_SPA_DIR"), std::env::var("TMV_SPA_OUT")) else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    for f in super::export::run(&p, "relion", &out, &|_, _| {}).unwrap().into_iter().chain(super::export::run(&p, "table", &out, &|_, _| {}).unwrap()) {
+        eprintln!("{f}");
+    }
+}
