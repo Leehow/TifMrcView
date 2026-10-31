@@ -354,6 +354,23 @@ pub fn slab_rows(g: &Geometry, h: usize) -> usize {
     ((1usize << 24) / (g.z * g.w).max(1)).clamp(1, h.max(1))
 }
 
+/// Mean of every view. Each is subtracted before reconstruction: the
+/// views' mean levels differ with the path length through the specimen
+/// (and the exposure), which no density inside the reconstructed slab can
+/// explain; left in, SIRT spreads them into broad shading and bright
+/// borders where few rays cross.
+fn view_means(src: &dyn Sinograms, views: usize, rows: usize) -> Result<Vec<f32>> {
+    let (w, h) = (src.width(), src.height());
+    let mut sum = vec![0f64; views];
+    for y0 in (0..h).step_by(rows) {
+        let n = rows.min(h - y0);
+        for (i, v) in src.rows(y0, n)?.iter().enumerate() {
+            sum[(i / w) % views] += *v as f64;
+        }
+    }
+    Ok(sum.iter().map(|s| (s / (w * h) as f64) as f32).collect())
+}
+
 /// Reconstructs every row: slabs go to `sink(y0, n, [n][z][w])` in order.
 /// GPU first (when there is one and `p.backend` allows); returns the backend.
 pub fn reconstruct(
@@ -377,10 +394,14 @@ pub fn reconstruct(
         crate::ctf_gpu::guarded(|| super::recon_gpu::Plan::new(dev, g, p)).ok().and_then(Result::ok).map(|plan| (plan, *name))
     });
     let mut backend = plan.as_ref().map_or("CPU", |p| p.1).to_string();
+    let means = view_means(src, g.views(), rows)?;
     for y0 in (0..h).step_by(rows) {
         check_cancel()?;
         let n = rows.min(h - y0);
-        let sino = src.rows(y0, n)?;
+        let mut sino = src.rows(y0, n)?;
+        for (i, v) in sino.iter_mut().enumerate() {
+            *v -= means[(i / g.w) % g.views()];
+        }
         let gpu_slab = plan.as_ref().map(|(gp, _)| crate::ctf_gpu::guarded(|| gp.slab(&sino, n)));
         let slab = match gpu_slab {
             Some(Ok(Ok(v))) => v,
