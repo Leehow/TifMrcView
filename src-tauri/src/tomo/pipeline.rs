@@ -268,7 +268,8 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
             let (a, shape, px) = load(even)?;
             let (b, ..) = load(odd)?;
             let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
-            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &req.cfg, tick)?, shape, px, "halves")
+            let method = if req.cfg.equivariant > 0.0 { "icecream" } else { "halves" };
+            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &req.cfg, tick)?, shape, px, method)
         }
         _ => {
             let (v, shape, px) = load(&src.path)?;
