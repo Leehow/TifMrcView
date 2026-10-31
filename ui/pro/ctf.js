@@ -505,9 +505,4 @@
     drawPlot();
     drawTrend();
   });
-  // One shared CTF controller; portal its controls/results into Cryo-ET.
-  window.TifMrcViewPro.ctfWorkspace = {
-    mount(host) { host.append(box); fillFromFile(); syncStackButton(); drawTrend(); },
-    unmount() { panel.append(box); },
-  };
 })();

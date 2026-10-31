@@ -326,6 +326,12 @@ pub fn solve(tr: &Tracks, angles: &[f64], axis: f64, groups: Groups) -> Result<S
     Ok(Solution { axis, shifts, magnifications: mags, rotations: rot, tilts: tilt, points, residual, per_view, weights })
 }
 
+/// Whether shared parameters stayed well inside their bounds (a solve that
+/// ran into them is fitting something the model does not describe).
+pub fn plausible(s: &Solution) -> bool {
+    s.rotations.iter().all(|r| r.abs() < 5.0) && s.tilts.iter().all(|t| t.abs() < 5.0) && s.magnifications.iter().all(|m| (m - 1.0).abs() < 0.05)
+}
+
 pub fn sweep(tr: &Tracks, angles: &[f64], initial: f64, groups: Groups) -> Result<Solution> {
     let mut best = solve(tr, angles, initial, groups)?;
     for i in -5..=5 {

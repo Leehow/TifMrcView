@@ -143,7 +143,6 @@ fn phantom_tracking_axis_sweep_and_shifts() {
             size: 30,
         },
         &[],
-        model::Groups::NONE,
         true,
         &|_, _| {},
     )
@@ -318,8 +317,8 @@ fn sorted_input_and_shared_even_odd_geometry() {
         .map(|i| ((i % w) as f32 * 0.2).sin() + (i / (w * h)) as f32)
         .collect();
     let mut imgs = Vec::new();
-    for (i, factor) in [1.0, 2.0].iter().enumerate() {
-        let path = dir.path().join(format!("source{i}.mrc"));
+    for (i, (name, factor)) in [("ts", 1.0), ("ts_even", 1.0), ("ts_odd", 2.0)].iter().enumerate() {
+        let path = dir.path().join(format!("{name}.mrc"));
         output::write_mrc(
             path.to_str().unwrap(),
             &frames.iter().map(|v| v * factor).collect::<Vec<_>>(),
@@ -380,34 +379,27 @@ fn sorted_input_and_shared_even_odd_geometry() {
         },
         ms: 0.0,
     };
-    let req = output::ReconReq {
-        token: 1,
-        c: 0,
-        t: 0,
-        alignment: a.clone(),
+    // The dataset finds the half stacks motion correction leaves beside the
+    // stack; one alignment reconstructs all three.
+    let mut d = dataset::Dataset::open(&imgs[0].info().path, 5, Some(2.276)).unwrap();
+    assert!(d.even.as_deref().unwrap().ends_with("ts_even.mrc"));
+    assert!(d.odd.as_deref().unwrap().ends_with("ts_odd.mrc"));
+    d.angles = angles.to_vec();
+    d.alignment = Some(a.clone());
+    let step = pipeline::ReconStep {
         bin: 2,
-        params: Params {
-            thickness: 8,
-            backend: "cpu".into(),
-            ..Default::default()
-        },
-        paths: vec![
-            dir.path().join("even.mrc").to_string_lossy().into(),
-            dir.path().join("odd.mrc").to_string_lossy().into(),
-        ],
-        additional_tokens: vec![2],
+        params: Params { thickness: 8, backend: "cpu".into(), ..Default::default() },
+        halves: true,
+        phase_flip: false,
     };
-    let out = output::reconstruct(&imgs, &req, &|_, _| {}).unwrap();
-    assert_eq!(out.paths.len(), 2);
-    let open =
-        |path: &str| OpenImage::new(9, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
+    let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
+    assert_eq!(out.paths.len(), 3);
+    assert!(out.paths[0].ends_with("ts_rec_b2.mrc") && out.paths[1].ends_with("ts_rec_b2_even.mrc"));
+    let open = |path: &str| OpenImage::new(9, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
     use std::path::Path;
-    let e = open(&req.paths[0]);
-    let o = open(&req.paths[1]);
-    assert_eq!(
-        (e.info().width, e.info().height, e.info().size_z),
-        (8, 8, 8)
-    );
+    let e = open(&out.paths[1]);
+    let o = open(&out.paths[2]);
+    assert_eq!((e.info().width, e.info().height, e.info().size_z), (8, 8, 8));
     assert!((output::pixel_a(&e) - 4.552).abs() < 1e-5);
     for z in 0..8 {
         let ep = e.page(z).unwrap();
@@ -416,10 +408,12 @@ fn sorted_input_and_shared_even_odd_geometry() {
             assert!((2.0 * ep[0].data.get_f64(i) - op[0].data.get_f64(i)).abs() < 1e-5);
         }
     }
-    assert_eq!(
-        std::fs::read_to_string(Path::new(&req.paths[0]).with_extension("views")).unwrap(),
-        "1\n3\n2\n0\n"
-    );
+    let again = dataset::Dataset::open(&imgs[0].info().path, 5, None).unwrap();
+    assert_eq!(again.tomograms.len(), 3);
+    assert_eq!(again.tomograms[0].halves.as_ref().unwrap()[1], out.paths[2]);
+    // Running again replaces its own outputs instead of numbering new ones.
+    let out2 = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
+    assert_eq!(out2.paths, out.paths);
     assert!(output::save(
         &imgs[0],
         &output::SaveReq {
@@ -444,7 +438,7 @@ fn rectangular_tracking_and_working_pixel_configs() {
         ny: 4,
         size: 30,
     };
-    let (_, s) = track_and_solve(&st, 88.6, patch, &[], model::Groups::NONE, true, &|_, _| {}).unwrap();
+    let (_, s) = track_and_solve(&st, 88.6, patch, &[], true, &|_, _| {}).unwrap();
     assert!((s.axis - 84.6).abs() <= 0.3, "rectangular axis {}", s.axis);
     assert!(s.residual < 0.5, "rectangular residual {}", s.residual);
     let p = track::PatchConfig::default_for(959, 256);
@@ -500,4 +494,43 @@ fn batched_patch_cc_matches_cached_cpu() {
         assert!((c.0[0] - g.0[0]).hypot(c.0[1] - g.0[1]) < 0.01);
         assert!((c.1 - g.1).abs() < 1e-4);
     }
+}
+
+#[test]
+fn phase_flip_turns_the_ctf_into_its_magnitude() {
+    // An image seen through sin γ (one defocus, untilted); flipping must give
+    // the same image seen through |sin γ|.
+    let (n, pixel, df) = (64usize, 4.0, 15000.0);
+    let l = crate::ctf::wavelength(300.0);
+    let (a, b, w) = (std::f64::consts::PI * l, 0.5 * std::f64::consts::PI * 2.7e7 * l.powi(3), (0.07f64 / (1.0f64 - 0.0049).sqrt()).atan());
+    let mut seed = 5;
+    let texture: Vec<f32> = (0..n * n).map(|_| rng(&mut seed) as f32).collect();
+    let fft = crate::motion::fourier::Cpu::new(n, n);
+    let through = |transfer: &dyn Fn(f64) -> f64| {
+        let (mut re, mut im) = (texture.clone(), vec![0.0; n * n]);
+        fft.transform(&mut re, &mut im, false);
+        for i in 0..n * n {
+            let (fx, fy) = (crate::motion::sum::freq(i % n, n), crate::motion::sum::freq(i / n, n));
+            let k2 = (fx * fx + fy * fy) / (n as f64 * pixel).powi(2);
+            let g = transfer(a * df * k2 - b * k2 * k2 + w) as f32;
+            re[i] *= g;
+            im[i] *= g;
+        }
+        fft.transform(&mut re, &mut im, true);
+        re
+    };
+    let mut seen = through(&|g| g.sin());
+    let want = through(&|g| g.sin().abs());
+    ctf::flip(&mut seen, n, n, &ctf::Flip {
+        optics: crate::ctf::Optics::of(300.0, 2.7, 0.07),
+        df1: df,
+        df2: df,
+        angle: 0.0,
+        theta: 0.0,
+        gradient: 0,
+        pixel_a: pixel,
+    });
+    let err = seen.iter().zip(&want).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>();
+    let norm = want.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
+    assert!((err / norm).sqrt() < 1e-4, "relative error {}", (err / norm).sqrt());
 }

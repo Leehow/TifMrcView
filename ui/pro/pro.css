@@ -213,31 +213,31 @@
 .wg-range { display: flex; align-items: center; gap: 4px; }
 .wg-range input { width: 52px; }
 
-/* Cryo-ET pipeline. */
-#tm-status, #tm-summary { margin: 6px 0; line-height: 1.5; font-variant-numeric: tabular-nums; }
-#tm-plot { width: 100%; height: 110px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
-#tm-table { max-height: 200px; overflow: auto; }
-#tm-table table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
-#tm-table th { position: sticky; top: 0; background: var(--surface); }
-#tm-table td { padding: 2px 3px; border-top: 1px solid var(--line); cursor: pointer; }
-#tm-table tr.flagged { background: rgba(231,19,22,.12); }
-#tm-table tr:hover { background: var(--muted); }
-
-/* Dedicated Cryo-ET workspace, with the viewer left visible beside it. */
+/* Cryo-ET workspace, with the viewer left visible beside it. */
 #cryoet-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #cryoet-workspace[hidden], #cryoet-workspace [hidden] { display:none; }
+#cryo-dataset { display:flex; align-items:center; gap:8px; padding-bottom:8px; }
+#cryo-dataset-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #cryo-steps { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; padding-bottom:10px; border-bottom:1px solid var(--line); }
 #cryo-steps button { padding:6px 3px; justify-content:center; font-size:11px; }
 #cryo-steps button.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
-#cryo-body { min-height:0; overflow:auto; padding-top:10px; }
+#cryo-body { flex:1; min-height:0; overflow:auto; padding-top:10px; }
 #cryo-body p { line-height:1.6; }
-#cryo-status { min-height:1.5em; padding-top:8px; }
-#cryoet-workspace #ctf-box { border:0; margin-top:0; padding:0; }
-#cryoet-workspace #ctf-opts { display:grid; }
-#cryoet-workspace #ctf-opts[hidden] { display:none; }
-#btn-cryoet { gap:4px; }
+#cryo-foot { display:flex; align-items:center; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
+#cryo-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
 #quickbar #btn-cryoet { width:auto; padding:0 8px; gap:5px; }
-/* Native movie/EER motion step. */
+#ta-summary, #ct-summary { margin:6px 0; line-height:1.5; font-variant-numeric:tabular-nums; }
+#ta-plot, #ct-plot { width:100%; height:110px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
+#ta-table { max-height:220px; overflow:auto; }
+#ta-table table { width:100%; border-collapse:collapse; font-size:11px; text-align:right; font-variant-numeric:tabular-nums; }
+#ta-table th { position:sticky; top:0; background:var(--surface); }
+#ta-table td { padding:2px 3px; border-top:1px solid var(--line); cursor:pointer; }
+#ta-table tr.flagged { background:rgba(231,19,22,.12); }
+#ta-table tr:hover { background:var(--muted); }
+#rc-list .al-row span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.ct-range { display:flex; align-items:center; gap:4px; }
+.ct-range input { width:56px; }
+
 #mo-trajectory, #mo-vectors { width:100%; height:160px; display:block; background:var(--subtle); border:1px solid var(--line); border-radius:6px; margin:8px 0; }
 #mo-table { max-height:190px; overflow:auto; margin:8px 0; }
 #mo-table table { width:100%; border-collapse:collapse; font-size:11px; font-variant-numeric:tabular-nums; }

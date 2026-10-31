@@ -6,9 +6,12 @@
 //! See geometry for axis conventions, model for gauges, recon for A/Aᵀ.
 
 pub mod correlation_gpu;
+pub mod ctf;
+pub mod dataset;
 pub mod geometry;
 pub mod model;
 pub mod output;
+pub mod pipeline;
 pub mod recon;
 pub mod recon_gpu;
 #[cfg(test)]
@@ -314,10 +317,13 @@ pub fn align(
             (None, None) if req.sweep => (0..12).map(|i| i as f64 * 15.0).collect(),
             (None, None) => vec![axis],
         };
+        // The search compares rigid fits (axis and shifts only): with the
+        // shared groups free, a wrong axis can be partly absorbed by
+        // rotations and magnifications and look better than it is.
         let mut best: Option<(Tracks, model::Solution)> = None;
         for start in starts {
             check_cancel()?;
-            match track_and_solve(&st, start, chosen, &req.excluded, groups, req.sweep, progress) {
+            match track_and_solve(&st, start, chosen, &req.excluded, req.sweep, progress) {
                 Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < b.1.residual) => best = Some(r),
                 Ok(_) => {}
                 Err(e) if CANCEL.load(Ordering::Relaxed) => return Err(e),
@@ -337,16 +343,27 @@ pub fn align(
                 let Ok(fit) = filtered_tracks(&tr, &st.file_order, &req.excluded) else {
                     continue;
                 };
-                if fit.observations.len() < 12 {
+                if fit.observations.len() < 12 || contours(&fit) < 12 {
                     continue;
                 }
-                let s = model::solve(&fit, &st.angles, fixed_axis, groups)?;
+                let s = model::solve(&fit, &st.angles, fixed_axis, model::Groups::NONE)?;
                 if s.residual < solution.residual {
                     solution = s;
                     chosen = patch;
                     tracks = tr;
                 }
             }
+        }
+    }
+    if req.previous.is_none() && groups != model::Groups::NONE {
+        // The shared groups refine the chosen rigid fit; kept only when
+        // they help and stay inside plausible bounds.
+        let fit = filtered_tracks(&tracks, &st.file_order, &req.excluded)?;
+        let refined = model::solve(&fit, &st.angles, solution.axis, groups)?;
+        if refined.residual < solution.residual && model::plausible(&refined) {
+            solution = refined;
+        } else {
+            eprintln!("tomo: grouped refinement not used ({:.3} vs rigid {:.3})", refined.residual, solution.residual);
         }
     }
     let med = median(
@@ -399,12 +416,12 @@ pub fn track_and_solve(
     axis: f64,
     patch: PatchConfig,
     excluded: &[usize],
-    groups: model::Groups,
     automatic: bool,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(Tracks, model::Solution)> {
     let mut tr = track::track(st, axis, patch, progress)?;
     let fit = filtered_tracks(&tr, &st.file_order, excluded)?;
+    let groups = model::Groups::NONE;
     let mut s = if automatic {
         model::sweep(&fit, &st.angles, axis, groups)?
     } else {
@@ -417,6 +434,15 @@ pub fn track_and_solve(
         s = model::refine(&fit, &st.angles, current, groups)?;
     }
     Ok((tr, s))
+}
+
+/// Contours that take part in a fit.
+fn contours(tr: &Tracks) -> usize {
+    let mut seen = vec![false; tr.points];
+    for o in &tr.observations {
+        seen[o.point] = true;
+    }
+    seen.iter().filter(|&&v| v).count()
 }
 
 /// Closest supported bin to a 1024-pixel working short side; zero is UI auto.

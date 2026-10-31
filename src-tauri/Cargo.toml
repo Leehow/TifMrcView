@@ -120,3 +120,7 @@ required-features = ["pro"]
 name = "motion_run"
 required-features = ["pro"]
 
+
+[[example]]
+name = "cryoet_pipeline"
+required-features = ["pro"]

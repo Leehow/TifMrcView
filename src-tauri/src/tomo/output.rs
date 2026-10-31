@@ -2,10 +2,10 @@
 //! IMOD affine sidecars. .xf/.tlt rows follow included, sorted tilt order;
 //! .views records the corresponding zero-based source sections explicitly.
 
-use super::{check_cancel, geometry, recon, track::sample, validate_bin, Alignment};
+use super::{check_cancel, geometry, track::sample, validate_bin, Alignment};
 use crate::image::OpenImage;
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -24,28 +24,6 @@ pub struct SaveReq {
     #[serde(default)]
     pub transforms_only: bool,
 }
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReconReq {
-    pub token: u64,
-    pub c: usize,
-    pub t: usize,
-    pub alignment: Alignment,
-    pub bin: usize,
-    pub params: recon::Params,
-    /// One output per input token: [main, optional even/odd inputs...].
-    pub paths: Vec<String>,
-    #[serde(default)]
-    pub additional_tokens: Vec<u64>,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReconResult {
-    pub paths: Vec<String>,
-    pub backend: Vec<String>,
-    pub ms: f64,
-}
-
 pub fn validate(img: &Arc<OpenImage>, a: &Alignment, bin: usize) -> Result<()> {
     validate_bin(bin)?;
     let info = img.info();
@@ -82,6 +60,22 @@ pub fn aligned(
     bin: usize,
     c: usize,
     t: usize,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<(Vec<f32>, usize, usize, Vec<f64>)> {
+    aligned_flipped(img, a, bin, c, t, None, progress)
+}
+
+/// CTF to phase flip with: the fits, the optics, the stack's pixel size (Å).
+pub type FlipWith<'a> = (&'a super::dataset::Ctf, &'a super::dataset::Optics, f64);
+
+/// Aligned views, phase flipped when `ctf` is given.
+pub fn aligned_flipped(
+    img: &Arc<OpenImage>,
+    a: &Alignment,
+    bin: usize,
+    c: usize,
+    t: usize,
+    ctf: Option<FlipWith>,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(Vec<f32>, usize, usize, Vec<f64>)> {
     validate(img, a, bin)?;
@@ -138,6 +132,21 @@ pub fn aligned(
                 *o = sum / (bin * bin) as f32;
             }
         });
+        if let Some((fits, optics, pixel_a)) = ctf {
+            if let Some(f) = fits.tilts.iter().find(|f| f.z == v.file_index) {
+                // The aligned view shows the stack turned by ψ = 90° − axis.
+                let psi = 90.0 - (a.axis + v.rotation);
+                super::ctf::flip(&mut plane, w, h, &super::ctf::Flip {
+                    optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
+                    df1: f.df1,
+                    df2: f.df2,
+                    angle: (f.angle - psi).to_radians(),
+                    theta: v.refined(),
+                    gradient: fits.gradient,
+                    pixel_a: pixel_a * bin as f64,
+                });
+            }
+        }
         stack.extend(plane);
         angles.push(v.refined());
         progress(i + 1, info.size_z);
@@ -373,40 +382,4 @@ impl Drop for VolumeFile {
             let _ = std::fs::remove_file(&self.part);
         }
     }
-}
-
-pub fn reconstruct(
-    imgs: &[Arc<OpenImage>],
-    req: &ReconReq,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<ReconResult> {
-    let now = std::time::Instant::now();
-    if imgs.len() != req.paths.len() || imgs.is_empty() {
-        bail!("每个输入叠层必须有一个输出路径");
-    }
-    for (i, path) in req.paths.iter().enumerate() {
-        if req.paths[..i].contains(path) {
-            bail!("输出路径重复");
-        }
-        for img in imgs {
-            protect_source(img, path)?;
-        }
-    }
-    let mut backends = Vec::new();
-    for (img, path) in imgs.iter().zip(&req.paths) {
-        validate(img, &req.alignment, req.bin)?;
-        let (stack, w, h, angles) = aligned(img, &req.alignment, req.bin, req.c, req.t, progress)?;
-        let g = recon::Geometry::new(w, req.params.thickness, &angles, req.params.z_offset)?;
-        let views = recon::Views { data: &stack, w, h, views: angles.len() };
-        let mut out = VolumeFile::create(path, [w, h, req.params.thickness], pixel_a(img) * req.bin as f64)?;
-        let backend = recon::reconstruct(&views, &g, &req.params, &mut |y0, n, slab| out.write_rows(y0, n, &slab), progress)?;
-        out.finish()?;
-        export(&req.alignment, path)?;
-        backends.push(backend);
-    }
-    Ok(ReconResult {
-        paths: req.paths.clone(),
-        backend: backends,
-        ms: now.elapsed().as_secs_f64() * 1000.0,
-    })
 }

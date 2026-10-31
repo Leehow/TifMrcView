@@ -112,9 +112,23 @@ pub(crate) struct Optics {
 
 impl Optics {
     fn new(p: &Params) -> Optics {
-        let l = wavelength(p.voltage_kv);
-        let amp = p.amp_contrast.clamp(0.0, 0.999);
-        Optics { a: PI * l, b: 0.5 * PI * p.cs_mm * 1e7 * l * l * l, w: (amp / (1.0 - amp * amp).sqrt()).atan() }
+        Optics::of(p.voltage_kv, p.cs_mm, p.amp_contrast)
+    }
+
+    pub(crate) fn of(kv: f64, cs_mm: f64, amp: f64) -> Optics {
+        let l = wavelength(kv);
+        let amp = amp.clamp(0.0, 0.999);
+        Optics { a: PI * l, b: 0.5 * PI * cs_mm * 1e7 * l * l * l, w: (amp / (1.0 - amp * amp).sqrt()).atan() }
+    }
+
+    /// Sign of sin γ at spatial frequency (kx, ky) in 1/Å for defocus df1
+    /// along `angle` (radians) and df2 across it: what phase flipping
+    /// multiplies by (+1 at low frequencies, where γ ≈ the amplitude phase).
+    pub(crate) fn flip(&self, df1: f64, df2: f64, angle: f64, kx: f64, ky: f64) -> f32 {
+        let k2 = kx * kx + ky * ky;
+        let t = ky.atan2(kx) - angle;
+        let df = 0.5 * (df1 + df2) + 0.5 * (df1 - df2) * (2.0 * t).cos();
+        if self.gamma(df, k2, 0.0).sin() >= 0.0 { 1.0 } else { -1.0 }
     }
 
     fn gamma(&self, df: f64, k2: f64, phase: f64) -> f64 {
@@ -806,6 +820,35 @@ pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0));
     found.iter().find_map(|(_, f)| read(f))
+}
+
+/// Fits per slice, each on its own region (slices sharing a region share
+/// one batch): what the tilt-series CTF uses, with strips along the axis.
+pub(crate) fn fit_regions(
+    img: &Arc<OpenImage>,
+    items: &[(usize, [f64; 4])],
+    c: usize,
+    t: usize,
+    n: usize,
+    params: &Params,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<Vec<Fit>> {
+    let mut out: Vec<Option<Fit>> = vec![None; items.len()];
+    let mut regions: Vec<[f64; 4]> = items.iter().map(|i| i.1).collect();
+    regions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    regions.dedup();
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    for r in regions {
+        let idx: Vec<usize> = (0..items.len()).filter(|&i| items[i].1 == r).collect();
+        let zs: Vec<usize> = idx.iter().map(|&i| items[i].0).collect();
+        let before = done.load(std::sync::atomic::Ordering::Relaxed);
+        let (fits, _, _) = fit_slices(img, &zs, c, t, r, n, params, &|k, _| progress(before + k, items.len()))?;
+        done.fetch_add(zs.len(), std::sync::atomic::Ordering::Relaxed);
+        for (i, f) in idx.into_iter().zip(fits) {
+            out[i] = Some(f);
+        }
+    }
+    Ok(out.into_iter().map(Option::unwrap).collect())
 }
 
 /// Spectra of a region on each slice, then `fit_many`. The spectra run on

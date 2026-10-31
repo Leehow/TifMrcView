@@ -355,6 +355,21 @@ pub fn run(
             result.even = Some(a);
             result.odd = Some(b);
         }
+        // Hand the tilt series on to the Cryo-ET steps: its dataset, with the
+        // acquisition's axis and optics (the stack has no mdoc beside it).
+        let mut d = crate::tomo::dataset::Dataset::open(&req.output, good.len(), Some(px))?;
+        d.angles = result.angles.clone();
+        d.even = result.even.clone();
+        d.odd = result.odd.clone();
+        d.alignment = None;
+        d.ctf = None;
+        d.tomograms.clear();
+        d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?).ok().and_then(|m| m.axis);
+        if let Some(kv) = doc.kv {
+            d.optics.kv = kv;
+        }
+        d.optics.pixel_a = Some(px);
+        d.save()?;
     } else {
         result
             .warnings
