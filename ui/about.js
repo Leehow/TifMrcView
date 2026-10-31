@@ -13,11 +13,19 @@ const AUTHOR = {
     ["ORCID", "https://orcid.org/0009-0004-2696-3267"],
   ],
   // Shown under "引用" with a copy button; empty hides the section.
-  citation: "Li, H. TifMrcView (software). https://github.com/Leehow/TifMrcView",
+  // {app} is the edition's name (TifMrcView or TifMrcView Pro).
+  citation: "Li, H. {app} (software). https://github.com/Leehow/TifMrcView",
 };
 
+// Pro is built from the same repository, so GitHub stays the same; the
+// site link, name and icon follow the edition (EDITION in app.js).
 const REPO_URL = "https://github.com/Leehow/TifMrcView";
 const SITE_URL = "https://tifmrcview.com/tifmrcview/";
+const PRO_SITE_URL = "https://tifmrcview.com/tifmrcview/pro/";
+
+function aboutCitation() {
+  return AUTHOR.citation.replace("{app}", EDITION.pro ? "TifMrcView Pro" : "TifMrcView");
+}
 
 function aboutLink(label, url) {
   const a = document.createElement("a");
@@ -31,6 +39,8 @@ function aboutLink(label, url) {
 }
 
 function renderAbout() {
+  $("about-app-name").textContent = EDITION.pro ? "TifMrcView Pro" : "TifMrcView";
+  $("about-icon").src = EDITION.pro ? "pro/about-icon.png" : "about-icon.png";
   $("about-version").textContent = pluginHost.appVersion ? `v${pluginHost.appVersion}` : "";
   $("about-name").textContent = AUTHOR.name;
   $("about-aff").textContent = AUTHOR.affiliation;
@@ -40,9 +50,9 @@ function renderAbout() {
   if (AUTHOR.email) all.push([AUTHOR.email, `mailto:${AUTHOR.email}`]);
   for (const [label, url] of all) links.append(aboutLink(label, url));
   const proj = $("about-project");
-  proj.replaceChildren(aboutLink("官网", SITE_URL), aboutLink("GitHub", REPO_URL));
+  proj.replaceChildren(aboutLink("官网", EDITION.pro ? PRO_SITE_URL : SITE_URL), aboutLink("GitHub", REPO_URL));
   $("about-cite-box").hidden = !AUTHOR.citation;
-  $("about-cite").textContent = AUTHOR.citation;
+  $("about-cite").textContent = aboutCitation();
 }
 
 function openAbout(force) {
@@ -62,7 +72,7 @@ $("about-dialog").addEventListener("click", (e) => {
   if (e.target.id === "about-dialog") openAbout(false);
 });
 $("about-cite-copy").addEventListener("click", () =>
-  navigator.clipboard.writeText(AUTHOR.citation).then(() => toast("已复制引用")),
+  navigator.clipboard.writeText(aboutCitation()).then(() => toast("已复制引用")),
 );
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("about-dialog").hidden) openAbout(false);
