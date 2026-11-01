@@ -659,14 +659,30 @@ pub fn auto(p: &mut Project, a: &AutoParams, outline: Option<discover::Outliner>
     // misplaced axis it can settle on a symmetrised mixture); the n-fold
     // axis is then found in the map and put along z, and a Dn tested.
     let guessed = a.symmetry.trim().is_empty();
-    let m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
+    let mut m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
     let mut sym = sym;
     if guessed && sym != "C1" {
         let n: usize = sym[1..].parse().unwrap_or(1);
-        let (v, dims, px) = data::read_volume(&m.path)?;
-        let b = dims[0];
-        let v = discover::centred3(&v, b);
-        match discover::find_axis(&v, b, n) {
+        let (mut v, mut dims, mut px) = data::read_volume(&m.path)?;
+        let mut b = dims[0];
+        v = discover::centred3(&v, b);
+        let mut found = discover::find_axis(&v, b, n);
+        // An ab initio run can settle on a poor model (T20S bin 2 with SAM:
+        // axis 0.69 although the 2D classes showed a clear 7-fold): two
+        // more starts before falling back to C1.
+        for seed in [19, 31] {
+            if found.is_some() {
+                break;
+            }
+            check_cancel()?;
+            eprintln!("ab initio again (seed {seed}): no {n}-fold axis in the model");
+            m = initial(p, &InitialParams { symmetry: "C1".into(), seed, ..Default::default() }, progress)?;
+            (v, dims, px) = data::read_volume(&m.path)?;
+            b = dims[0];
+            v = discover::centred3(&v, b);
+            found = discover::find_axis(&v, b, n);
+        }
+        match found {
             Some((axis, _, _)) => {
                 let mut v = discover::align_axis(&v, b, axis);
                 sym = format!("C{n}");
