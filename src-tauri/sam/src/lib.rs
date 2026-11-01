@@ -98,6 +98,11 @@ fn vulkan_gpu() -> bool {
     use burn::tensor::wgpu::wgpu;
     static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *HAS.get_or_init(|| {
+        // WSL has no GPU Vulkan driver, and listing its software adapters
+        // took about a minute on leehowpc: use CUDA there straight away.
+        if in_wsl() {
+            return false;
+        }
         guarded(|| {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
             desc.backends = wgpu::Backends::VULKAN;
@@ -106,6 +111,13 @@ fn vulkan_gpu() -> bool {
         })
         .unwrap_or(false)
     })
+}
+
+#[cfg(feature = "vulkan")]
+fn in_wsl() -> bool {
+    cfg!(target_os = "linux")
+        && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|r| r.to_ascii_lowercase().contains("microsoft")))
 }
 
 /// Runs a future to completion on this thread (wgpu's native futures are
