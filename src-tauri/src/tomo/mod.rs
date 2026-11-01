@@ -141,8 +141,8 @@ pub fn quality(r: f64) -> &'static str {
     }
 }
 pub fn validate_bin(bin: usize) -> Result<()> {
-    if ![1, 2, 4, 8].contains(&bin) {
-        bail!("binning 必须为 1/2/4/8");
+    if ![1, 2, 4, 8, 16].contains(&bin) {
+        bail!("binning 必须为 1/2/4/8/16");
     }
     Ok(())
 }

@@ -242,6 +242,10 @@ pub struct SeriesReq {
     pub folder: Option<String>,
     pub output: String,
     pub params: Params,
+    /// Delete each tilt's own files once the stacks are written (the
+    /// one-button reconstruction needs only the stacks).
+    #[serde(default)]
+    pub drop_tilts: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -416,6 +420,17 @@ pub fn run(
             stack(&b, "odd")?;
             result.even = Some(a);
             result.odd = Some(b);
+        }
+        if req.drop_tilts {
+            for r in &good {
+                let m = r.result.as_ref().unwrap();
+                for f in [Some(&m.path), m.unweighted.as_ref(), m.even.as_ref(), m.odd.as_ref()].into_iter().flatten() {
+                    let _ = std::fs::remove_file(f);
+                }
+                for side in ["before.png", "after.png", "before-ps.png", "after-ps.png", "radial.tsv", "motion.json"] {
+                    let _ = std::fs::remove_file(format!("{}.{side}", m.path));
+                }
+            }
         }
         // Hand the tilt series on to the Cryo-ET steps: its dataset, with the
         // acquisition's axis and optics (the stack has no mdoc beside it).

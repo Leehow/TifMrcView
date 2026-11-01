@@ -41,6 +41,9 @@ fn main() -> Result<()> {
         let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        for (step, s) in &r.timings {
+            println!("  {step:<16} {s:>7.1} s");
+        }
         png(&r.raw)?;
         png(&r.path)?;
         return Ok(());

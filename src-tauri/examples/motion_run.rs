@@ -31,6 +31,7 @@ fn main() -> Result<()> {
                 folder: None,
                 output: output.clone(),
                 params: p,
+                drop_tilts: std::env::var("DROP_TILTS").is_ok(),
             },
             &progress,
         )?;

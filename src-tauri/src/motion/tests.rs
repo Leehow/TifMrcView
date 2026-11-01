@@ -338,6 +338,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
                 working_size: 128,
                 ..Default::default()
             },
+            drop_tilts: false,
         },
         &|_, _, _| {},
     )

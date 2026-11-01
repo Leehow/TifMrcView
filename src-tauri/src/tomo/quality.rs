@@ -210,7 +210,7 @@ pub fn held_out(
         let vol = pipeline::volume(&how, others, w, h, &angles)?;
         let proj = project(&vol, w, h, thickness, a.views[k].refined(), z_offset)?;
         let curve = frc(&proj, &all[j * w * h..(j + 1) * w * h], w, h, pixel * bin as f64);
-        res += 1.0 / crossing(&curve, 0.143);
+        res += 1.0 / crossing(&curve, 0.143).max(curve[0].0);
         band += mean_between(&curve, 1.0 / 100.0, 1.0 / 20.0);
     }
     let n = picks.len() as f64;

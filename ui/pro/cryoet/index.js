@@ -135,7 +135,7 @@
     const output = await invoke("pick_save_path", { dir: saveDir(), name: `${W.name(mdoc).replace(/\.[^.]+$/, "").replace(/\.mrc$/, "")}.mrc`, filter: "MRC", exts: ["mrc"] });
     if (!output) return;
     const un = await T.event.listen("motion-progress", (e) => W.status(`运动校正 · ${e.payload.stage} ${e.payload.done} / ${e.payload.total}`));
-    const r = await W.run("运动校正", () => invoke("motion_series", { req: { mdoc, folder: null, output, params: {} } }), "motion_cancel");
+    const r = await W.run("运动校正", () => invoke("motion_series", { req: { mdoc, folder: null, output, params: {}, dropTilts: true } }), "motion_cancel");
     un();
     if (!r) return;
     if (!r.path || r.angles.length < 3) return W.status(r.path ? "找到的倾角不到 3 个，无法重构" : "mdoc 旁边没有找到电影");
