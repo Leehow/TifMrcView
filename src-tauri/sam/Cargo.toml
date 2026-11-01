@@ -20,6 +20,8 @@ fusion = ["burn/fusion"]
 autotune = ["burn/autotune"]
 # On Apple GPUs, kernels compiled to Metal Shading Language instead of WGSL.
 metal = ["wgpu", "burn/metal"]
+# Vulkan with kernels compiled to SPIR-V instead of WGSL (Windows, Linux).
+vulkan = ["wgpu", "burn/vulkan"]
 # NVIDIA machines without Vulkan; needs the driver's libcuda and NVRTC at run time.
 cuda = ["burn/cuda"]
 

@@ -1240,6 +1240,22 @@ async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>) -> CmdRes
     tomo_step(app, req, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
 }
 
+/// The GPU Pro computes on: backend name (Vulkan, CUDA, DX12, Metal or
+/// CPU) and the card, for the UI's hint when there is no GPU.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn gpu_info() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(|| match crate::ctf_gpu::device() {
+        Some((dev, name)) => {
+            let card = crate::ctf_gpu::guarded(|| dev.identity().map(|i| i.name)).ok().flatten();
+            serde_json::json!({ "backend": name, "card": card })
+        }
+        None => serde_json::json!({ "backend": "CPU", "card": null }),
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({ "backend": "CPU", "card": null }))
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>) -> CmdResult<serde_json::Value> {
@@ -2354,6 +2370,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_ctf,
             #[cfg(feature = "pro")] tomo_denoise,
             #[cfg(feature = "pro")] tomo_wedge,
+            #[cfg(feature = "pro")] gpu_info,
             #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_align,

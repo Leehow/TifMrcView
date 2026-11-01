@@ -286,3 +286,15 @@
 #spa-workspace .ws-steps button.ws-auto { font-weight:600; }
 #spa-fsc { width:100%; height:auto; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
 #spa-workspace input[type="text"] { width:100%; box-sizing:border-box; }
+
+/* One-time hint when Pro found no GPU (pro.js). */
+.pro-gpu-hint {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+  max-width: min(640px, calc(100vw - 32px)); padding: 10px 36px 10px 14px;
+  background: #fff8c5; color: #3b2300; border: 1px solid #d4a72c; border-radius: 6px;
+  font-size: 13px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.pro-gpu-hint a { color: #0969da; }
+.pro-gpu-hint button {
+  position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 16px; cursor: pointer; color: inherit;
+}
