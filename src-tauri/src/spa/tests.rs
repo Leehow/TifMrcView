@@ -591,3 +591,24 @@ fn axis_of_map() {
         eprintln!("{:?}", super::discover::dihedral(&al, b, n));
     }
 }
+
+/// Dn refinement of a project from its Cn map turned so the 2-fold at
+/// `TMV_SPA_PHI`, `TMV_SPA_DZ` lies along x (to see what Dn would give).
+#[test]
+#[ignore]
+fn refine_dn_from_map() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let n = env("TMV_SPA_N", 7.0) as usize;
+    let mut p = super::project::Project::load(&dir).unwrap();
+    let r = p.refine.clone().unwrap();
+    let (v, dims, px) = data::read_volume(&r.map).unwrap();
+    let aligned = super::discover::align_dihedral(&v, dims[0], env("TMV_SPA_PHI", 0.0), env("TMV_SPA_DZ", 0.0));
+    let start = p.path("refine_cn_aligned.mrc");
+    data::write_mrc(std::path::Path::new(&start), &aligned, dims, px, "Cn map, 2-fold along x").unwrap();
+    let t = std::time::Instant::now();
+    let pr = |s: &str, i: usize, k: usize| if i % 4000 == 0 { eprintln!("{s} {i}/{k} {:.0?}", t.elapsed()) };
+    let params = super::refine::RefineParams { symmetry: format!("D{n}"), res_init: (2.0 * r.res).max(15.0), ..Default::default() };
+    let out = super::project::refine(&mut p, &params, Some(&start), &pr).unwrap();
+    eprintln!("D{n}: {:.2} Å (masked {:.2}) in {:.0?}", out.res, out.res_masked, t.elapsed());
+}
