@@ -946,94 +946,6 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     Ok((net.valid(), loss_avg))
 }
 
-/// `vol` without the Fourier components a tilt series with these tilts
-/// misses (beam on Z, tilt axis on Y): the wedge lies in each XZ plane, so
-/// each one is transformed in 2D (padded with its mean to powers of two).
-/// Between tilts it keeps what `tilt_mask` keeps on a training cube of side
-/// `cube`: the network learned to repair that cut, and the much thinner
-/// one of the whole plane (only lines near each tilt at high frequency)
-/// left it a low-passed, streaked input (seen on EMPIAR-10164).
-fn cut_volume(vol: &Vol, g: &Geometry, tilts: &[f32], cube: usize) -> Vol {
-    let [w, h, d] = vol.n;
-    let (px, pz) = (w.next_power_of_two(), d.next_power_of_two());
-    let (lo, hi) = (g.min_tilt.unwrap_or(-g.max_tilt) as f64 - 1e-6, g.max_tilt as f64 + 1e-6);
-    let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
-    let side = cube as f64;
-    let mask: Vec<bool> = (0..px * pz)
-        .map(|i| {
-            let (mut a, mut b) = (f(i % px, px), f(i / px, pz));
-            if a < 0.0 || (a == 0.0 && b < 0.0) {
-                (a, b) = (-a, -b);
-            }
-            if a == 0.0 && b == 0.0 {
-                return true;
-            }
-            let angle = b.atan2(a);
-            let near = tilts.iter().map(|&t| (angle - (t as f64).to_radians()).abs()).fold(f64::MAX, f64::min);
-            (lo..=hi).contains(&angle.to_degrees()) && a.hypot(b) * side * near.sin() <= 1.0
-        })
-        .collect();
-    let (fx, fz) = (Fft::new(px), Fft::new(pz));
-    let mut out = vec![0f32; vol.v.len()];
-    let planes: Vec<Vec<f32>> = (0..h)
-        .into_par_iter()
-        .map(|y| {
-            let mut re = vec![0f32; px * pz];
-            let mut sum = 0f64;
-            for z in 0..d {
-                for x in 0..w {
-                    sum += vol.v[(z * h + y) * w + x] as f64;
-                }
-            }
-            let mean = (sum / (w * d) as f64) as f32;
-            for z in 0..pz {
-                for x in 0..px {
-                    re[z * px + x] = if z < d && x < w { vol.v[(z * h + y) * w + x] } else { mean };
-                }
-            }
-            let mut im = vec![0f32; px * pz];
-            let pass = |re: &mut Vec<f32>, im: &mut Vec<f32>| {
-                for z in 0..pz {
-                    fx.run(&mut re[z * px..(z + 1) * px], &mut im[z * px..(z + 1) * px]);
-                }
-                for x in 0..px {
-                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = ((0..pz).map(|z| re[z * px + x]).collect(), (0..pz).map(|z| im[z * px + x]).collect());
-                    fz.run(&mut cr, &mut ci);
-                    for z in 0..pz {
-                        re[z * px + x] = cr[z];
-                        im[z * px + x] = ci[z];
-                    }
-                }
-            };
-            pass(&mut re, &mut im);
-            for (i, &m) in mask.iter().enumerate() {
-                if m {
-                    im[i] = -im[i];
-                } else {
-                    re[i] = 0.0;
-                    im[i] = 0.0;
-                }
-            }
-            // Inverse as the conjugate of the forward transform.
-            pass(&mut re, &mut im);
-            let s = 1.0 / (px * pz) as f32;
-            let mut plane = vec![0f32; w * d];
-            for z in 0..d {
-                for x in 0..w {
-                    plane[z * w + x] = re[z * px + x] * s;
-                }
-            }
-            plane
-        })
-        .collect();
-    for (y, plane) in planes.iter().enumerate() {
-        for z in 0..d {
-            out[(z * h + y) * w..(z * h + y) * w + w].copy_from_slice(&plane[z * w..(z + 1) * w]);
-        }
-    }
-    Vol { n: vol.n, v: out }
-}
-
 /// For a reconstruction pipeline with even/odd half tomograms (same layout
 /// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
 /// and fills the wedge in one network, and returns the mean of its results
@@ -1055,25 +967,19 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
     let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
     let (net, _) = train_halves(dev, &a, &b, &g, tilts, cfg, &mut progress)?;
     let it = cfg.iterations + 1;
-    // A network trained for equivariance is applied twice, as in ICECREAM:
-    // its result, wedge-cut again, is repaired once more.
-    let passes = if cfg.equivariant > 0.0 { 2 } else { 1 };
+    // One pass only: a second pass on the wedge-cut first result (as in
+    // ICECREAM) smeared EMPIAR-10164 into a low-pass image, while the
+    // first pass alone matched full ICECREAM.
     let mut outs = vec![];
     for (h, vol) in [&a, &b].into_iter().enumerate() {
         let mut v = Vol { n: dims, v: vol.v.clone() };
-        for pass in 0..passes {
-            if pass > 0 {
-                v = cut_volume(&v, &g, tilts, cfg.cube);
+        v.v = apply(dev, &net, &v, [0; 3], dims, &mut |done, total| {
+            if CANCEL.load(Ordering::SeqCst) {
+                bail!("已取消");
             }
-            let k = h * passes + pass;
-            v.v = apply(dev, &net, &v, [0; 3], dims, &mut |done, total| {
-                if CANCEL.load(Ordering::SeqCst) {
-                    bail!("已取消");
-                }
-                progress(Progress { iteration: it, iterations: cfg.iterations, step: k * total + done, steps: 2 * passes * total, loss: 0.0 });
-                Ok(())
-            })?;
-        }
+            progress(Progress { iteration: it, iterations: cfg.iterations, step: h * total + done, steps: 2 * total, loss: 0.0 });
+            Ok(())
+        })?;
         outs.push(v.v);
     }
     Ok(outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect())
@@ -1396,20 +1302,6 @@ mod tests {
     }
 
     #[test]
-    fn volume_cut_matches_the_cube_cut() {
-        let n = 16;
-        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-54.0) };
-        let tilts: Vec<f32> = (-18..=20).map(|i| i as f32 * 3.0).collect();
-        let v = phantom(n, 8);
-        let mut sp = Spectral::new(n, &g);
-        sp.keep = tilt_mask(n, &g, &tilts);
-        let want = sp.filter(&v.v, &sp.keep);
-        let got = cut_volume(&v, &g, &tilts, n).v;
-        let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-        assert!(worst < 1e-3, "{worst}");
-    }
-
-    #[test]
     fn device_turns_match_the_cpu() {
         let n = 8;
         let dev = Device::flex();
@@ -1651,35 +1543,13 @@ mod bench {
             let n = a.n;
             let (vals, _) = crate::classify::on_device(|dev| {
                 let net = net.clone().to_device(dev);
-                let twice = cfg.equivariant > 0.0;
-                let run = |v: &Vol| -> Result<(Vec<f32>, Option<Vec<f32>>)> {
-                    let first = apply(dev, &net, v, [0; 3], n, &mut |_, _| Ok(()))?;
-                    if !twice {
-                        return Ok((first, None));
-                    }
-                    let cut = cut_volume(&Vol { n, v: first.clone() }, &g, &tilts, cfg.cube);
-                    Ok((first, Some(apply(dev, &net, &cut, [0; 3], n, &mut |_, _| Ok(()))?)))
-                };
-                let ((x1, x2), (y1, y2)) = (run(&a)?, run(&b)?);
-                let mean_of = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>();
-                Ok((mean_of(&x1, &y1), x2.zip(y2).map(|(x, y)| mean_of(&x, &y))))
+                let run = |v: &Vol| apply(dev, &net, v, [0; 3], n, &mut |_, _| Ok(()));
+                let (x, y) = (run(&a)?, run(&b)?);
+                Ok(x.iter().zip(&y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>())
             })
             .unwrap();
-            let (one, two) = vals;
-            let save = |path: &str, v: &[f32]| {
-                write_mrc(path, n, &v.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
-                println!("  saved {path}");
-            };
-            // With two passes, TMV_HALF_OUT gets the second; TMV_HALF_OUT1 the first.
-            match two {
-                Some(two) => {
-                    save(&out, &two);
-                    if let Ok(p1) = std::env::var("TMV_HALF_OUT1") {
-                        save(&p1, &one);
-                    }
-                }
-                None => save(&out, &one),
-            }
+            write_mrc(&out, n, &vals.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
+            println!("  saved {out}");
         }
     }
 
