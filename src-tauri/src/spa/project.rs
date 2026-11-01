@@ -506,7 +506,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
         fsc: r.fsc,
         fsc_masked: s.fsc_masked,
         history: r.history,
-        params: params.clone(),
+        params: RefineParams { symmetry: r.symmetry.clone(), ..params.clone() },
         backend: super::score::backend().into(),
     };
     p.refine = Some(info.clone());
@@ -643,25 +643,15 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
         }
         p.save()?;
     }
-    let r = refine(p, &RefineParams { symmetry: sym.clone(), ..Default::default() }, None, progress)?;
-    // At the refined resolution a Dn shows clearly where the initial model
-    // could not tell: refine once more with it, from the aligned map.
-    if guessed && sym.starts_with('C') && sym != "C1" {
-        let n: usize = sym[1..].parse().unwrap_or(1);
-        let (v, dims, px) = data::read_volume(&r.map)?;
-        if let Some((phi, dz, c)) = discover::dihedral(&v, dims[0], n) {
-            let aligned = discover::align_dihedral(&v, dims[0], phi, dz);
-            let start = p.path("refine_cn_aligned.mrc");
-            data::write_mrc(Path::new(&start), &aligned, dims, px, "TifMrcView Pro: Cn map, 2-fold along x")?;
-            let dn = format!("D{n}");
-            if let Some(g) = p.symmetry.as_mut() {
-                g.symmetry = dn.clone();
-                g.two_fold = c;
-            }
-            p.save()?;
-            let res_init = (2.0 * r.res).max(15.0);
-            return refine(p, &RefineParams { symmetry: dn, res_init, ..Default::default() }, Some(&start), progress);
+    // One refinement: a Cn guess is tested for a Dn once the map is
+    // refined enough, and refinement goes on in it when there is one.
+    let promote = guessed && sym.starts_with('C') && sym != "C1";
+    let r = refine(p, &RefineParams { symmetry: sym.clone(), promote_dihedral: promote, ..Default::default() }, None, progress)?;
+    if r.params.symmetry != sym {
+        if let Some(g) = p.symmetry.as_mut() {
+            g.symmetry = r.params.symmetry.clone();
         }
+        p.save()?;
     }
     Ok(r)
 }

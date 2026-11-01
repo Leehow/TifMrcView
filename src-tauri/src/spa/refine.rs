@@ -53,11 +53,15 @@ pub struct RefineParams {
     pub global_iterations: usize,
     pub global_step: f64,
     pub seed: u64,
+    /// With a Cn: test for a Dn once the map is refined enough and, when
+    /// there is one, turn the map and the poses to put its 2-fold along x
+    /// and go on in Dn (one refinement instead of a Cn and a Dn one).
+    pub promote_dihedral: bool,
 }
 
 impl Default for RefineParams {
     fn default() -> Self {
-        RefineParams { symmetry: "C1".into(), res_init: 30.0, max_iterations: 12, global_iterations: 2, global_step: 7.5, seed: 11 }
+        RefineParams { symmetry: "C1".into(), res_init: 30.0, max_iterations: 12, global_iterations: 2, global_step: 7.5, seed: 11, promote_dihedral: false }
     }
 }
 
@@ -208,6 +212,49 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &
             .collect();
         acc.insert(&pts);
     }
+}
+
+/// The 2-fold of a Dn in the average of two half maps (b³, n-fold along z),
+/// tested on a copy of at most 128 voxels: (phi, dz in voxels of b).
+fn dihedral_of(maps: &[Vec<f32>; 2], b: usize, n: usize) -> Option<(f64, f64)> {
+    let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
+    let s = b.min(128);
+    let small = if s == b { avg } else { fourier::resample3(&avg, b, s) };
+    let (phi, dz, _) = super::discover::dihedral(&small, s, n)?;
+    Some((phi, dz * b as f64 / s as f64))
+}
+
+/// Turns the maps (`discover::align_dihedral`: out(p) = v(A·p + t), A the
+/// turn by phi about z, t = (0, 0, dz)) and the poses with them: R → R·A,
+/// shift + (R·t)xy (test `poses_follow_a_turned_map`).
+pub(crate) fn promote(maps: &mut [Vec<f32>; 2], b: usize, (phi, dz): (f64, f64), parts: &mut [Particle], ids: &[usize]) {
+    for m in maps.iter_mut() {
+        *m = super::discover::align_dihedral(m, b, phi, dz);
+    }
+    let (s, c) = phi.to_radians().sin_cos();
+    let a: Mat = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+    for &i in ids {
+        let q = &mut parts[i];
+        let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
+        let e = geom::angles(&geom::mul(&r, &a));
+        q.euler = [e[0] as f32, e[1] as f32, e[2] as f32];
+        q.shift = [q.shift[0] + (r[0][2] * dz) as f32, q.shift[1] + (r[1][2] * dz) as f32];
+    }
+}
+
+/// One unfiltered map from every particle of `ids` at its orientation
+/// and shift (stack box), with the point group applied.
+pub fn reconstruct_all(stack: &Stack, parts: &[Particle], ids: &[usize], optics: &Optics, sym: &[Mat]) -> Vec<f32> {
+    let b = stack.b;
+    let noise = data::noise_spectrum(stack, ids, 2000);
+    let full = Half::new(b, b as f64 / 2.0 - 1.0);
+    let mut acc = Accum::new(b, volume::pad_for(b));
+    for chunk in ids.chunks(512) {
+        let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
+        insert(&mut acc, &c, &full, parts, chunk);
+    }
+    acc.symmetrize(sym);
+    acc.reconstruct(None)
 }
 
 /// Working box for a resolution: Nyquist at most res / 1.2, a power of two.
@@ -435,6 +482,8 @@ pub struct Refined {
     pub fsc: Vec<f64>,
     pub res: f64,
     pub history: Vec<Iteration>,
+    /// The point group at the end (a Cn may have become a Dn).
+    pub symmetry: String,
 }
 
 /// Gold-standard refinement from `start` (any box and pixel; it is
@@ -445,7 +494,10 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     }
     let b = stack.b;
     let px = stack.pixel_a;
-    let sym = geom::symmetry(&p.symmetry)?;
+    let mut sym = geom::symmetry(&p.symmetry)?;
+    let mut sym_name = p.symmetry.trim().to_uppercase();
+    let cn: usize = if p.promote_dihedral && sym_name.starts_with('C') { sym_name[1..].parse().unwrap_or(1) } else { 1 };
+    let mut dn_tests = 0;
     let noise = data::noise_spectrum(stack, ids, 2000);
     // Half sets, fixed for the whole run.
     let mut rng = Rng(p.seed.max(1));
@@ -572,6 +624,21 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             best_res = best_res.min(new_res);
             stalls += 1;
         }
+        // A Dn shows at refined resolution where the starting model could
+        // not tell: tested after the first two local rounds.
+        if cn > 1 && !is_global && dn_tests < 2 {
+            dn_tests += 1;
+            if let Some(found) = dihedral_of(&maps, b, cn) {
+                promote(&mut maps, b, found, parts, &all);
+                sym_name = format!("D{cn}");
+                sym = geom::symmetry(&sym_name)?;
+                dn_tests = 2;
+                // New frame: the earlier best alignments no longer apply.
+                best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
+                best_res = f64::INFINITY;
+                stalls = 0;
+            }
+        }
         res = new_res.max(2.0 * px * 1.05);
         // Done when the resolution has stopped improving at the finest useful step.
         if it >= p.global_iterations + 2 && stalls >= 2 && step <= want * 1.01 {
@@ -609,5 +676,5 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     let full_fsc: Vec<f64> = f.iter().map(|&x| (2.0 * x / (1.0 + x)).clamp(0.0, 1.0)).collect();
     let vf = both.reconstruct(Some(&full_fsc));
     drop(accs);
-    Ok(Refined { half1: Map { b, px, v: v1 }, half2: Map { b, px, v: v2 }, full: Map { b, px, v: vf }, fsc: f, res, history })
+    Ok(Refined { half1: Map { b, px, v: v1 }, half2: Map { b, px, v: v2 }, full: Map { b, px, v: vf }, fsc: f, res, history, symmetry: sym_name })
 }

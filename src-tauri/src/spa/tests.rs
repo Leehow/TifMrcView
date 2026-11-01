@@ -647,3 +647,23 @@ fn refine_dn_from_map() {
     let out = super::project::refine(&mut p, &params, Some(&start), &pr).unwrap();
     eprintln!("D{n}: {:.2} Å (masked {:.2}) in {:.0?}", out.res, out.res_masked, t.elapsed());
 }
+
+/// The poses follow a map turned about z and moved along z
+/// (`refine::promote`): the map rebuilt from the changed poses matches
+/// the turned map (0.995; R·Aᵀ gave 0.744, A·R 0.886, the opposite shift 0.28).
+#[test]
+fn poses_follow_a_turned_map() {
+    let dir = tempfile::tempdir().unwrap();
+    let (b, px) = (32, 6.0);
+    let truth = phantom(b);
+    let (path, parts, optics) = synth_stack(dir.path(), &truth, b, px, 400, 0.5, 9);
+    let stack = Stack::open(&path).unwrap();
+    let ids: Vec<usize> = (0..parts.len()).collect();
+    let m = refine::reconstruct_all(&stack, &parts, &ids, &optics, &[geom::IDENTITY]);
+    let mut maps = [m.clone(), m];
+    let mut moved = parts.clone();
+    refine::promote(&mut maps, b, (23.0, 3.0), &mut moved, &ids);
+    let m2 = refine::reconstruct_all(&stack, &moved, &ids, &optics, &[geom::IDENTITY]);
+    let c = corr(&m2, &maps[0]);
+    assert!(c > 0.97, "{c}");
+}
