@@ -204,9 +204,22 @@ impl Sam {
         let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h);
         let mut out = vec![];
         for p in points {
-            let r = predictor.predict(&enc, &[tmv_sam::Point { x: p[0], y: p[1], positive: true }], None, None);
+            // The low-resolution logits, sampled bilinearly at image pixels
+            // as the fill needs them (the full-size mask cost ~0.1 s a click).
+            let (low, _) = predictor.predict_low_res(&enc, tmv_sam::Point { x: p[0], y: p[1], positive: true });
+            let n = (low.len() as f64).sqrt() as usize;
+            let logit = |i: usize| -> f32 {
+                let u = ((i % w) as f32 + 0.5) * n as f32 / w as f32 - 0.5;
+                let v = ((i / w) as f32 + 0.5) * n as f32 / h as f32 - 0.5;
+                let (u, v) = (u.clamp(0.0, (n - 1) as f32), v.clamp(0.0, (n - 1) as f32));
+                let (u0, v0) = (u.floor() as usize, v.floor() as usize);
+                let (u1, v1) = ((u0 + 1).min(n - 1), (v0 + 1).min(n - 1));
+                let (fu, fv) = (u - u0 as f32, v - v0 as f32);
+                let at = |x: usize, y: usize| low[y * n + x];
+                (at(u0, v0) * (1.0 - fu) + at(u1, v0) * fu) * (1.0 - fv) + (at(u0, v1) * (1.0 - fu) + at(u1, v1) * fu) * fv
+            };
             let (cx, cy) = (p[0].round() as usize, p[1].round() as usize);
-            if cx >= w || cy >= h || r.logits[cy * w + cx] <= 0.0 {
+            if cx >= w || cy >= h || logit(cy * w + cx) <= 0.0 {
                 out.push(None);
                 continue;
             }
@@ -224,7 +237,7 @@ impl Sam {
                 for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
                     if nx < w && ny < h {
                         let j = ny * w + nx;
-                        if !seen[j] && r.logits[j] > 0.0 {
+                        if !seen[j] && logit(j) > 0.0 {
                             seen[j] = true;
                             stack.push(j);
                         }

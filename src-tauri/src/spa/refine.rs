@@ -557,9 +557,13 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     while it < iters {
         check_cancel()?;
         let is_global = it < global_until;
+        // The global round after a Dn promotion: the shifts are known and
+        // a box of 128 holds its resolution (it took 10 of 38 min at 256).
+        let redo = is_global && it >= p.global_iterations;
         // Search a little beyond the current resolution.
         let r_search = radius(b, px, res) * 1.15 + 2.0;
         let bw = box_for(b, px, res / 1.15).max(32.min(b));
+        let bw = if redo { bw.min(128.max(32.min(b))) } else { bw };
         let ratio = (b / bw) as f32;
         let pad = volume::pad_for(bw);
         let half = Half::new(bw, r_search.min(bw as f64 / 2.0 - 1.0));
@@ -581,7 +585,7 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             let grid = if is_global { geom::grid_for(step, &sym_name) } else { vec![] };
             let refs = if is_global { Some(slices(&proj, &grid, &half)) } else { None };
             let deltas = geom::local(step * 2.0, 2);
-            let offs = data::offsets(if is_global { 3 } else { 1 });
+            let offs = data::offsets(if is_global && !redo { 3 } else { 1 });
             let total = set.len();
             // Each chunk's images are read and transformed once, while the
             // previous chunk is being searched (the GPU otherwise waited on

@@ -275,6 +275,23 @@ impl Predictor {
         feats
     }
 
+    /// The 256² mask logits of the best multimask output for one click,
+    /// over the whole (stretched) image, and its IoU: `predict` without
+    /// the full-size upsampling and transfer (about ten times faster when
+    /// many particles are outlined one by one).
+    pub fn predict_low_res(&self, enc: &Encoded, p: Point) -> (Vec<f32>, f32) {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let sparse = pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device);
+        let dense = pe.dense(None, &self.device);
+        let f = &enc.features;
+        let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+        let iou: Vec<f32> = m.iou.clone().into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let best = (1..4).max_by(|&a, &b| iou[a].total_cmp(&iou[b])).unwrap();
+        let low: Vec<f32> = m.logits.narrow(1, best, 1).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        (low, iou[best])
+    }
+
     /// Starts tracking from a mask on one frame (image size, row-major),
     /// used as it is (SAM 2's mask input), and returns that frame's memory.
     pub fn track_start(&self, enc: &Encoded, mask: &[bool]) -> Memory {
