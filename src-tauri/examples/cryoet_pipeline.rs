@@ -28,6 +28,22 @@ fn main() -> Result<()> {
         d.alignment = Some(a);
         d.save()?;
     }
+    if steps.contains("thick") {
+        let a = d.alignment.clone().context("align first")?;
+        let bin = tomo::auto::output_bin(img.info().width, img.info().height, d.optics.pixel_a.unwrap_or(1.0), 9.0);
+        println!("thickness, offset: {:?} at bin {bin}", tomo::auto::estimate_thickness(&img, &a, d.optics.pixel_a.unwrap_or(1.0), bin, &progress)?);
+        return Ok(());
+    }
+    if steps.contains("auto") {
+        let (dev, _) = tifmrcview_lib::ctf_gpu::device().context("GPU")?;
+        let t = Instant::now();
+        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
+        eprintln!();
+        println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        png(&r.raw)?;
+        png(&r.path)?;
+        return Ok(());
+    }
     if steps.contains("export") {
         let dir = Path::new(stack).parent().unwrap().join("export");
         std::fs::create_dir_all(&dir)?;
@@ -48,15 +64,15 @@ fn main() -> Result<()> {
         }
     }
     if steps.contains("rec") {
-        for flip in [false, true] {
+        for (flip, ctf_3d) in [(false, false), (true, false), (true, true)] {
             if flip && d.ctf.is_none() {
                 continue;
             }
             let t = Instant::now();
-            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip };
+            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip, ctf_3d };
             let m = pipeline::reconstruct(&mut d, &step, &progress)?;
             eprintln!();
-            println!("rec (flip {flip}): {} on {}, {:.1} s", m.paths.join(", "), m.backend, t.elapsed().as_secs_f64());
+            println!("rec (flip {flip}, 3D {ctf_3d}): {} on {}, {:.1} s", m.paths.join(", "), m.backend, t.elapsed().as_secs_f64());
             png(&m.paths[0])?;
         }
     }

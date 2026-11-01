@@ -232,8 +232,8 @@ fn projector_geometry_and_reconstruction_quality() {
         let want = c * (30.0 - 23.5) + s * (g.depth(g.z / 2 + 6)) + 23.5;
         assert!((centroid - want).abs() < 0.05, "view {v}: {centroid} vs {want}");
     }
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, backend: "cpu".into(), ..Default::default() };
+    for (method, iterations) in [(Method::Wbp, 15), (Method::Sirt, 15), (Method::Sart, 3)] {
+        let p = Params { thickness: g.z, method, iterations, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, backend: "cpu".into(), ..Default::default() };
         let x = recon::cpu_slab(&g, &b, &p).unwrap();
         let cc = corr(&x, &truth);
         eprintln!("{method:?} phantom cc={cc}");
@@ -284,8 +284,8 @@ fn gpu_matches_cpu() {
         return;
     };
     let (g, _, b, rows) = recon_phantom();
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, ..Default::default() };
+    for method in [Method::Wbp, Method::Sirt, Method::Sart] {
+        let p = Params { thickness: g.z, method, iterations: if method == Method::Sart { 3 } else { 15 }, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, ..Default::default() };
         let cpu = recon::cpu_slab(&g, &b, &p).unwrap();
         let gpu = crate::ctf_gpu::guarded(|| recon_gpu::Plan::new(dev, &g, &p)?.slab(&b, rows)).unwrap().unwrap();
         let e = cpu.iter().zip(&gpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();
@@ -398,6 +398,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
         params: Params { thickness: 8, backend: "cpu".into(), ..Default::default() },
         halves: true,
         phase_flip: false,
+        ctf_3d: false,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
@@ -566,8 +567,24 @@ fn phase_flip_turns_the_ctf_into_its_magnitude() {
         theta: 0.0,
         gradient: 0,
         pixel_a: pixel,
+        offset: 0.0,
     });
     let err = seen.iter().zip(&want).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>();
     let norm = want.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
     assert!((err / norm).sqrt() < 1e-4, "relative error {}", (err / norm).sqrt());
+}
+
+#[test]
+fn depth_and_strip_defocus_make_the_beam_height() {
+    // A point at lateral u, depth v (specimen frame) in a view tilted by θ sits
+    // at detector d = u cos θ + v sin θ and height h = −u sin θ + v cos θ;
+    // strip gradient at d plus the slab's depth term is −gradient·h (pixels → Å).
+    for &(u, v, theta, g) in &[(12.0, 5.0, 40.0, 1i8), (-30.0, -8.0, -55.0, -1), (7.0, 20.0, 10.0, 1)] {
+        let (s, c) = f64::to_radians(theta).sin_cos();
+        let d = u * c + v * s;
+        let h = -u * s + v * c;
+        let strip = g as f64 * 2.0 * f64::to_radians(theta).tan() * d;
+        let total = strip + ctf::depth_defocus(v, theta, g, 2.0);
+        assert!((total + g as f64 * 2.0 * h).abs() < 1e-9, "{total} vs {}", -(g as f64) * 2.0 * h);
+    }
 }

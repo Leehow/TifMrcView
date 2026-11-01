@@ -9,15 +9,16 @@
     <div class="al-head"><b>三维重构</b></div>
     <p id="rc-geometry" class="dim">先在③完成倾转对齐。</p>
     <div class="al-opts">
-      <label>方法<select id="rc-method"><option value="wbp">WBP（加权反投影）</option><option value="sirt">SIRT（迭代）</option></select></label>
-      <label>SIRT 迭代次数<input id="rc-iters" type="number" min="1" max="1000" value="15"></label>
+      <label>方法<select id="rc-method"><option value="wbp">WBP（加权反投影）</option><option value="sirt">SIRT（迭代）</option><option value="sart">SART（逐张迭代，收敛快）</option></select></label>
+      <label>迭代次数<input id="rc-iters" type="number" min="1" max="1000" value="15" title="SIRT 常用 10–30 次，SART 3–5 次"></label>
       <label>WBP 滤波<select id="rc-filter"><option value="ramp">Ramp</option><option value="cosine">Cosine</option><option value="hamming">Hamming</option></select></label>
       <label>输出 binning<select id="rc-bin"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
       <label>厚度（输出像素）<input id="rc-z" type="number" min="1" max="8192" value="256"></label>
       <label>Z 偏移（输出像素）<input id="rc-offset" type="number" value="0"></label>
       <label class="al-check al-wide"><input id="rc-flip" type="checkbox">相位翻转（需要② CTF）</label>
+      <label class="al-check al-wide" title="按深度把断层分成薄层，每层用该深度的离焦翻转后只反投影到本层；厚样品、高分辨率更准，耗时约为普通 WBP 的几倍"><input id="rc-3d" type="checkbox">3D CTF 校正（仅 WBP）</label>
       <label class="al-check al-wide"><input id="rc-halves" type="checkbox">同时重构奇偶两半（供⑤ Noise2Noise）</label>
-      <label class="al-check al-wide"><input id="rc-positive" type="checkbox">SIRT 非负约束</label>
+      <label class="al-check al-wide"><input id="rc-positive" type="checkbox">迭代法非负约束</label>
     </div>
     <div class="al-row"><button id="rc-run" class="small primary">重构并打开</button></div>
     <div id="rc-list"></div>`;
@@ -30,6 +31,7 @@
     $("rc-run").disabled = !a;
     $("rc-flip").disabled = !d?.ctf;
     if (!d?.ctf) $("rc-flip").checked = false;
+    syncCtf3d();
     const halves = !!(d?.even && d?.odd);
     $("rc-halves").disabled = !halves;
     $("rc-halves").checked = halves;
@@ -51,16 +53,30 @@
     }
   }
 
+  // 3D CTF needs phase flipping and WBP.
+  function syncCtf3d() {
+    const ok = $("rc-flip").checked && $("rc-method").value === "wbp";
+    $("rc-3d").disabled = !ok;
+    if (!ok) $("rc-3d").checked = false;
+  }
+  $("rc-flip").onchange = syncCtf3d;
+  $("rc-method").onchange = () => {
+    syncCtf3d();
+    $("rc-iters").value = $("rc-method").value === "sart" ? 3 : 15;
+  };
+
   $("rc-run").onclick = async () => {
     const step = {
       bin: +$("rc-bin").value,
       halves: $("rc-halves").checked,
       phaseFlip: $("rc-flip").checked,
+      ctf3d: $("rc-3d").checked,
       params: {
         method: $("rc-method").value,
         thickness: +$("rc-z").value,
         iterations: +$("rc-iters").value,
-        lambda: 1,
+        // SART updates after every view; a smaller step keeps it from overshooting.
+        lambda: $("rc-method").value === "sart" ? 0.5 : 1,
         nonNegative: $("rc-positive").checked,
         zOffset: +$("rc-offset").value,
         filter: $("rc-filter").value,

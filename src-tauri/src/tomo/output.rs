@@ -68,6 +68,30 @@ pub fn aligned(
 /// CTF to phase flip with: the fits, the optics, the stack's pixel size (Å).
 pub type FlipWith<'a> = (&'a super::dataset::Ctf, &'a super::dataset::Optics, f64);
 
+/// Phase flips aligned views (as `aligned` returns them, excluded views
+/// left out) for a slab at `depth` output pixels from the mid-plane.
+pub fn flip_views(stack: &mut [f32], w: usize, h: usize, a: &Alignment, bin: usize, ctf: FlipWith, depth: f64) {
+    let (fits, optics, pixel_a) = ctf;
+    use rayon::prelude::*;
+    let kept: Vec<&super::View> = a.views.iter().filter(|v| !v.excluded).collect();
+    stack.par_chunks_mut(w * h).zip(kept).for_each(|(plane, v)| {
+        if let Some(f) = fits.tilts.iter().find(|f| f.z == v.file_index) {
+            let psi = 90.0 - (a.axis + v.rotation);
+            let px = pixel_a * bin as f64;
+            super::ctf::flip(plane, w, h, &super::ctf::Flip {
+                optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
+                df1: f.df1,
+                df2: f.df2,
+                angle: (f.angle - psi).to_radians(),
+                theta: v.refined(),
+                gradient: fits.gradient,
+                pixel_a: px,
+                offset: super::ctf::depth_defocus(depth, v.refined(), fits.gradient, px),
+            });
+        }
+    });
+}
+
 /// Aligned views, phase flipped when `ctf` is given.
 pub fn aligned_flipped(
     img: &Arc<OpenImage>,
@@ -144,6 +168,7 @@ pub fn aligned_flipped(
                     theta: v.refined(),
                     gradient: fits.gradient,
                     pixel_a: pixel_a * bin as f64,
+                    offset: 0.0,
                 });
             }
         }
@@ -318,16 +343,21 @@ impl VolumeFile {
 
     /// Rows y0..y0+n of every section, given as [n][z][w].
     pub fn write_rows(&mut self, y0: usize, n: usize, slab: &[f32]) -> Result<()> {
+        self.write_block(y0, n, 0, self.shape[2], slab)
+    }
+
+    /// Rows y0..y0+n of sections z0..z0+nz, given as [n][nz][w].
+    pub fn write_block(&mut self, y0: usize, n: usize, z0: usize, nz: usize, slab: &[f32]) -> Result<()> {
         use std::io::{Seek, SeekFrom};
         let [w, h, z] = self.shape;
-        if slab.len() != n * z * w || y0 + n > h {
+        if slab.len() != n * nz * w || y0 + n > h || z0 + nz > z {
             bail!("重构分块尺寸不一致");
         }
         let mut band = vec![0u8; n * w * 4];
-        for k in 0..z {
+        for k in z0..z0 + nz {
             for y in 0..n {
                 for x in 0..w {
-                    let v = slab[(y * z + k) * w + x];
+                    let v = slab[(y * nz + (k - z0)) * w + x];
                     if !v.is_finite() {
                         bail!("重构结果含 NaN/Inf");
                     }
@@ -342,7 +372,7 @@ impl VolumeFile {
             self.file.seek(SeekFrom::Start(HEADER + ((k * h + y0) * w * 4) as u64))?;
             self.file.write_all(&band)?;
         }
-        self.count += n * z * w;
+        self.count += n * nz * w;
         Ok(())
     }
 

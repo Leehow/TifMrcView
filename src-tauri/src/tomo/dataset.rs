@@ -39,6 +39,10 @@ pub struct TiltCtf {
     pub angle: f64,
     pub fit_res: f64,
     pub score: f64,
+    /// The fit failed (no usable rings, typical at high tilt): the defocus
+    /// is taken from the neighbouring tilts instead.
+    #[serde(default)]
+    pub estimated: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
