@@ -434,13 +434,21 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
             let elongation = med(m.iter().map(|&i| all[i].feat[0] / 2.0).collect()).exp() as f64;
             let contrast = med(m.iter().map(|&i| all[i].resp).collect()) as f64;
             // Typical members: the middle of the strength range (the
-            // strongest are often specks of ice or gold).
+            // strongest are often specks of ice or gold), and of those the
+            // closest in shape to the group's mean.
             m.sort_by(|&p, &q| all[q].resp.total_cmp(&all[p].resp));
             let from = m.len() / 4;
             m.drain(..from.min(m.len().saturating_sub(8)));
-            // Shown a little closer than the features are taken.
+            m.truncate((m.len() / 2).max(8));
+            let nf = all[m[0]].feat.len();
+            let centre: Vec<f32> = (0..nf).map(|j| m.iter().map(|&i| all[i].feat[j]).sum::<f32>() / m.len() as f32).collect();
+            let dist = |i: usize| all[i].feat.iter().zip(&centre).map(|(a, b)| (a - b) * (a - b)).sum::<f32>();
+            m.sort_by(|&p, &q| dist(p).total_cmp(&dist(q)));
+            // Shown a little closer than the features are taken, and
+            // smoothed to about a twentieth of the particle so the shape
+            // reads at a glance rather than the speckle.
             let rr = (0.7 * diameter / 2.0) as f32;
-            let tiles: Vec<Vec<f32>> = m.iter().take(8).map(|&i| crop(&dn[all[i].img], ww, wh, all[i].x, all[i].y, rr)).collect();
+            let tiles: Vec<Vec<f32>> = m.iter().take(8).map(|&i| gauss(&crop(&dn[all[i].img], ww, wh, all[i].x, all[i].y, rr), CROP, CROP, 1.0)).collect();
             let count = a.iter().filter(|&&x| x == c).count();
             kinds.push((Kind { diameter_a: diameter * wpx, count, share: 0.0, elongation, contrast, png: String::new() }, tiles, score));
         }
