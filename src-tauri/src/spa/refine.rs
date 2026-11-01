@@ -424,6 +424,8 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     let max_shift = (diameter_a * 0.2 / px) as f32;
     let mut step = p.global_step;
     let mut best_res = f64::INFINITY;
+    let all: Vec<usize> = h1.iter().chain(&h2).copied().collect();
+    let mut best: Vec<([f32; 3], [f32; 2])> = vec![];
     let mut stalls = 0;
     let iters = p.max_iterations.max(p.global_iterations + 1);
     let mut accs: Vec<Accum> = vec![];
@@ -488,10 +490,17 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
                 map.iter_mut().zip(&m).for_each(|(v, w)| *v *= w);
             }
         }
+        if new_res < best_res {
+            // The alignments of the best round so far: rounds at the finest
+            // steps wander by ±0.5 Å (6.1 → 6.7 Å on full-size T20S), and
+            // the final maps should come from the best.
+            best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
+        }
         if new_res < best_res * 0.98 {
             best_res = new_res;
             stalls = 0;
         } else {
+            best_res = best_res.min(new_res);
             stalls += 1;
         }
         res = new_res.max(2.0 * px * 1.05);
@@ -500,7 +509,11 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             break;
         }
     }
-    // Final maps at the full box from the last alignments.
+    // Final maps at the full box from the best round's alignments.
+    for (&i, &(e, sh)) in all.iter().zip(&best) {
+        parts[i].euler = e;
+        parts[i].shift = sh;
+    }
     progress("三维精修 · 最终重构", iters * 2000, iters * 2000 + 1000);
     let pad = volume::pad_for(b);
     let full = Half::new(b, b as f64 / 2.0 - 1.0);
