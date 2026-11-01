@@ -19,6 +19,7 @@ pub mod quality;
 pub mod recon;
 pub mod recon_gpu;
 pub mod refine;
+pub mod select;
 #[cfg(test)]
 mod tests;
 pub mod track;

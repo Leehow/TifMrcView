@@ -28,6 +28,19 @@ fn main() -> Result<()> {
         d.alignment = Some(a);
         d.save()?;
     }
+    if steps.contains("select") {
+        let t = Instant::now();
+        let a = d.alignment.clone().context("align first")?;
+        let (picked, batches) = tomo::select::exclude_views(&img, &d, &a, &progress)?;
+        eprintln!();
+        for b in &batches {
+            println!("batch: base {:.4}, kept {:?}", b.base, b.kept);
+            for m in &b.moves {
+                println!("    {:<12} gain {:+.4} ± {:.4}", m.0, m.1, m.2);
+            }
+        }
+        println!("select: {} views left out, {:.1} s", picked.views.iter().filter(|v| v.excluded).count(), t.elapsed().as_secs_f64());
+    }
     if steps.contains("thick") {
         let a = d.alignment.clone().context("align first")?;
         let bin = tomo::auto::output_bin(img.info().width, img.info().height, d.optics.pixel_a.unwrap_or(1.0), 9.0);
@@ -41,6 +54,9 @@ fn main() -> Result<()> {
         let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        for b in &r.selection {
+            println!("  batch: base {:.4}, kept {:?}, moves {:?}", b.base, b.kept, b.moves);
+        }
         for (step, s) in &r.timings {
             println!("  {step:<16} {s:>7.1} s");
         }
