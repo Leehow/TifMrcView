@@ -175,6 +175,9 @@ pub fn build(
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<String> {
     let p = how.params;
+    if p.y_slope != 0.0 {
+        return sheared(how, stack, w, h, angles, sink, progress);
+    }
     let thickness = p.thickness;
     match how.ctf {
         Some(ctf) if how.ctf_3d => {
@@ -208,6 +211,40 @@ pub fn build(
             recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, 0, thickness, &block), &|i, n| progress("", i, n))
         }
     }
+}
+
+/// `build` with `y_slope`: a tomogram thicker by the depth the slope spans,
+/// of which each row keeps the window shifted by its whole-section offset.
+fn sheared(
+    how: &Build,
+    stack: Vec<f32>,
+    w: usize,
+    h: usize,
+    angles: &[f64],
+    sink: &mut dyn FnMut(usize, usize, usize, usize, &[f32]) -> Result<()>,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<String> {
+    let p = how.params;
+    let span = p.y_slope.abs() * (h - 1) as f64 / 2.0;
+    let half = span.ceil() as usize;
+    let params = recon::Params { thickness: p.thickness + 2 * half, y_slope: 0.0, ..p.clone() };
+    let inner = Build { alignment: how.alignment, bin: how.bin, params: &params, ctf: how.ctf, ctf_3d: how.ctf_3d };
+    let centre = (h as f64 - 1.0) / 2.0;
+    let start = |y: usize| half as isize + (p.y_slope * (y as f64 - centre)).round() as isize;
+    let t = p.thickness as isize;
+    build(&inner, stack, w, h, angles, &mut |y0, n, z0, nz, block| {
+        for r in 0..n {
+            let s = start(y0 + r);
+            let (lo, hi) = ((z0 as isize - s).max(0), (z0 as isize + nz as isize - s).min(t));
+            if lo >= hi {
+                continue;
+            }
+            let k0 = (lo + s) as usize - z0;
+            let rows: Vec<f32> = (0..(hi - lo) as usize).flat_map(|k| block[(r * nz + k0 + k) * w..(r * nz + k0 + k + 1) * w].iter().copied()).collect();
+            sink(y0 + r, 1, lo as usize, (hi - lo) as usize, &rows)?;
+        }
+        Ok(())
+    }, progress)
 }
 
 /// A tomogram in memory as [z][y][x] (sections along Z), for comparisons.
@@ -359,7 +396,26 @@ pub struct WedgeStep {
     /// Train on the tomogram alone even when it has even/odd halves.
     #[serde(default)]
     pub single: bool,
+    /// Give up when training looks set to take longer than this, seconds
+    /// (judged after the first half minute); the error is `TooSlow`.
+    #[serde(default)]
+    pub budget_s: Option<f64>,
 }
+
+/// `wedge` stopped because its training would overrun `budget_s`.
+#[derive(Debug)]
+pub struct TooSlow {
+    /// The projected training time, seconds.
+    pub projected_s: f64,
+}
+
+impl std::fmt::Display for TooSlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0)
+    }
+}
+
+impl std::error::Error for TooSlow {}
 
 /// Even/odd halves: cube 48 did best in the held-out-tilt tests
 /// (EMPIAR-10045); about 20 min on an RTX 5080.
@@ -380,7 +436,17 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let projected = std::sync::Mutex::new(None::<f64>);
     let tick = |p: crate::wedge::Progress| {
+        if let (Some(budget), true) = (req.budget_s, p.iteration <= p.iterations) {
+            let done = ((p.iteration.max(1) - 1) * p.steps + p.step) as f64 / (p.iterations * p.steps).max(1) as f64;
+            let t = started.elapsed().as_secs_f64();
+            if t > 30.0 && done > 0.0 && t / done > budget {
+                *projected.lock().unwrap() = Some(t / done);
+                crate::wedge::CANCEL.store(true, Ordering::SeqCst);
+            }
+        }
         if p.iteration > p.iterations {
             progress("缺失楔补偿：应用", p.step, p.steps)
         } else {
@@ -389,7 +455,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     };
     // With even/odd halves one network denoises and fills the wedge
     // (Noise2Noise across the halves); else the IsoNet method on the one.
-    let (out, shape, px, method) = match (&src.halves, req.single) {
+    let trained = (|| -> Result<_> { Ok(match (&src.halves, req.single) {
         (Some([even, odd]), false) => {
             let (a, shape, px) = load(even)?;
             let (b, ..) = load(odd)?;
@@ -403,7 +469,12 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
             let cfg = req.cfg.clone().unwrap_or_else(single_config);
             (crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?, shape, px, "isonet")
         }
-    };
+    }) })();
+    if let Some(projected_s) = *projected.lock().unwrap() {
+        crate::wedge::CANCEL.store(false, Ordering::SeqCst);
+        return Err(TooSlow { projected_s }.into());
+    }
+    let (out, shape, px, method) = trained?;
     if CANCEL.load(Ordering::SeqCst) {
         bail!("已取消");
     }

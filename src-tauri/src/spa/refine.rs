@@ -288,7 +288,10 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
         model = volume_from(&acc, bw, pxw, res, mask_r);
         progress("初始模型", it + 1, iters + 2);
     }
-    // Two passes over every particle at the final resolution.
+    // Two passes at the final resolution over up to 3000 particles (the
+    // refinement after it searches every particle globally again; over all
+    // of them these passes were the slowest part of the model).
+    let ids = &order[..order.len().min(3000)];
     for pass in 0..2 {
         check_cancel()?;
         let half = Half::new(bw, radius(b, px, res_end).min(bw as f64 / 2.0 - 1.0));

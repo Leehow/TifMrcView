@@ -21,17 +21,31 @@ fn main() -> Result<()> {
     let px = d.optics.pixel_a.unwrap_or(1.0);
     if steps.contains("align") {
         let t = Instant::now();
-        let req = tomo::AlignReq { token: 1, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None };
+        let req = tomo::AlignReq { token: 1, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: std::env::var("AXIS").ok().and_then(|v| v.parse().ok()).or(d.axis_hint), bin: 0, sweep: std::env::var("AXIS").is_err(), patch: None, excluded: vec![], groups: None, previous: None };
         let a = tomo::align(&img, &req, &|i, n| progress("对齐", i, n))?;
         eprintln!();
         println!("align: residual {:.3} px, axis {:.2}, patches {}x{}/{}, bin {}, {:.1} s", a.residual, a.axis, a.patch.nx, a.patch.ny, a.patch.size, a.bin, t.elapsed().as_secs_f64());
         d.alignment = Some(a);
         d.save()?;
     }
+    if steps.contains("select") {
+        let t = Instant::now();
+        let a = d.alignment.clone().context("align first")?;
+        let (picked, batches) = tomo::select::exclude_views(&img, &d, &a, &progress)?;
+        eprintln!();
+        for b in &batches {
+            println!("batch: base {:.4}, kept {:?}", b.base, b.kept);
+            for m in &b.moves {
+                println!("    {:<12} gain {:+.4} ± {:.4}", m.0, m.1, m.2);
+            }
+        }
+        println!("select: {} views left out, {:.1} s", picked.views.iter().filter(|v| v.excluded).count(), t.elapsed().as_secs_f64());
+    }
     if steps.contains("thick") {
         let a = d.alignment.clone().context("align first")?;
         let bin = tomo::auto::output_bin(img.info().width, img.info().height, d.optics.pixel_a.unwrap_or(1.0), 9.0);
-        println!("thickness, offset: {:?} at bin {bin}", tomo::auto::estimate_thickness(&img, &a, d.optics.pixel_a.unwrap_or(1.0), bin, &progress)?);
+        let mut a = a.clone();
+        println!("placement: {:?} at bin {bin}", tomo::auto::level(&img, &mut a, d.optics.pixel_a.unwrap_or(1.0), bin, true, &progress)?);
         return Ok(());
     }
     if steps.contains("auto") {
@@ -40,6 +54,12 @@ fn main() -> Result<()> {
         let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        for b in &r.selection {
+            println!("  batch: base {:.4}, kept {:?}, moves {:?}", b.base, b.kept, b.moves);
+        }
+        for (step, s) in &r.timings {
+            println!("  {step:<16} {s:>7.1} s");
+        }
         png(&r.raw)?;
         png(&r.path)?;
         return Ok(());
@@ -89,7 +109,7 @@ fn main() -> Result<()> {
         let t = Instant::now();
         let cfg = tifmrcview_lib::wedge::TrainConfig { iterations: 3, steps: 60, count: 40, ..Default::default() };
         let source = d.tomograms.iter().rev().find(|t| t.kind == "denoised").map(|t| t.path.clone());
-        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false }, &progress)?;
+        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false, budget_s: None }, &progress)?;
         eprintln!();
         println!("wedge (short schedule): {} {:.1} s", m.paths[0], t.elapsed().as_secs_f64());
         png(&m.paths[0])?;
