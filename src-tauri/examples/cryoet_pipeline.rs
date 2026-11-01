@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     let px = d.optics.pixel_a.unwrap_or(1.0);
     if steps.contains("align") {
         let t = Instant::now();
-        let req = tomo::AlignReq { token: 1, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None };
+        let req = tomo::AlignReq { token: 1, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: std::env::var("AXIS").ok().and_then(|v| v.parse().ok()).or(d.axis_hint), bin: 0, sweep: std::env::var("AXIS").is_err(), patch: None, excluded: vec![], groups: None, previous: None };
         let a = tomo::align(&img, &req, &|i, n| progress("对齐", i, n))?;
         eprintln!();
         println!("align: residual {:.3} px, axis {:.2}, patches {}x{}/{}, bin {}, {:.1} s", a.residual, a.axis, a.patch.nx, a.patch.ny, a.patch.size, a.bin, t.elapsed().as_secs_f64());
@@ -41,6 +41,9 @@ fn main() -> Result<()> {
         let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
+        for (step, s) in &r.timings {
+            println!("  {step:<16} {s:>7.1} s");
+        }
         png(&r.raw)?;
         png(&r.path)?;
         return Ok(());

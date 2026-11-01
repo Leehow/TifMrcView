@@ -18,6 +18,7 @@ pub mod pipeline;
 pub mod quality;
 pub mod recon;
 pub mod recon_gpu;
+pub mod refine;
 #[cfg(test)]
 mod tests;
 pub mod track;
@@ -140,8 +141,8 @@ pub fn quality(r: f64) -> &'static str {
     }
 }
 pub fn validate_bin(bin: usize) -> Result<()> {
-    if ![1, 2, 4, 8].contains(&bin) {
-        bail!("binning 必须为 1/2/4/8");
+    if ![1, 2, 4, 8, 16].contains(&bin) {
+        bail!("binning 必须为 1/2/4/8/16");
     }
     Ok(())
 }
@@ -315,24 +316,34 @@ pub fn align(
         chosen = req
             .patch
             .unwrap_or_else(|| PatchConfig::default_for(st.w, st.h));
-        // Starting axes: the one asked for; else the mdoc's under both
-        // conventions in use (they differ by a mirror, see geometry); else a
-        // coarse turn through 180°. The lowest residual wins.
+        // Starting axes: the one asked for, or the mdoc's, under every
+        // convention met in practice (a mirror, see geometry; and mdocs
+        // rewritten by the CryoET Data Portal give IMOD's angle, 90° on:
+        // EMPIAR-10164 aligns at its own, 10000/TS_026 only at 90° on);
+        // else a coarse turn through 180°. The lowest residual wins.
+        let variants = |a: f64| -> Vec<f64> {
+            let wrap = |v: f64| (v + 180.0).rem_euclid(360.0) - 180.0;
+            vec![a, wrap(a + 90.0), -a, wrap(-(a + 90.0))]
+        };
         let starts: Vec<f64> = match (req.axis, meta.axis) {
+            (Some(a), _) if req.sweep => variants(a),
             (Some(a), _) => vec![a],
-            (None, Some(a)) if req.sweep => vec![a, -a],
+            (None, Some(a)) if req.sweep => variants(a),
             (None, Some(a)) => vec![a],
             (None, None) if req.sweep => (0..12).map(|i| i as f64 * 15.0).collect(),
             (None, None) => vec![axis],
         };
         // The search compares rigid fits (axis and shifts only): with the
         // shared groups free, a wrong axis can be partly absorbed by
-        // rotations and magnifications and look better than it is.
+        // rotations and magnifications and look better than it is. A mirror
+        // fits as well as the true axis (the residual cannot tell a
+        // tomogram's hand), so a later start must fit clearly better to win:
+        // the earlier, unmirrored readings keep the hand.
         let mut best: Option<(Tracks, model::Solution)> = None;
         for start in starts {
             check_cancel()?;
             match track_and_solve(&st, start, chosen, &req.excluded, req.sweep, progress) {
-                Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < b.1.residual) => best = Some(r),
+                Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < 0.9 * b.1.residual) => best = Some(r),
                 Ok(_) => {}
                 Err(e) if CANCEL.load(Ordering::Relaxed) => return Err(e),
                 Err(_) => {}

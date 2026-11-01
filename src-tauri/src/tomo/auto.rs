@@ -77,6 +77,8 @@ pub struct AutoResult {
     pub relion: Option<String>,
     /// Something the user should know about the result.
     pub note: Option<String>,
+    /// Seconds each step took, in order.
+    pub timings: Vec<(String, f64)>,
     /// How far the specimen was turned to lie flat (°): about Y (the tilt
     /// offset) and about X (the depth slope along Y).
     pub levelled: [f64; 2],
@@ -92,11 +94,11 @@ const WEDGE_BUDGET: f64 = 30.0 * 60.0;
 /// Most pixels a binned view may have.
 const MAX_PIXELS: f64 = 4.2e6;
 
-/// The binning (1, 2, 4 or 8) closest to `voxel` Å, within `MAX_PIXELS`.
+/// The binning (1 to 16; 16 for super-resolution frames) closest to `voxel` Å, within `MAX_PIXELS`.
 pub fn output_bin(w: usize, h: usize, pixel_a: f64, voxel: f64) -> usize {
-    [1usize, 2, 4, 8]
+    [1usize, 2, 4, 8, 16]
         .into_iter()
-        .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 8)
+        .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 16)
         .min_by(|&a, &b| ((pixel_a * a as f64) / voxel).ln().abs().total_cmp(&((pixel_a * b as f64) / voxel).ln().abs()))
         .unwrap()
 }
@@ -122,36 +124,64 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         Purpose::Display => 7,
         Purpose::Sta => 5,
     };
-    let stage = |k: usize| move |label: &str, i: usize, n: usize| progress(&format!("第 {k}/{total} 步 · {label}"), i, n);
+    // When each step was first and last heard from, for `timings` (steps
+    // can overlap).
+    let heard = std::sync::Mutex::new(Vec::<(usize, String, std::time::Instant, std::time::Instant)>::new());
+    let stage = |k: usize| {
+        let heard = &heard;
+        move |label: &str, i: usize, n: usize| {
+            let now = std::time::Instant::now();
+            let mut h = heard.lock().unwrap();
+            match h.iter_mut().find(|e| e.0 == k) {
+                Some(e) => e.3 = now,
+                None => h.push((k, label.split(['：', ' ']).next().unwrap_or(label).to_string(), now, now)),
+            }
+            drop(h);
+            progress(&format!("第 {k}/{total} 步 · {label}"), i, n)
+        }
+    };
     if req.fresh {
         d.alignment = None;
         d.ctf = None;
     }
-    if d.alignment.is_none() {
-        let a = super::align(
-            &img,
-            &super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None },
-            &|i, n| stage(1)("倾转对齐", i, n),
-        )?;
-        d.alignment = Some(a);
-        d.save()?;
-    }
-    check_cancel()?;
-    if d.ctf.is_none() {
-        let params = crate::ctf::Params {
-            voltage_kv: d.optics.kv,
-            cs_mm: d.optics.cs_mm,
-            amp_contrast: d.optics.amplitude,
-            pixel_a: px,
-            res_low_a: 30.0,
-            res_high_a: (2.5 * px).max(5.0),
-            df_min_a: 5000.0,
-            df_max_a: 80000.0,
-            max_astig_a: 2000.0,
-            phase: false,
-            backend: None,
-        };
-        pipeline::ctf(d, &params, 512, &stage(2))?;
+    let params = crate::ctf::Params {
+        voltage_kv: d.optics.kv,
+        cs_mm: d.optics.cs_mm,
+        amp_contrast: d.optics.amplitude,
+        pixel_a: px,
+        res_low_a: 30.0,
+        res_high_a: (2.5 * px).max(5.0),
+        df_min_a: 5000.0,
+        df_max_a: 80000.0,
+        max_astig_a: 2000.0,
+        phase: false,
+        backend: None,
+    };
+    let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None };
+    match (d.alignment.is_none(), d.ctf.is_none()) {
+        // With the acquisition's axis known, the CTF does not wait for the
+        // alignment: both run at once (the CTF on a copy of the dataset).
+        (true, true) if d.axis_hint.is_some() => {
+            let mut copy = d.clone();
+            let (a, c) = std::thread::scope(|s| {
+                let c = s.spawn(|| pipeline::ctf(&mut copy, &params, 512, &stage(2)));
+                let a = super::align(&img, &align_req, &|i, n| stage(1)("倾转对齐", i, n));
+                (a, c.join().unwrap_or_else(|_| Err(anyhow::anyhow!("CTF 拟合线程崩溃"))))
+            });
+            d.alignment = Some(a?);
+            d.ctf = Some(c?);
+            d.save()?;
+        }
+        (need_align, need_ctf) => {
+            if need_align {
+                d.alignment = Some(super::align(&img, &align_req, &|i, n| stage(1)("倾转对齐", i, n))?);
+                d.save()?;
+            }
+            check_cancel()?;
+            if need_ctf {
+                pipeline::ctf(d, &params, 512, &stage(2))?;
+            }
+        }
     }
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
@@ -201,7 +231,10 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);
-    Ok(AutoResult { path, raw, relion, note, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    let mut heard = heard.into_inner().unwrap();
+    heard.sort_by_key(|e| e.0);
+    let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
+    Ok(AutoResult { path, raw, relion, note, timings, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels
@@ -337,8 +370,12 @@ pub fn plane(vol: &[f32], w: usize, h: usize, z: usize) -> Option<[f64; 3]> {
             if prof[top] < median + 6.0 * spread {
                 continue;
             }
-            // The band: around the peak, where the excess is above half of it.
-            let cut = median + 0.5 * (prof[top] - median);
+            // The band: the run around the peak clearly above the quiet
+            // level. Not just the peak's half height: one bright surface
+            // (contamination on a lamella) would then stand for the band in
+            // some blocks and not in others, and tilt the fit
+            // (EMPIAR-10988 TS_026: 3.6° found, 2.2° true).
+            let cut = median + 3.0 * spread;
             let (mut lo, mut hi) = (top, top);
             while lo > 0 && prof[lo - 1] >= cut {
                 lo -= 1;
