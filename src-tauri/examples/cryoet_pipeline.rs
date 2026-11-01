@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     if steps.contains("auto") {
         let (dev, _) = tifmrcview_lib::ctf_gpu::device().context("GPU")?;
         let t = Instant::now();
-        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, wedge: steps.contains("wedge"), fresh: true }, &progress)?;
+        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
         png(&r.raw)?;
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
         let t = Instant::now();
         let cfg = tifmrcview_lib::wedge::TrainConfig { iterations: 3, steps: 60, count: 40, ..Default::default() };
         let source = d.tomograms.iter().rev().find(|t| t.kind == "denoised").map(|t| t.path.clone());
-        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false }, &progress)?;
+        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false, budget_s: None }, &progress)?;
         eprintln!();
         println!("wedge (short schedule): {} {:.1} s", m.paths[0], t.elapsed().as_secs_f64());
         png(&m.paths[0])?;
