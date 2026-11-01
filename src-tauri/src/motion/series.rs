@@ -170,6 +170,28 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
     None
 }
 
+/// The gain reference beside the movies, when there is exactly one: a
+/// `.gain` file (Falcon EER) or an MRC/TIFF whose name says gain or
+/// CountRef, in the folder of the first movie, the mdoc's folder or `folder`.
+pub fn find_gain(mdoc: &Path, movie: Option<&Path>, folder: Option<&Path>) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = [movie.and_then(Path::parent), mdoc.parent(), folder].into_iter().flatten().map(Path::to_path_buf).collect();
+    dirs.dedup();
+    let mut found: Vec<PathBuf> = vec![];
+    for d in dirs {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            let ext = p.extension().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            let named = name.contains("gain") || name.contains("countref");
+            if p.is_file() && (ext == "gain" || (named && matches!(ext.as_str(), "mrc" | "tif" | "tiff"))) && !found.contains(&p) {
+                found.push(p);
+            }
+        }
+    }
+    (found.len() == 1).then(|| found.remove(0))
+}
+
 /// Bounded, local sidecar discovery. Do not search the user's whole disk.
 pub fn find_mdoc(movie: &str) -> Option<String> {
     let parent = Path::new(movie).parent()?;
@@ -248,6 +270,16 @@ pub fn run(
 ) -> Result<SeriesResult> {
     req.params.validate()?;
     let doc = parse(&std::fs::read_to_string(&req.mdoc)?)?;
+    let mut req = req.clone();
+    let mut found_gain = None;
+    if req.params.gain_path.is_none() {
+        let first = doc.views.iter().find_map(|v| resolve(Path::new(&req.mdoc), &v.movie, req.folder.as_deref().map(Path::new)));
+        if let Some(g) = find_gain(Path::new(&req.mdoc), first.as_deref(), req.folder.as_deref().map(Path::new)) {
+            req.params.gain_path = Some(g.to_string_lossy().into_owned());
+            found_gain = Some(g);
+        }
+    }
+    let req = &req;
     output::protect(&req.mdoc, &req.output)?;
     for v in &doc.views {
         if let Some(path) = resolve(
@@ -267,6 +299,9 @@ pub fn run(
     let unknown =
         doc.views.iter().any(|v| v.dose.unwrap_or(0.0) <= 0.0) && req.params.total_dose.is_none();
     let mut warnings = vec![];
+    if let Some(g) = &found_gain {
+        warnings.push(format!("使用找到的增益参考 {}", g.file_name().and_then(|n| n.to_str()).unwrap_or("")));
+    }
     if unknown && req.params.dose_weighted {
         warnings.push(
             "mdoc 含未知/零剂量，累计前曝光不可信；此批不应用剂量加权，请指定每倾角总剂量".into(),
