@@ -172,9 +172,22 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
 
 /// The gain reference beside the movies, when there is exactly one: a
 /// `.gain` file (Falcon EER) or an MRC/TIFF whose name says gain or
-/// CountRef, in the folder of the first movie, the mdoc's folder or `folder`.
+/// CountRef, in the folder of the first movie, the mdoc's folder, `folder`,
+/// or a folder named for gain beside them (CryoET Data Portal: `Gains/`).
 pub fn find_gain(mdoc: &Path, movie: Option<&Path>, folder: Option<&Path>) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = [movie.and_then(Path::parent), mdoc.parent(), folder].into_iter().flatten().map(Path::to_path_buf).collect();
+    let near: Vec<PathBuf> = dirs.iter().flat_map(|d| [Some(d.clone()), d.parent().map(Path::to_path_buf)]).flatten().collect();
+    for d in near {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            if p.is_dir() && name.contains("gain") {
+                dirs.push(p);
+            }
+        }
+    }
+    dirs.sort();
     dirs.dedup();
     let mut found: Vec<PathBuf> = vec![];
     for d in dirs {

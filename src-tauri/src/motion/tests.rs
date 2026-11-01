@@ -449,4 +449,14 @@ fn mdoc_batch_finds_the_one_gain_reference() {
     // Two candidates: which one is meant is not known.
     std::fs::write(dir.path().join("CountRef_x.mrc"), "").unwrap();
     assert_eq!(find_gain(&mdoc, Some(&movie), None), None);
+    // The CryoET Data Portal layout: Frames/ beside Gains/.
+    let run = dir.path().join("TS_1");
+    for sub in ["Frames", "Gains"] {
+        std::fs::create_dir_all(run.join(sub)).unwrap();
+    }
+    let (mdoc, movie) = (run.join("Frames/TS_1.mdoc"), run.join("Frames/TS_1_001.tif"));
+    std::fs::write(&mdoc, "").unwrap();
+    std::fs::write(&movie, "").unwrap();
+    std::fs::write(run.join("Gains/TS_1_gain.mrc"), "").unwrap();
+    assert_eq!(find_gain(&mdoc, Some(&movie), None), Some(run.join("Gains/TS_1_gain.mrc")));
 }
