@@ -46,14 +46,26 @@ fn main() -> anyhow::Result<()> {
         project::ctf(&mut p, &cp, 512, &log)?;
     }
     if one_click {
-        let d = project::discover(&mut p, None, &log)?;
+        // SPA_SAM=<sam2.1_hiera_tiny.pt> outlines the blobs with SAM 2.1, as
+        // the app does when its model is downloaded.
+        let sam = std::env::var("SPA_SAM").ok().map(|path| -> anyhow::Result<tifmrcview_lib::sam::Sam> {
+            let (pr, name) = tmv_sam::load_best(std::path::Path::new(&path), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+            eprintln!("SAM on {name}");
+            Ok(tifmrcview_lib::sam::Sam::with_predictor(pr))
+        }).transpose()?;
+        let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.as_ref().unwrap().outline(img, w, h, pts);
+        let outliner: Option<tifmrcview_lib::spa::discover::Outliner> = sam.is_some().then_some(&outline);
+        let d = project::discover(&mut p, outliner, &log)?;
+        eprintln!("outlined by SAM: {}", d.outlined);
         for (i, k) in d.kinds.iter().enumerate() {
             eprintln!("kind {}: {:.0} Å, {:.0}%, {}", i + 1, k.diameter_a, k.share * 100.0, k.png);
         }
         let k: usize = std::env::var("SPA_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
         eprintln!("diameter {} Å", project::choose(&mut p, vec![k - 1])?);
         let symmetry = if sym == "auto" || args.get(3).is_none() { String::new() } else { sym.clone() };
-        let r = project::auto(&mut p, &project::AutoParams { symmetry }, &log)?;
+        // SPA_SAM_FILTER=1 also drops picks SAM outlines as clumps or fragments.
+        let filter = std::env::var("SPA_SAM_FILTER").is_ok_and(|v| v == "1");
+        let r = project::auto(&mut p, &project::AutoParams { symmetry }, if filter { outliner } else { None }, &log)?;
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "resolution": r.res, "resolutionMasked": r.res_masked, "bfactor": r.bfactor, "symmetry": r.params.symmetry,
             "particles": r.particles, "map": r.sharpened, "seconds": t0.elapsed().as_secs_f64(),

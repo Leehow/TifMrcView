@@ -628,7 +628,16 @@ impl MaskDecoder {
 
     /// All four masks (0 = single-mask token, 1..3 = multimask).
     pub fn forward(&self, image: Tensor<4>, pe: Tensor<4>, sparse: Tensor<3>, dense: Tensor<4>, s0: Tensor<4>, s1: Tensor<4>) -> Masks {
-        let tokens = Tensor::cat(vec![self.obj_score_token.weight.val(), self.iou_token.weight.val(), self.mask_tokens.weight.val()], 0).unsqueeze_dim(0);
+        let tokens: Tensor<3> = Tensor::cat(vec![self.obj_score_token.weight.val(), self.iou_token.weight.val(), self.mask_tokens.weight.val()], 0).unsqueeze_dim(0);
+        // Several prompts on one image: its features shared by every row.
+        let nb = sparse.dims()[0];
+        let wide = |t: Tensor<4>| {
+            let [b, c, h, w] = t.dims();
+            if b == 1 && nb > 1 { t.expand([nb, c, h, w]) } else { t }
+        };
+        let (image, pe, dense, s0, s1) = (wide(image), wide(pe), wide(dense), wide(s0), wide(s1));
+        let [_, nt, tc] = tokens.dims();
+        let tokens = if nb > 1 { tokens.expand([nb, nt, tc]) } else { tokens };
         let tokens = Tensor::cat(vec![tokens, sparse], 1);
         let src = image + dense;
         let [b, c, h, w] = src.dims();

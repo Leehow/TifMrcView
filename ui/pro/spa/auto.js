@@ -104,7 +104,7 @@
     const d = await W.run("保存选择", "choose", [...chosen].sort((a, b) => a - b));
     if (d == null) return;
     const symmetry = ($("spa-a-sym-text").value.trim() || $("spa-a-sym").value).toUpperCase();
-    const r = await W.run(`重构（颗粒直径 ${fmt(d, 0)} Å）`, "auto", { symmetry });
+    const r = await W.run(`重构（颗粒直径 ${fmt(d, 0)} Å）`, "auto", { symmetry, sam: true });
     if (r) showResult(W.project);
   };
   $("spa-a-map").onclick = () => W.project?.refine && openPath(W.project.refine.sharpened, true);

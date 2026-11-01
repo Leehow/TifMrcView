@@ -55,6 +55,11 @@ impl Projector {
         Projector { n, pad, re, im }
     }
 
+    /// The padded transform (re, im), n³ unshifted.
+    pub fn data(&self) -> (&[f32], &[f32]) {
+        (&self.re, &self.im)
+    }
+
     #[inline]
     fn at(&self, q: [f64; 3]) -> (f32, f32) {
         let n = self.n;
@@ -175,6 +180,69 @@ impl Accum {
                 }
             }
         });
+    }
+
+    /// Applies a point group to inserted data: every voxel gathers the
+    /// sums at its symmetry mates (trilinear). Particles are then inserted
+    /// once instead of once per mate (as RELION does), which on D7 made
+    /// insertion 14× cheaper; it was over half of a refinement round.
+    pub fn symmetrize(&mut self, sym: &[Mat]) {
+        if sym.len() <= 1 {
+            return;
+        }
+        let n = self.n;
+        let lim = (n / 2) as f64 - 1.0;
+        let (src_re, src_im, src_den) = (&self.re, &self.im, &self.den);
+        let sample = |a: &[f32], q: [f64; 3]| -> f32 {
+            let (fx, fy, fz) = (q[0].floor(), q[1].floor(), q[2].floor());
+            let (tx, ty, tz) = ((q[0] - fx) as f32, (q[1] - fy) as f32, (q[2] - fz) as f32);
+            let x0 = fourier::index(fx as i32, n);
+            let y0 = fourier::index(fy as i32, n);
+            let z0 = fourier::index(fz as i32, n);
+            let (x1, y1, z1) = ((x0 + 1) % n, (y0 + 1) % n, (z0 + 1) % n);
+            let mut s = 0f32;
+            for (iz, wz) in [(z0, 1.0 - tz), (z1, tz)] {
+                for (iy, wy) in [(y0, 1.0 - ty), (y1, ty)] {
+                    for (ix, wx) in [(x0, 1.0 - tx), (x1, tx)] {
+                        s += wx * wy * wz * a[(iz * n + iy) * n + ix];
+                    }
+                }
+            }
+            s
+        };
+        let mut re = vec![0f32; n * n * n];
+        let mut im = vec![0f32; n * n * n];
+        let mut den = vec![0f32; n * n * n];
+        re.par_chunks_mut(n * n).zip(im.par_chunks_mut(n * n)).zip(den.par_chunks_mut(n * n)).enumerate().for_each(|(z, ((pr, pi), pd))| {
+            let fz = fourier::freq(z, n) as f64;
+            for y in 0..n {
+                let fy = fourier::freq(y, n) as f64;
+                for x in 0..n {
+                    let fx = fourier::freq(x, n) as f64;
+                    if fx * fx + fy * fy + fz * fz > lim * lim {
+                        continue;
+                    }
+                    let (mut a, mut b, mut c) = (0f32, 0f32, 0f32);
+                    for g in sym {
+                        let q = [
+                            g[0][0] * fx + g[0][1] * fy + g[0][2] * fz,
+                            g[1][0] * fx + g[1][1] * fy + g[1][2] * fz,
+                            g[2][0] * fx + g[2][1] * fy + g[2][2] * fz,
+                        ];
+                        a += sample(src_re, q);
+                        b += sample(src_im, q);
+                        c += sample(src_den, q);
+                    }
+                    let j = y * n + x;
+                    pr[j] = a;
+                    pi[j] = b;
+                    pd[j] = c;
+                }
+            }
+        });
+        self.re = re;
+        self.im = im;
+        self.den = den;
     }
 
     pub fn add(&mut self, other: &Accum) {

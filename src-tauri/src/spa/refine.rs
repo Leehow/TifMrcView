@@ -53,11 +53,15 @@ pub struct RefineParams {
     pub global_iterations: usize,
     pub global_step: f64,
     pub seed: u64,
+    /// With a Cn: test for a Dn once the map is refined enough and, when
+    /// there is one, turn the map and the poses to put its 2-fold along x
+    /// and go on in Dn (one refinement instead of a Cn and a Dn one).
+    pub promote_dihedral: bool,
 }
 
 impl Default for RefineParams {
     fn default() -> Self {
-        RefineParams { symmetry: "C1".into(), res_init: 30.0, max_iterations: 12, global_iterations: 2, global_step: 7.5, seed: 11 }
+        RefineParams { symmetry: "C1".into(), res_init: 30.0, max_iterations: 12, global_iterations: 2, global_step: 7.5, seed: 11, promote_dihedral: false }
     }
 }
 
@@ -71,10 +75,14 @@ pub struct Map {
 
 /// Particle coefficients on `half` with shifts `offs` around their current shift.
 fn coeffs_for(stack: &Stack, parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
-    let fts = data::transforms(stack, chunk);
+    coeffs_from(stack, &data::transforms(stack, chunk), parts, chunk, optics, half, noise, offs)
+}
+
+/// As `coeffs_for`, from transforms already made.
+fn coeffs_from(stack: &Stack, fts: &[(Vec<f32>, Vec<f32>)], parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
     let ps: Vec<&Particle> = chunk.iter().map(|&i| &parts[i]).collect();
     let sh: Vec<[f32; 2]> = ps.iter().map(|q| q.shift).collect();
-    data::coeffs(optics, stack.pixel_a, stack.b, half, noise, &ps, &fts, &sh, offs)
+    data::coeffs(optics, stack.pixel_a, stack.b, half, noise, &ps, fts, &sh, offs)
 }
 
 /// Global search: every orientation of `grid` for each particle of `chunk`.
@@ -92,10 +100,54 @@ fn global(c: &Coeffs, offs: &[[f32; 2]], refs: &Refs, grid: &[Mat], ratio: f32, 
     Ok(())
 }
 
-/// Local search around each particle's orientation (CPU, per particle).
-fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
+/// The GPU form of the local search for one reference, when there is a GPU.
+#[cfg(feature = "pro")]
+type Gpu = super::local_gpu::LocalGpu;
+#[cfg(not(feature = "pro"))]
+type Gpu = ();
+
+#[cfg(feature = "pro")]
+fn local_gpu(proj: &Projector, half: &Half) -> Option<Gpu> {
+    let (dev, _) = crate::ctf_gpu::device()?;
+    crate::ctf_gpu::guarded(|| super::local_gpu::LocalGpu::new(dev, proj, half)).ok()
+}
+#[cfg(not(feature = "pro"))]
+fn local_gpu(_: &Projector, _: &Half) -> Option<Gpu> {
+    None
+}
+
+/// Local search around each particle's orientation: on the GPU when
+/// there is one, else per particle on the CPU.
+#[allow(clippy::too_many_arguments)]
+fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
     let k = c.k;
     let s = offs.len();
+    #[cfg(feature = "pro")]
+    if let Some(g) = gpu {
+        let d = deltas.len();
+        let rots: Vec<Mat> = chunk
+            .iter()
+            .flat_map(|&i| {
+                let q = &parts[i];
+                let r0 = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
+                deltas.iter().map(move |dl| geom::mul(dl, &r0))
+            })
+            .collect();
+        if let Ok(Ok(found)) = crate::ctf_gpu::guarded(|| g.search(c, s, &rots, d)) {
+            for (j, &i) in chunk.iter().enumerate() {
+                let (di, si, sc) = found[j];
+                let a = geom::angles(&rots[j * d + di]);
+                let q = &mut parts[i];
+                q.euler = [a[0] as f32, a[1] as f32, a[2] as f32];
+                let o = offs[si];
+                q.shift = [q.shift[0] + o[0] * ratio, q.shift[1] + o[1] * ratio];
+                q.score = sc;
+            }
+            return;
+        }
+    }
+    #[cfg(not(feature = "pro"))]
+    let _ = gpu;
     let found: Vec<(Mat, usize, f32)> = chunk
         .par_iter()
         .enumerate()
@@ -139,8 +191,10 @@ fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, half: &Half, deltas: &
     }
 }
 
-/// Inserts particles at their orientations (and symmetry mates).
-fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, sym: &[Mat], parts: &[Particle], chunk: &[usize]) {
+/// Inserts particles once each; the point group is applied afterwards
+/// with `Accum::symmetrize` (once per accumulator, before reconstructing).
+fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &[usize]) {
+    let sym = [geom::IDENTITY];
     let k = c.k;
     let per = (4_000_000 / (k * sym.len()).max(1)).max(1);
     for (bi, sub) in chunk.chunks(per).enumerate() {
@@ -152,12 +206,71 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, sym: &[Mat], parts: &[Partic
                 let q = &parts[i];
                 let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
                 let mut out = Vec::with_capacity(k * sym.len());
-                acc.points(&r, sym, half, &c.x[jj * 2 * k..(jj + 1) * 2 * k], &c.c2[jj * k..(jj + 1) * k], &mut out);
+                acc.points(&r, &sym, half, &c.x[jj * 2 * k..(jj + 1) * 2 * k], &c.c2[jj * k..(jj + 1) * k], &mut out);
                 out
             })
             .collect();
         acc.insert(&pts);
     }
+}
+
+/// The state before a Dn trial, to go back to.
+struct Trial {
+    at: usize,
+    res: f64,
+    maps: [Vec<f32>; 2],
+    poses: Vec<([f32; 3], [f32; 2])>,
+    best: Vec<([f32; 3], [f32; 2])>,
+    best_res: f64,
+    stalls: usize,
+    step: f64,
+    global_until: usize,
+}
+
+/// The 2-fold of a Dn in the average of two half maps (b³, n-fold along z),
+/// tested on a copy of at most 128 voxels: (phi, dz in voxels of b).
+fn dihedral_of(maps: &[Vec<f32>; 2], b: usize, n: usize) -> Option<(f64, f64)> {
+    let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
+    let s = b.min(128);
+    let small = if s == b { avg } else { fourier::resample3(&avg, b, s) };
+    let (phi, dz, top, _) = super::discover::dihedral_candidate(&small, s, n)?;
+    if top < 0.6 {
+        return None;
+    }
+    Some((phi, dz * b as f64 / s as f64))
+}
+
+/// Turns the maps (`discover::align_dihedral`: out(p) = v(A·p + t), A the
+/// turn by phi about z, t = (0, 0, dz)) and the poses with them: R → R·A,
+/// shift + (R·t)xy (test `poses_follow_a_turned_map`).
+pub(crate) fn promote(maps: &mut [Vec<f32>; 2], b: usize, (phi, dz): (f64, f64), parts: &mut [Particle], ids: &[usize]) {
+    for m in maps.iter_mut() {
+        *m = super::discover::align_dihedral(m, b, phi, dz);
+    }
+    let (s, c) = phi.to_radians().sin_cos();
+    let a: Mat = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+    for &i in ids {
+        let q = &mut parts[i];
+        let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
+        let e = geom::angles(&geom::mul(&r, &a));
+        q.euler = [e[0] as f32, e[1] as f32, e[2] as f32];
+        q.shift = [q.shift[0] + (r[0][2] * dz) as f32, q.shift[1] + (r[1][2] * dz) as f32];
+    }
+}
+
+/// One unfiltered map from every particle of `ids` at its orientation
+/// and shift (stack box), with the point group applied.
+pub fn reconstruct_all(stack: &Stack, parts: &[Particle], ids: &[usize], optics: &Optics, sym: &[Mat]) -> Vec<f32> {
+    let b = stack.b;
+    let noise = data::noise_spectrum(stack, ids, 2000);
+    let full = Half::new(b, b as f64 / 2.0 - 1.0);
+    let mut acc = Accum::new(b, volume::pad_for(b));
+    for chunk in ids.chunks(512) {
+        let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
+        insert(&mut acc, &c, &full, parts, chunk);
+    }
+    acc.symmetrize(sym);
+    acc.reconstruct(None)
 }
 
 /// Working box for a resolution: Nyquist at most res / 1.2, a power of two.
@@ -253,7 +366,8 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
     }
     let mut acc = Accum::new(bw, pad);
     let c = coeffs_for(stack, parts, start, optics, &full, &noise, &[]);
-    insert(&mut acc, &c, &full, &sym, parts, start);
+    insert(&mut acc, &c, &full, parts, start);
+    acc.symmetrize(&sym);
     let res_end = p.res_end.max(2.2 * pxw);
     let mut model = volume_from(&acc, bw, pxw, p.res_start, mask_r);
     let iters = p.iterations.max(1);
@@ -281,7 +395,8 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
         clamp_shifts(parts, &chunk, max_shift);
         let c = coeffs_for(stack, parts, &chunk, optics, &full, &noise, &[]);
         let mut fresh = Accum::new(bw, pad);
-        insert(&mut fresh, &c, &full, &sym, parts, &chunk);
+        insert(&mut fresh, &c, &full, parts, &chunk);
+        fresh.symmetrize(&sym);
         // Forget old batches: the model follows the recent alignments.
         acc.scale(0.85);
         acc.add(&fresh);
@@ -306,8 +421,9 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
             global(&c, &offs, &refs, &grid, ratio, parts, chunk)?;
             clamp_shifts(parts, chunk, max_shift);
             let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-            insert(&mut acc, &c, &full, &sym, parts, chunk);
+            insert(&mut acc, &c, &full, parts, chunk);
         }
+        acc.symmetrize(&sym);
         model = volume_from(&acc, bw, pxw, res_end, mask_r);
         progress("初始模型", iters + pass + 1, iters + 2);
     }
@@ -382,6 +498,8 @@ pub struct Refined {
     pub fsc: Vec<f64>,
     pub res: f64,
     pub history: Vec<Iteration>,
+    /// The point group at the end (a Cn may have become a Dn).
+    pub symmetry: String,
 }
 
 /// Gold-standard refinement from `start` (any box and pixel; it is
@@ -392,7 +510,11 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     }
     let b = stack.b;
     let px = stack.pixel_a;
-    let sym = geom::symmetry(&p.symmetry)?;
+    let mut sym = geom::symmetry(&p.symmetry)?;
+    let mut sym_name = p.symmetry.trim().to_uppercase();
+    let cn: usize = if p.promote_dihedral && sym_name.starts_with('C') { sym_name[1..].parse().unwrap_or(1) } else { 1 };
+    let mut dn_tests = 0;
+    let mut trial: Option<Trial> = None;
     let noise = data::noise_spectrum(stack, ids, 2000);
     // Half sets, fixed for the whole run.
     let mut rng = Rng(p.seed.max(1));
@@ -424,15 +546,24 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     let max_shift = (diameter_a * 0.2 / px) as f32;
     let mut step = p.global_step;
     let mut best_res = f64::INFINITY;
+    let all: Vec<usize> = h1.iter().chain(&h2).copied().collect();
+    let mut best: Vec<([f32; 3], [f32; 2])> = vec![];
     let mut stalls = 0;
-    let iters = p.max_iterations.max(p.global_iterations + 1);
+    let mut iters = p.max_iterations.max(p.global_iterations + 1);
+    // Rounds before this are global; a Dn found later adds one.
+    let mut global_until = p.global_iterations;
     let mut accs: Vec<Accum> = vec![];
-    for it in 0..iters {
+    let mut it = 0;
+    while it < iters {
         check_cancel()?;
-        let is_global = it < p.global_iterations;
+        let is_global = it < global_until;
+        // The global round after a Dn promotion: the shifts are known and
+        // a box of 128 holds its resolution (it took 10 of 38 min at 256).
+        let redo = is_global && it >= p.global_iterations;
         // Search a little beyond the current resolution.
         let r_search = radius(b, px, res) * 1.15 + 2.0;
         let bw = box_for(b, px, res / 1.15).max(32.min(b));
+        let bw = if redo { bw.min(128.max(32.min(b))) } else { bw };
         let ratio = (b / bw) as f32;
         let pad = volume::pad_for(bw);
         let half = Half::new(bw, r_search.min(bw as f64 / 2.0 - 1.0));
@@ -449,24 +580,40 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             let mut m = m;
             volume::mask_sphere(&mut m, bw, mask_r * bw as f64 / b as f64, 4.0);
             let proj = Projector::new(&m, bw, pad);
+            let gpu = if is_global { None } else { local_gpu(&proj, &half) };
             let mut acc = Accum::new(bw, pad);
-            let grid = if is_global { geom::grid(step) } else { vec![] };
+            let grid = if is_global { geom::grid_for(step, &sym_name) } else { vec![] };
             let refs = if is_global { Some(slices(&proj, &grid, &half)) } else { None };
             let deltas = geom::local(step * 2.0, 2);
-            let offs = data::offsets(if is_global { 3 } else { 1 });
+            let offs = data::offsets(if is_global && !redo { 3 } else { 1 });
             let total = set.len();
-            for (ci, chunk) in set.chunks(512).enumerate() {
+            // Each chunk's images are read and transformed once, while the
+            // previous chunk is being searched (the GPU otherwise waited on
+            // reading and FFTs in the global rounds).
+            let chunks: Vec<&[usize]> = set.chunks(512).collect();
+            let mut next = chunks.first().map(|c| data::transforms(stack, c));
+            for (ci, &chunk) in chunks.iter().enumerate() {
                 check_cancel()?;
-                let c = coeffs_for(stack, parts, chunk, optics, &half, &noise, &offs);
-                match &refs {
-                    Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
-                    None => local(&c, &offs, &proj, &half, &deltas, ratio, parts, chunk),
-                }
+                let fts = next.take().unwrap_or_default();
+                let c = coeffs_from(stack, &fts, parts, chunk, optics, &half, &noise, &offs);
+                let (found, ahead) = rayon::join(
+                    || -> Result<()> {
+                        match &refs {
+                            Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
+                            None => local(&c, &offs, &proj, gpu.as_ref(), &half, &deltas, ratio, parts, chunk),
+                        }
+                        Ok(())
+                    },
+                    || chunks.get(ci + 1).map(|c| data::transforms(stack, c)),
+                );
+                found?;
+                next = ahead;
                 clamp_shifts(parts, chunk, max_shift);
-                let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-                insert(&mut acc, &c, &full, &sym, parts, chunk);
+                let c = coeffs_from(stack, &fts, parts, chunk, optics, &full, &noise, &[]);
+                insert(&mut acc, &c, &full, parts, chunk);
                 progress("三维精修", it * 2000 + hi * 1000 + (ci + 1) * 512 * 1000 / total.max(1), iters * 2000 + 1000);
             }
+            acc.symmetrize(&sym);
             accs.push(acc);
         }
         // FSC of the unfiltered half maps; the next references are the
@@ -488,19 +635,94 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
                 map.iter_mut().zip(&m).for_each(|(v, w)| *v *= w);
             }
         }
+        if new_res < best_res {
+            // The alignments of the best round so far: rounds at the finest
+            // steps wander by ±0.5 Å (6.1 → 6.7 Å on full-size T20S), and
+            // the final maps should come from the best.
+            best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
+        }
         if new_res < best_res * 0.98 {
             best_res = new_res;
             stalls = 0;
         } else {
+            best_res = best_res.min(new_res);
             stalls += 1;
+        }
+        // A Dn trial is kept when the half maps agree at least as well as
+        // in Cn after a global and a local round in Dn; otherwise the run
+        // goes back to where it was (a map's own 2-fold correlation could
+        // not tell: 0.90 against 0.87 for T20S at 7 Å).
+        if let Some(t) = trial.take() {
+            if it == t.at + 2 {
+                let keep = new_res < t.res * 1.02;
+                eprintln!("Dn trial: {:.2} Å against {:.2} Å in C{cn}: {}", new_res, t.res, if keep { "kept" } else { "undone" });
+                if !keep {
+                    maps = t.maps;
+                    for (&i, &(e, sh)) in all.iter().zip(&t.poses) {
+                        parts[i].euler = e;
+                        parts[i].shift = sh;
+                    }
+                    sym_name = format!("C{cn}");
+                    sym = geom::symmetry(&sym_name)?;
+                    best = t.best;
+                    best_res = t.best_res;
+                    stalls = t.stalls;
+                    step = t.step;
+                    global_until = t.global_until;
+                    iters = (iters + 2).min(p.max_iterations.max(p.global_iterations + 1) + 4);
+                    res = t.res.max(2.0 * px * 1.05);
+                    it += 1;
+                    continue;
+                }
+            } else {
+                trial = Some(t);
+            }
+        }
+        // A Dn shows at refined resolution where the starting model could
+        // not tell: tried after one of the first two local rounds.
+        if cn > 1 && !is_global && dn_tests < 2 && trial.is_none() && sym_name.starts_with('C') {
+            dn_tests += 1;
+            if let Some(found) = dihedral_of(&maps, b, cn) {
+                trial = Some(Trial {
+                    at: it,
+                    res: new_res,
+                    maps: maps.clone(),
+                    poses: all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect(),
+                    best: best.clone(),
+                    best_res,
+                    stalls,
+                    step,
+                    global_until,
+                });
+                promote(&mut maps, b, found, parts, &all);
+                sym_name = format!("D{cn}");
+                sym = geom::symmetry(&sym_name)?;
+                dn_tests = 2;
+                // New frame: the earlier best alignments no longer apply.
+                best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
+                best_res = f64::INFINITY;
+                stalls = 0;
+                // One global round in the new frame: the C-n alignments of
+                // the two halves of the Dn are often swapped (6.6 Å plateau
+                // on T20S bin 4 without it), and a 2n-times smaller grid
+                // makes it cheap.
+                global_until = it + 2;
+                step = (p.global_step / 2.0).max(want);
+                iters = iters.max(global_until + 3);
+            }
         }
         res = new_res.max(2.0 * px * 1.05);
         // Done when the resolution has stopped improving at the finest useful step.
-        if it >= p.global_iterations + 2 && stalls >= 2 && step <= want * 1.01 {
+        if it >= global_until + 2 && stalls >= 2 && step <= want * 1.01 {
             break;
         }
+        it += 1;
     }
-    // Final maps at the full box from the last alignments.
+    // Final maps at the full box from the best round's alignments.
+    for (&i, &(e, sh)) in all.iter().zip(&best) {
+        parts[i].euler = e;
+        parts[i].shift = sh;
+    }
     progress("三维精修 · 最终重构", iters * 2000, iters * 2000 + 1000);
     let pad = volume::pad_for(b);
     let full = Half::new(b, b as f64 / 2.0 - 1.0);
@@ -510,8 +732,9 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
         for chunk in set.chunks(512) {
             check_cancel()?;
             let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-            insert(&mut acc, &c, &full, &sym, parts, chunk);
+            insert(&mut acc, &c, &full, parts, chunk);
         }
+        acc.symmetrize(&sym);
         finals.push(acc);
     }
     // Unfiltered half maps and their FSC; the full map with the Wiener
@@ -526,5 +749,5 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     let full_fsc: Vec<f64> = f.iter().map(|&x| (2.0 * x / (1.0 + x)).clamp(0.0, 1.0)).collect();
     let vf = both.reconstruct(Some(&full_fsc));
     drop(accs);
-    Ok(Refined { half1: Map { b, px, v: v1 }, half2: Map { b, px, v: v2 }, full: Map { b, px, v: vf }, fsc: f, res, history })
+    Ok(Refined { half1: Map { b, px, v: v1 }, half2: Map { b, px, v: v2 }, full: Map { b, px, v: vf }, fsc: f, res, history, symmetry: sym_name })
 }

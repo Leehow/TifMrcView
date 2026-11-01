@@ -665,6 +665,14 @@ fn corr3(a: &[f32], b: &[f32]) -> f64 {
 /// (by 0.05 and by half of what the worst one lacks; low-pass maps all
 /// correlate highly, so the margin is relative).
 pub fn dihedral(v: &[f32], b: usize, n: usize) -> Option<(f64, f64, f64)> {
+    let (phi, dz, top, worst) = dihedral_candidate(v, b, n)?;
+    let gap = top - worst;
+    (top >= 0.85 && gap >= 0.05 && gap >= 0.5 * (1.0 - worst)).then_some((phi, dz, top))
+}
+
+/// The best 2-fold axis of `dihedral` with its correlation and the worst
+/// angle's, whether or not it passes.
+pub fn dihedral_candidate(v: &[f32], b: usize, n: usize) -> Option<(f64, f64, f64, f64)> {
     let span = 180.0 / n.max(1) as f64;
     let reach = (b as f64 / 8.0).round();
     // Height first at a coarse angle step, then the angle at that height.
@@ -691,8 +699,7 @@ pub fn dihedral(v: &[f32], b: usize, n: usize) -> Option<(f64, f64, f64)> {
     let top = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1))?;
     let worst = scores.iter().map(|s| s.1).fold(f64::MAX, f64::min);
     eprintln!("dihedral test D{n}: best {:.2} at {:.0}°, {dz:+.0} voxels; worst {:.2}", top.1, top.0, worst);
-    let gap = top.1 - worst;
-    (top.1 >= 0.85 && gap >= 0.05 && gap >= 0.5 * (1.0 - worst)).then_some((top.0, dz, top.1))
+    Some((top.0, dz, top.1, worst))
 }
 
 /// The map turned about z and moved along z so that the 2-fold at `phi`,

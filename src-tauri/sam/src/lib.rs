@@ -321,13 +321,17 @@ impl Predictor {
         if !res.missing.is_empty() {
             return Err(anyhow!("checkpoint is missing {} tensors, e.g. {:?}", res.missing.len(), &res.missing[..res.missing.len().min(5)]));
         }
+        Ok(Self::from_model(model, device))
+    }
+
+    fn from_model(model: Sam2, device: &Device) -> Self {
         let pos = model.hiera_pos_embed(device);
         let dense_pe = model.sam_prompt_encoder.dense_pe(device);
         let n = IMAGE_SIZE / 16;
         let grid_pos = tokens(memory::sine_pe(model::D_MODEL, n, n, device));
         let mem_pos = tokens(memory::sine_pe(memory::MEM_DIM, n, n, device));
         let rope = memory::Rope::new(n, device);
-        Ok(Predictor { model, pos, dense_pe, grid_pos, mem_pos, rope, device: device.clone() })
+        Predictor { model, pos, dense_pe, grid_pos, mem_pos, rope, device: device.clone() }
     }
 
     /// Encodes an already normalized [1, 3, 1024, 1024] image.
@@ -394,6 +398,47 @@ impl Predictor {
             feats = feats + self.model.no_obj_embed_spatial.val().unsqueeze_dim::<3>(0);
         }
         feats
+    }
+
+    /// The 256² mask logits of the best multimask output for one click,
+    /// over the whole (stretched) image, and its IoU: `predict` without
+    /// the full-size upsampling and transfer (about ten times faster when
+    /// many particles are outlined one by one).
+    pub fn predict_low_res(&self, enc: &Encoded, p: Point) -> (Vec<f32>, f32) {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let sparse = pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device);
+        let dense = pe.dense(None, &self.device);
+        let f = &enc.features;
+        let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+        let iou: Vec<f32> = m.iou.clone().into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let best = (1..4).max_by(|&a, &b| iou[a].total_cmp(&iou[b])).unwrap();
+        let low: Vec<f32> = m.logits.narrow(1, best, 1).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        (low, iou[best])
+    }
+
+    /// `predict_low_res` for many single clicks on one image, decoded
+    /// together (one click at a time spent ~0.1 s mostly waiting on the
+    /// device).
+    pub fn predict_low_res_many(&self, enc: &Encoded, points: &[Point]) -> Vec<(Vec<f32>, f32)> {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let f = &enc.features;
+        let mut out = Vec::with_capacity(points.len());
+        for block in points.chunks(16) {
+            let sparse = Tensor::cat(block.iter().map(|p| pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device)).collect(), 0);
+            let dense = pe.dense(None, &self.device);
+            let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+            let iou: Vec<f32> = m.iou.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            let [_, _, h, w] = m.logits.dims();
+            let logits: Vec<f32> = m.logits.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            for i in 0..block.len() {
+                let best = (1..4).max_by(|&a, &b| iou[i * 4 + a].total_cmp(&iou[i * 4 + b])).unwrap();
+                let at = (i * 4 + best) * h * w;
+                out.push((logits[at..at + h * w].to_vec(), iou[i * 4 + best]));
+            }
+        }
+        out
     }
 
     /// Starts tracking from a mask on one frame (image size, row-major),
@@ -467,5 +512,28 @@ impl Predictor {
         let full = interpolate(low.clone(), InterpolateOptions::new(InterpolateMode::Bilinear).with_output_size([enc.height, enc.width]));
         let prediction = Prediction { logits: full.into_data().convert::<f32>().try_into_vec::<f32>().unwrap(), iou: iou[best], low_res: low.clamp(-32.0, 32.0) };
         Tracked { prediction, memory, obj_score }
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use burn::tensor::Distribution;
+
+    #[test]
+    fn many_clicks_decode_as_one_at_a_time() {
+        let dev = Device::flex();
+        let p = Predictor::from_model(Sam2::new(&Sam2Config::tiny(), &dev), &dev);
+        let r = |d: [usize; 4]| Tensor::<4>::random(d, Distribution::Normal(0.0, 1.0), &dev);
+        let enc = Encoded { features: model::Features { embed: r([1, 256, 64, 64]), raw: r([1, 256, 64, 64]), s0: r([1, 32, 256, 256]), s1: r([1, 64, 128, 128]) }, width: 900, height: 700 };
+        let pts: Vec<Point> = (0..19).map(|i| Point { x: 40.0 * i as f32 + 10.0, y: 30.0 * i as f32 + 5.0, positive: true }).collect();
+        let many = p.predict_low_res_many(&enc, &pts);
+        for (i, q) in pts.iter().enumerate().step_by(6) {
+            let (one, iou) = p.predict_low_res(&enc, *q);
+            assert!((iou - many[i].1).abs() < 1e-3, "{iou} {}", many[i].1);
+            let worst = one.iter().zip(&many[i].0).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            let scale = one.iter().fold(0f32, |a, x| a.max(x.abs()));
+            assert!(worst < 1e-3 * scale.max(1.0), "{worst} of {scale}");
+        }
     }
 }

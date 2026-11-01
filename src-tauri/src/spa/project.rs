@@ -352,6 +352,46 @@ pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Res
     Ok(all.iter().map(Vec::len).sum())
 }
 
+/// Drops picks whose SAM 2.1 outline is clearly not one particle: more
+/// than 1.5× the particle's size (clumps, overlaps, ice) or under 0.6×
+/// (fragments, specks). Each micrograph is binned to about 1024 pixels and
+/// smoothed; picks SAM cannot outline are kept. Returns the picks left.
+pub fn sam_filter(p: &mut Project, outline: discover::Outliner, progress: Progress) -> Result<usize> {
+    let mut picks = p.picks()?;
+    // The particle's own size: the box diameter is the kind's size × 1.3.
+    let size_a = p.diameter_a / 1.3;
+    let n = p.mics.len();
+    let (mut dropped, mut outlined, mut total) = (0usize, 0usize, 0usize);
+    for i in 0..n {
+        check_cancel()?;
+        if p.mics[i].excluded || picks[i].is_empty() {
+            continue;
+        }
+        let (img, w, h) = read_mic(&p.mics[i].path)?;
+        let f = (w.max(h) as f64 / 1024.0).ceil().max(1.0) as usize;
+        let (small, sw, sh) = super::pick::bin(&img, w, h, f);
+        let small = super::pick::gauss(&small, sw, sh, 1.0);
+        let want = size_a / (p.optics.pixel_a * f as f64);
+        let pts: Vec<[f32; 2]> = picks[i].iter().map(|q| [q[0] / f as f32, q[1] / f as f32]).collect();
+        let sizes = outline(&small, sw, sh, &pts)?;
+        let before = picks[i].len();
+        total += before;
+        let mut keep = sizes.iter().map(|d| match d {
+            Some(d) => *d >= 0.6 * want && *d <= 1.5 * want,
+            None => true,
+        });
+        outlined += sizes.iter().filter(|d| d.is_some()).count();
+        picks[i].retain(|_| keep.next().unwrap_or(true));
+        dropped += before - picks[i].len();
+        p.mics[i].picks = picks[i].len();
+        progress("SAM 筛选颗粒", i + 1, n);
+    }
+    eprintln!("SAM filter: {total} picks, {outlined} outlined, {dropped} dropped");
+    std::fs::write(p.picks_path(), serde_json::to_vec(&picks)?)?;
+    p.save()?;
+    Ok(total - dropped)
+}
+
 /// Extracts every pick into `particles.mrcs` (+ `particles.json`, `particles.star`).
 pub fn extract_all(p: &mut Project, max_box: usize, invert: bool, progress: Progress) -> Result<StackInfo> {
     let picks = p.picks()?;
@@ -506,7 +546,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
         fsc: r.fsc,
         fsc_masked: s.fsc_masked,
         history: r.history,
-        params: params.clone(),
+        params: RefineParams { symmetry: r.symmetry.clone(), ..params.clone() },
         backend: super::score::backend().into(),
     };
     p.refine = Some(info.clone());
@@ -590,9 +630,12 @@ pub struct AutoParams {
 /// Everything after the choice of particle: picking, extraction, 2D
 /// classification with the sharp classes kept, the point group, the
 /// initial model and the refinement.
-pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<RefineInfo> {
+pub fn auto(p: &mut Project, a: &AutoParams, outline: Option<discover::Outliner>, progress: Progress) -> Result<RefineInfo> {
     let pick = PickParams { diameter_a: p.diameter_a, ..p.pick.clone().unwrap_or_default() };
-    let n = pick_all(p, &pick, progress)?;
+    let mut n = pick_all(p, &pick, progress)?;
+    if let Some(f) = outline {
+        n = sam_filter(p, f, progress)?;
+    }
     if n < 100 {
         bail!("只挑到 {n} 个颗粒，太少了");
     }
@@ -616,14 +659,30 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
     // misplaced axis it can settle on a symmetrised mixture); the n-fold
     // axis is then found in the map and put along z, and a Dn tested.
     let guessed = a.symmetry.trim().is_empty();
-    let m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
+    let mut m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
     let mut sym = sym;
     if guessed && sym != "C1" {
         let n: usize = sym[1..].parse().unwrap_or(1);
-        let (v, dims, px) = data::read_volume(&m.path)?;
-        let b = dims[0];
-        let v = discover::centred3(&v, b);
-        match discover::find_axis(&v, b, n) {
+        let (mut v, mut dims, mut px) = data::read_volume(&m.path)?;
+        let mut b = dims[0];
+        v = discover::centred3(&v, b);
+        let mut found = discover::find_axis(&v, b, n);
+        // An ab initio run can settle on a poor model (T20S bin 2 with SAM:
+        // axis 0.69 although the 2D classes showed a clear 7-fold): two
+        // more starts before falling back to C1.
+        for seed in [19, 31] {
+            if found.is_some() {
+                break;
+            }
+            check_cancel()?;
+            eprintln!("ab initio again (seed {seed}): no {n}-fold axis in the model");
+            m = initial(p, &InitialParams { symmetry: "C1".into(), seed, ..Default::default() }, progress)?;
+            (v, dims, px) = data::read_volume(&m.path)?;
+            b = dims[0];
+            v = discover::centred3(&v, b);
+            found = discover::find_axis(&v, b, n);
+        }
+        match found {
             Some((axis, _, _)) => {
                 let mut v = discover::align_axis(&v, b, axis);
                 sym = format!("C{n}");
@@ -643,25 +702,15 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
         }
         p.save()?;
     }
-    let r = refine(p, &RefineParams { symmetry: sym.clone(), ..Default::default() }, None, progress)?;
-    // At the refined resolution a Dn shows clearly where the initial model
-    // could not tell: refine once more with it, from the aligned map.
-    if guessed && sym.starts_with('C') && sym != "C1" {
-        let n: usize = sym[1..].parse().unwrap_or(1);
-        let (v, dims, px) = data::read_volume(&r.map)?;
-        if let Some((phi, dz, c)) = discover::dihedral(&v, dims[0], n) {
-            let aligned = discover::align_dihedral(&v, dims[0], phi, dz);
-            let start = p.path("refine_cn_aligned.mrc");
-            data::write_mrc(Path::new(&start), &aligned, dims, px, "TifMrcView Pro: Cn map, 2-fold along x")?;
-            let dn = format!("D{n}");
-            if let Some(g) = p.symmetry.as_mut() {
-                g.symmetry = dn.clone();
-                g.two_fold = c;
-            }
-            p.save()?;
-            let res_init = (2.0 * r.res).max(15.0);
-            return refine(p, &RefineParams { symmetry: dn, res_init, ..Default::default() }, Some(&start), progress);
+    // One refinement: a Cn guess is tested for a Dn once the map is
+    // refined enough, and refinement goes on in it when there is one.
+    let promote = guessed && sym.starts_with('C') && sym != "C1";
+    let r = refine(p, &RefineParams { symmetry: sym.clone(), promote_dihedral: promote, ..Default::default() }, None, progress)?;
+    if r.params.symmetry != sym {
+        if let Some(g) = p.symmetry.as_mut() {
+            g.symmetry = r.params.symmetry.clone();
         }
+        p.save()?;
     }
     Ok(r)
 }
