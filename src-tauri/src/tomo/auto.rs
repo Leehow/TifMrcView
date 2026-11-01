@@ -79,6 +79,8 @@ pub struct AutoResult {
     pub note: Option<String>,
     /// Seconds each step took, in order.
     pub timings: Vec<(String, f64)>,
+    /// The batches that chose which views to leave out.
+    pub selection: Vec<super::select::Batch>,
     /// How far the specimen was turned to lie flat (°): about Y (the tilt
     /// offset) and about X (the depth slope along Y).
     pub levelled: [f64; 2],
@@ -184,6 +186,18 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         }
     }
     check_cancel()?;
+    // Views that make the tomogram worse are left out, judged by quick
+    // tomograms in batches (`select`); not for the quick survey.
+    let mut selection = vec![];
+    if req.purpose != Purpose::Survey {
+        let (picked, batches) = super::select::exclude_views(&img, d, d.alignment.as_ref().unwrap(), &stage(3))?;
+        if batches.iter().any(|b| b.kept.is_some()) {
+            d.alignment = Some(picked);
+            d.save()?;
+        }
+        selection = batches;
+    }
+    check_cancel()?;
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
     let bin = output_bin(w, h, px, req.purpose.voxel());
@@ -234,7 +248,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, relion, note, timings, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, relion, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels

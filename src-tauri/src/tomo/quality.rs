@@ -168,13 +168,39 @@ pub fn project(vol: &[f32], w: usize, h: usize, z: usize, theta: f64, z_offset: 
 /// Held-out projection score of an alignment (and CTF): views spread over
 /// the series are each left out, the rest reconstructed (phase-flipped WBP,
 /// quick) and projected along it, and the projection compared with the
-/// measured view by FRC. Comparable between alignments of the same series.
-#[derive(Clone, Copy, Debug)]
+/// measured view by FRC. Comparable between alignments of the same series;
+/// with the same views held out (`HeldOut::views`), pairwise (`better`).
+#[derive(Clone, Debug)]
 pub struct HeldOut {
     /// Mean resolution where the FRC falls below 0.143, Å.
     pub resolution_a: f64,
     /// Mean FRC between 100 and 20 Å: the steadier number to rank by.
     pub frc: f64,
+    /// The views held out (file indices) and each one's FRC 100–20 Å.
+    pub views: Vec<usize>,
+    pub per_view: Vec<f64>,
+}
+
+impl HeldOut {
+    /// How much `self` beats `base` (mean paired FRC difference) and the
+    /// standard error of that, over the views both held out.
+    pub fn better(&self, base: &HeldOut) -> (f64, f64) {
+        let d: Vec<f64> = self.views.iter().zip(&self.per_view).filter_map(|(v, f)| base.views.iter().position(|b| b == v).map(|j| f - base.per_view[j])).collect();
+        let n = d.len().max(1) as f64;
+        let mean = d.iter().sum::<f64>() / n;
+        let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+        (mean, (var / n).sqrt())
+    }
+}
+
+/// Views (file indices) to hold out: `count` spread over the tilt range of
+/// the views kept, leaving out `avoid`.
+pub fn spread_views(a: &super::Alignment, count: usize, avoid: &[usize]) -> Vec<usize> {
+    let mut order: Vec<&super::View> = a.views.iter().filter(|v| !v.excluded && !avoid.contains(&v.file_index)).collect();
+    order.sort_by(|x, y| x.refined().total_cmp(&y.refined()));
+    let mut picks: Vec<usize> = (0..count).map(|i| order[((order.len() - 1) as f64 * (0.1 + 0.8 * i as f64 / (count - 1).max(1) as f64)).round() as usize].file_index).collect();
+    picks.dedup();
+    picks
 }
 
 pub fn held_out(
@@ -185,21 +211,30 @@ pub fn held_out(
     thickness: usize,
     z_offset: f64,
 ) -> anyhow::Result<HeldOut> {
+    held_out_views(img, a, ctf, bin, thickness, z_offset, &spread_views(a, 6, &[]))
+}
+
+pub fn held_out_views(
+    img: &std::sync::Arc<crate::image::OpenImage>,
+    a: &super::Alignment,
+    ctf: Option<super::output::FlipWith>,
+    bin: usize,
+    thickness: usize,
+    z_offset: f64,
+    views: &[usize],
+) -> anyhow::Result<HeldOut> {
     use super::{output, pipeline, recon};
     let pixel = ctf.map(|c| c.2).unwrap_or_else(|| crate::align::pixel_a(img.info()));
-    let mut order: Vec<usize> = (0..a.views.len()).filter(|&i| !a.views[i].excluded).collect();
-    order.sort_by(|&i, &j| a.views[i].refined().total_cmp(&a.views[j].refined()));
-    let mut picks: Vec<usize> = [0.12, 0.3, 0.45, 0.55, 0.7, 0.88].iter().map(|f| order[((order.len() - 1) as f64 * f).round() as usize]).collect();
-    picks.dedup();
     let (mut all, w, h, _) = output::aligned(img, a, bin, 0, 0, &|_, _| {})?;
     if let Some(c) = ctf {
         output::flip_views(&mut all, w, h, a, bin, c, 0.0);
     }
     let kept: Vec<usize> = (0..a.views.len()).filter(|&i| !a.views[i].excluded).collect();
     let params = recon::Params { thickness, z_offset, ..Default::default() };
-    let (mut res, mut band) = (0.0, 0.0);
-    for &k in &picks {
+    let (mut res, mut per_view, mut used) = (0.0, vec![], vec![]);
+    for &file in views {
         super::check_cancel()?;
+        let Some(k) = a.views.iter().position(|v| v.file_index == file && !v.excluded) else { continue };
         let j = kept.iter().position(|&i| i == k).unwrap();
         let mut rest = a.clone();
         rest.views[k].excluded = true;
@@ -211,8 +246,9 @@ pub fn held_out(
         let proj = project(&vol, w, h, thickness, a.views[k].refined(), z_offset)?;
         let curve = frc(&proj, &all[j * w * h..(j + 1) * w * h], w, h, pixel * bin as f64);
         res += 1.0 / crossing(&curve, 0.143).max(curve[0].0);
-        band += mean_between(&curve, 1.0 / 100.0, 1.0 / 20.0);
+        per_view.push(mean_between(&curve, 1.0 / 100.0, 1.0 / 20.0));
+        used.push(file);
     }
-    let n = picks.len() as f64;
-    Ok(HeldOut { resolution_a: n / res, frc: band / n })
+    let n = used.len().max(1) as f64;
+    Ok(HeldOut { resolution_a: res / n, frc: per_view.iter().sum::<f64>() / n, views: used, per_view })
 }
