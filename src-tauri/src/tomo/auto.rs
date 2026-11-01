@@ -8,7 +8,11 @@
 //!   - survey: a quick look at the 3D shape, about 18 Å per voxel, SART
 //!     with phase flipping and the deconvolution; no learned steps.
 //!   - display (default): as clear as possible, about 9 Å per voxel,
-//!     Noise2Noise, the deconvolution and missing-wedge correction.
+//!     Noise2Noise, the deconvolution and missing-wedge correction when
+//!     this computer's GPU can train it in `WEDGE_BUDGET` (about 20 min on
+//!     a desktop GPU; an M1 Max would take 2.5 h at 4.5 s a step), judged
+//!     from its first half minute of training; else the deconvolved
+//!     tomogram is the result and `note` says why.
 //!   - STA: the high resolution kept for subtomogram averaging, about
 //!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
 //!     would change the high frequencies), and a RELION 5 folder beside
@@ -69,6 +73,8 @@ pub struct AutoResult {
     pub raw: String,
     /// The RELION 5 folder (for STA).
     pub relion: Option<String>,
+    /// Something the user should know about the result.
+    pub note: Option<String>,
     pub bin: usize,
     pub thickness: usize,
     pub residual: f64,
@@ -76,6 +82,8 @@ pub struct AutoResult {
     pub ms: f64,
 }
 
+/// Longest missing-wedge training the display tomogram waits for, seconds.
+const WEDGE_BUDGET: f64 = 30.0 * 60.0;
 /// Most pixels a binned view may have.
 const MAX_PIXELS: f64 = 4.2e6;
 
@@ -150,6 +158,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let raw = made.paths[0].clone();
     let mut path = raw.clone();
     let mut relion = None;
+    let mut note = None;
     if req.purpose == Purpose::Display {
         check_cancel()?;
         path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(5))?.paths.remove(0);
@@ -161,7 +170,14 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     if req.purpose == Purpose::Display {
         check_cancel()?;
-        path = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path), cfg: None, single: false }, &stage(7))?.paths.remove(0);
+        let step = pipeline::WedgeStep { source: Some(path.clone()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
+        match pipeline::wedge(dev, d, &step, &stage(7)) {
+            Ok(mut m) => path = m.paths.remove(0),
+            Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
+                Some(slow) => note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0)),
+                None => return Err(e),
+            },
+        }
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
@@ -174,7 +190,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);
-    Ok(AutoResult { path, raw, relion, bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, relion, note, bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// Thickness (output pixels at `bin`) and depth offset that cover the

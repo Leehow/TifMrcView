@@ -89,7 +89,7 @@ fn main() -> Result<()> {
         let t = Instant::now();
         let cfg = tifmrcview_lib::wedge::TrainConfig { iterations: 3, steps: 60, count: 40, ..Default::default() };
         let source = d.tomograms.iter().rev().find(|t| t.kind == "denoised").map(|t| t.path.clone());
-        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false }, &progress)?;
+        let m = pipeline::wedge(dev, &mut d, &pipeline::WedgeStep { source, cfg: Some(cfg), single: false, budget_s: None }, &progress)?;
         eprintln!();
         println!("wedge (short schedule): {} {:.1} s", m.paths[0], t.elapsed().as_secs_f64());
         png(&m.paths[0])?;

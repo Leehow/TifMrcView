@@ -49,7 +49,7 @@
         <label id="cryo-auto-pixel-row" hidden>像素大小 Å <input id="cryo-auto-pixel" type="number" min="0" step="0.001"></label>
         <label>用途<select id="cryo-auto-purpose">
           <option value="survey">快速预览：看三维形貌，最快（约 18 Å 体素）</option>
-          <option value="display" selected>展示：尽可能清晰，含去噪和补缺失楔，较慢（约 9 Å 体素）</option>
+          <option value="display" selected>展示：尽可能清晰，去噪并补缺失楔（约 9 Å 体素，较慢）</option>
           <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
         </select></label>
       </div>
@@ -140,7 +140,7 @@
     }
     autoResult = r;
     $("cryo-auto-open").hidden = false;
-    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层 · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}`;
+    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层 · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.note ? `。${r.note}` : ""}`;
     W.status("一键重构完成，已打开结果");
     await openPath(r.path);
   };
