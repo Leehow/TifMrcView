@@ -97,6 +97,22 @@ fn main() -> Result<()> {
         println!("ICECREAM in {:.0} s", t4.elapsed().as_secs_f64());
     }
 
+    // The same results with their lowest measured frequencies from the data.
+    let low: f32 = std::env::var("HOLDOUT_LOW_HALF").ok().and_then(|v| v.parse().ok()).unwrap_or(0.04);
+    let restored: Vec<(&str, Vec<f32>)> = methods
+        .iter()
+        .filter_map(|(name, vol)| {
+            let label = match *name {
+                "halves" => "halves + low data",
+                "halves → equivariant" => "halves → equi + low data",
+                "ICECREAM" => "ICECREAM + low data",
+                _ => return None,
+            };
+            Some((label, wedge::restore_low(vol, &a, &b, dims, &kept_tilts, low)))
+        })
+        .collect();
+    methods.extend(restored);
+
     // Project each result to the left-out tilts and compare.
     let held_angles: Vec<f64> = held.iter().map(|&v| angles[v]).collect();
     let g = recon::Geometry::new(w, z, &held_angles, 0.0)?;

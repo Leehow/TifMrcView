@@ -946,6 +946,101 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     Ok((net.valid(), loss_avg))
 }
 
+/// `out` with its lowest measured frequencies (half power at |k| = `half`
+/// cycles/voxel, inside the tilt range only) taken from the mean of the
+/// half tomograms: there the data are far above noise, while the network
+/// shifted large-scale grey levels (held-out tilts on EMPIAR-10045 showed
+/// the halves networks below WBP at |k| 0.02–0.05). Beam on Z, tilt axis
+/// on Y; the filter is a Gaussian along Y times one in XZ, cut to the
+/// measured angles, so each XZ plane is filtered in 2D.
+pub fn restore_low(out: &[f32], even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> Vec<f32> {
+    let [w, h, d] = dims;
+    let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
+    let (lo, hi) = (lo as f64 - 1e-6, hi as f64 + 1e-6);
+    let sk = half as f64 / (2.0 * std::f64::consts::LN_2).sqrt();
+    let sx = 1.0 / (2.0 * std::f64::consts::PI * sk);
+    let diff: Vec<f32> = (0..out.len()).into_par_iter().map(|i| 0.5 * (even[i] + odd[i]) - out[i]).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
+    // Along Y in real space.
+    let r = (3.0 * sx).ceil() as isize;
+    let kern: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sx * sx)).exp() as f32).collect();
+    let along: Vec<f32> = (0..out.len())
+        .into_par_iter()
+        .map(|i| {
+            let (x, y, z) = (i % w, (i / w) % h, i / (w * h));
+            let mut acc = 0f32;
+            let mut wsum = 0f32;
+            for (j, &k) in kern.iter().enumerate() {
+                let yy = y as isize + j as isize - r;
+                if yy >= 0 && (yy as usize) < h {
+                    acc += k * diff[(z * h + yy as usize) * w + x];
+                    wsum += k;
+                }
+            }
+            if wsum > 0.0 { acc / wsum } else { 0.0 }
+        })
+        .collect();
+    let pad = (3.0 * sx).ceil() as usize;
+    let (px, pz) = ((w + pad).next_power_of_two(), (d + pad).next_power_of_two());
+    let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
+    let filt: Vec<f32> = (0..px * pz)
+        .map(|i| {
+            let (mut a, mut b) = (f(i % px, px), f(i / px, pz));
+            if a < 0.0 || (a == 0.0 && b < 0.0) {
+                (a, b) = (-a, -b);
+            }
+            let g = (-(a * a + b * b) / (2.0 * sk * sk)).exp();
+            if a == 0.0 && b == 0.0 {
+                return g as f32;
+            }
+            if (lo..=hi).contains(&b.atan2(a).to_degrees()) { g as f32 } else { 0.0 }
+        })
+        .collect();
+    let (fx, fz) = (Fft::new(px), Fft::new(pz));
+    let planes: Vec<Vec<f32>> = (0..h)
+        .into_par_iter()
+        .map(|y| {
+            let mut re = vec![0f32; px * pz];
+            for z in 0..d {
+                for x in 0..w {
+                    re[z * px + x] = along[(z * h + y) * w + x];
+                }
+            }
+            let mut im = vec![0f32; px * pz];
+            let pass = |re: &mut Vec<f32>, im: &mut Vec<f32>| {
+                for z in 0..pz {
+                    fx.run(&mut re[z * px..(z + 1) * px], &mut im[z * px..(z + 1) * px]);
+                }
+                for x in 0..px {
+                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = ((0..pz).map(|z| re[z * px + x]).collect(), (0..pz).map(|z| im[z * px + x]).collect());
+                    fz.run(&mut cr, &mut ci);
+                    for z in 0..pz {
+                        re[z * px + x] = cr[z];
+                        im[z * px + x] = ci[z];
+                    }
+                }
+            };
+            pass(&mut re, &mut im);
+            for (i, &m) in filt.iter().enumerate() {
+                re[i] *= m;
+                im[i] = -im[i] * m;
+            }
+            // Inverse as the conjugate of the forward transform.
+            pass(&mut re, &mut im);
+            let s = 1.0 / (px * pz) as f32;
+            (0..w * d).map(|i| re[(i / w) * px + i % w] * s).collect()
+        })
+        .collect();
+    let mut res = out.to_vec();
+    res.par_chunks_mut(w * h).enumerate().for_each(|(z, slab)| {
+        for y in 0..h {
+            for x in 0..w {
+                slab[y * w + x] += planes[y][z * w + x];
+            }
+        }
+    });
+    res
+}
+
 /// For a reconstruction pipeline with even/odd half tomograms (same layout
 /// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
 /// and fills the wedge in one network, and returns the mean of its results
@@ -1299,6 +1394,26 @@ mod tests {
         let gappy: Vec<f32> = dense.iter().copied().filter(|t| !(10.0..30.0).contains(t)).collect();
         let holes = tilt_mask(n, &g, &gappy).iter().zip(&sp.keep).filter(|(a, b)| a != b).count();
         assert!(holes > 0);
+    }
+
+    #[test]
+    fn restores_measured_low_frequencies() {
+        let dims = [40, 24, 40];
+        let mut rng = Rng(7);
+        let data: Vec<f32> = (0..40 * 24 * 40).map(|_| rng.gauss()).collect();
+        let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
+        // Already the data: unchanged.
+        let same = restore_low(&data, &data, &data, dims, &tilts, 0.04);
+        let worst = same.iter().zip(&data).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-4, "{worst}");
+        // A slow wave along X (a measured direction) is taken back out.
+        let wave = |i: usize| 0.5 * (2.0 * std::f32::consts::PI * (i % 40) as f32 / 40.0).cos();
+        let shifted: Vec<f32> = data.iter().enumerate().map(|(i, v)| v + wave(i)).collect();
+        let back = restore_low(&shifted, &data, &data, dims, &tilts, 0.04);
+        let mid = (20 * 24 + 12) * 40 + 20;
+        // |k| 0.025 against half power at 0.04: about 3/4 of it goes.
+        let left = (back[mid] - data[mid]) / wave(mid);
+        assert!((0.1..0.4).contains(&left), "{left}");
     }
 
     #[test]
