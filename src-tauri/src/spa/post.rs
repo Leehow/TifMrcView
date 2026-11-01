@@ -14,11 +14,7 @@ use super::refine::lowpass;
 use super::volume::mask_sphere;
 
 fn shell_of(z: usize, y: usize, x: usize, b: usize) -> f64 {
-    let (fx, fy, fz) = (
-        fourier::freq(x, b),
-        fourier::freq(y, b),
-        fourier::freq(z, b),
-    );
+    let (fx, fy, fz) = (fourier::freq(x, b), fourier::freq(y, b), fourier::freq(z, b));
     ((fx * fx + fy * fy + fz * fz) as f64).sqrt()
 }
 
@@ -65,11 +61,7 @@ pub fn fsc_raw(a: &[f32], c: &[f32], b: usize) -> Vec<f64> {
                 return 1.0;
             }
             let d = (t[shells + r] * t[2 * shells + r]).sqrt();
-            if d > 0.0 {
-                t[r] / d
-            } else {
-                0.0
-            }
+            if d > 0.0 { t[r] / d } else { 0.0 }
         })
         .collect()
 }
@@ -80,11 +72,7 @@ pub fn resolution(f: &[f64], b: usize, px: f64, thr: f64) -> f64 {
     for r in 2..f.len() {
         if f[r] < thr {
             let (a, c) = (f[r - 1], f[r]);
-            let t = if (a - c).abs() > 1e-12 {
-                (a - thr) / (a - c)
-            } else {
-                0.0
-            };
+            let t = if (a - c).abs() > 1e-12 { (a - thr) / (a - c) } else { 0.0 };
             let s = (r as f64 - 1.0 + t.clamp(0.0, 1.0)).max(1.0);
             return b as f64 * px / s;
         }
@@ -99,8 +87,7 @@ fn otsu(v: &[f32], b: usize, radius: f64) -> f32 {
     for z in 0..b {
         for y in 0..b {
             for x in 0..b {
-                let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2))
-                    .sqrt();
+                let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2)).sqrt();
                 if d < radius {
                     vals.push(v[(z * b + y) * b + x]);
                 }
@@ -154,8 +141,7 @@ pub fn auto_mask(v: &[f32], b: usize, px: f64, radius: f64) -> Vec<f32> {
     m.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
         for y in 0..b {
             for x in 0..b {
-                let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2))
-                    .sqrt();
+                let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2)).sqrt();
                 plane[y * b + x] *= soft(d, b as f64 * 0.45, 3.0);
             }
         }
@@ -165,27 +151,20 @@ pub fn auto_mask(v: &[f32], b: usize, px: f64, radius: f64) -> Vec<f32> {
 
 fn blur3(v: &[f32], b: usize, sigma: f64) -> Vec<f32> {
     // x and y within each plane, then z.
-    let mut out: Vec<f32> = v
-        .par_chunks(b * b)
-        .flat_map_iter(|p| gauss(p, b, b, sigma))
-        .collect();
+    let mut out: Vec<f32> = v.par_chunks(b * b).flat_map_iter(|p| gauss(p, b, b, sigma)).collect();
     let r = (3.0 * sigma).ceil() as isize;
-    let k: Vec<f32> = (-r..=r)
-        .map(|i| (-(i * i) as f64 / (2.0 * sigma * sigma)).exp() as f32)
-        .collect();
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sigma * sigma)).exp() as f32).collect();
     let s: f32 = k.iter().sum();
     let src = out.clone();
-    out.par_chunks_mut(b * b)
-        .enumerate()
-        .for_each(|(z, plane)| {
-            plane.iter_mut().for_each(|x| *x = 0.0);
-            for (j, kv) in k.iter().enumerate() {
-                let zz = (z as isize + j as isize - r).clamp(0, b as isize - 1) as usize;
-                for (o, v) in plane.iter_mut().zip(&src[zz * b * b..(zz + 1) * b * b]) {
-                    *o += kv / s * v;
-                }
+    out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
+        plane.iter_mut().for_each(|x| *x = 0.0);
+        for (j, kv) in k.iter().enumerate() {
+            let zz = (z as isize + j as isize - r).clamp(0, b as isize - 1) as usize;
+            for (o, v) in plane.iter_mut().zip(&src[zz * b * b..(zz + 1) * b * b]) {
+                *o += kv / s * v;
             }
-        });
+        }
+    });
     out
 }
 
@@ -202,23 +181,11 @@ pub struct Sharpened {
 /// Sharpens the average of the unfiltered half maps `h1`, `h2` (a map
 /// already filtered by its FSC would have its fall-off counted twice in
 /// the B factor).
-pub fn sharpen(
-    h1: &[f32],
-    h2: &[f32],
-    mask: &[f32],
-    b: usize,
-    px: f64,
-    bfactor: Option<f64>,
-) -> (Vec<f32>, Sharpened) {
+pub fn sharpen(h1: &[f32], h2: &[f32], mask: &[f32], b: usize, px: f64, bfactor: Option<f64>) -> (Vec<f32>, Sharpened) {
     let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(mask).map(|(a, m)| a * m).collect() };
     let f = corrected_fsc(h1, h2, &masked, b);
     let res = resolution(&f, b, px, 0.143);
-    let mf: Vec<f32> = h1
-        .iter()
-        .zip(h2)
-        .zip(mask)
-        .map(|((a, c), m)| 0.5 * (a + c) * m)
-        .collect();
+    let mf: Vec<f32> = h1.iter().zip(h2).zip(mask).map(|((a, c), m)| 0.5 * (a + c) * m).collect();
     let (mut re, mut im) = fourier::ft3(b, &mf);
     // Guinier fit of ln|F| against 1/d² from 10 Å to the resolution.
     let shells = b / 2 + 1;
@@ -249,43 +216,29 @@ pub fn sharpen(
             let (mx, my) = (sx / n, sy / n);
             let num: f64 = pts.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
             let den: f64 = pts.iter().map(|p| (p.0 - mx).powi(2)).sum();
-            if den > 0.0 {
-                -4.0 * num / den
-            } else {
-                0.0
-            }
+            if den > 0.0 { -4.0 * num / den } else { 0.0 }
         } else {
             0.0
         }
     };
     let bf = bfactor.unwrap_or(fitted.max(0.0));
     let r_res = b as f64 * px / res;
-    re.par_chunks_mut(b * b)
-        .zip(im.par_chunks_mut(b * b))
-        .enumerate()
-        .for_each(|(z, (pr, pi))| {
-            for y in 0..b {
-                for x in 0..b {
-                    let s = shell_of(z, y, x, b);
-                    let r = s.round() as usize;
-                    let fv = f.get(r).copied().unwrap_or(0.0).max(0.0);
-                    let w = (2.0 * fv / (1.0 + fv)).sqrt();
-                    let s2 = (s / (b as f64 * px)).powi(2);
-                    let g = (w * (bf / 4.0 * s2).exp() * soft(s, r_res, 2.0) as f64) as f32;
-                    pr[y * b + x] *= g;
-                    pi[y * b + x] *= g;
-                }
+    re.par_chunks_mut(b * b).zip(im.par_chunks_mut(b * b)).enumerate().for_each(|(z, (pr, pi))| {
+        for y in 0..b {
+            for x in 0..b {
+                let s = shell_of(z, y, x, b);
+                let r = s.round() as usize;
+                let fv = f.get(r).copied().unwrap_or(0.0).max(0.0);
+                let w = (2.0 * fv / (1.0 + fv)).sqrt();
+                let s2 = (s / (b as f64 * px)).powi(2);
+                let g = (w * (bf / 4.0 * s2).exp() * soft(s, r_res, 2.0) as f64) as f32;
+                pr[y * b + x] *= g;
+                pi[y * b + x] *= g;
             }
-        });
+        }
+    });
     let out = fourier::ift3(b, &re, &im);
-    (
-        out,
-        Sharpened {
-            bfactor: bf,
-            res_masked: res,
-            fsc_masked: f,
-        },
-    )
+    (out, Sharpened { bfactor: bf, res_masked: res, fsc_masked: f })
 }
 
 /// Flips the hand (mirror along z).
@@ -297,12 +250,7 @@ const LEAK: usize = 3;
 /// phase randomisation (Chen et al., Ultramicroscopy 2013): beyond where
 /// the masked FSC falls below 0.8 the half maps' phases are randomised,
 /// masked the same way, and FSC = (FSC_t − FSC_n) / (1 − FSC_n).
-pub fn corrected_fsc(
-    h1: &[f32],
-    h2: &[f32],
-    masked: &dyn Fn(&[f32]) -> Vec<f32>,
-    b: usize,
-) -> Vec<f64> {
+pub fn corrected_fsc(h1: &[f32], h2: &[f32], masked: &dyn Fn(&[f32]) -> Vec<f32>, b: usize) -> Vec<f64> {
     let f_t = fsc_raw(&masked(h1), &masked(h2), b);
     // From where the masked FSC itself falls below 0.8: the unmasked one
     // falls much earlier (solvent noise), and real signal leaking through
@@ -310,21 +258,11 @@ pub fn corrected_fsc(
     let Some(r_rand) = (1..f_t.len()).find(|&r| f_t[r] < 0.8) else {
         return f_t;
     };
-    let f_n = fsc_raw(
-        &masked(&randomise_phases(h1, b, r_rand as f64, 1)),
-        &masked(&randomise_phases(h2, b, r_rand as f64, 2)),
-        b,
-    );
+    let f_n = fsc_raw(&masked(&randomise_phases(h1, b, r_rand as f64, 1)), &masked(&randomise_phases(h2, b, r_rand as f64, 2)), b);
     f_t.iter()
         .zip(&f_n)
         .enumerate()
-        .map(|(r, (&t, &n))| {
-            if r <= r_rand + LEAK || n >= 0.999 {
-                t
-            } else {
-                (t - n) / (1.0 - n)
-            }
-        })
+        .map(|(r, (&t, &n))| if r <= r_rand + LEAK || n >= 0.999 { t } else { (t - n) / (1.0 - n) })
         .collect()
 }
 
@@ -337,13 +275,8 @@ fn randomise_phases(v: &[f32], b: usize, r_from: f64, seed: u64) -> Vec<f32> {
         for y in 0..b {
             for x in 0..b {
                 let j = (z * b + y) * b + x;
-                let (fx, fy, fz) = (
-                    fourier::freq(x, b),
-                    fourier::freq(y, b),
-                    fourier::freq(z, b),
-                );
-                let m = (fourier::index(-fz, b) * b + fourier::index(-fy, b)) * b
-                    + fourier::index(-fx, b);
+                let (fx, fy, fz) = (fourier::freq(x, b), fourier::freq(y, b), fourier::freq(z, b));
+                let m = (fourier::index(-fz, b) * b + fourier::index(-fy, b)) * b + fourier::index(-fx, b);
                 if m <= j || shell_of(z, y, x, b).round() <= r_from {
                     continue;
                 }

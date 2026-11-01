@@ -9,9 +9,7 @@ pub fn pattern(c: usize, z: usize, t: usize, x: usize, y: usize) -> u16 {
 
 /// One plane of the pattern, little-endian u16.
 pub fn plane(c: usize, z: usize, t: usize, w: usize, h: usize) -> Vec<u16> {
-    (0..h)
-        .flat_map(|y| (0..w).map(move |x| pattern(c, z, t, x, y)))
-        .collect()
+    (0..h).flat_map(|y| (0..w).map(move |x| pattern(c, z, t, x, y))).collect()
 }
 
 fn utf16(s: &str) -> Vec<u8> {
@@ -46,24 +44,16 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
     let mut start = vec![END; streams.len()];
 
     // Large streams.
-    let big: Vec<usize> = (0..streams.len())
-        .filter(|&i| streams[i].data.len() >= CUTOFF)
-        .collect();
+    let big: Vec<usize> = (0..streams.len()).filter(|&i| streams[i].data.len() >= CUTOFF).collect();
     let mut chains: Vec<Vec<u32>> = vec![vec![]; streams.len()];
     let order: Vec<(usize, usize)> = if interleave {
-        let most = big
-            .iter()
-            .map(|&i| streams[i].data.len().div_ceil(SEC))
-            .max()
-            .unwrap_or(0);
+        let most = big.iter().map(|&i| streams[i].data.len().div_ceil(SEC)).max().unwrap_or(0);
         (0..most)
             .flat_map(|k| big.iter().map(move |&i| (i, k)))
             .filter(|&(i, k)| k < streams[i].data.len().div_ceil(SEC))
             .collect()
     } else {
-        big.iter()
-            .flat_map(|&i| (0..streams[i].data.len().div_ceil(SEC)).map(move |k| (i, k)))
-            .collect()
+        big.iter().flat_map(|&i| (0..streams[i].data.len().div_ceil(SEC)).map(move |k| (i, k))).collect()
     };
     for (i, k) in order {
         let d = &streams[i].data;
@@ -96,11 +86,7 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
         let first = (ministream.len() / MINI) as u32;
         let n = s.data.len().div_ceil(MINI);
         for k in 0..n {
-            minifat.push(if k + 1 == n {
-                END
-            } else {
-                first + k as u32 + 1
-            });
+            minifat.push(if k + 1 == n { END } else { first + k as u32 + 1 });
         }
         ministream.extend_from_slice(&s.data);
         ministream.resize(ministream.len().div_ceil(MINI) * MINI, 0);
@@ -147,12 +133,8 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
         e[120..128].copy_from_slice(&size.to_le_bytes());
         e
     };
-    let root_streams: Vec<usize> = (0..streams.len())
-        .filter(|&i| streams[i].storage.is_empty())
-        .collect();
-    let stored: Vec<usize> = (0..streams.len())
-        .filter(|&i| !streams[i].storage.is_empty())
-        .collect();
+    let root_streams: Vec<usize> = (0..streams.len()).filter(|&i| streams[i].storage.is_empty()).collect();
+    let stored: Vec<usize> = (0..streams.len()).filter(|&i| !streams[i].storage.is_empty()).collect();
     // Entry ids: 0 root, 1 storage, then root streams, then stored streams.
     let id_of = |i: usize| -> u32 {
         if let Some(k) = root_streams.iter().position(|&r| r == i) {
@@ -161,34 +143,15 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
             2 + root_streams.len() as u32 + stored.iter().position(|&s| s == i).unwrap() as u32
         }
     };
-    dir.push(entry(
-        "Root Entry",
-        5,
-        FREE,
-        FREE,
-        1,
-        mini_start,
-        ministream.len() as u64,
-    ));
-    let storage = streams
-        .iter()
-        .find(|s| !s.storage.is_empty())
-        .map_or("Storage00001", |s| s.storage);
+    dir.push(entry("Root Entry", 5, FREE, FREE, 1, mini_start, ministream.len() as u64));
+    let storage = streams.iter().find(|s| !s.storage.is_empty()).map_or("Storage00001", |s| s.storage);
     let first_root = root_streams.first().map_or(FREE, |&i| id_of(i));
     let first_stored = stored.first().map_or(FREE, |&i| id_of(i));
     dir.push(entry(storage, 1, FREE, first_root, first_stored, 0, 0));
     for list in [&root_streams, &stored] {
         for (k, &i) in list.iter().enumerate() {
             let right = list.get(k + 1).map_or(FREE, |&j| id_of(j));
-            dir.push(entry(
-                &streams[i].name,
-                2,
-                FREE,
-                right,
-                FREE,
-                start[i],
-                streams[i].data.len() as u64,
-            ));
+            dir.push(entry(&streams[i].name, 2, FREE, right, FREE, start[i], streams[i].data.len() as u64));
         }
     }
     let d: Vec<u8> = dir.concat();
@@ -223,11 +186,7 @@ pub fn write_cfb(path: &Path, streams: &[Stream], interleave: bool) {
     h[0x40..0x44].copy_from_slice(&(n_minifat as u32).to_le_bytes());
     h[0x44..0x48].copy_from_slice(&END.to_le_bytes());
     for k in 0..109 {
-        let v = if k < n_fat {
-            fat_first + k as u32
-        } else {
-            FREE
-        };
+        let v = if k < n_fat { fat_first + k as u32 } else { FREE };
         h[0x4c + k * 4..0x50 + k * 4].copy_from_slice(&v.to_le_bytes());
     }
     let mut out = h;
@@ -248,20 +207,8 @@ pub fn plane_tiff(px: &[u16], w: usize, h: usize, rps: usize, big_endian: bool) 
     let arrays = 8 + ifd_len;
     let data = arrays + nstrips * 8 + 3; // odd on purpose
     let mut b = vec![];
-    let u16b = |v: u16| {
-        if big_endian {
-            v.to_be_bytes()
-        } else {
-            v.to_le_bytes()
-        }
-    };
-    let u32b = |v: u32| {
-        if big_endian {
-            v.to_be_bytes()
-        } else {
-            v.to_le_bytes()
-        }
-    };
+    let u16b = |v: u16| if big_endian { v.to_be_bytes() } else { v.to_le_bytes() };
+    let u32b = |v: u32| if big_endian { v.to_be_bytes() } else { v.to_le_bytes() };
     b.extend_from_slice(if big_endian { b"MM" } else { b"II" });
     b.extend_from_slice(&u16b(42));
     b.extend_from_slice(&u32b(8));
@@ -330,17 +277,7 @@ pub struct OibSpec {
 
 impl Default for OibSpec {
     fn default() -> OibSpec {
-        OibSpec {
-            w: 64,
-            h: 48,
-            nc: 2,
-            nz: 3,
-            nt: 1,
-            rps: 16,
-            big_endian: false,
-            interleave: false,
-            missing: vec![],
-        }
+        OibSpec { w: 64, h: 48, nc: 2, nz: 3, nt: 1, rps: 16, big_endian: false, interleave: false, missing: vec![] }
     }
 }
 
@@ -371,25 +308,14 @@ fn main_oif(s: &OibSpec) -> String {
                 "StartPosition=-1000.0\r\nEndPosition={}.0\r\nInterval=150\r\n",
                 -1000 + 150 * (*n as i64 - 1)
             )),
-            "T" => m.push_str(&format!(
-                "StartPosition=0.0\r\nEndPosition={}.0\r\n",
-                2500 * (*n as i64 - 1).max(0)
-            )),
+            "T" => m.push_str(&format!("StartPosition=0.0\r\nEndPosition={}.0\r\n", 2500 * (*n as i64 - 1).max(0))),
             _ => {}
         }
     }
     let order = if s.nt > 1 { "XYCZT" } else { "XYCZ" };
-    m.push_str(&format!(
-        "[Axis Parameter Common]\r\nAxisCount={}\r\nAxisOrder=\"{order}\"\r\n",
-        order.len()
-    ));
-    for (c, (dye, ch, ex, em)) in [
-        ("DAPI", "CH1", 405, 461),
-        ("Alexa Fluor 594", "CH3", 543, 618),
-    ]
-    .iter()
-    .enumerate()
-    .take(s.nc)
+    m.push_str(&format!("[Axis Parameter Common]\r\nAxisCount={}\r\nAxisOrder=\"{order}\"\r\n", order.len()));
+    for (c, (dye, ch, ex, em)) in
+        [("DAPI", "CH1", 405, 461), ("Alexa Fluor 594", "CH3", 543, 618)].iter().enumerate().take(s.nc)
     {
         m.push_str(&format!(
             "[Channel {} Parameters]\r\nAnalogPMTVoltage={}\r\nBF Name=\"BA430-455\"\r\nCH Name=\"{ch}\"\r\nConfocal=\"ON\"\r\nDyeName=\"{dye}\"\r\nEmissionDM Name=\"SDM473\"\r\nEmissionWavelength={em}\r\nExcitationWavelength={ex}\r\nPMTDetectingMode=0\r\n",
@@ -430,30 +356,14 @@ pub fn write_oib(path: &Path, s: &OibSpec) {
     let mut streams = vec![];
     let mut info = String::from("[OibSaveInfo]\r\nMainFileName=Stream00001\r\nName=COFAImages\r\nStorage00001=synthetic.oif.files\r\nStream00001=synthetic.oif\r\n");
     let mut k = 2;
-    let mut add = |storage: &'static str,
-                   orig: &str,
-                   data: Vec<u8>,
-                   info: &mut String,
-                   streams: &mut Vec<Stream>| {
+    let mut add = |storage: &'static str, orig: &str, data: Vec<u8>, info: &mut String, streams: &mut Vec<Stream>| {
         let name = format!("Stream{k:05}");
-        let full = if storage.is_empty() {
-            orig.to_string()
-        } else {
-            format!("{storage}/{orig}")
-        };
+        let full = if storage.is_empty() { orig.to_string() } else { format!("{storage}/{orig}") };
         info.push_str(&format!("{name}={full}\r\n"));
-        streams.push(Stream {
-            storage,
-            name,
-            data,
-        });
+        streams.push(Stream { storage, name, data });
         k += 1;
     };
-    streams.push(Stream {
-        storage: "",
-        name: "Stream00001".into(),
-        data: utf16(&main_oif(s)),
-    });
+    streams.push(Stream { storage: "", name: "Stream00001".into(), data: utf16(&main_oif(s)) });
     for t in 0..s.nt {
         for z in 0..s.nz {
             for c in 0..s.nc {
@@ -466,50 +376,16 @@ pub fn write_oib(path: &Path, s: &OibSpec) {
                     format!("s_C{:03}Z{:03}", c + 1, z + 1)
                 };
                 let tif = plane_tiff(&plane(c, z, t, s.w, s.h), s.w, s.h, s.rps, s.big_endian);
-                add(
-                    "Storage00001",
-                    &format!("{stem}.tif"),
-                    tif,
-                    &mut info,
-                    &mut streams,
-                );
-                add(
-                    "Storage00001",
-                    &format!("{stem}.pty"),
-                    utf16(&pty(c)),
-                    &mut info,
-                    &mut streams,
-                );
+                add("Storage00001", &format!("{stem}.tif"), tif, &mut info, &mut streams);
+                add("Storage00001", &format!("{stem}.pty"), utf16(&pty(c)), &mut info, &mut streams);
             }
         }
     }
-    add(
-        "Storage00001",
-        "s_LUT1.lut",
-        lut([false, false, true]),
-        &mut info,
-        &mut streams,
-    );
-    add(
-        "Storage00001",
-        "s_LUT2.lut",
-        lut([true, false, false]),
-        &mut info,
-        &mut streams,
-    );
+    add("Storage00001", "s_LUT1.lut", lut([false, false, true]), &mut info, &mut streams);
+    add("Storage00001", "s_LUT2.lut", lut([true, false, false]), &mut info, &mut streams);
     // A thumbnail that is not part of the image.
-    add(
-        "Storage00001",
-        "s_Thumb.tif",
-        plane_tiff(&[1, 2, 3, 4], 2, 2, 2, false),
-        &mut info,
-        &mut streams,
-    );
-    streams.push(Stream {
-        storage: "",
-        name: "OibInfo.txt".into(),
-        data: utf16(&info),
-    });
+    add("Storage00001", "s_Thumb.tif", plane_tiff(&[1, 2, 3, 4], 2, 2, 2, false), &mut info, &mut streams);
+    streams.push(Stream { storage: "", name: "OibInfo.txt".into(), data: utf16(&info) });
     write_cfb(path, &streams, s.interleave);
 }
 
@@ -538,17 +414,7 @@ pub struct OirSpec {
 
 impl Default for OirSpec {
     fn default() -> OirSpec {
-        OirSpec {
-            w: 40,
-            h: 30,
-            nc: 2,
-            nz: 3,
-            nt: 2,
-            nl: 1,
-            strip: 800,
-            no_index: false,
-            reference: true,
-        }
+        OirSpec { w: 40, h: 30, nc: 2, nz: 3, nt: 2, nl: 1, strip: 800, no_index: false, reference: true }
     }
 }
 
@@ -647,29 +513,22 @@ pub fn write_oir(path: &Path, s: &OirSpec) {
     out[72..80].copy_from_slice(b"FLUOVIEW");
     let mut offsets = vec![];
 
-    let uid_block =
-        |out: &mut Vec<u8>, offsets: &mut Vec<u64>, uid: &str, at: usize, data: &[u8]| {
-            let mut p = vec![];
-            p.extend_from_slice(&(at as u32).to_le_bytes());
-            p.extend_from_slice(&(data.len() as u32).to_le_bytes());
-            p.extend_from_slice(&(uid.len() as u32).to_le_bytes());
-            p.extend_from_slice(uid.as_bytes());
-            block(out, offsets, 3, &p);
-            block(out, offsets, 4, data);
-        };
+    let uid_block = |out: &mut Vec<u8>, offsets: &mut Vec<u64>, uid: &str, at: usize, data: &[u8]| {
+        let mut p = vec![];
+        p.extend_from_slice(&(at as u32).to_le_bytes());
+        p.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        p.extend_from_slice(&(uid.len() as u32).to_le_bytes());
+        p.extend_from_slice(uid.as_bytes());
+        block(out, offsets, 3, &p);
+        block(out, offsets, 4, data);
+    };
     let bytes = |v: &[u16]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
 
     if s.reference {
         for c in 0..s.nc {
             let d = bytes(&plane(c, 99, 0, s.w, s.h));
             for (n, chunk) in d.chunks(s.strip).enumerate() {
-                uid_block(
-                    &mut out,
-                    &mut offsets,
-                    &format!("REF_LSM0_{}_{n}", GUIDS[c]),
-                    n * s.strip,
-                    chunk,
-                );
+                uid_block(&mut out, &mut offsets, &format!("REF_LSM0_{}_{n}", GUIDS[c]), n * s.strip, chunk);
             }
         }
     }

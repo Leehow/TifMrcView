@@ -9,11 +9,7 @@ use rayon::prelude::*;
 /// Signed frequency of index `i` in a transform of size `n`.
 #[inline]
 pub fn freq(i: usize, n: usize) -> i32 {
-    if i < n / 2 {
-        i as i32
-    } else {
-        i as i32 - n as i32
-    }
+    if i < n / 2 { i as i32 } else { i as i32 - n as i32 }
 }
 
 /// Index of signed frequency `f`.
@@ -25,11 +21,7 @@ pub fn index(f: i32, n: usize) -> usize {
 /// (−1)^(kx+ky): moves the phase origin from index 0 to the centre.
 #[inline]
 fn sign(i: usize) -> f32 {
-    if i & 1 == 0 {
-        1.0
-    } else {
-        -1.0
-    }
+    if i & 1 == 0 { 1.0 } else { -1.0 }
 }
 
 /// Forward 2D transform of a b × b image (one thread; callers parallelise
@@ -107,42 +99,35 @@ pub fn ift3(n: usize, re: &[f32], im: &[f32]) -> Vec<f32> {
 }
 
 fn centre3(n: usize, re: &mut [f32], im: &mut [f32]) {
-    re.par_chunks_mut(n * n)
-        .zip(im.par_chunks_mut(n * n))
-        .enumerate()
-        .for_each(|(z, (r, i))| {
-            for y in 0..n {
-                for x in 0..n {
-                    let s = sign(x + y + z);
-                    r[y * n + x] *= s;
-                    i[y * n + x] *= s;
-                }
+    re.par_chunks_mut(n * n).zip(im.par_chunks_mut(n * n)).enumerate().for_each(|(z, (r, i))| {
+        for y in 0..n {
+            for x in 0..n {
+                let s = sign(x + y + z);
+                r[y * n + x] *= s;
+                i[y * n + x] *= s;
             }
-        });
+        }
+    });
 }
 
 /// Transforms along x, y and z (each pass on contiguous copies).
 fn lines3(fft: &Fft, n: usize, re: &mut [f32], im: &mut [f32]) {
-    re.par_chunks_mut(n)
-        .zip(im.par_chunks_mut(n))
-        .for_each(|(r, i)| fft.run(r, i));
+    re.par_chunks_mut(n).zip(im.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
     // Along y, one z plane at a time.
-    re.par_chunks_mut(n * n)
-        .zip(im.par_chunks_mut(n * n))
-        .for_each(|(r, i)| {
-            let (mut cr, mut ci) = (vec![0f32; n], vec![0f32; n]);
-            for x in 0..n {
-                for y in 0..n {
-                    cr[y] = r[y * n + x];
-                    ci[y] = i[y * n + x];
-                }
-                fft.run(&mut cr, &mut ci);
-                for y in 0..n {
-                    r[y * n + x] = cr[y];
-                    i[y * n + x] = ci[y];
-                }
+    re.par_chunks_mut(n * n).zip(im.par_chunks_mut(n * n)).for_each(|(r, i)| {
+        let (mut cr, mut ci) = (vec![0f32; n], vec![0f32; n]);
+        for x in 0..n {
+            for y in 0..n {
+                cr[y] = r[y * n + x];
+                ci[y] = i[y * n + x];
             }
-        });
+            fft.run(&mut cr, &mut ci);
+            for y in 0..n {
+                r[y * n + x] = cr[y];
+                i[y * n + x] = ci[y];
+            }
+        }
+    });
     // Along z, one y row of columns at a time.
     let plane = n * n;
     let cols: Vec<(Vec<f32>, Vec<f32>)> = (0..plane)

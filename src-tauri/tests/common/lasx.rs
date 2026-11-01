@@ -35,47 +35,17 @@ pub fn stack(name: &str, w: usize, h: usize, nc: usize, nz: usize, nt: usize, bi
     let item = if bits > 8 { 2 } else { 1 };
     let plane = (w * h * item) as u64;
     let mut dims: Vec<Dim> = vec![
-        (
-            1,
-            w as u64,
-            0.0,
-            (w as f64 - 1.0) * 0.5e-6,
-            "m",
-            item as u64,
-        ),
-        (
-            2,
-            h as u64,
-            0.0,
-            (h as f64 - 1.0) * 0.5e-6,
-            "m",
-            w as u64 * item as u64,
-        ),
+        (1, w as u64, 0.0, (w as f64 - 1.0) * 0.5e-6, "m", item as u64),
+        (2, h as u64, 0.0, (h as f64 - 1.0) * 0.5e-6, "m", w as u64 * item as u64),
     ];
     if nz > 1 {
-        dims.push((
-            3,
-            nz as u64,
-            0.0,
-            -(nz as f64 - 1.0) * 1.5e-6,
-            "m",
-            plane * nc as u64,
-        ));
+        dims.push((3, nz as u64, 0.0, -(nz as f64 - 1.0) * 1.5e-6, "m", plane * nc as u64));
     }
     if nt > 1 {
-        dims.push((
-            4,
-            nt as u64,
-            0.0,
-            (nt as f64 - 1.0) * 2.5,
-            "s",
-            plane * (nc * nz) as u64,
-        ));
+        dims.push((4, nt as u64, 0.0, (nt as f64 - 1.0) * 2.5, "s", plane * (nc * nz) as u64));
     }
     let luts = ["Green", "Red", "Blue", "Gray"];
-    let chans = (0..nc)
-        .map(|c| (bits, luts[c % 4], c as u64 * plane, 0))
-        .collect();
+    let chans = (0..nc).map(|c| (bits, luts[c % 4], c as u64 * plane, 0)).collect();
     let mut data = vec![];
     for t in 0..nt {
         for z in 0..nz {
@@ -93,14 +63,7 @@ pub fn stack(name: &str, w: usize, h: usize, nc: usize, nz: usize, nt: usize, bi
             }
         }
     }
-    Img {
-        name: name.into(),
-        dims,
-        chans,
-        data,
-        attachments: String::new(),
-        chan_props: vec![],
-    }
+    Img { name: name.into(), dims, chans, data, attachments: String::new(), chan_props: vec![] }
 }
 
 fn dim_xml(d: &Dim) -> String {
@@ -114,9 +77,7 @@ fn chan_xml(c: &Chan, props: &[(&str, &str)]) -> String {
     let (bits, lut, inc, tag) = c;
     let props: String = props
         .iter()
-        .map(|(k, v)| {
-            format!("<ChannelProperty><Key>{k}</Key><Value>{v}</Value></ChannelProperty>")
-        })
+        .map(|(k, v)| format!("<ChannelProperty><Key>{k}</Key><Value>{v}</Value></ChannelProperty>"))
         .collect();
     format!(
         "<ChannelDescription DataType=\"0\" ChannelTag=\"{tag}\" Resolution=\"{bits}\" NameOfMeasuredQuantity=\"\" Min=\"0.0\" Max=\"65535.0\" Unit=\"\" LUTName=\"{lut}\" IsLUTInverted=\"0\" BytesInc=\"{inc}\" BitInc=\"0\">{props}</ChannelDescription>"
@@ -125,15 +86,9 @@ fn chan_xml(c: &Chan, props: &[(&str, &str)]) -> String {
 
 /// The `<Data>` element of an image.
 fn data_xml(i: &Img) -> String {
-    let mut x = format!(
-        "<Data><Image TextDescription=\"\">{}<ImageDescription><Channels>",
-        i.attachments
-    );
+    let mut x = format!("<Data><Image TextDescription=\"\">{}<ImageDescription><Channels>", i.attachments);
     for (k, c) in i.chans.iter().enumerate() {
-        x.push_str(&chan_xml(
-            c,
-            i.chan_props.get(k).map_or(&[][..], |p| &p[..]),
-        ));
+        x.push_str(&chan_xml(c, i.chan_props.get(k).map_or(&[][..], |p| &p[..])));
     }
     x.push_str("</Channels><Dimensions>");
     for d in &i.dims {

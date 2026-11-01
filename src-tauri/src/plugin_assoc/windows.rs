@@ -4,11 +4,7 @@ use std::collections::BTreeSet;
 
 pub(super) const CLSID: &str = crate::edition::THUMB_CLSID_STR;
 pub(super) const SLOT: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
-const RECORD: &str = if crate::edition::PRO {
-    r"Software\com.leehow.tifmrcview.pro\PluginFormats"
-} else {
-    r"Software\com.leehow.tifmrcview\PluginFormats"
-};
+const RECORD: &str = if crate::edition::PRO { r"Software\com.leehow.tifmrcview.pro\PluginFormats" } else { r"Software\com.leehow.tifmrcview\PluginFormats" };
 // Tauri NSIS APP_ASSOCIATE uses fileAssociations[].name as FILECLASS.
 const PROGID: &str = "MRC Image";
 

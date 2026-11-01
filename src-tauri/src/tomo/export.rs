@@ -35,20 +35,8 @@ use std::path::{Path, PathBuf};
 /// One `.xf` row: the transform taking the raw view to the aligned one.
 pub fn xf_row(a: &Alignment, v: &View) -> [f64; 6] {
     let r = geometry::rotation(a.axis + v.rotation);
-    let m = [
-        r[0][0] / v.mag,
-        r[1][0] / v.mag,
-        r[0][1] / v.mag,
-        r[1][1] / v.mag,
-    ];
-    [
-        m[0],
-        m[1],
-        m[2],
-        m[3],
-        -m[0] * v.shift[0] - m[1] * v.shift[1],
-        -m[2] * v.shift[0] - m[3] * v.shift[1],
-    ]
+    let m = [r[0][0] / v.mag, r[1][0] / v.mag, r[0][1] / v.mag, r[1][1] / v.mag];
+    [m[0], m[1], m[2], m[3], -m[0] * v.shift[0] - m[1] * v.shift[1], -m[2] * v.shift[0] - m[3] * v.shift[1]]
 }
 
 /// 1-based IMOD list (`1,4-6`).
@@ -61,22 +49,14 @@ fn ranges(mut v: Vec<usize>) -> String {
         while j + 1 < v.len() && v[j + 1] == v[j] + 1 {
             j += 1;
         }
-        out.push(if i == j {
-            format!("{}", v[i] + 1)
-        } else {
-            format!("{}-{}", v[i] + 1, v[j] + 1)
-        });
+        out.push(if i == j { format!("{}", v[i] + 1) } else { format!("{}-{}", v[i] + 1, v[j] + 1) });
         i = j + 1;
     }
     out.join(",")
 }
 
 fn stem(d: &Dataset) -> String {
-    Path::new(&d.stack)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("stack")
-        .to_string()
+    Path::new(&d.stack).file_stem().and_then(|s| s.to_str()).unwrap_or("stack").to_string()
 }
 
 /// Views of the alignment in stack order.
@@ -87,9 +67,7 @@ fn by_section(a: &Alignment) -> Vec<&View> {
 }
 
 pub fn imod(d: &Dataset, dir: &str) -> Result<Vec<String>> {
-    let Some(a) = d.alignment.as_ref() else {
-        bail!("先完成倾转对齐")
-    };
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
     let name = stem(d);
     let folder = PathBuf::from(dir).join(&name);
     std::fs::create_dir_all(&folder)?;
@@ -104,43 +82,22 @@ pub fn imod(d: &Dataset, dir: &str) -> Result<Vec<String>> {
     let (mut xf, mut tlt, mut raw) = (String::new(), String::new(), String::new());
     for v in &views {
         let x = xf_row(a, v);
-        writeln!(
-            xf,
-            "{:12.7} {:12.7} {:12.7} {:12.7} {:12.3} {:12.3}",
-            x[0], x[1], x[2], x[3], x[4], x[5]
-        )?;
+        writeln!(xf, "{:12.7} {:12.7} {:12.7} {:12.7} {:12.3} {:12.3}", x[0], x[1], x[2], x[3], x[4], x[5])?;
         writeln!(tlt, "{:.2}", v.refined())?;
         writeln!(raw, "{:.2}", v.angle)?;
     }
     put(file("xf"), xf)?;
     put(file("tlt"), tlt)?;
     put(file("rawtlt"), raw)?;
-    let excluded: Vec<usize> = views
-        .iter()
-        .filter(|v| v.excluded)
-        .map(|v| v.file_index)
-        .collect();
-    put(
-        folder.join(format!("{name}_exclude.txt")),
-        format!("{}\n", ranges(excluded)),
-    )?;
+    let excluded: Vec<usize> = views.iter().filter(|v| v.excluded).map(|v| v.file_index).collect();
+    put(folder.join(format!("{name}_exclude.txt")), format!("{}\n", ranges(excluded)))?;
     if let Some(ctf) = &d.ctf {
         // Version 3: a header line, then per view
         // start end tilt-start tilt-end defocus1 defocus2 (nm) astigmatism angle (°).
         let mut text = String::from("1  0 0. 0. 0  3\n");
         for f in &ctf.tilts {
             let t = d.angles.get(f.z).copied().unwrap_or(0.0);
-            writeln!(
-                text,
-                "{}  {}  {:.2}  {:.2}  {:.1}  {:.1}  {:.2}",
-                f.z + 1,
-                f.z + 1,
-                t,
-                t,
-                f.df1 / 10.0,
-                f.df2 / 10.0,
-                f.angle
-            )?;
+            writeln!(text, "{}  {}  {:.2}  {:.2}  {:.1}  {:.1}  {:.2}", f.z + 1, f.z + 1, t, t, f.df1 / 10.0, f.df2 / 10.0, f.angle)?;
         }
         put(file("defocus"), text)?;
     }
@@ -155,19 +112,12 @@ pub fn imod(d: &Dataset, dir: &str) -> Result<Vec<String>> {
 }
 
 pub fn table(d: &Dataset, dir: &str) -> Result<Vec<String>> {
-    let Some(a) = d.alignment.as_ref() else {
-        bail!("先完成倾转对齐")
-    };
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
     let px = d.optics.pixel_a.unwrap_or(1.0);
     let mut text = String::from("section,tilt_nominal_deg,tilt_refined_deg,excluded,shift_x_px,shift_y_px,shift_x_A,shift_y_A,axis_deg,rotation_deg,magnification,residual_px,defocus1_A,defocus2_A,astigmatism_angle_deg,ctf_fit_resolution_A\n");
     for v in by_section(a) {
-        let ctf = d
-            .ctf
-            .as_ref()
-            .and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
-        let c = |f: fn(&super::dataset::TiltCtf) -> f64| {
-            ctf.map(|t| format!("{:.1}", f(t))).unwrap_or_default()
-        };
+        let ctf = d.ctf.as_ref().and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
+        let c = |f: fn(&super::dataset::TiltCtf) -> f64| ctf.map(|t| format!("{:.1}", f(t))).unwrap_or_default();
         writeln!(
             text,
             "{},{:.3},{:.3},{},{:.3},{:.3},{:.2},{:.2},{:.3},{:.3},{:.5},{:.3},{},{},{},{}",
@@ -194,32 +144,16 @@ pub fn table(d: &Dataset, dir: &str) -> Result<Vec<String>> {
     Ok(vec![path.to_string_lossy().into_owned()])
 }
 
-pub fn aligned(
-    d: &Dataset,
-    dir: &str,
-    bin: usize,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<Vec<String>> {
-    let Some(a) = d.alignment.as_ref() else {
-        bail!("先完成倾转对齐")
-    };
+pub fn aligned(d: &Dataset, dir: &str, bin: usize, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
     let img = super::pipeline::open(&d.stack)?;
-    let px = d
-        .optics
-        .pixel_a
-        .unwrap_or_else(|| super::output::pixel_a(&img));
+    let px = d.optics.pixel_a.unwrap_or_else(|| super::output::pixel_a(&img));
     let (data, w, h, angles) = super::output::aligned(&img, a, bin, 0, 0, progress)?;
     let base = PathBuf::from(dir).join(format!("{}_ali", stem(d)));
     let mrc = base.with_extension("mrc").to_string_lossy().into_owned();
     super::output::write_mrc(&mrc, &data, [w, h, angles.len()], px * bin as f64, false)?;
     let tlt = base.with_extension("tlt");
-    std::fs::write(
-        &tlt,
-        angles
-            .iter()
-            .map(|t| format!("{t:.2}\n"))
-            .collect::<String>(),
-    )?;
+    std::fs::write(&tlt, angles.iter().map(|t| format!("{t:.2}\n")).collect::<String>())?;
     Ok(vec![mrc, tlt.to_string_lossy().into_owned()])
 }
 
@@ -245,17 +179,9 @@ fn star(block: &str, labels: &[&str], rows: &[Vec<String>]) -> String {
     s
 }
 
-pub fn relion5(
-    d: &Dataset,
-    dir: &str,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<Vec<String>> {
-    let Some(a) = d.alignment.as_ref() else {
-        bail!("先完成倾转对齐")
-    };
-    let Some(px) = d.optics.pixel_a else {
-        bail!("先在 CTF 一步填上像素大小")
-    };
+pub fn relion5(d: &Dataset, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
+    let Some(px) = d.optics.pixel_a else { bail!("先在 CTF 一步填上像素大小") };
     let name = stem(d);
     let root = PathBuf::from(dir).join(format!("{name}_relion5"));
     std::fs::create_dir_all(root.join("frames"))?;
@@ -266,12 +192,7 @@ pub fn relion5(
         .filter(|(_, p)| Path::new(p).exists())
         .collect();
     let kept: Vec<&View> = by_section(a).into_iter().filter(|v| !v.excluded).collect();
-    let frame = |v: &View, suffix: &str| {
-        format!(
-            "frames/{name}_{:03}_{:.1}{suffix}.mrc",
-            v.file_index, v.angle
-        )
-    };
+    let frame = |v: &View, suffix: &str| format!("frames/{name}_{:03}_{:.1}{suffix}.mrc", v.file_index, v.angle);
     let total = kept.len() * sources.len();
     let mut done = 0;
     for (suffix, path) in &sources {
@@ -283,32 +204,16 @@ pub fn relion5(
             let p = img.page(page)?;
             let p = &p[s.min(p.len() - 1)];
             let data: Vec<f32> = (0..p.w * p.h).map(|i| p.data.get_f64(i) as f32).collect();
-            super::output::write_mrc(
-                &root.join(frame(v, suffix)).to_string_lossy(),
-                &data,
-                [p.w, p.h, 1],
-                px,
-                false,
-            )?;
+            super::output::write_mrc(&root.join(frame(v, suffix)).to_string_lossy(), &data, [p.w, p.h, 1], px, false)?;
             done += 1;
             progress(done, total);
         }
     }
     let halves = sources.len() == 3;
     let mut labels = vec![
-        "rlnMicrographName",
-        "rlnTomoNominalStageTiltAngle",
-        "rlnTomoNominalTiltAxisAngle",
-        "rlnMicrographPreExposure",
-        "rlnDefocusU",
-        "rlnDefocusV",
-        "rlnDefocusAngle",
-        "rlnCtfMaxResolution",
-        "rlnTomoXTilt",
-        "rlnTomoYTilt",
-        "rlnTomoZRot",
-        "rlnTomoXShiftAngst",
-        "rlnTomoYShiftAngst",
+        "rlnMicrographName", "rlnTomoNominalStageTiltAngle", "rlnTomoNominalTiltAxisAngle", "rlnMicrographPreExposure",
+        "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", "rlnCtfMaxResolution",
+        "rlnTomoXTilt", "rlnTomoYTilt", "rlnTomoZRot", "rlnTomoXShiftAngst", "rlnTomoYShiftAngst",
     ];
     if halves {
         labels.extend(["rlnMicrographNameEven", "rlnMicrographNameOdd"]);
@@ -317,12 +222,8 @@ pub fn relion5(
         .iter()
         .map(|v| {
             let [z, sx, sy] = relion_pose(a, v, px);
-            let ctf = d
-                .ctf
-                .as_ref()
-                .and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
-            let (du, dv, da, res) =
-                ctf.map_or((0.0, 0.0, 0.0, 0.0), |f| (f.df1, f.df2, f.angle, f.fit_res));
+            let ctf = d.ctf.as_ref().and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
+            let (du, dv, da, res) = ctf.map_or((0.0, 0.0, 0.0, 0.0), |f| (f.df1, f.df2, f.angle, f.fit_res));
             let mut r = vec![
                 frame(v, ""),
                 format!("{:.3}", v.angle),
@@ -349,28 +250,10 @@ pub fn relion5(
     std::fs::write(&series, star(&name, &labels, &rows))?;
     let img = super::pipeline::open(&d.stack)?;
     let (w, h) = (img.info().width, img.info().height);
-    let depth = d
-        .tomograms
-        .iter()
-        .rev()
-        .find(|t| t.kind == "full")
-        .map_or(w.min(h) / 4, |t| t.thickness * t.bin);
+    let depth = d.tomograms.iter().rev().find(|t| t.kind == "full").map_or(w.min(h) / 4, |t| t.thickness * t.bin);
     let global = star(
         "global",
-        &[
-            "rlnTomoName",
-            "rlnTomoTiltSeriesStarFile",
-            "rlnVoltage",
-            "rlnSphericalAberration",
-            "rlnAmplitudeContrast",
-            "rlnMicrographOriginalPixelSize",
-            "rlnTomoHand",
-            "rlnOpticsGroupName",
-            "rlnTomoTiltSeriesPixelSize",
-            "rlnTomoSizeX",
-            "rlnTomoSizeY",
-            "rlnTomoSizeZ",
-        ],
+        &["rlnTomoName", "rlnTomoTiltSeriesStarFile", "rlnVoltage", "rlnSphericalAberration", "rlnAmplitudeContrast", "rlnMicrographOriginalPixelSize", "rlnTomoHand", "rlnOpticsGroupName", "rlnTomoTiltSeriesPixelSize", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"],
         &[vec![
             name.clone(),
             format!("tilt_series/{name}.star"),
@@ -388,19 +271,10 @@ pub fn relion5(
     );
     let top = root.join("tilt_series.star");
     std::fs::write(&top, global)?;
-    Ok(vec![
-        top.to_string_lossy().into_owned(),
-        series.to_string_lossy().into_owned(),
-    ])
+    Ok(vec![top.to_string_lossy().into_owned(), series.to_string_lossy().into_owned()])
 }
 
-pub fn run(
-    d: &Dataset,
-    format: &str,
-    dir: &str,
-    bin: usize,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<Vec<String>> {
+pub fn run(d: &Dataset, format: &str, dir: &str, bin: usize, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
     match format {
         "relion5" => relion5(d, dir, progress),
         "imod" => imod(d, dir),

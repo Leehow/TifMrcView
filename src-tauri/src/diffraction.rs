@@ -98,14 +98,8 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         }
         out
     };
-    let rows: Vec<f32> = (0..h)
-        .into_par_iter()
-        .flat_map_iter(|y| line(v, w, &|x| y * w + x))
-        .collect();
-    let cols: Vec<Vec<f32>> = (0..w)
-        .into_par_iter()
-        .map(|x| line(&rows, h, &|y| y * w + x))
-        .collect();
+    let rows: Vec<f32> = (0..h).into_par_iter().flat_map_iter(|y| line(v, w, &|x| y * w + x)).collect();
+    let cols: Vec<Vec<f32>> = (0..w).into_par_iter().map(|x| line(&rows, h, &|y| y * w + x)).collect();
     let mut out = vec![0f32; w * h];
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         for (x, o) in row.iter_mut().enumerate() {
@@ -124,11 +118,7 @@ fn find_spots(v: &[f32], w: usize, h: usize, min_dist: f64, sigma: f64) -> Vec<(
     let bg = box_mean(&box_mean(&lg, w, h, 3 * r + 2), w, h, 3 * r + 2);
     let res: Vec<f32> = lg.par_iter().zip(&bg).map(|(a, b)| a - b).collect();
     // Robust noise: median absolute deviation of a sample.
-    let mut sample: Vec<f32> = res
-        .iter()
-        .step_by((res.len() / 200_000).max(1))
-        .copied()
-        .collect();
+    let mut sample: Vec<f32> = res.iter().step_by((res.len() / 200_000).max(1)).copied().collect();
     sample.sort_by(f32::total_cmp);
     let med = sample[sample.len() / 2];
     let mut dev: Vec<f32> = sample.iter().map(|x| (x - med).abs()).collect();
@@ -165,11 +155,7 @@ fn find_spots(v: &[f32], w: usize, h: usize, min_dist: f64, sigma: f64) -> Vec<(
                         sw += wt;
                     }
                 }
-                let (px, py) = if sw > 0.0 {
-                    (sx / sw, sy / sw)
-                } else {
-                    (x as f64, y as f64)
-                };
+                let (px, py) = if sw > 0.0 { (sx / sw, sy / sw) } else { (x as f64, y as f64) };
                 Some((px, py, (c as f64 - med as f64) / noise))
             })
         })
@@ -180,10 +166,7 @@ fn find_spots(v: &[f32], w: usize, h: usize, min_dist: f64, sigma: f64) -> Vec<(
     // at each corner: keep only the strongest within the spot spacing.
     let mut kept: Vec<(f64, f64, f64)> = Vec::new();
     for p in peaks {
-        if kept
-            .iter()
-            .all(|k| (k.0 - p.0).hypot(k.1 - p.1) >= min_dist)
-        {
+        if kept.iter().all(|k| (k.0 - p.0).hypot(k.1 - p.1) >= min_dist) {
             kept.push(p);
             if kept.len() == MAX_SPOTS {
                 break;
@@ -208,35 +191,19 @@ fn friedel_center(spots: &[(f64, f64, f64)], tol: f64) -> Option<[f64; 2]> {
             ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, w)
         })
         .collect();
-    let score = |c: (f64, f64)| -> f64 {
-        mids.iter()
-            .filter(|m| (m.0 - c.0).hypot(m.1 - c.1) < tol)
-            .map(|m| m.2)
-            .sum()
-    };
+    let score = |c: (f64, f64)| -> f64 { mids.iter().filter(|m| (m.0 - c.0).hypot(m.1 - c.1) < tol).map(|m| m.2).sum() };
     // Candidates: midpoints of pairs that include one of the strongest spots.
     let top = spots.len().min(30);
     let best = (0..top)
         .flat_map(|i| (i..spots.len()).map(move |j| (i, j)))
-        .map(|(i, j)| {
-            (
-                (spots[i].0 + spots[j].0) / 2.0,
-                (spots[i].1 + spots[j].1) / 2.0,
-            )
-        })
+        .map(|(i, j)| ((spots[i].0 + spots[j].0) / 2.0, (spots[i].1 + spots[j].1) / 2.0))
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|c| (score(c), c))
         .max_by(|a, b| a.0.total_cmp(&b.0))?;
-    let near: Vec<&(f64, f64, f64)> = mids
-        .iter()
-        .filter(|m| (m.0 - best.1 .0).hypot(m.1 - best.1 .1) < tol)
-        .collect();
+    let near: Vec<&(f64, f64, f64)> = mids.iter().filter(|m| (m.0 - best.1 .0).hypot(m.1 - best.1 .1) < tol).collect();
     let sw: f64 = near.iter().map(|m| m.2).sum();
-    Some([
-        near.iter().map(|m| m.0 * m.2).sum::<f64>() / sw,
-        near.iter().map(|m| m.1 * m.2).sum::<f64>() / sw,
-    ])
+    Some([near.iter().map(|m| m.0 * m.2).sum::<f64>() / sw, near.iter().map(|m| m.1 * m.2).sum::<f64>() / sw])
 }
 
 fn cross(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -315,17 +282,11 @@ fn frequent_differences(g: &[([f64; 2], f64)], min_len: f64, keep: usize) -> Vec
             }
         }
     }
-    let near =
-        |a: [f64; 2], b: [f64; 2]| norm([a[0] - b[0], a[1] - b[1]]) < (0.06 * norm(a)).max(1.5);
-    let votes: Vec<f64> = d
-        .par_iter()
-        .map(|(v, _)| d.iter().filter(|(u, _)| near(*v, *u)).map(|(_, w)| w).sum())
-        .collect();
+    let near = |a: [f64; 2], b: [f64; 2]| norm([a[0] - b[0], a[1] - b[1]]) < (0.06 * norm(a)).max(1.5);
+    let votes: Vec<f64> = d.par_iter().map(|(v, _)| d.iter().filter(|(u, _)| near(*v, *u)).map(|(_, w)| w).sum()).collect();
     let mut order: Vec<usize> = (0..d.len()).collect();
     // Many votes first; among equals, the shorter.
-    order.sort_by(|&i, &j| {
-        (votes[j] / norm(d[j].0).sqrt()).total_cmp(&(votes[i] / norm(d[i].0).sqrt()))
-    });
+    order.sort_by(|&i, &j| (votes[j] / norm(d[j].0).sqrt()).total_cmp(&(votes[i] / norm(d[i].0).sqrt())));
     let mut out: Vec<[f64; 2]> = Vec::new();
     for i in order {
         let v = d[i].0;
@@ -352,13 +313,7 @@ fn frequent_differences(g: &[([f64; 2], f64)], min_len: f64, keep: usize) -> Vec
 /// disc that has no spot. A basis of half the spacing indexes every spot
 /// but leaves three empty points for each full one; a superlattice of
 /// weak spots leaves many.
-fn lattice_score(
-    g: &[([f64; 2], f64)],
-    a: [f64; 2],
-    b: [f64; 2],
-    penalty: f64,
-    spot_tol: f64,
-) -> f64 {
+fn lattice_score(g: &[([f64; 2], f64)], a: [f64; 2], b: [f64; 2], penalty: f64, spot_tol: f64) -> f64 {
     let det = cross(a, b).abs();
     let tol = tolerance(a, b, spot_tol);
     let mut fit = 0.0;
@@ -382,17 +337,11 @@ fn lattice_score(
     let mut empty = 0usize;
     for h in -hmax..=hmax {
         for k in -kmax..=kmax {
-            let p = [
-                h as f64 * a[0] + k as f64 * b[0],
-                h as f64 * a[1] + k as f64 * b[1],
-            ];
+            let p = [h as f64 * a[0] + k as f64 * b[0], h as f64 * a[1] + k as f64 * b[1]];
             if (h, k) == (0, 0) || norm(p) > r {
                 continue;
             }
-            if !g
-                .iter()
-                .any(|(v, _)| norm([v[0] - p[0], v[1] - p[1]]) < tol)
-            {
+            if !g.iter().any(|(v, _)| norm([v[0] - p[0], v[1] - p[1]]) < tol) {
                 empty += 1;
             }
         }
@@ -433,13 +382,7 @@ fn fit_lattice(g: &[([f64; 2], f64)], min_len: f64, spot_tol: f64) -> Option<([f
 
 /// Least squares for centre and basis together: p = c + h·a + k·b, over
 /// the spots that index within tolerance.
-fn refine(
-    spots: &[(f64, f64, f64)],
-    c: [f64; 2],
-    a: [f64; 2],
-    b: [f64; 2],
-    spot_tol: f64,
-) -> ([f64; 2], [f64; 2], [f64; 2]) {
+fn refine(spots: &[(f64, f64, f64)], c: [f64; 2], a: [f64; 2], b: [f64; 2], spot_tol: f64) -> ([f64; 2], [f64; 2], [f64; 2]) {
     let tol = tolerance(a, b, spot_tol);
     let rows: Vec<([f64; 3], [f64; 2])> = spots
         .iter()
@@ -463,20 +406,14 @@ fn refine(
             r[1][i] += x[i] * p[1];
         }
     }
-    let Some(inv) = invert3(m) else {
-        return (c, a, b);
-    };
-    let solve = |rhs: [f64; 3]| -> [f64; 3] {
-        std::array::from_fn(|i| (0..3).map(|j| inv[i][j] * rhs[j]).sum())
-    };
+    let Some(inv) = invert3(m) else { return (c, a, b) };
+    let solve = |rhs: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| (0..3).map(|j| inv[i][j] * rhs[j]).sum()) };
     let (sx, sy) = (solve(r[0]), solve(r[1]));
     ([sx[0], sy[0]], [sx[1], sy[1]], [sx[2], sy[2]])
 }
 
 fn invert3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
-    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
     if det.abs() < 1e-12 {
         return None;
     }
@@ -486,17 +423,11 @@ fn invert3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
         m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]
     };
     // Inverse = adjugate / det; adjugate[i][j] = cofactor[j][i].
-    Some(std::array::from_fn(|i| {
-        std::array::from_fn(|j| c(j, i) / det)
-    }))
+    Some(std::array::from_fn(|i| std::array::from_fn(|j| c(j, i) / det)))
 }
 
 /// Spots, centre and lattice of a set of spots (image pixels).
-fn analyse(
-    spots: Vec<(f64, f64, f64)>,
-    center: Option<[f64; 2]>,
-    min_dist: f64,
-) -> Result<(Vec<Spot>, [f64; 2], Option<Lattice>)> {
+fn analyse(spots: Vec<(f64, f64, f64)>, center: Option<[f64; 2]>, min_dist: f64) -> Result<(Vec<Spot>, [f64; 2], Option<Lattice>)> {
     if spots.is_empty() {
         bail!("没有找到斑点：把阈值调低一些，或检查最小间距");
     }
@@ -506,10 +437,7 @@ fn analyse(
         Some(c) => c,
         None => friedel_center(&spots, tol).unwrap_or([spots[0].0, spots[0].1]),
     };
-    let g: Vec<([f64; 2], f64)> = spots
-        .iter()
-        .map(|s| ([s.0 - c[0], s.1 - c[1]], s.2.sqrt()))
-        .collect();
+    let g: Vec<([f64; 2], f64)> = spots.iter().map(|s| ([s.0 - c[0], s.1 - c[1]], s.2.sqrt())).collect();
     let mut lattice = None;
     if let Some((a0, b0)) = fit_lattice(&g, min_dist * 0.75, spot_tol) {
         let (c1, a1, b1) = refine(&spots, c, a0, b0, spot_tol);
@@ -518,18 +446,9 @@ fn analyse(
             c = c1;
         }
         let tol = tolerance(a, b, spot_tol);
-        let errs: Vec<f64> = spots
-            .iter()
-            .map(|s| index([s.0 - c[0], s.1 - c[1]], a, b).1)
-            .filter(|&e| e < tol)
-            .collect();
+        let errs: Vec<f64> = spots.iter().map(|s| index([s.0 - c[0], s.1 - c[1]], a, b).1).filter(|&e| e < tol).collect();
         let rms = (errs.iter().map(|e| e * e).sum::<f64>() / errs.len().max(1) as f64).sqrt();
-        lattice = Some(Lattice {
-            a,
-            b,
-            inliers: errs.len(),
-            rms,
-        });
+        lattice = Some(Lattice { a, b, inliers: errs.len(), rms });
     }
     let out = spots
         .iter()
@@ -538,12 +457,7 @@ fn analyse(
                 let (hk, e) = index([s.0 - c[0], s.1 - c[1]], l.a, l.b);
                 (e < tolerance(l.a, l.b, spot_tol)).then_some(hk)
             });
-            Spot {
-                x: s.0,
-                y: s.1,
-                snr: s.2,
-                hk,
-            }
+            Spot { x: s.0, y: s.1, snr: s.2, hk }
         })
         .collect();
     Ok((out, c, lattice))
@@ -568,21 +482,10 @@ pub fn find(img: &Arc<OpenImage>, req: &FindReq) -> Result<Pattern> {
         }
         None => [0, 0, p.w, p.h],
     };
-    let v: Vec<f32> = (0..w * h)
-        .into_par_iter()
-        .map(|i| p.data.get_f64((y0 + i / w) * p.w + x0 + i % w) as f32)
-        .collect();
-    let spots: Vec<(f64, f64, f64)> = find_spots(&v, w, h, req.min_dist, req.sigma)
-        .into_iter()
-        .map(|(x, y, s)| (x + x0 as f64, y + y0 as f64, s))
-        .collect();
+    let v: Vec<f32> = (0..w * h).into_par_iter().map(|i| p.data.get_f64((y0 + i / w) * p.w + x0 + i % w) as f32).collect();
+    let spots: Vec<(f64, f64, f64)> = find_spots(&v, w, h, req.min_dist, req.sigma).into_iter().map(|(x, y, s)| (x + x0 as f64, y + y0 as f64, s)).collect();
     let (spots, center, lattice) = analyse(spots, req.center, req.min_dist)?;
-    Ok(Pattern {
-        center,
-        spots,
-        lattice,
-        ms: start.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Pattern { center, spots, lattice, ms: start.elapsed().as_secs_f64() * 1e3 })
 }
 
 // ---- Zone axes from a unit cell ----
@@ -636,26 +539,14 @@ fn allowed(c: &str, h: i32, k: i32, l: i32) -> bool {
 }
 
 fn gcd(a: i32, b: i32) -> i32 {
-    if b == 0 {
-        a.abs()
-    } else {
-        gcd(b, a % b)
-    }
+    if b == 0 { a.abs() } else { gcd(b, a % b) }
 }
 
 /// Reciprocal metric tensor G* of a cell (Å, degrees), for |g|² = hᵀ G* h.
 fn reciprocal_metric(cell: [f64; 6]) -> Result<[[f64; 3]; 3]> {
     let [a, b, c, al, be, ga] = cell;
-    let (ca, cb, cg) = (
-        al.to_radians().cos(),
-        be.to_radians().cos(),
-        ga.to_radians().cos(),
-    );
-    let g = [
-        [a * a, a * b * cg, a * c * cb],
-        [a * b * cg, b * b, b * c * ca],
-        [a * c * cb, b * c * ca, c * c],
-    ];
+    let (ca, cb, cg) = (al.to_radians().cos(), be.to_radians().cos(), ga.to_radians().cos());
+    let g = [[a * a, a * b * cg, a * c * cb], [a * b * cg, b * b, b * c * ca], [a * c * cb, b * c * ca, c * c]];
     invert3(g).ok_or_else(|| anyhow::anyhow!("晶胞参数不对"))
 }
 
@@ -666,17 +557,11 @@ pub fn zones(req: &ZoneReq) -> Result<Vec<Zone>> {
     let gs = reciprocal_metric(req.cell)?;
     let len = |h: [i32; 3]| -> f64 {
         let v = h.map(|x| x as f64);
-        (0..3)
-            .map(|i| (0..3).map(|j| v[i] * gs[i][j] * v[j]).sum::<f64>())
-            .sum::<f64>()
-            .max(0.0)
-            .sqrt()
+        (0..3).map(|i| (0..3).map(|j| v[i] * gs[i][j] * v[j]).sum::<f64>()).sum::<f64>().max(0.0).sqrt()
     };
     let dotg = |h: [i32; 3], k: [i32; 3]| -> f64 {
         let (u, v) = (h.map(|x| x as f64), k.map(|x| x as f64));
-        (0..3)
-            .map(|i| (0..3).map(|j| u[i] * gs[i][j] * v[j]).sum::<f64>())
-            .sum()
+        (0..3).map(|i| (0..3).map(|j| u[i] * gs[i][j] * v[j]).sum::<f64>()).sum()
     };
     // Reflections out to a bit past the longer measured vector.
     let gmax = req.a_len.max(req.b_len) * 2.2;
@@ -702,19 +587,11 @@ pub fn zones(req: &ZoneReq) -> Result<Vec<Zone>> {
         for v in -m..=m {
             for w in 0..=m {
                 // One of ±[uvw], primitive.
-                if (u, v, w) == (0, 0, 0)
-                    || gcd(gcd(u, v), w) != 1
-                    || (w == 0 && (v < 0 || (v == 0 && u < 0)))
-                {
+                if (u, v, w) == (0, 0, 0) || gcd(gcd(u, v), w) != 1 || (w == 0 && (v < 0 || (v == 0 && u < 0))) {
                     continue;
                 }
-                let zone: Vec<&([i32; 3], f64)> = refl
-                    .iter()
-                    .filter(|(h, _)| h[0] * u + h[1] * v + h[2] * w == 0)
-                    .collect();
-                let Some(&&(g1, l1)) = zone.first() else {
-                    continue;
-                };
+                let zone: Vec<&([i32; 3], f64)> = refl.iter().filter(|(h, _)| h[0] * u + h[1] * v + h[2] * w == 0).collect();
+                let Some(&&(g1, l1)) = zone.first() else { continue };
                 // Shortest one not parallel to g1.
                 let Some(&&(g2, l2)) = zone.iter().find(|(h, l)| {
                     let c = dotg(g1, *h) / (l1 * l);
@@ -722,36 +599,21 @@ pub fn zones(req: &ZoneReq) -> Result<Vec<Zone>> {
                 }) else {
                     continue;
                 };
-                let mut angle = (dotg(g1, g2) / (l1 * l2))
-                    .clamp(-1.0, 1.0)
-                    .acos()
-                    .to_degrees();
+                let mut angle = (dotg(g1, g2) / (l1 * l2)).clamp(-1.0, 1.0).acos().to_degrees();
                 let mut g2 = g2;
                 if angle > 90.0 {
                     angle = 180.0 - angle;
                     g2 = g2.map(|x| -x);
                 }
                 // Measured |a*| ≤ |b*|; compare like with like.
-                let len_err =
-                    ((l1 - req.a_len).abs() / req.a_len).max((l2 - req.b_len).abs() / req.b_len);
+                let len_err = ((l1 - req.a_len).abs() / req.a_len).max((l2 - req.b_len).abs() / req.b_len);
                 let angle_err = (angle - req.gamma).abs();
-                out.push(Zone {
-                    uvw: [u, v, w],
-                    g1,
-                    g2,
-                    g1_len: l1,
-                    g2_len: l2,
-                    angle,
-                    len_err,
-                    angle_err,
-                });
+                out.push(Zone { uvw: [u, v, w], g1, g2, g1_len: l1, g2_len: l2, angle, len_err, angle_err });
             }
         }
     }
     // A 1% length error weighs like 1° of angle.
-    out.sort_by(|a, b| {
-        (a.len_err * 100.0 + a.angle_err).total_cmp(&(b.len_err * 100.0 + b.angle_err))
-    });
+    out.sort_by(|a, b| (a.len_err * 100.0 + a.angle_err).total_cmp(&(b.len_err * 100.0 + b.angle_err)));
     // Enough for the UI to fold symmetry-equivalent axes and still list a few.
     out.truncate(60);
     Ok(out)
@@ -763,14 +625,7 @@ mod tests {
 
     /// A synthetic pattern: Gaussian spots on a lattice around a centre,
     /// fading outward, on a sloping background with noise.
-    fn pattern(
-        w: usize,
-        h: usize,
-        c: [f64; 2],
-        a: [f64; 2],
-        b: [f64; 2],
-        missing: &[[i32; 2]],
-    ) -> Vec<f32> {
+    fn pattern(w: usize, h: usize, c: [f64; 2], a: [f64; 2], b: [f64; 2], missing: &[[i32; 2]]) -> Vec<f32> {
         let mut v = vec![0f32; w * h];
         for (i, o) in v.iter_mut().enumerate() {
             let (x, y) = ((i % w) as f64, (i / w) as f64);
@@ -785,16 +640,9 @@ mod tests {
                 if missing.contains(&[hh, kk]) {
                     continue;
                 }
-                let p = [
-                    c[0] + hh as f64 * a[0] + kk as f64 * b[0],
-                    c[1] + hh as f64 * a[1] + kk as f64 * b[1],
-                ];
+                let p = [c[0] + hh as f64 * a[0] + kk as f64 * b[0], c[1] + hh as f64 * a[1] + kk as f64 * b[1]];
                 let r = (p[0] - c[0]).hypot(p[1] - c[1]);
-                let amp = if (hh, kk) == (0, 0) {
-                    5e4
-                } else {
-                    2e3 * (-r / 150.0).exp()
-                };
+                let amp = if (hh, kk) == (0, 0) { 5e4 } else { 2e3 * (-r / 150.0).exp() };
                 let (x0, y0) = (p[0].round() as isize, p[1].round() as isize);
                 for dy in -4..=4isize {
                     for dx in -4..=4isize {
@@ -803,8 +651,7 @@ mod tests {
                             continue;
                         }
                         let d2 = (x as f64 - p[0]).powi(2) + (y as f64 - p[1]).powi(2);
-                        v[y as usize * w + x as usize] +=
-                            (amp * (-d2 / (2.0 * 1.5 * 1.5)).exp()) as f32;
+                        v[y as usize * w + x as usize] += (amp * (-d2 / (2.0 * 1.5 * 1.5)).exp()) as f32;
                     }
                 }
             }
@@ -830,22 +677,11 @@ mod tests {
         // Same lattice: each found vector is a short integer combination of the true ones.
         let (ra, rb) = reduce(a, b);
         for (got, want) in [(l.a, ra), (l.b, rb)] {
-            let e = norm([got[0] - want[0], got[1] - want[1]])
-                .min(norm([got[0] + want[0], got[1] + want[1]]));
-            assert!(
-                e < 0.1,
-                "got {got:?} want {want:?} (basis {:?} {:?})",
-                l.a,
-                l.b
-            );
+            let e = norm([got[0] - want[0], got[1] - want[1]]).min(norm([got[0] + want[0], got[1] + want[1]]));
+            assert!(e < 0.1, "got {got:?} want {want:?} (basis {:?} {:?})", l.a, l.b);
         }
         assert!(l.rms < 0.3, "rms {}", l.rms);
-        assert!(
-            l.inliers >= 40 && l.inliers as f64 > 0.9 * spots.len() as f64,
-            "{} of {}",
-            l.inliers,
-            spots.len()
-        );
+        assert!(l.inliers >= 40 && l.inliers as f64 > 0.9 * spots.len() as f64, "{} of {}", l.inliers, spots.len());
     }
 
     #[test]
@@ -856,30 +692,19 @@ mod tests {
         let c = [256.0, 256.0];
         let a = [24.0, 0.0];
         let b = [0.0, 30.0];
-        let missing: Vec<[i32; 2]> = (-12..=12)
-            .flat_map(|hh| (-12..=12).map(move |kk| [hh, kk]))
-            .filter(|[hh, kk]| (hh + kk) % 2 != 0)
-            .collect();
+        let missing: Vec<[i32; 2]> = (-12..=12).flat_map(|hh| (-12..=12).map(move |kk| [hh, kk])).filter(|[hh, kk]| (hh + kk) % 2 != 0).collect();
         let v = pattern(w, h, c, a, b, &missing);
         let (_, _, lat) = run(&v, w, h, 12.0);
         let l = lat.unwrap();
         // The centred lattice: shortest vectors (24, ±30)... reduced, area 2·24·30.
         let area = cross(l.a, l.b).abs();
-        assert!(
-            (area - 2.0 * 24.0 * 30.0).abs() < 20.0,
-            "area {area} basis {:?} {:?}",
-            l.a,
-            l.b
-        );
+        assert!((area - 2.0 * 24.0 * 30.0).abs() < 20.0, "area {area} basis {:?} {:?}", l.a, l.b);
     }
 
     #[test]
     fn reduces_bases() {
         let (a, b) = reduce([10.0, 0.0], [23.0, 10.0]);
-        assert!(
-            (norm(a) - 10.0).abs() < 1e-9 && (b[1].abs() - 10.0).abs() < 1e-9,
-            "{a:?} {b:?}"
-        );
+        assert!((norm(a) - 10.0).abs() < 1e-9 && (b[1].abs() - 10.0).abs() < 1e-9, "{a:?} {b:?}");
         assert!(dot(a, b) >= 0.0 && cross(a, b) > 0.0);
     }
 
@@ -890,14 +715,7 @@ mod tests {
         // the shortest pair is 111 and 1-11 at 70.5°.
         let a = 5.431;
         let g111 = 3f64.sqrt() / a;
-        let req = ZoneReq {
-            cell: [a, a, a, 90.0, 90.0, 90.0],
-            centering: "F".into(),
-            a_len: g111,
-            b_len: g111,
-            gamma: 70.53,
-            max_uvw: 3,
-        };
+        let req = ZoneReq { cell: [a, a, a, 90.0, 90.0, 90.0], centering: "F".into(), a_len: g111, b_len: g111, gamma: 70.53, max_uvw: 3 };
         let z = zones(&req).unwrap();
         let first = &z[0];
         let mut uvw = first.uvw.map(|x| x.abs());
@@ -928,33 +746,16 @@ mod bench {
         let path = std::env::var("TMV_DIFF_RAW").unwrap();
         let w: usize = std::env::var("TMV_DIFF_W").unwrap().parse().unwrap();
         let h: usize = std::env::var("TMV_DIFF_H").unwrap().parse().unwrap();
-        let min_dist: f64 = std::env::var("TMV_DIFF_DIST")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(12.0);
+        let min_dist: f64 = std::env::var("TMV_DIFF_DIST").ok().and_then(|v| v.parse().ok()).unwrap_or(12.0);
         let b = std::fs::read(path).unwrap();
-        let v: Vec<f32> = b
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let v: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
         let t = std::time::Instant::now();
         let spots = super::find_spots(&v, w, h, min_dist, 5.0);
         match super::analyse(spots, None, min_dist) {
             Ok((s, c, l)) => {
-                println!(
-                    "{} spots, centre {c:?}, lattice {l:?}, {:?}",
-                    s.len(),
-                    t.elapsed()
-                );
+                println!("{} spots, centre {c:?}, lattice {l:?}, {:?}", s.len(), t.elapsed());
                 if let Ok(out) = std::env::var("TMV_DIFF_JSON") {
-                    std::fs::write(
-                        out,
-                        serde_json::to_string(
-                            &serde_json::json!({ "center": c, "spots": s, "lattice": l }),
-                        )
-                        .unwrap(),
-                    )
-                    .unwrap();
+                    std::fs::write(out, serde_json::to_string(&serde_json::json!({ "center": c, "spots": s, "lattice": l })).unwrap()).unwrap();
                 }
             }
             Err(e) => println!("{e}"),

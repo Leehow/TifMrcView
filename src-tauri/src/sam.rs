@@ -24,12 +24,7 @@ pub const MODEL_URLS: [&str; 2] = [
 ];
 
 pub fn model_path() -> Option<PathBuf> {
-    Some(
-        crate::plugins::paths::user_dir()?
-            .parent()?
-            .join("models")
-            .join(MODEL_FILE),
-    )
+    Some(crate::plugins::paths::user_dir()?.parent()?.join("models").join(MODEL_FILE))
 }
 
 #[derive(Deserialize, Clone, Copy, Debug)]
@@ -145,8 +140,7 @@ impl Sam {
         let loaded = false;
         Status {
             available: cfg!(feature = "pro"),
-            downloaded: model_path()
-                .is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == MODEL_SIZE)),
+            downloaded: model_path().is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == MODEL_SIZE)),
             loaded,
             backend: inner.backend.clone(),
             size: MODEL_SIZE,
@@ -156,17 +150,11 @@ impl Sam {
     #[cfg(feature = "pro")]
     fn predictor(inner: &mut Inner) -> Result<Arc<tmv_sam::Predictor>> {
         if inner.predictor.is_none() {
-            let Some(path) = model_path().filter(|p| p.exists()) else {
-                bail!("还没有下载 SAM 模型")
-            };
+            let Some(path) = model_path().filter(|p| p.exists()) else { bail!("还没有下载 SAM 模型") };
             #[cfg(target_os = "linux")]
             use_bundled_libdevice();
             let t = std::time::Instant::now();
-            let (p, name) = tmv_sam::load_best(
-                &path,
-                &tmv_sam::Sam2Config::tiny(),
-                std::time::Duration::from_secs(90),
-            )?;
+            let (p, name) = tmv_sam::load_best(&path, &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
             eprintln!("SAM: model ready on {name} in {:.1?}", t.elapsed());
             inner.predictor = Some(Arc::new(p));
             inner.backend = Some(name.to_string());
@@ -177,23 +165,9 @@ impl Sam {
     /// Mask of the prompt on slice `req.z` as one byte per pixel (1 = inside),
     /// plus the predicted IoU. `values` reads a slice's raw values.
     #[cfg(feature = "pro")]
-    pub fn predict(
-        &self,
-        req: &PredictReq,
-        (w, h, d): (usize, usize, usize),
-        values: impl Fn(usize) -> Result<Vec<f32>>,
-    ) -> Result<(Vec<u8>, f32)> {
+    pub fn predict(&self, req: &PredictReq, (w, h, d): (usize, usize, usize), values: impl Fn(usize) -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
         let dn = req.denoise;
-        let key = (
-            req.token,
-            req.z,
-            req.c,
-            req.t,
-            req.lo.to_bits(),
-            req.hi.to_bits(),
-            dn.slab,
-            dn.sigma.to_bits(),
-        );
+        let key = (req.token, req.z, req.c, req.t, req.lo.to_bits(), req.hi.to_bits(), dn.slab, dn.sigma.to_bits());
         let (predictor, encoded) = {
             let mut inner = self.inner.lock().unwrap();
             let p = Self::predictor(&mut inner)?;
@@ -201,37 +175,19 @@ impl Sam {
                 let t = std::time::Instant::now();
                 let gray = slice_gray(&values, req.z, (w, h, d), (req.lo, req.hi), dn)?;
                 inner.encoded = Some(Arc::new(p.encode_gray(&gray, w, h)));
-                eprintln!(
-                    "SAM: encoded slice {} ({w}x{h}) in {:.1?}",
-                    req.z,
-                    t.elapsed()
-                );
+                eprintln!("SAM: encoded slice {} ({w}x{h}) in {:.1?}", req.z, t.elapsed());
                 inner.key = Some(key);
             }
             (p, inner.encoded.clone().unwrap())
         };
-        let points: Vec<tmv_sam::Point> = req
-            .points
-            .iter()
-            .map(|p| tmv_sam::Point {
-                x: p.x,
-                y: p.y,
-                positive: p.positive,
-            })
-            .collect();
+        let points: Vec<tmv_sam::Point> = req.points.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: p.positive }).collect();
         if points.is_empty() && req.bbox.is_none() {
             bail!("请先点一下要分割的物体");
         }
         let r = predictor.predict(&encoded, &points, req.bbox, None);
         let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
         let bytes = mask.iter().map(|&m| m as u8).collect();
-        *self.last.lock().unwrap() = Some(LastMask {
-            token: req.token,
-            z: req.z,
-            mask,
-            iou: r.iou,
-            low_res: r.low_res_values(),
-        });
+        *self.last.lock().unwrap() = Some(LastMask { token: req.token, z: req.z, mask, iou: r.iou, low_res: r.low_res_values() });
         Ok((bytes, r.iou))
     }
 
@@ -240,34 +196,15 @@ impl Sam {
     /// outline's equivalent diameter in pixels (None when the point is not
     /// inside its mask or the mask covers a quarter of the image).
     #[cfg(feature = "pro")]
-    pub fn outline(
-        &self,
-        img: &[f32],
-        w: usize,
-        h: usize,
-        points: &[[f32; 2]],
-    ) -> Result<Vec<Option<f64>>> {
+    pub fn outline(&self, img: &[f32], w: usize, h: usize, points: &[[f32; 2]]) -> Result<Vec<Option<f64>>> {
         let predictor = Self::predictor(&mut self.inner.lock().unwrap())?;
-        let mut s: Vec<f32> = img
-            .iter()
-            .step_by((img.len() / 100_000).max(1))
-            .copied()
-            .collect();
+        let mut s: Vec<f32> = img.iter().step_by((img.len() / 100_000).max(1)).copied().collect();
         s.sort_by(f32::total_cmp);
         let (lo, hi) = (s[s.len() / 200], s[s.len() - 1 - s.len() / 200]);
         let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h);
         let mut out = vec![];
         for p in points {
-            let r = predictor.predict(
-                &enc,
-                &[tmv_sam::Point {
-                    x: p[0],
-                    y: p[1],
-                    positive: true,
-                }],
-                None,
-                None,
-            );
+            let r = predictor.predict(&enc, &[tmv_sam::Point { x: p[0], y: p[1], positive: true }], None, None);
             let (cx, cy) = (p[0].round() as usize, p[1].round() as usize);
             if cx >= w || cy >= h || r.logits[cy * w + cx] <= 0.0 {
                 out.push(None);
@@ -284,12 +221,7 @@ impl Sam {
                     break;
                 }
                 let (x, y) = (i % w, i / w);
-                for (nx, ny) in [
-                    (x.wrapping_sub(1), y),
-                    (x + 1, y),
-                    (x, y.wrapping_sub(1)),
-                    (x, y + 1),
-                ] {
+                for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
                     if nx < w && ny < h {
                         let j = ny * w + nx;
                         if !seen[j] && r.logits[j] > 0.0 {
@@ -299,9 +231,7 @@ impl Sam {
                     }
                 }
             }
-            out.push(
-                (area <= w * h / 4).then(|| 2.0 * (area as f64 / std::f64::consts::PI).sqrt()),
-            );
+            out.push((area <= w * h / 4).then(|| 2.0 * (area as f64 / std::f64::consts::PI).sqrt()));
         }
         Ok(out)
     }
@@ -319,9 +249,7 @@ impl Sam {
     ) -> Result<Vec<(usize, Vec<bool>)>> {
         use std::sync::atomic::Ordering::SeqCst;
         let (start, start_iou, start_low) = match self.last.lock().unwrap().as_ref() {
-            Some(m) if m.token == req.token && m.z == req.z => {
-                (m.mask.clone(), m.iou, m.low_res.clone())
-            }
+            Some(m) if m.token == req.token && m.z == req.z => (m.mask.clone(), m.iou, m.low_res.clone()),
             _ => bail!("先在这一层点出一个分割，再沿 Z 传播"),
         };
         if too_big(&start) {
@@ -355,43 +283,17 @@ impl Sam {
                         return Ok(out);
                     }
                     let z = (req.z as isize + dir * k as isize) as usize;
-                    let t = predictor.track_next(
-                        &predictor.encode_gray(&gray(z)?, w, h),
-                        &first,
-                        &prev,
-                        k,
-                        d,
-                    );
+                    let t = predictor.track_next(&predictor.encode_gray(&gray(z)?, w, h), &first, &prev, k, d);
                     let mask: Vec<bool> = t.prediction.logits.iter().map(|&v| v > 0.0).collect();
                     let area = mask.iter().filter(|m| **m).count();
                     if std::env::var_os("TMV_SAM_TRACE").is_some() {
-                        eprintln!(
-                            "SAM: slice {z}: object score {:.2}, quality {:.2}, {area} px, {}",
-                            t.obj_score,
-                            t.prediction.iou,
-                            compare(&prev_mask, &mask, w, h, t.prediction.iou)
-                        );
+                        eprintln!("SAM: slice {z}: object score {:.2}, quality {:.2}, {area} px, {}", t.obj_score, t.prediction.iou, compare(&prev_mask, &mask, w, h, t.prediction.iou));
                     }
                     // The object score alone stays positive while a thin
                     // object frays or the mask slides onto a neighbour at
                     // the ends, so the slice-to-slice checks apply too.
-                    if t.obj_score <= 0.0
-                        || area == 0
-                        || too_big(&mask)
-                        || !still_same(
-                            &prev_mask,
-                            &mask,
-                            w,
-                            h,
-                            t.prediction.iou,
-                            min_iou(start_iou),
-                        )
-                    {
-                        eprintln!(
-                            "SAM: tracking stops at slice {z}: object score {:.2}, {}",
-                            t.obj_score,
-                            compare(&prev_mask, &mask, w, h, t.prediction.iou)
-                        );
+                    if t.obj_score <= 0.0 || area == 0 || too_big(&mask) || !still_same(&prev_mask, &mask, w, h, t.prediction.iou, min_iou(start_iou)) {
+                        eprintln!("SAM: tracking stops at slice {z}: object score {:.2}, {}", t.obj_score, compare(&prev_mask, &mask, w, h, t.prediction.iou));
                         break;
                     }
                     done += 1;
@@ -415,43 +317,20 @@ impl Sam {
                     return Ok(out);
                 }
                 let z = (req.z as isize + dir * k as isize) as usize;
-                let Some(prompt) = follow_prompt(&prev, w, h) else {
-                    break;
-                };
-                let enc = predictor.encode_gray(
-                    &slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?,
-                    w,
-                    h,
-                );
-                let pts: Vec<tmv_sam::Point> = prompt
-                    .points
-                    .iter()
-                    .map(|p| tmv_sam::Point {
-                        x: p.x,
-                        y: p.y,
-                        positive: true,
-                    })
-                    .collect();
+                let Some(prompt) = follow_prompt(&prev, w, h) else { break };
+                let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h);
+                let pts: Vec<tmv_sam::Point> = prompt.points.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: true }).collect();
                 // Encoding is the slow part; the decoder is cheap, so each
                 // way of prompting is tried and the one that keeps closest
                 // to the previous slice wins.
                 let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
                 let mut why = vec![];
                 for (bbox, use_mask) in prompt.variants() {
-                    let r = predictor.predict(
-                        &enc,
-                        &pts,
-                        bbox,
-                        use_mask.then(|| predictor.mask_prompt(&prev_low)),
-                    );
+                    let r = predictor.predict(&enc, &pts, bbox, use_mask.then(|| predictor.mask_prompt(&prev_low)));
                     let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
                     let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
                     if grown > 3.0 || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {
-                        why.push(format!(
-                            "box {} mask {use_mask}: {}, grown {grown:.2}",
-                            bbox.is_some(),
-                            compare(&prev, &mask, w, h, r.iou)
-                        ));
+                        why.push(format!("box {} mask {use_mask}: {}, grown {grown:.2}", bbox.is_some(), compare(&prev, &mask, w, h, r.iou)));
                         continue;
                     }
                     let score = likeness(&prev, &mask, w, h);
@@ -460,11 +339,7 @@ impl Sam {
                     }
                 }
                 let Some((_, mask, low)) = best else {
-                    eprintln!(
-                        "SAM: propagation stops at slice {z} (needs quality {:.2}): {}",
-                        min_iou(start_iou),
-                        why.join("; ")
-                    );
+                    eprintln!("SAM: propagation stops at slice {z} (needs quality {:.2}): {}", min_iou(start_iou), why.join("; "));
                     break;
                 };
                 done += 1;
@@ -481,12 +356,7 @@ impl Sam {
     }
 
     #[cfg(not(feature = "pro"))]
-    pub fn predict(
-        &self,
-        _: &PredictReq,
-        _: (usize, usize, usize),
-        _: impl Fn(usize) -> Result<Vec<f32>>,
-    ) -> Result<(Vec<u8>, f32)> {
+    pub fn predict(&self, _: &PredictReq, _: (usize, usize, usize), _: impl Fn(usize) -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
         bail!("SAM 分割只在 TifMrcView Pro 里有")
     }
 
@@ -503,19 +373,11 @@ impl Sam {
 }
 
 /// The 8-bit image SAM encodes for slice `z`, denoised as asked.
-fn slice_gray(
-    values: &impl Fn(usize) -> Result<Vec<f32>>,
-    z: usize,
-    (w, h, d): (usize, usize, usize),
-    (lo, hi): (f32, f32),
-    dn: Denoise,
-) -> Result<Vec<u8>> {
+fn slice_gray(values: &impl Fn(usize) -> Result<Vec<f32>>, z: usize, (w, h, d): (usize, usize, usize), (lo, hi): (f32, f32), dn: Denoise) -> Result<Vec<u8>> {
     if dn.slab == 0 && dn.sigma <= 0.0 {
         return Ok(to_gray(&values(z)?, lo, hi));
     }
-    let slices = (z.saturating_sub(dn.slab)..=(z + dn.slab).min(d.max(1) - 1))
-        .map(values)
-        .collect::<Result<Vec<_>>>()?;
+    let slices = (z.saturating_sub(dn.slab)..=(z + dn.slab).min(d.max(1) - 1)).map(values).collect::<Result<Vec<_>>>()?;
     Ok(to_gray(&denoise(&slices, w, h, dn.sigma), lo, hi))
 }
 
@@ -523,9 +385,7 @@ fn slice_gray(
 pub fn to_gray(v: &[f32], lo: f32, hi: f32) -> Vec<u8> {
     let span = (hi - lo).abs().max(f32::MIN_POSITIVE);
     let lo = lo.min(hi);
-    v.iter()
-        .map(|&x| ((x - lo) / span * 255.0).clamp(0.0, 255.0) as u8)
-        .collect()
+    v.iter().map(|&x| ((x - lo) / span * 255.0).clamp(0.0, 255.0) as u8).collect()
 }
 
 /// Denoising for noisy slices (cryo-ET): the mean of the given neighbouring
@@ -542,9 +402,7 @@ pub fn denoise(slices: &[Vec<f32>], w: usize, h: usize, sigma: f32) -> Vec<f32> 
         return a;
     }
     let r = (sigma * 3.0).ceil() as isize;
-    let k: Vec<f32> = (-r..=r)
-        .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
-        .collect();
+    let k: Vec<f32> = (-r..=r).map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp()).collect();
     let sum: f32 = k.iter().sum();
     let mut b = vec![0f32; w * h];
     // Rows, then columns: (samples per line, stride along it, lines, line step).
@@ -580,17 +438,10 @@ impl Prompt {
     /// Blobs keep to their box: the previous mask would hold back the
     /// shrinking towards their ends.
     pub fn variants(&self) -> Vec<(Option<[f32; 4]>, bool)> {
-        let alt = if self.points.len() > 1 {
-            vec![(None, true), (None, false), (self.bbox, true)]
-        } else {
-            vec![]
-        };
+        let alt = if self.points.len() > 1 { vec![(None, true), (None, false), (self.bbox, true)] } else { vec![] };
         let mut v = vec![(self.bbox, self.use_mask)];
         for a in alt {
-            if !v
-                .iter()
-                .any(|b: &(Option<[f32; 4]>, bool)| (b.0.is_some(), b.1) == (a.0.is_some(), a.1))
-            {
+            if !v.iter().any(|b: &(Option<[f32; 4]>, bool)| (b.0.is_some(), b.1) == (a.0.is_some(), a.1)) {
                 v.push(a);
             }
         }
@@ -614,16 +465,8 @@ pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<Prompt> {
     }
     let outside: Vec<bool> = mask.iter().map(|m| !m).collect();
     let depth = crate::labels::edt(&outside, w, h);
-    let (i, &deepest) = depth
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| mask[*i])
-        .max_by(|a, b| a.1.total_cmp(b.1))?;
-    let point = |i: usize| PromptPoint {
-        x: (i % w) as f32 + 0.5,
-        y: (i / w) as f32 + 0.5,
-        positive: true,
-    };
+    let (i, &deepest) = depth.iter().enumerate().filter(|(i, _)| mask[*i]).max_by(|a, b| a.1.total_cmp(b.1))?;
+    let point = |i: usize| PromptPoint { x: (i % w) as f32 + 0.5, y: (i / w) as f32 + 0.5, positive: true };
     let (gx, gy) = ((x1 - x0 + 1) as f32 * 0.1, (y1 - y0 + 1) as f32 * 0.1);
     let bbox = [
         (x0 as f32 - gx).max(0.0),
@@ -633,71 +476,39 @@ pub fn follow_prompt(mask: &[bool], w: usize, h: usize) -> Option<Prompt> {
     ];
     let span = (x1 - x0 + 1).max(y1 - y0 + 1) as f32;
     if span <= 8.0 * deepest {
-        return Some(Prompt {
-            bbox: Some(bbox),
-            points: vec![point(i)],
-            use_mask: false,
-        });
+        return Some(Prompt { bbox: Some(bbox), points: vec![point(i)], use_mask: false });
     }
     let closed = enclosed(mask, w, h) > 2 * mask.iter().filter(|m| **m).count();
     // Farthest-point picks among the pixels on the middle line.
-    let mid: Vec<usize> = (0..mask.len())
-        .filter(|&j| mask[j] && depth[j] >= 0.5 * deepest)
-        .collect();
+    let mid: Vec<usize> = (0..mask.len()).filter(|&j| mask[j] && depth[j] >= 0.5 * deepest).collect();
     let mut pts = vec![i];
     for _ in 0..if closed { 4 } else { 2 } {
         let far = mid.iter().copied().max_by_key(|&j| {
-            pts.iter()
-                .map(|&p| (j % w).abs_diff(p % w).pow(2) + (j / w).abs_diff(p / w).pow(2))
-                .min()
-                .unwrap_or(0)
+            pts.iter().map(|&p| (j % w).abs_diff(p % w).pow(2) + (j / w).abs_diff(p / w).pow(2)).min().unwrap_or(0)
         });
         if let Some(f) = far.filter(|f| !pts.contains(f)) {
             pts.push(f);
         }
     }
     let points = pts.into_iter().map(point).collect();
-    Some(if closed {
-        Prompt {
-            bbox: None,
-            points,
-            use_mask: true,
-        }
-    } else {
-        Prompt {
-            bbox: Some(bbox),
-            points,
-            use_mask: false,
-        }
-    })
+    Some(if closed { Prompt { bbox: None, points, use_mask: true } } else { Prompt { bbox: Some(bbox), points, use_mask: false } })
 }
 
 /// Pixels outside `mask` that the image border cannot reach: the holes a
 /// closed outline encloses.
 fn enclosed(mask: &[bool], w: usize, h: usize) -> usize {
     let mut seen = mask.to_vec();
-    let mut stack: Vec<usize> = (0..w)
-        .flat_map(|x| [x, (h - 1) * w + x])
-        .chain((0..h).flat_map(|y| [y * w, y * w + w - 1]))
-        .collect();
+    let mut stack: Vec<usize> = (0..w).flat_map(|x| [x, (h - 1) * w + x]).chain((0..h).flat_map(|y| [y * w, y * w + w - 1])).collect();
     while let Some(i) = stack.pop() {
         if seen[i] {
             continue;
         }
         seen[i] = true;
         let (x, y) = (i % w, i / w);
-        if x > 0 {
-            stack.push(i - 1);
-        }
-        if x + 1 < w {
-            stack.push(i + 1);
-        }
-        if y > 0 {
-            stack.push(i - w);
-        }
-        if y + 1 < h {
-            stack.push(i + w);
-        }
+        if x > 0 { stack.push(i - 1); }
+        if x + 1 < w { stack.push(i + 1); }
+        if y > 0 { stack.push(i - w); }
+        if y + 1 < h { stack.push(i + w); }
     }
     seen.iter().filter(|s| !**s).count()
 }
@@ -710,18 +521,9 @@ fn use_bundled_libdevice() {
     if std::env::var_os("CUDA_PATH").is_some() {
         return;
     }
-    let lib = std::path::Path::new("usr/lib")
-        .join(crate::edition::BIN)
-        .join("cuda");
-    let roots = [
-        std::env::var_os("APPDIR").map(PathBuf::from),
-        Some(PathBuf::from("/")),
-    ];
-    let found = roots
-        .into_iter()
-        .flatten()
-        .map(|r| r.join(&lib))
-        .find(|d| d.join("nvvm/libdevice/libdevice.10.bc").is_file());
+    let lib = std::path::Path::new("usr/lib").join(crate::edition::BIN).join("cuda");
+    let roots = [std::env::var_os("APPDIR").map(PathBuf::from), Some(PathBuf::from("/"))];
+    let found = roots.into_iter().flatten().map(|r| r.join(&lib)).find(|d| d.join("nvvm/libdevice/libdevice.10.bc").is_file());
     if let Some(dir) = found {
         eprintln!("SAM: CUDA_PATH={}", dir.display());
         std::env::set_var("CUDA_PATH", dir);
@@ -744,18 +546,8 @@ pub fn min_iou(start: f32) -> f32 {
 /// confident, of similar size, and overlapping it. Thin objects shift by
 /// about their own width from slice to slice, so pixels within 2 px of the
 /// other mask also count as overlapping.
-pub fn still_same(
-    prev: &[bool],
-    next: &[bool],
-    w: usize,
-    h: usize,
-    iou_pred: f32,
-    min_iou: f32,
-) -> bool {
-    let (a, b) = (
-        prev.iter().filter(|m| **m).count(),
-        next.iter().filter(|m| **m).count(),
-    );
+pub fn still_same(prev: &[bool], next: &[bool], w: usize, h: usize, iou_pred: f32, min_iou: f32) -> bool {
+    let (a, b) = (prev.iter().filter(|m| **m).count(), next.iter().filter(|m| **m).count());
     let both = prev.iter().zip(next).filter(|(p, n)| **p && **n).count();
     if b == 0 || iou_pred < min_iou || too_big(next) {
         return false;
@@ -772,17 +564,10 @@ pub fn still_same(
 
 /// What `still_same` looks at, for the log.
 fn compare(prev: &[bool], next: &[bool], w: usize, h: usize, iou_pred: f32) -> String {
-    let (a, b) = (
-        prev.iter().filter(|m| **m).count(),
-        next.iter().filter(|m| **m).count(),
-    );
+    let (a, b) = (prev.iter().filter(|m| **m).count(), next.iter().filter(|m| **m).count());
     let both = prev.iter().zip(next).filter(|(p, n)| **p && **n).count();
     let iou = both as f32 / (a + b - both).max(1) as f32;
-    format!(
-        "quality {iou_pred:.2}, {b} px (x{:.2}), IoU {iou:.2}, near {:.2}",
-        b as f32 / a.max(1) as f32,
-        likeness(prev, next, w, h)
-    )
+    format!("quality {iou_pred:.2}, {b} px (x{:.2}), IoU {iou:.2}, near {:.2}", b as f32 / a.max(1) as f32, likeness(prev, next, w, h))
 }
 
 /// The smaller of the shares of each mask lying within 2 px of the other.
@@ -790,11 +575,7 @@ pub fn likeness(prev: &[bool], next: &[bool], w: usize, h: usize) -> f32 {
     let near = |from: &[bool], to: &[bool]| {
         let n = from.iter().filter(|m| **m).count().max(1);
         let dist = crate::labels::edt(to, w, h);
-        from.iter()
-            .zip(&dist)
-            .filter(|(m, d)| **m && **d <= 2.0)
-            .count() as f32
-            / n as f32
+        from.iter().zip(&dist).filter(|(m, d)| **m && **d <= 2.0).count() as f32 / n as f32
     };
     near(next, prev).min(near(prev, next))
 }
@@ -812,9 +593,7 @@ mod tests {
     use super::*;
 
     fn disc(w: usize, h: usize, cx: f32, cy: f32, r: f32) -> Vec<bool> {
-        (0..w * h)
-            .map(|i| ((i % w) as f32 + 0.5 - cx).hypot((i / w) as f32 + 0.5 - cy) < r)
-            .collect()
+        (0..w * h).map(|i| ((i % w) as f32 + 0.5 - cx).hypot((i / w) as f32 + 0.5 - cy) < r).collect()
     }
 
     /// A 3 px thick wavy line across the image, shifted down by `dy`.
@@ -830,9 +609,7 @@ mod tests {
     #[test]
     fn prompt_follows_the_mask() {
         let m = disc(64, 48, 30.0, 20.0, 10.0);
-        let Prompt {
-            bbox, points: p, ..
-        } = follow_prompt(&m, 64, 48).unwrap();
+        let Prompt { bbox, points: p, .. } = follow_prompt(&m, 64, 48).unwrap();
         let b = bbox.unwrap();
         assert_eq!(p.len(), 1);
         assert!((p[0].x - 30.0).abs() <= 1.0 && (p[0].y - 20.0).abs() <= 1.0);
@@ -843,11 +620,7 @@ mod tests {
     #[test]
     fn thin_objects_get_points_along_them() {
         let m = band(96, 48, 0.0);
-        let Prompt {
-            bbox,
-            points: p,
-            use_mask,
-        } = follow_prompt(&m, 96, 48).unwrap();
+        let Prompt { bbox, points: p, use_mask } = follow_prompt(&m, 96, 48).unwrap();
         assert!(bbox.is_some() && !use_mask);
         assert_eq!(p.len(), 3);
         let at = |q: &PromptPoint| m[q.y as usize * 96 + q.x as usize];
@@ -864,11 +637,7 @@ mod tests {
             .map(|i| ((i % w) as f32 + 0.5 - 48.0).hypot((i / w) as f32 + 0.5 - 32.0) - 24.0)
             .map(|r| r.abs() < 1.5)
             .collect();
-        let Prompt {
-            bbox,
-            points,
-            use_mask,
-        } = follow_prompt(&ring, w, h).unwrap();
+        let Prompt { bbox, points, use_mask } = follow_prompt(&ring, w, h).unwrap();
         assert!(bbox.is_none() && use_mask);
         assert_eq!(points.len(), 5);
         assert!(points.iter().all(|q| ring[q.y as usize * w + q.x as usize]));
@@ -890,30 +659,9 @@ mod tests {
     fn thin_objects_may_shift_by_their_width() {
         let a = band(96, 48, 0.0);
         // Moved by its own width: no plain overlap left, but still the same membrane.
-        assert!(still_same(
-            &a,
-            &band(96, 48, 2.5),
-            96,
-            48,
-            0.45,
-            min_iou(0.48)
-        ));
-        assert!(!still_same(
-            &a,
-            &band(96, 48, 10.0),
-            96,
-            48,
-            0.45,
-            min_iou(0.48)
-        ));
-        assert!(!still_same(
-            &a,
-            &band(96, 48, 2.5),
-            96,
-            48,
-            0.45,
-            min_iou(0.9)
-        ));
+        assert!(still_same(&a, &band(96, 48, 2.5), 96, 48, 0.45, min_iou(0.48)));
+        assert!(!still_same(&a, &band(96, 48, 10.0), 96, 48, 0.45, min_iou(0.48)));
+        assert!(!still_same(&a, &band(96, 48, 2.5), 96, 48, 0.45, min_iou(0.9)));
         assert_eq!(min_iou(0.9), 0.5);
         assert_eq!(min_iou(0.2), 0.3);
     }
@@ -941,55 +689,18 @@ mod tests {
             (0..w * h)
                 .map(|i| {
                     let (x, y) = ((i % w) as f32 - 80.0, (i / w) as f32 - 60.0);
-                    if x * x + y * y + dz * dz < r * r {
-                        200.0
-                    } else {
-                        30.0
-                    }
+                    if x * x + y * y + dz * dz < r * r { 200.0 } else { 30.0 }
                 })
                 .collect()
         };
         let sam = Sam::default();
-        let (p, backend) = tmv_sam::load_best(
-            path.as_ref(),
-            &tmv_sam::Sam2Config::tiny(),
-            std::time::Duration::from_secs(90),
-        )
-        .unwrap();
+        let (p, backend) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         println!("backend {backend}");
         sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
-        let req = PredictReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            points: vec![PromptPoint {
-                x: 80.0,
-                y: 60.0,
-                positive: true,
-            }],
-            bbox: None,
-            denoise: Denoise::default(),
-        };
+        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None, denoise: Denoise::default() };
         sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
-        let along = PropagateReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            up: true,
-            down: true,
-            max: 100,
-            denoise: Denoise::default(),
-            follow_prompts: false,
-        };
-        let masks = sam
-            .propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {})
-            .unwrap();
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default(), follow_prompts: false };
+        let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
         println!("slices {zs:?}");
@@ -1000,11 +711,7 @@ mod tests {
             let truth: Vec<bool> = slice(*z).iter().map(|&v| v > 100.0).collect();
             let both = truth.iter().zip(m).filter(|(a, b)| **a && **b).count();
             let any = truth.iter().zip(m).filter(|(a, b)| **a || **b).count();
-            assert!(
-                both as f32 / any as f32 > 0.8,
-                "z {z}: IoU {}",
-                both as f32 / any as f32
-            );
+            assert!(both as f32 / any as f32 > 0.8, "z {z}: IoU {}", both as f32 / any as f32);
         }
     }
 
@@ -1021,66 +728,22 @@ mod tests {
             let (x, y) = ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
             (y - (50.0 + (z as f32 - 10.0) * 1.5 + 8.0 * (x / 20.0).sin())).abs() < 1.5
         };
-        let slice = |z: usize| -> Vec<f32> {
-            (0..w * h)
-                .map(|i| if on(z, i) { 40.0 } else { 160.0 })
-                .collect()
-        };
-        let (p, _) = tmv_sam::load_best(
-            path.as_ref(),
-            &tmv_sam::Sam2Config::tiny(),
-            std::time::Duration::from_secs(90),
-        )
-        .unwrap();
+        let slice = |z: usize| -> Vec<f32> { (0..w * h).map(|i| if on(z, i) { 40.0 } else { 160.0 }).collect() };
+        let (p, _) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         let sam = Sam::with_predictor(p);
         let x = 96.0f32;
         let y = 50.0 + 8.0 * (x / 20.0).sin();
-        let req = PredictReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            points: vec![PromptPoint {
-                x,
-                y,
-                positive: true,
-            }],
-            bbox: None,
-            denoise: Denoise::default(),
-        };
+        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x, y, positive: true }], bbox: None, denoise: Denoise::default() };
         let (_, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
-        let along = PropagateReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            up: true,
-            down: true,
-            max: 100,
-            denoise: Denoise::default(),
-            follow_prompts: false,
-        };
-        let masks = sam
-            .propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {})
-            .unwrap();
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default(), follow_prompts: false };
+        let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
         println!("start quality {iou:.2}, slices {zs:?}");
         for (z, m) in &masks {
             let n = m.iter().filter(|v| **v).count();
-            let hit = m
-                .iter()
-                .enumerate()
-                .filter(|(i, v)| **v && on(*z, *i))
-                .count();
-            println!(
-                "z {z}: {n} px, {:.0} % on the membrane",
-                100.0 * hit as f32 / n as f32
-            );
+            let hit = m.iter().enumerate().filter(|(i, v)| **v && on(*z, *i)).count();
+            println!("z {z}: {n} px, {:.0} % on the membrane", 100.0 * hit as f32 / n as f32);
         }
         assert!(zs.len() >= 15, "{zs:?}");
     }
@@ -1090,27 +753,9 @@ mod tests {
     /// the whole cell, so it must be followed by points and mask alone.
     #[test]
     fn thin_objects_try_more_prompts() {
-        let blob = Prompt {
-            bbox: Some([0.0, 0.0, 9.0, 9.0]),
-            points: vec![PromptPoint {
-                x: 4.5,
-                y: 4.5,
-                positive: true,
-            }],
-            use_mask: false,
-        };
+        let blob = Prompt { bbox: Some([0.0, 0.0, 9.0, 9.0]), points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }], use_mask: false };
         assert_eq!(blob.variants().len(), 1);
-        let thin = Prompt {
-            points: vec![
-                PromptPoint {
-                    x: 4.5,
-                    y: 4.5,
-                    positive: true
-                };
-                3
-            ],
-            ..blob
-        };
+        let thin = Prompt { points: vec![PromptPoint { x: 4.5, y: 4.5, positive: true }; 3], ..blob };
         let v = thin.variants();
         assert_eq!(v.len(), 4);
         assert!(v[0].0.is_some() && !v[0].1 && v[1].0.is_none() && v[1].1);
@@ -1138,10 +783,7 @@ mod tests {
         let (w, h, d) = (192, 128, 21);
         let ring = |z: usize, i: usize| {
             let s = 1.0 - (z as f32 - 10.0).abs() * 0.02;
-            let (x, y) = (
-                ((i % w) as f32 + 0.5 - 96.0) / (60.0 * s),
-                ((i / w) as f32 + 0.5 - 64.0) / (40.0 * s),
-            );
+            let (x, y) = (((i % w) as f32 + 0.5 - 96.0) / (60.0 * s), ((i / w) as f32 + 0.5 - 64.0) / (40.0 * s));
             ((x * x + y * y).sqrt() - 1.0).abs() * 40.0 * s < 1.5 && !(gap && x < -0.7)
         };
         let slice = |z: usize| -> Vec<f32> {
@@ -1156,72 +798,22 @@ mod tests {
                 })
                 .collect()
         };
-        let (p, _) = tmv_sam::load_best(
-            path.as_ref(),
-            &tmv_sam::Sam2Config::tiny(),
-            std::time::Duration::from_secs(90),
-        )
-        .unwrap();
+        let (p, _) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         let sam = Sam::with_predictor(p);
-        let denoise = Denoise {
-            slab: 2,
-            sigma: 1.5,
-        };
-        let req = PredictReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            points: vec![PromptPoint {
-                x: 96.0,
-                y: 24.5,
-                positive: true,
-            }],
-            bbox: None,
-            denoise,
-        };
+        let denoise = Denoise { slab: 2, sigma: 1.5 };
+        let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 96.0, y: 24.5, positive: true }], bbox: None, denoise };
         let (start, iou) = sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
         let n = start.iter().filter(|v| **v != 0).count();
         println!("start quality {iou:.2}, {n} px");
-        let along = PropagateReq {
-            token: 1,
-            z: 10,
-            c: 0,
-            t: 0,
-            lo: 0.0,
-            hi: 255.0,
-            up: true,
-            down: true,
-            max: 100,
-            denoise,
-            follow_prompts: false,
-        };
-        let masks = sam
-            .propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {})
-            .unwrap();
+        let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise, follow_prompts: false };
+        let masks = sam.propagate(&along, (w, h, d), |z| Ok(slice(z)), |_, _| {}).unwrap();
         let mut zs: Vec<usize> = masks.iter().map(|m| m.0).collect();
         zs.sort();
         println!("slices {zs:?}");
         for (z, m) in &masks {
             let n = m.iter().filter(|v| **v).count();
-            let near = m
-                .iter()
-                .enumerate()
-                .filter(|(i, v)| {
-                    **v && (0..9).any(|k| {
-                        ring(
-                            *z,
-                            (*i + w * 4 + k).saturating_sub(4 + w * 4).min(w * h - 1),
-                        )
-                    })
-                })
-                .count();
-            println!(
-                "z {z}: {n} px, {:.0} % near the membrane",
-                100.0 * near as f32 / n as f32
-            );
+            let near = m.iter().enumerate().filter(|(i, v)| **v && (0..9).any(|k| ring(*z, (*i + w * 4 + k).saturating_sub(4 + w * 4).min(w * h - 1)))).count();
+            println!("z {z}: {n} px, {:.0} % near the membrane", 100.0 * near as f32 / n as f32);
         }
         assert!(zs.len() >= 15, "{zs:?}");
     }

@@ -122,30 +122,12 @@ impl PlaneData {
         match self {
             PlaneData::U8(v) => split(&v, channels).into_iter().map(PlaneData::U8).collect(),
             PlaneData::I8(v) => split(&v, channels).into_iter().map(PlaneData::I8).collect(),
-            PlaneData::U16(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::U16)
-                .collect(),
-            PlaneData::I16(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::I16)
-                .collect(),
-            PlaneData::U32(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::U32)
-                .collect(),
-            PlaneData::I32(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::I32)
-                .collect(),
-            PlaneData::F32(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::F32)
-                .collect(),
-            PlaneData::F64(v) => split(&v, channels)
-                .into_iter()
-                .map(PlaneData::F64)
-                .collect(),
+            PlaneData::U16(v) => split(&v, channels).into_iter().map(PlaneData::U16).collect(),
+            PlaneData::I16(v) => split(&v, channels).into_iter().map(PlaneData::I16).collect(),
+            PlaneData::U32(v) => split(&v, channels).into_iter().map(PlaneData::U32).collect(),
+            PlaneData::I32(v) => split(&v, channels).into_iter().map(PlaneData::I32).collect(),
+            PlaneData::F32(v) => split(&v, channels).into_iter().map(PlaneData::F32).collect(),
+            PlaneData::F64(v) => split(&v, channels).into_iter().map(PlaneData::F64).collect(),
         }
     }
 }
@@ -195,10 +177,7 @@ impl Stats {
                     }
                     (lo, hi)
                 })
-                .reduce(
-                    || (f32::INFINITY, f32::NEG_INFINITY),
-                    |a, b| (a.0.min(b.0), a.1.max(b.1)),
-                )
+                .reduce(|| (f32::INFINITY, f32::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)))
         }
         fn hist<T: Px>(v: &[T], step: usize, lo: f32, hi: f32) -> Vec<u32> {
             let scale = (HIST_BINS as f32 - 1.0) / (hi - lo).max(f32::MIN_POSITIVE);
@@ -228,12 +207,7 @@ impl Stats {
         }
         let h = with_plane!(&p.data, v => hist(v, step, lo, hi));
         let total = h.iter().map(|&x| x as u64).sum();
-        Stats {
-            min: lo,
-            max: hi,
-            hist: h,
-            total,
-        }
+        Stats { min: lo, max: hi, hist: h, total }
     }
 
     /// Value at the given fraction (0..1) of the cumulative histogram.
@@ -414,10 +388,7 @@ impl ImageInfo {
             } else {
                 DEFAULT_COLORS[i % DEFAULT_COLORS.len()]
             };
-            self.channels.push(ChannelInfo {
-                name: format!("C{}", i + 1),
-                color,
-            });
+            self.channels.push(ChannelInfo { name: format!("C{}", i + 1), color });
         }
         self.channels.truncate(self.size_c);
     }
@@ -449,9 +420,7 @@ pub type Page = Arc<Vec<Plane>>;
 pub fn bg_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
-        let n = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
+        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n.saturating_sub(1).max(1))
             .thread_name(|i| format!("tifmrcview-bg-{i}"))
@@ -545,13 +514,7 @@ impl OpenImage {
         let n = self.info().page_count;
         if self.direct() {
             // Read ahead into the OS file cache: count the pages visited.
-            let seen = self
-                .stats
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|k| k.1 == 0)
-                .count();
+            let seen = self.stats.lock().unwrap().keys().filter(|k| k.1 == 0).count();
             return (seen, n, true);
         }
         let fits = self.info().page_bytes().saturating_mul(n) <= self.budget;
@@ -577,11 +540,7 @@ impl OpenImage {
             // warms the OS file cache and computes statistics, for every page.
             let direct = me.direct();
             // Pages kept on each side of the focus.
-            let reach = if direct {
-                n
-            } else {
-                (me.budget / per_page).max(1).min(n) / 2
-            };
+            let reach = if direct { n } else { (me.budget / per_page).max(1).min(n) / 2 };
             let busy = Mutex::new(std::collections::HashSet::new());
             // Pages that failed to decode; never retried in the background.
             let failed = Mutex::new(std::collections::HashSet::new());
@@ -591,13 +550,7 @@ impl OpenImage {
                 let stats = me.stats.lock().unwrap();
                 let mut busy = busy.lock().unwrap();
                 let failed = failed.lock().unwrap();
-                let done = |p: usize| {
-                    if direct {
-                        stats.contains_key(&(p, 0))
-                    } else {
-                        cache.contains_key(&p)
-                    }
-                };
+                let done = |p: usize| if direct { stats.contains_key(&(p, 0)) } else { cache.contains_key(&p) };
                 for d in 0..=reach {
                     for p in [f.checked_add(d), f.checked_sub(d)].into_iter().flatten() {
                         if p < n && !done(p) && !busy.contains(&p) && !failed.contains(&p) {
@@ -657,11 +610,7 @@ mod prefetch_tests {
             self.reads[page].fetch_add(1, Ordering::Relaxed);
             anyhow::ensure!(page != 1, "broken page");
             assert!(page != 2, "decoder bug");
-            Ok(vec![Plane {
-                w: 1,
-                h: 1,
-                data: PlaneData::U8(vec![0]),
-            }])
+            Ok(vec![Plane { w: 1, h: 1, data: PlaneData::U8(vec![0]) }])
         }
     }
 
@@ -691,14 +640,7 @@ mod prefetch_tests {
             spectrum: None,
         };
         let reads: Arc<[AtomicUsize; 3]> = Arc::default();
-        let img = OpenImage::new(
-            1,
-            Box::new(Flaky {
-                info,
-                reads: reads.clone(),
-            }),
-            usize::MAX,
-        );
+        let img = OpenImage::new(1, Box::new(Flaky { info, reads: reads.clone() }), usize::MAX);
         img.prefetch(1);
         std::thread::sleep(std::time::Duration::from_millis(300));
         img.cancelled.store(true, Ordering::Relaxed);
@@ -713,14 +655,7 @@ pub(crate) mod tests {
     use super::*;
 
     /// An `ImageInfo` for tests; `page_count` follows from the dimensions.
-    pub(crate) fn fake_info(
-        w: usize,
-        h: usize,
-        c: usize,
-        z: usize,
-        t: usize,
-        dtype: DType,
-    ) -> ImageInfo {
+    pub(crate) fn fake_info(w: usize, h: usize, c: usize, z: usize, t: usize, dtype: DType) -> ImageInfo {
         let mut info = ImageInfo {
             path: String::new(),
             name: "fake".into(),
@@ -756,19 +691,9 @@ pub(crate) mod tests {
     }
 
     impl FakeSource {
-        pub(crate) fn new(
-            info: ImageInfo,
-            pages: Vec<Vec<Vec<u8>>>,
-        ) -> (FakeSource, Arc<AtomicUsize>) {
+        pub(crate) fn new(info: ImageInfo, pages: Vec<Vec<Vec<u8>>>) -> (FakeSource, Arc<AtomicUsize>) {
             let reads = Arc::new(AtomicUsize::new(0));
-            (
-                FakeSource {
-                    info,
-                    pages,
-                    reads: reads.clone(),
-                },
-                reads,
-            )
+            (FakeSource { info, pages, reads: reads.clone() }, reads)
         }
     }
 
@@ -778,16 +703,9 @@ pub(crate) mod tests {
         }
         fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
             self.reads.fetch_add(1, Ordering::Relaxed);
-            let p = self
-                .pages
-                .get(page)
-                .ok_or_else(|| anyhow::anyhow!("no page {page}"))?;
+            let p = self.pages.get(page).ok_or_else(|| anyhow::anyhow!("no page {page}"))?;
             Ok(p.iter()
-                .map(|b| Plane {
-                    w: self.info.width,
-                    h: self.info.height,
-                    data: PlaneData::U8(b.clone()),
-                })
+                .map(|b| Plane { w: self.info.width, h: self.info.height, data: PlaneData::U8(b.clone()) })
                 .collect())
         }
     }
@@ -805,16 +723,7 @@ pub(crate) mod tests {
 
     #[test]
     fn dtype_sizes() {
-        let all = [
-            DType::U8,
-            DType::I8,
-            DType::U16,
-            DType::I16,
-            DType::U32,
-            DType::I32,
-            DType::F32,
-            DType::F64,
-        ];
+        let all = [DType::U8, DType::I8, DType::U16, DType::I16, DType::U32, DType::I32, DType::F32, DType::F64];
         let sizes: Vec<usize> = all.iter().map(|d| d.size()).collect();
         assert_eq!(sizes, [1, 1, 2, 2, 4, 4, 4, 8]);
     }
@@ -875,11 +784,7 @@ pub(crate) mod tests {
     fn stats_ramp() {
         let s = Stats::compute(&plane(PlaneData::U8((0..=255).collect()), 16, 16));
         assert_eq!((s.min, s.max), (0.0, 255.0));
-        assert!(
-            (s.percentile(0.5) - 128.0).abs() <= 2.0,
-            "{}",
-            s.percentile(0.5)
-        );
+        assert!((s.percentile(0.5) - 128.0).abs() <= 2.0, "{}", s.percentile(0.5));
         assert!(s.percentile(0.0) <= 1.0);
         assert!(s.percentile(1.0) >= 254.0);
         let (lo, hi) = s.auto_range();
@@ -933,14 +838,8 @@ pub(crate) mod tests {
         assert_eq!(name(""), "CZT");
     }
 
-    const ORDERS: [DimOrder; 6] = [
-        DimOrder::CZT,
-        DimOrder::CTZ,
-        DimOrder::ZCT,
-        DimOrder::ZTC,
-        DimOrder::TCZ,
-        DimOrder::TZC,
-    ];
+    const ORDERS: [DimOrder; 6] =
+        [DimOrder::CZT, DimOrder::CTZ, DimOrder::ZCT, DimOrder::ZTC, DimOrder::TCZ, DimOrder::TZC];
 
     #[test]
     fn locate_every_order_is_a_bijection() {
@@ -1023,10 +922,7 @@ pub(crate) mod tests {
 
         let info = fake_info(1, 1, 3, 1, 1, DType::U8);
         let colors: Vec<_> = info.channels.iter().map(|c| c.color).collect();
-        assert_eq!(
-            colors,
-            [DEFAULT_COLORS[0], DEFAULT_COLORS[1], DEFAULT_COLORS[2]]
-        );
+        assert_eq!(colors, [DEFAULT_COLORS[0], DEFAULT_COLORS[1], DEFAULT_COLORS[2]]);
 
         let mut rgb = fake_info(1, 1, 3, 1, 1, DType::U8);
         rgb.is_rgb = true;
@@ -1048,13 +944,7 @@ pub(crate) mod tests {
         info.channels[0].name = "DAPI".into();
         info.size_c = 3;
         info.fill_default_channels();
-        assert_eq!(
-            (
-                info.channels[0].name.as_str(),
-                info.channels[2].name.as_str()
-            ),
-            ("DAPI", "C3")
-        );
+        assert_eq!((info.channels[0].name.as_str(), info.channels[2].name.as_str()), ("DAPI", "C3"));
     }
 
     #[test]

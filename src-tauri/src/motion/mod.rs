@@ -11,9 +11,9 @@ pub mod output;
 pub mod series;
 pub mod sum;
 pub mod sum_gpu;
+pub mod tiles;
 #[cfg(test)]
 mod tests;
-pub mod tiles;
 use crate::image::OpenImage;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -310,10 +310,7 @@ fn run_movie(
     }
     let from_mdoc = p.pixel_a.map(|v| {
         let (w, h, _) = movie.shape();
-        let doc = series::Doc {
-            image_size: p.mdoc_size,
-            ..Default::default()
-        };
+        let doc = series::Doc { image_size: p.mdoc_size, ..Default::default() };
         doc.frame_pixel(v, (w, h))
     });
     let pixel = from_mdoc
@@ -341,11 +338,7 @@ fn run_movie(
     });
     let (global, local, cc) = match g {
         Ok(g) => {
-            let measured: Vec<_> = g
-                .shifts
-                .iter()
-                .map(|d| d.map(|v| v * sp.bin as f64))
-                .collect();
+            let measured: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
             let global = smooth(&measured, &g.cc, SMOOTHING);
             let local = local::estimate(&sp, &global, p, progress)?;
             (global, local, g.cc)

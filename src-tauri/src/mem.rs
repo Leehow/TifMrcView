@@ -66,12 +66,7 @@ fn total_ram() -> Option<u64> {
     }
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos",
-    windows
-)))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 fn total_ram() -> Option<u64> {
     None
 }

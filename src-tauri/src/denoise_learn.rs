@@ -41,15 +41,8 @@ struct Block {
 
 impl Block {
     fn new(i: usize, o: usize, dev: &Device) -> Block {
-        let conv = |i, o| {
-            Conv2dConfig::new([i, o], [3, 3])
-                .with_padding(PaddingConfig2d::Same)
-                .init(dev)
-        };
-        Block {
-            c1: conv(i, o),
-            c2: conv(o, o),
-        }
+        let conv = |i, o| Conv2dConfig::new([i, o], [3, 3]).with_padding(PaddingConfig2d::Same).init(dev);
+        Block { c1: conv(i, o), c2: conv(o, o) }
     }
 
     fn forward(&self, x: Tensor<4>) -> Tensor<4> {
@@ -75,20 +68,10 @@ const ALIGN: usize = 1 << LEVELS;
 impl Net {
     pub fn new(dev: &Device) -> Net {
         let w = |l: usize| BASE << l;
-        let down = (0..LEVELS)
-            .map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev))
-            .collect();
+        let down = (0..LEVELS).map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev)).collect();
         let bottom = Block::new(w(LEVELS - 1), w(LEVELS), dev);
-        let up = (0..LEVELS)
-            .rev()
-            .map(|l| Block::new(w(l + 1) + w(l), w(l), dev))
-            .collect();
-        Net {
-            down,
-            bottom,
-            up,
-            head: Conv2dConfig::new([BASE, 1], [1, 1]).init(dev),
-        }
+        let up = (0..LEVELS).rev().map(|l| Block::new(w(l + 1) + w(l), w(l), dev)).collect();
+        Net { down, bottom, up, head: Conv2dConfig::new([BASE, 1], [1, 1]).init(dev) }
     }
 
     /// [B, 1, H, W] → [B, 1, H, W], H and W multiples of ALIGN.
@@ -104,10 +87,7 @@ impl Net {
         for b in &self.up {
             let skip = skips.pop().unwrap();
             let [_, _, h, w] = skip.dims();
-            x = interpolate(
-                x,
-                InterpolateOptions::new(InterpolateMode::Nearest).with_output_size([h, w]),
-            );
+            x = interpolate(x, InterpolateOptions::new(InterpolateMode::Nearest).with_output_size([h, w]));
             x = b.forward(Tensor::cat(vec![x, skip], 1));
         }
         self.head.forward(x)
@@ -139,13 +119,7 @@ pub struct TrainConfig {
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig {
-            steps: 1000,
-            batch: 8,
-            patch: 64,
-            lr: 1e-3,
-            seed: 0x5eed,
-        }
+        TrainConfig { steps: 1000, batch: 8, patch: 64, lr: 1e-3, seed: 0x5eed }
     }
 }
 
@@ -241,9 +215,7 @@ fn stats(images: &[&[f32]]) -> (f32, f32) {
 }
 
 fn standardise(v: &[f32], mean: f32, std: f32) -> Vec<f32> {
-    v.iter()
-        .map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 })
-        .collect()
+    v.iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect()
 }
 
 /// Trains on `pairs` of w × h images: (input, target) for Noise2Noise,
@@ -268,20 +240,9 @@ pub fn train(
     if (mode == Mode::N2v) != pairs.iter().all(|p| p.1.is_none()) {
         bail!("训练数据和方式对不上");
     }
-    let all: Vec<&[f32]> = pairs
-        .iter()
-        .flat_map(|(a, b)| std::iter::once(a.as_slice()).chain(b.as_deref()))
-        .collect();
+    let all: Vec<&[f32]> = pairs.iter().flat_map(|(a, b)| std::iter::once(a.as_slice()).chain(b.as_deref())).collect();
     let (mean, std) = stats(&all);
-    let data: Vec<(Vec<f32>, Option<Vec<f32>>)> = pairs
-        .iter()
-        .map(|(a, b)| {
-            (
-                standardise(a, mean, std),
-                b.as_ref().map(|b| standardise(b, mean, std)),
-            )
-        })
-        .collect();
+    let data: Vec<(Vec<f32>, Option<Vec<f32>>)> = pairs.iter().map(|(a, b)| (standardise(a, mean, std), b.as_ref().map(|b| standardise(b, mean, std)))).collect();
     let p = (cfg.patch.min(w).min(h) / ALIGN * ALIGN).max(ALIGN);
     let mut rng = Rng(cfg.seed | 1);
     let ad = dev.clone().autodiff();
@@ -294,11 +255,7 @@ pub fn train(
             bail!("已取消");
         }
         let b = cfg.batch;
-        let (mut xs, mut ts, mut ms) = (
-            Vec::with_capacity(b * p * p),
-            Vec::with_capacity(b * p * p),
-            Vec::with_capacity(b * p * p),
-        );
+        let (mut xs, mut ts, mut ms) = (Vec::with_capacity(b * p * p), Vec::with_capacity(b * p * p), Vec::with_capacity(b * p * p));
         for _ in 0..b {
             let s = rng.below(data.len());
             let (x0, y0) = (rng.below(w - p + 1), rng.below(h - p + 1));
@@ -333,18 +290,11 @@ pub fn train(
                     ms.extend(std::iter::repeat_n(0f32, p * p));
                     for cy in (0..p).step_by(CELL) {
                         for cx in (0..p).step_by(CELL) {
-                            let (x, y) = (
-                                cx + rng.below(CELL.min(p - cx)),
-                                cy + rng.below(CELL.min(p - cy)),
-                            );
+                            let (x, y) = (cx + rng.below(CELL.min(p - cx)), cy + rng.below(CELL.min(p - cy)));
                             let (nx, ny) = loop {
-                                let (dx, dy) =
-                                    (rng.below(5) as isize - 2, rng.below(5) as isize - 2);
+                                let (dx, dy) = (rng.below(5) as isize - 2, rng.below(5) as isize - 2);
                                 if dx != 0 || dy != 0 {
-                                    break (
-                                        (x as isize + dx).clamp(0, p as isize - 1) as usize,
-                                        (y as isize + dy).clamp(0, p as isize - 1) as usize,
-                                    );
+                                    break ((x as isize + dx).clamp(0, p as isize - 1) as usize, (y as isize + dy).clamp(0, p as isize - 1) as usize);
                                 }
                             };
                             xs[base + y * p + x] = ts[base + ny * p + nx];
@@ -360,15 +310,10 @@ pub fn train(
         let e = net.forward(x) - t;
         let loss = (e.clone() * e * m.clone()).sum() / m.sum().clamp_min(1.0);
         let lv: f32 = loss.clone().into_scalar();
-        loss_avg += if step == 0 {
-            lv - loss_avg
-        } else {
-            0.05 * (lv - loss_avg)
-        };
+        loss_avg += if step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
         let grads = GradientsParams::from_grads(loss.backward(), &net);
         // Cosine decay of the learning rate.
-        let lr =
-            cfg.lr * 0.5 * (1.0 + (std::f64::consts::PI * step as f64 / cfg.steps as f64).cos());
+        let lr = cfg.lr * 0.5 * (1.0 + (std::f64::consts::PI * step as f64 / cfg.steps as f64).cos());
         net = opt.step(lr, net, grads);
         if step % 10 == 9 || step + 1 == cfg.steps {
             progress(step + 1, cfg.steps, loss_avg);
@@ -423,22 +368,8 @@ impl Learned {
                 let (ax, ay) = (x0.saturating_sub(MARGIN), y0.saturating_sub(MARGIN));
                 let (bx, by) = ((x0 + step + MARGIN).min(w), (y0 + step + MARGIN).min(h));
                 let (tw, th) = (bx - ax, by - ay);
-                let (pw, ph) = (
-                    tw.div_ceil(ALIGN).max(2) * ALIGN,
-                    th.div_ceil(ALIGN).max(2) * ALIGN,
-                );
-                let reflect = |i: usize, n: usize| {
-                    if n == 1 {
-                        0
-                    } else {
-                        let k = i % (2 * n - 2);
-                        if k < n {
-                            k
-                        } else {
-                            2 * n - 2 - k
-                        }
-                    }
-                };
+                let (pw, ph) = (tw.div_ceil(ALIGN).max(2) * ALIGN, th.div_ceil(ALIGN).max(2) * ALIGN);
+                let reflect = |i: usize, n: usize| if n == 1 { 0 } else { let k = i % (2 * n - 2); if k < n { k } else { 2 * n - 2 - k } };
                 let mut tile = vec![0f32; pw * ph];
                 for y in 0..ph {
                     let sy = reflect(y, th);
@@ -447,12 +378,7 @@ impl Learned {
                     }
                 }
                 let x = Tensor::<4>::from_data(TensorData::new(tile, [1, 1, ph, pw]), dev);
-                let r = net
-                    .forward(x)
-                    .into_data()
-                    .convert::<f32>()
-                    .try_into_vec::<f32>()
-                    .unwrap();
+                let r = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
                 for y in y0..(y0 + step).min(h) {
                     for x in x0..(x0 + step).min(w) {
                         out[y * w + x] = r[(y - ay) * pw + (x - ax)] * std + mean;
@@ -473,32 +399,14 @@ mod tests {
         let dev = Device::flex();
         let (w, h) = (64, 64);
         let (clean, noisy) = phantom(w, h, 0.4);
-        let other: Vec<f32> = clean
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| c + 0.4 * gauss(99, i as u64))
-            .collect();
+        let other: Vec<f32> = clean.iter().enumerate().map(|(i, &c)| c + 0.4 * gauss(99, i as u64)).collect();
         let pairs = match mode {
             Mode::N2v => vec![(noisy.clone(), None)],
             _ => vec![(noisy.clone(), Some(other.clone()))],
         };
-        let cfg = TrainConfig {
-            steps,
-            batch: 4,
-            patch: 32,
-            lr: 2e-3,
-            seed: 7,
-        };
+        let cfg = TrainConfig { steps, batch: 4, patch: 32, lr: 2e-3, seed: 7 };
         let (net, mean, std, loss) = train(&dev, &pairs, w, h, mode, &cfg, |_, _, _| {}).unwrap();
-        let l = Learned {
-            net,
-            mode,
-            mean,
-            std,
-            loss,
-            source: String::new(),
-            bin: 1,
-        };
+        let l = Learned { net, mode, mean, std, loss, source: String::new(), bin: 1 };
         let out = match mode {
             Mode::N2v => l.apply(&dev, &noisy, w, h),
             _ => {
@@ -508,14 +416,7 @@ mod tests {
         };
         let before = match mode {
             Mode::N2v => rmse(&clean, &noisy),
-            _ => rmse(
-                &clean,
-                &noisy
-                    .iter()
-                    .zip(&other)
-                    .map(|(a, b)| 0.5 * (a + b))
-                    .collect::<Vec<_>>(),
-            ),
+            _ => rmse(&clean, &noisy.iter().zip(&other).map(|(a, b)| 0.5 * (a + b)).collect::<Vec<_>>()),
         };
         (before, rmse(&clean, &out))
     }
@@ -535,18 +436,8 @@ mod tests {
     #[test]
     fn other_scales_get_their_own_standardisation() {
         let dev = Device::flex();
-        let l = Learned {
-            net: Net::new(&dev),
-            mode: Mode::N2v,
-            mean: 0.5,
-            std: 0.1,
-            loss: 0.0,
-            source: String::new(),
-            bin: 1,
-        };
-        let near: Vec<f32> = (0..100)
-            .map(|i| 0.5 + 0.1 * ((i % 7) as f32 - 3.0) / 2.0)
-            .collect();
+        let l = Learned { net: Net::new(&dev), mode: Mode::N2v, mean: 0.5, std: 0.1, loss: 0.0, source: String::new(), bin: 1 };
+        let near: Vec<f32> = (0..100).map(|i| 0.5 + 0.1 * ((i % 7) as f32 - 3.0) / 2.0).collect();
         assert_eq!(l.scale_for(&near), (0.5, 0.1));
         let far: Vec<f32> = near.iter().map(|x| 1000.0 + 300.0 * x).collect();
         let (m, s) = l.scale_for(&far);
@@ -556,9 +447,7 @@ mod tests {
     #[test]
     fn binning_round_trips_smooth_images() {
         let (w, h) = (37, 29);
-        let v: Vec<f32> = (0..w * h)
-            .map(|i| (i % w) as f32 * 0.5 + (i / w) as f32)
-            .collect();
+        let v: Vec<f32> = (0..w * h).map(|i| (i % w) as f32 * 0.5 + (i / w) as f32).collect();
         let (b, bw, bh) = bin(&v, w, h, 2);
         assert_eq!((bw, bh), (18, 14));
         assert!((b[0] - (0.0 + 0.5 + 1.0 + 1.5) / 4.0).abs() < 1e-6);
@@ -574,24 +463,14 @@ mod tests {
     #[test]
     fn apply_covers_odd_sizes_and_tiles() {
         let dev = Device::flex();
-        let l = Learned {
-            net: Net::new(&dev),
-            mode: Mode::N2v,
-            mean: 3.0,
-            std: 2.0,
-            loss: 0.0,
-            source: String::new(),
-            bin: 1,
-        };
+        let l = Learned { net: Net::new(&dev), mode: Mode::N2v, mean: 3.0, std: 2.0, loss: 0.0, source: String::new(), bin: 1 };
         let (w, h) = (601, 21);
         let out = l.apply(&dev, &vec![1.0; w * h], w, h);
         assert_eq!(out.len(), w * h);
         assert!(out.iter().all(|v| v.is_finite()));
         // A flat input gives a flat result away from the edges.
         let mid = out[10 * w + 300];
-        assert!(out[10 * w + 100..10 * w + 500]
-            .iter()
-            .all(|v| (v - mid).abs() < 1e-3));
+        assert!(out[10 * w + 100..10 * w + 500].iter().all(|v| (v - mid).abs() < 1e-3));
     }
 }
 
@@ -609,23 +488,14 @@ mod bench {
     #[test]
     #[ignore]
     fn bench() {
-        let Ok(path) = std::env::var("TMV_DENOISE_FILE") else {
-            return;
-        };
-        let steps: usize = std::env::var("TMV_DENOISE_STEPS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1000);
+        let Ok(path) = std::env::var("TMV_DENOISE_FILE") else { return };
+        let steps: usize = std::env::var("TMV_DENOISE_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(1000);
         let src = crate::formats::open(std::path::Path::new(&path)).unwrap();
         let img = crate::image::OpenImage::new(1, src, 1 << 30);
         let info = img.info().clone();
         let (w, h, nz) = (info.width, info.height, info.size_z);
         let mid = nz / 2;
-        let k: usize = std::env::var("TMV_DENOISE_BIN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1)
-            .max(1);
+        let k: usize = std::env::var("TMV_DENOISE_BIN").ok().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
         // A movie: everything works on the frame mean, and neighbours make no sense.
         let movie = std::env::var("TMV_DENOISE_MOVIE").is_ok();
         let slice = if movie {
@@ -634,10 +504,7 @@ mod bench {
         } else {
             crate::denoise::input(&img, 0, mid, 0, 0).unwrap()
         };
-        println!(
-            "{path}: {w}×{h}×{nz}, slice {mid} noise σ {:.4}",
-            noise_sigma(&slice, w, h)
-        );
+        println!("{path}: {w}×{h}×{nz}, slice {mid} noise σ {:.4}", noise_sigma(&slice, w, h));
         let spread: Vec<usize> = (0..nz.min(16)).map(|i| i * nz / nz.min(16)).collect();
         for mode in [Mode::N2v, Mode::Neighbours, Mode::Frames] {
             if (mode != Mode::N2v && nz < 2) || (movie && mode == Mode::Neighbours) {
@@ -645,62 +512,25 @@ mod bench {
             }
             let pairs: Vec<(Vec<f32>, Option<Vec<f32>>)> = match mode {
                 Mode::N2v if movie => vec![(slice.clone(), None)],
-                Mode::N2v => spread
-                    .iter()
-                    .map(|&z| (crate::denoise::input(&img, 0, z, 0, 0).unwrap(), None))
-                    .collect(),
-                Mode::Neighbours => spread
-                    .iter()
-                    .filter(|&&z| z + 1 < nz)
-                    .map(|&z| {
-                        (
-                            crate::denoise::input(&img, 0, z, 0, 0).unwrap(),
-                            Some(crate::denoise::input(&img, 0, z + 1, 0, 0).unwrap()),
-                        )
-                    })
-                    .collect(),
+                Mode::N2v => spread.iter().map(|&z| (crate::denoise::input(&img, 0, z, 0, 0).unwrap(), None)).collect(),
+                Mode::Neighbours => spread.iter().filter(|&&z| z + 1 < nz).map(|&z| (crate::denoise::input(&img, 0, z, 0, 0).unwrap(), Some(crate::denoise::input(&img, 0, z + 1, 0, 0).unwrap()))).collect(),
                 Mode::Frames => {
                     let [a, b] = crate::denoise::frame_halves(&img, 0, 0).unwrap();
                     vec![(a, Some(b))]
                 }
             };
             let (bw, bh) = ((w / k).max(1), (h / k).max(1));
-            let pairs: Vec<_> = pairs
-                .into_iter()
-                .map(|(a, b)| (bin(&a, w, h, k).0, b.map(|b| bin(&b, w, h, k).0)))
-                .collect();
+            let pairs: Vec<_> = pairs.into_iter().map(|(a, b)| (bin(&a, w, h, k).0, b.map(|b| bin(&b, w, h, k).0))).collect();
             let t0 = std::time::Instant::now();
-            let cfg = TrainConfig {
-                steps,
-                ..Default::default()
-            };
-            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| {
-                train(dev, &pairs, bw, bh, mode, &cfg, |_, _, _| {})
-            })
-            .unwrap();
+            let cfg = TrainConfig { steps, ..Default::default() };
+            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| train(dev, &pairs, bw, bh, mode, &cfg, |_, _, _| {})).unwrap();
             let trained = t0.elapsed().as_secs_f64();
-            let l = Learned {
-                net,
-                mode,
-                mean,
-                std,
-                loss,
-                source: String::new(),
-                bin: k,
-            };
+            let l = Learned { net, mode, mean, std, loss, source: String::new(), bin: k };
             let t1 = std::time::Instant::now();
-            let (out, _) =
-                crate::classify::on_device(|dev| Ok(l.apply(dev, &slice, w, h))).unwrap();
+            let (out, _) = crate::classify::on_device(|dev| Ok(l.apply(dev, &slice, w, h))).unwrap();
             println!("  {mode:?} on {backend}: train {trained:.1} s ({steps} steps, loss {loss:.4}), apply {:.0} ms, σ left {:.4}", t1.elapsed().as_secs_f64() * 1e3, noise_sigma(&out, w, h));
             if let Ok(dir) = std::env::var("TMV_DENOISE_OUT") {
-                let mut bytes = crate::align::mrc_header(
-                    w,
-                    h,
-                    1,
-                    1.0,
-                    [0.0, 1.0, 0.0, 1.0],
-                    &format!("{mode:?}"),
-                );
+                let mut bytes = crate::align::mrc_header(w, h, 1, 1.0, [0.0, 1.0, 0.0, 1.0], &format!("{mode:?}"));
                 bytes.extend(out.iter().flat_map(|v| v.to_le_bytes()));
                 std::fs::write(format!("{dir}/denoised_{mode:?}.mrc"), bytes).unwrap();
             }

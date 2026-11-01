@@ -12,11 +12,7 @@
 //! - wedge: missing-wedge correction (IsoNet method, `crate::wedge`) with
 //!   the tilt range actually used.
 
-use super::{
-    check_cancel,
-    dataset::{Dataset, Tomogram},
-    output, recon, CANCEL,
-};
+use super::{check_cancel, dataset::{Dataset, Tomogram}, output, recon, CANCEL};
 use crate::image::OpenImage;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -27,11 +23,7 @@ use std::sync::{atomic::Ordering, Arc};
 pub type Progress<'a> = &'a (dyn Fn(&str, usize, usize) + Sync);
 
 pub fn open(path: &str) -> Result<Arc<OpenImage>> {
-    Ok(OpenImage::new(
-        0,
-        crate::formats::open(Path::new(path))?,
-        256 << 20,
-    ))
+    Ok(OpenImage::new(0, crate::formats::open(Path::new(path))?, 256 << 20))
 }
 
 /// `<stem>_<suffix>.mrc` beside the stack; an unlisted existing file is kept.
@@ -39,11 +31,7 @@ fn output_path(d: &Dataset, suffix: &str) -> String {
     let p = Path::new(&d.stack);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
     for k in 1.. {
-        let name = if k == 1 {
-            format!("{stem}_{suffix}.mrc")
-        } else {
-            format!("{stem}_{suffix}_{k}.mrc")
-        };
+        let name = if k == 1 { format!("{stem}_{suffix}.mrc") } else { format!("{stem}_{suffix}_{k}.mrc") };
         let f = p.with_file_name(name).to_string_lossy().into_owned();
         if !Path::new(&f).exists() || d.tomograms.iter().any(|t| t.path == f) {
             return f;
@@ -83,13 +71,9 @@ pub struct Made {
 
 pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
-    let Some(a) = d.alignment.clone() else {
-        bail!("先完成倾转对齐")
-    };
+    let Some(a) = d.alignment.clone() else { bail!("先完成倾转对齐") };
     let flip = if req.phase_flip {
-        let Some(ctf) = d.ctf.as_ref() else {
-            bail!("先完成 CTF 估计，或关闭相位翻转")
-        };
+        let Some(ctf) = d.ctf.as_ref() else { bail!("先完成 CTF 估计，或关闭相位翻转") };
         Some(ctf.clone())
     } else {
         None
@@ -114,17 +98,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
     if req.ctf_3d && flip.is_none() {
         bail!("3D CTF 校正需要先完成 CTF 估计并勾选相位翻转");
     }
-    let tag = format!(
-        "{method}_b{}{}",
-        req.bin,
-        if three_d {
-            "_ctf3d"
-        } else if flip.is_some() {
-            "_flip"
-        } else {
-            ""
-        }
-    );
+    let tag = format!("{method}_b{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" });
     let mut made: Vec<Tomogram> = Vec::new();
     let mut backend = String::new();
     for (kind, src) in sources {
@@ -132,55 +106,19 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         let img = open(&src)?;
         let px = pixel_a(d, &img);
         output::validate(&img, &a, req.bin)?;
-        let stage = format!(
-            "重构 {}",
-            match kind {
-                "even" => "偶数帧半",
-                "odd" => "奇数帧半",
-                _ => "全部",
-            }
-        );
-        let path = output_path(
-            d,
-            &if kind == "full" {
-                tag.clone()
-            } else {
-                format!("{tag}_{kind}")
-            },
-        );
-        let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| {
-            progress(&format!("{stage}：对齐叠层"), i, n)
-        })?;
-        let mut out =
-            output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
-        let how = Build {
-            alignment: &a,
-            bin: req.bin,
-            params: &req.params,
-            ctf: flip.as_ref().map(|c| (c, &d.optics, px)),
-            ctf_3d: three_d,
-        };
-        backend = build(
-            &how,
-            stack,
-            w,
-            h,
-            &angles,
-            &mut |y0, n, z0, nz, block| out.write_block(y0, n, z0, nz, block),
-            &|label, i, n| progress(&format!("{stage}{label}"), i, n),
-        )?;
+        let stage = format!("重构 {}", match kind { "even" => "偶数帧半", "odd" => "奇数帧半", _ => "全部" });
+        let path = output_path(d, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
+        let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
+        let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
+        let how = Build { alignment: &a, bin: req.bin, params: &req.params, ctf: flip.as_ref().map(|c| (c, &d.optics, px)), ctf_3d: three_d };
+        backend = build(&how, stack, w, h, &angles, &mut |y0, n, z0, nz, block| out.write_block(y0, n, z0, nz, block), &|label, i, n| progress(&format!("{stage}{label}"), i, n))?;
         out.finish()?;
         made.push(Tomogram {
             path,
             kind: kind.into(),
             bin: req.bin,
             thickness: req.params.thickness,
-            method: format!(
-                "{:?}{}",
-                req.params.method,
-                if three_d { "+ctf3d" } else { "" }
-            )
-            .to_lowercase(),
+            method: format!("{:?}{}", req.params.method, if three_d { "+ctf3d" } else { "" }).to_lowercase(),
             phase_flipped: flip.is_some(),
             halves: None,
         });
@@ -193,20 +131,11 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         d.add_tomogram(t);
     }
     d.save()?;
-    Ok(Made {
-        paths,
-        backend,
-        ms: now.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Made { paths, backend, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// Per-tilt CTF of the stack, kept in the dataset.
-pub fn ctf(
-    d: &mut Dataset,
-    params: &crate::ctf::Params,
-    n: usize,
-    progress: Progress,
-) -> Result<super::dataset::Ctf> {
+pub fn ctf(d: &mut Dataset, params: &crate::ctf::Params, n: usize, progress: Progress) -> Result<super::dataset::Ctf> {
     let img = open(&d.stack)?;
     let mut params = params.clone();
     // The pixel size given with the request wins (and is kept); else the dataset's or the header's.
@@ -255,10 +184,7 @@ pub fn build(
             let px_out = ctf.2 * how.bin as f64;
             // Slabs thin enough that the defocus changes by at most SLAB_DEFOCUS
             // across one, even at the steepest tilt kept.
-            let steep = angles
-                .iter()
-                .map(|t| t.to_radians().cos())
-                .fold(1.0, f64::min);
+            let steep = angles.iter().map(|t| t.to_radians().cos()).fold(1.0, f64::min);
             let slab = ((SLAB_DEFOCUS * steep / px_out).floor() as usize).clamp(1, thickness);
             let slabs: Vec<usize> = (0..thickness).step_by(slab).collect();
             let mut backend = String::new();
@@ -266,25 +192,13 @@ pub fn build(
                 check_cancel()?;
                 let nz = slab.min(thickness - z0);
                 // Depth of this slab's centre: its offset in the slab's own geometry.
-                let centre = z0 as f64 + (nz as f64 - 1.0) / 2.0 - (thickness as f64 - 1.0) / 2.0
-                    + p.z_offset;
+                let centre = z0 as f64 + (nz as f64 - 1.0) / 2.0 - (thickness as f64 - 1.0) / 2.0 + p.z_offset;
                 let mut flipped = stack.clone();
                 output::flip_views(&mut flipped, w, h, how.alignment, how.bin, ctf, centre);
                 let g = recon::Geometry::new(w, nz, angles, centre)?;
-                let views = recon::Views {
-                    data: &flipped,
-                    w,
-                    h,
-                    views: angles.len(),
-                };
+                let views = recon::Views { data: &flipped, w, h, views: angles.len() };
                 let label = format!("：3D CTF 第 {}/{} 层", k + 1, slabs.len());
-                backend = recon::reconstruct(
-                    &views,
-                    &g,
-                    p,
-                    &mut |y0, n, block| sink(y0, n, z0, nz, &block),
-                    &|i, n| progress(&label, i, n),
-                )?;
+                backend = recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, z0, nz, &block), &|i, n| progress(&label, i, n))?;
             }
             Ok(backend)
         }
@@ -293,19 +207,8 @@ pub fn build(
                 output::flip_views(&mut stack, w, h, how.alignment, how.bin, ctf, 0.0);
             }
             let g = recon::Geometry::new(w, thickness, angles, p.z_offset)?;
-            let views = recon::Views {
-                data: &stack,
-                w,
-                h,
-                views: angles.len(),
-            };
-            recon::reconstruct(
-                &views,
-                &g,
-                p,
-                &mut |y0, n, block| sink(y0, n, 0, thickness, &block),
-                &|i, n| progress("", i, n),
-            )
+            let views = recon::Views { data: &stack, w, h, views: angles.len() };
+            recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, 0, thickness, &block), &|i, n| progress("", i, n))
         }
     }
 }
@@ -324,80 +227,39 @@ fn sheared(
     let p = how.params;
     let span = p.y_slope.abs() * (h - 1) as f64 / 2.0;
     let half = span.ceil() as usize;
-    let params = recon::Params {
-        thickness: p.thickness + 2 * half,
-        y_slope: 0.0,
-        ..p.clone()
-    };
-    let inner = Build {
-        alignment: how.alignment,
-        bin: how.bin,
-        params: &params,
-        ctf: how.ctf,
-        ctf_3d: how.ctf_3d,
-    };
+    let params = recon::Params { thickness: p.thickness + 2 * half, y_slope: 0.0, ..p.clone() };
+    let inner = Build { alignment: how.alignment, bin: how.bin, params: &params, ctf: how.ctf, ctf_3d: how.ctf_3d };
     let centre = (h as f64 - 1.0) / 2.0;
     let start = |y: usize| half as isize + (p.y_slope * (y as f64 - centre)).round() as isize;
     let t = p.thickness as isize;
-    build(
-        &inner,
-        stack,
-        w,
-        h,
-        angles,
-        &mut |y0, n, z0, nz, block| {
-            for r in 0..n {
-                let s = start(y0 + r);
-                let (lo, hi) = (
-                    (z0 as isize - s).max(0),
-                    (z0 as isize + nz as isize - s).min(t),
-                );
-                if lo >= hi {
-                    continue;
-                }
-                let k0 = (lo + s) as usize - z0;
-                let rows: Vec<f32> = (0..(hi - lo) as usize)
-                    .flat_map(|k| {
-                        block[(r * nz + k0 + k) * w..(r * nz + k0 + k + 1) * w]
-                            .iter()
-                            .copied()
-                    })
-                    .collect();
-                sink(y0 + r, 1, lo as usize, (hi - lo) as usize, &rows)?;
+    build(&inner, stack, w, h, angles, &mut |y0, n, z0, nz, block| {
+        for r in 0..n {
+            let s = start(y0 + r);
+            let (lo, hi) = ((z0 as isize - s).max(0), (z0 as isize + nz as isize - s).min(t));
+            if lo >= hi {
+                continue;
             }
-            Ok(())
-        },
-        progress,
-    )
+            let k0 = (lo + s) as usize - z0;
+            let rows: Vec<f32> = (0..(hi - lo) as usize).flat_map(|k| block[(r * nz + k0 + k) * w..(r * nz + k0 + k + 1) * w].iter().copied()).collect();
+            sink(y0 + r, 1, lo as usize, (hi - lo) as usize, &rows)?;
+        }
+        Ok(())
+    }, progress)
 }
 
 /// A tomogram in memory as [z][y][x] (sections along Z), for comparisons.
-pub fn volume(
-    how: &Build,
-    stack: Vec<f32>,
-    w: usize,
-    h: usize,
-    angles: &[f64],
-) -> Result<Vec<f32>> {
+pub fn volume(how: &Build, stack: Vec<f32>, w: usize, h: usize, angles: &[f64]) -> Result<Vec<f32>> {
     let z = how.params.thickness;
     let mut v = vec![0f32; w * h * z];
-    build(
-        how,
-        stack,
-        w,
-        h,
-        angles,
-        &mut |y0, n, z0, nz, block| {
-            for y in 0..n {
-                for k in 0..nz {
-                    let dst = ((z0 + k) * h + y0 + y) * w;
-                    v[dst..dst + w].copy_from_slice(&block[(y * nz + k) * w..(y * nz + k + 1) * w]);
-                }
+    build(how, stack, w, h, angles, &mut |y0, n, z0, nz, block| {
+        for y in 0..n {
+            for k in 0..nz {
+                let dst = ((z0 + k) * h + y0 + y) * w;
+                v[dst..dst + w].copy_from_slice(&block[(y * nz + k) * w..(y * nz + k + 1) * w]);
             }
-            Ok(())
-        },
-        &|_, _, _| {},
-    )?;
+        }
+        Ok(())
+    }, &|_, _, _| {})?;
     Ok(v)
 }
 
@@ -406,9 +268,7 @@ pub fn volume(
 pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
     let src = self::source(d, source)?.clone();
-    let Some(ctf) = d.ctf.as_ref() else {
-        bail!("先完成 CTF 估计")
-    };
+    let Some(ctf) = d.ctf.as_ref() else { bail!("先完成 CTF 估计") };
     let mut df: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     df.sort_by(f64::total_cmp);
     progress("反卷积", 0, 1);
@@ -418,19 +278,9 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     let path = output_path(d, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &v, shape, px, false)?;
     progress("反卷积", 1, 1);
-    d.add_tomogram(Tomogram {
-        path: path.clone(),
-        kind: "deconvolved".into(),
-        method: "wiener".into(),
-        halves: None,
-        ..src
-    });
+    d.add_tomogram(Tomogram { path: path.clone(), kind: "deconvolved".into(), method: "wiener".into(), halves: None, ..src });
     d.save()?;
-    Ok(Made {
-        paths: vec![path],
-        backend: "CPU".into(),
-        ms: now.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Made { paths: vec![path], backend: "CPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// All sections of a volume, [z][y][x], with its shape and pixel size.
@@ -466,19 +316,11 @@ pub struct DenoiseStep {
     pub steps: usize,
 }
 
-pub fn denoise(
-    dev: &burn::tensor::Device,
-    d: &mut Dataset,
-    req: &DenoiseStep,
-    progress: Progress,
-) -> Result<Made> {
+pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, progress: Progress) -> Result<Made> {
     use crate::denoise_learn::{train, Learned, Mode, TrainConfig};
     let now = std::time::Instant::now();
     let full = source(d, req.source.as_deref())?.clone();
-    let present = full
-        .halves
-        .clone()
-        .filter(|[e, o]| Path::new(e).exists() && Path::new(o).exists());
+    let present = full.halves.clone().filter(|[e, o]| Path::new(e).exists() && Path::new(o).exists());
     let (shape, px, halves) = match present {
         Some([e, o]) => {
             let (ev, shape, px) = load(&e)?;
@@ -497,52 +339,26 @@ pub fn denoise(
     let plane = w * h;
     // Training pairs: at most 64 sections spread over the depth.
     let picks: Vec<usize> = (0..nz).step_by((nz / 64).max(1)).collect();
-    let (pairs, mode, inputs): (Vec<(Vec<f32>, Option<Vec<f32>>)>, Mode, Vec<Vec<f32>>) =
-        match halves {
-            Some((ev, od)) => {
-                let mut pairs = Vec::new();
-                for &z in &picks {
-                    let (a, b) = (
-                        ev[z * plane..(z + 1) * plane].to_vec(),
-                        od[z * plane..(z + 1) * plane].to_vec(),
-                    );
-                    pairs.push((a.clone(), Some(b.clone())));
-                    pairs.push((b, Some(a)));
-                }
-                (pairs, Mode::Frames, vec![ev, od])
+    let (pairs, mode, inputs): (Vec<(Vec<f32>, Option<Vec<f32>>)>, Mode, Vec<Vec<f32>>) = match halves {
+        Some((ev, od)) => {
+            let mut pairs = Vec::new();
+            for &z in &picks {
+                let (a, b) = (ev[z * plane..(z + 1) * plane].to_vec(), od[z * plane..(z + 1) * plane].to_vec());
+                pairs.push((a.clone(), Some(b.clone())));
+                pairs.push((b, Some(a)));
             }
-            None => {
-                let (v, _, _) = load(&full.path)?;
-                let pairs = picks
-                    .iter()
-                    .filter(|&&z| z + 1 < nz)
-                    .map(|&z| {
-                        (
-                            v[z * plane..(z + 1) * plane].to_vec(),
-                            Some(v[(z + 1) * plane..(z + 2) * plane].to_vec()),
-                        )
-                    })
-                    .collect();
-                (pairs, Mode::Neighbours, vec![v])
-            }
-        };
+            (pairs, Mode::Frames, vec![ev, od])
+        }
+        None => {
+            let (v, _, _) = load(&full.path)?;
+            let pairs = picks.iter().filter(|&&z| z + 1 < nz).map(|&z| (v[z * plane..(z + 1) * plane].to_vec(), Some(v[(z + 1) * plane..(z + 2) * plane].to_vec()))).collect();
+            (pairs, Mode::Neighbours, vec![v])
+        }
+    };
     crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
-    let cfg = TrainConfig {
-        steps: req.steps.clamp(20, 20000),
-        ..Default::default()
-    };
-    let (net, mean, std, loss) = train(dev, &pairs, w, h, mode, &cfg, |s, n, _| {
-        progress("Noise2Noise 训练", s, n)
-    })?;
-    let model = Learned {
-        net,
-        mode,
-        mean,
-        std,
-        loss,
-        source: full.path.clone(),
-        bin: 1,
-    };
+    let cfg = TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
+    let (net, mean, std, loss) = train(dev, &pairs, w, h, mode, &cfg, |s, n, _| progress("Noise2Noise 训练", s, n))?;
+    let model = Learned { net, mode, mean, std, loss, source: full.path.clone(), bin: 1 };
     let mut out = vec![0.0f32; plane * nz];
     for (k, v) in inputs.iter().enumerate() {
         for z in 0..nz {
@@ -556,39 +372,16 @@ pub fn denoise(
     }
     let path = output_path(d, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
-    d.add_tomogram(Tomogram {
-        path: path.clone(),
-        kind: "denoised".into(),
-        method: if mode == Mode::Frames {
-            "n2n-halves"
-        } else {
-            "n2n-neighbours"
-        }
-        .into(),
-        halves: None,
-        ..full
-    });
+    d.add_tomogram(Tomogram { path: path.clone(), kind: "denoised".into(), method: if mode == Mode::Frames { "n2n-halves" } else { "n2n-neighbours" }.into(), halves: None, ..full });
     d.save()?;
-    Ok(Made {
-        paths: vec![path],
-        backend: "GPU".into(),
-        ms: now.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// The part of a tomogram's name after the stack's stem (`rec_b4_flip`).
 fn stem_suffix(path: &str, stack: &str) -> String {
-    let stem = Path::new(stack)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let name = Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    name.strip_prefix(stem)
-        .map(|s| s.trim_start_matches('_').to_string())
-        .unwrap_or_else(|| name.to_string())
+    let stem = Path::new(stack).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let name = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    name.strip_prefix(stem).map(|s| s.trim_start_matches('_').to_string()).unwrap_or_else(|| name.to_string())
 }
 
 #[derive(Clone, Deserialize)]
@@ -618,11 +411,7 @@ pub struct TooSlow {
 
 impl std::fmt::Display for TooSlow {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "缺失楔补偿预计要 {:.0} 分钟，超出时限",
-            self.projected_s / 60.0
-        )
+        write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0)
     }
 }
 
@@ -631,51 +420,27 @@ impl std::error::Error for TooSlow {}
 /// Even/odd halves: cube 48 did best in the held-out-tilt tests
 /// (EMPIAR-10045); about 20 min on an RTX 5080.
 fn halves_config() -> crate::wedge::TrainConfig {
-    crate::wedge::TrainConfig {
-        cube: 48,
-        iterations: 3,
-        steps: 1000,
-        ..Default::default()
-    }
+    crate::wedge::TrainConfig { cube: 48, iterations: 3, steps: 1000, ..Default::default() }
 }
 
 /// One tomogram: the IsoNet method with a σ1 pre-smooth (noise is not
 /// filled into the wedge).
 fn single_config() -> crate::wedge::TrainConfig {
-    crate::wedge::TrainConfig {
-        smooth: 1.0,
-        ..Default::default()
-    }
+    crate::wedge::TrainConfig { smooth: 1.0, ..Default::default() }
 }
 
-pub fn wedge(
-    dev: &burn::tensor::Device,
-    d: &mut Dataset,
-    req: &WedgeStep,
-    progress: Progress,
-) -> Result<Made> {
+pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
-    let Some(a) = d.alignment.as_ref() else {
-        bail!("先完成倾转对齐")
-    };
-    let used: Vec<f64> = a
-        .views
-        .iter()
-        .filter(|v| !v.excluded)
-        .map(|v| v.refined())
-        .collect();
-    let range = [
-        used.iter().copied().fold(f64::INFINITY, f64::min) as f32,
-        used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32,
-    ];
+    let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
+    let used: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
+    let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
     let started = std::time::Instant::now();
     let projected = std::sync::Mutex::new(None::<f64>);
     let tick = |p: crate::wedge::Progress| {
         if let (Some(budget), true) = (req.budget_s, p.iteration <= p.iterations) {
-            let done = ((p.iteration.max(1) - 1) * p.steps + p.step) as f64
-                / (p.iterations * p.steps).max(1) as f64;
+            let done = ((p.iteration.max(1) - 1) * p.steps + p.step) as f64 / (p.iterations * p.steps).max(1) as f64;
             let t = started.elapsed().as_secs_f64();
             if t > 30.0 && done > 0.0 && t / done > budget {
                 *projected.lock().unwrap() = Some(t / done);
@@ -685,46 +450,26 @@ pub fn wedge(
         if p.iteration > p.iterations {
             progress("缺失楔补偿：应用", p.step, p.steps)
         } else {
-            progress(
-                &format!("缺失楔补偿：第 {}/{} 轮", p.iteration, p.iterations),
-                p.step,
-                p.steps,
-            )
+            progress(&format!("缺失楔补偿：第 {}/{} 轮", p.iteration, p.iterations), p.step, p.steps)
         }
     };
     // With even/odd halves one network denoises and fills the wedge
     // (Noise2Noise across the halves); else the IsoNet method on the one.
-    let trained = (|| -> Result<_> {
-        Ok(match (&src.halves, req.single) {
-            (Some([even, odd]), false) => {
-                let (a, shape, px) = load(even)?;
-                let (b, ..) = load(odd)?;
-                let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
-                let cfg = req.cfg.clone().unwrap_or_else(halves_config);
-                let method = if cfg.equivariant > 0.0 {
-                    "icecream"
-                } else {
-                    "halves"
-                };
-                (
-                    crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &cfg, tick)?,
-                    shape,
-                    px,
-                    method,
-                )
-            }
-            _ => {
-                let (v, shape, px) = load(&src.path)?;
-                let cfg = req.cfg.clone().unwrap_or_else(single_config);
-                (
-                    crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?,
-                    shape,
-                    px,
-                    "isonet",
-                )
-            }
-        })
-    })();
+    let trained = (|| -> Result<_> { Ok(match (&src.halves, req.single) {
+        (Some([even, odd]), false) => {
+            let (a, shape, px) = load(even)?;
+            let (b, ..) = load(odd)?;
+            let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
+            let cfg = req.cfg.clone().unwrap_or_else(halves_config);
+            let method = if cfg.equivariant > 0.0 { "icecream" } else { "halves" };
+            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &cfg, tick)?, shape, px, method)
+        }
+        _ => {
+            let (v, shape, px) = load(&src.path)?;
+            let cfg = req.cfg.clone().unwrap_or_else(single_config);
+            (crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?, shape, px, "isonet")
+        }
+    }) })();
     if let Some(projected_s) = *projected.lock().unwrap() {
         crate::wedge::CANCEL.store(false, Ordering::SeqCst);
         return Err(TooSlow { projected_s }.into());
@@ -735,17 +480,7 @@ pub fn wedge(
     }
     let path = output_path(d, &format!("{}_wedge", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
-    d.add_tomogram(Tomogram {
-        path: path.clone(),
-        kind: "wedge".into(),
-        method: method.into(),
-        halves: None,
-        ..src
-    });
+    d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
-    Ok(Made {
-        paths: vec![path],
-        backend: "GPU".into(),
-        ms: now.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }

@@ -70,42 +70,26 @@ pub type FlipWith<'a> = (&'a super::dataset::Ctf, &'a super::dataset::Optics, f6
 
 /// Phase flips aligned views (as `aligned` returns them, excluded views
 /// left out) for a slab at `depth` output pixels from the mid-plane.
-pub fn flip_views(
-    stack: &mut [f32],
-    w: usize,
-    h: usize,
-    a: &Alignment,
-    bin: usize,
-    ctf: FlipWith,
-    depth: f64,
-) {
+pub fn flip_views(stack: &mut [f32], w: usize, h: usize, a: &Alignment, bin: usize, ctf: FlipWith, depth: f64) {
     let (fits, optics, pixel_a) = ctf;
     use rayon::prelude::*;
     let kept: Vec<&super::View> = a.views.iter().filter(|v| !v.excluded).collect();
-    stack
-        .par_chunks_mut(w * h)
-        .zip(kept)
-        .for_each(|(plane, v)| {
-            if let Some(f) = fits.tilts.iter().find(|f| f.z == v.file_index) {
-                let psi = 90.0 - (a.axis + v.rotation);
-                let px = pixel_a * bin as f64;
-                super::ctf::flip(
-                    plane,
-                    w,
-                    h,
-                    &super::ctf::Flip {
-                        optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
-                        df1: f.df1,
-                        df2: f.df2,
-                        angle: (f.angle - psi).to_radians(),
-                        theta: v.refined(),
-                        gradient: fits.gradient,
-                        pixel_a: px,
-                        offset: super::ctf::depth_defocus(depth, v.refined(), fits.gradient, px),
-                    },
-                );
-            }
-        });
+    stack.par_chunks_mut(w * h).zip(kept).for_each(|(plane, v)| {
+        if let Some(f) = fits.tilts.iter().find(|f| f.z == v.file_index) {
+            let psi = 90.0 - (a.axis + v.rotation);
+            let px = pixel_a * bin as f64;
+            super::ctf::flip(plane, w, h, &super::ctf::Flip {
+                optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
+                df1: f.df1,
+                df2: f.df2,
+                angle: (f.angle - psi).to_radians(),
+                theta: v.refined(),
+                gradient: fits.gradient,
+                pixel_a: px,
+                offset: super::ctf::depth_defocus(depth, v.refined(), fits.gradient, px),
+            });
+        }
+    });
 }
 
 /// Aligned views, phase flipped when `ctf` is given.
@@ -176,21 +160,16 @@ pub fn aligned_flipped(
             if let Some(f) = fits.tilts.iter().find(|f| f.z == v.file_index) {
                 // The aligned view shows the stack turned by ψ = 90° − axis.
                 let psi = 90.0 - (a.axis + v.rotation);
-                super::ctf::flip(
-                    &mut plane,
-                    w,
-                    h,
-                    &super::ctf::Flip {
-                        optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
-                        df1: f.df1,
-                        df2: f.df2,
-                        angle: (f.angle - psi).to_radians(),
-                        theta: v.refined(),
-                        gradient: fits.gradient,
-                        pixel_a: pixel_a * bin as f64,
-                        offset: 0.0,
-                    },
-                );
+                super::ctf::flip(&mut plane, w, h, &super::ctf::Flip {
+                    optics: crate::ctf::Optics::of(optics.kv, optics.cs_mm, optics.amplitude),
+                    df1: f.df1,
+                    df2: f.df2,
+                    angle: (f.angle - psi).to_radians(),
+                    theta: v.refined(),
+                    gradient: fits.gradient,
+                    pixel_a: pixel_a * bin as f64,
+                    offset: 0.0,
+                });
             }
         }
         stack.extend(plane);
@@ -280,10 +259,7 @@ pub fn export(a: &Alignment, path: &str) -> Result<()> {
     let mut map = String::new();
     for v in a.views.iter().filter(|v| !v.excluded) {
         let x = super::export::xf_row(a, v);
-        xf.push_str(&format!(
-            "{:.9} {:.9} {:.9} {:.9} {:.6} {:.6}\n",
-            x[0], x[1], x[2], x[3], x[4], x[5]
-        ));
+        xf.push_str(&format!("{:.9} {:.9} {:.9} {:.9} {:.6} {:.6}\n", x[0], x[1], x[2], x[3], x[4], x[5]));
         tlt.push_str(&format!("{:.6}\n", v.refined()));
         map.push_str(&format!("{}\n", v.file_index));
     }
@@ -358,28 +334,11 @@ const HEADER: u64 = 1024;
 impl VolumeFile {
     pub fn create(path: &str, shape: [usize; 3], pixel_a: f64) -> Result<VolumeFile> {
         let path = PathBuf::from(path);
-        let part = path.with_extension(format!(
-            "{}.tomo-part",
-            path.extension().and_then(|s| s.to_str()).unwrap_or("out")
-        ));
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&part)?;
+        let part = path.with_extension(format!("{}.tomo-part", path.extension().and_then(|s| s.to_str()).unwrap_or("out")));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&part)?;
         let [w, h, z] = shape;
         file.set_len(HEADER + (w * h * z * 4) as u64)?;
-        Ok(VolumeFile {
-            file,
-            part,
-            path,
-            shape,
-            pixel_a,
-            stats: [f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0],
-            count: 0,
-            done: false,
-        })
+        Ok(VolumeFile { file, part, path, shape, pixel_a, stats: [f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0], count: 0, done: false })
     }
 
     /// Rows y0..y0+n of every section, given as [n][z][w].
@@ -388,14 +347,7 @@ impl VolumeFile {
     }
 
     /// Rows y0..y0+n of sections z0..z0+nz, given as [n][nz][w].
-    pub fn write_block(
-        &mut self,
-        y0: usize,
-        n: usize,
-        z0: usize,
-        nz: usize,
-        slab: &[f32],
-    ) -> Result<()> {
+    pub fn write_block(&mut self, y0: usize, n: usize, z0: usize, nz: usize, slab: &[f32]) -> Result<()> {
         use std::io::{Seek, SeekFrom};
         let [w, h, z] = self.shape;
         if slab.len() != n * nz * w || y0 + n > h || z0 + nz > z {
@@ -417,8 +369,7 @@ impl VolumeFile {
                     band[(y * w + x) * 4..(y * w + x + 1) * 4].copy_from_slice(&v.to_le_bytes());
                 }
             }
-            self.file
-                .seek(SeekFrom::Start(HEADER + ((k * h + y0) * w * 4) as u64))?;
+            self.file.seek(SeekFrom::Start(HEADER + ((k * h + y0) * w * 4) as u64))?;
             self.file.write_all(&band)?;
         }
         self.count += n * nz * w;
@@ -434,19 +385,7 @@ impl VolumeFile {
         let n = self.count as f64;
         let mean = self.stats[2] / n;
         let rms = (self.stats[3] / n - mean * mean).max(0.0).sqrt();
-        let header = crate::align::mrc_header(
-            w,
-            h,
-            z,
-            self.pixel_a,
-            [
-                self.stats[0] as f32,
-                self.stats[1] as f32,
-                mean as f32,
-                rms as f32,
-            ],
-            "TifMrcView Pro: single-axis tomography",
-        );
+        let header = crate::align::mrc_header(w, h, z, self.pixel_a, [self.stats[0] as f32, self.stats[1] as f32, mean as f32, rms as f32], "TifMrcView Pro: single-axis tomography");
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(&header)?;
         self.file.sync_all()?;

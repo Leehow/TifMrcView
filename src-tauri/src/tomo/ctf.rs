@@ -69,12 +69,7 @@ pub fn fit_series(
     if d.angles.len() != info.size_z {
         bail!("倾转角数与叠层不一致");
     }
-    let axis = d
-        .alignment
-        .as_ref()
-        .map(|a| a.axis)
-        .or(d.axis_hint)
-        .unwrap_or(90.0);
+    let axis = d.alignment.as_ref().map(|a| a.axis).or(d.axis_hint).unwrap_or(90.0);
     let dir = across(axis);
     let vertical = dir[0].abs() >= dir[1].abs();
     let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
@@ -91,31 +86,19 @@ pub fn fit_series(
         .enumerate()
         .map(|(z, &a)| {
             let s = strip(a);
-            let r = if vertical {
-                region(cx, cy, s, h as f64, w, h)
-            } else {
-                region(cx, cy, w as f64, s, w, h)
-            };
+            let r = if vertical { region(cx, cy, s, h as f64, w, h) } else { region(cx, cy, w as f64, s, w, h) };
             (z, r)
         })
         .collect();
-    let fits = crate::ctf::fit_regions(img, &items, 0, 0, n, params, &|i, total| {
-        progress(i, 2 * total)
-    })?;
+    let fits = crate::ctf::fit_regions(img, &items, 0, 0, n, params, &|i, total| progress(i, 2 * total))?;
     let strip_df: Vec<f64> = fits.iter().map(|f| 0.5 * (f.df1 + f.df2)).collect();
     // Strip fits far from their neighbours' median are replaced by it.
     let start: Vec<f64> = (0..strip_df.len())
         .map(|i| {
-            let mut near: Vec<f64> = (i.saturating_sub(3)..(i + 4).min(strip_df.len()))
-                .map(|j| strip_df[j])
-                .collect();
+            let mut near: Vec<f64> = (i.saturating_sub(3)..(i + 4).min(strip_df.len())).map(|j| strip_df[j]).collect();
             near.sort_by(f64::total_cmp);
             let m = near[near.len() / 2];
-            if (strip_df[i] - m).abs() > 0.2 * m {
-                m
-            } else {
-                strip_df[i]
-            }
+            if (strip_df[i] - m).abs() > 0.2 * m { m } else { strip_df[i] }
         })
         .collect();
     let powers: Vec<TilePowers> = (0..d.angles.len())
@@ -125,59 +108,28 @@ pub fn fit_series(
         })
         .collect::<Result<_>>()?;
     // Gradient direction: the steeper half of the tilts decides.
-    let steep: Vec<usize> = (0..d.angles.len())
-        .filter(|&z| d.angles[z].abs() >= 20.0)
-        .collect();
+    let steep: Vec<usize> = (0..d.angles.len()).filter(|&z| d.angles[z].abs() >= 20.0).collect();
     let score = |sign: f64| -> Result<f64> {
-        let scores = steep
-            .par_iter()
-            .map(|&z| refine(&powers[z], d.angles[z], start[z], sign, params).map(|f| f.score))
-            .collect::<Result<Vec<_>>>()?;
+        let scores = steep.par_iter().map(|&z| refine(&powers[z], d.angles[z], start[z], sign, params).map(|f| f.score)).collect::<Result<Vec<_>>>()?;
         Ok(scores.iter().sum())
     };
     let gradient = if steep.is_empty() {
         0i8
     } else {
         let (up, down) = (score(1.0)?, score(-1.0)?);
-        if up >= down {
-            1
-        } else {
-            -1
-        }
+        if up >= down { 1 } else { -1 }
     };
     let tilts = (0..d.angles.len())
         .into_par_iter()
         .map(|z| {
             let first = refine(&powers[z], d.angles[z], start[z], gradient as f64, params)?;
-            let f = refine(
-                &powers[z],
-                d.angles[z],
-                0.5 * (first.df1 + first.df2),
-                gradient as f64,
-                params,
-            )?;
-            Ok(TiltCtf {
-                z,
-                df1: f.df1,
-                df2: f.df2,
-                angle: f.angle,
-                fit_res: f.fit_res,
-                score: f.score,
-                estimated: false,
-            })
+            let f = refine(&powers[z], d.angles[z], 0.5 * (first.df1 + first.df2), gradient as f64, params)?;
+            Ok(TiltCtf { z, df1: f.df1, df2: f.df2, angle: f.angle, fit_res: f.fit_res, score: f.score, estimated: false })
         })
         .collect::<Result<Vec<_>>>()?;
     let tilts = repair(&d.angles, tilts, params, |z, df0| {
         let f = refine(&powers[z], d.angles[z], df0, gradient as f64, params)?;
-        Ok(TiltCtf {
-            z,
-            df1: f.df1,
-            df2: f.df2,
-            angle: f.angle,
-            fit_res: f.fit_res,
-            score: f.score,
-            estimated: false,
-        })
+        Ok(TiltCtf { z, df1: f.df1, df2: f.df2, angle: f.angle, fit_res: f.fit_res, score: f.score, estimated: false })
     })?;
     Ok(Ctf { gradient, tilts })
 }
@@ -197,9 +149,7 @@ fn failed(tilts: &[TiltCtf], params: &Params) -> Vec<bool> {
         .iter()
         .map(|t| {
             let df = mean(t);
-            df < params.df_min_a + edge
-                || df > params.df_max_a - edge
-                || (df - median).abs() > limit
+            df < params.df_min_a + edge || df > params.df_max_a - edge || (df - median).abs() > limit
         })
         .collect()
 }
@@ -208,12 +158,7 @@ fn failed(tilts: &[TiltCtf], params: &Params) -> Vec<bool> {
 /// around df0, the defocus interpolated in tilt angle between the nearest
 /// good tilts either side; a refit that fails or strays more than 15 % from
 /// df0 is replaced by df0 itself, with the nearest good tilt's astigmatism.
-fn repair(
-    angles: &[f64],
-    mut tilts: Vec<TiltCtf>,
-    params: &Params,
-    refit: impl Fn(usize, f64) -> Result<TiltCtf> + Sync,
-) -> Result<Vec<TiltCtf>> {
+fn repair(angles: &[f64], mut tilts: Vec<TiltCtf>, params: &Params, refit: impl Fn(usize, f64) -> Result<TiltCtf> + Sync) -> Result<Vec<TiltCtf>> {
     let bad = failed(&tilts, params);
     let good: Vec<usize> = (0..tilts.len()).filter(|&i| !bad[i]).collect();
     if good.is_empty() || good.len() == tilts.len() {
@@ -222,24 +167,13 @@ fn repair(
     let mean = |t: &TiltCtf| 0.5 * (t.df1 + t.df2);
     let guess = |i: usize| -> (f64, usize) {
         let a = angles[tilts[i].z];
-        let below = good
-            .iter()
-            .copied()
-            .filter(|&j| angles[tilts[j].z] < a)
-            .max_by(|&x, &y| angles[tilts[x].z].total_cmp(&angles[tilts[y].z]));
-        let above = good
-            .iter()
-            .copied()
-            .filter(|&j| angles[tilts[j].z] >= a)
-            .min_by(|&x, &y| angles[tilts[x].z].total_cmp(&angles[tilts[y].z]));
+        let below = good.iter().copied().filter(|&j| angles[tilts[j].z] < a).max_by(|&x, &y| angles[tilts[x].z].total_cmp(&angles[tilts[y].z]));
+        let above = good.iter().copied().filter(|&j| angles[tilts[j].z] >= a).min_by(|&x, &y| angles[tilts[x].z].total_cmp(&angles[tilts[y].z]));
         match (below, above) {
             (Some(b), Some(c)) => {
                 let (ab, ac) = (angles[tilts[b].z], angles[tilts[c].z]);
                 let t = if ac > ab { (a - ab) / (ac - ab) } else { 0.5 };
-                (
-                    mean(&tilts[b]) * (1.0 - t) + mean(&tilts[c]) * t,
-                    if t < 0.5 { b } else { c },
-                )
+                (mean(&tilts[b]) * (1.0 - t) + mean(&tilts[c]) * t, if t < 0.5 { b } else { c })
             }
             (Some(j), None) | (None, Some(j)) => (mean(&tilts[j]), j),
             (None, None) => unreachable!(),
@@ -254,26 +188,12 @@ fn repair(
             let f = refit(tilts[i].z, df0)?;
             let df = mean(&f);
             let edge = 0.02 * (params.df_max_a - params.df_min_a);
-            if (df - df0).abs() <= 0.15 * df0
-                && df > params.df_min_a + edge
-                && df < params.df_max_a - edge
-            {
+            if (df - df0).abs() <= 0.15 * df0 && df > params.df_min_a + edge && df < params.df_max_a - edge {
                 return Ok((i, f));
             }
             let n = &tilts[near];
             let half = 0.5 * (n.df1 - n.df2);
-            Ok((
-                i,
-                TiltCtf {
-                    z: tilts[i].z,
-                    df1: df0 + half,
-                    df2: df0 - half,
-                    angle: n.angle,
-                    fit_res: 0.0,
-                    score: 0.0,
-                    estimated: true,
-                },
-            ))
+            Ok((i, TiltCtf { z: tilts[i].z, df1: df0 + half, df2: df0 - half, angle: n.angle, fit_res: 0.0, score: 0.0, estimated: true }))
         })
         .collect::<Result<_>>()?;
     for (i, t) in fixes {
@@ -299,36 +219,18 @@ fn tile_powers(img: &Arc<OpenImage>, z: usize, n: usize, dir: [f64; 2]) -> Resul
     let (lo, hi) = crate::ctf::clip_range(|i| p.data.get_f64(i) as f32, p.w * p.h);
     let fft = crate::fft::Fft::new(n);
     let win = crate::fft::hann(n);
-    let starts =
-        |len: usize| -> Vec<usize> { (0..=(len - n) / (n / 2)).map(|k| k * n / 2).collect() };
-    let corners: Vec<(usize, usize)> = starts(h)
-        .into_iter()
-        .flat_map(|y| starts(w).into_iter().map(move |x| (x, y)))
-        .collect();
+    let starts = |len: usize| -> Vec<usize> { (0..=(len - n) / (n / 2)).map(|k| k * n / 2).collect() };
+    let corners: Vec<(usize, usize)> = starts(h).into_iter().flat_map(|y| starts(w).into_iter().map(move |x| (x, y))).collect();
     let tiles = corners
         .par_iter()
         .map(|&(x0, y0)| {
-            let mut tile: Vec<f32> = (0..n * n)
-                .map(|i| {
-                    crate::ctf::clip(
-                        p.data.get_f64((y0 + i / n) * p.w + x0 + i % n) as f32,
-                        lo,
-                        hi,
-                    )
-                })
-                .collect();
+            let mut tile: Vec<f32> = (0..n * n).map(|i| crate::ctf::clip(p.data.get_f64((y0 + i / n) * p.w + x0 + i % n) as f32, lo, hi)).collect();
             let mean = tile.iter().map(|&v| v as f64).sum::<f64>() / (n * n) as f64;
             for (i, v) in tile.iter_mut().enumerate() {
                 *v = (*v - mean as f32) * win[i % n] * win[i / n];
             }
-            let c = [
-                x0 as f64 + n as f64 / 2.0 - w as f64 / 2.0,
-                y0 as f64 + n as f64 / 2.0 - h as f64 / 2.0,
-            ];
-            (
-                c[0] * dir[0] + c[1] * dir[1],
-                crate::fft::power_2d(&fft, &tile),
-            )
+            let c = [x0 as f64 + n as f64 / 2.0 - w as f64 / 2.0, y0 as f64 + n as f64 / 2.0 - h as f64 / 2.0];
+            (c[0] * dir[0] + c[1] * dir[1], crate::fft::power_2d(&fft, &tile))
         })
         .collect();
     Ok(TilePowers { n, tiles })
@@ -336,13 +238,7 @@ fn tile_powers(img: &Arc<OpenImage>, z: usize, n: usize, dir: [f64; 2]) -> Resul
 
 /// Fits the average of the tiles' spectra stretched to defocus `df0` at the
 /// axis, the gradient running `sign`, searching `df0` ± 25 %.
-fn refine(
-    t: &TilePowers,
-    theta: f64,
-    df0: f64,
-    sign: f64,
-    params: &Params,
-) -> Result<crate::ctf::Fit> {
+fn refine(t: &TilePowers, theta: f64, df0: f64, sign: f64, params: &Params) -> Result<crate::ctf::Fit> {
     let n = t.n;
     let slope = sign * params.pixel_a * theta.to_radians().tan();
     let mut sum = vec![0f64; n * n];
@@ -358,21 +254,14 @@ fn refine(
                 if a < -half || a >= half || b < -half || b >= half {
                     return 0.0;
                 }
-                let (iu, iv) = (
-                    ((a as isize).rem_euclid(n as isize)) as usize,
-                    ((b as isize).rem_euclid(n as isize)) as usize,
-                );
+                let (iu, iv) = (((a as isize).rem_euclid(n as isize)) as usize, ((b as isize).rem_euclid(n as isize)) as usize);
                 power[iv * n + iu] as f64
             };
-            (1.0 - fv) * ((1.0 - fu) * get(u0, v0) + fu * get(u0 + 1.0, v0))
-                + fv * ((1.0 - fu) * get(u0, v0 + 1.0) + fu * get(u0 + 1.0, v0 + 1.0))
+            (1.0 - fv) * ((1.0 - fu) * get(u0, v0) + fu * get(u0 + 1.0, v0)) + fv * ((1.0 - fu) * get(u0, v0 + 1.0) + fu * get(u0 + 1.0, v0 + 1.0))
         };
         for v in 0..n {
             for u in 0..n {
-                let (fu, fv) = (
-                    crate::motion::sum::freq(u, n),
-                    crate::motion::sum::freq(v, n),
-                );
+                let (fu, fv) = (crate::motion::sum::freq(u, n), crate::motion::sum::freq(v, n));
                 sum[v * n + u] += at(fu * s, fv * s);
             }
         }
@@ -418,15 +307,9 @@ pub fn depth_defocus(depth: f64, theta: f64, gradient: i8, pixel_a: f64) -> f64 
 pub(crate) fn flip(plane: &mut [f32], w: usize, h: usize, f: &Flip) {
     let tan = f.theta.to_radians().tan();
     let slope = f.gradient as f64 * f.pixel_a * tan;
-    let step = if slope.abs() > 1e-9 {
-        (FLIP_STEP / slope.abs()).floor() as usize
-    } else {
-        w
-    };
+    let step = if slope.abs() > 1e-9 { (FLIP_STEP / slope.abs()).floor() as usize } else { w };
     let step = step.clamp(16, w);
-    let tile = (step + 2 * MARGIN)
-        .next_power_of_two()
-        .min(w.next_power_of_two().max(16));
+    let tile = (step + 2 * MARGIN).next_power_of_two().min(w.next_power_of_two().max(16));
     let th = h.next_power_of_two();
     let fft = crate::motion::fourier::Cpu::new(tile, th);
     let mean = (plane.iter().map(|&v| v as f64).sum::<f64>() / plane.len() as f64) as f32;
@@ -463,8 +346,7 @@ pub(crate) fn flip(plane: &mut [f32], w: usize, h: usize, f: &Flip) {
             let off = (x0 as isize - left) as usize;
             let mut out = vec![0.0; width * h];
             for y in 0..h {
-                out[y * width..(y + 1) * width]
-                    .copy_from_slice(&re[y * tile + off..y * tile + off + width]);
+                out[y * width..(y + 1) * width].copy_from_slice(&re[y * tile + off..y * tile + off + width]);
             }
             (x0, out)
         })
@@ -482,31 +364,11 @@ mod tests {
     use super::*;
 
     fn params() -> Params {
-        Params {
-            voltage_kv: 300.0,
-            cs_mm: 2.7,
-            amp_contrast: 0.07,
-            pixel_a: 2.0,
-            res_low_a: 30.0,
-            res_high_a: 5.0,
-            df_min_a: 5000.0,
-            df_max_a: 80000.0,
-            max_astig_a: 2000.0,
-            phase: false,
-            backend: None,
-        }
+        Params { voltage_kv: 300.0, cs_mm: 2.7, amp_contrast: 0.07, pixel_a: 2.0, res_low_a: 30.0, res_high_a: 5.0, df_min_a: 5000.0, df_max_a: 80000.0, max_astig_a: 2000.0, phase: false, backend: None }
     }
 
     fn tilt(z: usize, df: f64) -> TiltCtf {
-        TiltCtf {
-            z,
-            df1: df + 100.0,
-            df2: df - 100.0,
-            angle: 30.0,
-            fit_res: 8.0,
-            score: 0.2,
-            estimated: false,
-        }
+        TiltCtf { z, df1: df + 100.0, df2: df - 100.0, angle: 30.0, fit_res: 8.0, score: 0.2, estimated: false }
     }
 
     #[test]
@@ -514,20 +376,11 @@ mod tests {
         let params = params();
         let angles: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
         // A slow drift in defocus; the two highest tilts hit the search limit.
-        let mut tilts: Vec<TiltCtf> = (0..21)
-            .map(|z| tilt(z, 39000.0 + 50.0 * z as f64))
-            .collect();
+        let mut tilts: Vec<TiltCtf> = (0..21).map(|z| tilt(z, 39000.0 + 50.0 * z as f64)).collect();
         tilts[0] = tilt(0, 5010.0);
         tilts[20] = tilt(20, 5020.0);
         // The refit fails again for tilt 0 and recovers tilt 20.
-        let out = repair(&angles, tilts, &params, |z, df0| {
-            Ok(if z == 0 {
-                tilt(z, 5000.0)
-            } else {
-                tilt(z, df0 + 300.0)
-            })
-        })
-        .unwrap();
+        let out = repair(&angles, tilts, &params, |z, df0| Ok(if z == 0 { tilt(z, 5000.0) } else { tilt(z, df0 + 300.0) })).unwrap();
         assert!(out[0].estimated);
         assert!((0.5 * (out[0].df1 + out[0].df2) - 39050.0).abs() < 1.0);
         assert!((out[0].df1 - out[0].df2 - 200.0).abs() < 1e-6);
@@ -540,16 +393,8 @@ mod tests {
     fn a_good_series_is_left_alone() {
         let params = params();
         let angles: Vec<f64> = (0..11).map(|i| -30.0 + 6.0 * i as f64).collect();
-        let tilts: Vec<TiltCtf> = (0..11)
-            .map(|z| tilt(z, 38000.0 + 200.0 * (z % 3) as f64))
-            .collect();
-        let out = repair(&angles, tilts.clone(), &params, |_, _| {
-            panic!("no refit expected")
-        })
-        .unwrap();
-        assert!(out
-            .iter()
-            .zip(&tilts)
-            .all(|(a, b)| a.df1 == b.df1 && !a.estimated));
+        let tilts: Vec<TiltCtf> = (0..11).map(|z| tilt(z, 38000.0 + 200.0 * (z % 3) as f64)).collect();
+        let out = repair(&angles, tilts.clone(), &params, |_, _| panic!("no refit expected")).unwrap();
+        assert!(out.iter().zip(&tilts).all(|(a, b)| a.df1 == b.df1 && !a.estimated));
     }
 }

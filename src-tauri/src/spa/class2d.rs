@@ -36,16 +36,7 @@ pub struct Class2dParams {
 
 impl Default for Class2dParams {
     fn default() -> Self {
-        Class2dParams {
-            classes: 20,
-            iterations: 20,
-            psi_step: 6.0,
-            res_start: 30.0,
-            res_end: 8.0,
-            max_shift_a: 30.0,
-            box_px: 64,
-            seed: 1,
-        }
+        Class2dParams { classes: 20, iterations: 20, psi_step: 6.0, res_start: 30.0, res_end: 8.0, max_shift_a: 30.0, box_px: 64, seed: 1 }
     }
 }
 
@@ -67,15 +58,7 @@ pub struct Class2dResult {
 
 /// Runs the classification on `ids` (indices into `parts`), updating their
 /// class2d, psi2d and shift2d.
-pub fn run(
-    stack: &Stack,
-    parts: &mut [Particle],
-    ids: &[usize],
-    optics: &Optics,
-    diameter_a: f64,
-    p: &Class2dParams,
-    progress: Progress,
-) -> Result<Class2dResult> {
+pub fn run(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics, diameter_a: f64, p: &Class2dParams, progress: Progress) -> Result<Class2dResult> {
     if ids.len() < p.classes.max(1) * 3 {
         bail!("颗粒太少：每类至少需要 3 个");
     }
@@ -107,8 +90,7 @@ pub fn run(
         check_cancel()?;
         // Resolution: from res_start to res_end over the first two thirds.
         let f = (it as f64 / (iters as f64 * 0.67).max(1.0)).min(1.0);
-        let res =
-            1.0 / (1.0 / p.res_start + f * (1.0 / p.res_end.max(2.0 * pxw) - 1.0 / p.res_start));
+        let res = 1.0 / (1.0 / p.res_start + f * (1.0 / p.res_end.max(2.0 * pxw) - 1.0 / p.res_start));
         let r_max = (bw as f64 * pxw / res).min(bw as f64 / 2.0 - 1.0);
         let half = Half::new(bw, r_max);
         let k = half.len();
@@ -176,26 +158,13 @@ pub fn run(
                 let parity: Vec<usize> = chunk.iter().map(|&i| i % 2).collect();
                 insert_halves(&mut halves, &c, &full, &ps, &parity);
             }
-            progress(
-                "二维分类",
-                it * 1000 + (bi + 1) * 1000 * block / ids.len().max(1),
-                total * 1000,
-            );
+            progress("二维分类", it * 1000 + (bi + 1) * 1000 * block / ids.len().max(1), total * 1000);
         }
         // New averages; empty or tiny classes restart from a split of the largest.
-        let r_avg = if it == iters {
-            bw as f64 / 2.0 - 1.0
-        } else {
-            r_max
-        };
-        averages = acc
-            .par_iter()
-            .map(|a| a.average(0.2, r_avg, radius))
-            .collect();
+        let r_avg = if it == iters { bw as f64 / 2.0 - 1.0 } else { r_max };
+        averages = acc.par_iter().map(|a| a.average(0.2, r_avg, radius)).collect();
         counts = acc.iter().map(|a| a.count).collect();
-        scores = (0..k_classes)
-            .map(|c| (sums[c] / counts[c].max(1) as f64) as f32)
-            .collect();
+        scores = (0..k_classes).map(|c| (sums[c] / counts[c].max(1) as f64) as f32).collect();
         // Centre the classes.
         for a in &mut averages {
             let d = plane::centre_of_mass(a, bw);
@@ -231,10 +200,7 @@ pub fn run(
             let r = bw as f64 / 2.0 - 1.0;
             let f = frc(&a.average(0.2, r, radius), &b.average(0.2, r, radius), bw);
             let from = ((bw as f64 * pxw / 20.0).round() as usize).clamp(1, f.len() - 1);
-            (
-                frc_res(&f, bw, pxw),
-                f[from..].iter().sum::<f64>() / (f.len() - from) as f64,
-            )
+            (frc_res(&f, bw, pxw), f[from..].iter().sum::<f64>() / (f.len() - from) as f64)
         })
         .unzip();
     // Sort by size; renumber the particles.
@@ -267,12 +233,7 @@ fn insert_all(acc: &mut [Accum2], c: &Coeffs, half: &Half, ps: &[&Particle]) {
     acc.par_iter_mut().enumerate().for_each(|(cls, a)| {
         for (j, q) in ps.iter().enumerate() {
             if q.class2d as usize == cls {
-                a.insert(
-                    q.psi2d as f64,
-                    half,
-                    &c.x[j * 2 * k..(j + 1) * 2 * k],
-                    &c.c2[j * k..(j + 1) * k],
-                );
+                a.insert(q.psi2d as f64, half, &c.x[j * 2 * k..(j + 1) * 2 * k], &c.c2[j * k..(j + 1) * k]);
             }
         }
     });
@@ -287,12 +248,7 @@ fn insert_halves(acc: &mut [Accum2], c: &Coeffs, half: &Half, ps: &[&Particle], 
     acc.par_iter_mut().enumerate().for_each(|(slot, a)| {
         for (j, q) in ps.iter().enumerate() {
             if q.class2d as usize * 2 + parity[j] == slot {
-                a.insert(
-                    q.psi2d as f64,
-                    half,
-                    &c.x[j * 2 * k..(j + 1) * 2 * k],
-                    &c.c2[j * k..(j + 1) * k],
-                );
+                a.insert(q.psi2d as f64, half, &c.x[j * 2 * k..(j + 1) * 2 * k], &c.c2[j * k..(j + 1) * k]);
             }
         }
     });
@@ -317,9 +273,7 @@ pub fn frc(a: &[f32], b: &[f32], n: usize) -> Vec<f64> {
             }
         }
     }
-    (0..shells)
-        .map(|r| x[r] / (p[r] * q[r]).sqrt().max(1e-30))
-        .collect()
+    (0..shells).map(|r| x[r] / (p[r] * q[r]).sqrt().max(1e-30)).collect()
 }
 
 /// Resolution (Å) where an FRC falls below 0.143; `UNRESOLVED` when it
@@ -340,16 +294,11 @@ pub fn frc_res(f: &[f64], n: usize, px: f64) -> f64 {
 pub fn auto_select(counts: &[usize], quality: &[f64], share: f64) -> Vec<usize> {
     let total: usize = counts.iter().sum();
     let big = |c: usize| counts[c] * 100 >= total;
-    let best = (0..counts.len())
-        .filter(|&c| big(c))
-        .map(|c| quality[c])
-        .fold(0.0, f64::max);
+    let best = (0..counts.len()).filter(|&c| big(c)).map(|c| quality[c]).fold(0.0, f64::max);
     if best <= 0.0 {
         return vec![];
     }
-    (0..counts.len())
-        .filter(|&c| big(c) && quality[c] >= best * share)
-        .collect()
+    (0..counts.len()).filter(|&c| big(c) && quality[c] >= best * share).collect()
 }
 
 /// Real-space image from half-plane coefficients.

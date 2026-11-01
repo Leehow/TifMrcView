@@ -31,11 +31,7 @@ fn tiff(path: &Path, w: u32, h: u32, extra: &[(u16, u16, u32, Vec<u8>)]) {
     let mut out = b"II\x2a\x00\x08\x00\x00\x00".to_vec();
     out.extend_from_slice(&(tags.len() as u16).to_le_bytes());
     let strip_at = {
-        let big: usize = tags
-            .iter()
-            .filter(|t| t.3.len() > 4)
-            .map(|t| t.3.len())
-            .sum();
+        let big: usize = tags.iter().filter(|t| t.3.len() > 4).map(|t| t.3.len()).sum();
         (data_at + big) as u32
     };
     for (tag, ty, count, mut bytes) in tags {
@@ -93,10 +89,7 @@ fn plugins() -> Option<common::Plugins> {
 }
 
 fn items(g: &tifmrcview_lib::image::MetaGroup) -> Vec<(String, String)> {
-    g.items
-        .iter()
-        .map(|[a, b]| (a.clone(), b.clone()))
-        .collect()
+    g.items.iter().map(|[a, b]| (a.clone(), b.clone())).collect()
 }
 
 #[test]
@@ -109,20 +102,9 @@ fn smartsem_tiff_gets_settings_pixel_size_and_format() {
     let src = formats::open_with(&path, &p.registry).unwrap();
     let i = src.info();
     assert_eq!(i.format, "Zeiss SmartSEM TIFF");
-    assert_eq!(
-        (i.pixel_size, i.unit.as_str()),
-        (Some([15.625, 15.625, 0.0]), "nm")
-    );
+    assert_eq!((i.pixel_size, i.unit.as_str()), (Some([15.625, 15.625, 0.0]), "nm"));
     let names: Vec<&str> = i.metadata.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "SmartSEM 主要参数",
-            "全部数值参数 (AP)",
-            "全部状态 (DP)",
-            "系统信息 (SV)"
-        ]
-    );
+    assert_eq!(names, ["SmartSEM 主要参数", "全部数值参数 (AP)", "全部状态 (DP)", "系统信息 (SV)"]);
     let s = |a: &str, b: &str| (a.to_string(), b.to_string());
     assert_eq!(
         items(&i.metadata[0]),
@@ -137,10 +119,7 @@ fn smartsem_tiff_gets_settings_pixel_size_and_format() {
             s("Version", "V07.04.00.00 : 10-May-23"),
         ]
     );
-    assert_eq!(
-        items(&i.metadata[2]),
-        [s("Empty Value", ""), s("Signal A", "InLens")]
-    );
+    assert_eq!(items(&i.metadata[2]), [s("Empty Value", ""), s("Signal A", "InLens")]);
     // Pixels still come from the core reader.
     assert_eq!(src.read_page(0).unwrap()[0].data.get_f64(3), 3.0);
 
@@ -148,15 +127,8 @@ fn smartsem_tiff_gets_settings_pixel_size_and_format() {
     let tag = cz_sem();
     let path = tmp.path().join("sem512.tif");
     tiff(&path, 512, 1, &[(34118, 1, tag.len() as u32, tag)]);
-    let i = formats::open_with(&path, &p.registry)
-        .unwrap()
-        .info()
-        .clone();
-    assert_eq!(
-        i.pixel_size,
-        Some([15.63, 15.63, 0.0]),
-        "header value disagrees: the nominal size wins"
-    );
+    let i = formats::open_with(&path, &p.registry).unwrap().info().clone();
+    assert_eq!(i.pixel_size, Some([15.63, 15.63, 0.0]), "header value disagrees: the nominal size wins");
 }
 
 #[test]
@@ -168,15 +140,8 @@ fn other_tiffs_are_untouched_and_the_switch_is_respected() {
     let junk = tmp.path().join("junk.tif");
     tiff(&junk, 4, 4, &[(34118, 2, 6, b"hello\0".to_vec())]);
     for path in [&plain, &junk] {
-        let i = formats::open_with(path, &p.registry)
-            .unwrap()
-            .info()
-            .clone();
-        assert!(
-            i.format.contains("TIFF") && !i.format.contains("SmartSEM"),
-            "{}",
-            i.format
-        );
+        let i = formats::open_with(path, &p.registry).unwrap().info().clone();
+        assert!(i.format.contains("TIFF") && !i.format.contains("SmartSEM"), "{}", i.format);
         assert!(i.metadata.is_empty() && i.pixel_size.is_none());
     }
 
@@ -184,23 +149,11 @@ fn other_tiffs_are_untouched_and_the_switch_is_respected() {
     let tag = cz_sem();
     tiff(&sem, 1024, 1, &[(34118, 1, tag.len() as u32, tag)]);
     p.registry.set_disabled(vec!["zeiss".into()]).unwrap();
-    assert!(formats::open_with(&sem, &p.registry)
-        .unwrap()
-        .info()
-        .metadata
-        .is_empty());
+    assert!(formats::open_with(&sem, &p.registry).unwrap().info().metadata.is_empty());
     p.registry.set_disabled(vec![]).unwrap();
-    assert!(!formats::open_with(&sem, &p.registry)
-        .unwrap()
-        .info()
-        .metadata
-        .is_empty());
+    assert!(!formats::open_with(&sem, &p.registry).unwrap().info().metadata.is_empty());
 
     // Without the plugin the TIFF opens as before.
     let none = Registry::new(Some(tmp.path().join("none")), "0.4.0");
-    assert!(formats::open_with(&sem, &none)
-        .unwrap()
-        .info()
-        .metadata
-        .is_empty());
+    assert!(formats::open_with(&sem, &none).unwrap().info().metadata.is_empty());
 }

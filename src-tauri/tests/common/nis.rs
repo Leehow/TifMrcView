@@ -104,20 +104,14 @@ pub fn lite_compressed(root: &str, v: &Lv) -> Vec<u8> {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\n', "&#10;")
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "&#10;")
 }
 
 fn base64(b: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::new();
     for c in b.chunks(3) {
-        let n = (c[0] as u32) << 16
-            | (*c.get(1).unwrap_or(&0) as u32) << 8
-            | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
         for k in 0..4 {
             if k <= c.len() {
                 s.push(A[(n >> (18 - 6 * k) & 63) as usize] as char);
@@ -131,9 +125,7 @@ fn base64(b: &[u8]) -> String {
 
 fn xml_node(out: &mut String, name: &str, v: &Lv) {
     let name = if name.is_empty() { "no_name" } else { name };
-    let scalar = |ty: &str, val: String| {
-        format!("<{name} runtype=\"{ty}\" value=\"{}\"/>", xml_escape(&val))
-    };
+    let scalar = |ty: &str, val: String| format!("<{name} runtype=\"{ty}\" value=\"{}\"/>", xml_escape(&val));
     match v {
         Lv::Bool(b) => out.push_str(&scalar("bool", format!("{b}"))),
         Lv::I32(i) => out.push_str(&scalar("lx_int32", format!("{i}"))),
@@ -154,8 +146,7 @@ fn xml_node(out: &mut String, name: &str, v: &Lv) {
 
 /// A chunk's content as NIS-Elements 3 writes it: XML.
 pub fn xml(v: &Lv) -> Vec<u8> {
-    let mut out =
-        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><variant version=\"1.0\">");
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><variant version=\"1.0\">");
     xml_node(&mut out, "", v);
     out.push_str("</variant>");
     out.into_bytes()
@@ -262,16 +253,7 @@ impl Spec {
     }
 
     pub fn frame_count(&self) -> usize {
-        self.loops
-            .iter()
-            .map(|&(ty, n)| {
-                if ty == 2 {
-                    n - self.invalid_points.len()
-                } else {
-                    n
-                }
-            })
-            .product()
+        self.loops.iter().map(|&(ty, n)| if ty == 2 { n - self.invalid_points.len() } else { n }).product()
     }
 
     pub fn row_bytes(&self) -> usize {
@@ -304,9 +286,7 @@ pub fn frame(spec: &Spec, seq: usize) -> Vec<u8> {
 }
 
 fn experiment(spec: &Spec, k: usize) -> Lv {
-    let Some(&(ty, n)) = spec.loops.get(k) else {
-        return level(vec![]);
-    };
+    let Some(&(ty, n)) = spec.loops.get(k) else { return level(vec![]) };
     let pars = match ty {
         2 => level(vec![
             ("bUseZ", Lv::Bool(false)),
@@ -338,33 +318,19 @@ fn experiment(spec: &Spec, k: usize) -> Lv {
             (
                 "pPeriod",
                 list(vec![
-                    level(vec![
-                        ("uiCount", Lv::U32(n as u32)),
-                        ("dPeriod", Lv::F64(2000.0)),
-                    ]),
+                    level(vec![("uiCount", Lv::U32(n as u32)), ("dPeriod", Lv::F64(2000.0))]),
                     level(vec![("uiCount", Lv::U32(99)), ("dPeriod", Lv::F64(1.0))]),
                 ]),
             ),
             ("pPeriodValid", Lv::Bytes(vec![1, 0])),
         ]),
-        _ => level(vec![
-            ("uiCount", Lv::U32(n as u32)),
-            ("dPeriod", Lv::F64(500.0)),
-            ("dStart", Lv::F64(0.0)),
-        ]),
+        _ => level(vec![("uiCount", Lv::U32(n as u32)), ("dPeriod", Lv::F64(500.0)), ("dStart", Lv::F64(0.0))]),
     };
     // NIS-Elements 3 wraps the loop parameters in a one-item list.
     let pars = if spec.xml { list(vec![pars]) } else { pars };
     let mut items = vec![("eType", Lv::U32(ty)), ("uLoopPars", pars)];
     if ty == 2 && !spec.invalid_points.is_empty() {
-        items.push((
-            "pItemValid",
-            Lv::Bytes(
-                (0..n)
-                    .map(|i| !spec.invalid_points.contains(&i) as u8)
-                    .collect(),
-            ),
-        ));
+        items.push(("pItemValid", Lv::Bytes((0..n).map(|i| !spec.invalid_points.contains(&i) as u8).collect())));
     }
     if k + 1 < spec.loops.len() {
         items.push(("ppNextLevelEx", list(vec![experiment(spec, k + 1)])));
@@ -390,10 +356,7 @@ fn picture_metadata(spec: &Spec) -> Lv {
                     ("uiCount", Lv::U32(1)),
                     (
                         "pPoint",
-                        level(vec![(
-                            "Point0",
-                            level(vec![("eType", Lv::U32(4)), ("dWavelength", Lv::F64(w))]),
-                        )]),
+                        level(vec![("Point0", level(vec![("eType", Lv::U32(4)), ("dWavelength", Lv::F64(w))]))]),
                     ),
                 ])
             };
@@ -434,19 +397,13 @@ fn picture_metadata(spec: &Spec) -> Lv {
                             ("CameraUserName", s("Photometrics Prime 95B")),
                             (
                                 "FormatQuality",
-                                level(vec![(
-                                    "fmtDesc",
-                                    level(vec![("dBinningX", two()), ("dBinningY", two())]),
-                                )]),
+                                level(vec![("fmtDesc", level(vec![("dBinningX", two()), ("dBinningY", two())]))]),
                             ),
                         ]),
                     ),
                     (
                         "pObjectiveSetting",
-                        level(vec![
-                            ("wsObjectiveName", s(OBJECTIVE)),
-                            ("dObjectiveMag", Lv::F64(60.0)),
-                        ]),
+                        level(vec![("wsObjectiveName", s(OBJECTIVE)), ("dObjectiveMag", Lv::F64(60.0))]),
                     ),
                     (
                         "pDeviceSetting",
@@ -488,27 +445,18 @@ fn text_info(spec: &Spec) -> Lv {
     let mut desc = String::from("Metadata:\r\nDimensions: test\r\n");
     for (i, (name, _)) in spec.channels.iter().enumerate() {
         let (k, power) = (i + 1, 20 + i);
-        desc.push_str(&format!(
-            "Plane #{k}:\r\n Name: {name}\r\n Component Count: 1\r\n"
-        ));
+        desc.push_str(&format!("Plane #{k}:\r\n Name: {name}\r\n Component Count: 1\r\n"));
         desc.push_str(" Camera Settings:   \r\n  Binning: 2x2\r\n");
-        desc.push_str(&format!(
-            " Microscope Settings:   Nikon Ti2, FilterChanger(Turret1): {k} (Quad)\r\n"
-        ));
+        desc.push_str(&format!(" Microscope Settings:   Nikon Ti2, FilterChanger(Turret1): {k} (Quad)\r\n"));
         desc.push_str("  LUN-F, MultiLaser(LUN-F):\r\n     Line:1; ExW:405; Power: 10.0; Off\r\n");
-        desc.push_str(&format!(
-            "     Line:2; ExW:488; Power: {power}.5; On\r\n  \r\n  Zoom: 1.00x\r\n"
-        ));
+        desc.push_str(&format!("     Line:2; ExW:488; Power: {power}.5; On\r\n  \r\n  Zoom: 1.00x\r\n"));
     }
     desc.push_str("Z Stack Loop: 3\r\n");
     level(vec![
         ("TextInfoItem_0", s("")),
         ("TextInfoItem_4", s("Tester")),
         ("TextInfoItem_5", s(&desc)),
-        (
-            "TextInfoItem_6",
-            s("Photometrics\r\n\r\nCamera Type: Prime 95B\r\nExposure: 100 ms"),
-        ),
+        ("TextInfoItem_6", s("Photometrics\r\n\r\nCamera Type: Prime 95B\r\nExposure: 100 ms")),
         ("TextInfoItem_9", s("15/10/2026  10:12:03")),
         ("TextInfoItem_13", s(OBJECTIVE)),
     ])
@@ -532,10 +480,7 @@ pub fn write(path: &Path, spec: &Spec) {
         ("uiHeight", Lv::U32(spec.h as u32)),
         ("uiComp", Lv::U32(spec.comp as u32)),
         ("uiBpcInMemory", Lv::U32(spec.bits)),
-        (
-            "uiBpcSignificant",
-            Lv::U32(if spec.bits == 16 { 12 } else { spec.bits }),
-        ),
+        ("uiBpcSignificant", Lv::U32(if spec.bits == 16 { 12 } else { spec.bits })),
         ("uiSequenceCount", Lv::U32(n as u32)),
         ("eCompression", Lv::U32(if spec.compressed { 0 } else { 2 })),
     ]);
@@ -547,37 +492,17 @@ pub fn write(path: &Path, spec: &Spec) {
         data.extend(if spec.compressed { zlib(&f) } else { f });
         chunks.push((format!("ImageDataSeq|{seq}!"), data));
     }
-    chunks.push((
-        format!("ImageAttributes{sfx}!"),
-        enc("SLxImageAttributes", &attrs),
-    ));
-    chunks.push((
-        format!("ImageMetadataSeq{seq_sfx}|0!"),
-        enc("SLxPictureMetadata", &picture_metadata(spec)),
-    ));
+    chunks.push((format!("ImageAttributes{sfx}!"), enc("SLxImageAttributes", &attrs)));
+    chunks.push((format!("ImageMetadataSeq{seq_sfx}|0!"), enc("SLxPictureMetadata", &picture_metadata(spec))));
     if !spec.loops.is_empty() {
-        chunks.push((
-            format!("ImageMetadata{sfx}!"),
-            enc("SLxExperiment", &experiment(spec, 0)),
-        ));
+        chunks.push((format!("ImageMetadata{sfx}!"), enc("SLxExperiment", &experiment(spec, 0))));
     }
-    chunks.push((
-        format!("ImageTextInfo{sfx}!"),
-        enc("SLxImageTextInfo", &text_info(spec)),
-    ));
-    let app = level(vec![
-        ("m_SWNameString", s("NIS-Elements AR")),
-        ("m_VersionString", s("5.42.03 (Build 1234)")),
-    ]);
+    chunks.push((format!("ImageTextInfo{sfx}!"), enc("SLxImageTextInfo", &text_info(spec))));
+    let app = level(vec![("m_SWNameString", s("NIS-Elements AR")), ("m_VersionString", s("5.42.03 (Build 1234)"))]);
     chunks.push(("CustomDataVar|AppInfo_V1_0!".into(), enc("", &app)));
     // Per-frame custom data, which readers must skip without cost.
     for seq in 0..n.min(3) {
         chunks.push((format!("CustomDataSeq|Stuff|{seq}!"), vec![0; 8]));
     }
-    container(
-        path,
-        if spec.xml { "2.1" } else { "3.0" },
-        &chunks,
-        spec.pad,
-    );
+    container(path, if spec.xml { "2.1" } else { "3.0" }, &chunks, spec.pad);
 }

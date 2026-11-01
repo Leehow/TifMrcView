@@ -118,11 +118,7 @@ impl Optics {
     pub(crate) fn of(kv: f64, cs_mm: f64, amp: f64) -> Optics {
         let l = wavelength(kv);
         let amp = amp.clamp(0.0, 0.999);
-        Optics {
-            a: PI * l,
-            b: 0.5 * PI * cs_mm * 1e7 * l * l * l,
-            w: (amp / (1.0 - amp * amp).sqrt()).atan(),
-        }
+        Optics { a: PI * l, b: 0.5 * PI * cs_mm * 1e7 * l * l * l, w: (amp / (1.0 - amp * amp).sqrt()).atan() }
     }
 
     #[cfg(feature = "pro")]
@@ -133,11 +129,7 @@ impl Optics {
         let k2 = kx * kx + ky * ky;
         let t = ky.atan2(kx) - angle;
         let df = 0.5 * (df1 + df2) + 0.5 * (df1 - df2) * (2.0 * t).cos();
-        if self.gamma(df, k2, 0.0).sin() >= 0.0 {
-            1.0
-        } else {
-            -1.0
-        }
+        if self.gamma(df, k2, 0.0).sin() >= 0.0 { 1.0 } else { -1.0 }
     }
 
     pub(crate) fn gamma(&self, df: f64, k2: f64, phase: f64) -> f64 {
@@ -175,12 +167,7 @@ impl Model {
         self.p.hypot(self.q)
     }
     fn from_astig(mean: f64, half: f64, angle: f64, phase: f64) -> Model {
-        Model {
-            mean,
-            p: half * (2.0 * angle).cos(),
-            q: half * (2.0 * angle).sin(),
-            phase,
-        }
+        Model { mean, p: half * (2.0 * angle).cos(), q: half * (2.0 * angle).sin(), phase }
     }
 }
 
@@ -239,24 +226,14 @@ fn prepare(amp: &[f32], n: usize, pixel_a: f64, band: [f64; 2], boxw: usize) -> 
             // θ counterclockwise on screen: y up = −dv.
             let th = (-(dv as f64)).atan2(du as f64);
             let k = r / (n as f64 * pixel_a);
-            raw.push((
-                r,
-                ri,
-                k * k,
-                (2.0 * th).cos(),
-                (2.0 * th).sin(),
-                x,
-                th.rem_euclid(PI),
-            ));
+            raw.push((r, ri, k * k, (2.0 * th).cos(), (2.0 * th).sin(), x, th.rem_euclid(PI)));
         }
     }
     // Smooth the ring RMS over a few radii.
     let rms: Vec<f64> = (0..ring.len())
         .map(|i| {
             let (lo, hi) = (i.saturating_sub(3), (i + 3).min(ring.len() - 1));
-            let (s, c) = ring[lo..=hi]
-                .iter()
-                .fold((0.0, 0), |(s, c), &(a, b)| (s + a, c + b));
+            let (s, c) = ring[lo..=hi].iter().fold((0.0, 0), |(s, c), &(a, b)| (s + a, c + b));
             if c == 0 {
                 1.0
             } else {
@@ -275,20 +252,10 @@ fn prepare(amp: &[f32], n: usize, pixel_a: f64, band: [f64; 2], boxw: usize) -> 
             *o += v;
         }
     }
-    let mut out = Prepared {
-        band: Vec::new(),
-        outer: Vec::new(),
-    };
+    let mut out = Prepared { band: Vec::new(), outer: Vec::new() };
     for b in bins.iter().filter(|b| b[0] > 0.0) {
         let w = b[0];
-        let px = Px {
-            k2: (b[1] / w) as f32,
-            c2: (b[2] / w) as f32,
-            s2: (b[3] / w) as f32,
-            x: (b[4] / w) as f32,
-            r: (b[5] / w) as f32,
-            w: w as f32,
-        };
+        let px = Px { k2: (b[1] / w) as f32, c2: (b[2] / w) as f32, s2: (b[3] / w) as f32, x: (b[4] / w) as f32, r: (b[5] / w) as f32, w: w as f32 };
         if px.r as f64 <= band[1] {
             out.band.push(px);
         }
@@ -315,8 +282,7 @@ fn box_filter(a: &[f32], n: usize, w: usize) -> Vec<f32> {
         for (x, o) in row.iter_mut().enumerate() {
             let x0 = (x as i64 - h).max(0) as usize;
             let x1 = (x as i64 + h + 1).min(n as i64) as usize;
-            let s = sat[y1 * (n + 1) + x1] - sat[y0 * (n + 1) + x1] - sat[y1 * (n + 1) + x0]
-                + sat[y0 * (n + 1) + x0];
+            let s = sat[y1 * (n + 1) + x1] - sat[y0 * (n + 1) + x1] - sat[y1 * (n + 1) + x0] + sat[y0 * (n + 1) + x0];
             *o = (s / ((y1 - y0) * (x1 - x0)) as f64) as f32;
         }
     });
@@ -364,9 +330,7 @@ fn ring_average(px: &[Px], len: usize) -> Vec<(f64, usize)> {
         ring[r].0 += (p.x * p.w) as f64;
         ring[r].1 += p.w as usize;
     }
-    ring.iter()
-        .map(|&(s, c)| (if c > 0 { s / c as f64 } else { 0.0 }, c))
-        .collect()
+    ring.iter().map(|&(s, c)| (if c > 0 { s / c as f64 } else { 0.0 }, c)).collect()
 }
 
 /// 1D search of mean defocus (and phase) on the ring average: the best few
@@ -382,11 +346,7 @@ fn search_1d(px: &[Px], o: &Optics, p: &Params, n: usize) -> Vec<Model> {
             (k * k, x)
         })
         .collect();
-    let phases: Vec<f64> = if p.phase {
-        (0..18).map(|i| i as f64 * PI / 18.0).collect()
-    } else {
-        vec![0.0]
-    };
+    let phases: Vec<f64> = if p.phase { (0..18).map(|i| i as f64 * PI / 18.0).collect() } else { vec![0.0] };
     // Steps fine enough that a ring at the band's edge moves well under a period.
     let kmax2 = rows.last().map(|r| r.0).unwrap_or(1.0);
     let step = (0.15 / (o.a * kmax2)).max(5.0);
@@ -396,8 +356,7 @@ fn search_1d(px: &[Px], o: &Optics, p: &Params, n: usize) -> Vec<Model> {
         .flat_map_iter(|&ph| {
             let rows = &rows;
             (0..count).map(move |i| {
-                let df =
-                    p.df_min_a + (p.df_max_a - p.df_min_a) * i as f64 / (count - 1).max(1) as f64;
+                let df = p.df_min_a + (p.df_max_a - p.df_min_a) * i as f64 / (count - 1).max(1) as f64;
                 let mut s = [0f64; 6];
                 for &(k2, x) in rows {
                     let g = o.gamma(df, k2, ph).sin();
@@ -409,15 +368,7 @@ fn search_1d(px: &[Px], o: &Optics, p: &Params, n: usize) -> Vec<Model> {
                     s[4] += v * v;
                     s[5] += x * v;
                 }
-                (
-                    corr(s[0], s[1], s[2], s[3], s[4], s[5]),
-                    Model {
-                        mean: df,
-                        p: 0.0,
-                        q: 0.0,
-                        phase: ph,
-                    },
-                )
+                (corr(s[0], s[1], s[2], s[3], s[4], s[5]), Model { mean: df, p: 0.0, q: 0.0, phase: ph })
             })
         })
         .collect();
@@ -458,9 +409,7 @@ impl Grid for CpuGrid {
             .map(|(px, c)| {
                 let step = (px.len() / 30_000).max(1);
                 let v: Vec<f64> = c.par_iter().map(|m| score(px, &o, m, step)).collect();
-                c[(0..c.len())
-                    .max_by(|&a, &b| v[a].total_cmp(&v[b]))
-                    .unwrap_or(0)]
+                c[(0..c.len()).max_by(|&a, &b| v[a].total_cmp(&v[b])).unwrap_or(0)]
             })
             .collect()
     }
@@ -488,20 +437,14 @@ fn grid_candidates(p: &Params, starts: &[Model]) -> Vec<Model> {
 
 /// Score minus a penalty for leaving the requested ranges.
 fn objective(p: &Params, m: &Model, score: f64) -> f64 {
-    let over = (m.mean - p.df_max_a).max(p.df_min_a - m.mean).max(0.0)
-        + (2.0 * m.half_diff() - p.max_astig_a).max(0.0);
+    let over = (m.mean - p.df_max_a).max(p.df_min_a - m.mean).max(0.0) + (2.0 * m.half_diff() - p.max_astig_a).max(0.0);
     score - over * 1e-3
 }
 
 /// Nelder–Mead maximisation of the score (dimensions 3, or 4 with phase).
 fn refine(px: &[Px], o: &Optics, p: &Params, start: Model) -> Model {
     let dim = if p.phase { 4 } else { 3 };
-    let to = |v: &[f64]| Model {
-        mean: v[0],
-        p: v[1],
-        q: v[2],
-        phase: if dim == 4 { v[3] } else { start.phase },
-    };
+    let to = |v: &[f64]| Model { mean: v[0], p: v[1], q: v[2], phase: if dim == 4 { v[3] } else { start.phase } };
     let f = |v: &[f64]| {
         let m = to(v);
         -objective(p, &m, score(px, o, &m, 1))
@@ -523,14 +466,8 @@ fn refine(px: &[Px], o: &Optics, p: &Params, start: Model) -> Model {
         if (vals[dim] - vals[0]).abs() < 1e-7 {
             break;
         }
-        let cen: Vec<f64> = (0..dim)
-            .map(|j| simplex[..dim].iter().map(|v| v[j]).sum::<f64>() / dim as f64)
-            .collect();
-        let along = |t: f64| -> Vec<f64> {
-            (0..dim)
-                .map(|j| cen[j] + t * (simplex[dim][j] - cen[j]))
-                .collect()
-        };
+        let cen: Vec<f64> = (0..dim).map(|j| simplex[..dim].iter().map(|v| v[j]).sum::<f64>() / dim as f64).collect();
+        let along = |t: f64| -> Vec<f64> { (0..dim).map(|j| cen[j] + t * (simplex[dim][j] - cen[j])).collect() };
         let xr = along(-1.0);
         let fr = f(&xr);
         if fr < vals[0] {
@@ -547,11 +484,7 @@ fn refine(px: &[Px], o: &Optics, p: &Params, start: Model) -> Model {
             simplex[dim] = xr;
             vals[dim] = fr;
         } else {
-            let xc = if fr < vals[dim] {
-                along(-0.5)
-            } else {
-                along(0.5)
-            };
+            let xc = if fr < vals[dim] { along(-0.5) } else { along(0.5) };
             let fc = f(&xc);
             if fc < vals[dim].min(fr) {
                 simplex[dim] = xc;
@@ -559,17 +492,13 @@ fn refine(px: &[Px], o: &Optics, p: &Params, start: Model) -> Model {
             } else {
                 // Shrink toward the best vertex.
                 for i in 1..=dim {
-                    simplex[i] = (0..dim)
-                        .map(|j| simplex[0][j] + 0.5 * (simplex[i][j] - simplex[0][j]))
-                        .collect();
+                    simplex[i] = (0..dim).map(|j| simplex[0][j] + 0.5 * (simplex[i][j] - simplex[0][j])).collect();
                     vals[i] = f(&simplex[i]);
                 }
             }
         }
     }
-    let best = (0..=dim)
-        .min_by(|&a, &b| vals[a].total_cmp(&vals[b]))
-        .unwrap();
+    let best = (0..=dim).min_by(|&a, &b| vals[a].total_cmp(&vals[b])).unwrap();
     to(&simplex[best])
 }
 
@@ -608,15 +537,9 @@ fn check_params(n: usize, p: &Params) -> Result<[f64; 2]> {
     }
     let nyq = n as f64 / 2.0;
     let to_px = |res: f64| n as f64 * p.pixel_a / res;
-    let band = [
-        to_px(p.res_low_a).max(2.0),
-        to_px(p.res_high_a).min(nyq * 0.98),
-    ];
+    let band = [to_px(p.res_low_a).max(2.0), to_px(p.res_high_a).min(nyq * 0.98)];
     if band[1] - band[0] < 4.0 {
-        bail!(
-            "拟合范围太窄：低分辨率限要大于高分辨率限，且高分辨率限不能小于 2 倍像素（{:.2} Å）",
-            2.0 * p.pixel_a
-        );
+        bail!("拟合范围太窄：低分辨率限要大于高分辨率限，且高分辨率限不能小于 2 倍像素（{:.2} Å）", 2.0 * p.pixel_a);
     }
     Ok(band)
 }
@@ -626,19 +549,10 @@ fn check_params(n: usize, p: &Params) -> Result<[f64; 2]> {
 pub(crate) fn fit_many(logs: &[&[f32]], n: usize, p: &Params, grid: &dyn Grid) -> Result<Vec<Fit>> {
     let band = check_params(n, p)?;
     let o = Optics::new(p);
-    let amps: Vec<Vec<f32>> = logs
-        .par_iter()
-        .map(|log| log.iter().map(|&l| 10f32.powf(l * 0.5)).collect())
-        .collect();
+    let amps: Vec<Vec<f32>> = logs.par_iter().map(|log| log.iter().map(|&l| 10f32.powf(l * 0.5)).collect()).collect();
     let w0 = box_width(&o, None, n, p.pixel_a, band[0]);
-    let mut preps: Vec<Prepared> = amps
-        .par_iter()
-        .map(|a| prepare(a, n, p.pixel_a, band, w0))
-        .collect();
-    let cands: Vec<Vec<Model>> = preps
-        .par_iter()
-        .map(|pr| grid_candidates(p, &search_1d(&pr.band, &o, p, n)))
-        .collect();
+    let mut preps: Vec<Prepared> = amps.par_iter().map(|a| prepare(a, n, p.pixel_a, band, w0)).collect();
+    let cands: Vec<Vec<Model>> = preps.par_iter().map(|pr| grid_candidates(p, &search_1d(&pr.band, &o, p, n))).collect();
     let mut best = grid.best(&bands(&preps), o, &cands);
     // Redo the background for the ring spacing found, then search again.
     let redo: Vec<Option<Prepared>> = (0..preps.len())
@@ -655,11 +569,7 @@ pub(crate) fn fit_many(logs: &[&[f32]], n: usize, p: &Params, grid: &dyn Grid) -
             .map(|(r, b)| match r {
                 Some(pr) => {
                     let mut starts = search_1d(&pr.band, &o, p, n);
-                    starts.push(Model {
-                        p: 0.0,
-                        q: 0.0,
-                        ..*b
-                    });
+                    starts.push(Model { p: 0.0, q: 0.0, ..*b });
                     grid_candidates(p, &starts)
                 }
                 None => vec![*b],
@@ -687,16 +597,8 @@ pub(crate) fn fit_many(logs: &[&[f32]], n: usize, p: &Params, grid: &dyn Grid) -
             Fit {
                 df1: m.mean + h,
                 df2: m.mean - h,
-                angle: if h < 1e-6 {
-                    0.0
-                } else {
-                    angle.to_degrees() % 180.0
-                },
-                phase: if p.phase {
-                    m.phase.rem_euclid(PI).to_degrees()
-                } else {
-                    0.0
-                },
+                angle: if h < 1e-6 { 0.0 } else { angle.to_degrees() % 180.0 },
+                phase: if p.phase { m.phase.rem_euclid(PI).to_degrees() } else { 0.0 },
                 score: sc,
                 fit_res: n as f64 * p.pixel_a / fit_r,
                 n,
@@ -718,14 +620,7 @@ fn bands(preps: &[Prepared]) -> Vec<&[Px]> {
 
 /// Equal-phase average, fitted CTF² on it, window correlations, and the
 /// radius (FFT pixels) where the fit stops holding.
-fn fit_resolution(
-    px: &[Px],
-    o: &Optics,
-    m: &Model,
-    n: usize,
-    pixel_a: f64,
-    band: [f64; 2],
-) -> (Vec<f32>, Vec<f32>, Vec<f32>, f64) {
+fn fit_resolution(px: &[Px], o: &Optics, m: &Model, n: usize, pixel_a: f64, band: [f64; 2]) -> (Vec<f32>, Vec<f32>, Vec<f32>, f64) {
     let len = n / 2 + 1;
     let scale = n as f64 * pixel_a; // radius in px = k × scale
     let mut sum = vec![(0f64, 0f64); len];
@@ -733,19 +628,14 @@ fn fit_resolution(
         // The radius at which the mean-defocus CTF has this pixel's phase.
         let df = m.df(p.c2 as f64, p.s2 as f64);
         let g = o.gamma(df, p.k2 as f64, m.phase);
-        let Some(k2) = o.k2_at(m.mean, g - m.phase) else {
-            continue;
-        };
+        let Some(k2) = o.k2_at(m.mean, g - m.phase) else { continue };
         let r = (k2.sqrt() * scale).round() as usize;
         if r < len {
             sum[r].0 += (p.x * p.w) as f64;
             sum[r].1 += p.w as f64;
         }
     }
-    let epa: Vec<f64> = sum
-        .iter()
-        .map(|&(s, c)| if c > 0.0 { s / c } else { f64::NAN })
-        .collect();
+    let epa: Vec<f64> = sum.iter().map(|&(s, c)| if c > 0.0 { s / c } else { f64::NAN }).collect();
     let ctf2: Vec<f64> = (0..len)
         .map(|r| {
             let k = r as f64 / scale;
@@ -801,14 +691,8 @@ fn fit_resolution(
     let (mx, mv) = (sx / c.max(1.0), sv / c.max(1.0));
     let sdx = (sxx / c.max(1.0) - mx * mx).max(0.0).sqrt();
     let sdv = (svv / c.max(1.0) - mv * mv).max(1e-12).sqrt();
-    let model = ctf2
-        .iter()
-        .map(|&v| (mx + (v - mv) * sdx / sdv) as f32)
-        .collect();
-    let epa = epa
-        .iter()
-        .map(|&v| if v.is_nan() { 0.0 } else { v as f32 })
-        .collect();
+    let model = ctf2.iter().map(|&v| (mx + (v - mv) * sdx / sdv) as f32).collect();
+    let epa = epa.iter().map(|&v| if v.is_nan() { 0.0 } else { v as f32 }).collect();
     let cc = cc.iter().map(|&v| v as f32).collect();
     (epa, model, cc, fit_r)
 }
@@ -888,11 +772,7 @@ pub static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// (a few such pixels in a micrograph otherwise swamp its power spectrum).
 pub fn clip_range(get: impl Fn(usize) -> f32, n: usize) -> (f32, f32) {
     let step = (n / 100_000).max(1);
-    let mut s: Vec<f32> = (0..n)
-        .step_by(step)
-        .map(&get)
-        .filter(|v| v.is_finite())
-        .collect();
+    let mut s: Vec<f32> = (0..n).step_by(step).map(&get).filter(|v| v.is_finite()).collect();
     if s.is_empty() {
         return (f32::MIN, f32::MAX);
     }
@@ -917,47 +797,21 @@ pub fn clip(v: f32, lo: f32, hi: f32) -> f32 {
 }
 
 pub fn fit_region(img: &Arc<OpenImage>, req: &FitReq) -> Result<Fit> {
-    let (mut fits, backend, ms) = fit_slices(
-        img,
-        &[req.z],
-        req.c,
-        req.t,
-        req.region,
-        req.n,
-        &req.params,
-        &|_, _| (),
-    )?;
+    let (mut fits, backend, ms) = fit_slices(img, &[req.z], req.c, req.t, req.region, req.n, &req.params, &|_, _| ())?;
     let mut f = fits.pop().unwrap();
     f.backend = backend;
     f.ms = ms;
     Ok(f)
 }
 
-pub fn fit_stack(
-    img: &Arc<OpenImage>,
-    req: &StackReq,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<StackFit> {
+pub fn fit_stack(img: &Arc<OpenImage>, req: &StackReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<StackFit> {
     let nz = img.info().size_z;
-    let zs: Vec<usize> = if req.zs.is_empty() {
-        (0..nz).collect()
-    } else {
-        req.zs.iter().copied().filter(|&z| z < nz).collect()
-    };
+    let zs: Vec<usize> = if req.zs.is_empty() { (0..nz).collect() } else { req.zs.iter().copied().filter(|&z| z < nz).collect() };
     if zs.is_empty() {
         bail!("没有可拟合的层");
     }
     CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
-    let (mut fits, backend, ms) = fit_slices(
-        img,
-        &zs,
-        req.c,
-        req.t,
-        req.region,
-        req.n,
-        &req.params,
-        progress,
-    )?;
+    let (mut fits, backend, ms) = fit_slices(img, &zs, req.c, req.t, req.region, req.n, &req.params, progress)?;
     for f in &mut fits {
         f.epa = Vec::new();
         f.model = Vec::new();
@@ -965,13 +819,7 @@ pub fn fit_stack(
         f.zeros = Vec::new();
     }
     let tilts = tilt_angles(&img.info().path, nz).map(|t| zs.iter().map(|&z| t[z]).collect());
-    Ok(StackFit {
-        zs,
-        tilts,
-        fits,
-        backend,
-        ms,
-    })
+    Ok(StackFit { zs, tilts, fits, backend, ms })
 }
 
 /// IMOD's tilt angle file next to a tilt series (`x.st` → `x.rawtlt` or
@@ -980,16 +828,10 @@ pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
     let p = std::path::Path::new(path);
     let read = |f: &std::path::Path| -> Option<Vec<f64>> {
         let text = std::fs::read_to_string(f).ok()?;
-        let t: Vec<f64> = text
-            .split_whitespace()
-            .map(|v| v.parse().ok())
-            .collect::<Option<_>>()?;
+        let t: Vec<f64> = text.split_whitespace().map(|v| v.parse().ok()).collect::<Option<_>>()?;
         (t.len() == nz).then_some(t)
     };
-    if let Some(t) = ["rawtlt", "tlt"]
-        .iter()
-        .find_map(|ext| read(&p.with_extension(ext)))
-    {
+    if let Some(t) = ["rawtlt", "tlt"].iter().find_map(|ext| read(&p.with_extension(ext))) {
         return Some(t);
     }
     // A binned or aligned copy (TS21_bin2.mrc) next to the series' own
@@ -1002,9 +844,7 @@ pub fn tilt_angles(path: &str, nz: usize) -> Option<Vec<f64>> {
             let ext = f.extension()?.to_str()?;
             let s = f.file_stem()?.to_str()?;
             let len = s.len();
-            (matches!(ext, "rawtlt" | "tlt") && len > 0 && stem.starts_with(s))
-                .then_some(len)
-                .map(|l| (l, f.clone()))
+            (matches!(ext, "rawtlt" | "tlt") && len > 0 && stem.starts_with(s)).then_some(len).map(|l| (l, f.clone()))
         })
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0));
@@ -1032,9 +872,7 @@ pub(crate) fn fit_regions(
         let idx: Vec<usize> = (0..items.len()).filter(|&i| items[i].1 == r).collect();
         let zs: Vec<usize> = idx.iter().map(|&i| items[i].0).collect();
         let before = done.load(std::sync::atomic::Ordering::Relaxed);
-        let (fits, _, _) = fit_slices(img, &zs, c, t, r, n, params, &|k, _| {
-            progress((before + k).min(items.len()), items.len())
-        })?;
+        let (fits, _, _) = fit_slices(img, &zs, c, t, r, n, params, &|k, _| progress((before + k).min(items.len()), items.len()))?;
         done.fetch_add(zs.len(), std::sync::atomic::Ordering::Relaxed);
         for (i, f) in idx.into_iter().zip(fits) {
             out[i] = Some(f);
@@ -1115,11 +953,7 @@ fn fit_slices(
             });
             match tried.and_then(|r| r) {
                 Ok(f) => {
-                    let backend = if all {
-                        (*name).into()
-                    } else {
-                        format!("{name} 谱 + CPU 拟合")
-                    };
+                    let backend = if all { (*name).into() } else { format!("{name} 谱 + CPU 拟合") };
                     return Ok((f, backend, start.elapsed().as_secs_f64() * 1e3));
                 }
                 Err(e) if CANCEL.load(std::sync::atomic::Ordering::SeqCst) => return Err(e),
@@ -1150,22 +984,8 @@ pub(crate) mod tests {
         }
     }
 
-    pub fn params_pub() -> Params {
-        params()
-    }
-    pub fn synth_pub(
-        n: usize,
-        p: &Params,
-        a: f64,
-        b: f64,
-        c: f64,
-        d: f64,
-        e: f64,
-        f: f64,
-        g: u64,
-    ) -> Vec<f32> {
-        synth(n, p, a, b, c, d, e, f, g)
-    }
+    pub fn params_pub() -> Params { params() }
+    pub fn synth_pub(n: usize, p: &Params, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: u64) -> Vec<f32> { synth(n, p, a, b, c, d, e, f, g) }
     fn params() -> Params {
         Params {
             voltage_kv: 300.0,
@@ -1184,25 +1004,10 @@ pub(crate) mod tests {
 
     /// Synthetic log10 power spectrum: falling background plus an enveloped
     /// CTF², with multiplicative noise.
-    fn synth(
-        n: usize,
-        p: &Params,
-        df1: f64,
-        df2: f64,
-        angle_deg: f64,
-        phase_deg: f64,
-        bfac: f64,
-        noise: f64,
-        seed: u64,
-    ) -> Vec<f32> {
+    fn synth(n: usize, p: &Params, df1: f64, df2: f64, angle_deg: f64, phase_deg: f64, bfac: f64, noise: f64, seed: u64) -> Vec<f32> {
         let o = Optics::new(p);
         let h = (df1 - df2) / 2.0;
-        let m = Model::from_astig(
-            (df1 + df2) / 2.0,
-            h,
-            angle_deg.to_radians(),
-            phase_deg.to_radians(),
-        );
+        let m = Model::from_astig((df1 + df2) / 2.0, h, angle_deg.to_radians(), phase_deg.to_radians());
         let mut rng = Rng(seed);
         let half = n as f64 / 2.0;
         let mut out = vec![0f32; n * n];
@@ -1261,15 +1066,7 @@ pub(crate) mod tests {
     #[test]
     fn fits_defocus_and_astigmatism() {
         let p = params();
-        for (i, &(df1, df2, ang)) in [
-            (12000.0, 11000.0, 30.0),
-            (25000.0, 24600.0, 125.0),
-            (8000.0, 8000.0, 0.0),
-            (32000.0, 30500.0, 80.0),
-        ]
-        .iter()
-        .enumerate()
-        {
+        for (i, &(df1, df2, ang)) in [(12000.0, 11000.0, 30.0), (25000.0, 24600.0, 125.0), (8000.0, 8000.0, 0.0), (32000.0, 30500.0, 80.0)].iter().enumerate() {
             let s = synth(512, &p, df1, df2, ang, 0.0, 60.0, 0.4, 7 + i as u64);
             let fit = fit_spectrum(&s, 512, &p).unwrap();
             check(&fit, df1, df2, ang);
@@ -1282,38 +1079,14 @@ pub(crate) mod tests {
     #[test]
     fn fits_a_series_together() {
         let p = params();
-        let truth = [
-            (14000.0, 13400.0, 40.0),
-            (16500.0, 15900.0, 42.0),
-            (11800.0, 11200.0, 38.0),
-            (19000.0, 18400.0, 41.0),
-        ];
-        let specs: Vec<Vec<f32>> = truth
-            .iter()
-            .enumerate()
-            .map(|(i, &(a, b, c))| {
-                synth(
-                    256,
-                    &p,
-                    a,
-                    b,
-                    c,
-                    0.0,
-                    60.0,
-                    if i == 2 { 0.9 } else { 0.4 },
-                    30 + i as u64,
-                )
-            })
-            .collect();
+        let truth = [(14000.0, 13400.0, 40.0), (16500.0, 15900.0, 42.0), (11800.0, 11200.0, 38.0), (19000.0, 18400.0, 41.0)];
+        let specs: Vec<Vec<f32>> = truth.iter().enumerate().map(|(i, &(a, b, c))| synth(256, &p, a, b, c, 0.0, 60.0, if i == 2 { 0.9 } else { 0.4 }, 30 + i as u64)).collect();
         let refs: Vec<&[f32]> = specs.iter().map(|s| &s[..]).collect();
         let fits = fit_many(&refs, 256, &p, &CpuGrid).unwrap();
         for ((f, &(a, b, c)), s) in fits.iter().zip(&truth).zip(&specs) {
             check(f, a, b, c);
             let one = fit_spectrum(s, 256, &p).unwrap();
-            assert!(
-                (one.df1 - f.df1).abs() < 60.0,
-                "alone {one:?} together {f:?}"
-            );
+            assert!((one.df1 - f.df1).abs() < 60.0, "alone {one:?} together {f:?}");
         }
     }
 
@@ -1324,19 +1097,13 @@ pub(crate) mod tests {
         let st = dir.join("ts.st");
         assert!(tilt_angles(st.to_str().unwrap(), 3).is_none());
         std::fs::write(dir.join("ts.rawtlt"), "-3.0\n 0.0\n3.0\n").unwrap();
-        assert_eq!(
-            tilt_angles(st.to_str().unwrap(), 3),
-            Some(vec![-3.0, 0.0, 3.0])
-        );
+        assert_eq!(tilt_angles(st.to_str().unwrap(), 3), Some(vec![-3.0, 0.0, 3.0]));
         // Wrong count: not this series'.
         assert!(tilt_angles(st.to_str().unwrap(), 4).is_none());
         // A binned copy finds the series' own file by its name's start.
         std::fs::write(dir.join("TS21.tlt"), "-2\n0\n2\n4\n").unwrap();
         let bin = dir.join("TS21_bin2.mrc");
-        assert_eq!(
-            tilt_angles(bin.to_str().unwrap(), 4),
-            Some(vec![-2.0, 0.0, 2.0, 4.0])
-        );
+        assert_eq!(tilt_angles(bin.to_str().unwrap(), 4), Some(vec![-2.0, 0.0, 2.0, 4.0]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1354,38 +1121,16 @@ pub(crate) mod tests {
     fn fit_resolution_follows_the_envelope() {
         let p = params();
         // Strong damping: rings fade out well before Nyquist (2 Å).
-        let sharp = fit_spectrum(
-            &synth(512, &p, 15000.0, 14500.0, 10.0, 0.0, 20.0, 0.5, 11),
-            512,
-            &p,
-        )
-        .unwrap();
-        let soft = fit_spectrum(
-            &synth(512, &p, 15000.0, 14500.0, 10.0, 0.0, 400.0, 0.5, 11),
-            512,
-            &p,
-        )
-        .unwrap();
+        let sharp = fit_spectrum(&synth(512, &p, 15000.0, 14500.0, 10.0, 0.0, 20.0, 0.5, 11), 512, &p).unwrap();
+        let soft = fit_spectrum(&synth(512, &p, 15000.0, 14500.0, 10.0, 0.0, 400.0, 0.5, 11), 512, &p).unwrap();
         assert!(sharp.fit_res < 4.0, "sharp {}", sharp.fit_res);
-        assert!(
-            soft.fit_res > sharp.fit_res + 1.0,
-            "soft {} sharp {}",
-            soft.fit_res,
-            sharp.fit_res
-        );
+        assert!(soft.fit_res > sharp.fit_res + 1.0, "soft {} sharp {}", soft.fit_res, sharp.fit_res);
         assert!(soft.fit_res < 20.0, "soft {}", soft.fit_res);
     }
 
     /// An image whose Fourier transform is CTF-filtered noise (astigmatism
     /// `half` Å at `angle_deg`).
-    pub fn ctf_image(
-        size: usize,
-        p: &Params,
-        mean: f64,
-        half: f64,
-        angle_deg: f64,
-        seed: u64,
-    ) -> Vec<f32> {
+    pub fn ctf_image(size: usize, p: &Params, mean: f64, half: f64, angle_deg: f64, seed: u64) -> Vec<f32> {
         let o = Optics::new(p);
         let m = Model::from_astig(mean, half, angle_deg.to_radians(), 0.0);
         let f = fft::Fft::new(size);
@@ -1393,15 +1138,11 @@ pub(crate) mod tests {
         let mut re: Vec<f32> = (0..size * size).map(|_| rng.gauss() as f32).collect();
         let mut im = vec![0f32; size * size];
         let fft2 = |re: &mut Vec<f32>, im: &mut Vec<f32>| {
-            re.par_chunks_mut(size)
-                .zip(im.par_chunks_mut(size))
-                .for_each(|(r, i)| f.run(r, i));
+            re.par_chunks_mut(size).zip(im.par_chunks_mut(size)).for_each(|(r, i)| f.run(r, i));
             let cols: Vec<(Vec<f32>, Vec<f32>)> = (0..size)
                 .into_par_iter()
                 .map(|x| {
-                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = (0..size)
-                        .map(|y| (re[y * size + x], im[y * size + x]))
-                        .unzip();
+                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = (0..size).map(|y| (re[y * size + x], im[y * size + x])).unzip();
                     f.run(&mut cr, &mut ci);
                     (cr, ci)
                 })
@@ -1416,16 +1157,8 @@ pub(crate) mod tests {
         fft2(&mut re, &mut im);
         for v in 0..size {
             for u in 0..size {
-                let fu = if u < size / 2 {
-                    u as f64
-                } else {
-                    u as f64 - size as f64
-                };
-                let fv = if v < size / 2 {
-                    v as f64
-                } else {
-                    v as f64 - size as f64
-                };
+                let fu = if u < size / 2 { u as f64 } else { u as f64 - size as f64 };
+                let fv = if v < size / 2 { v as f64 } else { v as f64 - size as f64 };
                 let k = fu.hypot(fv) / (size as f64 * p.pixel_a);
                 let th = (-fv).atan2(fu);
                 let df = m.df((2.0 * th).cos(), (2.0 * th).sin());
@@ -1476,10 +1209,6 @@ mod dump {
             b.extend_from_slice(&0f32.to_le_bytes());
         }
         std::fs::write(format!("{dir}/spectrum.bin"), b).unwrap();
-        std::fs::write(
-            format!("{dir}/fit.json"),
-            serde_json::to_string(&fit).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(format!("{dir}/fit.json"), serde_json::to_string(&fit).unwrap()).unwrap();
     }
 }

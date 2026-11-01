@@ -8,11 +8,7 @@ use super::fourier::{self, Half};
 use crate::fft::Fft;
 
 fn sinc(u: f64) -> f64 {
-    if u.abs() < 1e-9 {
-        1.0
-    } else {
-        (std::f64::consts::PI * u).sin() / (std::f64::consts::PI * u)
-    }
+    if u.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * u).sin() / (std::f64::consts::PI * u) }
 }
 
 /// 2D rotation of a frequency by `deg`.
@@ -32,9 +28,7 @@ impl Projector2 {
     pub fn new(img: &[f32], b: usize, pad: usize) -> Projector2 {
         let n = b * pad;
         let o = (n - b) / 2;
-        let corr: Vec<f64> = (0..b)
-            .map(|i| sinc((i as f64 - b as f64 / 2.0) / n as f64).powi(2))
-            .collect();
+        let corr: Vec<f64> = (0..b).map(|i| sinc((i as f64 - b as f64 / 2.0) / n as f64).powi(2)).collect();
         let mut big = vec![0f32; n * n];
         for y in 0..b {
             for x in 0..b {
@@ -94,13 +88,7 @@ pub struct Accum2 {
 
 impl Accum2 {
     pub fn new(b: usize) -> Accum2 {
-        Accum2 {
-            b,
-            re: vec![0.0; b * b],
-            im: vec![0.0; b * b],
-            den: vec![0.0; b * b],
-            count: 0,
-        }
+        Accum2 { b, re: vec![0.0; b * b], im: vec![0.0; b * b], den: vec![0.0; b * b], count: 0 }
     }
 
     fn add(&mut self, q: [f32; 2], re: f32, im: f32, w: f32) {
@@ -205,11 +193,7 @@ pub fn centre_of_mass(img: &[f32], b: usize) -> [f32; 2] {
             s += v;
         }
     }
-    if s <= 0.0 {
-        [0.0, 0.0]
-    } else {
-        [(-sx / s) as f32, (-sy / s) as f32]
-    }
+    if s <= 0.0 { [0.0, 0.0] } else { [(-sx / s) as f32, (-sy / s) as f32] }
 }
 
 /// Shifts an image by `d` pixels (Fourier phase ramp).

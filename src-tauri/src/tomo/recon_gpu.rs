@@ -22,12 +22,7 @@ fn taps(pos: Tensor<1>, len: usize, stride: usize, base: Option<Tensor<1>>) -> T
     let w = len;
     let lo = pos.clone().floor();
     let f = pos - lo.clone();
-    let inside = |t: Tensor<1>| {
-        t.clone()
-            .greater_equal_elem(0.0)
-            .bool_and(t.lower_equal_elem((w - 1) as f32))
-            .float()
-    };
+    let inside = |t: Tensor<1>| t.clone().greater_equal_elem(0.0).bool_and(t.lower_equal_elem((w - 1) as f32)).float();
     let hi = lo.clone() + 1.0;
     let w0 = (f.clone().neg() + 1.0) * inside(lo.clone());
     let w1 = f * inside(hi.clone());
@@ -38,12 +33,7 @@ fn taps(pos: Tensor<1>, len: usize, stride: usize, base: Option<Tensor<1>>) -> T
             None => t.int(),
         }
     };
-    Taps {
-        i0: index(lo),
-        i1: index(hi),
-        w0: w0.unsqueeze_dim(0),
-        w1: w1.unsqueeze_dim(0),
-    }
+    Taps { i0: index(lo), i1: index(hi), w0: w0.unsqueeze_dim(0), w1: w1.unsqueeze_dim(0) }
 }
 
 fn gather(src: Tensor<2>, t: &Taps) -> Tensor<2> {
@@ -84,14 +74,8 @@ impl Plan {
                 .map(|v| {
                     (!g.by_rows(v)).then(|| {
                         let m = g.columns(v, 0).1;
-                        let k: Vec<f32> = (0..m * w)
-                            .map(|i| (g.columns(v, i % w).0 + (i / w) as isize) as f32)
-                            .collect();
-                        (
-                            up(k),
-                            up((0..m * w).map(|i| (i % w) as f32 - h).collect()),
-                            m,
-                        )
+                        let k: Vec<f32> = (0..m * w).map(|i| (g.columns(v, i % w).0 + (i / w) as isize) as f32).collect();
+                        (up(k), up((0..m * w).map(|i| (i % w) as f32 - h).collect()), m)
                     })
                 })
                 .collect(),
@@ -106,16 +90,10 @@ impl Plan {
                 let short = t.clone().lower_elem(least.max(COVERED));
                 t.clamp_min(COVERED).recip().mask_fill(short, 0.0)
             };
-            let rows = plan
-                .forward(Tensor::ones([1, z * w], dev))
-                .reshape([g.views(), w]);
+            let rows = plan.forward(Tensor::ones([1, z * w], dev)).reshape([g.views(), w]);
             let longest = rows.clone().max_dim(1).mul_scalar(SEEN).clamp_min(COVERED);
             let short = rows.clone().lower(longest.expand([g.views(), w]));
-            plan.inv_rows = rows
-                .clamp_min(COVERED)
-                .recip()
-                .mask_fill(short, 0.0)
-                .reshape([1, g.views() * w]);
+            plan.inv_rows = rows.clamp_min(COVERED).recip().mask_fill(short, 0.0).reshape([1, g.views() * w]);
             let ones = vec![1.0; g.views()];
             let cols = plan.back(Tensor::ones([1, g.views() * w], dev), &ones);
             let seen = SEEN * cols.clone().max().into_scalar::<f32>();
@@ -129,10 +107,7 @@ impl Plan {
         let (w, n) = (self.g.w, sino.dims()[0]);
         let mut out = Tensor::<2>::zeros([n, self.g.z * w], &self.dev);
         for k in 0..self.g.views() {
-            out = out
-                + self
-                    .back_view(k, sino.clone().narrow(1, k * w, w))
-                    .mul_scalar(scale[k] as f32);
+            out = out + self.back_view(k, sino.clone().narrow(1, k * w, w)).mul_scalar(scale[k] as f32);
         }
         out
     }
@@ -141,18 +116,14 @@ impl Plan {
     fn back_view(&self, k: usize, row: Tensor<2>) -> Tensor<2> {
         let w = self.g.w;
         let [c, s] = self.g.trig[k];
-        let d = self.u.clone().mul_scalar(c as f32)
-            + self.v.clone().mul_scalar(s as f32)
-            + (w - 1) as f32 / 2.0;
+        let d = self.u.clone().mul_scalar(c as f32) + self.v.clone().mul_scalar(s as f32) + (w - 1) as f32 / 2.0;
         gather(row, &taps(d, w, 1, None))
     }
 
     /// A: [n][z·w] → [n][views·w]; rows of `u`/`v` are reused for the
     /// (depth row z, detector j) pairs since both are z × w grids.
     fn forward(&self, slice: Tensor<2>) -> Tensor<2> {
-        let views = (0..self.g.views())
-            .map(|k| self.forward_view(k, slice.clone()))
-            .collect();
+        let views = (0..self.g.views()).map(|k| self.forward_view(k, slice.clone())).collect();
         Tensor::cat(views, 1)
     }
 
@@ -164,44 +135,28 @@ impl Plan {
         let [c, s] = self.g.trig[k];
         let cols = &self.cols[k];
         {
-            if let Some((k, t, m)) = cols {
-                // Step through columns: depth = (j − h − c·(k − h))/s, as a row index.
-                let depth = (t.clone() - (k.clone() - h).mul_scalar(c as f32)).div_scalar(s as f32);
-                let row = depth - self.g.z_offset as f32 + (z - 1) as f32 / 2.0;
-                let inside = k
-                    .clone()
-                    .greater_equal_elem(0.0)
-                    .bool_and(k.clone().lower_elem(w as f32))
-                    .float()
-                    .unsqueeze_dim(0);
-                let mut tp = taps(row, z, w, Some(k.clone().clamp(0.0, (w - 1) as f32)));
-                tp.w0 = tp.w0 * inside.clone();
-                tp.w1 = tp.w1 * inside;
-                gather(slice.clone(), &tp)
-                    .reshape([n, *m, w])
-                    .sum_dim(1)
-                    .reshape([n, w])
-                    .div_scalar(s.abs() as f32)
-            } else {
-                // Step through depth rows: x = (j − h − s·v)/c + h.
-                let x =
-                    (self.u.clone() - self.v.clone().mul_scalar(s as f32)).div_scalar(c as f32) + h;
-                let t = taps(x, w, 1, Some(rows.clone()));
-                gather(slice.clone(), &t)
-                    .reshape([n, z, w])
-                    .sum_dim(1)
-                    .reshape([n, w])
-                    .div_scalar(c.abs() as f32)
-            }
+                if let Some((k, t, m)) = cols {
+                    // Step through columns: depth = (j − h − c·(k − h))/s, as a row index.
+                    let depth = (t.clone() - (k.clone() - h).mul_scalar(c as f32)).div_scalar(s as f32);
+                    let row = depth - self.g.z_offset as f32 + (z - 1) as f32 / 2.0;
+                    let inside = k.clone().greater_equal_elem(0.0).bool_and(k.clone().lower_elem(w as f32)).float().unsqueeze_dim(0);
+                    let mut tp = taps(row, z, w, Some(k.clone().clamp(0.0, (w - 1) as f32)));
+                    tp.w0 = tp.w0 * inside.clone();
+                    tp.w1 = tp.w1 * inside;
+                    gather(slice.clone(), &tp).reshape([n, *m, w]).sum_dim(1).reshape([n, w]).div_scalar(s.abs() as f32)
+                } else {
+                    // Step through depth rows: x = (j − h − s·v)/c + h.
+                    let x = (self.u.clone() - self.v.clone().mul_scalar(s as f32)).div_scalar(c as f32) + h;
+                    let t = taps(x, w, 1, Some(rows.clone()));
+                    gather(slice.clone(), &t).reshape([n, z, w]).sum_dim(1).reshape([n, w]).div_scalar(c.abs() as f32)
+                }
         }
     }
 
     /// Start of each depth row, per (z, j).
     fn row_starts(&self) -> Tensor<1> {
         let w = self.g.w as f32;
-        (self.v.clone() - self.g.z_offset as f32 + (self.g.z - 1) as f32 / 2.0)
-            .mul_scalar(w)
-            .round()
+        (self.v.clone() - self.g.z_offset as f32 + (self.g.z - 1) as f32 / 2.0).mul_scalar(w).round()
     }
 
     /// One slab of `n` rows, [n][views][w] → [n][z][w].
@@ -215,12 +170,7 @@ impl Plan {
             Method::Wbp => {
                 let len = (2 * w).next_power_of_two();
                 let (re, im) = burn::signal::rfft(b.reshape([n, nv, w]), 2, Some(len));
-                let f = burn::signal::irfft(
-                    re * self.ramp.clone(),
-                    im * self.ramp.clone(),
-                    2,
-                    Some(len),
-                );
+                let f = burn::signal::irfft(re * self.ramp.clone(), im * self.ramp.clone(), 2, Some(len));
                 let f = f.narrow(2, 0, w).reshape([n, nv * w]);
                 let scale: Vec<f64> = self.g.weight.iter().map(|k| k / nv as f64).collect();
                 self.back(f, &scale)
@@ -232,8 +182,7 @@ impl Plan {
                 for _ in 0..self.p.iterations {
                     super::check_cancel()?;
                     for &k in &order {
-                        let e = (b.clone().narrow(1, k * w, w) - self.forward_view(k, x.clone()))
-                            * self.inv_rows.clone().narrow(1, k * w, w);
+                        let e = (b.clone().narrow(1, k * w, w) - self.forward_view(k, x.clone())) * self.inv_rows.clone().narrow(1, k * w, w);
                         x = x + self.back_view(k, e).mul_scalar(self.p.lambda);
                         if self.p.non_negative {
                             x = x.clamp_min(0.0);
@@ -257,9 +206,6 @@ impl Plan {
                 x
             }
         };
-        Ok(x.into_data()
-            .convert::<f32>()
-            .try_into_vec::<f32>()
-            .unwrap())
+        Ok(x.into_data().convert::<f32>().try_into_vec::<f32>().unwrap())
     }
 }

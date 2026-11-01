@@ -38,15 +38,7 @@ pub struct InitialParams {
 
 impl Default for InitialParams {
     fn default() -> Self {
-        InitialParams {
-            symmetry: "C1".into(),
-            iterations: 80,
-            batch: 300,
-            res_start: 35.0,
-            res_end: 12.0,
-            box_px: 64,
-            seed: 7,
-        }
+        InitialParams { symmetry: "C1".into(), iterations: 80, batch: 300, res_start: 35.0, res_end: 12.0, box_px: 64, seed: 7 }
     }
 }
 
@@ -69,15 +61,7 @@ pub struct RefineParams {
 
 impl Default for RefineParams {
     fn default() -> Self {
-        RefineParams {
-            symmetry: "C1".into(),
-            res_init: 30.0,
-            max_iterations: 12,
-            global_iterations: 2,
-            global_step: 7.5,
-            seed: 11,
-            promote_dihedral: false,
-        }
+        RefineParams { symmetry: "C1".into(), res_init: 30.0, max_iterations: 12, global_iterations: 2, global_step: 7.5, seed: 11, promote_dihedral: false }
     }
 }
 
@@ -90,63 +74,19 @@ pub struct Map {
 }
 
 /// Particle coefficients on `half` with shifts `offs` around their current shift.
-fn coeffs_for(
-    stack: &Stack,
-    parts: &[Particle],
-    chunk: &[usize],
-    optics: &Optics,
-    half: &Half,
-    noise: &[f32],
-    offs: &[[f32; 2]],
-) -> Coeffs {
-    coeffs_from(
-        stack,
-        &data::transforms(stack, chunk),
-        parts,
-        chunk,
-        optics,
-        half,
-        noise,
-        offs,
-    )
+fn coeffs_for(stack: &Stack, parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
+    coeffs_from(stack, &data::transforms(stack, chunk), parts, chunk, optics, half, noise, offs)
 }
 
 /// As `coeffs_for`, from transforms already made.
-fn coeffs_from(
-    stack: &Stack,
-    fts: &[(Vec<f32>, Vec<f32>)],
-    parts: &[Particle],
-    chunk: &[usize],
-    optics: &Optics,
-    half: &Half,
-    noise: &[f32],
-    offs: &[[f32; 2]],
-) -> Coeffs {
+fn coeffs_from(stack: &Stack, fts: &[(Vec<f32>, Vec<f32>)], parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
     let ps: Vec<&Particle> = chunk.iter().map(|&i| &parts[i]).collect();
     let sh: Vec<[f32; 2]> = ps.iter().map(|q| q.shift).collect();
-    data::coeffs(
-        optics,
-        stack.pixel_a,
-        stack.b,
-        half,
-        noise,
-        &ps,
-        fts,
-        &sh,
-        offs,
-    )
+    data::coeffs(optics, stack.pixel_a, stack.b, half, noise, &ps, fts, &sh, offs)
 }
 
 /// Global search: every orientation of `grid` for each particle of `chunk`.
-fn global(
-    c: &Coeffs,
-    offs: &[[f32; 2]],
-    refs: &Refs,
-    grid: &[Mat],
-    ratio: f32,
-    parts: &mut [Particle],
-    chunk: &[usize],
-) -> Result<()> {
+fn global(c: &Coeffs, offs: &[[f32; 2]], refs: &Refs, grid: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) -> Result<()> {
     let best = score::best(c, offs.len(), refs)?;
     for (j, &i) in chunk.iter().enumerate() {
         let b = best[j];
@@ -179,17 +119,7 @@ fn local_gpu(_: &Projector, _: &Half) -> Option<Gpu> {
 /// Local search around each particle's orientation: on the GPU when
 /// there is one, else per particle on the CPU.
 #[allow(clippy::too_many_arguments)]
-fn local(
-    c: &Coeffs,
-    offs: &[[f32; 2]],
-    proj: &Projector,
-    gpu: Option<&Gpu>,
-    half: &Half,
-    deltas: &[Mat],
-    ratio: f32,
-    parts: &mut [Particle],
-    chunk: &[usize],
-) {
+fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
     let k = c.k;
     let s = offs.len();
     #[cfg(feature = "pro")]
@@ -276,14 +206,7 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &
                 let q = &parts[i];
                 let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
                 let mut out = Vec::with_capacity(k * sym.len());
-                acc.points(
-                    &r,
-                    &sym,
-                    half,
-                    &c.x[jj * 2 * k..(jj + 1) * 2 * k],
-                    &c.c2[jj * k..(jj + 1) * k],
-                    &mut out,
-                );
+                acc.points(&r, &sym, half, &c.x[jj * 2 * k..(jj + 1) * 2 * k], &c.c2[jj * k..(jj + 1) * k], &mut out);
                 out
             })
             .collect();
@@ -294,17 +217,9 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &
 /// The 2-fold of a Dn in the average of two half maps (b³, n-fold along z),
 /// tested on a copy of at most 128 voxels: (phi, dz in voxels of b).
 fn dihedral_of(maps: &[Vec<f32>; 2], b: usize, n: usize) -> Option<(f64, f64)> {
-    let avg: Vec<f32> = maps[0]
-        .iter()
-        .zip(&maps[1])
-        .map(|(a, c)| 0.5 * (a + c))
-        .collect();
+    let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
     let s = b.min(128);
-    let small = if s == b {
-        avg
-    } else {
-        fourier::resample3(&avg, b, s)
-    };
+    let small = if s == b { avg } else { fourier::resample3(&avg, b, s) };
     let (phi, dz, _) = super::discover::dihedral(&small, s, n)?;
     Some((phi, dz * b as f64 / s as f64))
 }
@@ -312,13 +227,7 @@ fn dihedral_of(maps: &[Vec<f32>; 2], b: usize, n: usize) -> Option<(f64, f64)> {
 /// Turns the maps (`discover::align_dihedral`: out(p) = v(A·p + t), A the
 /// turn by phi about z, t = (0, 0, dz)) and the poses with them: R → R·A,
 /// shift + (R·t)xy (test `poses_follow_a_turned_map`).
-pub(crate) fn promote(
-    maps: &mut [Vec<f32>; 2],
-    b: usize,
-    (phi, dz): (f64, f64),
-    parts: &mut [Particle],
-    ids: &[usize],
-) {
+pub(crate) fn promote(maps: &mut [Vec<f32>; 2], b: usize, (phi, dz): (f64, f64), parts: &mut [Particle], ids: &[usize]) {
     for m in maps.iter_mut() {
         *m = super::discover::align_dihedral(m, b, phi, dz);
     }
@@ -329,22 +238,13 @@ pub(crate) fn promote(
         let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
         let e = geom::angles(&geom::mul(&r, &a));
         q.euler = [e[0] as f32, e[1] as f32, e[2] as f32];
-        q.shift = [
-            q.shift[0] + (r[0][2] * dz) as f32,
-            q.shift[1] + (r[1][2] * dz) as f32,
-        ];
+        q.shift = [q.shift[0] + (r[0][2] * dz) as f32, q.shift[1] + (r[1][2] * dz) as f32];
     }
 }
 
 /// One unfiltered map from every particle of `ids` at its orientation
 /// and shift (stack box), with the point group applied.
-pub fn reconstruct_all(
-    stack: &Stack,
-    parts: &[Particle],
-    ids: &[usize],
-    optics: &Optics,
-    sym: &[Mat],
-) -> Vec<f32> {
+pub fn reconstruct_all(stack: &Stack, parts: &[Particle], ids: &[usize], optics: &Optics, sym: &[Mat]) -> Vec<f32> {
     let b = stack.b;
     let noise = data::noise_spectrum(stack, ids, 2000);
     let full = Half::new(b, b as f64 / 2.0 - 1.0);
@@ -372,24 +272,17 @@ fn radius(b: usize, px: f64, res: f64) -> f64 {
 pub fn lowpass(v: &[f32], b: usize, px: f64, res: f64) -> Vec<f32> {
     let (mut re, mut im) = fourier::ft3(b, v);
     let r = b as f64 * px / res;
-    re.par_chunks_mut(b * b)
-        .zip(im.par_chunks_mut(b * b))
-        .enumerate()
-        .for_each(|(z, (pr, pi))| {
-            for y in 0..b {
-                for x in 0..b {
-                    let (fx, fy, fz) = (
-                        fourier::freq(x, b),
-                        fourier::freq(y, b),
-                        fourier::freq(z, b),
-                    );
-                    let d = ((fx * fx + fy * fy + fz * fz) as f64).sqrt();
-                    let f = data::soft(d, r, 3.0);
-                    pr[y * b + x] *= f;
-                    pi[y * b + x] *= f;
-                }
+    re.par_chunks_mut(b * b).zip(im.par_chunks_mut(b * b)).enumerate().for_each(|(z, (pr, pi))| {
+        for y in 0..b {
+            for x in 0..b {
+                let (fx, fy, fz) = (fourier::freq(x, b), fourier::freq(y, b), fourier::freq(z, b));
+                let d = ((fx * fx + fy * fy + fz * fz) as f64).sqrt();
+                let f = data::soft(d, r, 3.0);
+                pr[y * b + x] *= f;
+                pi[y * b + x] *= f;
             }
-        });
+        }
+    });
     fourier::ift3(b, &re, &im)
 }
 
@@ -406,45 +299,31 @@ pub fn fit_map(v: &[f32], [w, h, d]: [usize; 3], px_in: f64, b: usize, px: f64) 
         }
     };
     let mut out = vec![0f32; b * b * b];
-    out.par_chunks_mut(b * b)
-        .enumerate()
-        .for_each(|(z, plane)| {
-            for y in 0..b {
-                for x in 0..b {
-                    let s = px / px_in;
-                    let (fx, fy, fz) = (
-                        (x as f64 - c) * s + cx,
-                        (y as f64 - c) * s + cy,
-                        (z as f64 - c) * s + cz,
-                    );
-                    let (x0, y0, z0) = (fx.floor(), fy.floor(), fz.floor());
-                    let (tx, ty, tz) = ((fx - x0) as f32, (fy - y0) as f32, (fz - z0) as f32);
-                    let (x0, y0, z0) = (x0 as isize, y0 as isize, z0 as isize);
-                    let mut a = 0f32;
-                    for (dz, wz) in [(0, 1.0 - tz), (1, tz)] {
-                        for (dy, wy) in [(0, 1.0 - ty), (1, ty)] {
-                            for (dx, wx) in [(0, 1.0 - tx), (1, tx)] {
-                                a += wx * wy * wz * at(x0 + dx, y0 + dy, z0 + dz);
-                            }
+    out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
+        for y in 0..b {
+            for x in 0..b {
+                let s = px / px_in;
+                let (fx, fy, fz) = ((x as f64 - c) * s + cx, (y as f64 - c) * s + cy, (z as f64 - c) * s + cz);
+                let (x0, y0, z0) = (fx.floor(), fy.floor(), fz.floor());
+                let (tx, ty, tz) = ((fx - x0) as f32, (fy - y0) as f32, (fz - z0) as f32);
+                let (x0, y0, z0) = (x0 as isize, y0 as isize, z0 as isize);
+                let mut a = 0f32;
+                for (dz, wz) in [(0, 1.0 - tz), (1, tz)] {
+                    for (dy, wy) in [(0, 1.0 - ty), (1, ty)] {
+                        for (dx, wx) in [(0, 1.0 - tx), (1, tx)] {
+                            a += wx * wy * wz * at(x0 + dx, y0 + dy, z0 + dz);
                         }
                     }
-                    plane[y * b + x] = a;
                 }
+                plane[y * b + x] = a;
             }
-        });
+        }
+    });
     out
 }
 
 /// The ab initio model at the working box (`box_px`, Fourier-cropped).
-pub fn initial(
-    stack: &Stack,
-    parts: &mut [Particle],
-    ids: &[usize],
-    optics: &Optics,
-    diameter_a: f64,
-    p: &InitialParams,
-    progress: Progress,
-) -> Result<Map> {
+pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics, diameter_a: f64, p: &InitialParams, progress: Progress) -> Result<Map> {
     if ids.len() < 50 {
         bail!("颗粒太少（至少 50 个）");
     }
@@ -532,11 +411,7 @@ pub fn initial(
         model = volume_from(&acc, bw, pxw, res_end, mask_r);
         progress("初始模型", iters + pass + 1, iters + 2);
     }
-    Ok(Map {
-        b: bw,
-        px: pxw,
-        v: model,
-    })
+    Ok(Map { b: bw, px: pxw, v: model })
 }
 
 fn clamp_shifts(parts: &mut [Particle], chunk: &[usize], max: f32) {
@@ -585,21 +460,9 @@ pub fn random_rotation(rng: &mut Rng) -> Mat {
     let n = g.iter().map(|v| v * v).sum::<f64>().sqrt();
     let [w, x, y, z] = [g[0] / n, g[1] / n, g[2] / n, g[3] / n];
     [
-        [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - z * w),
-            2.0 * (x * z + y * w),
-        ],
-        [
-            2.0 * (x * y + z * w),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - x * w),
-        ],
-        [
-            2.0 * (x * z - y * w),
-            2.0 * (y * z + x * w),
-            1.0 - 2.0 * (x * x + y * y),
-        ],
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
     ]
 }
 
@@ -625,16 +488,7 @@ pub struct Refined {
 
 /// Gold-standard refinement from `start` (any box and pixel; it is
 /// resampled). The final maps are at the stack's box and pixel.
-pub fn refine(
-    stack: &Stack,
-    parts: &mut [Particle],
-    ids: &[usize],
-    optics: &Optics,
-    diameter_a: f64,
-    start: &Map,
-    p: &RefineParams,
-    progress: Progress,
-) -> Result<Refined> {
+pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Optics, diameter_a: f64, start: &Map, p: &RefineParams, progress: Progress) -> Result<Refined> {
     if ids.len() < 20 {
         bail!("颗粒太少（至少 20 个）");
     }
@@ -642,11 +496,7 @@ pub fn refine(
     let px = stack.pixel_a;
     let mut sym = geom::symmetry(&p.symmetry)?;
     let mut sym_name = p.symmetry.trim().to_uppercase();
-    let cn: usize = if p.promote_dihedral && sym_name.starts_with('C') {
-        sym_name[1..].parse().unwrap_or(1)
-    } else {
-        1
-    };
+    let cn: usize = if p.promote_dihedral && sym_name.starts_with('C') { sym_name[1..].parse().unwrap_or(1) } else { 1 };
     let mut dn_tests = 0;
     let noise = data::noise_spectrum(stack, ids, 2000);
     // Half sets, fixed for the whole run.
@@ -702,38 +552,17 @@ pub fn refine(
         if !is_global {
             step = want.min(step);
         }
-        history.push(Iteration {
-            res,
-            box_px: bw,
-            step,
-            global: is_global,
-        });
+        history.push(Iteration { res, box_px: bw, step, global: is_global });
         accs = vec![];
         for (hi, set) in [&h1, &h2].into_iter().enumerate() {
-            let m = if bw == b {
-                maps[hi].clone()
-            } else {
-                fourier::resample3(&maps[hi], b, bw)
-            };
+            let m = if bw == b { maps[hi].clone() } else { fourier::resample3(&maps[hi], b, bw) };
             let mut m = m;
             volume::mask_sphere(&mut m, bw, mask_r * bw as f64 / b as f64, 4.0);
             let proj = Projector::new(&m, bw, pad);
-            let gpu = if is_global {
-                None
-            } else {
-                local_gpu(&proj, &half)
-            };
+            let gpu = if is_global { None } else { local_gpu(&proj, &half) };
             let mut acc = Accum::new(bw, pad);
-            let grid = if is_global {
-                geom::grid_for(step, &sym_name)
-            } else {
-                vec![]
-            };
-            let refs = if is_global {
-                Some(slices(&proj, &grid, &half))
-            } else {
-                None
-            };
+            let grid = if is_global { geom::grid_for(step, &sym_name) } else { vec![] };
+            let refs = if is_global { Some(slices(&proj, &grid, &half)) } else { None };
             let deltas = geom::local(step * 2.0, 2);
             let offs = data::offsets(if is_global { 3 } else { 1 });
             let total = set.len();
@@ -750,17 +579,7 @@ pub fn refine(
                     || -> Result<()> {
                         match &refs {
                             Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
-                            None => local(
-                                &c,
-                                &offs,
-                                &proj,
-                                gpu.as_ref(),
-                                &half,
-                                &deltas,
-                                ratio,
-                                parts,
-                                chunk,
-                            ),
+                            None => local(&c, &offs, &proj, gpu.as_ref(), &half, &deltas, ratio, parts, chunk),
                         }
                         Ok(())
                     },
@@ -771,11 +590,7 @@ pub fn refine(
                 clamp_shifts(parts, chunk, max_shift);
                 let c = coeffs_from(stack, &fts, parts, chunk, optics, &full, &noise, &[]);
                 insert(&mut acc, &c, &full, parts, chunk);
-                progress(
-                    "三维精修",
-                    it * 2000 + hi * 1000 + (ci + 1) * 512 * 1000 / total.max(1),
-                    iters * 2000 + 1000,
-                );
+                progress("三维精修", it * 2000 + hi * 1000 + (ci + 1) * 512 * 1000 / total.max(1), iters * 2000 + 1000);
             }
             acc.symmetrize(&sym);
             accs.push(acc);
@@ -788,19 +603,12 @@ pub fn refine(
         let new_res = post::resolution(&f, bw, px * (b / bw) as f64, 0.143);
         let v1 = accs[0].reconstruct(Some(&f));
         let v2 = accs[1].reconstruct(Some(&f));
-        maps = [
-            fourier::resample3(&v1, bw, b),
-            fourier::resample3(&v2, bw, b),
-        ];
+        maps = [fourier::resample3(&v1, bw, b), fourier::resample3(&v2, bw, b)];
         // From the local search on, flatten the solvent of the references
         // with a soft mask around the molecule (as RELION and cryoSPARC do):
         // the noise outside it otherwise pulls the alignments.
         if it + 1 >= p.global_iterations {
-            let avg: Vec<f32> = maps[0]
-                .iter()
-                .zip(&maps[1])
-                .map(|(a, c)| 0.5 * (a + c))
-                .collect();
+            let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
             let m = post::auto_mask(&avg, b, px, mask_r);
             for map in &mut maps {
                 map.iter_mut().zip(&m).for_each(|(v, w)| *v *= w);
@@ -810,10 +618,7 @@ pub fn refine(
             // The alignments of the best round so far: rounds at the finest
             // steps wander by ±0.5 Å (6.1 → 6.7 Å on full-size T20S), and
             // the final maps should come from the best.
-            best = all
-                .iter()
-                .map(|&i| (parts[i].euler, parts[i].shift))
-                .collect();
+            best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
         }
         if new_res < best_res * 0.98 {
             best_res = new_res;
@@ -832,10 +637,7 @@ pub fn refine(
                 sym = geom::symmetry(&sym_name)?;
                 dn_tests = 2;
                 // New frame: the earlier best alignments no longer apply.
-                best = all
-                    .iter()
-                    .map(|&i| (parts[i].euler, parts[i].shift))
-                    .collect();
+                best = all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect();
                 best_res = f64::INFINITY;
                 stalls = 0;
                 // One global round in the new frame: the C-n alignments of
@@ -882,19 +684,8 @@ pub fn refine(
     let mut both = Accum::new(b, pad);
     both.add(&finals[0]);
     both.add(&finals[1]);
-    let full_fsc: Vec<f64> = f
-        .iter()
-        .map(|&x| (2.0 * x / (1.0 + x)).clamp(0.0, 1.0))
-        .collect();
+    let full_fsc: Vec<f64> = f.iter().map(|&x| (2.0 * x / (1.0 + x)).clamp(0.0, 1.0)).collect();
     let vf = both.reconstruct(Some(&full_fsc));
     drop(accs);
-    Ok(Refined {
-        half1: Map { b, px, v: v1 },
-        half2: Map { b, px, v: v2 },
-        full: Map { b, px, v: vf },
-        fsc: f,
-        res,
-        history,
-        symmetry: sym_name,
-    })
+    Ok(Refined { half1: Map { b, px, v: v1 }, half2: Map { b, px, v: v2 }, full: Map { b, px, v: vf }, fsc: f, res, history, symmetry: sym_name })
 }

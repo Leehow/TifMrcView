@@ -27,12 +27,7 @@ pub struct Optics {
 
 impl Default for Optics {
     fn default() -> Self {
-        Optics {
-            kv: 300.0,
-            cs_mm: 2.7,
-            amplitude: 0.1,
-            pixel_a: 1.0,
-        }
+        Optics { kv: 300.0, cs_mm: 2.7, amplitude: 0.1, pixel_a: 1.0 }
     }
 }
 
@@ -127,13 +122,7 @@ impl Stack {
         }
         let i = |o: usize| i32::from_le_bytes(map[o..o + 4].try_into().unwrap());
         let f32_at = |o: usize| f32::from_le_bytes(map[o..o + 4].try_into().unwrap());
-        let (w, h, n, mode, ext) = (
-            i(0) as usize,
-            i(4) as usize,
-            i(8) as usize,
-            i(12),
-            i(92).max(0) as usize,
-        );
+        let (w, h, n, mode, ext) = (i(0) as usize, i(4) as usize, i(8) as usize, i(12), i(92).max(0) as usize);
         if w != h || mode != 2 || w == 0 {
             bail!("颗粒叠层应为方形 float32 MRC");
         }
@@ -143,21 +132,12 @@ impl Stack {
         }
         let mx = i(28).max(1) as f64;
         let pixel_a = f32_at(40) as f64 / mx;
-        Ok(Stack {
-            map,
-            offset,
-            b: w,
-            n,
-            pixel_a: if pixel_a > 0.0 { pixel_a } else { 1.0 },
-        })
+        Ok(Stack { map, offset, b: w, n, pixel_a: if pixel_a > 0.0 { pixel_a } else { 1.0 } })
     }
 
     pub fn image(&self, i: usize) -> Vec<f32> {
         let s = self.offset + i * self.b * self.b * 4;
-        self.map[s..s + self.b * self.b * 4]
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-            .collect()
+        self.map[s..s + self.b * self.b * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
     }
 }
 
@@ -176,14 +156,7 @@ impl StackWriter {
     pub fn create(path: &Path, b: usize, px: f64, label: &str) -> Result<StackWriter> {
         let mut f = BufWriter::new(File::create(path)?);
         f.write_all(&[0u8; 1024])?;
-        Ok(StackWriter {
-            f,
-            b,
-            n: 0,
-            px,
-            stats: [f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0],
-            label: label.into(),
-        })
+        Ok(StackWriter { f, b, n: 0, px, stats: [f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0], label: label.into() })
     }
     pub fn push(&mut self, img: &[f32]) -> Result<()> {
         if img.len() != self.b * self.b {
@@ -208,42 +181,21 @@ impl StackWriter {
         let lo = if self.n > 0 { self.stats[0] } else { 0.0 };
         let hi = if self.n > 0 { self.stats[1] } else { 0.0 };
         self.f.seek(SeekFrom::Start(0))?;
-        self.f.write_all(&crate::align::mrc_header(
-            self.b,
-            self.b,
-            self.n,
-            self.px,
-            [lo as f32, hi as f32, mean as f32, rms as f32],
-            &self.label,
-        ))?;
+        self.f.write_all(&crate::align::mrc_header(self.b, self.b, self.n, self.px, [lo as f32, hi as f32, mean as f32, rms as f32], &self.label))?;
         self.f.flush()?;
         Ok(self.n)
     }
 }
 
 /// One float32 volume or image as MRC.
-pub fn write_mrc(
-    path: &Path,
-    data: &[f32],
-    [w, h, d]: [usize; 3],
-    px: f64,
-    label: &str,
-) -> Result<()> {
-    let mut f =
-        BufWriter::new(File::create(path).with_context(|| format!("无法写入 {}", path.display()))?);
+pub fn write_mrc(path: &Path, data: &[f32], [w, h, d]: [usize; 3], px: f64, label: &str) -> Result<()> {
+    let mut f = BufWriter::new(File::create(path).with_context(|| format!("无法写入 {}", path.display()))?);
     let n = data.len().max(1) as f64;
     let mean = data.iter().map(|&v| v as f64).sum::<f64>() / n;
     let rms = (data.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n).sqrt();
     let lo = data.iter().copied().fold(f32::INFINITY, f32::min);
     let hi = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    f.write_all(&crate::align::mrc_header(
-        w,
-        h,
-        d,
-        px,
-        [lo, hi, mean as f32, rms as f32],
-        label,
-    ))?;
+    f.write_all(&crate::align::mrc_header(w, h, d, px, [lo, hi, mean as f32, rms as f32], label))?;
     let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
     f.write_all(&bytes)?;
     f.flush()?;
@@ -289,19 +241,9 @@ pub fn noise_spectrum(stack: &Stack, ids: &[usize], max: usize) -> Vec<f32> {
             }
             s
         })
-        .reduce(
-            || vec![0f64; shells * 2],
-            |a, b| a.iter().zip(&b).map(|(x, y)| x + y).collect(),
-        );
-    let mut out: Vec<f32> = (0..shells)
-        .map(|r| (sums[r] / sums[shells + r].max(1.0)) as f32)
-        .collect();
-    let floor = out
-        .iter()
-        .skip(1)
-        .copied()
-        .fold(f32::INFINITY, f32::min)
-        .max(1e-12);
+        .reduce(|| vec![0f64; shells * 2], |a, b| a.iter().zip(&b).map(|(x, y)| x + y).collect());
+    let mut out: Vec<f32> = (0..shells).map(|r| (sums[r] / sums[shells + r].max(1.0)) as f32).collect();
+    let floor = out.iter().skip(1).copied().fold(f32::INFINITY, f32::min).max(1e-12);
     for v in &mut out {
         *v = v.max(floor);
     }
@@ -322,24 +264,12 @@ pub struct Coeffs {
 /// Raw centred transforms of particles at the stack box.
 pub fn transforms(stack: &Stack, ids: &[usize]) -> Vec<(Vec<f32>, Vec<f32>)> {
     let fft = Fft::new(stack.b);
-    ids.par_iter()
-        .map(|&i| fourier::ft2(&fft, stack.b, &stack.image(i)))
-        .collect()
+    ids.par_iter().map(|&i| fourier::ft2(&fft, stack.b, &stack.image(i))).collect()
 }
 
 /// The coefficients on `half` (a box of `half.b` pixels, Fourier-cropped
 /// from the stack box `b`), with `shift` (stack pixels) undone.
-pub fn coeffs(
-    o: &Optics,
-    px: f64,
-    b: usize,
-    half: &Half,
-    noise: &[f32],
-    parts: &[&Particle],
-    fts: &[(Vec<f32>, Vec<f32>)],
-    shifts: &[[f32; 2]],
-    extra: &[[f32; 2]],
-) -> Coeffs {
+pub fn coeffs(o: &Optics, px: f64, b: usize, half: &Half, noise: &[f32], parts: &[&Particle], fts: &[(Vec<f32>, Vec<f32>)], shifts: &[[f32; 2]], extra: &[[f32; 2]]) -> Coeffs {
     let k = half.len();
     let bw = half.b;
     let s = extra.len().max(1);
@@ -347,32 +277,28 @@ pub fn coeffs(
     let ratio = (b / bw).max(1) as f32;
     let mut x = vec![0f32; parts.len() * s * 2 * k];
     let mut c2 = vec![0f32; parts.len() * k];
-    x.par_chunks_mut(s * 2 * k)
-        .zip(c2.par_chunks_mut(k))
-        .enumerate()
-        .for_each(|(n, (xr, cr))| {
-            let ctf = CtfEval::new(o, parts[n], b, px);
-            let (re, im) = &fts[n];
-            for j in 0..k {
-                let [kx, ky] = half.k[j];
-                let i = fourier::index(ky as i32, b) * b + fourier::index(kx as i32, b);
-                let c = ctf.at(kx, ky);
-                let w =
-                    1.0 / noise[((kx * kx + ky * ky).sqrt().round() as usize).min(noise.len() - 1)];
-                let (xr0, xi0) = (re[i] * scale * c * w, im[i] * scale * c * w);
-                cr[j] = c * c * w;
-                for t in 0..s {
-                    let e = extra.get(t).copied().unwrap_or([0.0, 0.0]);
-                    // Undo the shift: multiply by exp(+2πi k·s / b).
-                    let sx = shifts[n][0] + e[0] * ratio;
-                    let sy = shifts[n][1] + e[1] * ratio;
-                    let ph = 2.0 * std::f32::consts::PI * (kx * sx + ky * sy) / b as f32;
-                    let (c, si) = (ph.cos(), ph.sin());
-                    xr[t * 2 * k + 2 * j] = xr0 * c - xi0 * si;
-                    xr[t * 2 * k + 2 * j + 1] = xr0 * si + xi0 * c;
-                }
+    x.par_chunks_mut(s * 2 * k).zip(c2.par_chunks_mut(k)).enumerate().for_each(|(n, (xr, cr))| {
+        let ctf = CtfEval::new(o, parts[n], b, px);
+        let (re, im) = &fts[n];
+        for j in 0..k {
+            let [kx, ky] = half.k[j];
+            let i = fourier::index(ky as i32, b) * b + fourier::index(kx as i32, b);
+            let c = ctf.at(kx, ky);
+            let w = 1.0 / noise[((kx * kx + ky * ky).sqrt().round() as usize).min(noise.len() - 1)];
+            let (xr0, xi0) = (re[i] * scale * c * w, im[i] * scale * c * w);
+            cr[j] = c * c * w;
+            for t in 0..s {
+                let e = extra.get(t).copied().unwrap_or([0.0, 0.0]);
+                // Undo the shift: multiply by exp(+2πi k·s / b).
+                let sx = shifts[n][0] + e[0] * ratio;
+                let sy = shifts[n][1] + e[1] * ratio;
+                let ph = 2.0 * std::f32::consts::PI * (kx * sx + ky * sy) / b as f32;
+                let (c, si) = (ph.cos(), ph.sin());
+                xr[t * 2 * k + 2 * j] = xr0 * c - xi0 * si;
+                xr[t * 2 * k + 2 * j + 1] = xr0 * si + xi0 * c;
             }
-        });
+        }
+    });
     Coeffs { k, x, c2 }
 }
 

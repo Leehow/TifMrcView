@@ -34,10 +34,7 @@ pub fn install() -> Option<Plugins> {
 
 /// This build's version, or 0.5.0 while the app is still older.
 pub fn app_version() -> &'static str {
-    let v: Vec<u32> = env!("CARGO_PKG_VERSION")
-        .split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect();
+    let v: Vec<u32> = env!("CARGO_PKG_VERSION").split('.').map(|p| p.parse().unwrap_or(0)).collect();
     if v.as_slice() < [0, 5, 0].as_slice() {
         "0.5.0"
     } else {

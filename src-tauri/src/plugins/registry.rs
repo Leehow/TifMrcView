@@ -20,9 +20,7 @@ use wasmi::Module;
 use super::package::{self, Manifest};
 use super::recipe;
 use super::wasm::{self, Exports, Instance};
-use crate::image::{
-    ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source, SpectrumInfo,
-};
+use crate::image::{ChannelInfo, DType, DimOrder, ImageInfo, MetaGroup, Plane, SeriesInfo, Source, SpectrumInfo};
 
 /// Largest page a plugin may describe (bytes).
 const MAX_PAGE_BYTES: u64 = 1 << 34;
@@ -59,11 +57,8 @@ struct Pkg {
 impl Pkg {
     fn module(&self) -> Result<&Module> {
         let r = self.module.get_or_init(|| {
-            let path = self.dir.join(
-                package::safe_rel(self.manifest.wasm.as_deref().unwrap_or("")).unwrap_or_default(),
-            );
-            let bytes =
-                std::fs::read(&path).map_err(|e| format!("读不到 {}：{e}", path.display()))?;
+            let path = self.dir.join(package::safe_rel(self.manifest.wasm.as_deref().unwrap_or("")).unwrap_or_default());
+            let bytes = std::fs::read(&path).map_err(|e| format!("读不到 {}：{e}", path.display()))?;
             wasm::compile(&bytes).map_err(|e| format!("{e:#}"))
         });
         match r {
@@ -73,11 +68,7 @@ impl Pkg {
     }
 
     fn opens(&self, ext: &str) -> Option<&str> {
-        self.manifest
-            .formats
-            .iter()
-            .find(|f| f.ext.iter().any(|e| e == ext))
-            .map(|f| f.name.as_str())
+        self.manifest.formats.iter().find(|f| f.ext.iter().any(|e| e == ext)).map(|f| f.name.as_str())
     }
 
     fn reads_metadata(&self, ext: &str) -> bool {
@@ -187,11 +178,7 @@ impl Registry {
                 let pkg = PathBuf::from(&p.dir);
                 if let Ok(m) = package::read_installed(&pkg, &version) {
                     if m.wasm.is_some() {
-                        idx.wasm.push(Arc::new(Pkg {
-                            manifest: m,
-                            dir: pkg,
-                            module: OnceLock::new(),
-                        }));
+                        idx.wasm.push(Arc::new(Pkg { manifest: m, dir: pkg, module: OnceLock::new() }));
                     }
                 }
             }
@@ -203,12 +190,7 @@ impl Registry {
 
     /// Enabled packages, in id order.
     fn active(&self) -> Vec<Arc<Pkg>> {
-        self.index()
-            .wasm
-            .iter()
-            .filter(|p| self.enabled(&p.manifest.id))
-            .cloned()
-            .collect()
+        self.index().wasm.iter().filter(|p| self.enabled(&p.manifest.id)).cloned().collect()
     }
 
     /// Whether an enabled plugin opens files with this (lower-case) extension.
@@ -218,11 +200,8 @@ impl Registry {
 
     /// Extensions enabled plugins can open, sorted.
     pub fn extensions(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
-            .active()
-            .iter()
-            .flat_map(|p| p.manifest.formats.iter().flat_map(|f| f.ext.clone()))
-            .collect();
+        let mut v: Vec<String> =
+            self.active().iter().flat_map(|p| p.manifest.formats.iter().flat_map(|f| f.ext.clone())).collect();
         v.sort();
         v.dedup();
         v
@@ -230,17 +209,9 @@ impl Registry {
 
     /// Opens image `series` of `path` with the first enabled plugin that
     /// handles `ext`; also returns that plugin's id.
-    pub fn open(
-        &self,
-        path: &Path,
-        ext: &str,
-        series: usize,
-    ) -> Option<Result<(Box<dyn Source>, String)>> {
+    pub fn open(&self, path: &Path, ext: &str, series: usize) -> Option<Result<(Box<dyn Source>, String)>> {
         let pkg = self.active().into_iter().find(|p| p.opens(ext).is_some())?;
-        Some(
-            WasmSource::open(&pkg, path, series)
-                .map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())),
-        )
+        Some(WasmSource::open(&pkg, path, series).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
     }
 
     fn stack_pkg(&self, path: &Path) -> Option<(Arc<Pkg>, String)> {
@@ -263,14 +234,8 @@ impl Registry {
             return None;
         }
         for d in dir.ancestors().take(3) {
-            let Ok(rd) = std::fs::read_dir(d) else {
-                continue;
-            };
-            let mut found: Vec<PathBuf> = rd
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| self.is_stack_file(p))
-                .collect();
+            let Ok(rd) = std::fs::read_dir(d) else { continue };
+            let mut found: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| self.is_stack_file(p)).collect();
             found.sort();
             if let Some(f) = found.into_iter().next() {
                 return Some(f);
@@ -282,12 +247,7 @@ impl Registry {
     /// Asks the plugin that reads project file `config` for image stack
     /// `series`. When the stack is opened as folder `opened`, the series
     /// whose slices are in that folder is picked instead.
-    pub fn stack(
-        &self,
-        config: &Path,
-        series: usize,
-        opened: Option<&Path>,
-    ) -> Option<Result<StackPlan>> {
+    pub fn stack(&self, config: &Path, series: usize, opened: Option<&Path>) -> Option<Result<StackPlan>> {
         let (pkg, name) = self.stack_pkg(config)?;
         Some(read_stack(self, &pkg, &name, config, series, opened))
     }
@@ -296,10 +256,7 @@ impl Registry {
     pub fn missing(&self, ext: &str) -> Option<String> {
         let idx = self.index();
         if let Some(p) = idx.wasm.iter().find(|p| p.opens(ext).is_some()) {
-            return Some(format!(
-                "「{}」插件已停用，请在「插件」里启用后再打开 .{ext} 文件",
-                p.manifest.name
-            ));
+            return Some(format!("「{}」插件已停用，请在「插件」里启用后再打开 .{ext} 文件", p.manifest.name));
         }
         let &(_, id, name) = KNOWN.iter().find(|k| k.0 == ext)?;
         Some(match idx.installed.get(id) {
@@ -311,18 +268,9 @@ impl Registry {
 
     /// Lets metadata plugins add to what the opener found. Plugin errors
     /// are logged and otherwise ignored: the image itself is fine.
-    pub fn add_metadata(
-        &self,
-        path: &Path,
-        ext: &str,
-        src: Box<dyn Source>,
-        skip: Option<&str>,
-    ) -> Box<dyn Source> {
-        let pkgs: Vec<Arc<Pkg>> = self
-            .active()
-            .into_iter()
-            .filter(|p| p.reads_metadata(ext) && Some(p.manifest.id.as_str()) != skip)
-            .collect();
+    pub fn add_metadata(&self, path: &Path, ext: &str, src: Box<dyn Source>, skip: Option<&str>) -> Box<dyn Source> {
+        let pkgs: Vec<Arc<Pkg>> =
+            self.active().into_iter().filter(|p| p.reads_metadata(ext) && Some(p.manifest.id.as_str()) != skip).collect();
         if pkgs.is_empty() {
             return src;
         }
@@ -447,10 +395,7 @@ struct GroupJson {
 
 impl GroupJson {
     fn into_group(self) -> MetaGroup {
-        MetaGroup {
-            name: self.name,
-            items: self.items,
-        }
+        MetaGroup { name: self.name, items: self.items }
     }
 }
 
@@ -470,20 +415,14 @@ fn parse_dtype(s: &str) -> Result<DType> {
 
 fn pixel_size(v: Option<Vec<f64>>) -> Option<[f64; 3]> {
     let v = v?;
-    let get = |i: usize| {
-        v.get(i)
-            .copied()
-            .filter(|x| x.is_finite() && *x > 0.0)
-            .unwrap_or(0.0)
-    };
+    let get = |i: usize| v.get(i).copied().filter(|x| x.is_finite() && *x > 0.0).unwrap_or(0.0);
     let x = get(0);
     (x > 0.0).then(|| [x, if get(1) > 0.0 { get(1) } else { x }, get(2)])
 }
 
 /// Turns `tmv_info` JSON into an [`ImageInfo`], checking it is consistent.
 fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInfo> {
-    let j: InfoJson =
-        serde_json::from_slice(json).map_err(|e| anyhow!("插件返回的图像信息不对：{e}"))?;
+    let j: InfoJson = serde_json::from_slice(json).map_err(|e| anyhow!("插件返回的图像信息不对：{e}"))?;
     if j.width == 0 || j.height == 0 || j.size_c == 0 || j.size_z == 0 || j.size_t == 0 {
         bail!("插件返回的图像尺寸不对");
     }
@@ -492,33 +431,19 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
     if spp != 1 && spp != j.size_c {
         bail!("插件返回的 samplesPerPage 必须是 1 或 sizeC");
     }
-    let default_pages = if spp > 1 {
-        j.size_z * j.size_t
-    } else {
-        j.size_c * j.size_z * j.size_t
-    };
+    let default_pages = if spp > 1 { j.size_z * j.size_t } else { j.size_c * j.size_z * j.size_t };
     let page_count = j.page_count.unwrap_or(default_pages);
     let page_bytes = (j.width as u64)
         .checked_mul(j.height as u64)
         .and_then(|n| n.checked_mul((spp * dtype.size()) as u64))
         .filter(|&n| n <= MAX_PAGE_BYTES);
     if page_bytes.is_none() || page_count == 0 || page_count > 1 << 24 {
-        bail!(
-            "插件返回的图像太大或没有页面（{}×{}，{page_count} 页）",
-            j.width,
-            j.height
-        );
+        bail!("插件返回的图像太大或没有页面（{}×{}，{page_count} 页）", j.width, j.height);
     }
     let mut info = ImageInfo {
         path: path.to_string_lossy().into_owned(),
-        name: path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        format: j
-            .format
-            .filter(|f| !f.is_empty())
-            .unwrap_or_else(|| default_format.to_string()),
+        name: path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        format: j.format.filter(|f| !f.is_empty()).unwrap_or_else(|| default_format.to_string()),
         width: j.width,
         height: j.height,
         size_c: j.size_c,
@@ -538,19 +463,8 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
         folder: None,
         spectrum: j
             .spectrum
-            .filter(|s| {
-                (s.axis == "x" || s.axis == "z")
-                    && s.start.is_finite()
-                    && s.step.is_finite()
-                    && s.step != 0.0
-            })
-            .map(|s| SpectrumInfo {
-                axis: s.axis,
-                start: s.start,
-                step: s.step,
-                unit: s.unit,
-                kind: s.kind,
-            }),
+            .filter(|s| (s.axis == "x" || s.axis == "z") && s.start.is_finite() && s.step.is_finite() && s.step != 0.0)
+            .map(|s| SpectrumInfo { axis: s.axis, start: s.start, step: s.step, unit: s.unit, kind: s.kind }),
     };
     if j.series.len() > 1 && j.series_index < j.series.len() {
         info.series_index = j.series_index;
@@ -558,14 +472,7 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
             .series
             .into_iter()
             .enumerate()
-            .map(|(i, s)| SeriesInfo {
-                name: if s.name.is_empty() {
-                    format!("图像 {}", i + 1)
-                } else {
-                    s.name
-                },
-                detail: s.detail,
-            })
+            .map(|(i, s)| SeriesInfo { name: if s.name.is_empty() { format!("图像 {}", i + 1) } else { s.name }, detail: s.detail })
             .collect();
     }
     if info.pixel_size.is_none() {
@@ -573,20 +480,9 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
     }
     let n = info.size_c;
     for (i, c) in j.channels.into_iter().take(n).enumerate() {
-        let fallback = if n == 1 {
-            [255, 255, 255]
-        } else {
-            crate::image::DEFAULT_COLORS[i % 7]
-        };
-        let name = if c.name.is_empty() {
-            format!("C{}", i + 1)
-        } else {
-            c.name
-        };
-        info.channels.push(ChannelInfo {
-            name,
-            color: c.color.unwrap_or(fallback),
-        });
+        let fallback = if n == 1 { [255, 255, 255] } else { crate::image::DEFAULT_COLORS[i % 7] };
+        let name = if c.name.is_empty() { format!("C{}", i + 1) } else { c.name };
+        info.channels.push(ChannelInfo { name, color: c.color.unwrap_or(fallback) });
     }
     info.fill_default_channels();
     Ok(info)
@@ -611,23 +507,10 @@ impl WasmSource {
         let series = u32::try_from(series).context("图像序号太大")?;
         let handle = inst.open(&path.to_string_lossy(), series)?;
         let json = inst.info(handle)?;
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let name = pkg
-            .opens(&ext)
-            .filter(|n| !n.is_empty())
-            .unwrap_or(&pkg.manifest.name)
-            .to_string();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let name = pkg.opens(&ext).filter(|n| !n.is_empty()).unwrap_or(&pkg.manifest.name).to_string();
         let info = parse_info(&json, path, &name)?;
-        Ok(WasmSource {
-            file,
-            info,
-            plugin: Mutex::new((inst, handle)),
-            raw: Mutex::new(HashMap::new()),
-        })
+        Ok(WasmSource { file, info, plugin: Mutex::new((inst, handle)), raw: Mutex::new(HashMap::new()) })
     }
 
     fn recipe(&self, page: usize) -> Result<recipe::Recipe> {
@@ -660,27 +543,20 @@ impl Source for WasmSource {
         let found = match cached {
             Some(f) => f,
             None => {
-                let f = self
-                    .recipe(page)
-                    .ok()
-                    .and_then(|r| match r.chunks.as_slice() {
-                        [c] if !c.inline
-                            && c.codec == recipe::codec::RAW
-                            && c.skip == 0
-                            && c.samples == 1
-                            && c.flags & !recipe::flags::BIG_ENDIAN == 0
-                            && c.rect == [0, 0, self.info.width, self.info.height]
-                            && (c.stride == 0
-                                || c.stride == self.info.width * self.info.dtype.size())
-                            && c.length as usize >= n =>
-                        {
-                            Some((
-                                usize::try_from(c.offset).ok()?,
-                                c.flags & recipe::flags::BIG_ENDIAN == 0,
-                            ))
-                        }
-                        _ => None,
-                    });
+                let f = self.recipe(page).ok().and_then(|r| match r.chunks.as_slice() {
+                    [c] if !c.inline
+                        && c.codec == recipe::codec::RAW
+                        && c.skip == 0
+                        && c.samples == 1
+                        && c.flags & !recipe::flags::BIG_ENDIAN == 0
+                        && c.rect == [0, 0, self.info.width, self.info.height]
+                        && (c.stride == 0 || c.stride == self.info.width * self.info.dtype.size())
+                        && c.length as usize >= n =>
+                    {
+                        Some((usize::try_from(c.offset).ok()?, c.flags & recipe::flags::BIG_ENDIAN == 0))
+                    }
+                    _ => None,
+                });
                 self.raw.lock().unwrap().insert(page, f);
                 f
             }
@@ -741,37 +617,20 @@ struct StackSeriesJson {
     dir: String,
 }
 
-fn read_stack(
-    reg: &Registry,
-    pkg: &Pkg,
-    name: &str,
-    config: &Path,
-    series: usize,
-    opened: Option<&Path>,
-) -> Result<StackPlan> {
-    let base = config
-        .parent()
-        .context("项目文件没有所在文件夹")?
-        .to_path_buf();
+fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usize, opened: Option<&Path>) -> Result<StackPlan> {
+    let base = config.parent().context("项目文件没有所在文件夹")?.to_path_buf();
     let listing = crate::formats::sequence::list_tree(&base);
     let mut inst = Instance::new(pkg.module()?, map_file(config)?, &pkg.manifest.id)?;
     let path = config.to_string_lossy();
     let joined = listing.join("\n");
     let call = |inst: &mut Instance, series: usize| -> Result<StackJson> {
-        let json = inst.stack(
-            &path,
-            &joined,
-            u32::try_from(series).context("图像序号太大")?,
-        )?;
+        let json = inst.stack(&path, &joined, u32::try_from(series).context("图像序号太大")?)?;
         serde_json::from_slice(&json).map_err(|e| anyhow!("插件返回的堆叠信息不对：{e}"))
     };
     let mut j = call(&mut inst, series)?;
     // Opened as one of the project's folders: show that folder's stack.
     if let (Some(dir), 0) = (opened, series) {
-        let same = |rel: &str| {
-            !rel.is_empty()
-                && std::fs::canonicalize(base.join(rel)).ok() == std::fs::canonicalize(dir).ok()
-        };
+        let same = |rel: &str| !rel.is_empty() && std::fs::canonicalize(base.join(rel)).ok() == std::fs::canonicalize(dir).ok();
         if let Some(i) = j.series.iter().position(|s| same(&s.dir)) {
             if i != j.series_index {
                 j = call(&mut inst, i)?;
@@ -796,14 +655,8 @@ fn read_stack(
     let mut plan = StackPlan {
         config: config.to_path_buf(),
         files,
-        format: j
-            .format
-            .filter(|f| !f.is_empty())
-            .or_else(|| (!name.is_empty()).then(|| name.to_string())),
-        z_spacing: j
-            .z_spacing
-            .filter(|z| z.is_finite() && *z > 0.0)
-            .map(|z| (z, j.unit.clone())),
+        format: j.format.filter(|f| !f.is_empty()).or_else(|| (!name.is_empty()).then(|| name.to_string())),
+        z_spacing: j.z_spacing.filter(|z| z.is_finite() && *z > 0.0).map(|z| (z, j.unit.clone())),
         metadata: j.metadata.into_iter().map(GroupJson::into_group).collect(),
         series: vec![],
         series_index: 0,
@@ -814,14 +667,7 @@ fn read_stack(
             .series
             .into_iter()
             .enumerate()
-            .map(|(i, s)| SeriesInfo {
-                name: if s.name.is_empty() {
-                    format!("序列 {}", i + 1)
-                } else {
-                    s.name
-                },
-                detail: s.detail,
-            })
+            .map(|(i, s)| SeriesInfo { name: if s.name.is_empty() { format!("序列 {}", i + 1) } else { s.name }, detail: s.detail })
             .collect();
     }
     Ok(plan)
@@ -844,23 +690,18 @@ impl MetaJson {
         if let Some(f) = self.format.filter(|f| !f.is_empty()) {
             info.format = f;
         }
-        if let (Some(ps), Some(unit)) = (
-            pixel_size(self.pixel_size),
-            self.unit.filter(|u| !u.is_empty()),
-        ) {
+        if let (Some(ps), Some(unit)) = (pixel_size(self.pixel_size), self.unit.filter(|u| !u.is_empty())) {
             info.pixel_size = Some(ps);
             info.unit = unit;
         }
-        info.metadata
-            .extend(self.groups.into_iter().map(GroupJson::into_group));
+        info.metadata.extend(self.groups.into_iter().map(GroupJson::into_group));
     }
 }
 
 fn read_metadata(pkg: &Pkg, path: &Path) -> Result<Option<MetaJson>> {
     let mut inst = Instance::new(pkg.module()?, map_file(path)?, &pkg.manifest.id)?;
     let json = inst.metadata(&path.to_string_lossy())?;
-    let m: Option<MetaJson> =
-        serde_json::from_slice(&json).map_err(|e| anyhow!("插件返回的元数据不对：{e}"))?;
+    let m: Option<MetaJson> = serde_json::from_slice(&json).map_err(|e| anyhow!("插件返回的元数据不对：{e}"))?;
     Ok(m)
 }
 
@@ -893,10 +734,7 @@ mod tests {
     fn info_json_is_checked_and_completed() {
         let p = Path::new("/x/a.abc");
         let i = parse_info(br#"{"width":4,"height":3,"dtype":"u16"}"#, p, "ABC").unwrap();
-        assert_eq!(
-            (i.width, i.height, i.size_c, i.page_count, i.format.as_str()),
-            (4, 3, 1, 1, "ABC")
-        );
+        assert_eq!((i.width, i.height, i.size_c, i.page_count, i.format.as_str()), (4, 3, 1, 1, "ABC"));
         assert_eq!(i.name, "a.abc");
         assert_eq!(i.channels.len(), 1);
         let i = parse_info(
@@ -920,24 +758,11 @@ mod tests {
         )
         .unwrap();
         let sp = i.spectrum.unwrap();
-        assert_eq!(
-            (
-                sp.axis.as_str(),
-                sp.start,
-                sp.step,
-                sp.unit.as_str(),
-                sp.kind.as_str()
-            ),
-            ("x", -100.0, 0.5, "eV", "EELS")
-        );
+        assert_eq!((sp.axis.as_str(), sp.start, sp.step, sp.unit.as_str(), sp.kind.as_str()), ("x", -100.0, 0.5, "eV", "EELS"));
         // A spectrum axis the viewer cannot plot is dropped, not an error.
         for odd in [r#"{"axis":"y","step":1}"#, r#"{"axis":"z","step":0}"#] {
             let j = format!(r#"{{"width":4,"height":3,"dtype":"u8","spectrum":{odd}}}"#);
-            assert_eq!(
-                parse_info(j.as_bytes(), p, "x").unwrap().spectrum,
-                None,
-                "{odd}"
-            );
+            assert_eq!(parse_info(j.as_bytes(), p, "x").unwrap().spectrum, None, "{odd}");
         }
         for bad in [
             &br#"{"width":0,"height":3,"dtype":"u8"}"#[..],
@@ -947,38 +772,22 @@ mod tests {
             br#"{"width":4000000000,"height":4000000000,"dtype":"f64"}"#,
             b"[]",
         ] {
-            assert!(
-                parse_info(bad, p, "x").is_err(),
-                "{}",
-                String::from_utf8_lossy(bad)
-            );
+            assert!(parse_info(bad, p, "x").is_err(), "{}", String::from_utf8_lossy(bad));
         }
     }
 
     #[test]
     fn metadata_json_merges() {
         let mut info = crate::image::tests::fake_info(4, 4, 1, 1, 1, DType::U8);
-        info.metadata.push(MetaGroup {
-            name: "core".into(),
-            items: vec![],
-        });
+        info.metadata.push(MetaGroup { name: "core".into(), items: vec![] });
         let m: Option<MetaJson> = serde_json::from_str(
             r#"{"format":"Vendor TIFF","pixelSize":[2.5,2.5,0],"unit":"nm","groups":[{"name":"V","items":[["a","b"]]}]}"#,
         )
         .unwrap();
         m.unwrap().apply(&mut info);
         assert_eq!(info.format, "Vendor TIFF");
-        assert_eq!(
-            (info.pixel_size, info.unit.as_str()),
-            (Some([2.5, 2.5, 0.0]), "nm")
-        );
-        assert_eq!(
-            info.metadata
-                .iter()
-                .map(|g| g.name.as_str())
-                .collect::<Vec<_>>(),
-            ["core", "V"]
-        );
+        assert_eq!((info.pixel_size, info.unit.as_str()), (Some([2.5, 2.5, 0.0]), "nm"));
+        assert_eq!(info.metadata.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["core", "V"]);
         let m: Option<MetaJson> = serde_json::from_str("null").unwrap();
         assert!(m.is_none());
     }
@@ -992,17 +801,12 @@ mod tests {
         assert!(r.missing("xyz").is_none());
         // A JavaScript-only zeiss package.
         std::fs::create_dir_all(tmp.path().join("zeiss")).unwrap();
-        std::fs::write(
-            tmp.path().join("zeiss/plugin.json"),
-            r#"{"id":"zeiss","name":"Zeiss","version":"1.0.0"}"#,
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("zeiss/plugin.json"), r#"{"id":"zeiss","name":"Zeiss","version":"1.0.0"}"#).unwrap();
         std::fs::write(tmp.path().join("zeiss/index.js"), "").unwrap();
         r.invalidate();
         assert!(r.missing("czi").unwrap().contains("更新到最新版本"));
 
-        r.set_disabled(vec!["zeiss".into(), "../bad".into()])
-            .unwrap();
+        r.set_disabled(vec!["zeiss".into(), "../bad".into()]).unwrap();
         let again = Registry::new(Some(tmp.path().to_path_buf()), "0.4.0");
         assert!(!again.enabled("zeiss") && again.enabled("nis"));
         assert!(r.extensions().is_empty() && !r.opens("czi"));
@@ -1014,9 +818,7 @@ mod tests {
         let pkg = |id: &str, extra: &str| {
             let d = tmp.path().join(id);
             std::fs::create_dir_all(&d).unwrap();
-            let m = format!(
-                r#"{{"id":"{id}","name":"{id}","version":"1.0.0","wasm":"m.wasm"{extra}}}"#
-            );
+            let m = format!(r#"{{"id":"{id}","name":"{id}","version":"1.0.0","wasm":"m.wasm"{extra}}}"#);
             std::fs::write(d.join("plugin.json"), m).unwrap();
             std::fs::write(d.join("index.js"), "").unwrap();
             std::fs::write(d.join("m.wasm"), "").unwrap();
@@ -1026,30 +828,11 @@ mod tests {
         let r = Registry::new(Some(tmp.path().to_path_buf()), "0.6.0");
         assert_eq!(r.extensions(), ["czi"]);
         assert_eq!(r.active().len(), 2);
-        pkg(
-            "zeiss",
-            r#","formats":[{"ext":["lsm"]}],"replaces":["zen","smartsem"]"#,
-        );
+        pkg("zeiss", r#","formats":[{"ext":["lsm"]}],"replaces":["zen","smartsem"]"#);
         r.invalidate();
         assert_eq!(r.extensions(), ["lsm"]);
-        assert_eq!(
-            r.active()
-                .iter()
-                .map(|p| p.manifest.id.as_str())
-                .collect::<Vec<_>>(),
-            ["zeiss"]
-        );
-        let by: Vec<_> = package::scan(tmp.path(), "0.6.0")
-            .into_iter()
-            .map(|p| (p.id, p.replaced_by))
-            .collect();
-        assert_eq!(
-            by,
-            [
-                ("smartsem".into(), Some("zeiss".into())),
-                ("zeiss".into(), None),
-                ("zen".into(), Some("zeiss".into()))
-            ]
-        );
+        assert_eq!(r.active().iter().map(|p| p.manifest.id.as_str()).collect::<Vec<_>>(), ["zeiss"]);
+        let by: Vec<_> = package::scan(tmp.path(), "0.6.0").into_iter().map(|p| (p.id, p.replaced_by)).collect();
+        assert_eq!(by, [("smartsem".into(), Some("zeiss".into())), ("zeiss".into(), None), ("zen".into(), Some("zeiss".into()))]);
     }
 }

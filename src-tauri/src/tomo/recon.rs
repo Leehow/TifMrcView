@@ -118,36 +118,16 @@ impl Geometry {
         order.sort_by(|&a, &b| angles[a].total_cmp(&angles[b]));
         let mut weight = vec![0.0; angles.len()];
         for (k, &i) in order.iter().enumerate() {
-            let lo = if k > 0 {
-                angles[order[k - 1]]
-            } else {
-                2.0 * angles[i] - angles[order[k + 1]]
-            };
-            let hi = if k + 1 < order.len() {
-                angles[order[k + 1]]
-            } else {
-                2.0 * angles[i] - angles[order[k - 1]]
-            };
+            let lo = if k > 0 { angles[order[k - 1]] } else { 2.0 * angles[i] - angles[order[k + 1]] };
+            let hi = if k + 1 < order.len() { angles[order[k + 1]] } else { 2.0 * angles[i] - angles[order[k - 1]] };
             weight[i] = (hi - lo) / 2.0;
         }
         let mean = weight.iter().sum::<f64>() / weight.len() as f64;
         for v in &mut weight {
             *v = (*v / mean).clamp(0.25, 4.0);
         }
-        let trig = angles
-            .iter()
-            .map(|a| {
-                let (s, c) = a.to_radians().sin_cos();
-                [c, s]
-            })
-            .collect();
-        Ok(Geometry {
-            w,
-            z,
-            z_offset,
-            trig,
-            weight,
-        })
+        let trig = angles.iter().map(|a| { let (s, c) = a.to_radians().sin_cos(); [c, s] }).collect();
+        Ok(Geometry { w, z, z_offset, trig, weight })
     }
 
     pub fn views(&self) -> usize {
@@ -176,13 +156,9 @@ impl Geometry {
     pub fn columns(&self, v: usize, j: usize) -> (isize, usize) {
         let [c, s] = self.trig[v];
         let h = (self.w - 1) as f64 / 2.0;
-        let at =
-            |r: f64| h + (j as f64 - h - s * (r + self.z_offset - (self.z - 1) as f64 / 2.0)) / c;
+        let at = |r: f64| h + (j as f64 - h - s * (r + self.z_offset - (self.z - 1) as f64 / 2.0)) / c;
         let (a, b) = (at(-1.0), at(self.z as f64));
-        (
-            a.min(b).floor() as isize,
-            ((self.z + 1) as f64 * (s / c).abs()).ceil() as usize + 2,
-        )
+        (a.min(b).floor() as isize, ((self.z + 1) as f64 * (s / c).abs()).ceil() as usize + 2)
     }
 
     /// Ray of detector bin j in view v at step k (a depth row or a column):
@@ -196,10 +172,7 @@ impl Geometry {
         } else {
             // Depth v at column k, back to a row index.
             let depth = (t - c * (k as f64 - h)) / s;
-            (
-                depth - self.z_offset + (self.z - 1) as f64 / 2.0,
-                1.0 / s.abs(),
-            )
+            (depth - self.z_offset + (self.z - 1) as f64 / 2.0, 1.0 / s.abs())
         }
     }
 }
@@ -211,13 +184,7 @@ fn lerp(row: &[f32], x: f64) -> f32 {
         return 0.0;
     }
     let f = (x - i) as f32;
-    let at = |k: f64| {
-        if k >= 0.0 && k < row.len() as f64 {
-            row[k as usize]
-        } else {
-            0.0
-        }
-    };
+    let at = |k: f64| if k >= 0.0 && k < row.len() as f64 { row[k as usize] } else { 0.0 };
     at(i) * (1.0 - f) + at(i + 1.0) * f
 }
 
@@ -266,9 +233,7 @@ pub fn back(g: &Geometry, sino: &[f32], scale: &[f64]) -> Vec<f32> {
     let mut out = vec![0.0; g.z * w];
     for (z, row) in out.chunks_mut(w).enumerate() {
         for (x, o) in row.iter_mut().enumerate() {
-            *o = (0..g.views())
-                .map(|v| scale[v] as f32 * lerp(&sino[v * w..(v + 1) * w], g.detector(v, x, z)))
-                .sum();
+            *o = (0..g.views()).map(|v| scale[v] as f32 * lerp(&sino[v * w..(v + 1) * w], g.detector(v, x, z))).sum();
         }
     }
     out
@@ -277,27 +242,17 @@ pub fn back(g: &Geometry, sino: &[f32], scale: &[f64]) -> Vec<f32> {
 /// A for one row: slice [z][w] → sino [views][w].
 pub fn forward(g: &Geometry, slice: &[f32]) -> Vec<f32> {
     let w = g.w;
-    let columns: Vec<Vec<f32>> = (0..w)
-        .map(|x| (0..g.z).map(|z| slice[z * w + x]).collect())
-        .collect();
+    let columns: Vec<Vec<f32>> = (0..w).map(|x| (0..g.z).map(|z| slice[z * w + x]).collect()).collect();
     let mut out = vec![0.0; g.views() * w];
     for (v, row) in out.chunks_mut(w).enumerate() {
         let rows = g.by_rows(v);
         for (j, o) in row.iter_mut().enumerate() {
             *o = if rows {
-                (0..g.z)
-                    .map(|k| {
-                        let (at, len) = g.crossing(v, j, k);
-                        len as f32 * lerp(&slice[k * w..(k + 1) * w], at)
-                    })
-                    .sum()
+                (0..g.z).map(|k| { let (at, len) = g.crossing(v, j, k); len as f32 * lerp(&slice[k * w..(k + 1) * w], at) }).sum()
             } else {
                 let (k0, m) = g.columns(v, j);
                 (k0.max(0)..(k0 + m as isize).min(w as isize))
-                    .map(|k| {
-                        let (at, len) = g.crossing(v, j, k as usize);
-                        len as f32 * lerp(&columns[k as usize], at)
-                    })
+                    .map(|k| { let (at, len) = g.crossing(v, j, k as usize); len as f32 * lerp(&columns[k as usize], at) })
                     .sum()
             };
         }
@@ -338,11 +293,7 @@ pub fn sart_order(n: usize) -> Vec<usize> {
 }
 
 fn gcd(a: usize, b: usize) -> usize {
-    if b == 0 {
-        a
-    } else {
-        gcd(b, a % b)
-    }
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// A1 and B1 for one row (they do not depend on Y).
@@ -363,11 +314,7 @@ pub const SEEN: f32 = 0.5;
 /// 1 / v where v ≥ `least`, else 0.
 fn inverse(v: &mut [f32], least: f32) {
     for v in v {
-        *v = if *v >= least.max(COVERED) {
-            1.0 / *v
-        } else {
-            0.0
-        };
+        *v = if *v >= least.max(COVERED) { 1.0 / *v } else { 0.0 };
     }
 }
 
@@ -380,10 +327,7 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
     if p.method == Method::Wbp {
         let f = filtered(sino, w, p.filter);
         let scale: Vec<f64> = g.weight.iter().map(|k| k / nv as f64).collect();
-        return Ok(f
-            .par_chunks(nv * w)
-            .flat_map_iter(|s| back(g, s, &scale))
-            .collect());
+        return Ok(f.par_chunks(nv * w).flat_map_iter(|s| back(g, s, &scale)).collect());
     }
     let (mut rs, mut cs) = normalisers(g);
     for view in rs.chunks_mut(w) {
@@ -405,9 +349,7 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
                 if p.method == Method::Sart {
                     for &v in &order {
                         let ax = forward_view(g, v, &x);
-                        let e: Vec<f32> = (0..w)
-                            .map(|j| (b[v * w + j] - ax[j]) * rs[v * w + j])
-                            .collect();
+                        let e: Vec<f32> = (0..w).map(|j| (b[v * w + j] - ax[j]) * rs[v * w + j]).collect();
                         let step = back_view(g, v, &e);
                         for (x, s) in x.iter_mut().zip(&step) {
                             *x += p.lambda * s;
@@ -419,12 +361,7 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
                     continue;
                 }
                 let ax = forward(g, &x);
-                let e: Vec<f32> = b
-                    .iter()
-                    .zip(&ax)
-                    .zip(&rs)
-                    .map(|((b, a), r)| (b - a) * r)
-                    .collect();
+                let e: Vec<f32> = b.iter().zip(&ax).zip(&rs).map(|((b, a), r)| (b - a) * r).collect();
                 let step = back(g, &e, &ones);
                 for ((x, s), c) in x.iter_mut().zip(&step).zip(&cs) {
                     *x += p.lambda * s * c;
@@ -511,19 +448,12 @@ pub fn reconstruct(
     }
     let h = src.height();
     let rows = slab_rows(g, h);
-    let gpu = if p.backend == "cpu" {
-        None
-    } else {
-        crate::ctf_gpu::device()
-    };
+    let gpu = if p.backend == "cpu" { None } else { crate::ctf_gpu::device() };
     if p.backend == "gpu" && gpu.is_none() {
         bail!("没有可用 GPU");
     }
     let mut plan = gpu.and_then(|(dev, name)| {
-        crate::ctf_gpu::guarded(|| super::recon_gpu::Plan::new(dev, g, p))
-            .ok()
-            .and_then(Result::ok)
-            .map(|plan| (plan, *name))
+        crate::ctf_gpu::guarded(|| super::recon_gpu::Plan::new(dev, g, p)).ok().and_then(Result::ok).map(|plan| (plan, *name))
     });
     let mut backend = plan.as_ref().map_or("CPU", |p| p.1).to_string();
     let means = view_means(src, g.views(), rows)?;
@@ -534,9 +464,7 @@ pub fn reconstruct(
         for (i, v) in sino.iter_mut().enumerate() {
             *v -= means[(i / g.w) % g.views()];
         }
-        let gpu_slab = plan
-            .as_ref()
-            .map(|(gp, _)| crate::ctf_gpu::guarded(|| gp.slab(&sino, n)));
+        let gpu_slab = plan.as_ref().map(|(gp, _)| crate::ctf_gpu::guarded(|| gp.slab(&sino, n)));
         let slab = match gpu_slab {
             Some(Ok(Ok(v))) => v,
             Some(r) => {

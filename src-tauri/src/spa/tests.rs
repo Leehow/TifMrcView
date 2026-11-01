@@ -7,13 +7,7 @@ use super::volume::{self, Accum, Projector};
 pub fn phantom(b: usize) -> Vec<f32> {
     let c = b as f64 / 2.0;
     let s = b as f64 / 32.0;
-    let lobes = [
-        ([0.0, 0.0, 0.0], 5.0),
-        ([6.0, 1.0, -2.0], 3.0),
-        ([-3.0, 7.0, 2.0], 2.5),
-        ([1.0, -6.0, 6.0], 2.0),
-        ([-7.0, -2.0, -4.0], 2.5),
-    ];
+    let lobes = [([0.0, 0.0, 0.0], 5.0), ([6.0, 1.0, -2.0], 3.0), ([-3.0, 7.0, 2.0], 2.5), ([1.0, -6.0, 6.0], 2.0), ([-7.0, -2.0, -4.0], 2.5)];
     let mut rng = super::Rng(99);
     let mut atoms = vec![];
     for (q, r) in lobes {
@@ -21,17 +15,9 @@ pub fn phantom(b: usize) -> Vec<f32> {
         while atoms.len() < 4000 && {
             let mut placed = 0;
             for _ in 0..n * 4 {
-                let p = [
-                    rng.unit() * 2.0 - 1.0,
-                    rng.unit() * 2.0 - 1.0,
-                    rng.unit() * 2.0 - 1.0,
-                ];
+                let p = [rng.unit() * 2.0 - 1.0, rng.unit() * 2.0 - 1.0, rng.unit() * 2.0 - 1.0];
                 if p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= 1.0 {
-                    atoms.push([
-                        q[0] * s + p[0] * r * s,
-                        q[1] * s + p[1] * r * s,
-                        q[2] * s + p[2] * r * s,
-                    ]);
+                    atoms.push([q[0] * s + p[0] * r * s, q[1] * s + p[1] * r * s, q[2] * s + p[2] * r * s]);
                     placed += 1;
                     if placed >= n {
                         break;
@@ -44,17 +30,11 @@ pub fn phantom(b: usize) -> Vec<f32> {
     let mut v = vec![0f32; b * b * b];
     let sig2 = 2.0 * 0.8f64 * 0.8;
     for a in &atoms {
-        let (x0, y0, z0) = (
-            (a[0] + c) as isize,
-            (a[1] + c) as isize,
-            (a[2] + c) as isize,
-        );
+        let (x0, y0, z0) = ((a[0] + c) as isize, (a[1] + c) as isize, (a[2] + c) as isize);
         for z in (z0 - 3).max(0)..(z0 + 4).min(b as isize) {
             for y in (y0 - 3).max(0)..(y0 + 4).min(b as isize) {
                 for x in (x0 - 3).max(0)..(x0 + 4).min(b as isize) {
-                    let d2 = (x as f64 - c - a[0]).powi(2)
-                        + (y as f64 - c - a[1]).powi(2)
-                        + (z as f64 - c - a[2]).powi(2);
+                    let d2 = (x as f64 - c - a[0]).powi(2) + (y as f64 - c - a[1]).powi(2) + (z as f64 - c - a[2]).powi(2);
                     v[(z as usize * b + y as usize) * b + x as usize] += (-d2 / sig2).exp() as f32;
                 }
             }
@@ -75,13 +55,7 @@ fn project_real(v: &[f32], b: usize, r: &geom::Mat) -> Vec<f32> {
             for z in 0..b {
                 let p = geom::apply(&rt, [x as f64 - c, y as f64 - c, z as f64 - c]);
                 let (i, j, k) = ((p[0] + c).round(), (p[1] + c).round(), (p[2] + c).round());
-                if i >= 0.0
-                    && j >= 0.0
-                    && k >= 0.0
-                    && (i as usize) < b
-                    && (j as usize) < b
-                    && (k as usize) < b
-                {
+                if i >= 0.0 && j >= 0.0 && k >= 0.0 && (i as usize) < b && (j as usize) < b && (k as usize) < b {
                     s += v[((k as usize) * b + j as usize) * b + i as usize];
                 }
             }
@@ -93,10 +67,7 @@ fn project_real(v: &[f32], b: usize, r: &geom::Mat) -> Vec<f32> {
 
 fn corr(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len() as f64;
-    let (ma, mb) = (
-        a.iter().map(|&v| v as f64).sum::<f64>() / n,
-        b.iter().map(|&v| v as f64).sum::<f64>() / n,
-    );
+    let (ma, mb) = (a.iter().map(|&v| v as f64).sum::<f64>() / n, b.iter().map(|&v| v as f64).sum::<f64>() / n);
     let (mut s, mut sa, mut sb) = (0.0, 0.0, 0.0);
     for (x, y) in a.iter().zip(b) {
         let (x, y) = (*x as f64 - ma, *y as f64 - mb);
@@ -140,22 +111,9 @@ fn mask_correlation_is_removed_from_fsc() {
     let fixed = super::post::corrected_fsc(&h1, &h2, &masked, b);
     let high = |f: &[f64]| f[16..30].iter().sum::<f64>() / 14.0;
     assert!(fixed[2] > 0.8, "low shells kept: {:.3}", fixed[2]);
-    eprintln!(
-        "mask FSC beyond the signal: raw {:.3}, corrected {:.3}",
-        high(&raw),
-        high(&fixed)
-    );
-    assert!(
-        high(&raw) > 0.04,
-        "the hard mask should correlate the noise: {:.3}",
-        high(&raw)
-    );
-    assert!(
-        high(&fixed).abs() < 0.03,
-        "corrected FSC beyond the signal {:.3} (raw {:.3})",
-        high(&fixed),
-        high(&raw)
-    );
+    eprintln!("mask FSC beyond the signal: raw {:.3}, corrected {:.3}", high(&raw), high(&fixed));
+    assert!(high(&raw) > 0.04, "the hard mask should correlate the noise: {:.3}", high(&raw));
+    assert!(high(&fixed).abs() < 0.03, "corrected FSC beyond the signal {:.3} (raw {:.3})", high(&fixed), high(&raw));
 }
 
 #[test]
@@ -204,17 +162,11 @@ fn symmetrizing_after_insertion_matches_inserting_mates() {
     c.symmetrize(&sym);
     let (ra, rc) = (a.reconstruct(None), c.reconstruct(None));
     let k = corr(&ra, &rc);
-    let plain = corr(
-        &ra,
-        &Accum::reconstruct(
-            &{
-                let mut u = Accum::new(b, 2);
-                u.insert(&pc);
-                u
-            },
-            None,
-        ),
-    );
+    let plain = corr(&ra, &Accum::reconstruct(&{
+        let mut u = Accum::new(b, 2);
+        u.insert(&pc);
+        u
+    }, None));
     eprintln!("symmetrised after: {k:.3}, not symmetrised: {plain:.3}");
     assert!(k > 0.97 && plain < k - 0.05, "{k} vs {plain}");
 }
@@ -224,21 +176,8 @@ use super::{refine, Rng};
 
 /// Noisy CTF-modulated projections of `vol` at random orientations and
 /// shifts; returns the stack path and the true particles.
-pub fn synth_stack(
-    dir: &std::path::Path,
-    vol: &[f32],
-    b: usize,
-    px: f64,
-    n: usize,
-    noise: f32,
-    seed: u64,
-) -> (String, Vec<Particle>, Optics) {
-    let optics = Optics {
-        kv: 300.0,
-        cs_mm: 2.7,
-        amplitude: 0.1,
-        pixel_a: px,
-    };
+pub fn synth_stack(dir: &std::path::Path, vol: &[f32], b: usize, px: f64, n: usize, noise: f32, seed: u64) -> (String, Vec<Particle>, Optics) {
+    let optics = Optics { kv: 300.0, cs_mm: 2.7, amplitude: 0.1, pixel_a: px };
     let p = Projector::new(vol, b, 2);
     let mut rng = Rng(seed);
     let path = dir.join("synth.mrcs");
@@ -248,32 +187,16 @@ pub fn synth_stack(
     for _ in 0..n {
         let r = refine::random_rotation(&mut rng);
         let a = geom::angles(&r);
-        let shift = [
-            (rng.unit() * 6.0 - 3.0) as f32,
-            (rng.unit() * 6.0 - 3.0) as f32,
-        ];
+        let shift = [(rng.unit() * 6.0 - 3.0) as f32, (rng.unit() * 6.0 - 3.0) as f32];
         let df = 10000.0 + rng.unit() * 20000.0;
-        let part = Particle {
-            df1: (df + 300.0) as f32,
-            df2: (df - 300.0) as f32,
-            angle: (rng.unit() * 180.0) as f32,
-            euler: [a[0] as f32, a[1] as f32, a[2] as f32],
-            shift,
-            class2d: -1,
-            ..Default::default()
-        };
+        let part = Particle { df1: (df + 300.0) as f32, df2: (df - 300.0) as f32, angle: (rng.unit() * 180.0) as f32, euler: [a[0] as f32, a[1] as f32, a[2] as f32], shift, class2d: -1, ..Default::default() };
         let ctf = CtfEval::new(&optics, &part, b, px);
         let (mut re, mut im) = (vec![0f32; b * b], vec![0f32; b * b]);
         for y in 0..b {
             for x in 0..b {
                 let (kx, ky) = (fourier::freq(x, b) as f32, fourier::freq(y, b) as f32);
                 let mut s = vec![0f32; 2];
-                let half = fourier::Half {
-                    b,
-                    idx: vec![0],
-                    k: vec![[kx, ky]],
-                    shell: vec![0],
-                };
+                let half = fourier::Half { b, idx: vec![0], k: vec![[kx, ky]], shell: vec![0] };
                 p.slice(&r, &half, &mut s);
                 let c = ctf.at(kx, ky);
                 let ph = -2.0 * std::f32::consts::PI * (kx * shift[0] + ky * shift[1]) / b as f32;
@@ -311,54 +234,19 @@ fn refines_synthetic_particles() {
     let dir = tempfile::tempdir().unwrap();
     let (b, px) = (64, 3.0);
     let truth = phantom(b);
-    let n: usize = std::env::var("TMV_SPA_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1500);
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
     let (path, true_parts, optics) = synth_stack(dir.path(), &truth, b, px, n, 3.0, 3);
     let stack = Stack::open(&path).unwrap();
-    let mut parts: Vec<Particle> = true_parts
-        .iter()
-        .map(|p| Particle {
-            euler: [0.0; 3],
-            shift: [0.0; 2],
-            ..p.clone()
-        })
-        .collect();
+    let mut parts: Vec<Particle> = true_parts.iter().map(|p| Particle { euler: [0.0; 3], shift: [0.0; 2], ..p.clone() }).collect();
     let ids: Vec<usize> = (0..n).collect();
-    let start = refine::Map {
-        b,
-        px,
-        v: truth.clone(),
-    };
+    let start = refine::Map { b, px, v: truth.clone() };
     let t = std::time::Instant::now();
     let progress = |s: &str, d: usize, t: usize| eprintln!("{s} {d}/{t}");
-    let r = refine::refine(
-        &stack,
-        &mut parts,
-        &ids,
-        &optics,
-        110.0,
-        &start,
-        &refine::RefineParams::default(),
-        &progress,
-    )
-    .unwrap();
-    eprintln!(
-        "refine {:?}, res {:.1} Å, history {:?}",
-        t.elapsed(),
-        r.res,
-        r.history
-    );
-    eprintln!(
-        "fsc {:?}",
-        r.fsc.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>()
-    );
+    let r = refine::refine(&stack, &mut parts, &ids, &optics, 110.0, &start, &refine::RefineParams::default(), &progress).unwrap();
+    eprintln!("refine {:?}, res {:.1} Å, history {:?}", t.elapsed(), r.res, r.history);
+    eprintln!("fsc {:?}", r.fsc.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>());
     let tf = super::post::fsc(&r.full.v, &truth, b, 25.0);
-    eprintln!(
-        "fsc vs truth {:?}",
-        tf.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>()
-    );
+    eprintln!("fsc vs truth {:?}", tf.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>());
     let errs: Vec<f64> = parts
         .iter()
         .zip(&true_parts)
@@ -370,11 +258,7 @@ fn refines_synthetic_particles() {
         .collect();
     let mut sorted = errs.clone();
     sorted.sort_by(f64::total_cmp);
-    eprintln!(
-        "orientation error median {:.2}°, 90% {:.2}°",
-        sorted[n / 2],
-        sorted[n * 9 / 10]
-    );
+    eprintln!("orientation error median {:.2}°, 90% {:.2}°", sorted[n / 2], sorted[n * 9 / 10]);
     let c = corr(&r.full.v, &truth);
     eprintln!("map correlation with truth {c:.3}");
     assert!(sorted[n / 2] < 5.0);
@@ -390,50 +274,20 @@ fn ab_initio_synthetic() {
     let dir = tempfile::tempdir().unwrap();
     let (b, px) = (64, 3.0);
     let truth = phantom(b);
-    let n: usize = std::env::var("TMV_SPA_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2000);
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
     let (path, true_parts, optics) = synth_stack(dir.path(), &truth, b, px, n, 3.0, 5);
     let stack = Stack::open(&path).unwrap();
-    let mut parts: Vec<Particle> = true_parts
-        .iter()
-        .map(|p| Particle {
-            euler: [0.0; 3],
-            shift: [0.0; 2],
-            ..p.clone()
-        })
-        .collect();
+    let mut parts: Vec<Particle> = true_parts.iter().map(|p| Particle { euler: [0.0; 3], shift: [0.0; 2], ..p.clone() }).collect();
     let ids: Vec<usize> = (0..n).collect();
-    let progress = |s: &str, d: usize, t: usize| {
-        if d % 10 == 0 || d == t {
-            eprintln!("{s} {d}/{t}")
-        }
-    };
+    let progress = |s: &str, d: usize, t: usize| if d % 10 == 0 || d == t { eprintln!("{s} {d}/{t}") };
     let t = std::time::Instant::now();
-    let init = refine::initial(
-        &stack,
-        &mut parts,
-        &ids,
-        &optics,
-        110.0,
-        &refine::InitialParams::default(),
-        &progress,
-    )
-    .unwrap();
+    let init = refine::initial(&stack, &mut parts, &ids, &optics, 110.0, &refine::InitialParams::default(), &progress).unwrap();
     eprintln!("initial {:?}", t.elapsed());
     let up = fourier::resample3(&init.v, init.b, b);
     let (cc, _) = best_match(&up, &truth, b);
     let (ccf, _) = best_match(&super::post::flip_hand(&up, b), &truth, b);
     eprintln!("ab initio vs truth: {cc:.3} (flipped hand {ccf:.3})");
-    data::write_mrc(
-        &std::path::Path::new("/tmp/spa_init.mrc"),
-        &up,
-        [b; 3],
-        px,
-        "init",
-    )
-    .ok();
+    data::write_mrc(&std::path::Path::new("/tmp/spa_init.mrc"), &up, [b; 3], px, "init").ok();
     assert!(cc.max(ccf) > 0.8);
 }
 
@@ -447,16 +301,7 @@ fn best_match(v: &[f32], truth: &[f32], b: usize) -> (f64, geom::Mat) {
     // Points of the model above its mean, sampled.
     let pts: Vec<([f64; 3], f32)> = (0..b * b * b)
         .step_by(3)
-        .map(|i| {
-            (
-                [
-                    (i % b) as f64 - c,
-                    ((i / b) % b) as f64 - c,
-                    (i / b / b) as f64 - c,
-                ],
-                lp_v[i],
-            )
-        })
+        .map(|i| ([(i % b) as f64 - c, ((i / b) % b) as f64 - c, (i / b / b) as f64 - c], lp_v[i]))
         .collect();
     let at = |p: [f64; 3]| -> f32 {
         let (x, y, z) = ((p[0] + c).round(), (p[1] + c).round(), (p[2] + c).round());
@@ -473,10 +318,7 @@ fn best_match(v: &[f32], truth: &[f32], b: usize) -> (f64, geom::Mat) {
             let t: Vec<f32> = pts.iter().map(|p| at(geom::apply(r, p.0))).collect();
             (corr(&a, &t), *r)
         })
-        .reduce(
-            || (-1.0, geom::IDENTITY),
-            |x, y| if x.0 >= y.0 { x } else { y },
-        );
+        .reduce(|| (-1.0, geom::IDENTITY), |x, y| if x.0 >= y.0 { x } else { y });
     best
 }
 
@@ -487,50 +329,20 @@ fn classifies_synthetic_particles() {
     let dir = tempfile::tempdir().unwrap();
     let (b, px) = (64, 3.0);
     let truth = phantom(b);
-    let n: usize = std::env::var("TMV_SPA_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2000);
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
     let (path, true_parts, optics) = synth_stack(dir.path(), &truth, b, px, n, 3.0, 9);
     let stack = Stack::open(&path).unwrap();
-    let mut parts: Vec<Particle> = true_parts
-        .iter()
-        .map(|p| Particle {
-            euler: [0.0; 3],
-            shift: [0.0; 2],
-            ..p.clone()
-        })
-        .collect();
+    let mut parts: Vec<Particle> = true_parts.iter().map(|p| Particle { euler: [0.0; 3], shift: [0.0; 2], ..p.clone() }).collect();
     let ids: Vec<usize> = (0..n).collect();
     let t = std::time::Instant::now();
-    let params = super::class2d::Class2dParams {
-        classes: 10,
-        iterations: 15,
-        ..Default::default()
-    };
-    let r = super::class2d::run(
-        &stack,
-        &mut parts,
-        &ids,
-        &optics,
-        110.0,
-        &params,
-        &|_, _, _| {},
-    )
-    .unwrap();
+    let params = super::class2d::Class2dParams { classes: 10, iterations: 15, ..Default::default() };
+    let r = super::class2d::run(&stack, &mut parts, &ids, &optics, 110.0, &params, &|_, _, _| {}).unwrap();
     eprintln!("2D {:?}, counts {:?}", t.elapsed(), r.counts);
     let mut all = vec![];
     for a in &r.averages {
         all.extend_from_slice(a);
     }
-    data::write_mrc(
-        std::path::Path::new("/tmp/spa_class2d.mrcs"),
-        &all,
-        [r.b, r.b, r.averages.len()],
-        r.pixel_a,
-        "classes",
-    )
-    .ok();
+    data::write_mrc(std::path::Path::new("/tmp/spa_class2d.mrcs"), &all, [r.b, r.b, r.averages.len()], r.pixel_a, "classes").ok();
     // Purity: share of each class's particles within 35° of the class's most common direction.
     let dir_of = |p: &Particle| {
         let m = geom::euler(p.euler[0] as f64, p.euler[1] as f64, p.euler[2] as f64);
@@ -538,20 +350,10 @@ fn classifies_synthetic_particles() {
     };
     let mut pure = 0usize;
     for c in 0..r.averages.len() {
-        let members: Vec<[f64; 3]> = (0..n)
-            .filter(|&i| parts[i].class2d == c as i32)
-            .map(|i| dir_of(&true_parts[i]))
-            .collect();
+        let members: Vec<[f64; 3]> = (0..n).filter(|&i| parts[i].class2d == c as i32).map(|i| dir_of(&true_parts[i])).collect();
         let best = members
             .iter()
-            .map(|d| {
-                members
-                    .iter()
-                    .filter(|e| {
-                        (d[0] * e[0] + d[1] * e[1] + d[2] * e[2]) > 35f64.to_radians().cos()
-                    })
-                    .count()
-            })
+            .map(|d| members.iter().filter(|e| (d[0] * e[0] + d[1] * e[1] + d[2] * e[2]) > 35f64.to_radians().cos()).count())
             .max()
             .unwrap_or(0);
         pure += best;
@@ -563,20 +365,8 @@ fn classifies_synthetic_particles() {
 
 /// Synthetic micrographs: particles at random orientations on a grid,
 /// plus "ice" (white noise) under the same CTF, plus shot noise.
-fn synth_mics(
-    dir: &std::path::Path,
-    truth: &[f32],
-    b: usize,
-    px: f64,
-    count: usize,
-    side: usize,
-) -> Vec<(f64, Vec<[f32; 2]>)> {
-    let optics = Optics {
-        kv: 300.0,
-        cs_mm: 2.7,
-        amplitude: 0.1,
-        pixel_a: px,
-    };
+fn synth_mics(dir: &std::path::Path, truth: &[f32], b: usize, px: f64, count: usize, side: usize) -> Vec<(f64, Vec<[f32; 2]>)> {
+    let optics = Optics { kv: 300.0, cs_mm: 2.7, amplitude: 0.1, pixel_a: px };
     let p = Projector::new(truth, b, 2);
     let mut rng = Rng(77);
     let fft = crate::fft::Fft::new(side);
@@ -590,10 +380,7 @@ fn synth_mics(
         while y + b < side {
             let mut x = b;
             while x + b < side {
-                let (cx, cy) = (
-                    x as f32 + rng.unit() as f32 * 6.0,
-                    y as f32 + rng.unit() as f32 * 6.0,
-                );
+                let (cx, cy) = (x as f32 + rng.unit() as f32 * 6.0, y as f32 + rng.unit() as f32 * 6.0);
                 let r = refine::random_rotation(&mut rng);
                 let proj = volume::project(&p, &r, b);
                 let (x0, y0) = (cx.round() as usize - b / 2, cy.round() as usize - b / 2);
@@ -612,12 +399,7 @@ fn synth_mics(
             *v += 1.5 * sd * rng.gauss() as f32;
         }
         // CTF over the whole micrograph.
-        let part = Particle {
-            df1: (df + 200.0) as f32,
-            df2: (df - 200.0) as f32,
-            angle: 30.0,
-            ..Default::default()
-        };
+        let part = Particle { df1: (df + 200.0) as f32, df2: (df - 200.0) as f32, angle: 30.0, ..Default::default() };
         let (mut re, mut im) = fourier::ft2(&fft, side, &img);
         let ctf = CtfEval::new(&optics, &part, side, px);
         for y in 0..side {
@@ -632,14 +414,7 @@ fn synth_mics(
         for v in &mut img {
             *v += 1.0 * sd * rng.gauss() as f32;
         }
-        data::write_mrc(
-            &dir.join(format!("mic_{m:03}.mrc")),
-            &img,
-            [side, side, 1],
-            px,
-            "synthetic micrograph",
-        )
-        .unwrap();
+        data::write_mrc(&dir.join(format!("mic_{m:03}.mrc")), &img, [side, side, 1], px, "synthetic micrograph").unwrap();
         out.push((df, centres));
     }
     out
@@ -652,95 +427,47 @@ fn workflow_from_micrographs() {
     use super::project;
     // TMV_SPA_KEEP=<empty folder> keeps the micrographs and the project.
     let tmp = tempfile::tempdir().unwrap();
-    let keep = std::env::var("TMV_SPA_KEEP")
-        .ok()
-        .map(std::path::PathBuf::from);
+    let keep = std::env::var("TMV_SPA_KEEP").ok().map(std::path::PathBuf::from);
     let dir = keep.as_deref().unwrap_or(tmp.path());
     std::fs::create_dir_all(dir).unwrap();
     let (b, px) = (64, 3.0);
     let truth = phantom(b);
-    let n_mics: usize = std::env::var("TMV_SPA_MICS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12);
+    let n_mics: usize = std::env::var("TMV_SPA_MICS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
     let made = synth_mics(dir, &truth, b, px, n_mics, 1024);
-    let log = |s: &str, d: usize, t: usize| {
-        if d == t {
-            eprintln!("{s} done ({t})")
-        }
-    };
+    let log = |s: &str, d: usize, t: usize| if d == t { eprintln!("{s} done ({t})") };
     let mut p = project::Project::open(&dir.to_string_lossy()).unwrap();
     assert_eq!(p.mics.len(), n_mics);
-    assert!(
-        (p.optics.pixel_a - px).abs() < 1e-3,
-        "pixel {}",
-        p.optics.pixel_a
-    );
+    assert!((p.optics.pixel_a - px).abs() < 1e-3, "pixel {}", p.optics.pixel_a);
     p.diameter_a = 110.0;
     p.save().unwrap();
-    let cp = crate::ctf::Params {
-        voltage_kv: 300.0,
-        cs_mm: 2.7,
-        amp_contrast: 0.1,
-        pixel_a: px,
-        res_low_a: 30.0,
-        res_high_a: 8.0,
-        df_min_a: 3000.0,
-        df_max_a: 50000.0,
-        max_astig_a: 2000.0,
-        phase: false,
-        backend: Some("cpu".into()),
-    };
+    let cp = crate::ctf::Params { voltage_kv: 300.0, cs_mm: 2.7, amp_contrast: 0.1, pixel_a: px, res_low_a: 30.0, res_high_a: 8.0, df_min_a: 3000.0, df_max_a: 50000.0, max_astig_a: 2000.0, phase: false, backend: Some("cpu".into()) };
     project::ctf(&mut p, &cp, 256, &log).unwrap();
     for (m, (df, _)) in p.mics.iter().zip(&made) {
         let c = m.ctf.as_ref().expect("ctf");
         let mean = (c.df1 + c.df2) / 2.0;
-        eprintln!(
-            "defocus {mean:.0} (true {df:.0}), fit to {:.1} Å",
-            c.fit_res
-        );
+        eprintln!("defocus {mean:.0} (true {df:.0}), fit to {:.1} Å", c.fit_res);
         assert!((mean - df).abs() < 0.05 * df);
     }
-    let pp = super::pick::PickParams {
-        diameter_a: 110.0,
-        ..Default::default()
-    };
+    let pp = super::pick::PickParams { diameter_a: 110.0, ..Default::default() };
     let total = project::pick_all(&mut p, &pp, &log).unwrap();
     let picks = p.picks().unwrap();
     let (mut hit, mut truth_n) = (0, 0);
     for (q, (_, centres)) in picks.iter().zip(&made) {
         truth_n += centres.len();
-        hit += centres
-            .iter()
-            .filter(|c| q.iter().any(|k| (k[0] - c[0]).hypot(k[1] - c[1]) < 8.0))
-            .count();
+        hit += centres.iter().filter(|c| q.iter().any(|k| (k[0] - c[0]).hypot(k[1] - c[1]) < 8.0)).count();
     }
     eprintln!("picked {total}, {hit} of {truth_n} true particles");
     assert!(hit as f64 > 0.8 * truth_n as f64);
     assert!((total as f64) < 1.3 * truth_n as f64);
     let s = project::extract_all(&mut p, 64, true, &log).unwrap();
     assert_eq!(s.count, total);
-    let c2 = super::class2d::Class2dParams {
-        classes: 8,
-        iterations: 8,
-        ..Default::default()
-    };
+    let c2 = super::class2d::Class2dParams { classes: 8, iterations: 8, ..Default::default() };
     project::class2d(&mut p, &c2, &log).unwrap();
-    let ip = refine::InitialParams {
-        iterations: 40,
-        batch: 200,
-        ..Default::default()
-    };
+    let ip = refine::InitialParams { iterations: 40, batch: 200, ..Default::default() };
     project::initial(&mut p, &ip, &log).unwrap();
-    let rp = refine::RefineParams {
-        max_iterations: 6,
-        ..Default::default()
-    };
+    let rp = refine::RefineParams { max_iterations: 6, ..Default::default() };
     let r = project::refine(&mut p, &rp, None, &log).unwrap();
-    eprintln!(
-        "refined: {:.1} Å (masked {:.1} Å), B {:.0}",
-        r.res, r.res_masked, r.bfactor
-    );
+    eprintln!("refined: {:.1} Å (masked {:.1} Å), B {:.0}", r.res, r.res_masked, r.bfactor);
     for f in [&r.map, &r.sharpened, &r.half1, &r.half2, &r.mask, &r.star] {
         assert!(std::path::Path::new(f).exists(), "{f}");
     }
@@ -756,21 +483,14 @@ fn workflow_from_micrographs() {
 #[test]
 #[ignore]
 fn masked_fsc_of_folder() {
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
     let read = |n: &str| data::read_volume(&format!("{dir}/{n}")).unwrap();
     let (h1, d, px) = read("refine_half1.mrc");
     let (h2, _, _) = read("refine_half2.mrc");
     let (mask, _, _) = read("refine_mask.mrc");
     let masked = |v: &[f32]| -> Vec<f32> { v.iter().zip(&mask).map(|(a, m)| a * m).collect() };
     let f = super::post::corrected_fsc(&h1, &h2, &masked, d[0]);
-    eprintln!(
-        "{:?}",
-        f.iter()
-            .map(|v| (v * 100.0).round() / 100.0)
-            .collect::<Vec<_>>()
-    );
+    eprintln!("{:?}", f.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
     let (_, s) = super::post::sharpen(&h1, &h2, &mask, d[0], px, None);
     eprintln!("B {:.0} Å², masked {:.2} Å", s.bfactor, s.res_masked);
 }
@@ -780,15 +500,9 @@ fn masked_fsc_of_folder() {
 #[test]
 #[ignore]
 fn export_of_folder() {
-    let (Ok(dir), Ok(out)) = (std::env::var("TMV_SPA_DIR"), std::env::var("TMV_SPA_OUT")) else {
-        return;
-    };
+    let (Ok(dir), Ok(out)) = (std::env::var("TMV_SPA_DIR"), std::env::var("TMV_SPA_OUT")) else { return };
     let p = super::project::Project::load(&dir).unwrap();
-    for f in super::export::run(&p, "relion", &out, &|_, _| {})
-        .unwrap()
-        .into_iter()
-        .chain(super::export::run(&p, "table", &out, &|_, _| {}).unwrap())
-    {
+    for f in super::export::run(&p, "relion", &out, &|_, _| {}).unwrap().into_iter().chain(super::export::run(&p, "table", &out, &|_, _| {}).unwrap()) {
         eprintln!("{f}");
     }
 }
@@ -800,65 +514,32 @@ fn export_of_folder() {
 #[ignore]
 fn discover_folder() {
     use super::discover;
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
     let p = super::project::Project::load(&dir).unwrap();
     let t = std::time::Instant::now();
-    let pr = |s: &str, i: usize, n: usize| {
-        if i == n {
-            eprintln!("{s} {n} {:.0?}", t.elapsed())
-        }
-    };
+    let pr = |s: &str, i: usize, n: usize| if i == n { eprintln!("{s} {n} {:.0?}", t.elapsed()) };
     let cfg = discover::Config::default();
     let cache = format!("{dir}/dn.bin");
     let d = if let Ok(b) = std::fs::read(&cache) {
-        let h: Vec<f64> = b[..32]
-            .chunks(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        let h: Vec<f64> = b[..32].chunks(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
         let (w, hh, px, n) = (h[0] as usize, h[1] as usize, h[2], h[3] as usize);
-        let v: Vec<f32> = b[32..]
-            .chunks(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-            .collect();
-        discover::Denoised {
-            images: v.chunks(w * hh).take(n).map(|c| c.to_vec()).collect(),
-            w,
-            h: hh,
-            px,
-            backend: "cache".into(),
-        }
+        let v: Vec<f32> = b[32..].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        discover::Denoised { images: v.chunks(w * hh).take(n).map(|c| c.to_vec()).collect(), w, h: hh, px, backend: "cache".into() }
     } else {
         let d = discover::denoised(&p, &cfg, &pr).unwrap();
-        let mut b: Vec<u8> = [d.w as f64, d.h as f64, d.px, d.images.len() as f64]
-            .iter()
-            .flat_map(|x| x.to_le_bytes())
-            .collect();
+        let mut b: Vec<u8> = [d.w as f64, d.h as f64, d.px, d.images.len() as f64].iter().flat_map(|x| x.to_le_bytes()).collect();
         for im in &d.images {
             b.extend(im.iter().flat_map(|x| x.to_le_bytes()));
         }
         std::fs::write(&cache, b).unwrap();
         for (i, im) in d.images.iter().enumerate() {
-            std::fs::write(
-                format!("{dir}/dn{i}.png"),
-                super::render::gallery(std::slice::from_ref(im), d.w.min(d.h), 1, 900).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(format!("{dir}/dn{i}.png"), super::render::gallery(std::slice::from_ref(im), d.w.min(d.h), 1, 900).unwrap()).unwrap();
         }
         d
     };
     let r = discover::kinds(&p, &cfg, &d, None, &pr).unwrap();
     for (i, k) in r.kinds.iter().enumerate() {
-        eprintln!(
-            "kind {}: {:.0} Å, {} ({:.0}%), elongation {:.2}, contrast {:.2}",
-            i + 1,
-            k.diameter_a,
-            k.count,
-            k.share * 100.0,
-            k.elongation,
-            k.contrast
-        );
+        eprintln!("kind {}: {:.0} Å, {} ({:.0}%), elongation {:.2}, contrast {:.2}", i + 1, k.diameter_a, k.count, k.share * 100.0, k.elongation, k.contrast);
     }
     let mut p = p;
     p.discovery = Some(r);
@@ -870,14 +551,9 @@ fn discover_folder() {
 #[test]
 #[ignore]
 fn auto_folder() {
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
     let mut p = super::project::Project::load(&dir).unwrap();
-    let k: usize = std::env::var("TMV_SPA_KIND")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+    let k: usize = std::env::var("TMV_SPA_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
     let d = super::project::choose(&mut p, vec![k - 1]).unwrap();
     eprintln!("diameter {d} Å");
     let t = std::time::Instant::now();
@@ -891,27 +567,15 @@ fn auto_folder() {
     };
     let r = super::project::auto(&mut p, &Default::default(), None, &pr).unwrap();
     eprintln!("symmetry {:?}", p.symmetry);
-    eprintln!(
-        "selected classes {:?}",
-        p.class2d.as_ref().map(|c| &c.selected)
-    );
-    eprintln!(
-        "{} particles, {:.2} Å, masked {:.2} Å, B {:.0}, {:.0} s",
-        r.particles,
-        r.res,
-        r.res_masked,
-        r.bfactor,
-        t.elapsed().as_secs_f64()
-    );
+    eprintln!("selected classes {:?}", p.class2d.as_ref().map(|c| &c.selected));
+    eprintln!("{} particles, {:.2} Å, masked {:.2} Å, B {:.0}, {:.0} s", r.particles, r.res, r.res_masked, r.bfactor, t.elapsed().as_secs_f64());
 }
 
 /// n-fold rotational correlations of a project's 2D classes (`TMV_SPA_DIR`).
 #[test]
 #[ignore]
 fn symmetry_of_folder() {
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
     let p = super::project::Project::load(&dir).unwrap();
     let c = p.class2d.as_ref().unwrap();
     let (v, dims, _) = data::read_volume(&c.path).unwrap();
@@ -920,39 +584,25 @@ fn symmetry_of_folder() {
     let radius = p.diameter_a / 2.0 / c.pixel_a;
     for (i, a) in avgs.iter().enumerate() {
         let a = &super::plane::shift(a, b, super::plane::centre_of_mass(a, b));
-        let r: Vec<String> = (2..=15)
-            .map(|n| format!("{n}:{:.2}", super::discover::rot_corr(a, b, radius, n)))
-            .collect();
+        let r: Vec<String> = (2..=15).map(|n| format!("{n}:{:.2}", super::discover::rot_corr(a, b, radius, n))).collect();
         eprintln!("class {i} ({}) {}", c.counts[i], r.join(" "));
     }
-    eprintln!(
-        "{:?}",
-        super::discover::symmetry(&avgs, b, radius, &c.selected)
-    );
+    eprintln!("{:?}", super::discover::symmetry(&avgs, b, radius, &c.selected));
 }
 
 /// The dihedral test on a project's initial model (`TMV_SPA_DIR`, `TMV_SPA_N`).
 #[test]
 #[ignore]
 fn dihedral_of_folder() {
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
-    let n: usize = std::env::var("TMV_SPA_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(7);
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
     let p = super::project::Project::load(&dir).unwrap();
     let (v, dims, _) = data::read_volume(&p.initial.as_ref().unwrap().path).unwrap();
     eprintln!("{:?}", super::discover::dihedral(&v, dims[0], n));
     let (v, dims, _) = data::read_volume(&p.refine.as_ref().unwrap().map).unwrap();
     eprintln!("refined: {:?}", super::discover::dihedral(&v, dims[0], n));
     for ax in 0..3 {
-        eprintln!(
-            "axis {ax}: {n}-fold corr {:.2}, 25° corr {:.2}",
-            super::discover::axis_corr(&v, dims[0], ax, 360.0 / n as f64),
-            super::discover::axis_corr(&v, dims[0], ax, 25.0)
-        );
+        eprintln!("axis {ax}: {n}-fold corr {:.2}, 25° corr {:.2}", super::discover::axis_corr(&v, dims[0], ax, 360.0 / n as f64), super::discover::axis_corr(&v, dims[0], ax, 25.0));
     }
 }
 
@@ -960,35 +610,19 @@ fn dihedral_of_folder() {
 #[test]
 #[ignore]
 fn axis_of_map() {
-    let Ok(path) = std::env::var("TMV_SPA_MAP") else {
-        return;
-    };
-    let n: usize = std::env::var("TMV_SPA_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(7);
+    let Ok(path) = std::env::var("TMV_SPA_MAP") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
     let (v, dims, _) = data::read_volume(&path).unwrap();
     let b = dims[0];
     // Tilted by 40° about an oblique axis (TMV_SPA_TILT) to test the search.
-    let v = if std::env::var("TMV_SPA_TILT").is_ok() {
-        super::discover::align_axis(
-            &v,
-            b,
-            [0.3f64.sin() * 0.6, 0.3f64.sin() * 0.8, 0.3f64.cos()],
-        )
-    } else {
-        v
-    };
+    let v = if std::env::var("TMV_SPA_TILT").is_ok() { super::discover::align_axis(&v, b, [0.3f64.sin() * 0.6, 0.3f64.sin() * 0.8, 0.3f64.cos()]) } else { v };
     let t = std::time::Instant::now();
     let v = super::discover::centred3(&v, b);
     let r = super::discover::find_axis(&v, b, n);
     eprintln!("{r:?} in {:.1?}", t.elapsed());
     if let Some((a, _, _)) = r {
         let al = super::discover::align_axis(&v, b, a);
-        eprintln!(
-            "aligned: {n}-fold about z {:.2}",
-            super::discover::axis_corr(&al, b, 2, 360.0 / n as f64)
-        );
+        eprintln!("aligned: {n}-fold about z {:.2}", super::discover::axis_corr(&al, b, 2, 360.0 / n as f64));
         eprintln!("{:?}", super::discover::dihedral(&al, b, n));
     }
 }
@@ -998,52 +632,20 @@ fn axis_of_map() {
 #[test]
 #[ignore]
 fn refine_dn_from_map() {
-    let Ok(dir) = std::env::var("TMV_SPA_DIR") else {
-        return;
-    };
-    let env = |k: &str, d: f64| {
-        std::env::var(k)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(d)
-    };
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let n = env("TMV_SPA_N", 7.0) as usize;
     let mut p = super::project::Project::load(&dir).unwrap();
     let r = p.refine.clone().unwrap();
     let (v, dims, px) = data::read_volume(&r.map).unwrap();
-    let aligned = super::discover::align_dihedral(
-        &v,
-        dims[0],
-        env("TMV_SPA_PHI", 0.0),
-        env("TMV_SPA_DZ", 0.0),
-    );
+    let aligned = super::discover::align_dihedral(&v, dims[0], env("TMV_SPA_PHI", 0.0), env("TMV_SPA_DZ", 0.0));
     let start = p.path("refine_cn_aligned.mrc");
-    data::write_mrc(
-        std::path::Path::new(&start),
-        &aligned,
-        dims,
-        px,
-        "Cn map, 2-fold along x",
-    )
-    .unwrap();
+    data::write_mrc(std::path::Path::new(&start), &aligned, dims, px, "Cn map, 2-fold along x").unwrap();
     let t = std::time::Instant::now();
-    let pr = |s: &str, i: usize, k: usize| {
-        if i % 4000 == 0 {
-            eprintln!("{s} {i}/{k} {:.0?}", t.elapsed())
-        }
-    };
-    let params = super::refine::RefineParams {
-        symmetry: format!("D{n}"),
-        res_init: (2.0 * r.res).max(15.0),
-        ..Default::default()
-    };
+    let pr = |s: &str, i: usize, k: usize| if i % 4000 == 0 { eprintln!("{s} {i}/{k} {:.0?}", t.elapsed()) };
+    let params = super::refine::RefineParams { symmetry: format!("D{n}"), res_init: (2.0 * r.res).max(15.0), ..Default::default() };
     let out = super::project::refine(&mut p, &params, Some(&start), &pr).unwrap();
-    eprintln!(
-        "D{n}: {:.2} Å (masked {:.2}) in {:.0?}",
-        out.res,
-        out.res_masked,
-        t.elapsed()
-    );
+    eprintln!("D{n}: {:.2} Å (masked {:.2}) in {:.0?}", out.res, out.res_masked, t.elapsed());
 }
 
 /// The poses follow a map turned about z and moved along z

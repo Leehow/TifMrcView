@@ -81,12 +81,7 @@ fn allowed(cur: u16, label: u16, guard: u16, locked: &[u16]) -> bool {
     if cur != 0 && cur != label && locked.contains(&cur) {
         return false;
     }
-    guard == 0
-        || if label != 0 {
-            cur == 0 || cur == label
-        } else {
-            cur == guard
-        }
+    guard == 0 || if label != 0 { cur == 0 || cur == label } else { cur == guard }
 }
 
 /// Name, colour and flags of one label (like a material in Amira). Labels
@@ -107,21 +102,14 @@ pub(crate) fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
     const INF: f32 = 1e20;
     let mut g: Vec<f32> = mask.iter().map(|&b| if b { 0.0 } else { INF }).collect();
     let n = w.max(h);
-    let (mut f, mut d, mut v, mut z) = (
-        vec![0f32; n],
-        vec![0f32; n],
-        vec![0usize; n],
-        vec![0f32; n + 1],
-    );
+    let (mut f, mut d, mut v, mut z) = (vec![0f32; n], vec![0f32; n], vec![0usize; n], vec![0f32; n + 1]);
     // Squared distances along one line of `len` samples.
     let mut pass = |f: &mut [f32], d: &mut [f32], len: usize| {
         let mut k = 0;
         v[0] = 0;
         z[0] = -INF;
         z[1] = INF;
-        let cross = |f: &[f32], q: usize, p: usize| {
-            ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32))
-        };
+        let cross = |f: &[f32], q: usize, p: usize| ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
         for q in 1..len {
             let mut s = cross(f, q, v[k]);
             // z[0] is -INF, so this stops at k = 0.
@@ -157,15 +145,7 @@ pub(crate) fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
         pass(&mut f, &mut d, w);
         g[y * w..(y + 1) * w].copy_from_slice(&d[..w]);
     }
-    g.iter()
-        .map(|&x| {
-            if x >= INF / 2.0 {
-                (w + h) as f32
-            } else {
-                x.sqrt()
-            }
-        })
-        .collect()
+    g.iter().map(|&x| if x >= INF / 2.0 { (w + h) as f32 } else { x.sqrt() }).collect()
 }
 
 /// Key of the materials line in the label file's ImageJ description.
@@ -200,16 +180,7 @@ pub struct Labels {
 
 impl Labels {
     pub fn new(w: usize, h: usize, d: usize) -> Labels {
-        Labels {
-            w,
-            h,
-            d,
-            slices: vec![None; d],
-            undo: vec![],
-            redo: vec![],
-            materials: vec![],
-            dirty: false,
-        }
+        Labels { w, h, d, slices: vec![None; d], undo: vec![], redo: vec![], materials: vec![], dirty: false }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -229,11 +200,7 @@ impl Labels {
     }
 
     fn locked(&self) -> Vec<u16> {
-        self.materials
-            .iter()
-            .filter(|m| m.locked)
-            .map(|m| m.label)
-            .collect()
+        self.materials.iter().filter(|m| m.locked).map(|m| m.label).collect()
     }
 
     /// Replaces the material list (entries for label 0 are dropped).
@@ -248,12 +215,7 @@ impl Labels {
     }
 
     pub fn max_label(&self) -> u16 {
-        self.slices
-            .iter()
-            .flatten()
-            .map(|s| s.iter().copied().max().unwrap_or(0))
-            .max()
-            .unwrap_or(0)
+        self.slices.iter().flatten().map(|s| s.iter().copied().max().unwrap_or(0)).max().unwrap_or(0)
     }
 
     /// Voxel count of every label, indexed by label (index 0 is unused).
@@ -279,21 +241,13 @@ impl Labels {
                 for &v in s {
                     n[v as usize] += 1;
                 }
-                (1..n.len())
-                    .max_by_key(|&k| n[k])
-                    .filter(|&k| n[k] > 0)
-                    .unwrap_or(0) as u16
+                (1..n.len()).max_by_key(|&k| n[k]).filter(|&k| n[k] > 0).unwrap_or(0) as u16
             })
             .collect()
     }
 
     /// Mutable slice `z`, remembering its old contents in `edit` first.
-    fn touch<'a>(
-        slices: &'a mut [Option<Vec<u16>>],
-        edit: &mut Edit,
-        z: usize,
-        n: usize,
-    ) -> &'a mut Vec<u16> {
+    fn touch<'a>(slices: &'a mut [Option<Vec<u16>>], edit: &mut Edit, z: usize, n: usize) -> &'a mut Vec<u16> {
         if !edit.iter().any(|(k, _)| *k == z) {
             edit.push((z, slices[z].clone()));
         }
@@ -303,10 +257,7 @@ impl Labels {
     /// Records `edit` for undo and returns the slices that really changed.
     fn commit(&mut self, mut edit: Edit) -> Vec<usize> {
         for (z, _) in &edit {
-            if self.slices[*z]
-                .as_ref()
-                .is_some_and(|s| s.iter().all(|&v| v == 0))
-            {
+            if self.slices[*z].as_ref().is_some_and(|s| s.iter().all(|&v| v == 0)) {
                 self.slices[*z] = None;
             }
         }
@@ -319,11 +270,7 @@ impl Labels {
         self.undo.push(edit);
         self.redo.clear();
         self.dirty = true;
-        let size = |e: &Edit| {
-            e.iter()
-                .map(|(_, s)| s.as_ref().map_or(0, |s| s.len() * 2))
-                .sum::<usize>()
-        };
+        let size = |e: &Edit| e.iter().map(|(_, s)| s.as_ref().map_or(0, |s| s.len() * 2)).sum::<usize>();
         let mut total: usize = self.undo.iter().map(size).sum();
         while total > HISTORY_BYTES && self.undo.len() > 1 {
             total -= size(&self.undo.remove(0));
@@ -343,18 +290,14 @@ impl Labels {
     }
 
     pub fn undo(&mut self) -> Vec<usize> {
-        let Some(e) = self.undo.pop() else {
-            return vec![];
-        };
+        let Some(e) = self.undo.pop() else { return vec![] };
         let (back, zs) = self.swap(e);
         self.redo.push(back);
         zs
     }
 
     pub fn redo(&mut self) -> Vec<usize> {
-        let Some(e) = self.redo.pop() else {
-            return vec![];
-        };
+        let Some(e) = self.redo.pop() else { return vec![] };
         let (back, zs) = self.swap(e);
         self.undo.push(back);
         zs
@@ -362,14 +305,7 @@ impl Labels {
 
     /// Paints a round brush of `radius` pixels along `pts` (image
     /// coordinates; pixel x covers x..x+1). Label 0 erases.
-    pub fn stroke(
-        &mut self,
-        z: usize,
-        pts: &[[f32; 2]],
-        radius: f32,
-        label: u16,
-        guard: u16,
-    ) -> Vec<usize> {
+    pub fn stroke(&mut self, z: usize, pts: &[[f32; 2]], radius: f32, label: u16, guard: u16) -> Vec<usize> {
         if z >= self.d || pts.is_empty() {
             return vec![];
         }
@@ -411,17 +347,7 @@ impl Labels {
     /// Flood fill from (x, y, z) over connected pixels whose value is within
     /// `tol` of the clicked one; `three_d` also grows through Z.
     #[allow(clippy::too_many_arguments)]
-    pub fn wand(
-        &mut self,
-        vol: &dyn Values,
-        x: usize,
-        y: usize,
-        z: usize,
-        tol: f32,
-        label: u16,
-        guard: u16,
-        three_d: bool,
-    ) -> Result<Vec<usize>> {
+    pub fn wand(&mut self, vol: &dyn Values, x: usize, y: usize, z: usize, tol: f32, label: u16, guard: u16, three_d: bool) -> Result<Vec<usize>> {
         let (w, h, d) = (self.w, self.h, self.d);
         if x >= w || y >= h || z >= d {
             return Ok(vec![]);
@@ -440,9 +366,7 @@ impl Labels {
             let vals = vol.slice(cz)?;
             let bits = seen.entry(cz).or_insert_with(|| Bits::new(n));
             let s = Self::touch(&mut self.slices, &mut edit, cz, n);
-            let ok = |i: usize, s: &[u16]| {
-                (vals[i] - seed).abs() <= tol && allowed(s[i], label, guard, &locked)
-            };
+            let ok = |i: usize, s: &[u16]| (vals[i] - seed).abs() <= tol && allowed(s[i], label, guard, &locked);
             while let Some(i) = stack.pop() {
                 if bits.get(i) || !ok(i, s) {
                     continue;
@@ -454,18 +378,10 @@ impl Labels {
                     bail!("区域太大，请调小容差");
                 }
                 let (px, py) = (i % w, i / w);
-                if px > 0 {
-                    stack.push(i - 1)
-                }
-                if px + 1 < w {
-                    stack.push(i + 1)
-                }
-                if py > 0 {
-                    stack.push(i - w)
-                }
-                if py + 1 < h {
-                    stack.push(i + w)
-                }
+                if px > 0 { stack.push(i - 1) }
+                if px + 1 < w { stack.push(i + 1) }
+                if py > 0 { stack.push(i - w) }
+                if py + 1 < h { stack.push(i + w) }
                 // Pixels of the next slices are checked when that slice is worked on.
                 if three_d {
                     if cz > 0 {
@@ -485,17 +401,7 @@ impl Labels {
     /// pixels gets its own new label, counting up from the highest label in
     /// use; otherwise they all get `label`. Returns the changed slices.
     #[allow(clippy::too_many_arguments)]
-    pub fn threshold(
-        &mut self,
-        vol: &dyn Values,
-        zs: Range<usize>,
-        lo: f32,
-        hi: f32,
-        label: u16,
-        guard: u16,
-        split: bool,
-        min_size: usize,
-    ) -> Result<Vec<usize>> {
+    pub fn threshold(&mut self, vol: &dyn Values, zs: Range<usize>, lo: f32, hi: f32, label: u16, guard: u16, split: bool, min_size: usize) -> Result<Vec<usize>> {
         let zs = zs.start.min(self.d)..zs.end.min(self.d);
         let n = self.w * self.h;
         let locked = self.locked();
@@ -547,24 +453,12 @@ impl Labels {
                             stack.push((z, j));
                         }
                     };
-                    if px > 0 {
-                        visit(cz, i - 1)
-                    }
-                    if px + 1 < w {
-                        visit(cz, i + 1)
-                    }
-                    if py > 0 {
-                        visit(cz, i - w)
-                    }
-                    if py + 1 < h {
-                        visit(cz, i + w)
-                    }
-                    if cz > 0 {
-                        visit(cz - 1, i)
-                    }
-                    if cz + 1 < nz {
-                        visit(cz + 1, i)
-                    }
+                    if px > 0 { visit(cz, i - 1) }
+                    if px + 1 < w { visit(cz, i + 1) }
+                    if py > 0 { visit(cz, i - w) }
+                    if py + 1 < h { visit(cz, i + w) }
+                    if cz > 0 { visit(cz - 1, i) }
+                    if cz + 1 < nz { visit(cz + 1, i) }
                 }
                 if region.len() > MAX_REGION {
                     bail!("区域太大，请收窄阈值范围");
@@ -602,14 +496,8 @@ impl Labels {
                 for x in 0..w {
                     let (xm, xp) = (x.saturating_sub(1), (x + 1).min(w - 1));
                     let p = |xx: usize, yy: usize| v[yy * w + xx];
-                    let gx = p(xp, ym) + 2.0 * p(xp, y) + p(xp, yp)
-                        - p(xm, ym)
-                        - 2.0 * p(xm, y)
-                        - p(xm, yp);
-                    let gy = p(xm, yp) + 2.0 * p(x, yp) + p(xp, yp)
-                        - p(xm, ym)
-                        - 2.0 * p(x, ym)
-                        - p(xp, ym);
+                    let gx = p(xp, ym) + 2.0 * p(xp, y) + p(xp, yp) - p(xm, ym) - 2.0 * p(xm, y) - p(xm, yp);
+                    let gy = p(xm, yp) + 2.0 * p(x, yp) + p(xp, yp) - p(xm, ym) - 2.0 * p(x, ym) - p(xp, ym);
                     let m = (gx * gx + gy * gy).sqrt();
                     if m.is_finite() {
                         g[y * w + x] = m;
@@ -620,13 +508,7 @@ impl Labels {
             grad.push(g);
         }
         const LEVELS: usize = 1024;
-        let level = |g: f32| {
-            if gmax > 0.0 {
-                ((g / gmax) * (LEVELS - 1) as f32) as usize
-            } else {
-                0
-            }
-        };
+        let level = |g: f32| if gmax > 0.0 { ((g / gmax) * (LEVELS - 1) as f32) as usize } else { 0 };
         // Bucket queue of (slice in range, pixel, label).
         let mut queue: Vec<Vec<(u32, u32, u16)>> = vec![vec![]; LEVELS];
         let mut edit = vec![];
@@ -638,24 +520,12 @@ impl Labels {
         let neighbours = |cz: usize, i: usize, out: &mut Vec<(usize, usize)>| {
             out.clear();
             let (px, py) = (i % w, i / w);
-            if px > 0 {
-                out.push((cz, i - 1))
-            }
-            if px + 1 < w {
-                out.push((cz, i + 1))
-            }
-            if py > 0 {
-                out.push((cz, i - w))
-            }
-            if py + 1 < h {
-                out.push((cz, i + w))
-            }
-            if cz > 0 {
-                out.push((cz - 1, i))
-            }
-            if cz + 1 < nz {
-                out.push((cz + 1, i))
-            }
+            if px > 0 { out.push((cz, i - 1)) }
+            if px + 1 < w { out.push((cz, i + 1)) }
+            if py > 0 { out.push((cz, i - w)) }
+            if py + 1 < h { out.push((cz, i + w)) }
+            if cz > 0 { out.push((cz - 1, i)) }
+            if cz + 1 < nz { out.push((cz + 1, i)) }
         };
         let mut nb = Vec::with_capacity(6);
         for cz in 0..nz {
@@ -765,13 +635,7 @@ impl Labels {
             .into_par_iter()
             .map(|(z, a, b, ma, mb)| {
                 let t = (z - a) as f32 / (b - a) as f32;
-                let px = ma
-                    .iter()
-                    .zip(mb)
-                    .enumerate()
-                    .filter(|(_, (x, y))| (1.0 - t) * **x + t * **y < 0.0)
-                    .map(|(i, _)| i)
-                    .collect();
+                let px = ma.iter().zip(mb).enumerate().filter(|(_, (x, y))| (1.0 - t) * **x + t * **y < 0.0).map(|(i, _)| i).collect();
                 (z, px)
             })
             .collect();
@@ -791,25 +655,12 @@ impl Labels {
     /// Paints `label` (0 erases) wherever `mask` is set on slice `z`.
     /// With `trim`, pixels of `label` outside the mask on that slice are
     /// cleared too (a rough brush outline refined by SAM).
-    pub fn apply_mask(
-        &mut self,
-        z: usize,
-        mask: &[bool],
-        label: u16,
-        guard: u16,
-        trim: bool,
-    ) -> Vec<usize> {
+    pub fn apply_mask(&mut self, z: usize, mask: &[bool], label: u16, guard: u16, trim: bool) -> Vec<usize> {
         self.apply_masks(&[(z, mask)], label, guard, trim)
     }
 
     /// `apply_mask` on several slices as one undo step.
-    pub fn apply_masks(
-        &mut self,
-        masks: &[(usize, &[bool])],
-        label: u16,
-        guard: u16,
-        trim: bool,
-    ) -> Vec<usize> {
+    pub fn apply_masks(&mut self, masks: &[(usize, &[bool])], label: u16, guard: u16, trim: bool) -> Vec<usize> {
         let locked = self.locked();
         let mut edit = vec![];
         for &(z, mask) in masks {
@@ -860,13 +711,7 @@ impl Labels {
 
     /// The pixels of the label at (x, y, z) connected to it, by slice:
     /// 4-connected within a slice and, with `three_d`, through Z as well.
-    fn region(
-        &self,
-        x: usize,
-        y: usize,
-        z: usize,
-        three_d: bool,
-    ) -> (u16, BTreeMap<usize, Vec<usize>>) {
+    fn region(&self, x: usize, y: usize, z: usize, three_d: bool) -> (u16, BTreeMap<usize, Vec<usize>>) {
         let (w, h, d) = (self.w, self.h, self.d);
         let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         if x >= w || y >= h || z >= d {
@@ -880,9 +725,7 @@ impl Labels {
         let mut seen: HashMap<usize, Bits> = HashMap::new();
         let mut stack = vec![(z, y * w + x)];
         while let Some((cz, i)) = stack.pop() {
-            let Some(s) = self.slices[cz].as_ref() else {
-                continue;
-            };
+            let Some(s) = self.slices[cz].as_ref() else { continue };
             let bits = seen.entry(cz).or_insert_with(|| Bits::new(n));
             if bits.get(i) || s[i] != k {
                 continue;
@@ -890,25 +733,13 @@ impl Labels {
             bits.set(i);
             out.entry(cz).or_default().push(i);
             let (px, py) = (i % w, i / w);
-            if px > 0 {
-                stack.push((cz, i - 1))
-            }
-            if px + 1 < w {
-                stack.push((cz, i + 1))
-            }
-            if py > 0 {
-                stack.push((cz, i - w))
-            }
-            if py + 1 < h {
-                stack.push((cz, i + w))
-            }
+            if px > 0 { stack.push((cz, i - 1)) }
+            if px + 1 < w { stack.push((cz, i + 1)) }
+            if py > 0 { stack.push((cz, i - w)) }
+            if py + 1 < h { stack.push((cz, i + w)) }
             if three_d {
-                if cz > 0 {
-                    stack.push((cz - 1, i))
-                }
-                if cz + 1 < d {
-                    stack.push((cz + 1, i))
-                }
+                if cz > 0 { stack.push((cz - 1, i)) }
+                if cz + 1 < d { stack.push((cz + 1, i)) }
             }
         }
         (k, out)
@@ -934,15 +765,7 @@ impl Labels {
     /// Moves the region at (x, y, z) by (dx, dy) pixels within its slices.
     /// Pixels moved off the image are lost; it covers other labels except
     /// locked ones.
-    pub fn move_region(
-        &mut self,
-        x: usize,
-        y: usize,
-        z: usize,
-        dx: i64,
-        dy: i64,
-        three_d: bool,
-    ) -> Vec<usize> {
+    pub fn move_region(&mut self, x: usize, y: usize, z: usize, dx: i64, dy: i64, three_d: bool) -> Vec<usize> {
         let (k, region) = self.region(x, y, z, three_d);
         let locked = self.locked();
         if k == 0 || locked.contains(&k) || (dx == 0 && dy == 0) {
@@ -1017,35 +840,24 @@ impl Labels {
             self.dirty = false;
             return Ok(false);
         }
-        use tiff::encoder::{
-            colortype::Gray16, compression::DeflateLevel, Compression, TiffEncoder,
-        };
+        use tiff::encoder::{colortype::Gray16, compression::DeflateLevel, Compression, TiffEncoder};
         use tiff::tags::Tag;
         let tmp = path.with_extension("tif.tmp");
         {
             let file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            let mut enc =
-                TiffEncoder::new(file)?.with_compression(Compression::Deflate(DeflateLevel::Fast));
+            let mut enc = TiffEncoder::new(file)?.with_compression(Compression::Deflate(DeflateLevel::Fast));
             let zero = vec![0u16; self.w * self.h];
             // ImageJ reads the pages as a Z stack.
             // Names and colours ride along on a line of their own, which ImageJ ignores.
-            let mut desc = format!(
-                "ImageJ=1.11a\nimages={0}\nslices={0}\nhyperstack=false\n",
-                self.d
-            );
+            let mut desc = format!("ImageJ=1.11a\nimages={0}\nslices={0}\nhyperstack=false\n", self.d);
             if !self.materials.is_empty() {
-                desc += &format!(
-                    "{MATERIALS_KEY}{}\n",
-                    ascii_json(&serde_json::to_string(&self.materials)?)
-                );
+                desc += &format!("{MATERIALS_KEY}{}\n", ascii_json(&serde_json::to_string(&self.materials)?));
             }
             for z in 0..self.d {
                 let mut img = enc.new_image::<Gray16>(self.w as u32, self.h as u32)?;
                 if z == 0 {
-                    img.encoder()
-                        .write_tag(Tag::ImageDescription, desc.as_str())?;
-                    img.encoder()
-                        .write_tag(Tag::Software, "TifMrcView Pro labels")?;
+                    img.encoder().write_tag(Tag::ImageDescription, desc.as_str())?;
+                    img.encoder().write_tag(Tag::Software, "TifMrcView Pro labels")?;
                 }
                 img.write_data(self.slices[z].as_deref().unwrap_or(&zero))?;
             }
@@ -1105,11 +917,7 @@ pub fn labels_path(image: &str, series: usize) -> String {
 
 /// Whether `path` is a label file of some image (kept out of folder lists).
 pub fn is_labels_file(path: &Path) -> bool {
-    path.file_name().is_some_and(|n| {
-        n.to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".labels.tif")
-    })
+    path.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().ends_with(".labels.tif"))
 }
 
 /// Label maps of the open images, by image token.
@@ -1154,9 +962,7 @@ mod tests {
     struct Fake<F: Fn(usize, usize, usize) -> f32 + Sync>(usize, usize, F);
     impl<F: Fn(usize, usize, usize) -> f32 + Sync> Values for Fake<F> {
         fn slice(&self, z: usize) -> Result<Vec<f32>> {
-            Ok((0..self.0 * self.1)
-                .map(|i| (self.2)(i % self.0, i / self.0, z))
-                .collect())
+            Ok((0..self.0 * self.1).map(|i| (self.2)(i % self.0, i / self.0, z)).collect())
         }
     }
 
@@ -1164,18 +970,11 @@ mod tests {
     fn classes_respect_locks_and_undo() {
         let mut l = Labels::new(4, 2, 2);
         l.stroke(0, &[[0.5, 0.5]], 0.5, 5, 0);
-        l.set_materials(vec![Material {
-            label: 5,
-            locked: true,
-            ..Default::default()
-        }]);
+        l.set_materials(vec![Material { label: 5, locked: true, ..Default::default() }]);
         let classes = vec![1, 2, 2, 0, 1, 1, 2, 2];
         assert_eq!(l.apply_classes(&[(0, classes.clone())], 0), vec![0]);
         // Locked label 5 stays, 0 leaves the pixel alone.
-        assert_eq!(
-            (0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(),
-            vec![5, 2, 2, 0]
-        );
+        assert_eq!((0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(), vec![5, 2, 2, 0]);
         assert_eq!(l.get(3, 1, 0), 2);
         assert_eq!(l.undo(), vec![0]);
         assert_eq!(l.get(1, 0, 0), 0);
@@ -1218,15 +1017,7 @@ mod tests {
         l.stroke(0, &[[7.5, 7.5]], 1.0, 1, 0);
         // Only the touched blob moves; the other one of the same label stays.
         assert_eq!(l.move_region(2, 2, 0, 3, 0, false), vec![0]);
-        assert_eq!(
-            (
-                l.get(2, 2, 0),
-                l.get(5, 2, 0),
-                l.get(7, 7, 0),
-                l.get(2, 2, 1)
-            ),
-            (0, 1, 1, 1)
-        );
+        assert_eq!((l.get(2, 2, 0), l.get(5, 2, 0), l.get(7, 7, 0), l.get(2, 2, 1)), (0, 1, 1, 1));
         // Through Z: the blob on slice 1 is joined to nothing at (5, 2) any more.
         assert_eq!(l.delete_region(5, 2, 0, true), vec![0]);
         assert_eq!((l.get(5, 2, 0), l.get(2, 2, 1)), (0, 1));
@@ -1242,21 +1033,14 @@ mod tests {
         let mut l = Labels::new(4, 1, 1);
         l.stroke(0, &[[0.5, 0.5], [3.5, 0.5]], 0.6, 2, 0);
         l.apply_mask(0, &[false, true, true, false], 2, 0, true);
-        assert_eq!(
-            (0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(),
-            vec![0, 2, 2, 0]
-        );
+        assert_eq!((0..4).map(|x| l.get(x, 0, 0)).collect::<Vec<_>>(), vec![0, 2, 2, 0]);
     }
 
     #[test]
     fn locked_labels_stay() {
         let mut l = Labels::new(10, 10, 1);
         l.stroke(0, &[[2.5, 2.5]], 1.0, 1, 0);
-        l.set_materials(vec![Material {
-            label: 1,
-            locked: true,
-            ..Default::default()
-        }]);
+        l.set_materials(vec![Material { label: 1, locked: true, ..Default::default() }]);
         l.stroke(0, &[[2.5, 2.5]], 3.0, 2, 0);
         assert_eq!(l.get(2, 2, 0), 1);
         assert_eq!(l.get(4, 2, 0), 2);
@@ -1285,12 +1069,7 @@ mod tests {
         assert_eq!(l.get(7, 5, 0), 3);
         assert_eq!(l.get(8, 2, 0), 0);
         assert_eq!(l.get(2, 6, 0), 0);
-        l.polygon(
-            0,
-            &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
-            0,
-            0,
-        );
+        l.polygon(0, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], 0, 0);
         assert!(l.is_empty());
     }
 
@@ -1298,27 +1077,13 @@ mod tests {
     fn interpolation_morphs_between_slices() {
         let mut l = Labels::new(30, 30, 5);
         // Small square on slice 0, big square on slice 4.
-        l.polygon(
-            0,
-            &[[10.0, 10.0], [14.0, 10.0], [14.0, 14.0], [10.0, 14.0]],
-            1,
-            0,
-        );
-        l.polygon(
-            4,
-            &[[6.0, 6.0], [22.0, 6.0], [22.0, 22.0], [6.0, 22.0]],
-            1,
-            0,
-        );
+        l.polygon(0, &[[10.0, 10.0], [14.0, 10.0], [14.0, 14.0], [10.0, 14.0]], 1, 0);
+        l.polygon(4, &[[6.0, 6.0], [22.0, 6.0], [22.0, 22.0], [6.0, 22.0]], 1, 0);
         l.stroke(2, &[[28.5, 28.5]], 0.5, 2, 0);
         let zs = l.interpolate(1, 0);
         assert_eq!(zs, vec![1, 2, 3]);
         let n = |z: usize| (0..900).filter(|&i| l.get(i % 30, i / 30, z) == 1).count();
-        assert!(
-            n(0) < n(1) && n(1) < n(2) && n(2) < n(3) && n(3) < n(4),
-            "{:?}",
-            (0..5).map(n).collect::<Vec<_>>()
-        );
+        assert!(n(0) < n(1) && n(1) < n(2) && n(2) < n(3) && n(3) < n(4), "{:?}", (0..5).map(n).collect::<Vec<_>>());
         assert_eq!(l.get(28, 28, 2), 2, "other labels stay");
         assert!(l.interpolate(1, 0).is_empty(), "nothing left to fill");
     }
@@ -1326,13 +1091,7 @@ mod tests {
     #[test]
     fn wand_stays_inside_region() {
         // A bright 4x4 square in each slice, dark elsewhere.
-        let vol = Fake(10, 10, |x, y, _| {
-            if (3..7).contains(&x) && (3..7).contains(&y) {
-                100.0
-            } else {
-                0.0
-            }
-        });
+        let vol = Fake(10, 10, |x, y, _| if (3..7).contains(&x) && (3..7).contains(&y) { 100.0 } else { 0.0 });
         let mut l = Labels::new(10, 10, 4);
         l.wand(&vol, 4, 4, 1, 10.0, 5, 0, false).unwrap();
         assert_eq!(l.counts()[5], 16);
@@ -1346,11 +1105,7 @@ mod tests {
     fn threshold_splits_regions() {
         // Two separate bright columns through all slices plus one lone pixel.
         let vol = Fake(12, 6, |x, y, z| {
-            if x < 3 || x > 8 || (x == 6 && y == 3 && z == 0) {
-                50.0
-            } else {
-                0.0
-            }
+            if x < 3 || x > 8 || (x == 6 && y == 3 && z == 0) { 50.0 } else { 0.0 }
         });
         let mut l = Labels::new(12, 6, 3);
         l.threshold(&vol, 0..3, 10.0, 100.0, 1, 0, true, 5).unwrap();
@@ -1359,8 +1114,7 @@ mod tests {
         assert_eq!((c[1], c[2]), (54, 54));
         assert_eq!(l.get(6, 3, 0), 0);
         l.undo();
-        l.threshold(&vol, 0..1, 10.0, 100.0, 4, 0, false, 0)
-            .unwrap();
+        l.threshold(&vol, 0..1, 10.0, 100.0, 4, 0, false, 0).unwrap();
         assert_eq!(l.counts()[4], 37);
     }
 
@@ -1403,13 +1157,7 @@ mod tests {
         let path = dir.path().join("a.mrc.labels.tif");
         let mut l = Labels::new(9, 7, 5);
         l.stroke(3, &[[4.0, 3.0]], 2.0, 1234, 0);
-        l.set_materials(vec![Material {
-            label: 1234,
-            name: "膜 \"a\"\nb 🦠".into(),
-            color: Some([1, 2, 3]),
-            hidden: true,
-            locked: false,
-        }]);
+        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false }]);
         assert!(l.save(&path).unwrap());
         assert!(!l.dirty);
         let back = Labels::load(&path, 9, 7, 5).unwrap();

@@ -47,14 +47,7 @@ pub fn fsc(a: &[f32], b: &[f32], shape: [usize; 3], pixel_a: f64) -> Vec<(f64, f
             }
         }
     }
-    (1..=shells)
-        .map(|s| {
-            (
-                s as f64 / (2.0 * shells as f64) / pixel_a,
-                num[s] / (da[s] * db[s]).sqrt().max(1e-30),
-            )
-        })
-        .collect()
+    (1..=shells).map(|s| (s as f64 / (2.0 * shells as f64) / pixel_a, num[s] / (da[s] * db[s]).sqrt().max(1e-30))).collect()
 }
 
 /// The frequency (1/Å) where the curve first drops below `threshold`.
@@ -70,11 +63,7 @@ pub fn crossing(curve: &[(f64, f64)], threshold: f64) -> f64 {
 
 /// Mean FSC between two frequencies (1/Å): a steadier single number than a crossing.
 pub fn mean_between(curve: &[(f64, f64)], lo: f64, hi: f64) -> f64 {
-    let v: Vec<f64> = curve
-        .iter()
-        .filter(|c| c.0 >= lo && c.0 <= hi)
-        .map(|c| c.1)
-        .collect();
+    let v: Vec<f64> = curve.iter().filter(|c| c.0 >= lo && c.0 <= hi).map(|c| c.1).collect();
     v.iter().sum::<f64>() / v.len().max(1) as f64
 }
 
@@ -84,15 +73,8 @@ fn fft3(v: &[f32], [nx, ny, nz]: [usize; 3]) -> Vec<(f64, f64)> {
     let mut re = v.to_vec();
     let mut im = vec![0f32; v.len()];
     let fx = crate::fft::Fft::new(nx);
-    re.par_chunks_mut(nx)
-        .zip(im.par_chunks_mut(nx))
-        .for_each(|(r, i)| fx.run(r, i));
-    let along = |re: &mut Vec<f32>,
-                 im: &mut Vec<f32>,
-                 n: usize,
-                 stride: usize,
-                 count: usize,
-                 base: &(dyn Fn(usize) -> usize + Sync)| {
+    re.par_chunks_mut(nx).zip(im.par_chunks_mut(nx)).for_each(|(r, i)| fx.run(r, i));
+    let along = |re: &mut Vec<f32>, im: &mut Vec<f32>, n: usize, stride: usize, count: usize, base: &(dyn Fn(usize) -> usize + Sync)| {
         let f = crate::fft::Fft::new(n);
         let lines: Vec<(Vec<f32>, Vec<f32>)> = (0..count)
             .into_par_iter()
@@ -112,16 +94,11 @@ fn fft3(v: &[f32], [nx, ny, nz]: [usize; 3]) -> Vec<(f64, f64)> {
             }
         }
     };
-    along(&mut re, &mut im, ny, nx, nx * nz, &|l| {
-        (l / nx) * nx * ny + l % nx
-    });
+    along(&mut re, &mut im, ny, nx, nx * nz, &|l| (l / nx) * nx * ny + l % nx);
     if nz > 1 {
         along(&mut re, &mut im, nz, nx * ny, nx * ny, &|l| l);
     }
-    re.into_iter()
-        .zip(im)
-        .map(|(r, i)| (r as f64, i as f64))
-        .collect()
+    re.into_iter().zip(im).map(|(r, i)| (r as f64, i as f64)).collect()
 }
 
 /// FRC of two images [y][x] of the same shape, central power-of-two box.
@@ -149,19 +126,12 @@ fn fsc_shells(a: &[f32], b: &[f32], shape: [usize; 3], pixel_a: f64) -> Vec<(f64
     };
     let (fa, fb) = (fft3(&crop(a), [nx, ny, nz]), fft3(&crop(b), [nx, ny, nz]));
     let shells = nx.min(ny) / 2;
-    let (mut num, mut da, mut db) = (
-        vec![0f64; shells + 1],
-        vec![0f64; shells + 1],
-        vec![0f64; shells + 1],
-    );
+    let (mut num, mut da, mut db) = (vec![0f64; shells + 1], vec![0f64; shells + 1], vec![0f64; shells + 1]);
     let f = |i: usize, n: usize| crate::motion::sum::freq(i, n) / n as f64;
     for k in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
-                let r = (f(x, nx).powi(2)
-                    + f(y, ny).powi(2)
-                    + if nz > 1 { f(k, nz).powi(2) } else { 0.0 })
-                .sqrt();
+                let r = (f(x, nx).powi(2) + f(y, ny).powi(2) + if nz > 1 { f(k, nz).powi(2) } else { 0.0 }).sqrt();
                 let s = (r * 2.0 * shells as f64).round() as usize;
                 if s > shells {
                     continue;
@@ -174,26 +144,12 @@ fn fsc_shells(a: &[f32], b: &[f32], shape: [usize; 3], pixel_a: f64) -> Vec<(f64
             }
         }
     }
-    (1..=shells)
-        .map(|s| {
-            (
-                s as f64 / (2.0 * shells as f64) / pixel_a,
-                num[s] / (da[s] * db[s]).sqrt().max(1e-30),
-            )
-        })
-        .collect()
+    (1..=shells).map(|s| (s as f64 / (2.0 * shells as f64) / pixel_a, num[s] / (da[s] * db[s]).sqrt().max(1e-30))).collect()
 }
 
 /// Projects a volume [z][y][x] (thickness z, width w, height h) along a
 /// view tilted by θ: one image [y][x], with `recon`'s forward projector.
-pub fn project(
-    vol: &[f32],
-    w: usize,
-    h: usize,
-    z: usize,
-    theta: f64,
-    z_offset: f64,
-) -> anyhow::Result<Vec<f32>> {
+pub fn project(vol: &[f32], w: usize, h: usize, z: usize, theta: f64, z_offset: f64) -> anyhow::Result<Vec<f32>> {
     use rayon::prelude::*;
     let g = super::recon::Geometry::new(w, z, &[theta, theta + 1e-3, theta + 2e-3], z_offset)?;
     let mut one = g.clone();
@@ -202,9 +158,7 @@ pub fn project(
     let rows: Vec<Vec<f32>> = (0..h)
         .into_par_iter()
         .map(|y| {
-            let slice: Vec<f32> = (0..z)
-                .flat_map(|k| vol[(k * h + y) * w..(k * h + y + 1) * w].iter().copied())
-                .collect();
+            let slice: Vec<f32> = (0..z).flat_map(|k| vol[(k * h + y) * w..(k * h + y + 1) * w].iter().copied()).collect();
             super::recon::forward(&one, &slice)
         })
         .collect();

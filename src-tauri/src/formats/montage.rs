@@ -49,28 +49,18 @@ pub fn from_mdoc(text: &str, sections: usize) -> Option<Vec<[i64; 3]>> {
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("[ZValue") {
-            z = rest
-                .trim_start_matches([' ', '='])
-                .trim_end_matches(']')
-                .trim()
-                .parse()
-                .ok();
+            z = rest.trim_start_matches([' ', '=']).trim_end_matches(']').trim().parse().ok();
             continue;
         }
         if line.starts_with('[') {
             z = None;
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
+        let Some((key, value)) = line.split_once('=') else { continue };
         match (key.trim(), z) {
             ("Montage", None) => montage = value.trim() == "1",
             ("PieceCoordinates", Some(z)) if z < sections => {
-                let v: Vec<i64> = value
-                    .split_whitespace()
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
+                let v: Vec<i64> = value.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                 if v.len() >= 2 {
                     out[z] = Some([v[0], v[1], v.get(2).copied().unwrap_or(0)]);
                 }
@@ -96,13 +86,7 @@ fn from_extended_header(mrc: &MrcSource) -> Option<Vec<[i64; 3]>> {
         return None;
     }
     let at = if flags & 1 != 0 { 2 } else { 0 };
-    let read = |b: &[u8]| -> i64 {
-        (if mrc.little() {
-            u16::from_le_bytes([b[0], b[1]])
-        } else {
-            u16::from_be_bytes([b[0], b[1]])
-        }) as i64
-    };
+    let read = |b: &[u8]| -> i64 { (if mrc.little() { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) }) as i64 };
     (0..mrc.stack_depth())
         .map(|s| {
             let e = ext.get(s * nint + at..s * nint + at + 6)?;
@@ -136,12 +120,7 @@ pub fn layout(coords: &[[i64; 3]], w: usize, h: usize) -> Option<(Vec<Vec<Piece>
                 .filter(|(_, c)| c[2] == z)
                 .map(|(section, c)| {
                     let (x, y) = (c[0] as usize, c[1] as usize);
-                    Piece {
-                        section,
-                        x,
-                        y,
-                        own: [x, x + w, y, y + h],
-                    }
+                    Piece { section, x, y, own: [x, x + w, y, y + h] }
                 })
                 .collect();
             split_overlaps(&mut pieces, w, h);
@@ -160,10 +139,7 @@ fn split_overlaps(pieces: &mut [Piece], w: usize, h: usize) {
     for p in pieces.iter_mut() {
         for q in &all {
             let (dx, dy) = (q.x as i64 - p.x as i64, q.y as i64 - p.y as i64);
-            if (dx == 0 && dy == 0)
-                || dx.unsigned_abs() as usize >= w
-                || dy.unsigned_abs() as usize >= h
-            {
+            if (dx == 0 && dy == 0) || dx.unsigned_abs() as usize >= w || dy.unsigned_abs() as usize >= h {
                 continue;
             }
             if dx.abs() >= dy.abs() {
@@ -222,23 +198,14 @@ fn open_scaled(path: &Path, series: usize, max_side: Option<usize>) -> Result<Bo
         return Ok(Box::new(mrc));
     };
     let list = vec![
-        SeriesInfo {
-            name: "拼好的 montage".into(),
-            detail: format!("{width}×{height}"),
-        },
-        SeriesInfo {
-            name: "单张 piece".into(),
-            detail: format!("{}×{} × {}", base.width, base.height, base.size_z),
-        },
+        SeriesInfo { name: "拼好的 montage".into(), detail: format!("{width}×{height}") },
+        SeriesInfo { name: "单张 piece".into(), detail: format!("{}×{} × {}", base.width, base.height, base.size_z) },
     ];
     let group = MetaGroup {
         name: "Montage 拼图".into(),
         items: vec![
             ["piece 数".into(), coords.len().to_string()],
-            [
-                "piece 大小".into(),
-                format!("{}×{}", base.width, base.height),
-            ],
+            ["piece 大小".into(), format!("{}×{}", base.width, base.height)],
             ["拼好的大小".into(), format!("{width}×{height}")],
             ["坐标来源".into(), from.into()],
         ],
@@ -266,14 +233,7 @@ fn open_scaled(path: &Path, series: usize, max_side: Option<usize>) -> Result<Bo
     info.series_index = 0;
     info.metadata.insert(0, group);
     let fill = mrc.header_mean();
-    Ok(Box::new(Montage {
-        pieces: mrc,
-        info,
-        planes,
-        bin,
-        fill,
-        done: AtomicUsize::new(0),
-    }))
+    Ok(Box::new(Montage { pieces: mrc, info, planes, bin, fill, done: AtomicUsize::new(0) }))
 }
 
 impl Source for Montage {
@@ -302,28 +262,23 @@ impl Source for Montage {
                 // in native order, else decoded.
                 let decoded;
                 let src = match self.pieces.raw_page(p.section) {
-                    Some((raw, little)) if little == cfg!(target_endian = "little") || es == 1 => {
-                        raw
-                    }
+                    Some((raw, little)) if little == cfg!(target_endian = "little") || es == 1 => raw,
                     _ => {
                         decoded = self.pieces.read_page(p.section)?;
                         decoded[0].data.as_bytes()
                     }
                 };
-                out[y0 * w * es..y1 * w * es]
-                    .par_chunks_mut(w * es)
-                    .enumerate()
-                    .for_each(|(i, row)| {
-                        let s = ((y0 + i) * bin - p.y) * pw + x0 * bin - p.x;
-                        if bin == 1 {
-                            row[x0 * es..x1 * es].copy_from_slice(&src[s * es..(s + x1 - x0) * es]);
-                        } else {
-                            for (k, o) in row[x0 * es..x1 * es].chunks_exact_mut(es).enumerate() {
-                                let at = (s + k * bin) * es;
-                                o.copy_from_slice(&src[at..at + es]);
-                            }
+                out[y0 * w * es..y1 * w * es].par_chunks_mut(w * es).enumerate().for_each(|(i, row)| {
+                    let s = ((y0 + i) * bin - p.y) * pw + x0 * bin - p.x;
+                    if bin == 1 {
+                        row[x0 * es..x1 * es].copy_from_slice(&src[s * es..(s + x1 - x0) * es]);
+                    } else {
+                        for (k, o) in row[x0 * es..x1 * es].chunks_exact_mut(es).enumerate() {
+                            let at = (s + k * bin) * es;
+                            o.copy_from_slice(&src[at..at + es]);
                         }
-                    });
+                    }
+                });
             }
             self.done.fetch_add(1, Ordering::Relaxed);
         }
@@ -355,10 +310,7 @@ mod tests {
         let text = "PixelSpacing = 14.46\nMontage = 1\n\n[ZValue = 1]\nPieceCoordinates = 2870 0 0\nTiltAngle = 0\n\n[ZValue = 0]\nPieceCoordinates = 0 0 0\n\n[MontSection = 0]\nPieceCoordinates = 9 9 9\n";
         assert_eq!(from_mdoc(text, 2), Some(vec![[0, 0, 0], [2870, 0, 0]]));
         // Not a montage, or a section without coordinates.
-        assert_eq!(
-            from_mdoc(&text.replace("Montage = 1", "Montage = 0"), 2),
-            None
-        );
+        assert_eq!(from_mdoc(&text.replace("Montage = 1", "Montage = 0"), 2), None);
         assert_eq!(from_mdoc(text, 3), None);
     }
 
@@ -369,15 +321,7 @@ mod tests {
         let (planes, w, h) = layout(&coords, 100, 100).unwrap();
         assert_eq!((planes.len(), w, h), (1, 180, 180));
         let own: Vec<[usize; 4]> = planes[0].iter().map(|p| p.own).collect();
-        assert_eq!(
-            own,
-            [
-                [0, 90, 0, 90],
-                [90, 180, 0, 90],
-                [0, 90, 90, 180],
-                [90, 180, 90, 180]
-            ]
-        );
+        assert_eq!(own, [[0, 90, 0, 90], [90, 180, 0, 90], [0, 90, 90, 180], [90, 180, 90, 180]]);
     }
 
     #[test]
@@ -392,10 +336,7 @@ mod tests {
         let coords = [[0, 0, 0], [8, 0, 0], [0, 0, 1], [8, 0, 1]];
         let (planes, w, h) = layout(&coords, 10, 10).unwrap();
         assert_eq!((planes.len(), w, h), (2, 18, 10));
-        assert_eq!(
-            planes[1].iter().map(|p| p.section).collect::<Vec<_>>(),
-            [2, 3]
-        );
+        assert_eq!(planes[1].iter().map(|p| p.section).collect::<Vec<_>>(), [2, 3]);
     }
 
     /// A 2×1 montage written as an MRC with the coordinates in a SerialEM
@@ -428,10 +369,7 @@ mod tests {
 
         let src = open(&path, 0).unwrap();
         let info = src.info();
-        assert_eq!(
-            (info.width, info.height, info.size_z, info.series.len()),
-            (7, 3, 1, 2)
-        );
+        assert_eq!((info.width, info.height, info.size_z, info.series.len()), (7, 3, 1, 2));
         let p = src.read_page(0).unwrap();
         let v: Vec<f64> = (0..21).map(|i| p[0].data.get_f64(i)).collect();
         // The overlap (x 3) splits at x 3: the first piece keeps x < 3.
@@ -449,14 +387,7 @@ mod tests {
         assert_eq!(v, [1., 1., 5., 5., 5., 5., 2., 2.]);
 
         let stack = open(&path, 1).unwrap();
-        assert_eq!(
-            (
-                stack.info().width,
-                stack.info().size_z,
-                stack.info().series_index
-            ),
-            (4, 2, 1)
-        );
+        assert_eq!((stack.info().width, stack.info().size_z, stack.info().series_index), (4, 2, 1));
         assert!(open(&path, 2).is_err());
     }
 }

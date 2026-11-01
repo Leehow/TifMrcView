@@ -132,21 +132,11 @@ const MEMORY: usize = 6 << 30;
 
 impl Stored {
     fn new(frame: &[f32], used: &mut usize) -> Stored {
-        let whole = |max: f32| {
-            frame
-                .par_iter()
-                .all(|v| *v >= 0.0 && *v <= max && v.fract() == 0.0)
-        };
+        let whole = |max: f32| frame.par_iter().all(|v| *v >= 0.0 && *v <= max && v.fract() == 0.0);
         let (s, bytes) = if whole(255.0) {
-            (
-                Stored::U8(frame.par_iter().map(|v| *v as u8).collect()),
-                frame.len(),
-            )
+            (Stored::U8(frame.par_iter().map(|v| *v as u8).collect()), frame.len())
         } else if whole(65535.0) {
-            (
-                Stored::U16(frame.par_iter().map(|v| *v as u16).collect()),
-                2 * frame.len(),
-            )
+            (Stored::U16(frame.par_iter().map(|v| *v as u16).collect()), 2 * frame.len())
         } else {
             (Stored::F32(frame.to_vec()), 4 * frame.len())
         };
@@ -295,10 +285,7 @@ impl Spool {
                 if !spool.dir.exists() {
                     fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
                 }
-                let bytes: Vec<u8> = frame
-                    .par_chunks(4096)
-                    .flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes()))
-                    .collect();
+                let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
                 fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
             }
             spool.stored.push(stored);

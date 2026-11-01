@@ -117,43 +117,23 @@ impl Geom {
         let n = want.min(1 << avail.ilog2());
         let bin = avail / n;
         let used = n * bin;
-        Ok(Geom {
-            x0: x + (w - used) / 2,
-            y0: y + (h - used) / 2,
-            bin,
-            n,
-            m: n / 2,
-            w: img_w,
-            h: img_h,
-        })
+        Ok(Geom { x0: x + (w - used) / 2, y0: y + (h - used) / 2, bin, n, m: n / 2, w: img_w, h: img_h })
     }
 
     /// The whole-pixel move nearest to a shift (binned pixels) that keeps
     /// the square inside the image.
     fn offset(&self, d: [f64; 2]) -> [isize; 2] {
         let used = (self.n * self.bin) as isize;
-        let clamp = |v: f64, start: usize, size: usize| {
-            ((v * self.bin as f64).round() as isize)
-                .clamp(-(start as isize), size as isize - start as isize - used)
-        };
+        let clamp = |v: f64, start: usize, size: usize| ((v * self.bin as f64).round() as isize).clamp(-(start as isize), size as isize - start as isize - used);
         [clamp(d[0], self.x0, self.w), clamp(d[1], self.y0, self.h)]
     }
 }
 
 /// Bins, tapers and transforms one slice; keeps the inner frequencies, filtered.
 /// `off` moves the binned square (full-image pixels; the caller keeps it inside).
-fn spectrum(
-    g: &Geom,
-    fft: &Fft,
-    filter: &[f32],
-    off: [isize; 2],
-    values: impl Fn(usize, usize) -> f32 + Sync,
-) -> Spec {
+fn spectrum(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl Fn(usize, usize) -> f32 + Sync) -> Spec {
     let (n, b) = (g.n, g.bin);
-    let (x0, y0) = (
-        (g.x0 as isize + off[0]) as usize,
-        (g.y0 as isize + off[1]) as usize,
-    );
+    let (x0, y0) = ((g.x0 as isize + off[0]) as usize, (g.y0 as isize + off[1]) as usize);
     let mut re: Vec<f32> = (0..n * n)
         .into_par_iter()
         .map(|i| {
@@ -173,11 +153,7 @@ fn spectrum(
     let taper: Vec<f32> = (0..n)
         .map(|i| {
             let d = i.min(n - 1 - i);
-            if d >= edge {
-                1.0
-            } else {
-                (0.5 - 0.5 * (PI * (d as f64 + 0.5) / edge as f64).cos()) as f32
-            }
+            if d >= edge { 1.0 } else { (0.5 - 0.5 * (PI * (d as f64 + 0.5) / edge as f64).cos()) as f32 }
         })
         .collect();
     re.par_chunks_mut(n).enumerate().for_each(|(y, row)| {
@@ -205,22 +181,14 @@ fn spectrum(
             energy += (a as f64).powi(2) + (b as f64).powi(2);
         }
     }
-    Spec {
-        re: kr,
-        im: ki,
-        energy,
-    }
+    Spec { re: kr, im: ki, energy }
 }
 
 /// 2D forward FFT in place, row major (row = y).
 fn fft2(fft: &Fft, re: &mut [f32], im: &mut [f32], n: usize) {
-    re.par_chunks_mut(n)
-        .zip(im.par_chunks_mut(n))
-        .for_each(|(r, i)| fft.run(r, i));
+    re.par_chunks_mut(n).zip(im.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
     let (mut tr, mut ti) = (transpose(re, n), transpose(im, n));
-    tr.par_chunks_mut(n)
-        .zip(ti.par_chunks_mut(n))
-        .for_each(|(r, i)| fft.run(r, i));
+    tr.par_chunks_mut(n).zip(ti.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
     re.copy_from_slice(&transpose(&tr, n));
     im.copy_from_slice(&transpose(&ti, n));
 }
@@ -253,14 +221,8 @@ fn make_filter(m: usize) -> Vec<f32> {
 fn shifted(s: &Spec, g: &Geom, d: [f64; 2], out_re: &mut [f32], out_im: &mut [f32], sign: f32) {
     let m = g.m;
     let w = 2.0 * PI / g.n as f64;
-    let ex: Vec<(f32, f32)> = (0..m)
-        .map(|c| ((c as f64 - (m / 2) as f64) * d[0] * w).sin_cos())
-        .map(|(s, c)| (c as f32, s as f32))
-        .collect();
-    let ey: Vec<(f32, f32)> = (0..m)
-        .map(|r| ((r as f64 - (m / 2) as f64) * d[1] * w).sin_cos())
-        .map(|(s, c)| (c as f32, s as f32))
-        .collect();
+    let ex: Vec<(f32, f32)> = (0..m).map(|c| ((c as f64 - (m / 2) as f64) * d[0] * w).sin_cos()).map(|(s, c)| (c as f32, s as f32)).collect();
+    let ey: Vec<(f32, f32)> = (0..m).map(|r| ((r as f64 - (m / 2) as f64) * d[1] * w).sin_cos()).map(|(s, c)| (c as f32, s as f32)).collect();
     for r in 0..m {
         let (cy, sy) = ey[r];
         for c in 0..m {
@@ -294,10 +256,7 @@ fn correlate_at(pr: &[f32], pi: &[f32], g: &Geom, xs: &[f64], ys: &[f64]) -> Vec
     let m = g.m;
     let w = 2.0 * PI / g.n as f64;
     let phase = |k: usize, d: f64| ((k as f64 - (m / 2) as f64) * d * w).sin_cos();
-    let ex: Vec<(f64, f64)> = (0..m)
-        .flat_map(|c| xs.iter().map(move |&x| phase(c, x)))
-        .map(|(s, c)| (c, s))
-        .collect();
+    let ex: Vec<(f64, f64)> = (0..m).flat_map(|c| xs.iter().map(move |&x| phase(c, x))).map(|(s, c)| (c, s)).collect();
     // T[ky][a] = Σ_kx P[ky][kx]·e^{i kx x_a}
     let nx = xs.len();
     let t: Vec<(f64, f64)> = (0..m)
@@ -346,17 +305,9 @@ fn coarse_peak(pr: &[f32], pi: &[f32], g: &Geom, fft_m: &Fft, max: f64) -> [f64;
     let step = (g.n / m) as f64;
     let mut best = (f32::MIN, [0f64; 2]);
     for y in 0..m {
-        let dy = if y >= m / 2 {
-            y as f64 - m as f64
-        } else {
-            y as f64
-        } * step;
+        let dy = if y >= m / 2 { y as f64 - m as f64 } else { y as f64 } * step;
         for x in 0..m {
-            let dx = if x >= m / 2 {
-                x as f64 - m as f64
-            } else {
-                x as f64
-            } * step;
+            let dx = if x >= m / 2 { x as f64 - m as f64 } else { x as f64 } * step;
             if dx.hypot(dy) <= max && re[y * m + x] > best.0 {
                 best = (re[y * m + x], [dx, dy]);
             }
@@ -374,21 +325,13 @@ fn refine_peak(pr: &[f32], pi: &[f32], g: &Geom, start: [f64; 2]) -> ([f64; 2], 
         let xs: Vec<f64> = (-2..=2).map(|i| c[0] + i as f64).collect();
         let ys: Vec<f64> = (-2..=2).map(|i| c[1] + i as f64).collect();
         let v = correlate_at(pr, pi, g, &xs, &ys);
-        let (bi, _) = v
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .unwrap();
+        let (bi, _) = v.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
         let (bx, by) = (bi % 5, bi / 5);
         if (1..=3).contains(&bx) && (1..=3).contains(&by) {
             let at = |x: usize, y: usize| v[y * 5 + x];
             let para = |a: f64, b: f64, c: f64| {
                 let den = a - 2.0 * b + c;
-                if den < 0.0 {
-                    (0.5 * (a - c) / den).clamp(-0.5, 0.5)
-                } else {
-                    0.0
-                }
+                if den < 0.0 { (0.5 * (a - c) / den).clamp(-0.5, 0.5) } else { 0.0 }
             };
             let fx = para(at(bx - 1, by), at(bx, by), at(bx + 1, by));
             let fy = para(at(bx, by - 1), at(bx, by), at(bx, by + 1));
@@ -402,21 +345,11 @@ fn refine_peak(pr: &[f32], pi: &[f32], g: &Geom, start: [f64; 2]) -> ([f64; 2], 
 /// Normalised correlation from a peak value and the two spectra's energies.
 fn norm_cc(peak: f64, ea: f64, eb: f64) -> f64 {
     let d = (ea * eb).sqrt();
-    if d > 0.0 {
-        (peak / d).clamp(-1.0, 1.0)
-    } else {
-        0.0
-    }
+    if d > 0.0 { (peak / d).clamp(-1.0, 1.0) } else { 0.0 }
 }
 
 /// Aligns spectra of a movie: each frame to the sum of the others. Shifts in binned pixels.
-fn align_movie(
-    specs: &[Spec],
-    g: &Geom,
-    fft_m: &Fft,
-    max: f64,
-    progress: &(dyn Fn(usize) + Sync),
-) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn align_movie(specs: &[Spec], g: &Geom, fft_m: &Fft, max: f64, progress: &(dyn Fn(usize) + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let len = g.m * g.m;
     let mut d = vec![[0f64; 2]; specs.len()];
     let mut cc = vec![0f64; specs.len()];
@@ -437,26 +370,14 @@ fn align_movie(
                 // The reference without this frame.
                 let (mut rr, mut ri) = (sr.clone(), si.clone());
                 shifted(s, g, di, &mut rr, &mut ri, -1.0);
-                let er: f64 = rr
-                    .iter()
-                    .zip(&ri)
-                    .map(|(&a, &b)| (a as f64).powi(2) + (b as f64).powi(2))
-                    .sum();
+                let er: f64 = rr.iter().zip(&ri).map(|(&a, &b)| (a as f64).powi(2) + (b as f64).powi(2)).sum();
                 let (pr, pi) = cross(s, &rr, &ri);
-                let start = if it == 0 {
-                    coarse_peak(&pr, &pi, g, fft_m, max)
-                } else {
-                    di
-                };
+                let start = if it == 0 { coarse_peak(&pr, &pi, g, fft_m, max) } else { di };
                 let (p, v) = refine_peak(&pr, &pi, g, start);
                 (p, norm_cc(v, s.energy, er))
             })
             .collect();
-        let change = next
-            .iter()
-            .zip(&d)
-            .map(|(a, b)| (a.0[0] - b[0]).hypot(a.0[1] - b[1]))
-            .fold(0f64, f64::max);
+        let change = next.iter().zip(&d).map(|(a, b)| (a.0[0] - b[0]).hypot(a.0[1] - b[1])).fold(0f64, f64::max);
         for (i, (p, v)) in next.into_iter().enumerate() {
             d[i] = p;
             cc[i] = v;
@@ -482,15 +403,7 @@ type SpecOf<'a> = dyn Fn(usize, [isize; 2]) -> Result<Spec> + Sync + 'a;
 
 /// Shifts (binned pixels) and correlations of `count` slices, with the
 /// squares moved by `offs`. Series: each to its neighbour, summed.
-fn pass(
-    g: &Geom,
-    count: usize,
-    offs: &[[isize; 2]],
-    series: bool,
-    max: f64,
-    spec_of: &SpecOf,
-    tick: &(dyn Fn() + Sync),
-) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spec_of: &SpecOf, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let fft_m = Fft::new(g.m);
     let get = |i: usize| -> Result<Spec> {
         let s = spec_of(i, offs[i]);
@@ -508,20 +421,14 @@ fn pass(
     // The last slice placed by a good step, for bridging weak ones.
     let mut anchor: Option<(usize, Spec)> = None;
     for start in (0..count).step_by(CHUNK) {
-        let specs: Vec<Spec> = (start..(start + CHUNK).min(count))
-            .map(get)
-            .collect::<Result<_>>()?;
+        let specs: Vec<Spec> = (start..(start + CHUNK).min(count)).map(get).collect::<Result<_>>()?;
         if start == 0 {
             anchor = Some((0, specs[0].clone()));
         }
         let steps: Vec<(usize, ([f64; 2], f64))> = (0..specs.len())
             .into_par_iter()
             .filter_map(|k| {
-                let a = if k == 0 {
-                    prev.as_ref()?
-                } else {
-                    &specs[k - 1]
-                };
+                let a = if k == 0 { prev.as_ref()? } else { &specs[k - 1] };
                 Some((start + k, pair_shift(a, &specs[k], g, &fft_m, max)))
             })
             .collect();
@@ -534,12 +441,7 @@ fn pass(
         let mut good: Vec<f64> = steps.iter().map(|(_, (_, v))| *v).collect();
         good.sort_by(f64::total_cmp);
         let weak = good.get(good.len() / 2).copied().unwrap_or(0.0) * LOW_STEP;
-        let moved = |a: usize, b: usize| {
-            [
-                (offs[b][0] - offs[a][0]) as f64 / g.bin as f64,
-                (offs[b][1] - offs[a][1]) as f64 / g.bin as f64,
-            ]
-        };
+        let moved = |a: usize, b: usize| [(offs[b][0] - offs[a][0]) as f64 / g.bin as f64, (offs[b][1] - offs[a][1]) as f64 / g.bin as f64];
         for (i, (s, v)) in steps {
             let k = i - start;
             let held_before = anchor.as_ref().is_some_and(|(a, _)| *a + 1 < i);
@@ -552,10 +454,7 @@ fn pass(
                         let end = [d[*a][0] + m[0] + bs[0], d[*a][1] + m[1] + bs[1]];
                         for j in *a + 1..i {
                             let f = (j - a) as f64 / (i - a) as f64;
-                            d[j] = [
-                                d[*a][0] + f * (end[0] - d[*a][0]),
-                                d[*a][1] + f * (end[1] - d[*a][1]),
-                            ];
+                            d[j] = [d[*a][0] + f * (end[0] - d[*a][0]), d[*a][1] + f * (end[1] - d[*a][1])];
                         }
                         placed = Some((end, bv));
                     }
@@ -586,43 +485,18 @@ fn pass(
 /// Two passes: the second with each square moved by the shift the first
 /// found, so the tapered edges no longer pull the peak toward zero shift.
 /// Returns full-image pixel shifts relative to the middle slice.
-fn measure(
-    g: &Geom,
-    count: usize,
-    series: bool,
-    max: f64,
-    spec_of: &SpecOf,
-    tick: &(dyn Fn() + Sync),
-) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn measure(g: &Geom, count: usize, series: bool, max: f64, spec_of: &SpecOf, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let zero = vec![[0isize; 2]; count];
     let (d1, _, it1) = pass(g, count, &zero, series, max, spec_of, tick)?;
     let mid = d1[count / 2];
-    let offs: Vec<[isize; 2]> = d1
-        .iter()
-        .map(|d| g.offset([d[0] - mid[0], d[1] - mid[1]]))
-        .collect();
+    let offs: Vec<[isize; 2]> = d1.iter().map(|d| g.offset([d[0] - mid[0], d[1] - mid[1]])).collect();
     // What is left is small; search a few binned pixels around it.
     let (d2, cc, it2) = pass(g, count, &offs, series, (max / 4.0).max(8.0), spec_of, tick)?;
 
     let mut d: Vec<[f64; 2]> = if series {
-        d2.iter()
-            .map(|v| {
-                [
-                    v[0] * g.bin as f64 + offs[0][0] as f64,
-                    v[1] * g.bin as f64 + offs[0][1] as f64,
-                ]
-            })
-            .collect()
+        d2.iter().map(|v| [v[0] * g.bin as f64 + offs[0][0] as f64, v[1] * g.bin as f64 + offs[0][1] as f64]).collect()
     } else {
-        d2.iter()
-            .zip(&offs)
-            .map(|(v, o)| {
-                [
-                    v[0] * g.bin as f64 + o[0] as f64,
-                    v[1] * g.bin as f64 + o[1] as f64,
-                ]
-            })
-            .collect()
+        d2.iter().zip(&offs).map(|(v, o)| [v[0] * g.bin as f64 + o[0] as f64, v[1] * g.bin as f64 + o[1] as f64]).collect()
     };
     // Series: relative to the middle slice (the untilted one of a tilt
     // series). Movie: to the mean, the least noisy reference.
@@ -630,10 +504,7 @@ fn measure(
         d[count / 2]
     } else {
         let k = count as f64;
-        [
-            d.iter().map(|v| v[0]).sum::<f64>() / k,
-            d.iter().map(|v| v[1]).sum::<f64>() / k,
-        ]
+        [d.iter().map(|v| v[0]).sum::<f64>() / k, d.iter().map(|v| v[1]).sum::<f64>() / k]
     };
     for v in &mut d {
         *v = [v[0] - origin[0], v[1] - origin[1]];
@@ -642,23 +513,11 @@ fn measure(
 }
 
 /// Measures the shift of every slice.
-pub fn estimate(
-    img: &Arc<OpenImage>,
-    req: &AlignReq,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<Aligned> {
+pub fn estimate(img: &Arc<OpenImage>, req: &AlignReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Aligned> {
     let start = std::time::Instant::now();
     CANCEL.store(false, Ordering::SeqCst);
     let info = img.info();
-    let zs: Vec<usize> = if req.zs.is_empty() {
-        (0..info.size_z).collect()
-    } else {
-        req.zs
-            .iter()
-            .copied()
-            .filter(|&z| z < info.size_z)
-            .collect()
-    };
+    let zs: Vec<usize> = if req.zs.is_empty() { (0..info.size_z).collect() } else { req.zs.iter().copied().filter(|&z| z < info.size_z).collect() };
     if zs.len() < 2 {
         bail!("至少需要两层");
     }
@@ -678,11 +537,7 @@ pub fn estimate(
     let g = Geom::new(region, req.n, info.width, info.height)?;
     let fft_n = Fft::new(g.n);
     let filter = make_filter(g.m);
-    let max = if req.max_shift > 0.0 {
-        req.max_shift / g.bin as f64
-    } else {
-        g.n as f64 / 4.0
-    };
+    let max = if req.max_shift > 0.0 { req.max_shift / g.bin as f64 } else { g.n as f64 / 4.0 };
     let series = match req.mode.as_str() {
         "movie" => false,
         "series" => true,
@@ -695,30 +550,15 @@ pub fn estimate(
         let (page, sample) = info.locate(req.c, zs[i], req.t);
         let planes = img.page(page)?;
         let p = &planes[sample.min(planes.len() - 1)];
-        Ok(spectrum(&g, &fft_n, &filter, off, |x, y| {
-            p.data.get_f64(y * p.w + x) as f32
-        }))
+        Ok(spectrum(&g, &fft_n, &filter, off, |x, y| p.data.get_f64(y * p.w + x) as f32))
     };
     // Progress: two passes of spectra, plus movie iterations (estimated).
     let total = 2 * zs.len() + if series { 0 } else { 8 };
     let done = std::sync::atomic::AtomicUsize::new(0);
-    let tick = || {
-        progress(
-            (done.fetch_add(1, Ordering::Relaxed) + 1).min(total - 1),
-            total,
-        )
-    };
+    let tick = || progress((done.fetch_add(1, Ordering::Relaxed) + 1).min(total - 1), total);
     let (shifts, cc, iterations) = measure(&g, zs.len(), series, max, &spec_of, &tick)?;
     progress(total, total);
-    Ok(Aligned {
-        zs,
-        shifts,
-        cc,
-        bin: g.bin,
-        n: g.n,
-        iterations,
-        ms: start.elapsed().as_secs_f64() * 1e3,
-    })
+    Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// Writes the aligned slices (or their mean) as an MRC file of 32-bit floats.
@@ -738,12 +578,7 @@ pub struct SaveReq {
 /// Catmull–Rom weights for a fraction t of a pixel.
 fn cubic(t: f32) -> [f32; 4] {
     let (t2, t3) = (t * t, t * t * t);
-    [
-        -0.5 * t3 + t2 - 0.5 * t,
-        1.5 * t3 - 2.5 * t2 + 1.0,
-        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
-        0.5 * t3 - 0.5 * t2,
-    ]
+    [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
 }
 
 /// out(x, y) = v(x + dx, y + dy), Catmull–Rom; `fill` where that falls off
@@ -756,22 +591,14 @@ fn shift_plane(v: &[f32], w: usize, h: usize, d: [f64; 2], fill: f32) -> Vec<f32
     };
     let ((ix, kx, fx), (iy, ky, fy)) = (split(d[0]), split(d[1]));
     // Where the sample point itself lies on the plane.
-    let inside = |c: isize, len: usize, frac: bool| {
-        c >= 0 && (c as usize) < len && !(frac && c as usize == len - 1)
-    };
+    let inside = |c: isize, len: usize, frac: bool| c >= 0 && (c as usize) < len && !(frac && c as usize == len - 1);
     let clamp = |c: isize, len: usize| c.clamp(0, len as isize - 1) as usize;
     let mut a = vec![0f32; w * h];
     a.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         let src = &v[y * w..(y + 1) * w];
         for (x, o) in row.iter_mut().enumerate() {
             let c = x as isize + ix;
-            *o = if inside(c, w, fx) {
-                (0..4)
-                    .map(|j| kx[j] * src[clamp(c + j as isize - 1, w)])
-                    .sum()
-            } else {
-                f32::NAN
-            };
+            *o = if inside(c, w, fx) { (0..4).map(|j| kx[j] * src[clamp(c + j as isize - 1, w)]).sum() } else { f32::NAN };
         }
     });
     let mut out = vec![0f32; w * h];
@@ -786,19 +613,14 @@ fn shift_plane(v: &[f32], w: usize, h: usize, d: [f64; 2], fill: f32) -> Vec<f32
             &a[r * w..(r + 1) * w]
         });
         for (x, o) in row.iter_mut().enumerate() {
-            let s =
-                ky[0] * rows[0][x] + ky[1] * rows[1][x] + ky[2] * rows[2][x] + ky[3] * rows[3][x];
+            let s = ky[0] * rows[0][x] + ky[1] * rows[1][x] + ky[2] * rows[2][x] + ky[3] * rows[3][x];
             *o = if s.is_nan() { fill } else { s };
         }
     });
     out
 }
 
-pub fn save(
-    img: &Arc<OpenImage>,
-    req: &SaveReq,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<()> {
+pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<()> {
     CANCEL.store(false, Ordering::SeqCst);
     if req.zs.len() != req.shifts.len() || req.zs.is_empty() {
         bail!("位移和层数对不上");
@@ -826,39 +648,25 @@ pub fn save(
         let (page, s) = info.locate(req.c, z, req.t);
         let planes = img.page(page)?;
         let p = &planes[s.min(planes.len() - 1)];
-        let v: Vec<f32> = (0..p.w * p.h)
-            .into_par_iter()
-            .map(|i| p.data.get_f64(i) as f32)
-            .collect();
+        let v: Vec<f32> = (0..p.w * p.h).into_par_iter().map(|i| p.data.get_f64(i) as f32).collect();
         let mean = (v.par_iter().map(|&x| x as f64).sum::<f64>() / v.len() as f64) as f32;
         let out = shift_plane(&v, p.w, p.h, *d, mean);
         if sum {
-            acc.par_iter_mut()
-                .zip(&out)
-                .for_each(|(a, &v)| *a += v as f64);
+            acc.par_iter_mut().zip(&out).for_each(|(a, &v)| *a += v as f64);
         } else {
             let (a, b, c, d) = out
                 .par_iter()
-                .fold(
-                    || (f64::MAX, f64::MIN, 0f64, 0f64),
-                    |(a, b, c, d), &v| {
-                        let v = v as f64;
-                        (a.min(v), b.max(v), c + v, d + v * v)
-                    },
-                )
-                .reduce(
-                    || (f64::MAX, f64::MIN, 0f64, 0f64),
-                    |x, y| (x.0.min(y.0), x.1.max(y.1), x.2 + y.2, x.3 + y.3),
-                );
+                .fold(|| (f64::MAX, f64::MIN, 0f64, 0f64), |(a, b, c, d), &v| {
+                    let v = v as f64;
+                    (a.min(v), b.max(v), c + v, d + v * v)
+                })
+                .reduce(|| (f64::MAX, f64::MIN, 0f64, 0f64), |x, y| (x.0.min(y.0), x.1.max(y.1), x.2 + y.2, x.3 + y.3));
             lo = lo.min(a);
             hi = hi.max(b);
             total += c;
             total2 += d;
             let mut bytes = vec![0u8; out.len() * 4];
-            bytes
-                .par_chunks_mut(4)
-                .zip(&out)
-                .for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
+            bytes.par_chunks_mut(4).zip(&out).for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
             f.write_all(&bytes)?;
         }
         progress(i + 1, req.zs.len());
@@ -883,19 +691,8 @@ pub fn save(
     let rms = (total2 / count - mean * mean).max(0.0).sqrt();
     f.seek(SeekFrom::Start(0))?;
     let frames = req.zs.len();
-    let label = if sum {
-        format!("TifMrcView: aligned sum of {frames} frames")
-    } else {
-        format!("TifMrcView: aligned stack of {frames} slices")
-    };
-    f.write_all(&mrc_header(
-        w,
-        h,
-        nz,
-        px,
-        [lo as f32, hi as f32, mean as f32, rms as f32],
-        &label,
-    ))?;
+    let label = if sum { format!("TifMrcView: aligned sum of {frames} frames") } else { format!("TifMrcView: aligned stack of {frames} slices") };
+    f.write_all(&mrc_header(w, h, nz, px, [lo as f32, hi as f32, mean as f32, rms as f32], &label))?;
     f.flush()?;
     drop(f);
     std::fs::rename(&tmp, &req.path)?;
@@ -910,30 +707,15 @@ pub(crate) fn pixel_a(info: &crate::image::ImageInfo) -> f64 {
         "Å" | "A" | "angstrom" => 1.0,
         _ => 0.0,
     };
-    info.pixel_size
-        .map(|p| p[0] * unit_a)
-        .filter(|&p| p > 0.0)
-        .unwrap_or(1.0)
+    info.pixel_size.map(|p| p[0] * unit_a).filter(|&p| p > 0.0).unwrap_or(1.0)
 }
 
 /// MRC2014 header for 32-bit floats (mode 2), little-endian; `stats` is
 /// min, max, mean, rms; `label` goes into the first of the ten labels.
-pub(crate) fn mrc_header(
-    w: usize,
-    h: usize,
-    nz: usize,
-    pixel_a: f64,
-    stats: [f32; 4],
-    label: &str,
-) -> Vec<u8> {
+pub(crate) fn mrc_header(w: usize, h: usize, nz: usize, pixel_a: f64, stats: [f32; 4], label: &str) -> Vec<u8> {
     let mut b = vec![0u8; 1024];
     let mut put_i = |off: usize, v: i32| b[off..off + 4].copy_from_slice(&v.to_le_bytes());
-    for (k, v) in [
-        w as i32, h as i32, nz as i32, 2, 0, 0, 0, w as i32, h as i32, nz as i32,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (k, v) in [w as i32, h as i32, nz as i32, 2, 0, 0, 0, w as i32, h as i32, nz as i32].into_iter().enumerate() {
         put_i(k * 4, v);
     }
     put_i(64, 1);
@@ -984,21 +766,14 @@ mod tests {
         let blobs: Vec<(f64, f64, f64, f64)> = (0..count as u64)
             .map(|i| {
                 let k = seed * 1_000_003 + i * 4;
-                (
-                    unit(k) * w as f64 * 1.4 - 0.2 * w as f64,
-                    unit(k + 1) * h as f64 * 1.4 - 0.2 * h as f64,
-                    1.5 + unit(k + 2) * 5.0,
-                    unit(k + 3) - 0.5,
-                )
+                (unit(k) * w as f64 * 1.4 - 0.2 * w as f64, unit(k + 1) * h as f64 * 1.4 - 0.2 * h as f64, 1.5 + unit(k + 2) * 5.0, unit(k + 3) - 0.5)
             })
             .collect();
         move |x, y| {
             blobs
                 .iter()
                 .filter(|b| (x - b.0).abs() < 4.0 * b.2 && (y - b.1).abs() < 4.0 * b.2)
-                .map(|&(bx, by, r, a)| {
-                    a * (-((x - bx).powi(2) + (y - by).powi(2)) / (2.0 * r * r)).exp()
-                })
+                .map(|&(bx, by, r, a)| a * (-((x - bx).powi(2) + (y - by).powi(2)) / (2.0 * r * r)).exp())
                 .sum::<f64>() as f32
         }
     }
@@ -1008,10 +783,7 @@ mod tests {
         let mut i = 0u64;
         move || {
             i += 1;
-            (0..4)
-                .map(|k| unit(seed.wrapping_mul(0x1000_0000_01b3) ^ (i * 4 + k)) as f32 - 0.5)
-                .sum::<f32>()
-                * 1.7
+            (0..4).map(|k| unit(seed.wrapping_mul(0x1000_0000_01b3) ^ (i * 4 + k)) as f32 - 0.5).sum::<f32>() * 1.7
         }
     }
 
@@ -1022,25 +794,15 @@ mod tests {
             .enumerate()
             .map(|(i, s)| {
                 let mut nz = noise(7 + i as u64);
-                (0..w * h)
-                    .map(|k| tex((k % w) as f64 - s[0], (k / w) as f64 - s[1]) + sigma * nz())
-                    .collect()
+                (0..w * h).map(|k| tex((k % w) as f64 - s[0], (k / w) as f64 - s[1]) + sigma * nz()).collect()
             })
             .collect()
     }
 
-    fn estimate_frames(
-        fr: &[Vec<f32>],
-        w: usize,
-        h: usize,
-        series: bool,
-        n: usize,
-    ) -> (Vec<[f64; 2]>, Vec<f64>) {
+    fn estimate_frames(fr: &[Vec<f32>], w: usize, h: usize, series: bool, n: usize) -> (Vec<[f64; 2]>, Vec<f64>) {
         let g = Geom::new([0, 0, w, h], n, w, h).unwrap();
         let (fft_n, filter) = (Fft::new(g.n), make_filter(g.m));
-        let spec_of = |i: usize, off: [isize; 2]| {
-            Ok(spectrum(&g, &fft_n, &filter, off, |x, y| fr[i][y * w + x]))
-        };
+        let spec_of = |i: usize, off: [isize; 2]| Ok(spectrum(&g, &fft_n, &filter, off, |x, y| fr[i][y * w + x]));
         let (d, cc, _) = measure(&g, fr.len(), series, g.n as f64 / 4.0, &spec_of, &|| ()).unwrap();
         (d, cc)
     }
@@ -1048,38 +810,18 @@ mod tests {
     /// Shifts agree up to a common offset (which slice is the reference).
     fn check(got: &[[f64; 2]], truth: &[[f64; 2]], tol: f64) {
         let k = got.len() as f64;
-        let err: Vec<[f64; 2]> = got
-            .iter()
-            .zip(truth)
-            .map(|(g, t)| [g[0] - t[0], g[1] - t[1]])
-            .collect();
-        let mean = [
-            err.iter().map(|e| e[0]).sum::<f64>() / k,
-            err.iter().map(|e| e[1]).sum::<f64>() / k,
-        ];
+        let err: Vec<[f64; 2]> = got.iter().zip(truth).map(|(g, t)| [g[0] - t[0], g[1] - t[1]]).collect();
+        let mean = [err.iter().map(|e| e[0]).sum::<f64>() / k, err.iter().map(|e| e[1]).sum::<f64>() / k];
         for (i, e) in err.iter().enumerate() {
             let e = (e[0] - mean[0]).hypot(e[1] - mean[1]);
-            assert!(
-                e < tol,
-                "slice {i}: got {:?}, want {:?} up to an offset (error {e:.3})",
-                got[i],
-                truth[i]
-            );
+            assert!(e < tol, "slice {i}: got {:?}, want {:?} up to an offset (error {e:.3})", got[i], truth[i]);
         }
     }
 
     #[test]
     fn finds_subpixel_drift_in_a_noisy_movie() {
         // A drifting movie: large first jumps, then slow, as stage drift does.
-        let truth: Vec<[f64; 2]> = (0..12)
-            .map(|i| {
-                let t = i as f64;
-                [
-                    6.0 * (1.0 - (-t / 3.0).exp()) + 0.13 * t,
-                    -4.0 * (1.0 - (-t / 4.0).exp()) - 0.07 * t,
-                ]
-            })
-            .collect();
+        let truth: Vec<[f64; 2]> = (0..12).map(|i| { let t = i as f64; [6.0 * (1.0 - (-t / 3.0).exp()) + 0.13 * t, -4.0 * (1.0 - (-t / 4.0).exp()) - 0.07 * t] }).collect();
         let fr = frames(256, 256, &truth, 0.5);
         let (d, cc) = estimate_frames(&fr, 256, 256, false, 256);
         check(&d, &truth, 0.25);
@@ -1088,9 +830,7 @@ mod tests {
 
     #[test]
     fn follows_a_series_with_large_steps() {
-        let truth: Vec<[f64; 2]> = (0..9)
-            .map(|i| [11.3 * i as f64 - 30.0, 25.0 * (i as f64 * 0.7).sin()])
-            .collect();
+        let truth: Vec<[f64; 2]> = (0..9).map(|i| [11.3 * i as f64 - 30.0, 25.0 * (i as f64 * 0.7).sin()]).collect();
         let fr = frames(300, 260, &truth, 0.05);
         let (d, _) = estimate_frames(&fr, 300, 260, true, 256);
         // Errors add up along a series.
@@ -1112,11 +852,7 @@ mod tests {
         let mid = truth[4];
         for (i, (g, t)) in d.iter().zip(&truth).enumerate() {
             let e = (g[0] - (t[0] - mid[0])).hypot(g[1] - (t[1] - mid[1]));
-            assert!(
-                e < if i == 6 { 4.0 } else { 0.5 },
-                "slice {i}: {g:?} vs {:?}",
-                [t[0] - mid[0], t[1] - mid[1]]
-            );
+            assert!(e < if i == 6 { 4.0 } else { 0.5 }, "slice {i}: {g:?} vs {:?}", [t[0] - mid[0], t[1] - mid[1]]);
         }
     }
 
@@ -1152,19 +888,13 @@ mod tests {
     #[test]
     fn interpolates_shifts() {
         let (w, h) = (40, 30);
-        let v: Vec<f32> = (0..w * h)
-            .map(|i| ((i % w) as f32 * 0.3).sin() + (i / w) as f32 * 0.1)
-            .collect();
+        let v: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 * 0.3).sin() + (i / w) as f32 * 0.1).collect();
         // A whole-pixel move gives the pixels themselves.
         let a = shift_plane(&v, w, h, [2.0, 3.0], -9.0);
         assert_eq!(a[7 * w + 5], v[10 * w + 7]);
         // Linear in y is reproduced exactly by Catmull–Rom.
         let b = shift_plane(&v, w, h, [0.0, 0.25], -9.0);
-        assert!(
-            (b[7 * w + 5] - (v[7 * w + 5] + 0.025)).abs() < 1e-4,
-            "{}",
-            b[7 * w + 5]
-        );
+        assert!((b[7 * w + 5] - (v[7 * w + 5] + 0.025)).abs() < 1e-4, "{}", b[7 * w + 5]);
         // Off the plane: the fill value.
         assert_eq!(a[(h - 1) * w + 5], -9.0);
         assert_eq!(a[7 * w + w - 1], -9.0);
@@ -1177,14 +907,7 @@ mod tests {
     fn writes_a_readable_mrc() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.mrc");
-        let mut bytes = mrc_header(
-            3,
-            2,
-            1,
-            1.5,
-            [0.0, 5.0, 2.5, 1.0],
-            "TifMrcView: aligned sum of 4 frames",
-        );
+        let mut bytes = mrc_header(3, 2, 1, 1.5, [0.0, 5.0, 2.5, 1.0], "TifMrcView: aligned sum of 4 frames");
         for v in 0..6 {
             bytes.extend_from_slice(&(v as f32).to_le_bytes());
         }
@@ -1212,8 +935,7 @@ mod bench {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("movie.mrc");
         let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-        f.write_all(&mrc_header(w, w, frames, 1.0, [0.0, 1.0, 0.5, 0.2], "test"))
-            .unwrap();
+        f.write_all(&mrc_header(w, w, frames, 1.0, [0.0, 1.0, 0.5, 0.2], "test")).unwrap();
         let t = Instant::now();
         // A blurred noise image, sampled at moving positions, plus fresh noise.
         let bw = w + 128;
@@ -1223,31 +945,10 @@ mod bench {
             z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             ((z ^ (z >> 31)) >> 40) as f32 / 16_777_216.0 - 0.5
         };
-        let mut base: Vec<f32> = (0..bw * bw)
-            .into_par_iter()
-            .map(|k| hash(k as u64))
-            .collect();
+        let mut base: Vec<f32> = (0..bw * bw).into_par_iter().map(|k| hash(k as u64)).collect();
         for _ in 0..2 {
-            let rows: Vec<f32> = (0..bw * bw)
-                .into_par_iter()
-                .map(|k| {
-                    let (x, y) = (k % bw, k / bw);
-                    (x.saturating_sub(2)..(x + 3).min(bw))
-                        .map(|xx| base[y * bw + xx])
-                        .sum::<f32>()
-                        / 5.0
-                })
-                .collect();
-            base = (0..bw * bw)
-                .into_par_iter()
-                .map(|k| {
-                    let (x, y) = (k % bw, k / bw);
-                    (y.saturating_sub(2)..(y + 3).min(bw))
-                        .map(|yy| rows[yy * bw + x])
-                        .sum::<f32>()
-                        / 5.0
-                })
-                .collect();
+            let rows: Vec<f32> = (0..bw * bw).into_par_iter().map(|k| { let (x, y) = (k % bw, k / bw); (x.saturating_sub(2)..(x + 3).min(bw)).map(|xx| base[y * bw + xx]).sum::<f32>() / 5.0 }).collect();
+            base = (0..bw * bw).into_par_iter().map(|k| { let (x, y) = (k % bw, k / bw); (y.saturating_sub(2)..(y + 3).min(bw)).map(|yy| rows[yy * bw + x]).sum::<f32>() / 5.0 }).collect();
         }
         for i in 0..frames {
             let (dx, dy) = (0.37 * i as f64, -0.21 * i as f64);
@@ -1258,8 +959,7 @@ mod bench {
                     let (x0, y0) = (x.floor() as usize, y.floor() as usize);
                     let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
                     let at = |xx: usize, yy: usize| base[yy * bw + xx];
-                    let v = (1.0 - fy) * ((1.0 - fx) * at(x0, y0) + fx * at(x0 + 1, y0))
-                        + fy * ((1.0 - fx) * at(x0, y0 + 1) + fx * at(x0 + 1, y0 + 1));
+                    let v = (1.0 - fy) * ((1.0 - fx) * at(x0, y0) + fx * at(x0 + 1, y0)) + fy * ((1.0 - fx) * at(x0, y0 + 1) + fx * at(x0 + 1, y0 + 1));
                     (v + 0.3 * hash(k as u64 ^ ((i as u64 + 1) << 40))).to_le_bytes()
                 })
                 .collect();
@@ -1267,22 +967,9 @@ mod bench {
         }
         drop(f);
         eprintln!("wrote {frames} × {w}² in {:?}", t.elapsed());
-        let img = Arc::new(OpenImage::new(
-            1,
-            crate::formats::open(&path).unwrap(),
-            4 << 30,
-        ));
+        let img = Arc::new(OpenImage::new(1, crate::formats::open(&path).unwrap(), 4 << 30));
         for n in [512, 1024] {
-            let req = AlignReq {
-                token: 1,
-                zs: vec![],
-                c: 0,
-                t: 0,
-                region: None,
-                mode: "movie".into(),
-                n,
-                max_shift: 0.0,
-            };
+            let req = AlignReq { token: 1, zs: vec![], c: 0, t: 0, region: None, mode: "movie".into(), n, max_shift: 0.0 };
             let t = Instant::now();
             let a = estimate(&img, &req, &|_, _| ()).unwrap();
             let last = a.shifts[frames - 1];
@@ -1292,20 +979,7 @@ mod bench {
                 for what in ["sum", "stack"] {
                     let out = dir.path().join(format!("{what}.mrc"));
                     let t = Instant::now();
-                    save(
-                        &img,
-                        &SaveReq {
-                            token: 1,
-                            zs: a.zs.clone(),
-                            shifts: a.shifts.clone(),
-                            c: 0,
-                            t: 0,
-                            path: out.to_string_lossy().into(),
-                            what: what.into(),
-                        },
-                        &|_, _| (),
-                    )
-                    .unwrap();
+                    save(&img, &SaveReq { token: 1, zs: a.zs.clone(), shifts: a.shifts.clone(), c: 0, t: 0, path: out.to_string_lossy().into(), what: what.into() }, &|_, _| ()).unwrap();
                     eprintln!("save {what}: {:?}", t.elapsed());
                 }
             }
@@ -1318,67 +992,22 @@ mod bench {
     fn file() {
         let path = std::env::var("TMV_ALIGN_FILE").unwrap();
         let mode = std::env::var("TMV_ALIGN_MODE").unwrap_or_else(|_| "movie".into());
-        let img = Arc::new(OpenImage::new(
-            1,
-            crate::formats::open(std::path::Path::new(&path)).unwrap(),
-            4 << 30,
-        ));
+        let img = Arc::new(OpenImage::new(1, crate::formats::open(std::path::Path::new(&path)).unwrap(), 4 << 30));
         let info = img.info();
         eprintln!("{path}: {} × {} × {}", info.width, info.height, info.size_z);
         for n in [512, 1024] {
-            let req = AlignReq {
-                token: 1,
-                zs: vec![],
-                c: 0,
-                t: 0,
-                region: None,
-                mode: mode.clone(),
-                n,
-                max_shift: 0.0,
-            };
+            let req = AlignReq { token: 1, zs: vec![], c: 0, t: 0, region: None, mode: mode.clone(), n, max_shift: 0.0 };
             let t = Instant::now();
             let a = estimate(&img, &req, &|_, _| ()).unwrap();
-            eprintln!(
-                "n {n} {mode}: {:?}, bin {}, {} iterations",
-                t.elapsed(),
-                a.bin,
-                a.iterations
-            );
+            eprintln!("n {n} {mode}: {:?}, bin {}, {} iterations", t.elapsed(), a.bin, a.iterations);
             for (i, (s, c)) in a.shifts.iter().zip(&a.cc).enumerate() {
                 eprintln!("  {i:3} {:8.2} {:8.2}  cc {c:.3}", s[0], s[1]);
             }
         }
         let out = std::env::temp_dir().join("tmv-align-sum.mrc");
-        let a = estimate(
-            &img,
-            &AlignReq {
-                token: 1,
-                zs: vec![],
-                c: 0,
-                t: 0,
-                region: None,
-                mode,
-                n: 1024,
-                max_shift: 0.0,
-            },
-            &|_, _| (),
-        )
-        .unwrap();
+        let a = estimate(&img, &AlignReq { token: 1, zs: vec![], c: 0, t: 0, region: None, mode, n: 1024, max_shift: 0.0 }, &|_, _| ()).unwrap();
         let t = Instant::now();
-        save(
-            &img,
-            &SaveReq {
-                token: 1,
-                zs: a.zs,
-                shifts: a.shifts,
-                c: 0,
-                t: 0,
-                path: out.to_string_lossy().into(),
-                what: "sum".into(),
-            },
-            &|_, _| (),
-        )
-        .unwrap();
+        save(&img, &SaveReq { token: 1, zs: a.zs, shifts: a.shifts, c: 0, t: 0, path: out.to_string_lossy().into(), what: "sum".into() }, &|_, _| ()).unwrap();
         eprintln!("sum written to {} in {:?}", out.display(), t.elapsed());
     }
 }
@@ -1386,29 +1015,11 @@ mod bench {
 /// Cross-correlation of two already sampled square patches. Shared by tilt
 /// tracking; the returned displacement takes a centre in `a` to one in `b`.
 #[cfg(feature = "pro")]
-struct PatchPlan {
-    g: Geom,
-    fft: Fft,
-    small: Fft,
-    filter: Vec<f32>,
-}
+struct PatchPlan { g: Geom, fft: Fft, small: Fft, filter: Vec<f32> }
 #[cfg(feature = "pro")]
 impl PatchPlan {
     fn new(n: usize) -> Self {
-        Self {
-            g: Geom {
-                x0: 0,
-                y0: 0,
-                bin: 1,
-                n,
-                m: n / 2,
-                w: n,
-                h: n,
-            },
-            fft: Fft::new(n),
-            small: Fft::new(n / 2),
-            filter: make_filter(n / 2),
-        }
+        Self { g: Geom { x0: 0, y0: 0, bin: 1, n, m: n / 2, w: n, h: n }, fft: Fft::new(n), small: Fft::new(n/2), filter: make_filter(n/2) }
     }
 }
 #[cfg(feature = "pro")]
@@ -1416,58 +1027,30 @@ thread_local! { static PATCH_PLANS: std::cell::RefCell<std::collections::HashMap
 
 #[cfg(feature = "pro")]
 fn patch_plan(n: usize) -> Arc<PatchPlan> {
-    PATCH_PLANS.with(|plans| {
-        plans
-            .borrow_mut()
-            .entry(n)
-            .or_insert_with(|| Arc::new(PatchPlan::new(n)))
-            .clone()
-    })
+    PATCH_PLANS.with(|plans| plans.borrow_mut().entry(n).or_insert_with(|| Arc::new(PatchPlan::new(n))).clone())
 }
 
 #[cfg(feature = "pro")]
 pub(crate) fn patch_shift(a: &[f32], b: &[f32], n: usize, max: f64) -> ([f64; 2], f64) {
-    let plan = patch_plan(n);
-    let sa = spectrum(&plan.g, &plan.fft, &plan.filter, [0, 0], |x, y| {
-        a[y * n + x]
-    });
-    let sb = spectrum(&plan.g, &plan.fft, &plan.filter, [0, 0], |x, y| {
-        b[y * n + x]
-    });
-    pair_shift(&sa, &sb, &plan.g, &plan.small, max)
+    let plan=patch_plan(n);
+    let sa=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|a[y*n+x]);
+    let sb=spectrum(&plan.g,&plan.fft,&plan.filter,[0,0],|x,y|b[y*n+x]);
+    pair_shift(&sa,&sb,&plan.g,&plan.small,max)
 }
 
 #[cfg(feature = "pro")]
-pub(crate) fn patch_cross_peak(
-    pr: &[f32],
-    pi: &[f32],
-    n: usize,
-    energies: [f64; 2],
-    max: f64,
-) -> ([f64; 2], f64) {
-    let p = patch_plan(n);
-    let start = coarse_peak(pr, pi, &p.g, &p.small, max);
-    let (d, v) = refine_peak(pr, pi, &p.g, start);
-    (d, norm_cc(v, energies[0], energies[1]))
+pub(crate) fn patch_cross_peak(pr: &[f32], pi: &[f32], n: usize, energies: [f64;2], max: f64) -> ([f64;2],f64) {
+    let p=patch_plan(n);
+    let start=coarse_peak(pr,pi,&p.g,&p.small,max);
+    let (d,v)=refine_peak(pr,pi,&p.g,start);
+    (d,norm_cc(v,energies[0],energies[1]))
 }
 
 #[cfg(feature = "pro")]
 pub(crate) fn patch_window(n: usize) -> (Vec<f32>, Vec<f32>) {
-    let edge = (n / 16).max(2);
-    let win: Vec<f32> = (0..n)
-        .map(|i| {
-            let d = i.min(n - 1 - i);
-            if d >= edge {
-                1.0
-            } else {
-                (0.5 - 0.5 * (PI * (d as f64 + 0.5) / edge as f64).cos()) as f32
-            }
-        })
-        .collect();
-    (
-        (0..n * n).map(|i| win[i / n] * win[i % n]).collect(),
-        make_filter(n / 2),
-    )
+    let edge=(n/16).max(2);
+    let win:Vec<f32>=(0..n).map(|i| {let d=i.min(n-1-i); if d>=edge {1.0} else {(0.5-0.5*(PI*(d as f64+0.5)/edge as f64).cos()) as f32}}).collect();
+    ((0..n*n).map(|i|win[i/n]*win[i%n]).collect(), make_filter(n/2))
 }
 
 /// A movie whose frames do not correlate: nothing to measure motion on.
@@ -1478,11 +1061,7 @@ pub(crate) struct NoSignal(pub f64);
 #[cfg(feature = "pro")]
 impl std::fmt::Display for NoSignal {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "电影全局相关度过低（中位 CC={:.3}），无法可靠测量运动；请增加分组或核对原始电影",
-            self.0
-        )
+        write!(f, "电影全局相关度过低（中位 CC={:.3}），无法可靠测量运动；请增加分组或核对原始电影", self.0)
     }
 }
 
@@ -1491,92 +1070,35 @@ impl std::error::Error for NoSignal {}
 
 /// Motion workspace: the same iterative movie solver on reduced groups.
 #[cfg(feature = "pro")]
-pub(crate) fn movie_planes(
-    frames: &[Vec<f32>],
-    w: usize,
-    h: usize,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<Aligned> {
-    let start = std::time::Instant::now();
-    if frames.len() < 2 || frames.iter().any(|v| v.len() != w * h) {
-        bail!("电影尺寸不一致");
-    }
-    let g = Geom::new([0, 0, w, h], 1024, w, h)?;
-    let f = Fft::new(g.n);
-    let filter = make_filter(g.m);
-    let spec_of = |i: usize, off: [isize; 2]| -> Result<Spec> {
-        if CANCEL.load(Ordering::SeqCst) {
-            bail!("已取消");
-        }
-        Ok(spectrum(&g, &f, &filter, off, |x, y| frames[i][y * w + x]))
+pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {
+    let start=std::time::Instant::now();
+    if frames.len()<2||frames.iter().any(|v|v.len()!=w*h){bail!("电影尺寸不一致");}
+    let g=Geom::new([0,0,w,h],1024,w,h)?;let f=Fft::new(g.n);let filter=make_filter(g.m);
+    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{
+        if CANCEL.load(Ordering::SeqCst){bail!("已取消");}
+        Ok(spectrum(&g,&f,&filter,off,|x,y|frames[i][y*w+x]))
     };
-    let done = std::sync::atomic::AtomicUsize::new(0);
-    let total = 2 * frames.len() + 24;
-    let (mut shifts, mut cc, mut iterations) =
-        measure(&g, frames.len(), false, g.n as f64 / 4.0, &spec_of, &|| {
-            progress((done.fetch_add(1, Ordering::Relaxed) + 1).min(total), total)
-        })?;
-    let median = |v: &[f64]| {
-        let mut a = v.to_vec();
-        a.sort_by(f64::total_cmp);
-        a[a.len() / 2]
-    };
-    if median(&cc) < 0.08 {
+    let done=std::sync::atomic::AtomicUsize::new(0);let total=2*frames.len()+24;
+    let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
+    let median=|v:&[f64]| {let mut a=v.to_vec();a.sort_by(f64::total_cmp);a[a.len()/2]};
+    if median(&cc)<0.08 {
         // Low-contrast movies need the full field and a narrower frequency band.
-        let n = (1usize << w.min(h).ilog2()).min(1024);
-        let bin = w.min(h) / n;
-        let wide = Geom {
-            x0: (w - n * bin) / 2,
-            y0: (h - n * bin) / 2,
-            bin,
-            n,
-            m: n / 2,
-            w,
-            h,
-        };
-        let fft = Fft::new(n);
-        let mut low = make_filter(n / 2);
-        for (i, v) in low.iter_mut().enumerate() {
-            let x = (i % (n / 2)) as f64 - (n / 4) as f64;
-            let y = (i / (n / 2)) as f64 - (n / 4) as f64;
-            *v *= (-0.5 * (x * x + y * y) / (n as f64 * 0.04).powi(2)).exp() as f32;
+        let n=(1usize<<w.min(h).ilog2()).min(1024);let bin=w.min(h)/n;
+        let wide=Geom{x0:(w-n*bin)/2,y0:(h-n*bin)/2,bin,n,m:n/2,w,h};
+        let fft=Fft::new(n);let mut low=make_filter(n/2);
+        for (i,v) in low.iter_mut().enumerate(){let x=(i%(n/2)) as f64-(n/4) as f64;let y=(i/(n/2)) as f64-(n/4) as f64;*v*=(-0.5*(x*x+y*y)/(n as f64*0.04).powi(2)).exp() as f32;}
+        let specs:Vec<_>=frames.par_iter().map(|v|spectrum(&wide,&fft,&low,[0,0],|x,y|v[y*w+x])).collect();
+        let (mut d,c,it)=align_movie(&specs,&wide,&Fft::new(n/2),n as f64/16.0,&|i|progress(i,MAX_ITER))?;
+        if median(&c)>median(&cc){
+            let mean:[f64;2]=std::array::from_fn(|k|d.iter().map(|v|v[k]).sum::<f64>()/d.len() as f64);
+            for v in &mut d{for k in 0..2{v[k]=(v[k]-mean[k])*bin as f64;}}
+            shifts=d;cc=c;iterations+=it;
         }
-        let specs: Vec<_> = frames
-            .par_iter()
-            .map(|v| spectrum(&wide, &fft, &low, [0, 0], |x, y| v[y * w + x]))
-            .collect();
-        let (mut d, c, it) = align_movie(&specs, &wide, &Fft::new(n / 2), n as f64 / 16.0, &|i| {
-            progress(i, MAX_ITER)
-        })?;
-        if median(&c) > median(&cc) {
-            let mean: [f64; 2] =
-                std::array::from_fn(|k| d.iter().map(|v| v[k]).sum::<f64>() / d.len() as f64);
-            for v in &mut d {
-                for k in 0..2 {
-                    v[k] = (v[k] - mean[k]) * bin as f64;
-                }
-            }
-            shifts = d;
-            cc = c;
-            iterations += it;
-        }
-        if median(&cc) < 0.12 {
-            return Err(NoSignal(median(&cc)).into());
-        }
+        if median(&cc)<0.12{return Err(NoSignal(median(&cc)).into());}
     }
-    Ok(Aligned {
-        zs: (0..frames.len()).collect(),
-        shifts,
-        cc,
-        bin: g.bin,
-        n: g.n,
-        iterations,
-        ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0})
 }
 
 /// Untapered image warping shared with native motion correction.
 #[cfg(feature = "pro")]
-pub(crate) fn movie_shift(v: &[f32], w: usize, h: usize, d: [f64; 2]) -> Vec<f32> {
-    shift_plane(v, w, h, d, 0.0)
-}
+pub(crate) fn movie_shift(v:&[f32],w:usize,h:usize,d:[f64;2])->Vec<f32> {shift_plane(v,w,h,d,0.0)}

@@ -5,11 +5,7 @@
 pub const PRO: bool = cfg!(feature = "pro");
 pub const NAME: &str = if PRO { "TifMrcView Pro" } else { "TifMrcView" };
 /// Bundle identifier, also the name of the app's data folder.
-pub const APP_ID: &str = if PRO {
-    "com.leehow.tifmrcview.pro"
-} else {
-    "com.leehow.tifmrcview"
-};
+pub const APP_ID: &str = if PRO { "com.leehow.tifmrcview.pro" } else { "com.leehow.tifmrcview" };
 /// Executable name, and the prefix of the files it installs on Linux.
 pub const BIN: &str = if PRO { "tifmrcview-pro" } else { "tifmrcview" };
 /// Windows Explorer thumbnail provider (tmv-thumbnail-win and the installer hooks).
@@ -30,25 +26,18 @@ mod tests {
 
     #[test]
     fn matches_tauri_config() {
-        let base: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let pro: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.pro.conf.json")).unwrap();
+        let base: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let pro: serde_json::Value = serde_json::from_str(include_str!("../tauri.pro.conf.json")).unwrap();
         let config = if PRO { &pro } else { &base };
         assert_eq!(config["identifier"], APP_ID);
         assert_eq!(config["productName"], NAME);
-        assert_eq!(
-            config["mainBinaryName"].as_str().unwrap_or("tifmrcview"),
-            BIN
-        );
+        assert_eq!(config["mainBinaryName"].as_str().unwrap_or("tifmrcview"), BIN);
         assert_eq!(pro["build"]["features"], serde_json::json!(["pro"]));
     }
 
     #[test]
     fn clsid_string_matches() {
-        let hex = THUMB_CLSID_STR
-            .trim_matches(|c| c == '{' || c == '}')
-            .replace('-', "");
+        let hex = THUMB_CLSID_STR.trim_matches(|c| c == '{' || c == '}').replace('-', "");
         assert_eq!(u128::from_str_radix(&hex, 16).unwrap(), THUMB_CLSID);
     }
 }

@@ -18,36 +18,24 @@ use std::sync::{Mutex, OnceLock};
 use tifmrcview_lib::plugins::registry::Registry;
 
 pub fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
 fn wasm_target_installed() -> bool {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
     Command::new(rustc)
-        .args([
-            "--print",
-            "target-libdir",
-            "--target",
-            "wasm32-unknown-unknown",
-        ])
+        .args(["--print", "target-libdir", "--target", "wasm32-unknown-unknown"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
-        .is_some_and(|d| {
-            d.join("libcore").exists()
-                || std::fs::read_dir(&d).is_ok_and(|mut r| r.next().is_some())
-        })
+        .is_some_and(|d| d.join("libcore").exists() || std::fs::read_dir(&d).is_ok_and(|mut r| r.next().is_some()))
 }
 
 /// Builds `plugins/<id>` for wasm32 (once per test run) and returns the
 /// .wasm, or `None` (with a note) when the wasm32 target is not installed.
 pub fn build_plugin(id: &str) -> Option<PathBuf> {
-    static BUILT: OnceLock<Mutex<std::collections::HashMap<String, Option<PathBuf>>>> =
-        OnceLock::new();
+    static BUILT: OnceLock<Mutex<std::collections::HashMap<String, Option<PathBuf>>>> = OnceLock::new();
     let mut built = BUILT.get_or_init(Default::default).lock().unwrap();
     if let Some(p) = built.get(id) {
         return p.clone();
@@ -65,18 +53,12 @@ pub fn build_plugin(id: &str) -> Option<PathBuf> {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let manifest = repo().join("plugins").join(id).join("Cargo.toml");
         let mut cmd = Command::new(cargo);
-        cmd.args([
-            "build",
-            "--release",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--manifest-path",
-        ])
-        .arg(&manifest)
-        .arg("--target-dir")
-        .arg(&target)
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env_remove("RUSTFLAGS");
+        cmd.args(["build", "--release", "--target", "wasm32-unknown-unknown", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--target-dir")
+            .arg(&target)
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env_remove("RUSTFLAGS");
         // The plugin's own release profile applies, whatever the app build uses.
         for (k, _) in std::env::vars_os() {
             if k.to_string_lossy().starts_with("CARGO_PROFILE_") {

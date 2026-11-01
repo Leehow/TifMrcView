@@ -30,11 +30,7 @@ fn nal_units(mut b: &[u8]) -> Vec<&[u8]> {
     let start = |b: &[u8]| -> Option<(usize, usize)> {
         (0..b.len().saturating_sub(2)).find_map(|i| {
             if b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1 {
-                Some(if i > 0 && b[i - 1] == 0 {
-                    (i - 1, 4)
-                } else {
-                    (i, 3)
-                })
+                Some(if i > 0 && b[i - 1] == 0 { (i - 1, 4) } else { (i, 3) })
             } else {
                 None
             }
@@ -194,28 +190,13 @@ impl Mp4Writer {
 
         let mvhd = {
             let mut b = B(vec![]);
-            b.u32(0)
-                .u32(0)
-                .u32(TIMESCALE)
-                .u32(dur32)
-                .u32(0x0001_0000)
-                .u16(0x0100)
-                .zeros(10);
+            b.u32(0).u32(0).u32(TIMESCALE).u32(dur32).u32(0x0001_0000).u16(0x0100).zeros(10);
             b.matrix().zeros(24).u32(2);
             fbx(b"mvhd", 0, &b.0)
         };
         let tkhd = {
             let mut b = B(vec![]);
-            b.u32(0)
-                .u32(0)
-                .u32(1)
-                .u32(0)
-                .u32(dur32)
-                .zeros(8)
-                .u16(0)
-                .u16(0)
-                .u16(0)
-                .u16(0);
+            b.u32(0).u32(0).u32(1).u32(0).u32(dur32).zeros(8).u16(0).u16(0).u16(0).u16(0);
             b.matrix().u32(w << 16).u32(h << 16);
             fbx(b"tkhd", 3, &b.0)
         };
@@ -238,12 +219,7 @@ impl Mp4Writer {
         };
         let avcc = {
             let mut b = B(vec![]);
-            b.u8(1)
-                .u8(self.sps[1])
-                .u8(self.sps[2])
-                .u8(self.sps[3])
-                .u8(0xff)
-                .u8(0xe1);
+            b.u8(1).u8(self.sps[1]).u8(self.sps[2]).u8(self.sps[3]).u8(0xff).u8(0xe1);
             b.u16(self.sps.len() as u16).bytes(&self.sps);
             b.u8(1).u16(self.pps.len() as u16).bytes(&self.pps);
             bx(b"avcC", &b.0)
@@ -317,8 +293,7 @@ impl Mp4Writer {
         self.out.write_all(&moov)?;
         let end = self.pos + moov.len() as u64;
         self.out.seek(SeekFrom::Start(self.mdat_start + 8))?;
-        self.out
-            .write_all(&(self.pos - self.mdat_start).to_be_bytes())?;
+        self.out.write_all(&(self.pos - self.mdat_start).to_be_bytes())?;
         self.out.flush()?;
         Ok(end)
     }
@@ -330,13 +305,8 @@ mod tests {
 
     #[test]
     fn splits_annexb() {
-        let s = [
-            0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5,
-        ];
+        let s = [0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5];
         let n = nal_units(&s);
-        assert_eq!(
-            n,
-            vec![&[0x67, 1, 2][..], &[0x68, 3][..], &[0x65, 4, 5][..]]
-        );
+        assert_eq!(n, vec![&[0x67, 1, 2][..], &[0x68, 3][..], &[0x65, 4, 5][..]]);
     }
 }

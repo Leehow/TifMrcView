@@ -17,18 +17,8 @@ pub const FALLOFF: f64 = 1.0;
 const HIGHPASS: f64 = 0.02;
 
 /// Deconvolves a volume [z][y][x] in place.
-pub(crate) fn deconvolve(
-    vol: &mut [f32],
-    [w, h, z]: [usize; 3],
-    pixel_a: f64,
-    defocus_a: f64,
-    optics: &Optics,
-) {
-    let (nx, ny, nz) = (
-        w.next_power_of_two(),
-        h.next_power_of_two(),
-        z.next_power_of_two().max(2),
-    );
+pub(crate) fn deconvolve(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics) {
+    let (nx, ny, nz) = (w.next_power_of_two(), h.next_power_of_two(), z.next_power_of_two().max(2));
     let mean = (vol.par_iter().map(|&v| v as f64).sum::<f64>() / vol.len() as f64) as f32;
     let mut re = vec![0f32; nx * ny * nz];
     let mut im = vec![0f32; nx * ny * nz];
@@ -42,29 +32,20 @@ pub(crate) fn deconvolve(
     }
     fft3(&mut re, &mut im, [nx, ny, nz], false);
     let f = |i: usize, n: usize| crate::motion::sum::freq(i, n) / n as f64;
-    re.par_chunks_mut(nx)
-        .zip(im.par_chunks_mut(nx))
-        .enumerate()
-        .for_each(|(line, (r, m))| {
-            let (y, k) = (line % ny, line / ny);
-            for x in 0..nx {
-                // Spatial frequency in cycles per pixel, then per Å.
-                let kp = (f(x, nx).powi(2) + f(y, ny).powi(2) + f(k, nz).powi(2)).sqrt();
-                let ka = kp / pixel_a;
-                let ctf = optics.gamma(defocus_a, ka * ka, 0.0).sin().abs();
-                let ramp = (kp / (HIGHPASS * 0.5)).min(1.0) * std::f64::consts::PI;
-                let snr = (-kp * 100.0 * FALLOFF / pixel_a).exp()
-                    * 10f64.powf(3.0 * STRENGTH)
-                    * (1.0 - ramp.cos());
-                let g = if snr > 0.0 {
-                    (ctf / (ctf * ctf + 1.0 / snr)) as f32
-                } else {
-                    0.0
-                };
-                r[x] *= g;
-                m[x] *= g;
-            }
-        });
+    re.par_chunks_mut(nx).zip(im.par_chunks_mut(nx)).enumerate().for_each(|(line, (r, m))| {
+        let (y, k) = (line % ny, line / ny);
+        for x in 0..nx {
+            // Spatial frequency in cycles per pixel, then per Å.
+            let kp = (f(x, nx).powi(2) + f(y, ny).powi(2) + f(k, nz).powi(2)).sqrt();
+            let ka = kp / pixel_a;
+            let ctf = optics.gamma(defocus_a, ka * ka, 0.0).sin().abs();
+            let ramp = (kp / (HIGHPASS * 0.5)).min(1.0) * std::f64::consts::PI;
+            let snr = (-kp * 100.0 * FALLOFF / pixel_a).exp() * 10f64.powf(3.0 * STRENGTH) * (1.0 - ramp.cos());
+            let g = if snr > 0.0 { (ctf / (ctf * ctf + 1.0 / snr)) as f32 } else { 0.0 };
+            r[x] *= g;
+            m[x] *= g;
+        }
+    });
     fft3(&mut re, &mut im, [nx, ny, nz], true);
     for k in 0..z {
         for y in 0..h {
@@ -98,13 +79,7 @@ fn fft3(re: &mut [f32], im: &mut [f32], [nx, ny, nz]: [usize; 3], inverse: bool)
         }
     };
     run(re, im, nx, 1, (0..ny * nz).map(|l| l * nx).collect());
-    run(
-        re,
-        im,
-        ny,
-        nx,
-        (0..nx * nz).map(|l| (l / nx) * nx * ny + l % nx).collect(),
-    );
+    run(re, im, ny, nx, (0..nx * nz).map(|l| (l / nx) * nx * ny + l % nx).collect());
     run(re, im, nz, nx * ny, (0..nx * ny).collect());
     if inverse {
         let n = (nx * ny * nz) as f32;

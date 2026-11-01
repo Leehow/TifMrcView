@@ -54,21 +54,15 @@ impl Vol {
 
     /// The `side`³ cube at `origin`, mirrored where it leaves the volume.
     fn cube(&self, origin: [isize; 3], side: [usize; 3]) -> Vec<f32> {
-        let idx: [Vec<usize>; 3] = std::array::from_fn(|a| {
-            (0..side[a])
-                .map(|i| reflect(origin[a] + i as isize, self.n[a]))
-                .collect()
-        });
+        let idx: [Vec<usize>; 3] = std::array::from_fn(|a| (0..side[a]).map(|i| reflect(origin[a] + i as isize, self.n[a])).collect());
         let mut out = vec![0f32; side[0] * side[1] * side[2]];
-        out.par_chunks_mut(side[0] * side[1])
-            .enumerate()
-            .for_each(|(z, plane)| {
-                for (y, row) in plane.chunks_mut(side[0]).enumerate() {
-                    for (x, o) in row.iter_mut().enumerate() {
-                        *o = self.at([idx[0][x], idx[1][y], idx[2][z]]);
-                    }
+        out.par_chunks_mut(side[0] * side[1]).enumerate().for_each(|(z, plane)| {
+            for (y, row) in plane.chunks_mut(side[0]).enumerate() {
+                for (x, o) in row.iter_mut().enumerate() {
+                    *o = self.at([idx[0][x], idx[1][y], idx[2][z]]);
                 }
-            });
+            }
+        });
         out
     }
 }
@@ -141,15 +135,10 @@ fn stats(v: &[f32]) -> (f32, f32) {
 /// the wedge with noise.
 pub fn smooth(vol: &Vol, sigma: f32) -> Vol {
     if sigma <= 0.0 {
-        return Vol {
-            n: vol.n,
-            v: vol.v.clone(),
-        };
+        return Vol { n: vol.n, v: vol.v.clone() };
     }
     let r = (3.0 * sigma).ceil() as isize;
-    let k: Vec<f32> = (-r..=r)
-        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
-        .collect();
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
     let sum: f32 = k.iter().sum();
     let k: Vec<f32> = k.iter().map(|v| v / sum).collect();
     let n = vol.n;
@@ -160,13 +149,7 @@ pub fn smooth(vol: &Vol, sigma: f32) -> Vol {
         v.par_iter_mut().enumerate().for_each(|(i, o)| {
             let c = (i / stride) % n[axis];
             let base = i - c * stride;
-            *o = k
-                .iter()
-                .enumerate()
-                .map(|(j, w)| {
-                    w * src[base + reflect(c as isize + j as isize - r, n[axis]) * stride]
-                })
-                .sum();
+            *o = k.iter().enumerate().map(|(j, w)| w * src[base + reflect(c as isize + j as isize - r, n[axis]) * stride]).sum();
         });
     }
     Vol { n, v }
@@ -210,35 +193,20 @@ impl Geometry {
         // A view tilted by α measures the plane through the tilt axis at
         // angle α from the plane normal to the beam; Friedel symmetry folds
         // each direction to (-90°, 90°].
-        let (lo, hi) = (
-            self.min_tilt.unwrap_or(-self.max_tilt) as f64 - 1e-6,
-            self.max_tilt as f64 + 1e-6,
-        );
-        let f = |i: usize| {
-            if i <= n / 2 {
-                i as f64
-            } else {
-                i as f64 - n as f64
-            }
-        };
+        let (lo, hi) = (self.min_tilt.unwrap_or(-self.max_tilt) as f64 - 1e-6, self.max_tilt as f64 + 1e-6);
+        let f = |i: usize| if i <= n / 2 { i as f64 } else { i as f64 - n as f64 };
         let mut out = vec![0f32; n * n * n];
-        out.par_chunks_mut(n * n)
-            .enumerate()
-            .for_each(|(z, plane)| {
-                for (i, m) in plane.iter_mut().enumerate() {
-                    let k = [f(i % n), f(i / n), f(z)];
-                    let (mut b, mut a) = (k[self.beam], k[self.across()]);
-                    if a < 0.0 || (a == 0.0 && b < 0.0) {
-                        (b, a) = (-b, -a);
-                    }
-                    let angle = if a == 0.0 && b == 0.0 {
-                        0.0
-                    } else {
-                        b.atan2(a).to_degrees()
-                    };
-                    *m = if (lo..=hi).contains(&angle) { 1.0 } else { 0.0 };
+        out.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+            for (i, m) in plane.iter_mut().enumerate() {
+                let k = [f(i % n), f(i / n), f(z)];
+                let (mut b, mut a) = (k[self.beam], k[self.across()]);
+                if a < 0.0 || (a == 0.0 && b < 0.0) {
+                    (b, a) = (-b, -a);
                 }
-            });
+                let angle = if a == 0.0 && b == 0.0 { 0.0 } else { b.atan2(a).to_degrees() };
+                *m = if (lo..=hi).contains(&angle) { 1.0 } else { 0.0 };
+            }
+        });
         out
     }
 }
@@ -250,9 +218,7 @@ fn fft3(fft: &Fft, n: usize, re: &mut Vec<f32>, im: &mut Vec<f32>, inverse: bool
         im.par_iter_mut().for_each(|v| *v = -*v);
     }
     for _ in 0..3 {
-        re.par_chunks_mut(n)
-            .zip(im.par_chunks_mut(n))
-            .for_each(|(r, i)| fft.run(r, i));
+        re.par_chunks_mut(n).zip(im.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
         *re = cycle(re, n);
         *im = cycle(im, n);
     }
@@ -266,14 +232,12 @@ fn fft3(fft: &Fft, n: usize, re: &mut Vec<f32>, im: &mut Vec<f32>, inverse: bool
 /// a[z][y][x] → out[x][z][y].
 fn cycle(a: &[f32], n: usize) -> Vec<f32> {
     let mut out = vec![0f32; n * n * n];
-    out.par_chunks_mut(n * n)
-        .enumerate()
-        .for_each(|(x, plane)| {
-            for (i, o) in plane.iter_mut().enumerate() {
-                let (z, y) = (i / n, i % n);
-                *o = a[(z * n + y) * n + x];
-            }
-        });
+    out.par_chunks_mut(n * n).enumerate().for_each(|(x, plane)| {
+        for (i, o) in plane.iter_mut().enumerate() {
+            let (z, y) = (i / n, i % n);
+            *o = a[(z * n + y) * n + x];
+        }
+    });
     out
 }
 
@@ -286,11 +250,7 @@ struct Spectral {
 
 impl Spectral {
     fn new(n: usize, g: &Geometry) -> Spectral {
-        Spectral {
-            n,
-            fft: Fft::new(n),
-            keep: g.mask(n),
-        }
+        Spectral { n, fft: Fft::new(n), keep: g.mask(n) }
     }
 
     /// `v` with only the Fourier components where `mask` is 1.
@@ -298,13 +258,10 @@ impl Spectral {
         let mut re = v.to_vec();
         let mut im = vec![0f32; v.len()];
         fft3(&self.fft, self.n, &mut re, &mut im, false);
-        re.par_iter_mut()
-            .zip(im.par_iter_mut())
-            .zip(mask)
-            .for_each(|((r, i), &m)| {
-                *r *= m;
-                *i *= m;
-            });
+        re.par_iter_mut().zip(im.par_iter_mut()).zip(mask).for_each(|((r, i), &m)| {
+            *r *= m;
+            *i *= m;
+        });
         fft3(&self.fft, self.n, &mut re, &mut im, true);
         re
     }
@@ -335,32 +292,23 @@ struct Rot {
 impl Rot {
     fn apply(&self, v: &[f32], n: usize) -> Vec<f32> {
         let mut out = vec![0f32; n * n * n];
-        out.par_chunks_mut(n * n)
-            .enumerate()
-            .for_each(|(z, plane)| {
-                for (i, o) in plane.iter_mut().enumerate() {
-                    let c = [i % n, i / n, z];
-                    let mut s = [0usize; 3];
-                    for a in 0..3 {
-                        s[self.perm[a]] = if self.flip[a] { n - 1 - c[a] } else { c[a] };
-                    }
-                    *o = v[(s[2] * n + s[1]) * n + s[0]];
+        out.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+            for (i, o) in plane.iter_mut().enumerate() {
+                let c = [i % n, i / n, z];
+                let mut s = [0usize; 3];
+                for a in 0..3 {
+                    s[self.perm[a]] = if self.flip[a] { n - 1 - c[a] } else { c[a] };
                 }
-            });
+                *o = v[(s[2] * n + s[1]) * n + s[0]];
+            }
+        });
         out
     }
 }
 
 /// The 24 rotations of a cube, less the 4 that leave the wedge where it is.
 fn rotations(g: &Geometry) -> Vec<Rot> {
-    const PERMS: [([usize; 3], bool); 6] = [
-        ([0, 1, 2], true),
-        ([1, 2, 0], true),
-        ([2, 0, 1], true),
-        ([0, 2, 1], false),
-        ([2, 1, 0], false),
-        ([1, 0, 2], false),
-    ];
+    const PERMS: [([usize; 3], bool); 6] = [([0, 1, 2], true), ([1, 2, 0], true), ([2, 0, 1], true), ([0, 2, 1], false), ([2, 1, 0], false), ([1, 0, 2], false)];
     let mut out = vec![];
     for (perm, even) in PERMS {
         for bits in 0..8 {
@@ -398,13 +346,7 @@ fn busiest(vol: &Vol, side: usize, count: usize, seed: u64) -> Vec<[isize; 3]> {
     let tries = (count * 4).max(64);
     let mut cands: Vec<([isize; 3], f32)> = (0..tries)
         .map(|_| {
-            let o: [isize; 3] = std::array::from_fn(|a| {
-                if vol.n[a] > side {
-                    rng.below(vol.n[a] - side + 1) as isize
-                } else {
-                    (vol.n[a] as isize - side as isize) / 2
-                }
-            });
+            let o: [isize; 3] = std::array::from_fn(|a| if vol.n[a] > side { rng.below(vol.n[a] - side + 1) as isize } else { (vol.n[a] as isize - side as isize) / 2 });
             // Spread of a coarse sample of the cube.
             let (mut k, mut s, mut s2) = (0f32, 0f32, 0f32);
             for z in (0..side).step_by(2) {
@@ -450,13 +392,7 @@ pub fn detect(vol: &Vol) -> Detected {
         }
     }
     let n = side;
-    let f = |i: usize| {
-        if i <= n / 2 {
-            i as f32
-        } else {
-            i as f32 - n as f32
-        }
-    };
+    let f = |i: usize| if i <= n / 2 { i as f32 } else { i as f32 - n as f32 };
     // Log power less its mean over the shell, for the band 0.2..0.9 Nyquist.
     let shells = n / 2 + 1;
     let (mut sum, mut cnt) = (vec![0f64; shells], vec![0f64; shells]);
@@ -465,11 +401,7 @@ pub fn detect(vol: &Vol) -> Detected {
         let k = [f(i % n), f((i / n) % n), f(i / (n * n))];
         let r = (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]).sqrt();
         let shell = r.round() as usize;
-        if shell >= shells
-            || (r as f64) < 0.2 * (n / 2) as f64
-            || (r as f64) > 0.9 * (n / 2) as f64
-            || p <= 0.0
-        {
+        if shell >= shells || (r as f64) < 0.2 * (n / 2) as f64 || (r as f64) > 0.9 * (n / 2) as f64 || p <= 0.0 {
             continue;
         }
         let l = p.ln();
@@ -477,10 +409,7 @@ pub fn detect(vol: &Vol) -> Detected {
         cnt[shell] += 1.0;
         pts.push((k, shell, l));
     }
-    let pts: Vec<([f32; 3], f32)> = pts
-        .into_iter()
-        .map(|(k, s, l)| (k, l - (sum[s] / cnt[s]) as f32))
-        .collect();
+    let pts: Vec<([f32; 3], f32)> = pts.into_iter().map(|(k, s, l)| (k, l - (sum[s] / cnt[s]) as f32)).collect();
     let mut best: Option<Detected> = None;
     for beam in 0..3 {
         for tilt in 0..3 {
@@ -499,12 +428,8 @@ pub fn detect(vol: &Vol) -> Detected {
                 bins[bin].0 += *l as f64;
                 bins[bin].1 += 1.0;
             }
-            let profile: Vec<f32> = bins
-                .iter()
-                .map(|&(s, c)| if c > 0.0 { (s / c) as f32 } else { 0.0 })
-                .collect();
-            let mean =
-                |r: std::ops::Range<usize>| profile[r.clone()].iter().sum::<f32>() / r.len() as f32;
+            let profile: Vec<f32> = bins.iter().map(|&(s, c)| if c > 0.0 { (s / c) as f32 } else { 0.0 }).collect();
+            let mean = |r: std::ops::Range<usize>| profile[r.clone()].iter().sum::<f32>() / r.len() as f32;
             let (hi, lo) = (mean(0..8), mean(16..18));
             let contrast = hi - lo;
             // The first 5° step from 40° on that falls below half way.
@@ -512,16 +437,7 @@ pub fn detect(vol: &Vol) -> Detected {
             let edge = (8..18).find(|&i| profile[i] < half).unwrap_or(17);
             let max_tilt = ((edge * 5) as f32).clamp(40.0, 80.0);
             if best.as_ref().is_none_or(|b| contrast > b.contrast) {
-                best = Some(Detected {
-                    geometry: Geometry {
-                        beam,
-                        tilt,
-                        max_tilt,
-                        min_tilt: None,
-                    },
-                    contrast,
-                    profile,
-                });
+                best = Some(Detected { geometry: Geometry { beam, tilt, max_tilt, min_tilt: None }, contrast, profile });
             }
         }
     }
@@ -539,15 +455,8 @@ struct Block {
 
 impl Block {
     fn new(i: usize, o: usize, dev: &Device) -> Block {
-        let conv = |i, o| {
-            Conv3dConfig::new([i, o], [3, 3, 3])
-                .with_padding(PaddingConfig3d::Same)
-                .init(dev)
-        };
-        Block {
-            c1: conv(i, o),
-            c2: conv(o, o),
-        }
+        let conv = |i, o| Conv3dConfig::new([i, o], [3, 3, 3]).with_padding(PaddingConfig3d::Same).init(dev);
+        Block { c1: conv(i, o), c2: conv(o, o) }
     }
 
     fn forward(&self, x: Tensor<5>) -> Tensor<5> {
@@ -570,43 +479,16 @@ pub struct Net {
 impl Net {
     pub fn new(base: usize, levels: usize, dev: &Device) -> Net {
         let w = |l: usize| base << l;
-        let down = (0..levels)
-            .map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev))
-            .collect();
-        let pool = (0..levels)
-            .map(|l| {
-                Conv3dConfig::new([w(l), w(l)], [2, 2, 2])
-                    .with_stride([2, 2, 2])
-                    .init(dev)
-            })
-            .collect();
+        let down = (0..levels).map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev)).collect();
+        let pool = (0..levels).map(|l| Conv3dConfig::new([w(l), w(l)], [2, 2, 2]).with_stride([2, 2, 2]).init(dev)).collect();
         let bottom = Block::new(w(levels - 1), w(levels), dev);
         // Nearest-neighbour doubling then a 3×3×3 convolution: no checkerboard,
         // which transposed convolutions leave.
-        let raise = (0..levels)
-            .rev()
-            .map(|l| {
-                Conv3dConfig::new([w(l + 1), w(l)], [3, 3, 3])
-                    .with_padding(PaddingConfig3d::Same)
-                    .init(dev)
-            })
-            .collect();
-        let up = (0..levels)
-            .rev()
-            .map(|l| Block::new(2 * w(l), w(l), dev))
-            .collect();
+        let raise = (0..levels).rev().map(|l| Conv3dConfig::new([w(l + 1), w(l)], [3, 3, 3]).with_padding(PaddingConfig3d::Same).init(dev)).collect();
+        let up = (0..levels).rev().map(|l| Block::new(2 * w(l), w(l), dev)).collect();
         // The head starts at zero: the network starts as the identity.
-        let head = Conv3dConfig::new([base, 1], [1, 1, 1])
-            .with_initializer(burn::nn::Initializer::Zeros)
-            .init(dev);
-        Net {
-            down,
-            pool,
-            bottom,
-            raise,
-            up,
-            head,
-        }
+        let head = Conv3dConfig::new([base, 1], [1, 1, 1]).with_initializer(burn::nn::Initializer::Zeros).init(dev);
+        Net { down, pool, bottom, raise, up, head }
     }
 
     /// Sides fed in are multiples of this.
@@ -677,21 +559,7 @@ pub struct TrainConfig {
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig {
-            cube: 64,
-            count: 120,
-            iterations: 10,
-            steps: 200,
-            batch: 4,
-            lr: 4e-4,
-            noise: 0.0,
-            base: 16,
-            levels: 3,
-            seed: 0x1503,
-            smooth: 0.0,
-            omega: 2.0,
-            equivariant: 0.0,
-        }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0 }
     }
 }
 
@@ -725,13 +593,7 @@ impl Rng {
 }
 
 /// Trains the network on cubes of `vol` (standardised).
-pub fn train(
-    dev: &Device,
-    vol: &Vol,
-    g: &Geometry,
-    cfg: &TrainConfig,
-    mut progress: impl FnMut(Progress),
-) -> Result<(Net, f32)> {
+pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
     g.check()?;
     let n = cfg.cube;
     if !n.is_power_of_two() || n < 16 || !n.is_multiple_of(1 << cfg.levels) {
@@ -739,10 +601,7 @@ pub fn train(
     }
     let sp = Spectral::new(n, g);
     let rots = rotations(g);
-    let orig: Vec<Vec<f32>> = busiest(vol, n, cfg.count.max(1), cfg.seed)
-        .into_iter()
-        .map(|o| vol.cube(o, [n; 3]))
-        .collect();
+    let orig: Vec<Vec<f32>> = busiest(vol, n, cfg.count.max(1), cfg.seed).into_iter().map(|o| vol.cube(o, [n; 3])).collect();
     let mut data = orig.clone();
     let ad = dev.clone().autodiff();
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
@@ -752,28 +611,13 @@ pub fn train(
     let mut loss_avg = 0f32;
     let edge = n / 8;
     let inside = |i: usize| (edge..n - edge).contains(&i);
-    let w: Vec<f32> = (0..n * n * n)
-        .map(|i| {
-            if inside(i % n) && inside((i / n) % n) && inside(i / (n * n)) {
-                1.0
-            } else {
-                0.0
-            }
-        })
-        .collect();
+    let w: Vec<f32> = (0..n * n * n).map(|i| if inside(i % n) && inside((i / n) % n) && inside(i / (n * n)) { 1.0 } else { 0.0 }).collect();
     let inner_n = w.iter().sum::<f32>() * cfg.batch as f32;
-    let inner = Tensor::<5>::from_data(
-        TensorData::new(w.repeat(cfg.batch), [cfg.batch, 1, n, n, n]),
-        &ad,
-    );
+    let inner = Tensor::<5>::from_data(TensorData::new(w.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
     for it in 0..cfg.iterations {
         let noise = if cfg.noise > 0.0 && cfg.iterations > 1 {
             let start = cfg.iterations / 2;
-            if it >= start {
-                cfg.noise * (it - start + 1) as f32 / (cfg.iterations - start) as f32
-            } else {
-                0.0
-            }
+            if it >= start { cfg.noise * (it - start + 1) as f32 / (cfg.iterations - start) as f32 } else { 0.0 }
         } else {
             0.0
         };
@@ -781,15 +625,7 @@ pub fn train(
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
-            let picks: Vec<(usize, Rot, u64)> = (0..cfg.batch)
-                .map(|_| {
-                    (
-                        rng.below(data.len()),
-                        rots[rng.below(rots.len())],
-                        rng.next(),
-                    )
-                })
-                .collect();
+            let picks: Vec<(usize, Rot, u64)> = (0..cfg.batch).map(|_| (rng.below(data.len()), rots[rng.below(rots.len())], rng.next())).collect();
             let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
                 .par_iter()
                 .map(|(i, r, seed)| {
@@ -800,13 +636,8 @@ pub fn train(
                         let raw: Vec<f32> = (0..n * n * n).map(|_| nr.gauss() * noise).collect();
                         // Noise as the tomogram has it: without the wedge.
                         let shaped = sp.cut(&raw);
-                        let gain = (raw.iter().map(|v| v * v).sum::<f32>()
-                            / shaped.iter().map(|v| v * v).sum::<f32>().max(1e-12))
-                        .sqrt();
-                        input
-                            .iter_mut()
-                            .zip(&shaped)
-                            .for_each(|(v, s)| *v += s * gain);
+                        let gain = (raw.iter().map(|v| v * v).sum::<f32>() / shaped.iter().map(|v| v * v).sum::<f32>().max(1e-12)).sqrt();
+                        input.iter_mut().zip(&shaped).for_each(|(v, s)| *v += s * gain);
                     }
                     (input, target)
                 })
@@ -818,54 +649,22 @@ pub fn train(
             // Fourier cuts ring at the cube's faces: score the middle only.
             let loss = ((net.forward(x) - t).abs() * inner.clone()).sum() / inner_n;
             let lv: f32 = loss.clone().into_scalar();
-            loss_avg += if it == 0 && step == 0 {
-                lv - loss_avg
-            } else {
-                0.05 * (lv - loss_avg)
-            };
+            loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
             let grads = GradientsParams::from_grads(loss.backward(), &net);
             let k = it * cfg.steps + step;
-            let lr = cfg.lr
-                * (0.1
-                    + 0.9
-                        * 0.5
-                        * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
+            let lr = cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
             net = opt.step(lr, net, grads);
             if step % 5 == 4 || step + 1 == cfg.steps {
-                progress(Progress {
-                    iteration: it + 1,
-                    iterations: cfg.iterations,
-                    step: step + 1,
-                    steps: cfg.steps,
-                    loss: loss_avg,
-                });
+                progress(Progress { iteration: it + 1, iterations: cfg.iterations, step: step + 1, steps: cfg.steps, loss: loss_avg });
             }
         }
         // Fill each cube's wedge with the network's guess for the next round.
         if it + 1 < cfg.iterations {
             let valid = net.valid();
             for chunk in (0..orig.len()).collect::<Vec<_>>().chunks(cfg.batch.max(1)) {
-                let x = Tensor::<5>::from_data(
-                    TensorData::new(
-                        chunk
-                            .iter()
-                            .flat_map(|&i| data[i].iter().copied())
-                            .collect::<Vec<f32>>(),
-                        [chunk.len(), 1, n, n, n],
-                    ),
-                    dev,
-                );
-                let out = valid
-                    .forward(x)
-                    .into_data()
-                    .convert::<f32>()
-                    .try_into_vec::<f32>()
-                    .unwrap();
-                let filled: Vec<Vec<f32>> = chunk
-                    .par_iter()
-                    .enumerate()
-                    .map(|(j, &i)| sp.fill(&orig[i], &out[j * n * n * n..(j + 1) * n * n * n]))
-                    .collect();
+                let x = Tensor::<5>::from_data(TensorData::new(chunk.iter().flat_map(|&i| data[i].iter().copied()).collect::<Vec<f32>>(), [chunk.len(), 1, n, n, n]), dev);
+                let out = valid.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+                let filled: Vec<Vec<f32>> = chunk.par_iter().enumerate().map(|(j, &i)| sp.fill(&orig[i], &out[j * n * n * n..(j + 1) * n * n * n])).collect();
                 for (&i, f) in chunk.iter().zip(filled) {
                     data[i] = f;
                 }
@@ -879,47 +678,20 @@ pub fn train(
 /// fastest, beam along Z, tilt axis along Y, tilts from `tilt_range[0]` to
 /// `tilt_range[1]` degrees) and returns the corrected volume, same units.
 /// `progress` gets training steps, then tiles as (iterations + 1, 1, done, total).
-pub fn train_and_apply(
-    dev: &Device,
-    values: &[f32],
-    dims: [usize; 3],
-    tilt_range: [f32; 2],
-    cfg: &TrainConfig,
-    mut progress: impl FnMut(Progress),
-) -> Result<Vec<f32>> {
+pub fn train_and_apply(dev: &Device, values: &[f32], dims: [usize; 3], tilt_range: [f32; 2], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
     if values.len() != dims[0] * dims[1] * dims[2] {
         bail!("体数据大小和尺寸不符");
     }
     let (mean, std) = stats(values);
-    let vol = smooth(
-        &Vol {
-            n: dims,
-            v: values
-                .par_iter()
-                .map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 })
-                .collect(),
-        },
-        cfg.smooth,
-    );
-    let g = Geometry {
-        beam: 2,
-        tilt: 1,
-        max_tilt: tilt_range[1],
-        min_tilt: Some(tilt_range[0]),
-    };
+    let vol = smooth(&Vol { n: dims, v: values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() }, cfg.smooth);
+    let g = Geometry { beam: 2, tilt: 1, max_tilt: tilt_range[1], min_tilt: Some(tilt_range[0]) };
     let (net, _) = train(dev, &vol, &g, cfg, &mut progress)?;
     let it = cfg.iterations + 1;
     let out = apply(dev, &net, &vol, [0; 3], dims, &mut |done, total| {
         if CANCEL.load(Ordering::SeqCst) {
             bail!("已取消");
         }
-        progress(Progress {
-            iteration: it,
-            iterations: cfg.iterations,
-            step: done,
-            steps: total,
-            loss: 0.0,
-        });
+        progress(Progress { iteration: it, iterations: cfg.iterations, step: done, steps: total, loss: 0.0 });
         Ok(())
     })?;
     Ok(out.into_par_iter().map(|v| v * std + mean).collect())
@@ -946,67 +718,47 @@ fn tilt_mask(n: usize, g: &Geometry, tilts: &[f32]) -> Vec<f32> {
     if tilts.len() < 2 {
         return range;
     }
-    let f = |i: usize| {
-        if i <= n / 2 {
-            i as f64
-        } else {
-            i as f64 - n as f64
-        }
-    };
-    range
-        .par_chunks_mut(n * n)
-        .enumerate()
-        .for_each(|(z, plane)| {
-            for (i, m) in plane.iter_mut().enumerate() {
-                if *m == 0.0 {
-                    continue;
-                }
-                let k = [f(i % n), f(i / n), f(z)];
-                let (mut b, mut a) = (k[g.beam], k[g.across()]);
-                if a < 0.0 || (a == 0.0 && b < 0.0) {
-                    (b, a) = (-b, -a);
-                }
-                let angle = b.atan2(a);
-                let r = a.hypot(b);
-                let near = tilts
-                    .iter()
-                    .map(|&t| (angle - (t as f64).to_radians()).abs())
-                    .fold(f64::MAX, f64::min);
-                if r * near.sin() > 1.0 {
-                    *m = 0.0;
-                }
+    let f = |i: usize| if i <= n / 2 { i as f64 } else { i as f64 - n as f64 };
+    range.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+        for (i, m) in plane.iter_mut().enumerate() {
+            if *m == 0.0 {
+                continue;
             }
-        });
+            let k = [f(i % n), f(i / n), f(z)];
+            let (mut b, mut a) = (k[g.beam], k[g.across()]);
+            if a < 0.0 || (a == 0.0 && b < 0.0) {
+                (b, a) = (-b, -a);
+            }
+            let angle = b.atan2(a);
+            let r = a.hypot(b);
+            let near = tilts.iter().map(|&t| (angle - (t as f64).to_radians()).abs()).fold(f64::MAX, f64::min);
+            if r * near.sin() > 1.0 {
+                *m = 0.0;
+            }
+        }
+    });
     range
 }
 
 /// `mask` (unshifted frequencies of a cube of side n) turned with the cube.
 fn turn_mask(mask: &[f32], n: usize, r: &Rot) -> Vec<f32> {
     let mut out = vec![0f32; n * n * n];
-    out.par_chunks_mut(n * n)
-        .enumerate()
-        .for_each(|(z, plane)| {
-            for (i, o) in plane.iter_mut().enumerate() {
-                let c = [i % n, i / n, z];
-                let mut s = [0usize; 3];
-                for a in 0..3 {
-                    s[r.perm[a]] = if r.flip[a] { (n - c[a]) % n } else { c[a] };
-                }
-                *o = mask[(s[2] * n + s[1]) * n + s[0]];
+    out.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+        for (i, o) in plane.iter_mut().enumerate() {
+            let c = [i % n, i / n, z];
+            let mut s = [0usize; 3];
+            for a in 0..3 {
+                s[r.perm[a]] = if r.flip[a] { (n - c[a]) % n } else { c[a] };
             }
-        });
+            *o = mask[(s[2] * n + s[1]) * n + s[0]];
+        }
+    });
     out
 }
 
 /// Cosine and −sine DFT matrices of side n.
 fn dft(n: usize, dev: &Device) -> (Tensor<2>, Tensor<2>) {
-    let at = |f: fn(f64) -> f64| -> Vec<f32> {
-        (0..n * n)
-            .map(|i| {
-                f(2.0 * std::f64::consts::PI * ((i / n) * (i % n) % n) as f64 / n as f64) as f32
-            })
-            .collect()
-    };
+    let at = |f: fn(f64) -> f64| -> Vec<f32> { (0..n * n).map(|i| f(2.0 * std::f64::consts::PI * ((i / n) * (i % n) % n) as f64 / n as f64) as f32).collect() };
     let c = Tensor::<2>::from_data(TensorData::new(at(f64::cos), [n, n]), dev);
     let s = Tensor::<2>::from_data(TensorData::new(at(|x| -x.sin()), [n, n]), dev);
     (c, s)
@@ -1015,12 +767,7 @@ fn dft(n: usize, dev: &Device) -> (Tensor<2>, Tensor<2>) {
 /// 3D DFT of [B, n, n, n] (real, imaginary) on the device: along the last
 /// axis, then the axes turned (Z, Y, X) → (X, Z, Y), three times, so they
 /// end where they began. Inverse with −s (and divide by n³).
-fn dft3(
-    re: Tensor<4>,
-    im: Option<Tensor<4>>,
-    c: &Tensor<2>,
-    s: &Tensor<2>,
-) -> (Tensor<4>, Tensor<4>) {
+fn dft3(re: Tensor<4>, im: Option<Tensor<4>>, c: &Tensor<2>, s: &Tensor<2>) -> (Tensor<4>, Tensor<4>) {
     let [b, n, _, _] = re.dims();
     let rows = b * n * n;
     let mut re = re;
@@ -1031,10 +778,7 @@ fn dft3(
             None => (r.clone().matmul(c.clone()), r.matmul(s.clone())),
             Some(i) => {
                 let i = i.reshape([rows, n]);
-                (
-                    r.clone().matmul(c.clone()) - i.clone().matmul(s.clone()),
-                    r.matmul(s.clone()) + i.matmul(c.clone()),
-                )
+                (r.clone().matmul(c.clone()) - i.clone().matmul(s.clone()), r.matmul(s.clone()) + i.matmul(c.clone()))
             }
         };
         re = nr.reshape([b, n, n, n]).permute([0, 3, 1, 2]);
@@ -1054,25 +798,12 @@ fn spectral_error(e: Tensor<5>, c: &Tensor<2>, s: &Tensor<2>, w: Tensor<4>) -> T
 fn spectral_cut(x: Tensor<4>, c: &Tensor<2>, s: &Tensor<2>, mask: &Tensor<4>) -> Tensor<4> {
     let n = x.dims()[1];
     let (re, im) = dft3(x, None, c, s);
-    let (re, _) = dft3(
-        re * mask.clone(),
-        Some(im * mask.clone()),
-        c,
-        &s.clone().neg(),
-    );
+    let (re, _) = dft3(re * mask.clone(), Some(im * mask.clone()), c, &s.clone().neg());
     re / (n * n * n) as f32
 }
 
 /// Trains on the two half tomograms `a` and `b` (standardised alike).
-pub fn train_halves(
-    dev: &Device,
-    a: &Vol,
-    b: &Vol,
-    g: &Geometry,
-    tilts: &[f32],
-    cfg: &TrainConfig,
-    mut progress: impl FnMut(Progress),
-) -> Result<(Net, f32)> {
+pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
     g.check()?;
     if a.n != b.n {
         bail!("两个半断层尺寸不同");
@@ -1091,51 +822,21 @@ pub fn train_halves(
         .iter()
         .map(|r| {
             let target = turn_mask(&keep, n, r);
-            let both = target
-                .iter()
-                .zip(&keep)
-                .filter(|(&t, &k)| t > 0.0 && k > 0.0)
-                .count()
-                .max(1) as f32;
-            let new = target
-                .iter()
-                .zip(&keep)
-                .filter(|(&t, &k)| t > 0.0 && k == 0.0)
-                .count()
-                .max(1) as f32;
-            let w: Vec<f32> = target
-                .iter()
-                .zip(&keep)
-                .map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new })
-                .collect();
+            let both = target.iter().zip(&keep).filter(|(&t, &k)| t > 0.0 && k > 0.0).count().max(1) as f32;
+            let new = target.iter().zip(&keep).filter(|(&t, &k)| t > 0.0 && k == 0.0).count().max(1) as f32;
+            let w: Vec<f32> = target.iter().zip(&keep).map(|(&t, &k)| t * if k > 0.0 { 1.0 / both } else { cfg.omega / new }).collect();
             w
         })
         .collect();
     let edge = (n / 8).max(1);
-    let taper1: Vec<f32> = (0..n)
-        .map(|i| {
-            let d = i.min(n - 1 - i);
-            if d >= edge {
-                1.0
-            } else {
-                (0.5 - 0.5 * (std::f32::consts::PI * (d as f32 + 0.5) / edge as f32).cos()).max(0.0)
-            }
-        })
-        .collect();
-    let taper: Vec<f32> = (0..n * n * n)
-        .map(|i| taper1[i % n] * taper1[(i / n) % n] * taper1[i / (n * n)])
-        .collect();
-    let mean = Vol {
-        n: a.n,
-        v: a.v
-            .par_iter()
-            .zip(&b.v)
-            .map(|(x, y)| 0.5 * (x + y))
-            .collect(),
-    };
+    let taper1: Vec<f32> = (0..n).map(|i| {
+        let d = i.min(n - 1 - i);
+        if d >= edge { 1.0 } else { (0.5 - 0.5 * (std::f32::consts::PI * (d as f32 + 0.5) / edge as f32).cos()).max(0.0) }
+    }).collect();
+    let taper: Vec<f32> = (0..n * n * n).map(|i| taper1[i % n] * taper1[(i / n) % n] * taper1[i / (n * n)]).collect();
+    let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
     let origins = busiest(&mean, n, cfg.count.max(1), cfg.seed);
-    let orig: [Vec<Vec<f32>>; 2] =
-        [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
+    let orig: [Vec<Vec<f32>>; 2] = [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
     let ad = dev.clone().autodiff();
     let (c, s) = dft(n, &ad);
     let (c0, s0) = dft(n, dev);
@@ -1146,17 +847,7 @@ pub fn train_halves(
     let n3 = n * n * n;
     let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
     let measured = keep_v.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
-    let keep_w = Tensor::<4>::from_data(
-        TensorData::new(
-            keep_v
-                .iter()
-                .map(|&k| k / measured)
-                .collect::<Vec<f32>>()
-                .repeat(bb),
-            [bb, n, n, n],
-        ),
-        &ad,
-    );
+    let keep_w = Tensor::<4>::from_data(TensorData::new(keep_v.iter().map(|&k| k / measured).collect::<Vec<f32>>().repeat(bb), [bb, n, n, n]), &ad);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
@@ -1173,124 +864,47 @@ pub fn train_halves(
                 // the equivariance term turns u (held fixed), cuts the
                 // wedge again and asks the network to give back the turned
                 // u of the other half, where that turned half was measured.
-                let picks: Vec<(usize, usize)> = (0..cfg.batch)
-                    .map(|_| (rng.below(origins.len()), rng.below(rots.len())))
-                    .collect();
+                let picks: Vec<(usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()))).collect();
                 let orig = &orig;
-                let y: Vec<f32> = (0..2)
-                    .flat_map(|h| {
-                        picks
-                            .iter()
-                            .flat_map(move |&(i, _)| orig[h][i].iter().copied())
-                    })
-                    .collect();
-                let other: Vec<f32> = y[cfg.batch * n3..]
-                    .iter()
-                    .chain(&y[..cfg.batch * n3])
-                    .copied()
-                    .collect();
-                let u = net.forward(Tensor::<5>::from_data(
-                    TensorData::new(y, [bb, 1, n, n, n]),
-                    &ad,
-                ));
+                let y: Vec<f32> = (0..2).flat_map(|h| picks.iter().flat_map(move |&(i, _)| orig[h][i].iter().copied())).collect();
+                let other: Vec<f32> = y[cfg.batch * n3..].iter().chain(&y[..cfg.batch * n3]).copied().collect();
+                let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [bb, 1, n, n, n]), &ad));
                 let target = Tensor::<5>::from_data(TensorData::new(other, [bb, 1, n, n, n]), &ad);
-                let data = spectral_error(
-                    (u.clone() - target) * window.clone(),
-                    &c,
-                    &s,
-                    keep_w.clone(),
-                ) / (bb * n3) as f32;
-                let held = u
-                    .into_data()
-                    .convert::<f32>()
-                    .try_into_vec::<f32>()
-                    .unwrap();
-                let turned: Vec<Vec<f32>> = (0..bb)
-                    .into_par_iter()
-                    .map(|k| rots[picks[k % cfg.batch].1].apply(&held[k * n3..(k + 1) * n3], n))
-                    .collect();
-                let z =
-                    Tensor::<4>::from_data(TensorData::new(turned.concat(), [bb, n, n, n]), dev);
-                let z = Tensor::<5>::from_data(
-                    spectral_cut(z, &c0, &s0, &keep)
-                        .reshape([bb, 1, n, n, n])
-                        .into_data(),
-                    &ad,
-                );
-                let goal: Vec<f32> = (0..bb)
-                    .flat_map(|k| turned[(k + cfg.batch) % bb].iter().copied())
-                    .collect();
+                let data = spectral_error((u.clone() - target) * window.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
+                let held = u.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+                let turned: Vec<Vec<f32>> = (0..bb).into_par_iter().map(|k| rots[picks[k % cfg.batch].1].apply(&held[k * n3..(k + 1) * n3], n)).collect();
+                let z = Tensor::<4>::from_data(TensorData::new(turned.concat(), [bb, n, n, n]), dev);
+                let z = Tensor::<5>::from_data(spectral_cut(z, &c0, &s0, &keep).reshape([bb, 1, n, n, n]).into_data(), &ad);
+                let goal: Vec<f32> = (0..bb).flat_map(|k| turned[(k + cfg.batch) % bb].iter().copied()).collect();
                 let goal = Tensor::<5>::from_data(TensorData::new(goal, [bb, 1, n, n, n]), &ad);
-                let w: Vec<f32> = (0..bb)
-                    .flat_map(|k| weights[picks[k % cfg.batch].1].iter().copied())
-                    .collect();
+                let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % cfg.batch].1].iter().copied()).collect();
                 let w = Tensor::<4>::from_data(TensorData::new(w, [bb, n, n, n]), &ad);
-                let equi = spectral_error((net.forward(z) - goal) * window.clone(), &c, &s, w)
-                    / ((bb * n3) as f32 * (1.0 + cfg.omega));
+                let equi = spectral_error((net.forward(z) - goal) * window.clone(), &c, &s, w) / ((bb * n3) as f32 * (1.0 + cfg.omega));
                 data + equi * cfg.equivariant
             } else {
-                let picks: Vec<(usize, usize, usize)> = (0..cfg.batch)
-                    .map(|_| {
-                        (
-                            rng.below(origins.len()),
-                            rng.below(rots.len()),
-                            rng.below(2),
-                        )
-                    })
-                    .collect();
-                let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
-                    .par_iter()
-                    .map(|&(i, r, from)| {
-                        (
-                            rots[r].apply(&orig[from][i], n),
-                            rots[r].apply(&orig[1 - from][i], n),
-                        )
-                    })
-                    .collect();
-                let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
-                let w: Vec<f32> = picks
-                    .iter()
-                    .flat_map(|&(_, r, _)| weights[r].iter().copied())
-                    .collect();
-                let norm = (cfg.batch * n * n * n) as f32 * (1.0 + cfg.omega);
-                // The wedge is cut from the inputs on the device.
-                let x =
-                    Tensor::<4>::from_data(TensorData::new(xs.concat(), [cfg.batch, n, n, n]), dev);
-                let x = Tensor::<5>::from_data(
-                    spectral_cut(x, &c0, &s0, &keep)
-                        .reshape([cfg.batch, 1, n, n, n])
-                        .into_data(),
-                    &ad,
-                );
-                let t = Tensor::<5>::from_data(
-                    TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]),
-                    &ad,
-                );
-                let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
-                spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm
+            let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
+            let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
+                .par_iter()
+                .map(|&(i, r, from)| (rots[r].apply(&orig[from][i], n), rots[r].apply(&orig[1 - from][i], n)))
+                .collect();
+            let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
+            let w: Vec<f32> = picks.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
+            let norm = (cfg.batch * n * n * n) as f32 * (1.0 + cfg.omega);
+            // The wedge is cut from the inputs on the device.
+            let x = Tensor::<4>::from_data(TensorData::new(xs.concat(), [cfg.batch, n, n, n]), dev);
+            let x = Tensor::<5>::from_data(spectral_cut(x, &c0, &s0, &keep).reshape([cfg.batch, 1, n, n, n]).into_data(), &ad);
+            let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]), &ad);
+            let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
+            spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm
             };
             let lv: f32 = loss.clone().into_scalar();
-            loss_avg += if it == 0 && step == 0 {
-                lv - loss_avg
-            } else {
-                0.05 * (lv - loss_avg)
-            };
+            loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
             let grads = GradientsParams::from_grads(loss.backward(), &net);
             let k = it * cfg.steps + step;
-            let lr = cfg.lr
-                * (0.1
-                    + 0.9
-                        * 0.5
-                        * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
+            let lr = cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
             net = opt.step(lr, net, grads);
             if step % 5 == 4 || step + 1 == cfg.steps {
-                progress(Progress {
-                    iteration: it + 1,
-                    iterations: cfg.iterations,
-                    step: step + 1,
-                    steps: cfg.steps,
-                    loss: loss_avg,
-                });
+                progress(Progress { iteration: it + 1, iterations: cfg.iterations, step: step + 1, steps: cfg.steps, loss: loss_avg });
             }
         }
     }
@@ -1301,41 +915,21 @@ pub fn train_halves(
 /// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
 /// and fills the wedge in one network, and returns the mean of its results
 /// for both halves, in the halves' units.
-pub fn train_halves_and_apply(
-    dev: &Device,
-    even: &[f32],
-    odd: &[f32],
-    dims: [usize; 3],
-    tilts: &[f32],
-    cfg: &TrainConfig,
-    mut progress: impl FnMut(Progress),
-) -> Result<Vec<f32>> {
+pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
     let len = dims[0] * dims[1] * dims[2];
     if even.len() != len || odd.len() != len {
         bail!("体数据大小和尺寸不符");
     }
-    let (lo, hi) = tilts
-        .iter()
-        .fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
+    let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
     if tilts.len() < 2 {
         bail!("缺少倾转角");
     }
     let (m0, s0) = stats(even);
     let (m1, s1) = stats(odd);
     let (mean, std) = (0.5 * (m0 + m1), 0.5 * (s0 + s1));
-    let std_vol = |v: &[f32]| Vol {
-        n: dims,
-        v: v.par_iter()
-            .map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 })
-            .collect(),
-    };
+    let std_vol = |v: &[f32]| Vol { n: dims, v: v.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
     let (a, b) = (std_vol(even), std_vol(odd));
-    let g = Geometry {
-        beam: 2,
-        tilt: 1,
-        max_tilt: hi,
-        min_tilt: Some(lo),
-    };
+    let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
     let (net, _) = train_halves(dev, &a, &b, &g, tilts, cfg, &mut progress)?;
     let it = cfg.iterations + 1;
     let mut outs = vec![];
@@ -1344,21 +938,11 @@ pub fn train_halves_and_apply(
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
-            progress(Progress {
-                iteration: it,
-                iterations: cfg.iterations,
-                step: h * total + done,
-                steps: 2 * total,
-                loss: 0.0,
-            });
+            progress(Progress { iteration: it, iterations: cfg.iterations, step: h * total + done, steps: 2 * total, loss: 0.0 });
             Ok(())
         })?);
     }
-    Ok(outs[0]
-        .par_iter()
-        .zip(&outs[1])
-        .map(|(x, y)| 0.5 * (x + y) * std + mean)
-        .collect())
+    Ok(outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect())
 }
 
 // ---- Applying ----
@@ -1373,14 +957,7 @@ const TILE: usize = 112;
 /// overlapping tiles that read past the box (mirrored at the volume's
 /// edges) and are cross-faded where they meet. `tick(done, total)` after
 /// each tile.
-pub fn apply(
-    dev: &Device,
-    net: &Net,
-    vol: &Vol,
-    origin: [usize; 3],
-    size: [usize; 3],
-    tick: &mut dyn FnMut(usize, usize) -> Result<()>,
-) -> Result<Vec<f32>> {
+pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<Vec<f32>> {
     let al = net.align();
     let step = TILE - 2 * MARGIN;
     let starts: [Vec<usize>; 3] = std::array::from_fn(|a| (0..size[a]).step_by(step).collect());
@@ -1396,36 +973,17 @@ pub fn apply(
                 // BLEND on each side, inside the box.
                 let lo: [usize; 3] = std::array::from_fn(|a| o[a].saturating_sub(BLEND));
                 let hi: [usize; 3] = std::array::from_fn(|a| (o[a] + step + BLEND).min(size[a]));
-                let side: [usize; 3] = std::array::from_fn(|a| {
-                    (hi[a] - lo[a] + 2 * (MARGIN - BLEND)).div_ceil(al) * al
-                });
+                let side: [usize; 3] = std::array::from_fn(|a| (hi[a] - lo[a] + 2 * (MARGIN - BLEND)).div_ceil(al) * al);
                 let pad = MARGIN - BLEND;
-                let corner: [isize; 3] =
-                    std::array::from_fn(|a| (origin[a] + lo[a]) as isize - pad as isize);
+                let corner: [isize; 3] = std::array::from_fn(|a| (origin[a] + lo[a]) as isize - pad as isize);
                 let tile = vol.cube(corner, side);
-                let x = Tensor::<5>::from_data(
-                    TensorData::new(tile, [1, 1, side[2], side[1], side[0]]),
-                    dev,
-                );
-                let r = net
-                    .forward(x)
-                    .into_data()
-                    .convert::<f32>()
-                    .try_into_vec::<f32>()
-                    .unwrap();
+                let x = Tensor::<5>::from_data(TensorData::new(tile, [1, 1, side[2], side[1], side[0]]), dev);
+                let r = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
                 // Weight ramps from 0 to 1 across the 2·BLEND overlap.
                 let ramp = |a: usize, i: usize| -> f32 {
-                    let rise = if o[a] == 0 {
-                        1.0
-                    } else {
-                        ((i + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0)
-                    };
+                    let rise = if o[a] == 0 { 1.0 } else { ((i + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
                     let left = hi[a] - lo[a] - 1 - i;
-                    let fall = if hi[a] == size[a] {
-                        1.0
-                    } else {
-                        ((left + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0)
-                    };
+                    let fall = if hi[a] == size[a] { 1.0 } else { ((left + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
                     rise.min(fall)
                 };
                 for z in 0..hi[2] - lo[2] {
@@ -1446,9 +1004,7 @@ pub fn apply(
             }
         }
     }
-    acc.par_iter_mut()
-        .zip(&wsum)
-        .for_each(|(a, &w)| *a /= w.max(1e-12));
+    acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
     Ok(acc)
 }
 
@@ -1472,8 +1028,7 @@ pub static MODEL: Mutex<Option<Arc<Trained>>> = Mutex::new(None);
 
 /// Loaded volume reused between `detect` and training: (token, c, t, bin).
 #[allow(clippy::type_complexity)]
-pub static VOLUME: Mutex<Option<((u64, usize, usize, usize), Arc<Vol>, f32, f32)>> =
-    Mutex::new(None);
+pub static VOLUME: Mutex<Option<((u64, usize, usize, usize), Arc<Vol>, f32, f32)>> = Mutex::new(None);
 
 pub fn volume(img: &OpenImage, c: usize, t: usize, bin: usize) -> Result<(Arc<Vol>, f32, f32)> {
     let key = (img.token, c, t, bin);
@@ -1519,10 +1074,7 @@ pub fn preview(m: &Trained, req: &PreviewReq) -> Result<Vec<u8>> {
     let [rx, ry, rw, rh] = req.region;
     let lim = 512;
     let (cu, cv) = ((rx + rw / 2) / b, (ry + rh / 2) / b);
-    let (wu, wv) = (
-        (rw / b).clamp(1, lim).min(n[u]),
-        (rh / b).clamp(1, lim).min(n[v]),
-    );
+    let (wu, wv) = ((rw / b).clamp(1, lim).min(n[u]), (rh / b).clamp(1, lim).min(n[v]));
     let ou = cu.saturating_sub(wu / 2).min(n[u] - wu);
     let ov = cv.saturating_sub(wv / 2).min(n[v] - wv);
     let mut origin = [0usize; 3];
@@ -1560,12 +1112,7 @@ pub fn preview(m: &Trained, req: &PreviewReq) -> Result<Vec<u8>> {
 }
 
 /// Corrects the whole volume and writes it as a float32 MRC at `path`.
-pub fn save(
-    m: &Trained,
-    path: &str,
-    pixel_a: f64,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<&'static str> {
+pub fn save(m: &Trained, path: &str, pixel_a: f64, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<&'static str> {
     use std::io::Write;
     CANCEL.store(false, Ordering::SeqCst);
     let n = m.vol.n;
@@ -1581,34 +1128,15 @@ pub fn save(
     })?;
     let (s, k) = (m.std, m.mean);
     let real: Vec<f32> = vals.par_iter().map(|v| v * s + k).collect();
-    let (lo, hi) = real
-        .par_iter()
-        .fold(|| (f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)))
-        .reduce(|| (f32::MAX, f32::MIN), |x, y| (x.0.min(y.0), x.1.max(y.1)));
+    let (lo, hi) = real.par_iter().fold(|| (f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v))).reduce(|| (f32::MAX, f32::MIN), |x, y| (x.0.min(y.0), x.1.max(y.1)));
     let (mean, sd) = stats(&real);
     let g = &m.geometry;
-    let label = format!(
-        "TifMrcView: missing wedge filled, beam {} tilt {} +-{:.0} bin {}",
-        ["X", "Y", "Z"][g.beam],
-        ["X", "Y", "Z"][g.tilt],
-        g.max_tilt,
-        m.bin
-    );
+    let label = format!("TifMrcView: missing wedge filled, beam {} tilt {} +-{:.0} bin {}", ["X", "Y", "Z"][g.beam], ["X", "Y", "Z"][g.tilt], g.max_tilt, m.bin);
     let tmp = format!("{path}.part");
     let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-    f.write_all(&crate::align::mrc_header(
-        n[0],
-        n[1],
-        n[2],
-        pixel_a * m.bin as f64,
-        [lo, hi, mean, sd],
-        &label,
-    ))?;
+    f.write_all(&crate::align::mrc_header(n[0], n[1], n[2], pixel_a * m.bin as f64, [lo, hi, mean, sd], &label))?;
     let mut bytes = vec![0u8; real.len() * 4];
-    bytes
-        .par_chunks_mut(4)
-        .zip(&real)
-        .for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
+    bytes.par_chunks_mut(4).zip(&real).for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
     f.write_all(&bytes)?;
     f.flush()?;
     drop(f);
@@ -1623,15 +1151,7 @@ mod tests {
     /// Random blobs (ellipsoids of several sizes) in a cube of side n.
     fn phantom(n: usize, seed: u64) -> Vol {
         let mut rng = Rng(seed);
-        let blobs: Vec<([f32; 3], f32, f32)> = (0..n / 2)
-            .map(|_| {
-                (
-                    std::array::from_fn(|_| rng.below(n * 100) as f32 / 100.0),
-                    1.5 + rng.below(400) as f32 / 100.0,
-                    if rng.below(2) == 0 { 1.0 } else { -0.6 },
-                )
-            })
-            .collect();
+        let blobs: Vec<([f32; 3], f32, f32)> = (0..n / 2).map(|_| (std::array::from_fn(|_| rng.below(n * 100) as f32 / 100.0), 1.5 + rng.below(400) as f32 / 100.0, if rng.below(2) == 0 { 1.0 } else { -0.6 })).collect();
         let mut v = vec![0f32; n * n * n];
         v.par_iter_mut().enumerate().for_each(|(i, o)| {
             let p = [(i % n) as f32, ((i / n) % n) as f32, (i / (n * n)) as f32];
@@ -1641,10 +1161,7 @@ mod tests {
             }
         });
         let (m, s) = stats(&v);
-        Vol {
-            n: [n; 3],
-            v: v.iter().map(|x| (x - m) / s).collect(),
-        }
+        Vol { n: [n; 3], v: v.iter().map(|x| (x - m) / s).collect() }
     }
 
     #[test]
@@ -1656,12 +1173,7 @@ mod tests {
         fft3(&fft, n, &mut re, &mut im, false);
         fft3(&fft, n, &mut re, &mut im, true);
         assert!(re.iter().zip(&v).all(|(a, b)| (a - b).abs() < 1e-4));
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
         let once = sp.cut(&v);
         let twice = sp.cut(&once);
@@ -1676,12 +1188,7 @@ mod tests {
 
     #[test]
     fn twenty_rotations_move_the_wedge() {
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let rots = rotations(&g);
         assert_eq!(rots.len(), 20);
         let n = 8;
@@ -1694,34 +1201,14 @@ mod tests {
 
     #[test]
     fn detects_the_wedge() {
-        for g in [
-            Geometry {
-                beam: 2,
-                tilt: 1,
-                max_tilt: 60.0,
-                min_tilt: None,
-            },
-            Geometry {
-                beam: 1,
-                tilt: 0,
-                max_tilt: 50.0,
-                min_tilt: None,
-            },
-        ] {
+        for g in [Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None }, Geometry { beam: 1, tilt: 0, max_tilt: 50.0, min_tilt: None }] {
             let vol = phantom(64, 11);
             let sp = Spectral::new(64, &g);
             let mut rng = Rng(5);
             let noisy: Vec<f32> = vol.v.iter().map(|v| v + 0.3 * rng.gauss()).collect();
-            let cut = Vol {
-                n: vol.n,
-                v: sp.cut(&noisy),
-            };
+            let cut = Vol { n: vol.n, v: sp.cut(&noisy) };
             let d = detect(&cut);
-            assert_eq!(
-                (d.geometry.beam, d.geometry.tilt),
-                (g.beam, g.tilt),
-                "{d:?}"
-            );
+            assert_eq!((d.geometry.beam, d.geometry.tilt), (g.beam, g.tilt), "{d:?}");
             assert!((d.geometry.max_tilt - g.max_tilt).abs() <= 10.0, "{d:?}");
             assert!(d.contrast > 0.5, "{d:?}");
         }
@@ -1737,77 +1224,40 @@ mod tests {
         let e0 = e.clone();
         let (mut re, mut im) = (e.clone(), vec![0f32; e.len()]);
         fft3(&Fft::new(n), n, &mut re, &mut im, false);
-        let cpu: f32 = (0..e.len())
-            .map(|i| w[i] * (re[i] * re[i] + im[i] * im[i]))
-            .sum();
+        let cpu: f32 = (0..e.len()).map(|i| w[i] * (re[i] * re[i] + im[i] * im[i])).sum();
         let (c, s) = dft(n, &dev);
         let x = Tensor::<5>::from_data(TensorData::new(e, [1, 1, n, n, n]), &dev);
         let wt = Tensor::<4>::from_data(TensorData::new(w, [1, n, n, n]), &dev);
         let gpu: f32 = spectral_error(x.clone(), &c, &s, wt).into_scalar();
         assert!((gpu - cpu).abs() < 1e-3 * cpu, "{gpu} {cpu}");
         // The device cut matches the CPU one.
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
         let keep = Tensor::<4>::from_data(TensorData::new(sp.keep.clone(), [1, n, n, n]), &dev);
-        let on_dev = spectral_cut(x.reshape([1, n, n, n]), &c, &s, &keep)
-            .into_data()
-            .convert::<f32>()
-            .try_into_vec::<f32>()
-            .unwrap();
-        let worst = on_dev
-            .iter()
-            .zip(sp.cut(&e0))
-            .map(|(a, b)| (a - b).abs())
-            .fold(0f32, f32::max);
+        let on_dev = spectral_cut(x.reshape([1, n, n, n]), &c, &s, &keep).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let worst = on_dev.iter().zip(sp.cut(&e0)).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-3, "{worst}");
     }
 
     #[test]
     fn turned_masks_match_turned_cubes() {
         let n = 16;
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: Some(-50.0),
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-50.0) };
         let sp = Spectral::new(n, &g);
         let v = sp.cut(&phantom(n, 8).v);
         for r in rotations(&g) {
             // A turned cut cube has only the turned mask's components.
             let turned = r.apply(&v, n);
-            let worst = |m: &[f32]| {
-                sp.filter(&turned, m)
-                    .iter()
-                    .zip(&turned)
-                    .map(|(a, b)| (a - b).abs())
-                    .fold(0f32, f32::max)
-            };
+            let worst = |m: &[f32]| sp.filter(&turned, m).iter().zip(&turned).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
             // (Nyquist components of an asymmetric range leave a little.)
             let (right, wrong) = (worst(&turn_mask(&sp.keep, n, &r)), worst(&sp.keep));
-            assert!(
-                right < 1e-2 && wrong > 10.0 * right,
-                "{r:?} {right} {wrong}"
-            );
+            assert!(right < 1e-2 && wrong > 10.0 * right, "{r:?} {right} {wrong}");
         }
         // A dense series measures the whole range; a gap leaves a hole.
         let dense: Vec<f32> = (-25..=30).map(|i| i as f32 * 2.0).collect();
         assert_eq!(tilt_mask(n, &g, &dense), sp.keep);
-        let gappy: Vec<f32> = dense
-            .iter()
-            .copied()
-            .filter(|t| !(10.0..30.0).contains(t))
-            .collect();
-        let holes = tilt_mask(n, &g, &gappy)
-            .iter()
-            .zip(&sp.keep)
-            .filter(|(a, b)| a != b)
-            .count();
+        let gappy: Vec<f32> = dense.iter().copied().filter(|t| !(10.0..30.0).contains(t)).collect();
+        let holes = tilt_mask(n, &g, &gappy).iter().zip(&sp.keep).filter(|(a, b)| a != b).count();
         assert!(holes > 0);
     }
 
@@ -1816,34 +1266,18 @@ mod tests {
         let dev = Device::flex();
         let truth = phantom(24, 4);
         let mut rng = Rng(2);
-        let half =
-            |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
+        let half = |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
         let (a, b) = (half(&mut rng), half(&mut rng));
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
-        let cfg = TrainConfig {
-            cube: 16,
-            count: 4,
-            iterations: 2,
-            steps: 3,
-            batch: 2,
-            lr: 1e-3,
-            base: 4,
-            levels: 2,
-            seed: 1,
-            ..Default::default()
-        };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, base: 4, levels: 2, seed: 1, ..Default::default() };
         let mut last = None;
-        let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| last = Some(p))
-            .unwrap();
+        let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), a.len());
         assert!(out.iter().all(|v| v.is_finite()));
         let p = last.unwrap();
         assert_eq!((p.iteration, p.step, p.steps), (3, 2, 2));
         // ICECREAM-style training runs too.
-        let cfg = TrainConfig {
-            equivariant: 2.0,
-            ..cfg
-        };
+        let cfg = TrainConfig { equivariant: 2.0, ..cfg };
         let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |_| {}).unwrap();
         assert!(out.iter().all(|v| v.is_finite()));
     }
@@ -1857,33 +1291,15 @@ mod tests {
     fn halves_beat_one_tomogram() {
         let (dev, name) = crate::classify::device();
         eprintln!("device {name}");
-        let env = |k: &str, d: f64| {
-            std::env::var(k)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(d)
-        };
+        let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
         let n = env("WN", 64.0) as usize;
         let truth = phantom(n, 21);
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
         let sigma = env("WNOISE", 1.0) as f32;
         let mut rng = Rng(77);
         // Each half: the specimen plus its own noise, both wedge-cut.
-        let mut half = || -> Vec<f32> {
-            sp.cut(
-                &truth
-                    .v
-                    .iter()
-                    .map(|v| v + sigma * rng.gauss())
-                    .collect::<Vec<f32>>(),
-            )
-        };
+        let mut half = || -> Vec<f32> { sp.cut(&truth.v.iter().map(|v| v + sigma * rng.gauss()).collect::<Vec<f32>>()) };
         let (a, b) = (half(), half());
         let full: Vec<f32> = a.iter().zip(&b).map(|(x, y)| 0.5 * (x + y)).collect();
         let cfg = TrainConfig {
@@ -1903,10 +1319,7 @@ mod tests {
         // Correlation with the truth, overall and inside the wedge only.
         let score = |v: &[f32]| -> (f32, f32) {
             let corr = |x: &[f32], y: &[f32]| {
-                let (mx, my) = (
-                    x.iter().sum::<f32>() / x.len() as f32,
-                    y.iter().sum::<f32>() / y.len() as f32,
-                );
+                let (mx, my) = (x.iter().sum::<f32>() / x.len() as f32, y.iter().sum::<f32>() / y.len() as f32);
                 let (mut sxy, mut sxx, mut syy) = (0f32, 0f32, 0f32);
                 for (p, q) in x.iter().zip(y) {
                     sxy += (p - mx) * (q - my);
@@ -1915,74 +1328,30 @@ mod tests {
                 }
                 sxy / (sxx * syy).sqrt().max(1e-12)
             };
-            let wedge =
-                |x: &[f32]| -> Vec<f32> { x.iter().zip(sp.cut(x)).map(|(a, b)| a - b).collect() };
+            let wedge = |x: &[f32]| -> Vec<f32> { x.iter().zip(sp.cut(x)).map(|(a, b)| a - b).collect() };
             (corr(v, &truth.v), corr(&wedge(v), &wedge(&truth.v)))
         };
         eprintln!("input (mean of halves): {:?}", score(&full));
         if std::env::var("WONE").is_err() {
-            let t0 = std::time::Instant::now();
-            let one = train_and_apply(
-                &dev,
-                &full,
-                truth.n,
-                [-60.0, 60.0],
-                &TrainConfig {
-                    smooth: 1.0,
-                    ..cfg.clone()
-                },
-                |_| {},
-            )
-            .unwrap();
-            eprintln!(
-                "one tomogram, σ1 pre-smooth: {:?} in {:.0?}",
-                score(&one),
-                t0.elapsed()
-            );
+        let t0 = std::time::Instant::now();
+        let one = train_and_apply(&dev, &full, truth.n, [-60.0, 60.0], &TrainConfig { smooth: 1.0, ..cfg.clone() }, |_| {}).unwrap();
+        eprintln!("one tomogram, σ1 pre-smooth: {:?} in {:.0?}", score(&one), t0.elapsed());
         }
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
         let t0 = std::time::Instant::now();
-        let two = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| {
-            if p.step == p.steps {
-                eprintln!("round {} loss {}", p.iteration, p.loss)
-            }
-        })
-        .unwrap();
+        let two = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         eprintln!("halves: {:?} in {:.0?}", score(&two), t0.elapsed());
     }
 
     #[test]
     fn trains_and_fills() {
         let dev = Device::flex();
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
-        let values: Vec<f32> =
-            Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig {
-            cube: 16,
-            count: 4,
-            iterations: 2,
-            steps: 3,
-            batch: 2,
-            lr: 1e-3,
-            noise: 0.1,
-            base: 4,
-            levels: 2,
-            seed: 1,
-            smooth: 1.0,
-            omega: 2.0,
-            equivariant: 0.0,
-        };
+        let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0 };
         let mut last = None;
-        let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| {
-            last = Some(p)
-        })
-        .unwrap();
+        let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
         assert!(out.iter().all(|v| v.is_finite()));
         let p = last.unwrap();
@@ -1996,63 +1365,18 @@ mod tests {
     #[ignore]
     fn learns_to_fill_the_wedge() {
         let dev = Device::flex();
-        let n = std::env::var("WN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(32);
-        let cube = std::env::var("WC")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(16);
+        let n = std::env::var("WN").ok().and_then(|s| s.parse().ok()).unwrap_or(32);
+        let cube = std::env::var("WC").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
         let truth = phantom(n, 21);
-        let g = Geometry {
-            beam: 2,
-            tilt: 1,
-            max_tilt: 60.0,
-            min_tilt: None,
-        };
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
-        let vol = Vol {
-            n: truth.n,
-            v: sp.cut(&truth.v),
-        };
-        let iters: usize = std::env::var("WI")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(6);
-        let steps: usize = std::env::var("WS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(200);
-        let base = std::env::var("WB")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(8);
-        let lr = std::env::var("WL")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(2e-3);
-        let cfg = TrainConfig {
-            cube,
-            count: 24,
-            iterations: iters,
-            steps,
-            batch: 4,
-            lr,
-            noise: 0.0,
-            base,
-            levels: 2,
-            seed: 9,
-            smooth: 0.0,
-            omega: 2.0,
-            equivariant: 0.0,
-        };
-        let (net, _) = train(&dev, &vol, &g, &cfg, |p| {
-            if p.step == p.steps {
-                eprintln!("round {} loss {}", p.iteration, p.loss)
-            }
-        })
-        .unwrap();
+        let vol = Vol { n: truth.n, v: sp.cut(&truth.v) };
+        let iters: usize = std::env::var("WI").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
+        let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
+        let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+        let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0 };
+        let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
         let wedge = |v: &[f32]| -> f32 {
@@ -2072,48 +1396,20 @@ mod tests {
         // A trained-looking net: perturb the zero head so the output differs from the input.
         let mut rng = Rng(3);
         let n = [40, 36, 30];
-        let vol = Vol {
-            n,
-            v: (0..n[0] * n[1] * n[2]).map(|_| rng.gauss()).collect(),
-        };
+        let vol = Vol { n, v: (0..n[0] * n[1] * n[2]).map(|_| rng.gauss()).collect() };
         let net = {
             let mut net = net;
             net.head.weight = net.head.weight.map(|w| w.ones_like() * 0.3);
             net
         };
         let full = apply(&dev, &net, &vol, [0; 3], n, &mut |_, _| Ok(())).unwrap();
-        let m = Trained {
-            net,
-            vol: Arc::new(vol),
-            geometry: Geometry {
-                beam: 2,
-                tilt: 1,
-                max_tilt: 60.0,
-                min_tilt: None,
-            },
-            bin: 1,
-            mean: 0.0,
-            std: 1.0,
-            loss: 0.0,
-            token: 7,
-            c: 0,
-            t: 0,
-        };
+        let m = Trained { net, vol: Arc::new(vol), geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None }, bin: 1, mean: 0.0, std: 1.0, loss: 0.0, token: 7, c: 0, t: 0 };
         for (axis, index) in [("xy", 11), ("xz", 17), ("yz", 5)] {
-            let req = PreviewReq {
-                token: 7,
-                axis: axis.into(),
-                index,
-                region: [0, 0, 1000, 1000],
-            };
+            let req = PreviewReq { token: 7, axis: axis.into(), index, region: [0, 0, 1000, 1000] };
             let bytes = preview(&m, &req).unwrap();
-            let u32_at =
-                |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
+            let u32_at = |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
             let (w, h) = (u32_at(4), u32_at(5));
-            let vals: Vec<f32> = bytes[44..]
-                .chunks(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect();
+            let vals: Vec<f32> = bytes[44..].chunks(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
             assert_eq!(vals.len(), w * h);
             for j in 0..h {
                 for i in 0..w {
@@ -2123,11 +1419,7 @@ mod tests {
                         _ => [index, i, j],
                     };
                     let want = full[(p[2] * n[1] + p[1]) * n[0] + p[0]];
-                    assert!(
-                        (vals[j * w + i] - want).abs() < 1e-3,
-                        "{axis} ({i},{j}): {} vs {want}",
-                        vals[j * w + i]
-                    );
+                    assert!((vals[j * w + i] - want).abs() < 1e-3, "{axis} ({i},{j}): {} vs {want}", vals[j * w + i]);
                 }
             }
         }
@@ -2137,10 +1429,7 @@ mod tests {
     fn apply_tiles_any_box() {
         let dev = Device::flex();
         let net = Net::new(4, 2, &dev);
-        let vol = Vol {
-            n: [70, 20, 9],
-            v: vec![0.5; 70 * 20 * 9],
-        };
+        let vol = Vol { n: [70, 20, 9], v: vec![0.5; 70 * 20 * 9] };
         let out = apply(&dev, &net, &vol, [3, 0, 4], [67, 20, 1], &mut |_, _| Ok(())).unwrap();
         assert_eq!(out.len(), 67 * 20);
         let mid = out[10 * 67 + 30];
@@ -2163,100 +1452,47 @@ mod bench {
     #[test]
     #[ignore]
     fn halves() {
-        let (Ok(even), Ok(odd)) = (
-            std::env::var("TMV_HALF_EVEN"),
-            std::env::var("TMV_HALF_ODD"),
-        ) else {
-            return;
-        };
+        let (Ok(even), Ok(odd)) = (std::env::var("TMV_HALF_EVEN"), std::env::var("TMV_HALF_ODD")) else { return };
         let env = |k: &str| std::env::var(k).ok().and_then(|s| s.parse::<f64>().ok());
         let bin = env("TMV_HALF_BIN").unwrap_or(1.0) as usize;
         let read = |p: &str| {
-            let img = OpenImage::new(
-                1,
-                crate::formats::open(std::path::Path::new(p)).unwrap(),
-                1 << 30,
-            );
+            let img = OpenImage::new(1, crate::formats::open(std::path::Path::new(p)).unwrap(), 1 << 30);
             let (v, mean, std) = load(&img, 0, 0, bin).unwrap();
             (v, mean, std, crate::align::pixel_a(img.info()))
         };
         let (a, mean, std, pixel_a) = read(&even);
         let (b, ..) = read(&odd);
-        let both = Vol {
-            n: a.n,
-            v: a.v.iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect(),
-        };
+        let both = Vol { n: a.n, v: a.v.iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
         let d = detect(&both);
-        println!(
-            "{:?} after bin {bin}; detected {:?}, contrast {:.2}",
-            a.n, d.geometry, d.contrast
-        );
-        let tilts: Vec<f32> = std::env::var("TMV_HALF_TILTS")
-            .map(|p| {
-                std::fs::read_to_string(p)
-                    .unwrap()
-                    .split_whitespace()
-                    .filter_map(|s| s.parse().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+        println!("{:?} after bin {bin}; detected {:?}, contrast {:.2}", a.n, d.geometry, d.contrast);
+        let tilts: Vec<f32> = std::env::var("TMV_HALF_TILTS").map(|p| std::fs::read_to_string(p).unwrap().split_whitespace().filter_map(|s| s.parse().ok()).collect()).unwrap_or_default();
         let mut g = d.geometry;
         if tilts.len() > 1 {
             g.max_tilt = tilts.iter().cloned().fold(f32::MIN, f32::max);
             g.min_tilt = Some(tilts.iter().cloned().fold(f32::MAX, f32::min));
             println!("  {} tilts {:?}..{:?}", tilts.len(), g.min_tilt, g.max_tilt);
         }
-        let mut cfg = TrainConfig {
-            iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize,
-            steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize,
-            omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32,
-            equivariant: env("TMV_HALF_EQUI").unwrap_or(0.0) as f32,
-            cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize,
-            ..Default::default()
-        };
+        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, equivariant: env("TMV_HALF_EQUI").unwrap_or(0.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
         while a.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
             cfg.cube /= 2;
         }
         let t0 = std::time::Instant::now();
-        let ((net, loss), backend) = crate::classify::on_device(|dev| {
-            train_halves(dev, &a, &b, &g, &tilts, &cfg, |p| {
-                if p.step % 100 == 0 {
-                    println!(
-                        "  round {} step {} loss {:.4} at {:.0} s",
-                        p.iteration,
-                        p.step,
-                        p.loss,
-                        t0.elapsed().as_secs_f64()
-                    );
-                }
-            })
-        })
-        .unwrap();
-        println!(
-            "  trained on {backend}: {} × {} steps, cube {}, loss {loss:.4}, {:.1} s",
-            cfg.iterations,
-            cfg.steps,
-            cfg.cube,
-            t0.elapsed().as_secs_f64()
-        );
+        let ((net, loss), backend) = crate::classify::on_device(|dev| train_halves(dev, &a, &b, &g, &tilts, &cfg, |p| {
+            if p.step % 100 == 0 {
+                println!("  round {} step {} loss {:.4} at {:.0} s", p.iteration, p.step, p.loss, t0.elapsed().as_secs_f64());
+            }
+        })).unwrap();
+        println!("  trained on {backend}: {} × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t0.elapsed().as_secs_f64());
         if let Ok(out) = std::env::var("TMV_HALF_OUT") {
             let n = a.n;
             let (vals, _) = crate::classify::on_device(|dev| {
                 let net = net.clone().to_device(dev);
                 let x = apply(dev, &net, &a, [0; 3], n, &mut |_, _| Ok(()))?;
                 let y = apply(dev, &net, &b, [0; 3], n, &mut |_, _| Ok(()))?;
-                Ok(x.iter()
-                    .zip(&y)
-                    .map(|(p, q)| 0.5 * (p + q))
-                    .collect::<Vec<f32>>())
+                Ok(x.iter().zip(&y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>())
             })
             .unwrap();
-            write_mrc(
-                &out,
-                n,
-                &vals.iter().map(|v| v * std + mean).collect::<Vec<f32>>(),
-                pixel_a * bin as f64,
-            );
+            write_mrc(&out, n, &vals.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
             println!("  saved {out}");
         }
     }
@@ -2264,19 +1500,9 @@ mod bench {
     fn write_mrc(path: &str, n: [usize; 3], v: &[f32], pixel_a: f64) {
         use std::io::Write;
         let (m, s) = stats(v);
-        let (lo, hi) = v
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        let (lo, hi) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
         let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
-        f.write_all(&crate::align::mrc_header(
-            n[0],
-            n[1],
-            n[2],
-            pixel_a,
-            [lo, hi, m, s],
-            "TifMrcView: wedge from even/odd halves",
-        ))
-        .unwrap();
+        f.write_all(&crate::align::mrc_header(n[0], n[1], n[2], pixel_a, [lo, hi, m, s], "TifMrcView: wedge from even/odd halves")).unwrap();
         for x in v {
             f.write_all(&x.to_le_bytes()).unwrap();
         }
@@ -2285,30 +1511,16 @@ mod bench {
     #[test]
     #[ignore]
     fn bench() {
-        let Ok(path) = std::env::var("TMV_WEDGE_FILE") else {
-            return;
-        };
+        let Ok(path) = std::env::var("TMV_WEDGE_FILE") else { return };
         let env = |k: &str| std::env::var(k).ok().and_then(|s| s.parse::<f64>().ok());
         let src = crate::formats::open(std::path::Path::new(&path)).unwrap();
         let img = OpenImage::new(1, src, 1 << 30);
         let bin = env("TMV_WEDGE_BIN").unwrap_or(1.0) as usize;
         let t0 = std::time::Instant::now();
         let (vol, mean, std) = load(&img, 0, 0, bin).unwrap();
-        println!(
-            "{path}: {:?} after bin {bin}, read in {:.1} s",
-            vol.n,
-            t0.elapsed().as_secs_f64()
-        );
+        println!("{path}: {:?} after bin {bin}, read in {:.1} s", vol.n, t0.elapsed().as_secs_f64());
         let d = detect(&vol);
-        println!(
-            "  detected {:?}, contrast {:.2}, profile {:?}",
-            d.geometry,
-            d.contrast,
-            d.profile
-                .iter()
-                .map(|v| (v * 100.0).round() / 100.0)
-                .collect::<Vec<_>>()
-        );
+        println!("  detected {:?}, contrast {:.2}, profile {:?}", d.geometry, d.contrast, d.profile.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
         let mut cfg = TrainConfig::default();
         if let Some(v) = env("TMV_WEDGE_ITER") {
             cfg.iterations = v as usize;
@@ -2327,62 +1539,20 @@ mod bench {
             cfg.cube /= 2;
         }
         let t1 = std::time::Instant::now();
-        let ((net, loss), backend) =
-            crate::classify::on_device(|dev| train(dev, &vol, &d.geometry, &cfg, |_| {})).unwrap();
-        println!(
-            "  trained on {backend}: {} it × {} steps, cube {}, loss {loss:.4}, {:.1} s",
-            cfg.iterations,
-            cfg.steps,
-            cfg.cube,
-            t1.elapsed().as_secs_f64()
-        );
-        let m = Trained {
-            net,
-            vol: Arc::new(vol),
-            geometry: d.geometry,
-            bin,
-            mean,
-            std,
-            loss,
-            token: 1,
-            c: 0,
-            t: 0,
-        };
+        let ((net, loss), backend) = crate::classify::on_device(|dev| train(dev, &vol, &d.geometry, &cfg, |_| {})).unwrap();
+        println!("  trained on {backend}: {} it × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t1.elapsed().as_secs_f64());
+        let m = Trained { net, vol: Arc::new(vol), geometry: d.geometry, bin, mean, std, loss, token: 1, c: 0, t: 0 };
         // The preview must show what saving writes: compare a slice per view.
         let n = m.vol.n;
-        let (full, b) = crate::classify::on_device(|dev| {
-            apply(
-                dev,
-                &m.net.clone().to_device(dev),
-                &m.vol,
-                [0; 3],
-                n,
-                &mut |_, _| Ok(()),
-            )
-        })
-        .unwrap();
+        let (full, b) = crate::classify::on_device(|dev| apply(dev, &m.net.clone().to_device(dev), &m.vol, [0; 3], n, &mut |_, _| Ok(()))).unwrap();
         for (axis, index) in [("xy", n[2] / 2), ("xz", n[1] / 2), ("yz", n[0] / 2)] {
-            let bytes = preview(
-                &m,
-                &PreviewReq {
-                    token: 1,
-                    axis: axis.into(),
-                    index: index * bin,
-                    region: [0, 0, 1 << 20, 1 << 20],
-                },
-            )
-            .unwrap();
-            let at =
-                |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
+            let bytes = preview(&m, &PreviewReq { token: 1, axis: axis.into(), index: index * bin, region: [0, 0, 1 << 20, 1 << 20] }).unwrap();
+            let at = |k: usize| u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
             let (w, h, x0, y0) = (at(4), at(5), at(0) / bin, at(1) / bin);
             let mut worst = 0f32;
             for (k, c) in bytes[44..].chunks(4).enumerate() {
                 let (i, j) = (x0 + k % w, y0 + k / w);
-                let p = match axis {
-                    "xy" => [i, j, index],
-                    "xz" => [i, index, j],
-                    _ => [index, i, j],
-                };
+                let p = match axis { "xy" => [i, j, index], "xz" => [i, index, j], _ => [index, i, j] };
                 let want = full[(p[2] * n[1] + p[1]) * n[0] + p[0]] * m.std + m.mean;
                 worst = worst.max((f32::from_le_bytes(c.try_into().unwrap()) - want).abs());
             }
@@ -2391,10 +1561,7 @@ mod bench {
         if let Ok(out) = std::env::var("TMV_WEDGE_OUT") {
             let t2 = std::time::Instant::now();
             let b = save(&m, &out, crate::align::pixel_a(img.info()), &|_, _| {}).unwrap();
-            println!(
-                "  applied and saved on {b} in {:.1} s → {out}",
-                t2.elapsed().as_secs_f64()
-            );
+            println!("  applied and saved on {b} in {:.1} s → {out}", t2.elapsed().as_secs_f64());
         }
     }
 }

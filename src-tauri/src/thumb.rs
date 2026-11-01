@@ -13,9 +13,7 @@ pub const MAX_SIZE: u32 = 2048;
 static PLUGINS: Once = Once::new();
 
 pub fn configure_plugins(dir: Option<std::path::PathBuf>) {
-    PLUGINS.call_once(|| {
-        plugins::registry::Registry::global().configure(dir, env!("CARGO_PKG_VERSION"))
-    });
+    PLUGINS.call_once(|| plugins::registry::Registry::global().configure(dir, env!("CARGO_PKG_VERSION")));
 }
 
 /// Middle Z, first T, all channels. No stack prefetch or metadata plugins.
@@ -54,17 +52,10 @@ pub fn thumbnail_rgba(path: &Path, max_size: u32) -> Result<(u32, u32, Vec<u8>)>
     ensure!(out.len() >= 12, "short render header");
     let (w, h, channels) = (word(0), word(4), word(8) as usize);
     let header = 12usize
-        .checked_add(
-            channels
-                .checked_mul(16)
-                .context("channel header overflow")?,
-        )
+        .checked_add(channels.checked_mul(16).context("channel header overflow")?)
         .context("header overflow")?;
     let pixels = out.get(header..).context("short render payload")?;
-    ensure!(
-        pixels.len() == w as usize * h as usize * 4,
-        "invalid RGBA payload"
-    );
+    ensure!(pixels.len() == w as usize * h as usize * 4, "invalid RGBA payload");
     Ok((w, h, pixels.to_vec()))
 }
 
@@ -118,8 +109,7 @@ mod tests {
     fn low_signal_tiff_has_visible_contrast_and_plain_rgba() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("low.tiff");
-        let mut enc =
-            tiff::encoder::TiffEncoder::new(std::fs::File::create(&path).unwrap()).unwrap();
+        let mut enc = tiff::encoder::TiffEncoder::new(std::fs::File::create(&path).unwrap()).unwrap();
         let pixels: Vec<u16> = (0..256).map(|n| 108 + n % 240).collect();
         enc.write_image::<tiff::encoder::colortype::Gray16>(16, 16, &pixels)
             .unwrap();
@@ -146,15 +136,11 @@ mod tests {
         hdr[208..212].copy_from_slice(b"MAP ");
         hdr[212] = 0x44;
         f.write_all(&hdr).unwrap();
-        f.set_len(1024 + w as u64 * h as u64 * z as u64 * 2)
+        f.set_len(1024 + w as u64 * h as u64 * z as u64 * 2).unwrap();
+        f.seek(SeekFrom::Start(1024 + w as u64 * h as u64 * (z / 2) as u64 * 2))
             .unwrap();
-        f.seek(SeekFrom::Start(
-            1024 + w as u64 * h as u64 * (z / 2) as u64 * 2,
-        ))
-        .unwrap();
         for n in 0..w * h {
-            f.write_all(&((108 + n % 240) as u16).to_le_bytes())
-                .unwrap();
+            f.write_all(&((108 + n % 240) as u16).to_le_bytes()).unwrap();
         }
         drop(f);
         let (tw, th, rgba) = thumbnail_rgba(&path, 32).unwrap();

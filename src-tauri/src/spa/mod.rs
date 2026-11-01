@@ -14,14 +14,14 @@ pub mod geom;
 pub mod local_gpu;
 pub mod pick;
 pub mod plane;
-pub mod post;
 pub mod project;
+pub mod post;
 pub mod refine;
 pub mod render;
 pub mod score;
+pub mod volume;
 #[cfg(test)]
 mod tests;
-pub mod volume;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

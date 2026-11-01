@@ -172,20 +172,11 @@ fn plane(img: &OpenImage, c: usize, z: usize, t: usize) -> Result<Vec<f32>> {
     let (page, s) = info.locate(c, z, t);
     let planes = img.page(page)?;
     let p = &planes[s.min(planes.len() - 1)];
-    Ok((0..p.w * p.h)
-        .into_par_iter()
-        .map(|i| p.data.get_f64(i) as f32)
-        .collect())
+    Ok((0..p.w * p.h).into_par_iter().map(|i| p.data.get_f64(i) as f32).collect())
 }
 
 /// Slice `z`, averaged with `slab` slices on each side that exist.
-pub(crate) fn input(
-    img: &OpenImage,
-    c: usize,
-    z: usize,
-    t: usize,
-    slab: usize,
-) -> Result<Vec<f32>> {
+pub(crate) fn input(img: &OpenImage, c: usize, z: usize, t: usize, slab: usize) -> Result<Vec<f32>> {
     let nz = img.info().size_z;
     let (a, b) = (z.saturating_sub(slab), (z + slab).min(nz - 1));
     let mut acc = plane(img, c, a, t)?;
@@ -224,13 +215,7 @@ pub fn preview(img: &Arc<OpenImage>, req: &PreviewReq) -> Result<Denoised> {
     let (cw, ch) = ((x1 - x0).min(PREVIEW_MAX), (y1 - y0).min(PREVIEW_MAX));
     let (cx, cy) = (x0 + (x1 - x0 - cw) / 2, y0 + (y1 - y0 - ch) / 2);
     let (values, sigma, backend) = run(img, req.c, req.z, req.t, &req.params, [cx, cy, cw, ch])?;
-    Ok(Denoised {
-        rect: [cx, cy, cw, ch],
-        values,
-        sigma,
-        ms: t0.elapsed().as_secs_f64() * 1e3,
-        backend,
-    })
+    Ok(Denoised { rect: [cx, cy, cw, ch], values, sigma, ms: t0.elapsed().as_secs_f64() * 1e3, backend })
 }
 
 /// Whether the method is the trained network in movie mode, whose input is
@@ -271,21 +256,10 @@ pub fn frame_halves(img: &OpenImage, c: usize, t: usize) -> Result<[Vec<f32>; 2]
 /// Denoises the `rect` of slice `z` (of the movie in frames mode): the
 /// input with the margin the method reads, each part filtered, the parts
 /// averaged. Returns the values, the noise σ and the backend.
-fn run(
-    img: &OpenImage,
-    c: usize,
-    z: usize,
-    t: usize,
-    p: &Params,
-    rect: [usize; 4],
-) -> Result<(Vec<f32>, f32, &'static str)> {
+fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 4]) -> Result<(Vec<f32>, f32, &'static str)> {
     let info = img.info();
     let (w, h) = (info.width, info.height);
-    let parts: Vec<Vec<f32>> = if uses_frames(img, p) {
-        frame_halves(img, c, t)?.into()
-    } else {
-        vec![input(img, c, z, t, p.slab)?]
-    };
+    let parts: Vec<Vec<f32>> = if uses_frames(img, p) { frame_halves(img, c, t)?.into() } else { vec![input(img, c, z, t, p.slab)?] };
     let sigma = noise_sigma(&parts[0], w, h);
     let [cx, cy, cw, ch] = rect;
     let m = p.margin();
@@ -293,16 +267,10 @@ fn run(
     let (ew, eh) = ((cx + cw + m).min(w) - ex, (cy + ch + m).min(h) - ey);
     let (mut sum, mut backend) = (vec![0f32; cw * ch], "CPU");
     for full in &parts {
-        let part = if [ex, ey, ew, eh] == [0, 0, w, h] {
-            full.clone()
-        } else {
-            crop(full, w, [ex, ey, ew, eh])
-        };
+        let part = if [ex, ey, ew, eh] == [0, 0, w, h] { full.clone() } else { crop(full, w, [ex, ey, ew, eh]) };
         let (out, b) = filter(part, ew, eh, p, sigma)?;
         backend = b;
-        sum.par_iter_mut()
-            .zip(crop(&out, ew, [cx - ex, cy - ey, cw, ch]))
-            .for_each(|(s, v)| *s += v);
+        sum.par_iter_mut().zip(crop(&out, ew, [cx - ex, cy - ey, cw, ch])).for_each(|(s, v)| *s += v);
     }
     let n = parts.len() as f32;
     if n > 1.0 {
@@ -313,13 +281,7 @@ fn run(
 
 /// Denoises one whole image of `w` × `h` with noise level `sigma`; returns
 /// the result and the backend that made it.
-pub fn filter(
-    v: Vec<f32>,
-    w: usize,
-    h: usize,
-    p: &Params,
-    sigma: f32,
-) -> Result<(Vec<f32>, &'static str)> {
+pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result<(Vec<f32>, &'static str)> {
     let sigma = sigma.max(f32::MIN_POSITIVE);
     // Only NLM goes to the GPU: diffusion is a few cheap passes that run as
     // fast on the CPU (RTX 5080 even, M1 Max Metal 10–30× slower).
@@ -328,9 +290,7 @@ pub fn filter(
         // On Apple GPUs (M1 Max) these unfused tensor passes are 1.5–2×
         // slower than the CPU code, so "auto" keeps NLM on the CPU there;
         // "gpu" forces it.
-        if let Some((dev, name)) =
-            crate::ctf_gpu::device().filter(|(_, n)| p.device == "gpu" || *n != "Metal")
-        {
+        if let Some((dev, name)) = crate::ctf_gpu::device().filter(|(_, n)| p.device == "gpu" || *n != "Metal") {
             match crate::ctf_gpu::guarded(|| nlm_gpu_tiled(dev, &v, w, h, p, sigma)) {
                 Ok(out) => return Ok((out, name)),
                 Err(e) => eprintln!("denoise: GPU failed, using the CPU: {e:#}"),
@@ -345,15 +305,7 @@ pub fn filter(
         Method::Gaussian => gaussian(&v, w, h, p.strength),
         Method::Median => median(&v, w, h, p.median_radius()),
         Method::Diffusion => diffusion(v, w, h, p.strength * sigma, p.iterations.min(200)),
-        Method::Nlm => nlm(
-            &v,
-            w,
-            h,
-            p.patch.min(5),
-            p.search.min(20),
-            p.strength * sigma,
-            sigma,
-        ),
+        Method::Nlm => nlm(&v, w, h, p.patch.min(5), p.search.min(20), p.strength * sigma, sigma),
     };
     Ok((out, "CPU"))
 }
@@ -371,9 +323,7 @@ fn learned_bin() -> usize {
 fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'static str)> {
     #[cfg(feature = "pro")]
     {
-        let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().clone() else {
-            bail!("先训练自监督模型")
-        };
+        let Some(m) = crate::denoise_learn::MODEL.lock().unwrap().clone() else { bail!("先训练自监督模型") };
         let (mut out, backend) = if p.device == "cpu" {
             (m.apply(&burn::tensor::Device::flex(), &v, w, h), "CPU")
         } else {
@@ -381,9 +331,7 @@ fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'s
         };
         let k = p.strength.clamp(0.0, 1.0);
         if k < 1.0 {
-            out.par_iter_mut()
-                .zip(&v)
-                .for_each(|(o, &x)| *o = k * *o + (1.0 - k) * x);
+            out.par_iter_mut().zip(&v).for_each(|(o, &x)| *o = k * *o + (1.0 - k) * x);
         }
         Ok((out, backend))
     }
@@ -398,27 +346,12 @@ fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'s
 /// read, so each tile batches many offsets: one offset at a time over a
 /// 4096² image made Metal (M1 Max) 3× slower than the CPU.
 #[cfg(feature = "pro")]
-fn nlm_gpu_tiled(
-    dev: &burn::tensor::Device,
-    v: &[f32],
-    w: usize,
-    h: usize,
-    p: &Params,
-    sigma: f32,
-) -> Vec<f32> {
+fn nlm_gpu_tiled(dev: &burn::tensor::Device, v: &[f32], w: usize, h: usize, p: &Params, sigma: f32) -> Vec<f32> {
     tiled(dev, v, w, h, p, sigma, 1024)
 }
 
 #[cfg(feature = "pro")]
-fn tiled(
-    dev: &burn::tensor::Device,
-    v: &[f32],
-    w: usize,
-    h: usize,
-    p: &Params,
-    sigma: f32,
-    tile: usize,
-) -> Vec<f32> {
+fn tiled(dev: &burn::tensor::Device, v: &[f32], w: usize, h: usize, p: &Params, sigma: f32, tile: usize) -> Vec<f32> {
     let m = p.margin();
     let mut out = vec![0f32; w * h];
     for ty in (0..h).step_by(tile) {
@@ -448,13 +381,8 @@ pub fn noise_sigma(v: &[f32], w: usize, h: usize) -> f32 {
         .step_by(step)
         .flat_map(|y| (1..w - 1).step_by(step).map(move |x| (x, y)))
         .map(|(x, y)| {
-            let at = |dx: isize, dy: isize| {
-                v[(y as isize + dy) as usize * w + (x as isize + dx) as usize]
-            };
-            (at(-1, -1) + at(1, -1) + at(-1, 1) + at(1, 1)
-                - 2.0 * (at(0, -1) + at(0, 1) + at(-1, 0) + at(1, 0))
-                + 4.0 * at(0, 0))
-            .abs()
+            let at = |dx: isize, dy: isize| v[(y as isize + dy) as usize * w + (x as isize + dx) as usize];
+            (at(-1, -1) + at(1, -1) + at(-1, 1) + at(1, 1) - 2.0 * (at(0, -1) + at(0, 1) + at(-1, 0) + at(1, 0)) + 4.0 * at(0, 0)).abs()
         })
         .filter(|x| x.is_finite())
         .collect();
@@ -496,11 +424,7 @@ pub fn noise_correlation(v: &[f32], w: usize, h: usize) -> f32 {
             }
         }
     }
-    let r = if saa > 0.0 && sbb > 0.0 {
-        (sab / (saa * sbb).sqrt()) as f32
-    } else {
-        -1.0 / 6.0
-    };
+    let r = if saa > 0.0 && sbb > 0.0 { (sab / (saa * sbb).sqrt()) as f32 } else { -1.0 / 6.0 };
     // White noise gives −12/81 ÷ 72/81 = −1/6.
     r + 1.0 / 6.0
 }
@@ -512,9 +436,7 @@ pub fn kernel_radius(sigma: f32) -> usize {
 fn gauss_kernel(sigma: f32) -> Vec<f32> {
     let r = kernel_radius(sigma) as isize;
     let s = sigma.max(1e-3);
-    let k: Vec<f32> = (-r..=r)
-        .map(|i| (-(i * i) as f32 / (2.0 * s * s)).exp())
-        .collect();
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * s * s)).exp()).collect();
     let sum: f32 = k.iter().sum();
     k.into_iter().map(|x| x / sum).collect()
 }
@@ -531,11 +453,7 @@ fn separable(v: &[f32], w: usize, h: usize, k: &[f32]) -> Vec<f32> {
     tmp.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         let src = &v[y * w..(y + 1) * w];
         for (x, o) in row.iter_mut().enumerate() {
-            *o = k
-                .iter()
-                .enumerate()
-                .map(|(j, &kj)| kj * src[clampi(x as isize + j as isize - r, w)])
-                .sum();
+            *o = k.iter().enumerate().map(|(j, &kj)| kj * src[clampi(x as isize + j as isize - r, w)]).sum();
         }
     });
     let mut out = vec![0f32; w * h];
@@ -560,21 +478,19 @@ pub fn gaussian(v: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
 pub fn median(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     let r = r as isize;
     let mut out = vec![0f32; w * h];
-    out.par_chunks_mut(w)
-        .enumerate()
-        .for_each_init(Vec::new, |win, (y, row)| {
-            for (x, o) in row.iter_mut().enumerate() {
-                win.clear();
-                for dy in -r..=r {
-                    let yy = clampi(y as isize + dy, h);
-                    for dx in -r..=r {
-                        win.push(v[yy * w + clampi(x as isize + dx, w)]);
-                    }
+    out.par_chunks_mut(w).enumerate().for_each_init(Vec::new, |win, (y, row)| {
+        for (x, o) in row.iter_mut().enumerate() {
+            win.clear();
+            for dy in -r..=r {
+                let yy = clampi(y as isize + dy, h);
+                for dx in -r..=r {
+                    win.push(v[yy * w + clampi(x as isize + dx, w)]);
                 }
-                let k = win.len() / 2;
-                *o = *win.select_nth_unstable_by(k, f32::total_cmp).1;
             }
-        });
+            let k = win.len() / 2;
+            *o = *win.select_nth_unstable_by(k, f32::total_cmp).1;
+        }
+    });
     out
 }
 
@@ -609,15 +525,7 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
 }
 
 /// Non-local means; see the module notes.
-pub fn nlm(
-    v: &[f32],
-    w: usize,
-    h: usize,
-    patch: usize,
-    search: usize,
-    hh: f32,
-    sigma: f32,
-) -> Vec<f32> {
+pub fn nlm(v: &[f32], w: usize, h: usize, patch: usize, search: usize, hh: f32, sigma: f32) -> Vec<f32> {
     let inv_h2 = 1.0 / (hh * hh).max(f32::MIN_POSITIVE);
     let two_s2 = 2.0 * sigma * sigma;
     let mut num = vec![0f32; w * h];
@@ -634,17 +542,14 @@ pub fn nlm(
                 }
             });
             let dd = box_mean(&d, w, h, patch);
-            num.par_chunks_mut(w)
-                .zip(den.par_chunks_mut(w))
-                .enumerate()
-                .for_each(|(y, (nr, dr))| {
-                    let q = clampi(y as isize + oy, h);
-                    for x in 0..w {
-                        let wt = (-(dd[y * w + x] - two_s2).max(0.0) * inv_h2).exp();
-                        nr[x] += wt * v[q * w + clampi(x as isize + ox, w)];
-                        dr[x] += wt;
-                    }
-                });
+            num.par_chunks_mut(w).zip(den.par_chunks_mut(w)).enumerate().for_each(|(y, (nr, dr))| {
+                let q = clampi(y as isize + oy, h);
+                for x in 0..w {
+                    let wt = (-(dd[y * w + x] - two_s2).max(0.0) * inv_h2).exp();
+                    nr[x] += wt * v[q * w + clampi(x as isize + ox, w)];
+                    dr[x] += wt;
+                }
+            });
         }
     }
     num.par_iter_mut().zip(&den).for_each(|(n, &d)| *n /= d);
@@ -652,11 +557,7 @@ pub fn nlm(
 }
 
 /// Writes the denoised slices as a float32 MRC (the pixel size is kept).
-pub fn save(
-    img: &Arc<OpenImage>,
-    req: &SaveReq,
-    progress: &(dyn Fn(usize, usize) + Sync),
-) -> Result<&'static str> {
+pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<&'static str> {
     CANCEL.store(false, Ordering::SeqCst);
     let info = img.info();
     let (w, h) = (info.width, info.height);
@@ -686,26 +587,17 @@ pub fn save(
         backend = b;
         let (a, b, c, d) = out
             .par_iter()
-            .fold(
-                || (f64::MAX, f64::MIN, 0f64, 0f64),
-                |(a, b, c, d), &v| {
-                    let v = v as f64;
-                    (a.min(v), b.max(v), c + v, d + v * v)
-                },
-            )
-            .reduce(
-                || (f64::MAX, f64::MIN, 0f64, 0f64),
-                |x, y| (x.0.min(y.0), x.1.max(y.1), x.2 + y.2, x.3 + y.3),
-            );
+            .fold(|| (f64::MAX, f64::MIN, 0f64, 0f64), |(a, b, c, d), &v| {
+                let v = v as f64;
+                (a.min(v), b.max(v), c + v, d + v * v)
+            })
+            .reduce(|| (f64::MAX, f64::MIN, 0f64, 0f64), |x, y| (x.0.min(y.0), x.1.max(y.1), x.2 + y.2, x.3 + y.3));
         lo = lo.min(a);
         hi = hi.max(b);
         total += c;
         total2 += d;
         let mut bytes = vec![0u8; out.len() * 4];
-        bytes
-            .par_chunks_mut(4)
-            .zip(&out)
-            .for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
+        bytes.par_chunks_mut(4).zip(&out).for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
         f.write_all(&bytes)?;
         progress(i + 1, zs.len());
     }
@@ -716,37 +608,12 @@ pub fn save(
     let label = match p.method {
         Method::Gaussian => format!("TifMrcView: denoised, gaussian {:.2} px", p.strength),
         Method::Median => format!("TifMrcView: denoised, median r {}", p.median_radius()),
-        Method::Diffusion => format!(
-            "TifMrcView: denoised, diffusion K {:.2} sd x{}",
-            p.strength, p.iterations
-        ),
-        Method::Nlm => format!(
-            "TifMrcView: denoised, NLM h {:.2} sd p{} s{}",
-            p.strength, p.patch, p.search
-        ),
-        Method::Learned => format!(
-            "TifMrcView: denoised, self-supervised{} mix {:.2}",
-            if uses_frames(img, p) {
-                " N2N frames"
-            } else {
-                ""
-            },
-            p.strength
-        ),
-    } + &if p.slab > 0 {
-        format!(" z+-{}", p.slab)
-    } else {
-        String::new()
-    };
+        Method::Diffusion => format!("TifMrcView: denoised, diffusion K {:.2} sd x{}", p.strength, p.iterations),
+        Method::Nlm => format!("TifMrcView: denoised, NLM h {:.2} sd p{} s{}", p.strength, p.patch, p.search),
+        Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(img, p) { " N2N frames" } else { "" }, p.strength),
+    } + &if p.slab > 0 { format!(" z+-{}", p.slab) } else { String::new() };
     f.seek(SeekFrom::Start(0))?;
-    f.write_all(&crate::align::mrc_header(
-        w,
-        h,
-        zs.len(),
-        crate::align::pixel_a(info),
-        [lo as f32, hi as f32, mean as f32, rms as f32],
-        &label,
-    ))?;
+    f.write_all(&crate::align::mrc_header(w, h, zs.len(), crate::align::pixel_a(info), [lo as f32, hi as f32, mean as f32, rms as f32], &label))?;
     f.flush()?;
     drop(f);
     std::fs::rename(&tmp, &req.path)?;
@@ -767,10 +634,7 @@ pub(crate) mod tests {
 
     /// Standard normal noise (Box–Muller) from a hash of (seed, i).
     pub fn gauss(seed: u64, i: u64) -> f32 {
-        let u = |k: u64| {
-            ((mix(seed.wrapping_mul(0x1000_0000_01b3) ^ k) >> 11) as f64 + 0.5)
-                / (1u64 << 53) as f64
-        };
+        let u = |k: u64| ((mix(seed.wrapping_mul(0x1000_0000_01b3) ^ k) >> 11) as f64 + 0.5) / (1u64 << 53) as f64;
         ((-2.0 * u(2 * i).ln()).sqrt() * (2.0 * std::f64::consts::PI * u(2 * i + 1)).cos()) as f32
     }
 
@@ -780,23 +644,11 @@ pub(crate) mod tests {
             .map(|i| {
                 let (x, y) = ((i % w) as f32, (i / w) as f32);
                 let disc = |cx: f32, cy: f32, r: f32| ((x - cx).powi(2) + (y - cy).powi(2)) < r * r;
-                let bar =
-                    (x - w as f32 * 0.7).abs() < 3.0 && y > h as f32 * 0.2 && y < h as f32 * 0.8;
-                if disc(w as f32 * 0.3, h as f32 * 0.3, 12.0)
-                    || disc(w as f32 * 0.35, h as f32 * 0.7, 7.0)
-                    || bar
-                {
-                    1.0
-                } else {
-                    0.0
-                }
+                let bar = (x - w as f32 * 0.7).abs() < 3.0 && y > h as f32 * 0.2 && y < h as f32 * 0.8;
+                if disc(w as f32 * 0.3, h as f32 * 0.3, 12.0) || disc(w as f32 * 0.35, h as f32 * 0.7, 7.0) || bar { 1.0 } else { 0.0 }
             })
             .collect();
-        let noisy = clean
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| c + s * gauss(7, i as u64))
-            .collect();
+        let noisy = clean.iter().enumerate().map(|(i, &c)| c + s * gauss(7, i as u64)).collect();
         (clean, noisy)
     }
 
@@ -819,22 +671,9 @@ pub(crate) mod tests {
         let (clean, noisy) = phantom(w, h, 0.3);
         let sigma = noise_sigma(&noisy, w, h);
         let before = rmse(&clean, &noisy);
-        let p = |method, strength| Params {
-            method,
-            strength,
-            iterations: 15,
-            patch: 2,
-            search: 6,
-            slab: 0,
-            device: "cpu".into(),
-        };
+        let p = |method, strength| Params { method, strength, iterations: 15, patch: 2, search: 6, slab: 0, device: "cpu".into() };
         let mut errs = Vec::new();
-        for (m, s) in [
-            (Method::Gaussian, 1.0),
-            (Method::Median, 1.0),
-            (Method::Diffusion, 2.0),
-            (Method::Nlm, 0.8),
-        ] {
+        for (m, s) in [(Method::Gaussian, 1.0), (Method::Median, 1.0), (Method::Diffusion, 2.0), (Method::Nlm, 0.8)] {
             let (out, b) = filter(noisy.clone(), w, h, &p(m, s), sigma).unwrap();
             assert_eq!(b, "CPU");
             let e = rmse(&clean, &out);
@@ -850,15 +689,7 @@ pub(crate) mod tests {
         let (w, h) = (20, 10);
         let mut v = vec![2.5f32; w * h];
         for m in [Method::Gaussian, Method::Diffusion, Method::Nlm] {
-            let p = Params {
-                method: m,
-                strength: 1.0,
-                iterations: 5,
-                patch: 1,
-                search: 3,
-                slab: 0,
-                device: "cpu".into(),
-            };
+            let p = Params { method: m, strength: 1.0, iterations: 5, patch: 1, search: 3, slab: 0, device: "cpu".into() };
             let (out, _) = filter(v.clone(), w, h, &p, 0.1).unwrap();
             assert!(out.iter().all(|&x| (x - 2.5).abs() < 1e-5), "{m:?}");
         }
@@ -874,22 +705,10 @@ pub(crate) mod tests {
         let dev = burn::tensor::Device::flex();
         let (w, h) = (50, 37);
         let (_, noisy) = phantom(w, h, 0.3);
-        let p = Params {
-            method: Method::Nlm,
-            strength: 0.8,
-            iterations: 0,
-            patch: 1,
-            search: 3,
-            slab: 0,
-            device: String::new(),
-        };
+        let p = Params { method: Method::Nlm, strength: 0.8, iterations: 0, patch: 1, search: 3, slab: 0, device: String::new() };
         let whole = crate::denoise_gpu::filter(&dev, &noisy, w, h, &p, 0.3);
         let parts = tiled(&dev, &noisy, w, h, &p, 0.3, 16);
-        let worst = whole
-            .iter()
-            .zip(&parts)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0f32, f32::max);
+        let worst = whole.iter().zip(&parts).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-5, "{worst}");
     }
 
@@ -899,34 +718,18 @@ pub(crate) mod tests {
         let mut seed = 1u64;
         let noisy: Vec<f32> = (0..w * h)
             .map(|_| {
-                seed = seed
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 (seed >> 40) as f32 / (1u64 << 24) as f32
             })
             .collect();
-        assert!(
-            noise_correlation(&noisy, w, h).abs() < 0.08,
-            "{}",
-            noise_correlation(&noisy, w, h)
-        );
+        assert!(noise_correlation(&noisy, w, h).abs() < 0.08, "{}", noise_correlation(&noisy, w, h));
         let blurred = gaussian(&noisy, w, h, 1.0);
-        assert!(
-            noise_correlation(&blurred, w, h) > 0.2,
-            "{}",
-            noise_correlation(&blurred, w, h)
-        );
+        assert!(noise_correlation(&blurred, w, h) > 0.2, "{}", noise_correlation(&blurred, w, h));
     }
 
     #[test]
     fn preview_bytes_have_the_documented_layout() {
-        let d = Denoised {
-            rect: [1, 2, 2, 1],
-            values: vec![0.5, -1.0],
-            sigma: 0.25,
-            ms: 3.0,
-            backend: "CPU",
-        };
+        let d = Denoised { rect: [1, 2, 2, 1], values: vec![0.5, -1.0], sigma: 0.25, ms: 3.0, backend: "CPU" };
         let b = d.to_bytes();
         assert_eq!(b.len(), 40 + 8);
         assert_eq!(u32::from_le_bytes(b[8..12].try_into().unwrap()), 2);
@@ -958,81 +761,37 @@ mod bench {
             let p = &planes[s.min(planes.len() - 1)];
             let v: Vec<f32> = (0..w * h).map(|i| p.data.get_f64(i) as f32).collect();
             let sigma = noise_sigma(&v, w, h);
-            println!(
-                "{path}: {w}×{h}, slice {} of {}, noise σ {sigma:.4}",
-                info.size_z / 2,
-                info.size_z
-            );
-            for (m, s, it) in [
-                (Method::Gaussian, 1.5, 0),
-                (Method::Median, 2.0, 0),
-                (Method::Diffusion, 2.0, 20),
-                (Method::Nlm, 0.8, 0),
-            ] {
+            println!("{path}: {w}×{h}, slice {} of {}, noise σ {sigma:.4}", info.size_z / 2, info.size_z);
+            for (m, s, it) in [(Method::Gaussian, 1.5, 0), (Method::Median, 2.0, 0), (Method::Diffusion, 2.0, 20), (Method::Nlm, 0.8, 0)] {
                 for device in ["cpu", "auto"] {
                     if device == "auto" && m != Method::Nlm {
                         continue;
                     }
-                    let p = Params {
-                        method: m,
-                        strength: s,
-                        iterations: it,
-                        patch: 2,
-                        search: 7,
-                        slab: 0,
-                        device: device.into(),
-                    };
+                    let p = Params { method: m, strength: s, iterations: it, patch: 2, search: 7, slab: 0, device: device.into() };
                     // Twice: the first GPU call includes compiling the kernels.
                     for run in 0..2 {
                         let t0 = Instant::now();
                         let (out, b) = filter(v.clone(), w, h, &p, sigma).unwrap();
-                        println!(
-                            "  {m:?} {s} on {b} (run {run}): {:.0} ms, σ left {:.4}",
-                            t0.elapsed().as_secs_f64() * 1e3,
-                            noise_sigma(&out, w, h)
-                        );
+                        println!("  {m:?} {s} on {b} (run {run}): {:.0} ms, σ left {:.4}", t0.elapsed().as_secs_f64() * 1e3, noise_sigma(&out, w, h));
                     }
                 }
             }
             return;
         }
-        let n: usize = std::env::var("TMV_DENOISE_N")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1024);
+        let n: usize = std::env::var("TMV_DENOISE_N").ok().and_then(|s| s.parse().ok()).unwrap_or(1024);
         for noise in [0.3f32, 1.0] {
             let (clean, noisy) = phantom(n, n, noise);
             let sigma = noise_sigma(&noisy, n, n);
-            println!(
-                "{n}² noise σ {noise} (estimated {sigma:.3}): input RMSE {:.3}",
-                rmse(&clean, &noisy)
-            );
-            for (m, s, it) in [
-                (Method::Gaussian, 1.5, 0),
-                (Method::Median, 2.0, 0),
-                (Method::Diffusion, 2.0, 20),
-                (Method::Nlm, 0.8, 0),
-            ] {
+            println!("{n}² noise σ {noise} (estimated {sigma:.3}): input RMSE {:.3}", rmse(&clean, &noisy));
+            for (m, s, it) in [(Method::Gaussian, 1.5, 0), (Method::Median, 2.0, 0), (Method::Diffusion, 2.0, 20), (Method::Nlm, 0.8, 0)] {
                 for device in ["cpu", "auto"] {
                     if device == "auto" && m != Method::Nlm {
                         continue;
                     }
-                    let p = Params {
-                        method: m,
-                        strength: s,
-                        iterations: it,
-                        patch: 2,
-                        search: 7,
-                        slab: 0,
-                        device: device.into(),
-                    };
+                    let p = Params { method: m, strength: s, iterations: it, patch: 2, search: 7, slab: 0, device: device.into() };
                     let t0 = Instant::now();
                     let (out, b) = filter(noisy.clone(), n, n, &p, sigma).unwrap();
-                    println!(
-                        "  {m:?} {s} on {b}: RMSE {:.3} in {:.0} ms",
-                        rmse(&clean, &out),
-                        t0.elapsed().as_secs_f64() * 1e3
-                    );
+                    println!("  {m:?} {s} on {b}: RMSE {:.3} in {:.0} ms", rmse(&clean, &out), t0.elapsed().as_secs_f64() * 1e3);
                 }
             }
         }

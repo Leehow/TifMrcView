@@ -13,16 +13,11 @@ use crate::plugins::registry::Registry;
 
 /// Formats built into the app. Others (Zeiss CZI…) come from WebAssembly
 /// plugins, see `plugins::registry`.
-pub const CORE_EXTENSIONS: &[&str] = &[
-    "tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "ali", "preali", "png", "jpg", "jpeg", "gif",
-    "bmp", "webp",
-];
+pub const CORE_EXTENSIONS: &[&str] =
+    &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "ali", "preali", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
 fn ext_of(path: &Path) -> String {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
+    path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -69,24 +64,14 @@ pub fn open_series_with(path: &Path, series: usize, reg: &Registry) -> Result<Bo
 }
 
 /// The source, and the id of the plugin that opened it (if one did).
-pub(crate) fn open_pixels_with(
-    path: &Path,
-    series: usize,
-    reg: &Registry,
-) -> Result<(Box<dyn Source>, Option<String>)> {
+pub(crate) fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
     // A folder of slices, or an acquisition program's project file that
     // lists them: one Z stack.
     if path.is_dir() {
-        return Ok((
-            Box::new(sequence::Sequence::open_dir(path, series, reg)?),
-            None,
-        ));
+        return Ok((Box::new(sequence::Sequence::open_dir(path, series, reg)?), None));
     }
     if reg.is_stack_file(path) {
-        return Ok((
-            Box::new(sequence::Sequence::open_project(path, series, reg)?),
-            None,
-        ));
+        return Ok((Box::new(sequence::Sequence::open_project(path, series, reg)?), None));
     }
     let ext = ext_of(path);
     let montage = matches!(ext.as_str(), "mrc" | "mrcs" | "map" | "st");
@@ -96,12 +81,8 @@ pub(crate) fn open_pixels_with(
     let core: Box<dyn Source> = match ext.as_str() {
         "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
         _ if montage => montage::open(path, series)?,
-        "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" | "preali" => {
-            Box::new(mrc::MrcSource::open(path)?)
-        }
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => {
-            Box::new(raster::RasterSource::open(path)?)
-        }
+        "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" | "preali" => Box::new(mrc::MrcSource::open(path)?),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),
         _ => {
             return match reg.open(path, &ext, series) {
                 Some(r) => r.map(|(s, id)| (s, Some(id))),
@@ -124,11 +105,7 @@ pub fn raw_to_plane(bytes: &[u8], dtype: DType, little: bool) -> PlaneData {
                 .par_chunks_exact($n)
                 .map(|b| {
                     let a: [u8; $n] = b.try_into().unwrap();
-                    if little {
-                        <$t>::from_le_bytes(a)
-                    } else {
-                        <$t>::from_be_bytes(a)
-                    }
+                    if little { <$t>::from_le_bytes(a) } else { <$t>::from_be_bytes(a) }
                 })
                 .collect();
             PlaneData::$variant(v)
@@ -189,10 +166,7 @@ mod tests {
 
     #[test]
     fn supported_extensions() {
-        for f in [
-            "a.tif", "a.TIFF", "b.mrc", "b.MRCS", "c.rec", "c.st", "c.map", "c.ali", "c.preali",
-            "d.png", "d.JPG", "d.webp",
-        ] {
+        for f in ["a.tif", "a.TIFF", "b.mrc", "b.MRCS", "c.rec", "c.st", "c.map", "c.ali", "c.preali", "d.png", "d.JPG", "d.webp"] {
             assert!(is_supported(Path::new(f)), "{f}");
         }
         for f in ["a.txt", "noext", "a.tif.bak", ".tif", "a.mod", ""] {
@@ -237,14 +211,8 @@ mod tests {
 
     #[test]
     fn raw_to_plane_u8_i8() {
-        assert_eq!(
-            f64s(&raw_to_plane(&[0, 255], DType::U8, true)),
-            [0.0, 255.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&[0x80, 0x7f, 0xff], DType::I8, false)),
-            [-128.0, 127.0, -1.0]
-        );
+        assert_eq!(f64s(&raw_to_plane(&[0, 255], DType::U8, true)), [0.0, 255.0]);
+        assert_eq!(f64s(&raw_to_plane(&[0x80, 0x7f, 0xff], DType::I8, false)), [-128.0, 127.0, -1.0]);
     }
 
     #[test]
@@ -253,38 +221,14 @@ mod tests {
         let be = |v: &[u8]| raw_to_plane(v, DType::U16, false);
         assert_eq!(f64s(&le(&[0x34, 0x12])), [0x1234 as f64]);
         assert_eq!(f64s(&be(&[0x12, 0x34])), [0x1234 as f64]);
-        assert_eq!(
-            f64s(&raw_to_plane(&(-2i16).to_le_bytes(), DType::I16, true)),
-            [-2.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&(-2i16).to_be_bytes(), DType::I16, false)),
-            [-2.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&70000u32.to_le_bytes(), DType::U32, true)),
-            [70000.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&70000u32.to_be_bytes(), DType::U32, false)),
-            [70000.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&(-70000i32).to_le_bytes(), DType::I32, true)),
-            [-70000.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&(-70000i32).to_be_bytes(), DType::I32, false)),
-            [-70000.0]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&1.5f32.to_le_bytes(), DType::F32, true)),
-            [1.5]
-        );
-        assert_eq!(
-            f64s(&raw_to_plane(&1.5f32.to_be_bytes(), DType::F32, false)),
-            [1.5]
-        );
+        assert_eq!(f64s(&raw_to_plane(&(-2i16).to_le_bytes(), DType::I16, true)), [-2.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-2i16).to_be_bytes(), DType::I16, false)), [-2.0]);
+        assert_eq!(f64s(&raw_to_plane(&70000u32.to_le_bytes(), DType::U32, true)), [70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&70000u32.to_be_bytes(), DType::U32, false)), [70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-70000i32).to_le_bytes(), DType::I32, true)), [-70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&(-70000i32).to_be_bytes(), DType::I32, false)), [-70000.0]);
+        assert_eq!(f64s(&raw_to_plane(&1.5f32.to_le_bytes(), DType::F32, true)), [1.5]);
+        assert_eq!(f64s(&raw_to_plane(&1.5f32.to_be_bytes(), DType::F32, false)), [1.5]);
         let p = raw_to_plane(&(-0.25f64).to_le_bytes(), DType::F64, true);
         assert!(matches!(p, PlaneData::F64(ref v) if v == &[-0.25]));
         let p = raw_to_plane(&(-0.25f64).to_be_bytes(), DType::F64, false);

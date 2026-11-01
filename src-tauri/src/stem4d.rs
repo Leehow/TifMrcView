@@ -64,18 +64,8 @@ impl Frames for ImageFrames {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Detector {
     /// Pixels with r0 ≤ distance from (cx, cy) < r1; r0 = 0 is a disk.
-    Annulus {
-        cx: f64,
-        cy: f64,
-        r0: f64,
-        r1: f64,
-    },
-    Rect {
-        x: f64,
-        y: f64,
-        w: f64,
-        h: f64,
-    },
+    Annulus { cx: f64, cy: f64, r0: f64, r1: f64 },
+    Rect { x: f64, y: f64, w: f64, h: f64 },
 }
 
 impl Detector {
@@ -89,12 +79,7 @@ impl Detector {
                         let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
                         d >= r0 && d < r1
                     }
-                    Detector::Rect {
-                        x: rx,
-                        y: ry,
-                        w: rw,
-                        h: rh,
-                    } => px >= rx && px < rx + rw && py >= ry && py < ry + rh,
+                    Detector::Rect { x: rx, y: ry, w: rw, h: rh } => px >= rx && px < rx + rw && py >= ry && py < ry + rh,
                 };
                 if on {
                     m[y * w + x] = 1.0;
@@ -233,21 +218,11 @@ fn cpu_pass(src: &dyn Frames, n: usize, masks: &[Vec<f32>]) -> Result<Pass> {
         }
         start = end;
     }
-    Ok(Pass {
-        sums,
-        mean: mean.iter().map(|v| (v / n as f64) as f32).collect(),
-        max,
-        gpu: false,
-    })
+    Ok(Pass { sums, mean: mean.iter().map(|v| (v / n as f64) as f32).collect(), max, gpu: false })
 }
 
 #[cfg(feature = "pro")]
-fn gpu_pass(
-    dev: &burn::tensor::Device,
-    src: &dyn Frames,
-    n: usize,
-    masks: &[Vec<f32>],
-) -> Result<Pass> {
+fn gpu_pass(dev: &burn::tensor::Device, src: &dyn Frames, n: usize, masks: &[Vec<f32>]) -> Result<Pass> {
     use burn::tensor::{Tensor, TensorData};
     let [w, h] = src.dims();
     let k = w * h;
@@ -269,27 +244,14 @@ fn gpu_pass(
         let end = (start + b).min(n);
         let rows = end - start;
         let mut buf = vec![0f32; rows * k];
-        buf.par_chunks_mut(k)
-            .enumerate()
-            .try_for_each(|(r, out)| src.read(start + r, out))?;
+        buf.par_chunks_mut(k).enumerate().try_for_each(|(r, out)| src.read(start + r, out))?;
         // The maximum is a cheap scan of the block already in memory.
         for row in buf.chunks(k) {
             max.iter_mut().zip(row).for_each(|(a, &b)| *a = a.max(b));
         }
         let t: Tensor<2> = Tensor::from_data(TensorData::new(buf, [rows, k]), dev);
-        let prod: Vec<f32> = t
-            .clone()
-            .matmul(mt.clone())
-            .into_data()
-            .convert::<f32>()
-            .try_into_vec::<f32>()
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        let s: Vec<f32> = t
-            .sum_dim(0)
-            .into_data()
-            .convert::<f32>()
-            .try_into_vec::<f32>()
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let prod: Vec<f32> = t.clone().matmul(mt.clone()).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let s: Vec<f32> = t.sum_dim(0).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         for r in 0..rows {
             for j in 0..m {
                 sums[j][start + r] = prod[r * m + j] as f64;
@@ -298,12 +260,7 @@ fn gpu_pass(
         mean.iter_mut().zip(&s).for_each(|(a, &b)| *a += b as f64);
         start = end;
     }
-    Ok(Pass {
-        sums,
-        mean: mean.iter().map(|v| (v / n as f64) as f32).collect(),
-        max,
-        gpu: true,
-    })
+    Ok(Pass { sums, mean: mean.iter().map(|v| (v / n as f64) as f32).collect(), max, gpu: true })
 }
 
 /// The bright-field disk of a mean pattern: centre and radius of the
@@ -339,15 +296,7 @@ pub fn default_detectors(disk: [f64; 3], w: usize, h: usize) -> Vec<Detector> {
     let edge = cx.min(cy).min(w as f64 - cx).min(h as f64 - cy);
     let r0 = 1.3 * r;
     let r1 = (3.0 * r).min(edge).max(r0 + 2.0);
-    vec![
-        Detector::Annulus {
-            cx,
-            cy,
-            r0: 0.0,
-            r1: r,
-        },
-        Detector::Annulus { cx, cy, r0, r1 },
-    ]
+    vec![Detector::Annulus { cx, cy, r0: 0.0, r1: r }, Detector::Annulus { cx, cy, r0, r1 }]
 }
 
 pub fn analyze(src: &dyn Frames, req: &Req) -> Result<Result4d> {
@@ -358,10 +307,7 @@ pub fn analyze(src: &dyn Frames, req: &Req) -> Result<Result4d> {
         bail!("扫描尺寸不对");
     }
     if n > src.count() {
-        bail!(
-            "扫描 {sx} × {sy} = {n} 个点，但文件只有 {} 张衍射图",
-            src.count()
-        );
+        bail!("扫描 {sx} × {sy} = {n} 个点，但文件只有 {} 张衍射图", src.count());
     }
     let [w, h] = src.dims();
     let k = w * h;
@@ -390,16 +336,10 @@ pub fn analyze(src: &dyn Frames, req: &Req) -> Result<Result4d> {
         }
     }
     // A constant offset (a slightly wrong centre) is not part of the field.
-    let (mx, my) = (
-        cx.iter().sum::<f64>() / n as f64,
-        cy.iter().sum::<f64>() / n as f64,
-    );
+    let (mx, my) = (cx.iter().sum::<f64>() / n as f64, cy.iter().sum::<f64>() / n as f64);
     cx.iter_mut().for_each(|v| *v -= mx);
     cy.iter_mut().for_each(|v| *v -= my);
-    let images: Vec<Vec<f32>> = p.sums[3..]
-        .iter()
-        .map(|s| s.iter().map(|&v| v as f32).collect())
-        .collect();
+    let images: Vec<Vec<f32>> = p.sums[3..].iter().map(|s| s.iter().map(|&v| v as f32).collect()).collect();
     let _ = k;
 
     let (rotation, flip, found) = match (req.rotation, req.flip) {
@@ -415,11 +355,7 @@ pub fn analyze(src: &dyn Frames, req: &Req) -> Result<Result4d> {
     // Curl does not tell θ from θ + 180°: take the one whose potential
     // is high where the dark-field signal is (atoms scatter to high angles).
     if found {
-        if let Some(adf) = detectors
-            .iter()
-            .position(|d| matches!(d, Detector::Annulus { r0, .. } if *r0 > 0.0))
-            .map(|j| &images[j])
-        {
+        if let Some(adf) = detectors.iter().position(|d| matches!(d, Detector::Annulus { r0, .. } if *r0 > 0.0)).map(|j| &images[j]) {
             if corr(&phi, adf) < 0.0 {
                 rotation = (rotation + 180.0) % 360.0;
                 u.iter_mut().for_each(|a| *a = -*a);
@@ -454,10 +390,7 @@ fn corr(a: &[f64], b: &[f32]) -> f64 {
     let n = a.len() as f64;
     let ma = a.iter().sum::<f64>() / n;
     let mb = b.iter().map(|&v| v as f64).sum::<f64>() / n;
-    a.iter()
-        .zip(b)
-        .map(|(x, &y)| (x - ma) * (y as f64 - mb))
-        .sum()
+    a.iter().zip(b).map(|(x, &y)| (x - ma) * (y as f64 - mb)).sum()
 }
 
 /// Turns the field by `deg` (after mirroring y when `flip`).
@@ -483,11 +416,7 @@ fn curl_rms(u: &[f64], v: &[f64], w: usize, h: usize) -> f64 {
             n += 1.0;
         }
     }
-    if n > 0.0 {
-        (s / n).sqrt()
-    } else {
-        0.0
-    }
+    if n > 0.0 { (s / n).sqrt() } else { 0.0 }
 }
 
 /// The angle in [0°, 180°) and flip that make the field most curl-free.
@@ -520,14 +449,11 @@ pub fn find_rotation(x: &[f64], y: &[f64], w: usize, h: usize) -> (f64, bool) {
 }
 
 fn divergence(u: &[f64], v: &[f64], w: usize, h: usize) -> Vec<f64> {
-    let at = |a: &[f64], x: isize, y: isize| {
-        a[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize]
-    };
+    let at = |a: &[f64], x: isize, y: isize| a[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize];
     let mut out = vec![0.0; w * h];
     for y in 0..h as isize {
         for x in 0..w as isize {
-            out[y as usize * w + x as usize] = (at(u, x + 1, y) - at(u, x - 1, y)) / 2.0
-                + (at(v, x, y + 1) - at(v, x, y - 1)) / 2.0;
+            out[y as usize * w + x as usize] = (at(u, x + 1, y) - at(u, x - 1, y)) / 2.0 + (at(v, x, y + 1) - at(v, x, y - 1)) / 2.0;
         }
     }
     out
@@ -544,14 +470,7 @@ struct Dft {
 impl Dft {
     fn new(n: usize) -> Dft {
         let fft = (n.is_power_of_two() && n >= 2).then(|| crate::fft::Fft::new(n));
-        let (cos, sin) = if fft.is_some() {
-            (vec![], vec![])
-        } else {
-            (0..n)
-                .map(|k| (2.0 * std::f64::consts::PI * k as f64 / n as f64).sin_cos())
-                .map(|(s, c)| (c, s))
-                .unzip()
-        };
+        let (cos, sin) = if fft.is_some() { (vec![], vec![]) } else { (0..n).map(|k| (2.0 * std::f64::consts::PI * k as f64 / n as f64).sin_cos()).map(|(s, c)| (c, s)).unzip() };
         Dft { n, fft, cos, sin }
     }
     /// Forward when `inverse` is false; the inverse is not scaled.
@@ -591,14 +510,11 @@ impl Dft {
 /// 2D transform of a w × h grid in place.
 fn dft2(re: &mut [f64], im: &mut [f64], w: usize, h: usize, inverse: bool) {
     let (fx, fy) = (Dft::new(w), Dft::new(h));
-    re.par_chunks_mut(w)
-        .zip(im.par_chunks_mut(w))
-        .for_each(|(r, i)| fx.run(r, i, inverse));
+    re.par_chunks_mut(w).zip(im.par_chunks_mut(w)).for_each(|(r, i)| fx.run(r, i, inverse));
     let cols: Vec<(Vec<f64>, Vec<f64>)> = (0..w)
         .into_par_iter()
         .map(|x| {
-            let (mut r, mut i): (Vec<f64>, Vec<f64>) =
-                (0..h).map(|y| (re[y * w + x], im[y * w + x])).unzip();
+            let (mut r, mut i): (Vec<f64>, Vec<f64>) = (0..h).map(|y| (re[y * w + x], im[y * w + x])).unzip();
             fy.run(&mut r, &mut i, inverse);
             (r, i)
         })
@@ -632,17 +548,9 @@ pub fn integrate(u: &[f64], v: &[f64], w: usize, h: usize) -> Vec<f64> {
     // φ̂ = (kx·Û + ky·V̂) / (2πi |k|²), with k in cycles per pixel.
     let (mut pr, mut pi) = (vec![0.0; ww * hh], vec![0.0; ww * hh]);
     for y in 0..hh {
-        let ky = if y <= hh / 2 {
-            y as f64
-        } else {
-            y as f64 - hh as f64
-        } / hh as f64;
+        let ky = if y <= hh / 2 { y as f64 } else { y as f64 - hh as f64 } / hh as f64;
         for x in 0..ww {
-            let kx = if x <= ww / 2 {
-                x as f64
-            } else {
-                x as f64 - ww as f64
-            } / ww as f64;
+            let kx = if x <= ww / 2 { x as f64 } else { x as f64 - ww as f64 } / ww as f64;
             let k2 = kx * kx + ky * ky;
             if k2 == 0.0 {
                 continue;
@@ -714,11 +622,7 @@ mod tests {
     fn synth(sx: usize, sy: usize, w: usize, rot: f64, flip: bool) -> (Synth, Vec<f64>) {
         // No mirror or rotation symmetry, so the angle and flip are unique.
         let tau = 2.0 * std::f64::consts::PI;
-        let pot = |x: f64, y: f64| {
-            0.6 * (tau * x / 9.0).cos()
-                + 0.5 * (tau * (x + 2.0 * y) / 13.0).sin()
-                + 0.4 * (tau * (0.3 * x - y) / 7.0 + 1.0).cos()
-        };
+        let pot = |x: f64, y: f64| 0.6 * (tau * x / 9.0).cos() + 0.5 * (tau * (x + 2.0 * y) / 13.0).sin() + 0.4 * (tau * (0.3 * x - y) / 7.0 + 1.0).cos();
         let mut frames = Vec::new();
         let mut truth = Vec::new();
         let (s, c) = (-rot).to_radians().sin_cos();
@@ -727,10 +631,7 @@ mod tests {
                 let (x, y) = (i as f64, j as f64);
                 let p = pot(x, y);
                 truth.push(p);
-                let g = [
-                    (pot(x + 0.01, y) - pot(x - 0.01, y)) / 0.02,
-                    (pot(x, y + 0.01) - pot(x, y - 0.01)) / 0.02,
-                ];
+                let g = [(pot(x + 0.01, y) - pot(x - 0.01, y)) / 0.02, (pot(x, y + 0.01) - pot(x, y - 0.01)) / 0.02];
                 // Scan-frame shift → detector frame: undo the rotation, then the flip.
                 let (dx, dy) = (c * g[0] - s * g[1], s * g[0] + c * g[1]);
                 let dy = if flip { -dy } else { dy };
@@ -738,14 +639,9 @@ mod tests {
                 let mut f = vec![0f32; w * w];
                 for yy in 0..w {
                     for xx in 0..w {
-                        let d = ((xx as f64 + 0.5 - cx).powi(2) + (yy as f64 + 0.5 - cy).powi(2))
-                            .sqrt();
+                        let d = ((xx as f64 + 0.5 - cx).powi(2) + (yy as f64 + 0.5 - cy).powi(2)).sqrt();
                         let disk = 1.0 / (1.0 + ((d - 6.0) * 2.0).exp());
-                        let halo = if d > 9.0 && d < 14.0 {
-                            0.05 * (1.0 + p)
-                        } else {
-                            0.0
-                        };
+                        let halo = if d > 9.0 && d < 14.0 { 0.05 * (1.0 + p) } else { 0.0 };
                         f[yy * w + xx] = (100.0 * disk + 100.0 * halo) as f32;
                     }
                 }
@@ -768,10 +664,7 @@ mod tests {
             }
         }
         let (gx, gy) = (gx / ((w - 1) * h) as f64, gy / (w * (h - 1)) as f64);
-        t.iter()
-            .enumerate()
-            .map(|(i, v)| v - gx * (i % w) as f64 - gy * (i / w) as f64)
-            .collect()
+        t.iter().enumerate().map(|(i, v)| v - gx * (i % w) as f64 - gy * (i / w) as f64).collect()
     }
 
     fn pearson(a: &[f64], b: &[f32]) -> f64 {
@@ -792,31 +685,10 @@ mod tests {
     fn recovers_rotation_and_potential() {
         for (rot, flip) in [(0.0, false), (37.0, false), (200.0, true)] {
             let (src, truth) = synth(32, 24, 40, rot, flip);
-            let r = analyze(
-                &src,
-                &Req {
-                    token: 0,
-                    c: 0,
-                    scan: [32, 24],
-                    detectors: vec![],
-                    center: None,
-                    rotation: None,
-                    flip: None,
-                },
-            )
-            .unwrap();
-            assert!(
-                (r.disk[0] - 20.0).abs() < 0.5 && (r.disk[2] - 6.0).abs() < 1.0,
-                "disk {:?}",
-                r.disk
-            );
+            let r = analyze(&src, &Req { token: 0, c: 0, scan: [32, 24], detectors: vec![], center: None, rotation: None, flip: None }).unwrap();
+            assert!((r.disk[0] - 20.0).abs() < 0.5 && (r.disk[2] - 6.0).abs() < 1.0, "disk {:?}", r.disk);
             let d = (r.rotation - rot).rem_euclid(360.0);
-            assert!(
-                d.min(360.0 - d) < 2.0 && r.flip == flip,
-                "rot {rot} flip {flip}: got {} {}",
-                r.rotation,
-                r.flip
-            );
+            assert!(d.min(360.0 - d) < 2.0 && r.flip == flip, "rot {rot} flip {flip}: got {} {}", r.rotation, r.flip);
             // The mean shift is removed (it can't be told from a centre
             // offset), and with it the potential's mean slope over the scan.
             let cc = pearson(&detrend(&truth, 32, 24), &r.idpc);
@@ -881,12 +753,7 @@ mod tests {
                         *o = match self.bytes {
                             1 => b[k] as f32,
                             2 => u16::from_be_bytes([b[2 * k], b[2 * k + 1]]) as f32,
-                            _ => u32::from_be_bytes([
-                                b[4 * k],
-                                b[4 * k + 1],
-                                b[4 * k + 2],
-                                b[4 * k + 3],
-                            ]) as f32,
+                            _ => u32::from_be_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]]) as f32,
                         };
                     }
                     return Ok(());
@@ -903,82 +770,23 @@ mod tests {
     #[ignore]
     fn bench_mib() {
         let dir = std::path::PathBuf::from(std::env::var("TMV_MIB_DIR").unwrap());
-        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e == "mib"))
-            .collect();
-        let num = |p: &std::path::PathBuf| {
-            p.file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .chars()
-                .filter(|c| c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<usize>()
-                .unwrap_or(0)
-        };
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "mib")).collect();
+        let num = |p: &std::path::PathBuf| p.file_stem().unwrap().to_string_lossy().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse::<usize>().unwrap_or(0);
         files.sort_by_key(num);
         let mut hdr = vec![0u8; 384];
         use std::io::Read;
-        std::fs::File::open(&files[0])
-            .unwrap()
-            .read_exact(&mut hdr)
-            .unwrap();
+        std::fs::File::open(&files[0]).unwrap().read_exact(&mut hdr).unwrap();
         let h = String::from_utf8_lossy(&hdr);
         let f: Vec<&str> = h.split(',').collect();
         let head: usize = f[2].trim().parse().unwrap();
         let w: usize = f[4].trim().parse().unwrap();
-        let bytes = match f[6].trim() {
-            "U08" => 1,
-            "U16" => 2,
-            _ => 4,
-        };
+        let bytes = match f[6].trim() { "U08" => 1, "U16" => 2, _ => 4 };
         let size = head + w * w * bytes;
-        let list = files
-            .iter()
-            .map(|p| {
-                (
-                    p.clone(),
-                    std::fs::metadata(p).unwrap().len() as usize / size,
-                )
-            })
-            .collect();
-        let src = Mib {
-            files: list,
-            head,
-            w,
-            bytes,
-        };
-        let scan: Vec<usize> = std::env::var("TMV_SCAN")
-            .unwrap_or("128x128".into())
-            .split('x')
-            .map(|v| v.parse().unwrap())
-            .collect();
-        let r = analyze(
-            &src,
-            &Req {
-                token: 0,
-                c: 0,
-                scan: [scan[0], scan[1]],
-                detectors: vec![],
-                center: None,
-                rotation: None,
-                flip: None,
-            },
-        )
-        .unwrap();
-        eprintln!(
-            "{} frames {}x{}: {:.0} ms, disk {:?}, rotation {:.2} flip {} gpu {}",
-            src.count(),
-            w,
-            w,
-            r.ms,
-            r.disk,
-            r.rotation,
-            r.flip,
-            r.gpu
-        );
+        let list = files.iter().map(|p| (p.clone(), std::fs::metadata(p).unwrap().len() as usize / size)).collect();
+        let src = Mib { files: list, head, w, bytes };
+        let scan: Vec<usize> = std::env::var("TMV_SCAN").unwrap_or("128x128".into()).split('x').map(|v| v.parse().unwrap()).collect();
+        let r = analyze(&src, &Req { token: 0, c: 0, scan: [scan[0], scan[1]], detectors: vec![], center: None, rotation: None, flip: None }).unwrap();
+        eprintln!("{} frames {}x{}: {:.0} ms, disk {:?}, rotation {:.2} flip {} gpu {}", src.count(), w, w, r.ms, r.disk, r.rotation, r.flip, r.gpu);
         if let Ok(out) = std::env::var("TMV_4D_OUT") {
             std::fs::write(out, serde_json::to_string(&r).unwrap()).unwrap();
         }
