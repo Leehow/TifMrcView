@@ -63,6 +63,9 @@ pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store"]
 # Training the membrane network (examples/membrane_train.rs) on CUDA or LibTorch.
 train-cuda = ["pro", "burn/cuda"]
 train-tch = ["pro", "burn/tch"]
+train-vulkan = ["pro", "burn/vulkan"]
+# Burn kernel fusion (off in the app builds), to measure its effect.
+train-fusion = ["pro", "burn/fusion"]
 # MP4 recorder plugin (OpenH264, adds about 1 MB).
 recorder = ["desktop", "dep:openh264"]
 

@@ -5,7 +5,7 @@
 //!
 //! cargo run --release --features pro,train-cuda --example membrane_train -- \
 //!     --data DIR --out membrane.safetensors [--steps 100000] [--batch 2] [--patch 128]
-//!     [--lr 0.01] [--val 20] [--resume FILE] [--bench 20] [--backend cuda|tch|auto]
+//!     [--lr 0.01] [--val 20] [--resume FILE] [--bench 20] [--backend cuda|vulkan|tch|auto]
 //!     [--start-step K] [--skel 1.0] [--skel-level 0]
 //! membrane_train --export IN.safetensors OUT.safetensors   (half precision, to publish)
 //!
@@ -96,6 +96,8 @@ fn device(name: &str) -> Device {
         "tch" => Device::libtorch_cuda(0),
         #[cfg(feature = "train-cuda")]
         "cuda" => Device::cuda(0),
+        #[cfg(feature = "train-vulkan")]
+        "vulkan" => Device::vulkan(burn::tensor::DeviceKind::DiscreteGpu(0)),
         "cpu" => Device::flex(),
         _ => {
             #[cfg(feature = "train-cuda")]
