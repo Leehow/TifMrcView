@@ -190,12 +190,18 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     // tomograms in batches (`select`); not for the quick survey.
     let mut selection = vec![];
     if req.purpose != Purpose::Survey {
+        let (chosen, batches) = super::select::choose_patches(&img, d, d.alignment.as_ref().unwrap(), &stage(3))?;
+        if batches.iter().any(|b| b.kept.is_some()) {
+            d.alignment = Some(chosen);
+            d.save()?;
+        }
+        selection.extend(batches);
         let (picked, batches) = super::select::exclude_views(&img, d, d.alignment.as_ref().unwrap(), &stage(3))?;
         if batches.iter().any(|b| b.kept.is_some()) {
             d.alignment = Some(picked);
             d.save()?;
         }
-        selection = batches;
+        selection.extend(batches);
     }
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
