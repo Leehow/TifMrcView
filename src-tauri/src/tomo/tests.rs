@@ -385,6 +385,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
             backend: String::new(),
         },
         ms: 0.0,
+        tilt_offset: 0.0,
     };
     // The dataset finds the half stacks motion correction leaves beside the
     // stack; one alignment reconstructs all three.
@@ -522,7 +523,7 @@ fn relion_pose_is_the_relion_projection() {
     // RELION 5 projects X to Rz(ZRot)·[cos YTilt·x + sin YTilt·z, y] + shift
     // (its rlnTomoProjX/Y rows); ours is m·R(axis + ρ)·[…] + shift.
     let v = View { file_index: 0, angle: 30.0, residual: 0.0, shift: [3.5, -2.0], mag: 1.0, rotation: 0.7, tilt: 30.4, cc: 1.0, contours: 1, flagged: false, excluded: false };
-    let a = Alignment { width: 64, height: 64, bin: 1, axis: 84.6, patch: track::PatchConfig { nx: 2, ny: 2, size: 8 }, residual: 0.0, quality: String::new(), views: vec![v.clone()], tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() }, ms: 0.0 };
+    let a = Alignment { width: 64, height: 64, bin: 1, axis: 84.6, patch: track::PatchConfig { nx: 2, ny: 2, size: 8 }, residual: 0.0, quality: String::new(), views: vec![v.clone()], tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() }, ms: 0.0, tilt_offset: 0.0 };
     let [z, sx, sy] = export::relion_pose(&a, &v, 2.0);
     let x = [10.0, -7.0, 4.0];
     let (s, c) = v.tilt.to_radians().sin_cos();

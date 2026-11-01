@@ -175,6 +175,9 @@ pub fn build(
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<String> {
     let p = how.params;
+    if p.y_slope != 0.0 {
+        return sheared(how, stack, w, h, angles, sink, progress);
+    }
     let thickness = p.thickness;
     match how.ctf {
         Some(ctf) if how.ctf_3d => {
@@ -208,6 +211,40 @@ pub fn build(
             recon::reconstruct(&views, &g, p, &mut |y0, n, block| sink(y0, n, 0, thickness, &block), &|i, n| progress("", i, n))
         }
     }
+}
+
+/// `build` with `y_slope`: a tomogram thicker by the depth the slope spans,
+/// of which each row keeps the window shifted by its whole-section offset.
+fn sheared(
+    how: &Build,
+    stack: Vec<f32>,
+    w: usize,
+    h: usize,
+    angles: &[f64],
+    sink: &mut dyn FnMut(usize, usize, usize, usize, &[f32]) -> Result<()>,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<String> {
+    let p = how.params;
+    let span = p.y_slope.abs() * (h - 1) as f64 / 2.0;
+    let half = span.ceil() as usize;
+    let params = recon::Params { thickness: p.thickness + 2 * half, y_slope: 0.0, ..p.clone() };
+    let inner = Build { alignment: how.alignment, bin: how.bin, params: &params, ctf: how.ctf, ctf_3d: how.ctf_3d };
+    let centre = (h as f64 - 1.0) / 2.0;
+    let start = |y: usize| half as isize + (p.y_slope * (y as f64 - centre)).round() as isize;
+    let t = p.thickness as isize;
+    build(&inner, stack, w, h, angles, &mut |y0, n, z0, nz, block| {
+        for r in 0..n {
+            let s = start(y0 + r);
+            let (lo, hi) = ((z0 as isize - s).max(0), (z0 as isize + nz as isize - s).min(t));
+            if lo >= hi {
+                continue;
+            }
+            let k0 = (lo + s) as usize - z0;
+            let rows: Vec<f32> = (0..(hi - lo) as usize).flat_map(|k| block[(r * nz + k0 + k) * w..(r * nz + k0 + k + 1) * w].iter().copied()).collect();
+            sink(y0 + r, 1, lo as usize, (hi - lo) as usize, &rows)?;
+        }
+        Ok(())
+    }, progress)
 }
 
 /// A tomogram in memory as [z][y][x] (sections along Z), for comparisons.
