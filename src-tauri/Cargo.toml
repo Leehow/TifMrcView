@@ -109,6 +109,10 @@ opt-level = 2
 name = "sam_slice"
 required-features = ["pro"]
 
+[[example]]
+name = "gpu_bench"
+required-features = ["pro"]
+
 [dev-dependencies]
 tempfile = "3"
 # Tests write LZ4 blocks.
