@@ -31,7 +31,7 @@ use burn::nn::conv::{Conv3d, Conv3dConfig};
 use burn::nn::PaddingConfig3d;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::activation::leaky_relu;
-use burn::tensor::{Device, Tensor, TensorData};
+use burn::tensor::{Device, Int, Tensor, TensorData};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -306,28 +306,25 @@ impl Rot {
     }
 }
 
-/// `Rot::apply` on the device, for cubes [B, 1, n, n, n] (Z, Y, X): the
-/// output's axis a reads the input's axis perm[a], mirrored where flip[a].
-fn turn(x: Tensor<5>, r: &Rot) -> Tensor<5> {
-    // Coordinate axis a (x, y, z) is tensor dim 4 − a.
-    let mut dims = [0, 1, 2, 3, 4];
-    for a in 0..3 {
-        dims[4 - a] = 4 - r.perm[a];
-    }
-    let x = x.permute(dims);
-    let flips: Vec<usize> = (0..3).filter(|&a| r.flip[a]).map(|a| 4 - a).collect();
-    match flips.as_slice() {
-        [] => x,
-        [a] => x.flip([*a]),
-        [a, b] => x.flip([*a, *b]),
-        _ => x.flip([2, 3, 4]),
-    }
+/// For each rotation, the source voxel of each output voxel (flat indices
+/// into a cube of side n), on the device: `Rot::apply` as a gather.
+fn turn_indices(rots: &[Rot], n: usize, dev: &Device) -> Vec<Tensor<1, Int>> {
+    let ids: Vec<f32> = (0..n * n * n).map(|i| i as f32).collect();
+    rots.iter()
+        .map(|r| {
+            let src: Vec<i64> = r.apply(&ids, n).iter().map(|&v| v as i64).collect();
+            Tensor::<1, Int>::from_data(TensorData::new(src, [n * n * n]), dev)
+        })
+        .collect()
 }
 
-/// Each cube k of x [B, 1, n, n, n] turned by rots[which[k]].
-fn turn_each(x: Tensor<5>, rots: &[Rot], which: &[usize]) -> Tensor<5> {
-    let parts: Vec<Tensor<5>> = which.iter().enumerate().map(|(k, &r)| turn(x.clone().narrow(0, k, 1), &rots[r])).collect();
-    Tensor::cat(parts, 0)
+/// Each cube k of x [B, 1, n, n, n] turned by the rotation with indices
+/// `idx[which[k]]` (a gather, so gradients flow back through it).
+fn turn_each(x: Tensor<5>, idx: &[Tensor<1, Int>], which: &[usize]) -> Tensor<5> {
+    let [b, _, n, _, _] = x.dims();
+    let flat = x.reshape([b, n * n * n]);
+    let parts: Vec<Tensor<2>> = which.iter().enumerate().map(|(k, &r)| flat.clone().narrow(0, k, 1).select(1, idx[r].clone())).collect();
+    Tensor::cat(parts, 0).reshape([b, 1, n, n, n])
 }
 
 /// The 24 rotations of a cube, less the 4 that leave the wedge where it is.
@@ -869,6 +866,7 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let (c, s) = dft(n, &ad);
     let (c0, s0) = dft(n, dev);
     let keep_v = keep.clone();
+    let turn_idx = if cfg.equivariant > 0.0 { turn_indices(&rots, n, &ad) } else { vec![] };
     let keep_ad = Tensor::<4>::from_data(TensorData::new(keep.clone(), [1, n, n, n]), &ad);
     let keep = Tensor::<4>::from_data(TensorData::new(keep, [1, n, n, n]), dev);
     let eq = cfg.equivariant > 0.0;
@@ -908,7 +906,7 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
                 // Turned and cut on the device; gradients run through both
                 // passes (and the target), as in the reference method.
                 let which: Vec<usize> = (0..bb).map(|k| picks[k % bh].1).collect();
-                let turned = turn_each(u, &rots, &which);
+                let turned = turn_each(u, &turn_idx, &which);
                 let z = spectral_cut(turned.clone().reshape([bb, n, n, n]), &c, &s, &keep_ad).reshape([bb, 1, n, n, n]);
                 let goal = Tensor::cat(vec![turned.clone().narrow(0, bh, bh), turned.narrow(0, 0, bh)], 0);
                 let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % bh].1].iter().copied()).collect();
@@ -1411,8 +1409,10 @@ mod tests {
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let v: Vec<f32> = (0..n * n * n).map(|i| ((i * 7919) % 101) as f32).collect();
         let x = Tensor::<5>::from_data(TensorData::new(v.clone(), [1, 1, n, n, n]), &dev);
-        for r in rotations(&g) {
-            let on_dev = turn(x.clone(), &r).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let rots = rotations(&g);
+        let idx = turn_indices(&rots, n, &dev);
+        for (i, r) in rots.iter().enumerate() {
+            let on_dev = turn_each(x.clone(), &idx, &[i]).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
             assert_eq!(on_dev, r.apply(&v, n), "{r:?}");
         }
     }
