@@ -51,6 +51,7 @@ zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["wgpu", "flex"] }
 # Pro: the CTF fit on the same GPU backend (features come from tmv-sam).
 burn = { version = "0.22.1", optional = true, default-features = false, features = ["std", "autodiff", "optim", "signal"] }
+burn-store = { version = "0.22.1", optional = true, default-features = false, features = ["std", "safetensors"] }
 # Imaris LZ4 chunks (HDF5 filter 32004).
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
@@ -58,7 +59,13 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls"]
 # TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
-pro = ["dep:tmv-sam", "dep:burn"]
+pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store"]
+# Training the membrane network (examples/membrane_train.rs) on CUDA or LibTorch.
+train-cuda = ["pro", "burn/cuda"]
+train-tch = ["pro", "burn/tch"]
+train-vulkan = ["pro", "burn/vulkan"]
+# Burn kernel fusion (off in the app builds), to measure its effect.
+train-fusion = ["pro", "burn/fusion"]
 # MP4 recorder plugin (OpenH264, adds about 1 MB).
 recorder = ["desktop", "dep:openh264"]
 
@@ -137,6 +144,14 @@ required-features = ["pro"]
 
 [[example]]
 name = "spa_probe"
+required-features = ["pro"]
+
+[[example]]
+name = "membrane_train"
+required-features = ["pro"]
+
+[[example]]
+name = "membrane_seg"
 required-features = ["pro"]
 
 [[example]]

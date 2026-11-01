@@ -214,6 +214,19 @@ impl Labels {
         }
     }
 
+    /// The label of the material called `name`, added (with `color`) as a
+    /// new label when there is none.
+    pub fn material_label(&mut self, name: &str, color: [u8; 3]) -> u16 {
+        if let Some(m) = self.materials.iter().find(|m| m.name == name) {
+            return m.label;
+        }
+        let label = self.max_label().max(self.materials.iter().map(|m| m.label).max().unwrap_or(0)) + 1;
+        let mut m = self.materials.clone();
+        m.push(Material { label, name: name.into(), color: Some(color), ..Default::default() });
+        self.set_materials(m);
+        label
+    }
+
     pub fn max_label(&self) -> u16 {
         self.slices.iter().flatten().map(|s| s.iter().copied().max().unwrap_or(0)).max().unwrap_or(0)
     }
@@ -697,6 +710,13 @@ impl Labels {
             }
         }
         self.commit(edit)
+    }
+
+    /// `apply_masks` with one mask for the whole stack (X fastest).
+    pub fn apply_volume_mask(&mut self, mask: &[bool], label: u16, guard: u16) -> Vec<usize> {
+        let plane = self.w * self.h;
+        let masks: Vec<(usize, &[bool])> = mask.chunks(plane).enumerate().filter(|(_, m)| m.iter().any(|&b| b)).collect();
+        self.apply_masks(&masks, label, guard, false)
     }
 
     /// Slice `z`, or None when it is empty.
