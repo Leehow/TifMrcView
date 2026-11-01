@@ -903,10 +903,13 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
                 let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [bb, 1, n, n, n]), &ad));
                 let target = Tensor::<5>::from_data(TensorData::new(other, [bb, 1, n, n, n]), &ad);
                 let data = spectral_error((u.clone() - target) * window_e.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
-                // Turned and cut on the device; gradients run through both
-                // passes (and the target), as in the reference method.
+                // Turned and cut on the device, with the first pass held
+                // fixed: with gradients through it (and the target), noisy
+                // halves let the network shrink its output to a low-pass
+                // blur, which zeroes this term for little data-term cost
+                // (seen on EMPIAR-10164).
                 let which: Vec<usize> = (0..bb).map(|k| picks[k % bh].1).collect();
-                let turned = turn_each(u, &turn_idx, &which);
+                let turned = turn_each(u.detach(), &turn_idx, &which);
                 let z = spectral_cut(turned.clone().reshape([bb, n, n, n]), &c, &s, &keep_ad).reshape([bb, 1, n, n, n]);
                 let goal = Tensor::cat(vec![turned.clone().narrow(0, bh, bh), turned.narrow(0, 0, bh)], 0);
                 let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % bh].1].iter().copied()).collect();
