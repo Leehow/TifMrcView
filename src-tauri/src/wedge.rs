@@ -306,6 +306,30 @@ impl Rot {
     }
 }
 
+/// `Rot::apply` on the device, for cubes [B, 1, n, n, n] (Z, Y, X): the
+/// output's axis a reads the input's axis perm[a], mirrored where flip[a].
+fn turn(x: Tensor<5>, r: &Rot) -> Tensor<5> {
+    // Coordinate axis a (x, y, z) is tensor dim 4 − a.
+    let mut dims = [0, 1, 2, 3, 4];
+    for a in 0..3 {
+        dims[4 - a] = 4 - r.perm[a];
+    }
+    let x = x.permute(dims);
+    let flips: Vec<usize> = (0..3).filter(|&a| r.flip[a]).map(|a| 4 - a).collect();
+    match flips.as_slice() {
+        [] => x,
+        [a] => x.flip([*a]),
+        [a, b] => x.flip([*a, *b]),
+        _ => x.flip([2, 3, 4]),
+    }
+}
+
+/// Each cube k of x [B, 1, n, n, n] turned by rots[which[k]].
+fn turn_each(x: Tensor<5>, rots: &[Rot], which: &[usize]) -> Tensor<5> {
+    let parts: Vec<Tensor<5>> = which.iter().enumerate().map(|(k, &r)| turn(x.clone().narrow(0, k, 1), &rots[r])).collect();
+    Tensor::cat(parts, 0)
+}
+
 /// The 24 rotations of a cube, less the 4 that leave the wedge where it is.
 fn rotations(g: &Geometry) -> Vec<Rot> {
     const PERMS: [([usize; 3], bool); 6] = [([0, 1, 2], true), ([1, 2, 0], true), ([2, 0, 1], true), ([0, 2, 1], false), ([2, 1, 0], false), ([1, 0, 2], false)];
@@ -555,11 +579,15 @@ pub struct TrainConfig {
     /// equivariance loss: the network's own result, turned and cut again,
     /// must come back as the turned result of the other half).
     pub equivariant: f32,
+    /// Fraction of the training done before the equivariance term starts
+    /// (0 = from the start): the halves method first, then ICECREAM-style
+    /// steps from a good start, each with half as many cube pairs.
+    pub equi_from: f32,
 }
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0 }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 }
     }
 }
 
@@ -841,45 +869,51 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let (c, s) = dft(n, &ad);
     let (c0, s0) = dft(n, dev);
     let keep_v = keep.clone();
+    let keep_ad = Tensor::<4>::from_data(TensorData::new(keep.clone(), [1, n, n, n]), &ad);
     let keep = Tensor::<4>::from_data(TensorData::new(keep, [1, n, n, n]), dev);
     let eq = cfg.equivariant > 0.0;
-    let bb = if eq { 2 * cfg.batch } else { cfg.batch };
+    // Equivariance steps: half the cube pairs (each runs the network twice
+    // on both halves), so a step costs about what a halves step does.
+    let bh = (cfg.batch / 2).max(1);
+    let bb = 2 * bh;
     let n3 = n * n * n;
-    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
+    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
+    let window_e = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
     let measured = keep_v.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
     let keep_w = Tensor::<4>::from_data(TensorData::new(keep_v.iter().map(|&k| k / measured).collect::<Vec<f32>>().repeat(bb), [bb, n, n, n]), &ad);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
     let total = cfg.iterations * cfg.steps;
+    let equi_start = (cfg.equi_from.clamp(0.0, 1.0) * total as f32) as usize;
     let mut loss_avg = 0f32;
     for it in 0..cfg.iterations {
         for step in 0..cfg.steps {
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
-            let loss = if eq {
+            let loss = if eq && it * cfg.steps + step >= equi_start {
                 // ICECREAM: u = f(y) for both halves; the data term asks
                 // u of one half to match the other half where measured;
                 // the equivariance term turns u (held fixed), cuts the
                 // wedge again and asks the network to give back the turned
                 // u of the other half, where that turned half was measured.
-                let picks: Vec<(usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()))).collect();
+                let picks: Vec<(usize, usize)> = (0..bh).map(|_| (rng.below(origins.len()), rng.below(rots.len()))).collect();
                 let orig = &orig;
                 let y: Vec<f32> = (0..2).flat_map(|h| picks.iter().flat_map(move |&(i, _)| orig[h][i].iter().copied())).collect();
-                let other: Vec<f32> = y[cfg.batch * n3..].iter().chain(&y[..cfg.batch * n3]).copied().collect();
+                let other: Vec<f32> = y[bh * n3..].iter().chain(&y[..bh * n3]).copied().collect();
                 let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [bb, 1, n, n, n]), &ad));
                 let target = Tensor::<5>::from_data(TensorData::new(other, [bb, 1, n, n, n]), &ad);
-                let data = spectral_error((u.clone() - target) * window.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
-                let held = u.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
-                let turned: Vec<Vec<f32>> = (0..bb).into_par_iter().map(|k| rots[picks[k % cfg.batch].1].apply(&held[k * n3..(k + 1) * n3], n)).collect();
-                let z = Tensor::<4>::from_data(TensorData::new(turned.concat(), [bb, n, n, n]), dev);
-                let z = Tensor::<5>::from_data(spectral_cut(z, &c0, &s0, &keep).reshape([bb, 1, n, n, n]).into_data(), &ad);
-                let goal: Vec<f32> = (0..bb).flat_map(|k| turned[(k + cfg.batch) % bb].iter().copied()).collect();
-                let goal = Tensor::<5>::from_data(TensorData::new(goal, [bb, 1, n, n, n]), &ad);
-                let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % cfg.batch].1].iter().copied()).collect();
+                let data = spectral_error((u.clone() - target) * window_e.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
+                // Turned and cut on the device; gradients run through both
+                // passes (and the target), as in the reference method.
+                let which: Vec<usize> = (0..bb).map(|k| picks[k % bh].1).collect();
+                let turned = turn_each(u, &rots, &which);
+                let z = spectral_cut(turned.clone().reshape([bb, n, n, n]), &c, &s, &keep_ad).reshape([bb, 1, n, n, n]);
+                let goal = Tensor::cat(vec![turned.clone().narrow(0, bh, bh), turned.narrow(0, 0, bh)], 0);
+                let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % bh].1].iter().copied()).collect();
                 let w = Tensor::<4>::from_data(TensorData::new(w, [bb, n, n, n]), &ad);
-                let equi = spectral_error((net.forward(z) - goal) * window.clone(), &c, &s, w) / ((bb * n3) as f32 * (1.0 + cfg.omega));
+                let equi = spectral_error((net.forward(z) - goal) * window_e.clone(), &c, &s, w) / ((bb * n3) as f32 * (1.0 + cfg.omega));
                 data + equi * cfg.equivariant
             } else {
             let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
@@ -911,6 +945,90 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     Ok((net.valid(), loss_avg))
 }
 
+/// `vol` without the Fourier components a tilt series with these tilts
+/// misses (beam on Z, tilt axis on Y): the wedge lies in each XZ plane, so
+/// each one is transformed in 2D (padded with its mean to powers of two).
+fn cut_volume(vol: &Vol, g: &Geometry, tilts: &[f32]) -> Vol {
+    let [w, h, d] = vol.n;
+    let (px, pz) = (w.next_power_of_two(), d.next_power_of_two());
+    let (lo, hi) = (g.min_tilt.unwrap_or(-g.max_tilt) as f64 - 1e-6, g.max_tilt as f64 + 1e-6);
+    let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
+    let side = px.max(pz) as f64;
+    let mask: Vec<bool> = (0..px * pz)
+        .map(|i| {
+            let (mut a, mut b) = (f(i % px, px), f(i / px, pz));
+            if a < 0.0 || (a == 0.0 && b < 0.0) {
+                (a, b) = (-a, -b);
+            }
+            if a == 0.0 && b == 0.0 {
+                return true;
+            }
+            let angle = b.atan2(a);
+            let near = tilts.iter().map(|&t| (angle - (t as f64).to_radians()).abs()).fold(f64::MAX, f64::min);
+            (lo..=hi).contains(&angle.to_degrees()) && a.hypot(b) * side * near.sin() <= 1.0
+        })
+        .collect();
+    let (fx, fz) = (Fft::new(px), Fft::new(pz));
+    let mut out = vec![0f32; vol.v.len()];
+    let planes: Vec<Vec<f32>> = (0..h)
+        .into_par_iter()
+        .map(|y| {
+            let mut re = vec![0f32; px * pz];
+            let mut sum = 0f64;
+            for z in 0..d {
+                for x in 0..w {
+                    sum += vol.v[(z * h + y) * w + x] as f64;
+                }
+            }
+            let mean = (sum / (w * d) as f64) as f32;
+            for z in 0..pz {
+                for x in 0..px {
+                    re[z * px + x] = if z < d && x < w { vol.v[(z * h + y) * w + x] } else { mean };
+                }
+            }
+            let mut im = vec![0f32; px * pz];
+            let pass = |re: &mut Vec<f32>, im: &mut Vec<f32>| {
+                for z in 0..pz {
+                    fx.run(&mut re[z * px..(z + 1) * px], &mut im[z * px..(z + 1) * px]);
+                }
+                for x in 0..px {
+                    let (mut cr, mut ci): (Vec<f32>, Vec<f32>) = ((0..pz).map(|z| re[z * px + x]).collect(), (0..pz).map(|z| im[z * px + x]).collect());
+                    fz.run(&mut cr, &mut ci);
+                    for z in 0..pz {
+                        re[z * px + x] = cr[z];
+                        im[z * px + x] = ci[z];
+                    }
+                }
+            };
+            pass(&mut re, &mut im);
+            for (i, &m) in mask.iter().enumerate() {
+                if m {
+                    im[i] = -im[i];
+                } else {
+                    re[i] = 0.0;
+                    im[i] = 0.0;
+                }
+            }
+            // Inverse as the conjugate of the forward transform.
+            pass(&mut re, &mut im);
+            let s = 1.0 / (px * pz) as f32;
+            let mut plane = vec![0f32; w * d];
+            for z in 0..d {
+                for x in 0..w {
+                    plane[z * w + x] = re[z * px + x] * s;
+                }
+            }
+            plane
+        })
+        .collect();
+    for (y, plane) in planes.iter().enumerate() {
+        for z in 0..d {
+            out[(z * h + y) * w..(z * h + y) * w + w].copy_from_slice(&plane[z * w..(z + 1) * w]);
+        }
+    }
+    Vol { n: vol.n, v: out }
+}
+
 /// For a reconstruction pipeline with even/odd half tomograms (same layout
 /// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
 /// and fills the wedge in one network, and returns the mean of its results
@@ -932,15 +1050,26 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
     let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
     let (net, _) = train_halves(dev, &a, &b, &g, tilts, cfg, &mut progress)?;
     let it = cfg.iterations + 1;
+    // A network trained for equivariance is applied twice, as in ICECREAM:
+    // its result, wedge-cut again, is repaired once more.
+    let passes = if cfg.equivariant > 0.0 { 2 } else { 1 };
     let mut outs = vec![];
     for (h, vol) in [&a, &b].into_iter().enumerate() {
-        outs.push(apply(dev, &net, vol, [0; 3], dims, &mut |done, total| {
-            if CANCEL.load(Ordering::SeqCst) {
-                bail!("已取消");
+        let mut v = Vol { n: dims, v: vol.v.clone() };
+        for pass in 0..passes {
+            if pass > 0 {
+                v = cut_volume(&v, &g, tilts);
             }
-            progress(Progress { iteration: it, iterations: cfg.iterations, step: h * total + done, steps: 2 * total, loss: 0.0 });
-            Ok(())
-        })?);
+            let k = h * passes + pass;
+            v.v = apply(dev, &net, &v, [0; 3], dims, &mut |done, total| {
+                if CANCEL.load(Ordering::SeqCst) {
+                    bail!("已取消");
+                }
+                progress(Progress { iteration: it, iterations: cfg.iterations, step: k * total + done, steps: 2 * passes * total, loss: 0.0 });
+                Ok(())
+            })?;
+        }
+        outs.push(v.v);
     }
     Ok(outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect())
 }
@@ -1262,6 +1391,33 @@ mod tests {
     }
 
     #[test]
+    fn volume_cut_matches_the_cube_cut() {
+        let n = 16;
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-54.0) };
+        let tilts: Vec<f32> = (-18..=20).map(|i| i as f32 * 3.0).collect();
+        let v = phantom(n, 8);
+        let mut sp = Spectral::new(n, &g);
+        sp.keep = tilt_mask(n, &g, &tilts);
+        let want = sp.filter(&v.v, &sp.keep);
+        let got = cut_volume(&v, &g, &tilts).v;
+        let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-3, "{worst}");
+    }
+
+    #[test]
+    fn device_turns_match_the_cpu() {
+        let n = 8;
+        let dev = Device::flex();
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
+        let v: Vec<f32> = (0..n * n * n).map(|i| ((i * 7919) % 101) as f32).collect();
+        let x = Tensor::<5>::from_data(TensorData::new(v.clone(), [1, 1, n, n, n]), &dev);
+        for r in rotations(&g) {
+            let on_dev = turn(x.clone(), &r).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            assert_eq!(on_dev, r.apply(&v, n), "{r:?}");
+        }
+    }
+
+    #[test]
     fn trains_on_halves() {
         let dev = Device::flex();
         let truth = phantom(24, 4);
@@ -1277,7 +1433,7 @@ mod tests {
         let p = last.unwrap();
         assert_eq!((p.iteration, p.step, p.steps), (3, 2, 2));
         // ICECREAM-style training runs too.
-        let cfg = TrainConfig { equivariant: 2.0, ..cfg };
+        let cfg = TrainConfig { equivariant: 2.0, equi_from: 0.5, ..cfg };
         let out = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |_| {}).unwrap();
         assert!(out.iter().all(|v| v.is_finite()));
     }
@@ -1314,6 +1470,7 @@ mod tests {
             seed: 9,
             omega: env("WO", 2.0) as f32,
             equivariant: env("WE", 0.0) as f32,
+            equi_from: env("WEF", 0.0) as f32,
             ..Default::default()
         };
         // Correlation with the truth, overall and inside the wedge only.
@@ -1349,7 +1506,7 @@ mod tests {
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
         let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0 };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 };
         let mut last = None;
         let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
@@ -1375,7 +1532,7 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0 };
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 };
         let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
@@ -1447,7 +1604,7 @@ mod bench {
 
     /// Even/odd half tomograms (e.g. from the cryo-ET pipeline):
     /// TMV_HALF_EVEN=… TMV_HALF_ODD=… [TMV_HALF_TILTS=x.tlt] [TMV_HALF_BIN=2]
-    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_EQUI=0 (ICECREAM weight, e.g. 2)] [TMV_HALF_CUBE=64] [TMV_HALF_OUT=x.mrc]
+    /// [TMV_HALF_ITER=3] [TMV_HALF_STEPS=1000] [TMV_HALF_OMEGA=2] [TMV_HALF_EQUI=0 (ICECREAM weight, e.g. 2)] [TMV_HALF_EQUI_FROM=0 (fraction trained as halves first, e.g. 0.67)] [TMV_HALF_CUBE=64] [TMV_HALF_OUT=x.mrc]
     /// cargo test --release --features pro --lib wedge::bench::halves -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -1472,7 +1629,7 @@ mod bench {
             g.min_tilt = Some(tilts.iter().cloned().fold(f32::MAX, f32::min));
             println!("  {} tilts {:?}..{:?}", tilts.len(), g.min_tilt, g.max_tilt);
         }
-        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, equivariant: env("TMV_HALF_EQUI").unwrap_or(0.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
+        let mut cfg = TrainConfig { iterations: env("TMV_HALF_ITER").unwrap_or(3.0) as usize, steps: env("TMV_HALF_STEPS").unwrap_or(1000.0) as usize, omega: env("TMV_HALF_OMEGA").unwrap_or(2.0) as f32, equivariant: env("TMV_HALF_EQUI").unwrap_or(0.0) as f32, equi_from: env("TMV_HALF_EQUI_FROM").unwrap_or(0.0) as f32, cube: env("TMV_HALF_CUBE").unwrap_or(64.0) as usize, ..Default::default() };
         while a.n.iter().any(|&k| k < cfg.cube) && cfg.cube > 16 {
             cfg.cube /= 2;
         }
@@ -1487,8 +1644,16 @@ mod bench {
             let n = a.n;
             let (vals, _) = crate::classify::on_device(|dev| {
                 let net = net.clone().to_device(dev);
-                let x = apply(dev, &net, &a, [0; 3], n, &mut |_, _| Ok(()))?;
-                let y = apply(dev, &net, &b, [0; 3], n, &mut |_, _| Ok(()))?;
+                let twice = cfg.equivariant > 0.0;
+                let run = |v: &Vol| -> Result<Vec<f32>> {
+                    let first = apply(dev, &net, v, [0; 3], n, &mut |_, _| Ok(()))?;
+                    if !twice {
+                        return Ok(first);
+                    }
+                    let cut = cut_volume(&Vol { n, v: first }, &g, &tilts);
+                    apply(dev, &net, &cut, [0; 3], n, &mut |_, _| Ok(()))
+                };
+                let (x, y) = (run(&a)?, run(&b)?);
                 Ok(x.iter().zip(&y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>())
             })
             .unwrap();
