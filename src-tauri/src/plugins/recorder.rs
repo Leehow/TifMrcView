@@ -8,8 +8,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{anyhow, bail, Context, Result};
 use openh264::encoder::{
-    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, QpRange, RateControlMode, UsageType,
-    VuiConfig,
+    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, QpRange,
+    RateControlMode, UsageType, VuiConfig,
 };
 use openh264::formats::{RgbaSliceU8, YUVBuffer};
 use openh264::OpenH264API;
@@ -95,11 +95,15 @@ impl Recorder {
             .qp(QpRange::new(10, max_qp))
             .background_detection(false)
             .adaptive_quantization(false)
-            .intra_frame_period(IntraFramePeriod::from_num_frames((a.fps * 2.0).ceil().max(1.0) as u32))
+            .intra_frame_period(IntraFramePeriod::from_num_frames(
+                (a.fps * 2.0).ceil().max(1.0) as u32,
+            ))
             .vui(VuiConfig::bt601());
-        let encoder = Encoder::with_api_config(OpenH264API::from_source(), cfg).map_err(|e| anyhow!("{e}"))?;
+        let encoder = Encoder::with_api_config(OpenH264API::from_source(), cfg)
+            .map_err(|e| anyhow!("{e}"))?;
         let path = PathBuf::from(&a.path);
-        let mp4 = Mp4Writer::create(&path, w, h).with_context(|| format!("cannot write {}", path.display()))?;
+        let mp4 = Mp4Writer::create(&path, w, h)
+            .with_context(|| format!("cannot write {}", path.display()))?;
         let mut s = self.session();
         if let Some(old) = s.take() {
             let _ = std::fs::remove_file(&old.path);
@@ -120,13 +124,25 @@ impl Recorder {
 
     fn frame(&self, a: Frame, rgba: &[u8]) -> Result<Value> {
         let mut guard = self.session();
-        let s = guard.as_mut().ok_or_else(|| anyhow!("recording not started"))?;
+        let s = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("recording not started"))?;
         let (w, h) = (s.width as usize, s.height as usize);
         if rgba.len() != w * h * 4 {
-            bail!("expected {}×{} RGBA ({} bytes), got {}", w, h, w * h * 4, rgba.len());
+            bail!(
+                "expected {}×{} RGBA ({} bytes), got {}",
+                w,
+                h,
+                w * h * 4,
+                rgba.len()
+            );
         }
         s.yuv.read_rgba8(RgbaSliceU8::new(rgba, (w, h)));
-        let bits = s.encoder.encode(&s.yuv).map_err(|e| anyhow!("{e}"))?.to_vec();
+        let bits = s
+            .encoder
+            .encode(&s.yuv)
+            .map_err(|e| anyhow!("{e}"))?
+            .to_vec();
         // Keep timestamps exact for fractional frame rates.
         let repeat = a.repeat.unwrap_or(1).max(1) as f64;
         let start = s.ticks_done.round();
@@ -138,7 +154,10 @@ impl Recorder {
     }
 
     fn finish(&self) -> Result<Value> {
-        let s = self.session().take().ok_or_else(|| anyhow!("recording not started"))?;
+        let s = self
+            .session()
+            .take()
+            .ok_or_else(|| anyhow!("recording not started"))?;
         let frames = s.mp4.frames();
         let path = s.path.clone();
         match s.mp4.finish() {
@@ -187,7 +206,12 @@ mod tests {
         let path = dir.join("t.mp4");
         let r = Recorder::default();
         let (w, h) = (320u32, 240u32);
-        r.call("begin", json!({"path": path, "width": w, "height": h, "fps": 7.5}), &[]).unwrap();
+        r.call(
+            "begin",
+            json!({"path": path, "width": w, "height": h, "fps": 7.5}),
+            &[],
+        )
+        .unwrap();
         for i in 0..20u32 {
             let mut px = vec![0u8; (w * h * 4) as usize];
             for (k, p) in px.chunks_mut(4).enumerate() {

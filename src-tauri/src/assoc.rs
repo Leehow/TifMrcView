@@ -30,14 +30,20 @@ pub fn set_default() -> Result<String, String> {
         let t = CFString::new(uti);
         // SAFETY: both strings are valid CFStrings for the duration of the call.
         let status = unsafe {
-            LSSetDefaultRoleHandlerForContentType(t.as_concrete_TypeRef(), ROLES_ALL, handler.as_concrete_TypeRef())
+            LSSetDefaultRoleHandlerForContentType(
+                t.as_concrete_TypeRef(),
+                ROLES_ALL,
+                handler.as_concrete_TypeRef(),
+            )
         };
         if status != 0 {
             failed.push(format!("{uti} ({status})"));
         }
     }
     if failed.is_empty() {
-        Ok(format!("已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"))
+        Ok(format!(
+            "已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"
+        ))
     } else {
         Err(format!("部分类型设置失败: {}", failed.join(", ")))
     }
@@ -52,11 +58,17 @@ pub fn set_default() -> Result<String, String> {
         let dir = std::path::Path::new(&home).join(".local/share/mime");
         let pkg = dir.join("packages");
         if std::fs::create_dir_all(&pkg).is_ok() {
-            let _ = std::fs::write(pkg.join("tifmrcview-mrc.xml"), include_str!("../../packaging/linux/tifmrcview-mrc.xml"));
+            let _ = std::fs::write(
+                pkg.join("tifmrcview-mrc.xml"),
+                include_str!("../../packaging/linux/tifmrcview-mrc.xml"),
+            );
             let _ = Command::new("update-mime-database").arg(&dir).status();
         }
     }
-    let candidates = [format!("{NAME}.desktop"), format!("{}.desktop", crate::edition::BIN)];
+    let candidates = [
+        format!("{NAME}.desktop"),
+        format!("{}.desktop", crate::edition::BIN),
+    ];
     let desktop = candidates
         .iter()
         .find(|d| {
@@ -70,7 +82,9 @@ pub fn set_default() -> Result<String, String> {
         .status()
         .map_err(|e| format!("无法运行 xdg-mime: {e}"))?;
     if status.success() {
-        Ok(format!("已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"))
+        Ok(format!(
+            "已将 {NAME} 设为 .tif / .tiff / .mrc 的默认打开方式"
+        ))
     } else {
         Err("xdg-mime 设置失败".into())
     }
@@ -82,10 +96,15 @@ pub fn set_default() -> Result<String, String> {
     // The installer registers TifMrcView; this opens the page where the user
     // confirms it.
     std::process::Command::new("explorer.exe")
-        .arg(format!("ms-settings:defaultapps?registeredAppUser={}", NAME.replace(' ', "%20")))
+        .arg(format!(
+            "ms-settings:defaultapps?registeredAppUser={}",
+            NAME.replace(' ', "%20")
+        ))
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok(format!("已打开系统“默认应用”设置，请在其中把 .tif / .tiff / .mrc 选为 {NAME}"))
+    Ok(format!(
+        "已打开系统“默认应用”设置，请在其中把 .tif / .tiff / .mrc 选为 {NAME}"
+    ))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

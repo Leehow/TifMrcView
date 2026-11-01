@@ -120,7 +120,11 @@ pub struct Alignment {
 impl View {
     /// The refined tilt angle (alignments saved before refinement have none).
     pub fn refined(&self) -> f64 {
-        if self.tilt != 0.0 { self.tilt } else { self.angle }
+        if self.tilt != 0.0 {
+            self.tilt
+        } else {
+            self.angle
+        }
     }
 }
 
@@ -279,7 +283,9 @@ pub fn align(
         req.bin
     };
     let st = read_stack(img, req.c, req.t, bin, &angles)?;
-    let groups = req.groups.unwrap_or_else(|| model::Groups::default_for(st.angles.len()));
+    let groups = req
+        .groups
+        .unwrap_or_else(|| model::Groups::default_for(st.angles.len()));
     if st
         .file_order
         .iter()
@@ -332,13 +338,16 @@ pub fn align(
         for start in starts {
             check_cancel()?;
             match track_and_solve(&st, start, chosen, &req.excluded, req.sweep, progress) {
-                Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < b.1.residual) => best = Some(r),
+                Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < b.1.residual) => {
+                    best = Some(r)
+                }
                 Ok(_) => {}
                 Err(e) if CANCEL.load(Ordering::Relaxed) => return Err(e),
                 Err(_) => {}
             }
         }
-        (tracks, solution) = best.ok_or_else(|| anyhow::anyhow!("各起始轴角都无法对齐，请检查倾转角或手动给出轴角"))?;
+        (tracks, solution) = best
+            .ok_or_else(|| anyhow::anyhow!("各起始轴角都无法对齐，请检查倾转角或手动给出轴角"))?;
         if req.sweep {
             let fixed_axis = solution.axis;
             for patch in PatchConfig::candidates(st.w, st.h) {
@@ -371,7 +380,10 @@ pub fn align(
         if refined.residual < solution.residual && model::plausible(&refined) {
             solution = refined;
         } else {
-            eprintln!("tomo: grouped refinement not used ({:.3} vs rigid {:.3})", refined.residual, solution.residual);
+            eprintln!(
+                "tomo: grouped refinement not used ({:.3} vs rigid {:.3})",
+                refined.residual, solution.residual
+            );
         }
     }
     let med = median(

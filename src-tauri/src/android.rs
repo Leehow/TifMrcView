@@ -17,7 +17,9 @@ struct PathReply {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("tmv")
         .setup(|app, api| {
-            app.manage(Native(api.register_android_plugin("com.leehow.tifmrcview", "TmvPlugin")?));
+            app.manage(Native(
+                api.register_android_plugin("com.leehow.tifmrcview", "TmvPlugin")?,
+            ));
             Ok(())
         })
         .build()

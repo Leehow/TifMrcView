@@ -16,10 +16,10 @@
 //! `docs/format-plugins.md`); that is how Zeiss CZI and SmartSEM support
 //! ship, so no vendor format code lives in the core.
 
-#[cfg(feature = "recorder")]
-mod mp4;
 #[cfg(feature = "desktop")]
 pub mod market;
+#[cfg(feature = "recorder")]
+mod mp4;
 pub mod package;
 pub mod recipe;
 #[cfg(feature = "recorder")]

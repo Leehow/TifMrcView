@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const DESKTOP: &str = if crate::edition::PRO { "tifmrcview-pro.desktop" } else { "tifmrcview.desktop" };
+const DESKTOP: &str = if crate::edition::PRO {
+    "tifmrcview-pro.desktop"
+} else {
+    "tifmrcview.desktop"
+};
 const PREFIX: &str = "application/x-tifmrcview-";
 
 #[derive(Default, Deserialize, Serialize)]
@@ -62,7 +66,11 @@ fn thumbnailer(mimes: &BTreeSet<String>) -> String {
         .lines()
         .find(|line| line.starts_with("Exec="))
         .unwrap();
-    let exec = exec.replacen("Exec=tifmrcview ", &format!("Exec={} ", crate::edition::BIN), 1);
+    let exec = exec.replacen(
+        "Exec=tifmrcview ",
+        &format!("Exec={} ", crate::edition::BIN),
+        1,
+    );
     format!(
         "[Thumbnailer Entry]\nTryExec={}\n{exec}\nMimeType={};\n",
         crate::edition::BIN,
@@ -224,7 +232,9 @@ fn sync_at(
     globs: &str,
     exe: &Path,
 ) -> Result<()> {
-    let record_path = data.join(crate::edition::APP_ID).join("plugin-formats.json");
+    let record_path = data
+        .join(crate::edition::APP_ID)
+        .join("plugin-formats.json");
     let record = read_optional(&record_path)?;
     let previous: Record = if record.is_empty() {
         Record::default()
@@ -257,7 +267,10 @@ fn sync_at(
     let mime_changed = write_changed(&xml_path, (!types.is_empty()).then_some(xml.as_str()))?;
     let thumb = thumbnailer(&mimes);
     write_changed(
-        &data.join(format!("thumbnailers/{}-plugins.thumbnailer", crate::edition::BIN)),
+        &data.join(format!(
+            "thumbnailers/{}-plugins.thumbnailer",
+            crate::edition::BIN
+        )),
         (!mimes.is_empty()).then_some(thumb.as_str()),
     )?;
     if !apps.is_empty() {
@@ -322,8 +335,12 @@ mod tests {
         assert_eq!(types["dm4"], "application/x-tifmrcview-dm4");
         let xml = mime_xml(&types);
         assert!(xml.contains("<mime-type type=\"image/png\"><glob pattern=\"*.png\"/>"));
-        assert!(thumbnailer(&types.values().cloned().collect())
-            .contains(&format!("Exec={} --thumbnail %i %o --size %s\n", crate::edition::BIN)));
+        assert!(
+            thumbnailer(&types.values().cloned().collect()).contains(&format!(
+                "Exec={} --thumbnail %i %o --size %s\n",
+                crate::edition::BIN
+            ))
+        );
     }
     #[test]
     fn added_associations_preserve_defaults_order_and_user_entries() {
@@ -336,7 +353,9 @@ mod tests {
             &set(&["application/x-tifmrcview-dm3"]),
         );
         assert!(out.starts_with("# keep\n[Default Applications]\nimage/png=other.desktop;\n"));
-        assert!(out.contains(&format!("image/png=before.desktop;{DESKTOP};after.desktop;")));
+        assert!(out.contains(&format!(
+            "image/png=before.desktop;{DESKTOP};after.desktop;"
+        )));
         assert!(out.contains("application/x-tifmrcview-dm3=other.desktop;"));
         assert_eq!(owned, set(&["application/x-tifmrcview-dm4"]));
         assert_eq!(
@@ -364,14 +383,22 @@ mod tests {
         assert_eq!(std::fs::read(config.join("mimeapps.list")).unwrap(), apps);
         run(&["dm4"]);
         let bin = crate::edition::BIN;
-        let xml = std::fs::read_to_string(data.join(format!("mime/packages/{bin}-plugins.xml"))).unwrap();
+        let xml =
+            std::fs::read_to_string(data.join(format!("mime/packages/{bin}-plugins.xml"))).unwrap();
         assert!(!xml.contains("dm3"));
         assert!(xml.contains("dm4"));
         run(&[]);
-        assert!(!data.join(format!("thumbnailers/{bin}-plugins.thumbnailer")).exists());
-        assert!(!data.join(format!("mime/packages/{bin}-plugins.xml")).exists());
+        assert!(!data
+            .join(format!("thumbnailers/{bin}-plugins.thumbnailer"))
+            .exists());
+        assert!(!data
+            .join(format!("mime/packages/{bin}-plugins.xml"))
+            .exists());
         assert!(!data.join("applications").join(DESKTOP).exists());
-        assert!(!data.join(crate::edition::APP_ID).join("plugin-formats.json").exists());
+        assert!(!data
+            .join(crate::edition::APP_ID)
+            .join("plugin-formats.json")
+            .exists());
         assert_eq!(
             std::fs::read_to_string(config.join("mimeapps.list")).unwrap(),
             "[Added Associations]\n"

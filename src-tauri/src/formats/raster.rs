@@ -23,7 +23,10 @@ fn reader(path: &Path) -> Result<ImageReader<std::io::BufReader<std::fs::File>>>
 impl RasterSource {
     pub fn open(path: &Path) -> Result<RasterSource> {
         let r = reader(path)?;
-        let format = r.format().map(|f| format!("{f:?}").to_uppercase()).unwrap_or_else(|| "IMAGE".into());
+        let format = r
+            .format()
+            .map(|f| format!("{f:?}").to_uppercase())
+            .unwrap_or_else(|| "IMAGE".into());
         let mut dec = r.into_decoder()?;
         let (w, h) = image::ImageDecoder::dimensions(&dec);
         let color = image::ImageDecoder::color_type(&dec);
@@ -39,15 +42,24 @@ impl RasterSource {
             ["R", "G", "B"]
                 .iter()
                 .zip([[255, 0, 0], [0, 255, 0], [0, 0, 255]])
-                .map(|(n, c)| ChannelInfo { name: n.to_string(), color: c })
+                .map(|(n, c)| ChannelInfo {
+                    name: n.to_string(),
+                    color: c,
+                })
                 .collect()
         } else {
-            vec![ChannelInfo { name: "灰度".into(), color: [255, 255, 255] }]
+            vec![ChannelInfo {
+                name: "灰度".into(),
+                color: [255, 255, 255],
+            }]
         };
         let size_c = channels.len();
         let info = ImageInfo {
             path: path.to_string_lossy().into_owned(),
-            name: path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+            name: path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             format,
             width: w as usize,
             height: h as usize,
@@ -68,7 +80,10 @@ impl RasterSource {
             folder: None,
             spectrum: None,
         };
-        Ok(RasterSource { path: path.to_path_buf(), info })
+        Ok(RasterSource {
+            path: path.to_path_buf(),
+            info,
+        })
     }
 }
 

@@ -100,10 +100,20 @@ fn lsminfo(s: &Spec, offs: &Offsets) -> Vec<u8> {
     let mut b = vec![0u8; 512];
     put(&mut b, 0, &67127628u32.to_le_bytes());
     put(&mut b, 4, &512i32.to_le_bytes());
-    for (o, v) in [(8, s.w), (12, s.h), (16, s.z as u32), (20, s.c as u32), (24, s.t as u32)] {
+    for (o, v) in [
+        (8, s.w),
+        (12, s.h),
+        (16, s.z as u32),
+        (20, s.c as u32),
+        (24, s.t as u32),
+    ] {
         put(&mut b, o, &(v as i32).to_le_bytes());
     }
-    put(&mut b, 28, &(if s.bits == 8 { 1i32 } else { 2 }).to_le_bytes());
+    put(
+        &mut b,
+        28,
+        &(if s.bits == 8 { 1i32 } else { 2 }).to_le_bytes(),
+    );
     put(&mut b, 32, &(s.w as i32 / 8).to_le_bytes());
     put(&mut b, 36, &(s.h as i32 / 8).to_le_bytes());
     for (o, v) in [(40, 0.25e-6f64), (48, 0.25e-6), (56, 1.5e-6)] {
@@ -197,7 +207,9 @@ pub fn scan_info() -> Vec<u8> {
     rec(0x2000_0000, 0, &[]);
     // (name, acquire, detector name, channel name, pinhole, gain, laser nm, transmission, spectral)
     let tracks = [
-        ("Track A", -1, "Pmt2", "Ch1", 123.0f64, 812.0f64, 488.0f64, 2.0f64),
+        (
+            "Track A", -1, "Pmt2", "Ch1", 123.0f64, 812.0f64, 488.0f64, 2.0f64,
+        ),
         ("Track B", -1, "Pmt3", "Ch2", 454.0, 690.0, 543.0, 22.0),
         ("Off", 0, "Pmt1", "Ch3", 0.0, 0.0, 633.0, 10.0),
     ];
@@ -213,7 +225,11 @@ pub fn scan_info() -> Vec<u8> {
         // A detector that is not acquired, then the real one.
         for on in [0i32, -1] {
             rec(0x7000_0000, 0, &[]);
-            rec(0x7000_0003, 5, &(if on != 0 { gain } else { 0.0 }).to_le_bytes());
+            rec(
+                0x7000_0003,
+                5,
+                &(if on != 0 { gain } else { 0.0 }).to_le_bytes(),
+            );
             rec(0x7000_0009, 5, &pinhole.to_le_bytes());
             rec(0x7000_000B, 4, &on.to_le_bytes());
             rec(0x7000_000C, 2, &s(if on != 0 { det } else { "PmtOther" }));
@@ -263,7 +279,10 @@ fn encode(s: &Spec, plane: &[u8], spp_in_data: usize) -> Vec<u8> {
                     r[i] = r[i].wrapping_sub(r[i - spp_in_data]);
                 } else {
                     let a = u16::from_le_bytes([r[i * 2], r[i * 2 + 1]]);
-                    let b = u16::from_le_bytes([r[(i - spp_in_data) * 2], r[(i - spp_in_data) * 2 + 1]]);
+                    let b = u16::from_le_bytes([
+                        r[(i - spp_in_data) * 2],
+                        r[(i - spp_in_data) * 2 + 1],
+                    ]);
                     r[i * 2..i * 2 + 2].copy_from_slice(&a.wrapping_sub(b).to_le_bytes());
                 }
             }
@@ -271,7 +290,9 @@ fn encode(s: &Spec, plane: &[u8], spp_in_data: usize) -> Vec<u8> {
     }
     match s.comp {
         Comp::None => data,
-        _ => weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8).encode(&data).unwrap(),
+        _ => weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+            .encode(&data)
+            .unwrap(),
     }
 }
 
@@ -286,7 +307,14 @@ struct Page {
 }
 
 /// Cuts rows into strips, compresses them, and records their uncompressed sizes.
-fn split(s: &Spec, data: &[u8], row_bytes: usize, spp: usize, strips: &mut Vec<Vec<u8>>, counts: &mut Vec<u32>) {
+fn split(
+    s: &Spec,
+    data: &[u8],
+    row_bytes: usize,
+    spp: usize,
+    strips: &mut Vec<Vec<u8>>,
+    counts: &mut Vec<u32>,
+) {
     for k in 0..s.h.div_ceil(s.rows_per_strip) {
         let y0 = (k * s.rows_per_strip) as usize;
         let y1 = ((k + 1) * s.rows_per_strip).min(s.h) as usize;
@@ -309,7 +337,14 @@ fn pages(s: &Spec) -> Vec<Page> {
         if s.planar {
             for c in 0..s.c {
                 let plane = plane_bytes(s, img, c);
-                split(s, &plane, (s.w * size) as usize, 1, &mut strips, &mut counts);
+                split(
+                    s,
+                    &plane,
+                    (s.w * size) as usize,
+                    1,
+                    &mut strips,
+                    &mut counts,
+                );
             }
             dummy = s.c == 2;
         } else {
@@ -322,10 +357,22 @@ fn pages(s: &Spec) -> Vec<Page> {
                     inter.extend_from_slice(&p[i * sz..(i + 1) * sz]);
                 }
             }
-            split(s, &inter, s.w as usize * s.c * sz, s.c, &mut strips, &mut counts);
+            split(
+                s,
+                &inter,
+                s.w as usize * s.c * sz,
+                s.c,
+                &mut strips,
+                &mut counts,
+            );
             dummy = false;
         }
-        out.push(Page { main: true, strips, counts, dummy });
+        out.push(Page {
+            main: true,
+            strips,
+            counts,
+            dummy,
+        });
         if s.thumbnails {
             let (tw, th) = (s.w / 8, s.h / 8);
             let plane = vec![0xEEu8; (tw * th) as usize];
@@ -348,10 +395,20 @@ struct Ent {
 }
 
 fn ent_short(tag: u16, v: &[u16]) -> Ent {
-    Ent { tag, typ: 3, count: v.len() as u32, data: v.iter().flat_map(|x| x.to_le_bytes()).collect() }
+    Ent {
+        tag,
+        typ: 3,
+        count: v.len() as u32,
+        data: v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+    }
 }
 fn ent_long(tag: u16, v: &[u32]) -> Ent {
-    Ent { tag, typ: 4, count: v.len() as u32, data: v.iter().flat_map(|x| x.to_le_bytes()).collect() }
+    Ent {
+        tag,
+        typ: 4,
+        count: v.len() as u32,
+        data: v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+    }
 }
 
 /// Writes the file. Layout: header, metadata blocks, the IFD chain, the pixel data.
@@ -418,13 +475,28 @@ pub fn write(path: &Path, s: &Spec) {
             if let Some(p) = pending_next {
                 put(&mut out, p, &(ifd_at as u32).to_le_bytes());
             }
-            let (w, h) = if page.main { (s.w, s.h) } else { (s.w / 8, s.h / 8) };
+            let (w, h) = if page.main {
+                (s.w, s.h)
+            } else {
+                (s.w / 8, s.h / 8)
+            };
             let page_spp = if page.main { spp } else { 3 };
             let planar = if page.main { s.planar } else { true };
-            let compression = if !page.main || s.comp == Comp::None { 1 } else { 5 };
+            let compression = if !page.main || s.comp == Comp::None {
+                1
+            } else {
+                5
+            };
             let rps = if page.main { s.rows_per_strip } else { h };
             let bits = if page.main { size * 8 } else { 8 };
-            let mut bps: Vec<u16> = vec![bits; if page.main && s.c < 3 && planar { s.c } else { page_spp }];
+            let mut bps: Vec<u16> = vec![
+                bits;
+                if page.main && s.c < 3 && planar {
+                    s.c
+                } else {
+                    page_spp
+                }
+            ];
             if page.main && s.c == 2 && planar {
                 bps.push(0);
             }
@@ -458,7 +530,12 @@ pub fn write(path: &Path, s: &Spec) {
                 ents.push(ent_short(317, &[2]));
             }
             if n == 0 {
-                ents.push(Ent { tag: 34412, typ: 1, count: info.len() as u32, data: info.clone() });
+                ents.push(Ent {
+                    tag: 34412,
+                    typ: 1,
+                    count: info.len() as u32,
+                    data: info.clone(),
+                });
             }
             let table = 2 + ents.len() * 12 + 4;
             let blobs_at = ifd_at + table;

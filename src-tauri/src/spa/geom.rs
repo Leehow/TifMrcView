@@ -101,7 +101,31 @@ pub fn grid(step: f64) -> Vec<Mat> {
     let psis = (360.0 / step).round().max(1.0) as usize;
     directions(step)
         .into_iter()
-        .flat_map(|[rot, tilt]| (0..psis).map(move |j| euler(rot, tilt, j as f64 * 360.0 / psis as f64)))
+        .flat_map(|[rot, tilt]| {
+            (0..psis).map(move |j| euler(rot, tilt, j as f64 * 360.0 / psis as f64))
+        })
+        .collect()
+}
+
+/// `grid(step)` without orientations that a point group repeats: for Cn
+/// and Dn (n-fold along z, 2-fold along x) only views whose direction
+/// (third row of R; a mate R·g has gᵀ·d) lies in the sector 0 ≤ φ < 360°/n,
+/// and for Dn the upper half. 2n times fewer for Dn; other groups whole.
+pub fn grid_for(step: f64, symmetry: &str) -> Vec<Mat> {
+    let s = symmetry.trim().to_uppercase();
+    let n: usize = s.get(1..).and_then(|v| v.parse().ok()).unwrap_or(1);
+    let (cyclic, dihedral) = (s.starts_with('C'), s.starts_with('D'));
+    if n <= 1 && !dihedral || !(cyclic || dihedral) {
+        return grid(step);
+    }
+    let sector = 360.0 / n as f64;
+    grid(step)
+        .into_iter()
+        .filter(|r| {
+            let d = r[2];
+            let phi = d[1].atan2(d[0]).to_degrees().rem_euclid(360.0);
+            phi < sector - 1e-6 && (!dihedral || d[2] > -1e-9)
+        })
         .collect()
 }
 
@@ -118,7 +142,13 @@ pub fn local(range: f64, steps: usize) -> Vec<Mat> {
                 if (a * a + b * b + c * c).sqrt() > range * 1.01 {
                     continue;
                 }
-                let m = mul(&axis_angle([1.0, 0.0, 0.0], a), &mul(&axis_angle([0.0, 1.0, 0.0], b), &axis_angle([0.0, 0.0, 1.0], c)));
+                let m = mul(
+                    &axis_angle([1.0, 0.0, 0.0], a),
+                    &mul(
+                        &axis_angle([0.0, 1.0, 0.0], b),
+                        &axis_angle([0.0, 0.0, 1.0], c),
+                    ),
+                );
                 out.push(m);
             }
         }
@@ -130,18 +160,39 @@ pub fn local(range: f64, steps: usize) -> Vec<Mat> {
 /// (2-folds along x, y, z; the 5-folds in the yz plane, as in RELION's I2).
 pub fn symmetry(name: &str) -> anyhow::Result<Vec<Mat>> {
     let s = name.trim().to_ascii_uppercase();
-    let fold = |s: &str| s[1..].parse::<usize>().ok().filter(|&n| (1..=60).contains(&n));
+    let fold = |s: &str| {
+        s[1..]
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| (1..=60).contains(&n))
+    };
     let gens: Vec<Mat> = match s.chars().next() {
-        Some('C') => vec![axis_angle([0.0, 0.0, 1.0], 360.0 / fold(&s).ok_or_else(|| anyhow::anyhow!("对称性无效：{name}"))? as f64)],
+        Some('C') => vec![axis_angle(
+            [0.0, 0.0, 1.0],
+            360.0 / fold(&s).ok_or_else(|| anyhow::anyhow!("对称性无效：{name}"))? as f64,
+        )],
         Some('D') => {
             let n = fold(&s).ok_or_else(|| anyhow::anyhow!("对称性无效：{name}"))?;
-            vec![axis_angle([0.0, 0.0, 1.0], 360.0 / n as f64), axis_angle([1.0, 0.0, 0.0], 180.0)]
+            vec![
+                axis_angle([0.0, 0.0, 1.0], 360.0 / n as f64),
+                axis_angle([1.0, 0.0, 0.0], 180.0),
+            ]
         }
-        Some('T') if s == "T" => vec![axis_angle([0.0, 0.0, 1.0], 180.0), axis_angle([1.0, 1.0, 1.0], 120.0)],
-        Some('O') if s == "O" => vec![axis_angle([0.0, 0.0, 1.0], 90.0), axis_angle([1.0, 1.0, 1.0], 120.0)],
+        Some('T') if s == "T" => vec![
+            axis_angle([0.0, 0.0, 1.0], 180.0),
+            axis_angle([1.0, 1.0, 1.0], 120.0),
+        ],
+        Some('O') if s == "O" => vec![
+            axis_angle([0.0, 0.0, 1.0], 90.0),
+            axis_angle([1.0, 1.0, 1.0], 120.0),
+        ],
         Some('I') if s == "I" => {
             let phi = (1.0 + 5f64.sqrt()) / 2.0;
-            vec![axis_angle([0.0, 0.0, 1.0], 180.0), axis_angle([1.0, 1.0, 1.0], 120.0), axis_angle([0.0, 1.0, phi], 72.0)]
+            vec![
+                axis_angle([0.0, 0.0, 1.0], 180.0),
+                axis_angle([1.0, 1.0, 1.0], 120.0),
+                axis_angle([0.0, 1.0, phi], 72.0),
+            ]
         }
         _ => anyhow::bail!("对称性无效：{name}（可用 C1、Cn、Dn、T、O、I）"),
     };
@@ -180,7 +231,11 @@ mod tests {
 
     #[test]
     fn euler_round_trip() {
-        for &(r, t, p) in &[(10.0, 20.0, 30.0), (-150.0, 100.0, 170.0), (45.0, 179.0, -60.0)] {
+        for &(r, t, p) in &[
+            (10.0, 20.0, 30.0),
+            (-150.0, 100.0, 170.0),
+            (45.0, 179.0, -60.0),
+        ] {
             let m = euler(r, t, p);
             let [r2, t2, p2] = angles(&m);
             assert!(distance(&m, &euler(r2, t2, p2)) < 1e-6);
@@ -189,7 +244,14 @@ mod tests {
 
     #[test]
     fn group_orders() {
-        for (name, n) in [("C1", 1), ("C7", 7), ("D3", 6), ("T", 12), ("O", 24), ("I", 60)] {
+        for (name, n) in [
+            ("C1", 1),
+            ("C7", 7),
+            ("D3", 6),
+            ("T", 12),
+            ("O", 24),
+            ("I", 60),
+        ] {
             assert_eq!(symmetry(name).unwrap().len(), n, "{name}");
         }
     }
@@ -201,16 +263,56 @@ mod tests {
         for i in 0..200 {
             let z = 1.0 - 2.0 * (i as f64 + 0.5) / 200.0;
             let a = i as f64 * 2.4;
-            let v = [(1.0 - z * z).sqrt() * a.cos(), (1.0 - z * z).sqrt() * a.sin(), z];
+            let v = [
+                (1.0 - z * z).sqrt() * a.cos(),
+                (1.0 - z * z).sqrt() * a.sin(),
+                z,
+            ];
             let best = g
                 .iter()
                 .map(|[r, t]| {
                     let (r, t) = (r.to_radians(), t.to_radians());
                     let u = [t.sin() * r.cos(), t.sin() * r.sin(), t.cos()];
-                    (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]).clamp(-1.0, 1.0).acos().to_degrees()
+                    (u[0] * v[0] + u[1] * v[1] + u[2] * v[2])
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                        .to_degrees()
                 })
                 .fold(180.0, f64::min);
             assert!(best < 10.0, "{best}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    #[test]
+    fn reduced_grid_covers_every_orientation() {
+        // Each orientation has a symmetry mate within the grid's step of
+        // the reduced grid.
+        for name in ["C7", "D7", "D2"] {
+            let full = grid(15.0);
+            let red = grid_for(15.0, name);
+            let g = symmetry(name).unwrap();
+            assert!(
+                red.len() * g.len() <= full.len() * 11 / 10
+                    && red.len() * g.len() >= full.len() * 9 / 10,
+                "{name}: {} × {} vs {}",
+                red.len(),
+                g.len(),
+                full.len()
+            );
+            let mut rng = crate::spa::Rng(3);
+            for _ in 0..200 {
+                let r = crate::spa::refine::random_rotation(&mut rng);
+                let best = red
+                    .iter()
+                    .flat_map(|q| g.iter().map(move |m| distance(&mul(q, m), &r)))
+                    .fold(f64::MAX, f64::min);
+                assert!(best < 15.0, "{name}: {best}");
+            }
         }
     }
 }

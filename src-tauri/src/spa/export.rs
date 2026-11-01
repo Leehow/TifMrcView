@@ -30,11 +30,20 @@ use anyhow::{bail, Context, Result};
 use super::project::{self, Project};
 
 fn name(p: &Project) -> String {
-    Path::new(&p.source).file_name().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("spa").to_string()
+    Path::new(&p.source)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("spa")
+        .to_string()
 }
 
 fn stem(path: &str) -> String {
-    Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("mic").to_string()
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mic")
+        .to_string()
 }
 
 /// A hard link when possible, else a copy.
@@ -61,7 +70,11 @@ fn star(block: &str, labels: &[&str], rows: &[Vec<String>]) -> String {
     s
 }
 
-pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
+pub fn relion(
+    p: &Project,
+    dir: &str,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<Vec<String>> {
     let out = Path::new(dir).join(format!("{}_relion", name(p)));
     std::fs::create_dir_all(out.join("coords"))?;
     let mut files: Vec<PathBuf> = vec![];
@@ -71,10 +84,28 @@ pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) 
     let mut s = String::from("# TifMrcView Pro\n");
     s += &star(
         "optics",
-        &["OpticsGroup", "OpticsGroupName", "MicrographOriginalPixelSize", "Voltage", "SphericalAberration", "AmplitudeContrast", "MicrographPixelSize"],
-        &[vec!["1".into(), "opticsGroup1".into(), format!("{:.5}", o.pixel_a), format!("{:.1}", o.kv), format!("{:.3}", o.cs_mm), format!("{:.4}", o.amplitude), format!("{:.5}", o.pixel_a)]],
+        &[
+            "OpticsGroup",
+            "OpticsGroupName",
+            "MicrographOriginalPixelSize",
+            "Voltage",
+            "SphericalAberration",
+            "AmplitudeContrast",
+            "MicrographPixelSize",
+        ],
+        &[vec![
+            "1".into(),
+            "opticsGroup1".into(),
+            format!("{:.5}", o.pixel_a),
+            format!("{:.1}", o.kv),
+            format!("{:.3}", o.cs_mm),
+            format!("{:.4}", o.amplitude),
+            format!("{:.5}", o.pixel_a),
+        ]],
     );
-    let used: Vec<usize> = (0..p.mics.len()).filter(|&i| !p.mics[i].excluded && p.mics[i].ctf.is_some()).collect();
+    let used: Vec<usize> = (0..p.mics.len())
+        .filter(|&i| !p.mics[i].excluded && p.mics[i].ctf.is_some())
+        .collect();
     if used.is_empty() {
         bail!("还没有拟合 CTF 的显微图");
     }
@@ -96,7 +127,20 @@ pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) 
             ]
         })
         .collect();
-    s += &star("micrographs", &["MicrographName", "OpticsGroup", "DefocusU", "DefocusV", "CtfAstigmatism", "DefocusAngle", "CtfMaxResolution", "CtfFigureOfMerit"], &rows);
+    s += &star(
+        "micrographs",
+        &[
+            "MicrographName",
+            "OpticsGroup",
+            "DefocusU",
+            "DefocusV",
+            "CtfAstigmatism",
+            "DefocusAngle",
+            "CtfMaxResolution",
+            "CtfFigureOfMerit",
+        ],
+        &rows,
+    );
     let f = out.join("micrographs_ctf.star");
     std::fs::write(&f, s)?;
     files.push(f);
@@ -105,16 +149,52 @@ pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) 
     let picks = p.picks()?;
     let mut list = vec![];
     for (k, &i) in used.iter().enumerate() {
-        let Some(q) = picks.get(i).filter(|q| !q.is_empty()) else { continue };
-        let rows: Vec<Vec<String>> = q.iter().map(|c| vec![format!("{:.2}", c[0]), format!("{:.2}", c[1]), format!("{:.4}", c[2])]).collect();
-        let f = out.join("coords").join(format!("{}_autopick.star", stem(&p.mics[i].path)));
-        std::fs::write(&f, format!("# TifMrcView Pro\n{}", star("", &["CoordinateX", "CoordinateY", "AutopickFigureOfMerit"], &rows)))?;
-        list.push(vec![p.mics[i].path.clone(), format!("coords/{}", f.file_name().unwrap().to_string_lossy())]);
+        let Some(q) = picks.get(i).filter(|q| !q.is_empty()) else {
+            continue;
+        };
+        let rows: Vec<Vec<String>> = q
+            .iter()
+            .map(|c| {
+                vec![
+                    format!("{:.2}", c[0]),
+                    format!("{:.2}", c[1]),
+                    format!("{:.4}", c[2]),
+                ]
+            })
+            .collect();
+        let f = out
+            .join("coords")
+            .join(format!("{}_autopick.star", stem(&p.mics[i].path)));
+        std::fs::write(
+            &f,
+            format!(
+                "# TifMrcView Pro\n{}",
+                star(
+                    "",
+                    &["CoordinateX", "CoordinateY", "AutopickFigureOfMerit"],
+                    &rows
+                )
+            ),
+        )?;
+        list.push(vec![
+            p.mics[i].path.clone(),
+            format!("coords/{}", f.file_name().unwrap().to_string_lossy()),
+        ]);
         progress(k + 1, used.len() + 1);
     }
     if !list.is_empty() {
         let f = out.join("autopick.star");
-        std::fs::write(&f, format!("# TifMrcView Pro\n{}", star("coordinate_files", &["MicrographName", "MicrographCoordinates"], &list)))?;
+        std::fs::write(
+            &f,
+            format!(
+                "# TifMrcView Pro\n{}",
+                star(
+                    "coordinate_files",
+                    &["MicrographName", "MicrographCoordinates"],
+                    &list
+                )
+            ),
+        )?;
         files.push(f);
     }
 
@@ -146,7 +226,13 @@ pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) 
             let f = out.join("refine.star");
             project::write_star(p, &sub, &s, st.box_px, st.pixel_a, Some(&ids), true, &f)?;
             files.push(f);
-            for (src, dst) in [(&r.map, "map.mrc"), (&r.half1, "half1.mrc"), (&r.half2, "half2.mrc"), (&r.mask, "mask.mrc"), (&r.sharpened, "sharpened.mrc")] {
+            for (src, dst) in [
+                (&r.map, "map.mrc"),
+                (&r.half1, "half1.mrc"),
+                (&r.half2, "half2.mrc"),
+                (&r.mask, "mask.mrc"),
+                (&r.sharpened, "sharpened.mrc"),
+            ] {
                 let f = out.join(dst);
                 place(src, &f)?;
                 files.push(f);
@@ -164,7 +250,11 @@ pub fn relion(p: &Project, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) 
 
 pub fn table(p: &Project, dir: &str) -> Result<Vec<String>> {
     let parts = p.particles()?;
-    let px = p.stack.as_ref().map(|s| s.pixel_a).unwrap_or(p.optics.pixel_a);
+    let px = p
+        .stack
+        .as_ref()
+        .map(|s| s.pixel_a)
+        .unwrap_or(p.optics.pixel_a);
     let used = project::selected(p, &parts);
     let keep: std::collections::HashSet<usize> = used.into_iter().collect();
     let mut s = String::from("index,micrograph,x_px,y_px,defocus_u_A,defocus_v_A,defocus_angle_deg,pick_score,class2d,selected,rot_deg,tilt_deg,psi_deg,origin_x_A,origin_y_A,half_set\n");
@@ -182,11 +272,24 @@ pub fn table(p: &Project, dir: &str) -> Result<Vec<String>> {
             q.df2,
             q.angle,
             q.fom,
-            if q.class2d >= 0 { (q.class2d + 1).to_string() } else { String::new() },
+            if q.class2d >= 0 {
+                (q.class2d + 1).to_string()
+            } else {
+                String::new()
+            },
             keep.contains(&i) as u8
         );
         if oriented {
-            let _ = writeln!(s, ",{:.3},{:.3},{:.3},{:.3},{:.3},{}", q.euler[0], q.euler[1], q.euler[2], -q.shift[0] as f64 * px, -q.shift[1] as f64 * px, q.half);
+            let _ = writeln!(
+                s,
+                ",{:.3},{:.3},{:.3},{:.3},{:.3},{}",
+                q.euler[0],
+                q.euler[1],
+                q.euler[2],
+                -q.shift[0] as f64 * px,
+                -q.shift[1] as f64 * px,
+                q.half
+            );
         } else {
             s.push_str(",,,,,,\n");
         }
@@ -197,7 +300,12 @@ pub fn table(p: &Project, dir: &str) -> Result<Vec<String>> {
     Ok(vec![f.to_string_lossy().into()])
 }
 
-pub fn run(p: &Project, format: &str, dir: &str, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<String>> {
+pub fn run(
+    p: &Project,
+    format: &str,
+    dir: &str,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<Vec<String>> {
     match format {
         "relion" => relion(p, dir, progress),
         "table" => table(p, dir),

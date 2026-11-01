@@ -13,18 +13,29 @@ fn png(gray: &[u8], rgb_marks: &[(usize, u8, u8, u8)], w: usize, h: usize) -> Re
         rgb[3 * i + 2] = b;
     }
     let mut out = std::io::Cursor::new(Vec::new());
-    image::RgbImage::from_raw(w as u32, h as u32, rgb).ok_or_else(|| anyhow::anyhow!("png"))?.write_to(&mut out, image::ImageFormat::Png)?;
+    image::RgbImage::from_raw(w as u32, h as u32, rgb)
+        .ok_or_else(|| anyhow::anyhow!("png"))?
+        .write_to(&mut out, image::ImageFormat::Png)?;
     Ok(out.into_inner())
 }
 
 fn to_gray(v: &[f32]) -> Vec<u8> {
     let (m, s) = robust(v);
-    v.iter().map(|&x| (((x - m) / s / 6.0 + 0.5) * 255.0).clamp(0.0, 255.0) as u8).collect()
+    v.iter()
+        .map(|&x| (((x - m) / s / 6.0 + 0.5) * 255.0).clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 /// The micrograph binned to at most `max_side` pixels (lightly smoothed),
 /// with a circle of `radius_px` (micrograph pixels) at each pick.
-pub fn mic_preview(img: &[f32], w: usize, h: usize, picks: &[[f32; 3]], radius_px: f64, max_side: usize) -> Result<(Vec<u8>, f64)> {
+pub fn mic_preview(
+    img: &[f32],
+    w: usize,
+    h: usize,
+    picks: &[[f32; 3]],
+    radius_px: f64,
+    max_side: usize,
+) -> Result<(Vec<u8>, f64)> {
     let f = w.max(h).div_ceil(max_side.max(64)).max(1);
     let (b, bw, bh) = bin(img, w, h, f);
     let b = gauss(&b, bw, bh, 1.0);
@@ -37,7 +48,10 @@ pub fn mic_preview(img: &[f32], w: usize, h: usize, picks: &[[f32; 3]], radius_p
         for s in 0..steps {
             let a = s as f64 / steps as f64 * 2.0 * std::f64::consts::PI;
             for dr in [0.0, 1.0] {
-                let (x, y) = ((cx + (r + dr) * a.cos()).round(), (cy + (r + dr) * a.sin()).round());
+                let (x, y) = (
+                    (cx + (r + dr) * a.cos()).round(),
+                    (cy + (r + dr) * a.sin()).round(),
+                );
                 if x >= 0.0 && y >= 0.0 && (x as usize) < bw && (y as usize) < bh {
                     marks.push((y as usize * bw + x as usize, 40, 220, 90));
                 }

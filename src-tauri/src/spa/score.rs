@@ -24,12 +24,18 @@ pub struct Refs {
 
 impl Refs {
     pub fn new(k: usize) -> Refs {
-        Refs { o: 0, k, v: vec![], p2: vec![] }
+        Refs {
+            o: 0,
+            k,
+            v: vec![],
+            p2: vec![],
+        }
     }
     pub fn push(&mut self, coeffs: &[f32]) {
         debug_assert_eq!(coeffs.len(), 2 * self.k);
         self.v.extend_from_slice(coeffs);
-        self.p2.extend(coeffs.chunks_exact(2).map(|c| c[0] * c[0] + c[1] * c[1]));
+        self.p2
+            .extend(coeffs.chunks_exact(2).map(|c| c[0] * c[0] + c[1] * c[1]));
         self.o += 1;
     }
 }
@@ -43,7 +49,11 @@ pub struct Best {
 
 impl Default for Best {
     fn default() -> Self {
-        Best { o: 0, s: 0, score: f32::NEG_INFINITY }
+        Best {
+            o: 0,
+            s: 0,
+            score: f32::NEG_INFINITY,
+        }
     }
 }
 
@@ -108,7 +118,11 @@ pub fn cpu_best(c: &Coeffs, shifts: usize, refs: &Refs) -> Vec<Best> {
                             let sc = dot(row, v) / norm;
                             let b = &mut best[p - p0];
                             if sc > b.score {
-                                *b = Best { o: o as u32, s: s as u16, score: sc };
+                                *b = Best {
+                                    o: o as u32,
+                                    s: s as u16,
+                                    score: sc,
+                                };
                             }
                         }
                     }
@@ -128,7 +142,12 @@ pub fn cpu_best(c: &Coeffs, shifts: usize, refs: &Refs) -> Vec<Best> {
 }
 
 #[cfg(feature = "pro")]
-fn gpu_best(dev: &burn::tensor::Device, c: &Coeffs, shifts: usize, refs: &Refs) -> Result<Vec<Best>> {
+fn gpu_best(
+    dev: &burn::tensor::Device,
+    c: &Coeffs,
+    shifts: usize,
+    refs: &Refs,
+) -> Result<Vec<Best>> {
     use burn::tensor::{Tensor, TensorData};
     let k = c.k;
     let n = c.c2.len() / k.max(1);
@@ -136,7 +155,12 @@ fn gpu_best(dev: &burn::tensor::Device, c: &Coeffs, shifts: usize, refs: &Refs) 
     // Reference chunks of at most 2^24 values; particle blocks so the
     // score matrix stays under 2^25.
     let oc = ((1usize << 24) / (2 * k).max(1)).clamp(1, refs.o.max(1));
-    let to_vec = |t: Tensor<2>| t.into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow::anyhow!("{e:?}"));
+    let to_vec = |t: Tensor<2>| {
+        t.into_data()
+            .convert::<f32>()
+            .try_into_vec::<f32>()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
+    };
     for o0 in (0..refs.o).step_by(oc) {
         let o1 = (o0 + oc).min(refs.o);
         let m = o1 - o0;
@@ -157,17 +181,37 @@ fn gpu_best(dev: &burn::tensor::Device, c: &Coeffs, shifts: usize, refs: &Refs) 
         for p0 in (0..n).step_by(pb) {
             let p1 = (p0 + pb).min(n);
             let b = p1 - p0;
-            let x: Tensor<2> = Tensor::from_data(TensorData::new(c.x[p0 * shifts * 2 * k..p1 * shifts * 2 * k].to_vec(), [b * shifts, 2 * k]), dev);
-            let w: Tensor<2> = Tensor::from_data(TensorData::new(c.c2[p0 * k..p1 * k].to_vec(), [b, k]), dev);
+            let x: Tensor<2> = Tensor::from_data(
+                TensorData::new(
+                    c.x[p0 * shifts * 2 * k..p1 * shifts * 2 * k].to_vec(),
+                    [b * shifts, 2 * k],
+                ),
+                dev,
+            );
+            let w: Tensor<2> =
+                Tensor::from_data(TensorData::new(c.c2[p0 * k..p1 * k].to_vec(), [b, k]), dev);
             let cross = x.matmul(vt.clone()).reshape([b, shifts, m]);
-            let norm = w.matmul(pt.clone()).clamp_min(1e-20).sqrt().reshape([b, 1, m]);
+            let norm = w
+                .matmul(pt.clone())
+                .clamp_min(1e-20)
+                .sqrt()
+                .reshape([b, 1, m]);
             let sc = (cross / norm).reshape([b, shifts * m]);
             let max = to_vec(sc.clone().max_dim(1))?;
-            let arg = sc.argmax(1).into_data().convert::<i64>().try_into_vec::<i64>().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let arg = sc
+                .argmax(1)
+                .into_data()
+                .convert::<i64>()
+                .try_into_vec::<i64>()
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
             for i in 0..b {
                 if max[i] > out[p0 + i].score {
                     let a = arg[i] as usize;
-                    out[p0 + i] = Best { o: (o0 + a % m) as u32, s: (a / m) as u16, score: max[i] };
+                    out[p0 + i] = Best {
+                        o: (o0 + a % m) as u32,
+                        s: (a / m) as u16,
+                        score: max[i],
+                    };
                 }
             }
         }
@@ -185,10 +229,14 @@ mod tests {
         let mut refs = Refs::new(k);
         let mut seed = 1u64;
         let mut rnd = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5
         };
-        let all: Vec<Vec<f32>> = (0..40).map(|_| (0..2 * k).map(|_| rnd()).collect()).collect();
+        let all: Vec<Vec<f32>> = (0..40)
+            .map(|_| (0..2 * k).map(|_| rnd()).collect())
+            .collect();
         for r in &all {
             refs.push(r);
         }
@@ -201,7 +249,11 @@ mod tests {
         for v in &mut x[8 * k..12 * k] {
             *v = rnd();
         }
-        let c = Coeffs { k, x, c2: vec![1.0; 2 * k] };
+        let c = Coeffs {
+            k,
+            x,
+            c2: vec![1.0; 2 * k],
+        };
         let b = cpu_best(&c, 3, &refs);
         assert_eq!((b[0].o, b[0].s), (7, 1));
         assert_eq!((b[1].o, b[1].s), (30, 0));

@@ -51,10 +51,9 @@ fn sample(v: &[f32], w: usize, h: usize, x: f64, y: f64) -> f32 {
             v[yi as usize * w + xi as usize]
         }
     };
-    (1.0 - fy) * ((1.0 - fx) * at(x0, y0) + fx * at(x0 + 1.0, y0)) + fy * ((1.0 - fx) * at(x0, y0 + 1.0) + fx * at(x0 + 1.0, y0 + 1.0))
+    (1.0 - fy) * ((1.0 - fx) * at(x0, y0) + fx * at(x0 + 1.0, y0))
+        + fy * ((1.0 - fx) * at(x0, y0 + 1.0) + fx * at(x0 + 1.0, y0 + 1.0))
 }
-
-
 
 /// Nyquist bins have no conjugate partner for a fractional shift; on an
 /// axis shifted by a fractional amount they are dropped.
@@ -68,10 +67,12 @@ pub fn fractional(s: f64) -> bool {
 
 /// Signed frequency index of bin i of n.
 pub fn freq(i: usize, n: usize) -> f64 {
-    if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }
+    if i <= n / 2 {
+        i as f64
+    } else {
+        i as f64 - n as f64
+    }
 }
-
-
 
 /// Dose weight factor per (frame exposure start, dose) at critical exposure `n`.
 pub fn q(n: f64, start: f64, d: f64) -> f64 {
@@ -106,7 +107,12 @@ pub fn cpu(
     let fft = fourier::Cpu::new(t, t);
     let critical: Vec<f64> = if exposures.is_some() {
         (0..t * t)
-            .map(|i| dose::critical((freq(i % t, t)).hypot(freq(i / t, t)) / t as f64 / pixel, kv))
+            .map(|i| {
+                dose::critical(
+                    (freq(i % t, t)).hypot(freq(i / t, t)) / t as f64 / pixel,
+                    kv,
+                )
+            })
             .collect::<Result<_>>()?
     } else {
         vec![]
@@ -114,7 +120,9 @@ pub fn cpu(
     let n = plan.len();
     let zeros = || vec![vec![0.0f32; t * t]; n];
     // Per tile: even (re, im), odd (re, im), weighted (re, im).
-    let mut acc: Vec<[Vec<Vec<f32>>; 2]> = (0..if exposures.is_some() { 3 } else { 2 }).map(|_| [zeros(), zeros()]).collect();
+    let mut acc: Vec<[Vec<Vec<f32>>; 2]> = (0..if exposures.is_some() { 3 } else { 2 })
+        .map(|_| [zeros(), zeros()])
+        .collect();
     let mut norm = vec![0.0f64; if exposures.is_some() { t * t } else { 0 }];
     for (i, &g) in global.iter().enumerate() {
         check_cancel()?;
@@ -135,7 +143,10 @@ pub fn cpu(
                 fft.transform(&mut re, &mut im, false);
                 let f = [s[0] - s[0].round(), s[1] - s[1].round()];
                 let drop = f.map(fractional);
-                let (ax, ay) = (std::f64::consts::TAU * f[0] / t as f64, std::f64::consts::TAU * f[1] / t as f64);
+                let (ax, ay) = (
+                    std::f64::consts::TAU * f[0] / t as f64,
+                    std::f64::consts::TAU * f[1] / t as f64,
+                );
                 for j in 0..t * t {
                     if (drop[0] && nyquist(j % t, t)) || (drop[1] && nyquist(j / t, t)) {
                         re[j] = 0.0;
@@ -187,13 +198,29 @@ pub fn cpu(
     };
     let [er, ei] = &acc[0];
     let [or, oi] = &acc[1];
-    let ur: Vec<Vec<f32>> = er.iter().zip(or).map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect()).collect();
-    let ui: Vec<Vec<f32>> = ei.iter().zip(oi).map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect()).collect();
+    let ur: Vec<Vec<f32>> = er
+        .iter()
+        .zip(or)
+        .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect())
+        .collect();
+    let ui: Vec<Vec<f32>> = ei
+        .iter()
+        .zip(oi)
+        .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect())
+        .collect();
     let weighted = exposures.map(|_| {
         let n = (sp.len() as f64).sqrt();
-        let scale: Vec<f32> = norm.iter().map(|v| (n / v.sqrt().max(1e-12)) as f32).collect();
+        let scale: Vec<f32> = norm
+            .iter()
+            .map(|v| (n / v.sqrt().max(1e-12)) as f32)
+            .collect();
         let [wr, wi] = &acc[2];
         back(wr, wi, Some(&scale))
     });
-    Ok(Sums { unweighted: back(&ur, &ui, None), even: back(er, ei, None), odd: back(or, oi, None), weighted })
+    Ok(Sums {
+        unweighted: back(&ur, &ui, None),
+        even: back(er, ei, None),
+        odd: back(or, oi, None),
+        weighted,
+    })
 }

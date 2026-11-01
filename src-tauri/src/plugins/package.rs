@@ -30,7 +30,11 @@ const MAX_MANIFEST: u64 = 1 << 20;
 
 /// `[a-z0-9-]+`, at most 64 characters.
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// One component of a relative path inside a package.
@@ -54,8 +58,15 @@ pub fn safe_rel(path: &str) -> Option<PathBuf> {
 /// build suffix ("-beta", "+1") is ignored.
 pub fn compare_versions(a: &str, b: &str) -> Result<Ordering> {
     fn parse(v: &str) -> Result<Vec<u64>> {
-        let core = v.trim().trim_start_matches('v').split(['-', '+']).next().unwrap_or("");
-        core.split('.').map(|p| p.parse::<u64>().map_err(|_| anyhow!("版本号格式不对：{v}"))).collect()
+        let core = v
+            .trim()
+            .trim_start_matches('v')
+            .split(['-', '+'])
+            .next()
+            .unwrap_or("");
+        core.split('.')
+            .map(|p| p.parse::<u64>().map_err(|_| anyhow!("版本号格式不对：{v}")))
+            .collect()
     }
     let (mut a, mut b) = (parse(a)?, parse(b)?);
     let n = a.len().max(b.len());
@@ -95,10 +106,16 @@ pub struct Manifest {
 
 /// `[a-z0-9]{1,16}`, lower-cased, without the dot.
 fn parse_exts(v: Option<&Value>, what: &str) -> Result<Vec<String>> {
-    let list = v.and_then(Value::as_array).ok_or_else(|| anyhow!("{what} 的 ext 必须是扩展名列表"))?;
+    let list = v
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("{what} 的 ext 必须是扩展名列表"))?;
     let mut out = vec![];
     for e in list {
-        let e = e.as_str().unwrap_or("").trim_start_matches('.').to_ascii_lowercase();
+        let e = e
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
         if e.is_empty() || e.len() > 16 || !e.bytes().all(|b| b.is_ascii_alphanumeric()) {
             bail!("{what} 里的扩展名不对：{e}");
         }
@@ -120,7 +137,9 @@ pub struct StackDecl {
 
 impl StackDecl {
     pub fn matches(&self, file_name: &str) -> bool {
-        self.files.iter().any(|p| glob_match(&p.to_lowercase(), &file_name.to_lowercase()))
+        self.files
+            .iter()
+            .any(|p| glob_match(&p.to_lowercase(), &file_name.to_lowercase()))
     }
 }
 
@@ -128,9 +147,13 @@ impl StackDecl {
 fn glob_match(pat: &str, s: &str) -> bool {
     let mut parts = pat.split('*');
     let first = parts.next().unwrap_or("");
-    let Some(mut rest) = s.strip_prefix(first) else { return false };
+    let Some(mut rest) = s.strip_prefix(first) else {
+        return false;
+    };
     let parts: Vec<&str> = parts.collect();
-    let Some((last, middle)) = parts.split_last() else { return rest.is_empty() };
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
     for m in middle {
         match rest.find(m) {
             Some(i) => rest = &rest[i + m.len()..],
@@ -144,11 +167,18 @@ fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
     let Some(v) = v else { return Ok(vec![]) };
     let mut out = vec![];
     for d in v.as_array().ok_or_else(|| anyhow!("stacks 必须是列表"))? {
-        let files = d.get("files").and_then(Value::as_array).ok_or_else(|| anyhow!("stacks 的 files 必须是文件名列表"))?;
+        let files = d
+            .get("files")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("stacks 的 files 必须是文件名列表"))?;
         let mut names = vec![];
         for f in files {
             let f = f.as_str().unwrap_or("");
-            if f.is_empty() || f.len() > 64 || f.contains(['/', '\\']) || f.chars().all(|c| c == '*' || c == '.') {
+            if f.is_empty()
+                || f.len() > 64
+                || f.contains(['/', '\\'])
+                || f.chars().all(|c| c == '*' || c == '.')
+            {
                 bail!("stacks 里的文件名不对：{f}");
             }
             names.push(f.to_string());
@@ -156,7 +186,11 @@ fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
         if names.is_empty() {
             bail!("stacks 至少要有一个文件名");
         }
-        let name = d.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        let name = d
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         out.push(StackDecl { files: names, name });
     }
     Ok(out)
@@ -165,7 +199,9 @@ fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
 pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
     let raw: Value = serde_json::from_slice(bytes).context("plugin.json 不是有效的 JSON")?;
     let s = |k: &str| raw.get(k).and_then(Value::as_str);
-    let id = s("id").ok_or_else(|| anyhow!("plugin.json 缺少 id"))?.to_string();
+    let id = s("id")
+        .ok_or_else(|| anyhow!("plugin.json 缺少 id"))?
+        .to_string();
     if !valid_id(&id) {
         bail!("插件 id 只能用小写字母、数字和 -：{id}");
     }
@@ -187,7 +223,10 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
     }
     if api == 2 {
         let permissions = raw.get("permissions").and_then(Value::as_array);
-        if permissions.is_none_or(|ps| ps.iter().any(|p| !p.as_str().is_some_and(|p| SANDBOX_PERMISSIONS.contains(&p)))) {
+        if permissions.is_none_or(|ps| {
+            ps.iter()
+                .any(|p| !p.as_str().is_some_and(|p| SANDBOX_PERMISSIONS.contains(&p)))
+        }) {
             bail!("API 2 的 permissions 必须是已知权限名称的列表");
         }
         if raw.get("native").is_some() {
@@ -214,10 +253,17 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
         for d in f.as_array().ok_or_else(|| anyhow!("formats 必须是列表"))? {
             let ext = parse_exts(d.get("ext"), "formats")?;
             // The core's own formats cannot be taken over.
-            if let Some(core) = ext.iter().find(|e| crate::formats::CORE_EXTENSIONS.contains(&e.as_str())) {
+            if let Some(core) = ext
+                .iter()
+                .find(|e| crate::formats::CORE_EXTENSIONS.contains(&e.as_str()))
+            {
                 bail!("formats 不能接管内置格式 .{core}");
             }
-            let name = d.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+            let name = d
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             formats.push(FormatDecl { ext, name });
         }
     }
@@ -231,8 +277,13 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
     }
     let mut replaces = vec![];
     if let Some(r) = raw.get("replaces") {
-        for v in r.as_array().ok_or_else(|| anyhow!("replaces 必须是插件 id 列表"))? {
-            let old = v.as_str().filter(|o| valid_id(o) && *o != id && !BUILTIN.contains(o));
+        for v in r
+            .as_array()
+            .ok_or_else(|| anyhow!("replaces 必须是插件 id 列表"))?
+        {
+            let old = v
+                .as_str()
+                .filter(|o| valid_id(o) && *o != id && !BUILTIN.contains(o));
             let old = old.ok_or_else(|| anyhow!("replaces 里的插件 id 不对：{v}"))?;
             if !replaces.iter().any(|r| r == old) {
                 replaces.push(old.to_string());
@@ -240,7 +291,17 @@ pub fn parse_manifest(bytes: &[u8], app_version: &str) -> Result<Manifest> {
         }
     }
     let name = s("name").unwrap_or_default().to_string();
-    Ok(Manifest { id, name, main, wasm, formats, metadata, stacks, replaces, raw })
+    Ok(Manifest {
+        id,
+        name,
+        main,
+        wasm,
+        formats,
+        metadata,
+        stacks,
+        replaces,
+        raw,
+    })
 }
 
 /// Reads and checks `<pkg>/plugin.json`, including that `main` exists.
@@ -276,7 +337,9 @@ pub struct Installed {
 
 /// Lists the package folders in `dir`; broken ones carry `error`.
 pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
-    let Ok(rd) = fs::read_dir(dir) else { return vec![] };
+    let Ok(rd) = fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut replacers: Vec<(String, Vec<String>)> = vec![];
     let mut out: Vec<Installed> = rd
         .filter_map(|e| e.ok())
@@ -294,17 +357,34 @@ pub fn scan(dir: &Path, app_version: &str) -> Vec<Installed> {
                     if !m.replaces.is_empty() {
                         replacers.push((m.name.clone(), m.replaces.clone()));
                     }
-                    Installed { id: m.id, dir, main: Some(m.main), manifest: Some(m.raw), error: None, replaced_by: None }
+                    Installed {
+                        id: m.id,
+                        dir,
+                        main: Some(m.main),
+                        manifest: Some(m.raw),
+                        error: None,
+                        replaced_by: None,
+                    }
                 }
                 Err(err) => {
                     let error = Some(format!("{err:#}"));
-                    Installed { id: name, dir, main: None, manifest: None, error, replaced_by: None }
+                    Installed {
+                        id: name,
+                        dir,
+                        main: None,
+                        manifest: None,
+                        error,
+                        replaced_by: None,
+                    }
                 }
             })
         })
         .collect();
     for p in &mut out {
-        p.replaced_by = replacers.iter().find(|(_, ids)| ids.contains(&p.id)).map(|(name, _)| name.clone());
+        p.replaced_by = replacers
+            .iter()
+            .find(|(_, ids)| ids.contains(&p.id))
+            .map(|(name, _)| name.clone());
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
@@ -328,10 +408,15 @@ fn entry_target(name: &str, strip: &str) -> Result<Option<PathBuf>> {
     if rel.is_empty() || name.ends_with('/') {
         return Ok(None);
     }
-    if rel.split('/').any(|c| c.starts_with('.') || c == "__MACOSX") {
+    if rel
+        .split('/')
+        .any(|c| c.starts_with('.') || c == "__MACOSX")
+    {
         return Ok(None);
     }
-    safe_rel(rel).map(Some).ok_or_else(|| anyhow!("压缩包里有不安全的路径：{name}"))
+    safe_rel(rel)
+        .map(Some)
+        .ok_or_else(|| anyhow!("压缩包里有不安全的路径：{name}"))
 }
 
 /// The folder every entry sits in when the zip wraps the plugin in one, else "".
@@ -339,11 +424,20 @@ fn wrapper(names: &[String]) -> String {
     if names.iter().any(|n| n == MANIFEST) {
         return String::new();
     }
-    let real: Vec<&String> = names.iter().filter(|n| !n.starts_with("__MACOSX/")).collect();
-    let Some(first) = real.first() else { return String::new() };
-    let Some((top, _)) = first.split_once('/') else { return String::new() };
+    let real: Vec<&String> = names
+        .iter()
+        .filter(|n| !n.starts_with("__MACOSX/"))
+        .collect();
+    let Some(first) = real.first() else {
+        return String::new();
+    };
+    let Some((top, _)) = first.split_once('/') else {
+        return String::new();
+    };
     let prefix = format!("{top}/");
-    if real.iter().all(|n| n.starts_with(&prefix)) && names.iter().any(|n| *n == format!("{prefix}{MANIFEST}")) {
+    if real.iter().all(|n| n.starts_with(&prefix))
+        && names.iter().any(|n| *n == format!("{prefix}{MANIFEST}"))
+    {
         prefix
     } else {
         String::new()
@@ -351,7 +445,9 @@ fn wrapper(names: &[String]) -> String {
 }
 
 pub(crate) fn unique_tmp(dir: &Path, tag: &str, id: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
     dir.join(format!(".{tag}-{id}-{}-{nanos}", std::process::id()))
 }
 
@@ -390,13 +486,21 @@ pub fn inspect(bytes: &[u8], app_version: &str) -> Result<Manifest> {
     archive_manifest(&mut zip, app_version).map(|(m, _)| m)
 }
 
-fn archive_manifest(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, app_version: &str) -> Result<(Manifest, String)> {
+fn archive_manifest(
+    zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    app_version: &str,
+) -> Result<(Manifest, String)> {
     if zip.len() > MAX_ENTRIES {
-        bail!("插件包里的文件太多（{} 个，最多 {MAX_ENTRIES} 个）", zip.len());
+        bail!(
+            "插件包里的文件太多（{} 个，最多 {MAX_ENTRIES} 个）",
+            zip.len()
+        );
     }
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
     let strip = wrapper(&names);
-    let mut f = zip.by_name(&format!("{strip}{MANIFEST}")).map_err(|_| anyhow!("插件包里没有 plugin.json"))?;
+    let mut f = zip
+        .by_name(&format!("{strip}{MANIFEST}"))
+        .map_err(|_| anyhow!("插件包里没有 plugin.json"))?;
     let mut buf = vec![];
     (&mut f).take(MAX_MANIFEST).read_to_end(&mut buf)?;
     let manifest = parse_manifest(&buf, app_version)?;
@@ -444,7 +548,9 @@ fn extract(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, strip: &str, tmp: &Path) ->
         if f.is_symlink() {
             bail!("插件包里不能有符号链接：{name}");
         }
-        let Some(rel) = entry_target(&name, strip)? else { continue };
+        let Some(rel) = entry_target(&name, strip)? else {
+            continue;
+        };
         if f.is_dir() {
             continue;
         }
@@ -504,7 +610,10 @@ pub fn retire_replaced(dir: &Path, m: &Manifest) -> Vec<String> {
         }
         match uninstall(dir, old) {
             Ok(()) => gone.push(old.clone()),
-            Err(e) => eprintln!("plugin {}: could not remove the replaced plugin {old}: {e:#}", m.id),
+            Err(e) => eprintln!(
+                "plugin {}: could not remove the replaced plugin {old}: {e:#}",
+                m.id
+            ),
         }
     }
     gone
@@ -519,7 +628,9 @@ pub fn resolve(dir: &Path, path: &str) -> Option<(PathBuf, &'static str)> {
             return None;
         }
         let file = dir.join(path);
-        return file.is_file().then_some((file, "text/javascript; charset=utf-8"));
+        return file
+            .is_file()
+            .then_some((file, "text/javascript; charset=utf-8"));
     };
     if !valid_id(id) {
         return None;
@@ -557,7 +668,8 @@ mod tests {
 
     fn make_zip(path: &Path, files: &[(&str, &str)]) {
         let mut w = zip::ZipWriter::new(File::create(path).unwrap());
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for (name, body) in files {
             if name.ends_with('/') {
                 w.add_directory(*name, opts).unwrap();
@@ -571,9 +683,15 @@ mod tests {
 
     #[test]
     fn versions() {
-        assert_eq!(compare_versions("0.10.0", "0.9.9").unwrap(), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.10.0", "0.9.9").unwrap(),
+            Ordering::Greater
+        );
         assert_eq!(compare_versions("0.2", "0.2.0").unwrap(), Ordering::Equal);
-        assert_eq!(compare_versions("1.0.0-beta", "1.0.0").unwrap(), Ordering::Equal);
+        assert_eq!(
+            compare_versions("1.0.0-beta", "1.0.0").unwrap(),
+            Ordering::Equal
+        );
         assert_eq!(compare_versions("v0.2.1", "0.3.0").unwrap(), Ordering::Less);
         assert!(compare_versions("1.x", "1.0").is_err());
     }
@@ -588,12 +706,24 @@ mod tests {
         assert!(bad(r#"{"id":"a b","name":"x","version":"1.0.0"}"#));
         assert!(bad(r#"{"id":"demo","version":"1.0.0"}"#));
         assert!(bad(r#"{"id":"demo","name":"x"}"#));
-        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"../x.js"}"#));
-        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","main":"index.html"}"#));
-        assert!(!bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2,"permissions":[]}"#));
-        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":3}"#));
-        assert!(bad(r#"{"id":"demo","name":"x","version":"1.0.0","minAppVersion":"0.10.0"}"#));
-        assert!(!bad(r#"{"id":"demo-2","name":"x","version":"1.0.0","minAppVersion":"0.1.9"}"#));
+        assert!(bad(
+            r#"{"id":"demo","name":"x","version":"1.0.0","main":"../x.js"}"#
+        ));
+        assert!(bad(
+            r#"{"id":"demo","name":"x","version":"1.0.0","main":"index.html"}"#
+        ));
+        assert!(!bad(
+            r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":2,"permissions":[]}"#
+        ));
+        assert!(bad(
+            r#"{"id":"demo","name":"x","version":"1.0.0","apiVersion":3}"#
+        ));
+        assert!(bad(
+            r#"{"id":"demo","name":"x","version":"1.0.0","minAppVersion":"0.10.0"}"#
+        ));
+        assert!(!bad(
+            r#"{"id":"demo-2","name":"x","version":"1.0.0","minAppVersion":"0.1.9"}"#
+        ));
     }
 
     #[test]
@@ -602,7 +732,13 @@ mod tests {
         m["apiVersion"] = 2.into();
         let parse = |m: &Value| parse_manifest(&serde_json::to_vec(m).unwrap(), "0.5.0");
         assert!(parse(&m).is_err(), "permissions required");
-        for bad in [Value::Null, serde_json::json!({}), serde_json::json!("state"), serde_json::json!(["state", 1]), serde_json::json!(["native"])] {
+        for bad in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!("state"),
+            serde_json::json!(["state", 1]),
+            serde_json::json!(["native"]),
+        ] {
             m["permissions"] = bad;
             assert!(parse(&m).is_err());
         }
@@ -612,7 +748,10 @@ mod tests {
         assert!(parse(&m).is_ok());
         for native in [Value::Null, false.into(), true.into(), "recorder".into()] {
             m["native"] = native;
-            assert!(parse(&m).is_err(), "native is forbidden regardless of value");
+            assert!(
+                parse(&m).is_err(),
+                "native is forbidden regardless of value"
+            );
         }
         m.as_object_mut().unwrap().remove("native");
         m["apiVersion"] = 0.into();
@@ -624,10 +763,26 @@ mod tests {
 
     #[test]
     fn manifest_replaces() {
-        let parse = |extra: &str| parse_manifest(format!(r#"{{"id":"zeiss","name":"Z","version":"1.0.0"{extra}}}"#).as_bytes(), "0.6.0");
+        let parse = |extra: &str| {
+            parse_manifest(
+                format!(r#"{{"id":"zeiss","name":"Z","version":"1.0.0"{extra}}}"#).as_bytes(),
+                "0.6.0",
+            )
+        };
         assert!(parse("").unwrap().replaces.is_empty());
-        assert_eq!(parse(r#","replaces":["zen","smartsem","zen"]"#).unwrap().replaces, ["zen", "smartsem"]);
-        for bad in [r#""zen""#, r#"["../x"]"#, r#"["zeiss"]"#, r#"["i18n"]"#, r#"[1]"#] {
+        assert_eq!(
+            parse(r#","replaces":["zen","smartsem","zen"]"#)
+                .unwrap()
+                .replaces,
+            ["zen", "smartsem"]
+        );
+        for bad in [
+            r#""zen""#,
+            r#"["../x"]"#,
+            r#"["zeiss"]"#,
+            r#"["i18n"]"#,
+            r#"[1]"#,
+        ] {
             assert!(parse(&format!(r#","replaces":{bad}"#)).is_err(), "{bad}");
         }
     }
@@ -638,12 +793,24 @@ mod tests {
         let parse = |extra: &str| parse_manifest(format!("{{{base},{extra}}}").as_bytes(), "0.4.0");
         let m = parse(r#""wasm":"f.wasm","formats":[{"ext":["ABC",".xyz"],"name":"ABC"}],"metadata":{"ext":["tif"]}"#).unwrap();
         assert_eq!(m.wasm.as_deref(), Some("f.wasm"));
-        assert_eq!(m.formats, [FormatDecl { ext: vec!["abc".into(), "xyz".into()], name: "ABC".into() }]);
+        assert_eq!(
+            m.formats,
+            [FormatDecl {
+                ext: vec!["abc".into(), "xyz".into()],
+                name: "ABC".into()
+            }]
+        );
         assert_eq!(m.metadata, ["tif"]);
         assert!(parse(r#""wasm":"../f.wasm""#).is_err());
         assert!(parse(r#""wasm":"f.js""#).is_err());
-        assert!(parse(r#""formats":[{"ext":["abc"]}]"#).is_err(), "formats without wasm");
-        assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":["tif"]}]"#).is_err(), "core format");
+        assert!(
+            parse(r#""formats":[{"ext":["abc"]}]"#).is_err(),
+            "formats without wasm"
+        );
+        assert!(
+            parse(r#""wasm":"f.wasm","formats":[{"ext":["tif"]}]"#).is_err(),
+            "core format"
+        );
         assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":["a/b"]}]"#).is_err());
         assert!(parse(r#""wasm":"f.wasm","formats":[{"ext":[]}]"#).is_err());
         assert!(parse(r#""wasm":"f.wasm","metadata":{"ext":"tif"}"#).is_err());
@@ -654,15 +821,39 @@ mod tests {
     fn manifest_stacks() {
         let base = r#""id":"vem","name":"V","version":"1.0.0""#;
         let parse = |extra: &str| parse_manifest(format!("{{{base},{extra}}}").as_bytes(), "0.7.0");
-        let m = parse(r#""wasm":"v.wasm","stacks":[{"files":["ProjectData.dat","*.a3d"],"name":"ASV"}]"#).unwrap();
+        let m = parse(
+            r#""wasm":"v.wasm","stacks":[{"files":["ProjectData.dat","*.a3d"],"name":"ASV"}]"#,
+        )
+        .unwrap();
         let d = &m.stacks[0];
         assert_eq!(d.name, "ASV");
-        assert!(d.matches("projectdata.DAT") && d.matches("run.A3D") && !d.matches("ProjectData.dat.bak") && !d.matches("x.a3dx"));
-        assert!(parse(r#""stacks":[{"files":["a.dat"]}]"#).is_err(), "stacks without wasm");
-        for bad in [r#"[{"files":[]}]"#, r#"[{"files":["a/b.dat"]}]"#, r#"[{"files":["*"]}]"#, r#"{"files":["a"]}"#] {
-            assert!(parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).is_err(), "{bad}");
+        assert!(
+            d.matches("projectdata.DAT")
+                && d.matches("run.A3D")
+                && !d.matches("ProjectData.dat.bak")
+                && !d.matches("x.a3dx")
+        );
+        assert!(
+            parse(r#""stacks":[{"files":["a.dat"]}]"#).is_err(),
+            "stacks without wasm"
+        );
+        for bad in [
+            r#"[{"files":[]}]"#,
+            r#"[{"files":["a/b.dat"]}]"#,
+            r#"[{"files":["*"]}]"#,
+            r#"{"files":["a"]}"#,
+        ] {
+            assert!(
+                parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).is_err(),
+                "{bad}"
+            );
         }
-        assert!(glob_match("a*b*c", "aXbYc") && glob_match("a*", "a") && !glob_match("a*b", "ab_") && glob_match("*.tif", ".tif"));
+        assert!(
+            glob_match("a*b*c", "aXbYc")
+                && glob_match("a*", "a")
+                && !glob_match("a*b", "ab_")
+                && glob_match("*.tif", ".tif")
+        );
     }
 
     #[test]
@@ -673,7 +864,10 @@ mod tests {
         let m = r#"{"id":"fmt","name":"F","version":"1.0.0","wasm":"f.wasm","formats":[{"ext":["abc"]}]}"#;
         make_zip(&z, &[("plugin.json", m), ("index.js", "1")]);
         assert!(format!("{:#}", install(&dir, &z, "0.4.0").unwrap_err()).contains("f.wasm"));
-        make_zip(&z, &[("plugin.json", m), ("index.js", "1"), ("f.wasm", "x")]);
+        make_zip(
+            &z,
+            &[("plugin.json", m), ("index.js", "1"), ("f.wasm", "x")],
+        );
         let err = install_checked(&dir, &z, "0.4.0", |tmp, m| {
             assert!(tmp.join("f.wasm").is_file());
             bail!("bad module {}", m.id)
@@ -690,7 +884,13 @@ mod tests {
     fn rejects_unsafe_entries() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("plugins");
-        for evil in ["../evil.js", "a/../../evil.js", "/abs.js", "a\\b.js", "C:/x.js"] {
+        for evil in [
+            "../evil.js",
+            "a/../../evil.js",
+            "/abs.js",
+            "a\\b.js",
+            "C:/x.js",
+        ] {
             let z = tmp.path().join("evil.zip");
             make_zip(&z, &[("plugin.json", OK), ("index.js", "1"), (evil, "x")]);
             let err = install(&dir, &z, "0.2.0").unwrap_err();
@@ -716,7 +916,13 @@ mod tests {
         w.finish().unwrap();
         assert!(format!("{:#}", install(&dir, &z, "0.2.0").unwrap_err()).contains("符号链接"));
 
-        make_zip(&z, &[("plugin.json", &OK.replace("demo", "i18n")), ("index.js", "1")]);
+        make_zip(
+            &z,
+            &[
+                ("plugin.json", &OK.replace("demo", "i18n")),
+                ("index.js", "1"),
+            ],
+        );
         assert!(install(&dir, &z, "0.2.0").is_err());
         make_zip(&z, &[("plugin.json", OK)]);
         assert!(install(&dir, &z, "0.2.0").is_err());
@@ -738,7 +944,10 @@ mod tests {
 
         // Compresses to almost nothing, inflates past the limit.
         let big = "0".repeat((MAX_TOTAL + 1) as usize);
-        make_zip(&z, &[("plugin.json", OK), ("index.js", "1"), ("blob.js", &big)]);
+        make_zip(
+            &z,
+            &[("plugin.json", OK), ("index.js", "1"), ("blob.js", &big)],
+        );
         assert!(format!("{:#}", install(&dir, &z, "0.2.0").unwrap_err()).contains("太大"));
         assert!(!dir.join("demo").exists());
     }
@@ -748,7 +957,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("plugins");
         let z = tmp.path().join("demo.zip");
-        make_zip(&z, &[("plugin.json", OK), ("index.js", "v1"), ("lib/", ""), ("lib/a.js", "a"), (".DS_Store", "")]);
+        make_zip(
+            &z,
+            &[
+                ("plugin.json", OK),
+                ("index.js", "v1"),
+                ("lib/", ""),
+                ("lib/a.js", "a"),
+                (".DS_Store", ""),
+            ],
+        );
         let m = install(&dir, &z, "0.2.0").unwrap();
         assert_eq!(m.raw["version"], "1.2.0");
         assert_eq!(fs::read_to_string(dir.join("demo/index.js")).unwrap(), "v1");
@@ -756,7 +974,13 @@ mod tests {
         assert!(is_installed(&dir, "demo"));
 
         // Upgrade, wrapped in a folder (as a re-zipped download would be).
-        make_zip(&z, &[("demo-1.3/plugin.json", &OK.replace("1.2.0", "1.3.0")), ("demo-1.3/index.js", "v2")]);
+        make_zip(
+            &z,
+            &[
+                ("demo-1.3/plugin.json", &OK.replace("1.2.0", "1.3.0")),
+                ("demo-1.3/index.js", "v2"),
+            ],
+        );
         install(&dir, &z, "0.2.0").unwrap();
         assert_eq!(fs::read_to_string(dir.join("demo/index.js")).unwrap(), "v2");
         assert!(!dir.join("demo/lib").exists());
@@ -770,7 +994,10 @@ mod tests {
         assert_eq!(list[1].id, "demo");
         assert_eq!(list[1].manifest.as_ref().unwrap()["version"], "1.3.0");
         // Only the package and the leftovers we made ourselves remain.
-        let mut left: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let mut left: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         left.sort();
         assert_eq!(left, ["broken", "demo", "legacy.js"]);
 
@@ -793,8 +1020,14 @@ mod tests {
         fs::write(dir.join("legacy.js"), "1").unwrap();
         fs::write(tmp.path().join("secret.js"), "1").unwrap();
 
-        assert_eq!(resolve(&dir, "demo/index.js").unwrap().1, "text/javascript; charset=utf-8");
-        assert_eq!(resolve(&dir, "demo/lib/a.css").unwrap().1, "text/css; charset=utf-8");
+        assert_eq!(
+            resolve(&dir, "demo/index.js").unwrap().1,
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            resolve(&dir, "demo/lib/a.css").unwrap().1,
+            "text/css; charset=utf-8"
+        );
         assert!(resolve(&dir, "legacy.js").is_some());
         for bad in [
             "../secret.js",
@@ -815,7 +1048,8 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(tmp.path().join("secret.js"), dir.join("demo/out.js")).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("secret.js"), dir.join("demo/out.js"))
+                .unwrap();
             assert!(resolve(&dir, "demo/out.js").is_none());
         }
     }

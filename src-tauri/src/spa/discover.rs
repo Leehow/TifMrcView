@@ -30,7 +30,8 @@ use super::{check_cancel, render, Progress, Rng};
 
 /// Outlines blobs: (denoised image, w, h, blob centres) → equivalent
 /// diameter of each outline in pixels, None where there is no good one.
-pub type Outliner<'a> = &'a (dyn Fn(&[f32], usize, usize, &[[f32; 2]]) -> Result<Vec<Option<f64>>> + Sync);
+pub type Outliner<'a> =
+    &'a (dyn Fn(&[f32], usize, usize, &[[f32; 2]]) -> Result<Vec<Option<f64>>> + Sync);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,7 +78,9 @@ const MAX_PER_MIC: usize = 400;
 
 /// Micrographs to look at: up to `n`, the best CTF fits, spread over the set.
 fn sample(p: &Project, n: usize) -> Vec<usize> {
-    let mut ok: Vec<usize> = (0..p.mics.len()).filter(|&i| !p.mics[i].excluded && p.mics[i].ctf.is_some()).collect();
+    let mut ok: Vec<usize> = (0..p.mics.len())
+        .filter(|&i| !p.mics[i].excluded && p.mics[i].ctf.is_some())
+        .collect();
     if ok.is_empty() {
         ok = (0..p.mics.len()).filter(|&i| !p.mics[i].excluded).collect();
     }
@@ -112,7 +115,13 @@ fn crop(img: &[f32], w: usize, h: usize, x: f32, y: f32, r: f32) -> Vec<f32> {
     let mut out = vec![0f32; CROP * CROP];
     for j in 0..CROP {
         for i in 0..CROP {
-            out[j * CROP + i] = at(img, w, h, x + (i as f32 - c) * scale, y + (j as f32 - c) * scale);
+            out[j * CROP + i] = at(
+                img,
+                w,
+                h,
+                x + (i as f32 - c) * scale,
+                y + (j as f32 - c) * scale,
+            );
         }
     }
     out
@@ -166,7 +175,10 @@ fn shape(c: &[f32]) -> (Vec<f32>, f32) {
         syy += (y - cy) * (y - cy);
         sxy += (x - cx) * (y - cy);
     }
-    let (a, b) = (0.5 * (sxx + syy), (0.25 * (sxx - syy).powi(2) + sxy * sxy).sqrt());
+    let (a, b) = (
+        0.5 * (sxx + syy),
+        (0.25 * (sxx - syy).powi(2) + sxy * sxy).sqrt(),
+    );
     let el = ((a + b) / (a - b).max(1e-3)).sqrt().min(5.0);
     (prof, el)
 }
@@ -195,7 +207,16 @@ fn blobs_at(img: &[f32], w: usize, h: usize, r: f64, most: usize) -> Vec<(f32, f
             }
             // 3 × 3 maximum first (cheap), the distance rule below.
             let mut top = true;
-            for (dx, dy) in [(-1isize, -1isize), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            for (dx, dy) in [
+                (-1isize, -1isize),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ] {
                 if z[(y as isize + dy) as usize * w + (x as isize + dx) as usize] > v {
                     top = false;
                     break;
@@ -210,7 +231,10 @@ fn blobs_at(img: &[f32], w: usize, h: usize, r: f64, most: usize) -> Vec<(f32, f
     let min = (0.9 * r) as f32;
     let mut kept: Vec<(f32, f32, f32)> = vec![];
     for c in cand {
-        if kept.iter().all(|k| (k.0 - c.0).powi(2) + (k.1 - c.1).powi(2) > min * min) {
+        if kept
+            .iter()
+            .all(|k| (k.0 - c.0).powi(2) + (k.1 - c.1).powi(2) > min * min)
+        {
             kept.push(c);
             if kept.len() >= most {
                 break;
@@ -227,7 +251,10 @@ fn kmeans(x: &[Vec<f32>], k: usize, seed: u64) -> Vec<usize> {
     let mut rng = Rng(seed);
     let mut cent: Vec<Vec<f32>> = vec![x[rng.below(n)].clone()];
     while cent.len() < k {
-        let dist: Vec<f32> = x.iter().map(|v| cent.iter().map(|c| d2(v, c)).fold(f32::MAX, f32::min)).collect();
+        let dist: Vec<f32> = x
+            .iter()
+            .map(|v| cent.iter().map(|c| d2(v, c)).fold(f32::MAX, f32::min))
+            .collect();
         let total: f32 = dist.iter().sum();
         if total <= 0.0 {
             break;
@@ -247,14 +274,21 @@ fn kmeans(x: &[Vec<f32>], k: usize, seed: u64) -> Vec<usize> {
     for _ in 0..50 {
         let mut changed = false;
         for (i, v) in x.iter().enumerate() {
-            let best = (0..cent.len()).min_by(|&p, &q| d2(v, &cent[p]).total_cmp(&d2(v, &cent[q]))).unwrap();
+            let best = (0..cent.len())
+                .min_by(|&p, &q| d2(v, &cent[p]).total_cmp(&d2(v, &cent[q])))
+                .unwrap();
             if best != a[i] {
                 a[i] = best;
                 changed = true;
             }
         }
         for (c, cv) in cent.iter_mut().enumerate() {
-            let members: Vec<&Vec<f32>> = x.iter().zip(&a).filter(|(_, &ai)| ai == c).map(|(v, _)| v).collect();
+            let members: Vec<&Vec<f32>> = x
+                .iter()
+                .zip(&a)
+                .filter(|(_, &ai)| ai == c)
+                .map(|(v, _)| v)
+                .collect();
             if members.is_empty() {
                 continue;
             }
@@ -278,7 +312,12 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { micrographs: 5, kinds: 6, denoise_steps: 300, dark: true }
+        Config {
+            micrographs: 5,
+            kinds: 6,
+            denoise_steps: 300,
+            dark: true,
+        }
     }
 }
 
@@ -292,7 +331,12 @@ pub struct Denoised {
     pub backend: String,
 }
 
-pub fn run(p: &Project, cfg: &Config, outline: Option<Outliner>, progress: Progress) -> Result<Discovery> {
+pub fn run(
+    p: &Project,
+    cfg: &Config,
+    outline: Option<Outliner>,
+    progress: Progress,
+) -> Result<Discovery> {
     let d = denoised(p, cfg, progress)?;
     kinds(p, cfg, &d, outline, progress)
 }
@@ -316,18 +360,41 @@ pub fn denoised(p: &Project, cfg: &Config, progress: Progress) -> Result<Denoise
         (ww, wh) = (bw, bh);
         let (m, s) = robust(&b);
         let sign = if cfg.dark { -1.0 } else { 1.0 };
-        imgs.push(b.iter().map(|v| (sign * (v - m) / s).clamp(-6.0, 6.0)).collect::<Vec<f32>>());
+        imgs.push(
+            b.iter()
+                .map(|v| (sign * (v - m) / s).clamp(-6.0, 6.0))
+                .collect::<Vec<f32>>(),
+        );
         progress("读取显微图", n + 1, ids.len());
     }
     let wpx = p.optics.pixel_a * kbin as f64;
     // Noise2Void on these images alone.
     let pairs: Vec<(Vec<f32>, Option<Vec<f32>>)> = imgs.iter().map(|v| (v.clone(), None)).collect();
-    let tc = crate::denoise_learn::TrainConfig { steps: cfg.denoise_steps.max(20), ..Default::default() };
+    let tc = crate::denoise_learn::TrainConfig {
+        steps: cfg.denoise_steps.max(20),
+        ..Default::default()
+    };
     let steps = tc.steps;
     let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| {
-        crate::denoise_learn::train(dev, &pairs, ww, wh, crate::denoise_learn::Mode::N2v, &tc, |s, _, _| progress("去噪训练", s, steps))
+        crate::denoise_learn::train(
+            dev,
+            &pairs,
+            ww,
+            wh,
+            crate::denoise_learn::Mode::N2v,
+            &tc,
+            |s, _, _| progress("去噪训练", s, steps),
+        )
     })?;
-    let learned = crate::denoise_learn::Learned { net, mode: crate::denoise_learn::Mode::N2v, mean, std, loss, source: String::new(), bin: 1 };
+    let learned = crate::denoise_learn::Learned {
+        net,
+        mode: crate::denoise_learn::Mode::N2v,
+        mean,
+        std,
+        loss,
+        source: String::new(),
+        bin: 1,
+    };
     let dev = crate::classify::device().0;
     let mut dn = vec![];
     for (n, v) in imgs.iter().enumerate() {
@@ -339,11 +406,23 @@ pub fn denoised(p: &Project, cfg: &Config, progress: Progress) -> Result<Denoise
         dn.push(gauss(&d, ww, wh, 0.7));
         progress("去噪", n + 1, imgs.len());
     }
-    Ok(Denoised { images: dn, w: ww, h: wh, px: wpx, backend: backend.into() })
+    Ok(Denoised {
+        images: dn,
+        w: ww,
+        h: wh,
+        px: wpx,
+        backend: backend.into(),
+    })
 }
 
 /// The kinds of blob on denoised images.
-pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>, progress: Progress) -> Result<Discovery> {
+pub fn kinds(
+    p: &Project,
+    cfg: &Config,
+    d: &Denoised,
+    outline: Option<Outliner>,
+    progress: Progress,
+) -> Result<Discovery> {
     let (dn, ww, wh, wpx) = (&d.images, d.w, d.h, d.px);
     // Sizes: diameters from 40 Å (or 8 pixels) to 500 Å (or a fifth of
     // the image), about 1.6× apart. Which one holds whole particles is
@@ -355,20 +434,35 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         bail!("像素太大或图像太小，找不到颗粒尺度");
     }
     let n_sizes = (((hi / lo).ln() / 1.6f64.ln()).round() as usize + 1).clamp(1, cfg.kinds.max(1));
-    let radii: Vec<f64> = (0..n_sizes).map(|i| if n_sizes == 1 { lo } else { lo * (hi / lo).powf(i as f64 / (n_sizes - 1) as f64) }).collect();
+    let radii: Vec<f64> = (0..n_sizes)
+        .map(|i| {
+            if n_sizes == 1 {
+                lo
+            } else {
+                lo * (hi / lo).powf(i as f64 / (n_sizes - 1) as f64)
+            }
+        })
+        .collect();
     let mut outlined = outline.is_some();
     let mut kinds = vec![];
     for (si, &r) in radii.iter().enumerate() {
         check_cancel()?;
         let mut all: Vec<Blob> = vec![];
         for (n, img) in dn.iter().enumerate() {
-            let most = ((ww * wh) as f64 / (std::f64::consts::PI * r * r) * 0.5).clamp(5.0, MAX_PER_MIC as f64) as usize;
+            let most = ((ww * wh) as f64 / (std::f64::consts::PI * r * r) * 0.5)
+                .clamp(5.0, MAX_PER_MIC as f64) as usize;
             for q in blobs_at(img, ww, wh, r, most) {
                 let c = crop(img, ww, wh, q.0, q.1, r as f32);
                 let (prof, el) = shape(&c);
                 let mut feat = vec![el.ln() * 2.0];
                 feat.extend(prof.iter().map(|v| v * 0.3));
-                all.push(Blob { img: n, x: q.0, y: q.1, resp: q.2, feat });
+                all.push(Blob {
+                    img: n,
+                    x: q.0,
+                    y: q.1,
+                    resp: q.2,
+                    feat,
+                });
             }
         }
         progress("寻找颗粒", si + 1, radii.len());
@@ -381,7 +475,9 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         // peaked shape (~0.5 and less); whole particles are flat-topped
         // discs or rings (0.6 and more). Only shown when debugging now.
         let np = all[0].feat.len() - 1;
-        let mean: Vec<f32> = (0..np).map(|j| all.iter().map(|b| b.feat[j + 1] / 0.3).sum::<f32>() / all.len() as f32).collect();
+        let mean: Vec<f32> = (0..np)
+            .map(|j| all.iter().map(|b| b.feat[j + 1] / 0.3).sum::<f32>() / all.len() as f32)
+            .collect();
         let flat = (mean[PROFILE / 3] / mean[0].max(1e-3)) as f64;
         // Where the mean blob falls to half its height, in radii of the
         // scale. Flatness alone swings with the denoiser's training: on
@@ -392,7 +488,14 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         // texture) fall off by ~0.6.
         let edge = half_edge(&mean);
         if std::env::var("TMV_SPA_DEBUG").is_ok() {
-            eprintln!("{:.0} Å: {} blobs, flatness {flat:.2}, edge {edge:.2}, profile {:?}", 2.0 * r * wpx, all.len(), mean.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
+            eprintln!(
+                "{:.0} Å: {} blobs, flatness {flat:.2}, edge {edge:.2}, profile {:?}",
+                2.0 * r * wpx,
+                all.len(),
+                mean.iter()
+                    .map(|v| (v * 100.0).round() / 100.0)
+                    .collect::<Vec<_>>()
+            );
         }
         let score = edge;
         // Size from SAM outlines of the strongest blobs, when it agrees
@@ -403,9 +506,18 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         if let (Some(f), true) = (outline, outlined) {
             let mut sizes = vec![];
             for (n, img) in dn.iter().enumerate() {
-                let pts: Vec<[f32; 2]> = order.iter().filter(|&&i| all[i].img == n).take(12).map(|&i| [all[i].x, all[i].y]).collect();
+                let pts: Vec<[f32; 2]> = order
+                    .iter()
+                    .filter(|&&i| all[i].img == n)
+                    .take(12)
+                    .map(|&i| [all[i].x, all[i].y])
+                    .collect();
                 match f(img, ww, wh, &pts) {
-                    Ok(s) => sizes.extend(s.into_iter().flatten().filter(|&dpx| dpx > r && dpx < 4.0 * r)),
+                    Ok(s) => sizes.extend(
+                        s.into_iter()
+                            .flatten()
+                            .filter(|&dpx| dpx > r && dpx < 4.0 * r),
+                    ),
                     Err(e) => {
                         eprintln!("discover: outlines failed: {e}");
                         outlined = false;
@@ -441,16 +553,47 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
             m.drain(..from.min(m.len().saturating_sub(8)));
             m.truncate((m.len() / 2).max(8));
             let nf = all[m[0]].feat.len();
-            let centre: Vec<f32> = (0..nf).map(|j| m.iter().map(|&i| all[i].feat[j]).sum::<f32>() / m.len() as f32).collect();
-            let dist = |i: usize| all[i].feat.iter().zip(&centre).map(|(a, b)| (a - b) * (a - b)).sum::<f32>();
+            let centre: Vec<f32> = (0..nf)
+                .map(|j| m.iter().map(|&i| all[i].feat[j]).sum::<f32>() / m.len() as f32)
+                .collect();
+            let dist = |i: usize| {
+                all[i]
+                    .feat
+                    .iter()
+                    .zip(&centre)
+                    .map(|(a, b)| (a - b) * (a - b))
+                    .sum::<f32>()
+            };
             m.sort_by(|&p, &q| dist(p).total_cmp(&dist(q)));
             // Shown a little closer than the features are taken, and
             // smoothed to about a twentieth of the particle so the shape
             // reads at a glance rather than the speckle.
             let rr = (0.7 * diameter / 2.0) as f32;
-            let tiles: Vec<Vec<f32>> = m.iter().take(8).map(|&i| gauss(&crop(&dn[all[i].img], ww, wh, all[i].x, all[i].y, rr), CROP, CROP, 1.0)).collect();
+            let tiles: Vec<Vec<f32>> = m
+                .iter()
+                .take(8)
+                .map(|&i| {
+                    gauss(
+                        &crop(&dn[all[i].img], ww, wh, all[i].x, all[i].y, rr),
+                        CROP,
+                        CROP,
+                        1.0,
+                    )
+                })
+                .collect();
             let count = a.iter().filter(|&&x| x == c).count();
-            kinds.push((Kind { diameter_a: diameter * wpx, count, share: 0.0, elongation, contrast, png: String::new() }, tiles, score));
+            kinds.push((
+                Kind {
+                    diameter_a: diameter * wpx,
+                    count,
+                    share: 0.0,
+                    elongation,
+                    contrast,
+                    png: String::new(),
+                },
+                tiles,
+                score,
+            ));
         }
     }
     if kinds.is_empty() {
@@ -469,7 +612,14 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         std::fs::write(&k.png, render::gallery(&tiles, CROP, 8, 72)?)?;
         out.push(k);
     }
-    Ok(Discovery { kinds: out, micrographs: dn.len(), working_px: wpx, outlined, backend: d.backend.clone(), chosen: vec![] })
+    Ok(Discovery {
+        kinds: out,
+        micrographs: dn.len(),
+        working_px: wpx,
+        outlined,
+        backend: d.backend.clone(),
+        chosen: vec![],
+    })
 }
 
 /// Half-height radius of a radial profile (to 1.5 radii, background 0),
@@ -500,8 +650,12 @@ const EDGE_OK: f64 = 0.65;
 #[test]
 fn half_edge_of_profiles() {
     // Mean profiles measured on T20S at 113 Å (particles) and 186 Å.
-    let whole = [1.41, 1.35, 1.23, 1.11, 0.98, 0.76, 0.51, 0.25, 0.03, -0.09, -0.12, -0.09];
-    let small = [0.99, 1.03, 1.05, 0.92, 0.64, 0.3, 0.08, -0.01, -0.04, -0.02, 0.01, 0.04];
+    let whole = [
+        1.41, 1.35, 1.23, 1.11, 0.98, 0.76, 0.51, 0.25, 0.03, -0.09, -0.12, -0.09,
+    ];
+    let small = [
+        0.99, 1.03, 1.05, 0.92, 0.64, 0.3, 0.08, -0.01, -0.04, -0.02, 0.01, 0.04,
+    ];
     assert!(half_edge(&whole) > EDGE_OK);
     assert!(half_edge(&small) < EDGE_OK);
     assert_eq!(half_edge(&[0.0; 12]), 0.0);
@@ -517,12 +671,20 @@ pub(crate) fn rot_corr(img: &[f32], b: usize, radius: f64, n: usize) -> f64 {
 fn rot_corr_deg(img: &[f32], b: usize, radius: f64, deg: f64) -> f64 {
     let c = b as f64 / 2.0;
     let angles = 360;
-    let rings: Vec<f64> = (0..16).map(|i| radius * (0.15 + 0.75 * i as f64 / 15.0)).collect();
+    let rings: Vec<f64> = (0..16)
+        .map(|i| radius * (0.15 + 0.75 * i as f64 / 15.0))
+        .collect();
     let mut polar = vec![0f64; rings.len() * angles];
     for (ri, &r) in rings.iter().enumerate() {
         for t in 0..angles {
             let a = t as f64 / angles as f64 * std::f64::consts::TAU;
-            polar[ri * angles + t] = at(img, b, b, (c + r * a.cos()) as f32, (c + r * a.sin()) as f32) as f64;
+            polar[ri * angles + t] = at(
+                img,
+                b,
+                b,
+                (c + r * a.cos()) as f32,
+                (c + r * a.sin()) as f32,
+            ) as f64;
         }
         let row = &mut polar[ri * angles..(ri + 1) * angles];
         let m = row.iter().sum::<f64>() / angles as f64;
@@ -539,7 +701,11 @@ fn rot_corr_deg(img: &[f32], b: usize, radius: f64, deg: f64) -> f64 {
             den += w * row[t] * row[t];
         }
     }
-    if den <= 0.0 { 0.0 } else { num / den }
+    if den <= 0.0 {
+        0.0
+    } else {
+        num / den
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -557,7 +723,15 @@ pub struct SymmetryGuess {
 /// featureless disc or ring stays high at every angle and has no dip.
 /// Returns (n, peak height) or None.
 pub(crate) fn rotational_order(img: &[f32], b: usize, radius: f64) -> Option<(usize, f64)> {
-    let rho: Vec<f64> = (0..=180).map(|t| if t == 0 { 1.0 } else { rot_corr_deg(img, b, radius, t as f64) }).collect();
+    let rho: Vec<f64> = (0..=180)
+        .map(|t| {
+            if t == 0 {
+                1.0
+            } else {
+                rot_corr_deg(img, b, radius, t as f64)
+            }
+        })
+        .collect();
     let (mut peak_t, mut peak) = (0usize, f64::MIN);
     for (t, &r) in rho.iter().enumerate().take(131).skip(25) {
         if r > peak {
@@ -576,7 +750,10 @@ pub(crate) fn rotational_order(img: &[f32], b: usize, radius: f64) -> Option<(us
 /// (`rotational_order`). Dn also has side views with a 2-fold axis in the
 /// plane (only used when clear; the refined map decides otherwise).
 pub fn symmetry(avgs: &[Vec<f32>], b: usize, radius: f64, use_classes: &[usize]) -> SymmetryGuess {
-    let centred: Vec<Vec<f32>> = avgs.iter().map(|a| super::plane::shift(a, b, super::plane::centre_of_mass(a, b))).collect();
+    let centred: Vec<Vec<f32>> = avgs
+        .iter()
+        .map(|a| super::plane::shift(a, b, super::plane::centre_of_mass(a, b)))
+        .collect();
     let mut best = (1usize, 0f64, usize::MAX);
     for &c in use_classes {
         if let Some((n, peak)) = rotational_order(&centred[c], b, radius) {
@@ -586,7 +763,11 @@ pub fn symmetry(avgs: &[Vec<f32>], b: usize, radius: f64, use_classes: &[usize])
         }
     }
     if best.0 < 3 {
-        return SymmetryGuess { symmetry: "C1".into(), score: 0.0, two_fold: 0.0 };
+        return SymmetryGuess {
+            symmetry: "C1".into(),
+            score: 0.0,
+            two_fold: 0.0,
+        };
     }
     let two = use_classes
         .iter()
@@ -594,21 +775,47 @@ pub fn symmetry(avgs: &[Vec<f32>], b: usize, radius: f64, use_classes: &[usize])
         .map(|&c| {
             let a = &centred[c];
             let (s2, s3) = (rot_corr(a, b, radius, 2), rot_corr(a, b, radius, 3));
-            if s2 - s3 >= 0.2 { s2 } else { 0.0 }
+            if s2 - s3 >= 0.2 {
+                s2
+            } else {
+                0.0
+            }
         })
         .fold(0f64, f64::max);
-    let symmetry = if two >= 0.6 { format!("D{}", best.0) } else { format!("C{}", best.0) };
-    SymmetryGuess { symmetry, score: best.1, two_fold: two }
+    let symmetry = if two >= 0.6 {
+        format!("D{}", best.0)
+    } else {
+        format!("C{}", best.0)
+    };
+    SymmetryGuess {
+        symmetry,
+        score: best.1,
+        two_fold: two,
+    }
 }
 
 /// Trilinear sample of a b³ map at (x, y, z) voxels (0 outside).
 fn at3(v: &[f32], b: usize, x: f64, y: f64, z: f64) -> f32 {
-    if x < 0.0 || y < 0.0 || z < 0.0 || x > (b - 1) as f64 || y > (b - 1) as f64 || z > (b - 1) as f64 {
+    if x < 0.0
+        || y < 0.0
+        || z < 0.0
+        || x > (b - 1) as f64
+        || y > (b - 1) as f64
+        || z > (b - 1) as f64
+    {
         return 0.0;
     }
     let (x0, y0, z0) = (x.floor() as usize, y.floor() as usize, z.floor() as usize);
-    let (x1, y1, z1) = ((x0 + 1).min(b - 1), (y0 + 1).min(b - 1), (z0 + 1).min(b - 1));
-    let (tx, ty, tz) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32, (z - z0 as f64) as f32);
+    let (x1, y1, z1) = (
+        (x0 + 1).min(b - 1),
+        (y0 + 1).min(b - 1),
+        (z0 + 1).min(b - 1),
+    );
+    let (tx, ty, tz) = (
+        (x - x0 as f64) as f32,
+        (y - y0 as f64) as f32,
+        (z - z0 as f64) as f32,
+    );
     let i = |x: usize, y: usize, z: usize| v[(z * b + y) * b + x];
     let c00 = i(x0, y0, z0) * (1.0 - tx) + i(x1, y0, z0) * tx;
     let c10 = i(x0, y1, z0) * (1.0 - tx) + i(x1, y1, z0) * tx;
@@ -626,28 +833,33 @@ fn turned(v: &[f32], b: usize, phi: f64, dz: f64, about_z: bool) -> Vec<f32> {
     let c = b as f64 / 2.0;
     let (s, co) = phi.to_radians().sin_cos();
     let mut out = vec![0f32; b * b * b];
-    out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
-        for y in 0..b {
-            for x in 0..b {
-                let (px, py, pz) = (x as f64 - c, y as f64 - c, z as f64 - c);
-                let (qx, qy, qz) = if about_z {
-                    // Sample at R(−phi)·p, so the map turns by +phi.
-                    (co * px + s * py, -s * px + co * py, pz + dz)
-                } else {
-                    // R = 2uuᵀ − I with u = (cos, sin, 0): its own inverse.
-                    let d = co * px + s * py;
-                    (2.0 * d * co - px, 2.0 * d * s - py, 2.0 * dz - pz)
-                };
-                plane[y * b + x] = at3(v, b, qx + c, qy + c, qz + c);
+    out.par_chunks_mut(b * b)
+        .enumerate()
+        .for_each(|(z, plane)| {
+            for y in 0..b {
+                for x in 0..b {
+                    let (px, py, pz) = (x as f64 - c, y as f64 - c, z as f64 - c);
+                    let (qx, qy, qz) = if about_z {
+                        // Sample at R(−phi)·p, so the map turns by +phi.
+                        (co * px + s * py, -s * px + co * py, pz + dz)
+                    } else {
+                        // R = 2uuᵀ − I with u = (cos, sin, 0): its own inverse.
+                        let d = co * px + s * py;
+                        (2.0 * d * co - px, 2.0 * d * s - py, 2.0 * dz - pz)
+                    };
+                    plane[y * b + x] = at3(v, b, qx + c, qy + c, qz + c);
+                }
             }
-        }
-    });
+        });
     out
 }
 
 fn corr3(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len() as f64;
-    let (ma, mb) = (a.iter().map(|&v| v as f64).sum::<f64>() / n, b.iter().map(|&v| v as f64).sum::<f64>() / n);
+    let (ma, mb) = (
+        a.iter().map(|&v| v as f64).sum::<f64>() / n,
+        b.iter().map(|&v| v as f64).sum::<f64>() / n,
+    );
     let (mut sab, mut saa, mut sbb) = (0f64, 0f64, 0f64);
     for (&x, &y) in a.iter().zip(b) {
         let (x, y) = (x as f64 - ma, y as f64 - mb);
@@ -690,7 +902,10 @@ pub fn dihedral(v: &[f32], b: usize, n: usize) -> Option<(f64, f64, f64)> {
     }
     let top = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1))?;
     let worst = scores.iter().map(|s| s.1).fold(f64::MAX, f64::min);
-    eprintln!("dihedral test D{n}: best {:.2} at {:.0}°, {dz:+.0} voxels; worst {:.2}", top.1, top.0, worst);
+    eprintln!(
+        "dihedral test D{n}: best {:.2} at {:.0}°, {dz:+.0} voxels; worst {:.2}",
+        top.1, top.0, worst
+    );
     let gap = top.1 - worst;
     (top.1 >= 0.85 && gap >= 0.05 && gap >= 0.5 * (1.0 - worst)).then_some((top.0, dz, top.1))
 }
@@ -711,7 +926,11 @@ pub fn axis_corr(v: &[f32], b: usize, ax: usize, deg: f64) -> f64 {
         for y in 0..b {
             for x in 0..b {
                 let p = [x as f64 - c, y as f64 - c, z as f64 - c];
-                let (i, j) = match ax { 0 => (1, 2), 1 => (2, 0), _ => (0, 1) };
+                let (i, j) = match ax {
+                    0 => (1, 2),
+                    1 => (2, 0),
+                    _ => (0, 1),
+                };
                 let mut q = p;
                 q[i] = co * p[i] + s * p[j];
                 q[j] = -s * p[i] + co * p[j];
@@ -728,15 +947,19 @@ type M3 = [[f64; 3]; 3];
 fn sample_by(v: &[f32], b: usize, m: &M3, t: [f64; 3]) -> Vec<f32> {
     let c = b as f64 / 2.0;
     let mut out = vec![0f32; b * b * b];
-    out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
-        for y in 0..b {
-            for x in 0..b {
-                let p = [x as f64 - c, y as f64 - c, z as f64 - c];
-                let q: Vec<f64> = (0..3).map(|i| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + t[i] + c).collect();
-                plane[y * b + x] = at3(v, b, q[0], q[1], q[2]);
+    out.par_chunks_mut(b * b)
+        .enumerate()
+        .for_each(|(z, plane)| {
+            for y in 0..b {
+                for x in 0..b {
+                    let p = [x as f64 - c, y as f64 - c, z as f64 - c];
+                    let q: Vec<f64> = (0..3)
+                        .map(|i| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + t[i] + c)
+                        .collect();
+                    plane[y * b + x] = at3(v, b, q[0], q[1], q[2]);
+                }
             }
-        }
-    });
+        });
     out
 }
 
@@ -745,11 +968,19 @@ fn rot(a: [f64; 3], deg: f64) -> M3 {
     let (s, c) = deg.to_radians().sin_cos();
     let t = 1.0 - c;
     let [x, y, z] = a;
-    [[t * x * x + c, t * x * y - s * z, t * x * z + s * y], [t * x * y + s * z, t * y * y + c, t * y * z - s * x], [t * x * z - s * y, t * y * z + s * x, t * z * z + c]]
+    [
+        [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ]
 }
 
 fn transpose(m: &M3) -> M3 {
-    [[m[0][0], m[1][0], m[2][0]], [m[0][1], m[1][1], m[2][1]], [m[0][2], m[1][2], m[2][2]]]
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
 }
 
 /// The map moved so that its centre of (positive) mass is at the box centre.
@@ -779,7 +1010,11 @@ pub fn centred3(v: &[f32], b: usize) -> Vec<f32> {
 /// hemisphere, then refined at full size. Returns (axis, correlation,
 /// correlation of the half-way turn) or None when nothing matches.
 pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> {
-    let small = if b > 32 { super::fourier::resample3(v, b, 32) } else { v.to_vec() };
+    let small = if b > 32 {
+        super::fourier::resample3(v, b, 32)
+    } else {
+        v.to_vec()
+    };
     let bs = (small.len() as f64).cbrt().round() as usize;
     let step = 360.0 / n as f64;
     // Fibonacci points on the upper hemisphere, about 3° apart.
@@ -793,8 +1028,13 @@ pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> 
             [r * t.cos(), r * t.sin(), z]
         })
         .collect();
-    let score = |vol: &[f32], bb: usize, a: [f64; 3], deg: f64| corr3(vol, &sample_by(vol, bb, &rot(a, deg), [0.0; 3]));
-    let mut coarse: Vec<([f64; 3], f64)> = dirs.iter().map(|&a| (a, score(&small, bs, a, step))).collect();
+    let score = |vol: &[f32], bb: usize, a: [f64; 3], deg: f64| {
+        corr3(vol, &sample_by(vol, bb, &rot(a, deg), [0.0; 3]))
+    };
+    let mut coarse: Vec<([f64; 3], f64)> = dirs
+        .iter()
+        .map(|&a| (a, score(&small, bs, a, step)))
+        .collect();
     coarse.sort_by(|a, b| b.1.total_cmp(&a.1));
     // Refine the best few at full size on a ±3° grid.
     let mut best = ([0.0, 0.0, 1.0], f64::MIN);
@@ -804,12 +1044,20 @@ pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> 
             loop {
                 let mut moved = false;
                 // Two directions perpendicular to the axis.
-                let u = if cur[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                let u = if cur[2].abs() < 0.9 {
+                    [0.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
                 let e1 = norm(cross(cur, u));
                 let e2 = cross(cur, e1);
                 for (p, q) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
                     let t = d.to_radians();
-                    let cand = norm([cur[0] + t * (p * e1[0] + q * e2[0]), cur[1] + t * (p * e1[1] + q * e2[1]), cur[2] + t * (p * e1[2] + q * e2[2])]);
+                    let cand = norm([
+                        cur[0] + t * (p * e1[0] + q * e2[0]),
+                        cur[1] + t * (p * e1[1] + q * e2[1]),
+                        cur[2] + t * (p * e1[2] + q * e2[2]),
+                    ]);
                     let s = score(v, b, cand, step);
                     if s > cs {
                         (cur, cs) = (cand, s);
@@ -826,7 +1074,10 @@ pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> 
         }
     }
     let half = score(v, b, best.0, step / 2.0);
-    eprintln!("axis search C{n}: {:.2} (half turn {:.2}) along {:.2?}", best.1, half, best.0);
+    eprintln!(
+        "axis search C{n}: {:.2} (half turn {:.2}) along {:.2?}",
+        best.1, half, best.0
+    );
     // The n comes from the 2D classes; at low resolution the n-fold turn
     // hardly beats a half-way one (the map is mostly a cylinder), but the
     // best direction is still the axis. A poor match means no axis.
@@ -834,7 +1085,11 @@ pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> 
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn norm(a: [f64; 3]) -> [f64; 3] {
@@ -848,7 +1103,11 @@ pub fn align_axis(v: &[f32], b: usize, axis: [f64; 3]) -> Vec<f32> {
     let k = cross(axis, z);
     let s = (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]).sqrt();
     if s < 1e-9 {
-        return if axis[2] > 0.0 { v.to_vec() } else { sample_by(v, b, &rot([1.0, 0.0, 0.0], 180.0), [0.0; 3]) };
+        return if axis[2] > 0.0 {
+            v.to_vec()
+        } else {
+            sample_by(v, b, &rot([1.0, 0.0, 0.0], 180.0), [0.0; 3])
+        };
     }
     let angle = s.atan2(axis[2]).to_degrees();
     // R takes axis to z; out(p) = v(Rᵀ p).

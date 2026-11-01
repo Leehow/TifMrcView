@@ -13,7 +13,10 @@ use anyhow::Result;
 use burn::tensor::{Device, Tensor, TensorData};
 
 pub fn download<const D: usize>(t: Tensor<D>) -> Vec<f32> {
-    t.into_data().convert::<f32>().try_into_vec::<f32>().unwrap()
+    t.into_data()
+        .convert::<f32>()
+        .try_into_vec::<f32>()
+        .unwrap()
 }
 
 /// Inverse of the batched half-plane transform: [n][t][t/2+1] → [n][t][t].
@@ -37,13 +40,20 @@ pub fn run(
     let plan = Plan::new(sp.w, sp.h);
     let (t, n) = (plan.t, plan.len());
     let hw = t / 2 + 1;
-    let up3 = |v: Vec<f32>, shape: [usize; 3]| Tensor::<3>::from_data(TensorData::new(v, shape), dev);
+    let up3 =
+        |v: Vec<f32>, shape: [usize; 3]| Tensor::<3>::from_data(TensorData::new(v, shape), dev);
     let kx = up3((0..hw).map(|i| i as f32).collect(), [1, 1, hw]);
     let ky = up3((0..t).map(|i| freq(i, t) as f32).collect(), [1, t, 1]);
     let rates = match exposures {
         Some(_) => {
             let v = (0..t * hw)
-                .map(|i| dose::critical(freq(i % hw, t).hypot(freq(i / hw, t)) / t as f64 / pixel, kv).map(|c| (0.5 / c) as f32))
+                .map(|i| {
+                    dose::critical(
+                        freq(i % hw, t).hypot(freq(i / hw, t)) / t as f64 / pixel,
+                        kv,
+                    )
+                    .map(|c| (0.5 / c) as f32)
+                })
                 .collect::<Result<Vec<_>>>()?;
             Some(up3(v, [1, t, hw]))
         }
@@ -58,18 +68,66 @@ pub fn run(
         check_cancel()?;
         let frame = sp.read(i)?;
         let mean = (frame.iter().map(|&a| a as f64).sum::<f64>() / frame.len() as f64) as f32;
-        let shifts: Vec<[f64; 2]> = (0..n).map(|k| plan.shift(k, model, sp.times[i], g)).collect();
+        let shifts: Vec<[f64; 2]> = (0..n)
+            .map(|k| plan.shift(k, model, sp.times[i], g))
+            .collect();
         {
             use rayon::prelude::*;
-            batch.par_chunks_mut(t * t).enumerate().for_each(|(k, out)| plan.cut(&frame, k, shifts[k], mean, out));
+            batch
+                .par_chunks_mut(t * t)
+                .enumerate()
+                .for_each(|(k, out)| plan.cut(&frame, k, shifts[k], mean, out));
         }
         drop(frame);
-        let fracs: Vec<[f64; 2]> = shifts.iter().map(|s| [s[0] - s[0].round(), s[1] - s[1].round()]).collect();
-        let ax = up3(fracs.iter().map(|f| (std::f64::consts::TAU * f[0] / t as f64) as f32).collect(), [n, 1, 1]);
-        let ay = up3(fracs.iter().map(|f| (std::f64::consts::TAU * f[1] / t as f64) as f32).collect(), [n, 1, 1]);
+        let fracs: Vec<[f64; 2]> = shifts
+            .iter()
+            .map(|s| [s[0] - s[0].round(), s[1] - s[1].round()])
+            .collect();
+        let ax = up3(
+            fracs
+                .iter()
+                .map(|f| (std::f64::consts::TAU * f[0] / t as f64) as f32)
+                .collect(),
+            [n, 1, 1],
+        );
+        let ay = up3(
+            fracs
+                .iter()
+                .map(|f| (std::f64::consts::TAU * f[1] / t as f64) as f32)
+                .collect(),
+            [n, 1, 1],
+        );
         // Nyquist bins of fractionally shifted axes drop out (see sum.rs).
-        let keep_x = up3(fracs.iter().flat_map(|f| (0..hw).map(move |j| if fractional(f[0]) && nyquist(j, t) { 0.0 } else { 1.0 })).collect(), [n, 1, hw]);
-        let keep_y = up3(fracs.iter().flat_map(|f| (0..t).map(move |j| if fractional(f[1]) && nyquist(j, t) { 0.0 } else { 1.0 })).collect(), [n, t, 1]);
+        let keep_x = up3(
+            fracs
+                .iter()
+                .flat_map(|f| {
+                    (0..hw).map(move |j| {
+                        if fractional(f[0]) && nyquist(j, t) {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                    })
+                })
+                .collect(),
+            [n, 1, hw],
+        );
+        let keep_y = up3(
+            fracs
+                .iter()
+                .flat_map(|f| {
+                    (0..t).map(move |j| {
+                        if fractional(f[1]) && nyquist(j, t) {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                    })
+                })
+                .collect(),
+            [n, t, 1],
+        );
         let x = up3(batch.clone(), [n, t, t]);
         let (re, im) = burn::signal::rfft(x, 2, None);
         let (re, im) = burn::signal::cfft(re, im, 1, None);
@@ -83,7 +141,8 @@ pub fn run(
             let z = rate.clone().mul_scalar(d as f32);
             let exact = (z.clone().neg().exp().neg() + 1.0) / z.clone().clamp_min(1e-20);
             let approx = z.clone().mul_scalar(-0.5) + 1.0 + (z.clone() * z.clone()).div_scalar(6.0);
-            let q = rate.clone().mul_scalar(-start as f32).exp() * exact.mask_where(z.lower_elem(1e-3), approx);
+            let q = rate.clone().mul_scalar(-start as f32).exp()
+                * exact.mask_where(z.lower_elem(1e-3), approx);
             wr = wr + r.clone() * q.clone();
             wi = wi + m.clone() * q.clone();
             norm = norm + q.clone() * q;
@@ -103,7 +162,11 @@ pub fn run(
         plan.blend(&tiles)
     };
     let weighted = exposures.map(|_| {
-        let scale = norm.sqrt().clamp_min(1e-12).recip().mul_scalar((sp.len() as f32).sqrt());
+        let scale = norm
+            .sqrt()
+            .clamp_min(1e-12)
+            .recip()
+            .mul_scalar((sp.len() as f32).sqrt());
         back(wr * scale.clone(), wi * scale)
     });
     Ok(Sums {

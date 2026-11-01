@@ -33,7 +33,9 @@ impl Fft {
     pub fn new(n: usize) -> Fft {
         assert!(n.is_power_of_two() && n >= 2);
         let bits = n.trailing_zeros();
-        let rev = (0..n as u32).map(|i| i.reverse_bits() >> (32 - bits)).collect();
+        let rev = (0..n as u32)
+            .map(|i| i.reverse_bits() >> (32 - bits))
+            .collect();
         let (cos, sin) = (0..n / 2)
             .map(|k| {
                 let a = -2.0 * PI * k as f64 / n as f64;
@@ -79,10 +81,14 @@ pub(crate) fn power_2d(fft: &Fft, tile: &[f32]) -> Vec<f32> {
     let n = fft.n;
     let mut re = tile.to_vec();
     let mut im = vec![0f32; n * n];
-    re.par_chunks_mut(n).zip(im.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
+    re.par_chunks_mut(n)
+        .zip(im.par_chunks_mut(n))
+        .for_each(|(r, i)| fft.run(r, i));
     // Columns: transpose, transform the rows, and read back transposed.
     let (mut tr, mut ti) = (transpose(&re, n), transpose(&im, n));
-    tr.par_chunks_mut(n).zip(ti.par_chunks_mut(n)).for_each(|(r, i)| fft.run(r, i));
+    tr.par_chunks_mut(n)
+        .zip(ti.par_chunks_mut(n))
+        .for_each(|(r, i)| fft.run(r, i));
     // tr[u][v] holds frequency (row v, column u).
     let mut out = vec![0f32; n * n];
     out.par_chunks_mut(n).enumerate().for_each(|(v, row)| {
@@ -105,7 +111,9 @@ fn transpose(a: &[f32], n: usize) -> Vec<f32> {
 }
 
 pub(crate) fn hann(n: usize) -> Vec<f32> {
-    (0..n).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos()) as f32).collect()
+    (0..n)
+        .map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos()) as f32)
+        .collect()
 }
 
 /// Tile origins along one axis: overlapping by half, at most `max` of them.
@@ -144,7 +152,11 @@ pub(crate) fn tiling(region: [usize; 4], want_n: usize) -> Result<(usize, Vec<us
 }
 
 /// Power spectrum of `values` (w × h, row major) inside `region`.
-pub fn spectrum(values: impl Fn(usize, usize) -> f32 + Sync, region: [usize; 4], want_n: usize) -> Result<Spectrum> {
+pub fn spectrum(
+    values: impl Fn(usize, usize) -> f32 + Sync,
+    region: [usize; 4],
+    want_n: usize,
+) -> Result<Spectrum> {
     let (n, xs, ys) = tiling(region, want_n)?;
     let fft = Fft::new(n);
     let win = hann(n);
@@ -191,13 +203,28 @@ pub(crate) fn finish(sum: &[f64], n: usize, tiles: usize) -> Spectrum {
             }
         }
     }
-    let radial = ring.iter().map(|&(s, c)| (s / c.max(1) as f64 + 1e-12).log10() as f32).collect();
-    Spectrum { n, tiles, log, radial }
+    let radial = ring
+        .iter()
+        .map(|&(s, c)| (s / c.max(1) as f64 + 1e-12).log10() as f32)
+        .collect();
+    Spectrum {
+        n,
+        tiles,
+        log,
+        radial,
+    }
 }
 
 /// Reply of the `power_spectrum` command: `u32 n, u32 tiles`, then n × n
 /// f32 (log10 power, centred), then n/2 + 1 f32 (radial average).
-pub fn power_spectrum(img: &Arc<OpenImage>, c: usize, z: usize, t: usize, region: [f64; 4], n: usize) -> Result<Vec<u8>> {
+pub fn power_spectrum(
+    img: &Arc<OpenImage>,
+    c: usize,
+    z: usize,
+    t: usize,
+    region: [f64; 4],
+    n: usize,
+) -> Result<Vec<u8>> {
     let info = img.info();
     let (page, sample) = info.locate(c, z, t);
     let planes = img.page(page)?;
@@ -209,7 +236,11 @@ pub fn power_spectrum(img: &Arc<OpenImage>, c: usize, z: usize, t: usize, region
     if x1 <= x0 || y1 <= y0 {
         bail!("区域在图像外");
     }
-    let s = spectrum(|x, y| p.data.get_f64(y * p.w + x) as f32, [x0, y0, x1 - x0, y1 - y0], n)?;
+    let s = spectrum(
+        |x, y| p.data.get_f64(y * p.w + x) as f32,
+        [x0, y0, x1 - x0, y1 - y0],
+        n,
+    )?;
     let mut out = Vec::with_capacity(8 + (s.log.len() + s.radial.len()) * 4);
     out.extend_from_slice(&(s.n as u32).to_le_bytes());
     out.extend_from_slice(&(s.tiles as u32).to_le_bytes());
@@ -231,7 +262,10 @@ mod tests {
                 (0..n).fold((0.0, 0.0), |(sr, si), j| {
                     let a = -2.0 * PI * (k * j) as f64 / n as f64;
                     let (c, s) = (a.cos(), a.sin());
-                    (sr + re[j] as f64 * c - im[j] as f64 * s, si + re[j] as f64 * s + im[j] as f64 * c)
+                    (
+                        sr + re[j] as f64 * c - im[j] as f64 * s,
+                        si + re[j] as f64 * s + im[j] as f64 * c,
+                    )
                 })
             })
             .unzip()
@@ -246,8 +280,14 @@ mod tests {
             let (mut r, mut i) = (re.clone(), im.clone());
             Fft::new(n).run(&mut r, &mut i);
             for k in 0..n {
-                assert!((r[k] as f64 - wr[k]).abs() < 1e-3 * n as f64, "n {n} re[{k}]");
-                assert!((i[k] as f64 - wi[k]).abs() < 1e-3 * n as f64, "n {n} im[{k}]");
+                assert!(
+                    (r[k] as f64 - wr[k]).abs() < 1e-3 * n as f64,
+                    "n {n} re[{k}]"
+                );
+                assert!(
+                    (i[k] as f64 - wi[k]).abs() < 1e-3 * n as f64,
+                    "n {n} im[{k}]"
+                );
             }
         }
     }
@@ -279,7 +319,9 @@ mod tests {
         assert_eq!(v, 64);
         assert_eq!((u as i64 - 64).abs(), 16);
         // The radial average peaks at the same radius.
-        let r = (1..s.radial.len()).max_by(|&a, &b| s.radial[a].total_cmp(&s.radial[b])).unwrap();
+        let r = (1..s.radial.len())
+            .max_by(|&a, &b| s.radial[a].total_cmp(&s.radial[b]))
+            .unwrap();
         assert_eq!(r, 16);
     }
 

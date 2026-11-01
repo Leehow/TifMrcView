@@ -38,7 +38,14 @@ fn mean(p: &Plane, [x0, y0, w, h]: [usize; 4]) -> f64 {
 /// The spectrum of `region` of channel `c`: for axis "x" the mean of the
 /// region's rows of slice `z` (all columns), for axis "z" the mean of the
 /// region's pixels in every slice.
-pub fn values(img: &Arc<OpenImage>, axis: &str, c: usize, z: usize, t: usize, region: [f64; 4]) -> Result<Vec<f64>> {
+pub fn values(
+    img: &Arc<OpenImage>,
+    axis: &str,
+    c: usize,
+    z: usize,
+    t: usize,
+    region: [f64; 4],
+) -> Result<Vec<f64>> {
     let info = img.info();
     let r = clamp(region, info.width, info.height)?;
     match axis {
@@ -49,7 +56,12 @@ pub fn values(img: &Arc<OpenImage>, axis: &str, c: usize, z: usize, t: usize, re
             let [_, y0, _, h] = r;
             Ok((0..p.w)
                 .into_par_iter()
-                .map(|x| (y0..y0 + h).map(|y| p.data.get_f64(y * p.w + x)).sum::<f64>() / h as f64)
+                .map(|x| {
+                    (y0..y0 + h)
+                        .map(|y| p.data.get_f64(y * p.w + x))
+                        .sum::<f64>()
+                        / h as f64
+                })
                 .collect())
         }
         "z" => (0..info.size_z)

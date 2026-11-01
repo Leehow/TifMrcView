@@ -16,12 +16,30 @@ pub struct Block {
 impl Block {
     /// A full-resolution tile at (x, y) of size w×h with C/Z/T/M indices.
     #[allow(clippy::too_many_arguments)]
-    pub fn tile(pixel: i32, x: i32, y: i32, w: i32, h: i32, c: i32, z: i32, t: i32, m: i32, data: Vec<u8>) -> Block {
+    pub fn tile(
+        pixel: i32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        c: i32,
+        z: i32,
+        t: i32,
+        m: i32,
+        data: Vec<u8>,
+    ) -> Block {
         Block {
             pixel,
             compression: 0,
             pyramid: 0,
-            dims: vec![("X", x, w, w), ("Y", y, h, h), ("C", c, 1, 1), ("Z", z, 1, 1), ("T", t, 1, 1), ("M", m, 1, 1)],
+            dims: vec![
+                ("X", x, w, w),
+                ("Y", y, h, h),
+                ("C", c, 1, 1),
+                ("Z", z, 1, 1),
+                ("T", t, 1, 1),
+                ("M", m, 1, 1),
+            ],
             data,
         }
     }
@@ -112,7 +130,9 @@ pub fn write(path: &Path, blocks: &[Block], xml: &str, file_part: i32) {
 /// under Information (to make the document large).
 pub fn xml(channels: &[(&str, &str)], pixel_m: f64, z_m: f64, extra: usize) -> String {
     let mut x = String::from("<ImageDocument><Metadata><Information>");
-    x.push_str("<Application><Name>ZEN 3.8 (blue edition)</Name><Version>3.8.2.0</Version></Application>");
+    x.push_str(
+        "<Application><Name>ZEN 3.8 (blue edition)</Name><Version>3.8.2.0</Version></Application>",
+    );
     x.push_str(
         "<Document><CreationDate>2026-10-15T10:12:03.98+08:00</CreationDate><UserName>tester</UserName></Document>",
     );
@@ -127,7 +147,10 @@ pub fn xml(channels: &[(&str, &str)], pixel_m: f64, z_m: f64, extra: usize) -> S
     x.push_str("<Processing><Airyscan><Channels><Channel Id=\"Channel:0\"><SuperResolutionParameter>5.2</SuperResolutionParameter></Channel></Channels></Airyscan></Processing>");
     x.push_str("<Extra>");
     for i in 0..extra {
-        x.push_str(&format!("<Param Id=\"p{i}\"><Value>{}</Value><Unit>µm</Unit></Param>", i as f64 * 0.37));
+        x.push_str(&format!(
+            "<Param Id=\"p{i}\"><Value>{}</Value><Unit>µm</Unit></Param>",
+            i as f64 * 0.37
+        ));
     }
     x.push_str("</Extra></Information>");
     x.push_str(&format!(
@@ -135,7 +158,9 @@ pub fn xml(channels: &[(&str, &str)], pixel_m: f64, z_m: f64, extra: usize) -> S
     ));
     x.push_str("<DisplaySetting><Channels>");
     for (i, (name, color)) in channels.iter().enumerate() {
-        x.push_str(&format!("<Channel Id=\"Channel:{i}\" Name=\"{name}\"><Color>{color}</Color></Channel>"));
+        x.push_str(&format!(
+            "<Channel Id=\"Channel:{i}\" Name=\"{name}\"><Color>{color}</Color></Channel>"
+        ));
     }
     x.push_str("</Channels></DisplaySetting></Metadata></ImageDocument>");
     x
@@ -177,12 +202,31 @@ pub fn zstd1_plain(data: &[u8]) -> Vec<u8> {
 }
 
 /// A Z stack: `channels` × `zs` pages of w×h u16, one tile per page.
-pub fn stack(path: &Path, w: usize, h: usize, channels: usize, zs: usize, compression: i32, extra_xml: usize) {
+pub fn stack(
+    path: &Path,
+    w: usize,
+    h: usize,
+    channels: usize,
+    zs: usize,
+    compression: i32,
+    extra_xml: usize,
+) {
     let mut blocks = vec![];
     for z in 0..zs {
         for c in 0..channels {
             let raw = u16_tile(c, z, 0, 0, w, h);
-            let b = Block::tile(1, 0, 0, w as i32, h as i32, c as i32, z as i32, 0, 0, vec![]);
+            let b = Block::tile(
+                1,
+                0,
+                0,
+                w as i32,
+                h as i32,
+                c as i32,
+                z as i32,
+                0,
+                0,
+                vec![],
+            );
             blocks.push(match compression {
                 0 => b.compressed(0, raw),
                 5 => b.compressed(5, zstd(&raw)),
@@ -191,6 +235,15 @@ pub fn stack(path: &Path, w: usize, h: usize, channels: usize, zs: usize, compre
             });
         }
     }
-    let names = [("EGFP", "#FF00FF5B"), ("mCherry", "#FFFF0000"), ("DAPI", "#FF0000FF")];
-    write(path, &blocks, &xml(&names[..channels.min(3)], 4.5e-8, 1.5e-7, extra_xml), 0);
+    let names = [
+        ("EGFP", "#FF00FF5B"),
+        ("mCherry", "#FFFF0000"),
+        ("DAPI", "#FF0000FF"),
+    ];
+    write(
+        path,
+        &blocks,
+        &xml(&names[..channels.min(3)], 4.5e-8, 1.5e-7, extra_xml),
+        0,
+    );
 }

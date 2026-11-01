@@ -26,10 +26,23 @@ impl Plan {
         // The overlap is wide enough for the blend and for fractional shifts to wrap harmlessly.
         let stride = t - (t / 8).max(4);
         let margin = (t - stride) as isize / 2;
-        let starts = |n: usize| -> Vec<isize> { (0..n.div_ceil(stride).max(1)).map(|k| (k * stride) as isize - margin).collect() };
+        let starts = |n: usize| -> Vec<isize> {
+            (0..n.div_ceil(stride).max(1))
+                .map(|k| (k * stride) as isize - margin)
+                .collect()
+        };
         let (xs, ys) = (starts(w), starts(h));
-        let corners = ys.iter().flat_map(|&y| xs.iter().map(move |&x| [x, y])).collect();
-        Plan { w, h, t, stride, corners }
+        let corners = ys
+            .iter()
+            .flat_map(|&y| xs.iter().map(move |&x| [x, y]))
+            .collect();
+        Plan {
+            w,
+            h,
+            t,
+            stride,
+            corners,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -39,7 +52,10 @@ impl Plan {
     /// Displacement of tile k at a frame's time: global + local model at its centre.
     pub fn shift(&self, k: usize, model: &Model, time: f64, global: [f64; 2]) -> [f64; 2] {
         let c = model.spatial(time);
-        let centre = [self.corners[k][0] as f64 + self.t as f64 / 2.0, self.corners[k][1] as f64 + self.t as f64 / 2.0];
+        let centre = [
+            self.corners[k][0] as f64 + self.t as f64 / 2.0,
+            self.corners[k][1] as f64 + self.t as f64 / 2.0,
+        ];
         let xx = 2.0 * centre[0] / (self.w - 1).max(1) as f64 - 1.0;
         let yy = 2.0 * centre[1] / (self.h - 1).max(1) as f64 - 1.0;
         let s = [1.0, xx, yy, xx * xx, xx * yy, yy * yy];
@@ -61,7 +77,11 @@ impl Plan {
             let line = &frame[(y * w) as usize..((y + 1) * w) as usize];
             for (i, o) in row.iter_mut().enumerate() {
                 let x = x0 + i as isize;
-                *o = if x >= 0 && x < w { line[x as usize] } else { fill };
+                *o = if x >= 0 && x < w {
+                    line[x as usize]
+                } else {
+                    fill
+                };
             }
         }
     }
@@ -71,7 +91,9 @@ impl Plan {
         let (t, w, h) = (self.t, self.w, self.h);
         let ramp = t - self.stride;
         // Weight along one axis: rising over the first `ramp` pixels, falling over the last.
-        let edge: Vec<f64> = (0..t).map(|i| (((i.min(t - 1 - i)) as f64 + 0.5) / ramp as f64).min(1.0)).collect();
+        let edge: Vec<f64> = (0..t)
+            .map(|i| (((i.min(t - 1 - i)) as f64 + 0.5) / ramp as f64).min(1.0))
+            .collect();
         let mut sum = vec![0.0f64; w * h];
         let mut weight = vec![0.0f64; w * h];
         for (k, tile) in tiles.iter().enumerate() {
@@ -93,6 +115,9 @@ impl Plan {
                 }
             }
         }
-        sum.iter().zip(&weight).map(|(s, a)| (s / a.max(1e-12)) as f32).collect()
+        sum.iter()
+            .zip(&weight)
+            .map(|(s, a)| (s / a.max(1e-12)) as f32)
+            .collect()
     }
 }

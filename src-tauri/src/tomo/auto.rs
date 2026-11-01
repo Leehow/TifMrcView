@@ -97,18 +97,33 @@ pub fn output_bin(w: usize, h: usize, pixel_a: f64, voxel: f64) -> usize {
     [1usize, 2, 4, 8]
         .into_iter()
         .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 8)
-        .min_by(|&a, &b| ((pixel_a * a as f64) / voxel).ln().abs().total_cmp(&((pixel_a * b as f64) / voxel).ln().abs()))
+        .min_by(|&a, &b| {
+            ((pixel_a * a as f64) / voxel)
+                .ln()
+                .abs()
+                .total_cmp(&((pixel_a * b as f64) / voxel).ln().abs())
+        })
         .unwrap()
 }
 
-pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress: pipeline::Progress) -> Result<AutoResult> {
+pub fn run(
+    dev: &burn::tensor::Device,
+    d: &mut Dataset,
+    req: &AutoReq,
+    progress: pipeline::Progress,
+) -> Result<AutoResult> {
     let now = std::time::Instant::now();
     let img = pipeline::open(&d.stack)?;
     let (w, h) = (img.info().width, img.info().height);
     if let Some(px) = req.pixel_a.filter(|p| *p > 0.0) {
         d.optics.pixel_a = Some(px);
     }
-    let px = match d.optics.pixel_a.or_else(|| img.info().pixel_size.is_some().then(|| crate::align::pixel_a(img.info()))) {
+    let px = match d.optics.pixel_a.or_else(|| {
+        img.info()
+            .pixel_size
+            .is_some()
+            .then(|| crate::align::pixel_a(img.info()))
+    }) {
         Some(p) => p,
         None => bail!("不知道像素大小：请填写像素大小（Å）"),
     };
@@ -122,7 +137,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         Purpose::Display => 7,
         Purpose::Sta => 5,
     };
-    let stage = |k: usize| move |label: &str, i: usize, n: usize| progress(&format!("第 {k}/{total} 步 · {label}"), i, n);
+    let stage = |k: usize| {
+        move |label: &str, i: usize, n: usize| {
+            progress(&format!("第 {k}/{total} 步 · {label}"), i, n)
+        }
+    };
     if req.fresh {
         d.alignment = None;
         d.ctf = None;
@@ -130,7 +149,21 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     if d.alignment.is_none() {
         let a = super::align(
             &img,
-            &super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None },
+            &super::AlignReq {
+                token: 0,
+                c: 0,
+                t: 0,
+                angles: d.angles.clone(),
+                start: None,
+                step: None,
+                axis: d.axis_hint,
+                bin: 0,
+                sweep: true,
+                patch: None,
+                excluded: vec![],
+                groups: None,
+                previous: None,
+            },
             &|i, n| stage(1)("倾转对齐", i, n),
         )?;
         d.alignment = Some(a);
@@ -158,36 +191,87 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let ctf = d.ctf.clone().unwrap();
     let bin = output_bin(w, h, px, req.purpose.voxel());
     let mut leveled = a.clone();
-    let place = level(&img, &mut leveled, px, bin, req.purpose != Purpose::Sta, &stage(3))?;
+    let place = level(
+        &img,
+        &mut leveled,
+        px,
+        bin,
+        req.purpose != Purpose::Sta,
+        &stage(3),
+    )?;
     if place.tilt_offset != 0.0 {
         d.alignment = Some(leveled);
         d.save()?;
     }
     let thickness = place.thickness;
-    let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, &stage(4))?;
+    let params = recon::Params {
+        thickness,
+        method: recon::Method::Sart,
+        iterations: 3,
+        lambda: 0.5,
+        z_offset: place.z_offset,
+        y_slope: place.y_slope,
+        ..Default::default()
+    };
+    let made = pipeline::reconstruct(
+        d,
+        &pipeline::ReconStep {
+            bin,
+            params,
+            halves: d.even.is_some() && d.odd.is_some(),
+            phase_flip: true,
+            ctf_3d: false,
+        },
+        &stage(4),
+    )?;
     let raw = made.paths[0].clone();
     let mut path = raw.clone();
     let mut relion = None;
     let mut note = None;
     if req.purpose == Purpose::Display {
         check_cancel()?;
-        path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(5))?.paths.remove(0);
+        path = pipeline::denoise(
+            dev,
+            d,
+            &pipeline::DenoiseStep {
+                source: Some(path),
+                steps: 1000,
+            },
+            &stage(5),
+        )?
+        .paths
+        .remove(0);
     }
     if req.purpose != Purpose::Sta {
         check_cancel()?;
-        let k = if req.purpose == Purpose::Display { 6 } else { 5 };
-        path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+        let k = if req.purpose == Purpose::Display {
+            6
+        } else {
+            5
+        };
+        path = pipeline::deconvolve(d, Some(&path), &stage(k))?
+            .paths
+            .remove(0);
     }
     if req.purpose == Purpose::Display {
         check_cancel()?;
-        let step = pipeline::WedgeStep { source: Some(path.clone()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
+        let step = pipeline::WedgeStep {
+            source: Some(path.clone()),
+            cfg: None,
+            single: false,
+            budget_s: Some(WEDGE_BUDGET),
+        };
         match pipeline::wedge(dev, d, &step, &stage(7)) {
             Ok(mut m) => path = m.paths.remove(0),
-            Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
-                Some(slow) => note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0)),
-                None => return Err(e),
-            },
+            Err(e) => {
+                match e.downcast_ref::<pipeline::TooSlow>() {
+                    Some(slow) => note = Some(format!(
+                        "这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）",
+                        slow.projected_s / 3600.0
+                    )),
+                    None => return Err(e),
+                }
+            }
         }
     }
     if req.purpose == Purpose::Sta {
@@ -195,13 +279,26 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         let stem = d.stack.strip_suffix(".mrc").unwrap_or(&d.stack);
         let dir = format!("{stem}_relion5");
         std::fs::create_dir_all(&dir)?;
-        super::export::run(d, "relion5", &dir, 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
+        super::export::run(d, "relion5", &dir, 1, &|i, n| {
+            stage(5)("导出 RELION 5", i, n)
+        })?;
         relion = Some(dir);
     }
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);
-    Ok(AutoResult { path, raw, relion, note, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult {
+        path,
+        raw,
+        relion,
+        note,
+        levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()],
+        bin,
+        thickness,
+        residual: a.residual,
+        defocus_um: sorted[sorted.len() / 2] / 1e4,
+        ms: now.elapsed().as_secs_f64() * 1e3,
+    })
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels
@@ -244,12 +341,26 @@ pub fn level(
     let mut round = 0;
     let (vol, w, h) = loop {
         check_cancel()?;
-        let (stack, w, h, angles) = output::aligned(img, a, probe, 0, 0, &|i, n| progress("估计厚度和倾斜", i, n))?;
-        let params = recon::Params { thickness: depth, y_slope, ..Default::default() };
-        let how = pipeline::Build { alignment: a, bin: probe, params: &params, ctf: None, ctf_3d: false };
+        let (stack, w, h, angles) = output::aligned(img, a, probe, 0, 0, &|i, n| {
+            progress("估计厚度和倾斜", i, n)
+        })?;
+        let params = recon::Params {
+            thickness: depth,
+            y_slope,
+            ..Default::default()
+        };
+        let how = pipeline::Build {
+            alignment: a,
+            bin: probe,
+            params: &params,
+            ctf: None,
+            ctf_3d: false,
+        };
         let vol = pipeline::volume(&how, stack, w, h, &angles)?;
         round += 1;
-        let Some([sx, sy, _]) = plane(&vol, w, h, depth) else { break (vol, w, h) };
+        let Some([sx, sy, _]) = plane(&vol, w, h, depth) else {
+            break (vol, w, h);
+        };
         let sy = if level_y { sy } else { 0.0 };
         if (sx.abs() < LEVEL && sy.abs() < LEVEL) || round == 4 {
             break (vol, w, h);
@@ -271,7 +382,12 @@ pub fn level(
     let extent = ((hi - lo) as f64 + 2.0 * margin) * scale;
     let thickness = (extent.round() as usize).clamp(32, 2048);
     let centre = ((lo + hi) as f64 / 2.0 - (depth as f64 - 1.0) / 2.0) * scale;
-    Ok(Placement { thickness: thickness.div_ceil(8) * 8, z_offset: centre, y_slope, tilt_offset: offset })
+    Ok(Placement {
+        thickness: thickness.div_ceil(8) * 8,
+        z_offset: centre,
+        y_slope,
+        tilt_offset: offset,
+    })
 }
 
 /// Band-pass of one section (Gaussian σ 1 minus σ 4 pixels): particle-sized
@@ -279,17 +395,26 @@ pub fn level(
 fn band_pass(s: &[f32], w: usize, h: usize) -> Vec<f32> {
     let blur = |s: &[f32], sigma: f32| -> Vec<f32> {
         let r = (3.0 * sigma).ceil() as isize;
-        let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+        let k: Vec<f32> = (-r..=r)
+            .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
+            .collect();
         let sum: f32 = k.iter().sum();
         let pass = |src: &[f32], dx: isize, dy: isize| -> Vec<f32> {
             (0..w * h)
                 .map(|p| {
                     let (x, y) = ((p % w) as isize, (p / w) as isize);
-                    k.iter().enumerate().map(|(j, kk)| {
-                        let o = j as isize - r;
-                        let (xx, yy) = ((x + o * dx).clamp(0, w as isize - 1), (y + o * dy).clamp(0, h as isize - 1));
-                        kk * src[yy as usize * w + xx as usize]
-                    }).sum::<f32>() / sum
+                    k.iter()
+                        .enumerate()
+                        .map(|(j, kk)| {
+                            let o = j as isize - r;
+                            let (xx, yy) = (
+                                (x + o * dx).clamp(0, w as isize - 1),
+                                (y + o * dy).clamp(0, h as isize - 1),
+                            );
+                            kk * src[yy as usize * w + xx as usize]
+                        })
+                        .sum::<f32>()
+                        / sum
                 })
                 .collect()
         };
@@ -310,7 +435,12 @@ pub fn plane(vol: &[f32], w: usize, h: usize, z: usize) -> Option<[f64; 3]> {
     let plane = w * h;
     let power: Vec<Vec<f32>> = (0..z)
         .into_par_iter()
-        .map(|k| band_pass(&vol[k * plane..(k + 1) * plane], w, h).into_iter().map(|v| v * v).collect())
+        .map(|k| {
+            band_pass(&vol[k * plane..(k + 1) * plane], w, h)
+                .into_iter()
+                .map(|v| v * v)
+                .collect()
+        })
         .collect();
     // About 12 blocks along the longer side, at least 16 pixels each.
     let side = (w.max(h) / 12).max(16);
@@ -318,15 +448,31 @@ pub fn plane(vol: &[f32], w: usize, h: usize, z: usize) -> Option<[f64; 3]> {
     let mut points = Vec::new();
     for by in 0..ny {
         for bx in 0..nx {
-            let (x0, x1, y0, y1) = (bx * w / nx, (bx + 1) * w / nx, by * h / ny, (by + 1) * h / ny);
+            let (x0, x1, y0, y1) = (
+                bx * w / nx,
+                (bx + 1) * w / nx,
+                by * h / ny,
+                (by + 1) * h / ny,
+            );
             let raw: Vec<f64> = power
                 .iter()
-                .map(|p| (y0..y1).map(|y| p[y * w + x0..y * w + x1].iter().map(|&v| v as f64).sum::<f64>()).sum::<f64>())
+                .map(|p| {
+                    (y0..y1)
+                        .map(|y| {
+                            p[y * w + x0..y * w + x1]
+                                .iter()
+                                .map(|&v| v as f64)
+                                .sum::<f64>()
+                        })
+                        .sum::<f64>()
+                })
                 .collect();
-            let prof: Vec<f64> = (0..z).map(|k| {
-                let r = &raw[k.saturating_sub(2)..(k + 3).min(z)];
-                r.iter().sum::<f64>() / r.len() as f64
-            }).collect();
+            let prof: Vec<f64> = (0..z)
+                .map(|k| {
+                    let r = &raw[k.saturating_sub(2)..(k + 3).min(z)];
+                    r.iter().sum::<f64>() / r.len() as f64
+                })
+                .collect();
             let mut sorted = prof.clone();
             sorted.sort_by(f64::total_cmp);
             let median = sorted[z / 2];
@@ -359,22 +505,48 @@ pub fn plane(vol: &[f32], w: usize, h: usize, z: usize) -> Option<[f64; 3]> {
     let mut keep = vec![true; points.len()];
     let mut fit = None;
     for _ in 0..3 {
-        let used: Vec<&(f64, f64, f64, f64)> = points.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| p).collect();
+        let used: Vec<&(f64, f64, f64, f64)> = points
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(p, _)| p)
+            .collect();
         if used.len() < 6 {
             return None;
         }
         let f = least_squares(&used)?;
-        let res: Vec<f64> = points.iter().map(|p| (p.2 - (f[0] * p.0 + f[1] * p.1 + f[2])).abs()).collect();
-        let mut r: Vec<f64> = res.iter().zip(&keep).filter(|(_, k)| **k).map(|(r, _)| *r).collect();
+        let res: Vec<f64> = points
+            .iter()
+            .map(|p| (p.2 - (f[0] * p.0 + f[1] * p.1 + f[2])).abs())
+            .collect();
+        let mut r: Vec<f64> = res
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(r, _)| *r)
+            .collect();
         r.sort_by(f64::total_cmp);
         let limit = (3.0 * 1.4826 * r[r.len() / 2]).max(1.0);
         keep = res.iter().map(|r| *r <= limit).collect();
         fit = Some(f);
     }
     // Columns must spread along both axes for both slopes to mean anything.
-    let xs: Vec<f64> = points.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| p.0).collect();
-    let ys: Vec<f64> = points.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| p.1).collect();
-    let spread = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max) - v.iter().copied().fold(f64::INFINITY, f64::min);
+    let xs: Vec<f64> = points
+        .iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(p, _)| p.0)
+        .collect();
+    let ys: Vec<f64> = points
+        .iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(p, _)| p.1)
+        .collect();
+    let spread = |v: &[f64]| {
+        v.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - v.iter().copied().fold(f64::INFINITY, f64::min)
+    };
     let mut f = fit?;
     if spread(&xs) < w as f64 / 3.0 {
         f[0] = 0.0;
@@ -431,10 +603,14 @@ pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usi
             d.iter().map(|&v| (v as f64 - m).powi(2)).sum::<f64>() / d.len() as f64
         })
         .collect();
-    let detail: Vec<f64> = (0..z).map(|k| {
-        let r: Vec<f64> = (k.saturating_sub(2)..(k + 3).min(z)).map(|j| raw[j]).collect();
-        r.iter().sum::<f64>() / r.len() as f64
-    }).collect();
+    let detail: Vec<f64> = (0..z)
+        .map(|k| {
+            let r: Vec<f64> = (k.saturating_sub(2)..(k + 3).min(z))
+                .map(|j| raw[j])
+                .collect();
+            r.iter().sum::<f64>() / r.len() as f64
+        })
+        .collect();
     let mut sorted = detail.clone();
     sorted.sort_by(f64::total_cmp);
     let median = sorted[z / 2];
@@ -447,7 +623,9 @@ pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usi
     }
     // From the peak out to where the level is back near the quiet one.
     let cut = median + 3.0 * spread;
-    let top = (0..z).max_by(|&a, &b| detail[a].total_cmp(&detail[b])).unwrap();
+    let top = (0..z)
+        .max_by(|&a, &b| detail[a].total_cmp(&detail[b]))
+        .unwrap();
     let mut lo = top;
     while lo > 0 && detail[lo - 1] >= cut {
         lo -= 1;

@@ -28,9 +28,18 @@ struct Block {
 
 impl Block {
     fn new(i: usize, o: usize, dev: &Device) -> Block {
-        let conv = |i, o| Conv2dConfig::new([i, o], [3, 3]).with_padding(PaddingConfig2d::Same).init(dev);
+        let conv = |i, o| {
+            Conv2dConfig::new([i, o], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(dev)
+        };
         let norm = |c| GroupNormConfig::new(4, c).init(dev);
-        Block { c1: conv(i, o), n1: norm(o), c2: conv(o, o), n2: norm(o) }
+        Block {
+            c1: conv(i, o),
+            n1: norm(o),
+            c2: conv(o, o),
+            n2: norm(o),
+        }
     }
 
     fn forward(&self, x: Tensor<4>) -> Tensor<4> {
@@ -56,11 +65,21 @@ pub const ALIGN: usize = 1 << LEVELS;
 impl UNet {
     pub fn new(classes: usize, dev: &Device) -> UNet {
         let w = |l: usize| BASE << l;
-        let down = (0..LEVELS).map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev)).collect();
+        let down = (0..LEVELS)
+            .map(|l| Block::new(if l == 0 { 1 } else { w(l - 1) }, w(l), dev))
+            .collect();
         let bottom = Block::new(w(LEVELS - 1), w(LEVELS), dev);
-        let up = (0..LEVELS).rev().map(|l| Block::new(w(l + 1) + w(l), w(l), dev)).collect();
+        let up = (0..LEVELS)
+            .rev()
+            .map(|l| Block::new(w(l + 1) + w(l), w(l), dev))
+            .collect();
         let head = Conv2dConfig::new([BASE, classes], [1, 1]).init(dev);
-        UNet { down, bottom, up, head }
+        UNet {
+            down,
+            bottom,
+            up,
+            head,
+        }
     }
 
     /// Logits [B, classes, H, W] of images [B, 1, H, W] (H, W multiples of ALIGN).
@@ -76,7 +95,10 @@ impl UNet {
         for b in &self.up {
             let skip = skips.pop().unwrap();
             let [_, _, h, w] = skip.dims();
-            x = interpolate(x, InterpolateOptions::new(InterpolateMode::Nearest).with_output_size([h, w]));
+            x = interpolate(
+                x,
+                InterpolateOptions::new(InterpolateMode::Nearest).with_output_size([h, w]),
+            );
             x = b.forward(Tensor::cat(vec![x, skip], 1));
         }
         self.head.forward(x)
@@ -95,7 +117,13 @@ pub struct TrainConfig {
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { steps: 400, batch: 8, patch: 128, lr: 2e-3, seed: 0x5eed }
+        TrainConfig {
+            steps: 400,
+            batch: 8,
+            patch: 128,
+            lr: 2e-3,
+            seed: 0x5eed,
+        }
     }
 }
 
@@ -125,7 +153,9 @@ impl Rng {
 
 fn scale(v: &[f32], lo: f32, hi: f32) -> Vec<f32> {
     let k = if hi > lo { 1.0 / (hi - lo) } else { 1.0 };
-    v.iter().map(|&x| if x.is_finite() { (x - lo) * k } else { 0.0 }).collect()
+    v.iter()
+        .map(|&x| if x.is_finite() { (x - lo) * k } else { 0.0 })
+        .collect()
 }
 
 /// Masked cross-entropy over labelled pixels, and the share of them right.
@@ -151,7 +181,11 @@ pub fn train(
     cfg: &TrainConfig,
     mut progress: impl FnMut(usize, usize, f32),
 ) -> Result<Trained> {
-    let mut labels: Vec<u16> = slices.iter().flat_map(|(_, l)| l.iter().copied()).filter(|&v| v != 0).collect();
+    let mut labels: Vec<u16> = slices
+        .iter()
+        .flat_map(|(_, l)| l.iter().copied())
+        .filter(|&v| v != 0)
+        .collect();
     labels.sort_unstable();
     labels.dedup();
     if labels.len() < 2 {
@@ -166,7 +200,10 @@ pub fn train(
     let data: Vec<(Vec<f32>, Vec<i64>, Vec<f32>)> = slices
         .iter()
         .map(|(v, l)| {
-            let cls = l.iter().map(|&k| labels.binary_search(&k).map_or(0, |c| c as i64)).collect();
+            let cls = l
+                .iter()
+                .map(|&k| labels.binary_search(&k).map_or(0, |c| c as i64))
+                .collect();
             let mask = l.iter().map(|&k| (k != 0) as u8 as f32).collect();
             (scale(v, lo, hi), cls, mask)
         })
@@ -189,7 +226,11 @@ pub fn train(
                 let s = rng.below(data.len());
                 let (x0, y0) = (rng.below(w - p + 1), rng.below(h - p + 1));
                 let m = &data[s].2;
-                let any = (0..p).any(|y| m[(y0 + y) * w + x0..(y0 + y) * w + x0 + p].iter().any(|&v| v > 0.0));
+                let any = (0..p).any(|y| {
+                    m[(y0 + y) * w + x0..(y0 + y) * w + x0 + p]
+                        .iter()
+                        .any(|&v| v > 0.0)
+                });
                 pick = Some((s, x0, y0));
                 if any {
                     break;
@@ -226,19 +267,33 @@ pub fn train(
         acc_avg += k * (av - acc_avg);
         let grads = GradientsParams::from_grads(loss.backward(), &net);
         // Cosine decay of the learning rate.
-        let lr = cfg.lr * 0.5 * (1.0 + (std::f64::consts::PI * step as f64 / cfg.steps as f64).cos());
+        let lr =
+            cfg.lr * 0.5 * (1.0 + (std::f64::consts::PI * step as f64 / cfg.steps as f64).cos());
         net = opt.step(lr, net, grads);
         if step % 5 == 4 || step + 1 == cfg.steps {
             progress(step + 1, cfg.steps, loss_avg);
         }
     }
-    Ok(Trained { net: net.valid(), labels, lo, hi, loss: loss_avg, accuracy: acc_avg })
+    Ok(Trained {
+        net: net.valid(),
+        labels,
+        lo,
+        hi,
+        loss: loss_avg,
+        accuracy: acc_avg,
+    })
 }
 
 impl Trained {
     /// Label and confidence of every pixel of one slice. The slice is
     /// padded (reflected) to a multiple of ALIGN and processed in tiles.
-    pub fn predict(&self, dev: &Device, values: &[f32], w: usize, h: usize) -> (Vec<u16>, Vec<f32>) {
+    pub fn predict(
+        &self,
+        dev: &Device,
+        values: &[f32],
+        w: usize,
+        h: usize,
+    ) -> (Vec<u16>, Vec<f32>) {
         let v = scale(values, self.lo, self.hi);
         const TILE: usize = 512;
         const OVERLAP: usize = 32;
@@ -256,16 +311,39 @@ impl Trained {
                 let (pw, ph) = (tw.div_ceil(ALIGN) * ALIGN, th.div_ceil(ALIGN) * ALIGN);
                 let mut tile = vec![0f32; pw * ph];
                 for y in 0..ph {
-                    let sy = if y < th { y } else { 2 * th - 2 - y.min(2 * th - 2) }.min(th - 1);
+                    let sy = if y < th {
+                        y
+                    } else {
+                        2 * th - 2 - y.min(2 * th - 2)
+                    }
+                    .min(th - 1);
                     for x in 0..pw {
-                        let sx = if x < tw { x } else { 2 * tw - 2 - x.min(2 * tw - 2) }.min(tw - 1);
+                        let sx = if x < tw {
+                            x
+                        } else {
+                            2 * tw - 2 - x.min(2 * tw - 2)
+                        }
+                        .min(tw - 1);
                         tile[y * pw + x] = v[(ay + sy) * w + ax + sx];
                     }
                 }
                 let x = Tensor::<4>::from_data(TensorData::new(tile, [1, 1, ph, pw]), dev);
                 let p = softmax(net.forward(x), 1);
-                let best = p.clone().max_dim(1).reshape([ph * pw]).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
-                let arg = p.argmax(1).reshape([ph * pw]).into_data().convert::<i64>().try_into_vec::<i64>().unwrap();
+                let best = p
+                    .clone()
+                    .max_dim(1)
+                    .reshape([ph * pw])
+                    .into_data()
+                    .convert::<f32>()
+                    .try_into_vec::<f32>()
+                    .unwrap();
+                let arg = p
+                    .argmax(1)
+                    .reshape([ph * pw])
+                    .into_data()
+                    .convert::<i64>()
+                    .try_into_vec::<i64>()
+                    .unwrap();
                 // Keep the tile's core (x0.., y0..).
                 for y in y0..(y0 + step).min(h) {
                     for x in x0..(x0 + step).min(w) {
@@ -289,12 +367,22 @@ mod tests {
     /// Discs on a noisy background, the discs darker: labels 2 inside, 1 outside.
     fn scene(w: usize, h: usize, seed: u64) -> (Vec<f32>, Vec<u16>) {
         let mut rng = Rng(seed);
-        let centers: Vec<(f32, f32, f32)> = (0..6).map(|_| (rng.below(w) as f32, rng.below(h) as f32, 5.0 + rng.below(6) as f32)).collect();
+        let centers: Vec<(f32, f32, f32)> = (0..6)
+            .map(|_| {
+                (
+                    rng.below(w) as f32,
+                    rng.below(h) as f32,
+                    5.0 + rng.below(6) as f32,
+                )
+            })
+            .collect();
         let mut v = vec![0f32; w * h];
         let mut l = vec![1u16; w * h];
         for i in 0..w * h {
             let (x, y) = ((i % w) as f32, (i / w) as f32);
-            let inside = centers.iter().any(|&(cx, cy, r)| (x - cx).powi(2) + (y - cy).powi(2) < r * r);
+            let inside = centers
+                .iter()
+                .any(|&(cx, cy, r)| (x - cx).powi(2) + (y - cy).powi(2) < r * r);
             let noise = (rng.below(1000) as f32 / 1000.0 - 0.5) * 0.3;
             v[i] = if inside { 0.3 } else { 0.7 } + noise;
             if inside {
@@ -309,20 +397,38 @@ mod tests {
         let dev = Device::flex();
         let (w, h) = (48, 40);
         let train_set: Vec<_> = (0..3).map(|s| scene(w, h, 11 + s)).collect();
-        let cfg = TrainConfig { steps: 120, batch: 4, patch: 32, lr: 3e-3, seed: 3 };
+        let cfg = TrainConfig {
+            steps: 120,
+            batch: 4,
+            patch: 32,
+            lr: 3e-3,
+            seed: 3,
+        };
         let t = train(&dev, &train_set, w, h, 0.0, 1.0, &cfg, |_, _, _| {}).unwrap();
         assert_eq!(t.labels, vec![1, 2]);
         let (v, want) = scene(w, h, 99);
         let (got, _) = t.predict(&dev, &v, w, h);
         let right = got.iter().zip(&want).filter(|(a, b)| a == b).count();
-        assert!(right as f32 / (w * h) as f32 > 0.95, "{right}/{} (loss {})", w * h, t.loss);
+        assert!(
+            right as f32 / (w * h) as f32 > 0.95,
+            "{right}/{} (loss {})",
+            w * h,
+            t.loss
+        );
     }
 
     #[test]
     fn prediction_covers_odd_sizes_and_tiles() {
         let dev = Device::flex();
         let net = UNet::new(3, &dev);
-        let t = Trained { net, labels: vec![1, 4, 9], lo: 0.0, hi: 1.0, loss: 0.0, accuracy: 0.0 };
+        let t = Trained {
+            net,
+            labels: vec![1, 4, 9],
+            lo: 0.0,
+            hi: 1.0,
+            loss: 0.0,
+            accuracy: 0.0,
+        };
         let (w, h) = (601, 37);
         let (out, conf) = t.predict(&dev, &vec![0.5; w * h], w, h);
         assert_eq!(out.len(), w * h);

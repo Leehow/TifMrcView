@@ -80,19 +80,44 @@ fn main() -> Result<()> {
     }
     let now = Instant::now();
     let (stack, w, h, angles) = output::aligned(&img, &a, a.bin, 0, 0, &|_, _| {})?;
-    println!("resample={:.3}s shape={w}x{h}x{z}", now.elapsed().as_secs_f64());
+    println!(
+        "resample={:.3}s shape={w}x{h}x{z}",
+        now.elapsed().as_secs_f64()
+    );
     let g = recon::Geometry::new(w, z, &angles, 0.0)?;
-    let views = recon::Views { data: &stack, w, h, views: angles.len() };
+    let views = recon::Views {
+        data: &stack,
+        w,
+        h,
+        views: angles.len(),
+    };
     for method in [recon::Method::Wbp, recon::Method::Sirt, recon::Method::Sart] {
         let mut results = vec![];
         for backend in ["cpu", "gpu"] {
-            let p = recon::Params { thickness: z, method, iterations: if method == recon::Method::Sart { 3 } else { 15 }, lambda: if method == recon::Method::Sart { 0.5 } else { 1.0 }, backend: backend.into(), ..Default::default() };
+            let p = recon::Params {
+                thickness: z,
+                method,
+                iterations: if method == recon::Method::Sart { 3 } else { 15 },
+                lambda: if method == recon::Method::Sart {
+                    0.5
+                } else {
+                    1.0
+                },
+                backend: backend.into(),
+                ..Default::default()
+            };
             let mut out = vec![0.0f32; h * z * w];
             let now = Instant::now();
-            let name = match recon::reconstruct(&views, &g, &p, &mut |y0, n, slab| {
-                out[y0 * z * w..(y0 + n) * z * w].copy_from_slice(&slab);
-                Ok(())
-            }, &|_, _| {}) {
+            let name = match recon::reconstruct(
+                &views,
+                &g,
+                &p,
+                &mut |y0, n, slab| {
+                    out[y0 * z * w..(y0 + n) * z * w].copy_from_slice(&slab);
+                    Ok(())
+                },
+                &|_, _| {},
+            ) {
                 Ok(name) => name,
                 Err(e) => {
                     println!("{method:?} {backend}: {e}");
@@ -103,14 +128,24 @@ fn main() -> Result<()> {
             results.push(out);
         }
         if let [cpu, gpu] = &results[..] {
-            let diff = gpu.iter().zip(cpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();
+            let diff = gpu
+                .iter()
+                .zip(cpu)
+                .map(|(a, b)| (*a as f64 - *b as f64).powi(2))
+                .sum::<f64>();
             let norm = cpu.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
             println!("{method:?} relL2={:.6}", (diff / norm.max(1e-20)).sqrt());
         }
         if let (Some(path), Some(data)) = (args.get(5), results.first()) {
             let stem = format!("{path}.{}", format!("{method:?}").to_lowercase());
             // [y][z][x] slabs: XY section at mid Z, XZ slice at mid Y.
-            let xy: Vec<f32> = (0..h).flat_map(|y| data[(y * z + z / 2) * w..(y * z + z / 2 + 1) * w].iter().copied()).collect();
+            let xy: Vec<f32> = (0..h)
+                .flat_map(|y| {
+                    data[(y * z + z / 2) * w..(y * z + z / 2 + 1) * w]
+                        .iter()
+                        .copied()
+                })
+                .collect();
             let xz = data[(h / 2) * z * w..(h / 2 + 1) * z * w].to_vec();
             save_png(&format!("{stem}.xy.png"), &xy, w, h)?;
             save_png(&format!("{stem}.xz.png"), &xz, w, z)?;

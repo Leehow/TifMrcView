@@ -30,7 +30,8 @@ fn values(p: &PlaneData) -> Vec<f64> {
 }
 
 fn open(reg: &Registry, path: &Path, series: usize) -> Box<dyn Source> {
-    formats::open_series_with(path, series, reg).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
+    formats::open_series_with(path, series, reg)
+        .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
 }
 
 fn err(reg: &Registry, path: &Path, series: usize) -> String {
@@ -47,7 +48,13 @@ fn plane(src: &dyn Source, c: usize, z: usize, t: usize) -> Vec<f64> {
 }
 
 fn item(i: &ImageInfo, group: &str, label: &str) -> Option<String> {
-    i.metadata.iter().find(|g| g.name == group)?.items.iter().find(|it| it[0] == label).map(|it| it[1].clone())
+    i.metadata
+        .iter()
+        .find(|g| g.name == group)?
+        .items
+        .iter()
+        .find(|it| it[0] == label)
+        .map(|it| it[1].clone())
 }
 
 fn group_names(i: &ImageInfo) -> Vec<&str> {
@@ -55,7 +62,9 @@ fn group_names(i: &ImageInfo) -> Vec<&str> {
 }
 
 fn pattern_plane(w: usize, h: usize, c: usize, z: usize, t: usize, mask: u16) -> Vec<f64> {
-    (0..h).flat_map(|y| (0..w).map(move |x| (lasx::pattern(c, z, t, x, y) & mask) as f64)).collect()
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (lasx::pattern(c, z, t, x, y) & mask) as f64))
+        .collect()
 }
 
 #[test]
@@ -68,19 +77,38 @@ fn two_series_stack_info_and_pixels() {
         let nodes = vec![
             Node::Image(lasx::stack("Stack A", 40, 30, 2, 3, 1, 16)),
             Node::Folder("Empty".into(), vec![]),
-            Node::Folder("Sub".into(), vec![Node::Image(lasx::stack("Series002", 20, 10, 1, 1, 3, 8))]),
+            Node::Folder(
+                "Sub".into(),
+                vec![Node::Image(lasx::stack("Series002", 20, 10, 1, 1, 3, 8))],
+            ),
         ];
         lasx::write_lif(&path, version, "Project", &nodes);
 
         let src = open(&p.registry, &path, 0);
         let i = src.info();
-        assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.page_count), (40, 30, 2, 3, 1, 6));
+        assert_eq!(
+            (
+                i.width,
+                i.height,
+                i.size_c,
+                i.size_z,
+                i.size_t,
+                i.page_count
+            ),
+            (40, 30, 2, 3, 1, 6)
+        );
         assert_eq!(i.dtype, DType::U16);
         assert_eq!(i.format, "Leica LIF");
         assert_eq!(i.unit, "µm");
         let ps = i.pixel_size.unwrap();
-        assert!((ps[0] - 0.5).abs() < 1e-9 && (ps[1] - 0.5).abs() < 1e-9 && (ps[2] - 1.5).abs() < 1e-9, "{ps:?}");
-        assert_eq!(i.channels.iter().map(|c| c.color).collect::<Vec<_>>(), [[0, 255, 0], [255, 0, 0]]);
+        assert!(
+            (ps[0] - 0.5).abs() < 1e-9 && (ps[1] - 0.5).abs() < 1e-9 && (ps[2] - 1.5).abs() < 1e-9,
+            "{ps:?}"
+        );
+        assert_eq!(
+            i.channels.iter().map(|c| c.color).collect::<Vec<_>>(),
+            [[0, 255, 0], [255, 0, 0]]
+        );
         // Folders and the root are not series; names are tree paths.
         let names: Vec<_> = i.series.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Stack A", "Sub/Series002"]);
@@ -89,19 +117,38 @@ fn two_series_stack_info_and_pixels() {
         assert_eq!(i.series_index, 0);
         assert_eq!(group_names(i), ["LAS X 图像", "LAS X 全部参数"]);
         assert_eq!(item(i, "LAS X 图像", "图像").as_deref(), Some("Stack A"));
-        assert_eq!(item(i, "LAS X 图像", "采集时间").as_deref(), Some("2017-01-30 07:56:07 UTC"));
-        assert_eq!(item(i, "LAS X 图像", "像素尺寸 X").as_deref(), Some("0.5000 µm"));
-        assert_eq!(item(i, "LAS X 图像", "Z 步长").as_deref(), Some("1.5000 µm"));
-        assert_eq!(item(i, "LAS X 图像", "尺寸").as_deref(), Some("X=40  Y=30  C=2  Z=3"));
+        assert_eq!(
+            item(i, "LAS X 图像", "采集时间").as_deref(),
+            Some("2017-01-30 07:56:07 UTC")
+        );
+        assert_eq!(
+            item(i, "LAS X 图像", "像素尺寸 X").as_deref(),
+            Some("0.5000 µm")
+        );
+        assert_eq!(
+            item(i, "LAS X 图像", "Z 步长").as_deref(),
+            Some("1.5000 µm")
+        );
+        assert_eq!(
+            item(i, "LAS X 图像", "尺寸").as_deref(),
+            Some("X=40  Y=30  C=2  Z=3")
+        );
 
         for z in 0..3 {
             for c in 0..2 {
-                assert_eq!(plane(&*src, c, z, 0), pattern_plane(40, 30, c, z, 0, u16::MAX), "c{c} z{z}");
+                assert_eq!(
+                    plane(&*src, c, z, 0),
+                    pattern_plane(40, 30, c, z, 0, u16::MAX),
+                    "c{c} z{z}"
+                );
                 // Uncompressed single-chunk pages can be read in place (side views).
                 let (page, _) = i.locate(c, z, 0);
                 let (raw, little) = src.raw_page(page).unwrap();
                 assert!(little);
-                let want: Vec<u8> = pattern_plane(40, 30, c, z, 0, u16::MAX).iter().flat_map(|&v| (v as u16).to_le_bytes()).collect();
+                let want: Vec<u8> = pattern_plane(40, 30, c, z, 0, u16::MAX)
+                    .iter()
+                    .flat_map(|&v| (v as u16).to_le_bytes())
+                    .collect();
                 assert_eq!(raw, &want[..]);
             }
         }
@@ -109,15 +156,32 @@ fn two_series_stack_info_and_pixels() {
         // The second image of the project.
         let src = open(&p.registry, &path, 1);
         let i = src.info();
-        assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.page_count), (20, 10, 1, 1, 3, 3));
+        assert_eq!(
+            (
+                i.width,
+                i.height,
+                i.size_c,
+                i.size_z,
+                i.size_t,
+                i.page_count
+            ),
+            (20, 10, 1, 1, 3, 3)
+        );
         assert_eq!(i.dtype, DType::U8);
         assert_eq!(i.series_index, 1);
         assert_eq!(i.series.len(), 2);
         assert_eq!(i.channels[0].color, [0, 255, 0]);
-        assert_eq!(item(i, "LAS X 图像", "图像").as_deref(), Some("Sub/Series002"));
+        assert_eq!(
+            item(i, "LAS X 图像", "图像").as_deref(),
+            Some("Sub/Series002")
+        );
         assert_eq!(item(i, "LAS X 图像", "时间间隔").as_deref(), Some("2.5 s"));
         for t in 0..3 {
-            assert_eq!(plane(&*src, 0, 0, t), pattern_plane(20, 10, 0, 0, t, 0xff), "t{t}");
+            assert_eq!(
+                plane(&*src, 0, 0, t),
+                pattern_plane(20, 10, 0, 0, t, 0xff),
+                "t{t}"
+            );
         }
         assert!(err(&p.registry, &path, 2).contains("没有这个图像"));
     }
@@ -131,13 +195,22 @@ fn lof_single_image() {
     lasx::write_lof(&path, &lasx::stack("Series001", 24, 16, 2, 1, 4, 16));
     let src = open(&p.registry, &path, 0);
     let i = src.info();
-    assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t), (24, 16, 2, 1, 4));
+    assert_eq!(
+        (i.width, i.height, i.size_c, i.size_z, i.size_t),
+        (24, 16, 2, 1, 4)
+    );
     assert_eq!(i.format, "Leica LOF");
     assert!(i.series.len() <= 1);
-    assert_eq!(item(i, "LAS X 图像", "文件类型").as_deref(), Some("Leica LOF"));
+    assert_eq!(
+        item(i, "LAS X 图像", "文件类型").as_deref(),
+        Some("Leica LOF")
+    );
     for t in 0..4 {
         for c in 0..2 {
-            assert_eq!(plane(&*src, c, 0, t), pattern_plane(24, 16, c, 0, t, u16::MAX));
+            assert_eq!(
+                plane(&*src, c, 0, t),
+                pattern_plane(24, 16, c, 0, t, u16::MAX)
+            );
         }
     }
     assert!(err(&p.registry, &path, 1).contains("没有这个图像"));
@@ -160,10 +233,17 @@ fn interleaved_rgb_and_samples() {
             data.extend_from_slice(&vec![0xEE; pad]);
         }
         let tags = if bgr { [3, 2, 1] } else { [1, 2, 3] };
-        let luts = if bgr { ["Blue", "Green", "Red"] } else { ["Red", "Green", "Blue"] };
+        let luts = if bgr {
+            ["Blue", "Green", "Red"]
+        } else {
+            ["Red", "Green", "Blue"]
+        };
         Img {
             name: "Photo".into(),
-            dims: vec![(1, w as u64, 0.0, 4e-6, "m", 3), (2, h as u64, 0.0, 2e-6, "m", (3 * w + pad) as u64)],
+            dims: vec![
+                (1, w as u64, 0.0, 4e-6, "m", 3),
+                (2, h as u64, 0.0, 2e-6, "m", (3 * w + pad) as u64),
+            ],
             chans: (0..3).map(|k| (8, luts[k], k as u64, tags[k])).collect(),
             data,
             attachments: String::new(),
@@ -176,12 +256,17 @@ fn interleaved_rgb_and_samples() {
         let src = open(&p.registry, &path, 0);
         let i = src.info();
         assert!(i.is_rgb, "bgr={bgr}");
-        assert_eq!((i.size_c, i.samples_per_page, i.page_count, i.dtype), (3, 3, 1, DType::U8));
+        assert_eq!(
+            (i.size_c, i.samples_per_page, i.page_count, i.dtype),
+            (3, 3, 1, DType::U8)
+        );
         assert_eq!(i.series.len(), 0);
         let planes = src.read_page(0).unwrap();
         assert_eq!(planes.len(), 3);
         for (k, pl) in planes.iter().enumerate() {
-            let want: Vec<f64> = (0..h).flat_map(|y| (0..w).map(move |x| rgb(x, y)[k] as f64)).collect();
+            let want: Vec<f64> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| rgb(x, y)[k] as f64))
+                .collect();
             assert_eq!(values(&pl.data), want, "bgr={bgr} sample {k}");
         }
     }
@@ -207,18 +292,28 @@ fn interleaved_rgb_and_samples() {
     let src = open(&p.registry, &path, 0);
     let i = src.info();
     assert!(!i.is_rgb);
-    assert_eq!((i.size_c, i.samples_per_page, i.page_count, i.dtype), (2, 2, 1, DType::U16));
+    assert_eq!(
+        (i.size_c, i.samples_per_page, i.page_count, i.dtype),
+        (2, 2, 1, DType::U16)
+    );
     assert_eq!(i.channels[1].color, [255, 0, 255]);
     let planes = src.read_page(0).unwrap();
     for c in 0..2 {
-        assert_eq!(values(&planes[c].data), pattern_plane(4, 3, c, 0, 0, u16::MAX));
+        assert_eq!(
+            values(&planes[c].data),
+            pattern_plane(4, 3, c, 0, 0, u16::MAX)
+        );
     }
 }
 
 fn tile_image(len_is_n_steps: bool, attachments: &str) -> Img {
     // Four 8x8 tiles, tile m filled with m + 1; 1 µm pixels.
     let (w, nt) = (8usize, 4usize);
-    let length = if len_is_n_steps { w as f64 * 1e-6 } else { (w as f64 - 1.0) * 1e-6 };
+    let length = if len_is_n_steps {
+        w as f64 * 1e-6
+    } else {
+        (w as f64 - 1.0) * 1e-6
+    };
     let mut data = vec![];
     for m in 0..nt {
         data.extend(std::iter::repeat((m + 1) as u8).take(w * w));
@@ -239,7 +334,8 @@ fn tile_image(len_is_n_steps: bool, attachments: &str) -> Img {
 
 fn tile_scan_info(swap: u8) -> String {
     // Pitch of 6 pixels (2 px overlap): tiles at (0,0) (6,0) (0,6) (6,6) in µm.
-    let mut x = format!("<Attachment Name=\"TileScanInfo\" FlipX=\"0\" FlipY=\"0\" SwapXY=\"{swap}\">");
+    let mut x =
+        format!("<Attachment Name=\"TileScanInfo\" FlipX=\"0\" FlipY=\"0\" SwapXY=\"{swap}\">");
     for (fx, fy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
         x.push_str(&format!(
             "<Tile FieldX=\"{fx}\" FieldY=\"{fy}\" PosX=\"{:e}\" PosY=\"{:e}\" PosZ=\"0\"/>",
@@ -283,7 +379,9 @@ fn tile_scan_is_stitched_by_position() {
         let i = src.info();
         assert_eq!((i.width, i.height), (8, 8), "{name}");
         assert_eq!(plane(&*src, 0, 0, 0), vec![1.0; 64]);
-        assert!(item(i, "LAS X 图像", "拼块").unwrap().contains("只显示第 1 个"));
+        assert!(item(i, "LAS X 图像", "拼块")
+            .unwrap()
+            .contains("只显示第 1 个"));
     }
 }
 
@@ -313,10 +411,31 @@ fn hardware_settings_become_groups() {
     let src = open(&p.registry, &path, 0);
     let i = src.info();
     assert_eq!(i.format, "Leica LOF (LAS X 4.3.0.24308)");
-    assert_eq!(group_names(i), ["LAS X 图像", "LAS X 显微镜", "通道 1：EGFP", "通道 2：ALEXA 405", "LAS X 全部参数"]);
-    assert_eq!(i.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["EGFP", "ALEXA 405"]);
-    assert_eq!(item(i, "LAS X 图像", "软件").as_deref(), Some("LAS X 4.3.0.24308"));
-    assert_eq!(item(i, "LAS X 图像", "系统").as_deref(), Some("STELLARIS 5"));
+    assert_eq!(
+        group_names(i),
+        [
+            "LAS X 图像",
+            "LAS X 显微镜",
+            "通道 1：EGFP",
+            "通道 2：ALEXA 405",
+            "LAS X 全部参数"
+        ]
+    );
+    assert_eq!(
+        i.channels
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["EGFP", "ALEXA 405"]
+    );
+    assert_eq!(
+        item(i, "LAS X 图像", "软件").as_deref(),
+        Some("LAS X 4.3.0.24308")
+    );
+    assert_eq!(
+        item(i, "LAS X 图像", "系统").as_deref(),
+        Some("STELLARIS 5")
+    );
     let m = |k: &str| item(i, "LAS X 显微镜", k);
     assert_eq!(m("物镜").as_deref(), Some("HC PL APO CS2 63x/1.40 OIL"));
     assert_eq!(m("数值孔径 NA").as_deref(), Some("1.4"));
@@ -341,13 +460,32 @@ fn hardware_settings_become_groups() {
 
     // Every attribute and text of the image, with paths.
     let all = |k: &str| item(i, "LAS X 全部参数", k);
-    assert_eq!(all("Image/Attachment[HardwareSetting]/ATLConfocalSettingDefinition@Zoom").as_deref(), Some("2.25109702165419"));
+    assert_eq!(
+        all("Image/Attachment[HardwareSetting]/ATLConfocalSettingDefinition@Zoom").as_deref(),
+        Some("2.25109702165419")
+    );
     assert_eq!(all("Image/Attachment[HardwareSetting]/ATLConfocalSettingDefinition/DetectorList/Detector[HyD S 3]@Gain").as_deref(), Some("2.888671875"));
-    assert_eq!(all("Image/ImageDescription/Channels/ChannelDescription/ChannelProperty[DetectorName]").as_deref(), Some("HyD S 3"));
-    assert_eq!(all("Image/ImageDescription/Channels/ChannelDescription#2@LUTName").as_deref(), Some("Red"));
-    assert_eq!(all("Image/ImageDescription/Dimensions/DimensionDescription#2@NumberOfElements").as_deref(), Some("30"));
+    assert_eq!(
+        all("Image/ImageDescription/Channels/ChannelDescription/ChannelProperty[DetectorName]")
+            .as_deref(),
+        Some("HyD S 3")
+    );
+    assert_eq!(
+        all("Image/ImageDescription/Channels/ChannelDescription#2@LUTName").as_deref(),
+        Some("Red")
+    );
+    assert_eq!(
+        all("Image/ImageDescription/Dimensions/DimensionDescription#2@NumberOfElements").as_deref(),
+        Some("30")
+    );
     // Only this image: nothing from the container's root.
-    assert!(i.metadata.last().unwrap().items.iter().all(|it| !it[0].contains("Experiment")));
+    assert!(i
+        .metadata
+        .last()
+        .unwrap()
+        .items
+        .iter()
+        .all(|it| !it[0].contains("Experiment")));
 }
 
 /// The flattened parameters belong to the selected image, not the first one.
@@ -360,10 +498,26 @@ fn all_settings_follow_the_selected_series() {
     a.attachments = "<Attachment Name=\"Marker\" Which=\"first\"/>".into();
     let mut b = lasx::stack("B", 9, 9, 1, 1, 1, 8);
     b.attachments = "<Attachment Name=\"Marker\" Which=\"second\"/>".into();
-    lasx::write_lif(&path, 2, "Root", &[Node::Image(a), Node::Folder("F".into(), vec![Node::Image(b)])]);
+    lasx::write_lif(
+        &path,
+        2,
+        "Root",
+        &[
+            Node::Image(a),
+            Node::Folder("F".into(), vec![Node::Image(b)]),
+        ],
+    );
     for (series, which) in [(0, "first"), (1, "second")] {
         let src = open(&p.registry, &path, series);
-        assert_eq!(item(src.info(), "LAS X 全部参数", "Image/Attachment[Marker]@Which").as_deref(), Some(which));
+        assert_eq!(
+            item(
+                src.info(),
+                "LAS X 全部参数",
+                "Image/Attachment[Marker]@Which"
+            )
+            .as_deref(),
+            Some(which)
+        );
     }
 }
 
@@ -372,7 +526,12 @@ fn stopped_scans_and_broken_files() {
     let p = lasx!();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("cut.lif");
-    lasx::write_lif(&path, 2, "Project", &[Node::Image(lasx::stack("S", 16, 16, 2, 3, 1, 16))]);
+    lasx::write_lif(
+        &path,
+        2,
+        "Project",
+        &[Node::Image(lasx::stack("S", 16, 16, 2, 3, 1, 16))],
+    );
     let full = std::fs::read(&path).unwrap();
 
     // Each case gets its own file: Windows cannot rewrite a file that is still memory-mapped.
@@ -387,9 +546,15 @@ fn stopped_scans_and_broken_files() {
     // The last plane is missing (acquisition stopped): the others still read, it stays blank.
     let path = fresh(&full[..full.len() - 100]);
     let src = open(&p.registry, &path, 0);
-    assert_eq!(plane(&*src, 0, 0, 0), pattern_plane(16, 16, 0, 0, 0, u16::MAX));
+    assert_eq!(
+        plane(&*src, 0, 0, 0),
+        pattern_plane(16, 16, 0, 0, 0, u16::MAX)
+    );
     assert_eq!(plane(&*src, 1, 2, 0), vec![0.0; 256]);
-    assert_eq!(plane(&*src, 0, 2, 0), pattern_plane(16, 16, 0, 2, 0, u16::MAX));
+    assert_eq!(
+        plane(&*src, 0, 2, 0),
+        pattern_plane(16, 16, 0, 2, 0, u16::MAX)
+    );
 
     // Garbage and cuts anywhere are errors, never crashes.
     for cut in [0, 5, 12, 40, 400, 1500, full.len() / 2] {
@@ -403,7 +568,12 @@ fn stopped_scans_and_broken_files() {
 
     // A project whose block is missing from the file.
     let path = tmp.path().join("small.lif");
-    lasx::write_lif(&path, 2, "Project", &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))]);
+    lasx::write_lif(
+        &path,
+        2,
+        "Project",
+        &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))],
+    );
     let mut bytes = std::fs::read(&path).unwrap();
     let xml_end = 13 + 2 * u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
     bytes.truncate(xml_end);
@@ -427,7 +597,12 @@ fn stopped_scans_and_broken_files() {
 fn needs_the_plugin_and_follows_the_switch() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("a.lif");
-    lasx::write_lif(&path, 2, "P", &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))]);
+    lasx::write_lif(
+        &path,
+        2,
+        "P",
+        &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))],
+    );
     let none = Registry::new(Some(tmp.path().join("no-plugins")), "0.5.0");
     // (The host's list of well-known plugins is what turns this into "install the plugin".)
     assert!(err(&none, &path, 0).contains(".lif"));
@@ -453,25 +628,46 @@ fn large_projects_stay_within_the_fuel_budget() {
     let mut nodes = vec![];
     for k in 0..400 {
         let mut img = lasx::stack(&format!("Series{k:03}"), 8, 8, 2, 2, 1, 16);
-        let mut att = String::from("<Attachment Name=\"HardwareSetting\"><ATLConfocalSettingDefinition Zoom=\"1\">");
+        let mut att = String::from(
+            "<Attachment Name=\"HardwareSetting\"><ATLConfocalSettingDefinition Zoom=\"1\">",
+        );
         for j in 0..40 {
-            att.push_str(&format!("<Detector Name=\"D{j}\" Gain=\"{j}\" Offset=\"0\" IsActive=\"0\"/>"));
+            att.push_str(&format!(
+                "<Detector Name=\"D{j}\" Gain=\"{j}\" Offset=\"0\" IsActive=\"0\"/>"
+            ));
         }
         att.push_str("</ATLConfocalSettingDefinition></Attachment>");
         img.attachments = att;
-        nodes.push(Node::Folder(format!("Pos{}", k / 20), vec![Node::Image(img)]));
+        nodes.push(Node::Folder(
+            format!("Pos{}", k / 20),
+            vec![Node::Image(img)],
+        ));
     }
     lasx::write_lif(&path, 2, "Experiment", &nodes);
     let kb = std::fs::metadata(&path).unwrap().len() >> 10;
     for series in [0, 399] {
         let t = std::time::Instant::now();
         let src = open(&p.registry, &path, series);
-        eprintln!("opened series {series} of a {kb} KB LIF with 400 images in {:?}", t.elapsed());
+        eprintln!(
+            "opened series {series} of a {kb} KB LIF with 400 images in {:?}",
+            t.elapsed()
+        );
         let i = src.info();
         assert_eq!(i.series.len(), 400);
         assert_eq!(i.series[399].name, "Pos19/Series399");
-        assert_eq!(plane(&*src, 1, 1, 0), pattern_plane(8, 8, 1, 1, 0, u16::MAX));
-        assert_eq!(item(i, "LAS X 全部参数", "Image/Attachment[HardwareSetting]/ATLConfocalSettingDefinition/Detector[D39]@Gain").as_deref(), Some("39"));
+        assert_eq!(
+            plane(&*src, 1, 1, 0),
+            pattern_plane(8, 8, 1, 1, 0, u16::MAX)
+        );
+        assert_eq!(
+            item(
+                i,
+                "LAS X 全部参数",
+                "Image/Attachment[HardwareSetting]/ATLConfocalSettingDefinition/Detector[D39]@Gain"
+            )
+            .as_deref(),
+            Some("39")
+        );
     }
 }
 
@@ -491,17 +687,55 @@ fn sum(v: &[f64]) -> u64 {
 const FRET: [(usize, &str, usize, usize, usize, usize, u64, u64); 8] = [
     (0, "423_001", 1024, 2, 1, 1, 11614995, 104804559),
     (1, "423_002", 1024, 2, 1, 1, 32178927, 28640963),
-    (2, "FRET_AB_423_001/DonAcc_PreBleach", 1024, 2, 1, 1, 79156057, 28436101),
-    (3, "FRET_AB_423_001/Bleach003", 1024, 1, 10, 1, 133077090, 113574953),
-    (4, "FRET_AB_423_001/DonAcc_PostBleach", 1024, 2, 1, 1, 88000562, 25550033),
-    (5, "FRET_AB_423_001/FRET-Efficiency", 1024, 1, 1, 1, 35971946, 35971946),
+    (
+        2,
+        "FRET_AB_423_001/DonAcc_PreBleach",
+        1024,
+        2,
+        1,
+        1,
+        79156057,
+        28436101,
+    ),
+    (
+        3,
+        "FRET_AB_423_001/Bleach003",
+        1024,
+        1,
+        10,
+        1,
+        133077090,
+        113574953,
+    ),
+    (
+        4,
+        "FRET_AB_423_001/DonAcc_PostBleach",
+        1024,
+        2,
+        1,
+        1,
+        88000562,
+        25550033,
+    ),
+    (
+        5,
+        "FRET_AB_423_001/FRET-Efficiency",
+        1024,
+        1,
+        1,
+        1,
+        35971946,
+        35971946,
+    ),
     (6, "Series005", 512, 2, 16, 1, 378788, 1526010),
     (7, "Series006", 512, 2, 39, 1, 378080, 1926425),
 ];
 
 #[test]
 fn sample_lif_series_match_liffile() {
-    let Some(path) = sample("lif/20191025 Test FRET 585. 423, 426.lif") else { return };
+    let Some(path) = sample("lif/20191025 Test FRET 585. 423, 426.lif") else {
+        return;
+    };
     let p = lasx!();
     for &(series, name, w, c, z, t, first, last) in &FRET {
         let t0 = std::time::Instant::now();
@@ -511,23 +745,51 @@ fn sample_lif_series_match_liffile() {
         assert_eq!(i.series.len(), 8);
         assert_eq!(i.series[series].name, name);
         assert_eq!(i.series_index, series);
-        assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.dtype), (w, w, c, z, t, DType::U8), "{name}");
+        assert_eq!(
+            (i.width, i.height, i.size_c, i.size_z, i.size_t, i.dtype),
+            (w, w, c, z, t, DType::U8),
+            "{name}"
+        );
         assert_eq!(sum(&plane(&*src, 0, 0, 0)), first, "{name} first plane");
-        assert_eq!(sum(&plane(&*src, c - 1, z - 1, t - 1)), last, "{name} last plane");
+        assert_eq!(
+            sum(&plane(&*src, c - 1, z - 1, t - 1)),
+            last,
+            "{name} last plane"
+        );
         let ps = i.pixel_size.unwrap();
-        assert!(ps[0] > 0.05 && ps[0] < 0.2 && (ps[0] - ps[1]).abs() < 1e-9, "{name}: {ps:?}");
+        assert!(
+            ps[0] > 0.05 && ps[0] < 0.2 && (ps[0] - ps[1]).abs() < 1e-9,
+            "{name}: {ps:?}"
+        );
         // The computed FRET-Efficiency image has no hardware settings of its own.
         if series != 5 {
-            assert_eq!(item(i, "LAS X 图像", "软件").as_deref(), Some("LAS X 3.5.2.18963"), "{name}");
+            assert_eq!(
+                item(i, "LAS X 图像", "软件").as_deref(),
+                Some("LAS X 3.5.2.18963"),
+                "{name}"
+            );
         }
-        eprintln!("{name}: {}  opened in {open_time:?}, groups {:?}", i.format, group_names(i));
+        eprintln!(
+            "{name}: {}  opened in {open_time:?}, groups {:?}",
+            i.format,
+            group_names(i)
+        );
     }
     // The first series: pixel size 1.37e-20.. → Length/(N-1) in µm, cyan and red LUTs, detector info.
     let src = open(&p.registry, &path, 0);
     let i = src.info();
-    assert_eq!(i.channels.iter().map(|c| c.color).collect::<Vec<_>>(), [[0, 255, 255], [255, 0, 0]]);
-    assert_eq!(item(i, "LAS X 显微镜", "数值孔径 NA").as_deref(), Some("1.4"));
-    assert_eq!(item(i, "LAS X 显微镜", "物镜").as_deref(), Some("HC PL APO CS2 63x/1.40 OIL"));
+    assert_eq!(
+        i.channels.iter().map(|c| c.color).collect::<Vec<_>>(),
+        [[0, 255, 255], [255, 0, 0]]
+    );
+    assert_eq!(
+        item(i, "LAS X 显微镜", "数值孔径 NA").as_deref(),
+        Some("1.4")
+    );
+    assert_eq!(
+        item(i, "LAS X 显微镜", "物镜").as_deref(),
+        Some("HC PL APO CS2 63x/1.40 OIL")
+    );
     assert_eq!(item(i, "LAS X 图像", "采集时间").is_some(), true);
     // Six-image Z stack: Z step from the Z dimension.
     let src = open(&p.registry, &path, 6);
@@ -536,12 +798,24 @@ fn sample_lif_series_match_liffile() {
 
 #[test]
 fn sample_lif_tile_scan_is_stitched() {
-    let Some(path) = sample("lif/PR2729_frameOrderCombinedScanTypes.lif") else { return };
+    let Some(path) = sample("lif/PR2729_frameOrderCombinedScanTypes.lif") else {
+        return;
+    };
     let p = lasx!();
     let src = open(&p.registry, &path, 0);
     let i = src.info();
     // 2 T x 3 Z x 2 C, four 64x64 tiles at a 34 pixel pitch.
-    assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.page_count), (98, 98, 2, 3, 2, 12));
+    assert_eq!(
+        (
+            i.width,
+            i.height,
+            i.size_c,
+            i.size_z,
+            i.size_t,
+            i.page_count
+        ),
+        (98, 98, 2, 3, 2, 12)
+    );
     assert!(item(i, "LAS X 图像", "拼块").unwrap().contains("98×98"));
     // Composites built with numpy from liffile's frames and tile positions.
     assert_eq!(sum(&plane(&*src, 0, 0, 0)), 570372);
@@ -551,23 +825,41 @@ fn sample_lif_tile_scan_is_stitched() {
 
 #[test]
 fn sample_lof_matches_liffile() {
-    let Some(path) = sample("lof/xyct 16bit 2ch t11.lof") else { return };
+    let Some(path) = sample("lof/xyct 16bit 2ch t11.lof") else {
+        return;
+    };
     let p = lasx!();
     let t0 = std::time::Instant::now();
     let src = open(&p.registry, &path, 0);
     let i = src.info();
-    eprintln!("LOF opened in {:?}; groups {:?}", t0.elapsed(), group_names(i));
-    assert_eq!((i.width, i.height, i.size_c, i.size_z, i.size_t, i.dtype), (512, 512, 2, 1, 11, DType::U16));
+    eprintln!(
+        "LOF opened in {:?}; groups {:?}",
+        t0.elapsed(),
+        group_names(i)
+    );
+    assert_eq!(
+        (i.width, i.height, i.size_c, i.size_z, i.size_t, i.dtype),
+        (512, 512, 2, 1, 11, DType::U16)
+    );
     assert_eq!(i.format, "Leica LOF (LAS X 4.3.0.24308)");
     assert_eq!(sum(&plane(&*src, 0, 0, 0)), 1890797909);
     assert_eq!(sum(&plane(&*src, 1, 0, 10)), 418168306);
     let ps = i.pixel_size.unwrap();
     assert!((ps[0] - 8.197062e-5 * 1e6 / 511.0).abs() < 1e-6, "{ps:?}");
-    assert_eq!(item(i, "LAS X 显微镜", "数值孔径 NA").as_deref(), Some("1.4"));
+    assert_eq!(
+        item(i, "LAS X 显微镜", "数值孔径 NA").as_deref(),
+        Some("1.4")
+    );
     assert_eq!(item(i, "LAS X 显微镜", "变焦").as_deref(), Some("2.2511"));
-    assert_eq!(item(i, "LAS X 图像", "时间间隔").as_deref(), Some("1.422 s"));
+    assert_eq!(
+        item(i, "LAS X 图像", "时间间隔").as_deref(),
+        Some("1.422 s")
+    );
     // Both channels have a detector, dye and detection range.
-    let ch: Vec<&str> = group_names(i).into_iter().filter(|n| n.starts_with("通道")).collect();
+    let ch: Vec<&str> = group_names(i)
+        .into_iter()
+        .filter(|n| n.starts_with("通道"))
+        .collect();
     assert_eq!(ch.len(), 2, "{ch:?}");
     assert!(i.metadata.last().unwrap().items.len() > 300);
 }

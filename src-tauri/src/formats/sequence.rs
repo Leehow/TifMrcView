@@ -106,10 +106,12 @@ pub fn slices_in(dir: &Path, reg: &Registry) -> Result<Vec<PathBuf>> {
             None => groups.push((key, vec![f])),
         }
     }
-    let best = groups.into_iter().fold(None::<Vec<PathBuf>>, |best, (_, g)| match best {
-        Some(b) if b.len() >= g.len() => Some(b),
-        _ => Some(g),
-    });
+    let best = groups
+        .into_iter()
+        .fold(None::<Vec<PathBuf>>, |best, (_, g)| match best {
+            Some(b) if b.len() >= g.len() => Some(b),
+            _ => Some(g),
+        });
     match best {
         Some(g) if g.len() >= 2 => Ok(g),
         Some(_) => bail!("文件夹里只有一张同名规则的图像，组不成堆叠"),
@@ -122,7 +124,9 @@ pub fn slices_in(dir: &Path, reg: &Registry) -> Result<Vec<PathBuf>> {
 /// plugin sees of an acquisition folder.
 pub fn list_tree(dir: &Path) -> Vec<String> {
     fn walk(base: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
-        let Ok(rd) = std::fs::read_dir(base.join(rel)) else { return };
+        let Ok(rd) = std::fs::read_dir(base.join(rel)) else {
+            return;
+        };
         let mut entries: Vec<(String, bool)> = rd
             .filter_map(|e| e.ok())
             .filter_map(|e| {
@@ -136,7 +140,11 @@ pub fn list_tree(dir: &Path) -> Vec<String> {
             if out.len() >= LIST_MAX {
                 return;
             }
-            let path = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            let path = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
             if is_dir {
                 if depth < LIST_DEPTH {
                     walk(base, &path, depth + 1, out);
@@ -220,7 +228,12 @@ impl Sequence {
     }
 
     /// `path` is what the stack is opened as (a folder or a project file).
-    fn new(files: Vec<PathBuf>, path: &Path, reg: &Registry, plan: Option<&StackPlan>) -> Result<Sequence> {
+    fn new(
+        files: Vec<PathBuf>,
+        path: &Path,
+        reg: &Registry,
+        plan: Option<&StackPlan>,
+    ) -> Result<Sequence> {
         let first_path = files.first().context("序列里没有图像")?.clone();
         // The first slice with what metadata plugins add (pixel size,
         // instrument settings); the others only for their pixels.
@@ -233,29 +246,49 @@ impl Sequence {
         let n = files.len();
         let mut info = first.clone();
         info.path = path.to_string_lossy().into_owned();
-        info.name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| info.path.clone());
+        info.name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| info.path.clone());
         info.size_z = first.size_z * n;
         info.size_t = 1;
         info.order = DimOrder::CZT;
-        info.page_count = if first.samples_per_page > 1 { info.size_z } else { info.size_c * info.size_z };
+        info.page_count = if first.samples_per_page > 1 {
+            info.size_z
+        } else {
+            info.size_c * info.size_z
+        };
         info.series = vec![];
         info.series_index = 0;
-        let kind = plan.and_then(|p| p.format.clone()).unwrap_or_else(|| "图像序列".to_string());
+        let kind = plan
+            .and_then(|p| p.format.clone())
+            .unwrap_or_else(|| "图像序列".to_string());
         info.format = format!("{kind} · {}", first.format);
 
-        let mut group = MetaGroup { name: "图像序列".into(), items: vec![] };
+        let mut group = MetaGroup {
+            name: "图像序列".into(),
+            items: vec![],
+        };
         let mut add = |k: &str, v: String| group.items.push([k.to_string(), v]);
         if let Some(p) = plan {
             add("项目文件", p.config.to_string_lossy().into_owned());
         }
-        let dir = first_path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = first_path
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
         info.folder = Some(dir.clone());
         add("文件夹", dir);
         add("文件数", n.to_string());
         if first.size_z > 1 {
             add("每个文件的层数", first.size_z.to_string());
         }
-        let file_name = |p: &PathBuf| p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let file_name = |p: &PathBuf| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
         add("第一张", file_name(&files[0]));
         add("最后一张", file_name(&files[n - 1]));
 
@@ -264,7 +297,10 @@ impl Sequence {
         if let Some(z) = plan.and_then(|p| p.z_spacing.clone()) {
             let (z, z_unit) = z;
             let slice_unit = info.pixel_size.map(|_| info.unit.clone());
-            match (slice_unit.as_deref().and_then(unit_metres), unit_metres(&z_unit)) {
+            match (
+                slice_unit.as_deref().and_then(unit_metres),
+                unit_metres(&z_unit),
+            ) {
                 (Some(to), Some(from)) => {
                     let ps = info.pixel_size.as_mut().unwrap();
                     ps[2] = tidy(z * from / to);
@@ -290,7 +326,14 @@ impl Sequence {
         info.metadata = metadata;
 
         let open: VecDeque<(usize, Arc<dyn Source>)> = VecDeque::from([(0, Arc::from(first_src))]);
-        Ok(Sequence { files, reg: reg.snapshot(), first, info, open: Mutex::new(open), failed: Mutex::new(HashMap::new()) })
+        Ok(Sequence {
+            files,
+            reg: reg.snapshot(),
+            first,
+            info,
+            open: Mutex::new(open),
+            failed: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn files(&self) -> &[PathBuf] {
@@ -305,29 +348,47 @@ impl Sequence {
             bail!("{e}");
         }
         let path = &self.files[i];
-        let opened = super::open_pixels_with(path, 0, &self.reg).map(|(s, _)| s).and_then(|s| {
-            let a = s.info();
-            let b = &self.first;
-            if (a.width, a.height, a.dtype, a.size_c, a.samples_per_page, a.size_z)
-                != (b.width, b.height, b.dtype, b.size_c, b.samples_per_page, b.size_z)
-            {
-                bail!(
-                    "{} 是 {}×{} {}，和第一张（{}×{} {}）不一样，不能放进同一个堆叠",
-                    a.name,
+        let opened = super::open_pixels_with(path, 0, &self.reg)
+            .map(|(s, _)| s)
+            .and_then(|s| {
+                let a = s.info();
+                let b = &self.first;
+                if (
                     a.width,
                     a.height,
-                    dtype_name(a.dtype),
+                    a.dtype,
+                    a.size_c,
+                    a.samples_per_page,
+                    a.size_z,
+                ) != (
                     b.width,
                     b.height,
-                    dtype_name(b.dtype)
-                );
-            }
-            Ok(Arc::<dyn Source>::from(s))
-        });
+                    b.dtype,
+                    b.size_c,
+                    b.samples_per_page,
+                    b.size_z,
+                ) {
+                    bail!(
+                        "{} 是 {}×{} {}，和第一张（{}×{} {}）不一样，不能放进同一个堆叠",
+                        a.name,
+                        a.width,
+                        a.height,
+                        dtype_name(a.dtype),
+                        b.width,
+                        b.height,
+                        dtype_name(b.dtype)
+                    );
+                }
+                Ok(Arc::<dyn Source>::from(s))
+            });
         let src = match opened {
             Ok(s) => s,
             Err(e) => {
-                let msg = format!("第 {} 层（{}）：{e:#}", i + 1, path.file_name().unwrap_or_default().to_string_lossy());
+                let msg = format!(
+                    "第 {} 层（{}）：{e:#}",
+                    i + 1,
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
                 self.failed.lock().unwrap().insert(i, msg.clone());
                 bail!("{msg}");
             }
@@ -366,7 +427,11 @@ impl Source for Sequence {
 
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
         let page = page.min(self.info.page_count - 1);
-        let (c, z) = if self.info.samples_per_page > 1 { (0, page) } else { (page % self.info.size_c, page / self.info.size_c) };
+        let (c, z) = if self.info.samples_per_page > 1 {
+            (0, page)
+        } else {
+            (page % self.info.size_c, page / self.info.size_c)
+        };
         let per_file = self.first.size_z;
         let (file, inner_z) = (z / per_file, z % per_file);
         let src = self.slice(file)?;
@@ -393,8 +458,14 @@ mod tests {
 
     #[test]
     fn patterns_group_slices() {
-        assert_eq!(name_pattern("Run - SliceImage - 012.tif"), "run - sliceimage - #.tif");
-        assert_eq!(name_pattern("2020-08-04_17_04_11_1_0_mode_0.tif"), "#-#-#_#_#_#_#_#_mode_#.tif");
+        assert_eq!(
+            name_pattern("Run - SliceImage - 012.tif"),
+            "run - sliceimage - #.tif"
+        );
+        assert_eq!(
+            name_pattern("2020-08-04_17_04_11_1_0_mode_0.tif"),
+            "#-#-#_#_#_#_#_#_mode_#.tif"
+        );
         assert_eq!(natural_cmp("s9.tif", "s10.tif"), Ordering::Less);
     }
 
@@ -413,7 +484,9 @@ mod tests {
         let i = s.info();
         assert_eq!((i.width, i.height, i.size_z, i.page_count), (4, 3, 3, 3));
         assert!(i.format.starts_with("图像序列"), "{}", i.format);
-        let v: Vec<f64> = (0..3).map(|p| s.read_page(p).unwrap()[0].data.get_f64(0)).collect();
+        let v: Vec<f64> = (0..3)
+            .map(|p| s.read_page(p).unwrap()[0].data.get_f64(0))
+            .collect();
         assert_eq!(v, [1.0, 2.0, 10.0], "natural order");
         assert_eq!(i.metadata[0].name, "图像序列");
         assert!(Sequence::open_dir(d, 1, &reg()).is_err());
@@ -437,7 +510,11 @@ mod tests {
     #[test]
     fn single_or_no_images_are_not_a_stack() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(format!("{:#}", Sequence::open_dir(tmp.path(), 0, &reg()).err().unwrap()).contains("没有能打开的图像"));
+        assert!(format!(
+            "{:#}",
+            Sequence::open_dir(tmp.path(), 0, &reg()).err().unwrap()
+        )
+        .contains("没有能打开的图像"));
         write_tif(&tmp.path().join("a.tif"), 2, 2, 1);
         assert!(Sequence::open_dir(tmp.path(), 0, &reg()).is_err());
     }
@@ -462,9 +539,19 @@ mod tests {
         let d = tmp.path();
         std::fs::create_dir_all(d.join("a/b/c/d/e")).unwrap();
         std::fs::create_dir_all(d.join(".hidden")).unwrap();
-        for f in ["top.dat", "a/x2.tif", "a/x10.tif", "a/b/c/d/deep.tif", "a/b/c/d/e/too-deep.tif", ".hidden/h.tif"] {
+        for f in [
+            "top.dat",
+            "a/x2.tif",
+            "a/x10.tif",
+            "a/b/c/d/deep.tif",
+            "a/b/c/d/e/too-deep.tif",
+            ".hidden/h.tif",
+        ] {
             std::fs::write(d.join(f), "").unwrap();
         }
-        assert_eq!(list_tree(d), ["a/b/c/d/deep.tif", "a/x2.tif", "a/x10.tif", "top.dat"]);
+        assert_eq!(
+            list_tree(d),
+            ["a/b/c/d/deep.tif", "a/x2.tif", "a/x10.tif", "top.dat"]
+        );
     }
 }

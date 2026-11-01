@@ -1401,7 +1401,14 @@ async fn spa_run(app: AppHandle, req: SpaStep) -> CmdResult<serde_json::Value> {
                 serde_json::to_value(sp::discover(&mut p, outliner, &emit)?)?
             }
             "choose" => serde_json::json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
-            "auto" => serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, &emit)?)?,
+            "auto" => {
+                // SAM 2.1 drops picks that are clumps or fragments when its model is here.
+                let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(false);
+                let sam = app.state::<crate::sam::Sam>();
+                let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.outline(img, w, h, pts);
+                let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
+                serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, outliner, &emit)?)?
+            }
             "refine" => {
                 let reference = v.get("reference").and_then(|r| r.as_str()).map(str::to_string);
                 serde_json::to_value(sp::refine(&mut p, &serde_json::from_value(v["params"].clone())?, reference.as_deref(), &emit)?)?

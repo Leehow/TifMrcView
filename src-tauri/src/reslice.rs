@@ -58,7 +58,13 @@ impl Reslice {
                 }
             }
         }
-        Reslice { base, axis, info, pages, done: AtomicUsize::new(0) }
+        Reslice {
+            base,
+            axis,
+            info,
+            pages,
+            done: AtomicUsize::new(0),
+        }
     }
 }
 
@@ -97,8 +103,15 @@ impl Source for Reslice {
         let es = b.dtype.size();
         let (w, h) = (self.info.width, self.info.height);
         // One plane per sample, as the base file stores them.
-        let channels: Vec<usize> = if b.samples_per_page > 1 { (0..b.size_c).collect() } else { vec![c0] };
-        let mut out: Vec<PlaneData> = channels.iter().map(|_| PlaneData::zeroed(b.dtype, w * h)).collect();
+        let channels: Vec<usize> = if b.samples_per_page > 1 {
+            (0..b.size_c).collect()
+        } else {
+            vec![c0]
+        };
+        let mut out: Vec<PlaneData> = channels
+            .iter()
+            .map(|_| PlaneData::zeroed(b.dtype, w * h))
+            .collect();
         self.done.store(0, Ordering::Relaxed);
         for (k, &c) in channels.iter().enumerate() {
             // Rows of the side view are the Z slices; read them in parallel.
@@ -164,7 +177,9 @@ mod tests {
 
     fn values(r: &Reslice, page: usize) -> Vec<f64> {
         let planes = r.read_page(page).unwrap();
-        (0..planes[0].data.len()).map(|i| planes[0].data.get_f64(i)).collect()
+        (0..planes[0].data.len())
+            .map(|i| planes[0].data.get_f64(i))
+            .collect()
     }
 
     #[test]

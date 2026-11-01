@@ -52,15 +52,23 @@ impl TiffSource {
         let mut dec = Decoder::new(Cursor::new(&mmap[..]))?.with_limits(Limits::unlimited());
 
         let (w, h) = dec.dimensions()?;
-        let photometric = dec.find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)?.unwrap_or(1);
+        let photometric = dec
+            .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)?
+            .unwrap_or(1);
         let mut palette = None;
         let color = if photometric == 3 {
-            let bits = dec.find_tag_unsigned::<u16>(Tag::BitsPerSample)?.unwrap_or(1);
+            let bits = dec
+                .find_tag_unsigned::<u16>(Tag::BitsPerSample)?
+                .unwrap_or(1);
             if bits != 8 {
                 bail!("不支持 {bits} 位的调色板 TIFF");
             }
-            let map = dec.find_tag_unsigned_vec::<u16>(Tag::ColorMap)?.unwrap_or_default();
-            palette = Some(Palette { lut: color_lut(&map) });
+            let map = dec
+                .find_tag_unsigned_vec::<u16>(Tag::ColorMap)?
+                .unwrap_or_default();
+            palette = Some(Palette {
+                lut: color_lut(&map),
+            });
             match palette.as_ref().and_then(|p| p.lut.as_ref()) {
                 Some(_) => ColorType::RGB(8),
                 None => ColorType::Gray(8),
@@ -83,7 +91,10 @@ impl TiffSource {
             ColorType::RGBA(b) => (b, 4, b == 8),
             ColorType::CMYK(b) | ColorType::CMYKA(b) => (b, 4, false),
             ColorType::YCbCr(b) | ColorType::Lab(b) => (b, 3, b == 8),
-            ColorType::Multiband { bit_depth, num_samples } => (bit_depth, num_samples as usize, false),
+            ColorType::Multiband {
+                bit_depth,
+                num_samples,
+            } => (bit_depth, num_samples as usize, false),
             _ => bail!("不支持的 TIFF 颜色类型 {:?}", color),
         };
         let dtype = match (bits, sample_format) {
@@ -106,7 +117,9 @@ impl TiffSource {
             .and_then(|v| v.into_u64_vec().ok())
             .and_then(|v| v.first().copied());
         let compression = dec.find_tag_unsigned::<u16>(Tag::Compression)?.unwrap_or(1);
-        let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration)?.unwrap_or(1);
+        let planar = dec
+            .find_tag_unsigned::<u16>(Tag::PlanarConfiguration)?
+            .unwrap_or(1);
         let rational = |v: Option<tiff::decoder::ifd::Value>| {
             use tiff::decoder::ifd::Value;
             match v? {
@@ -119,7 +132,11 @@ impl TiffSource {
         };
         let xres = rational(dec.find_tag(Tag::XResolution).ok().flatten());
         let yres = rational(dec.find_tag(Tag::YResolution).ok().flatten());
-        let res_unit = dec.find_tag_unsigned::<u16>(Tag::ResolutionUnit).ok().flatten().unwrap_or(2);
+        let res_unit = dec
+            .find_tag_unsigned::<u16>(Tag::ResolutionUnit)
+            .ok()
+            .flatten()
+            .unwrap_or(2);
 
         // Walk the IFD chain, keeping full-resolution pages of the same shape.
         let mut ifds = vec![0usize];
@@ -129,13 +146,22 @@ impl TiffSource {
             if dec.next_image().is_err() {
                 break;
             }
-            let reduced = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0) & 1 == 1;
+            let reduced = dec
+                .find_tag_unsigned::<u32>(Tag::NewSubfileType)
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+                & 1
+                == 1;
             if !reduced && dec.dimensions().ok() == Some((w, h)) {
                 ifds.push(idx);
             }
         }
 
-        let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut info = ImageInfo {
             path: path.to_string_lossy().into_owned(),
             name,
@@ -167,7 +193,11 @@ impl TiffSource {
             let images = parse_imagej(&description, &mut info);
             let plane = info.page_bytes();
             if let (Some(n), Some(off)) = (images, first_strip) {
-                if ifds.len() == 1 && n > 1 && compression == 1 && off as usize + n * plane <= mmap.len() {
+                if ifds.len() == 1
+                    && n > 1
+                    && compression == 1
+                    && off as usize + n * plane <= mmap.len()
+                {
                     contiguous = Some((off as usize, little));
                     info.page_count = n;
                 }
@@ -192,7 +222,11 @@ impl TiffSource {
             let known = info.pixel_size.map(|p| p[0] > 0.0).unwrap_or(false);
             let z = info.pixel_size.map(|p| p[2]).unwrap_or(0.0);
             let yr = yres.unwrap_or(xr);
-            if !known && info.format == "ImageJ TIFF" && !info.unit.is_empty() && info.unit != "pixel" {
+            if !known
+                && info.format == "ImageJ TIFF"
+                && !info.unit.is_empty()
+                && info.unit != "pixel"
+            {
                 info.pixel_size = Some([1.0 / xr, 1.0 / yr, z]);
             } else if !known && res_unit == 3 {
                 info.pixel_size = Some([1e4 / xr, 1e4 / yr, z]);
@@ -200,7 +234,14 @@ impl TiffSource {
             }
         }
         info.fill_default_channels();
-        Ok(TiffSource { mmap, info, ifds, contiguous, planar: planar == 2, palette })
+        Ok(TiffSource {
+            mmap,
+            info,
+            ifds,
+            contiguous,
+            planar: planar == 2,
+            palette,
+        })
     }
 
     fn decoder_at(&self, ifd: usize) -> Result<Dec<'_>> {
@@ -219,7 +260,9 @@ impl TiffSource {
         let (w, h) = (self.info.width, self.info.height);
         let spp = self.info.samples_per_page;
         let bps = self.info.dtype.size();
-        let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration)?.unwrap_or(1);
+        let planar = dec
+            .find_tag_unsigned::<u16>(Tag::PlanarConfiguration)?
+            .unwrap_or(1);
         let bits = dec.colortype()?.bit_depth();
         let native = matches!(bits, 8 | 32 | 64) || (bits == 16 && self.info.dtype != DType::F32);
         if planar != 1 || !native {
@@ -283,28 +326,47 @@ impl TiffSource {
         if dec.find_tag(Tag::TileOffsets)?.is_some() {
             bail!("分块存储的调色板 TIFF 暂不支持");
         }
-        let offsets = dec.find_tag(Tag::StripOffsets)?.ok_or_else(|| anyhow!("缺少 StripOffsets"))?.into_u64_vec()?;
-        let counts = dec.find_tag(Tag::StripByteCounts)?.ok_or_else(|| anyhow!("缺少 StripByteCounts"))?.into_u64_vec()?;
-        let rps = (dec.find_tag_unsigned::<u32>(Tag::RowsPerStrip)?.unwrap_or(u32::MAX) as usize).clamp(1, h);
+        let offsets = dec
+            .find_tag(Tag::StripOffsets)?
+            .ok_or_else(|| anyhow!("缺少 StripOffsets"))?
+            .into_u64_vec()?;
+        let counts = dec
+            .find_tag(Tag::StripByteCounts)?
+            .ok_or_else(|| anyhow!("缺少 StripByteCounts"))?
+            .into_u64_vec()?;
+        let rps = (dec
+            .find_tag_unsigned::<u32>(Tag::RowsPerStrip)?
+            .unwrap_or(u32::MAX) as usize)
+            .clamp(1, h);
         let compression = dec.find_tag_unsigned::<u16>(Tag::Compression)?.unwrap_or(1);
         let predictor = dec.find_tag_unsigned::<u16>(Tag::Predictor)?.unwrap_or(1);
         let mut idx = vec![0u8; w * h];
-        idx.par_chunks_mut(rps * w).enumerate().try_for_each(|(i, out)| -> Result<()> {
-            let (off, n) = (*offsets.get(i).ok_or_else(|| anyhow!("条带缺失"))? as usize, *counts.get(i).unwrap_or(&0) as usize);
-            let src = self.mmap.get(off..off + n).ok_or_else(|| anyhow!("条带超出文件末尾"))?;
-            inflate_strip(src, compression, out)?;
-            if predictor == 2 {
-                for row in out.chunks_mut(w) {
-                    for x in 1..row.len() {
-                        row[x] = row[x].wrapping_add(row[x - 1]);
+        idx.par_chunks_mut(rps * w)
+            .enumerate()
+            .try_for_each(|(i, out)| -> Result<()> {
+                let (off, n) = (
+                    *offsets.get(i).ok_or_else(|| anyhow!("条带缺失"))? as usize,
+                    *counts.get(i).unwrap_or(&0) as usize,
+                );
+                let src = self
+                    .mmap
+                    .get(off..off + n)
+                    .ok_or_else(|| anyhow!("条带超出文件末尾"))?;
+                inflate_strip(src, compression, out)?;
+                if predictor == 2 {
+                    for row in out.chunks_mut(w) {
+                        for x in 1..row.len() {
+                            row[x] = row[x].wrapping_add(row[x - 1]);
+                        }
                     }
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })?;
         Ok(match &pal.lut {
             None => PlaneData::U8(idx),
-            Some(lut) => PlaneData::U8(idx.par_iter().flat_map_iter(|&i| lut[i as usize]).collect()),
+            Some(lut) => {
+                PlaneData::U8(idx.par_iter().flat_map_iter(|&i| lut[i as usize]).collect())
+            }
         })
     }
 
@@ -327,7 +389,8 @@ impl TiffSource {
         };
         let need = self.info.width * self.info.height * self.info.samples_per_page;
         let bits = dec.colortype()?.bit_depth();
-        if let (PlaneData::U8(packed), true) = (&data, bits < 8 && self.info.samples_per_page == 1) {
+        if let (PlaneData::U8(packed), true) = (&data, bits < 8 && self.info.samples_per_page == 1)
+        {
             // Sub-byte samples come back packed MSB first, rows padded to a byte;
             // the library has already applied WhiteIsZero inversion.
             let (w, h) = (self.info.width, self.info.height);
@@ -369,7 +432,11 @@ impl Source for TiffSource {
     }
 
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
-        let (w, h, spp) = (self.info.width, self.info.height, self.info.samples_per_page);
+        let (w, h, spp) = (
+            self.info.width,
+            self.info.height,
+            self.info.samples_per_page,
+        );
         let data = if let Some((off, little)) = self.contiguous {
             let n = self.info.page_bytes();
             let start = off + page * n;
@@ -383,14 +450,19 @@ impl Source for TiffSource {
         } else {
             data.deinterleave(spp)
         };
-        Ok(planes.into_iter().map(|data| Plane { w, h, data }).collect())
+        Ok(planes
+            .into_iter()
+            .map(|data| Plane { w, h, data })
+            .collect())
     }
 }
 
 /// Replaces the library's English "unsupported" errors with a user-facing one.
 fn unsupported_msg(e: anyhow::Error) -> anyhow::Error {
     match e.downcast_ref::<tiff::TiffError>() {
-        Some(tiff::TiffError::UnsupportedError(u)) => anyhow!("不支持的 TIFF 位深或颜色类型（{u}）"),
+        Some(tiff::TiffError::UnsupportedError(u)) => {
+            anyhow!("不支持的 TIFF 位深或颜色类型（{u}）")
+        }
         _ => e,
     }
 }
@@ -398,7 +470,9 @@ fn unsupported_msg(e: anyhow::Error) -> anyhow::Error {
 fn split_planar(data: PlaneData, plane: usize, n: usize) -> Vec<PlaneData> {
     macro_rules! s {
         ($v:expr, $var:ident) => {
-            (0..n).map(|i| PlaneData::$var($v[i * plane..(i + 1) * plane].to_vec())).collect()
+            (0..n)
+                .map(|i| PlaneData::$var($v[i * plane..(i + 1) * plane].to_vec()))
+                .collect()
         };
     }
     match data {
@@ -414,7 +488,9 @@ fn split_planar(data: PlaneData, plane: usize, n: usize) -> Vec<PlaneData> {
 }
 
 fn parse_ome(xml: &str, info: &mut ImageInfo) {
-    let Some(pixels) = xml_tags(xml, "Pixels").next() else { return };
+    let Some(pixels) = xml_tags(xml, "Pixels").next() else {
+        return;
+    };
     let get = |k: &str| xml_attr(pixels, k).and_then(|v| v.parse::<usize>().ok());
     info.format = "OME-TIFF".into();
     info.size_c = get("SizeC").unwrap_or(1).max(1);
@@ -425,8 +501,14 @@ fn parse_ome(xml: &str, info: &mut ImageInfo) {
     }
     let fx = |k: &str| xml_attr(pixels, k).and_then(|v| v.parse::<f64>().ok());
     if let Some(px) = fx("PhysicalSizeX") {
-        info.pixel_size = Some([px, fx("PhysicalSizeY").unwrap_or(px), fx("PhysicalSizeZ").unwrap_or(0.0)]);
-        info.unit = xml_attr(pixels, "PhysicalSizeXUnit").unwrap_or("µm").to_string();
+        info.pixel_size = Some([
+            px,
+            fx("PhysicalSizeY").unwrap_or(px),
+            fx("PhysicalSizeZ").unwrap_or(0.0),
+        ]);
+        info.unit = xml_attr(pixels, "PhysicalSizeXUnit")
+            .unwrap_or("µm")
+            .to_string();
     }
     info.channels = xml_tags(xml, "Channel")
         .enumerate()
@@ -484,7 +566,11 @@ fn parse_imagej(desc: &str, info: &mut ImageInfo) -> Option<usize> {
         info.pixel_size = Some([0.0, 0.0, sp]);
     }
     if let Some(u) = kv("unit") {
-        info.unit = if u == "micron" || u == "um" || u == "\\u00B5m" { "µm".into() } else { u };
+        info.unit = if u == "micron" || u == "um" || u == "\\u00B5m" {
+            "µm".into()
+        } else {
+            u
+        };
     }
     images
 }
@@ -498,7 +584,11 @@ fn color_lut(map: &[u16]) -> Option<Vec<[u8; 3]>> {
         return None;
     }
     let (r, g, b) = (&map[..n], &map[n..2 * n], &map[2 * n..3 * n]);
-    let gray = (0..n).filter(|&i| r[i] == g[i] && g[i] == b[i] && (r[i] >> 8) as usize == i * 255 / (n - 1).max(1)).count();
+    let gray = (0..n)
+        .filter(|&i| {
+            r[i] == g[i] && g[i] == b[i] && (r[i] >> 8) as usize == i * 255 / (n - 1).max(1)
+        })
+        .count();
     if gray * 4 >= n * 3 {
         return None;
     }
@@ -611,7 +701,11 @@ mod format_fix_tests {
     #[test]
     fn bilevel_black_is_zero() {
         // 10x2, rows padded to 2 bytes.
-        let (info, d) = read("b1", &build(10, 2, 1, 1, &[0b1010_0000, 0b0100_0000, 0xff, 0xc0])).unwrap();
+        let (info, d) = read(
+            "b1",
+            &build(10, 2, 1, 1, &[0b1010_0000, 0b0100_0000, 0xff, 0xc0]),
+        )
+        .unwrap();
         assert_eq!(info.dtype, DType::U8);
         let PlaneData::U8(v) = d else { panic!() };
         let mut want = vec![1, 0, 1, 0, 0, 0, 0, 0, 0, 1];
@@ -638,7 +732,9 @@ mod format_fix_tests {
     fn twelve_bit_gray_clear_error() {
         // 2x1, 12-bit packed: 0xABC 0x123.
         // The tiff crate cannot decode 12-bit samples: expect a clear error.
-        let e = read("b12", &build(2, 1, 12, 1, &[0xab, 0xc1, 0x23])).err().unwrap();
+        let e = read("b12", &build(2, 1, 12, 1, &[0xab, 0xc1, 0x23]))
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("不支持的 TIFF 位深"), "{e:#}");
     }
 }
@@ -686,7 +782,9 @@ mod tests {
 
     /// `n` pages of 3x2 pixels where page p holds p*10 + pixel index.
     fn gray8_pages(n: usize) -> Vec<Vec<u8>> {
-        (0..n).map(|p| (0..6).map(|i| (p * 10 + i) as u8).collect()).collect()
+        (0..n)
+            .map(|p| (0..6).map(|i| (p * 10 + i) as u8).collect())
+            .collect()
     }
 
     #[test]
@@ -697,12 +795,18 @@ mod tests {
         let src = open(&path);
         let info = src.info();
         assert_eq!((info.width, info.height), (3, 2));
-        assert_eq!((info.size_c, info.size_z, info.size_t, info.page_count), (1, 4, 1, 4));
+        assert_eq!(
+            (info.size_c, info.size_z, info.size_t, info.page_count),
+            (1, 4, 1, 4)
+        );
         assert_eq!(info.dtype, DType::U8);
         assert!(!info.is_rgb);
         assert_eq!(info.format, "TIFF");
         assert_eq!(info.pixel_size, None);
-        assert_eq!(page_values(&*src, 2, 0), [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
+        assert_eq!(
+            page_values(&*src, 2, 0),
+            [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]
+        );
         assert_eq!(info.locate(0, 3, 0), (3, 0));
     }
 
@@ -710,12 +814,17 @@ mod tests {
     fn gray16_stack() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.tif");
-        let pages: Vec<Vec<u16>> = (0..3).map(|p| (0..6).map(|i| (p * 20000 + i * 1000) as u16).collect()).collect();
+        let pages: Vec<Vec<u16>> = (0..3)
+            .map(|p| (0..6).map(|i| (p * 20000 + i * 1000) as u16).collect())
+            .collect();
         write_tiff::<colortype::Gray16>(&path, (3, 2), &pages, None, None);
         let src = open(&path);
         assert_eq!(src.info().dtype, DType::U16);
         assert_eq!(src.info().size_z, 3);
-        assert_eq!(page_values(&*src, 2, 0), [40000.0, 41000.0, 42000.0, 43000.0, 44000.0, 45000.0]);
+        assert_eq!(
+            page_values(&*src, 2, 0),
+            [40000.0, 41000.0, 42000.0, 43000.0, 44000.0, 45000.0]
+        );
     }
 
     #[test]
@@ -723,10 +832,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.tif");
         let vals = vec![-1.5f32, 0.0, 0.25, 1e6, f32::MIN_POSITIVE, 3.0];
-        write_tiff::<colortype::Gray32Float>(&path, (3, 2), std::slice::from_ref(&vals), None, None);
+        write_tiff::<colortype::Gray32Float>(
+            &path,
+            (3, 2),
+            std::slice::from_ref(&vals),
+            None,
+            None,
+        );
         let src = open(&path);
         assert_eq!(src.info().dtype, DType::F32);
-        assert_eq!(page_values(&*src, 0, 0), vals.iter().map(|&v| v as f64).collect::<Vec<_>>());
+        assert_eq!(
+            page_values(&*src, 0, 0),
+            vals.iter().map(|&v| v as f64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -739,7 +857,15 @@ mod tests {
         let src = open(&path);
         let info = src.info();
         assert!(info.is_rgb);
-        assert_eq!((info.size_c, info.size_z, info.samples_per_page, info.page_count), (3, 2, 3, 2));
+        assert_eq!(
+            (
+                info.size_c,
+                info.size_z,
+                info.samples_per_page,
+                info.page_count
+            ),
+            (3, 2, 3, 2)
+        );
         assert_eq!(info.channels.len(), 3);
         assert_eq!(src.read_page(1).unwrap().len(), 3);
         assert_eq!(page_values(&*src, 0, 0), [0.0, 1.0, 2.0, 3.0]);
@@ -767,7 +893,10 @@ mod tests {
         img.rows_per_strip(2).unwrap();
         img.write_data(&page).unwrap();
         let src = open(&path);
-        assert_eq!(page_values(&*src, 0, 0), page.iter().map(|&v| v as f64).collect::<Vec<_>>());
+        assert_eq!(
+            page_values(&*src, 0, 0),
+            page.iter().map(|&v| v as f64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -779,7 +908,10 @@ mod tests {
         let src = open(&path);
         let info = src.info();
         assert_eq!(info.format, "ImageJ TIFF");
-        assert_eq!((info.size_c, info.size_z, info.size_t, info.page_count), (2, 3, 1, 6));
+        assert_eq!(
+            (info.size_c, info.size_z, info.size_t, info.page_count),
+            (2, 3, 1, 6)
+        );
         assert_eq!(info.unit, "µm");
         // The z spacing comes from the description.
         assert_eq!(info.pixel_size.map(|p| p[2]), Some(0.5));
@@ -796,7 +928,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.tif");
         let desc = "ImageJ=1.53t\nimages=1\nunit=micron\n";
-        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), Some(desc), Some((ResolutionUnit::None, 4)));
+        write_tiff::<colortype::Gray8>(
+            &path,
+            (3, 2),
+            &gray8_pages(1),
+            Some(desc),
+            Some((ResolutionUnit::None, 4)),
+        );
         let info = open(&path).info().clone();
         assert_eq!(info.unit, "µm");
         assert_eq!(info.pixel_size, Some([0.25, 0.25, 0.0]));
@@ -806,7 +944,13 @@ mod tests {
     fn plain_tiff_resolution_in_centimetres() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.tif");
-        write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), None, Some((ResolutionUnit::Centimeter, 10_000)));
+        write_tiff::<colortype::Gray8>(
+            &path,
+            (3, 2),
+            &gray8_pages(1),
+            None,
+            Some((ResolutionUnit::Centimeter, 10_000)),
+        );
         let info = open(&path).info().clone();
         assert_eq!(info.unit, "µm");
         assert_eq!(info.pixel_size, Some([1.0, 1.0, 0.0]));
@@ -821,13 +965,19 @@ mod tests {
         let desc = "ImageJ=1.53t\nimages=3\nslices=3\n";
         write_tiff::<colortype::Gray8>(&path, (3, 2), &gray8_pages(1), Some(desc), None);
         let mut bytes = std::fs::read(&path).unwrap();
-        let off = bytes.windows(6).position(|w| w == [0, 1, 2, 3, 4, 5]).unwrap();
+        let off = bytes
+            .windows(6)
+            .position(|w| w == [0, 1, 2, 3, 4, 5])
+            .unwrap();
         bytes.extend_from_slice(&[0; 64]);
         std::fs::write(&path, &bytes).unwrap();
         let src = open(&path);
         assert_eq!((src.info().page_count, src.info().size_z), (3, 3));
         assert_eq!(page_values(&*src, 0, 0), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
-        let want: Vec<f64> = bytes[off + 12..off + 18].iter().map(|&b| b as f64).collect();
+        let want: Vec<f64> = bytes[off + 12..off + 18]
+            .iter()
+            .map(|&b| b as f64)
+            .collect();
         assert_eq!(page_values(&*src, 2, 0), want);
     }
 
@@ -871,7 +1021,10 @@ mod tests {
         let page: Vec<u8> = (0..12).collect();
         write_tiff::<colortype::RGB8>(&path, (2, 2), &[page.clone(), page], Some(desc), None);
         let info = open(&path).info().clone();
-        assert_eq!((info.size_c, info.size_z, info.size_t, info.samples_per_page), (3, 2, 1, 3));
+        assert_eq!(
+            (info.size_c, info.size_z, info.size_t, info.samples_per_page),
+            (3, 2, 1, 3)
+        );
     }
 
     // ---- parsers on strings ----------------------------------------------
@@ -883,7 +1036,10 @@ mod tests {
     #[test]
     fn parse_imagej_fields() {
         let mut i = info();
-        let n = parse_imagej("ImageJ=1.53\nimages=24\nchannels=2\nslices=3\nframes=4\nspacing=0.7\nunit=um\n", &mut i);
+        let n = parse_imagej(
+            "ImageJ=1.53\nimages=24\nchannels=2\nslices=3\nframes=4\nspacing=0.7\nunit=um\n",
+            &mut i,
+        );
         assert_eq!(n, Some(24));
         assert_eq!((i.size_c, i.size_z, i.size_t), (2, 3, 4));
         assert_eq!(i.pixel_size, Some([0.0, 0.0, 0.7]));
@@ -926,7 +1082,10 @@ mod tests {
     #[test]
     fn parse_ome_defaults_and_order() {
         let mut i = info();
-        parse_ome(r#"<OME><Pixels SizeZ="6" DimensionOrder="XYTZC"/></OME>"#, &mut i);
+        parse_ome(
+            r#"<OME><Pixels SizeZ="6" DimensionOrder="XYTZC"/></OME>"#,
+            &mut i,
+        );
         assert_eq!((i.size_c, i.size_z, i.size_t), (1, 6, 1));
         assert!(matches!(i.order, DimOrder::TZC));
         assert_eq!(i.pixel_size, None);
@@ -936,7 +1095,10 @@ mod tests {
     #[test]
     fn parse_ome_physical_size_prefix_does_not_confuse_size() {
         let mut i = info();
-        parse_ome(r#"<OME><Pixels PhysicalSizeZ="2" SizeZ="4" PhysicalSizeX="0.1"/></OME>"#, &mut i);
+        parse_ome(
+            r#"<OME><Pixels PhysicalSizeZ="2" SizeZ="4" PhysicalSizeX="0.1"/></OME>"#,
+            &mut i,
+        );
         assert_eq!(i.size_z, 4);
         assert_eq!(i.pixel_size, Some([0.1, 0.1, 2.0]));
         assert_eq!(i.unit, "µm");
@@ -949,7 +1111,11 @@ mod tests {
             r#"<OME><Pixels SizeC="3" SizeZ="2"><Channel Name="A" Color="-65536"/><Channel Color="0"/><Channel Fluor="F" Color="16711935"/></Pixels></OME>"#,
             &mut i,
         );
-        let ch: Vec<_> = i.channels.iter().map(|c| (c.name.as_str(), c.color)).collect();
+        let ch: Vec<_> = i
+            .channels
+            .iter()
+            .map(|c| (c.name.as_str(), c.color))
+            .collect();
         // -65536 = 0xFFFF0000 (RGBA) -> yellow; 0 is "no colour" -> default; 0x00FF00FF -> (0,255,0).
         assert_eq!(ch[0], ("A", [255, 255, 0]));
         assert_eq!(ch[1], ("C2", crate::image::DEFAULT_COLORS[1]));
@@ -959,7 +1125,10 @@ mod tests {
     #[test]
     fn parse_ome_single_channel_is_white() {
         let mut i = info();
-        parse_ome(r#"<OME><Pixels SizeZ="1"><Channel Name="A" Color="-65536"/></Pixels></OME>"#, &mut i);
+        parse_ome(
+            r#"<OME><Pixels SizeZ="1"><Channel Name="A" Color="-65536"/></Pixels></OME>"#,
+            &mut i,
+        );
         assert_eq!(i.channels[0].color, [255, 255, 255]);
     }
 

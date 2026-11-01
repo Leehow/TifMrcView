@@ -35,7 +35,11 @@ impl MrcSource {
         let mut little = mmap[212] != 0x11;
         let rd = |off: usize, le: bool| {
             let b: [u8; 4] = mmap[off..off + 4].try_into().unwrap();
-            if le { i32::from_le_bytes(b) } else { i32::from_be_bytes(b) }
+            if le {
+                i32::from_le_bytes(b)
+            } else {
+                i32::from_be_bytes(b)
+            }
         };
         // Some writers leave the stamp empty; sanity-check the mode instead.
         let plausible = |m: i32| matches!(m, 0 | 1 | 2 | 3 | 4 | 6 | 12 | 101);
@@ -44,7 +48,11 @@ impl MrcSource {
         }
         let rf = |off: usize| {
             let b: [u8; 4] = mmap[off..off + 4].try_into().unwrap();
-            if little { f32::from_le_bytes(b) } else { f32::from_be_bytes(b) }
+            if little {
+                f32::from_le_bytes(b)
+            } else {
+                f32::from_be_bytes(b)
+            }
         };
         let (nx, ny, nz, mode) = (rd(0, little), rd(4, little), rd(8, little), rd(12, little));
         let (mx, my, mz) = (rd(28, little), rd(32, little), rd(36, little));
@@ -74,11 +82,20 @@ impl MrcSource {
             bail!("MRC 数据被截断");
         }
         let depth = d.min(available);
-        let px = |c: f32, m: i32| if m > 0 && c > 0.0 { c as f64 / m as f64 } else { 0.0 };
+        let px = |c: f32, m: i32| {
+            if m > 0 && c > 0.0 {
+                c as f64 / m as f64
+            } else {
+                0.0
+            }
+        };
         let pixel_size = (cx > 0.0).then(|| [px(cx, mx), px(cy, my), px(cz, mz)]);
         let mut info = ImageInfo {
             path: path.to_string_lossy().into_owned(),
-            name: path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+            name: path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             format: format!("MRC (mode {mode})"),
             width: w,
             height: h,
@@ -102,12 +119,26 @@ impl MrcSource {
         info.fill_default_channels();
         let rs = |off: usize| {
             let b = [mmap[off], mmap[off + 1]];
-            if little { i16::from_le_bytes(b) } else { i16::from_be_bytes(b) }
+            if little {
+                i16::from_le_bytes(b)
+            } else {
+                i16::from_be_bytes(b)
+            }
         };
-        let serial_em = (&mmap[104..108] == b"SERI").then(|| (rs(128).max(0) as usize, rs(130) as i32));
+        let serial_em =
+            (&mmap[104..108] == b"SERI").then(|| (rs(128).max(0) as usize, rs(130) as i32));
         let ext = 1024..data_offset.min(mmap.len());
         let mean = rf(84);
-        Ok(MrcSource { mmap, info, data_offset, little, mode, ext, serial_em, mean })
+        Ok(MrcSource {
+            mmap,
+            info,
+            data_offset,
+            little,
+            mode,
+            ext,
+            serial_em,
+            mean,
+        })
     }
 
     /// Sections in the file.
@@ -200,7 +231,11 @@ impl Source for MrcSource {
                     .par_chunks_exact(2)
                     .map(|b| {
                         let a = [b[0], b[1]];
-                        f16_to_f32(if little { u16::from_le_bytes(a) } else { u16::from_be_bytes(a) })
+                        f16_to_f32(if little {
+                            u16::from_le_bytes(a)
+                        } else {
+                            u16::from_be_bytes(a)
+                        })
                     })
                     .collect(),
             ),
@@ -214,13 +249,21 @@ impl Source for MrcSource {
                             let (re, im) = if half == 2 {
                                 let f = |s: &[u8]| {
                                     let a = [s[0], s[1]];
-                                    (if little { i16::from_le_bytes(a) } else { i16::from_be_bytes(a) }) as f32
+                                    (if little {
+                                        i16::from_le_bytes(a)
+                                    } else {
+                                        i16::from_be_bytes(a)
+                                    }) as f32
                                 };
                                 (f(&b[..2]), f(&b[2..]))
                             } else {
                                 let f = |s: &[u8]| {
                                     let a: [u8; 4] = s.try_into().unwrap();
-                                    if little { f32::from_le_bytes(a) } else { f32::from_be_bytes(a) }
+                                    if little {
+                                        f32::from_le_bytes(a)
+                                    } else {
+                                        f32::from_be_bytes(a)
+                                    }
                                 };
                                 (f(&b[..4]), f(&b[4..]))
                             };
@@ -391,18 +434,29 @@ mod tests {
     }
 
     fn f32_bytes(v: &[f32], le: bool) -> Vec<u8> {
-        v.iter().flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() }).collect()
+        v.iter()
+            .flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() })
+            .collect()
     }
 
     fn i16_bytes(v: &[i16], le: bool) -> Vec<u8> {
-        v.iter().flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() }).collect()
+        v.iter()
+            .flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() })
+            .collect()
     }
 
     fn u16_bytes(v: &[u16], le: bool) -> Vec<u8> {
-        v.iter().flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() }).collect()
+        v.iter()
+            .flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() })
+            .collect()
     }
 
-    fn write(dir: &tempfile::TempDir, name: &str, header: Vec<u8>, data: &[u8]) -> std::path::PathBuf {
+    fn write(
+        dir: &tempfile::TempDir,
+        name: &str,
+        header: Vec<u8>,
+        data: &[u8],
+    ) -> std::path::PathBuf {
         let path = dir.path().join(name);
         let mut bytes = header;
         bytes.extend_from_slice(data);
@@ -430,14 +484,23 @@ mod tests {
             let path = write(&dir, "a.mrc", h, &f32_bytes(&vals, le));
             let src = open(&path);
             let info = src.info();
-            assert_eq!((info.width, info.height, info.size_z, info.page_count), (3, 2, 2, 2));
+            assert_eq!(
+                (info.width, info.height, info.size_z, info.page_count),
+                (3, 2, 2, 2)
+            );
             assert_eq!((info.size_c, info.size_t), (1, 1));
             assert_eq!(info.dtype, DType::F32);
             assert_eq!(info.format, "MRC (mode 2)");
             assert_eq!(info.unit, "Å");
             assert_eq!(info.pixel_size, Some([2.0, 2.5, 4.0]));
-            assert_eq!(values(&*src, 0), vals[..6].iter().map(|&v| v as f64).collect::<Vec<_>>());
-            assert_eq!(values(&*src, 1), vals[6..].iter().map(|&v| v as f64).collect::<Vec<_>>());
+            assert_eq!(
+                values(&*src, 0),
+                vals[..6].iter().map(|&v| v as f64).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                values(&*src, 1),
+                vals[6..].iter().map(|&v| v as f64).collect::<Vec<_>>()
+            );
         }
     }
 
@@ -445,7 +508,12 @@ mod tests {
     fn mode1_signed_16_bit() {
         for le in [true, false] {
             let dir = tempfile::tempdir().unwrap();
-            let path = write(&dir, "a.mrc", header([2, 2, 1], 1, le, [0.0; 3]), &i16_bytes(&[-32768, -1, 0, 32767], le));
+            let path = write(
+                &dir,
+                "a.mrc",
+                header([2, 2, 1], 1, le, [0.0; 3]),
+                &i16_bytes(&[-32768, -1, 0, 32767], le),
+            );
             let src = open(&path);
             assert_eq!(src.info().dtype, DType::I16);
             assert_eq!(src.info().pixel_size, None);
@@ -457,7 +525,12 @@ mod tests {
     fn mode6_unsigned_16_bit() {
         for le in [true, false] {
             let dir = tempfile::tempdir().unwrap();
-            let path = write(&dir, "a.mrc", header([2, 1, 1], 6, le, [0.0; 3]), &u16_bytes(&[0, 65535], le));
+            let path = write(
+                &dir,
+                "a.mrc",
+                header([2, 1, 1], 6, le, [0.0; 3]),
+                &u16_bytes(&[0, 65535], le),
+            );
             let src = open(&path);
             assert_eq!(src.info().dtype, DType::U16);
             assert_eq!(values(&*src, 0), [0.0, 65535.0]);
@@ -467,7 +540,12 @@ mod tests {
     #[test]
     fn mode0_is_signed_without_imod_stamp() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write(&dir, "a.mrc", header([4, 1, 1], 0, true, [0.0; 3]), &[0, 127, 128, 255]);
+        let path = write(
+            &dir,
+            "a.mrc",
+            header([4, 1, 1], 0, true, [0.0; 3]),
+            &[0, 127, 128, 255],
+        );
         let src = open(&path);
         assert_eq!(src.info().dtype, DType::I8);
         assert_eq!(values(&*src, 0), [0.0, 127.0, -128.0, -1.0]);
@@ -498,7 +576,12 @@ mod tests {
         for le in [true, false] {
             let dir = tempfile::tempdir().unwrap();
             // 1.0, -2.0, 0.0, 65504
-            let path = write(&dir, "a.mrc", header([2, 2, 1], 12, le, [0.0; 3]), &u16_bytes(&[0x3C00, 0xC000, 0, 0x7BFF], le));
+            let path = write(
+                &dir,
+                "a.mrc",
+                header([2, 2, 1], 12, le, [0.0; 3]),
+                &u16_bytes(&[0x3C00, 0xC000, 0, 0x7BFF], le),
+            );
             let src = open(&path);
             assert_eq!(src.info().dtype, DType::F32);
             assert_eq!(values(&*src, 0), [1.0, -2.0, 0.0, 65504.0]);
@@ -509,7 +592,12 @@ mod tests {
     fn mode101_four_bit_packed() {
         let dir = tempfile::tempdir().unwrap();
         // 3x2 pixels, rows padded to 2 bytes; low nibble is the even pixel.
-        let path = write(&dir, "a.mrc", header([3, 2, 1], 101, true, [0.0; 3]), &[0x21, 0x03, 0x54, 0x06]);
+        let path = write(
+            &dir,
+            "a.mrc",
+            header([3, 2, 1], 101, true, [0.0; 3]),
+            &[0x21, 0x03, 0x54, 0x06],
+        );
         let src = open(&path);
         assert_eq!(src.info().dtype, DType::U8);
         assert_eq!(values(&*src, 0), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -518,9 +606,19 @@ mod tests {
     #[test]
     fn complex_modes_show_amplitude() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write(&dir, "c3.mrc", header([2, 1, 1], 3, true, [0.0; 3]), &i16_bytes(&[3, 4, -6, 8], true));
+        let path = write(
+            &dir,
+            "c3.mrc",
+            header([2, 1, 1], 3, true, [0.0; 3]),
+            &i16_bytes(&[3, 4, -6, 8], true),
+        );
         assert_eq!(values(&*open(&path), 0), [5.0, 10.0]);
-        let path = write(&dir, "c4.mrc", header([1, 1, 1], 4, false, [0.0; 3]), &f32_bytes(&[5.0, 12.0], false));
+        let path = write(
+            &dir,
+            "c4.mrc",
+            header([1, 1, 1], 4, false, [0.0; 3]),
+            &f32_bytes(&[5.0, 12.0], false),
+        );
         assert_eq!(values(&*open(&path), 0), [13.0]);
     }
 
@@ -553,7 +651,12 @@ mod tests {
         // Header promises 5 planes of 2 floats, file holds 2 and a half.
         let mut data = f32_bytes(&[1.0, 2.0, 3.0, 4.0, 5.0], true);
         data.truncate(20);
-        let src = open(&write(&dir, "a.mrc", header([2, 1, 5], 2, true, [0.0; 3]), &data));
+        let src = open(&write(
+            &dir,
+            "a.mrc",
+            header([2, 1, 5], 2, true, [0.0; 3]),
+            &data,
+        ));
         assert_eq!(src.info().size_z, 2);
         assert_eq!(src.info().page_count, 2);
         assert_eq!(values(&*src, 1), [3.0, 4.0]);
@@ -569,18 +672,43 @@ mod tests {
         assert!(formats::open(&short).is_err());
 
         // No data at all.
-        let p = write(&dir, "nodata.mrc", header([2, 2, 1], 2, true, [0.0; 3]), &[]);
+        let p = write(
+            &dir,
+            "nodata.mrc",
+            header([2, 2, 1], 2, true, [0.0; 3]),
+            &[],
+        );
         assert!(formats::open(&p).is_err());
         // Less than one plane.
-        let p = write(&dir, "partial.mrc", header([2, 2, 1], 2, true, [0.0; 3]), &[0; 15]);
+        let p = write(
+            &dir,
+            "partial.mrc",
+            header([2, 2, 1], 2, true, [0.0; 3]),
+            &[0; 15],
+        );
         assert!(formats::open(&p).is_err());
         // Zero and negative dimensions.
-        let p = write(&dir, "zero.mrc", header([0, 2, 1], 2, true, [0.0; 3]), &[0; 64]);
+        let p = write(
+            &dir,
+            "zero.mrc",
+            header([0, 2, 1], 2, true, [0.0; 3]),
+            &[0; 64],
+        );
         assert!(formats::open(&p).is_err());
-        let p = write(&dir, "neg.mrc", header([2, -2, 1], 2, true, [0.0; 3]), &[0; 64]);
+        let p = write(
+            &dir,
+            "neg.mrc",
+            header([2, -2, 1], 2, true, [0.0; 3]),
+            &[0; 64],
+        );
         assert!(formats::open(&p).is_err());
         // Unsupported mode.
-        let p = write(&dir, "mode5.mrc", header([2, 2, 1], 5, true, [0.0; 3]), &[0; 64]);
+        let p = write(
+            &dir,
+            "mode5.mrc",
+            header([2, 2, 1], 5, true, [0.0; 3]),
+            &[0; 64],
+        );
         assert!(formats::open(&p).is_err());
     }
 

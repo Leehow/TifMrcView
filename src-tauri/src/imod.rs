@@ -98,7 +98,9 @@ pub fn load(path: &Path) -> Result<Model> {
     Ok(Model {
         path: path.to_string_lossy().into_owned(),
         name: if name.is_empty() {
-            path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            path.file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
         } else {
             name
         },
@@ -178,8 +180,13 @@ fn read_chunks(r: &mut Rd<'_>, objects: &mut Vec<Object>) -> Result<()> {
 /// Model files that probably belong to an image: same stem with an IMOD
 /// model extension, e.g. `tomo.rec` → `tomo.mod`, `tilt.st` → `tilt.fid`.
 pub fn find_for(image: &Path) -> Vec<PathBuf> {
-    let Some(dir) = image.parent() else { return vec![] };
-    let name = image.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let Some(dir) = image.parent() else {
+        return vec![];
+    };
+    let name = image
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut stems = vec![];
     if let Some(i) = name.find('.') {
         stems.push(name[..i].to_string());
@@ -205,14 +212,23 @@ mod tests {
     /// Set TIFMRCVIEW_TEST_MOD to a model file to run.
     #[test]
     fn reads_model_from_env() {
-        let Ok(p) = std::env::var("TIFMRCVIEW_TEST_MOD") else { return };
+        let Ok(p) = std::env::var("TIFMRCVIEW_TEST_MOD") else {
+            return;
+        };
         let m = super::load(p.as_ref()).unwrap();
         println!("{} objects, size {:?}", m.objects.len(), m.size);
         for o in &m.objects {
             let n: usize = o.contours.iter().map(|c| c.pts.len() / 3).sum();
-            println!("  {} color {:?} open {} scat {} contours {} points {} first {:?}",
-                o.name, o.color, o.open, o.scattered, o.contours.len(), n,
-                o.contours.first().map(|c| &c.pts[..3.min(c.pts.len())]));
+            println!(
+                "  {} color {:?} open {} scat {} contours {} points {} first {:?}",
+                o.name,
+                o.color,
+                o.open,
+                o.scattered,
+                o.contours.len(),
+                n,
+                o.contours.first().map(|c| &c.pts[..3.min(c.pts.len())])
+            );
         }
         assert!(!m.objects.is_empty());
     }

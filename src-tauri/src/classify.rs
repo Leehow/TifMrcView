@@ -45,11 +45,19 @@ fn radius(sigma: f32) -> usize {
 fn kernels(sigma: f32) -> [Vec<f32>; 3] {
     let r = radius(sigma) as i32;
     let s2 = sigma * sigma;
-    let g: Vec<f32> = (-r..=r).map(|x| (-(x * x) as f32 / (2.0 * s2)).exp()).collect();
+    let g: Vec<f32> = (-r..=r)
+        .map(|x| (-(x * x) as f32 / (2.0 * s2)).exp())
+        .collect();
     let sum: f32 = g.iter().sum();
     let g: Vec<f32> = g.iter().map(|v| v / sum).collect();
-    let d1 = (-r..=r).zip(&g).map(|(x, v)| -(x as f32) / s2 * v * sigma).collect();
-    let d2: Vec<f32> = (-r..=r).zip(&g).map(|(x, v)| ((x * x) as f32 / (s2 * s2) - 1.0 / s2) * v * s2).collect();
+    let d1 = (-r..=r)
+        .zip(&g)
+        .map(|(x, v)| -(x as f32) / s2 * v * sigma)
+        .collect();
+    let d2: Vec<f32> = (-r..=r)
+        .zip(&g)
+        .map(|(x, v)| ((x * x) as f32 / (s2 * s2) - 1.0 / s2) * v * s2)
+        .collect();
     // The sampled second derivative should sum to 0 (no response to a flat image).
     let mean = d2.iter().sum::<f32>() / d2.len() as f32;
     let d2 = d2.iter().map(|v| v - mean).collect();
@@ -88,7 +96,11 @@ fn upload<const D: usize>(v: Vec<f32>, shape: [usize; D], dev: &Device) -> Tenso
 /// Features of one slice, feature-major: `out[f * w * h + i]`. `pixels` are
 /// already scaled to about 0..1.
 pub fn features(dev: &Device, pixels: &[f32], w: usize, h: usize) -> Vec<f32> {
-    features_tensor(dev, pixels, w, h).into_data().convert::<f32>().try_into_vec::<f32>().unwrap()
+    features_tensor(dev, pixels, w, h)
+        .into_data()
+        .convert::<f32>()
+        .try_into_vec::<f32>()
+        .unwrap()
 }
 
 /// `features` left on the device, shape [FEATURES, w * h].
@@ -97,19 +109,37 @@ pub fn features_tensor(dev: &Device, pixels: &[f32], w: usize, h: usize) -> Tens
     let (pw, ph) = (w + 2 * pad, h + 2 * pad);
     let img = upload(reflect(pixels, w, h, pad), [1, 1, ph, pw], dev);
     let n = w * h;
-    let mut out = vec![img.clone().slice([0..1, 0..1, pad..pad + h, pad..pad + w]).reshape([1, n])];
+    let mut out = vec![img
+        .clone()
+        .slice([0..1, 0..1, pad..pad + h, pad..pad + w])
+        .reshape([1, n])];
     for sigma in SIGMAS {
         let r = radius(sigma);
         let k = 2 * r + 1;
         let [g, d1, d2] = kernels(sigma);
         // Along x: channels g, d1, d2.
         let wx: Vec<f32> = [&g, &d1, &d2].into_iter().flatten().copied().collect();
-        let rows = conv2d(img.clone(), upload(wx, [3, 1, 1, k], dev), None, ConvOptions::new([1, 1], [0, 0], [1, 1], 1));
+        let rows = conv2d(
+            img.clone(),
+            upload(wx, [3, 1, 1, k], dev),
+            None,
+            ConvOptions::new([1, 1], [0, 0], [1, 1], 1),
+        );
         // Along y, in groups: G = g·g, Gx = d1·g, Gy = g·d1, Gxx = d2·g, Gyy = g·d2, Gxy = d1·d1.
-        let pick = Tensor::<1, Int>::from_ints(TensorData::new(vec![0i64, 1, 0, 2, 0, 1], [6]), dev);
+        let pick =
+            Tensor::<1, Int>::from_ints(TensorData::new(vec![0i64, 1, 0, 2, 0, 1], [6]), dev);
         let six = rows.select(1, pick);
-        let wy: Vec<f32> = [&g, &g, &d1, &g, &d2, &d1].into_iter().flatten().copied().collect();
-        let all = conv2d(six, upload(wy, [6, 1, k, 1], dev), None, ConvOptions::new([1, 1], [0, 0], [1, 1], 6));
+        let wy: Vec<f32> = [&g, &g, &d1, &g, &d2, &d1]
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        let all = conv2d(
+            six,
+            upload(wy, [6, 1, k, 1], dev),
+            None,
+            ConvOptions::new([1, 1], [0, 0], [1, 1], 6),
+        );
         // `all` is (ph - 2r) × (pw - 2r); the slice starts at pad - r.
         let o = pad - r;
         let all = all.slice([0..1, 0..6, o..o + h, o..o + w]).reshape([6, n]);
@@ -194,7 +224,13 @@ pub struct ForestConfig {
 
 impl Default for ForestConfig {
     fn default() -> Self {
-        ForestConfig { trees: 64, max_depth: 14, min_leaf: 2, bins: 32, seed: 0x5eed }
+        ForestConfig {
+            trees: 64,
+            max_depth: 14,
+            min_leaf: 2,
+            bins: 32,
+            seed: 0x5eed,
+        }
     }
 }
 
@@ -211,7 +247,13 @@ pub struct Forest {
 impl Forest {
     /// Trains on `x` (sample-major, `features` per sample) and classes `y`
     /// (0..classes).
-    pub fn train(x: &[f32], y: &[u16], features: usize, classes: usize, cfg: &ForestConfig) -> Result<Forest> {
+    pub fn train(
+        x: &[f32],
+        y: &[u16],
+        features: usize,
+        classes: usize,
+        cfg: &ForestConfig,
+    ) -> Result<Forest> {
         let n = y.len();
         if n == 0 || x.len() != n * features {
             bail!("no training samples");
@@ -223,9 +265,14 @@ impl Forest {
         let cuts: Vec<Vec<f32>> = (0..features)
             .into_par_iter()
             .map(|f| {
-                let mut v: Vec<f32> = (0..n).map(|i| x[i * features + f]).filter(|v| v.is_finite()).collect();
+                let mut v: Vec<f32> = (0..n)
+                    .map(|i| x[i * features + f])
+                    .filter(|v| v.is_finite())
+                    .collect();
                 v.sort_by(|a, b| a.total_cmp(b));
-                let mut c: Vec<f32> = (1..cfg.bins).filter_map(|k| v.get(k * v.len() / cfg.bins).copied()).collect();
+                let mut c: Vec<f32> = (1..cfg.bins)
+                    .filter_map(|k| v.get(k * v.len() / cfg.bins).copied())
+                    .collect();
                 c.dedup();
                 c
             })
@@ -239,16 +286,36 @@ impl Forest {
         let built: Vec<(Tree, Vec<usize>)> = (0..cfg.trees)
             .into_par_iter()
             .map(|t| {
-                let mut rng = Rng(cfg.seed ^ (t as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+                let mut rng =
+                    Rng(cfg.seed ^ (t as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
                 let mut seen = vec![false; n];
                 let mut idx: Vec<usize> = (0..n).map(|_| rng.below(n)).collect();
                 for &i in &idx {
                     seen[i] = true;
                 }
-                let mut b = Builder { binned: &binned, cuts: &cuts, y, features, classes, cfg, mtry, rng, nodes: vec![], leaves: vec![], depth: 0 };
+                let mut b = Builder {
+                    binned: &binned,
+                    cuts: &cuts,
+                    y,
+                    features,
+                    classes,
+                    cfg,
+                    mtry,
+                    rng,
+                    nodes: vec![],
+                    leaves: vec![],
+                    depth: 0,
+                };
                 b.grow(&mut idx, 0);
                 let oob = (0..n).filter(|&i| !seen[i]).collect();
-                (Tree { nodes: b.nodes, leaves: b.leaves, depth: b.depth }, oob)
+                (
+                    Tree {
+                        nodes: b.nodes,
+                        leaves: b.leaves,
+                        depth: b.depth,
+                    },
+                    oob,
+                )
             })
             .collect();
         let trees: Vec<Tree> = built.iter().map(|(t, _)| t.clone()).collect();
@@ -270,8 +337,17 @@ impl Forest {
                 right += (argmax(v) == y[i] as usize) as usize;
             }
         }
-        let oob_accuracy = if counted > 0 { right as f32 / counted as f32 } else { 0.0 };
-        Ok(Forest { trees, classes, features, oob_accuracy })
+        let oob_accuracy = if counted > 0 {
+            right as f32 / counted as f32
+        } else {
+            0.0
+        };
+        Ok(Forest {
+            trees,
+            classes,
+            features,
+            oob_accuracy,
+        })
     }
 
     /// Class probabilities of one sample.
@@ -305,7 +381,8 @@ impl Forest {
         let n = feats.dims()[1];
         let t = self.trees.len();
         // All trees in one table; a leaf points at itself so extra steps stay put.
-        let (mut feat, mut thr, mut left, mut right, mut probs) = (vec![], vec![], vec![], vec![], vec![]);
+        let (mut feat, mut thr, mut left, mut right, mut probs) =
+            (vec![], vec![], vec![], vec![], vec![]);
         for tree in &self.trees {
             let base = feat.len() as i64;
             for (k, node) in tree.nodes.iter().enumerate() {
@@ -315,7 +392,10 @@ impl Forest {
                     thr.push(f32::INFINITY);
                     left.push(me);
                     right.push(me);
-                    probs.extend_from_slice(&tree.leaves[node.left as usize * self.classes..(node.left as usize + 1) * self.classes]);
+                    probs.extend_from_slice(
+                        &tree.leaves[node.left as usize * self.classes
+                            ..(node.left as usize + 1) * self.classes],
+                    );
                 } else {
                     feat.push(node.feature as i64);
                     thr.push(node.threshold);
@@ -365,11 +445,28 @@ impl Forest {
                 let r = right.clone().gather(0, idx);
                 idx = r.mask_where(go_left, l);
             }
-            let p = probs.clone().select(0, idx).reshape([t, len, self.classes]).mean_dim(0).reshape([len, self.classes]);
+            let p = probs
+                .clone()
+                .select(0, idx)
+                .reshape([t, len, self.classes])
+                .mean_dim(0)
+                .reshape([len, self.classes]);
             let best = p.clone().max_dim(1).reshape([len]);
             let arg = p.argmax(1).reshape([len]);
-            classes.extend(arg.into_data().convert::<i64>().try_into_vec::<i64>().unwrap().into_iter().map(|c| c as u16));
-            conf.extend(best.into_data().convert::<f32>().try_into_vec::<f32>().unwrap());
+            classes.extend(
+                arg.into_data()
+                    .convert::<i64>()
+                    .try_into_vec::<i64>()
+                    .unwrap()
+                    .into_iter()
+                    .map(|c| c as u16),
+            );
+            conf.extend(
+                best.into_data()
+                    .convert::<f32>()
+                    .try_into_vec::<f32>()
+                    .unwrap(),
+            );
             start += len;
         }
         (classes, conf)
@@ -389,7 +486,11 @@ impl Tree {
                 let l = n.left as usize;
                 return &self.leaves[l * classes..(l + 1) * classes];
             }
-            k = if s[n.feature as usize] <= n.threshold { n.left } else { n.right } as usize;
+            k = if s[n.feature as usize] <= n.threshold {
+                n.left
+            } else {
+                n.right
+            } as usize;
         }
     }
 }
@@ -417,7 +518,12 @@ impl Builder<'_> {
         let total = idx.len().max(1) as f32;
         let at = (self.leaves.len() / self.classes) as u32;
         self.leaves.extend(p.iter().map(|v| v / total));
-        self.nodes.push(Node { feature: LEAF, threshold: 0.0, left: at, right: at });
+        self.nodes.push(Node {
+            feature: LEAF,
+            threshold: 0.0,
+            left: at,
+            right: at,
+        });
         (self.nodes.len() - 1) as u32
     }
 
@@ -428,7 +534,9 @@ impl Builder<'_> {
         if pure || depth >= self.cfg.max_depth || idx.len() < 2 * self.cfg.min_leaf {
             return self.leaf(idx);
         }
-        let Some((f, bin)) = self.best_split(idx) else { return self.leaf(idx) };
+        let Some((f, bin)) = self.best_split(idx) else {
+            return self.leaf(idx);
+        };
         // Partition in place: bin <= `bin` goes left.
         let mut l = 0;
         for k in 0..idx.len() {
@@ -438,7 +546,12 @@ impl Builder<'_> {
             }
         }
         let me = self.nodes.len();
-        self.nodes.push(Node { feature: f as u16, threshold: self.cuts[f][bin], left: 0, right: 0 });
+        self.nodes.push(Node {
+            feature: f as u16,
+            threshold: self.cuts[f][bin],
+            left: 0,
+            right: 0,
+        });
         let (a, b) = idx.split_at_mut(l);
         let left = self.grow(a, depth + 1);
         let right = self.grow(b, depth + 1);
@@ -516,7 +629,10 @@ pub struct Classifier {
 /// Scales raw values to about 0..1 with the view's contrast.
 pub fn scale(values: &[f32], lo: f32, hi: f32) -> Vec<f32> {
     let k = if hi > lo { 1.0 / (hi - lo) } else { 1.0 };
-    values.iter().map(|&v| if v.is_finite() { (v - lo) * k } else { 0.0 }).collect()
+    values
+        .iter()
+        .map(|&v| if v.is_finite() { (v - lo) * k } else { 0.0 })
+        .collect()
 }
 
 /// Most samples taken per class, so big scribbles don't slow training.
@@ -524,9 +640,21 @@ pub const MAX_PER_CLASS: usize = 20_000;
 
 /// Training data from scribbled slices: for every slice, its pixel values and
 /// its scribble labels (0 = not scribbled). Returns the classifier.
-pub fn train(dev: &Device, slices: &[(Vec<f32>, &[u16])], w: usize, h: usize, lo: f32, hi: f32, cfg: &ForestConfig) -> Result<Classifier> {
+pub fn train(
+    dev: &Device,
+    slices: &[(Vec<f32>, &[u16])],
+    w: usize,
+    h: usize,
+    lo: f32,
+    hi: f32,
+    cfg: &ForestConfig,
+) -> Result<Classifier> {
     // Which labels were scribbled, and where.
-    let mut labels: Vec<u16> = slices.iter().flat_map(|(_, s)| s.iter().copied()).filter(|&v| v != 0).collect();
+    let mut labels: Vec<u16> = slices
+        .iter()
+        .flat_map(|(_, s)| s.iter().copied())
+        .filter(|&v| v != 0)
+        .collect();
     labels.sort_unstable();
     labels.dedup();
     if labels.len() < 2 {
@@ -554,7 +682,11 @@ pub fn train(dev: &Device, slices: &[(Vec<f32>, &[u16])], w: usize, h: usize, lo
     let mut y = vec![0u16; n];
     let mut row = 0;
     for (si, (values, _)) in slices.iter().enumerate() {
-        let wanted: Vec<(usize, usize)> = per_class.iter().enumerate().flat_map(|(c, v)| v.iter().filter(|p| p.0 == si).map(move |p| (c, p.1))).collect();
+        let wanted: Vec<(usize, usize)> = per_class
+            .iter()
+            .enumerate()
+            .flat_map(|(c, v)| v.iter().filter(|p| p.0 == si).map(move |p| (c, p.1)))
+            .collect();
         if wanted.is_empty() {
             continue;
         }
@@ -569,12 +701,24 @@ pub fn train(dev: &Device, slices: &[(Vec<f32>, &[u16])], w: usize, h: usize, lo
         }
     }
     let forest = Forest::train(&x, &y, FEATURES, labels.len(), cfg)?;
-    Ok(Classifier { forest, labels, lo, hi, samples: n })
+    Ok(Classifier {
+        forest,
+        labels,
+        lo,
+        hi,
+        samples: n,
+    })
 }
 
 impl Classifier {
     /// Label and confidence of every pixel of one slice.
-    pub fn predict(&self, dev: &Device, values: &[f32], w: usize, h: usize) -> (Vec<u16>, Vec<f32>) {
+    pub fn predict(
+        &self,
+        dev: &Device,
+        values: &[f32],
+        w: usize,
+        h: usize,
+    ) -> (Vec<u16>, Vec<f32>) {
         let f = features_tensor(dev, &scale(values, self.lo, self.hi), w, h);
         let (c, p) = self.forest.predict_device(dev, f);
         (c.into_iter().map(|c| self.labels[c as usize]).collect(), p)
@@ -613,7 +757,14 @@ mod tests {
                 }
                 o
             };
-            let (gs, gx, gy, gxx, gyy, gxy) = (conv(&g, &g), conv(&d1, &g), conv(&g, &d1), conv(&d2, &g), conv(&g, &d2), conv(&d1, &d1));
+            let (gs, gx, gy, gxx, gyy, gxy) = (
+                conv(&g, &g),
+                conv(&d1, &g),
+                conv(&g, &d1),
+                conv(&d2, &g),
+                conv(&g, &d2),
+                conv(&d1, &d1),
+            );
             out.extend(gs.iter());
             out.extend((0..n).map(|i| (gx[i] * gx[i] + gy[i] * gy[i]).sqrt()));
             out.extend((0..n).map(|i| gxx[i] + gyy[i]));
@@ -648,7 +799,9 @@ mod tests {
         assert_eq!(want.len(), got.len());
         let names = feature_names();
         for f in 0..FEATURES {
-            let worst = (0..w * h).map(|i| (got[f * w * h + i] - want[f * w * h + i]).abs()).fold(0f32, f32::max);
+            let worst = (0..w * h)
+                .map(|i| (got[f * w * h + i] - want[f * w * h + i]).abs())
+                .fold(0f32, f32::max);
             assert!(worst < 1e-4, "{}: off by {worst}", names[f]);
         }
     }
@@ -662,7 +815,11 @@ mod tests {
             for i in 0..w * h {
                 assert!((f[base * w * h + i] - 0.5).abs() < 1e-4);
                 for k in 1..PER_SIGMA {
-                    assert!(f[(base + k) * w * h + i].abs() < 1e-4, "feature {} not flat", base + k);
+                    assert!(
+                        f[(base + k) * w * h + i].abs() < 1e-4,
+                        "feature {} not flat",
+                        base + k
+                    );
                 }
             }
         }
@@ -682,7 +839,17 @@ mod tests {
             }
             y[i] = ((x[i * f] > 0.0) ^ (x[i * f + 1] > 0.0)) as u16;
         }
-        let forest = Forest::train(&x, &y, f, 2, &ForestConfig { trees: 24, ..Default::default() }).unwrap();
+        let forest = Forest::train(
+            &x,
+            &y,
+            f,
+            2,
+            &ForestConfig {
+                trees: 24,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(forest.oob_accuracy > 0.9, "oob {}", forest.oob_accuracy);
         // Feature-major test grid.
         let m = 400;
@@ -713,7 +880,10 @@ mod tests {
         let mut s = vec![0u16; w * h];
         for a in 0..30 {
             let t = a as f32 * 0.05;
-            let (x, y) = ((30.0 + 12.0 * t.cos()).round() as usize, (20.0 + 12.0 * t.sin()).round() as usize);
+            let (x, y) = (
+                (30.0 + 12.0 * t.cos()).round() as usize,
+                (20.0 + 12.0 * t.sin()).round() as usize,
+            );
             s[y * w + x] = 3;
         }
         for x in 4..60 {
@@ -725,7 +895,16 @@ mod tests {
             s[y * w + 52] = 1;
         }
         let d = dev();
-        let c = train(&d, &[(px.clone(), &s)], w, h, 0.0, 1.0, &ForestConfig::default()).unwrap();
+        let c = train(
+            &d,
+            &[(px.clone(), &s)],
+            w,
+            h,
+            0.0,
+            1.0,
+            &ForestConfig::default(),
+        )
+        .unwrap();
         assert_eq!(c.labels, vec![1, 3]);
         let (out, _) = c.predict(&d, &px, w, h);
         // Pixels on the ring's edge (within a pixel of it) may go either way.

@@ -143,7 +143,10 @@ pub fn analyze(img: &Arc<OpenImage>, req: &Req) -> Result<Result2> {
         }
         None => [0, 0, p.w, p.h],
     };
-    let raw: Vec<f32> = (0..w * h).into_par_iter().map(|i| p.data.get_f64((y0 + i / w) * p.w + x0 + i % w) as f32).collect();
+    let raw: Vec<f32> = (0..w * h)
+        .into_par_iter()
+        .map(|i| p.data.get_f64((y0 + i / w) * p.w + x0 + i % w) as f32)
+        .collect();
     let mut out = run(&raw, w, h, req)?;
     for q in &mut out.particles {
         q.x += x0 as f64;
@@ -173,7 +176,9 @@ pub fn run(raw: &[f32], w: usize, h: usize, req: &Req) -> Result<Result2> {
         gaussian(&mut bg, w, h, req.background);
         v.par_iter_mut().zip(&bg).for_each(|(a, b)| *a -= b);
     }
-    let (min, max) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+    let (min, max) = v
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
     if !(max > min) {
         bail!("图是平的，找不到颗粒");
     }
@@ -185,7 +190,10 @@ pub fn run(raw: &[f32], w: usize, h: usize, req: &Req) -> Result<Result2> {
         }
         None => auto_threshold(&v, &hist, min, max, req.dark),
     };
-    let mut mask: Vec<bool> = v.par_iter().map(|&x| if dark { x < threshold } else { x > threshold }).collect();
+    let mut mask: Vec<bool> = v
+        .par_iter()
+        .map(|&x| if dark { x < threshold } else { x > threshold })
+        .collect();
     if req.fill_holes {
         fill_holes(&mut mask, w, h);
     }
@@ -196,11 +204,24 @@ pub fn run(raw: &[f32], w: usize, h: usize, req: &Req) -> Result<Result2> {
     } else {
         watershed(&mask, &vec![0.0; w * h], w, h, f32::INFINITY)
     };
-    let (mut particles, dropped_small, dropped_edge) = measure(&labels, raw, w, h, req.min_area.max(1), req.exclude_edge);
+    let (mut particles, dropped_small, dropped_edge) =
+        measure(&labels, raw, w, h, req.min_area.max(1), req.exclude_edge);
     for (k, q) in particles.iter_mut().enumerate() {
         q.id = k + 1;
     }
-    Ok(Result2 { region: [0, 0, w, h], dark, threshold, min, max, hist, foreground, particles, dropped_small, dropped_edge, ms: 0.0 })
+    Ok(Result2 {
+        region: [0, 0, w, h],
+        dark,
+        threshold,
+        min,
+        max,
+        hist,
+        foreground,
+        particles,
+        dropped_small,
+        dropped_edge,
+        ms: 0.0,
+    })
 }
 
 /// Separable Gaussian blur with edge clamping; wide ones as three box
@@ -214,7 +235,9 @@ pub fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
         if wl % 2 == 0 {
             wl -= 1;
         }
-        let m = ((12.0 * s2 - 3.0 * (wl * wl) as f64 - 12.0 * wl as f64 - 9.0) / (-4.0 * wl as f64 - 4.0)).round() as i64;
+        let m = ((12.0 * s2 - 3.0 * (wl * wl) as f64 - 12.0 * wl as f64 - 9.0)
+            / (-4.0 * wl as f64 - 4.0))
+            .round() as i64;
         for pass in 0..3 {
             let r = ((if pass < m { wl } else { wl + 2 }) / 2) as usize;
             box_blur(v, w, h, r);
@@ -222,7 +245,9 @@ pub fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
         return;
     }
     let r = (3.0 * sigma).ceil().max(1.0) as i64;
-    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+    let k: Vec<f32> = (-r..=r)
+        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
     let s: f32 = k.iter().sum();
     let k: Vec<f32> = k.iter().map(|x| x / s).collect();
     let mut tmp = vec![0f32; w * h];
@@ -262,7 +287,9 @@ fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
         }
     }
     let mut tmp = vec![0f32; w * h];
-    tmp.par_chunks_mut(w).zip(v.par_chunks(w)).for_each(|(o, s)| line(s, o, r));
+    tmp.par_chunks_mut(w)
+        .zip(v.par_chunks(w))
+        .for_each(|(o, s)| line(s, o, r));
     let cols: Vec<Vec<f32>> = (0..w)
         .into_par_iter()
         .map(|x| {
@@ -308,14 +335,25 @@ fn auto_threshold(v: &[f32], hist: &[u32], min: f32, max: f32, dark: Option<bool
     let lo = s.iter().filter(|&&x| x < med - 3.0 * sigma).count();
     let hi = s.iter().filter(|&&x| x > med + 3.0 * sigma).count();
     let dark = dark.unwrap_or(lo > hi);
-    (if dark { med - 3.0 * sigma } else { med + 3.0 * sigma }, dark)
+    (
+        if dark {
+            med - 3.0 * sigma
+        } else {
+            med + 3.0 * sigma
+        },
+        dark,
+    )
 }
 
 /// Otsu's threshold: the bin edge that maximises the between-class variance.
 pub fn otsu(hist: &[u32], min: f32, max: f32) -> f32 {
     let n = hist.len();
     let total: f64 = hist.iter().map(|&c| c as f64).sum();
-    let sum: f64 = hist.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum();
+    let sum: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| i as f64 * c as f64)
+        .sum();
     let (mut w0, mut s0, mut best, mut at) = (0.0, 0.0, -1.0, n / 2);
     for (i, &c) in hist.iter().enumerate().take(n - 1) {
         w0 += c as f64;
@@ -365,7 +403,9 @@ fn fill_holes(mask: &mut [bool], w: usize, h: usize) {
             stack.push(i + w);
         }
     }
-    mask.par_iter_mut().zip(&outside).for_each(|(m, &o)| *m = !o);
+    mask.par_iter_mut()
+        .zip(&outside)
+        .for_each(|(m, &o)| *m = !o);
 }
 
 /// Exact Euclidean distance of each foreground pixel to the nearest
@@ -376,14 +416,23 @@ pub fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
     const INF: f64 = 1e20;
     let mut f = vec![0f64; w * h];
     f.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        let src: Vec<f64> = (0..w).map(|x| if mask[y * w + x] { INF } else { 0.0 }).collect();
+        let src: Vec<f64> = (0..w)
+            .map(|x| if mask[y * w + x] { INF } else { 0.0 })
+            .collect();
         row.copy_from_slice(&envelope(&src));
     });
-    let cols: Vec<Vec<f64>> = (0..w).into_par_iter().map(|x| envelope(&(0..h).map(|y| f[y * w + x]).collect::<Vec<_>>())).collect();
+    let cols: Vec<Vec<f64>> = (0..w)
+        .into_par_iter()
+        .map(|x| envelope(&(0..h).map(|y| f[y * w + x]).collect::<Vec<_>>()))
+        .collect();
     let mut out = vec![0f32; w * h];
     for (x, col) in cols.iter().enumerate() {
         for (y, &d) in col.iter().enumerate() {
-            out[y * w + x] = if d >= INF / 2.0 { (w.max(h)) as f32 } else { d.sqrt() as f32 };
+            out[y * w + x] = if d >= INF / 2.0 {
+                (w.max(h)) as f32
+            } else {
+                d.sqrt() as f32
+            };
         }
     }
     out
@@ -397,7 +446,9 @@ fn envelope(f: &[f64]) -> Vec<f64> {
     let mut k = 0;
     z[0] = f64::NEG_INFINITY;
     z[1] = f64::INFINITY;
-    let sect = |q: usize, p: usize| ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2.0 * (q as f64 - p as f64));
+    let sect = |q: usize, p: usize| {
+        ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2.0 * (q as f64 - p as f64))
+    };
     for q in 1..n {
         let mut s = sect(q, v[k]);
         while s <= z[k] {
@@ -426,7 +477,11 @@ fn envelope(f: &[f64]) -> Vec<f64> {
 /// level. Returns a label per pixel (0 = background), labels 1..=n.
 pub fn watershed(mask: &[bool], height: &[f32], w: usize, h: usize, hmin: f32) -> Vec<u32> {
     let mut order: Vec<u32> = (0..(w * h) as u32).filter(|&i| mask[i as usize]).collect();
-    order.par_sort_unstable_by(|&a, &b| height[b as usize].total_cmp(&height[a as usize]).then(a.cmp(&b)));
+    order.par_sort_unstable_by(|&a, &b| {
+        height[b as usize]
+            .total_cmp(&height[a as usize])
+            .then(a.cmp(&b))
+    });
     const NONE: u32 = u32::MAX;
     let mut parent: Vec<u32> = vec![NONE; w * h];
     let mut peak: Vec<f32> = vec![0.0; w * h];
@@ -468,7 +523,11 @@ pub fn watershed(mask: &[bool], height: &[f32], w: usize, h: usize, hmin: f32) -
             continue;
         }
         // Highest peak first; lower ones merge into it when shallow.
-        roots.sort_by(|&a, &b| peak[b as usize].total_cmp(&peak[a as usize]).then(a.cmp(&b)));
+        roots.sort_by(|&a, &b| {
+            peak[b as usize]
+                .total_cmp(&peak[a as usize])
+                .then(a.cmp(&b))
+        });
         let top = roots[0];
         for &r in &roots[1..] {
             if peak[r as usize] - lv < hmin {
@@ -510,9 +569,24 @@ struct Acc {
     first: usize,
 }
 
-fn measure(labels: &[u32], raw: &[f32], w: usize, h: usize, min_area: usize, exclude_edge: bool) -> (Vec<Particle>, usize, usize) {
+fn measure(
+    labels: &[u32],
+    raw: &[f32],
+    w: usize,
+    h: usize,
+    min_area: usize,
+    exclude_edge: bool,
+) -> (Vec<Particle>, usize, usize) {
     let n = labels.iter().copied().max().unwrap_or(0) as usize;
-    let mut acc = vec![Acc { x0: usize::MAX, y0: usize::MAX, first: usize::MAX, ..Default::default() }; n + 1];
+    let mut acc = vec![
+        Acc {
+            x0: usize::MAX,
+            y0: usize::MAX,
+            first: usize::MAX,
+            ..Default::default()
+        };
+        n + 1
+    ];
     let at = |x: i64, y: i64| -> u32 {
         if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
             0
@@ -587,7 +661,8 @@ fn measure(labels: &[u32], raw: &[f32], w: usize, h: usize, min_area: usize, exc
             let disc = (tr * tr / 4.0 - det).max(0.0).sqrt();
             let (l1, l2) = (tr / 2.0 + disc, (tr / 2.0 - disc).max(0.0));
             let angle = 0.5 * (2.0 * mxy).atan2(mxx - myy);
-            let perimeter = std::f64::consts::PI / 8.0 * (a.c[0] as f64 + a.c[1] as f64 + (a.c[2] + a.c[3]) as f64 / 2f64.sqrt());
+            let perimeter = std::f64::consts::PI / 8.0
+                * (a.c[0] as f64 + a.c[1] as f64 + (a.c[2] + a.c[3]) as f64 / 2f64.sqrt());
             let outline = trace(labels, w, h, l as u32, a.first, a.n);
             let hull = convex_hull(&outline);
             let hull_area = polygon_area(&hull);
@@ -608,11 +683,18 @@ fn measure(labels: &[u32], raw: &[f32], w: usize, h: usize, min_area: usize, exc
                 angle: angle.to_degrees(),
                 circularity: (4.0 * std::f64::consts::PI * area / (perimeter * perimeter)).min(1.0),
                 aspect: if fmin > 0.0 { fmax / fmin } else { 1.0 },
-                solidity: if hull_area > 0.0 { (area / hull_area).min(1.0) } else { 1.0 },
+                solidity: if hull_area > 0.0 {
+                    (area / hull_area).min(1.0)
+                } else {
+                    1.0
+                },
                 mean: a.sv / nf,
                 bbox: [a.x0, a.y0, a.x1 + 1 - a.x0, a.y1 + 1 - a.y0],
                 touches_edge: a.edge,
-                outline: outline.iter().flat_map(|p| [p.0 as f32, p.1 as f32]).collect(),
+                outline: outline
+                    .iter()
+                    .flat_map(|p| [p.0 as f32, p.1 as f32])
+                    .collect(),
             }
         })
         .collect();
@@ -624,7 +706,9 @@ fn measure(labels: &[u32], raw: &[f32], w: usize, h: usize, min_area: usize, exc
 /// the right. Diagonal neighbours stay in one outline. Straight runs are
 /// collapsed to their end points.
 fn trace(labels: &[u32], w: usize, h: usize, l: u32, first: usize, area: usize) -> Vec<(f64, f64)> {
-    let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && labels[y as usize * w + x as usize] == l;
+    let inside = |x: i64, y: i64| {
+        x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && labels[y as usize * w + x as usize] == l
+    };
     // Directions: 0 = +x, 1 = +y, 2 = −x, 3 = −y (y down). At corner (x, y)
     // heading d, the pixels right and left of the next edge decide the turn;
     // heading +x they are pixel (x, y) below and (x, y − 1) above.
@@ -694,9 +778,15 @@ pub fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut hull: Vec<(f64, f64)> = Vec::with_capacity(2 * p.len());
     for pass in 0..2 {
         let base = hull.len();
-        let it: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        let it: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
+            Box::new(p.iter())
+        } else {
+            Box::new(p.iter().rev())
+        };
         for &q in it {
-            while hull.len() >= base + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0 {
+            while hull.len() >= base + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0
+            {
                 hull.pop();
             }
             hull.push(q);
@@ -708,7 +798,11 @@ pub fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
 
 fn polygon_area(p: &[(f64, f64)]) -> f64 {
     let n = p.len();
-    (0..n).map(|i| p[i].0 * p[(i + 1) % n].1 - p[(i + 1) % n].0 * p[i].1).sum::<f64>().abs() / 2.0
+    (0..n)
+        .map(|i| p[i].0 * p[(i + 1) % n].1 - p[(i + 1) % n].0 * p[i].1)
+        .sum::<f64>()
+        .abs()
+        / 2.0
 }
 
 /// Feret maximum (with its direction) and minimum width of a convex polygon.
@@ -742,7 +836,10 @@ pub fn calipers(hull: &[(f64, f64)]) -> (f64, f64, f64) {
         if len == 0.0 {
             continue;
         }
-        let far = hull.iter().map(|&q| cross(a, b, q).abs() / len).fold(0.0, f64::max);
+        let far = hull
+            .iter()
+            .map(|&q| cross(a, b, q).abs() / len)
+            .fold(0.0, f64::max);
         dmin = dmin.min(far);
     }
     (dmax, ang, dmin)
@@ -753,14 +850,31 @@ mod tests {
     use super::*;
 
     fn req() -> Req {
-        Req { token: 0, c: 0, z: 0, t: 0, region: None, dark: None, threshold: None, smooth: 1.0, background: 0.0, fill_holes: true, split: true, split_h: 1.0, min_area: 10, exclude_edge: true }
+        Req {
+            token: 0,
+            c: 0,
+            z: 0,
+            t: 0,
+            region: None,
+            dark: None,
+            threshold: None,
+            smooth: 1.0,
+            background: 0.0,
+            fill_holes: true,
+            split: true,
+            split_h: 1.0,
+            min_area: 10,
+            exclude_edge: true,
+        }
     }
 
     /// Dark disks on a bright noisy support.
     fn disks(w: usize, h: usize, d: &[(f64, f64, f64)]) -> Vec<f32> {
         let mut s = 12345u64;
         let mut noise = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 33) as f64 / (1u64 << 31) as f64 - 0.5) as f32
         };
         (0..w * h)
@@ -774,17 +888,56 @@ mod tests {
 
     #[test]
     fn measures_separate_disks() {
-        let d = [(40.0, 40.0, 10.0), (100.0, 50.0, 15.0), (60.0, 110.0, 8.0), (150.0, 140.0, 20.0)];
+        let d = [
+            (40.0, 40.0, 10.0),
+            (100.0, 50.0, 15.0),
+            (60.0, 110.0, 8.0),
+            (150.0, 140.0, 20.0),
+        ];
         let img = disks(200, 180, &d);
         let r = run(&img, 200, 180, &req()).unwrap();
         assert!(r.dark);
-        assert_eq!(r.particles.len(), 4, "{:?}", r.particles.iter().map(|p| p.diameter).collect::<Vec<_>>());
+        assert_eq!(
+            r.particles.len(),
+            4,
+            "{:?}",
+            r.particles.iter().map(|p| p.diameter).collect::<Vec<_>>()
+        );
         for p in &r.particles {
-            let (_, _, rad) = d.iter().copied().min_by(|a, b| (a.0 - p.x).hypot(a.1 - p.y).total_cmp(&(b.0 - p.x).hypot(b.1 - p.y))).unwrap();
-            assert!((p.diameter - 2.0 * rad).abs() < 1.0, "diameter {} vs {}", p.diameter, 2.0 * rad);
-            assert!((p.feret_max - 2.0 * rad).abs() < 1.5, "feret {} vs {}", p.feret_max, 2.0 * rad);
-            assert!((p.feret_min - 2.0 * rad).abs() < 1.5, "feret min {}", p.feret_min);
-            assert!((p.perimeter - 2.0 * std::f64::consts::PI * rad).abs() / (2.0 * std::f64::consts::PI * rad) < 0.06, "perimeter {} r {}", p.perimeter, rad);
+            let (_, _, rad) = d
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    (a.0 - p.x)
+                        .hypot(a.1 - p.y)
+                        .total_cmp(&(b.0 - p.x).hypot(b.1 - p.y))
+                })
+                .unwrap();
+            assert!(
+                (p.diameter - 2.0 * rad).abs() < 1.0,
+                "diameter {} vs {}",
+                p.diameter,
+                2.0 * rad
+            );
+            assert!(
+                (p.feret_max - 2.0 * rad).abs() < 1.5,
+                "feret {} vs {}",
+                p.feret_max,
+                2.0 * rad
+            );
+            assert!(
+                (p.feret_min - 2.0 * rad).abs() < 1.5,
+                "feret min {}",
+                p.feret_min
+            );
+            assert!(
+                (p.perimeter - 2.0 * std::f64::consts::PI * rad).abs()
+                    / (2.0 * std::f64::consts::PI * rad)
+                    < 0.06,
+                "perimeter {} r {}",
+                p.perimeter,
+                rad
+            );
             assert!(p.circularity > 0.88, "circularity {}", p.circularity);
             assert!(p.solidity > 0.9);
             assert!(p.outline.len() >= 16);
@@ -849,8 +1002,13 @@ mod tests {
         let d = edt(&mask, w, h);
         for y in 0..h {
             for x in 0..w {
-                let e = ((x as f64 - 15.0).hypot(y as f64 - 10.0)).min((x as f64 - 4.0).hypot(y as f64 - 3.0));
-                assert!((d[y * w + x] as f64 - e).abs() < 1e-4, "({x},{y}) {} vs {e}", d[y * w + x]);
+                let e = ((x as f64 - 15.0).hypot(y as f64 - 10.0))
+                    .min((x as f64 - 4.0).hypot(y as f64 - 3.0));
+                assert!(
+                    (d[y * w + x] as f64 - e).abs() < 1e-4,
+                    "({x},{y}) {} vs {e}",
+                    d[y * w + x]
+                );
             }
         }
     }
@@ -865,7 +1023,9 @@ mod tests {
         let sig = 9.0f64;
         let tot: f64 = a.iter().map(|&x| x as f64).sum();
         assert!((tot - 1.0).abs() < 1e-3);
-        let var: f64 = (0..w).map(|x| (0..h).map(|y| a[y * w + x] as f64).sum::<f64>() * (x as f64 - 50.0).powi(2)).sum();
+        let var: f64 = (0..w)
+            .map(|x| (0..h).map(|y| a[y * w + x] as f64).sum::<f64>() * (x as f64 - 50.0).powi(2))
+            .sum();
         assert!((var.sqrt() - sig).abs() < 0.3, "σ {}", var.sqrt());
         gaussian(&mut b, w, h, 3.0);
         assert!(b[50 * w + 50] > 0.0);
@@ -875,7 +1035,10 @@ mod tests {
     fn few_particles_on_flat_background() {
         // Two small dark disks: Otsu would split the noise.
         let d = [(40.0, 40.0, 6.0), (120.0, 90.0, 7.0)];
-        let img: Vec<f32> = disks(200, 150, &d).iter().map(|v| if *v < 70.0 { 85.0 + (v - 40.0) } else { *v }).collect();
+        let img: Vec<f32> = disks(200, 150, &d)
+            .iter()
+            .map(|v| if *v < 70.0 { 85.0 + (v - 40.0) } else { *v })
+            .collect();
         let r = run(&img, 200, 150, &req()).unwrap();
         assert!(r.dark);
         assert_eq!(r.particles.len(), 2, "threshold {}", r.threshold);
@@ -901,7 +1064,10 @@ mod tests {
         let w: usize = env("TMV_NP_W").unwrap().parse().unwrap();
         let h: usize = env("TMV_NP_H").unwrap().parse().unwrap();
         let bytes = std::fs::read(path).unwrap();
-        let img: Vec<f32> = bytes.chunks(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let img: Vec<f32> = bytes
+            .chunks(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
         let mut q = req();
         q.dark = env("TMV_NP_DARK").map(|v| v == "1");
         if let Some(v) = env("TMV_NP_BG") {
@@ -915,7 +1081,13 @@ mod tests {
         }
         let t = std::time::Instant::now();
         let r = run(&img, w, h, &q).unwrap();
-        eprintln!("{} particles, dark {}, threshold {}, {:.0} ms", r.particles.len(), r.dark, r.threshold, t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "{} particles, dark {}, threshold {}, {:.0} ms",
+            r.particles.len(),
+            r.dark,
+            r.threshold,
+            t.elapsed().as_secs_f64() * 1e3
+        );
         if let Some(out) = env("TMV_NP_OUT") {
             std::fs::write(out, serde_json::to_string(&r).unwrap()).unwrap();
         }

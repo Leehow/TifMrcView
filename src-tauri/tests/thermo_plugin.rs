@@ -213,7 +213,6 @@ fn tia_diffraction_in_reciprocal_units_and_emi_explains() {
     let emi = tmp.path().join("diff.emi");
     std::fs::write(&emi, b"anything").unwrap();
     assert!(open_err(&p.registry, &emi).contains("_1.ser"));
-
 }
 
 /// A TIA series of 1D elements (spectra) with `dims` series dimensions.
@@ -269,10 +268,19 @@ fn tia_spectra_become_rows() {
     ser_spectra(&path, &[1], &[spec(0)]);
     let src = open(&p.registry, &path);
     let i = src.info().clone();
-    assert_eq!((i.width, i.height, i.page_count, i.dtype), (6, 1, 1, DType::I32));
+    assert_eq!(
+        (i.width, i.height, i.page_count, i.dtype),
+        (6, 1, 1, DType::I32)
+    );
     assert_eq!(
         i.spectrum,
-        Some(SpectrumInfo { axis: "x".into(), start: 90.0, step: 2.5, unit: "eV".into(), kind: String::new() })
+        Some(SpectrumInfo {
+            axis: "x".into(),
+            start: 90.0,
+            step: 2.5,
+            unit: "eV".into(),
+            kind: String::new()
+        })
     );
     assert_eq!(page(&*src, 0), [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]);
     // A 3 × 2 spectrum image: one scan line per page.
@@ -571,10 +579,21 @@ fn asv_project(root: &Path) {
     std::fs::write(root.join("ProjectData.dat"), xml).unwrap();
     let ini = "[System]\r\nSystemType=Helios NanoLab\" 650\r\n[Scan]\r\nPixelWidth=3e-09\r\nPixelHeight=3e-09\r\n\0";
     let fei = [(34682u16, 2u16, ini.len() as u32, ini.as_bytes().to_vec())];
-    for (dir, n) in [("Images/SEM Image", 3), ("Images/SEM Image 2", 2), ("LogImages", 4)] {
+    for (dir, n) in [
+        ("Images/SEM Image", 3),
+        ("Images/SEM Image 2", 2),
+        ("LogImages", 4),
+    ] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
         for i in 1..=n {
-            tiff(&root.join(dir).join(format!("worm - SliceImage - {i:03}.tif")), 6, 4, &fei);
+            tiff(
+                &root
+                    .join(dir)
+                    .join(format!("worm - SliceImage - {i:03}.tif")),
+                6,
+                4,
+                &fei,
+            );
         }
     }
     tiff(&root.join("Images/overview.tif"), 6, 4, &fei);
@@ -590,16 +609,35 @@ fn auto_slice_and_view_projects_are_z_stacks() {
     let src = open(&p.registry, &config);
     let i = src.info().clone();
     assert_eq!((i.width, i.height, i.size_z, i.page_count), (6, 4, 3, 3));
-    assert!(i.format.starts_with("Thermo Auto Slice & View · "), "{}", i.format);
+    assert!(
+        i.format.starts_with("Thermo Auto Slice & View · "),
+        "{}",
+        i.format
+    );
     let ps = i.pixel_size.unwrap();
     assert_eq!(i.unit, "nm");
-    assert!((ps[0] - 3.0).abs() < 1e-9 && (ps[2] - 10.0).abs() < 1e-9, "{ps:?}");
-    assert_eq!(item(&i, "Auto Slice & View 项目", "项目名称").as_deref(), Some("worm"));
-    assert_eq!(item(&i, "Auto Slice & View 项目", "切片数（项目记录）").as_deref(), Some("3"));
-    assert_eq!(item(&i, "Auto Slice & View 项目", "实测切片厚度").as_deref(), Some("10 nm ± 1 nm（2 片的平均）"));
+    assert!(
+        (ps[0] - 3.0).abs() < 1e-9 && (ps[2] - 10.0).abs() < 1e-9,
+        "{ps:?}"
+    );
+    assert_eq!(
+        item(&i, "Auto Slice & View 项目", "项目名称").as_deref(),
+        Some("worm")
+    );
+    assert_eq!(
+        item(&i, "Auto Slice & View 项目", "切片数（项目记录）").as_deref(),
+        Some("3")
+    );
+    assert_eq!(
+        item(&i, "Auto Slice & View 项目", "实测切片厚度").as_deref(),
+        Some("10 nm ± 1 nm（2 片的平均）")
+    );
     assert_eq!(item(&i, "图像序列", "文件数").as_deref(), Some("3"));
     assert!(item(&i, "图像序列", "Z 间距").unwrap().starts_with("10 nm"));
-    assert_eq!(i.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["SEM Image", "SEM Image 2"]);
+    assert_eq!(
+        i.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["SEM Image", "SEM Image 2"]
+    );
     assert_eq!(page(&*src, 2)[5], 5.0);
     assert!(i.folder.as_deref().unwrap().ends_with("Images/SEM Image"));
 
@@ -616,7 +654,11 @@ fn auto_slice_and_view_projects_are_z_stacks() {
     // The log images are not part of any project stack: a plain sequence.
     let logs = open(&p.registry, &tmp.path().join("LogImages"));
     assert_eq!(logs.info().size_z, 4);
-    assert!(logs.info().format.starts_with("图像序列"), "{}", logs.info().format);
+    assert!(
+        logs.info().format.starts_with("图像序列"),
+        "{}",
+        logs.info().format
+    );
 }
 
 /// An MRC with an FEI2 extended header, `n` 2×2 i16 sections tilted by

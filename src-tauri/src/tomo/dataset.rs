@@ -23,7 +23,12 @@ pub struct Optics {
 
 impl Default for Optics {
     fn default() -> Self {
-        Optics { kv: 300.0, cs_mm: 2.7, amplitude: 0.07, pixel_a: None }
+        Optics {
+            kv: 300.0,
+            cs_mm: 2.7,
+            amplitude: 0.07,
+            pixel_a: None,
+        }
     }
 }
 
@@ -98,7 +103,10 @@ pub struct Dataset {
 /// `<dir>/<stem>.tomo.json` for a stack.
 pub fn path_for(stack: &str) -> PathBuf {
     let p = Path::new(stack);
-    p.with_file_name(format!("{}.tomo.json", p.file_stem().and_then(|s| s.to_str()).unwrap_or("stack")))
+    p.with_file_name(format!(
+        "{}.tomo.json",
+        p.file_stem().and_then(|s| s.to_str()).unwrap_or("stack")
+    ))
 }
 
 impl Dataset {
@@ -110,7 +118,10 @@ impl Dataset {
             if d.version <= VERSION && d.angles.len() == sections {
                 return Ok(d);
             }
-            eprintln!("tomo: {} does not match the stack, starting over", file.display());
+            eprintln!(
+                "tomo: {} does not match the stack, starting over",
+                file.display()
+            );
         }
         let meta = geometry::metadata(stack, sections).unwrap_or_default();
         Ok(Dataset {
@@ -120,7 +131,10 @@ impl Dataset {
             odd: sibling(stack, "odd"),
             angles: meta.angles,
             axis_hint: meta.axis,
-            optics: Optics { pixel_a: pixel_a.or(meta.pixel_a), ..Default::default() },
+            optics: Optics {
+                pixel_a: pixel_a.or(meta.pixel_a),
+                ..Default::default()
+            },
             alignment: None,
             ctf: None,
             tomograms: Vec::new(),
@@ -148,6 +162,10 @@ impl Dataset {
 /// `x_even.mrc` beside `x.mrc`, if it exists (motion correction writes them).
 fn sibling(stack: &str, half: &str) -> Option<String> {
     let p = Path::new(stack);
-    let f = p.with_file_name(format!("{}_{half}.{}", p.file_stem()?.to_str()?, p.extension()?.to_str()?));
+    let f = p.with_file_name(format!(
+        "{}_{half}.{}",
+        p.file_stem()?.to_str()?,
+        p.extension()?.to_str()?
+    ));
     f.exists().then(|| f.to_string_lossy().into_owned())
 }

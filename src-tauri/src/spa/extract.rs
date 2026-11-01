@@ -21,7 +21,10 @@ pub fn boxes(diameter_a: f64, px: f64, max_out: usize) -> (usize, usize) {
 /// Cuts a box of side `big` centred on (x, y), filling outside the
 /// micrograph with the mean of what is inside.
 pub fn cut(img: &[f32], w: usize, h: usize, x: f32, y: f32, big: usize) -> Vec<f32> {
-    let (x0, y0) = (x.round() as isize - (big / 2) as isize, y.round() as isize - (big / 2) as isize);
+    let (x0, y0) = (
+        x.round() as isize - (big / 2) as isize,
+        y.round() as isize - (big / 2) as isize,
+    );
     let mut out = vec![f32::NAN; big * big];
     let (mut s, mut n) = (0f64, 0usize);
     for j in 0..big {
@@ -81,7 +84,11 @@ pub fn remove_plane(img: &mut [f32], b: usize, radius: f64) {
 }
 
 fn solve3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
-    let det = |m: &[[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let det = |m: &[[f64; 3]; 3]| {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
     let d = det(&m);
     if d.abs() < 1e-12 {
         return None;
@@ -98,7 +105,16 @@ fn solve3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 }
 
 /// Particles of one micrograph: `big` box cut at each pick, binned to `out`.
-pub fn particles(img: &[f32], w: usize, h: usize, picks: &[[f32; 2]], big: usize, out: usize, diameter_px_out: f64, invert: bool) -> Result<Vec<Vec<f32>>> {
+pub fn particles(
+    img: &[f32],
+    w: usize,
+    h: usize,
+    picks: &[[f32; 2]],
+    big: usize,
+    out: usize,
+    diameter_px_out: f64,
+    invert: bool,
+) -> Result<Vec<Vec<f32>>> {
     let radius_big = diameter_px_out / 2.0 * (big as f64 / out as f64) * 1.1;
     let radius_out = diameter_px_out / 2.0 * 1.1;
     Ok(picks

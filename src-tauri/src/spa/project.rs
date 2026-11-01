@@ -137,7 +137,11 @@ pub struct Project {
 const MIC_EXT: [&str; 6] = ["mrc", "mrcs", "tif", "tiff", "eer", "dm4"];
 
 fn open_image(path: &str) -> Result<Arc<OpenImage>> {
-    Ok(OpenImage::new(0, crate::formats::open(Path::new(path)).with_context(|| format!("打不开 {path}"))?, 256 << 20))
+    Ok(OpenImage::new(
+        0,
+        crate::formats::open(Path::new(path)).with_context(|| format!("打不开 {path}"))?,
+        256 << 20,
+    ))
 }
 
 /// The first plane of an image file as f32, with its size.
@@ -147,7 +151,13 @@ pub fn read_mic(path: &str) -> Result<(Vec<f32>, usize, usize)> {
     let p = img.page(info.locate(0, 0, 0).0)?;
     let (w, h) = (p[0].w, p[0].h);
     let (lo, hi) = crate::ctf::clip_range(|i| p[0].data.get_f64(i) as f32, w * h);
-    Ok(((0..w * h).map(|i| crate::ctf::clip(p[0].data.get_f64(i) as f32, lo, hi)).collect(), w, h))
+    Ok((
+        (0..w * h)
+            .map(|i| crate::ctf::clip(p[0].data.get_f64(i) as f32, lo, hi))
+            .collect(),
+        w,
+        h,
+    ))
 }
 
 impl Project {
@@ -167,7 +177,9 @@ impl Project {
     }
 
     pub fn load(dir: &str) -> Result<Project> {
-        let mut p: Project = serde_json::from_slice(&std::fs::read(Project::file(dir)).with_context(|| format!("没有单颗粒工程：{dir}"))?)?;
+        let mut p: Project = serde_json::from_slice(
+            &std::fs::read(Project::file(dir)).with_context(|| format!("没有单颗粒工程：{dir}"))?,
+        )?;
         p.dir = dir.into();
         Ok(p)
     }
@@ -176,8 +188,16 @@ impl Project {
     /// it from the micrographs or movies found there.
     pub fn open(source: &str) -> Result<Project> {
         let src = Path::new(source);
-        let folder = if src.is_dir() { src.to_path_buf() } else { src.parent().map(Path::to_path_buf).unwrap_or_default() };
-        let folder = if folder.file_name().is_some_and(|n| n == DIR) { folder.parent().unwrap().to_path_buf() } else { folder };
+        let folder = if src.is_dir() {
+            src.to_path_buf()
+        } else {
+            src.parent().map(Path::to_path_buf).unwrap_or_default()
+        };
+        let folder = if folder.file_name().is_some_and(|n| n == DIR) {
+            folder.parent().unwrap().to_path_buf()
+        } else {
+            folder
+        };
         let dir = folder.join(DIR);
         let dir_s: String = dir.to_string_lossy().into();
         if Project::file(&dir_s).exists() {
@@ -185,7 +205,12 @@ impl Project {
         }
         let mut files: Vec<PathBuf> = std::fs::read_dir(&folder)?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| MIC_EXT.contains(&x.to_ascii_lowercase().as_str())))
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(|x| x.to_str())
+                        .is_some_and(|x| MIC_EXT.contains(&x.to_ascii_lowercase().as_str()))
+            })
             .filter(|p| {
                 // Skip motion-correction by-products.
                 let s = p.file_stem().unwrap_or_default().to_string_lossy();
@@ -198,24 +223,40 @@ impl Project {
         }
         // Movies: EER, or a first file with many frames.
         let first = files[0].to_string_lossy().to_string();
-        let movies = files[0].extension().is_some_and(|x| x.eq_ignore_ascii_case("eer")) || {
-            let img = open_image(&first)?;
-            let i = img.info();
-            i.size_z.max(i.size_t) > 2
-        };
+        let movies = files[0]
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("eer"))
+            || {
+                let img = open_image(&first)?;
+                let i = img.info();
+                i.size_z.max(i.size_t) > 2
+            };
         let img = open_image(&first)?;
         let info = img.info().clone();
-        let px = if info.pixel_size.is_some() { crate::align::pixel_a(&info) } else { 1.0 };
+        let px = if info.pixel_size.is_some() {
+            crate::align::pixel_a(&info)
+        } else {
+            1.0
+        };
         std::fs::create_dir_all(&dir)?;
         let mics = files
             .iter()
-            .map(|f| Mic { path: f.to_string_lossy().into(), movie: movies.then(|| f.to_string_lossy().into()), width: info.width, height: info.height, ..Default::default() })
+            .map(|f| Mic {
+                path: f.to_string_lossy().into(),
+                movie: movies.then(|| f.to_string_lossy().into()),
+                width: info.width,
+                height: info.height,
+                ..Default::default()
+            })
             .collect();
         let p = Project {
             dir: dir_s,
             source: folder.to_string_lossy().into(),
             movies,
-            optics: Optics { pixel_a: px, ..Default::default() },
+            optics: Optics {
+                pixel_a: px,
+                ..Default::default()
+            },
             diameter_a: 150.0,
             mics,
             pick: None,
@@ -243,7 +284,9 @@ impl Project {
     }
 
     pub fn particles(&self) -> Result<Vec<Particle>> {
-        Ok(serde_json::from_slice(&std::fs::read(self.path("particles.json")).context("还没有提取颗粒")?)?)
+        Ok(serde_json::from_slice(
+            &std::fs::read(self.path("particles.json")).context("还没有提取颗粒")?,
+        )?)
     }
 
     fn save_particles(&self, parts: &[Particle]) -> Result<()> {
@@ -266,11 +309,27 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
     params.unweighted = false;
     for i in 0..n {
         check_cancel()?;
-        let movie = p.mics[i].movie.clone().unwrap_or_else(|| p.mics[i].path.clone());
-        let stem = Path::new(&movie).file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let movie = p.mics[i]
+            .movie
+            .clone()
+            .unwrap_or_else(|| p.mics[i].path.clone());
+        let stem = Path::new(&movie)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let out = out_dir.join(format!("{stem}.mrc"));
         if !out.exists() {
-            let req = crate::motion::RunReq { token: None, path: Some(movie.clone()), mdoc: None, output: out.to_string_lossy().into(), c: 0, z: 0, t: 0, params: params.clone() };
+            let req = crate::motion::RunReq {
+                token: None,
+                path: Some(movie.clone()),
+                mdoc: None,
+                output: out.to_string_lossy().into(),
+                c: 0,
+                z: 0,
+                t: 0,
+                params: params.clone(),
+            };
             let r = crate::motion::run(&req, None, &|_, _, _| {})?;
             if p.optics.pixel_a <= 1.0 || i == 0 {
                 p.optics.pixel_a = r.pixel_a;
@@ -290,8 +349,17 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
 }
 
 /// CTF of every micrograph (`ctf::fit_region` on the whole image).
-pub fn ctf(p: &mut Project, params: &crate::ctf::Params, n_fft: usize, progress: Progress) -> Result<()> {
-    if p.movies && p.mics.iter().any(|m| m.movie.as_deref() == Some(m.path.as_str())) {
+pub fn ctf(
+    p: &mut Project,
+    params: &crate::ctf::Params,
+    n_fft: usize,
+    progress: Progress,
+) -> Result<()> {
+    if p.movies
+        && p.mics
+            .iter()
+            .any(|m| m.movie.as_deref() == Some(m.path.as_str()))
+    {
         bail!("请先做运动校正");
     }
     let n = p.mics.len();
@@ -304,9 +372,25 @@ pub fn ctf(p: &mut Project, params: &crate::ctf::Params, n_fft: usize, progress:
         check_cancel()?;
         let img = open_image(&p.mics[i].path)?;
         let (w, h) = (img.info().width, img.info().height);
-        let req = crate::ctf::FitReq { token: 0, z: 0, t: 0, c: 0, region: [0.0, 0.0, w as f64, h as f64], n: n_fft, params: params.clone() };
+        let req = crate::ctf::FitReq {
+            token: 0,
+            z: 0,
+            t: 0,
+            c: 0,
+            region: [0.0, 0.0, w as f64, h as f64],
+            n: n_fft,
+            params: params.clone(),
+        };
         match crate::ctf::fit_region(&img, &req) {
-            Ok(f) if f.score.is_finite() => p.mics[i].ctf = Some(MicCtf { df1: f.df1, df2: f.df2, angle: f.angle, score: f.score, fit_res: f.fit_res }),
+            Ok(f) if f.score.is_finite() => {
+                p.mics[i].ctf = Some(MicCtf {
+                    df1: f.df1,
+                    df2: f.df2,
+                    angle: f.angle,
+                    score: f.score,
+                    fit_res: f.fit_res,
+                })
+            }
             Ok(_) => {
                 p.mics[i].ctf = None;
                 p.mics[i].excluded = true;
@@ -341,7 +425,11 @@ pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Res
     let mut all = vec![];
     for i in 0..n {
         check_cancel()?;
-        let picks = if p.mics[i].excluded { vec![] } else { pick_one(p, i, params)? };
+        let picks = if p.mics[i].excluded {
+            vec![]
+        } else {
+            pick_one(p, i, params)?
+        };
         p.mics[i].picks = picks.len();
         all.push(picks);
         progress("挑选颗粒", i + 1, n);
@@ -352,8 +440,60 @@ pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Res
     Ok(all.iter().map(Vec::len).sum())
 }
 
+/// Drops picks whose SAM 2.1 outline is clearly not one particle: more
+/// than 1.5× the particle's size (clumps, overlaps, ice) or under 0.6×
+/// (fragments, specks). Each micrograph is binned to about 1024 pixels and
+/// smoothed; picks SAM cannot outline are kept. Returns the picks left.
+pub fn sam_filter(
+    p: &mut Project,
+    outline: discover::Outliner,
+    progress: Progress,
+) -> Result<usize> {
+    let mut picks = p.picks()?;
+    // The particle's own size: the box diameter is the kind's size × 1.3.
+    let size_a = p.diameter_a / 1.3;
+    let n = p.mics.len();
+    let (mut dropped, mut outlined, mut total) = (0usize, 0usize, 0usize);
+    for i in 0..n {
+        check_cancel()?;
+        if p.mics[i].excluded || picks[i].is_empty() {
+            continue;
+        }
+        let (img, w, h) = read_mic(&p.mics[i].path)?;
+        let f = (w.max(h) as f64 / 1024.0).ceil().max(1.0) as usize;
+        let (small, sw, sh) = super::pick::bin(&img, w, h, f);
+        let small = super::pick::gauss(&small, sw, sh, 1.0);
+        let want = size_a / (p.optics.pixel_a * f as f64);
+        let pts: Vec<[f32; 2]> = picks[i]
+            .iter()
+            .map(|q| [q[0] / f as f32, q[1] / f as f32])
+            .collect();
+        let sizes = outline(&small, sw, sh, &pts)?;
+        let before = picks[i].len();
+        total += before;
+        let mut keep = sizes.iter().map(|d| match d {
+            Some(d) => *d >= 0.6 * want && *d <= 1.5 * want,
+            None => true,
+        });
+        outlined += sizes.iter().filter(|d| d.is_some()).count();
+        picks[i].retain(|_| keep.next().unwrap_or(true));
+        dropped += before - picks[i].len();
+        p.mics[i].picks = picks[i].len();
+        progress("SAM 筛选颗粒", i + 1, n);
+    }
+    eprintln!("SAM filter: {total} picks, {outlined} outlined, {dropped} dropped");
+    std::fs::write(p.picks_path(), serde_json::to_vec(&picks)?)?;
+    p.save()?;
+    Ok(total - dropped)
+}
+
 /// Extracts every pick into `particles.mrcs` (+ `particles.json`, `particles.star`).
-pub fn extract_all(p: &mut Project, max_box: usize, invert: bool, progress: Progress) -> Result<StackInfo> {
+pub fn extract_all(
+    p: &mut Project,
+    max_box: usize,
+    invert: bool,
+    progress: Progress,
+) -> Result<StackInfo> {
     let picks = p.picks()?;
     if picks.iter().all(Vec::is_empty) {
         bail!("还没有挑选颗粒");
@@ -369,13 +509,25 @@ pub fn extract_all(p: &mut Project, max_box: usize, invert: bool, progress: Prog
         if m.excluded || picks[i].is_empty() {
             continue;
         }
-        let Some(c) = &m.ctf else { bail!("{} 没有 CTF，请先做 CTF 或排除它", m.path) };
+        let Some(c) = &m.ctf else {
+            bail!("{} 没有 CTF，请先做 CTF 或排除它", m.path)
+        };
         let (img, iw, ih) = read_mic(&m.path)?;
         let xy: Vec<[f32; 2]> = picks[i].iter().map(|q| [q[0], q[1]]).collect();
         let boxes = extract::particles(&img, iw, ih, &xy, big, out, p.diameter_a / px_out, invert)?;
         for (b, q) in boxes.iter().zip(&picks[i]) {
             w.push(b)?;
-            parts.push(Particle { mic: i as u32, x: q[0], y: q[1], df1: c.df1 as f32, df2: c.df2 as f32, angle: c.angle as f32, fom: q[2], class2d: -1, ..Default::default() });
+            parts.push(Particle {
+                mic: i as u32,
+                x: q[0],
+                y: q[1],
+                df1: c.df1 as f32,
+                df2: c.df2 as f32,
+                angle: c.angle as f32,
+                fom: q[2],
+                class2d: -1,
+                ..Default::default()
+            });
         }
         progress("提取颗粒", i + 1, n);
     }
@@ -383,7 +535,13 @@ pub fn extract_all(p: &mut Project, max_box: usize, invert: bool, progress: Prog
     p.save_particles(&parts)?;
     let star = p.path("particles.star");
     write_star(p, &parts, &path, out, px_out, None, false, Path::new(&star))?;
-    let info = StackInfo { path, box_px: out, pixel_a: px_out, count, star };
+    let info = StackInfo {
+        path,
+        box_px: out,
+        pixel_a: px_out,
+        count,
+        star,
+    };
     p.stack = Some(info.clone());
     p.class2d = None;
     p.initial = None;
@@ -400,7 +558,9 @@ fn stack_of(p: &Project) -> Result<Stack> {
 /// Particles to use: those in the selected 2D classes, or all.
 pub fn selected(p: &Project, parts: &[Particle]) -> Vec<usize> {
     match &p.class2d {
-        Some(c) if !c.selected.is_empty() => (0..parts.len()).filter(|&i| parts[i].class2d >= 0 && c.selected.contains(&(parts[i].class2d as usize))).collect(),
+        Some(c) if !c.selected.is_empty() => (0..parts.len())
+            .filter(|&i| parts[i].class2d >= 0 && c.selected.contains(&(parts[i].class2d as usize)))
+            .collect(),
         _ => (0..parts.len()).collect(),
     }
 }
@@ -409,17 +569,41 @@ pub fn class2d(p: &mut Project, params: &Class2dParams, progress: Progress) -> R
     let stack = stack_of(p)?;
     let mut parts = p.particles()?;
     let ids: Vec<usize> = (0..parts.len()).collect();
-    let r = class2d::run(&stack, &mut parts, &ids, &p.optics, p.diameter_a, params, progress)?;
+    let r = class2d::run(
+        &stack,
+        &mut parts,
+        &ids,
+        &p.optics,
+        p.diameter_a,
+        params,
+        progress,
+    )?;
     let path = p.path("class2d.mrcs");
     let mut all = vec![];
     for a in &r.averages {
         all.extend_from_slice(a);
     }
-    data::write_mrc(Path::new(&path), &all, [r.b, r.b, r.averages.len()], r.pixel_a, "TifMrcView Pro: 2D classes")?;
+    data::write_mrc(
+        Path::new(&path),
+        &all,
+        [r.b, r.b, r.averages.len()],
+        r.pixel_a,
+        "TifMrcView Pro: 2D classes",
+    )?;
     p.save_particles(&parts)?;
     // The sharp classes are kept by default; the user can change the choice.
     let selected = class2d::auto_select(&r.counts, &r.quality, 0.6);
-    let info = Class2dInfo { path, box_px: r.b, pixel_a: r.pixel_a, counts: r.counts, scores: r.scores, res: r.res, quality: r.quality, selected, params: params.clone() };
+    let info = Class2dInfo {
+        path,
+        box_px: r.b,
+        pixel_a: r.pixel_a,
+        counts: r.counts,
+        scores: r.scores,
+        res: r.res,
+        quality: r.quality,
+        selected,
+        params: params.clone(),
+    };
     p.class2d = Some(info.clone());
     p.save()?;
     Ok(info)
@@ -438,11 +622,29 @@ pub fn initial(p: &mut Project, params: &InitialParams, progress: Progress) -> R
     let stack = stack_of(p)?;
     let mut parts = p.particles()?;
     let ids = selected(p, &parts);
-    let m = refine::initial(&stack, &mut parts, &ids, &p.optics, p.diameter_a, params, progress)?;
+    let m = refine::initial(
+        &stack,
+        &mut parts,
+        &ids,
+        &p.optics,
+        p.diameter_a,
+        params,
+        progress,
+    )?;
     let path = p.path("initial.mrc");
-    data::write_mrc(Path::new(&path), &m.v, [m.b; 3], m.px, "TifMrcView Pro: ab initio model")?;
+    data::write_mrc(
+        Path::new(&path),
+        &m.v,
+        [m.b; 3],
+        m.px,
+        "TifMrcView Pro: ab initio model",
+    )?;
     p.save_particles(&parts)?;
-    let info = MapInfo { path, box_px: m.b, pixel_a: m.px };
+    let info = MapInfo {
+        path,
+        box_px: m.b,
+        pixel_a: m.px,
+    };
     p.initial = Some(info.clone());
     p.save()?;
     Ok(info)
@@ -453,28 +655,59 @@ pub fn flip_initial(p: &mut Project) -> Result<()> {
     let info = p.initial.clone().context("还没有初始模型")?;
     let (v, dims, px) = data::read_volume(&info.path)?;
     let f = post::flip_hand(&v, dims[0]);
-    data::write_mrc(Path::new(&info.path), &f, dims, px, "TifMrcView Pro: ab initio model (hand flipped)")
+    data::write_mrc(
+        Path::new(&info.path),
+        &f,
+        dims,
+        px,
+        "TifMrcView Pro: ab initio model (hand flipped)",
+    )
 }
 
-pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, progress: Progress) -> Result<RefineInfo> {
+pub fn refine(
+    p: &mut Project,
+    params: &RefineParams,
+    reference: Option<&str>,
+    progress: Progress,
+) -> Result<RefineInfo> {
     let stack = stack_of(p)?;
     let mut parts = p.particles()?;
     let ids = selected(p, &parts);
     let start_path = match reference {
         Some(r) => r.to_string(),
-        None => p.initial.as_ref().context("需要初始模型或参考图")?.path.clone(),
+        None => p
+            .initial
+            .as_ref()
+            .context("需要初始模型或参考图")?
+            .path
+            .clone(),
     };
     let (v, dims, px) = data::read_volume(&start_path)?;
     if dims[0] != dims[1] || dims[1] != dims[2] {
         bail!("参考图应为立方体");
     }
     let start = Map { b: dims[0], px, v };
-    let r = refine::refine(&stack, &mut parts, &ids, &p.optics, p.diameter_a, &start, params, progress)?;
+    let r = refine::refine(
+        &stack,
+        &mut parts,
+        &ids,
+        &p.optics,
+        p.diameter_a,
+        &start,
+        params,
+        progress,
+    )?;
     let b = r.full.b;
     let px = r.full.px;
     let mask = post::auto_mask(&r.full.v, b, px, p.diameter_a / 2.0 / px * 1.2);
     let (sharp, s) = post::sharpen(&r.half1.v, &r.half2.v, &mask, b, px, None);
-    let names = ["refine_map.mrc", "refine_sharp.mrc", "refine_half1.mrc", "refine_half2.mrc", "refine_mask.mrc"];
+    let names = [
+        "refine_map.mrc",
+        "refine_sharp.mrc",
+        "refine_half1.mrc",
+        "refine_half2.mrc",
+        "refine_mask.mrc",
+    ];
     for (name, v, label) in [
         (names[0], &r.full.v, "TifMrcView Pro: refined map"),
         (names[1], &sharp, "TifMrcView Pro: sharpened map"),
@@ -489,7 +722,16 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
     let stack_path = p.stack.as_ref().unwrap().path.clone();
     let used: Vec<Particle> = ids.iter().map(|&i| parts[i].clone()).collect();
     let idx: Vec<usize> = ids.clone();
-    write_star(p, &used, &stack_path, b, px, Some(&idx), true, Path::new(&star))?;
+    write_star(
+        p,
+        &used,
+        &stack_path,
+        b,
+        px,
+        Some(&idx),
+        true,
+        Path::new(&star),
+    )?;
     let info = RefineInfo {
         map: p.path(names[0]),
         sharpened: p.path(names[1]),
@@ -506,7 +748,10 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
         fsc: r.fsc,
         fsc_masked: s.fsc_masked,
         history: r.history,
-        params: RefineParams { symmetry: r.symmetry.clone(), ..params.clone() },
+        params: RefineParams {
+            symmetry: r.symmetry.clone(),
+            ..params.clone()
+        },
         backend: super::score::backend().into(),
     };
     p.refine = Some(info.clone());
@@ -517,25 +762,63 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
 /// RELION 3.1-style STAR file (optics group + particles). `index` maps
 /// rows to stack positions when only some particles are written;
 /// `oriented` adds the angles, origins and half sets of the refinement.
-pub fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f64, index: Option<&[usize]>, oriented: bool, out: &Path) -> Result<()> {
+pub fn write_star(
+    p: &Project,
+    parts: &[Particle],
+    stack: &str,
+    b: usize,
+    px: f64,
+    index: Option<&[usize]>,
+    oriented: bool,
+    out: &Path,
+) -> Result<()> {
     use std::fmt::Write as _;
     let o = &p.optics;
     let mut s = String::new();
     writeln!(s, "# TifMrcView Pro\n\ndata_optics\n\nloop_\n_rlnOpticsGroup #1\n_rlnOpticsGroupName #2\n_rlnAmplitudeContrast #3\n_rlnSphericalAberration #4\n_rlnVoltage #5\n_rlnImagePixelSize #6\n_rlnImageSize #7\n_rlnImageDimensionality #8")?;
-    writeln!(s, "1 opticsGroup1 {:.4} {:.3} {:.1} {:.5} {} 2\n", o.amplitude, o.cs_mm, o.kv, px, b)?;
+    writeln!(
+        s,
+        "1 opticsGroup1 {:.4} {:.3} {:.1} {:.5} {} 2\n",
+        o.amplitude, o.cs_mm, o.kv, px, b
+    )?;
     writeln!(s, "\ndata_particles\n\nloop_\n_rlnCoordinateX #1\n_rlnCoordinateY #2\n_rlnMicrographName #3\n_rlnImageName #4\n_rlnDefocusU #5\n_rlnDefocusV #6\n_rlnDefocusAngle #7\n_rlnOpticsGroup #8\n_rlnAutopickFigureOfMerit #9\n_rlnClassNumber #10")?;
     if oriented {
         writeln!(s, "_rlnAngleRot #11\n_rlnAngleTilt #12\n_rlnAnglePsi #13\n_rlnOriginXAngst #14\n_rlnOriginYAngst #15\n_rlnRandomSubset #16")?;
     }
-    let stack_name = Path::new(stack).file_name().unwrap_or_default().to_string_lossy();
+    let stack_name = Path::new(stack)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
     for (row, q) in parts.iter().enumerate() {
         let i = index.map(|ix| ix[row]).unwrap_or(row);
         let mic = &p.mics[q.mic as usize].path;
         // RELION measures the defocus angle with y down in the image.
-        write!(s, "{:.2} {:.2} {} {:06}@{} {:.1} {:.1} {:.2} 1 {:.3} {}", q.x, q.y, mic, i + 1, stack_name, q.df1, q.df2, (-q.angle).rem_euclid(180.0), q.fom, q.class2d + 1)?;
+        write!(
+            s,
+            "{:.2} {:.2} {} {:06}@{} {:.1} {:.1} {:.2} 1 {:.3} {}",
+            q.x,
+            q.y,
+            mic,
+            i + 1,
+            stack_name,
+            q.df1,
+            q.df2,
+            (-q.angle).rem_euclid(180.0),
+            q.fom,
+            q.class2d + 1
+        )?;
         if oriented {
             // The particle centre is at −origin from the box centre.
-            write!(s, " {:.3} {:.3} {:.3} {:.3} {:.3} {}", q.euler[0], q.euler[1], q.euler[2], -q.shift[0] as f64 * px, -q.shift[1] as f64 * px, q.half)?;
+            write!(
+                s,
+                " {:.3} {:.3} {:.3} {:.3} {:.3} {}",
+                q.euler[0],
+                q.euler[1],
+                q.euler[2],
+                -q.shift[0] as f64 * px,
+                -q.shift[1] as f64 * px,
+                q.half
+            )?;
         }
         writeln!(s)?;
     }
@@ -544,8 +827,15 @@ pub fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f6
 }
 
 /// Finds the kinds of particle (`discover::run`) and keeps them.
-pub fn discover(p: &mut Project, outline: Option<discover::Outliner>, progress: Progress) -> Result<discover::Discovery> {
-    let cfg = discover::Config { dark: p.pick.as_ref().map(|q| q.dark).unwrap_or(true), ..Default::default() };
+pub fn discover(
+    p: &mut Project,
+    outline: Option<discover::Outliner>,
+    progress: Progress,
+) -> Result<discover::Discovery> {
+    let cfg = discover::Config {
+        dark: p.pick.as_ref().map(|q| q.dark).unwrap_or(true),
+        ..Default::default()
+    };
     let d = discover::run(p, &cfg, outline, progress)?;
     p.discovery = Some(d.clone());
     p.save()?;
@@ -590,15 +880,30 @@ pub struct AutoParams {
 /// Everything after the choice of particle: picking, extraction, 2D
 /// classification with the sharp classes kept, the point group, the
 /// initial model and the refinement.
-pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<RefineInfo> {
-    let pick = PickParams { diameter_a: p.diameter_a, ..p.pick.clone().unwrap_or_default() };
-    let n = pick_all(p, &pick, progress)?;
+pub fn auto(
+    p: &mut Project,
+    a: &AutoParams,
+    outline: Option<discover::Outliner>,
+    progress: Progress,
+) -> Result<RefineInfo> {
+    let pick = PickParams {
+        diameter_a: p.diameter_a,
+        ..p.pick.clone().unwrap_or_default()
+    };
+    let mut n = pick_all(p, &pick, progress)?;
+    if let Some(f) = outline {
+        n = sam_filter(p, f, progress)?;
+    }
     if n < 100 {
         bail!("只挑到 {n} 个颗粒，太少了");
     }
     // A box up to 256 when 128 would cap the resolution above 4 Å.
     let (big, _) = extract::boxes(p.diameter_a, p.optics.pixel_a, 128);
-    let max_box = if p.optics.pixel_a * big as f64 / 128.0 > 2.0 { 256 } else { 128 };
+    let max_box = if p.optics.pixel_a * big as f64 / 128.0 > 2.0 {
+        256
+    } else {
+        128
+    };
     extract_all(p, max_box, true, progress)?;
     let c = class2d(p, &Class2dParams::default(), progress)?;
     let sym = if a.symmetry.trim().is_empty() {
@@ -616,7 +921,14 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
     // misplaced axis it can settle on a symmetrised mixture); the n-fold
     // axis is then found in the map and put along z, and a Dn tested.
     let guessed = a.symmetry.trim().is_empty();
-    let m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
+    let m = initial(
+        p,
+        &InitialParams {
+            symmetry: if guessed { "C1".into() } else { sym.clone() },
+            ..Default::default()
+        },
+        progress,
+    )?;
     let mut sym = sym;
     if guessed && sym != "C1" {
         let n: usize = sym[1..].parse().unwrap_or(1);
@@ -634,7 +946,13 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
                         g.two_fold = c;
                     }
                 }
-                data::write_mrc(Path::new(&m.path), &v, dims, px, "TifMrcView Pro: ab initio model (symmetry axis along z)")?;
+                data::write_mrc(
+                    Path::new(&m.path),
+                    &v,
+                    dims,
+                    px,
+                    "TifMrcView Pro: ab initio model (symmetry axis along z)",
+                )?;
             }
             None => sym = "C1".into(),
         }
@@ -646,7 +964,16 @@ pub fn auto(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<Refin
     // One refinement: a Cn guess is tested for a Dn once the map is
     // refined enough, and refinement goes on in it when there is one.
     let promote = guessed && sym.starts_with('C') && sym != "C1";
-    let r = refine(p, &RefineParams { symmetry: sym.clone(), promote_dihedral: promote, ..Default::default() }, None, progress)?;
+    let r = refine(
+        p,
+        &RefineParams {
+            symmetry: sym.clone(),
+            promote_dihedral: promote,
+            ..Default::default()
+        },
+        None,
+        progress,
+    )?;
     if r.params.symmetry != sym {
         if let Some(g) = p.symmetry.as_mut() {
             g.symmetry = r.params.symmetry.clone();

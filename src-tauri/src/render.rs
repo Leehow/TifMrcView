@@ -176,7 +176,13 @@ fn gather<T: Px>(
 }
 
 /// Raw values of every channel at one pixel.
-pub fn pixel_values(img: &Arc<OpenImage>, z: usize, t: usize, x: usize, y: usize) -> Result<Vec<f64>> {
+pub fn pixel_values(
+    img: &Arc<OpenImage>,
+    z: usize,
+    t: usize,
+    x: usize,
+    y: usize,
+) -> Result<Vec<f64>> {
     let info = img.info();
     if x >= info.width || y >= info.height {
         return Ok(vec![]);
@@ -202,7 +208,12 @@ pub fn thumbnail(img: &Arc<OpenImage>, size: usize) -> Result<Vec<u8>> {
         .iter()
         .enumerate()
         .take(if info.is_rgb { 3 } else { 4 })
-        .map(|(i, c)| ChanReq { index: i, color: c.color, min: None, max: None })
+        .map(|(i, c)| ChanReq {
+            index: i,
+            color: c.color,
+            min: None,
+            max: None,
+        })
         .collect();
     let req = RenderReq {
         token: img.token,
@@ -235,7 +246,12 @@ mod tests {
             token: 1,
             z: 0,
             t: 0,
-            channels: vec![ChanReq { index: 0, color: [255, 255, 255], min: Some(0.0), max: Some(255.0) }],
+            channels: vec![ChanReq {
+                index: 0,
+                color: [255, 255, 255],
+                min: Some(0.0),
+                max: Some(255.0),
+            }],
             region: [0.0, 0.0, 4.0, 4.0],
             out_w: out,
             out_h: out,
@@ -254,7 +270,10 @@ mod tests {
 
     /// Red channel of every output pixel.
     fn reds(out: &[u8]) -> Vec<u8> {
-        out[12 + 16 * u32_at(out, 8) as usize..].chunks_exact(4).map(|p| p[0]).collect()
+        out[12 + 16 * u32_at(out, 8) as usize..]
+            .chunks_exact(4)
+            .map(|p| p[0])
+            .collect()
     }
 
     fn close(a: &[u8], b: &[u8]) {
@@ -268,7 +287,10 @@ mod tests {
     fn header_layout() {
         let out = render(&ramp(), &req(4)).unwrap();
         assert_eq!(out.len(), 12 + 16 + 4 * 4 * 4);
-        assert_eq!((u32_at(&out, 0), u32_at(&out, 4), u32_at(&out, 8)), (4, 4, 1));
+        assert_eq!(
+            (u32_at(&out, 0), u32_at(&out, 4), u32_at(&out, 8)),
+            (4, 4, 1)
+        );
         // lo, hi (as requested), then data min / max.
         let h: Vec<f32> = (0..4).map(|k| f32_at(&out, 12 + 4 * k)).collect();
         assert_eq!(h, [0.0, 255.0, 0.0, 240.0]);
@@ -353,12 +375,25 @@ mod tests {
     #[test]
     fn two_channels_add() {
         let page = |v: u8| vec![v; 16];
-        let (src, _) = FakeSource::new(fake_info(4, 4, 2, 1, 1, DType::U8), vec![vec![page(100)], vec![page(100)]]);
+        let (src, _) = FakeSource::new(
+            fake_info(4, 4, 2, 1, 1, DType::U8),
+            vec![vec![page(100)], vec![page(100)]],
+        );
         let img = OpenImage::new(1, Box::new(src), 1 << 20);
         let mut r = req(4);
         r.channels = vec![
-            ChanReq { index: 0, color: [255, 0, 0], min: Some(0.0), max: Some(200.0) },
-            ChanReq { index: 1, color: [0, 255, 0], min: Some(0.0), max: Some(200.0) },
+            ChanReq {
+                index: 0,
+                color: [255, 0, 0],
+                min: Some(0.0),
+                max: Some(200.0),
+            },
+            ChanReq {
+                index: 1,
+                color: [0, 255, 0],
+                min: Some(0.0),
+                max: Some(200.0),
+            },
         ];
         let out = render(&img, &r).unwrap();
         assert_eq!(u32_at(&out, 8), 2);
@@ -393,7 +428,9 @@ mod tests {
         assert_eq!(pixel_values(&img, 0, 0, 3, 3).unwrap(), [240.0]);
         assert!(pixel_values(&img, 0, 0, 4, 0).unwrap().is_empty());
         assert!(pixel_values(&img, 0, 0, 0, 4).unwrap().is_empty());
-        assert!(pixel_values(&img, 0, 0, usize::MAX, usize::MAX).unwrap().is_empty());
+        assert!(pixel_values(&img, 0, 0, usize::MAX, usize::MAX)
+            .unwrap()
+            .is_empty());
         // z and t beyond the stack are clamped.
         assert_eq!(pixel_values(&img, 9, 9, 0, 1).unwrap(), [64.0]);
     }
@@ -409,7 +446,10 @@ mod tests {
     }
 
     fn sized(w: usize, h: usize) -> Arc<OpenImage> {
-        let (src, _) = FakeSource::new(fake_info(w, h, 1, 1, 1, DType::U8), vec![vec![vec![7; w * h]]]);
+        let (src, _) = FakeSource::new(
+            fake_info(w, h, 1, 1, 1, DType::U8),
+            vec![vec![vec![7; w * h]]],
+        );
         OpenImage::new(1, Box::new(src), 1 << 20)
     }
 
@@ -417,7 +457,10 @@ mod tests {
     fn thumbnail_dimensions() {
         let dims = |img: &Arc<OpenImage>, size| {
             let out = thumbnail(img, size).unwrap();
-            assert_eq!(out.len(), 12 + 16 + (u32_at(&out, 0) * u32_at(&out, 4) * 4) as usize);
+            assert_eq!(
+                out.len(),
+                12 + 16 + (u32_at(&out, 0) * u32_at(&out, 4) * 4) as usize
+            );
             (u32_at(&out, 0), u32_at(&out, 4))
         };
         assert_eq!(dims(&sized(8, 4), 4), (4, 2));

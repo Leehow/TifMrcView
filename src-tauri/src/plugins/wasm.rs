@@ -13,7 +13,10 @@ use anyhow::{anyhow, bail, Context, Result};
 
 /// The bytes of the file a plugin reads (usually a memory map).
 pub type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
-use wasmi::{Caller, Config, Engine, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
+use wasmi::{
+    Caller, Config, Engine, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+    TypedFunc,
+};
 
 use super::recipe;
 
@@ -66,7 +69,11 @@ pub fn compile(bytes: &[u8]) -> Result<(Module, Exports)> {
     }
     for i in module.imports() {
         if i.module() != "tmv" || !IMPORTS.contains(&i.name()) {
-            bail!("WebAssembly 模块需要宿主不提供的导入 {}.{}", i.module(), i.name());
+            bail!(
+                "WebAssembly 模块需要宿主不提供的导入 {}.{}",
+                i.module(),
+                i.name()
+            );
         }
     }
     let format = FORMAT_EXPORTS.iter().all(|n| has(n));
@@ -75,7 +82,14 @@ pub fn compile(bytes: &[u8]) -> Result<(Module, Exports)> {
     if !format && !metadata && !stack {
         bail!("WebAssembly 模块既没有 tmv_open/tmv_info/tmv_page/tmv_close，也没有 tmv_metadata 或 tmv_stack");
     }
-    Ok((module, Exports { format, metadata, stack }))
+    Ok((
+        module,
+        Exports {
+            format,
+            metadata,
+            stack,
+        },
+    ))
 }
 
 const IMPORTS: &[&str] = &["file_size", "read", "decompress", "log", "error"];
@@ -113,70 +127,134 @@ fn memory_of(caller: &Caller<'_, HostState>) -> Option<Memory> {
 
 /// A UTF-8 string from plugin memory, at most 4 KB.
 fn string_at(caller: &Caller<'_, HostState>, ptr: u32, len: u32) -> String {
-    let Some(mem) = memory_of(caller) else { return String::new() };
+    let Some(mem) = memory_of(caller) else {
+        return String::new();
+    };
     let data = mem.data(caller);
     let (p, l) = (ptr as usize, (len as usize).min(4096));
-    data.get(p..p.saturating_add(l)).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()
+    data.get(p..p.saturating_add(l))
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default()
 }
 
 fn linker() -> Result<Linker<HostState>> {
     let mut l = Linker::new(engine());
-    l.func_wrap("tmv", "file_size", |c: Caller<'_, HostState>| -> u64 { (*c.data().file).as_ref().len() as u64 })?;
-    l.func_wrap("tmv", "read", |mut c: Caller<'_, HostState>, offset: u64, len: u32, dst: u32| -> i32 {
-        let Some(mem) = memory_of(&c) else { return -1 };
-        let (data, state) = mem.data_and_store_mut(&mut c);
-        let len = (len as usize).min(1 << 30);
-        let Some(out) = data.get_mut(dst as usize..dst as usize + len) else { return -1 };
-        let file = (*state.file).as_ref();
-        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(file.len());
-        let n = len.min(file.len() - start);
-        out[..n].copy_from_slice(&file[start..start + n]);
-        n as i32
+    l.func_wrap("tmv", "file_size", |c: Caller<'_, HostState>| -> u64 {
+        (*c.data().file).as_ref().len() as u64
     })?;
     l.func_wrap(
         "tmv",
+        "read",
+        |mut c: Caller<'_, HostState>, offset: u64, len: u32, dst: u32| -> i32 {
+            let Some(mem) = memory_of(&c) else { return -1 };
+            let (data, state) = mem.data_and_store_mut(&mut c);
+            let len = (len as usize).min(1 << 30);
+            let Some(out) = data.get_mut(dst as usize..dst as usize + len) else {
+                return -1;
+            };
+            let file = (*state.file).as_ref();
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(file.len());
+            let n = len.min(file.len() - start);
+            out[..n].copy_from_slice(&file[start..start + n]);
+            n as i32
+        },
+    )?;
+    l.func_wrap(
+        "tmv",
         "decompress",
-        |mut c: Caller<'_, HostState>, codec: u32, src: u32, src_len: u32, dst: u32, dst_len: u32| -> i32 {
+        |mut c: Caller<'_, HostState>,
+         codec: u32,
+         src: u32,
+         src_len: u32,
+         dst: u32,
+         dst_len: u32|
+         -> i32 {
             let Some(mem) = memory_of(&c) else { return -1 };
             let data = mem.data_mut(&mut c);
-            let Some(input) = data.get(src as usize..src as usize + src_len as usize) else { return -1 };
+            let Some(input) = data.get(src as usize..src as usize + src_len as usize) else {
+                return -1;
+            };
             let cap = (dst_len as usize).min(MAX_DECOMPRESS);
             if codec > u8::MAX as u32 || codec == recipe::codec::JPEG as u32 {
                 return -2;
             }
-            let Ok(out) = recipe::decompress(codec as u8, input, cap) else { return -3 };
-            let Some(target) = data.get_mut(dst as usize..dst as usize + out.len()) else { return -1 };
+            let Ok(out) = recipe::decompress(codec as u8, input, cap) else {
+                return -3;
+            };
+            let Some(target) = data.get_mut(dst as usize..dst as usize + out.len()) else {
+                return -1;
+            };
             target.copy_from_slice(&out);
             out.len() as i32
         },
     )?;
-    l.func_wrap("tmv", "log", |c: Caller<'_, HostState>, ptr: u32, len: u32| {
-        let msg = string_at(&c, ptr, len);
-        match c.get_fuel() {
-            Ok(left) if debug() => eprintln!("[plugin {}] {msg} ({left} fuel left)", c.data().plugin),
-            _ => eprintln!("[plugin {}] {msg}", c.data().plugin),
-        }
-    })?;
-    l.func_wrap("tmv", "error", |mut c: Caller<'_, HostState>, ptr: u32, len: u32| {
-        let msg = string_at(&c, ptr, len);
-        c.data_mut().error = Some(msg);
-    })?;
+    l.func_wrap(
+        "tmv",
+        "log",
+        |c: Caller<'_, HostState>, ptr: u32, len: u32| {
+            let msg = string_at(&c, ptr, len);
+            match c.get_fuel() {
+                Ok(left) if debug() => {
+                    eprintln!("[plugin {}] {msg} ({left} fuel left)", c.data().plugin)
+                }
+                _ => eprintln!("[plugin {}] {msg}", c.data().plugin),
+            }
+        },
+    )?;
+    l.func_wrap(
+        "tmv",
+        "error",
+        |mut c: Caller<'_, HostState>, ptr: u32, len: u32| {
+            let msg = string_at(&c, ptr, len);
+            c.data_mut().error = Some(msg);
+        },
+    )?;
     Ok(l)
 }
 
 impl Instance {
     /// Instantiates `module` for reading `file`. `plugin` names it in messages.
     pub fn new(module: &Module, file: Bytes, plugin: &str) -> Result<Instance> {
-        let limits = StoreLimitsBuilder::new().memory_size(MAX_MEMORY).memories(1).tables(4).instances(1).build();
-        let mut store = Store::new(engine(), HostState { file, memory: None, error: None, limits, plugin: plugin.into() });
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(MAX_MEMORY)
+            .memories(1)
+            .tables(4)
+            .instances(1)
+            .build();
+        let mut store = Store::new(
+            engine(),
+            HostState {
+                file,
+                memory: None,
+                error: None,
+                limits,
+                plugin: plugin.into(),
+            },
+        );
         store.limiter(|s| &mut s.limits);
         store.set_fuel(FUEL_CALL)?;
-        let inst = linker()?.instantiate_and_start(&mut store, module).map_err(|e| trap(e, plugin, None))?;
-        let memory = inst.get_memory(&store, "memory").context("插件没有导出 memory")?;
+        let inst = linker()?
+            .instantiate_and_start(&mut store, module)
+            .map_err(|e| trap(e, plugin, None))?;
+        let memory = inst
+            .get_memory(&store, "memory")
+            .context("插件没有导出 memory")?;
         store.data_mut().memory = Some(memory);
-        let alloc = inst.get_typed_func(&store, "tmv_alloc").context("插件的 tmv_alloc 签名不对")?;
-        let free = inst.get_typed_func(&store, "tmv_free").context("插件的 tmv_free 签名不对")?;
-        let mut me = Instance { store, memory, alloc, free, inst };
+        let alloc = inst
+            .get_typed_func(&store, "tmv_alloc")
+            .context("插件的 tmv_alloc 签名不对")?;
+        let free = inst
+            .get_typed_func(&store, "tmv_free")
+            .context("插件的 tmv_free 签名不对")?;
+        let mut me = Instance {
+            store,
+            memory,
+            alloc,
+            free,
+            inst,
+        };
         let abi: u32 = me.call("tmv_abi", (), FUEL_CALL)?;
         if abi != ABI_VERSION {
             bail!("插件接口版本是 {abi}，这个版本的 TifMrcView 只支持 {ABI_VERSION}，请更新插件或 TifMrcView");
@@ -184,7 +262,12 @@ impl Instance {
         Ok(me)
     }
 
-    fn call<P: wasmi::WasmParams, R: wasmi::WasmResults>(&mut self, name: &str, args: P, fuel: u64) -> Result<R> {
+    fn call<P: wasmi::WasmParams, R: wasmi::WasmResults>(
+        &mut self,
+        name: &str,
+        args: P,
+        fuel: u64,
+    ) -> Result<R> {
         let f = self
             .inst
             .get_typed_func::<P, R>(&self.store, name)
@@ -214,11 +297,16 @@ impl Instance {
     /// Copies a string into plugin memory; returns (ptr, len).
     fn put(&mut self, s: &str) -> Result<(u32, u32)> {
         let len = u32::try_from(s.len()).context("路径太长")?;
-        let ptr: u32 = self.alloc.call(&mut self.store, len).map_err(|e| trap(e, "?", None))?;
+        let ptr: u32 = self
+            .alloc
+            .call(&mut self.store, len)
+            .map_err(|e| trap(e, "?", None))?;
         if ptr == 0 {
             bail!("插件内存不足");
         }
-        self.memory.write(&mut self.store, ptr as usize, s.as_bytes()).map_err(|_| anyhow!("插件内存越界"))?;
+        self.memory
+            .write(&mut self.store, ptr as usize, s.as_bytes())
+            .map_err(|_| anyhow!("插件内存越界"))?;
         Ok((ptr, len))
     }
 
@@ -245,10 +333,17 @@ impl Instance {
         let arg = self.put(path)?;
         let r = if series == 0 {
             self.call::<(u32, u32), i32>("tmv_open", arg, FUEL_OPEN)
-        } else if self.inst.get_export(&self.store, "tmv_open_series").is_some() {
+        } else if self
+            .inst
+            .get_export(&self.store, "tmv_open_series")
+            .is_some()
+        {
             self.call::<(u32, u32, u32), i32>("tmv_open_series", (arg.0, arg.1, series), FUEL_OPEN)
         } else {
-            Err(anyhow!("插件 {} 不支持打开文件里的其他图像，请更新插件", self.store.data().plugin))
+            Err(anyhow!(
+                "插件 {} 不支持打开文件里的其他图像，请更新插件",
+                self.store.data().plugin
+            ))
         };
         self.release(arg);
         match r? {
@@ -286,7 +381,11 @@ impl Instance {
                 return Err(e);
             }
         };
-        let r = self.call::<(u32, u32, u32, u32, u32), u64>("tmv_stack", (arg.0, arg.1, list.0, list.1, series), FUEL_OPEN);
+        let r = self.call::<(u32, u32, u32, u32, u32), u64>(
+            "tmv_stack",
+            (arg.0, arg.1, list.0, list.1, series),
+            FUEL_OPEN,
+        );
         self.release(list);
         self.release(arg);
         match r? {
@@ -424,12 +523,21 @@ mod tests {
         let spin: &[u8] = &[0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00];
         let m = asm::plugin(&[("tmv_metadata", &[asm::I32, asm::I32], &[asm::I64], spin)]);
         let (module, ex) = compile(&m).unwrap();
-        assert_eq!(ex, Exports { format: false, metadata: true, stack: false });
+        assert_eq!(
+            ex,
+            Exports {
+                format: false,
+                metadata: true,
+                stack: false
+            }
+        );
         let mut inst = Instance::new(&module, file(), "spin").unwrap();
         // A smaller budget keeps the test quick; the mechanism is the same.
         let arg = inst.put("x").unwrap();
         let t = std::time::Instant::now();
-        let err = inst.call::<(u32, u32), u64>("tmv_metadata", arg, 50_000_000).unwrap_err();
+        let err = inst
+            .call::<(u32, u32), u64>("tmv_metadata", arg, 50_000_000)
+            .unwrap_err();
         assert!(format!("{err:#}").contains("超时"), "{err:#}");
         eprintln!("50M fuel took {:?}", t.elapsed());
     }
@@ -458,9 +566,17 @@ mod tests {
             ("tmv_abi", &[], &[asm::I32], &[0x41, 2]),
             ("tmv_alloc", &[asm::I32], &[asm::I32], &[0x41, 0]),
             ("tmv_free", &[asm::I32, asm::I32], &[], &[]),
-            ("tmv_metadata", &[asm::I32, asm::I32], &[asm::I64], &[0x42, 0]),
+            (
+                "tmv_metadata",
+                &[asm::I32, asm::I32],
+                &[asm::I64],
+                &[0x42, 0],
+            ),
         ]);
         let (module, _) = compile(&m).unwrap();
-        assert!(format!("{:#}", Instance::new(&module, file(), "t").err().unwrap()).contains("接口版本"));
+        assert!(
+            format!("{:#}", Instance::new(&module, file(), "t").err().unwrap())
+                .contains("接口版本")
+        );
     }
 }

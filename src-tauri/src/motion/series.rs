@@ -29,7 +29,9 @@ impl Doc {
     /// PixelSpacing for frames of this size: the mdoc's spacing is for its
     /// ImageSize, so frames 8× as wide have 1/8 of it.
     pub fn frame_pixel(&self, spacing: f64, frame: (usize, usize)) -> f64 {
-        let Some([w, h]) = self.image_size.filter(|[w, h]| *w > 0 && *h > 0) else { return spacing };
+        let Some([w, h]) = self.image_size.filter(|[w, h]| *w > 0 && *h > 0) else {
+            return spacing;
+        };
         let r = frame.0.max(frame.1) as f64 / w.max(h) as f64;
         if (0.9..=1.1).contains(&r) {
             return spacing;
@@ -78,7 +80,10 @@ pub fn parse(text: &str) -> Result<Doc> {
                 "PixelSpacing" => d.pixel_a = number(v).filter(|v| *v > 0.0),
                 "Voltage" => d.kv = number(v),
                 "ImageSize" => {
-                    let n: Vec<usize> = v.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                    let n: Vec<usize> = v
+                        .split_whitespace()
+                        .filter_map(|x| x.parse().ok())
+                        .collect();
                     if n.len() == 2 {
                         d.image_size = Some([n[0], n[1]]);
                     }
@@ -391,7 +396,9 @@ pub fn run(
         d.alignment = None;
         d.ctf = None;
         d.tomograms.clear();
-        d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?).ok().and_then(|m| m.axis);
+        d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?)
+            .ok()
+            .and_then(|m| m.axis);
         if let Some(kv) = doc.kv {
             d.optics.kv = kv;
         }
