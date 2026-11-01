@@ -417,10 +417,13 @@ impl std::fmt::Display for TooSlow {
 
 impl std::error::Error for TooSlow {}
 
-/// Even/odd halves: cube 48 did best in the held-out-tilt tests
-/// (EMPIAR-10045); about 20 min on an RTX 5080.
+/// Even/odd halves: cube 48, trained on the halves for two thirds of the
+/// steps and with ICECREAM's equivariance term for the last third. It
+/// did best in the held-out-tilt tests (EMPIAR-10045, all three folds)
+/// and matched full ICECREAM on EMPIAR-10164 at under a third of its
+/// time; about 25 min on an RTX 5080.
 fn halves_config() -> crate::wedge::TrainConfig {
-    crate::wedge::TrainConfig { cube: 48, iterations: 3, steps: 1000, ..Default::default() }
+    crate::wedge::TrainConfig { cube: 48, iterations: 3, steps: 1000, equivariant: 2.0, equi_from: 0.67, ..Default::default() }
 }
 
 /// One tomogram: the IsoNet method with a σ1 pre-smooth (noise is not
