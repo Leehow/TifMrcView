@@ -372,6 +372,21 @@ pub fn segment(dev: &Device, net: &MemNet, values: &[f32], n: [usize; 3], pixel_
     Ok(Segmentation { score, mask, components, stats })
 }
 
+/// Writes `mask` (dims `n`) into the label map beside `image` as the
+/// material "膜", keeping labels already there; returns the label file.
+pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool]) -> Result<String> {
+    let path = crate::labels::labels_path(image, 0);
+    let mut l = if Path::new(&path).exists() {
+        crate::labels::Labels::load(Path::new(&path), n[0], n[1], n[2])?
+    } else {
+        crate::labels::Labels::new(n[0], n[1], n[2])
+    };
+    let label = l.material_label(MATERIAL, COLOR);
+    l.apply_volume_mask(mask, label, 0);
+    l.save(Path::new(&path))?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

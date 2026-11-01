@@ -11,6 +11,8 @@
 //!   are no halves.
 //! - wedge: missing-wedge correction (IsoNet method, `crate::wedge`) with
 //!   the tilt range actually used.
+//! - membranes: membrane segmentation (`crate::membrane`) of the latest
+//!   tomogram, written into its label map (material "膜").
 
 use super::{check_cancel, dataset::{Dataset, Tomogram}, output, recon, CANCEL};
 use crate::image::OpenImage;
@@ -135,7 +137,8 @@ pub fn ctf(d: &mut Dataset, params: &crate::ctf::Params, n: usize, progress: Pro
 }
 
 /// All sections of a volume, [z][y][x], with its shape and pixel size.
-fn load(path: &str) -> Result<(Vec<f32>, [usize; 3], f64)> {
+/// A tomogram as values (X fastest), its size and pixel size (Å).
+pub fn load(path: &str) -> Result<(Vec<f32>, [usize; 3], f64)> {
     let img = open(path)?;
     let info = img.info();
     let (w, h, nz) = (info.width, info.height, info.size_z);
@@ -283,5 +286,24 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
+    Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+/// Segments the membranes of `source` (else the latest tomogram that is not
+/// a half) into its label map. The model must have been downloaded.
+pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
+    let now = std::time::Instant::now();
+    let src = match source {
+        Some(p) => d.tomograms.iter().find(|t| t.path == p),
+        None => d.tomograms.iter().rev().find(|t| t.kind != "even" && t.kind != "odd"),
+    };
+    let Some(src) = src.cloned() else { bail!("先完成重构") };
+    let model = crate::membrane::model_path().filter(|p| p.exists()).ok_or_else(|| anyhow::anyhow!("先下载膜分割模型"))?;
+    crate::membrane::CANCEL.store(false, Ordering::SeqCst);
+    let (v, shape, px) = load(&src.path)?;
+    let net = crate::membrane::load(&model, dev)?;
+    let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::BUDGET_S, &mut |p| progress("膜分割", p.done, p.total))?;
+    drop(v);
+    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask)?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }

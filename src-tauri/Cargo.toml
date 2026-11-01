@@ -142,5 +142,9 @@ name = "membrane_train"
 required-features = ["pro"]
 
 [[example]]
+name = "membrane_seg"
+required-features = ["pro"]
+
+[[example]]
 name = "wedge_holdout"
 required-features = ["pro"]

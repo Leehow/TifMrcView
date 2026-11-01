@@ -712,6 +712,13 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// `apply_masks` with one mask for the whole stack (X fastest).
+    pub fn apply_volume_mask(&mut self, mask: &[bool], label: u16, guard: u16) -> Vec<usize> {
+        let plane = self.w * self.h;
+        let masks: Vec<(usize, &[bool])> = mask.chunks(plane).enumerate().filter(|(_, m)| m.iter().any(|&b| b)).collect();
+        self.apply_masks(&masks, label, guard, false)
+    }
+
     /// Slice `z`, or None when it is empty.
     pub fn slice(&self, z: usize) -> Option<&[u16]> {
         self.slices.get(z).and_then(|s| s.as_deref())

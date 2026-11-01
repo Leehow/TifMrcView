@@ -945,14 +945,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
             drop(v);
             let mut e = e.lock().unwrap();
             let label = e.labels.material_label(crate::membrane::MATERIAL, crate::membrane::COLOR);
-            let plane = n[0] * n[1];
-            let slices: Vec<(usize, Vec<u16>)> = (0..n[2])
-                .filter_map(|z| {
-                    let m = &seg.mask[z * plane..(z + 1) * plane];
-                    m.iter().any(|&b| b).then(|| (z, m.iter().map(|&b| if b { label } else { 0 }).collect()))
-                })
-                .collect();
-            let zs = e.labels.apply_classes(&slices, guard);
+            let zs = e.labels.apply_volume_mask(&seg.mask, label, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
             Ok(MembraneResult {
