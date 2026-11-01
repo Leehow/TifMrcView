@@ -379,13 +379,22 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         // over the centre. Maxima of the filter alone (noise, texture, a
         // size that is not the particles') average to the filter's own
         // peaked shape (~0.5 and less); whole particles are flat-topped
-        // discs or rings (0.6 and more).
+        // discs or rings (0.6 and more). Only shown when debugging now.
         let np = all[0].feat.len() - 1;
         let mean: Vec<f32> = (0..np).map(|j| all.iter().map(|b| b.feat[j + 1] / 0.3).sum::<f32>() / all.len() as f32).collect();
         let flat = (mean[PROFILE / 3] / mean[0].max(1e-3)) as f64;
+        // Where the mean blob falls to half its height, in radii of the
+        // scale. Flatness alone swings with the denoiser's training: on
+        // T20S (bin2) one training ranked the 186 Å clumps (0.66) above the
+        // 113 Å particles (0.63). The edge kept them apart in all three
+        // trainings tried (0.69–0.72 vs 0.61): blobs of the scale's own
+        // size reach ~0.7, smaller things picked at too large a scale (or
+        // texture) fall off by ~0.6.
+        let edge = half_edge(&mean);
         if std::env::var("TMV_SPA_DEBUG").is_ok() {
-            eprintln!("{:.0} Å: {} blobs, flatness {flat:.2}", 2.0 * r * wpx, all.len());
+            eprintln!("{:.0} Å: {} blobs, flatness {flat:.2}, edge {edge:.2}, profile {:?}", 2.0 * r * wpx, all.len(), mean.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
         }
+        let score = edge;
         // Size from SAM outlines of the strongest blobs, when it agrees
         // with the scale (else the scale's own).
         let mut order: Vec<usize> = (0..all.len()).collect();
@@ -433,7 +442,7 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
             let rr = (0.7 * diameter / 2.0) as f32;
             let tiles: Vec<Vec<f32>> = m.iter().take(8).map(|&i| crop(&dn[all[i].img], ww, wh, all[i].x, all[i].y, rr)).collect();
             let count = a.iter().filter(|&&x| x == c).count();
-            kinds.push((Kind { diameter_a: diameter * wpx, count, share: 0.0, elongation, contrast, png: String::new() }, tiles, flat));
+            kinds.push((Kind { diameter_a: diameter * wpx, count, share: 0.0, elongation, contrast, png: String::new() }, tiles, score));
         }
     }
     if kinds.is_empty() {
@@ -442,7 +451,7 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
     // The particle-like sizes first; at most `cfg.kinds` cards, and the
     // clearly not particle-like ones only to fill up to three.
     kinds.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let good = kinds.iter().filter(|k| k.2 >= 0.6).count();
+    let good = kinds.iter().filter(|k| k.2 >= EDGE_OK).count();
     kinds.truncate(good.max(3).min(cfg.kinds.max(1)));
     let total: usize = kinds.iter().map(|k| k.0.count).sum();
     let mut out = vec![];
@@ -453,6 +462,41 @@ pub fn kinds(p: &Project, cfg: &Config, d: &Denoised, outline: Option<Outliner>,
         out.push(k);
     }
     Ok(Discovery { kinds: out, micrographs: dn.len(), working_px: wpx, outlined, backend: d.backend.clone(), chosen: vec![] })
+}
+
+/// Half-height radius of a radial profile (to 1.5 radii, background 0),
+/// in radii; the height is the mean of the inner quarter radius.
+fn half_edge(prof: &[f32]) -> f64 {
+    let n = prof.len();
+    let inner = (n / 6).max(1);
+    let top = prof[..inner].iter().sum::<f32>() / inner as f32;
+    if top <= 0.0 {
+        return 0.0;
+    }
+    let half = top / 2.0;
+    for i in 1..n {
+        if prof[i] < half {
+            // Bin centres at (i + 0.5) · 1.5 / n radii.
+            let f = ((prof[i - 1] - half) / (prof[i - 1] - prof[i]).max(1e-6)) as f64;
+            return (i as f64 - 0.5 + f) * 1.5 / n as f64;
+        }
+    }
+    1.5
+}
+
+/// Blobs whose mean edge is at least this far out (radii) look like whole
+/// particles of the scale's size.
+const EDGE_OK: f64 = 0.65;
+
+#[cfg(test)]
+#[test]
+fn half_edge_of_profiles() {
+    // Mean profiles measured on T20S at 113 Å (particles) and 186 Å.
+    let whole = [1.41, 1.35, 1.23, 1.11, 0.98, 0.76, 0.51, 0.25, 0.03, -0.09, -0.12, -0.09];
+    let small = [0.99, 1.03, 1.05, 0.92, 0.64, 0.3, 0.08, -0.01, -0.04, -0.02, 0.01, 0.04];
+    assert!(half_edge(&whole) > EDGE_OK);
+    assert!(half_edge(&small) < EDGE_OK);
+    assert_eq!(half_edge(&[0.0; 12]), 0.0);
 }
 
 /// Correlation of an image with itself rotated by 360°/n, over a ring
