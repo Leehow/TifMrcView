@@ -36,7 +36,7 @@
     const df = c.tilts.map((t) => (t.df1 + t.df2) / 2e4);
     const sorted = df.slice().sort((a, b) => a - b);
     const gradient = { 1: "离焦随 +x 增大", "-1": "离焦随 +x 减小", 0: "未能判定（相位翻转只用轴上离焦）" }[c.gradient];
-    $("ct-summary").textContent = `离焦中位 ${sorted[sorted.length >> 1].toFixed(2)} µm（${sorted[0].toFixed(2)}–${sorted[sorted.length - 1].toFixed(2)}）· 梯度方向：${gradient}`;
+    $("ct-summary").textContent = `离焦中位 ${sorted[sorted.length >> 1].toFixed(2)} µm（${sorted[0].toFixed(2)}–${sorted[sorted.length - 1].toFixed(2)}）· 梯度方向：${gradient}${c.tilts.some((t) => t.estimated) ? ` · ${c.tilts.filter((t) => t.estimated).length} 张拟合失败，按相邻倾角估计（空心点）` : ""}`;
     plot(d, df);
   }
 
@@ -52,10 +52,12 @@
     ctx.fillText(`${top.toFixed(1)} µm`, 4, 18);
     ctx.fillStyle = "#d9822b";
     ctx.fillText(`${res.toFixed(0)} Å`, cv.width - 55, 18);
+    // Hollow: the fit failed and the defocus comes from neighbouring tilts.
     d.ctf.tilts.forEach((t, i) => {
-      ctx.fillStyle = "#4488bb";
+      ctx.fillStyle = ctx.strokeStyle = "#4488bb";
       ctx.beginPath();
       ctx.arc(x(angles[i]), cv.height - 20 - df[i] / top * (cv.height - 45), 4, 0, Math.PI * 2);
+      if (t.estimated) return ctx.stroke();
       ctx.fill();
       ctx.fillStyle = "#d9822b";
       ctx.fillRect(x(angles[i]) - 2, cv.height - 20 - t.fitRes / res * (cv.height - 45) - 2, 4, 4);

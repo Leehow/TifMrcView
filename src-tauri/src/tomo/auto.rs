@@ -4,32 +4,59 @@
 //! the reconstruction, projected back and compared with the measured view.
 //!
 //! - Alignment and CTF run when the dataset has none yet.
-//! - Output binning: the voxel size closest to 9 Å, what tomograms are
-//!   usually looked at with (2.2 Å pixels → bin 4).
+//! - What it makes depends on what the tomogram is for (`Purpose`):
+//!   - survey: a quick look at the 3D shape, about 18 Å per voxel, SART
+//!     with phase flipping and the deconvolution; no learned steps.
+//!   - display (default): as clear as possible, about 9 Å per voxel,
+//!     Noise2Noise, the deconvolution and missing-wedge correction.
+//!   - STA: the high resolution kept for subtomogram averaging, about
+//!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
+//!     would change the high frequencies), and a RELION 5 folder beside
+//!     the stack to go on with.
 //! - Thickness: a quick bin-8 reconstruction twice as thick as likely
 //!   shows where the specimen is (detail varies there, empty ice and
 //!   vacuum do not); the tomogram covers that with a margin, centred on it.
 //! - Reconstruction: SART, 3 rounds, with phase flipping. On EMPIAR-10045
-//!   (bin 4) it reached 36 Å by held-out FRC against 45 Å for plain WBP and
-//!   38 Å for phase-flipped WBP, at a third of SIRT's time. 3D CTF made no
-//!   measurable difference at these samplings, so it is left out.
+//!   it reached 36 Å by held-out FRC against 45 Å for plain WBP and 38 Å
+//!   for phase-flipped WBP at bin 4 (the same order at bin 2), at a third
+//!   of SIRT's time. 3D CTF made no measurable difference at these
+//!   samplings, so it is left out.
 //! - Noise2Noise on the even/odd half tomograms when motion correction made
 //!   them (else on neighbouring sections), then the Wiener-like
 //!   deconvolution of Warp and IsoNet (`deconv`), which restores the low
-//!   resolution contrast; that is the tomogram that opens.
-//! - Missing-wedge correction (IsoNet method) when asked: it takes minutes.
+//!   resolution contrast.
 
 use super::{check_cancel, dataset::Dataset, output, pipeline, recon};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+
+/// What the tomogram is for.
+#[derive(Clone, Copy, Deserialize, Default, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum Purpose {
+    Survey,
+    #[default]
+    Display,
+    Sta,
+}
+
+impl Purpose {
+    /// Output voxel size aimed at, Å.
+    fn voxel(self) -> f64 {
+        match self {
+            Purpose::Survey => 18.0,
+            Purpose::Display => 9.0,
+            Purpose::Sta => 4.5,
+        }
+    }
+}
 
 #[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoReq {
     /// Pixel size of the stack, Å, when neither the file nor the mdoc has it.
     pub pixel_a: Option<f64>,
-    /// Also correct the missing wedge (slow).
-    pub wedge: bool,
+    pub purpose: Purpose,
     /// Start over even when the dataset has an alignment and CTF.
     pub fresh: bool,
 }
@@ -37,9 +64,11 @@ pub struct AutoReq {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoResult {
-    /// The tomogram to look at (denoised, or wedge-corrected when asked).
+    /// The tomogram to look at.
     pub path: String,
     pub raw: String,
+    /// The RELION 5 folder (for STA).
+    pub relion: Option<String>,
     pub bin: usize,
     pub thickness: usize,
     pub residual: f64,
@@ -47,17 +76,15 @@ pub struct AutoResult {
     pub ms: f64,
 }
 
-/// Output voxel size aimed at, Å: what tomograms are usually looked at with.
-const TARGET_VOXEL: f64 = 9.0;
 /// Most pixels a binned view may have.
 const MAX_PIXELS: f64 = 4.2e6;
 
-/// The binning (1, 2, 4 or 8) closest to `TARGET_VOXEL`, within `MAX_PIXELS`.
-pub fn output_bin(w: usize, h: usize, pixel_a: f64) -> usize {
+/// The binning (1, 2, 4 or 8) closest to `voxel` Å, within `MAX_PIXELS`.
+pub fn output_bin(w: usize, h: usize, pixel_a: f64, voxel: f64) -> usize {
     [1usize, 2, 4, 8]
         .into_iter()
         .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 8)
-        .min_by(|&a, &b| ((pixel_a * a as f64) / TARGET_VOXEL).ln().abs().total_cmp(&((pixel_a * b as f64) / TARGET_VOXEL).ln().abs()))
+        .min_by(|&a, &b| ((pixel_a * a as f64) / voxel).ln().abs().total_cmp(&((pixel_a * b as f64) / voxel).ln().abs()))
         .unwrap()
 }
 
@@ -77,7 +104,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         bail!("没有找到倾转角（.mdoc / .tlt / .rawtlt），请在高级设置里给出起始角和步长");
     }
     // Each step's own counter restarts; the label says which step of all.
-    let total = 6 + req.wedge as usize;
+    let total = match req.purpose {
+        Purpose::Survey => 5,
+        Purpose::Display => 7,
+        Purpose::Sta => 5,
+    };
     let stage = |k: usize| move |label: &str, i: usize, n: usize| progress(&format!("第 {k}/{total} 步 · {label}"), i, n);
     if req.fresh {
         d.alignment = None;
@@ -112,25 +143,38 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
-    let bin = output_bin(w, h, px);
+    let bin = output_bin(w, h, px, req.purpose.voxel());
     let (thickness, z_offset) = estimate_thickness(&img, &a, px, bin, &stage(3))?;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset, ..Default::default() };
     let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, &stage(4))?;
     let raw = made.paths[0].clone();
-    check_cancel()?;
-    let denoised = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(raw.clone()), steps: 1000 }, &stage(5))?;
-    check_cancel()?;
-    let deconvolved = pipeline::deconvolve(d, Some(&denoised.paths[0]), &stage(6))?;
-    let mut path = deconvolved.paths[0].clone();
-    if req.wedge {
+    let mut path = raw.clone();
+    let mut relion = None;
+    if req.purpose == Purpose::Display {
         check_cancel()?;
-        let w = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path.clone()), cfg: crate::wedge::TrainConfig::default(), single: false }, &stage(7))?;
-        path = w.paths[0].clone();
+        path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(5))?.paths.remove(0);
+    }
+    if req.purpose != Purpose::Sta {
+        check_cancel()?;
+        let k = if req.purpose == Purpose::Display { 6 } else { 5 };
+        path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+    }
+    if req.purpose == Purpose::Display {
+        check_cancel()?;
+        path = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path), cfg: None, single: false }, &stage(7))?.paths.remove(0);
+    }
+    if req.purpose == Purpose::Sta {
+        check_cancel()?;
+        let stem = d.stack.strip_suffix(".mrc").unwrap_or(&d.stack);
+        let dir = format!("{stem}_relion5");
+        std::fs::create_dir_all(&dir)?;
+        super::export::run(d, "relion5", &dir, 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
+        relion = Some(dir);
     }
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);
-    Ok(AutoResult { path, raw, bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, relion, bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// Thickness (output pixels at `bin`) and depth offset that cover the
