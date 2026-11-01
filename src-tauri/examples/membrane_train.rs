@@ -9,6 +9,9 @@
 //!     [--start-step K] [--skel 1.0] [--skel-level 0]
 //! membrane_train --export IN.safetensors OUT.safetensors   (half precision, to publish)
 //!
+//! Checkpoints every 250 steps (step number in OUT.step); creating OUT.stop
+//! makes it checkpoint and exit; continue with --resume OUT --start-step N.
+//!
 //! Optimiser as nnU-Net: SGD, Nesterov momentum 0.99, weight decay 3e-5,
 //! gradient norm clipped at 12, learning rate × (1 − step/steps)^0.9.
 //! Loss: Dice + cross-entropy at full, half and quarter resolution
@@ -349,10 +352,25 @@ fn main() -> Result<()> {
             let d = 2.0 * tp / (2.0 * tp + fp + fn_).max(1.0);
             eprintln!("step {} validation dice {:.4} (precision {:.3}, recall {:.3})", step + 1, d, tp / (tp + fp).max(1.0), tp / (tp + fn_).max(1.0));
             membrane::save(&valid, &a.out, false)?;
+            std::fs::write(a.out.with_extension("step"), format!("{}\n", step + 1))?;
             if d > best {
                 best = d;
                 membrane::save(&valid, &a.out.with_extension("best.safetensors"), false)?;
             }
+        } else if a.bench == 0 && (step + 1) % 250 == 0 {
+            // Checkpoint (no validation) so a pause loses little.
+            membrane::save(&net.valid(), &a.out, false)?;
+            std::fs::write(a.out.with_extension("step"), format!("{}\n", step + 1))?;
+        }
+        // `<out>.stop` present: checkpoint and exit (to give the GPU away;
+        // continue later with --resume <out> --start-step <out>.step).
+        let stop = a.out.with_extension("stop");
+        if a.bench == 0 && stop.exists() {
+            membrane::save(&net.valid(), &a.out, false)?;
+            std::fs::write(a.out.with_extension("step"), format!("{}\n", step + 1))?;
+            let _ = std::fs::remove_file(&stop);
+            eprintln!("stopped at step {} (checkpoint saved)", step + 1);
+            return Ok(());
         }
     }
     Ok(())
