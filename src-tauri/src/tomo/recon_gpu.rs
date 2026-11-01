@@ -85,7 +85,7 @@ impl Plan {
             inv_rows: Tensor::zeros([1, 1], dev),
             inv_cols: Tensor::zeros([1, 1], dev),
         };
-        if p.method == Method::Sirt {
+        if p.method != Method::Wbp {
             let inv = |t: Tensor<2>, least: f32| {
                 let short = t.clone().lower_elem(least.max(COVERED));
                 t.clamp_min(COVERED).recip().mask_fill(short, 0.0)
@@ -106,26 +106,35 @@ impl Plan {
     fn back(&self, sino: Tensor<2>, scale: &[f64]) -> Tensor<2> {
         let (w, n) = (self.g.w, sino.dims()[0]);
         let mut out = Tensor::<2>::zeros([n, self.g.z * w], &self.dev);
-        for (k, [c, s]) in self.g.trig.iter().enumerate() {
-            let d = self.u.clone().mul_scalar(*c as f32) + self.v.clone().mul_scalar(*s as f32) + (w - 1) as f32 / 2.0;
-            let t = taps(d, w, 1, None);
-            out = out + gather(sino.clone().narrow(1, k * w, w), &t).mul_scalar(scale[k] as f32);
+        for k in 0..self.g.views() {
+            out = out + self.back_view(k, sino.clone().narrow(1, k * w, w)).mul_scalar(scale[k] as f32);
         }
         out
+    }
+
+    /// B for one view: [n][w] → [n][z·w].
+    fn back_view(&self, k: usize, row: Tensor<2>) -> Tensor<2> {
+        let w = self.g.w;
+        let [c, s] = self.g.trig[k];
+        let d = self.u.clone().mul_scalar(c as f32) + self.v.clone().mul_scalar(s as f32) + (w - 1) as f32 / 2.0;
+        gather(row, &taps(d, w, 1, None))
     }
 
     /// A: [n][z·w] → [n][views·w]; rows of `u`/`v` are reused for the
     /// (depth row z, detector j) pairs since both are z × w grids.
     fn forward(&self, slice: Tensor<2>) -> Tensor<2> {
+        let views = (0..self.g.views()).map(|k| self.forward_view(k, slice.clone())).collect();
+        Tensor::cat(views, 1)
+    }
+
+    /// A for one view: [n][z·w] → [n][w].
+    fn forward_view(&self, k: usize, slice: Tensor<2>) -> Tensor<2> {
         let (w, z, n) = (self.g.w, self.g.z, slice.dims()[0]);
         let h = (w - 1) as f32 / 2.0;
         let rows = self.row_starts();
-        let views = self
-            .g
-            .trig
-            .iter()
-            .zip(&self.cols)
-            .map(|(&[c, s], cols)| {
+        let [c, s] = self.g.trig[k];
+        let cols = &self.cols[k];
+        {
                 if let Some((k, t, m)) = cols {
                     // Step through columns: depth = (j − h − c·(k − h))/s, as a row index.
                     let depth = (t.clone() - (k.clone() - h).mul_scalar(c as f32)).div_scalar(s as f32);
@@ -141,9 +150,7 @@ impl Plan {
                     let t = taps(x, w, 1, Some(rows.clone()));
                     gather(slice.clone(), &t).reshape([n, z, w]).sum_dim(1).reshape([n, w]).div_scalar(c.abs() as f32)
                 }
-            })
-            .collect();
-        Tensor::cat(views, 1)
+        }
     }
 
     /// Start of each depth row, per (z, j).
@@ -167,6 +174,22 @@ impl Plan {
                 let f = f.narrow(2, 0, w).reshape([n, nv * w]);
                 let scale: Vec<f64> = self.g.weight.iter().map(|k| k / nv as f64).collect();
                 self.back(f, &scale)
+            }
+            Method::Sart => {
+                let b = b.reshape([n, nv * w]);
+                let mut x = Tensor::<2>::zeros([n, self.g.z * w], &self.dev);
+                let order = super::recon::sart_order(nv);
+                for _ in 0..self.p.iterations {
+                    super::check_cancel()?;
+                    for &k in &order {
+                        let e = (b.clone().narrow(1, k * w, w) - self.forward_view(k, x.clone())) * self.inv_rows.clone().narrow(1, k * w, w);
+                        x = x + self.back_view(k, e).mul_scalar(self.p.lambda);
+                        if self.p.non_negative {
+                            x = x.clamp_min(0.0);
+                        }
+                    }
+                }
+                x
             }
             Method::Sirt => {
                 let b = b.reshape([n, nv * w]);
