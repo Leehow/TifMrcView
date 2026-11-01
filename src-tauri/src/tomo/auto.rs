@@ -370,8 +370,12 @@ pub fn plane(vol: &[f32], w: usize, h: usize, z: usize) -> Option<[f64; 3]> {
             if prof[top] < median + 6.0 * spread {
                 continue;
             }
-            // The band: around the peak, where the excess is above half of it.
-            let cut = median + 0.5 * (prof[top] - median);
+            // The band: the run around the peak clearly above the quiet
+            // level. Not just the peak's half height: one bright surface
+            // (contamination on a lamella) would then stand for the band in
+            // some blocks and not in others, and tilt the fit
+            // (EMPIAR-10988 TS_026: 3.6° found, 2.2° true).
+            let cut = median + 3.0 * spread;
             let (mut lo, mut hi) = (top, top);
             while lo > 0 && prof[lo - 1] >= cut {
                 lo -= 1;
