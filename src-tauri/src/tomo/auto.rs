@@ -8,7 +8,9 @@
 //!   - survey: a quick look at the 3D shape, about 18 Å per voxel, SART
 //!     with phase flipping and the deconvolution; no learned steps.
 //!   - display (default): as clear as possible, about 9 Å per voxel,
-//!     Noise2Noise, the deconvolution and missing-wedge correction.
+//!     Noise2Noise and the deconvolution; missing-wedge correction when
+//!     asked, since it trains a network for long (about 20 min on a
+//!     desktop GPU, hours on a laptop's: 4.5 s per step on an M1 Max).
 //!   - STA: the high resolution kept for subtomogram averaging, about
 //!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
 //!     would change the high frequencies), and a RELION 5 folder beside
@@ -57,6 +59,8 @@ pub struct AutoReq {
     /// Pixel size of the stack, Å, when neither the file nor the mdoc has it.
     pub pixel_a: Option<f64>,
     pub purpose: Purpose,
+    /// For display: also correct the missing wedge (slow).
+    pub wedge: bool,
     /// Start over even when the dataset has an alignment and CTF.
     pub fresh: bool,
 }
@@ -106,7 +110,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Survey => 5,
-        Purpose::Display => 7,
+        Purpose::Display => 6 + req.wedge as usize,
         Purpose::Sta => 5,
     };
     let stage = |k: usize| move |label: &str, i: usize, n: usize| progress(&format!("第 {k}/{total} 步 · {label}"), i, n);
@@ -159,7 +163,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         let k = if req.purpose == Purpose::Display { 6 } else { 5 };
         path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
     }
-    if req.purpose == Purpose::Display {
+    if req.purpose == Purpose::Display && req.wedge {
         check_cancel()?;
         path = pipeline::wedge(dev, d, &pipeline::WedgeStep { source: Some(path), cfg: None, single: false }, &stage(7))?.paths.remove(0);
     }

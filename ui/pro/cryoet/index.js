@@ -49,9 +49,10 @@
         <label id="cryo-auto-pixel-row" hidden>像素大小 Å <input id="cryo-auto-pixel" type="number" min="0" step="0.001"></label>
         <label>用途<select id="cryo-auto-purpose">
           <option value="survey">快速预览：看三维形貌，最快（约 18 Å 体素）</option>
-          <option value="display" selected>展示：尽可能清晰，含去噪和补缺失楔，较慢（约 9 Å 体素）</option>
+          <option value="display" selected>展示：尽可能清晰，含去噪和反卷积（约 9 Å 体素）</option>
           <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
         </select></label>
+        <label class="al-check" id="cryo-auto-wedge-row" title="训练一个网络补回倾转角之外缺失的信息，让物体沿电子束方向不再拉长；台式机独显约 20 分钟，笔记本上可能要几个小时"><input id="cryo-auto-wedge" type="checkbox">补缺失楔（很慢）</label>
       </div>
       <div class="al-row"><button id="cryo-auto-run" class="primary">一键重构</button><button id="cryo-auto-open" class="small" hidden>打开结果</button></div>
       <p id="cryo-auto-result" class="dim"></p>
@@ -126,13 +127,15 @@
 
   // One button: tomo::auto does every step with the choices made.
   let autoResult = null;
+  // Missing-wedge correction is a choice only for the display tomogram.
+  $("cryo-auto-purpose").onchange = () => { $("cryo-auto-wedge-row").hidden = $("cryo-auto-purpose").value !== "display"; };
   $("cryo-auto-run").onclick = async () => {
     if (!W.dataset) {
       if (!S.info || S.info.sizeZ < 3) return W.status("请先打开一个倾转序列");
       try { await W.load(S.info.path); } catch (e) { return W.status(`无法载入：${e}`); }
     }
     const pixel = +$("cryo-auto-pixel").value || null;
-    const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, fresh: false });
+    const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, wedge: $("cryo-auto-purpose").value === "display" && $("cryo-auto-wedge").checked, fresh: false });
     if (!r) {
       // The backend asks for the pixel size only when no file or mdoc gives it.
       if ($("cryo-status").textContent.includes("像素大小")) $("cryo-auto-pixel-row").hidden = false;
