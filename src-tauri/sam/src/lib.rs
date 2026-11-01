@@ -43,7 +43,7 @@ pub fn backends() -> Vec<Backend> {
     // renderer (lavapipe on Linux without a GPU Vulkan driver, as in WSL),
     // which is slower than the CPU backend and fails on large buffers.
     #[cfg(feature = "vulkan")]
-    {
+    if vulkan_gpu() {
         use burn::tensor::DeviceKind;
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::DiscreteGpu(0))) });
     }
@@ -51,7 +51,7 @@ pub fn backends() -> Vec<Backend> {
     #[cfg(feature = "cuda")]
     v.push(Backend { name: "CUDA", make: || Ok(Device::cuda(0)) });
     #[cfg(feature = "vulkan")]
-    {
+    if vulkan_gpu() {
         use burn::tensor::DeviceKind;
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::IntegratedGpu(0))) });
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::VirtualGpu(0))) });
@@ -88,6 +88,46 @@ pub fn backends() -> Vec<Backend> {
         }
     }
     v
+}
+
+/// Whether Vulkan reaches a real GPU (not only a software renderer such as
+/// llvmpipe in WSL). Asked once, so machines without one skip Vulkan
+/// instead of failing (noisily) on each kind of device.
+#[cfg(feature = "vulkan")]
+fn vulkan_gpu() -> bool {
+    use burn::tensor::wgpu::wgpu;
+    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS.get_or_init(|| {
+        guarded(|| {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+            desc.backends = wgpu::Backends::VULKAN;
+            let adapters = block_on(wgpu::Instance::new(desc).enumerate_adapters(wgpu::Backends::VULKAN));
+            adapters.iter().any(|a| matches!(a.get_info().device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu))
+        })
+        .unwrap_or(false)
+    })
+}
+
+/// Runs a future to completion on this thread (wgpu's native futures are
+/// ready at once or soon).
+#[cfg(feature = "vulkan")]
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    use std::task::{Context, Poll, Wake, Waker};
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(std::sync::Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut f = std::pin::pin!(f);
+    loop {
+        if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::park();
+    }
 }
 
 /// A DX12 device on the discrete (0) or integrated (1) GPU. wgpu's own
