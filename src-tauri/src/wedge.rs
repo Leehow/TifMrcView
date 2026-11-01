@@ -953,13 +953,16 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
 /// the halves networks below WBP at |k| 0.02–0.05). Beam on Z, tilt axis
 /// on Y; the filter is a Gaussian along Y times one in XZ, cut to the
 /// measured angles, so each XZ plane is filtered in 2D.
-pub fn restore_low(out: &[f32], even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> Vec<f32> {
+pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> Vec<f32> {
     let [w, h, d] = dims;
     let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
     let (lo, hi) = (lo as f64 - 1e-6, hi as f64 + 1e-6);
     let sk = half as f64 / (2.0 * std::f64::consts::LN_2).sqrt();
     let sx = 1.0 / (2.0 * std::f64::consts::PI * sk);
-    let diff: Vec<f32> = (0..out.len()).into_par_iter().map(|i| 0.5 * (even[i] + odd[i]) - out[i]).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
+    let diff = |i: usize| {
+        let v = 0.5 * (even[i] + odd[i]) - out[i];
+        if v.is_finite() { v } else { 0.0 }
+    };
     // Along Y in real space.
     let r = (3.0 * sx).ceil() as isize;
     let kern: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sx * sx)).exp() as f32).collect();
@@ -972,7 +975,7 @@ pub fn restore_low(out: &[f32], even: &[f32], odd: &[f32], dims: [usize; 3], til
             for (j, &k) in kern.iter().enumerate() {
                 let yy = y as isize + j as isize - r;
                 if yy >= 0 && (yy as usize) < h {
-                    acc += k * diff[(z * h + yy as usize) * w + x];
+                    acc += k * diff((z * h + yy as usize) * w + x);
                     wsum += k;
                 }
             }
@@ -1030,15 +1033,14 @@ pub fn restore_low(out: &[f32], even: &[f32], odd: &[f32], dims: [usize; 3], til
             (0..w * d).map(|i| re[(i / w) * px + i % w] * s).collect()
         })
         .collect();
-    let mut res = out.to_vec();
-    res.par_chunks_mut(w * h).enumerate().for_each(|(z, slab)| {
+    out.par_chunks_mut(w * h).enumerate().for_each(|(z, slab)| {
         for y in 0..h {
             for x in 0..w {
                 slab[y * w + x] += planes[y][z * w + x];
             }
         }
     });
-    res
+    out
 }
 
 /// For a reconstruction pipeline with even/odd half tomograms (same layout
@@ -1077,8 +1079,13 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
         })?;
         outs.push(v.v);
     }
-    Ok(outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect())
+    let out: Vec<f32> = outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect();
+    Ok(restore_low(out, even, odd, dims, tilts, LOW_HALF))
 }
+
+/// Half power (cycles/voxel) of the measured low frequencies taken from the
+/// data after the halves network ([`restore_low`]).
+pub const LOW_HALF: f32 = 0.04;
 
 // ---- Applying ----
 
@@ -1403,13 +1410,13 @@ mod tests {
         let data: Vec<f32> = (0..40 * 24 * 40).map(|_| rng.gauss()).collect();
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
         // Already the data: unchanged.
-        let same = restore_low(&data, &data, &data, dims, &tilts, 0.04);
+        let same = restore_low(data.clone(), &data, &data, dims, &tilts, 0.04);
         let worst = same.iter().zip(&data).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-4, "{worst}");
         // A slow wave along X (a measured direction) is taken back out.
         let wave = |i: usize| 0.5 * (2.0 * std::f32::consts::PI * (i % 40) as f32 / 40.0).cos();
         let shifted: Vec<f32> = data.iter().enumerate().map(|(i, v)| v + wave(i)).collect();
-        let back = restore_low(&shifted, &data, &data, dims, &tilts, 0.04);
+        let back = restore_low(shifted, &data, &data, dims, &tilts, 0.04);
         let mid = (20 * 24 + 12) * 40 + 20;
         // |k| 0.025 against half power at 0.04: about 3/4 of it goes.
         let left = (back[mid] - data[mid]) / wave(mid);
