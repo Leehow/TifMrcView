@@ -7,11 +7,13 @@
 //!     --data DIR --out membrane.safetensors [--steps 100000] [--batch 2] [--patch 128]
 //!     [--lr 0.01] [--val 20] [--resume FILE] [--bench 20] [--backend cuda|tch|auto]
 //!     [--start-step K] [--skel 1.0] [--skel-level 0]
+//! membrane_train --export IN.safetensors OUT.safetensors   (half precision, to publish)
 //!
 //! Optimiser as nnU-Net: SGD, Nesterov momentum 0.99, weight decay 3e-5,
 //! gradient norm clipped at 12, learning rate × (1 − step/steps)^0.9.
 //! Loss: Dice + cross-entropy at full, half and quarter resolution
-//! (weights 1, ½, ¼), plus a skeleton Dice term at one level (full resolution by default). Augmentation runs on CPU threads beside training.
+//! (weights 1, ½, ¼), plus a skeleton Dice term at one level (full
+//! resolution by default). Augmentation runs on CPU threads beside training.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
@@ -173,6 +175,18 @@ fn dice(score: &[f32], lab: &[u8]) -> (f64, f64, f64) {
 }
 
 fn main() -> Result<()> {
+    // `--export IN OUT`: IN (single precision) → OUT in half precision, to publish.
+    let v: Vec<String> = std::env::args().collect();
+    if v.get(1).map(String::as_str) == Some("--export") && v.len() == 4 {
+        let dev = Device::flex();
+        let net = membrane::load(Path::new(&v[2]), &dev)?;
+        membrane::save(&net, Path::new(&v[3]), true)?;
+        let back = membrane::load(Path::new(&v[3]), &dev)?;
+        let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
+        let d = (net.forward(x.clone()) - back.forward(x)).abs().max().into_scalar::<f32>();
+        eprintln!("exported {} (max logit difference {d:.4})", v[3]);
+        return Ok(());
+    }
     let a = args()?;
     let dev = device(&a.backend);
     eprintln!("device {dev:?}");
@@ -332,10 +346,10 @@ fn main() -> Result<()> {
             }
             let d = 2.0 * tp / (2.0 * tp + fp + fn_).max(1.0);
             eprintln!("step {} validation dice {:.4} (precision {:.3}, recall {:.3})", step + 1, d, tp / (tp + fp).max(1.0), tp / (tp + fn_).max(1.0));
-            membrane::save(&valid, &a.out)?;
+            membrane::save(&valid, &a.out, false)?;
             if d > best {
                 best = d;
-                membrane::save(&valid, &a.out.with_extension("best.safetensors"))?;
+                membrane::save(&valid, &a.out.with_extension("best.safetensors"), false)?;
             }
         }
     }

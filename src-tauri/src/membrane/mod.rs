@@ -72,9 +72,26 @@ pub fn model_path() -> Option<PathBuf> {
     Some(crate::plugins::paths::user_dir()?.parent()?.join("models").join(MODEL_FILE))
 }
 
+/// Whether a safetensors file stores half-precision weights (the published
+/// model does, to halve the download).
+fn is_half(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut len = [0u8; 8];
+    f.read_exact(&mut len)?;
+    let n = u64::from_le_bytes(len).min(16 << 20) as usize;
+    let mut head = vec![0u8; n];
+    f.read_exact(&mut head)?;
+    Ok(String::from_utf8_lossy(&head).contains("\"F16\""))
+}
+
+/// Loads weights saved by `save` (single or half precision).
 pub fn load(path: &Path, dev: &Device) -> Result<MemNet> {
     let mut net = MemNet::new(&NetConfig::default(), dev);
     let mut store = SafetensorsStore::from_file(path);
+    if is_half(path)? {
+        store = store.with_from_adapter(burn_store::HalfPrecisionAdapter::new());
+    }
     let r = net.load_from(&mut store).map_err(|e| anyhow!("读取膜分割模型失败：{e:?}"))?;
     if !r.missing.is_empty() {
         bail!("膜分割模型不完整（缺 {} 个参数）", r.missing.len());
@@ -82,8 +99,12 @@ pub fn load(path: &Path, dev: &Device) -> Result<MemNet> {
     Ok(net)
 }
 
-pub fn save(net: &MemNet, path: &Path) -> Result<()> {
+/// Saves the weights, as half precision with `half` (for publishing).
+pub fn save(net: &MemNet, path: &Path, half: bool) -> Result<()> {
     let mut store = SafetensorsStore::from_file(path).overwrite(true);
+    if half {
+        store = store.with_to_adapter(burn_store::HalfPrecisionAdapter::new());
+    }
     net.save_into(&mut store).map_err(|e| anyhow!("保存模型失败：{e:?}"))
 }
 
@@ -356,6 +377,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn save_load_half() {
+        let dev = Device::flex();
+        let net = MemNet::new(&NetConfig::default(), &dev);
+        let dir = std::env::temp_dir();
+        let (a, b) = (dir.join("tmv-mem-f32.safetensors"), dir.join("tmv-mem-f16.safetensors"));
+        save(&net, &a, false).unwrap();
+        save(&net, &b, true).unwrap();
+        assert!(!is_half(&a).unwrap() && is_half(&b).unwrap());
+        assert!(std::fs::metadata(&b).unwrap().len() * 3 < std::fs::metadata(&a).unwrap().len() * 2);
+        let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
+        let (p, q) = (load(&a, &dev).unwrap().forward(x.clone()), load(&b, &dev).unwrap().forward(x));
+        assert!((p - q).abs().max().into_scalar::<f32>() < 0.05);
+    }
+
+    #[test]
     fn starts_cover() {
         assert_eq!(starts(100, 160), vec![0]);
         assert_eq!(starts(160, 160), vec![0]);
@@ -398,7 +434,7 @@ mod tests {
         assert_eq!(o.len(), 2);
         assert_eq!(o[0].dims(), [1, 1, 8, 12, 16]);
         assert_eq!(o[1].dims(), [1, 1, 4, 6, 8]);
-        assert_eq!(net.forward(x).dims(), [1, 1, 8, 12, 16]);
+        assert_eq!(net.forward(x.clone()).dims(), [1, 1, 8, 12, 16]);
         let l = net::loss(o[0].clone(), Tensor::<5>::zeros([1, 1, 8, 12, 16], &dev));
         assert!(l.into_scalar::<f32>().is_finite());
         let y = Tensor::<5>::ones([1, 1, 8, 12, 16], &dev);
