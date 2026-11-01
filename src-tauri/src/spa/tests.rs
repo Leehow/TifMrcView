@@ -136,6 +136,41 @@ fn reconstructs_from_projections() {
     assert!(c > 0.95, "{c}");
 }
 
+#[test]
+fn symmetrizing_after_insertion_matches_inserting_mates() {
+    // A D7-symmetric phantom seen from a few views: inserting every
+    // symmetry mate and applying the group after one insertion give the
+    // same map.
+    let b = 32;
+    let sym = geom::symmetry("D7").unwrap();
+    let v0 = phantom(b);
+    // Symmetrise the phantom in real space by averaging its projections'
+    // reconstruction with all mates (the reference for both routes).
+    let p = Projector::new(&v0, b, 2);
+    let half = fourier::Half::new(b, b as f64 / 2.0 - 1.0);
+    let ones = vec![1f32; half.len()];
+    let mut buf = vec![0f32; 2 * half.len()];
+    let (mut a, mut c) = (Accum::new(b, 2), Accum::new(b, 2));
+    let (mut pa, mut pc) = (vec![], vec![]);
+    for r in geom::grid(15.0).iter().step_by(5) {
+        p.slice(r, &half, &mut buf);
+        a.points(r, &sym, &half, &buf, &ones, &mut pa);
+        c.points(r, &[geom::IDENTITY], &half, &buf, &ones, &mut pc);
+    }
+    a.insert(&pa);
+    c.insert(&pc);
+    c.symmetrize(&sym);
+    let (ra, rc) = (a.reconstruct(None), c.reconstruct(None));
+    let k = corr(&ra, &rc);
+    let plain = corr(&ra, &Accum::reconstruct(&{
+        let mut u = Accum::new(b, 2);
+        u.insert(&pc);
+        u
+    }, None));
+    eprintln!("symmetrised after: {k:.3}, not symmetrised: {plain:.3}");
+    assert!(k > 0.97 && plain < k - 0.05, "{k} vs {plain}");
+}
+
 use super::data::{self, CtfEval, Optics, Particle, Stack, StackWriter};
 use super::{refine, Rng};
 

@@ -71,10 +71,14 @@ pub struct Map {
 
 /// Particle coefficients on `half` with shifts `offs` around their current shift.
 fn coeffs_for(stack: &Stack, parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
-    let fts = data::transforms(stack, chunk);
+    coeffs_from(stack, &data::transforms(stack, chunk), parts, chunk, optics, half, noise, offs)
+}
+
+/// As `coeffs_for`, from transforms already made.
+fn coeffs_from(stack: &Stack, fts: &[(Vec<f32>, Vec<f32>)], parts: &[Particle], chunk: &[usize], optics: &Optics, half: &Half, noise: &[f32], offs: &[[f32; 2]]) -> Coeffs {
     let ps: Vec<&Particle> = chunk.iter().map(|&i| &parts[i]).collect();
     let sh: Vec<[f32; 2]> = ps.iter().map(|q| q.shift).collect();
-    data::coeffs(optics, stack.pixel_a, stack.b, half, noise, &ps, &fts, &sh, offs)
+    data::coeffs(optics, stack.pixel_a, stack.b, half, noise, &ps, fts, &sh, offs)
 }
 
 /// Global search: every orientation of `grid` for each particle of `chunk`.
@@ -140,7 +144,10 @@ fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, half: &Half, deltas: &
 }
 
 /// Inserts particles at their orientations (and symmetry mates).
-fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, sym: &[Mat], parts: &[Particle], chunk: &[usize]) {
+/// Inserts particles once each; the point group is applied afterwards
+/// with `Accum::symmetrize` (once per accumulator, before reconstructing).
+fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &[usize]) {
+    let sym = [geom::IDENTITY];
     let k = c.k;
     let per = (4_000_000 / (k * sym.len()).max(1)).max(1);
     for (bi, sub) in chunk.chunks(per).enumerate() {
@@ -152,7 +159,7 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, sym: &[Mat], parts: &[Partic
                 let q = &parts[i];
                 let r = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
                 let mut out = Vec::with_capacity(k * sym.len());
-                acc.points(&r, sym, half, &c.x[jj * 2 * k..(jj + 1) * 2 * k], &c.c2[jj * k..(jj + 1) * k], &mut out);
+                acc.points(&r, &sym, half, &c.x[jj * 2 * k..(jj + 1) * 2 * k], &c.c2[jj * k..(jj + 1) * k], &mut out);
                 out
             })
             .collect();
@@ -253,7 +260,8 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
     }
     let mut acc = Accum::new(bw, pad);
     let c = coeffs_for(stack, parts, start, optics, &full, &noise, &[]);
-    insert(&mut acc, &c, &full, &sym, parts, start);
+    insert(&mut acc, &c, &full, parts, start);
+    acc.symmetrize(&sym);
     let res_end = p.res_end.max(2.2 * pxw);
     let mut model = volume_from(&acc, bw, pxw, p.res_start, mask_r);
     let iters = p.iterations.max(1);
@@ -281,7 +289,8 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
         clamp_shifts(parts, &chunk, max_shift);
         let c = coeffs_for(stack, parts, &chunk, optics, &full, &noise, &[]);
         let mut fresh = Accum::new(bw, pad);
-        insert(&mut fresh, &c, &full, &sym, parts, &chunk);
+        insert(&mut fresh, &c, &full, parts, &chunk);
+        fresh.symmetrize(&sym);
         // Forget old batches: the model follows the recent alignments.
         acc.scale(0.85);
         acc.add(&fresh);
@@ -306,8 +315,9 @@ pub fn initial(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Op
             global(&c, &offs, &refs, &grid, ratio, parts, chunk)?;
             clamp_shifts(parts, chunk, max_shift);
             let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-            insert(&mut acc, &c, &full, &sym, parts, chunk);
+            insert(&mut acc, &c, &full, parts, chunk);
         }
+        acc.symmetrize(&sym);
         model = volume_from(&acc, bw, pxw, res_end, mask_r);
         progress("初始模型", iters + pass + 1, iters + 2);
     }
@@ -457,18 +467,33 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             let deltas = geom::local(step * 2.0, 2);
             let offs = data::offsets(if is_global { 3 } else { 1 });
             let total = set.len();
-            for (ci, chunk) in set.chunks(512).enumerate() {
+            // Each chunk's images are read and transformed once, while the
+            // previous chunk is being searched (the GPU otherwise waited on
+            // reading and FFTs in the global rounds).
+            let chunks: Vec<&[usize]> = set.chunks(512).collect();
+            let mut next = chunks.first().map(|c| data::transforms(stack, c));
+            for (ci, &chunk) in chunks.iter().enumerate() {
                 check_cancel()?;
-                let c = coeffs_for(stack, parts, chunk, optics, &half, &noise, &offs);
-                match &refs {
-                    Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
-                    None => local(&c, &offs, &proj, &half, &deltas, ratio, parts, chunk),
-                }
+                let fts = next.take().unwrap_or_default();
+                let c = coeffs_from(stack, &fts, parts, chunk, optics, &half, &noise, &offs);
+                let (found, ahead) = rayon::join(
+                    || -> Result<()> {
+                        match &refs {
+                            Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
+                            None => local(&c, &offs, &proj, &half, &deltas, ratio, parts, chunk),
+                        }
+                        Ok(())
+                    },
+                    || chunks.get(ci + 1).map(|c| data::transforms(stack, c)),
+                );
+                found?;
+                next = ahead;
                 clamp_shifts(parts, chunk, max_shift);
-                let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-                insert(&mut acc, &c, &full, &sym, parts, chunk);
+                let c = coeffs_from(stack, &fts, parts, chunk, optics, &full, &noise, &[]);
+                insert(&mut acc, &c, &full, parts, chunk);
                 progress("三维精修", it * 2000 + hi * 1000 + (ci + 1) * 512 * 1000 / total.max(1), iters * 2000 + 1000);
             }
+            acc.symmetrize(&sym);
             accs.push(acc);
         }
         // FSC of the unfiltered half maps; the next references are the
@@ -523,8 +548,9 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
         for chunk in set.chunks(512) {
             check_cancel()?;
             let c = coeffs_for(stack, parts, chunk, optics, &full, &noise, &[]);
-            insert(&mut acc, &c, &full, &sym, parts, chunk);
+            insert(&mut acc, &c, &full, parts, chunk);
         }
+        acc.symmetrize(&sym);
         finals.push(acc);
     }
     // Unfiltered half maps and their FSC; the full map with the Wiener
