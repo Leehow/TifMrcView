@@ -92,11 +92,11 @@ const WEDGE_BUDGET: f64 = 30.0 * 60.0;
 /// Most pixels a binned view may have.
 const MAX_PIXELS: f64 = 4.2e6;
 
-/// The binning (1, 2, 4 or 8) closest to `voxel` Å, within `MAX_PIXELS`.
+/// The binning (1 to 16; 16 for super-resolution frames) closest to `voxel` Å, within `MAX_PIXELS`.
 pub fn output_bin(w: usize, h: usize, pixel_a: f64, voxel: f64) -> usize {
-    [1usize, 2, 4, 8]
+    [1usize, 2, 4, 8, 16]
         .into_iter()
-        .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 8)
+        .filter(|&b| (w * h) as f64 / (b * b) as f64 <= MAX_PIXELS || b == 16)
         .min_by(|&a, &b| ((pixel_a * a as f64) / voxel).ln().abs().total_cmp(&((pixel_a * b as f64) / voxel).ln().abs()))
         .unwrap()
 }

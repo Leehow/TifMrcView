@@ -140,3 +140,8 @@ required-features = ["pro"]
 [[example]]
 name = "cryoet_quality"
 required-features = ["pro"]
+
+
+[[example]]
+name = "cryoet_align_select"
+required-features = ["pro"]

@@ -12,7 +12,14 @@ fn main() -> Result<()> {
     let thickness: usize = a.get(3).map(|s| s.parse()).transpose()?.unwrap_or(128);
     let img = pipeline::open(stack)?;
     let d = Dataset::open(stack, img.info().size_z, None)?;
-    let al = d.alignment.clone().context("no alignment")?;
+    let mut al = d.alignment.clone().context("no alignment")?;
+    // REFINE=n: projection matching (tomo::refine) first, n rounds.
+    if let Some(n) = std::env::var("REFINE").ok().and_then(|v| v.parse::<usize>().ok()) {
+        let t = Instant::now();
+        let r = tifmrcview_lib::tomo::refine::refine(&img, &mut al, bin, thickness, 0.0, n, &|s, i, n| eprint!("\r{s} {i}/{n}   "))?;
+        eprintln!();
+        println!("refine: median move per round {:?} px (bin {bin}), {:.1} s", r.rounds, t.elapsed().as_secs_f64());
+    }
     let ctf = d.ctf.clone().context("no CTF")?;
     let px = d.optics.pixel_a.context("no pixel size")?;
     // Held-out views spread over the series: each is left out, the rest

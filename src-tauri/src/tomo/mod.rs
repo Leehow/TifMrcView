@@ -18,6 +18,7 @@ pub mod pipeline;
 pub mod quality;
 pub mod recon;
 pub mod recon_gpu;
+pub mod refine;
 #[cfg(test)]
 mod tests;
 pub mod track;

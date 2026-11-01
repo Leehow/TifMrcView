@@ -164,3 +164,55 @@ pub fn project(vol: &[f32], w: usize, h: usize, z: usize, theta: f64, z_offset: 
         .collect();
     Ok(rows.concat())
 }
+
+/// Held-out projection score of an alignment (and CTF): views spread over
+/// the series are each left out, the rest reconstructed (phase-flipped WBP,
+/// quick) and projected along it, and the projection compared with the
+/// measured view by FRC. Comparable between alignments of the same series.
+#[derive(Clone, Copy, Debug)]
+pub struct HeldOut {
+    /// Mean resolution where the FRC falls below 0.143, Å.
+    pub resolution_a: f64,
+    /// Mean FRC between 100 and 20 Å: the steadier number to rank by.
+    pub frc: f64,
+}
+
+pub fn held_out(
+    img: &std::sync::Arc<crate::image::OpenImage>,
+    a: &super::Alignment,
+    ctf: Option<super::output::FlipWith>,
+    bin: usize,
+    thickness: usize,
+    z_offset: f64,
+) -> anyhow::Result<HeldOut> {
+    use super::{output, pipeline, recon};
+    let pixel = ctf.map(|c| c.2).unwrap_or_else(|| crate::align::pixel_a(img.info()));
+    let mut order: Vec<usize> = (0..a.views.len()).filter(|&i| !a.views[i].excluded).collect();
+    order.sort_by(|&i, &j| a.views[i].refined().total_cmp(&a.views[j].refined()));
+    let mut picks: Vec<usize> = [0.12, 0.3, 0.45, 0.55, 0.7, 0.88].iter().map(|f| order[((order.len() - 1) as f64 * f).round() as usize]).collect();
+    picks.dedup();
+    let (mut all, w, h, _) = output::aligned(img, a, bin, 0, 0, &|_, _| {})?;
+    if let Some(c) = ctf {
+        output::flip_views(&mut all, w, h, a, bin, c, 0.0);
+    }
+    let kept: Vec<usize> = (0..a.views.len()).filter(|&i| !a.views[i].excluded).collect();
+    let params = recon::Params { thickness, z_offset, ..Default::default() };
+    let (mut res, mut band) = (0.0, 0.0);
+    for &k in &picks {
+        super::check_cancel()?;
+        let j = kept.iter().position(|&i| i == k).unwrap();
+        let mut rest = a.clone();
+        rest.views[k].excluded = true;
+        let others: Vec<f32> = (0..kept.len()).filter(|&i| i != j).flat_map(|i| all[i * w * h..(i + 1) * w * h].iter().copied()).collect();
+        let angles: Vec<f64> = rest.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
+        // Already flipped: the build itself does not flip again.
+        let how = pipeline::Build { alignment: &rest, bin, params: &params, ctf: None, ctf_3d: false };
+        let vol = pipeline::volume(&how, others, w, h, &angles)?;
+        let proj = project(&vol, w, h, thickness, a.views[k].refined(), z_offset)?;
+        let curve = frc(&proj, &all[j * w * h..(j + 1) * w * h], w, h, pixel * bin as f64);
+        res += 1.0 / crossing(&curve, 0.143);
+        band += mean_between(&curve, 1.0 / 100.0, 1.0 / 20.0);
+    }
+    let n = picks.len() as f64;
+    Ok(HeldOut { resolution_a: n / res, frc: band / n })
+}
