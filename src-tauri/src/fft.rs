@@ -75,7 +75,7 @@ impl Fft {
 }
 
 /// |FFT|² of an N × N tile (row major), unshifted.
-fn power_2d(fft: &Fft, tile: &[f32]) -> Vec<f32> {
+pub(crate) fn power_2d(fft: &Fft, tile: &[f32]) -> Vec<f32> {
     let n = fft.n;
     let mut re = tile.to_vec();
     let mut im = vec![0f32; n * n];

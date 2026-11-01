@@ -1378,6 +1378,22 @@ async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>) -> CmdRes
     tomo_step(app, req, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
 }
 
+/// The GPU Pro computes on: backend name (Vulkan, CUDA, DX12, Metal or
+/// CPU) and the card, for the UI's hint when there is no GPU.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn gpu_info() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(|| match crate::ctf_gpu::device() {
+        Some((dev, name)) => {
+            let card = crate::ctf_gpu::guarded(|| dev.identity().map(|i| i.name)).ok().flatten();
+            serde_json::json!({ "backend": name, "card": card })
+        }
+        None => serde_json::json!({ "backend": "CPU", "card": null }),
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({ "backend": "CPU", "card": null }))
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>) -> CmdResult<serde_json::Value> {
@@ -1390,6 +1406,17 @@ async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::De
     tomo_step(app, req, |d, s, p| {
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         crate::ctf_gpu::guarded(|| crate::tomo::pipeline::denoise(dev, d, s, p))?
+    }).await
+}
+
+/// One-button reconstruction (`tomo::auto`): alignment, CTF, reconstruction
+/// and denoising with the choices made, the result opened by the UI.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, |d, s, p| {
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        crate::ctf_gpu::guarded(|| crate::tomo::auto::run(dev, d, s, p))?
     }).await
 }
 
@@ -1519,6 +1546,23 @@ async fn spa_run(app: AppHandle, req: SpaStep) -> CmdResult<serde_json::Value> {
             "select" => serde_json::json!(sp::select(&mut p, serde_json::from_value(v)?)?),
             "initial" => serde_json::to_value(sp::initial(&mut p, &serde_json::from_value(v)?, &emit)?)?,
             "flip" => { sp::flip_initial(&mut p)?; serde_json::Value::Null }
+            "discover" => {
+                // SAM outlines the blobs when its model is on this computer (no download here).
+                let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(true);
+                let sam = app.state::<crate::sam::Sam>();
+                let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.outline(img, w, h, pts);
+                let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
+                serde_json::to_value(sp::discover(&mut p, outliner, &emit)?)?
+            }
+            "choose" => serde_json::json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
+            "auto" => {
+                // SAM 2.1 drops picks that are clumps or fragments when its model is here.
+                let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(false);
+                let sam = app.state::<crate::sam::Sam>();
+                let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.outline(img, w, h, pts);
+                let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
+                serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, outliner, &emit)?)?
+            }
             "refine" => {
                 let reference = v.get("reference").and_then(|r| r.as_str()).map(str::to_string);
                 serde_json::to_value(sp::refine(&mut p, &serde_json::from_value(v["params"].clone())?, reference.as_deref(), &emit)?)?
@@ -1561,6 +1605,21 @@ async fn spa_classes(dir: String) -> CmdResult<serde_json::Value> {
         let cell = 72;
         let png = crate::spa::render::gallery(&avgs, b, cols, cell)?;
         Ok(serde_json::json!({"png": base64(&png), "cols": cols, "cell": cell, "counts": c.counts, "scores": c.scores, "res": c.res, "selected": c.selected}))
+    }).await
+}
+
+/// The particle kinds found by `discover`, each with its strip as base64 PNG.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_kinds(dir: String) -> CmdResult<Vec<serde_json::Value>> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let d = p.discovery.ok_or_else(|| anyhow::anyhow!("还没有寻找颗粒类型"))?;
+        d.kinds.iter().map(|k| {
+            let mut v = serde_json::to_value(k)?;
+            v["png"] = serde_json::json!(base64(&std::fs::read(&k.png)?));
+            Ok(v)
+        }).collect()
     }).await
 }
 
@@ -2460,7 +2519,9 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_ctf,
             #[cfg(feature = "pro")] tomo_denoise,
             #[cfg(feature = "pro")] tomo_wedge,
+            #[cfg(feature = "pro")] gpu_info,
             #[cfg(feature = "pro")] tomo_export,
+            #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,
@@ -2471,6 +2532,7 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_preview,
             #[cfg(feature = "pro")] spa_classes,
             #[cfg(feature = "pro")] spa_export,
+            #[cfg(feature = "pro")] spa_kinds,
             #[cfg(feature = "pro")] spa_cancel,
             diffraction_find,
             diffraction_zones,

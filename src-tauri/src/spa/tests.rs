@@ -136,6 +136,41 @@ fn reconstructs_from_projections() {
     assert!(c > 0.95, "{c}");
 }
 
+#[test]
+fn symmetrizing_after_insertion_matches_inserting_mates() {
+    // A D7-symmetric phantom seen from a few views: inserting every
+    // symmetry mate and applying the group after one insertion give the
+    // same map.
+    let b = 32;
+    let sym = geom::symmetry("D7").unwrap();
+    let v0 = phantom(b);
+    // Symmetrise the phantom in real space by averaging its projections'
+    // reconstruction with all mates (the reference for both routes).
+    let p = Projector::new(&v0, b, 2);
+    let half = fourier::Half::new(b, b as f64 / 2.0 - 1.0);
+    let ones = vec![1f32; half.len()];
+    let mut buf = vec![0f32; 2 * half.len()];
+    let (mut a, mut c) = (Accum::new(b, 2), Accum::new(b, 2));
+    let (mut pa, mut pc) = (vec![], vec![]);
+    for r in geom::grid(15.0).iter().step_by(5) {
+        p.slice(r, &half, &mut buf);
+        a.points(r, &sym, &half, &buf, &ones, &mut pa);
+        c.points(r, &[geom::IDENTITY], &half, &buf, &ones, &mut pc);
+    }
+    a.insert(&pa);
+    c.insert(&pc);
+    c.symmetrize(&sym);
+    let (ra, rc) = (a.reconstruct(None), c.reconstruct(None));
+    let k = corr(&ra, &rc);
+    let plain = corr(&ra, &Accum::reconstruct(&{
+        let mut u = Accum::new(b, 2);
+        u.insert(&pc);
+        u
+    }, None));
+    eprintln!("symmetrised after: {k:.3}, not symmetrised: {plain:.3}");
+    assert!(k > 0.97 && plain < k - 0.05, "{k} vs {plain}");
+}
+
 use super::data::{self, CtfEval, Optics, Particle, Stack, StackWriter};
 use super::{refine, Rng};
 
@@ -470,4 +505,165 @@ fn export_of_folder() {
     for f in super::export::run(&p, "relion", &out, &|_, _| {}).unwrap().into_iter().chain(super::export::run(&p, "table", &out, &|_, _| {}).unwrap()) {
         eprintln!("{f}");
     }
+}
+
+/// Particle kinds of a real project (`TMV_SPA_DIR`), printed; the strips
+/// are left as kind*.png in the project, the denoised images cached as
+/// dn.bin and shown as dn*.png there.
+#[test]
+#[ignore]
+fn discover_folder() {
+    use super::discover;
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    let t = std::time::Instant::now();
+    let pr = |s: &str, i: usize, n: usize| if i == n { eprintln!("{s} {n} {:.0?}", t.elapsed()) };
+    let cfg = discover::Config::default();
+    let cache = format!("{dir}/dn.bin");
+    let d = if let Ok(b) = std::fs::read(&cache) {
+        let h: Vec<f64> = b[..32].chunks(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
+        let (w, hh, px, n) = (h[0] as usize, h[1] as usize, h[2], h[3] as usize);
+        let v: Vec<f32> = b[32..].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        discover::Denoised { images: v.chunks(w * hh).take(n).map(|c| c.to_vec()).collect(), w, h: hh, px, backend: "cache".into() }
+    } else {
+        let d = discover::denoised(&p, &cfg, &pr).unwrap();
+        let mut b: Vec<u8> = [d.w as f64, d.h as f64, d.px, d.images.len() as f64].iter().flat_map(|x| x.to_le_bytes()).collect();
+        for im in &d.images {
+            b.extend(im.iter().flat_map(|x| x.to_le_bytes()));
+        }
+        std::fs::write(&cache, b).unwrap();
+        for (i, im) in d.images.iter().enumerate() {
+            std::fs::write(format!("{dir}/dn{i}.png"), super::render::gallery(std::slice::from_ref(im), d.w.min(d.h), 1, 900).unwrap()).unwrap();
+        }
+        d
+    };
+    let r = discover::kinds(&p, &cfg, &d, None, &pr).unwrap();
+    for (i, k) in r.kinds.iter().enumerate() {
+        eprintln!("kind {}: {:.0} Å, {} ({:.0}%), elongation {:.2}, contrast {:.2}", i + 1, k.diameter_a, k.count, k.share * 100.0, k.elongation, k.contrast);
+    }
+    let mut p = p;
+    p.discovery = Some(r);
+    p.save().unwrap();
+}
+
+/// The one-click run on a real project after `discover_folder`:
+/// `TMV_SPA_KIND` (1-based, default 1) chosen, the point group guessed.
+#[test]
+#[ignore]
+fn auto_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let mut p = super::project::Project::load(&dir).unwrap();
+    let k: usize = std::env::var("TMV_SPA_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let d = super::project::choose(&mut p, vec![k - 1]).unwrap();
+    eprintln!("diameter {d} Å");
+    let t = std::time::Instant::now();
+    let last = std::sync::Mutex::new(String::new());
+    let pr = |s: &str, i: usize, n: usize| {
+        let mut l = last.lock().unwrap();
+        if *l != s || i == n {
+            eprintln!("[{:>7.1} s] {s} {i}/{n}", t.elapsed().as_secs_f64());
+            *l = s.to_string();
+        }
+    };
+    let r = super::project::auto(&mut p, &Default::default(), None, &pr).unwrap();
+    eprintln!("symmetry {:?}", p.symmetry);
+    eprintln!("selected classes {:?}", p.class2d.as_ref().map(|c| &c.selected));
+    eprintln!("{} particles, {:.2} Å, masked {:.2} Å, B {:.0}, {:.0} s", r.particles, r.res, r.res_masked, r.bfactor, t.elapsed().as_secs_f64());
+}
+
+/// n-fold rotational correlations of a project's 2D classes (`TMV_SPA_DIR`).
+#[test]
+#[ignore]
+fn symmetry_of_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let p = super::project::Project::load(&dir).unwrap();
+    let c = p.class2d.as_ref().unwrap();
+    let (v, dims, _) = data::read_volume(&c.path).unwrap();
+    let b = dims[0];
+    let avgs: Vec<Vec<f32>> = v.chunks(b * b).map(|x| x.to_vec()).collect();
+    let radius = p.diameter_a / 2.0 / c.pixel_a;
+    for (i, a) in avgs.iter().enumerate() {
+        let a = &super::plane::shift(a, b, super::plane::centre_of_mass(a, b));
+        let r: Vec<String> = (2..=15).map(|n| format!("{n}:{:.2}", super::discover::rot_corr(a, b, radius, n))).collect();
+        eprintln!("class {i} ({}) {}", c.counts[i], r.join(" "));
+    }
+    eprintln!("{:?}", super::discover::symmetry(&avgs, b, radius, &c.selected));
+}
+
+/// The dihedral test on a project's initial model (`TMV_SPA_DIR`, `TMV_SPA_N`).
+#[test]
+#[ignore]
+fn dihedral_of_folder() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+    let p = super::project::Project::load(&dir).unwrap();
+    let (v, dims, _) = data::read_volume(&p.initial.as_ref().unwrap().path).unwrap();
+    eprintln!("{:?}", super::discover::dihedral(&v, dims[0], n));
+    let (v, dims, _) = data::read_volume(&p.refine.as_ref().unwrap().map).unwrap();
+    eprintln!("refined: {:?}", super::discover::dihedral(&v, dims[0], n));
+    for ax in 0..3 {
+        eprintln!("axis {ax}: {n}-fold corr {:.2}, 25° corr {:.2}", super::discover::axis_corr(&v, dims[0], ax, 360.0 / n as f64), super::discover::axis_corr(&v, dims[0], ax, 25.0));
+    }
+}
+
+/// Axis search on a C1 map (`TMV_SPA_MAP`, `TMV_SPA_N`).
+#[test]
+#[ignore]
+fn axis_of_map() {
+    let Ok(path) = std::env::var("TMV_SPA_MAP") else { return };
+    let n: usize = std::env::var("TMV_SPA_N").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+    let (v, dims, _) = data::read_volume(&path).unwrap();
+    let b = dims[0];
+    // Tilted by 40° about an oblique axis (TMV_SPA_TILT) to test the search.
+    let v = if std::env::var("TMV_SPA_TILT").is_ok() { super::discover::align_axis(&v, b, [0.3f64.sin() * 0.6, 0.3f64.sin() * 0.8, 0.3f64.cos()]) } else { v };
+    let t = std::time::Instant::now();
+    let v = super::discover::centred3(&v, b);
+    let r = super::discover::find_axis(&v, b, n);
+    eprintln!("{r:?} in {:.1?}", t.elapsed());
+    if let Some((a, _, _)) = r {
+        let al = super::discover::align_axis(&v, b, a);
+        eprintln!("aligned: {n}-fold about z {:.2}", super::discover::axis_corr(&al, b, 2, 360.0 / n as f64));
+        eprintln!("{:?}", super::discover::dihedral(&al, b, n));
+    }
+}
+
+/// Dn refinement of a project from its Cn map turned so the 2-fold at
+/// `TMV_SPA_PHI`, `TMV_SPA_DZ` lies along x (to see what Dn would give).
+#[test]
+#[ignore]
+fn refine_dn_from_map() {
+    let Ok(dir) = std::env::var("TMV_SPA_DIR") else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let n = env("TMV_SPA_N", 7.0) as usize;
+    let mut p = super::project::Project::load(&dir).unwrap();
+    let r = p.refine.clone().unwrap();
+    let (v, dims, px) = data::read_volume(&r.map).unwrap();
+    let aligned = super::discover::align_dihedral(&v, dims[0], env("TMV_SPA_PHI", 0.0), env("TMV_SPA_DZ", 0.0));
+    let start = p.path("refine_cn_aligned.mrc");
+    data::write_mrc(std::path::Path::new(&start), &aligned, dims, px, "Cn map, 2-fold along x").unwrap();
+    let t = std::time::Instant::now();
+    let pr = |s: &str, i: usize, k: usize| if i % 4000 == 0 { eprintln!("{s} {i}/{k} {:.0?}", t.elapsed()) };
+    let params = super::refine::RefineParams { symmetry: format!("D{n}"), res_init: (2.0 * r.res).max(15.0), ..Default::default() };
+    let out = super::project::refine(&mut p, &params, Some(&start), &pr).unwrap();
+    eprintln!("D{n}: {:.2} Å (masked {:.2}) in {:.0?}", out.res, out.res_masked, t.elapsed());
+}
+
+/// The poses follow a map turned about z and moved along z
+/// (`refine::promote`): the map rebuilt from the changed poses matches
+/// the turned map (0.995; R·Aᵀ gave 0.744, A·R 0.886, the opposite shift 0.28).
+#[test]
+fn poses_follow_a_turned_map() {
+    let dir = tempfile::tempdir().unwrap();
+    let (b, px) = (32, 6.0);
+    let truth = phantom(b);
+    let (path, parts, optics) = synth_stack(dir.path(), &truth, b, px, 400, 0.5, 9);
+    let stack = Stack::open(&path).unwrap();
+    let ids: Vec<usize> = (0..parts.len()).collect();
+    let m = refine::reconstruct_all(&stack, &parts, &ids, &optics, &[geom::IDENTITY]);
+    let mut maps = [m.clone(), m];
+    let mut moved = parts.clone();
+    refine::promote(&mut maps, b, (23.0, 3.0), &mut moved, &ids);
+    let m2 = refine::reconstruct_all(&stack, &moved, &ids, &optics, &[geom::IDENTITY]);
+    let c = corr(&m2, &maps[0]);
+    assert!(c > 0.97, "{c}");
 }

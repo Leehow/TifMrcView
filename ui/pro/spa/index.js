@@ -8,8 +8,10 @@
 // `show(project)` after every change, `enter()` when the step is opened.
 // Shares app.js globals: S, T, F, invoke, $, setFft, openPath, saveDir.
 (() => {
-  const STEPS = ["① 显微图", "② CTF", "③ 挑选", "④ 二维分类", "⑤ 初始模型", "⑥ 三维精修"];
-  const W = window.TifMrcViewPro.spa = { project: null, busy: false, current: 0, sections: [], hooks: new Map() };
+  // Step 6 (auto.js) is the one-click mode, shown first; 0–5 are the steps by hand.
+  const STEPS = ["① 显微图", "② CTF", "③ 挑选", "④ 二维分类", "⑤ 初始模型", "⑥ 三维精修", "一键"];
+  const AUTO = 6;
+  const W = window.TifMrcViewPro.spa = { project: null, busy: false, current: AUTO, sections: [], buttons: [], hooks: new Map() };
 
   const button = document.createElement("button");
   button.id = "btn-spa";
@@ -46,11 +48,19 @@
     const b = document.createElement("button");
     b.textContent = name;
     b.onclick = () => W.select(i);
-    $("spa-steps").append(b);
     const s = document.createElement("section");
     s.hidden = true;
-    $("spa-body").append(s);
+    if (i === AUTO) {
+      b.className = "ws-auto";
+      b.title = "一键模式：自动做完全部步骤，只需要从找到的几种颗粒里点出你的";
+      $("spa-steps").prepend(b);
+      $("spa-body").prepend(s);
+    } else {
+      $("spa-steps").append(b);
+      $("spa-body").append(s);
+    }
     W.sections.push(s);
+    W.buttons.push(b);
   }
 
   W.register = (i, hooks) => W.hooks.set(i, hooks);
@@ -62,7 +72,7 @@
     W.current = i;
     W.sections.forEach((s, j) => {
       s.hidden = i !== j;
-      const b = $("spa-steps").children[j];
+      const b = W.buttons[j];
       b.classList.toggle("on", i === j);
       b.setAttribute("aria-current", i === j ? "step" : "false");
     });
@@ -79,8 +89,9 @@
       !!p?.class2d,
       !!p?.initial,
       !!p?.refine,
+      !!p?.refine,
     ];
-    [...$("spa-steps").children].forEach((b, i) => { b.textContent = STEPS[i] + (done[i] ? " ✓" : ""); });
+    W.buttons.forEach((b, i) => { b.textContent = STEPS[i] + (done[i] ? " ✓" : ""); });
   }
 
   // Makes `p` the workspace's project and lets every step show it.
@@ -185,5 +196,5 @@
   $("spa-close").onclick = close;
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
   $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
-  W.select(0);
+  W.select(AUTO);
 })();

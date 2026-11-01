@@ -43,8 +43,24 @@
       <label>对齐叠层 binning<select id="cryo-export-bin"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
       <div class="al-row"><button id="cryo-export-go" class="small primary">选择文件夹并导出…</button></div>
     </div>
-    <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
-    <div id="cryo-body"></div>
+    <div id="cryo-auto">
+      <p class="dim">打开倾转序列，或直接选 mdoc（EER / TIFF 电影在它旁边），选好结果的用途，按下面的按钮：运动校正、对齐、CTF、重构和后处理都自动完成，结果直接打开。</p>
+      <div class="al-row">
+        <label id="cryo-auto-pixel-row" hidden>像素大小 Å <input id="cryo-auto-pixel" type="number" min="0" step="0.001"></label>
+        <label>用途<select id="cryo-auto-purpose">
+          <option value="survey">快速预览：看三维形貌，最快（约 18 Å 体素）</option>
+          <option value="display" selected>展示：尽可能清晰，去噪并补缺失楔（约 9 Å 体素，较慢）</option>
+          <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
+        </select></label>
+      </div>
+      <div class="al-row"><button id="cryo-auto-run" class="primary">一键重构</button><button id="cryo-auto-mdoc" class="small">从 mdoc 开始…</button><button id="cryo-auto-open" class="small" hidden>打开结果</button></div>
+      <p id="cryo-auto-result" class="dim"></p>
+    </div>
+    <details id="cryo-advanced">
+      <summary>高级设置（分步操作）</summary>
+      <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
+      <div id="cryo-body"></div>
+    </details>
     <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden>取消</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
@@ -108,6 +124,44 @@
     if (files) W.status(`已导出 ${files.length} 个文件到 ${dir}`);
   };
 
+  // One button: tomo::auto does every step with the choices made.
+  let autoResult = null;
+  $("cryo-auto-run").onclick = () => auto();
+  // From the movies: motion correction of the mdoc batch with its defaults
+  // (the gain reference beside the movies is found), then the same button.
+  $("cryo-auto-mdoc").onclick = async () => {
+    const mdoc = await invoke("motion_pick", { dir: saveDir(), kind: "mdoc" });
+    if (!mdoc) return;
+    const output = await invoke("pick_save_path", { dir: saveDir(), name: `${W.name(mdoc).replace(/\.[^.]+$/, "").replace(/\.mrc$/, "")}.mrc`, filter: "MRC", exts: ["mrc"] });
+    if (!output) return;
+    const un = await T.event.listen("motion-progress", (e) => W.status(`运动校正 · ${e.payload.stage} ${e.payload.done} / ${e.payload.total}`));
+    const r = await W.run("运动校正", () => invoke("motion_series", { req: { mdoc, folder: null, output, params: {}, dropTilts: true } }), "motion_cancel");
+    un();
+    if (!r) return;
+    if (!r.path || r.angles.length < 3) return W.status(r.path ? "找到的倾角不到 3 个，无法重构" : "mdoc 旁边没有找到电影");
+    await W.load(r.path);
+    await auto();
+  };
+  async function auto() {
+    if (!W.dataset) {
+      if (!S.info || S.info.sizeZ < 3) return W.status("请先打开一个倾转序列，或从 mdoc 开始");
+      try { await W.load(S.info.path); } catch (e) { return W.status(`无法载入：${e}`); }
+    }
+    const pixel = +$("cryo-auto-pixel").value || null;
+    const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, fresh: false });
+    if (!r) {
+      // The backend asks for the pixel size only when no file or mdoc gives it.
+      if ($("cryo-status").textContent.includes("像素大小")) $("cryo-auto-pixel-row").hidden = false;
+      return;
+    }
+    autoResult = r;
+    $("cryo-auto-open").hidden = false;
+    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层${Math.hypot(...r.levelled) >= 0.5 ? ` · 样品倾斜已拉平（${r.levelled.map((v) => v.toFixed(1)).join("° / ")}°）` : ""} · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.note ? `。${r.note}` : ""}`;
+    W.status("一键重构完成，已打开结果");
+    await openPath(r.path);
+  }
+  $("cryo-auto-open").onclick = () => autoResult && openPath(autoResult.path);
+
   // Loads the dataset of a tilt series by its path.
   W.load = async (stack) => {
     const d = await invoke("tomo_dataset", { stack });
@@ -131,7 +185,7 @@
     W.busy = true;
     $("cryo-cancel").hidden = false;
     $("cryo-cancel").onclick = () => invoke(cancel);
-    const buttons = [...panel.querySelectorAll("#cryo-body button, #cryo-dataset button")];
+    const buttons = [...panel.querySelectorAll("#cryo-body button, #cryo-dataset button, #cryo-auto button")];
     const was = buttons.map((b) => b.disabled);
     buttons.forEach((b) => { b.disabled = true; });
     const un = await T.event.listen("tomo-progress", (e) => {

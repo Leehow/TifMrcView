@@ -191,6 +191,65 @@ impl Sam {
         Ok((bytes, r.iou))
     }
 
+    /// Outlines blobs on an image (single-particle discovery): one positive
+    /// point on each, the mask's connected part around it; returns each
+    /// outline's equivalent diameter in pixels (None when the point is not
+    /// inside its mask or the mask covers a quarter of the image).
+    #[cfg(feature = "pro")]
+    pub fn outline(&self, img: &[f32], w: usize, h: usize, points: &[[f32; 2]]) -> Result<Vec<Option<f64>>> {
+        let predictor = Self::predictor(&mut self.inner.lock().unwrap())?;
+        let mut s: Vec<f32> = img.iter().step_by((img.len() / 100_000).max(1)).copied().collect();
+        s.sort_by(f32::total_cmp);
+        let (lo, hi) = (s[s.len() / 200], s[s.len() - 1 - s.len() / 200]);
+        let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h);
+        let mut out = vec![];
+        let clicks: Vec<tmv_sam::Point> = points.iter().map(|p| tmv_sam::Point { x: p[0], y: p[1], positive: true }).collect();
+        let lows = predictor.predict_low_res_many(&enc, &clicks);
+        for (p, (low, _)) in points.iter().zip(lows) {
+            // The low-resolution logits, sampled bilinearly at image pixels
+            // as the fill needs them (the full-size mask cost ~0.1 s a click).
+            let n = (low.len() as f64).sqrt() as usize;
+            let logit = |i: usize| -> f32 {
+                let u = ((i % w) as f32 + 0.5) * n as f32 / w as f32 - 0.5;
+                let v = ((i / w) as f32 + 0.5) * n as f32 / h as f32 - 0.5;
+                let (u, v) = (u.clamp(0.0, (n - 1) as f32), v.clamp(0.0, (n - 1) as f32));
+                let (u0, v0) = (u.floor() as usize, v.floor() as usize);
+                let (u1, v1) = ((u0 + 1).min(n - 1), (v0 + 1).min(n - 1));
+                let (fu, fv) = (u - u0 as f32, v - v0 as f32);
+                let at = |x: usize, y: usize| low[y * n + x];
+                (at(u0, v0) * (1.0 - fu) + at(u1, v0) * fu) * (1.0 - fv) + (at(u0, v1) * (1.0 - fu) + at(u1, v1) * fu) * fv
+            };
+            let (cx, cy) = (p[0].round() as usize, p[1].round() as usize);
+            if cx >= w || cy >= h || logit(cy * w + cx) <= 0.0 {
+                out.push(None);
+                continue;
+            }
+            // Flood fill from the point, giving up past a quarter of the image.
+            let mut seen = vec![false; w * h];
+            let mut stack = vec![cy * w + cx];
+            seen[cy * w + cx] = true;
+            let mut area = 0usize;
+            while let Some(i) = stack.pop() {
+                area += 1;
+                if area > w * h / 4 {
+                    break;
+                }
+                let (x, y) = (i % w, i / w);
+                for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                    if nx < w && ny < h {
+                        let j = ny * w + nx;
+                        if !seen[j] && logit(j) > 0.0 {
+                            seen[j] = true;
+                            stack.push(j);
+                        }
+                    }
+                }
+            }
+            out.push((area <= w * h / 4).then(|| 2.0 * (area as f64 / std::f64::consts::PI).sqrt()));
+        }
+        Ok(out)
+    }
+
     /// Carries the last mask (on `req.z`) up and/or down the stack, one slice
     /// at a time, until the object is lost or `cancel` is set. Returns the
     /// masks by slice, the starting one first.

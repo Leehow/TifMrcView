@@ -338,6 +338,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
                 working_size: 128,
                 ..Default::default()
             },
+            drop_tilts: false,
         },
         &|_, _, _| {},
     )
@@ -419,4 +420,43 @@ fn frames_on_t_and_oriented_gain() {
     let first = sp.read(0).unwrap();
     let expected = 1.0 + 24.0 / 127.0 + 80.0 / 127.0;
     assert!((first[24 * w + 40] as f64 - expected).abs() < 1e-6);
+}
+
+#[test]
+fn mdoc_pixel_is_rescaled_to_the_frames() {
+    // EMPIAR-10164: binned images 924×958 at 5.4 Å, super-resolution frames 7420×7676.
+    let doc = series::parse("PixelSpacing = 5.4\nImageSize = 924 958\n[ZValue = 0]\nTiltAngle = 0\nPixelSpacing = 5.4\n").unwrap();
+    assert_eq!(doc.image_size, Some([924, 958]));
+    assert!((doc.frame_pixel(5.4, (7420, 7676)) - 0.675).abs() < 1e-9);
+    assert_eq!(doc.frame_pixel(5.4, (924, 958)), 5.4);
+    assert!((doc.frame_pixel(5.4, (3710, 3838)) - 1.35).abs() < 1e-9);
+}
+
+#[test]
+fn mdoc_batch_finds_the_one_gain_reference() {
+    use super::series::find_gain;
+    let dir = tempfile::tempdir().unwrap();
+    let frames = dir.path().join("frames");
+    std::fs::create_dir(&frames).unwrap();
+    let mdoc = dir.path().join("ts.mrc.mdoc");
+    std::fs::write(&mdoc, "").unwrap();
+    let movie = frames.join("a.eer");
+    std::fs::write(&movie, "").unwrap();
+    std::fs::write(frames.join("notes.txt"), "").unwrap();
+    assert_eq!(find_gain(&mdoc, Some(&movie), None), None);
+    std::fs::write(frames.join("20260610_gain.gain"), "").unwrap();
+    assert_eq!(find_gain(&mdoc, Some(&movie), None), Some(frames.join("20260610_gain.gain")));
+    // Two candidates: which one is meant is not known.
+    std::fs::write(dir.path().join("CountRef_x.mrc"), "").unwrap();
+    assert_eq!(find_gain(&mdoc, Some(&movie), None), None);
+    // The CryoET Data Portal layout: Frames/ beside Gains/.
+    let run = dir.path().join("TS_1");
+    for sub in ["Frames", "Gains"] {
+        std::fs::create_dir_all(run.join(sub)).unwrap();
+    }
+    let (mdoc, movie) = (run.join("Frames/TS_1.mdoc"), run.join("Frames/TS_1_001.tif"));
+    std::fs::write(&mdoc, "").unwrap();
+    std::fs::write(&movie, "").unwrap();
+    std::fs::write(run.join("Gains/TS_1_gain.mrc"), "").unwrap();
+    assert_eq!(find_gain(&mdoc, Some(&movie), None), Some(run.join("Gains/TS_1_gain.mrc")));
 }

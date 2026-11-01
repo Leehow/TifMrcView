@@ -214,10 +214,14 @@
 .wg-range input { width: 52px; }
 
 /* Cryo-ET workspace, with the viewer left visible beside it. */
-#cryoet-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
+#cryoet-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #cryoet-workspace[hidden], #cryoet-workspace [hidden] { display:none; }
 #cryo-dataset { display:flex; align-items:center; gap:8px; padding-bottom:8px; }
 #cryo-export-box { padding-bottom:8px; }
+#cryo-auto { padding:4px 0 10px; border-bottom:1px solid var(--line); }
+#cryo-auto-run { font-size:13px; padding:6px 18px; }
+#cryo-advanced { margin-top:8px; display:flex; flex-direction:column; min-height:0; }
+#cryo-advanced > summary { cursor:pointer; color:var(--dim); padding:4px 0 8px; }
 #cryo-dataset-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #cryo-steps { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; padding-bottom:10px; border-bottom:1px solid var(--line); }
 #cryo-steps button { padding:6px 3px; justify-content:center; font-size:11px; }
@@ -274,5 +278,23 @@
 #spa-workspace .ws-gallery figure.on { border-color:var(--accent); }
 #spa-workspace .ws-gallery canvas { display:block; width:72px; height:72px; border-radius:4px; }
 #spa-workspace .ws-gallery figcaption { font-size:10px; color:var(--dim); font-variant-numeric:tabular-nums; }
+#spa-workspace .ws-kinds { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+#spa-workspace .ws-kinds figure { margin:0; padding:3px; border:2px solid var(--line); border-radius:8px; cursor:pointer; }
+#spa-workspace .ws-kinds figure.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+#spa-workspace .ws-kinds img { display:block; width:100%; max-width:576px; image-rendering:auto; border-radius:4px; }
+#spa-workspace .ws-kinds figcaption { font-size:12px; margin-top:2px; font-variant-numeric:tabular-nums; }
+#spa-workspace .ws-steps button.ws-auto { font-weight:600; }
 #spa-fsc { width:100%; height:auto; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
 #spa-workspace input[type="text"] { width:100%; box-sizing:border-box; }
+
+/* One-time hint when Pro found no GPU (pro.js). */
+.pro-gpu-hint {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+  max-width: min(640px, calc(100vw - 32px)); padding: 10px 36px 10px 14px;
+  background: #fff8c5; color: #3b2300; border: 1px solid #d4a72c; border-radius: 6px;
+  font-size: 13px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.pro-gpu-hint a { color: #0969da; }
+.pro-gpu-hint button {
+  position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 16px; cursor: pointer; color: inherit;
+}

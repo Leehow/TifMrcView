@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 pub enum Method {
     Wbp,
     Sirt,
+    /// Simultaneous algebraic reconstruction (Andersen & Kak, 1984): the
+    /// SIRT update made one view at a time, views taken far apart in turn.
+    Sart,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +52,11 @@ pub struct Params {
     pub lambda: f32,
     pub non_negative: bool,
     pub z_offset: f64,
+    /// Depth change per row along Y (sections per row): each row of the
+    /// tomogram is taken that much deeper, so a specimen tilted about X
+    /// lies level. Whole sections only, so nothing is resampled.
+    #[serde(default)]
+    pub y_slope: f64,
     pub filter: Filter,
     /// auto / cpu / gpu (explicit gpu fails instead of hiding fallback).
     pub backend: String,
@@ -62,6 +70,7 @@ impl Default for Params {
             lambda: 1.0,
             non_negative: false,
             z_offset: 0.0,
+            y_slope: 0.0,
             filter: Filter::Ramp,
             backend: "auto".into(),
         }
@@ -76,6 +85,8 @@ impl Params {
             || self.iterations == 0
             || self.iterations > 1000
             || !self.z_offset.is_finite()
+            || !self.y_slope.is_finite()
+            || self.y_slope.abs() > 1.0
             || !self.lambda.is_finite()
             || self.lambda <= 0.0
             || self.lambda > 2.0
@@ -249,6 +260,42 @@ pub fn forward(g: &Geometry, slice: &[f32]) -> Vec<f32> {
     out
 }
 
+/// B for one view: row [w] → slice [z][w].
+pub fn back_view(g: &Geometry, v: usize, row: &[f32]) -> Vec<f32> {
+    let w = g.w;
+    let mut out = vec![0.0; g.z * w];
+    for (z, r) in out.chunks_mut(w).enumerate() {
+        for (x, o) in r.iter_mut().enumerate() {
+            *o = lerp(row, g.detector(v, x, z));
+        }
+    }
+    out
+}
+
+/// A for one view: slice [z][w] → row [w].
+pub fn forward_view(g: &Geometry, v: usize, slice: &[f32]) -> Vec<f32> {
+    let mut one = g.clone();
+    one.trig = vec![g.trig[v]];
+    one.weight = vec![1.0];
+    forward(&one, slice)
+}
+
+/// The order SART visits views in: each next view far from the last
+/// (steps of about 0.618 of the series), so consecutive updates are
+/// nearly independent.
+pub fn sart_order(n: usize) -> Vec<usize> {
+    let step = ((n as f64 * 0.618).round() as usize).max(1);
+    let mut step = step;
+    while gcd(step, n) != 1 {
+        step += 1;
+    }
+    (0..n).map(|k| k * step % n).collect()
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 /// A1 and B1 for one row (they do not depend on Y).
 pub fn normalisers(g: &Geometry) -> (Vec<f32>, Vec<f32>) {
     let rows = forward(g, &vec![1.0; g.z * g.w]);
@@ -290,6 +337,7 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
     let most = cs.iter().copied().fold(0.0, f32::max);
     inverse(&mut cs, SEEN * most);
     let ones = vec![1.0; nv];
+    let order = sart_order(nv);
     let slabs: Vec<Vec<f32>> = sino
         .par_chunks(nv * w)
         .map(|b| {
@@ -297,6 +345,20 @@ pub fn cpu_slab(g: &Geometry, sino: &[f32], p: &Params) -> Result<Vec<f32>> {
             for _ in 0..p.iterations {
                 if check_cancel().is_err() {
                     break;
+                }
+                if p.method == Method::Sart {
+                    for &v in &order {
+                        let ax = forward_view(g, v, &x);
+                        let e: Vec<f32> = (0..w).map(|j| (b[v * w + j] - ax[j]) * rs[v * w + j]).collect();
+                        let step = back_view(g, v, &e);
+                        for (x, s) in x.iter_mut().zip(&step) {
+                            *x += p.lambda * s;
+                            if p.non_negative {
+                                *x = x.max(0.0);
+                            }
+                        }
+                    }
+                    continue;
                 }
                 let ax = forward(g, &x);
                 let e: Vec<f32> = b.iter().zip(&ax).zip(&rs).map(|((b, a), r)| (b - a) * r).collect();
@@ -354,6 +416,23 @@ pub fn slab_rows(g: &Geometry, h: usize) -> usize {
     ((1usize << 24) / (g.z * g.w).max(1)).clamp(1, h.max(1))
 }
 
+/// Mean of every view. Each is subtracted before reconstruction: the
+/// views' mean levels differ with the path length through the specimen
+/// (and the exposure), which no density inside the reconstructed slab can
+/// explain; left in, SIRT spreads them into broad shading and bright
+/// borders where few rays cross.
+fn view_means(src: &dyn Sinograms, views: usize, rows: usize) -> Result<Vec<f32>> {
+    let (w, h) = (src.width(), src.height());
+    let mut sum = vec![0f64; views];
+    for y0 in (0..h).step_by(rows) {
+        let n = rows.min(h - y0);
+        for (i, v) in src.rows(y0, n)?.iter().enumerate() {
+            sum[(i / w) % views] += *v as f64;
+        }
+    }
+    Ok(sum.iter().map(|s| (s / (w * h) as f64) as f32).collect())
+}
+
 /// Reconstructs every row: slabs go to `sink(y0, n, [n][z][w])` in order.
 /// GPU first (when there is one and `p.backend` allows); returns the backend.
 pub fn reconstruct(
@@ -377,10 +456,14 @@ pub fn reconstruct(
         crate::ctf_gpu::guarded(|| super::recon_gpu::Plan::new(dev, g, p)).ok().and_then(Result::ok).map(|plan| (plan, *name))
     });
     let mut backend = plan.as_ref().map_or("CPU", |p| p.1).to_string();
+    let means = view_means(src, g.views(), rows)?;
     for y0 in (0..h).step_by(rows) {
         check_cancel()?;
         let n = rows.min(h - y0);
-        let sino = src.rows(y0, n)?;
+        let mut sino = src.rows(y0, n)?;
+        for (i, v) in sino.iter_mut().enumerate() {
+            *v -= means[(i / g.w) % g.views()];
+        }
         let gpu_slab = plan.as_ref().map(|(gp, _)| crate::ctf_gpu::guarded(|| gp.slab(&sino, n)));
         let slab = match gpu_slab {
             Some(Ok(Ok(v))) => v,

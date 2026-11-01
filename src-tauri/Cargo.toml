@@ -97,9 +97,11 @@ rust-ini = "=0.21.1"
 # Pro: CUDA for NVIDIA machines without a GPU Vulkan driver (WSL, compute
 # servers). It needs libdevice.10.bc, which the Linux packages bring along
 # (scripts/build-thumbnails.mjs); Vulkan and the CPU remain the fallbacks.
-tmv-sam = { path = "sam", optional = true, default-features = false, features = ["cuda"] }
+tmv-sam = { path = "sam", optional = true, default-features = false, features = ["cuda", "vulkan"] }
 
 [target.'cfg(windows)'.dependencies]
+# Pro: Vulkan with SPIR-V kernels first, DX12 when there is no Vulkan driver.
+tmv-sam = { path = "sam", optional = true, default-features = false, features = ["vulkan"] }
 windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security"] }
 
 [profile.release]
@@ -112,6 +114,10 @@ opt-level = 2
 
 [[example]]
 name = "sam_slice"
+required-features = ["pro"]
+
+[[example]]
+name = "gpu_bench"
 required-features = ["pro"]
 
 [dev-dependencies]
@@ -150,4 +156,13 @@ required-features = ["pro"]
 
 [[example]]
 name = "wedge_holdout"
+required-features = ["pro"]
+
+[[example]]
+name = "cryoet_quality"
+required-features = ["pro"]
+
+
+[[example]]
+name = "cryoet_align_select"
 required-features = ["pro"]

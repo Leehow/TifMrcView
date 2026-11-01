@@ -105,6 +105,28 @@ pub fn grid(step: f64) -> Vec<Mat> {
         .collect()
 }
 
+/// `grid(step)` without orientations that a point group repeats: for Cn
+/// and Dn (n-fold along z, 2-fold along x) only views whose direction
+/// (third row of R; a mate R·g has gᵀ·d) lies in the sector 0 ≤ φ < 360°/n,
+/// and for Dn the upper half. 2n times fewer for Dn; other groups whole.
+pub fn grid_for(step: f64, symmetry: &str) -> Vec<Mat> {
+    let s = symmetry.trim().to_uppercase();
+    let n: usize = s.get(1..).and_then(|v| v.parse().ok()).unwrap_or(1);
+    let (cyclic, dihedral) = (s.starts_with('C'), s.starts_with('D'));
+    if n <= 1 && !dihedral || !(cyclic || dihedral) {
+        return grid(step);
+    }
+    let sector = 360.0 / n as f64;
+    grid(step)
+        .into_iter()
+        .filter(|r| {
+            let d = r[2];
+            let phi = d[1].atan2(d[0]).to_degrees().rem_euclid(360.0);
+            phi < sector - 1e-6 && (!dihedral || d[2] > -1e-9)
+        })
+        .collect()
+}
+
 /// Small rotations within ±`range` degrees about each axis, `steps` per
 /// side, for a local search around a known orientation.
 pub fn local(range: f64, steps: usize) -> Vec<Mat> {
@@ -211,6 +233,29 @@ mod tests {
                 })
                 .fold(180.0, f64::min);
             assert!(best < 10.0, "{best}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    #[test]
+    fn reduced_grid_covers_every_orientation() {
+        // Each orientation has a symmetry mate within the grid's step of
+        // the reduced grid.
+        for name in ["C7", "D7", "D2"] {
+            let full = grid(15.0);
+            let red = grid_for(15.0, name);
+            let g = symmetry(name).unwrap();
+            assert!(red.len() * g.len() <= full.len() * 11 / 10 && red.len() * g.len() >= full.len() * 9 / 10, "{name}: {} × {} vs {}", red.len(), g.len(), full.len());
+            let mut rng = crate::spa::Rng(3);
+            for _ in 0..200 {
+                let r = crate::spa::refine::random_rotation(&mut rng);
+                let best = red.iter().flat_map(|q| g.iter().map(move |m| distance(&mul(q, m), &r))).fold(f64::MAX, f64::min);
+                assert!(best < 15.0, "{name}: {best}");
+            }
         }
     }
 }

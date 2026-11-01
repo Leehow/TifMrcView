@@ -16,30 +16,148 @@ use burn_store::{ModuleSnapshot, PytorchStore};
 
 pub use model::{Features, Sam2, Sam2Config, IMAGE_SIZE};
 
-/// The backends to try, fastest first: CUDA, then the platform GPU API
-/// (Metal, DX12 or Vulkan through wgpu), then the CPU, with names to show.
-fn candidates() -> Vec<(fn() -> Device, &'static str)> {
+/// One way to run Burn on this machine, with a name to show.
+pub struct Backend {
+    pub name: &'static str,
+    make: fn() -> Result<Device>,
+}
+
+impl Backend {
+    pub fn device(&self) -> Result<Device> {
+        guarded(self.make).and_then(|r| r)
+    }
+}
+
+/// The backends to try, fastest first: Vulkan (SPIR-V kernels), then CUDA
+/// for NVIDIA machines without a GPU Vulkan driver (WSL, compute servers),
+/// then DX12 on Windows; Metal on a Mac; the CPU last. On an RTX 5080
+/// (`examples/gpu_bench.rs`, Windows, driver 617) Vulkan was fastest in 7
+/// of 10 Pro tasks, CUDA up to 20x slower (SART) and only ahead in SAM
+/// encoding, DX12 in between. `TMV_GPU=cuda|vulkan|dx12|metal|cpu` keeps
+/// only that one (and the CPU after it), for benchmarks and as a way out
+/// when a driver misbehaves.
+pub fn backends() -> Vec<Backend> {
     #[allow(unused_mut)]
-    let mut v: Vec<(fn() -> Device, &'static str)> = vec![];
-    #[cfg(feature = "cuda")]
-    v.push((|| Device::cuda(0), "CUDA"));
+    let mut v: Vec<Backend> = vec![];
     // Real GPUs only, by kind: wgpu's default device can be a software
     // renderer (lavapipe on Linux without a GPU Vulkan driver, as in WSL),
     // which is slower than the CPU backend and fails on large buffers.
-    #[cfg(feature = "wgpu")]
+    #[cfg(feature = "vulkan")]
+    if vulkan_gpu() {
+        use burn::tensor::DeviceKind;
+        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::DiscreteGpu(0))) });
+    }
+    // A discrete NVIDIA card without a Vulkan driver beats an integrated GPU.
+    #[cfg(feature = "cuda")]
+    v.push(Backend { name: "CUDA", make: || Ok(Device::cuda(0)) });
+    #[cfg(feature = "vulkan")]
+    if vulkan_gpu() {
+        use burn::tensor::DeviceKind;
+        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::IntegratedGpu(0))) });
+        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::VirtualGpu(0))) });
+    }
+    #[cfg(all(feature = "wgpu", windows))]
+    {
+        v.push(Backend { name: "DX12", make: || dx12(0) });
+        v.push(Backend { name: "DX12", make: || dx12(1) });
+    }
+    #[cfg(all(feature = "metal", target_os = "macos"))]
     {
         use burn::tensor::DeviceKind;
-        let name = if cfg!(target_os = "macos") { "Metal" } else if cfg!(windows) { "GPU (DX12/Vulkan)" } else { "GPU (Vulkan)" };
-        v.push((|| Device::wgpu(DeviceKind::DiscreteGpu(0)), name));
-        v.push((|| Device::wgpu(DeviceKind::IntegratedGpu(0)), name));
-        v.push((|| Device::wgpu(DeviceKind::VirtualGpu(0)), name));
+        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::DiscreteGpu(0))) });
+        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::IntegratedGpu(0))) });
+        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::VirtualGpu(0))) });
+    }
+    // A build with wgpu but no pinned API for this platform (e.g. Linux
+    // without the vulkan feature): leave the API to wgpu.
+    #[cfg(all(feature = "wgpu", not(feature = "vulkan"), not(windows), not(all(feature = "metal", target_os = "macos"))))]
+    {
+        use burn::tensor::DeviceKind;
+        v.push(Backend { name: "GPU", make: || Ok(Device::wgpu(DeviceKind::DiscreteGpu(0))) });
+        v.push(Backend { name: "GPU", make: || Ok(Device::wgpu(DeviceKind::IntegratedGpu(0))) });
     }
     #[cfg(feature = "flex")]
-    v.push((Device::flex, "CPU"));
-    if v.is_empty() {
-        v.push((Device::default, "CPU"));
+    v.push(Backend { name: "CPU", make: || Ok(Device::flex()) });
+    if !v.iter().any(|b| b.name == "CPU") {
+        v.push(Backend { name: "CPU", make: || Ok(Device::default()) });
+    }
+    if let Ok(want) = std::env::var("TMV_GPU") {
+        let want = want.trim().to_ascii_lowercase();
+        if !want.is_empty() && want != "auto" {
+            v.retain(|b| b.name.eq_ignore_ascii_case(&want) || b.name == "CPU");
+        }
     }
     v
+}
+
+/// Whether Vulkan reaches a real GPU (not only a software renderer such as
+/// llvmpipe in WSL). Asked once, so machines without one skip Vulkan
+/// instead of failing (noisily) on each kind of device.
+#[cfg(feature = "vulkan")]
+fn vulkan_gpu() -> bool {
+    use burn::tensor::wgpu::wgpu;
+    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS.get_or_init(|| {
+        // WSL has no GPU Vulkan driver, and listing its software adapters
+        // took about a minute on leehowpc: use CUDA there straight away.
+        if in_wsl() {
+            return false;
+        }
+        guarded(|| {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+            desc.backends = wgpu::Backends::VULKAN;
+            let adapters = block_on(wgpu::Instance::new(desc).enumerate_adapters(wgpu::Backends::VULKAN));
+            adapters.iter().any(|a| matches!(a.get_info().device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu))
+        })
+        .unwrap_or(false)
+    })
+}
+
+#[cfg(feature = "vulkan")]
+fn in_wsl() -> bool {
+    cfg!(target_os = "linux")
+        && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|r| r.to_ascii_lowercase().contains("microsoft")))
+}
+
+/// Runs a future to completion on this thread (wgpu's native futures are
+/// ready at once or soon).
+#[cfg(feature = "vulkan")]
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    use std::task::{Context, Poll, Wake, Waker};
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(std::sync::Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut f = std::pin::pin!(f);
+    loop {
+        if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::park();
+    }
+}
+
+/// A DX12 device on the discrete (0) or integrated (1) GPU. wgpu's own
+/// choice of API on Windows is Vulkan first, so DX12 has to be asked for;
+/// a device can be set up only once, so it is kept.
+#[cfg(all(feature = "wgpu", windows))]
+fn dx12(which: usize) -> Result<Device> {
+    use burn::tensor::wgpu::WgpuBackend;
+    use burn::tensor::DeviceKind;
+    use std::sync::{Mutex, OnceLock};
+    static DEVS: OnceLock<Mutex<[Option<Option<Device>>; 2]>> = OnceLock::new();
+    let mut devs = DEVS.get_or_init(|| Mutex::new([None, None])).lock().unwrap_or_else(|e| e.into_inner());
+    let slot = &mut devs[which];
+    if slot.is_none() {
+        let kind = if which == 0 { DeviceKind::DiscreteGpu(0) } else { DeviceKind::IntegratedGpu(0) };
+        *slot = Some(Device::wgpu_options().device_kind(kind).graphics_api(WgpuBackend::Dx12).init().ok());
+    }
+    slot.clone().flatten().ok_or_else(|| anyhow!("no DX12 GPU"))
 }
 
 /// Runs `f`, turning a panic (how Burn reports a failed GPU kernel or
@@ -54,15 +172,17 @@ fn guarded<T>(f: impl FnOnce() -> T) -> Result<T> {
 /// The fastest backend where a small computation works. Returns the
 /// device and a name to show.
 pub fn pick_device() -> (Device, &'static str) {
-    for (make, name) in candidates() {
+    for b in backends() {
         let ok = guarded(|| {
-            let d = make();
+            let d = b.device().ok()?;
             let x = Tensor::<2>::ones([8, 8], &d);
             let s: f32 = x.clone().matmul(x).sum().into_scalar();
             (s == 512.0).then_some(d)
         });
-        if let Ok(Some(d)) = ok {
-            return (d, name);
+        match ok {
+            Ok(Some(d)) => return (d, b.name),
+            Ok(None) => eprintln!("GPU: {} backend failed", b.name),
+            Err(e) => eprintln!("GPU: {} backend failed: {e:#}", b.name),
         }
     }
     (Device::default(), "CPU")
@@ -76,14 +196,15 @@ pub fn pick_device() -> (Device, &'static str) {
 /// on as well; its thread is left behind.
 pub fn load_best(path: &Path, cfg: &Sam2Config, gpu_timeout: std::time::Duration) -> Result<(Predictor, &'static str)> {
     let mut last = anyhow!("no backend");
-    let list = candidates();
+    let list = backends();
     let n = list.len();
-    for (i, (make, name)) in list.into_iter().enumerate() {
+    for (i, b) in list.into_iter().enumerate() {
+        let (make, name) = (b.make, b.name);
         let (tx, rx) = std::sync::mpsc::channel();
         let (path, cfg) = (path.to_path_buf(), cfg.clone());
         std::thread::spawn(move || {
             let tried = guarded(|| -> Result<Predictor> {
-                let p = Predictor::load(&path, &cfg, &make())?;
+                let p = Predictor::load(&path, &cfg, &make()?)?;
                 let enc = p.encode_gray(&[0u8; 64 * 64], 64, 64);
                 p.predict(&enc, &[Point { x: 32.0, y: 32.0, positive: true }], None, None);
                 Ok(p)
@@ -200,13 +321,17 @@ impl Predictor {
         if !res.missing.is_empty() {
             return Err(anyhow!("checkpoint is missing {} tensors, e.g. {:?}", res.missing.len(), &res.missing[..res.missing.len().min(5)]));
         }
+        Ok(Self::from_model(model, device))
+    }
+
+    fn from_model(model: Sam2, device: &Device) -> Self {
         let pos = model.hiera_pos_embed(device);
         let dense_pe = model.sam_prompt_encoder.dense_pe(device);
         let n = IMAGE_SIZE / 16;
         let grid_pos = tokens(memory::sine_pe(model::D_MODEL, n, n, device));
         let mem_pos = tokens(memory::sine_pe(memory::MEM_DIM, n, n, device));
         let rope = memory::Rope::new(n, device);
-        Ok(Predictor { model, pos, dense_pe, grid_pos, mem_pos, rope, device: device.clone() })
+        Predictor { model, pos, dense_pe, grid_pos, mem_pos, rope, device: device.clone() }
     }
 
     /// Encodes an already normalized [1, 3, 1024, 1024] image.
@@ -273,6 +398,47 @@ impl Predictor {
             feats = feats + self.model.no_obj_embed_spatial.val().unsqueeze_dim::<3>(0);
         }
         feats
+    }
+
+    /// The 256² mask logits of the best multimask output for one click,
+    /// over the whole (stretched) image, and its IoU: `predict` without
+    /// the full-size upsampling and transfer (about ten times faster when
+    /// many particles are outlined one by one).
+    pub fn predict_low_res(&self, enc: &Encoded, p: Point) -> (Vec<f32>, f32) {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let sparse = pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device);
+        let dense = pe.dense(None, &self.device);
+        let f = &enc.features;
+        let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+        let iou: Vec<f32> = m.iou.clone().into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let best = (1..4).max_by(|&a, &b| iou[a].total_cmp(&iou[b])).unwrap();
+        let low: Vec<f32> = m.logits.narrow(1, best, 1).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        (low, iou[best])
+    }
+
+    /// `predict_low_res` for many single clicks on one image, decoded
+    /// together (one click at a time spent ~0.1 s mostly waiting on the
+    /// device).
+    pub fn predict_low_res_many(&self, enc: &Encoded, points: &[Point]) -> Vec<(Vec<f32>, f32)> {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let f = &enc.features;
+        let mut out = Vec::with_capacity(points.len());
+        for block in points.chunks(16) {
+            let sparse = Tensor::cat(block.iter().map(|p| pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device)).collect(), 0);
+            let dense = pe.dense(None, &self.device);
+            let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+            let iou: Vec<f32> = m.iou.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            let [_, _, h, w] = m.logits.dims();
+            let logits: Vec<f32> = m.logits.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            for i in 0..block.len() {
+                let best = (1..4).max_by(|&a, &b| iou[i * 4 + a].total_cmp(&iou[i * 4 + b])).unwrap();
+                let at = (i * 4 + best) * h * w;
+                out.push((logits[at..at + h * w].to_vec(), iou[i * 4 + best]));
+            }
+        }
+        out
     }
 
     /// Starts tracking from a mask on one frame (image size, row-major),
@@ -346,5 +512,28 @@ impl Predictor {
         let full = interpolate(low.clone(), InterpolateOptions::new(InterpolateMode::Bilinear).with_output_size([enc.height, enc.width]));
         let prediction = Prediction { logits: full.into_data().convert::<f32>().try_into_vec::<f32>().unwrap(), iou: iou[best], low_res: low.clamp(-32.0, 32.0) };
         Tracked { prediction, memory, obj_score }
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use burn::tensor::Distribution;
+
+    #[test]
+    fn many_clicks_decode_as_one_at_a_time() {
+        let dev = Device::flex();
+        let p = Predictor::from_model(Sam2::new(&Sam2Config::tiny(), &dev), &dev);
+        let r = |d: [usize; 4]| Tensor::<4>::random(d, Distribution::Normal(0.0, 1.0), &dev);
+        let enc = Encoded { features: model::Features { embed: r([1, 256, 64, 64]), raw: r([1, 256, 64, 64]), s0: r([1, 32, 256, 256]), s1: r([1, 64, 128, 128]) }, width: 900, height: 700 };
+        let pts: Vec<Point> = (0..19).map(|i| Point { x: 40.0 * i as f32 + 10.0, y: 30.0 * i as f32 + 5.0, positive: true }).collect();
+        let many = p.predict_low_res_many(&enc, &pts);
+        for (i, q) in pts.iter().enumerate().step_by(6) {
+            let (one, iou) = p.predict_low_res(&enc, *q);
+            assert!((iou - many[i].1).abs() < 1e-3, "{iou} {}", many[i].1);
+            let worst = one.iter().zip(&many[i].0).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            let scale = one.iter().fold(0f32, |a, x| a.max(x.abs()));
+            assert!(worst < 1e-3 * scale.max(1.0), "{worst} of {scale}");
+        }
     }
 }

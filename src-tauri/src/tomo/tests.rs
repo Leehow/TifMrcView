@@ -232,8 +232,8 @@ fn projector_geometry_and_reconstruction_quality() {
         let want = c * (30.0 - 23.5) + s * (g.depth(g.z / 2 + 6)) + 23.5;
         assert!((centroid - want).abs() < 0.05, "view {v}: {centroid} vs {want}");
     }
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, backend: "cpu".into(), ..Default::default() };
+    for (method, iterations) in [(Method::Wbp, 15), (Method::Sirt, 15), (Method::Sart, 3)] {
+        let p = Params { thickness: g.z, method, iterations, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, backend: "cpu".into(), ..Default::default() };
         let x = recon::cpu_slab(&g, &b, &p).unwrap();
         let cc = corr(&x, &truth);
         eprintln!("{method:?} phantom cc={cc}");
@@ -267,7 +267,14 @@ fn streaming_slabs_match_one_slab() {
         Ok(())
     }, &|_, _| {})
     .unwrap();
-    assert_eq!(out, recon::cpu_slab(&g, &b, &p).unwrap());
+    // Streaming subtracts each view's mean over all rows first.
+    let mut means = vec![0f64; g.views()];
+    for (i, v) in b.iter().enumerate() {
+        means[(i / g.w) % g.views()] += *v as f64 / (rows * g.w) as f64;
+    }
+    let centred: Vec<f32> = b.iter().enumerate().map(|(i, v)| v - means[(i / g.w) % g.views()] as f32).collect();
+    let want = recon::cpu_slab(&g, &centred, &p).unwrap();
+    assert!(out.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-5));
 }
 
 #[test]
@@ -277,8 +284,8 @@ fn gpu_matches_cpu() {
         return;
     };
     let (g, _, b, rows) = recon_phantom();
-    for method in [Method::Wbp, Method::Sirt] {
-        let p = Params { thickness: g.z, method, ..Default::default() };
+    for method in [Method::Wbp, Method::Sirt, Method::Sart] {
+        let p = Params { thickness: g.z, method, iterations: if method == Method::Sart { 3 } else { 15 }, lambda: if method == Method::Sart { 0.5 } else { 1.0 }, ..Default::default() };
         let cpu = recon::cpu_slab(&g, &b, &p).unwrap();
         let gpu = crate::ctf_gpu::guarded(|| recon_gpu::Plan::new(dev, &g, &p)?.slab(&b, rows)).unwrap().unwrap();
         let e = cpu.iter().zip(&gpu).map(|(a, b)| (*a as f64 - *b as f64).powi(2)).sum::<f64>();
@@ -378,6 +385,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
             backend: String::new(),
         },
         ms: 0.0,
+        tilt_offset: 0.0,
     };
     // The dataset finds the half stacks motion correction leaves beside the
     // stack; one alignment reconstructs all three.
@@ -391,6 +399,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
         params: Params { thickness: 8, backend: "cpu".into(), ..Default::default() },
         halves: true,
         phase_flip: false,
+        ctf_3d: false,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
@@ -514,7 +523,7 @@ fn relion_pose_is_the_relion_projection() {
     // RELION 5 projects X to Rz(ZRot)·[cos YTilt·x + sin YTilt·z, y] + shift
     // (its rlnTomoProjX/Y rows); ours is m·R(axis + ρ)·[…] + shift.
     let v = View { file_index: 0, angle: 30.0, residual: 0.0, shift: [3.5, -2.0], mag: 1.0, rotation: 0.7, tilt: 30.4, cc: 1.0, contours: 1, flagged: false, excluded: false };
-    let a = Alignment { width: 64, height: 64, bin: 1, axis: 84.6, patch: track::PatchConfig { nx: 2, ny: 2, size: 8 }, residual: 0.0, quality: String::new(), views: vec![v.clone()], tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() }, ms: 0.0 };
+    let a = Alignment { width: 64, height: 64, bin: 1, axis: 84.6, patch: track::PatchConfig { nx: 2, ny: 2, size: 8 }, residual: 0.0, quality: String::new(), views: vec![v.clone()], tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() }, ms: 0.0, tilt_offset: 0.0 };
     let [z, sx, sy] = export::relion_pose(&a, &v, 2.0);
     let x = [10.0, -7.0, 4.0];
     let (s, c) = v.tilt.to_radians().sin_cos();
@@ -559,8 +568,24 @@ fn phase_flip_turns_the_ctf_into_its_magnitude() {
         theta: 0.0,
         gradient: 0,
         pixel_a: pixel,
+        offset: 0.0,
     });
     let err = seen.iter().zip(&want).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>();
     let norm = want.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
     assert!((err / norm).sqrt() < 1e-4, "relative error {}", (err / norm).sqrt());
+}
+
+#[test]
+fn depth_and_strip_defocus_make_the_beam_height() {
+    // A point at lateral u, depth v (specimen frame) in a view tilted by θ sits
+    // at detector d = u cos θ + v sin θ and height h = −u sin θ + v cos θ;
+    // strip gradient at d plus the slab's depth term is −gradient·h (pixels → Å).
+    for &(u, v, theta, g) in &[(12.0, 5.0, 40.0, 1i8), (-30.0, -8.0, -55.0, -1), (7.0, 20.0, 10.0, 1)] {
+        let (s, c) = f64::to_radians(theta).sin_cos();
+        let d = u * c + v * s;
+        let h = -u * s + v * c;
+        let strip = g as f64 * 2.0 * f64::to_radians(theta).tan() * d;
+        let total = strip + ctf::depth_defocus(v, theta, g, 2.0);
+        assert!((total + g as f64 * 2.0 * h).abs() < 1e-9, "{total} vs {}", -(g as f64) * 2.0 * h);
+    }
 }

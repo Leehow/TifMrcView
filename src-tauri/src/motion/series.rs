@@ -20,6 +20,24 @@ pub struct Doc {
     pub views: Vec<View>,
     pub pixel_a: Option<f64>,
     pub kv: Option<f64>,
+    /// ImageSize of the recorded (often binned) images that PixelSpacing
+    /// describes; the frames may be larger (unbinned or super-resolution).
+    pub image_size: Option<[usize; 2]>,
+}
+
+impl Doc {
+    /// PixelSpacing for frames of this size: the mdoc's spacing is for its
+    /// ImageSize, so frames 8× as wide have 1/8 of it.
+    pub fn frame_pixel(&self, spacing: f64, frame: (usize, usize)) -> f64 {
+        let Some([w, h]) = self.image_size.filter(|[w, h]| *w > 0 && *h > 0) else { return spacing };
+        let r = frame.0.max(frame.1) as f64 / w.max(h) as f64;
+        if (0.9..=1.1).contains(&r) {
+            return spacing;
+        }
+        // Frames are usually a power-of-two binning apart (maybe cropped a little).
+        let p = 2f64.powf(r.log2().round());
+        spacing / if (r / p - 1.0).abs() < 0.05 { p } else { r }
+    }
 }
 fn number(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
@@ -59,6 +77,12 @@ pub fn parse(text: &str) -> Result<Doc> {
             match key.trim() {
                 "PixelSpacing" => d.pixel_a = number(v).filter(|v| *v > 0.0),
                 "Voltage" => d.kv = number(v),
+                "ImageSize" => {
+                    let n: Vec<usize> = v.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 2 {
+                        d.image_size = Some([n[0], n[1]]);
+                    }
+                }
                 _ => {}
             }
         }
@@ -146,6 +170,41 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
     None
 }
 
+/// The gain reference beside the movies, when there is exactly one: a
+/// `.gain` file (Falcon EER) or an MRC/TIFF whose name says gain or
+/// CountRef, in the folder of the first movie, the mdoc's folder, `folder`,
+/// or a folder named for gain beside them (CryoET Data Portal: `Gains/`).
+pub fn find_gain(mdoc: &Path, movie: Option<&Path>, folder: Option<&Path>) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = [movie.and_then(Path::parent), mdoc.parent(), folder].into_iter().flatten().map(Path::to_path_buf).collect();
+    let near: Vec<PathBuf> = dirs.iter().flat_map(|d| [Some(d.clone()), d.parent().map(Path::to_path_buf)]).flatten().collect();
+    for d in near {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            if p.is_dir() && name.contains("gain") {
+                dirs.push(p);
+            }
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    let mut found: Vec<PathBuf> = vec![];
+    for d in dirs {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            let ext = p.extension().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            let named = name.contains("gain") || name.contains("countref");
+            if p.is_file() && (ext == "gain" || (named && matches!(ext.as_str(), "mrc" | "tif" | "tiff"))) && !found.contains(&p) {
+                found.push(p);
+            }
+        }
+    }
+    (found.len() == 1).then(|| found.remove(0))
+}
+
 /// Bounded, local sidecar discovery. Do not search the user's whole disk.
 pub fn find_mdoc(movie: &str) -> Option<String> {
     let parent = Path::new(movie).parent()?;
@@ -196,6 +255,10 @@ pub struct SeriesReq {
     pub folder: Option<String>,
     pub output: String,
     pub params: Params,
+    /// Delete each tilt's own files once the stacks are written (the
+    /// one-button reconstruction needs only the stacks).
+    #[serde(default)]
+    pub drop_tilts: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -224,6 +287,16 @@ pub fn run(
 ) -> Result<SeriesResult> {
     req.params.validate()?;
     let doc = parse(&std::fs::read_to_string(&req.mdoc)?)?;
+    let mut req = req.clone();
+    let mut found_gain = None;
+    if req.params.gain_path.is_none() {
+        let first = doc.views.iter().find_map(|v| resolve(Path::new(&req.mdoc), &v.movie, req.folder.as_deref().map(Path::new)));
+        if let Some(g) = find_gain(Path::new(&req.mdoc), first.as_deref(), req.folder.as_deref().map(Path::new)) {
+            req.params.gain_path = Some(g.to_string_lossy().into_owned());
+            found_gain = Some(g);
+        }
+    }
+    let req = &req;
     output::protect(&req.mdoc, &req.output)?;
     for v in &doc.views {
         if let Some(path) = resolve(
@@ -243,6 +316,9 @@ pub fn run(
     let unknown =
         doc.views.iter().any(|v| v.dose.unwrap_or(0.0) <= 0.0) && req.params.total_dose.is_none();
     let mut warnings = vec![];
+    if let Some(g) = &found_gain {
+        warnings.push(format!("使用找到的增益参考 {}", g.file_name().and_then(|n| n.to_str()).unwrap_or("")));
+    }
     if unknown && req.params.dose_weighted {
         warnings.push(
             "mdoc 含未知/零剂量，累计前曝光不可信；此批不应用剂量加权，请指定每倾角总剂量".into(),
@@ -273,7 +349,10 @@ pub fn run(
             if p.total_dose.is_none() && p.dose_per_frame.is_none() {
                 p.total_dose = dose.filter(|v| *v > 0.0);
             }
-            p.pixel_a = p.pixel_a.or(v.pixel_a).or(doc.pixel_a);
+            if p.pixel_a.is_none() {
+                p.pixel_a = v.pixel_a.or(doc.pixel_a);
+                p.mdoc_size = doc.image_size;
+            }
             if p.voltage_auto {
                 p.voltage_kv = doc.kv.unwrap_or(p.voltage_kv);
             }
@@ -354,6 +433,17 @@ pub fn run(
             stack(&b, "odd")?;
             result.even = Some(a);
             result.odd = Some(b);
+        }
+        if req.drop_tilts {
+            for r in &good {
+                let m = r.result.as_ref().unwrap();
+                for f in [Some(&m.path), m.unweighted.as_ref(), m.even.as_ref(), m.odd.as_ref()].into_iter().flatten() {
+                    let _ = std::fs::remove_file(f);
+                }
+                for side in ["before.png", "after.png", "before-ps.png", "after-ps.png", "radial.tsv", "motion.json"] {
+                    let _ = std::fs::remove_file(format!("{}.{side}", m.path));
+                }
+            }
         }
         // Hand the tilt series on to the Cryo-ET steps: its dataset, with the
         // acquisition's axis and optics (the stack has no mdoc beside it).

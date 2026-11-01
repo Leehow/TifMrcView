@@ -13,7 +13,7 @@ use super::class2d::{self, Class2dParams};
 use super::data::{self, Optics, Particle, Stack, StackWriter};
 use super::pick::{self, PickParams};
 use super::refine::{self, InitialParams, Map, RefineParams};
-use super::{check_cancel, extract, post, Progress};
+use super::{check_cancel, discover, extract, post, Progress};
 use crate::image::OpenImage;
 
 pub const DIR: &str = "tifmrcview-spa";
@@ -126,6 +126,12 @@ pub struct Project {
     pub initial: Option<MapInfo>,
     #[serde(default)]
     pub refine: Option<RefineInfo>,
+    /// Kinds of particle found on a few micrographs (one-click mode).
+    #[serde(default)]
+    pub discovery: Option<discover::Discovery>,
+    /// Point group suggested by the 2D classes.
+    #[serde(default)]
+    pub symmetry: Option<discover::SymmetryGuess>,
 }
 
 const MIC_EXT: [&str; 6] = ["mrc", "mrcs", "tif", "tiff", "eer", "dm4"];
@@ -217,6 +223,8 @@ impl Project {
             class2d: None,
             initial: None,
             refine: None,
+            discovery: None,
+            symmetry: None,
         };
         p.save()?;
         Ok(p)
@@ -342,6 +350,46 @@ pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Res
     p.pick = Some(params.clone());
     p.save()?;
     Ok(all.iter().map(Vec::len).sum())
+}
+
+/// Drops picks whose SAM 2.1 outline is clearly not one particle: more
+/// than 1.5× the particle's size (clumps, overlaps, ice) or under 0.6×
+/// (fragments, specks). Each micrograph is binned to about 1024 pixels and
+/// smoothed; picks SAM cannot outline are kept. Returns the picks left.
+pub fn sam_filter(p: &mut Project, outline: discover::Outliner, progress: Progress) -> Result<usize> {
+    let mut picks = p.picks()?;
+    // The particle's own size: the box diameter is the kind's size × 1.3.
+    let size_a = p.diameter_a / 1.3;
+    let n = p.mics.len();
+    let (mut dropped, mut outlined, mut total) = (0usize, 0usize, 0usize);
+    for i in 0..n {
+        check_cancel()?;
+        if p.mics[i].excluded || picks[i].is_empty() {
+            continue;
+        }
+        let (img, w, h) = read_mic(&p.mics[i].path)?;
+        let f = (w.max(h) as f64 / 1024.0).ceil().max(1.0) as usize;
+        let (small, sw, sh) = super::pick::bin(&img, w, h, f);
+        let small = super::pick::gauss(&small, sw, sh, 1.0);
+        let want = size_a / (p.optics.pixel_a * f as f64);
+        let pts: Vec<[f32; 2]> = picks[i].iter().map(|q| [q[0] / f as f32, q[1] / f as f32]).collect();
+        let sizes = outline(&small, sw, sh, &pts)?;
+        let before = picks[i].len();
+        total += before;
+        let mut keep = sizes.iter().map(|d| match d {
+            Some(d) => *d >= 0.6 * want && *d <= 1.5 * want,
+            None => true,
+        });
+        outlined += sizes.iter().filter(|d| d.is_some()).count();
+        picks[i].retain(|_| keep.next().unwrap_or(true));
+        dropped += before - picks[i].len();
+        p.mics[i].picks = picks[i].len();
+        progress("SAM 筛选颗粒", i + 1, n);
+    }
+    eprintln!("SAM filter: {total} picks, {outlined} outlined, {dropped} dropped");
+    std::fs::write(p.picks_path(), serde_json::to_vec(&picks)?)?;
+    p.save()?;
+    Ok(total - dropped)
 }
 
 /// Extracts every pick into `particles.mrcs` (+ `particles.json`, `particles.star`).
@@ -498,7 +546,7 @@ pub fn refine(p: &mut Project, params: &RefineParams, reference: Option<&str>, p
         fsc: r.fsc,
         fsc_masked: s.fsc_masked,
         history: r.history,
-        params: params.clone(),
+        params: RefineParams { symmetry: r.symmetry.clone(), ..params.clone() },
         backend: super::score::backend().into(),
     };
     p.refine = Some(info.clone());
@@ -533,4 +581,136 @@ pub fn write_star(p: &Project, parts: &[Particle], stack: &str, b: usize, px: f6
     }
     std::fs::write(out, s)?;
     Ok(())
+}
+
+/// Finds the kinds of particle (`discover::run`) and keeps them.
+pub fn discover(p: &mut Project, outline: Option<discover::Outliner>, progress: Progress) -> Result<discover::Discovery> {
+    let cfg = discover::Config { dark: p.pick.as_ref().map(|q| q.dark).unwrap_or(true), ..Default::default() };
+    let d = discover::run(p, &cfg, outline, progress)?;
+    p.discovery = Some(d.clone());
+    p.save()?;
+    Ok(d)
+}
+
+/// The user's choice of kinds: the particle diameter becomes their size.
+pub fn choose(p: &mut Project, kinds: Vec<usize>) -> Result<f64> {
+    let d = p.discovery.as_mut().context("还没有寻找颗粒类型")?;
+    let chosen: Vec<&discover::Kind> = kinds.iter().filter_map(|&i| d.kinds.get(i)).collect();
+    if chosen.is_empty() {
+        bail!("请选择至少一种颗粒");
+    }
+    // Count-weighted median of the chosen sizes.
+    let mut v: Vec<(f64, usize)> = chosen.iter().map(|k| (k.diameter_a, k.count)).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total: usize = v.iter().map(|x| x.1).sum();
+    let mut acc = 0;
+    let mut dia = v[0].0;
+    for (x, c) in &v {
+        acc += c;
+        dia = *x;
+        if 2 * acc >= total {
+            break;
+        }
+    }
+    d.chosen = kinds;
+    // The blob size is about the particle's width; the mask and the box
+    // need its longest dimension (side views), so a third more.
+    p.diameter_a = (1.3 * dia / 5.0).round() * 5.0;
+    p.save()?;
+    Ok(p.diameter_a)
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoParams {
+    /// Point group; empty: the one the 2D classes suggest.
+    pub symmetry: String,
+}
+
+/// Everything after the choice of particle: picking, extraction, 2D
+/// classification with the sharp classes kept, the point group, the
+/// initial model and the refinement.
+pub fn auto(p: &mut Project, a: &AutoParams, outline: Option<discover::Outliner>, progress: Progress) -> Result<RefineInfo> {
+    let pick = PickParams { diameter_a: p.diameter_a, ..p.pick.clone().unwrap_or_default() };
+    let mut n = pick_all(p, &pick, progress)?;
+    if let Some(f) = outline {
+        n = sam_filter(p, f, progress)?;
+    }
+    if n < 100 {
+        bail!("只挑到 {n} 个颗粒，太少了");
+    }
+    // A box up to 256 when 128 would cap the resolution above 4 Å.
+    let (big, _) = extract::boxes(p.diameter_a, p.optics.pixel_a, 128);
+    let max_box = if p.optics.pixel_a * big as f64 / 128.0 > 2.0 { 256 } else { 128 };
+    extract_all(p, max_box, true, progress)?;
+    let c = class2d(p, &Class2dParams::default(), progress)?;
+    let sym = if a.symmetry.trim().is_empty() {
+        let (v, dims, _) = data::read_volume(&c.path)?;
+        let b = dims[0];
+        let avgs: Vec<Vec<f32>> = v.chunks(b * b).map(|x| x.to_vec()).collect();
+        let g = discover::symmetry(&avgs, b, p.diameter_a / 2.0 / c.pixel_a, &c.selected);
+        p.symmetry = Some(g.clone());
+        p.save()?;
+        g.symmetry
+    } else {
+        a.symmetry.trim().to_uppercase()
+    };
+    // Ab initio in C1 when the point group is a guess (with a wrong or
+    // misplaced axis it can settle on a symmetrised mixture); the n-fold
+    // axis is then found in the map and put along z, and a Dn tested.
+    let guessed = a.symmetry.trim().is_empty();
+    let mut m = initial(p, &InitialParams { symmetry: if guessed { "C1".into() } else { sym.clone() }, ..Default::default() }, progress)?;
+    let mut sym = sym;
+    if guessed && sym != "C1" {
+        let n: usize = sym[1..].parse().unwrap_or(1);
+        let (mut v, mut dims, mut px) = data::read_volume(&m.path)?;
+        let mut b = dims[0];
+        v = discover::centred3(&v, b);
+        let mut found = discover::find_axis(&v, b, n);
+        // An ab initio run can settle on a poor model (T20S bin 2 with SAM:
+        // axis 0.69 although the 2D classes showed a clear 7-fold): two
+        // more starts before falling back to C1.
+        for seed in [19, 31] {
+            if found.is_some() {
+                break;
+            }
+            check_cancel()?;
+            eprintln!("ab initio again (seed {seed}): no {n}-fold axis in the model");
+            m = initial(p, &InitialParams { symmetry: "C1".into(), seed, ..Default::default() }, progress)?;
+            (v, dims, px) = data::read_volume(&m.path)?;
+            b = dims[0];
+            v = discover::centred3(&v, b);
+            found = discover::find_axis(&v, b, n);
+        }
+        match found {
+            Some((axis, _, _)) => {
+                let mut v = discover::align_axis(&v, b, axis);
+                sym = format!("C{n}");
+                if let Some((phi, dz, c)) = discover::dihedral(&v, b, n) {
+                    v = discover::align_dihedral(&v, b, phi, dz);
+                    sym = format!("D{n}");
+                    if let Some(g) = p.symmetry.as_mut() {
+                        g.two_fold = c;
+                    }
+                }
+                data::write_mrc(Path::new(&m.path), &v, dims, px, "TifMrcView Pro: ab initio model (symmetry axis along z)")?;
+            }
+            None => sym = "C1".into(),
+        }
+        if let Some(g) = p.symmetry.as_mut() {
+            g.symmetry = sym.clone();
+        }
+        p.save()?;
+    }
+    // One refinement: a Cn guess is tested for a Dn once the map is
+    // refined enough, and refinement goes on in it when there is one.
+    let promote = guessed && sym.starts_with('C') && sym != "C1";
+    let r = refine(p, &RefineParams { symmetry: sym.clone(), promote_dihedral: promote, ..Default::default() }, None, progress)?;
+    if r.params.symmetry != sym {
+        if let Some(g) = p.symmetry.as_mut() {
+            g.symmetry = r.params.symmetry.clone();
+        }
+        p.save()?;
+    }
+    Ok(r)
 }
