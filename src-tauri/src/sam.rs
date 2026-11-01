@@ -203,10 +203,11 @@ impl Sam {
         let (lo, hi) = (s[s.len() / 200], s[s.len() - 1 - s.len() / 200]);
         let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h);
         let mut out = vec![];
-        for p in points {
+        let clicks: Vec<tmv_sam::Point> = points.iter().map(|p| tmv_sam::Point { x: p[0], y: p[1], positive: true }).collect();
+        let lows = predictor.predict_low_res_many(&enc, &clicks);
+        for (p, (low, _)) in points.iter().zip(lows) {
             // The low-resolution logits, sampled bilinearly at image pixels
             // as the fill needs them (the full-size mask cost ~0.1 s a click).
-            let (low, _) = predictor.predict_low_res(&enc, tmv_sam::Point { x: p[0], y: p[1], positive: true });
             let n = (low.len() as f64).sqrt() as usize;
             let logit = |i: usize| -> f32 {
                 let u = ((i % w) as f32 + 0.5) * n as f32 / w as f32 - 0.5;
