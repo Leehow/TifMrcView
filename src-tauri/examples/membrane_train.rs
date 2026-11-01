@@ -6,12 +6,12 @@
 //! cargo run --release --features pro,train-cuda --example membrane_train -- \
 //!     --data DIR --out membrane.safetensors [--steps 100000] [--batch 2] [--patch 128]
 //!     [--lr 0.01] [--val 20] [--resume FILE] [--bench 20] [--backend cuda|tch|auto]
-//!     [--start-step K] [--skel 1.0]
+//!     [--start-step K] [--skel 1.0] [--skel-level 0]
 //!
 //! Optimiser as nnU-Net: SGD, Nesterov momentum 0.99, weight decay 3e-5,
 //! gradient norm clipped at 12, learning rate × (1 − step/steps)^0.9.
 //! Loss: Dice + cross-entropy at full, half and quarter resolution
-//! (weights 1, ½, ¼), plus a skeleton Dice term at full resolution. Augmentation runs on CPU threads beside training.
+//! (weights 1, ½, ¼), plus a skeleton Dice term at one level (full resolution by default). Augmentation runs on CPU threads beside training.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
@@ -41,6 +41,7 @@ struct Args {
     backend: String,
     workers: usize,
     skel: f32,
+    skel_level: usize,
 }
 
 fn args() -> Result<Args> {
@@ -57,6 +58,7 @@ fn args() -> Result<Args> {
         bench: 0,
         backend: "auto".into(),
         skel: 1.0,
+        skel_level: 0,
         workers: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8).saturating_sub(2).clamp(2, 12),
     };
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -77,6 +79,7 @@ fn args() -> Result<Args> {
             "--backend" => a.backend = val,
             "--workers" => a.workers = val.parse()?,
             "--skel" => a.skel = val.parse()?,
+            "--skel-level" => a.skel_level = val.parse()?,
             o => bail!("unknown argument {o}"),
         }
         i += 2;
@@ -284,8 +287,9 @@ fn main() -> Result<()> {
             let s = p >> h;
             let y = upload_labels(&b.y[h], a.batch, s, &ad);
             let mut l = membrane::net::loss(o.clone(), y.clone());
-            if h == 0 && a.skel > 0.0 {
-                // Dice+CE and the skeleton term share the full-resolution weight.
+            if h == a.skel_level && a.skel > 0.0 {
+                // Dice+CE and the skeleton term share this level's weight
+                // (a coarser level is much cheaper).
                 l = (l + membrane::net::skeleton_loss(o, y) * a.skel) / (1.0 + a.skel);
             }
             let l = l * (weights[h] / wsum);
