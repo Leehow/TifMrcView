@@ -96,10 +96,54 @@ fn global(c: &Coeffs, offs: &[[f32; 2]], refs: &Refs, grid: &[Mat], ratio: f32, 
     Ok(())
 }
 
-/// Local search around each particle's orientation (CPU, per particle).
-fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
+/// The GPU form of the local search for one reference, when there is a GPU.
+#[cfg(feature = "pro")]
+type Gpu = super::local_gpu::LocalGpu;
+#[cfg(not(feature = "pro"))]
+type Gpu = ();
+
+#[cfg(feature = "pro")]
+fn local_gpu(proj: &Projector, half: &Half) -> Option<Gpu> {
+    let (dev, _) = crate::ctf_gpu::device()?;
+    crate::ctf_gpu::guarded(|| super::local_gpu::LocalGpu::new(dev, proj, half)).ok()
+}
+#[cfg(not(feature = "pro"))]
+fn local_gpu(_: &Projector, _: &Half) -> Option<Gpu> {
+    None
+}
+
+/// Local search around each particle's orientation: on the GPU when
+/// there is one, else per particle on the CPU.
+#[allow(clippy::too_many_arguments)]
+fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
     let k = c.k;
     let s = offs.len();
+    #[cfg(feature = "pro")]
+    if let Some(g) = gpu {
+        let d = deltas.len();
+        let rots: Vec<Mat> = chunk
+            .iter()
+            .flat_map(|&i| {
+                let q = &parts[i];
+                let r0 = geom::euler(q.euler[0] as f64, q.euler[1] as f64, q.euler[2] as f64);
+                deltas.iter().map(move |dl| geom::mul(dl, &r0))
+            })
+            .collect();
+        if let Ok(Ok(found)) = crate::ctf_gpu::guarded(|| g.search(c, s, &rots, d)) {
+            for (j, &i) in chunk.iter().enumerate() {
+                let (di, si, sc) = found[j];
+                let a = geom::angles(&rots[j * d + di]);
+                let q = &mut parts[i];
+                q.euler = [a[0] as f32, a[1] as f32, a[2] as f32];
+                let o = offs[si];
+                q.shift = [q.shift[0] + o[0] * ratio, q.shift[1] + o[1] * ratio];
+                q.score = sc;
+            }
+            return;
+        }
+    }
+    #[cfg(not(feature = "pro"))]
+    let _ = gpu;
     let found: Vec<(Mat, usize, f32)> = chunk
         .par_iter()
         .enumerate()
@@ -143,7 +187,6 @@ fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, half: &Half, deltas: &
     }
 }
 
-/// Inserts particles at their orientations (and symmetry mates).
 /// Inserts particles once each; the point group is applied afterwards
 /// with `Accum::symmetrize` (once per accumulator, before reconstructing).
 fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &[usize]) {
@@ -461,6 +504,7 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             let mut m = m;
             volume::mask_sphere(&mut m, bw, mask_r * bw as f64 / b as f64, 4.0);
             let proj = Projector::new(&m, bw, pad);
+            let gpu = if is_global { None } else { local_gpu(&proj, &half) };
             let mut acc = Accum::new(bw, pad);
             let grid = if is_global { geom::grid(step) } else { vec![] };
             let refs = if is_global { Some(slices(&proj, &grid, &half)) } else { None };
@@ -480,7 +524,7 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
                     || -> Result<()> {
                         match &refs {
                             Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
-                            None => local(&c, &offs, &proj, &half, &deltas, ratio, parts, chunk),
+                            None => local(&c, &offs, &proj, gpu.as_ref(), &half, &deltas, ratio, parts, chunk),
                         }
                         Ok(())
                     },

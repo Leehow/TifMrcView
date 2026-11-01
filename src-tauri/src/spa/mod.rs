@@ -10,6 +10,8 @@ pub mod export;
 pub mod extract;
 pub mod fourier;
 pub mod geom;
+#[cfg(feature = "pro")]
+pub mod local_gpu;
 pub mod pick;
 pub mod plane;
 pub mod project;

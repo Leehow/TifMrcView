@@ -55,6 +55,11 @@ impl Projector {
         Projector { n, pad, re, im }
     }
 
+    /// The padded transform (re, im), n³ unshifted.
+    pub fn data(&self) -> (&[f32], &[f32]) {
+        (&self.re, &self.im)
+    }
+
     #[inline]
     fn at(&self, q: [f64; 3]) -> (f32, f32) {
         let n = self.n;
