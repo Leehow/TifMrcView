@@ -31,7 +31,9 @@ fn main() -> Result<()> {
     if steps.contains("select") {
         let t = Instant::now();
         let a = d.alignment.clone().context("align first")?;
-        let (picked, batches) = tomo::select::exclude_views(&img, &d, &a, &progress)?;
+        let (a, mut batches) = tomo::select::choose_patches(&img, &d, &a, &progress)?;
+        let (picked, more) = tomo::select::exclude_views(&img, &d, &a, &progress)?;
+        batches.extend(more);
         eprintln!();
         for b in &batches {
             println!("batch: base {:.4}, kept {:?}", b.base, b.kept);
