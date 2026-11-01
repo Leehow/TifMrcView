@@ -76,20 +76,30 @@ fn main() -> Result<()> {
     let mut methods: Vec<(&str, Vec<f32>)> = vec![("WBP", full.clone())];
     let gauss = wedge::smooth(&wedge::Vol { n: dims, v: full.clone() }, 1.0).v;
     methods.push(("WBP + Gauss σ1", gauss));
+    // HOLDOUT_ONLY_WARM: skip IsoNet and plain halves (for seed or weight
+    // sweeps of the warm start); HOLDOUT_SEED, HOLDOUT_EQUI_W override those.
+    let only_warm = std::env::var("HOLDOUT_ONLY_WARM").is_ok();
+    let seed: Option<u64> = std::env::var("HOLDOUT_SEED").ok().and_then(|v| v.parse().ok());
+    let equi_w: f32 = std::env::var("HOLDOUT_EQUI_W").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
+    let mut halves_cfg = wedge::TrainConfig { cube, iterations: 3, steps: steps / 3, ..Default::default() };
+    if let Some(seed) = seed {
+        halves_cfg.seed = seed;
+    }
+    if !only_warm {
     let t1 = Instant::now();
     let single_cfg = wedge::TrainConfig { cube: 32, iterations: 3, steps: steps / 3, smooth: 1.0, ..Default::default() };
     methods.push(("IsoNet (one tomogram)", wedge::train_and_apply(&dev, &full, dims, range, &single_cfg, |_| {})?));
     println!("IsoNet in {:.0} s", t1.elapsed().as_secs_f64());
     let t2 = Instant::now();
-    let halves_cfg = wedge::TrainConfig { cube, iterations: 3, steps: steps / 3, ..Default::default() };
     methods.push(("halves", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &halves_cfg, |_| {})?));
     println!("halves in {:.0} s", t2.elapsed().as_secs_f64());
+    }
     // Halves first, equivariance for the last third (half the pairs per step).
     let from: f32 = std::env::var("HOLDOUT_EQUI_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0.67);
     let t3 = Instant::now();
-    let warm = wedge::TrainConfig { equivariant: 2.0, equi_from: from, ..halves_cfg.clone() };
+    let warm = wedge::TrainConfig { equivariant: equi_w, equi_from: from, ..halves_cfg.clone() };
     methods.push(("halves → equivariant", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &warm, |_| {})?));
-    println!("halves → equivariant (from {from}) in {:.0} s", t3.elapsed().as_secs_f64());
+    println!("halves → equivariant (from {from}, weight {equi_w}, seed {}) in {:.0} s", warm.seed, t3.elapsed().as_secs_f64());
     if std::env::var("HOLDOUT_FULL_ICECREAM").is_ok() {
         let t4 = Instant::now();
         let cfg = wedge::TrainConfig { equivariant: 2.0, ..halves_cfg };
