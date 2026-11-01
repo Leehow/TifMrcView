@@ -111,6 +111,10 @@ pub struct Alignment {
     pub views: Vec<View>,
     pub tracks: Tracks,
     pub ms: f64,
+    /// Added to every view's tilt to level the specimen (°), IMOD's OFFSET:
+    /// a lamella milled at an angle lies flat in the tomogram.
+    #[serde(default)]
+    pub tilt_offset: f64,
 }
 
 impl View {
@@ -410,6 +414,7 @@ pub fn align(
         views,
         tracks,
         ms: now.elapsed().as_secs_f64() * 1e3,
+        tilt_offset: 0.0,
     })
 }
 

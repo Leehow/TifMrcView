@@ -31,7 +31,8 @@ fn main() -> Result<()> {
     if steps.contains("thick") {
         let a = d.alignment.clone().context("align first")?;
         let bin = tomo::auto::output_bin(img.info().width, img.info().height, d.optics.pixel_a.unwrap_or(1.0), 9.0);
-        println!("thickness, offset: {:?} at bin {bin}", tomo::auto::estimate_thickness(&img, &a, d.optics.pixel_a.unwrap_or(1.0), bin, &progress)?);
+        let mut a = a.clone();
+        println!("placement: {:?} at bin {bin}", tomo::auto::level(&img, &mut a, d.optics.pixel_a.unwrap_or(1.0), bin, true, &progress)?);
         return Ok(());
     }
     if steps.contains("auto") {

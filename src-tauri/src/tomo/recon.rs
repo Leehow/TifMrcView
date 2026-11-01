@@ -52,6 +52,11 @@ pub struct Params {
     pub lambda: f32,
     pub non_negative: bool,
     pub z_offset: f64,
+    /// Depth change per row along Y (sections per row): each row of the
+    /// tomogram is taken that much deeper, so a specimen tilted about X
+    /// lies level. Whole sections only, so nothing is resampled.
+    #[serde(default)]
+    pub y_slope: f64,
     pub filter: Filter,
     /// auto / cpu / gpu (explicit gpu fails instead of hiding fallback).
     pub backend: String,
@@ -65,6 +70,7 @@ impl Default for Params {
             lambda: 1.0,
             non_negative: false,
             z_offset: 0.0,
+            y_slope: 0.0,
             filter: Filter::Ramp,
             backend: "auto".into(),
         }
@@ -79,6 +85,8 @@ impl Params {
             || self.iterations == 0
             || self.iterations > 1000
             || !self.z_offset.is_finite()
+            || !self.y_slope.is_finite()
+            || self.y_slope.abs() > 1.0
             || !self.lambda.is_finite()
             || self.lambda <= 0.0
             || self.lambda > 2.0

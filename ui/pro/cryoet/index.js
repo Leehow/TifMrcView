@@ -140,7 +140,7 @@
     }
     autoResult = r;
     $("cryo-auto-open").hidden = false;
-    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层 · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.note ? `。${r.note}` : ""}`;
+    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层${Math.hypot(...r.levelled) >= 0.5 ? ` · 样品倾斜已拉平（${r.levelled.map((v) => v.toFixed(1)).join("° / ")}°）` : ""} · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.note ? `。${r.note}` : ""}`;
     W.status("一键重构完成，已打开结果");
     await openPath(r.path);
   };
