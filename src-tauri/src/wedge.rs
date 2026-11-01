@@ -949,12 +949,16 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
 /// `vol` without the Fourier components a tilt series with these tilts
 /// misses (beam on Z, tilt axis on Y): the wedge lies in each XZ plane, so
 /// each one is transformed in 2D (padded with its mean to powers of two).
-fn cut_volume(vol: &Vol, g: &Geometry, tilts: &[f32]) -> Vol {
+/// Between tilts it keeps what `tilt_mask` keeps on a training cube of side
+/// `cube`: the network learned to repair that cut, and the much thinner
+/// one of the whole plane (only lines near each tilt at high frequency)
+/// left it a low-passed, streaked input (seen on EMPIAR-10164).
+fn cut_volume(vol: &Vol, g: &Geometry, tilts: &[f32], cube: usize) -> Vol {
     let [w, h, d] = vol.n;
     let (px, pz) = (w.next_power_of_two(), d.next_power_of_two());
     let (lo, hi) = (g.min_tilt.unwrap_or(-g.max_tilt) as f64 - 1e-6, g.max_tilt as f64 + 1e-6);
     let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
-    let side = px.max(pz) as f64;
+    let side = cube as f64;
     let mask: Vec<bool> = (0..px * pz)
         .map(|i| {
             let (mut a, mut b) = (f(i % px, px), f(i / px, pz));
@@ -1059,7 +1063,7 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
         let mut v = Vol { n: dims, v: vol.v.clone() };
         for pass in 0..passes {
             if pass > 0 {
-                v = cut_volume(&v, &g, tilts);
+                v = cut_volume(&v, &g, tilts, cfg.cube);
             }
             let k = h * passes + pass;
             v.v = apply(dev, &net, &v, [0; 3], dims, &mut |done, total| {
@@ -1400,7 +1404,7 @@ mod tests {
         let mut sp = Spectral::new(n, &g);
         sp.keep = tilt_mask(n, &g, &tilts);
         let want = sp.filter(&v.v, &sp.keep);
-        let got = cut_volume(&v, &g, &tilts).v;
+        let got = cut_volume(&v, &g, &tilts, n).v;
         let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(worst < 1e-3, "{worst}");
     }
@@ -1648,20 +1652,34 @@ mod bench {
             let (vals, _) = crate::classify::on_device(|dev| {
                 let net = net.clone().to_device(dev);
                 let twice = cfg.equivariant > 0.0;
-                let run = |v: &Vol| -> Result<Vec<f32>> {
+                let run = |v: &Vol| -> Result<(Vec<f32>, Option<Vec<f32>>)> {
                     let first = apply(dev, &net, v, [0; 3], n, &mut |_, _| Ok(()))?;
                     if !twice {
-                        return Ok(first);
+                        return Ok((first, None));
                     }
-                    let cut = cut_volume(&Vol { n, v: first }, &g, &tilts);
-                    apply(dev, &net, &cut, [0; 3], n, &mut |_, _| Ok(()))
+                    let cut = cut_volume(&Vol { n, v: first.clone() }, &g, &tilts, cfg.cube);
+                    Ok((first, Some(apply(dev, &net, &cut, [0; 3], n, &mut |_, _| Ok(()))?)))
                 };
-                let (x, y) = (run(&a)?, run(&b)?);
-                Ok(x.iter().zip(&y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>())
+                let ((x1, x2), (y1, y2)) = (run(&a)?, run(&b)?);
+                let mean_of = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(p, q)| 0.5 * (p + q)).collect::<Vec<f32>>();
+                Ok((mean_of(&x1, &y1), x2.zip(y2).map(|(x, y)| mean_of(&x, &y))))
             })
             .unwrap();
-            write_mrc(&out, n, &vals.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
-            println!("  saved {out}");
+            let (one, two) = vals;
+            let save = |path: &str, v: &[f32]| {
+                write_mrc(path, n, &v.iter().map(|v| v * std + mean).collect::<Vec<f32>>(), pixel_a * bin as f64);
+                println!("  saved {path}");
+            };
+            // With two passes, TMV_HALF_OUT gets the second; TMV_HALF_OUT1 the first.
+            match two {
+                Some(two) => {
+                    save(&out, &two);
+                    if let Ok(p1) = std::env::var("TMV_HALF_OUT1") {
+                        save(&p1, &one);
+                    }
+                }
+                None => save(&out, &one),
+            }
         }
     }
 
