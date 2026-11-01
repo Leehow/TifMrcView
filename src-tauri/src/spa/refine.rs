@@ -214,13 +214,29 @@ fn insert(acc: &mut Accum, c: &Coeffs, half: &Half, parts: &[Particle], chunk: &
     }
 }
 
+/// The state before a Dn trial, to go back to.
+struct Trial {
+    at: usize,
+    res: f64,
+    maps: [Vec<f32>; 2],
+    poses: Vec<([f32; 3], [f32; 2])>,
+    best: Vec<([f32; 3], [f32; 2])>,
+    best_res: f64,
+    stalls: usize,
+    step: f64,
+    global_until: usize,
+}
+
 /// The 2-fold of a Dn in the average of two half maps (b³, n-fold along z),
 /// tested on a copy of at most 128 voxels: (phi, dz in voxels of b).
 fn dihedral_of(maps: &[Vec<f32>; 2], b: usize, n: usize) -> Option<(f64, f64)> {
     let avg: Vec<f32> = maps[0].iter().zip(&maps[1]).map(|(a, c)| 0.5 * (a + c)).collect();
     let s = b.min(128);
     let small = if s == b { avg } else { fourier::resample3(&avg, b, s) };
-    let (phi, dz, _) = super::discover::dihedral(&small, s, n)?;
+    let (phi, dz, top, _) = super::discover::dihedral_candidate(&small, s, n)?;
+    if top < 0.6 {
+        return None;
+    }
     Some((phi, dz * b as f64 / s as f64))
 }
 
@@ -498,6 +514,7 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
     let mut sym_name = p.symmetry.trim().to_uppercase();
     let cn: usize = if p.promote_dihedral && sym_name.starts_with('C') { sym_name[1..].parse().unwrap_or(1) } else { 1 };
     let mut dn_tests = 0;
+    let mut trial: Option<Trial> = None;
     let noise = data::noise_spectrum(stack, ids, 2000);
     // Half sets, fixed for the whole run.
     let mut rng = Rng(p.seed.max(1));
@@ -627,11 +644,52 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
             best_res = best_res.min(new_res);
             stalls += 1;
         }
+        // A Dn trial is kept when the half maps agree at least as well as
+        // in Cn after a global and a local round in Dn; otherwise the run
+        // goes back to where it was (a map's own 2-fold correlation could
+        // not tell: 0.90 against 0.87 for T20S at 7 Å).
+        if let Some(t) = trial.take() {
+            if it == t.at + 2 {
+                let keep = new_res < t.res * 1.02;
+                eprintln!("Dn trial: {:.2} Å against {:.2} Å in C{cn}: {}", new_res, t.res, if keep { "kept" } else { "undone" });
+                if !keep {
+                    maps = t.maps;
+                    for (&i, &(e, sh)) in all.iter().zip(&t.poses) {
+                        parts[i].euler = e;
+                        parts[i].shift = sh;
+                    }
+                    sym_name = format!("C{cn}");
+                    sym = geom::symmetry(&sym_name)?;
+                    best = t.best;
+                    best_res = t.best_res;
+                    stalls = t.stalls;
+                    step = t.step;
+                    global_until = t.global_until;
+                    iters = (iters + 2).min(p.max_iterations.max(p.global_iterations + 1) + 4);
+                    res = t.res.max(2.0 * px * 1.05);
+                    it += 1;
+                    continue;
+                }
+            } else {
+                trial = Some(t);
+            }
+        }
         // A Dn shows at refined resolution where the starting model could
-        // not tell: tested after the first two local rounds.
-        if cn > 1 && !is_global && dn_tests < 2 {
+        // not tell: tried after one of the first two local rounds.
+        if cn > 1 && !is_global && dn_tests < 2 && trial.is_none() && sym_name.starts_with('C') {
             dn_tests += 1;
             if let Some(found) = dihedral_of(&maps, b, cn) {
+                trial = Some(Trial {
+                    at: it,
+                    res: new_res,
+                    maps: maps.clone(),
+                    poses: all.iter().map(|&i| (parts[i].euler, parts[i].shift)).collect(),
+                    best: best.clone(),
+                    best_res,
+                    stalls,
+                    step,
+                    global_until,
+                });
                 promote(&mut maps, b, found, parts, &all);
                 sym_name = format!("D{cn}");
                 sym = geom::symmetry(&sym_name)?;
