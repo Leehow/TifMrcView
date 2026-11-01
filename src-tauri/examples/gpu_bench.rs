@@ -99,6 +99,31 @@ fn tasks(sam: Option<String>) -> Vec<Task> {
         unet::train(d, &slices, w, h, 0.0, 1.5, &cfg, |_, _, _| {})?;
         Ok(())
     })));
+    v.push(("3D U-Net (wedge) training 10 steps, 4 × 64³", Box::new(|d: &Device| {
+        use burn::optim::{AdamConfig, GradientsParams};
+        let ad = d.clone().autodiff();
+        let mut net = tifmrcview_lib::wedge::Net::new(16, 3, &ad);
+        let mut opt = AdamConfig::new().init();
+        let n = 64;
+        for k in 0..10 {
+            let x = Tensor::<5>::from_data(burn::tensor::TensorData::new(noise(4 * n * n * n, 20 + k), [4, 1, n, n, n]), &ad);
+            let t = Tensor::<5>::from_data(burn::tensor::TensorData::new(noise(4 * n * n * n, 50 + k), [4, 1, n, n, n]), &ad);
+            let loss = (net.forward(x) - t).abs().mean();
+            let _: f32 = loss.clone().into_scalar();
+            let grads = GradientsParams::from_grads(loss.backward(), &net);
+            net = opt.step(4e-4, net, grads);
+        }
+        Ok(())
+    })));
+    v.push(("3D U-Net (wedge) inference 4 × 96³", Box::new(|d: &Device| {
+        let net = tifmrcview_lib::wedge::Net::new(16, 3, d);
+        let n = 96;
+        for k in 0..4 {
+            let x = Tensor::<5>::from_data(burn::tensor::TensorData::new(noise(n * n * n, 80 + k), [1, 1, n, n, n]), d);
+            let _: f32 = net.forward(x).sum().into_scalar();
+        }
+        Ok(())
+    })));
     if let Some(path) = sam {
         let model = std::sync::Mutex::new(None::<(Device, tmv_sam::Predictor)>);
         v.push(("SAM 2.1 image encode ×5", Box::new(move |d: &Device| {
