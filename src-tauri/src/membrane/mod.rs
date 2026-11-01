@@ -194,12 +194,14 @@ fn flip(x: Tensor<5>, axes: &[usize]) -> Tensor<5> {
     }
 }
 
-/// Starts of windows of `side` covering `n` with about half overlap.
+/// Starts of windows of `side` covering `n`, overlapping by about a third
+/// (MemBrain-seg uses half; with the Gaussian weights a third joins as
+/// smoothly and needs about 30% fewer windows).
 fn starts(n: usize, side: usize) -> Vec<usize> {
     if n <= side {
         return vec![0];
     }
-    let k = (n - side).div_ceil(side / 2) + 1;
+    let k = (n - side).div_ceil(side * 2 / 3) + 1;
     (0..k).map(|i| ((n - side) as f64 * i as f64 / (k - 1) as f64).round() as usize).collect()
 }
 
@@ -412,7 +414,8 @@ mod tests {
         assert_eq!(starts(160, 160), vec![0]);
         let s = starts(400, 160);
         assert_eq!(*s.last().unwrap(), 240);
-        assert!(s.windows(2).all(|w| w[1] - w[0] <= 80));
+        assert!(s.windows(2).all(|w| w[1] - w[0] <= 107));
+        assert_eq!(starts(837, 160).len(), 8);
     }
 
     #[test]
