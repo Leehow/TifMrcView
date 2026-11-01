@@ -1,5 +1,5 @@
 //! GPU side of the CTF fit (Pro), with Burn on the device SAM uses
-//! (Metal, DX12 or Vulkan through wgpu): the tiled power spectrum as
+//! (Vulkan, CUDA, DX12 or Metal, see `tmv_sam::backends`): the tiled power spectrum as
 //! batched DFT matrix products, and the scores of many CTF models at once.
 //! `ctf` falls back to its CPU code when there is no GPU or a kernel fails.
 

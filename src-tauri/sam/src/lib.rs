@@ -28,17 +28,17 @@ impl Backend {
     }
 }
 
-/// The backends to try, fastest first: CUDA on NVIDIA cards, then the
-/// platform's GPU API (Vulkan, which runs SPIR-V kernels, then DX12 on
-/// Windows; Metal on a Mac), then the CPU. Measured on an RTX 5080 (see
-/// `examples/gpu_bench.rs`). `TMV_GPU=cuda|vulkan|dx12|metal|cpu` keeps
+/// The backends to try, fastest first: Vulkan (SPIR-V kernels), then CUDA
+/// for NVIDIA machines without a GPU Vulkan driver (WSL, compute servers),
+/// then DX12 on Windows; Metal on a Mac; the CPU last. On an RTX 5080
+/// (`examples/gpu_bench.rs`, Windows, driver 617) Vulkan was fastest in 7
+/// of 10 Pro tasks, CUDA up to 20x slower (SART) and only ahead in SAM
+/// encoding, DX12 in between. `TMV_GPU=cuda|vulkan|dx12|metal|cpu` keeps
 /// only that one (and the CPU after it), for benchmarks and as a way out
 /// when a driver misbehaves.
 pub fn backends() -> Vec<Backend> {
     #[allow(unused_mut)]
     let mut v: Vec<Backend> = vec![];
-    #[cfg(feature = "cuda")]
-    v.push(Backend { name: "CUDA", make: || Ok(Device::cuda(0)) });
     // Real GPUs only, by kind: wgpu's default device can be a software
     // renderer (lavapipe on Linux without a GPU Vulkan driver, as in WSL),
     // which is slower than the CPU backend and fails on large buffers.
@@ -46,6 +46,13 @@ pub fn backends() -> Vec<Backend> {
     {
         use burn::tensor::DeviceKind;
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::DiscreteGpu(0))) });
+    }
+    // A discrete NVIDIA card without a Vulkan driver beats an integrated GPU.
+    #[cfg(feature = "cuda")]
+    v.push(Backend { name: "CUDA", make: || Ok(Device::cuda(0)) });
+    #[cfg(feature = "vulkan")]
+    {
+        use burn::tensor::DeviceKind;
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::IntegratedGpu(0))) });
         v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::VirtualGpu(0))) });
     }
