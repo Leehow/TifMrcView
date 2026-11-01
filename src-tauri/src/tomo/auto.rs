@@ -27,6 +27,8 @@
 //!   for phase-flipped WBP at bin 4 (the same order at bin 2), at a third
 //!   of SIRT's time. 3D CTF made no measurable difference at these
 //!   samplings, so it is left out.
+//! - Display tomograms end with membrane segmentation (`crate::membrane`)
+//!   into the tomogram's label map, when the model has been downloaded.
 //! - Noise2Noise on the even/odd half tomograms when motion correction made
 //!   them (else on neighbouring sections), then the Wiener-like
 //!   deconvolution of Warp and IsoNet (`deconv`), which restores the low
@@ -75,6 +77,8 @@ pub struct AutoResult {
     pub raw: String,
     /// The RELION 5 folder (for STA).
     pub relion: Option<String>,
+    /// The label map with the membranes (material "膜"), beside `path`.
+    pub labels: Option<String>,
     /// Something the user should know about the result.
     pub note: Option<String>,
     /// Seconds each step took, in order.
@@ -120,10 +124,13 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     if d.angles.len() != img.info().size_z || d.angles.len() < 3 {
         bail!("没有找到倾转角（.mdoc / .tlt / .rawtlt），请在高级设置里给出起始角和步长");
     }
+    // Membranes are segmented at the end of a display tomogram when the
+    // model is on this computer (the app downloads it beforehand).
+    let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some_and(|p| p.exists());
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Survey => 5,
-        Purpose::Display => 7,
+        Purpose::Display => 7 + membranes as usize,
         Purpose::Sta => 5,
     };
     // When each step was first and last heard from, for `timings` (steps
@@ -234,6 +241,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             },
         }
     }
+    let mut labels = None;
+    if membranes {
+        check_cancel()?;
+        labels = Some(pipeline::membranes(dev, d, Some(&path), &stage(8))?.paths.remove(0));
+    }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
         let stem = d.stack.strip_suffix(".mrc").unwrap_or(&d.stack);
@@ -248,7 +260,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, relion, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, relion, labels, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels
