@@ -164,6 +164,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node --test scripts/make-release.test.mjs
 
+      - name: Image ownership regressions
+        if: runner.os == 'Linux'
+        run: node --test scripts/image-ownership.test.mjs
+
   bundle:
     needs: [version, reuse]
     # Installers take most of the CI time (Pro, macOS universal), so pull

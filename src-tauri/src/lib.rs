@@ -24,6 +24,8 @@ pub mod unet;
 #[cfg(feature = "pro")]
 pub mod wedge;
 pub mod image;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod open_requests;
 #[cfg(feature = "desktop")]
 mod mem;
 #[cfg(all(test, feature = "desktop"))]

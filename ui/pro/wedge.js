@@ -309,24 +309,33 @@
       invoke("wedge_cancel");
       return;
     }
-    if (!W.model) {
-      status("请先训练");
+    const token = baseToken();
+    if (!W.model || W.model.token !== token) {
+      status("请先在当前图像上训练");
       return;
     }
     const info = baseInfo();
     const stem = info.name.replace(/\.[^.]+$/, "");
     const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_wedge.mrc`, filter: "MRC", exts: ["mrc"] });
     if (!path) return;
+    if (token !== baseToken() || W.model.token !== token) {
+      status("图像已切换，请在当前图像上训练后保存");
+      return;
+    }
     setSaveDir(dirname(path));
     const un = await T.event.listen("wedge-progress", (ev) => {
       const { done, total } = ev.payload;
       status(`保存中 ${done}/${total} 块`);
     });
+    if (token !== baseToken()) {
+      un();
+      return;
+    }
     W.saving = true;
     $("wg-save").textContent = "取消";
     const t0 = performance.now();
     try {
-      const backend = await invoke("wedge_save", { path });
+      const backend = await invoke("wedge_save", { path, token });
       W.saved = path;
       status(`已保存 · ${((performance.now() - t0) / 1000).toFixed(1)} s · ${backend}`);
       $("wg-saved-name").textContent = path.split(/[\\/]/).pop();
