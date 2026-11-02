@@ -30,7 +30,9 @@
 //! - Noise2Noise on the even/odd half tomograms when motion correction made
 //!   them (else on neighbouring sections), then the Wiener-like
 //!   deconvolution of Warp and IsoNet (`deconv`), which restores the low
-//!   resolution contrast.
+//!   resolution contrast. This is also the display fallback if wedge training
+//!   exceeds the device budget. With halves, wedge training itself uses the
+//!   original independent reconstructions and its output is deconvolved.
 
 use super::{check_cancel, dataset::Dataset, output, pipeline, recon};
 use anyhow::{bail, Result};
@@ -93,6 +95,15 @@ pub struct AutoResult {
 
 /// Longest missing-wedge training the display tomogram waits for, seconds.
 const WEDGE_BUDGET: f64 = 30.0 * 60.0;
+
+/// Processed display volumes are not independent halves. Use the original
+/// reconstruction's observations when available, without relabelling them
+/// as halves of the processed image.
+pub(super) fn display_wedge_source<'a>(d: &Dataset, raw: &'a str, display: &'a str) -> (&'a str, bool) {
+    let paired = d.tomograms.iter().find(|t| t.path == raw).and_then(|t| t.halves.as_ref())
+        .is_some_and(|p| p.iter().all(|p| std::path::Path::new(p).exists()));
+    (if paired { raw } else { display }, paired)
+}
 /// Most pixels a binned view may have.
 const MAX_PIXELS: f64 = 4.2e6;
 
@@ -231,9 +242,15 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     if req.purpose == Purpose::Display {
         check_cancel()?;
-        let step = pipeline::WedgeStep { source: Some(path.clone()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
+        let (source, paired) = display_wedge_source(d, &raw, &path);
+        let step = pipeline::WedgeStep { source: Some(source.to_owned()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
         match pipeline::wedge(dev, d, &step, &stage(7)) {
-            Ok(mut m) => path = m.paths.remove(0),
+            Ok(mut m) => {
+                path = m.paths.remove(0);
+                if paired {
+                    path = pipeline::deconvolve(d, Some(&path), &stage(7))?.paths.remove(0);
+                }
+            }
             Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
                 Some(slow) => note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0)),
                 None => return Err(e),

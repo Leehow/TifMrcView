@@ -1,6 +1,7 @@
 //! The Cryo-ET steps from the command line, as the workspace runs them:
 //! cryoet_pipeline STACK [PIXEL_A=header] [BIN=4] [THICKNESS=128] [STEPS=align,ctf,rec,n2n,wedge]
 //! Writes the outputs beside the stack and central XY/XZ PNGs of each tomogram.
+//! Add `reuse` to `auto` to retain cached stages, matching the GUI.
 use anyhow::{Context, Result};
 use std::{path::Path, time::Instant};
 use tifmrcview_lib::{formats, image::OpenImage, tomo::{self, dataset::Dataset, pipeline, recon}};
@@ -53,7 +54,7 @@ fn main() -> Result<()> {
     if steps.contains("auto") {
         let (dev, _) = tifmrcview_lib::ctf_gpu::device().context("GPU")?;
         let t = Instant::now();
-        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: true }, &progress)?;
+        let r = tomo::auto::run(dev, &mut d, &tomo::auto::AutoReq { pixel_a: pixel, purpose: if steps.contains("sta") { tomo::auto::Purpose::Sta } else if steps.contains("survey") { tomo::auto::Purpose::Survey } else { tomo::auto::Purpose::Display }, fresh: !steps.contains("reuse") }, &progress)?;
         eprintln!();
         println!("auto: {} (raw {}), bin {}, thickness {}, residual {:.2} px, defocus {:.2} µm, {:.1} s", r.path, r.raw, r.bin, r.thickness, r.residual, r.defocus_um, t.elapsed().as_secs_f64());
         for b in &r.selection {
@@ -62,6 +63,7 @@ fn main() -> Result<()> {
         for (step, s) in &r.timings {
             println!("  {step:<16} {s:>7.1} s");
         }
+        println!("auto-result: {}", serde_json::to_string(&r)?);
         png(&r.raw)?;
         png(&r.path)?;
         return Ok(());
