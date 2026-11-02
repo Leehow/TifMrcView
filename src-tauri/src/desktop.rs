@@ -15,6 +15,7 @@ struct AppState {
     /// The file shown in each window, by window label.
     current: Mutex<HashMap<String, Arc<OpenImage>>>,
     next_token: AtomicU64,
+    opening: crate::open_requests::OpenRequests,
     #[cfg_attr(target_os = "android", allow(dead_code))]
     next_window: AtomicU64,
     /// Files the OS asked us to open that a window has not picked up yet.
@@ -83,9 +84,16 @@ async fn open_image(
     state: State<'_, AppState>,
     path: String,
     series: Option<usize>,
+    request: u64,
 ) -> CmdResult<Opened> {
     let token = state.next_token.fetch_add(1, Ordering::Relaxed) + 1;
-    state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
+    // Order by the user's requests, not by which async command starts first.
+    if !state.opening.begin(window.label(), request) {
+        return Err("stale".into());
+    }
+    state.opening.commit(window.label(), request, || {
+        state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
+    }).map_err(err)?;
     // Each window gets an equal share of the page cache.
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
     let budget = mem::cache_budget() / (others + 1);
@@ -95,7 +103,7 @@ async fn open_image(
     })
     .await?;
     let info = img.info().clone();
-    {
+    state.opening.commit(window.label(), request, || -> CmdResult<()> {
         let mut cur = state.current.lock().unwrap();
         // If the window closed while the file was opening, nothing would ever
         // cancel the prefetch below. Tauri unregisters a window before our
@@ -107,7 +115,8 @@ async fn open_image(
             old.cancelled.store(true, Ordering::Relaxed);
         }
         state.side.lock().unwrap().remove(window.label());
-    }
+        Ok(())
+    }).map_err(err)??;
     let (center, _) = info.locate(0, info.size_z / 2, 0);
     img.prefetch(center);
     Ok(Opened { token, info })
@@ -1802,7 +1811,8 @@ async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Val
                     let _ = app2.emit("wedge-train", p);
                 })
             })?;
-            *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, c: req.c, t: req.t }));
+            let pixel_a = crate::align::pixel_a(img.info());
+            *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, pixel_a, c: req.c, t: req.t }));
             let seconds = started.elapsed().as_secs_f32();
             eprintln!("wedge_train: {:?} cube {} × {} {} it × {} steps, loss {loss:.4}, {backend} in {seconds:.1} s", vol.n, cfg.cube, cfg.count, cfg.iterations, cfg.steps);
             Ok(serde_json::json!({ "loss": loss, "backend": backend, "seconds": seconds, "dims": vol.n, "cube": cfg.cube }))
@@ -1831,10 +1841,10 @@ async fn wedge_preview(req: serde_json::Value) -> CmdResult<Response> {
 /// Writes the whole corrected volume to a path from `pick_save_path`;
 /// reports `wedge-progress` {done, total}; returns the backend.
 #[tauri::command]
-async fn wedge_save(app: AppHandle, path: String) -> CmdResult<String> {
+async fn wedge_save(window: WebviewWindow, app: AppHandle, token: u64, path: String) -> CmdResult<String> {
     #[cfg(not(feature = "pro"))]
     {
-        let _ = (app, path);
+        let _ = (window, app, token, path);
         pro_only()
     }
     #[cfg(feature = "pro")]
@@ -1842,13 +1852,15 @@ async fn wedge_save(app: AppHandle, path: String) -> CmdResult<String> {
         if !app.state::<AppState>().save_paths.allowed(&path) {
             return Err(format!("不允许写入：{path}"));
         }
+        if !app.state::<AppState>().current.lock().unwrap().get(window.label()).is_some_and(|img| img.token == token) {
+            return Err("图像已切换，请在当前图像上训练后保存".into());
+        }
         let Some(m) = crate::wedge::MODEL.lock().unwrap().clone() else { return Err("还没有训练网络".into()) };
-        let pixel_a = current(&app.state::<AppState>(), m.token).map(|img| crate::align::pixel_a(img.info())).unwrap_or(1.0);
         blocking(move || {
             let progress = |done, total| {
                 let _ = app.emit("wedge-progress", serde_json::json!({ "done": done, "total": total }));
             };
-            crate::wedge::save(&m, &path, pixel_a, &progress).map(String::from)
+            crate::wedge::save(&m, token, &path, &progress).map(String::from)
         })
         .await
     }
@@ -2444,6 +2456,7 @@ pub fn run() {
             // Free a window's file when it closes.
             if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &_event {
                 let state = _app.state::<AppState>();
+                state.opening.close(label);
                 if let Some(img) = state.current.lock().unwrap().remove(label) {
                     img.cancelled.store(true, Ordering::Relaxed);
                 }

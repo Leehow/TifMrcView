@@ -1161,6 +1161,8 @@ pub struct Trained {
     pub loss: f32,
     /// Image it belongs to.
     pub token: u64,
+    /// Source voxel size, captured before training; independent of open windows.
+    pub pixel_a: f64,
     pub c: usize,
     pub t: usize,
 }
@@ -1254,8 +1256,11 @@ pub fn preview(m: &Trained, req: &PreviewReq) -> Result<Vec<u8>> {
 }
 
 /// Corrects the whole volume and writes it as a float32 MRC at `path`.
-pub fn save(m: &Trained, path: &str, pixel_a: f64, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<&'static str> {
+pub fn save(m: &Trained, token: u64, path: &str, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<&'static str> {
     use std::io::Write;
+    if m.token != token {
+        bail!("网络是在另一个图像上训练的，请重新训练");
+    }
     CANCEL.store(false, Ordering::SeqCst);
     let n = m.vol.n;
     let (vals, backend) = crate::classify::on_device(|dev| {
@@ -1276,7 +1281,7 @@ pub fn save(m: &Trained, path: &str, pixel_a: f64, progress: &(dyn Fn(usize, usi
     let label = format!("TifMrcView: missing wedge filled, beam {} tilt {} +-{:.0} bin {}", ["X", "Y", "Z"][g.beam], ["X", "Y", "Z"][g.tilt], g.max_tilt, m.bin);
     let tmp = format!("{path}.part");
     let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-    f.write_all(&crate::align::mrc_header(n[0], n[1], n[2], pixel_a * m.bin as f64, [lo, hi, mean, sd], &label))?;
+    f.write_all(&crate::align::mrc_header(n[0], n[1], n[2], m.pixel_a * m.bin as f64, [lo, hi, mean, sd], &label))?;
     let mut bytes = vec![0u8; real.len() * 4];
     bytes.par_chunks_mut(4).zip(&real).for_each(|(b, v)| b.copy_from_slice(&v.to_le_bytes()));
     f.write_all(&bytes)?;
@@ -1289,6 +1294,48 @@ pub fn save(m: &Trained, path: &str, pixel_a: f64, progress: &(dyn Fn(usize, usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn save_fixture() -> Trained {
+        Trained {
+            net: Net::new(4, 2, &Device::flex()),
+            vol: Arc::new(Vol { n: [8; 3], v: vec![0.5; 8 * 8 * 8] }),
+            geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None },
+            bin: 3, mean: 5.0, std: 2.0, loss: 0.0, token: 7, pixel_a: 2.75, c: 0, t: 0,
+        }
+    }
+
+    #[test]
+    fn save_rejects_another_images_model_before_creating_a_file() {
+        let m = save_fixture();
+        let dir = std::env::temp_dir().join(format!("tmv-wedge-wrong-owner-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("B.mrc");
+        assert!(save(&m, 8, path.to_str().unwrap(), &|_, _| panic!("wrong model applied")).is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn save_keeps_the_sources_calibration_without_an_open_image() {
+        // No live image/window is available here. The trained result owns
+        // both its normalized volume and its source calibration.
+        let m = save_fixture();
+        let dir = std::env::temp_dir().join(format!("tmv-wedge-calibration-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("A.mrc");
+        save(&m, 7, path.to_str().unwrap(), &|_, _| {}).unwrap();
+        let file = std::fs::read(&path).unwrap();
+        let at = |offset| f32::from_le_bytes(file[offset..offset + 4].try_into().unwrap());
+        assert_eq!(file.len(), 1024 + 8 * 8 * 8 * 4);
+        for axis in 0..3 {
+            // MRC stores cell length = dimension × (source voxel × bin).
+            assert!((at(40 + axis * 4) / 8.0 - 8.25).abs() < 1e-6);
+        }
+        assert!(file[1024..].chunks_exact(4).all(|b| (f32::from_le_bytes(b.try_into().unwrap()) - 6.0).abs() < 1e-4));
+        assert!(!path.with_extension("mrc.part").exists());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     /// Random blobs (ellipsoids of several sizes) in a cube of side n.
     fn phantom(n: usize, seed: u64) -> Vol {
@@ -1581,7 +1628,7 @@ mod tests {
             net
         };
         let full = apply(&dev, &net, &vol, [0; 3], n, &mut |_, _| Ok(())).unwrap();
-        let m = Trained { net, vol: Arc::new(vol), geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None }, bin: 1, mean: 0.0, std: 1.0, loss: 0.0, token: 7, c: 0, t: 0 };
+        let m = Trained { net, vol: Arc::new(vol), geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None }, bin: 1, mean: 0.0, std: 1.0, loss: 0.0, token: 7, pixel_a: 2.75, c: 0, t: 0 };
         for (axis, index) in [("xy", 11), ("xz", 17), ("yz", 5)] {
             let req = PreviewReq { token: 7, axis: axis.into(), index, region: [0, 0, 1000, 1000] };
             let bytes = preview(&m, &req).unwrap();
@@ -1719,7 +1766,7 @@ mod bench {
         let t1 = std::time::Instant::now();
         let ((net, loss), backend) = crate::classify::on_device(|dev| train(dev, &vol, &d.geometry, &cfg, |_| {})).unwrap();
         println!("  trained on {backend}: {} it × {} steps, cube {}, loss {loss:.4}, {:.1} s", cfg.iterations, cfg.steps, cfg.cube, t1.elapsed().as_secs_f64());
-        let m = Trained { net, vol: Arc::new(vol), geometry: d.geometry, bin, mean, std, loss, token: 1, c: 0, t: 0 };
+        let m = Trained { net, vol: Arc::new(vol), geometry: d.geometry, bin, mean, std, loss, token: 1, pixel_a: crate::align::pixel_a(img.info()), c: 0, t: 0 };
         // The preview must show what saving writes: compare a slice per view.
         let n = m.vol.n;
         let (full, b) = crate::classify::on_device(|dev| apply(dev, &m.net.clone().to_device(dev), &m.vol, [0; 3], n, &mut |_, _| Ok(()))).unwrap();
@@ -1738,7 +1785,7 @@ mod bench {
         }
         if let Ok(out) = std::env::var("TMV_WEDGE_OUT") {
             let t2 = std::time::Instant::now();
-            let b = save(&m, &out, crate::align::pixel_a(img.info()), &|_, _| {}).unwrap();
+            let b = save(&m, m.token, &out, &|_, _| {}).unwrap();
             println!("  applied and saved on {b} in {:.1} s → {out}", t2.elapsed().as_secs_f64());
         }
     }

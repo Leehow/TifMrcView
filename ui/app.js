@@ -207,6 +207,14 @@ function needsPlugin(e) {
   return /「.+」插件/.test(String(e));
 }
 
+let openRequest = 0;
+let openPending = false;
+// Preserve the window's request order across a WebView reload too.
+try {
+  const saved = Number(sessionStorage.getItem("open-request"));
+  if (Number.isSafeInteger(saved) && saved >= 0) openRequest = saved;
+} catch (_) {}
+
 /**
  * Opens `path` (image `series` of a file that holds several); `force`
  * re-reads the file shown now (e.g. after a plugin was switched).
@@ -214,14 +222,20 @@ function needsPlugin(e) {
 async function openPath(path, force = false, series = 0) {
   if (!path) return;
   // Clicking the image already shown changes nothing.
-  if (!force && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
-  finishText(true);
-  await flushAnn();
-  $("loading").textContent = "加载中…";
-  // Only show the hint when loading takes a while, so quick flips do not blink.
-  const slow = setTimeout(() => ($("loading").hidden = false), 300);
+  if (!force && !openPending && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
+  const request = ++openRequest;
+  try { sessionStorage.setItem("open-request", String(request)); } catch (_) {}
+  openPending = true;
+  let slow;
   try {
-    const res = await invoke("open_image", { path, series });
+    finishText(true);
+    await flushAnn();
+    if (request !== openRequest) return;
+    $("loading").textContent = "加载中…";
+    // Only the latest request may change the image or its loading indicator.
+    slow = setTimeout(() => { if (request === openRequest) $("loading").hidden = false; }, 300);
+    const res = await invoke("open_image", { path, series, request });
+    if (request !== openRequest) return;
     stopPlay();
     sideDone();
     holdFrame();
@@ -289,15 +303,20 @@ async function openPath(path, force = false, series = 0) {
     autoLoadModel(path);
     loadAnn(path, res.info.seriesIndex);
     await refreshFolder(path);
+    if (request !== openRequest) return;
     pluginEmit("open", S.info);
     watchLoad();
   } catch (e) {
+    if (request !== openRequest) return;
     toast(`无法打开 ${basename(path)}：${e}`, needsPlugin(e) ? 8000 : 3500);
     // The plugin window has the way to the plugin market.
     if (needsPlugin(e) && typeof togglePluginDialog === "function") togglePluginDialog(true);
   } finally {
     clearTimeout(slow);
-    $("loading").hidden = true;
+    if (request === openRequest) {
+      openPending = false;
+      $("loading").hidden = true;
+    }
   }
 }
 
@@ -459,12 +478,14 @@ function folderIndex(path) {
 }
 
 async function refreshFolder(path) {
+  const token = S.token;
   // A stack made of a folder's slices lists that folder; the stack itself
   // is in the list when a project file describes it.
   const stackDir = S.info && S.info.folder;
   const dir = stackDir || dirname(path);
   if (dir !== S.folder.dir) {
     const f = await invoke("list_folder", { path: stackDir || path });
+    if (token !== S.token) return;
     const stacks = f.stacks || [];
     // List the files group by group, in the order the side panel shows them.
     const all = [
