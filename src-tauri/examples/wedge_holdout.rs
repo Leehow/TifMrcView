@@ -98,7 +98,11 @@ fn main() -> Result<()> {
     let from: f32 = std::env::var("HOLDOUT_EQUI_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0.67);
     let t3 = Instant::now();
     let warm = wedge::TrainConfig { equivariant: equi_w, equi_from: from, ..halves_cfg.clone() };
-    methods.push(("halves → equivariant", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &warm, |_| {})?));
+    methods.push(("halves → equivariant", wedge::train_halves_and_apply(&dev, &a, &b, dims, &kept_tilts, &warm, |p| {
+        if p.step % 100 == 0 || p.step == p.steps {
+            println!("  round {} step {} loss {:.6} at {:.1} s", p.iteration, p.step, p.loss, t3.elapsed().as_secs_f64());
+        }
+    })?));
     println!("halves → equivariant (from {from}, weight {equi_w}, seed {}) in {:.0} s", warm.seed, t3.elapsed().as_secs_f64());
     if std::env::var("HOLDOUT_FULL_ICECREAM").is_ok() {
         let t4 = Instant::now();
@@ -129,6 +133,8 @@ fn main() -> Result<()> {
             let file = format!("{dir}/{}.xz.png", name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>());
             let xz: Vec<f32> = (0..z).flat_map(|zz| vol[(zz * h + h / 2) * w..(zz * h + h / 2 + 1) * w].iter().copied()).collect();
             save_png(&file, &xz, w, z)?;
+            let mrc = file.trim_end_matches(".xz.png").to_owned() + ".mrc";
+            tifmrcview_lib::tomo::output::write_mrc(&mrc, vol, dims, tifmrcview_lib::tomo::output::pixel_a(&img), false)?;
         }
     }
     Ok(())
