@@ -418,10 +418,8 @@ impl std::fmt::Display for TooSlow {
 impl std::error::Error for TooSlow {}
 
 /// Even/odd halves: cube 48, trained on the halves for two thirds of the
-/// steps and with ICECREAM's equivariance term for the last third. It
-/// did best in the held-out-tilt tests (EMPIAR-10045, all three folds)
-/// and matched full ICECREAM on EMPIAR-10164 at under a third of its
-/// time; about 25 min on an RTX 5080.
+/// steps and with ICECREAM's equivariance term for the last third.
+/// Runtime is checked on the current device by the caller's budget.
 fn halves_config() -> crate::wedge::TrainConfig {
     crate::wedge::TrainConfig { cube: 48, iterations: 3, steps: 1000, equivariant: 2.0, equi_from: 0.67, ..Default::default() }
 }
@@ -435,7 +433,7 @@ fn single_config() -> crate::wedge::TrainConfig {
 pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
     let Some(a) = d.alignment.as_ref() else { bail!("先完成倾转对齐") };
-    let used: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
+    let used: Vec<_> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
     let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
@@ -461,7 +459,15 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     let trained = (|| -> Result<_> { Ok(match (&src.halves, req.single) {
         (Some([even, odd]), false) => {
             let (a, shape, px) = load(even)?;
-            let (b, ..) = load(odd)?;
+            let (b, odd_shape, odd_px) = load(odd)?;
+            let raw = open(&src.path)?;
+            let info = raw.info();
+            let same_pixel = |p: f64| p.is_finite() && px.is_finite() && p > 0.0 && px > 0.0
+                && (p - px).abs() <= 1e-5 * p.max(px).max(1.0);
+            if shape != odd_shape || shape != [info.width, info.height, info.size_z]
+                || !same_pixel(odd_px) || !same_pixel(output::pixel_a(&raw)) {
+                bail!("两半体积与原始重构的尺寸或像素标定不一致，不能训练缺失楔补偿");
+            }
             let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
             let cfg = req.cfg.clone().unwrap_or_else(halves_config);
             let method = if cfg.equivariant > 0.0 { "icecream" } else { "halves" };
@@ -486,4 +492,118 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+#[cfg(test)]
+mod wedge_acceptance {
+    use super::*;
+
+    fn fixture(dir: &std::path::Path, halves: bool) -> Dataset {
+        let path = |s: &str| dir.join(s).to_string_lossy().into_owned();
+        let angles = [-60.0, -30.0, 0.0, 30.0, 60.0];
+        let values: Vec<f32> = (0..16usize.pow(3)).map(|i| 5.0 + ((i % 16) as f32 * 0.4).sin() + ((i / 256) as f32 * 0.3).cos()).collect();
+        for name in ["source.mrc", "even.mrc", "odd.mrc"] {
+            output::write_mrc(&path(name), &values, [16; 3], 11.0, false).unwrap();
+        }
+        let views: Vec<serde_json::Value> = angles.iter().enumerate().map(|(i, a)| serde_json::json!({
+            "fileIndex":i,"angle":a,"residual":0.0,"shift":[0.0,0.0],"mag":1.0,"rotation":0.0,"tilt":a,"cc":1.0,"contours":0,"flagged":false,"excluded":false
+        })).collect();
+        serde_json::from_value(serde_json::json!({
+            "version":1,"stack":path("stack.mrc"),"angles":angles,
+            "optics":{"kv":300.0,"csMm":2.7,"amplitude":0.07,"pixelA":2.75},
+            "alignment":{"width":64,"height":64,"bin":1,"axis":90.0,"patch":{"nx":2,"ny":2,"size":16},"residual":0.0,"quality":"test","views":views,"tracks":{"observations":[],"points":0,"cc":[],"counts":[]},"ms":0.0},
+            "tomograms":[{"path":path("source.mrc"),"kind":"full","bin":4,"thickness":16,"method":"wbp","halves":if halves {Some([path("even.mrc"),path("odd.mrc")])}else{None}}]
+        })).unwrap()
+    }
+
+    fn settings() -> crate::wedge::TrainConfig {
+        crate::wedge::TrainConfig { cube:16, count:2, iterations:1, steps:2, batch:2, base:2, levels:2, seed:7, equivariant:2.0, equi_from:0.5, ..Default::default() }
+    }
+
+    #[test]
+    fn wedge_stage_preserves_source_grid_and_records_the_selected_method() {
+        let dev = burn::tensor::Device::flex();
+        for (halves, single, method) in [(false,false,"isonet"),(true,true,"isonet"),(true,false,"icecream")] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut d = fixture(dir.path(), halves);
+            let original = std::fs::read(&d.tomograms[0].path).unwrap();
+            let req = WedgeStep { source:None, cfg:Some(settings()), single, budget_s:None };
+            let made = wedge(&dev, &mut d, &req, &|_,_,_| {}).unwrap();
+            let (values, shape, px) = load(&made.paths[0]).unwrap();
+            assert_eq!(shape, [16;3]);
+            assert!((px - 11.0).abs() < 1e-5);
+            assert!(values.iter().all(|v| v.is_finite()));
+            assert_eq!(std::fs::read(&d.tomograms[0].path).unwrap(), original);
+            let saved = d.tomograms.last().unwrap();
+            assert_eq!((saved.kind.as_str(), saved.method.as_str(), saved.bin), ("wedge", method, 4));
+            assert!(saved.halves.is_none());
+            let restored = Dataset::open(&d.stack, 5, None).unwrap();
+            assert_eq!(restored.tomograms.last().unwrap().path, made.paths[0]);
+        }
+    }
+
+    #[test]
+    fn display_processing_still_uses_the_original_independent_halves() {
+        use super::super::dataset::{Ctf, TiltCtf};
+        let dev = burn::tensor::Device::flex();
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = fixture(dir.path(), true);
+        let raw = d.tomograms[0].path.clone();
+        d.ctf = Some(Ctf { gradient:0, tilts:vec![TiltCtf { z:0,df1:20000.0,df2:20000.0,angle:0.0,fit_res:30.0,score:1.0,estimated:false }] });
+        let denoised = denoise(&dev, &mut d, &DenoiseStep { source:Some(raw.clone()),steps:20 }, &|_,_,_| {}).unwrap().paths.remove(0);
+        let display = deconvolve(&mut d, Some(&denoised), &|_,_,_| {}).unwrap().paths.remove(0);
+        assert!(d.tomograms.last().unwrap().halves.is_none());
+        let (selected, paired) = super::super::auto::display_wedge_source(&d, &raw, &display);
+        assert!(paired);
+        let req = WedgeStep { source:Some(selected.to_owned()),cfg:Some(settings()),single:false,budget_s:None };
+        let corrected = wedge(&dev, &mut d, &req, &|_,_,_| {}).unwrap().paths.remove(0);
+        assert_eq!(d.tomograms.last().unwrap().method, "icecream");
+        let final_path = deconvolve(&mut d, Some(&corrected), &|_,_,_| {}).unwrap().paths.remove(0);
+        let (values, shape, px) = load(&final_path).unwrap();
+        assert_eq!(shape, [16;3]);
+        assert!((px-11.0).abs()<1e-5 && values.iter().all(|x|x.is_finite()));
+        std::fs::remove_file(dir.path().join("odd.mrc")).unwrap();
+        assert_eq!(super::super::auto::display_wedge_source(&d, &raw, &display), (display.as_str(), false));
+    }
+
+    #[test]
+    fn mismatched_half_grids_fail_before_training_or_saving() {
+        for (name, shape, px) in [("odd.mrc",[32,16,8],11.0),("odd.mrc",[16;3],22.0),
+            ("source.mrc",[32,16,8],11.0),("source.mrc",[16;3],22.0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut d = fixture(dir.path(),true);
+            let bad = dir.path().join(name);
+            output::write_mrc(bad.to_str().unwrap(), &vec![1.0;4096],shape,px,false).unwrap();
+            d.save().unwrap();
+            let metadata = super::super::dataset::path_for(&d.stack);
+            let before = std::fs::read(&metadata).unwrap();
+            let req = WedgeStep { source:None,cfg:Some(settings()),single:false,budget_s:None };
+            let err = wedge(&burn::tensor::Device::flex(), &mut d, &req, &|_,_,_| {}).err().expect("incompatible half grid must fail");
+            assert!(err.to_string().contains("尺寸或像素标定不一致"),"{err:#}");
+            assert_eq!(d.tomograms.len(),1);
+            assert_eq!(std::fs::read(metadata).unwrap(),before);
+            assert!(!std::fs::read_dir(dir.path()).unwrap().any(|p|p.unwrap().file_name().to_string_lossy().contains("_wedge")));
+        }
+    }
+
+    /// Real 30-second estimator / cancellation path, kept out of routine CI.
+    #[test]
+    #[ignore]
+    fn wedge_budget_skip_leaves_no_output_and_allows_the_next_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = fixture(dir.path(), true);
+        d.save().unwrap();
+        let before = std::fs::read(super::super::dataset::path_for(&d.stack)).unwrap();
+        let mut cfg = settings();
+        cfg.steps = 1_000_000;
+        let req = WedgeStep { source:None, cfg:Some(cfg), single:false, budget_s:Some(0.001) };
+        let err = wedge(&burn::tensor::Device::flex(), &mut d, &req, &|_,_,_| {}).err().expect("budget should stop training");
+        assert!(err.downcast_ref::<TooSlow>().is_some(), "{err:#}");
+        assert_eq!(d.tomograms.len(), 1);
+        assert_eq!(std::fs::read(super::super::dataset::path_for(&d.stack)).unwrap(), before);
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|p| p.unwrap().file_name().to_string_lossy().contains("wedge")));
+        assert!(!crate::wedge::CANCEL.load(Ordering::SeqCst));
+        let req = WedgeStep { source:None, cfg:Some(settings()), single:false, budget_s:None };
+        assert!(wedge(&burn::tensor::Device::flex(), &mut d, &req, &|_,_,_| {}).is_ok());
+    }
 }

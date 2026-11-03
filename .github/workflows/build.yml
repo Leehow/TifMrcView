@@ -112,6 +112,7 @@ jobs:
           cargo test --features pro --lib
           cargo check --features pro
           cargo test -p tmv-sam
+          cargo run --features pro --example wedge_repro -- --cpu
 
       - name: Headless thumbnail core
         working-directory: src-tauri

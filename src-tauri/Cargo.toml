@@ -144,6 +144,14 @@ name = "wedge_holdout"
 required-features = ["pro"]
 
 [[example]]
+name = "wedge_repro"
+required-features = ["pro"]
+
+[[example]]
+name = "wedge_prepare"
+required-features = ["pro"]
+
+[[example]]
 name = "cryoet_quality"
 required-features = ["pro"]
 

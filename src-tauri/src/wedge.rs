@@ -564,6 +564,7 @@ pub struct TrainConfig {
     pub noise: f32,
     pub base: usize,
     pub levels: usize,
+    /// Network initialization, patch selection and augmentation.
     pub seed: u64,
     /// Gaussian low-pass of the volume first (σ in voxels, 0 = none).
     pub smooth: f32,
@@ -629,6 +630,7 @@ pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progr
     let orig: Vec<Vec<f32>> = busiest(vol, n, cfg.count.max(1), cfg.seed).into_iter().map(|o| vol.cube(o, [n; 3])).collect();
     let mut data = orig.clone();
     let ad = dev.clone().autodiff();
+    ad.seed(cfg.seed);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
@@ -879,6 +881,7 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
     let window_e = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
     let measured = keep_v.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
     let keep_w = Tensor::<4>::from_data(TensorData::new(keep_v.iter().map(|&k| k / measured).collect::<Vec<f32>>().repeat(bb), [bb, n, n, n]), &ad);
+    ad.seed(cfg.seed);
     let mut net = Net::new(cfg.base, cfg.levels, &ad);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
@@ -1542,7 +1545,7 @@ mod tests {
             ..Default::default()
         };
         // Correlation with the truth, overall and inside the wedge only.
-        let score = |v: &[f32]| -> (f32, f32) {
+        let score = |v: &[f32]| {
             let corr = |x: &[f32], y: &[f32]| {
                 let (mx, my) = (x.iter().sum::<f32>() / x.len() as f32, y.iter().sum::<f32>() / y.len() as f32);
                 let (mut sxy, mut sxx, mut syy) = (0f32, 0f32, 0f32);
@@ -1554,18 +1557,24 @@ mod tests {
                 sxy / (sxx * syy).sqrt().max(1e-12)
             };
             let wedge = |x: &[f32]| -> Vec<f32> { x.iter().zip(sp.cut(x)).map(|(a, b)| a - b).collect() };
-            (corr(v, &truth.v), corr(&wedge(v), &wedge(&truth.v)))
+            let (pred, target) = (wedge(v), wedge(&truth.v));
+            let energy = target.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().max(1e-30);
+            serde_json::json!({
+                "overall_corr": corr(v, &truth.v), "missing_corr": corr(&pred, &target),
+                "missing_nrmse": (pred.iter().zip(&target).map(|(x,y)| (*x as f64 - *y as f64).powi(2)).sum::<f64>() / energy).sqrt(),
+                "missing_rms_ratio": (pred.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / energy).sqrt(),
+            })
         };
-        eprintln!("input (mean of halves): {:?}", score(&full));
+        eprintln!("input (mean of halves): {}", score(&full));
         if std::env::var("WONE").is_err() {
         let t0 = std::time::Instant::now();
         let one = train_and_apply(&dev, &full, truth.n, [-60.0, 60.0], &TrainConfig { smooth: 1.0, ..cfg.clone() }, |_| {}).unwrap();
-        eprintln!("one tomogram, σ1 pre-smooth: {:?} in {:.0?}", score(&one), t0.elapsed());
+        eprintln!("one tomogram, σ1 pre-smooth: {} in {:.0?}", score(&one), t0.elapsed());
         }
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
         let t0 = std::time::Instant::now();
         let two = train_halves_and_apply(&dev, &a, &b, truth.n, &tilts, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
-        eprintln!("halves: {:?} in {:.0?}", score(&two), t0.elapsed());
+        eprintln!("halves: {} in {:.0?}", score(&two), t0.elapsed());
     }
 
     #[test]
