@@ -139,7 +139,7 @@
     </details>
     <details id="lab-mem">
       <summary>膜分割（断层）</summary>
-      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」；其中呈球壳状的单独写进「囊泡」，并测出直径。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
+      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」；其中呈球壳状的单独写进「囊泡」，并测出直径；微管写进「微管」。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
       <div class="row">
         <button class="small primary" id="lab-mem-run" title="分割整个断层里的膜（Esc 停止）">自动分割膜</button>
       </div>
@@ -1460,7 +1460,7 @@
     M.busy = true;
     M.text = "";
     syncMem();
-    const STAGES = { read: "读取断层", net: "网络推理" };
+    const STAGES = { read: "读取断层", net: "网络推理", tubes: "找微管" };
     const un = await T.event.listen("membrane-progress", (ev) => {
       const p = ev.payload;
       M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
@@ -1479,6 +1479,8 @@
           const sd = Math.sqrt(d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length);
           M.text += `，其中 ${d.length} 个囊泡，直径 ${mean.toFixed(1)} ± ${sd.toFixed(1)} nm`;
         }
+        const mt = r.microtubules || [];
+        if (mt.length) M.text += `；${mt.length} 根微管，共 ${(mt.reduce((a, b) => a + b, 0) / 1000).toFixed(2)} µm`;
       }
       if (r) {
         L.active = r.label;

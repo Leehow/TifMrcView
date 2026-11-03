@@ -522,34 +522,42 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
 pub const VESICLE_MATERIAL: &str = "囊泡";
 pub const VESICLE_COLOR: [u8; 3] = [92, 190, 60];
 
+/// Material microtubules (`crate::filaments`) go to.
+pub const TUBE_MATERIAL: &str = "微管";
+pub const TUBE_COLOR: [u8; 3] = [240, 110, 20];
+
 /// Writes `mask` (dims `n`, `pixel_a` Å per voxel) into `l` in one undo step:
-/// vesicles (`vesicles::find`) as "囊泡", the other membranes as "膜".
-/// Returns the changed slices, the membrane label and the vesicles.
-pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], n: [usize; 3], pixel_a: f32, guard: u16) -> (Vec<usize>, u16, Vec<vesicles::Vesicle>) {
+/// vesicles (`vesicles::find`) as "囊泡", the other membranes as "膜", and
+/// the microtubule voxels `tubes` (when given) as "微管". Returns the changed
+/// slices, the membrane label and the vesicles.
+pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], tubes: Option<&[bool]>, n: [usize; 3], pixel_a: f32, guard: u16) -> (Vec<usize>, u16, Vec<vesicles::Vesicle>) {
     let (ves, is_ves) = vesicles::find(mask, n, pixel_a);
     let label = l.material_label(MATERIAL, COLOR);
     let vlabel = if ves.is_empty() { 0 } else { l.material_label(VESICLE_MATERIAL, VESICLE_COLOR) };
+    let tubes = tubes.filter(|t| t.iter().any(|&b| b));
+    let tlabel = if tubes.is_some() { l.material_label(TUBE_MATERIAL, TUBE_COLOR) } else { 0 };
     let plane = n[0] * n[1];
+    let tube = |i: usize| tubes.is_some_and(|t| t[i]);
     let classes: Vec<(usize, Vec<u16>)> = (0..n[2])
-        .filter(|&z| mask[z * plane..(z + 1) * plane].iter().any(|&b| b))
+        .filter(|&z| (z * plane..(z + 1) * plane).any(|i| mask[i] || tube(i)))
         .map(|z| {
-            let r = z * plane..(z + 1) * plane;
-            (z, mask[r.clone()].iter().zip(&is_ves[r]).map(|(&m, &v)| if v { vlabel } else if m { label } else { 0 }).collect())
+            let class = |i: usize| if is_ves[i] { vlabel } else if mask[i] { label } else if tube(i) { tlabel } else { 0 };
+            (z, (z * plane..(z + 1) * plane).map(class).collect())
         })
         .collect();
     (l.apply_classes(&classes, guard), label, ves)
 }
 
-/// Writes `mask` (dims `n`) into the label map beside `image` (see `apply`),
-/// keeping labels already there; returns the label file.
-pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], pixel_a: f32) -> Result<String> {
+/// Writes `mask` and `tubes` (dims `n`) into the label map beside `image`
+/// (see `apply`), keeping labels already there; returns the label file.
+pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&[bool]>, pixel_a: f32) -> Result<String> {
     let path = crate::labels::labels_path(image, 0);
     let mut l = if Path::new(&path).exists() {
         crate::labels::Labels::load(Path::new(&path), n[0], n[1], n[2])?
     } else {
         crate::labels::Labels::new(n[0], n[1], n[2])
     };
-    apply(&mut l, mask, n, pixel_a, 0);
+    apply(&mut l, mask, tubes, n, pixel_a, 0);
     l.save(Path::new(&path))?;
     Ok(path)
 }

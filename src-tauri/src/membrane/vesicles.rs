@@ -524,7 +524,7 @@ mod tests {
             }
         }
         let mut l = crate::labels::Labels::new(n[0], n[1], n[2]);
-        let (zs, label, ves) = crate::membrane::apply(&mut l, &m, n, 10.0, 0);
+        let (zs, label, ves) = crate::membrane::apply(&mut l, &m, None, n, 10.0, 0);
         assert_eq!(ves.len(), 1);
         assert!(!zs.is_empty());
         let vlabel = l.materials.iter().find(|m| m.name == crate::membrane::VESICLE_MATERIAL).unwrap().label;
