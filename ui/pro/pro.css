@@ -26,6 +26,10 @@
 #vol-panel .vp-obj { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; }
 #vol-panel .vp-obj .dim { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 #vol-panel .vp-obj-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+#vol-panel .vp-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+#vol-panel .vp-class { padding: 2px 6px 2px 4px; font-size: 11px; border: 1px solid var(--line-strong); border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
+#vol-panel .vp-class::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--c); }
+#vol-panel .vp-class.on { border-color: var(--accent); color: var(--accent); }
 #vol-panel .vp-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 
 /* Segmentation labels (labels.js). */

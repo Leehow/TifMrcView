@@ -1073,6 +1073,14 @@ void main() { outColor = vec4(1.0); }`;
     return s;
   }
 
+  // One-click classes for picked objects, coloured like published
+  // segmentation figures (e.g. Houcek et al. 2026, Fig. 4). "囊泡" matches
+  // the material membrane segmentation writes vesicles to.
+  const CLASSES = [
+    ["囊泡", [92, 190, 60]], ["其他囊泡", [140, 140, 140]], ["质膜", [86, 190, 233]], ["线粒体", [240, 220, 40]],
+    ["内质网", [40, 60, 170]], ["微管", [240, 110, 20]], ["突触后致密区", [190, 140, 230]], ["其他膜", [255, 196, 0]],
+  ];
+
   /// Shows what is known about the picked object (-1 = none) with its actions.
   function showObject(i) {
     const labels = window.TifMrcViewPro.labels;
@@ -1119,7 +1127,22 @@ void main() { outColor = vec4(1.0); }`;
     const row = document.createElement("div");
     row.className = "vp-row";
     row.append(hide, del);
-    box.append(title, size, move, row);
+    const chips = document.createElement("div");
+    chips.className = "vp-classes";
+    chips.title = "把这个物体归到一类结构（可以撤销）";
+    for (const [name, rgb] of CLASSES) {
+      const b = document.createElement("button");
+      b.className = "vp-class";
+      b.textContent = name;
+      b.style.setProperty("--c", `rgb(${rgb.join(",")})`);
+      if (labels.nameOf(o.label) === name) b.classList.add("on");
+      b.addEventListener("click", () => {
+        if (labels.nameOf(o.label) === name) return;
+        relabel(i, labels.materialLabel(name, rgb));
+      });
+      chips.append(b);
+    }
+    box.append(title, size, chips, move, row);
   }
 
   async function relabel(i, label) {

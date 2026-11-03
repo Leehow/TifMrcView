@@ -8,8 +8,14 @@
 //! of a vesicle, and the membrane must go round it: seen from the centre it
 //! covers most directions. Directions near the beam axis are not counted,
 //! since the missing wedge erases membranes facing the beam, nor directions
-//! that leave the tomogram. A solid blob, a flat sheet, a tube or two
-//! touching vesicles fail one of the checks and stay plain membrane.
+//! that leave the tomogram. A solid blob, a flat sheet or a tube fails one
+//! of the checks and stays plain membrane.
+//!
+//! Vesicles that touch each other or another membrane make one piece that
+//! is no sphere. In such a piece spheres are searched with RANSAC: a sphere
+//! through four nearby voxels, kept when enough of the piece lies on it and
+//! it passes the same checks; its voxels are then taken out and the search
+//! goes on until it keeps failing.
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -38,9 +44,21 @@ pub struct Vesicle {
     pub voxels: usize,
 }
 
-/// One piece of membrane: its voxels (indices, X fastest), or None when it
-/// is too big to be a vesicle.
-fn pieces(mask: &[bool], n: [usize; 3], max_side: usize) -> Vec<Vec<u32>> {
+/// RANSAC: spheres up to this radius (nm) are searched in pieces that are
+/// no sphere, from points this close to the first one.
+const SPLIT_R_MAX: f64 = 60.0;
+/// Membrane thickness the voxels on a sphere are counted in, nm.
+const THICK: f64 = 4.0;
+/// Share of the expected voxels a RANSAC sphere must collect.
+const MIN_FILL: f64 = 0.4;
+/// The search in a piece stops after this many failed tries in a row.
+const MAX_FAILS: usize = 400;
+/// Pieces with more voxels than this are not searched (whole cell membranes).
+const MAX_SPLIT_VOXELS: usize = 4 << 20;
+
+/// The 26-connected pieces of membrane: their voxels (indices, X fastest).
+/// Pieces larger than `max_voxels` are left out.
+fn pieces(mask: &[bool], n: [usize; 3], max_voxels: usize) -> Vec<Vec<u32>> {
     let (w, h, d) = (n[0], n[1], n[2]);
     let mut seen = vec![0u64; mask.len().div_ceil(64)];
     let mut out = vec![];
@@ -52,17 +70,12 @@ fn pieces(mask: &[bool], n: [usize; 3], max_side: usize) -> Vec<Vec<u32>> {
         seen[start / 64] |= 1 << (start % 64);
         stack.push(start as u32);
         let mut vox = vec![];
-        let (mut lo, mut hi) = ([usize::MAX; 3], [0usize; 3]);
         let mut big = false;
         while let Some(i) = stack.pop() {
             let i = i as usize;
             let p = [i % w, (i / w) % h, i / (w * h)];
             if !big {
-                for a in 0..3 {
-                    lo[a] = lo[a].min(p[a]);
-                    hi[a] = hi[a].max(p[a]);
-                }
-                if (0..3).any(|a| hi[a] - lo[a] > max_side) {
+                if vox.len() >= max_voxels {
                     big = true;
                     vox = vec![];
                 } else {
@@ -131,12 +144,88 @@ fn fit_sphere(pts: &[[f64; 3]]) -> Option<([f64; 3], f64)> {
     (r2 > 0.0).then(|| ([x[0], x[1], x[2]], r2.sqrt()))
 }
 
-/// Tests one piece; `size` is the tomogram in nm.
-fn vesicle(pts: &[[f64; 3]], size: [f64; 3]) -> Option<([f64; 3], f64)> {
+/// Whether the membrane around a sphere (centre `c`, radius `r`) goes on
+/// as a tube: of the points of `ctx` a little outside the sphere, most lie
+/// at one distance from the line through `c` along which they spread, on
+/// both sides of it. Only a tube does that; a
+/// touching flat membrane or vesicle does not. Tubes along the beam look
+/// like vesicles in every slice.
+fn tube(ctx: &[[f64; 3]], c: [f64; 3], r: f64, hits: usize, size: [f64; 3]) -> bool {
+    let beyond: Vec<[f64; 3]> = ctx
+        .iter()
+        .map(|p| [p[0] - c[0], p[1] - c[1], p[2] - c[2]])
+        .filter(|v| {
+            let d = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            d > r + THICK && d < 2.0 * r + THICK
+        })
+        .collect();
+    if (beyond.len() as f64) < 0.3 * hits as f64 {
+        return false;
+    }
+    // Main direction of the points beyond (power iteration on their scatter).
+    let mut m = [[0f64; 3]; 3];
+    for v in &beyond {
+        for i in 0..3 {
+            for j in 0..3 {
+                m[i][j] += v[i] * v[j];
+            }
+        }
+    }
+    let mut a = [0.3, 0.5, 0.8];
+    for _ in 0..50 {
+        let b = [0, 1, 2].map(|i| m[i][0] * a[0] + m[i][1] * a[1] + m[i][2] * a[2]);
+        let l = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt().max(1e-12);
+        a = b.map(|x| x / l);
+    }
+    let tq: Vec<(f64, f64)> = beyond
+        .iter()
+        .map(|v| {
+            let t = v[0] * a[0] + v[1] * a[1] + v[2] * a[2];
+            (t, (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] - t * t).max(0.0).sqrt())
+        })
+        .collect();
+    let mut qs: Vec<f64> = tq.iter().map(|x| x.1).collect();
+    qs.sort_by(f64::total_cmp);
+    let tube_r = qs[qs.len() / 2];
+    let (mut fore, mut back) = (0usize, 0usize);
+    for &(t, q) in &tq {
+        if (q - tube_r).abs() <= THICK / 2.0 + 1.0 && tube_r <= r + THICK {
+            if t > 0.0 {
+                fore += 1;
+            } else {
+                back += 1;
+            }
+        }
+    }
+    if (fore + back) * 2 > beyond.len() && fore.min(back) as f64 >= 0.1 * hits as f64 {
+        return true;
+    }
+    // A tube along the beam, the case the missing wedge hides: points at
+    // radius r around the vertical through `c`, above and below the sphere
+    // (or the tomogram ends there).
+    let (mut up, mut down) = (0usize, 0usize);
+    for v in &beyond {
+        let rxy = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        if (rxy - r).abs() <= THICK / 2.0 + 1.0 && v[2].abs() > r * 0.8 {
+            if v[2] > 0.0 {
+                up += 1;
+            } else {
+                down += 1;
+            }
+        }
+    }
+    let side = |n: usize, z: f64| n as f64 >= 0.1 * hits as f64 || z < 0.0 || z > size[2];
+    up.max(down) as f64 >= 0.1 * hits as f64 && side(up, c[2] + 1.5 * r + THICK) && side(down, c[2] - 1.5 * r - THICK)
+}
+
+/// Tests the points `pts` of a possible vesicle; `ctx` is the whole piece
+/// they belong to and `size` the tomogram, nm.
+fn vesicle(pts: &[[f64; 3]], ctx: &[[f64; 3]], size: [f64; 3]) -> Option<([f64; 3], f64)> {
     let (c, r) = fit_sphere(pts)?;
-    // Most of a vesicle is inside the tomogram, so its centre is too; arcs of
-    // bigger membranes cut by the border fit spheres centred outside.
-    if !(R_MIN..=R_MAX).contains(&r) || (0..3).any(|a| c[a] < 0.0 || c[a] > size[a]) {
+    // Most of a vesicle is inside the tomogram, so its centre is well inside
+    // too; arcs of bigger membranes cut by the border fit spheres centred
+    // near or beyond it.
+    if !(R_MIN..=R_MAX).contains(&r) || (0..3).any(|a| c[a] < 0.25 * r || c[a] > size[a] - 0.25 * r) {
         return None;
     }
     let ms = pts.iter().map(|p| ((0..3).map(|a| (p[a] - c[a]).powi(2)).sum::<f64>().sqrt() - r).powi(2)).sum::<f64>() / pts.len() as f64;
@@ -174,18 +263,112 @@ fn vesicle(pts: &[[f64; 3]], size: [f64; 3]) -> Option<([f64; 3], f64)> {
     }
     // Enough of the counted band must be inside the tomogram to judge.
     let band = (0..RINGS).filter(|&k| (((k as f64 + 0.5) / RINGS as f64) * 2.0 - 1.0).abs() <= WEDGE_COS).count() * SECTORS;
-    (2 * counted >= band && covered as f64 >= MIN_COVER * counted as f64).then_some((c, r))
+    (2 * counted >= band && covered as f64 >= MIN_COVER * counted as f64 && !tube(ctx, c, r, pts.len(), size)).then_some((c, r))
+}
+
+/// Small deterministic random numbers for RANSAC.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n.max(1) as u64) as usize
+    }
+}
+
+/// Spheres in a piece that is no sphere as a whole (see the module notes).
+/// `vox_nm3` is the volume of a voxel. Returns per sphere the indices of its
+/// points, centre and radius.
+fn split(pts: &[[f64; 3]], size: [f64; 3], vox_nm3: f64) -> Vec<(Vec<usize>, [f64; 3], f64)> {
+    const CELL: f64 = 10.0;
+    let key = |p: &[f64; 3]| [(p[0] / CELL).floor() as i32, (p[1] / CELL).floor() as i32, (p[2] / CELL).floor() as i32];
+    let mut grid: std::collections::HashMap<[i32; 3], Vec<usize>> = std::collections::HashMap::new();
+    for (i, p) in pts.iter().enumerate() {
+        grid.entry(key(p)).or_default().push(i);
+    }
+    // Indices of live points within `reach` of `c`.
+    let near = |c: &[f64; 3], reach: f64, alive: &[bool]| -> Vec<usize> {
+        let (lo, hi) = (key(&c.map(|v| v - reach)), key(&c.map(|v| v + reach)));
+        let mut out = vec![];
+        for x in lo[0]..=hi[0] {
+            for y in lo[1]..=hi[1] {
+                for z in lo[2]..=hi[2] {
+                    if let Some(v) = grid.get(&[x, y, z]) {
+                        out.extend(v.iter().copied().filter(|&i| alive[i]));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let on = |i: usize, c: &[f64; 3], r: f64| {
+        let d = (0..3).map(|a| (pts[i][a] - c[a]).powi(2)).sum::<f64>().sqrt();
+        (d - r).abs() <= THICK / 2.0 + 0.5
+    };
+    let mut alive = vec![true; pts.len()];
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ pts.len() as u64);
+    let mut out = vec![];
+    let mut fails = 0;
+    while fails < MAX_FAILS {
+        let left: usize = alive.iter().filter(|&&a| a).count();
+        if left < 8 {
+            break;
+        }
+        fails += 1;
+        let mut p0 = rng.below(pts.len());
+        for _ in 0..16 {
+            if alive[p0] {
+                break;
+            }
+            p0 = rng.below(pts.len());
+        }
+        if !alive[p0] {
+            continue;
+        }
+        let nb = near(&pts[p0], 2.0 * SPLIT_R_MAX, &alive);
+        if nb.len() < 8 {
+            continue;
+        }
+        let four = [pts[p0], pts[nb[rng.below(nb.len())]], pts[nb[rng.below(nb.len())]], pts[nb[rng.below(nb.len())]]];
+        let Some((c, r)) = fit_sphere(&four) else { continue };
+        if !(R_MIN..=SPLIT_R_MAX).contains(&r) {
+            continue;
+        }
+        // Expected voxels of a shell without the wedge caps.
+        let expected = 4.0 * std::f64::consts::PI * r * r * WEDGE_COS * THICK / vox_nm3;
+        let mut hits: Vec<usize> = near(&c, r + THICK, &alive).into_iter().filter(|&i| on(i, &c, r)).collect();
+        if (hits.len() as f64) < MIN_FILL * expected {
+            continue;
+        }
+        // Refit on the points on the sphere a few times, so a touching
+        // membrane does not pull it.
+        for _ in 0..4 {
+            let sub: Vec<[f64; 3]> = hits.iter().map(|&i| pts[i]).collect();
+            let Some((c, r)) = fit_sphere(&sub) else { break };
+            hits = near(&c, r + THICK, &alive).into_iter().filter(|&i| on(i, &c, r)).collect();
+        }
+        let sub: Vec<[f64; 3]> = hits.iter().map(|&i| pts[i]).collect();
+        let Some((c, r)) = vesicle(&sub, pts, size) else { continue };
+        let hits: Vec<usize> = near(&c, r + THICK, &alive).into_iter().filter(|&i| on(i, &c, r)).collect();
+        for &i in &hits {
+            alive[i] = false;
+        }
+        out.push((hits, c, r));
+        fails = 0;
+    }
+    out
 }
 
 /// Finds the vesicles in a membrane mask (dims `n`, X fastest, `pixel_a` Å
 /// per voxel). Returns them and the mask of their voxels.
 pub fn find(mask: &[bool], n: [usize; 3], pixel_a: f32) -> (Vec<Vesicle>, Vec<bool>) {
     let nm = pixel_a as f64 / 10.0;
-    let max_side = ((2.0 * R_MAX + 20.0) / nm).ceil() as usize;
     let size = [n[0] as f64 * nm, n[1] as f64 * nm, n[2] as f64 * nm];
-    let found: Vec<(Vec<u32>, [f64; 3], f64)> = pieces(mask, n, max_side)
+    let found: Vec<(Vec<u32>, [f64; 3], f64)> = pieces(mask, n, MAX_SPLIT_VOXELS)
         .into_par_iter()
-        .filter_map(|vox| {
+        .flat_map_iter(|vox| {
             let pts: Vec<[f64; 3]> = vox
                 .iter()
                 .map(|&i| {
@@ -193,8 +376,10 @@ pub fn find(mask: &[bool], n: [usize; 3], pixel_a: f32) -> (Vec<Vesicle>, Vec<bo
                     [((i % n[0]) as f64 + 0.5) * nm, (((i / n[0]) % n[1]) as f64 + 0.5) * nm, ((i / (n[0] * n[1])) as f64 + 0.5) * nm]
                 })
                 .collect();
-            let (c, r) = vesicle(&pts, size)?;
-            Some((vox, c, r))
+            if let Some((c, r)) = vesicle(&pts, &pts, size) {
+                return vec![(vox, c, r)];
+            }
+            split(&pts, size, nm * nm * nm).into_iter().map(|(idx, c, r)| (idx.iter().map(|&i| vox[i]).collect(), c, r)).collect()
         })
         .collect();
     let mut is = vec![false; mask.len()];
@@ -230,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_vesicles_not_sheets_blobs_or_pairs() {
+    fn finds_vesicles_and_touching_pairs_not_sheets_or_blobs() {
         // 10 Å voxels: 1 voxel = 1 nm.
         let n = [160, 160, 80];
         let mut m = vec![false; n[0] * n[1] * n[2]];
@@ -238,7 +423,7 @@ mod tests {
         shell(&mut m, n, [100.0, 40.0, 40.0], 18.0, 4.0);
         // Cut by the top of the tomogram (centre 10 nm below it): still a vesicle.
         shell(&mut m, n, [40.0, 120.0, 72.0], 20.0, 4.0);
-        // Two touching vesicles: one piece, not a sphere.
+        // Two touching vesicles: one piece, split into two.
         shell(&mut m, n, [100.0, 110.0, 40.0], 18.0, 4.0);
         shell(&mut m, n, [134.0, 110.0, 40.0], 18.0, 4.0);
         // A flat sheet and a solid ball.
@@ -259,10 +444,10 @@ mod tests {
             }
         }
         let (v, is) = find(&m, n, 10.0);
-        assert_eq!(v.len(), 3, "{v:?}");
+        assert_eq!(v.len(), 5, "{v:?}");
         let mut d: Vec<f32> = v.iter().map(|v| v.diameter).collect();
         d.sort_by(f32::total_cmp);
-        for (got, want) in d.iter().zip([36.0, 40.0, 44.0]) {
+        for (got, want) in d.iter().zip([36.0, 36.0, 36.0, 40.0, 44.0]) {
             assert!((got - want).abs() < 2.0, "{d:?}");
         }
         assert!(is[(40 * n[1] + 30) * n[0] + 8]);
@@ -285,6 +470,45 @@ mod tests {
         for v in ves.iter().take(40) {
             eprintln!("  {:?} {:.1} nm {} voxels", v.center.map(|c| c.round()), v.diameter, v.voxels);
         }
+    }
+
+    #[test]
+    fn vesicle_touching_a_membrane_is_found() {
+        let n = [128, 128, 64];
+        let mut m = vec![false; n[0] * n[1] * n[2]];
+        // A wavy sheet across the whole volume and a vesicle resting on it.
+        for z in 0..n[2] {
+            for x in 0..n[0] {
+                let y0 = 40.0 + 6.0 * (x as f64 / 20.0).sin();
+                for y in (y0 - 2.0) as usize..(y0 + 2.0) as usize {
+                    m[(z * n[1] + y) * n[0] + x] = true;
+                }
+            }
+        }
+        shell(&mut m, n, [64.0, 40.0 + 6.0 * (64.0f64 / 20.0).sin() + 22.0, 32.0], 20.0, 4.0);
+        let (v, is) = find(&m, n, 10.0);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!((v[0].diameter - 40.0).abs() < 2.5, "{v:?}");
+        // The sheet away from the vesicle stays membrane.
+        assert!(!is[(32 * n[1] + 40) * n[0] + 10]);
+    }
+
+    #[test]
+    fn tube_along_the_beam_is_not_a_vesicle() {
+        let n = [64, 64, 96];
+        let mut m = vec![false; n[0] * n[1] * n[2]];
+        for z in 0..n[2] {
+            for y in 0..n[1] {
+                for x in 0..n[0] {
+                    let r = ((x as f64 + 0.5 - 32.0).powi(2) + (y as f64 + 0.5 - 32.0).powi(2)).sqrt();
+                    if (r - 18.0).abs() <= 2.0 {
+                        m[(z * n[1] + y) * n[0] + x] = true;
+                    }
+                }
+            }
+        }
+        let (v, _) = find(&m, n, 10.0);
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
