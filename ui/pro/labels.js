@@ -1597,6 +1597,14 @@
     hidden,
     /** Gives object `object` of the 3D surfaces label `label` (0 deletes it), undoable. */
     relabelObject: (object, label) => editWith("labels_object_relabel", { token: L.token, object, label }),
+    /** The label of the material called `name`, made with `color` when there is none. */
+    materialLabel: (name, color) => {
+      const old = Object.values(L.materials).find((m) => m.name === name);
+      if (old) return old.label;
+      const k = Math.max(0, maxUsedOf(L.counts), ...Object.keys(L.materials).map(Number)) + 1;
+      setMaterial(k, { name, color });
+      return k;
+    },
     /** Labels in use, ascending. */
     used: () => L.counts.map((n, k) => (k > 0 && n > 0 ? k : 0)).filter((k) => k),
   };
