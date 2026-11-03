@@ -2705,7 +2705,6 @@ function showSize(a) {
   }
   if (a && a.type === "line") $("measure-out").textContent = sizeText(a);
   $("ann-del").hidden = !a || a !== S.picked;
-  if (!a || a !== S.picked) $("ann-menu").hidden = true;
 }
 
 // Undo history: every change to annotations or the crop first saves a
@@ -2772,7 +2771,6 @@ function restore(h) {
 }
 
 function deletePicked() {
-  $("ann-menu").hidden = true;
   if (!S.picked) return false;
   pushHistory(snapshot());
   S.ann = S.ann.filter((a) => a !== S.picked);
@@ -2834,7 +2832,6 @@ for (const id of ["ann-z0", "ann-z1"])
 $("ann-z-one").addEventListener("click", () => S.zEdit && setAnnZ(S.zEdit, S.z, S.z));
 $("ann-z-all").addEventListener("click", () => S.zEdit && setAnnZ(S.zEdit, 0, S.info.sizeZ - 1));
 $("ann-del").addEventListener("click", () => deletePicked());
-$("ann-menu-del").addEventListener("click", () => deletePicked());
 for (const el of [$("ann-z0"), $("ann-z1")])
   el.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === "Escape") {
@@ -2988,33 +2985,6 @@ function setCursor(p) {
 // second finger can take over from whatever the first one started.
 const touches = new Map();
 let pinch = null;
-// Holding a finger still on an annotation picks it and offers 删除.
-let press = null;
-
-function cancelPress() {
-  if (press) clearTimeout(press.timer);
-  press = null;
-}
-
-function longPress() {
-  const { a, x, y } = press;
-  press = null;
-  // Whatever the finger started (a stroke, a drag) gives way to the menu.
-  if (S.op && S.op.kind === "draw" && S.op.item === S.cropBox) S.cropBox = null;
-  S.op = null;
-  canvas.classList.remove("drag");
-  if (S.tool !== "select") setTool("select");
-  S.picked = a;
-  showSize(a);
-  draw();
-  const r = $("stage").getBoundingClientRect();
-  const m = $("ann-menu");
-  m.style.left = `${x - r.left}px`;
-  m.style.top = `${Math.max(56, y - r.top - 24)}px`;
-  m.hidden = false;
-  if (navigator.vibrate) navigator.vibrate(15);
-}
-
 function pinchCentre() {
   const [a, b] = [...touches.values()];
   const r = canvas.getBoundingClientRect();
@@ -3026,12 +2996,6 @@ canvas.addEventListener(
   (e) => {
     if (e.pointerType !== "touch") return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    $("ann-menu").hidden = true;
-    cancelPress();
-    if (touches.size === 1 && S.info && S.annShow) {
-      const a = annAt(toImage(e), HIT / S.view.scale);
-      if (a) press = { id: e.pointerId, x: e.clientX, y: e.clientY, a, timer: setTimeout(longPress, 500) };
-    }
     if (touches.size !== 2 || !S.info) return;
     e.stopImmediatePropagation();
     // Drop the stroke or drag the first finger began.
@@ -3051,7 +3015,6 @@ canvas.addEventListener(
   (e) => {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) cancelPress();
     if (!pinch) return;
     e.stopImmediatePropagation();
     if (touches.size < 2) return;
@@ -3072,7 +3035,6 @@ for (const type of ["pointerup", "pointercancel"]) {
   canvas.addEventListener(
     type,
     (e) => {
-      if (press && press.id === e.pointerId) cancelPress();
       if (!touches.delete(e.pointerId) || !pinch) return;
       e.stopImmediatePropagation();
       // The finger left on the glass does nothing until it is lifted too.

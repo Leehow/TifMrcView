@@ -531,13 +531,10 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   .desk-only { display: none; }
 }
 
-/* Long-press menu for an annotation on touch screens. */
-#ann-menu {
-  position: absolute; z-index: 30; transform: translate(-50%, -100%);
-  padding: 4px; background: var(--surface); border: 1px solid var(--line-strong);
-  border-radius: 10px; box-shadow: var(--shadow);
+/* Touch screens: a tapped annotation's 删除 above the image, big enough for a finger. */
+@media (pointer: coarse) {
+  #size-out #ann-del { height: 34px; padding: 0 16px; font-size: 15px; color: #cf222e; }
 }
-#ann-menu button { height: 40px; padding: 0 20px; font-size: 15px; color: #cf222e; border: 0; }
 
 /* Narrow windows (a tablet held upright): the tool buttons get a row of
    their own instead of being squeezed between the file and view groups. */
