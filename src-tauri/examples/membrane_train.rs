@@ -184,9 +184,9 @@ fn main() -> Result<()> {
     let v: Vec<String> = std::env::args().collect();
     if v.get(1).map(String::as_str) == Some("--export") && v.len() == 4 {
         let dev = Device::flex();
-        let net = membrane::load(Path::new(&v[2]), &dev)?;
+        let net = membrane::load_own(Path::new(&v[2]), &dev)?;
         membrane::save(&net, Path::new(&v[3]), true)?;
-        let back = membrane::load(Path::new(&v[3]), &dev)?;
+        let back = membrane::load_own(Path::new(&v[3]), &dev)?;
         let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
         let d = (net.forward(x.clone()) - back.forward(x)).abs().max().into_scalar::<f32>();
         eprintln!("exported {} (max logit difference {d:.4})", v[3]);
@@ -280,7 +280,7 @@ fn main() -> Result<()> {
     let ad = dev.clone().autodiff();
     let mut net = MemNet::new(&cfg, &ad);
     if let Some(r) = &a.resume {
-        net = membrane::load(r, &ad)?;
+        net = membrane::load_own(r, &ad)?;
         eprintln!("resumed from {}", r.display());
     }
     let mut opt = SgdConfig::new()

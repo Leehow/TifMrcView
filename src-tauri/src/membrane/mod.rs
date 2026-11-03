@@ -1,21 +1,26 @@
 //! Membrane segmentation for tomograms (Pro), modelled on MemBrain-seg, the
 //! segmentation part of MemBrain v2 (Lamm et al., bioRxiv 2024), written here
-//! from the paper and its documentation; no code or weights are taken from it.
+//! from the paper, its documentation and the layout of its checkpoints; no
+//! code or weights are taken from it.
 //!
 //! As there: the tomogram is rescaled to 10 Å per voxel and standardised, a
-//! residual 3D U-Net (instance norm, deep supervision; `net`) scores every
+//! residual 3D U-Net (instance norm, deep supervision) scores every
 //! voxel in overlapping 160³ windows weighted by a Gaussian, the scores of
-//! mirrored copies are averaged (test-time augmentation), and voxels with a
+//! eight mirrored copies are averaged (test-time augmentation), and voxels with a
 //! positive score are membrane. Small specks are removed and the result is
 //! taken back to the tomogram's own grid.
 //!
-//! Our own network is trained by `examples/membrane_train.rs` on the
-//! MemBrain-seg training patches (Zenodo 15089686, CC BY 4.0), with heavy
-//! augmentation (`augment`). The user does not choose anything: the pixel
-//! size comes from the file, the number of mirrored copies from the
-//! measured speed.
+//! The network is the published MemBrain-seg model (`dynunet`), from a
+//! checkpoint the user downloads from its authors: the weights carry no
+//! licence, so the app does not ship them. The user picks the file once and
+//! it is remembered. Our own network (`net`), trained by
+//! `examples/membrane_train.rs` on the MemBrain-seg training patches
+//! (Zenodo 15089686, CC BY 4.0) with heavy augmentation (`augment`), loads
+//! the same way from its .safetensors file. Nothing else is chosen: the
+//! pixel size comes from the file.
 
 pub mod augment;
+pub mod dynunet;
 pub mod net;
 pub mod nifti;
 
@@ -29,6 +34,7 @@ use burn_store::{ModuleSnapshot, SafetensorsStore};
 use rayon::prelude::*;
 use serde::Serialize;
 
+pub use dynunet::DynUNet;
 pub use net::{MemNet, NetConfig};
 
 /// Voxel size the network works at (Å).
@@ -38,25 +44,12 @@ pub const WINDOW: usize = 160;
 /// Membrane patches smaller than this (nm³) are dropped.
 pub const MIN_NM3: f32 = 2000.0;
 
-pub const MODEL_FILE: &str = "membrane-v1.safetensors";
-/// Tried in order: the site, then its China mirror.
-pub const MODEL_URLS: [&str; 2] = ["https://tifmrcview.com/models/membrane-v1.safetensors", "https://dl.deepwood.cn/tifmrcview/models/membrane-v1.safetensors"];
-
-/// Size and SHA-256 of the published model (0 / empty: not checked yet).
-pub const MODEL_SIZE: u64 = 0;
-pub const MODEL_SHA256: &str = "";
-/// Seconds the app spends on extra mirrored copies.
-pub const BUDGET_S: f64 = 60.0;
+/// Where the user gets the MemBrain-seg models (the README lists the
+/// download links of each version).
+pub const MODEL_PAGE: &str = "https://github.com/teamtomo/membrain-seg";
 /// Material the result is written to.
 pub const MATERIAL: &str = "膜";
 pub const COLOR: [u8; 3] = [255, 196, 0];
-
-pub fn verify(len: u64, sha256_hex: &str) -> Result<()> {
-    if (MODEL_SIZE != 0 && len != MODEL_SIZE) || (!MODEL_SHA256.is_empty() && sha256_hex != MODEL_SHA256) {
-        bail!("膜分割模型文件校验失败");
-    }
-    Ok(())
-}
 
 /// Set to stop a running segmentation.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
@@ -68,8 +61,69 @@ fn check_cancel() -> Result<()> {
     Ok(())
 }
 
+/// The file that remembers which model the user picked.
+fn choice_file() -> Option<PathBuf> {
+    Some(crate::plugins::paths::user_dir()?.parent()?.join("models").join("membrane-model.txt"))
+}
+
+/// The model file the user picked, while it is still there.
 pub fn model_path() -> Option<PathBuf> {
-    Some(crate::plugins::paths::user_dir()?.parent()?.join("models").join(MODEL_FILE))
+    let p = PathBuf::from(std::fs::read_to_string(choice_file()?).ok()?.trim());
+    p.is_file().then_some(p)
+}
+
+/// Remembers `path` as the model after checking that it loads.
+pub fn choose(path: &Path, dev: &Device) -> Result<()> {
+    load(path, dev)?;
+    let f = choice_file().ok_or_else(|| anyhow!("找不到存放设置的文件夹"))?;
+    std::fs::create_dir_all(f.parent().unwrap())?;
+    std::fs::write(f, path.to_string_lossy().as_bytes())?;
+    Ok(())
+}
+
+/// A loaded membrane network.
+pub enum Model {
+    /// The published MemBrain-seg model.
+    MemBrain(DynUNet),
+    /// Ours.
+    Own(MemNet),
+}
+
+impl Model {
+    pub fn align(&self) -> usize {
+        match self {
+            Model::MemBrain(n) => n.align(),
+            Model::Own(n) => n.align(),
+        }
+    }
+
+    /// Whether the network takes volumes as [x, y, z] (MemBrain-seg reads
+    /// tomograms that way; its kernels are not symmetric, the missing wedge
+    /// being along z) rather than our [z, y, x].
+    pub fn xyz(&self) -> bool {
+        matches!(self, Model::MemBrain(_))
+    }
+
+    /// Logits for [n, 1, …] in the network's axis order (`xyz`).
+    pub fn forward(&self, x: Tensor<5>) -> Tensor<5> {
+        match self {
+            Model::MemBrain(n) => n.forward(x),
+            Model::Own(n) => n.forward(x),
+        }
+    }
+}
+
+/// Reverses the axis order of a volume (dims `n`, first axis fastest).
+fn transpose(v: &[f32], n: [usize; 3]) -> Vec<f32> {
+    let mut out = vec![0f32; v.len()];
+    out.par_chunks_mut(n[2] * n[1]).enumerate().for_each(|(x, plane)| {
+        for y in 0..n[1] {
+            for z in 0..n[2] {
+                plane[y * n[2] + z] = v[(z * n[1] + y) * n[0] + x];
+            }
+        }
+    });
+    out
 }
 
 /// Whether a safetensors file stores half-precision weights (the published
@@ -85,8 +139,18 @@ fn is_half(path: &Path) -> Result<bool> {
     Ok(String::from_utf8_lossy(&head).contains("\"F16\""))
 }
 
+/// Loads a MemBrain-seg checkpoint (.ckpt) or our weights (.safetensors).
+pub fn load(path: &Path, dev: &Device) -> Result<Model> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "ckpt" | "pt" | "pth" => Ok(Model::MemBrain(dynunet::load(path, dev)?)),
+        "safetensors" => Ok(Model::Own(load_own(path, dev)?)),
+        _ => bail!("膜分割模型应是 MemBrain-seg 的 .ckpt 文件"),
+    }
+}
+
 /// Loads weights saved by `save` (single or half precision).
-pub fn load(path: &Path, dev: &Device) -> Result<MemNet> {
+pub fn load_own(path: &Path, dev: &Device) -> Result<MemNet> {
     let mut net = MemNet::new(&NetConfig::default(), dev);
     let mut store = SafetensorsStore::from_file(path);
     if is_half(path)? {
@@ -165,7 +229,17 @@ pub fn grid_at(n: [usize; 3], pixel_a: f32) -> [usize; 3] {
 // ---- Inference ----
 
 /// Mirror sets for test-time augmentation, in the order they are used.
-const FLIPS: [&[usize]; 8] = [&[], &[4], &[3], &[2], &[3, 4], &[2, 4], &[2, 3], &[2, 3, 4]];
+/// (Mirrored axes x, y, z.)
+const FLIPS: [[bool; 3]; 8] = [
+    [false, false, false],
+    [true, false, false],
+    [false, true, false],
+    [false, false, true],
+    [true, true, false],
+    [true, false, true],
+    [false, true, true],
+    [true, true, true],
+];
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,42 +259,101 @@ pub struct Stats {
     pub ms: f64,
 }
 
-fn flip(x: Tensor<5>, axes: &[usize]) -> Tensor<5> {
-    match axes {
-        [] => x,
-        [a] => x.flip([*a]),
-        [a, b] => x.flip([*a, *b]),
-        _ => x.flip([2, 3, 4]),
+/// Mirrors a volume (dims `n`, x fastest) along the axes in `m`.
+fn mirror(v: Vec<f32>, n: [usize; 3], m: [bool; 3]) -> Vec<f32> {
+    if m == [false; 3] {
+        return v;
     }
+    let mut out = vec![0f32; v.len()];
+    out.par_chunks_mut(n[0] * n[1]).enumerate().for_each(|(z, plane)| {
+        let sz = if m[2] { n[2] - 1 - z } else { z };
+        for y in 0..n[1] {
+            let sy = if m[1] { n[1] - 1 - y } else { y };
+            let src = &v[(sz * n[1] + sy) * n[0]..][..n[0]];
+            let dst = &mut plane[y * n[0]..][..n[0]];
+            if m[0] {
+                dst.iter_mut().zip(src.iter().rev()).for_each(|(d, s)| *d = *s);
+            } else {
+                dst.copy_from_slice(src);
+            }
+        }
+    });
+    out
 }
 
-/// Starts of windows of `side` covering `n`, overlapping by about a third
-/// (MemBrain-seg uses half; with the Gaussian weights a third joins as
-/// smoothly and needs about 30% fewer windows).
-fn starts(n: usize, side: usize) -> Vec<usize> {
+/// How thoroughly `score` goes over the volume.
+#[derive(Clone, Copy, Debug)]
+pub enum Pass {
+    /// Windows overlapping by about a third (about 30% fewer), as many
+    /// mirrored copies beyond the first as fit in this many seconds (at most
+    /// eight in all). Faster, but fewer copies agree noticeably less with
+    /// MemBrain-seg (two copies: Dice 0.95), so only for comparisons.
+    Budget(f64),
+    /// As MemBrain-seg's own `segment`: windows overlapping by half (placed
+    /// as MONAI's sliding window does), all eight copies. The app's: on a
+    /// 240 × 160 × 128 tomogram every voxel's score was within 0.015 of
+    /// MemBrain-seg 0.0.10 (Dice 0.99986).
+    Official,
+}
+
+/// Starts of windows of `side` covering `n`, overlapping by about a third;
+/// negative when the side is shorter than a window (centred, the rest
+/// zeros, as in MemBrain-seg).
+fn starts(n: usize, side: usize) -> Vec<isize> {
     if n <= side {
-        return vec![0];
+        return vec![-(((side - n) / 2) as isize)];
     }
     let k = (n - side).div_ceil(side * 2 / 3) + 1;
-    (0..k).map(|i| ((n - side) as f64 * i as f64 / (k - 1) as f64).round() as usize).collect()
+    (0..k).map(|i| ((n - side) as f64 * i as f64 / (k - 1) as f64).round() as isize).collect()
+}
+
+/// Starts as MONAI's sliding window (overlap ½) places them.
+fn starts_official(n: usize, side: usize) -> Vec<isize> {
+    if n <= side {
+        return starts(n, side);
+    }
+    let step = side / 2;
+    let k = (n - side).div_ceil(step) + 1;
+    (0..k).map(|i| (i * step).min(n - side) as isize).collect()
 }
 
 /// Membrane scores (logits) of a standardised volume `v` (dims `n`, X
-/// fastest) already at `PIXEL_A`. Spends about `budget_s` seconds on mirrored
-/// copies beyond the first (at least one copy, at most eight).
-pub fn score(dev: &Device, net: &MemNet, v: &[f32], n: [usize; 3], budget_s: f64, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
+/// fastest) already at `PIXEL_A`, in `WINDOW`³ windows padded with zeros
+/// where the volume is thinner (as MemBrain-seg; tomograms on the 10 Å
+/// grid are often thinner than a window).
+pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
     let t0 = Instant::now();
-    let al = net.align();
-    let side: [usize; 3] = std::array::from_fn(|a| WINDOW.min(n[a].div_ceil(al) * al).max(al));
-    let st: [Vec<usize>; 3] = std::array::from_fn(|a| starts(n[a], side[a]));
+    if !WINDOW.is_multiple_of(net.align()) {
+        bail!("模型的窗口对齐不符");
+    }
+    let official = matches!(pass, Pass::Official);
+    let side = [WINDOW; 3];
+    let st: [Vec<isize>; 3] = std::array::from_fn(|a| if official { starts_official(n[a], side[a]) } else { starts(n[a], side[a]) });
     let windows = st[0].len() * st[1].len() * st[2].len();
-    // Gaussian importance (σ = side/8) so window edges count little.
+    // Gaussian importance (σ = side/8) so window edges count little, at
+    // least 1e-3 (as MONAI's sliding window, which MemBrain-seg uses: the
+    // floor is on the 3D weight, not on each axis).
     let g: [Vec<f32>; 3] = std::array::from_fn(|a| {
         let s = side[a] as f32 / 8.0;
         let c = (side[a] as f32 - 1.0) / 2.0;
-        (0..side[a]).map(|i| (-((i as f32 - c).powi(2)) / (2.0 * s * s)).exp().max(1e-3)).collect()
+        (0..side[a]).map(|i| (-((i as f32 - c).powi(2)) / (2.0 * s * s)).exp()).collect()
     });
-    let vol = crate::wedge::Vol { n, v: v.to_vec() };
+    let inside = |a: usize, o: isize, i: usize| -> Option<usize> { usize::try_from(o + i as isize).ok().filter(|&k| k < n[a]) };
+    let tile = |o: [isize; 3]| -> Vec<f32> {
+        let mut t = vec![0f32; side[0] * side[1] * side[2]];
+        for z in 0..side[2] {
+            let Some(zz) = inside(2, o[2], z) else { continue };
+            for y in 0..side[1] {
+                let Some(yy) = inside(1, o[1], y) else { continue };
+                for x in 0..side[0] {
+                    if let Some(xx) = inside(0, o[0], x) {
+                        t[(z * side[1] + y) * side[0] + x] = v[(zz * n[1] + yy) * n[0] + xx];
+                    }
+                }
+            }
+        }
+        t
+    };
     let len = n[0] * n[1] * n[2];
     let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
     let mut copies = 8;
@@ -231,19 +364,29 @@ pub fn score(dev: &Device, net: &MemNet, v: &[f32], n: [usize; 3], budget_s: f64
             for &y0 in &st[1] {
                 for &x0 in &st[0] {
                     check_cancel()?;
-                    let tile = vol.cube([x0 as isize, y0 as isize, z0 as isize], side);
-                    let x = Tensor::<5>::from_data(TensorData::new(tile, [1, 1, side[2], side[1], side[0]]), dev);
-                    let r = flip(net.forward(flip(x, FLIPS[c])), FLIPS[c]);
-                    let r: Vec<f32> = r.into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
-                    for z in 0..side[2].min(n[2] - z0) {
-                        for y in 0..side[1].min(n[1] - y0) {
+                    // Mirrored and put in the network's axis order on the host
+                    // (cheap next to the network).
+                    let t = mirror(tile([x0, y0, z0]), side, FLIPS[c]);
+                    let x = if net.xyz() {
+                        Tensor::<5>::from_data(TensorData::new(transpose(&t, side), [1, 1, side[0], side[1], side[2]]), dev)
+                    } else {
+                        Tensor::<5>::from_data(TensorData::new(t, [1, 1, side[2], side[1], side[0]]), dev)
+                    };
+                    let r: Vec<f32> = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
+                    let r = mirror(if net.xyz() { transpose(&r, [side[2], side[1], side[0]]) } else { r }, side, FLIPS[c]);
+                    for z in 0..side[2] {
+                        let Some(zz) = inside(2, z0, z) else { continue };
+                        for y in 0..side[1] {
+                            let Some(yy) = inside(1, y0, y) else { continue };
                             let wzy = g[2][z] * g[1][y];
                             let src = (z * side[1] + y) * side[0];
-                            let dst = ((z0 + z) * n[1] + y0 + y) * n[0] + x0;
-                            for x in 0..side[0].min(n[0] - x0) {
-                                let w = wzy * g[0][x];
-                                acc[dst + x] += w * r[src + x];
-                                wsum[dst + x] += w;
+                            let dst = (zz * n[1] + yy) * n[0];
+                            for x in 0..side[0] {
+                                if let Some(xx) = inside(0, x0, x) {
+                                    let w = (wzy * g[0][x]).max(1e-3);
+                                    acc[dst + xx] += w * r[src + x];
+                                    wsum[dst + xx] += w;
+                                }
                             }
                         }
                     }
@@ -252,7 +395,7 @@ pub fn score(dev: &Device, net: &MemNet, v: &[f32], n: [usize; 3], budget_s: f64
                 }
             }
         }
-        if c == 0 {
+        if let (0, Pass::Budget(budget_s)) = (c, pass) {
             // From the first pass's time, as many copies as fit the budget.
             let per = t0.elapsed().as_secs_f64().max(1e-3);
             copies = match (budget_s / per).floor() as usize + 1 {
@@ -335,8 +478,8 @@ pub struct Segmentation {
 }
 
 /// Segments the membranes of `values` (dims `n`, X fastest, `pixel_a` Å per
-/// voxel). `budget_s`: seconds to spend on extra mirrored copies.
-pub fn segment(dev: &Device, net: &MemNet, values: &[f32], n: [usize; 3], pixel_a: f32, budget_s: f64, progress: &mut dyn FnMut(Progress)) -> Result<Segmentation> {
+/// voxel).
+pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a: f32, pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<Segmentation> {
     if values.len() != n[0] * n[1] * n[2] {
         bail!("体数据大小和尺寸不符");
     }
@@ -355,7 +498,7 @@ pub fn segment(dev: &Device, net: &MemNet, values: &[f32], n: [usize; 3], pixel_
     let (m2, s2) = crate::wedge::stats(&small);
     let small: Vec<f32> = small.into_par_iter().map(|x| (x - m2) / s2).collect();
     check_cancel()?;
-    let (logits, stats) = score(dev, net, &small, m, budget_s, progress)?;
+    let (logits, stats) = score(dev, net, &small, m, pass, progress)?;
     let min = (MIN_NM3 / (PIXEL_A / 10.0).powi(3)).round() as usize;
     let (kept, components) = clean(&logits.iter().map(|&s| s > 0.0).collect::<Vec<_>>(), m, min);
     let score = resample(&logits, m, n);
@@ -404,18 +547,41 @@ mod tests {
         assert!(!is_half(&a).unwrap() && is_half(&b).unwrap());
         assert!(std::fs::metadata(&b).unwrap().len() * 3 < std::fs::metadata(&a).unwrap().len() * 2);
         let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
-        let (p, q) = (load(&a, &dev).unwrap().forward(x.clone()), load(&b, &dev).unwrap().forward(x));
+        let (p, q) = (load_own(&a, &dev).unwrap().forward(x.clone()), load_own(&b, &dev).unwrap().forward(x));
         assert!((p - q).abs().max().into_scalar::<f32>() < 0.05);
     }
 
     #[test]
+    fn transpose_reverses_axes() {
+        let n = [4, 3, 2];
+        let v: Vec<f32> = (0..24).map(|i| i as f32).collect();
+        let t = transpose(&v, n);
+        // v[x + 4 (y + 3 z)] lands at t[z + 2 (y + 3 x)].
+        assert_eq!(t[1 + 2 * (2 + 3 * 3)], v[3 + 4 * (2 + 3)]);
+        assert_eq!(transpose(&t, [2, 3, 4]), v);
+    }
+
+    #[test]
+    fn mirror_twice_is_identity() {
+        let n = [5, 4, 3];
+        let v: Vec<f32> = (0..60).map(|i| i as f32).collect();
+        for m in FLIPS {
+            assert_eq!(mirror(mirror(v.clone(), n, m), n, m), v);
+        }
+        assert_eq!(mirror(v.clone(), n, [true, false, true])[0], v[4 + 5 * 4 * 2]);
+    }
+
+    #[test]
     fn starts_cover() {
-        assert_eq!(starts(100, 160), vec![0]);
+        assert_eq!(starts(100, 160), vec![-30]);
         assert_eq!(starts(160, 160), vec![0]);
         let s = starts(400, 160);
         assert_eq!(*s.last().unwrap(), 240);
         assert!(s.windows(2).all(|w| w[1] - w[0] <= 107));
         assert_eq!(starts(837, 160).len(), 8);
+        assert_eq!(starts_official(128, 160), vec![-16]);
+        assert_eq!(starts_official(400, 160), vec![0, 80, 160, 240]);
+        assert_eq!(starts_official(410, 160), vec![0, 80, 160, 240, 250]);
     }
 
     #[test]

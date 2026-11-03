@@ -138,7 +138,7 @@
     </details>
     <details id="lab-mem">
       <summary>膜分割（断层）</summary>
-      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」。像素大小从文件读取；第一次使用会下载模型（约 100 MB）。可以一步撤回。</div>
+      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
       <div class="row">
         <button class="small primary" id="lab-mem-run" title="分割整个断层里的膜（Esc 停止）">自动分割膜</button>
       </div>
@@ -1404,11 +1404,6 @@
     M.busy = true;
     M.text = "";
     syncMem();
-    const unDl = await T.event.listen("membrane-download", (ev) => {
-      const p = ev.payload;
-      M.text = `下载模型 ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
-      syncMem();
-    });
     const STAGES = { read: "读取断层", net: "网络推理" };
     const un = await T.event.listen("membrane-progress", (ev) => {
       const p = ev.payload;
@@ -1416,8 +1411,7 @@
       syncMem();
     });
     try {
-      const st = await invoke("membrane_status");
-      if (!st.downloaded) await invoke("membrane_download");
+      if (!(await window.TifMrcViewPro.membrane.ensure())) return;
       const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
       M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : "";
       if (r) {
@@ -1429,7 +1423,6 @@
       toast(String(e), 8000);
     } finally {
       un();
-      unDl();
       M.busy = false;
       syncMem();
       draw();

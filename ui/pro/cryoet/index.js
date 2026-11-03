@@ -148,16 +148,14 @@
       try { await W.load(S.info.path); } catch (e) { return W.status(`无法载入：${e}`); }
     }
     const pixel = +$("cryo-auto-pixel").value || null;
-    // Display tomograms end with membrane segmentation: fetch its model once.
-    if ($("cryo-auto-purpose").value === "display") {
+    // Display tomograms end with membrane segmentation once the user has
+    // picked the MemBrain-seg model; asked once (closing the box skips it,
+    // the labels panel can still ask).
+    if ($("cryo-auto-purpose").value === "display" && !localStorage.getItem("tmv-mem-skip")) {
       try {
-        const m = await invoke("membrane_status");
-        if (m.available && !m.downloaded) {
-          const un = await T.event.listen("membrane-download", (e) => W.status(`下载膜分割模型 ${Math.round((100 * e.payload.done) / Math.max(1, e.payload.total))}%`));
-          try { await invoke("membrane_download"); } finally { un(); }
-        }
+        if (!(await window.TifMrcViewPro.membrane.ensure())) localStorage.setItem("tmv-mem-skip", "1");
       } catch (e) {
-        W.status(`膜分割模型下载失败（重构照常进行）：${e}`);
+        W.status(`膜分割模型不可用（重构照常进行）：${e}`);
       }
     }
     const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, fresh: false });

@@ -51,7 +51,7 @@ zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["wgpu", "flex"] }
 # Pro: the CTF fit on the same GPU backend (features come from tmv-sam).
 burn = { version = "0.22.1", optional = true, default-features = false, features = ["std", "autodiff", "optim", "signal"] }
-burn-store = { version = "0.22.1", optional = true, default-features = false, features = ["std", "safetensors"] }
+burn-store = { version = "0.22.1", optional = true, default-features = false, features = ["std", "safetensors", "pytorch"] }
 # Imaris LZ4 chunks (HDF5 filter 32004).
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 

@@ -498,7 +498,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
 }
 
 /// Segments the membranes of `source` (else the latest tomogram that is not
-/// a half) into its label map. The model must have been downloaded.
+/// a half) into its label map. The user must have picked the model.
 pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
     let src = match source {
@@ -506,11 +506,11 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
         None => d.tomograms.iter().rev().find(|t| t.kind != "even" && t.kind != "odd"),
     };
     let Some(src) = src.cloned() else { bail!("先完成重构") };
-    let model = crate::membrane::model_path().filter(|p| p.exists()).ok_or_else(|| anyhow::anyhow!("先下载膜分割模型"))?;
+    let model = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
     crate::membrane::CANCEL.store(false, Ordering::SeqCst);
     let (v, shape, px) = load(&src.path)?;
     let net = crate::membrane::load(&model, dev)?;
-    let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::BUDGET_S, &mut |p| progress("膜分割", p.done, p.total))?;
+    let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
     drop(v);
     let path = crate::membrane::write_labels(&src.path, shape, &seg.mask)?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })

@@ -329,59 +329,6 @@ async fn labels_volume(state: State<'_, AppState>, token: u64, max_voxels: usize
 
 // ---------- Pro SAM segmentation ----------
 
-/// Downloads a model file to `path` from the first of `urls` that works,
-/// reporting `event` {done, total}; `verify(bytes, sha256 hex)` checks it.
-async fn download_model(app: &AppHandle, urls: &[&str], path: &Path, size: u64, event: &str, verify: impl Fn(u64, &str) -> anyhow::Result<()>) -> CmdResult<()> {
-    use sha2::{Digest, Sha256};
-    use std::io::Write;
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
-    let part = path.with_extension("part");
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
-    let client = reqwest::Client::builder()
-        .user_agent(format!("{}/{}", crate::edition::NAME, env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .read_timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(err)?;
-    let mut last_err = String::new();
-    for url in urls {
-        let attempt = async {
-            let mut resp = client.get(*url).send().await.map_err(err)?;
-            if !resp.status().is_success() {
-                return Err(format!("服务器返回 {}", resp.status().as_u16()));
-            }
-            let total = resp.content_length().unwrap_or(size);
-            let mut file = std::io::BufWriter::new(std::fs::File::create(&part).map_err(err)?);
-            let mut hash = Sha256::new();
-            let (mut done, mut shown) = (0u64, 0u64);
-            while let Some(chunk) = resp.chunk().await.map_err(err)? {
-                file.write_all(&chunk).map_err(err)?;
-                hash.update(&chunk);
-                done += chunk.len() as u64;
-                if done - shown > 1 << 20 || done == total {
-                    shown = done;
-                    let _ = app.emit(event, serde_json::json!({ "done": done, "total": total }));
-                }
-            }
-            file.flush().map_err(err)?;
-            drop(file);
-            let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-            verify(done, &hex).map_err(err)?;
-            std::fs::rename(&part, path).map_err(err)
-        };
-        match attempt.await {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                let _ = std::fs::remove_file(&part);
-                last_err = e;
-            }
-        }
-    }
-    Err(format!("模型下载失败：{last_err}"))
-}
-
 #[tauri::command]
 fn sam_status(sam: State<'_, crate::sam::Sam>) -> crate::sam::Status {
     sam.status()
@@ -390,6 +337,8 @@ fn sam_status(sam: State<'_, crate::sam::Sam>) -> crate::sam::Status {
 /// Downloads the SAM model once, reporting `sam-download` {done, total}.
 #[tauri::command]
 async fn sam_download(app: AppHandle) -> CmdResult<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
     use std::sync::atomic::Ordering::SeqCst;
     let sam = app.state::<crate::sam::Sam>();
     if !crate::edition::PRO {
@@ -400,7 +349,52 @@ async fn sam_download(app: AppHandle) -> CmdResult<()> {
     }
     let result = async {
         let path = crate::sam::model_path().ok_or("找不到存放模型的文件夹")?;
-        download_model(&app, &crate::sam::MODEL_URLS, &path, crate::sam::MODEL_SIZE, "sam-download", |n, hex| crate::sam::verify(n, hex)).await
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
+        let part = path.with_extension("part");
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+        let client = reqwest::Client::builder()
+            .user_agent(format!("{}/{}", crate::edition::NAME, env!("CARGO_PKG_VERSION")))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .read_timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(err)?;
+        let mut last_err = String::new();
+        for url in crate::sam::MODEL_URLS {
+            let attempt = async {
+                let mut resp = client.get(url).send().await.map_err(err)?;
+                if !resp.status().is_success() {
+                    return Err(format!("服务器返回 {}", resp.status().as_u16()));
+                }
+                let total = resp.content_length().unwrap_or(crate::sam::MODEL_SIZE);
+                let mut file = std::io::BufWriter::new(std::fs::File::create(&part).map_err(err)?);
+                let mut hash = Sha256::new();
+                let (mut done, mut shown) = (0u64, 0u64);
+                while let Some(chunk) = resp.chunk().await.map_err(err)? {
+                    file.write_all(&chunk).map_err(err)?;
+                    hash.update(&chunk);
+                    done += chunk.len() as u64;
+                    if done - shown > 1 << 20 || done == total {
+                        shown = done;
+                        let _ = app.emit("sam-download", serde_json::json!({ "done": done, "total": total }));
+                    }
+                }
+                file.flush().map_err(err)?;
+                drop(file);
+                let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+                crate::sam::verify(done, &hex).map_err(err)?;
+                std::fs::rename(&part, &path).map_err(err)
+            };
+            match attempt.await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&part);
+                    last_err = e;
+                }
+            }
+        }
+        Err(format!("模型下载失败：{last_err}"))
     }
     .await;
     sam.downloading.store(false, SeqCst);
@@ -852,22 +846,26 @@ fn unet_cancel() {
 #[serde(rename_all = "camelCase")]
 struct MembraneStatus {
     available: bool,
-    downloaded: bool,
+    /// The model file the user picked, while it is there.
+    model: Option<String>,
+    /// Where to download the MemBrain-seg models.
+    page: &'static str,
 }
 
 #[tauri::command]
 fn membrane_status() -> MembraneStatus {
     #[cfg(feature = "pro")]
     {
-        MembraneStatus { available: true, downloaded: crate::membrane::model_path().is_some_and(|p| p.exists()) }
+        MembraneStatus { available: true, model: crate::membrane::model_path().map(|p| p.to_string_lossy().into_owned()), page: crate::membrane::MODEL_PAGE }
     }
     #[cfg(not(feature = "pro"))]
-    MembraneStatus { available: false, downloaded: false }
+    MembraneStatus { available: false, model: None, page: "" }
 }
 
-/// Downloads the membrane model once, reporting `membrane-download` {done, total}.
+/// Asks for the MemBrain-seg checkpoint the user downloaded, checks that it
+/// loads and remembers it. `None` when the user cancels.
 #[tauri::command]
-async fn membrane_download(app: AppHandle) -> CmdResult<()> {
+async fn membrane_choose(app: AppHandle) -> CmdResult<Option<String>> {
     #[cfg(not(feature = "pro"))]
     {
         let _ = app;
@@ -875,17 +873,14 @@ async fn membrane_download(app: AppHandle) -> CmdResult<()> {
     }
     #[cfg(feature = "pro")]
     {
-        static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if BUSY.swap(true, Ordering::SeqCst) {
-            return Err("模型正在下载".into());
-        }
-        let result = async {
-            let path = crate::membrane::model_path().ok_or("找不到存放模型的文件夹")?;
-            download_model(&app, &crate::membrane::MODEL_URLS, &path, crate::membrane::MODEL_SIZE, "membrane-download", crate::membrane::verify).await
-        }
-        .await;
-        BUSY.store(false, Ordering::SeqCst);
-        result
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app.dialog().file().set_title("选择 MemBrain-seg 模型（.ckpt）").add_filter("MemBrain-seg 模型", &["ckpt", "safetensors"]).blocking_pick_file().and_then(|f| f.into_path().ok());
+        let Some(path) = picked else { return Ok(None) };
+        blocking(move || {
+            crate::classify::on_device(|dev| crate::membrane::choose(&path, dev))?;
+            Ok(Some(path.to_string_lossy().into_owned()))
+        })
+        .await
     }
 }
 
@@ -923,7 +918,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
         blocking(move || {
             use crate::labels::Values;
             let started = std::time::Instant::now();
-            let path = crate::membrane::model_path().filter(|p| p.exists()).ok_or_else(|| anyhow::anyhow!("先下载膜分割模型"))?;
+            let path = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
             let info = img.info();
             let n = [info.width, info.height, info.size_z];
             if n[2] < 8 {
@@ -949,7 +944,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
             }
             let (seg, backend) = crate::classify::on_device(|dev| {
                 let net = crate::membrane::load(&path, dev)?;
-                crate::membrane::segment(dev, &net, &v, n, pixel_a as f32, crate::membrane::BUDGET_S, &mut |p| emit("net", p.done, p.total))
+                crate::membrane::segment(dev, &net, &v, n, pixel_a as f32, crate::membrane::Pass::Official, &mut |p| emit("net", p.done, p.total))
             })?;
             drop(v);
             let mut e = e.lock().unwrap();
@@ -2507,7 +2502,7 @@ pub fn run() {
             unet_apply,
             unet_cancel,
             membrane_status,
-            membrane_download,
+            membrane_choose,
             membrane_segment,
             membrane_cancel,
             pixel_values,

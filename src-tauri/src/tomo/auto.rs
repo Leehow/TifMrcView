@@ -28,7 +28,7 @@
 //!   of SIRT's time. 3D CTF made no measurable difference at these
 //!   samplings, so it is left out.
 //! - Display tomograms end with membrane segmentation (`crate::membrane`)
-//!   into the tomogram's label map, when the model has been downloaded.
+//!   into the tomogram's label map, when the user has picked the model.
 //! - Noise2Noise on the even/odd half tomograms when motion correction made
 //!   them (else on neighbouring sections), then the Wiener-like
 //!   deconvolution of Warp and IsoNet (`deconv`), which restores the low
@@ -136,8 +136,8 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         bail!("没有找到倾转角（.mdoc / .tlt / .rawtlt），请在高级设置里给出起始角和步长");
     }
     // Membranes are segmented at the end of a display tomogram when the
-    // model is on this computer (the app downloads it beforehand).
-    let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some_and(|p| p.exists());
+    // user has picked the MemBrain-seg model (the app asks beforehand).
+    let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Survey => 5,
