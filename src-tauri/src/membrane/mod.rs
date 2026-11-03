@@ -23,6 +23,7 @@ pub mod augment;
 pub mod dynunet;
 pub mod net;
 pub mod nifti;
+pub mod vesicles;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -517,17 +518,38 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     Ok(Segmentation { score, mask, components, stats })
 }
 
-/// Writes `mask` (dims `n`) into the label map beside `image` as the
-/// material "膜", keeping labels already there; returns the label file.
-pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool]) -> Result<String> {
+/// Material the vesicles found among the membranes go to.
+pub const VESICLE_MATERIAL: &str = "囊泡";
+pub const VESICLE_COLOR: [u8; 3] = [92, 190, 60];
+
+/// Writes `mask` (dims `n`, `pixel_a` Å per voxel) into `l` in one undo step:
+/// vesicles (`vesicles::find`) as "囊泡", the other membranes as "膜".
+/// Returns the changed slices, the membrane label and the vesicles.
+pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], n: [usize; 3], pixel_a: f32, guard: u16) -> (Vec<usize>, u16, Vec<vesicles::Vesicle>) {
+    let (ves, is_ves) = vesicles::find(mask, n, pixel_a);
+    let label = l.material_label(MATERIAL, COLOR);
+    let vlabel = if ves.is_empty() { 0 } else { l.material_label(VESICLE_MATERIAL, VESICLE_COLOR) };
+    let plane = n[0] * n[1];
+    let classes: Vec<(usize, Vec<u16>)> = (0..n[2])
+        .filter(|&z| mask[z * plane..(z + 1) * plane].iter().any(|&b| b))
+        .map(|z| {
+            let r = z * plane..(z + 1) * plane;
+            (z, mask[r.clone()].iter().zip(&is_ves[r]).map(|(&m, &v)| if v { vlabel } else if m { label } else { 0 }).collect())
+        })
+        .collect();
+    (l.apply_classes(&classes, guard), label, ves)
+}
+
+/// Writes `mask` (dims `n`) into the label map beside `image` (see `apply`),
+/// keeping labels already there; returns the label file.
+pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], pixel_a: f32) -> Result<String> {
     let path = crate::labels::labels_path(image, 0);
     let mut l = if Path::new(&path).exists() {
         crate::labels::Labels::load(Path::new(&path), n[0], n[1], n[2])?
     } else {
         crate::labels::Labels::new(n[0], n[1], n[2])
     };
-    let label = l.material_label(MATERIAL, COLOR);
-    l.apply_volume_mask(mask, label, 0);
+    apply(&mut l, mask, n, pixel_a, 0);
     l.save(Path::new(&path))?;
     Ok(path)
 }

@@ -948,6 +948,9 @@ struct MembraneResult {
     copies: usize,
     backend: String,
     seconds: f32,
+    /// Vesicles found among the membranes (written as "囊泡").
+    #[cfg(feature = "pro")]
+    vesicles: Vec<crate::membrane::vesicles::Vesicle>,
 }
 
 /// Segments the membranes of the open tomogram (channel `c`, time `t`) and
@@ -1000,8 +1003,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
             })?;
             drop(v);
             let mut e = e.lock().unwrap();
-            let label = e.labels.material_label(crate::membrane::MATERIAL, crate::membrane::COLOR);
-            let zs = e.labels.apply_volume_mask(&seg.mask, label, guard);
+            let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, n, pixel_a as f32, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
             Ok(MembraneResult {
@@ -1013,6 +1015,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
                 copies: seg.stats.copies,
                 backend: backend.to_string(),
                 seconds: started.elapsed().as_secs_f32(),
+                vesicles,
             })
         })
         .await
