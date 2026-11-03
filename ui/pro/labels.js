@@ -136,6 +136,14 @@
         <button class="small" id="lab-ws-all">全部层</button>
       </div>
     </details>
+    <details id="lab-mem">
+      <summary>膜分割（断层）</summary>
+      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」。像素大小从文件读取；第一次使用会下载模型（约 100 MB）。可以一步撤回。</div>
+      <div class="row">
+        <button class="small primary" id="lab-mem-run" title="分割整个断层里的膜（Esc 停止）">自动分割膜</button>
+      </div>
+      <div class="dim" id="lab-mem-text"></div>
+    </details>
     <details id="lab-unet">
       <summary>深度学习 U-Net</summary>
       <div class="dim" id="lab-unet-text"></div>
@@ -1381,6 +1389,57 @@
       draw();
     }
   }
+
+  // ---------- membranes (membrane/) ----------
+
+  const M = { busy: false, text: "" };
+  function syncMem() {
+    $("lab-mem-run").disabled = M.busy || L.busy || !L.token;
+    $("lab-mem-run").textContent = M.busy ? "分割中…" : "自动分割膜";
+    $("lab-mem-text").textContent = M.text;
+  }
+  async function memRun() {
+    if (!ready() || M.busy) return;
+    if (!(S.info && S.info.sizeZ >= 8)) return toast("膜分割需要三维断层");
+    M.busy = true;
+    M.text = "";
+    syncMem();
+    const unDl = await T.event.listen("membrane-download", (ev) => {
+      const p = ev.payload;
+      M.text = `下载模型 ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
+      syncMem();
+    });
+    const STAGES = { read: "读取断层", net: "网络推理" };
+    const un = await T.event.listen("membrane-progress", (ev) => {
+      const p = ev.payload;
+      M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
+      syncMem();
+    });
+    try {
+      const st = await invoke("membrane_status");
+      if (!st.downloaded) await invoke("membrane_download");
+      const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
+      M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : "";
+      if (r) {
+        L.active = r.label;
+        renderList();
+      }
+    } catch (e) {
+      M.text = "";
+      toast(String(e), 8000);
+    } finally {
+      un();
+      unDl();
+      M.busy = false;
+      syncMem();
+      draw();
+    }
+  }
+  $("lab-mem-run").addEventListener("click", memRun);
+  $("lab-mem").addEventListener("toggle", syncMem);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && M.busy) { invoke("membrane_cancel"); e.preventDefault(); e.stopPropagation(); }
+  }, true);
 
   $("lab-unet").addEventListener("toggle", () => { syncUnet(); draw(); });
   $("lab-unet-train").addEventListener("click", unetTrain);
