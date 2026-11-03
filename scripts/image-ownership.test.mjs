@@ -25,8 +25,9 @@ function opening(storage = new Map()) {
     T: { window: { getCurrentWindow: () => ({ setTitle: async () => {} }) } }, EDITION: { name: 'test' },
     toast: (s) => errors.push(s), basename: (s) => s, needsPlugin: () => false,
     pluginEmit: (_event, info) => events.push(info.path),
+    window: {}, document: { dispatchEvent: () => {} }, CustomEvent: class {},
   };
-  for (const name of ['finishText', 'stopPlay', 'sideDone', 'holdFrame', 'showSize', 'setModel', 'buildChannels', 'buildSeries', 'setupSliders', 'syncScaleUi', 'updateInfo', 'updateSaveButtons', 'renderMeta', 'specOpened', 'clampView', 'draw', 'requestRender', 'fit', 'autoLoadModel', 'loadAnn', 'watchLoad']) context[name] = () => {};
+  for (const name of ['finishText', 'stopPlay', 'sideDone', 'holdFrame', 'showSize', 'setModel', 'buildChannels', 'buildSeries', 'setupSliders', 'syncScaleUi', 'updateInfo', 'updateSaveButtons', 'renderMeta', 'specOpened', 'clampView', 'draw', 'requestRender', 'fit', 'autoLoadModel', 'loadAnn', 'watchLoad', 'rememberRecent']) context[name] = () => {};
   const start = app.indexOf('let openRequest =') >= 0 ? app.indexOf('let openRequest =') : app.indexOf('async function openPath(');
   const end = app.indexOf('/** Keeps the current picture', start);
   vm.createContext(context);
