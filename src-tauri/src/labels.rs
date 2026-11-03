@@ -792,6 +792,29 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// Gives the pixels of label `from` in slices `zs` that `keep(x, y, z)`
+    /// accepts label `to` (0 clears them), unless `from` is locked. Used for
+    /// an object picked in the 3D view.
+    pub fn relabel_where(&mut self, zs: Range<usize>, from: u16, to: u16, keep: impl Fn(usize, usize, usize) -> bool) -> Vec<usize> {
+        if from == 0 || from == to || self.locked().contains(&from) {
+            return vec![];
+        }
+        let (w, n) = (self.w, self.w * self.h);
+        let mut edit = vec![];
+        for z in zs.start..zs.end.min(self.d) {
+            if !self.slices[z].as_ref().is_some_and(|s| s.contains(&from)) {
+                continue;
+            }
+            let s = Self::touch(&mut self.slices, &mut edit, z, n);
+            for (i, v) in s.iter_mut().enumerate() {
+                if *v == from && keep(i % w, i / w, z) {
+                    *v = to;
+                }
+            }
+        }
+        self.commit(edit)
+    }
+
     pub fn delete_label(&mut self, k: u16) -> Vec<usize> {
         let n = self.w * self.h;
         let mut edit = vec![];
@@ -930,6 +953,8 @@ pub struct Entry {
     pub classifier: Option<Arc<crate::classify::Classifier>>,
     #[cfg(feature = "pro")]
     pub unet: Option<Arc<crate::unet::Trained>>,
+    /// The surfaces last shown in 3D, for picking objects and exporting.
+    pub surfaces: Option<Arc<crate::surfaces::Surfaces>>,
 }
 
 impl Entry {
@@ -942,6 +967,7 @@ impl Entry {
             classifier: None,
             #[cfg(feature = "pro")]
             unet: None,
+            surfaces: None,
         }
     }
 

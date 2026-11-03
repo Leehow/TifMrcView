@@ -17,6 +17,7 @@ pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
+pub mod surfaces;
 #[cfg(feature = "pro")]
 pub mod classify;
 #[cfg(feature = "pro")]

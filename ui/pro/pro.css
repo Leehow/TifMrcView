@@ -23,6 +23,10 @@
 #vol-panel .vp-row button { flex: 1; justify-content: center; border: 1px solid var(--line-strong); }
 #vol-panel .vp-status { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; min-height: 1.4em; }
 #vol-panel label.vp-check { flex-direction: row; align-items: center; gap: 6px; }
+#vol-panel .vp-obj { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; }
+#vol-panel .vp-obj .dim { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+#vol-panel .vp-obj-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+#vol-panel .vp-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 
 /* Segmentation labels (labels.js). */
 #lab-tools button.on { background: var(--muted); color: var(--accent); border-color: var(--accent); }
