@@ -327,6 +327,58 @@ async fn labels_volume(state: State<'_, AppState>, token: u64, max_voxels: usize
     Ok(Response::new(bytes))
 }
 
+/// Smooth surfaces of every labelled object for the 3D view (see
+/// surfaces.rs for the layout); kept for picking and export.
+#[tauri::command]
+async fn labels_surfaces(state: State<'_, AppState>, token: u64) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let bytes = blocking(move || {
+        let mut e = e.lock().unwrap();
+        let s = Arc::new(crate::surfaces::Surfaces::build(&e.labels));
+        e.surfaces = Some(s.clone());
+        Ok(s.encode())
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Gives object `object` of the last surfaces label `label` (0 deletes it).
+#[tauri::command]
+async fn labels_object_relabel(state: State<'_, AppState>, token: u64, object: usize, label: u16) -> CmdResult<LabelsState> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let mut e = e.lock().unwrap();
+        let s = e.surfaces.clone().ok_or_else(|| anyhow::anyhow!("3D 表面已过期，请刷新"))?;
+        let o = s.objects.get(object).ok_or_else(|| anyhow::anyhow!("3D 表面已过期，请刷新"))?;
+        let zs = e.labels.relabel_where(s.z_range(object), o.label, label, |x, y, z| s.in_object(object, x, y, z));
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+/// Writes the last surfaces as OBJ (+ .mtl) to a path from `pick_save_path`:
+/// only objects of `materials`, without the `skip` ones, scaled to `unit`.
+#[tauri::command]
+async fn labels_surfaces_export(
+    state: State<'_, AppState>,
+    token: u64,
+    path: String,
+    materials: Vec<crate::surfaces::ExportMaterial>,
+    skip: Vec<u32>,
+    scale: [f32; 3],
+    unit: String,
+) -> CmdResult<()> {
+    if !state.save_paths.allowed(&path) {
+        return Err(format!("不允许写入：{path}"));
+    }
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let s = e.lock().unwrap().surfaces.clone().ok_or_else(|| anyhow::anyhow!("3D 表面已过期，请刷新"))?;
+        s.write_obj(Path::new(&path), &materials, &skip, scale, &unit)
+    })
+    .await
+}
+
 // ---------- Pro SAM segmentation ----------
 
 #[tauri::command]
@@ -982,6 +1034,11 @@ fn classify_cancel() {
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
+    let plane = req.plane.clone();
+    if plane == "xz" || plane == "yz" {
+        let bytes = blocking(move || crate::ortho::render_plane(&img, &plane, &req)).await?;
+        return Ok(Response::new(bytes));
+    }
     img.set_focus(img.info().locate(0, req.z, req.t).0);
     let bytes = blocking(move || render::render(&img, &req)).await?;
     Ok(Response::new(bytes))
@@ -1493,6 +1550,10 @@ struct SpaSettings {
     diameter_a: Option<f64>,
     pixel_a: Option<f64>,
     excluded: Option<Vec<usize>>,
+    #[serde(default)]
+    kv: Option<f64>,
+    #[serde(default)]
+    kv_from_user: bool,
 }
 
 #[cfg(feature = "pro")]
@@ -1501,7 +1562,16 @@ async fn spa_settings(req: SpaSettings) -> CmdResult<crate::spa::project::Projec
     blocking(move || {
         let mut p = crate::spa::project::Project::load(&req.dir)?;
         if let Some(d) = req.diameter_a.filter(|d| *d > 0.0) { p.diameter_a = d; }
-        if let Some(px) = req.pixel_a.filter(|v| *v > 0.0) { p.optics.pixel_a = px; }
+        if let Some(px) = req.pixel_a.filter(|v| *v > 0.0) {
+            p.optics.pixel_a = px;
+            p.optics_found.pixel = true;
+        }
+        if req.kv_from_user {
+            if let Some(kv) = req.kv.filter(|v| *v > 0.0) {
+                p.optics.kv = kv;
+                p.optics_found.kv = true;
+            }
+        }
         if let Some(ex) = req.excluded {
             for (i, m) in p.mics.iter_mut().enumerate() { m.excluded = ex.contains(&i); }
         }
@@ -2484,6 +2554,9 @@ pub fn run() {
             labels_edit,
             labels_save,
             labels_volume,
+            labels_surfaces,
+            labels_object_relabel,
+            labels_surfaces_export,
             sam_status,
             sam_download,
             sam_predict,

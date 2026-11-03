@@ -1,5 +1,6 @@
 "use strict";
-// Pro 3D view: the current Z stack as a WebGL2 volume (ray marching).
+// Pro 3D view: the current Z stack as a WebGL2 volume (ray marching), or
+// the segmentation as smooth surfaces over a slice of it (surfaces.js).
 // Shares app.js globals: S (viewer state), invoke, $.
 (() => {
   const MAX_CHANNELS = 4;
@@ -24,7 +25,7 @@ uniform vec3 extent;      // half size of the box
 uniform sampler3D vol[${MAX_CHANNELS}];
 uniform vec3 color[${MAX_CHANNELS}];
 uniform int nch;
-uniform int mode;         // 0 MIP, 1 translucent, 2 surface
+uniform int mode;         // 0 MIP, 1 translucent, 2 surface (3, segmentation surfaces, is drawn by surfaces.js)
 // Per channel: the levels set on channel 0's histogram, moved to the same
 // number of standard deviations above each channel's own mean.
 uniform float threshold[${MAX_CHANNELS}]; // surface level, or where MIP / translucent start
@@ -279,7 +280,7 @@ void main() { outColor = vec4(1.0); }`;
   class VolumeView {
     constructor(canvas) {
       this.canvas = canvas;
-      const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
+      const gl = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true });
       if (!gl) throw new Error("这台电脑的显卡不支持 WebGL2，无法显示 3D");
       this.gl = gl;
       const sh = (type, src) => {
@@ -336,7 +337,11 @@ void main() { outColor = vec4(1.0); }`;
       this.labelTex = null;
       this.setLabels(null);
       // levels[mode] = [start, full] in 0..1 of the volume's value range (surface uses start only).
-      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7, invert: false, smooth: 0 };
+      // levels[3] is unused (segmentation surfaces); slice = depth of their XY slice in 0..1.
+      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1], [0, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7, invert: false, smooth: 0, showSlice: true, slice: 0.5 };
+      this.scene = null; // surfaces.js SurfaceScene, made when surfaces arrive
+      this.selected = -1; // picked object of the surfaces
+      this.objectColor = () => null; // object index -> [r, g, b] in 0..1, or null when hidden
       this.resetView();
     }
 
@@ -563,12 +568,15 @@ void main() { outColor = vec4(1.0); }`;
       gl.bindVertexArray(this.vao);
       gl.disable(gl.BLEND);
       gl.viewport(0, 0, w, h);
-      gl.clearColor(0, 0, 0, 1);
+      // Segmentation surfaces sit on white, like figures of segmented tomograms.
+      const white = this.settings.mode === 3 ? 1 : 0;
+      gl.clearColor(white, white, white, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (!this.vol) return;
       // Centre the volume in the part not covered by the tools panel (app.js freeRect).
       const x0 = Math.min(w - 1, Math.round(freeRect().x0 * dpr * scale));
       gl.viewport(x0, 0, w - x0, h);
+      this.lastViewport = [x0, 0, w - x0, h];
       const s = this.settings;
       const eye = [
         this.dist * Math.cos(this.pitch) * Math.sin(this.yaw),
@@ -578,6 +586,11 @@ void main() { outColor = vec4(1.0); }`;
       const t = this.target;
       const pan = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0], -t[1], -t[2], 1]);
       const vp = mul(perspective(FOVY, (w - x0) / h, 0.05, 20), mul(lookAt(eye), pan));
+      if (s.mode === 3) {
+        this.last = { vp, eye: eye.map((v, i) => v + t[i]), viewport: [x0, 0, w - x0, h], w, h };
+        if (this.scene) this.scene.draw(this.sceneOptions());
+        return;
+      }
       gl.useProgram(this.prog);
       // Unused samplers still need a valid texture bound.
       for (let i = 0; i < MAX_CHANNELS; i++) {
@@ -612,6 +625,35 @@ void main() { outColor = vec4(1.0); }`;
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
+    /// Surfaces plus the XY slice of the first channel, its grey levels at
+    /// mean ± 3 standard deviations; the camera of the last frame.
+    sceneOptions() {
+      const s = this.settings, ext = this.extent(), st = (this.stats || [])[0];
+      const slice = s.showSlice && this.textures.length ? {
+        tex: this.textures[0], unit: MAX_CHANNELS + 2,
+        remap: [this.remap[0], this.remap[1]],
+        window: st && st.sd > 1e-3 ? [st.m - 3 * st.sd, st.m + 3 * st.sd] : [0, 1],
+        z: (s.slice - 0.5) * 2 * ext[2],
+      } : null;
+      return { vp: this.last.vp, eye: this.last.eye, extent: ext, slice, colorOf: this.objectColor, selected: this.selected };
+    }
+
+    /// Mesh parsed by surfaces.js, or null.
+    setSurfaces(mesh) {
+      if (!this.scene && mesh) this.scene = new window.TifMrcViewPro.surfaces.SurfaceScene(this.gl);
+      if (this.scene) this.scene.setMesh(mesh);
+      this.selected = -1;
+      this.draw();
+    }
+
+    /// Object under CSS pixel (x, y) of the canvas, or -1 (surfaces of the last frame).
+    pickAt(x, y) {
+      if (!this.scene || !this.last || this.settings.mode !== 3) return -1;
+      const dpr = this.last.w / Math.max(1, this.canvas.clientWidth);
+      const id = this.scene.pick(this.sceneOptions(), x * dpr, y * dpr, this.last.w, this.last.h, this.last.viewport);
+      return id;
+    }
+
     /// Levels for each channel: channel 0 takes `lo`/`hi` as they are; the
     /// others the same distance from their mean in their own standard
     /// deviations, so a dim or sparse channel is not cut off by levels
@@ -642,6 +684,7 @@ void main() { outColor = vec4(1.0); }`;
     }
 
     dispose() {
+      this.setSurfaces(null);
       this.dropSmoothed();
       this.raw.forEach((t) => this.gl.deleteTexture(t));
       this.raw = [];
@@ -678,6 +721,7 @@ void main() { outColor = vec4(1.0); }`;
         <option value="0">最大强度投影</option>
         <option value="1">半透明</option>
         <option value="2">表面</option>
+        <option value="3" id="vp-mode-seg" hidden>分割表面</option>
       </select>
     </label>
     <div id="vp-levels">
@@ -701,7 +745,17 @@ void main() { outColor = vec4(1.0); }`;
         </select>
       </label>
     </div>
-    <label>亮度 <input type="range" id="vp-br" min="0.2" max="4" step="0.05" value="1.2"></label>
+    <div id="vp-seg-rows" hidden>
+      <label class="vp-check" title="在分割表面下面显示一张 XY 断层切片"><input type="checkbox" id="vp-slice-on" checked> 切片</label>
+      <label>切片位置 <input type="range" id="vp-slice" min="0" max="1" step="0.001" value="0.5"></label>
+      <div class="vp-obj" id="vp-obj" hidden></div>
+      <div class="vp-row">
+        <button id="vp-obj-all" hidden>全部显示</button>
+        <button id="vp-export-obj" title="把显示中的分割表面导出成 OBJ 网格（附 .mtl 颜色），Blender、ChimeraX、Amira 等都能打开">导出网格</button>
+        <button id="vp-export-png" title="把当前 3D 画面存成 PNG 图片">保存图片</button>
+      </div>
+    </div>
+    <label id="vp-br-row">亮度 <input type="range" id="vp-br" min="0.2" max="4" step="0.05" value="1.2"></label>
     <label>Z 比例 <input type="range" id="vp-z" min="0.1" max="5" step="0.05" value="1"></label>
     <div id="vp-lab-rows" hidden>
       <label class="vp-check"><input type="checkbox" id="vp-lab" checked> 显示标签</label>
@@ -721,6 +775,10 @@ void main() { outColor = vec4(1.0); }`;
   function syncRows() {
     const mode = view ? view.settings.mode : 0;
     $("vp-op-row").hidden = mode !== 1;
+    $("vp-levels").hidden = mode === 3;
+    $("vp-br-row").hidden = mode === 3;
+    $("vp-seg-rows").hidden = mode !== 3;
+    $("vp-lab-rows").hidden = mode === 3 || $("vp-mode-seg").hidden;
     $("vp-hi").hidden = mode === 2;
     $("vp-lo-label").textContent = mode === 2 ? "等值面" : "范围";
     syncLevels();
@@ -851,6 +909,7 @@ void main() { outColor = vec4(1.0); }`;
       [c(m), c(m + 4 * sd)],
       [c(m + 0.5 * sd), c(m + 3 * sd)],
       [c(m + 2 * sd), 1],
+      [0, 1],
     ];
   }
 
@@ -934,6 +993,7 @@ void main() { outColor = vec4(1.0); }`;
       await loadLabels();
       const secs = ((performance.now() - started) / 1000).toFixed(1);
       status(`${vol.w} × ${vol.h} × ${vol.d} 体素 · ${secs} 秒`);
+      if (view && view.settings.mode === 3) await loadSurfaces();
     } catch (e) {
       status(String(e));
     }
@@ -945,7 +1005,9 @@ void main() { outColor = vec4(1.0); }`;
   async function loadLabels() {
     const labels = window.TifMrcViewPro.labels;
     const has = !!(labels && labels.token() === S.token && labels.any());
-    $("vp-lab-rows").hidden = !has;
+    $("vp-mode-seg").hidden = !has;
+    if (!has && view && view.settings.mode === 3) setMode(0);
+    syncRows();
     if (!view || !view.vol) return;
     if (!has) { view.setLabels(null); return; }
     view.setColorTable(labels.colorTable());
@@ -961,10 +1023,171 @@ void main() { outColor = vec4(1.0); }`;
     }
   }
 
+  // --- segmentation surfaces (mode 3) ---
+  let surfaces = null; // parsed mesh shown
+  let surfToken = 0;
+  let surfStale = true; // the labels changed since the surfaces were made
+  const hiddenObjects = new Set();
+
+  function setMode(m) {
+    view.settings.mode = m;
+    $("vp-mode").value = String(m);
+    syncRows();
+    view.draw();
+  }
+
+  /// Rebuilds the surfaces of the labels (labels_surfaces) and shows them.
+  async function loadSurfaces() {
+    if (!view || !view.vol || view.settings.mode !== 3) return;
+    const token = S.token;
+    status("正在生成分割表面…");
+    const started = performance.now();
+    try {
+      const mesh = window.TifMrcViewPro.surfaces.parse(await invoke("labels_surfaces", { token }));
+      if (token !== S.token || !view || !view.vol) return;
+      surfaces = mesh;
+      surfToken = token;
+      surfStale = false;
+      hiddenObjects.clear();
+      view.setSurfaces(mesh);
+      showObject(-1);
+      const secs = ((performance.now() - started) / 1000).toFixed(1);
+      status(`${mesh.objects.length.toLocaleString()} 个物体 · ${(mesh.tri.length / 3).toLocaleString()} 个三角形 · ${secs} 秒`);
+    } catch (e) {
+      status(String(e));
+    }
+  }
+
+  function objectColor(i) {
+    const labels = window.TifMrcViewPro.labels;
+    const o = surfaces && surfaces.objects[i];
+    if (!o || !labels || hiddenObjects.has(i) || labels.hidden(o.label)) return null;
+    return labels.colorOf(o.label).map((x) => x / 255);
+  }
+
+  /// Size of an object: pixels, and its volume when the voxel size is known.
+  function objectSize(o) {
+    let s = `约 ${o.pixels.toLocaleString()} 像素`;
+    const pz = S.info && S.info.pixelSize && S.info.pixelSize[2];
+    if (S.px && pz > 0) s += ` · ${+(o.pixels * S.px.x * S.px.y * pz).toPrecision(3)} ${S.px.unit}³`;
+    return s;
+  }
+
+  /// Shows what is known about the picked object (-1 = none) with its actions.
+  function showObject(i) {
+    const labels = window.TifMrcViewPro.labels;
+    if (view) {
+      view.selected = i;
+      view.draw();
+    }
+    $("vp-obj-all").hidden = !hiddenObjects.size;
+    const box = $("vp-obj");
+    const o = i >= 0 && surfaces && surfaces.objects[i];
+    box.hidden = !o;
+    if (!o || !labels) return;
+    box.replaceChildren();
+    const title = document.createElement("div");
+    title.className = "vp-obj-name";
+    const sw = document.createElement("span");
+    sw.className = "vp-swatch";
+    sw.style.background = `rgb(${labels.colorOf(o.label).join(",")})`;
+    title.append(sw, `${labels.nameOf(o.label)} · 物体 ${i + 1}`);
+    const size = document.createElement("div");
+    size.className = "dim";
+    size.textContent = objectSize(o);
+    const move = document.createElement("select");
+    move.title = "把这个物体改成另一个标签（可以撤销）";
+    move.append(new Option("改为标签…", ""));
+    const used = labels.used();
+    for (const k of used) if (k !== o.label) move.append(new Option(labels.nameOf(k), String(k)));
+    move.append(new Option("新标签", String(Math.max(0, ...used) + 1)));
+    move.addEventListener("change", () => {
+      const k = +move.value;
+      if (k) relabel(i, k);
+    });
+    const hide = document.createElement("button");
+    hide.textContent = "隐藏";
+    hide.title = "只在 3D 里隐藏这个物体，不改标签";
+    hide.addEventListener("click", () => {
+      hiddenObjects.add(i);
+      showObject(-1);
+    });
+    const del = document.createElement("button");
+    del.textContent = "删除";
+    del.title = "把这个物体从标签里擦掉（可以撤销）";
+    del.addEventListener("click", () => relabel(i, 0));
+    const row = document.createElement("div");
+    row.className = "vp-row";
+    row.append(hide, del);
+    box.append(title, size, move, row);
+  }
+
+  async function relabel(i, label) {
+    const labels = window.TifMrcViewPro.labels;
+    if (!labels || surfToken !== S.token) return;
+    status("正在修改标签…");
+    // labels.js reports the change through labelsChanged, which rebuilds the surfaces.
+    await labels.relabelObject(i, label);
+  }
+
+  async function exportMesh() {
+    const labels = window.TifMrcViewPro.labels;
+    if (!surfaces || !labels || surfToken !== S.token) return;
+    const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_surfaces.obj`, filter: "OBJ", exts: ["obj"] }).catch(() => null);
+    if (!path) return;
+    setSaveDir(dirname(path));
+    const shown = [...new Set(surfaces.objects.map((o) => o.label))].filter((k) => !labels.hidden(k));
+    const materials = shown.map((k) => ({ label: k, name: labels.nameOf(k), color: labels.colorOf(k) }));
+    const pz = S.info.pixelSize && S.info.pixelSize[2];
+    const known = !!(S.px && pz > 0);
+    status("正在导出网格…");
+    try {
+      await invoke("labels_surfaces_export", {
+        token: S.token, path, materials, skip: [...hiddenObjects],
+        scale: known ? [S.px.x, S.px.y, pz] : [1, 1, 1], unit: known ? S.px.unit : "pixel",
+      });
+      status(`已导出 ${path}`);
+    } catch (e) {
+      status(String(e));
+    }
+  }
+
+  /// The 3D picture as PNG, without the part under the tools panel.
+  async function exportPicture() {
+    if (!view || !view.vol) return;
+    const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_3d.png` }).catch(() => null);
+    if (!path) return;
+    setSaveDir(dirname(path));
+    view.render(false);
+    const [x, , w, h] = view.lastViewport;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    c.getContext("2d").drawImage(canvas3d, x, 0, w, h, 0, 0, w, h);
+    const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+    try {
+      await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+      status(`已保存 ${path}`);
+    } catch (e) {
+      status(String(e));
+    }
+  }
+
+  /// Opens the 3D view showing the segmentation as surfaces.
+  function openSurfaces() {
+    if (canvas3d.hidden) open();
+    if (!view) return;
+    if (view.settings.mode !== 3) setMode(3);
+    if (view.vol && shownToken === S.token && (surfStale || surfToken !== S.token)) loadSurfaces();
+  }
+
   function open() {
     if (!view) {
       try {
         view = new VolumeView(canvas3d);
+        view.objectColor = objectColor;
       } catch (e) {
         alert(String(e.message || e));
         return;
@@ -979,6 +1202,9 @@ void main() { outColor = vec4(1.0); }`;
   }
 
   function close() {
+    surfaces = null;
+    hiddenObjects.clear();
+    $("vp-obj").hidden = true;
     canvas3d.hidden = true;
     panel.hidden = true;
     btn.classList.remove("on");
@@ -1001,7 +1227,7 @@ void main() { outColor = vec4(1.0); }`;
   canvas3d.addEventListener("pointerdown", (e) => {
     if (e.button === 1) e.preventDefault();
     const pan = e.button === 1 || (e.button === 0 && e.shiftKey);
-    drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, pan };
+    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, yaw: view.yaw, pitch: view.pitch, pan };
     canvas3d.style.cursor = pan ? "move" : "";
     canvas3d.setPointerCapture(e.pointerId);
   });
@@ -1020,7 +1246,15 @@ void main() { outColor = vec4(1.0); }`;
     view.draw(true);
   });
   const endDrag = () => { if (drag) { drag = null; canvas3d.style.cursor = ""; view.draw(); } };
-  canvas3d.addEventListener("pointerup", endDrag);
+  // A click without dragging picks an object of the segmentation surfaces.
+  canvas3d.addEventListener("pointerup", (e) => {
+    const click = drag && !drag.pan && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 4;
+    if (click && view.settings.mode === 3 && surfaces) {
+      const r = canvas3d.getBoundingClientRect();
+      showObject(view.pickAt(e.clientX - r.left, e.clientY - r.top));
+    }
+    endDrag();
+  });
   canvas3d.addEventListener("pointercancel", endDrag);
   canvas3d.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -1047,6 +1281,21 @@ void main() { outColor = vec4(1.0); }`;
     });
   };
   bind("vp-mode", "mode", (v) => +v);
+  $("vp-mode").addEventListener("change", () => {
+    if (view && view.settings.mode === 3 && (surfStale || surfToken !== S.token)) loadSurfaces();
+  });
+  $("vp-slice-on").addEventListener("change", (e) => {
+    if (!view) return;
+    view.settings.showSlice = e.target.checked;
+    view.draw();
+  });
+  bind("vp-slice", "slice", parseFloat);
+  $("vp-obj-all").addEventListener("click", () => {
+    hiddenObjects.clear();
+    showObject(-1);
+  });
+  $("vp-export-obj").addEventListener("click", exportMesh);
+  $("vp-export-png").addEventListener("click", exportPicture);
   bind("vp-op", "opacity", parseFloat);
   bind("vp-br", "brightness", parseFloat);
   bind("vp-z", "zScale", parseFloat);
@@ -1078,9 +1327,13 @@ void main() { outColor = vec4(1.0); }`;
   // Labels changed in 2D: refresh them in the open 3D view.
   let labelTimer = 0;
   function labelsChanged() {
+    surfStale = true;
     if (canvas3d.hidden || !view || !view.vol) return;
     clearTimeout(labelTimer);
-    labelTimer = setTimeout(loadLabels, 300);
+    labelTimer = setTimeout(async () => {
+      await loadLabels();
+      if (view && view.settings.mode === 3) loadSurfaces();
+    }, 300);
   }
 
   // Label colours or visibility changed: only the colour table needs updating.
@@ -1088,7 +1341,8 @@ void main() { outColor = vec4(1.0); }`;
     const labels = window.TifMrcViewPro.labels;
     if (!view || canvas3d.hidden || !labels || labels.token() !== S.token) return;
     view.setColorTable(labels.colorTable());
+    if (surfaces) showObject(view.selected);
   }
 
-  window.TifMrcViewPro.volume = { open, close, parseVolume, labelsChanged, materialsChanged };
+  window.TifMrcViewPro.volume = { open, close, openSurfaces, parseVolume, labelsChanged, materialsChanged };
 })();

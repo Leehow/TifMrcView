@@ -6,7 +6,7 @@
   const W = window.TifMrcViewPro.spa;
   W.sections[0].innerHTML = `
     <div class="al-head"><b>显微图与运动校正</b></div>
-    <p id="spa-mics" class="dim">选择一个文件夹：里面的 MRC / TIFF 显微图，或 EER / TIFF / MRC 电影（多帧）。工程保存在它的 tifmrcview-spa 子文件夹里，可以随时关掉再接着做。</p>
+    <p id="spa-mics" class="dim">当前打开的文件所在文件夹：里面的 MRC / TIFF 显微图，或 EER / TIFF / MRC 电影（多帧）。工程保存在它的 tifmrcview-spa 子文件夹里，可以随时关掉再接着做。</p>
     <div class="al-opts">
       <label>颗粒直径 Å<input id="spa-diam" type="number" min="20" max="2000" value="150"></label>
       <label>像素 Å<input id="spa-pixel" type="number" min="0.1" step="0.001"></label>
@@ -26,7 +26,7 @@
     show(p) {
       $("spa-mics").textContent = `${p.mics.length} 张${p.movies ? "电影" : "显微图"}（${p.mics[0]?.width}×${p.mics[0]?.height}）· 工程：${p.dir}`;
       $("spa-diam").value = p.diameterA;
-      $("spa-pixel").value = p.optics.pixelA;
+      $("spa-pixel").value = p.opticsFound?.pixel ? p.optics.pixelA : "";
       $("spa-motion").hidden = !p.movies;
     },
   });
@@ -35,10 +35,11 @@
 
   $("spa-run-motion").onclick = () => {
     const dose = +$("spa-dose").value;
+    const total = !(dose > 0) && W.project?.doseTotal > 0 ? W.project.doseTotal : null;
     W.run("运动校正", "motion", {
       group: +$("spa-group").value, upsample: 1, frameAxis: "auto", workingSize: 1024, local: $("spa-local").checked, patches: 5,
-      doseWeighted: dose > 0, unweighted: false, evenOdd: false, pixelA: +$("spa-pixel").value || null, voltageKv: +$("spa-kv").value || 300,
-      voltageAuto: false, dosePerFrame: dose > 0 ? dose : null, totalDose: null, preExposure: 0, gainPath: null, gainRotate: 0,
+      doseWeighted: dose > 0 || total > 0, unweighted: false, evenOdd: false, pixelA: +$("spa-pixel").value || null, voltageKv: +$("spa-kv").value || 300,
+      voltageAuto: !W.project?.opticsFound?.kv && !W.pendingOptics?.kvFromUser, dosePerFrame: dose > 0 ? dose : null, totalDose: total, preExposure: 0, gainPath: null, gainRotate: 0,
       gainFlipX: false, gainFlipY: false, backend: "auto", benchmark: false, diagnostics: false,
     });
   };

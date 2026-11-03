@@ -106,6 +106,7 @@
     </div>
     <div id="lab-list"></div>
     <div class="row">
+      <button class="small" id="lab-3d-surf" title="把所有标签做成光滑的三维表面，叠在断层切片上显示；点一个物体可以隐藏、删除或换标签">3D 表面</button>
       <button class="small" id="lab-interp" title="隔几层画一个轮廓，再按这里，把当前标签画过的层之间的层按形状自动补齐">隔层插值</button>
     </div>
     <div class="row">
@@ -193,6 +194,7 @@
     $("lab-show").checked = L.show;
     $("lab-busy").textContent = L.busy ? "处理中…" : "";
     for (const b of sec.querySelectorAll("#lab-th button, #lab-ws button, #lab-interp")) b.disabled = L.busy || !L.token;
+    $("lab-3d-surf").disabled = L.busy || !any() || !(S.info && S.info.sizeZ > 1);
   }
 
   function renderList() {
@@ -1509,6 +1511,10 @@
   $("lab-ws-z").addEventListener("click", () => watershed(false));
   $("lab-ws-all").addEventListener("click", () => watershed(true));
 
+  $("lab-3d-surf").addEventListener("click", () => {
+    if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.openSurfaces();
+  });
+
   // Save before the window goes away.
   window.addEventListener("beforeunload", () => { flush(); });
 
@@ -1521,5 +1527,12 @@
     any,
     flush,
     colorTable,
+    colorOf,
+    nameOf,
+    hidden,
+    /** Gives object `object` of the 3D surfaces label `label` (0 deletes it), undoable. */
+    relabelObject: (object, label) => editWith("labels_object_relabel", { token: L.token, object, label }),
+    /** Labels in use, ascending. */
+    used: () => L.counts.map((n, k) => (k > 0 && n > 0 ? k : 0)).filter((k) => k),
   };
 })();

@@ -1,21 +1,22 @@
 "use strict";
-// One-click mode: motion correction and CTF with the usual settings, then
-// the kinds of particle found on a few denoised micrographs (spa::discover)
-// as cards. The user clicks theirs; picking, 2D classification (sharp
-// classes kept), the point group, the initial model and the refinement
-// then run on their own. The steps by hand stay available for changes.
+// One-click mode, the panel's default view (the steps by hand are under
+// 高级设置). Motion correction and CTF use the optics read from the open
+// folder; pixel size and voltage are asked only when no file had them.
+// The kinds of particle found on a few denoised micrographs are cards.
+// The user clicks theirs; picking, 2D classification, the point group,
+// the initial model and the refinement then run on their own.
 (() => {
   const W = window.TifMrcViewPro.spa;
   const { fmt } = W;
-  const host = W.sections[6];
-  host.innerHTML = `
-    <div class="al-head"><b>一键重构</b></div>
-    <p class="dim">选好显微图或电影所在的文件夹，点“开始”。程序自动做运动校正和 CTF，在几张去噪后的显微图上找出不同种类的颗粒，你只需点出哪一种是你的样品，剩下的全部自动完成。</p>
-    <div class="al-opts">
-      <label>像素 Å<input id="spa-a-pixel" type="number" min="0.1" step="0.001" title="从文件头读取；读不到时请填写"></label>
-      <label>电压 kV<select id="spa-a-kv"><option>300</option><option>200</option><option>120</option></select></label>
+  $("spa-auto").innerHTML = `
+    <p class="dim">对当前打开的文件所在文件夹自动做运动校正和 CTF，在几张去噪后的显微图上找出不同种类的颗粒。点出你的样品后，挑选、二维分类、初始模型和三维精修会接着做完。</p>
+    <p id="spa-optics-line" class="dim"></p>
+    <div id="spa-ask" class="al-opts" hidden>
+      <p class="dim al-wide">当前文件夹里没有找到配置文件中的这些参数，请填写：</p>
+      <label id="spa-ask-pixel-row">像素大小 Å<input id="spa-ask-pixel" type="number" min="0.05" step="0.001" placeholder="例如 1.06"></label>
+      <label id="spa-ask-kv-row">电压 kV<input id="spa-ask-kv" type="number" min="20" max="400" step="10" placeholder="例如 300"></label>
     </div>
-    <div class="al-row"><button id="spa-a-start" class="small primary">① 开始：预处理并寻找颗粒</button></div>
+    <div class="al-row"><button id="spa-a-start" class="primary">一键开始</button></div>
     <div id="spa-a-kinds" class="ws-kinds"></div>
     <p id="spa-a-hint" class="dim"></p>
     <div id="spa-a-finish" hidden>
@@ -23,12 +24,24 @@
         <label>对称性<select id="spa-a-sym"><option value="">自动判断</option><option>C1</option></select></label>
         <label>或填写<input id="spa-a-sym-text" type="text" placeholder="如 C4、D7、O" size="5"></label>
       </div>
-      <div class="al-row"><button id="spa-a-go" class="small primary" disabled>② 用选中的颗粒完成重构</button></div>
+      <div class="al-row"><button id="spa-a-go" class="primary" disabled>用选中的颗粒完成重构</button></div>
     </div>
     <p id="spa-a-result" class="dim"></p>
-    <div class="al-row" id="spa-a-open" hidden><button id="spa-a-map" class="small">打开三维图</button><button id="spa-a-more" class="small">查看各步骤</button></div>`;
+    <div class="al-row" id="spa-a-open" hidden><button id="spa-a-map" class="small">打开三维图</button><button id="spa-a-more" class="small">在高级设置里查看</button></div>`;
 
   const chosen = new Set();
+
+  function opticsLine(p) {
+    const f = p.opticsFound || {};
+    const bits = [];
+    if (f.pixel) bits.push(`像素 ${fmt(p.optics.pixelA, 3)} Å`);
+    if (f.kv) bits.push(`${fmt(p.optics.kv, 0)} kV`);
+    if (f.cs) bits.push(`Cs ${fmt(p.optics.csMm, 2)} mm`);
+    if (f.amplitude) bits.push(`振幅衬度 ${fmt(p.optics.amplitude, 2)}`);
+    if (p.doseTotal > 0) bits.push(`剂量 ${fmt(p.doseTotal, 2)} e⁻/Å²`);
+    if (f.file) bits.push(f.file);
+    return bits.join(" · ");
+  }
 
   async function showKinds() {
     const p = W.project;
@@ -69,30 +82,63 @@
     $("spa-a-result").textContent = `完成：分辨率 ${fmt(r.res)} Å，掩膜后 ${fmt(r.resMasked)} Å · ${r.particles} 个颗粒${sym}`;
   }
 
-  W.register(6, {
-    enter: showKinds,
+  W.hooks.set("auto", {
     show(p) {
-      $("spa-a-pixel").value = p.optics.pixelA;
-      $("spa-a-kv").value = String(Math.round(p.optics.kv || 300));
+      if (!p) {
+        W.kindMark = "";
+        $("spa-optics-line").textContent = "";
+        $("spa-ask").hidden = true;
+        $("spa-a-kinds").replaceChildren();
+        $("spa-a-hint").textContent = "";
+        $("spa-a-finish").hidden = true;
+        $("spa-a-open").hidden = true;
+        $("spa-a-result").textContent = "";
+        return;
+      }
+      const f = p.opticsFound || { pixel: true, kv: true };
+      $("spa-ask-pixel-row").hidden = !!f.pixel;
+      $("spa-ask-kv-row").hidden = !!f.kv;
+      $("spa-ask").hidden = !!(f.pixel && f.kv);
+      $("spa-optics-line").textContent = opticsLine(p);
       showResult(p);
+      // Rebuilding the cards on every refresh would drop a selection that
+      // has not been saved yet. Rebuild only when the found set changes.
+      const mark = `${p.dir}:${p.discovery?.micrographs ?? ""}:${(p.discovery?.chosen || []).join(",")}`;
+      if (mark !== W.kindMark) {
+        W.kindMark = mark;
+        if (p.discovery) showKinds();
+        else {
+          $("spa-a-kinds").replaceChildren();
+          $("spa-a-hint").textContent = "";
+          $("spa-a-finish").hidden = true;
+        }
+      }
     },
   });
 
   $("spa-a-start").onclick = async () => {
-    if (!W.project) {
-      const dir = await invoke("pick_folder", { dir: S.info ? saveDir() : "" });
-      if (!dir) return;
-      await W.load(dir);
-      if (!W.project) return;
+    if (!W.project) return W.status("请先打开一张显微图或电影");
+    const f = W.project.opticsFound || { pixel: true, kv: true };
+    if (!f.pixel) {
+      const px = +$("spa-ask-pixel").value;
+      if (!(px > 0)) return W.status("当前文件夹里没有找到像素大小，请填写（Å）");
+      $("spa-pixel").value = px;
     }
-    const px = +$("spa-a-pixel").value;
-    if (!(px > 0)) return W.status("请填写像素大小（Å）");
-    $("spa-pixel").value = px;
-    $("spa-kv").value = $("spa-a-kv").value;
+    const pending = {};
+    if (!f.kv) {
+      const kv = +$("spa-ask-kv").value;
+      if (!(kv > 0)) return W.status("当前文件夹里没有找到电压，请填写（kV）");
+      $("spa-kv").value = kv;
+      pending.kv = kv;
+      pending.kvFromUser = true;
+    }
+    W.pendingOptics = pending;
     let p = W.project;
     if (p.movies && p.mics.some((m) => m.path === m.movie)) {
       if (await $("spa-run-motion").onclick() == null) return;
       p = W.project;
+    } else if (pending.kvFromUser || !f.pixel) {
+      try { await W.settings(); } catch (e) { return W.status(`${e}`); }
     }
     if (!p.mics.some((m) => m.ctf)) {
       if (await $("spa-run-ctf").onclick() == null) return;
@@ -108,5 +154,5 @@
     if (r) showResult(W.project);
   };
   $("spa-a-map").onclick = () => W.project?.refine && openPath(W.project.refine.sharpened, true);
-  $("spa-a-more").onclick = () => W.select(5);
+  $("spa-a-more").onclick = () => { $("spa-advanced").open = true; W.select(5); };
 })();

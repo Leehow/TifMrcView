@@ -17,6 +17,7 @@ pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
+pub mod surfaces;
 #[cfg(feature = "pro")]
 pub mod classify;
 #[cfg(feature = "pro")]
@@ -26,6 +27,7 @@ pub mod wedge;
 #[cfg(feature = "pro")]
 pub mod membrane;
 pub mod image;
+pub mod ortho;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 mod open_requests;
 #[cfg(feature = "desktop")]
