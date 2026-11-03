@@ -24,6 +24,8 @@ pub mod classify;
 pub mod unet;
 #[cfg(feature = "pro")]
 pub mod wedge;
+#[cfg(feature = "pro")]
+pub mod membrane;
 pub mod image;
 pub mod ortho;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]

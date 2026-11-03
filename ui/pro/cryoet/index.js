@@ -148,6 +148,16 @@
       try { await W.load(S.info.path); } catch (e) { return W.status(`无法载入：${e}`); }
     }
     const pixel = +$("cryo-auto-pixel").value || null;
+    // Display tomograms end with membrane segmentation once the user has
+    // picked the MemBrain-seg model; asked once (closing the box skips it,
+    // the labels panel can still ask).
+    if ($("cryo-auto-purpose").value === "display" && !localStorage.getItem("tmv-mem-skip")) {
+      try {
+        if (!(await window.TifMrcViewPro.membrane.ensure())) localStorage.setItem("tmv-mem-skip", "1");
+      } catch (e) {
+        W.status(`膜分割模型不可用（重构照常进行）：${e}`);
+      }
+    }
     const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, fresh: false });
     if (!r) {
       // The backend asks for the pixel size only when no file or mdoc gives it.
@@ -156,9 +166,11 @@
     }
     autoResult = r;
     $("cryo-auto-open").hidden = false;
-    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层${Math.hypot(...r.levelled) >= 0.5 ? ` · 样品倾斜已拉平（${r.levelled.map((v) => v.toFixed(1)).join("° / ")}°）` : ""} · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.note ? `。${r.note}` : ""}`;
+    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层${Math.hypot(...r.levelled) >= 0.5 ? ` · 样品倾斜已拉平（${r.levelled.map((v) => v.toFixed(1)).join("° / ")}°）` : ""} · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.labels ? " · 膜已写进标签「膜」" : ""}${r.note ? `。${r.note}` : ""}`;
     W.status("一键重构完成，已打开结果");
     await openPath(r.path);
+    // Show the membranes over the tomogram.
+    if (r.labels) setTool("label");
   }
   $("cryo-auto-open").onclick = () => autoResult && openPath(autoResult.path);
 

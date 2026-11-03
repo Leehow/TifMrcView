@@ -892,6 +892,139 @@ fn unet_cancel() {
     crate::unet::CANCEL.store(true, Ordering::SeqCst);
 }
 
+// ---------- Pro membrane segmentation (membrane/) ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MembraneStatus {
+    available: bool,
+    /// The model file the user picked, while it is there.
+    model: Option<String>,
+    /// Where to download the MemBrain-seg models.
+    page: &'static str,
+}
+
+#[tauri::command]
+fn membrane_status() -> MembraneStatus {
+    #[cfg(feature = "pro")]
+    {
+        MembraneStatus { available: true, model: crate::membrane::model_path().map(|p| p.to_string_lossy().into_owned()), page: crate::membrane::MODEL_PAGE }
+    }
+    #[cfg(not(feature = "pro"))]
+    MembraneStatus { available: false, model: None, page: "" }
+}
+
+/// Asks for the MemBrain-seg checkpoint the user downloaded, checks that it
+/// loads and remembers it. `None` when the user cancels.
+#[tauri::command]
+async fn membrane_choose(app: AppHandle) -> CmdResult<Option<String>> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = app;
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app.dialog().file().set_title("选择 MemBrain-seg 模型（.ckpt）").add_filter("MemBrain-seg 模型", &["ckpt", "safetensors"]).blocking_pick_file().and_then(|f| f.into_path().ok());
+        let Some(path) = picked else { return Ok(None) };
+        blocking(move || {
+            crate::classify::on_device(|dev| crate::membrane::choose(&path, dev))?;
+            Ok(Some(path.to_string_lossy().into_owned()))
+        })
+        .await
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MembraneResult {
+    #[serde(flatten)]
+    labels: LabelsState,
+    label: u16,
+    components: usize,
+    voxels: usize,
+    pixel_a: f64,
+    copies: usize,
+    backend: String,
+    seconds: f32,
+}
+
+/// Segments the membranes of the open tomogram (channel `c`, time `t`) and
+/// writes them into its label map as the material "膜" (one undo step);
+/// reports `membrane-progress` {stage, done, total}.
+#[tauri::command]
+async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard: u16) -> CmdResult<MembraneResult> {
+    #[cfg(not(feature = "pro"))]
+    {
+        let _ = (app, token, c, t, guard);
+        pro_only()
+    }
+    #[cfg(feature = "pro")]
+    {
+        let state = app.state::<AppState>();
+        let e = labels_entry(&state, token)?;
+        let img = current(&state, token)?;
+        let app2 = app.clone();
+        crate::membrane::CANCEL.store(false, Ordering::SeqCst);
+        blocking(move || {
+            use crate::labels::Values;
+            let started = std::time::Instant::now();
+            let path = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
+            let info = img.info();
+            let n = [info.width, info.height, info.size_z];
+            if n[2] < 8 {
+                anyhow::bail!("膜分割需要三维断层（至少 8 层）");
+            }
+            let pixel_a = crate::tomo::output::pixel_a(&img);
+            if (pixel_a - 1.0).abs() < 1e-6 {
+                anyhow::bail!("文件里没有像素大小，无法换算到 10 Å 体素；请在图像信息里设好像素大小");
+            }
+            let emit = |stage: &str, done: usize, total: usize| {
+                let _ = app2.emit("membrane-progress", serde_json::json!({ "stage": stage, "done": done, "total": total }));
+            };
+            let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
+            let mut v = Vec::with_capacity(n[0] * n[1] * n[2]);
+            for z in 0..n[2] {
+                if crate::membrane::CANCEL.load(Ordering::SeqCst) {
+                    anyhow::bail!("已取消");
+                }
+                v.extend(vals.slice(z)?);
+                if z % 16 == 0 {
+                    emit("read", z, n[2]);
+                }
+            }
+            let (seg, backend) = crate::classify::on_device(|dev| {
+                let net = crate::membrane::load(&path, dev)?;
+                crate::membrane::segment(dev, &net, &v, n, pixel_a as f32, crate::membrane::Pass::Official, &mut |p| emit("net", p.done, p.total))
+            })?;
+            drop(v);
+            let mut e = e.lock().unwrap();
+            let label = e.labels.material_label(crate::membrane::MATERIAL, crate::membrane::COLOR);
+            let zs = e.labels.apply_volume_mask(&seg.mask, label, guard);
+            let voxels = seg.mask.iter().filter(|&&b| b).count();
+            eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
+            Ok(MembraneResult {
+                labels: labels_state(&e, zs),
+                label,
+                components: seg.components,
+                voxels,
+                pixel_a,
+                copies: seg.stats.copies,
+                backend: backend.to_string(),
+                seconds: started.elapsed().as_secs_f32(),
+            })
+        })
+        .await
+    }
+}
+
+#[tauri::command]
+fn membrane_cancel() {
+    #[cfg(feature = "pro")]
+    crate::membrane::CANCEL.store(true, Ordering::SeqCst);
+}
+
 #[tauri::command]
 fn classify_cancel() {
     #[cfg(feature = "pro")]
@@ -2441,6 +2574,10 @@ pub fn run() {
             unet_predict,
             unet_apply,
             unet_cancel,
+            membrane_status,
+            membrane_choose,
+            membrane_segment,
+            membrane_cancel,
             pixel_values,
             list_folder,
             thumbnail,

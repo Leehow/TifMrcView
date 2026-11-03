@@ -306,3 +306,6 @@
 .pro-gpu-hint button {
   position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 16px; cursor: pointer; color: inherit;
 }
+
+/* MemBrain-seg model picker (membrane.js): centred, above the panels. */
+.dialog.mem-model { top: 25%; left: 50%; right: auto; transform: translateX(-50%); width: 380px; z-index: 30; }
