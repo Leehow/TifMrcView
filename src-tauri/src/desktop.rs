@@ -901,6 +901,11 @@ fn classify_cancel() {
 #[tauri::command]
 async fn render_view(state: State<'_, AppState>, req: render::RenderReq) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
+    let plane = req.plane.clone();
+    if plane == "xz" || plane == "yz" {
+        let bytes = blocking(move || crate::ortho::render_plane(&img, &plane, &req)).await?;
+        return Ok(Response::new(bytes));
+    }
     img.set_focus(img.info().locate(0, req.z, req.t).0);
     let bytes = blocking(move || render::render(&img, &req)).await?;
     Ok(Response::new(bytes))
@@ -1412,6 +1417,10 @@ struct SpaSettings {
     diameter_a: Option<f64>,
     pixel_a: Option<f64>,
     excluded: Option<Vec<usize>>,
+    #[serde(default)]
+    kv: Option<f64>,
+    #[serde(default)]
+    kv_from_user: bool,
 }
 
 #[cfg(feature = "pro")]
@@ -1420,7 +1429,16 @@ async fn spa_settings(req: SpaSettings) -> CmdResult<crate::spa::project::Projec
     blocking(move || {
         let mut p = crate::spa::project::Project::load(&req.dir)?;
         if let Some(d) = req.diameter_a.filter(|d| *d > 0.0) { p.diameter_a = d; }
-        if let Some(px) = req.pixel_a.filter(|v| *v > 0.0) { p.optics.pixel_a = px; }
+        if let Some(px) = req.pixel_a.filter(|v| *v > 0.0) {
+            p.optics.pixel_a = px;
+            p.optics_found.pixel = true;
+        }
+        if req.kv_from_user {
+            if let Some(kv) = req.kv.filter(|v| *v > 0.0) {
+                p.optics.kv = kv;
+                p.optics_found.kv = true;
+            }
+        }
         if let Some(ex) = req.excluded {
             for (i, m) in p.mics.iter_mut().enumerate() { m.excluded = ex.contains(&i); }
         }

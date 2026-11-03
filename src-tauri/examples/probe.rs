@@ -55,7 +55,7 @@ fn main() {
             channels: info.channels.iter().enumerate().map(|(i, c)| render::ChanReq { index: i, color: c.color, min: None, max: None }).collect(),
             region: [0.0, 0.0, info.width as f64, info.height as f64],
             out_w: 1600.min(info.width), out_h: (1600.min(info.width) * info.height / info.width).max(1),
-            gamma: 1.0, invert: false,
+            gamma: 1.0, invert: false, plane: String::new(),
         };
         let out = render::render(&img, &req).unwrap();
         let t_render = t3.elapsed();

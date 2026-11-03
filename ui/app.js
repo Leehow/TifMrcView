@@ -243,6 +243,7 @@ async function openPath(path, force = false, series = 0) {
     S.token = res.token;
     S.info = res.info;
     S.pluginMeta = [];
+    if (window.xyz) xyz.close(true);
     S.axis = "xy";
     S.base = null;
     S.z = Math.floor(res.info.sizeZ / 2);
@@ -280,6 +281,7 @@ async function openPath(path, force = false, series = 0) {
     }
     S.pz = S.px && ps && ps[2] > 0 && S.pxSource !== "手动" ? ps[2] : null;
     $("empty").hidden = true;
+    rememberRecent(res.info);
     $("st-pixel").textContent = "";
     T.window.getCurrentWindow().setTitle(`${res.info.name} — ${EDITION.name}`).catch(() => {});
     buildChannels();
@@ -305,6 +307,8 @@ async function openPath(path, force = false, series = 0) {
     await refreshFolder(path);
     if (request !== openRequest) return;
     pluginEmit("open", S.info);
+    // The single-particle workspace indexes whichever folder is open.
+    document.dispatchEvent(new CustomEvent("tmv-opened"));
     watchLoad();
   } catch (e) {
     if (request !== openRequest) return;
@@ -769,7 +773,7 @@ function setupSliders() {
   const { sizeZ, sizeT } = S.info;
   const stack = (S.base ? S.base.info : S.info).sizeZ > 1;
   $("btn-axis").hidden = $("axis-sep").hidden = !stack;
-  $("axis-label").textContent = S.axis.toUpperCase();
+  $("axis-label").textContent = S.xyz ? "XYZ" : S.axis.toUpperCase();
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
   $("zslider").max = sizeZ - 1;
   $("zslider").value = S.z;
@@ -790,6 +794,15 @@ function updateZLabel() {
 function setZ(z) {
   if (!S.info) return;
   z = Math.max(0, Math.min(S.info.sizeZ - 1, z));
+  if (S.xyz) {
+    if (z === S.z && z === S.xyz.z) return;
+    S.z = z;
+    S.xyz.z = z;
+    $("zslider").value = z;
+    updateZLabel();
+    xyz.moved("z");
+    return;
+  }
   if (z === S.z) return;
   S.z = z;
   $("zslider").value = z;
@@ -993,6 +1006,7 @@ function clampView() {
 }
 
 function fit() {
+  if (S.xyz) { xyz.fit(); return; }
   if (!S.info) return;
   const { cw, ch } = cssSize();
   const { x0, x1, y0, y1 } = freeRect();
@@ -1005,6 +1019,7 @@ function fit() {
 }
 
 function zoomBy(k) {
+  if (S.xyz) { xyz.zoom(k); return; }
   if (!S.info) return;
   S.view.scale *= k;
   clampView();
@@ -1038,6 +1053,7 @@ function toScreen(x, y) {
 }
 
 function toImage(e) {
+  if (S.xyz) return xyz.toVolume(e);
   const r = canvas.getBoundingClientRect();
   const { cw, ch } = cssSize();
   return [
@@ -1311,6 +1327,7 @@ function drawModel(g, map, k, unit, z = S.z) {
 }
 
 function draw() {
+  if (S.xyz) { xyz.paint(); updateZMarks(); return; }
   updateZMarks();
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1448,6 +1465,7 @@ function drawTag(g, text, x, y) {
 }
 
 function requestRender() {
+  if (S.xyz) { xyz.reload(); return; }
   if (!S.info) return;
   if (S.inflight) {
     S.dirty = true;
@@ -2431,6 +2449,7 @@ function showPanel(mode) {
   }
   if (mode === "info") renderMeta();
   else if (mode) loadHist();
+  if (S.xyz) xyz.layout();
 }
 
 // ---------- image info / acquisition metadata ----------
@@ -3084,6 +3103,7 @@ for (const type of ["pointerup", "pointercancel"]) {
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!S.info) return;
+  if (S.xyz && xyz.pointer("down", e)) return;
   // A click beside the text being typed finishes it.
   if (S.textEdit) {
     finishText(true);
@@ -3191,6 +3211,7 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("pointermove", (e) => {
+  if (S.xyz && xyz.pointer("move", e)) return;
   const op = S.op;
   showPixel(e);
   if (!op) {
@@ -3259,6 +3280,7 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 function endPointer(e) {
+  if (S.xyz && xyz.pointer("up", e)) return;
   const op = S.op;
   S.op = null;
   if (!op) return;
@@ -3324,6 +3346,7 @@ canvas.addEventListener(
   (e) => {
     if (!S.info) return;
     e.preventDefault();
+    if (S.xyz && xyz.wheel(e)) return;
     // Ctrl (⌘ on Mac) or Shift + wheel steps through Z. On a Mac, ctrlKey is
     // also set by trackpad pinches, which keep zooming.
     if ((IS_MAC ? e.metaKey : e.ctrlKey) || (e.shiftKey && !e.ctrlKey)) {
@@ -3525,11 +3548,15 @@ $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-redo").addEventListener("click", redo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
-const AXES = { xy: "正常看每一层", xz: "从侧面看，拉条切换 Y", yz: "从侧面看，拉条切换 X" };
+const AXES = { xy: "正常看每一层", xz: "从侧面看，拉条切换 Y", yz: "从侧面看，拉条切换 X", xyz: "四个画面：XY、XZ、YZ，右上角的十字用来改 Z" };
 $("btn-axis").addEventListener("click", () => {
   if (!S.info || closeMenu($("btn-axis"))) return;
-  const items = Object.entries(AXES).map(([v, hint]) => ({ value: v, label: v.toUpperCase(), hint, on: S.axis === v }));
-  openMenu($("btn-axis"), items, (v) => v !== S.axis && setAxis(v));
+  const items = Object.entries(AXES).map(([v, hint]) => ({ value: v, label: v.toUpperCase(), hint, on: v === "xyz" ? !!S.xyz : S.axis === v && !S.xyz }));
+  openMenu($("btn-axis"), items, (v) => {
+    if (v === "xyz") { xyz.toggle(); return; }
+    if (S.xyz) xyz.close();
+    if (v !== S.axis) setAxis(v);
+  });
 });
 // Arrows to scroll the tool buttons when the window is too narrow for them.
 {
@@ -3848,11 +3875,59 @@ function markStrip() {
   }
 }
 
+// Recently opened images, newest first. The home screen lists them the way
+// ChimeraX lists recent files: click a row to open that path again.
+const RECENT_MAX = 10;
+function rememberRecent(info) {
+  if (!info?.path) return;
+  const path = info.path;
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const row = {
+    path,
+    name: info.name || path.slice(slash + 1),
+    dir: slash > 0 ? path.slice(0, slash) : "",
+    series: info.seriesIndex || 0,
+  };
+  const list = (pref.get("recent", []) || []).filter((r) => r && r.path !== path);
+  list.unshift(row);
+  pref.set("recent", list.slice(0, RECENT_MAX));
+  renderRecent();
+}
+function renderRecent() {
+  const box = $("recent-list");
+  if (!box) return;
+  box.replaceChildren();
+  const list = pref.get("recent", []);
+  if (!Array.isArray(list) || !list.length) {
+    const d = document.createElement("div");
+    d.className = "dim recent-empty";
+    d.textContent = "还没有打开过图像";
+    box.append(d);
+    return;
+  }
+  for (const r of list) {
+    if (!r?.path) continue;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "recent-row";
+    b.title = r.path;
+    const name = document.createElement("b");
+    name.textContent = r.name || r.path;
+    const where = document.createElement("span");
+    const slash = Math.max((r.dir || "").lastIndexOf("/"), (r.dir || "").lastIndexOf("\\"));
+    where.textContent = slash >= 0 ? r.dir.slice(slash + 1) : r.dir;
+    b.append(name, where);
+    b.addEventListener("click", () => openPath(r.path, false, r.series || 0));
+    box.append(b);
+  }
+}
+
 // ---------- startup ----------
 
 S.scaleBar = pref.get("scalebar-on", true);
 $("fft-n").value = String(pref.get("fft-n", "512"));
 if (pref.get("fft-on", false)) setFft(true);
+renderRecent();
 toggleSidebar(pref.get("sidebar", true));
 {
   const t = pref.get("tools", null);

@@ -26,6 +26,9 @@ pub struct RenderReq {
     pub z: usize,
     pub t: usize,
     pub channels: Vec<ChanReq>,
+    /// "xz" or "yz" renders that orthogonal plane; `z` is then the fixed Y or X.
+    #[serde(default)]
+    pub plane: String,
     /// Source rectangle in image pixels: x, y, width, height.
     pub region: [f64; 4],
     pub out_w: usize,
@@ -214,6 +217,7 @@ pub fn thumbnail(img: &Arc<OpenImage>, size: usize) -> Result<Vec<u8>> {
         out_h: oh,
         gamma: 1.0,
         invert: false,
+        plane: String::new(),
     };
     render(img, &req)
 }
@@ -241,6 +245,7 @@ mod tests {
             out_h: out,
             gamma: 1.0,
             invert: false,
+            plane: String::new(),
         }
     }
 

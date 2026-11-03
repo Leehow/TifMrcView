@@ -19,7 +19,7 @@
 
   W.register(1, {
     show(p) {
-      $("spa-kv").value = p.optics.kv;
+      $("spa-kv").value = p.opticsFound?.kv ? p.optics.kv : "";
       $("spa-cs").value = p.optics.csMm;
       $("spa-amp").value = p.optics.amplitude;
       const t = document.createElement("table");
@@ -46,6 +46,7 @@
   $("spa-run-ctf").onclick = () => {
     const px = +$("spa-pixel").value;
     if (!(px > 0)) return W.status("请先填写像素大小");
+    if (!(+$("spa-kv").value > 0)) return W.status("请先填写电压");
     W.run("CTF 拟合", "ctf", {
       n: +$("spa-n").value,
       params: {

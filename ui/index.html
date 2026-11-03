@@ -57,21 +57,29 @@
     <main id="stage">
       <canvas id="view"></canvas>
       <div id="empty">
-        <div class="big desk-only">把图像或文件夹拖进来，或点左上角的文件夹图标打开</div>
-        <div class="big touch-only">点左上角的文件夹图标选择图像</div>
-        <div id="formats">
-          <div class="fmt-head">直接支持</div>
-          <div class="fmt-core">
-            <div class="fmt-item"><b>TIFF / OME-TIFF</b><span>.tif .tiff</span></div>
-            <div class="fmt-item"><b>MRC</b><span>.mrc .mrcs .rec .st .map .ali .preali</span></div>
-            <div class="fmt-item"><b>普通图片</b><span>.png .jpg .jpeg .gif .bmp .webp</span></div>
-            <div class="fmt-item"><b>图像文件夹</b><span>连续切片按顺序组成 Z 堆叠</span></div>
+        <div id="home">
+          <div class="big desk-only">把图像或文件夹拖进来，或点左上角的文件夹图标打开</div>
+          <div class="big touch-only">点左上角的文件夹图标选择图像</div>
+          <div class="home-grid">
+            <section class="home-card" id="home-recent">
+              <div class="fmt-head">最近打开</div>
+              <div id="recent-list"></div>
+            </section>
+            <section class="home-card" id="formats">
+              <div class="fmt-head">直接支持</div>
+              <div class="fmt-core">
+                <div class="fmt-item"><b>TIFF / OME-TIFF</b><span>.tif .tiff</span></div>
+                <div class="fmt-item"><b>MRC</b><span>.mrc .mrcs .rec .st .map .ali .preali</span></div>
+                <div class="fmt-item"><b>普通图片</b><span>.png .jpg .jpeg .gif .bmp .webp</span></div>
+                <div class="fmt-item"><b>图像文件夹</b><span>连续切片按顺序组成 Z 堆叠</span></div>
+              </div>
+              <div class="fmt-head">装上插件后支持 <span class="dim">点击即可安装</span></div>
+              <div id="fmt-plugins"></div>
+            </section>
           </div>
-          <div class="fmt-head">装上插件后支持 <span class="dim">点击即可安装</span></div>
-          <div id="fmt-plugins"></div>
+          <div class="hint desk-only">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
+          <div class="hint touch-only">双指捏合 缩放　拖动 平移　双击 适应屏幕</div>
         </div>
-        <div class="hint desk-only">↑ ↓ 切换文件　← → 切换 Z　Ctrl/⌘+滚轮 切换 Z　空格 播放　滚轮 缩放　拖动 平移　Ctrl/⌘+S 存 PNG</div>
-        <div class="hint touch-only">双指捏合 缩放　拖动 平移　双击 适应屏幕</div>
       </div>
       <div id="loading" hidden></div>
       <div id="size-out" hidden>
@@ -224,6 +232,14 @@
 
   <section id="zbar" hidden>
     <button id="btn-play" title="播放 Z (空格)">▶</button>
+    <div id="xyz-axes" hidden>
+      <span class="dim">X</span>
+      <input type="range" id="xyz-x" min="0" max="0" value="0" />
+      <span id="xyz-xl"></span>
+      <span class="dim">Y</span>
+      <input type="range" id="xyz-y" min="0" max="0" value="0" />
+      <span id="xyz-yl"></span>
+    </div>
     <span class="dim" id="zname">Z</span>
     <div id="zwrap"><div id="zmarks"></div><input type="range" id="zslider" min="0" max="0" value="0" /></div>
     <span id="zlabel"></span>
@@ -353,6 +369,7 @@
   <div id="toast" hidden></div>
 
   <script src="app.js"></script>
+  <script src="xyz.js"></script>
   <script src="plugin-host.js"></script>
   <script src="plugin-sandbox.js"></script>
   <script src="plugin-market.js"></script>

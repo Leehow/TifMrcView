@@ -12,16 +12,17 @@ pub mod fourier;
 pub mod geom;
 #[cfg(feature = "pro")]
 pub mod local_gpu;
+pub mod optics;
 pub mod pick;
 pub mod plane;
-pub mod project;
 pub mod post;
+pub mod project;
 pub mod refine;
 pub mod render;
 pub mod score;
-pub mod volume;
 #[cfg(test)]
 mod tests;
+pub mod volume;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
