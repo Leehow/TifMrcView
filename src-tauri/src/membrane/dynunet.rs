@@ -17,7 +17,7 @@ use burn::nn::{InstanceNorm, InstanceNormConfig, PaddingConfig3d};
 use burn::tensor::activation::leaky_relu;
 use burn::tensor::module::conv3d;
 use burn::tensor::ops::ConvOptions;
-use burn::tensor::{Device, Tensor};
+use burn::tensor::{Device, Slice, Tensor};
 use burn_store::{ModuleSnapshot, PytorchStore};
 
 const SLOPE: f64 = 0.01;
@@ -42,8 +42,93 @@ impl Conv {
     }
 }
 
+impl Conv {
+    fn forward(&self, x: Tensor<5>) -> Tensor<5> {
+        conv(x, self.conv.weight.val(), self.conv.bias.as_ref().map(|b| b.val()), self.conv.stride[0])
+    }
+}
+
+/// A cubic convolution (side 1 or 3, padding side/2, stride 1 or 2). Burn's
+/// direct kernel is slow wherever there are many channels (Metal, M1 Max:
+/// 1024 channels on 5³ took 0.54 s), so those are one matrix product per
+/// kernel offset, summed: 10–50× faster. Its kernel stays for the
+/// full-resolution 32-channel convolutions, where the two are even.
+fn conv(x: Tensor<5>, w: Tensor<5>, bias: Option<Tensor<1>>, stride: usize) -> Tensor<5> {
+    let [b, c, d, h, wd] = x.dims();
+    let [o, _, k, ..] = w.dims();
+    let p = k / 2;
+    if c <= 32 && stride == 1 && k == 3 {
+        return conv3d(x, w, bias, ConvOptions::new([1; 3], [p; 3], [1; 3], 1));
+    }
+    let out = |n: usize| (n + 2 * p - k) / stride + 1;
+    let (od, oh, ow) = (out(d), out(h), out(wd));
+    let x = if p > 0 { x.pad([(0, 0), (0, 0), (p, p), (p, p), (p, p)], burn::tensor::ops::PadMode::Constant(0.0)) } else { x };
+    let span = |at: usize, n: usize| Slice { start: at as isize, end: Some((at + stride * (n - 1) + 1) as isize), step: stride as isize };
+    let n = od * oh * ow;
+    let mut acc: Option<Tensor<3>> = None;
+    for kz in 0..k {
+        for ky in 0..k {
+            for kx in 0..k {
+                let xs = x.clone().slice([Slice::from(0..b), Slice::from(0..c), span(kz, od), span(ky, oh), span(kx, ow)]).reshape([b, c, n]);
+                let wk = w.clone().slice([0..o, 0..c, kz..kz + 1, ky..ky + 1, kx..kx + 1]).reshape([1, o, c]);
+                let r = wk.repeat_dim(0, b).matmul(xs);
+                acc = Some(match acc {
+                    None => r,
+                    Some(a) => a + r,
+                });
+            }
+        }
+    }
+    let mut y = acc.unwrap();
+    if let Some(bias) = bias {
+        y = y + bias.reshape([1, o, 1]);
+    }
+    y.reshape([b, o, od, oh, ow])
+}
+
+/// The ×2 transposed convolution (side 2, stride 2) as eight matrix
+/// products, one per output parity, interleaved (as `conv`, for speed).
+fn up2(x: Tensor<5>, w: Tensor<5>) -> Tensor<5> {
+    let [b, c, d, h, wd] = x.dims();
+    let o = w.dims()[1];
+    let n = d * h * wd;
+    let x = x.reshape([b, c, n]);
+    let mut parts = Vec::with_capacity(8);
+    for a in 0..2 {
+        for e in 0..2 {
+            for f in 0..2 {
+                let wk = w.clone().slice([0..c, 0..o, a..a + 1, e..e + 1, f..f + 1]).reshape([1, c, o]).swap_dims(1, 2).repeat_dim(0, b);
+                parts.push(wk.matmul(x.clone()).reshape([b, o, d, h, wd]));
+            }
+        }
+    }
+    // [2, 2, 2, b, o, d, h, w] → [b, o, d, 2, h, 2, w, 2].
+    let t: Tensor<8> = Tensor::stack::<6>(parts, 0).reshape([2, 2, 2, b, o, d, h, wd]);
+    t.permute([3, 4, 5, 0, 6, 1, 7, 2]).reshape([b, o, 2 * d, 2 * h, 2 * wd])
+}
+
 fn norm(c: usize, dev: &Device) -> InstanceNorm {
     InstanceNormConfig::new(c).with_affine(true).init(dev)
+}
+
+/// Instance norm with the statistics reduced in two stages: Burn's own
+/// reduces each channel's millions of voxels in one pass and took as long
+/// as a convolution on a 160³ window (0.38 s against 0.03 s, Metal).
+fn inorm(n: &InstanceNorm, x: Tensor<5>) -> Tensor<5> {
+    let d = x.dims();
+    let (bc, len) = (d[0] * d[1], d[2] * d[3] * d[4]);
+    // Blocks of the largest power of two (up to 4096) dividing the length.
+    let k = (1usize << len.trailing_zeros().min(12)).min(len);
+    let mean = |t: Tensor<2>| t.reshape([bc, k, len / k]).mean_dim(2).mean_dim(1).reshape([bc, 1]);
+    let x = x.reshape([bc, len]);
+    let c = x.clone() - mean(x);
+    let var = mean(c.clone().powi_scalar(2));
+    let y = c / (var + n.epsilon).sqrt();
+    let affine = |p: &Option<burn::module::Param<Tensor<1>>>| p.as_ref().map(|p| p.val().reshape([1, d[1]]).repeat_dim(0, d[0]).reshape([bc, 1]));
+    match (affine(&n.gamma), affine(&n.beta)) {
+        (Some(g), Some(b)) => (y * g + b).reshape(d),
+        _ => y.reshape(d),
+    }
 }
 
 /// conv–norm–act–conv–norm plus the input (through a strided 1³
@@ -72,10 +157,10 @@ impl ResBlock {
     }
 
     fn forward(&self, x: Tensor<5>) -> Tensor<5> {
-        let h = leaky_relu(self.norm1.forward(self.conv1.conv.forward(x.clone())), SLOPE);
-        let h = self.norm2.forward(self.conv2.conv.forward(h));
+        let h = leaky_relu(inorm(&self.norm1, self.conv1.forward(x.clone())), SLOPE);
+        let h = inorm(&self.norm2, self.conv2.forward(h));
         let s = match (&self.conv3, &self.norm3) {
-            (Some(c), Some(n)) => n.forward(c.conv.forward(x)),
+            (Some(c), Some(n)) => inorm(n, c.forward(x)),
             _ => x,
         };
         leaky_relu(h + s, SLOPE)
@@ -105,10 +190,9 @@ impl BasicBlock {
         let w = self.conv1.conv.weight.val();
         let [_, i, ..] = w.dims();
         let ca = a.dims()[1];
-        let opt = || ConvOptions::new([1; 3], [1; 3], [1; 3], 1);
-        let h = conv3d(a, w.clone().narrow(1, 0, ca), None, opt()) + conv3d(b, w.narrow(1, ca, i - ca), None, opt());
-        let h = leaky_relu(self.norm1.forward(h), SLOPE);
-        leaky_relu(self.norm2.forward(self.conv2.conv.forward(h)), SLOPE)
+        let h = conv(a, w.clone().narrow(1, 0, ca), None, 1) + conv(b, w.narrow(1, ca, i - ca), None, 1);
+        let h = leaky_relu(inorm(&self.norm1, h), SLOPE);
+        leaky_relu(inorm(&self.norm2, self.conv2.forward(h)), SLOPE)
     }
 }
 
@@ -133,7 +217,7 @@ impl UpBlock {
     }
 
     fn forward(&self, x: Tensor<5>, skip: Tensor<5>) -> Tensor<5> {
-        let up = self.transp_conv.conv.forward(x);
+        let up = up2(x, self.transp_conv.conv.weight.val());
         self.conv_block.forward_pair(up, skip)
     }
 }
@@ -183,7 +267,7 @@ impl DynUNet {
         for up in &self.upsamples {
             h = up.forward(h, skips.pop().unwrap());
         }
-        self.output_block.conv.conv.forward(h)
+        self.output_block.conv.forward(h)
     }
 }
 
@@ -205,4 +289,39 @@ pub fn load(path: &std::path::Path, dev: &Device) -> anyhow::Result<DynUNet> {
         anyhow::bail!("这个文件不是 MemBrain-seg v10 模型（缺 {} 个参数，{} 个形状不符）", r.missing.len(), r.errors.len());
     }
     Ok(net)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn::tensor::Distribution;
+
+    #[test]
+    fn matrix_convolutions_match_burn() {
+        let dev = Device::flex();
+        let x = Tensor::<5>::random([2, 40, 6, 5, 7], Distribution::Normal(0.0, 1.0), &dev);
+        for (k, stride) in [(3, 1), (3, 2), (1, 1), (1, 2)] {
+            let w = Tensor::<5>::random([24, 40, k, k, k], Distribution::Normal(0.0, 0.1), &dev);
+            let b = Tensor::<1>::random([24], Distribution::Normal(0.0, 0.1), &dev);
+            let want = conv3d(x.clone(), w.clone(), Some(b.clone()), ConvOptions::new([stride; 3], [k / 2; 3], [1; 3], 1));
+            let got = conv(x.clone(), w, Some(b), stride);
+            assert_eq!(got.dims(), want.dims());
+            assert!((got - want).abs().max().into_scalar::<f32>() < 1e-4, "side {k} stride {stride}");
+        }
+        let up = ConvTranspose3dConfig::new([40, 16], [2; 3]).with_stride([2; 3]).with_bias(false).init(&dev);
+        let want = up.forward(x.clone());
+        let got = up2(x, up.weight.val());
+        assert_eq!(got.dims(), want.dims());
+        assert!((got - want).abs().max().into_scalar::<f32>() < 1e-4);
+    }
+
+    #[test]
+    fn instance_norm_matches_burn() {
+        let dev = Device::flex();
+        let mut n = norm(6, &dev);
+        n.gamma = Some(burn::module::Param::from_tensor(Tensor::<1>::random([6], Distribution::Normal(1.0, 0.3), &dev)));
+        n.beta = Some(burn::module::Param::from_tensor(Tensor::<1>::random([6], Distribution::Normal(0.0, 0.3), &dev)));
+        let x = Tensor::<5>::random([2, 6, 8, 6, 10], Distribution::Normal(3.0, 2.0), &dev);
+        assert!((inorm(&n, x.clone()) - n.forward(x)).abs().max().into_scalar::<f32>() < 1e-4);
+    }
 }

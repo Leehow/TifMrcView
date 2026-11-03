@@ -113,19 +113,6 @@ impl Model {
     }
 }
 
-/// Reverses the axis order of a volume (dims `n`, first axis fastest).
-fn transpose(v: &[f32], n: [usize; 3]) -> Vec<f32> {
-    let mut out = vec![0f32; v.len()];
-    out.par_chunks_mut(n[2] * n[1]).enumerate().for_each(|(x, plane)| {
-        for y in 0..n[1] {
-            for z in 0..n[2] {
-                plane[y * n[2] + z] = v[(z * n[1] + y) * n[0] + x];
-            }
-        }
-    });
-    out
-}
-
 /// Whether a safetensors file stores half-precision weights (the published
 /// model does, to halve the download).
 fn is_half(path: &Path) -> Result<bool> {
@@ -259,28 +246,6 @@ pub struct Stats {
     pub ms: f64,
 }
 
-/// Mirrors a volume (dims `n`, x fastest) along the axes in `m`.
-fn mirror(v: Vec<f32>, n: [usize; 3], m: [bool; 3]) -> Vec<f32> {
-    if m == [false; 3] {
-        return v;
-    }
-    let mut out = vec![0f32; v.len()];
-    out.par_chunks_mut(n[0] * n[1]).enumerate().for_each(|(z, plane)| {
-        let sz = if m[2] { n[2] - 1 - z } else { z };
-        for y in 0..n[1] {
-            let sy = if m[1] { n[1] - 1 - y } else { y };
-            let src = &v[(sz * n[1] + sy) * n[0]..][..n[0]];
-            let dst = &mut plane[y * n[0]..][..n[0]];
-            if m[0] {
-                dst.iter_mut().zip(src.iter().rev()).for_each(|(d, s)| *d = *s);
-            } else {
-                dst.copy_from_slice(src);
-            }
-        }
-    });
-    out
-}
-
 /// How thoroughly `score` goes over the volume.
 #[derive(Clone, Copy, Debug)]
 pub enum Pass {
@@ -291,8 +256,9 @@ pub enum Pass {
     Budget(f64),
     /// As MemBrain-seg's own `segment`: windows overlapping by half (placed
     /// as MONAI's sliding window does), all eight copies. The app's: on a
-    /// 240 × 160 × 128 tomogram every voxel's score was within 0.015 of
-    /// MemBrain-seg 0.0.10 (Dice 0.99986).
+    /// 512 × 512 × 128 tomogram (36 windows) every voxel's score was within
+    /// 1e-4 of MemBrain-seg 0.0.10 in single precision, no voxel decided
+    /// differently.
     Official,
 }
 
@@ -339,62 +305,90 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         (0..side[a]).map(|i| (-((i as f32 - c).powi(2)) / (2.0 * s * s)).exp()).collect()
     });
     let inside = |a: usize, o: isize, i: usize| -> Option<usize> { usize::try_from(o + i as isize).ok().filter(|&k| k < n[a]) };
-    let tile = |o: [isize; 3]| -> Vec<f32> {
+    // Where tile voxel (x, y, z) sits in the network's input and output,
+    // mirrored by `m`: in its axis order (`Model::xyz`), so the tile is
+    // gathered and scattered in one pass on the host.
+    let xyz = net.xyz();
+    let at = |m: [bool; 3], x: usize, y: usize, z: usize| -> usize {
+        let f = |a: usize, i: usize| if m[a] { side[a] - 1 - i } else { i };
+        let (x, y, z) = (f(0, x), f(1, y), f(2, z));
+        if xyz {
+            (x * side[1] + y) * side[2] + z
+        } else {
+            (z * side[1] + y) * side[0] + x
+        }
+    };
+    let tile = |o: [isize; 3], m: [bool; 3]| -> Vec<f32> {
+        // Filled in the network's order: its slowest axis in parallel.
+        let ax = if xyz { [0, 1, 2] } else { [2, 1, 0] };
+        let f = |a: usize, i: usize| if m[a] { side[a] - 1 - i } else { i };
         let mut t = vec![0f32; side[0] * side[1] * side[2]];
-        for z in 0..side[2] {
-            let Some(zz) = inside(2, o[2], z) else { continue };
-            for y in 0..side[1] {
-                let Some(yy) = inside(1, o[1], y) else { continue };
-                for x in 0..side[0] {
-                    if let Some(xx) = inside(0, o[0], x) {
-                        t[(z * side[1] + y) * side[0] + x] = v[(zz * n[1] + yy) * n[0] + xx];
+        t.par_chunks_mut(side[ax[1]] * side[ax[2]]).enumerate().for_each(|(i, slab)| {
+            let mut l = [0usize; 3];
+            l[ax[0]] = f(ax[0], i);
+            for j in 0..side[ax[1]] {
+                l[ax[1]] = f(ax[1], j);
+                for k in 0..side[ax[2]] {
+                    l[ax[2]] = f(ax[2], k);
+                    if let (Some(xx), Some(yy), Some(zz)) = (inside(0, o[0], l[0]), inside(1, o[1], l[1]), inside(2, o[2], l[2])) {
+                        slab[j * side[ax[2]] + k] = v[(zz * n[1] + yy) * n[0] + xx];
                     }
                 }
             }
-        }
+        });
         t
     };
     let len = n[0] * n[1] * n[2];
     let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
+    // Each copy is blended on its own and the copies averaged (as
+    // MemBrain-seg): mirrored windows sit elsewhere, so their weights
+    // differ from copy to copy.
+    let mut total = vec![0f32; len];
     let mut copies = 8;
     let mut done = 0;
     let mut c = 0;
     while c < copies {
-        for &z0 in &st[2] {
-            for &y0 in &st[1] {
-                for &x0 in &st[0] {
+        // MemBrain-seg mirrors the whole volume and then places its
+        // windows, so along a mirrored axis they sit mirrored too (the same
+        // places only when they are spread symmetrically).
+        let m = FLIPS[c];
+        let sc: [Vec<isize>; 3] = std::array::from_fn(|a| st[a].iter().map(|&s| if m[a] { n[a] as isize - side[a] as isize - s } else { s }).collect());
+        for &z0 in &sc[2] {
+            for &y0 in &sc[1] {
+                for &x0 in &sc[0] {
                     check_cancel()?;
-                    // Mirrored and put in the network's axis order on the host
-                    // (cheap next to the network).
-                    let t = mirror(tile([x0, y0, z0]), side, FLIPS[c]);
-                    let x = if net.xyz() {
-                        Tensor::<5>::from_data(TensorData::new(transpose(&t, side), [1, 1, side[0], side[1], side[2]]), dev)
-                    } else {
-                        Tensor::<5>::from_data(TensorData::new(t, [1, 1, side[2], side[1], side[0]]), dev)
-                    };
+                    let dims = if xyz { [1, 1, side[0], side[1], side[2]] } else { [1, 1, side[2], side[1], side[0]] };
+                    let x = Tensor::<5>::from_data(TensorData::new(tile([x0, y0, z0], m), dims), dev);
                     let r: Vec<f32> = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
-                    let r = mirror(if net.xyz() { transpose(&r, [side[2], side[1], side[0]]) } else { r }, side, FLIPS[c]);
-                    for z in 0..side[2] {
-                        let Some(zz) = inside(2, z0, z) else { continue };
+                    // Each volume plane the window covers, in parallel.
+                    let plane = n[0] * n[1];
+                    acc.par_chunks_mut(plane).zip(wsum.par_chunks_mut(plane)).enumerate().for_each(|(zz, (pa, pw))| {
+                        let z = zz as isize - z0;
+                        if z < 0 || z >= side[2] as isize {
+                            return;
+                        }
+                        let z = z as usize;
                         for y in 0..side[1] {
                             let Some(yy) = inside(1, y0, y) else { continue };
                             let wzy = g[2][z] * g[1][y];
-                            let src = (z * side[1] + y) * side[0];
-                            let dst = (zz * n[1] + yy) * n[0];
                             for x in 0..side[0] {
                                 if let Some(xx) = inside(0, x0, x) {
                                     let w = (wzy * g[0][x]).max(1e-3);
-                                    acc[dst + xx] += w * r[src + x];
-                                    wsum[dst + xx] += w;
+                                    pa[yy * n[0] + xx] += w * r[at(m, x, y, z)];
+                                    pw[yy * n[0] + xx] += w;
                                 }
                             }
                         }
-                    }
+                    });
                     done += 1;
                     progress(Progress { done, total: windows * copies });
                 }
             }
         }
+        total.par_iter_mut().zip(acc.par_iter_mut().zip(wsum.par_iter_mut())).for_each(|(t, (a, w))| {
+            *t += *a / w.max(1e-12);
+            (*a, *w) = (0.0, 0.0);
+        });
         if let (0, Pass::Budget(budget_s)) = (c, pass) {
             // From the first pass's time, as many copies as fit the budget.
             let per = t0.elapsed().as_secs_f64().max(1e-3);
@@ -407,8 +401,8 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         }
         c += 1;
     }
-    acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
-    Ok((acc, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
+    total.par_iter_mut().for_each(|t| *t /= copies as f32);
+    Ok((total, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
 }
 
 /// Keeps the 26-connected components of `mask` with at least `min` voxels.
@@ -477,6 +471,15 @@ pub struct Segmentation {
     pub stats: Stats,
 }
 
+/// Mean and spread of every voxel (sums in f64).
+fn exact_stats(v: &[f32]) -> (f32, f32) {
+    let (s, s2) = v.par_iter().fold(|| (0f64, 0f64), |(a, b), &x| (a + x as f64, b + x as f64 * x as f64)).reduce(|| (0.0, 0.0), |p, q| (p.0 + q.0, p.1 + q.1));
+    let k = v.len().max(1) as f64;
+    let mean = s / k;
+    let sd = (s2 / k - mean * mean).max(0.0).sqrt();
+    (mean as f32, if sd > 1e-12 { sd as f32 } else { 1.0 })
+}
+
 /// Segments the membranes of `values` (dims `n`, X fastest, `pixel_a` Å per
 /// voxel).
 pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a: f32, pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<Segmentation> {
@@ -494,8 +497,10 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect();
     let small = resample(&norm, n, m);
     drop(norm);
-    // Standardise again at the network's scale (the low-pass narrows it).
-    let (m2, s2) = crate::wedge::stats(&small);
+    // Standardise again at the network's scale (the low-pass narrows it),
+    // over every voxel: a sample (every 16th of 512² × 128) shifted the
+    // scores enough to cost 0.01 Dice against MemBrain-seg.
+    let (m2, s2) = exact_stats(&small);
     let small: Vec<f32> = small.into_par_iter().map(|x| (x - m2) / s2).collect();
     check_cancel()?;
     let (logits, stats) = score(dev, net, &small, m, pass, progress)?;
@@ -549,26 +554,6 @@ mod tests {
         let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
         let (p, q) = (load_own(&a, &dev).unwrap().forward(x.clone()), load_own(&b, &dev).unwrap().forward(x));
         assert!((p - q).abs().max().into_scalar::<f32>() < 0.05);
-    }
-
-    #[test]
-    fn transpose_reverses_axes() {
-        let n = [4, 3, 2];
-        let v: Vec<f32> = (0..24).map(|i| i as f32).collect();
-        let t = transpose(&v, n);
-        // v[x + 4 (y + 3 z)] lands at t[z + 2 (y + 3 x)].
-        assert_eq!(t[1 + 2 * (2 + 3 * 3)], v[3 + 4 * (2 + 3)]);
-        assert_eq!(transpose(&t, [2, 3, 4]), v);
-    }
-
-    #[test]
-    fn mirror_twice_is_identity() {
-        let n = [5, 4, 3];
-        let v: Vec<f32> = (0..60).map(|i| i as f32).collect();
-        for m in FLIPS {
-            assert_eq!(mirror(mirror(v.clone(), n, m), n, m), v);
-        }
-        assert_eq!(mirror(v.clone(), n, [true, false, true])[0], v[4 + 5 * 4 * 2]);
     }
 
     #[test]
