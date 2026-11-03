@@ -512,7 +512,7 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     let net = crate::membrane::load(&model, dev)?;
     let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
     drop(v);
-    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask)?;
+    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask, px as f32)?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 

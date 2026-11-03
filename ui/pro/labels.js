@@ -139,11 +139,15 @@
     </details>
     <details id="lab-mem">
       <summary>膜分割（断层）</summary>
-      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
+      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」；其中呈球壳状的单独写进「囊泡」，并测出直径。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
       <div class="row">
         <button class="small primary" id="lab-mem-run" title="分割整个断层里的膜（Esc 停止）">自动分割膜</button>
       </div>
       <div class="dim" id="lab-mem-text"></div>
+      <canvas id="lab-ves-hist" hidden title="囊泡直径（膜中线）分布"></canvas>
+      <div class="row">
+        <button class="small" id="lab-ves-csv" hidden title="把每个囊泡的中心坐标（像素）和直径（nm）存成 CSV">导出囊泡表</button>
+      </div>
     </details>
     <details id="lab-unet">
       <summary>深度学习 U-Net</summary>
@@ -1394,11 +1398,61 @@
 
   // ---------- membranes (membrane/) ----------
 
-  const M = { busy: false, text: "" };
+  const M = { busy: false, text: "", vesicles: [], token: 0 };
   function syncMem() {
     $("lab-mem-run").disabled = M.busy || L.busy || !L.token;
     $("lab-mem-run").textContent = M.busy ? "分割中…" : "自动分割膜";
     $("lab-mem-text").textContent = M.text;
+    const ves = M.token === L.token ? M.vesicles : [];
+    $("lab-ves-csv").hidden = !ves.length;
+    $("lab-ves-hist").hidden = ves.length < 2;
+    if (ves.length >= 2) drawVesicles(ves);
+  }
+
+  /** Diameter histogram of the vesicles, 5 nm bins. */
+  function drawVesicles(ves) {
+    const c = $("lab-ves-hist");
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth || 240, h = 90;
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const d = ves.map((v) => v.diameter);
+    const lo = Math.floor(Math.min(...d) / 5) * 5, hi = Math.ceil((Math.max(...d) + 0.01) / 5) * 5;
+    const bins = new Array(Math.max(1, (hi - lo) / 5)).fill(0);
+    for (const x of d) bins[Math.min(bins.length - 1, Math.floor((x - lo) / 5))]++;
+    const top = Math.max(...bins), axis = 14, bw = w / bins.length;
+    const css = getComputedStyle(document.documentElement);
+    g.fillStyle = "rgb(92, 190, 60)"; // the colour of 囊泡 (membrane/mod.rs)
+    bins.forEach((n, i) => {
+      const bh = (n / top) * (h - axis - 4);
+      g.fillRect(i * bw + 1, h - axis - bh, Math.max(1, bw - 2), bh);
+    });
+    g.fillStyle = css.getPropertyValue("--dim").trim() || "#888";
+    g.font = "10px sans-serif";
+    g.textBaseline = "bottom";
+    g.textAlign = "left";
+    g.fillText(`${lo}`, 0, h);
+    g.textAlign = "right";
+    g.fillText(`${hi} nm`, w, h);
+  }
+
+  async function exportVesicles() {
+    const ves = M.token === L.token ? M.vesicles : [];
+    if (!ves.length) return;
+    const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_vesicles.csv`, filter: "CSV", exts: ["csv"] }).catch(() => null);
+    if (!path) return;
+    setSaveDir(dirname(path));
+    const rows = ["x_px,y_px,z_px,diameter_nm,voxels", ...ves.map((v) => `${v.center.map((c) => c.toFixed(1)).join(",")},${v.diameter.toFixed(2)},${v.voxels}`)];
+    try {
+      await writeFile(path, new TextEncoder().encode(rows.join("\n") + "\n"));
+      toast(`已保存 ${path}`);
+    } catch (e) {
+      toast(`保存失败：${e}`, 6000);
+    }
   }
   async function memRun() {
     if (!ready() || M.busy) return;
@@ -1417,6 +1471,16 @@
       const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
       M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : "";
       if (r) {
+        M.vesicles = r.vesicles || [];
+        M.token = L.token;
+        const d = M.vesicles.map((v) => v.diameter);
+        if (d.length) {
+          const mean = d.reduce((a, b) => a + b, 0) / d.length;
+          const sd = Math.sqrt(d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length);
+          M.text += `，其中 ${d.length} 个囊泡，直径 ${mean.toFixed(1)} ± ${sd.toFixed(1)} nm`;
+        }
+      }
+      if (r) {
         L.active = r.label;
         renderList();
       }
@@ -1431,6 +1495,7 @@
     }
   }
   $("lab-mem-run").addEventListener("click", memRun);
+  $("lab-ves-csv").addEventListener("click", exportVesicles);
   $("lab-mem").addEventListener("toggle", syncMem);
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && M.busy) { invoke("membrane_cancel"); e.preventDefault(); e.stopPropagation(); }
