@@ -183,8 +183,16 @@
     const req = { token: S.token, c: fftChannel(), t: S.t, mode: $("dn-mode").value, steps: +$("dn-steps").value, bin: +$("dn-bin").value, slab: S.info.sizeZ > 1 ? P.slab : 0 };
     const un = await T.event.listen("denoise-train", (ev) => {
       const { step, steps, loss } = ev.payload;
-      $("dn-model").textContent = `训练中 ${step}/${steps} · 损失 ${loss.toPrecision(3)}`;
+      $("dn-model").textContent = `训练中 ${step}/${steps} · 损失 ${loss.toPrecision(3)}` + (N.live ? " · 预览随训练实时更新" : "");
     });
+    // Every few seconds the network so far: show its result as it improves.
+    const unLive = await T.event.listen("denoise-live", () => {
+      N.live = true;
+      N.modelToken = req.token;
+      N.key = "";
+    });
+    const prevToken = N.modelToken;
+    N.live = false;
     N.training = true;
     $("dn-train").textContent = "取消";
     $("dn-model").textContent = "准备训练数据…";
@@ -199,9 +207,14 @@
       N.key = "";
     } catch (e) {
       $("dn-model").textContent = String(e).includes("已取消") ? "已取消训练" : "训练失败：" + e;
+      // The backend kept the earlier network.
+      N.modelToken = prevToken;
     } finally {
       un();
+      unLive();
       N.training = false;
+      N.live = false;
+      N.key = "";
       $("dn-train").textContent = "训练";
     }
   }
@@ -258,7 +271,7 @@
   }
 
   async function runPreview() {
-    if (N.busy || N.training || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
+    if (N.busy || (N.training && !N.live) || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
     const req = previewReq();
     if (!req) return;
     const key = JSON.stringify(req);
@@ -366,6 +379,7 @@
       return;
     }
     if (!S.info) return;
+    if (N.training) return status("训练完成后再保存");
     const stem = S.info.name.replace(/\.[^.]+$/, "");
     const p = params();
     const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_denoised_${p.method}${all ? "" : `_z${S.z + 1}`}.mrc`, filter: "MRC", exts: ["mrc"] });

@@ -156,8 +156,16 @@
     const req = { ...baseReq(), geometry: geometry(), config: { cube: P.cube, count: P.count, iterations: P.iterations, steps: P.steps, noise: P.noise, smooth: P.smooth } };
     const un = await T.event.listen("wedge-train", (ev) => {
       const p = ev.payload;
-      $("wg-model").textContent = `训练中 第 ${p.iteration}/${p.iterations} 轮 · ${p.step}/${p.steps} 步 · 损失 ${p.loss.toPrecision(3)}`;
+      $("wg-model").textContent = `训练中 第 ${p.iteration}/${p.iterations} 轮 · ${p.step}/${p.steps} 步 · 损失 ${p.loss.toPrecision(3)}` + (W.live ? " · 预览每轮更新" : "");
     });
+    // After each round the network so far: show its result as it improves.
+    const unLive = await T.event.listen("wedge-live", () => {
+      W.live = true;
+      W.model = { token: req.token };
+      W.key = "";
+    });
+    const prevModel = W.model;
+    W.live = false;
     W.training = true;
     $("wg-train").textContent = "取消";
     $("wg-model").textContent = "读取体数据、切子块…";
@@ -170,9 +178,14 @@
       W.key = "";
     } catch (e) {
       $("wg-model").textContent = String(e).includes("已取消") ? "已取消训练" : "训练失败：" + e;
+      // The backend kept the earlier network.
+      W.model = prevModel;
     } finally {
       un();
+      unLive();
       W.training = false;
+      W.live = false;
+      W.key = "";
       $("wg-train").textContent = "训练";
     }
   }
@@ -219,7 +232,7 @@
   }
 
   async function runPreview() {
-    if (W.busy || W.training || W.saving || panel.hidden || !$("wg-preview").checked || S.scrubbing) return;
+    if (W.busy || (W.training && !W.live) || W.saving || panel.hidden || !$("wg-preview").checked || S.scrubbing) return;
     const req = previewReq();
     if (!req) return;
     const key = JSON.stringify(req);
@@ -310,6 +323,10 @@
       return;
     }
     const token = baseToken();
+    if (W.training) {
+      status("训练完成后再保存");
+      return;
+    }
     if (!W.model || W.model.token !== token) {
       status("请先在当前图像上训练");
       return;

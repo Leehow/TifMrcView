@@ -229,7 +229,24 @@ pub fn train(
     h: usize,
     mode: Mode,
     cfg: &TrainConfig,
+    progress: impl FnMut(usize, usize, f32),
+) -> Result<(Net, f32, f32, f32)> {
+    train_live(dev, pairs, w, h, mode, cfg, progress, &mut |_, _, _| {})
+}
+
+/// As `train`, also handing the network as it is so far to `snapshot`
+/// (net, mean, std) every few seconds, for the viewer to show the result
+/// improving while it trains.
+#[allow(clippy::too_many_arguments)]
+pub fn train_live(
+    dev: &Device,
+    pairs: &[(Vec<f32>, Option<Vec<f32>>)],
+    w: usize,
+    h: usize,
+    mode: Mode,
+    cfg: &TrainConfig,
     mut progress: impl FnMut(usize, usize, f32),
+    snapshot: &mut dyn FnMut(Net, f32, f32),
 ) -> Result<(Net, f32, f32, f32)> {
     if pairs.is_empty() {
         bail!("没有训练数据");
@@ -250,6 +267,7 @@ pub fn train(
     let mut opt = AdamConfig::new().init();
     let mut loss_avg = 0f32;
     const CELL: usize = 8;
+    let mut shot = std::time::Instant::now();
     for step in 0..cfg.steps {
         if CANCEL.load(Ordering::SeqCst) {
             bail!("已取消");
@@ -317,6 +335,10 @@ pub fn train(
         net = opt.step(lr, net, grads);
         if step % 10 == 9 || step + 1 == cfg.steps {
             progress(step + 1, cfg.steps, loss_avg);
+        }
+        if step + 1 < cfg.steps && shot.elapsed().as_secs_f32() > 2.5 {
+            snapshot(net.valid(), mean, std);
+            shot = std::time::Instant::now();
         }
     }
     Ok((net.valid(), mean, std, loss_avg))

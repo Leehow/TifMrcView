@@ -439,6 +439,7 @@
       g.drawImage(canvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
       g.restore();
     }
+    drawLive(g);
     drawCls(g);
     drawUnet(g);
     drawSam(g);
@@ -1317,8 +1318,12 @@
 
   async function unetPredict() {
     const U = L.unet;
-    if (!U.info || U.busy) return;
+    // While training, the network so far (unet-live) segments the slice.
+    if (!(U.info || U.live) || U.predicting || (U.busy && !U.live)) return;
     const z = S.z;
+    const own = !U.busy;
+    U.stale = false;
+    U.predicting = true;
     U.busy = true;
     syncUnet();
     try {
@@ -1328,10 +1333,11 @@
       U.predZ = z;
       unetPaint();
     } catch (e) {
-      toast(String(e), 6000);
+      if (!U.live) toast(String(e), 6000);
       U.predZ = z;
     } finally {
-      U.busy = false;
+      U.predicting = false;
+      if (own) U.busy = false;
       syncUnet();
       draw();
     }
@@ -1339,11 +1345,9 @@
 
   function drawUnet(g) {
     const U = L.unet;
-    if (S.tool !== "label" || !unetOpen() || !U.info || !U.preview || S.axis !== "xy" || L.token !== S.token) return;
-    if (U.predZ !== S.z) {
-      if (!U.busy) unetPredict();
-      return;
-    }
+    if (S.tool !== "label" || !unetOpen() || !(U.info || U.live) || !U.preview || S.axis !== "xy" || L.token !== S.token) return;
+    if (U.predZ !== S.z || U.stale) unetPredict();
+    if (U.predZ !== S.z) return;
     if (!U.pred) return;
     const [sx, sy] = toScreen(0, 0);
     g.save();
@@ -1361,13 +1365,23 @@
     U.train = { step: 0, steps: +$("lab-unet-steps").value || 400, loss: 0 };
     syncUnet();
     const un = await T.event.listen("unet-train", (ev) => { if (U.train) { U.train = ev.payload; syncUnet(); } });
+    // Every few seconds the network so far: its segmentation of this slice
+    // shows while it trains.
+    const unLive = await T.event.listen("unet-live", () => {
+      U.live = true;
+      U.stale = true;
+      draw();
+    });
     try {
       U.info = await invoke("unet_train", { req: clsReq(), steps: U.train.steps });
       Object.assign(U, { pred: null, predZ: -1 });
     } catch (e) {
       toast(String(e), 6000);
+      Object.assign(U, { pred: null, predZ: -1 });
     } finally {
       un();
+      unLive();
+      U.live = false;
       U.busy = false;
       U.train = null;
       syncUnet();
@@ -1399,6 +1413,90 @@
   // ---------- membranes (membrane/) ----------
 
   const M = { busy: false, text: "", vesicles: [], token: 0 };
+
+  // What the running job has found so far (live.rs), drawn over the image
+  // so the result builds up in the viewer, window by window.
+  const LV = { on: false, token: 0, z: -1, fetching: false, again: false, last: 0, data: null };
+  const liveCanvas = document.createElement("canvas");
+  const liveCtx = liveCanvas.getContext("2d");
+  function liveStart() {
+    Object.assign(LV, { on: true, token: L.token, z: -1, data: null, last: 0 });
+  }
+  function liveStop() {
+    Object.assign(LV, { on: false, data: null, z: -1 });
+  }
+  /** Fetches the slice under Z, at most about four times a second. */
+  async function liveFetch() {
+    if (!LV.on || S.axis !== "xy" || LV.token !== S.token) return;
+    if (LV.fetching) { LV.again = true; return; }
+    const wait = 250 - (performance.now() - LV.last);
+    if (wait > 0 && LV.z === S.z) {
+      if (!LV.timer) LV.timer = setTimeout(() => { LV.timer = 0; liveFetch(); }, wait);
+      return;
+    }
+    LV.fetching = true;
+    LV.last = performance.now();
+    const z = S.z;
+    try {
+      const buf = await invoke("live_slice", { token: LV.token, z });
+      if (!LV.on) return;
+      LV.z = z;
+      if (!buf || buf.byteLength < 32) {
+        LV.data = null;
+        return;
+      }
+      const dv = new DataView(buf);
+      const u = (i) => dv.getUint32(i * 4, true);
+      const [gw, gh, nc, busy] = [u(0), u(1), u(2), u(3)];
+      const pal = new Uint8Array(buf, 32, nc * 4);
+      const cells = new Uint8Array(buf, 32 + nc * 4, gw * gh);
+      if (liveCanvas.width !== gw || liveCanvas.height !== gh) {
+        liveCanvas.width = gw;
+        liveCanvas.height = gh;
+      }
+      const im = liveCtx.createImageData(gw, gh), px = im.data;
+      for (let i = 0; i < cells.length; i++) {
+        const k = cells[i];
+        if (!k || k >= nc) continue;
+        const o = i * 4;
+        px[o] = pal[k * 4]; px[o + 1] = pal[k * 4 + 1]; px[o + 2] = pal[k * 4 + 2]; px[o + 3] = pal[k * 4 + 3];
+      }
+      liveCtx.putImageData(im, 0, 0);
+      LV.data = { busy: busy ? [u(4), u(5), u(6), u(7)] : null };
+      draw();
+    } catch (_) {
+      // The job ended meanwhile.
+    } finally {
+      LV.fetching = false;
+      if (LV.again || (LV.on && LV.z !== S.z)) { LV.again = false; liveFetch(); }
+    }
+  }
+  function drawLive(g) {
+    if (!LV.on || S.axis !== "xy" || LV.token !== S.token || !S.info) return;
+    if (LV.z !== S.z) liveFetch();
+    if (!LV.data || LV.z !== S.z) return;
+    const [sx, sy] = toScreen(0, 0);
+    const k = S.view.scale;
+    g.save();
+    g.globalAlpha = L.opacity;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(liveCanvas, sx, sy, S.info.width * k, S.info.height * k);
+    g.restore();
+    // The window the network is reading now.
+    const b = LV.data.busy;
+    if (b) {
+      const [x0, y0] = toScreen(b[0], b[1]), [x1, y1] = toScreen(b[2], b[3]);
+      g.save();
+      g.setLineDash([6, 4]);
+      g.lineWidth = 1.5;
+      g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+      g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      g.lineDashOffset = 5;
+      g.strokeStyle = "rgb(255, 196, 0)";
+      g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      g.restore();
+    }
+  }
   function syncMem() {
     $("lab-mem-run").disabled = M.busy || L.busy || !L.token;
     $("lab-mem-run").textContent = M.busy ? "分割中…" : "自动分割膜";
@@ -1465,7 +1563,9 @@
       const p = ev.payload;
       M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
       syncMem();
+      if (p.stage !== "read") liveFetch();
     });
+    liveStart();
     try {
       if (!(await window.TifMrcViewPro.membrane.ensure())) return;
       const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
@@ -1491,6 +1591,7 @@
       toast(String(e), 8000);
     } finally {
       un();
+      liveStop();
       M.busy = false;
       syncMem();
       draw();

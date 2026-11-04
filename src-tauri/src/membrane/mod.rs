@@ -369,6 +369,13 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
             for &y0 in &st[1] {
                 for &x0 in &st[0] {
                     check_cancel()?;
+                    let clip = |a: usize, o: isize| -> (usize, usize) { (o.max(0) as usize, ((o + side[a] as isize).max(0) as usize).min(n[a])) };
+                    let ((bx0, bx1), (by0, by1), (bz0, bz1)) = (clip(0, x0), clip(1, y0), clip(2, z0));
+                    crate::live::with(|m| {
+                        if m.grid == n {
+                            m.busy = Some([bx0, by0, bz0, bx1, by1, bz1]);
+                        }
+                    });
                     // Mirrored and put in the network's axis order on the host
                     // (cheap next to the network).
                     let t = mirror(tile([x0, y0, z0]), side, FLIPS[c]);
@@ -395,6 +402,20 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
                             }
                         }
                     }
+                    // What the window found so far, for the viewer (`live`).
+                    crate::live::with(|m| {
+                        if m.grid != n {
+                            return;
+                        }
+                        for z in bz0..bz1 {
+                            for y in by0..by1 {
+                                let i = (z * n[1] + y) * n[0];
+                                for x in bx0..bx1 {
+                                    m.cells[i + x] = u8::from(acc[i + x] > 0.0);
+                                }
+                            }
+                        }
+                    });
                     done += 1;
                     progress(Progress { done, total: windows * copies });
                 }
@@ -412,6 +433,7 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         }
         c += 1;
     }
+    crate::live::with(|m| m.busy = None);
     acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
     Ok((acc, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
 }
@@ -609,7 +631,9 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
         bail!("文件里没有像素大小，无法换算到 10 Å 体素");
     }
     let net = load(model, dev)?;
+    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &[]);
     let seg = segment(dev, &net, &v, shape, px as f32, Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &seg.mask);
     progress("膜分割：微管", 0, 1);
     let fils = crate::filaments::find(&v, shape, px as f32);
     let tubes = crate::filaments::mask(&fils, shape, px as f32);
@@ -713,6 +737,31 @@ mod tests {
         let v = vec![3.0f32; 20 * 20 * 20];
         let r = resample(&v, [20; 3], [7, 9, 11]);
         assert!(r.iter().all(|&x| (x - 3.0).abs() < 1e-4));
+    }
+
+    /// `score` draws what each window found into the live map (`live`) and
+    /// marks the window it is reading.
+    #[test]
+    fn score_fills_the_live_map() {
+        let _one = crate::live::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dev = Device::flex();
+        let cfg = NetConfig { widths: vec![2, 4, 4], blocks: vec![1, 1, 1], heads: 1 };
+        let net = Model::Own(MemNet::new(&cfg, &dev));
+        let n = [WINDOW + 40, WINDOW, 8];
+        let v: Vec<f32> = (0..n[0] * n[1] * n[2]).map(|i| ((i % 7) as f32 - 3.0) / 3.0 + ((i / n[0]) % 5) as f32 * 0.2).collect();
+        crate::live::start(1, n, n, vec![[0; 4], [255, 196, 0, 255]]);
+        let mut boxes = vec![];
+        let (logits, stats) = score(&dev, &net, &v, n, Pass::Budget(0.0), &mut |_| {
+            boxes.push(crate::live::MAP.lock().unwrap().as_ref().unwrap().busy);
+        })
+        .unwrap();
+        assert_eq!((stats.windows, stats.copies), (2, 1));
+        // The windows read, in order, clipped to the volume.
+        assert_eq!(boxes, vec![Some([0, 0, 0, WINDOW, WINDOW, 8]), Some([40, 0, 0, WINDOW + 40, WINDOW, 8])]);
+        let map = crate::live::MAP.lock().unwrap().take().unwrap();
+        assert_eq!(map.busy, None);
+        let want: Vec<u8> = logits.iter().map(|&s| u8::from(s > 0.0)).collect();
+        assert_eq!(map.cells, want);
     }
 
     #[test]
