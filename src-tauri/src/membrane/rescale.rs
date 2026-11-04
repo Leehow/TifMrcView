@@ -66,6 +66,56 @@ impl FourierResize {
         assert!(source.is_multiple_of(2) && target.is_multiple_of(2));
         Self { source: Transform::new(source), target: Transform::new(target) }
     }
+    /// Shrink a zero-padded patch without allocating its source cube. Bounds
+    /// and sampling use [fast, middle, slow] array axes, including mirroring.
+    /// Each source plane is reduced in X/Y before it is retained; only the
+    /// valid Z extent × target² complex values survive for the final pass.
+    pub(super) fn shrink_window(
+        &self,
+        bounds: [std::ops::Range<usize>; 3],
+        sample: impl Fn(usize, usize, usize) -> f32 + Sync,
+    ) -> Vec<f32> {
+        let (n, m) = (self.source.n, self.target.n);
+        assert!(n > m && bounds.iter().all(|b| b.start <= b.end && b.end <= n));
+        let mut xy = vec![(0.0, 0.0); bounds[2].len() * m * m];
+        xy.par_chunks_mut(m * m).enumerate().for_each(|(zi, plane)| {
+            let z = bounds[2].start + zi;
+            let mut rows = vec![(0.0, 0.0); bounds[1].len() * m];
+            for (yi, y) in bounds[1].clone().enumerate() {
+                let mut line = vec![(0.0, 0.0); n];
+                for x in bounds[0].clone() { line[x] = (sample(x, y, z), 0.0); }
+                rows[yi * m..(yi + 1) * m].copy_from_slice(&self.shrink_line(&line));
+            }
+            for x in 0..m {
+                let mut line = vec![(0.0, 0.0); n];
+                for (yi, y) in bounds[1].clone().enumerate() { line[y] = rows[yi * m + x]; }
+                for (y, value) in self.shrink_line(&line).into_iter().enumerate() { plane[y * m + x] = value; }
+            }
+        });
+        // Keep complex values through all three axes: taking real parts
+        // earlier loses cross-axis phase at the retained negative Nyquist bin.
+        let columns: Vec<Vec<f32>> = (0..m * m).into_par_iter().map(|i| {
+            let mut line = vec![(0.0, 0.0); n];
+            for (zi, z) in bounds[2].clone().enumerate() { line[z] = xy[zi * m * m + i]; }
+            self.shrink_line(&line).into_iter().map(|(r, _)| r).collect()
+        }).collect();
+        drop(xy);
+        let mut out = vec![0.0; m * m * m];
+        out.par_chunks_mut(m * m).enumerate().for_each(|(z, plane)| {
+            for (i, value) in plane.iter_mut().enumerate() { *value = columns[i][z]; }
+        });
+        out
+    }
+
+    fn shrink_line(&self, line: &[(f32, f32)]) -> Vec<(f32, f32)> {
+        let (n, m) = (self.source.n, self.target.n);
+        let spectrum = self.source.run(line, false);
+        // Same centred even-length crop as fftshift -> crop -> ifftshift.
+        // No SciPy-style Nyquist merging or amplitude compensation.
+        let cropped: Vec<_> = (0..m).map(|k| spectrum[if k < m / 2 { k } else { k + n - m }]).collect();
+        self.target.run(&cropped, true)
+    }
+
     pub(super) fn run(&self, values: &[f32]) -> Vec<f32> {
         let (n, m) = (self.source.n, self.target.n);
         assert_eq!(values.len(), n*n*n);
@@ -167,6 +217,23 @@ mod tests {
             }}}
             assert!((value as f64-expected).abs()<2e-6);
         }
+    }
+
+    #[test]
+    fn streaming_crop_matches_full_complex_transform_with_padding_and_phase() {
+        let (n,m)=(12usize,6usize);
+        let bounds=[1..9,2..11,0..7];
+        let sample=|x:usize,y:usize,z:usize| {
+            ((x as f64*std::f64::consts::PI/2.0).cos()*(y as f64*std::f64::consts::PI/2.0).sin()
+                + (z as f64*0.37).cos() + if [x,y,z]==[3,4,2] {1.0} else {0.0}) as f32
+        };
+        let mut full=vec![0.0;n*n*n];
+        for z in bounds[2].clone() { for y in bounds[1].clone() { for x in bounds[0].clone() { full[(z*n+y)*n+x]=sample(x,y,z); } } }
+        let resize=FourierResize::new(n,m);
+        let expected=resize.run(&full);
+        let actual=resize.shrink_window(bounds,sample);
+        let max=actual.iter().zip(expected).map(|(a,b)|(a-b).abs()).fold(0.0f32,f32::max);
+        assert!(max<3e-5,"streamed complex crop error {max}");
     }
 
 }
