@@ -619,7 +619,13 @@ impl Rng {
 }
 
 /// Trains the network on cubes of `vol` (standardised).
-pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
+pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
+    train_live(dev, vol, g, cfg, progress, &mut |_| {})
+}
+
+/// As `train`, also handing the network to `snapshot` after each round
+/// but the last, for the viewer to show the result improving meanwhile.
+pub fn train_live(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progress: impl FnMut(Progress), snapshot: &mut dyn FnMut(Net)) -> Result<(Net, f32)> {
     g.check()?;
     let n = cfg.cube;
     if !n.is_power_of_two() || n < 16 || !n.is_multiple_of(1 << cfg.levels) {
@@ -688,6 +694,7 @@ pub fn train(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut progr
         // Fill each cube's wedge with the network's guess for the next round.
         if it + 1 < cfg.iterations {
             let valid = net.valid();
+            snapshot(valid.clone());
             for chunk in (0..orig.len()).collect::<Vec<_>>().chunks(cfg.batch.max(1)) {
                 let x = Tensor::<5>::from_data(TensorData::new(chunk.iter().flat_map(|&i| data[i].iter().copied()).collect::<Vec<f32>>(), [chunk.len(), 1, n, n, n]), dev);
                 let out = valid.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();

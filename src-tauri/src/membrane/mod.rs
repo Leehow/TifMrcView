@@ -23,6 +23,7 @@ pub mod augment;
 pub mod dynunet;
 pub mod net;
 pub mod nifti;
+pub mod vesicles;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -357,6 +358,13 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
             for &y0 in &sc[1] {
                 for &x0 in &sc[0] {
                     check_cancel()?;
+                    let clip = |a: usize, o: isize| -> (usize, usize) { (o.max(0) as usize, ((o + side[a] as isize).max(0) as usize).min(n[a])) };
+                    let ((bx0, bx1), (by0, by1), (bz0, bz1)) = (clip(0, x0), clip(1, y0), clip(2, z0));
+                    crate::live::with(|lv| {
+                        if lv.grid == n {
+                            lv.busy = Some([bx0, by0, bz0, bx1, by1, bz1]);
+                        }
+                    });
                     let dims = if xyz { [1, 1, side[0], side[1], side[2]] } else { [1, 1, side[2], side[1], side[0]] };
                     let x = Tensor::<5>::from_data(TensorData::new(tile([x0, y0, z0], m), dims), dev);
                     let r: Vec<f32> = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
@@ -376,6 +384,20 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
                                     let w = (wzy * g[0][x]).max(1e-3);
                                     pa[yy * n[0] + xx] += w * r[at(m, x, y, z)];
                                     pw[yy * n[0] + xx] += w;
+                                }
+                            }
+                        }
+                    });
+                    // What the window found so far, for the viewer (`live`).
+                    crate::live::with(|lv| {
+                        if lv.grid != n {
+                            return;
+                        }
+                        for z in bz0..bz1 {
+                            for y in by0..by1 {
+                                let i = (z * n[1] + y) * n[0];
+                                for x in bx0..bx1 {
+                                    lv.cells[i + x] = u8::from(acc[i + x] > 0.0);
                                 }
                             }
                         }
@@ -401,6 +423,7 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         }
         c += 1;
     }
+    crate::live::with(|lv| lv.busy = None);
     total.par_iter_mut().for_each(|t| *t /= copies as f32);
     Ok((total, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
 }
@@ -522,17 +545,46 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     Ok(Segmentation { score, mask, components, stats })
 }
 
-/// Writes `mask` (dims `n`) into the label map beside `image` as the
-/// material "膜", keeping labels already there; returns the label file.
-pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool]) -> Result<String> {
+/// Material the vesicles found among the membranes go to.
+pub const VESICLE_MATERIAL: &str = "囊泡";
+pub const VESICLE_COLOR: [u8; 3] = [92, 190, 60];
+
+/// Material microtubules (`crate::filaments`) go to.
+pub const TUBE_MATERIAL: &str = "微管";
+pub const TUBE_COLOR: [u8; 3] = [240, 110, 20];
+
+/// Writes `mask` (dims `n`, `pixel_a` Å per voxel) into `l` in one undo step:
+/// vesicles (`vesicles::find`) as "囊泡", the other membranes as "膜", and
+/// the microtubule voxels `tubes` (when given) as "微管". Returns the changed
+/// slices, the membrane label and the vesicles.
+pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], tubes: Option<&[bool]>, n: [usize; 3], pixel_a: f32, guard: u16) -> (Vec<usize>, u16, Vec<vesicles::Vesicle>) {
+    let (ves, is_ves) = vesicles::find(mask, n, pixel_a);
+    let label = l.material_label(MATERIAL, COLOR);
+    let vlabel = if ves.is_empty() { 0 } else { l.material_label(VESICLE_MATERIAL, VESICLE_COLOR) };
+    let tubes = tubes.filter(|t| t.iter().any(|&b| b));
+    let tlabel = if tubes.is_some() { l.material_label(TUBE_MATERIAL, TUBE_COLOR) } else { 0 };
+    let plane = n[0] * n[1];
+    let tube = |i: usize| tubes.is_some_and(|t| t[i]);
+    let classes: Vec<(usize, Vec<u16>)> = (0..n[2])
+        .filter(|&z| (z * plane..(z + 1) * plane).any(|i| mask[i] || tube(i)))
+        .map(|z| {
+            let class = |i: usize| if is_ves[i] { vlabel } else if mask[i] { label } else if tube(i) { tlabel } else { 0 };
+            (z, (z * plane..(z + 1) * plane).map(class).collect())
+        })
+        .collect();
+    (l.apply_classes(&classes, guard), label, ves)
+}
+
+/// Writes `mask` and `tubes` (dims `n`) into the label map beside `image`
+/// (see `apply`), keeping labels already there; returns the label file.
+pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&[bool]>, pixel_a: f32) -> Result<String> {
     let path = crate::labels::labels_path(image, 0);
     let mut l = if Path::new(&path).exists() {
         crate::labels::Labels::load(Path::new(&path), n[0], n[1], n[2])?
     } else {
         crate::labels::Labels::new(n[0], n[1], n[2])
     };
-    let label = l.material_label(MATERIAL, COLOR);
-    l.apply_volume_mask(mask, label, 0);
+    apply(&mut l, mask, tubes, n, pixel_a, 0);
     l.save(Path::new(&path))?;
     Ok(path)
 }
@@ -590,6 +642,31 @@ mod tests {
         let v = vec![3.0f32; 20 * 20 * 20];
         let r = resample(&v, [20; 3], [7, 9, 11]);
         assert!(r.iter().all(|&x| (x - 3.0).abs() < 1e-4));
+    }
+
+    /// `score` draws what each window found into the live map (`live`) and
+    /// marks the window it is reading.
+    #[test]
+    fn score_fills_the_live_map() {
+        let _one = crate::live::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dev = Device::flex();
+        let cfg = NetConfig { widths: vec![2, 4, 4], blocks: vec![1, 1, 1], heads: 1 };
+        let net = Model::Own(MemNet::new(&cfg, &dev));
+        let n = [WINDOW + 40, WINDOW, 8];
+        let v: Vec<f32> = (0..n[0] * n[1] * n[2]).map(|i| ((i % 7) as f32 - 3.0) / 3.0 + ((i / n[0]) % 5) as f32 * 0.2).collect();
+        crate::live::start(1, n, n, vec![[0; 4], [255, 196, 0, 255]]);
+        let mut boxes = vec![];
+        let (logits, stats) = score(&dev, &net, &v, n, Pass::Budget(0.0), &mut |_| {
+            boxes.push(crate::live::MAP.lock().unwrap().as_ref().unwrap().busy);
+        })
+        .unwrap();
+        assert_eq!((stats.windows, stats.copies), (2, 1));
+        // The windows read, in order, clipped to the volume.
+        assert_eq!(boxes, vec![Some([0, 0, 0, WINDOW, WINDOW, 8]), Some([40, 0, 0, WINDOW + 40, WINDOW, 8])]);
+        let map = crate::live::MAP.lock().unwrap().take().unwrap();
+        assert_eq!(map.busy, None);
+        let want: Vec<u8> = logits.iter().map(|&s| u8::from(s > 0.0)).collect();
+        assert_eq!(map.cells, want);
     }
 
     #[test]

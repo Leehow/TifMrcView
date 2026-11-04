@@ -779,11 +779,34 @@ async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult
                 slices.push((vals.slice(z)?, l));
             }
             let cfg = crate::unet::TrainConfig { steps: steps.clamp(10, 20000), ..Default::default() };
-            let (t, backend) = crate::classify::on_device(|dev| {
-                crate::unet::train(dev, &slices, w, h, req.lo, req.hi, &cfg, |step, steps, loss| {
-                    let _ = app2.emit("unet-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
-                })
-            })?;
+            // Every few seconds the network so far segments the preview
+            // (`unet-live`); the earlier network comes back if it fails.
+            let before = e.lock().unwrap().unet.clone();
+            let trained = crate::classify::on_device(|dev| {
+                crate::unet::train_live(
+                    dev,
+                    &slices,
+                    w,
+                    h,
+                    req.lo,
+                    req.hi,
+                    &cfg,
+                    |step, steps, loss| {
+                        let _ = app2.emit("unet-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
+                    },
+                    &mut |t| {
+                        e.lock().unwrap().unet = Some(Arc::new(t));
+                        let _ = app2.emit("unet-live", ());
+                    },
+                )
+            });
+            let (t, backend) = match trained {
+                Ok(r) => r,
+                Err(err) => {
+                    e.lock().unwrap().unet = before;
+                    return Err(err);
+                }
+            };
             let out = UnetInfo {
                 labels: t.labels.clone(),
                 slices: slices.len(),
@@ -948,6 +971,11 @@ struct MembraneResult {
     copies: usize,
     backend: String,
     seconds: f32,
+    /// Vesicles found among the membranes (written as "囊泡").
+    #[cfg(feature = "pro")]
+    vesicles: Vec<crate::membrane::vesicles::Vesicle>,
+    /// Lengths of the microtubules found (written as "微管"), nm.
+    microtubules: Vec<f32>,
 }
 
 /// Segments the membranes of the open tomogram (channel `c`, time `t`) and
@@ -994,14 +1022,36 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
                     emit("read", z, n[2]);
                 }
             }
+            // Drawn in the viewer while the network runs (`live_slice`).
+            struct Live;
+            impl Drop for Live {
+                fn drop(&mut self) {
+                    crate::live::stop();
+                }
+            }
+            let _live = Live;
+            let rgba = |c: [u8; 3]| [c[0], c[1], c[2], 255];
+            crate::live::start(
+                token,
+                n,
+                crate::membrane::grid_at(n, pixel_a as f32),
+                vec![[0; 4], rgba(crate::membrane::COLOR), rgba(crate::membrane::VESICLE_COLOR), rgba(crate::membrane::TUBE_COLOR)],
+            );
             let (seg, backend) = crate::classify::on_device(|dev| {
                 let net = crate::membrane::load(&path, dev)?;
                 crate::membrane::segment(dev, &net, &v, n, pixel_a as f32, crate::membrane::Pass::Official, &mut |p| emit("net", p.done, p.total))
             })?;
+            emit("tubes", 0, 1);
+            let fils = crate::filaments::find(&v, n, pixel_a as f32);
+            let tubes = crate::filaments::mask(&fils, n, pixel_a as f32);
+            crate::live::with(|m| {
+                m.busy = None;
+                m.paint_full(&tubes, 3);
+            });
+            emit("tubes", 1, 1);
             drop(v);
             let mut e = e.lock().unwrap();
-            let label = e.labels.material_label(crate::membrane::MATERIAL, crate::membrane::COLOR);
-            let zs = e.labels.apply_volume_mask(&seg.mask, label, guard);
+            let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, Some(&tubes), n, pixel_a as f32, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
             Ok(MembraneResult {
@@ -1013,9 +1063,45 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
                 copies: seg.stats.copies,
                 backend: backend.to_string(),
                 seconds: started.elapsed().as_secs_f32(),
+                vesicles,
+                microtubules: fils.iter().map(|f| f.length).collect(),
             })
         })
         .await
+    }
+}
+
+/// What the running Pro job has found so far on slice `z` of image
+/// `token`, as `live::slice` lays it out (empty when nothing runs).
+#[tauri::command]
+fn live_slice(token: u64, z: usize) -> Response {
+    #[cfg(feature = "pro")]
+    let bytes = crate::live::slice(token, z).unwrap_or_default();
+    #[cfg(not(feature = "pro"))]
+    let bytes = {
+        let _ = (token, z);
+        Vec::new()
+    };
+    Response::new(bytes)
+}
+
+/// The picture the running cryo-ET step shows (`live::picture`; empty when
+/// there is none).
+#[tauri::command]
+fn live_picture() -> Response {
+    #[cfg(feature = "pro")]
+    let bytes = crate::live::picture().unwrap_or_default();
+    #[cfg(not(feature = "pro"))]
+    let bytes = Vec::new();
+    Response::new(bytes)
+}
+
+/// Forgets the picture of an earlier step.
+#[tauri::command]
+fn live_clear() {
+    #[cfg(feature = "pro")]
+    {
+        *crate::live::PICTURE.lock().unwrap() = None;
     }
 }
 
@@ -1929,11 +2015,36 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
             let pairs: Vec<_> = pairs.into_iter().map(|(a, b)| (shrink(a), b.map(shrink))).collect();
             let cfg = crate::denoise_learn::TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
             let app2 = app.clone();
-            let ((net, mean, std, loss), backend) = crate::classify::on_device(|dev| {
-                crate::denoise_learn::train(dev, &pairs, bw, bh, mode, &cfg, |step, steps, loss| {
-                    let _ = app2.emit("denoise-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
-                })
-            })?;
+            // The network so far serves the preview while it trains
+            // (`denoise-live`); the earlier model comes back if it fails.
+            let before = MODEL.lock().unwrap().clone();
+            let source = info.name.clone();
+            let trained = crate::classify::on_device(|dev| {
+                let last_loss = std::cell::Cell::new(f32::NAN);
+                crate::denoise_learn::train_live(
+                    dev,
+                    &pairs,
+                    bw,
+                    bh,
+                    mode,
+                    &cfg,
+                    |step, steps, loss| {
+                        last_loss.set(loss);
+                        let _ = app2.emit("denoise-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
+                    },
+                    &mut |net, mean, std| {
+                        *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss: last_loss.get(), source: source.clone(), bin: k }));
+                        let _ = app2.emit("denoise-live", ());
+                    },
+                )
+            });
+            let ((net, mean, std, loss), backend) = match trained {
+                Ok(r) => r,
+                Err(e) => {
+                    *MODEL.lock().unwrap() = before;
+                    return Err(e);
+                }
+            };
             *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone(), bin: k }));
             // Self-supervision assumes noise independent from pixel to pixel.
             let corr = crate::denoise::noise_correlation(&pairs[0].0, bw, bh);
@@ -2009,12 +2120,32 @@ async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Val
                 cfg.cube /= 2;
             }
             let app2 = app.clone();
-            let ((net, loss), backend) = crate::classify::on_device(|dev| {
-                crate::wedge::train(dev, &vol, &g, &cfg, |p| {
-                    let _ = app2.emit("wedge-train", p);
-                })
-            })?;
             let pixel_a = crate::align::pixel_a(img.info());
+            // After each round the network so far serves the preview
+            // (`wedge-live`); the earlier model comes back if it fails.
+            let before = MODEL.lock().unwrap().clone();
+            let trained = crate::classify::on_device(|dev| {
+                crate::wedge::train_live(
+                    dev,
+                    &vol,
+                    &g,
+                    &cfg,
+                    |p| {
+                        let _ = app2.emit("wedge-train", p);
+                    },
+                    &mut |net| {
+                        *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss: f32::NAN, token: req.token, pixel_a, c: req.c, t: req.t }));
+                        let _ = app2.emit("wedge-live", ());
+                    },
+                )
+            });
+            let ((net, loss), backend) = match trained {
+                Ok(r) => r,
+                Err(e) => {
+                    *MODEL.lock().unwrap() = before;
+                    return Err(e);
+                }
+            };
             *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, pixel_a, c: req.c, t: req.t }));
             let seconds = started.elapsed().as_secs_f32();
             eprintln!("wedge_train: {:?} cube {} × {} {} it × {} steps, loss {loss:.4}, {backend} in {seconds:.1} s", vol.n, cfg.cube, cfg.count, cfg.iterations, cfg.steps);
@@ -2578,6 +2709,9 @@ pub fn run() {
             membrane_choose,
             membrane_segment,
             membrane_cancel,
+            live_slice,
+            live_picture,
+            live_clear,
             pixel_values,
             list_folder,
             thumbnail,

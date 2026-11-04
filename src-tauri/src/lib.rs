@@ -26,6 +26,10 @@ pub mod unet;
 pub mod wedge;
 #[cfg(feature = "pro")]
 pub mod membrane;
+#[cfg(feature = "pro")]
+pub mod filaments;
+#[cfg(feature = "pro")]
+pub mod live;
 pub mod image;
 pub mod ortho;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]

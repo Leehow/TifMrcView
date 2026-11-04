@@ -26,6 +26,10 @@
 #vol-panel .vp-obj { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; }
 #vol-panel .vp-obj .dim { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 #vol-panel .vp-obj-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+#vol-panel .vp-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+#vol-panel .vp-class { padding: 2px 6px 2px 4px; font-size: 11px; border: 1px solid var(--line-strong); border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
+#vol-panel .vp-class::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--c); }
+#vol-panel .vp-class.on { border-color: var(--accent); color: var(--accent); }
 #vol-panel .vp-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 
 /* Segmentation labels (labels.js). */
@@ -37,6 +41,7 @@
 #lab-list .sw { flex: none; width: 12px; height: 12px; min-height: 0; border-radius: 3px; cursor: pointer; padding: 0; border: 1px solid rgba(0, 0, 0, 0.2); margin-right: 4px; }
 /* One colour input for all rows, moved next to the swatch that was clicked,
    so re-drawing the list does not close the colour picker. */
+#lab-ves-hist { display: block; width: 100%; height: 90px; margin-top: 4px; }
 #lab-color { position: fixed; width: 12px; height: 12px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 #lab-list .name { flex: 1 1 4em; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #lab-list .name-edit { flex: 1 1 auto; min-width: 0; width: 0; font-size: 12px; padding: 1px 4px; }
@@ -232,6 +237,9 @@
 #cryo-steps button.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
 #cryo-body { flex:1; min-height:0; overflow:auto; padding-top:10px; }
 #cryo-body p { line-height:1.6; }
+#cryo-live { margin:8px 0 0; }
+#cryo-live canvas { display:block; width:100%; height:auto; max-height:320px; object-fit:contain; background:#000; border-radius:4px; image-rendering:pixelated; }
+#cryo-live figcaption { font-size:12px; margin-top:2px; }
 #cryo-foot { display:flex; align-items:center; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
 #cryo-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
 #quickbar #btn-cryoet { width:auto; padding:0 8px; gap:5px; }

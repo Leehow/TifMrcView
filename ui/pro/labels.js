@@ -139,11 +139,15 @@
     </details>
     <details id="lab-mem">
       <summary>膜分割（断层）</summary>
-      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
+      <div class="dim">一键找出冷冻电镜断层里的所有生物膜，写进标签「膜」；其中呈球壳状的单独写进「囊泡」，并测出直径；微管写进「微管」。用 MemBrain-seg 官方模型：第一次使用时按提示下载并选择模型文件，以后自动载入。像素大小从文件读取，可以一步撤回。</div>
       <div class="row">
         <button class="small primary" id="lab-mem-run" title="分割整个断层里的膜（Esc 停止）">自动分割膜</button>
       </div>
       <div class="dim" id="lab-mem-text"></div>
+      <canvas id="lab-ves-hist" hidden title="囊泡直径（膜中线）分布"></canvas>
+      <div class="row">
+        <button class="small" id="lab-ves-csv" hidden title="把每个囊泡的中心坐标（像素）和直径（nm）存成 CSV">导出囊泡表</button>
+      </div>
     </details>
     <details id="lab-unet">
       <summary>深度学习 U-Net</summary>
@@ -435,6 +439,7 @@
       g.drawImage(canvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
       g.restore();
     }
+    drawLive(g);
     drawCls(g);
     drawUnet(g);
     drawSam(g);
@@ -1313,8 +1318,12 @@
 
   async function unetPredict() {
     const U = L.unet;
-    if (!U.info || U.busy) return;
+    // While training, the network so far (unet-live) segments the slice.
+    if (!(U.info || U.live) || U.predicting || (U.busy && !U.live)) return;
     const z = S.z;
+    const own = !U.busy;
+    U.stale = false;
+    U.predicting = true;
     U.busy = true;
     syncUnet();
     try {
@@ -1324,10 +1333,11 @@
       U.predZ = z;
       unetPaint();
     } catch (e) {
-      toast(String(e), 6000);
+      if (!U.live) toast(String(e), 6000);
       U.predZ = z;
     } finally {
-      U.busy = false;
+      U.predicting = false;
+      if (own) U.busy = false;
       syncUnet();
       draw();
     }
@@ -1335,11 +1345,9 @@
 
   function drawUnet(g) {
     const U = L.unet;
-    if (S.tool !== "label" || !unetOpen() || !U.info || !U.preview || S.axis !== "xy" || L.token !== S.token) return;
-    if (U.predZ !== S.z) {
-      if (!U.busy) unetPredict();
-      return;
-    }
+    if (S.tool !== "label" || !unetOpen() || !(U.info || U.live) || !U.preview || S.axis !== "xy" || L.token !== S.token) return;
+    if (U.predZ !== S.z || U.stale) unetPredict();
+    if (U.predZ !== S.z) return;
     if (!U.pred) return;
     const [sx, sy] = toScreen(0, 0);
     g.save();
@@ -1357,13 +1365,23 @@
     U.train = { step: 0, steps: +$("lab-unet-steps").value || 400, loss: 0 };
     syncUnet();
     const un = await T.event.listen("unet-train", (ev) => { if (U.train) { U.train = ev.payload; syncUnet(); } });
+    // Every few seconds the network so far: its segmentation of this slice
+    // shows while it trains.
+    const unLive = await T.event.listen("unet-live", () => {
+      U.live = true;
+      U.stale = true;
+      draw();
+    });
     try {
       U.info = await invoke("unet_train", { req: clsReq(), steps: U.train.steps });
       Object.assign(U, { pred: null, predZ: -1 });
     } catch (e) {
       toast(String(e), 6000);
+      Object.assign(U, { pred: null, predZ: -1 });
     } finally {
       un();
+      unLive();
+      U.live = false;
       U.busy = false;
       U.train = null;
       syncUnet();
@@ -1394,11 +1412,145 @@
 
   // ---------- membranes (membrane/) ----------
 
-  const M = { busy: false, text: "" };
+  const M = { busy: false, text: "", vesicles: [], token: 0 };
+
+  // What the running job has found so far (live.rs), drawn over the image
+  // so the result builds up in the viewer, window by window.
+  const LV = { on: false, token: 0, z: -1, fetching: false, again: false, last: 0, data: null };
+  const liveCanvas = document.createElement("canvas");
+  const liveCtx = liveCanvas.getContext("2d");
+  function liveStart() {
+    Object.assign(LV, { on: true, token: L.token, z: -1, data: null, last: 0 });
+  }
+  function liveStop() {
+    Object.assign(LV, { on: false, data: null, z: -1 });
+  }
+  /** Fetches the slice under Z, at most about four times a second. */
+  async function liveFetch() {
+    if (!LV.on || S.axis !== "xy" || LV.token !== S.token) return;
+    if (LV.fetching) { LV.again = true; return; }
+    const wait = 250 - (performance.now() - LV.last);
+    if (wait > 0 && LV.z === S.z) {
+      if (!LV.timer) LV.timer = setTimeout(() => { LV.timer = 0; liveFetch(); }, wait);
+      return;
+    }
+    LV.fetching = true;
+    LV.last = performance.now();
+    const z = S.z;
+    try {
+      const buf = await invoke("live_slice", { token: LV.token, z });
+      if (!LV.on) return;
+      LV.z = z;
+      if (!buf || buf.byteLength < 32) {
+        LV.data = null;
+        return;
+      }
+      const dv = new DataView(buf);
+      const u = (i) => dv.getUint32(i * 4, true);
+      const [gw, gh, nc, busy] = [u(0), u(1), u(2), u(3)];
+      const pal = new Uint8Array(buf, 32, nc * 4);
+      const cells = new Uint8Array(buf, 32 + nc * 4, gw * gh);
+      if (liveCanvas.width !== gw || liveCanvas.height !== gh) {
+        liveCanvas.width = gw;
+        liveCanvas.height = gh;
+      }
+      const im = liveCtx.createImageData(gw, gh), px = im.data;
+      for (let i = 0; i < cells.length; i++) {
+        const k = cells[i];
+        if (!k || k >= nc) continue;
+        const o = i * 4;
+        px[o] = pal[k * 4]; px[o + 1] = pal[k * 4 + 1]; px[o + 2] = pal[k * 4 + 2]; px[o + 3] = pal[k * 4 + 3];
+      }
+      liveCtx.putImageData(im, 0, 0);
+      LV.data = { busy: busy ? [u(4), u(5), u(6), u(7)] : null };
+      draw();
+    } catch (_) {
+      // The job ended meanwhile.
+    } finally {
+      LV.fetching = false;
+      if (LV.again || (LV.on && LV.z !== S.z)) { LV.again = false; liveFetch(); }
+    }
+  }
+  function drawLive(g) {
+    if (!LV.on || S.axis !== "xy" || LV.token !== S.token || !S.info) return;
+    if (LV.z !== S.z) liveFetch();
+    if (!LV.data || LV.z !== S.z) return;
+    const [sx, sy] = toScreen(0, 0);
+    const k = S.view.scale;
+    g.save();
+    g.globalAlpha = L.opacity;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(liveCanvas, sx, sy, S.info.width * k, S.info.height * k);
+    g.restore();
+    // The window the network is reading now.
+    const b = LV.data.busy;
+    if (b) {
+      const [x0, y0] = toScreen(b[0], b[1]), [x1, y1] = toScreen(b[2], b[3]);
+      g.save();
+      g.setLineDash([6, 4]);
+      g.lineWidth = 1.5;
+      g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+      g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      g.lineDashOffset = 5;
+      g.strokeStyle = "rgb(255, 196, 0)";
+      g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      g.restore();
+    }
+  }
   function syncMem() {
     $("lab-mem-run").disabled = M.busy || L.busy || !L.token;
     $("lab-mem-run").textContent = M.busy ? "分割中…" : "自动分割膜";
     $("lab-mem-text").textContent = M.text;
+    const ves = M.token === L.token ? M.vesicles : [];
+    $("lab-ves-csv").hidden = !ves.length;
+    $("lab-ves-hist").hidden = ves.length < 2;
+    if (ves.length >= 2) drawVesicles(ves);
+  }
+
+  /** Diameter histogram of the vesicles, 5 nm bins. */
+  function drawVesicles(ves) {
+    const c = $("lab-ves-hist");
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth || 240, h = 90;
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const d = ves.map((v) => v.diameter);
+    const lo = Math.floor(Math.min(...d) / 5) * 5, hi = Math.ceil((Math.max(...d) + 0.01) / 5) * 5;
+    const bins = new Array(Math.max(1, (hi - lo) / 5)).fill(0);
+    for (const x of d) bins[Math.min(bins.length - 1, Math.floor((x - lo) / 5))]++;
+    const top = Math.max(...bins), axis = 14, bw = w / bins.length;
+    const css = getComputedStyle(document.documentElement);
+    g.fillStyle = "rgb(92, 190, 60)"; // the colour of 囊泡 (membrane/mod.rs)
+    bins.forEach((n, i) => {
+      const bh = (n / top) * (h - axis - 4);
+      g.fillRect(i * bw + 1, h - axis - bh, Math.max(1, bw - 2), bh);
+    });
+    g.fillStyle = css.getPropertyValue("--dim").trim() || "#888";
+    g.font = "10px sans-serif";
+    g.textBaseline = "bottom";
+    g.textAlign = "left";
+    g.fillText(`${lo}`, 0, h);
+    g.textAlign = "right";
+    g.fillText(`${hi} nm`, w, h);
+  }
+
+  async function exportVesicles() {
+    const ves = M.token === L.token ? M.vesicles : [];
+    if (!ves.length) return;
+    const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_vesicles.csv`, filter: "CSV", exts: ["csv"] }).catch(() => null);
+    if (!path) return;
+    setSaveDir(dirname(path));
+    const rows = ["x_px,y_px,z_px,diameter_nm,voxels", ...ves.map((v) => `${v.center.map((c) => c.toFixed(1)).join(",")},${v.diameter.toFixed(2)},${v.voxels}`)];
+    try {
+      await writeFile(path, new TextEncoder().encode(rows.join("\n") + "\n"));
+      toast(`已保存 ${path}`);
+    } catch (e) {
+      toast(`保存失败：${e}`, 6000);
+    }
   }
   async function memRun() {
     if (!ready() || M.busy) return;
@@ -1406,16 +1558,30 @@
     M.busy = true;
     M.text = "";
     syncMem();
-    const STAGES = { read: "读取断层", net: "网络推理" };
+    const STAGES = { read: "读取断层", net: "网络推理", tubes: "找微管" };
     const un = await T.event.listen("membrane-progress", (ev) => {
       const p = ev.payload;
       M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
       syncMem();
+      if (p.stage !== "read") liveFetch();
     });
+    liveStart();
     try {
       if (!(await window.TifMrcViewPro.membrane.ensure())) return;
       const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
       M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : "";
+      if (r) {
+        M.vesicles = r.vesicles || [];
+        M.token = L.token;
+        const d = M.vesicles.map((v) => v.diameter);
+        if (d.length) {
+          const mean = d.reduce((a, b) => a + b, 0) / d.length;
+          const sd = Math.sqrt(d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length);
+          M.text += `，其中 ${d.length} 个囊泡，直径 ${mean.toFixed(1)} ± ${sd.toFixed(1)} nm`;
+        }
+        const mt = r.microtubules || [];
+        if (mt.length) M.text += `；${mt.length} 根微管，共 ${(mt.reduce((a, b) => a + b, 0) / 1000).toFixed(2)} µm`;
+      }
       if (r) {
         L.active = r.label;
         renderList();
@@ -1425,12 +1591,14 @@
       toast(String(e), 8000);
     } finally {
       un();
+      liveStop();
       M.busy = false;
       syncMem();
       draw();
     }
   }
   $("lab-mem-run").addEventListener("click", memRun);
+  $("lab-ves-csv").addEventListener("click", exportVesicles);
   $("lab-mem").addEventListener("toggle", syncMem);
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && M.busy) { invoke("membrane_cancel"); e.preventDefault(); e.stopPropagation(); }
@@ -1532,6 +1700,14 @@
     hidden,
     /** Gives object `object` of the 3D surfaces label `label` (0 deletes it), undoable. */
     relabelObject: (object, label) => editWith("labels_object_relabel", { token: L.token, object, label }),
+    /** The label of the material called `name`, made with `color` when there is none. */
+    materialLabel: (name, color) => {
+      const old = Object.values(L.materials).find((m) => m.name === name);
+      if (old) return old.label;
+      const k = Math.max(0, maxUsedOf(L.counts), ...Object.keys(L.materials).map(Number)) + 1;
+      setMaterial(k, { name, color });
+      return k;
+    },
     /** Labels in use, ascending. */
     used: () => L.counts.map((n, k) => (k > 0 && n > 0 ? k : 0)).filter((k) => k),
   };
