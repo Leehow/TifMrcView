@@ -52,11 +52,20 @@ impl Conv {
 /// direct kernel is slow wherever there are many channels (Metal, M1 Max:
 /// 1024 channels on 5³ took 0.54 s), so those are one matrix product per
 /// kernel offset, summed: 10–50× faster. Its kernel stays for the
-/// full-resolution 32-channel convolutions, where the two are even.
+/// full-resolution 32-channel convolutions, except the measured Metal
+/// matrix-instruction path below.
 fn conv(x: Tensor<5>, w: Tensor<5>, bias: Option<Tensor<1>>, stride: usize) -> Tensor<5> {
     let [b, c, d, h, wd] = x.dims();
     let [o, _, k, ..] = w.dims();
     let p = k / 2;
+    // Only the four measured full-resolution convolutions use this path.
+    // Other shapes, backends, precision and autodiff keep their existing ops.
+    #[cfg(all(target_os = "macos", not(feature = "train-fusion")))]
+    if [b, c, d, h, wd] == [1, 32, 160, 160, 160] && w.dims() == [32, 32, 3, 3, 3] && stride == 1 && bias.is_none() {
+        if let Some(y) = metal_conv32(&x, &w) {
+            return y;
+        }
+    }
     if c <= 32 && stride == 1 && k == 3 {
         return conv3d(x, w, bias, ConvOptions::new([1; 3], [p; 3], [1; 3], 1));
     }
@@ -84,6 +93,34 @@ fn conv(x: Tensor<5>, w: Tensor<5>, bias: Option<Tensor<1>>, stride: usize) -> T
         y = y + bias.reshape([1, o, 1]);
     }
     y.reshape([b, o, od, oh, ow])
+}
+
+/// Reuse Burn's fp32 implicit-GEMM convolution rather than materializing a
+/// multi-gigabyte im2col tensor. Metal's matrix instructions make the measured
+/// 32→32,160³ convolution about twice as fast as its default direct kernel.
+#[cfg(all(target_os = "macos", not(feature = "train-fusion")))]
+fn metal_conv32(x: &Tensor<5>, w: &Tensor<5>) -> Option<Tensor<5>> {
+    use burn::tensor::DType;
+    use burn_cubecl::{CubeBackend, CubeDevice, cubecl::ir::{ElemType, FloatKind}, kernel::conv::{conv_forward, ConvStrategy}};
+    // Conversion rejects CPU and autodiff tensors without touching
+    // the original values. CubeBackend also covers CUDA, so test the actual
+    // runtime instead of assuming the Rust backend type identifies Metal.
+    let x = x.clone().try_into_primitive::<CubeBackend>().ok()?;
+    let w = w.clone().try_into_primitive::<CubeBackend>().ok()?;
+    // Auto-selected devices keep backend=Auto even after choosing Metal.
+    // CubeCL assigns this runtime name only to actual Metal using MSL.
+    if !matches!(&x.device, CubeDevice::Wgpu(_)) || x.client.name() != "wgpu<msl>" || x.dtype != DType::F32 || w.dtype != DType::F32 {
+        return None;
+    }
+    let f32 = ElemType::Float(FloatKind::F32);
+    if !x.client.properties().features.matmul.cmma.iter().any(|config| config.a_type == f32 && config.b_type == f32 && config.cd_type == f32) {
+        return None;
+    }
+    // A launch/device failure is not an unsupported-device fallback: let the
+    // existing read_window guard report it before any result can be saved.
+    let y = conv_forward::<3>(x, w, None, ConvOptions::new([1; 3], [1; 3], [1; 3], 1), ConvStrategy::ImplicitGemm)
+        .unwrap_or_else(|e| panic!("膜卷积矩阵计算失败：{e:?}"));
+    Some(Tensor::from_primitive::<CubeBackend>(y))
 }
 
 /// The ×2 transposed convolution (side 2, stride 2) as eight matrix
@@ -295,6 +332,35 @@ pub fn load(path: &std::path::Path, dev: &Device) -> anyhow::Result<DynUNet> {
 mod tests {
     use super::*;
     use burn::tensor::Distribution;
+
+    #[cfg(all(target_os = "macos", not(feature = "train-fusion")))]
+    #[test]
+    fn metal_matrix_path_preserves_cpu_fallback() {
+        let dev = Device::flex();
+        let x = Tensor::<5>::ones([1, 32, 2, 2, 2], &dev);
+        let w = Tensor::<5>::ones([32, 32, 3, 3, 3], &dev);
+        assert!(metal_conv32(&x, &w).is_none());
+        assert_eq!(x.sum().into_scalar::<f32>(), 256.0);
+    }
+
+    #[cfg(all(target_os = "macos", not(feature = "train-fusion")))]
+    #[test]
+    #[ignore = "requires a Metal GPU and full 160-cubed activation buffers"]
+    fn metal_matrix_convolution_matches_direct_with_strided_weights() {
+        let dev = Device::wgpu_options()
+            .graphics_api(burn::tensor::wgpu::WgpuBackend::Metal)
+            .device_kind(burn::tensor::DeviceKind::IntegratedGpu(0))
+            .init().unwrap();
+        dev.seed(0x29c784b1);
+        let x = Tensor::<5>::random([1, 32, 160, 160, 160], Distribution::Normal(0.0, 1.0), &dev);
+        // The decoder's split skip convolution uses this non-contiguous view.
+        let w = Tensor::<5>::random([32, 64, 3, 3, 3], Distribution::Normal(0.0, 0.1), &dev).narrow(1, 32, 32);
+        let want = conv3d(x.clone(), w.clone(), None, ConvOptions::new([1; 3], [1; 3], [1; 3], 1));
+        assert!(want.clone().abs().max().into_scalar::<f32>() > 0.1);
+        let got = metal_conv32(&x, &w).expect("fp32 Metal matrix path unavailable");
+        let max = (got - want).abs().max().into_scalar::<f32>();
+        assert!(max.is_finite() && max < 1e-4, "maximum difference {max}");
+    }
 
     #[test]
     fn matrix_convolutions_match_burn() {

@@ -73,7 +73,7 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls"]
 # TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
-pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store"]
+pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store", "dep:burn-cubecl"]
 # The `tmv` command-line tool (Pro without the desktop parts).
 cli = ["pro"]
 # Training the membrane network (examples/membrane_train.rs) on CUDA or LibTorch.
@@ -96,6 +96,10 @@ tauri-plugin-updater = { version = "2.14", optional = true }
 webpki-root-certs = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Select the already-installed fp32 implicit-GEMM kernel for membrane convs.
+# Runtime extension access is needed only on Metal; other targets stay unchanged.
+burn = { version = "0.22.1", optional = true, default-features = false, features = ["extension"] }
+burn-cubecl = { version = "=0.22.1", optional = true, default-features = false }
 core-foundation = "0.10"
 libc = "0.2"
 # NSOpenPanel for the folder button (choose an image or a folder in one panel).

@@ -8474,6 +8474,7 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "burn",
+ "burn-cubecl",
  "burn-store",
  "core-foundation 0.10.1",
  "dirs 7.0.0",
