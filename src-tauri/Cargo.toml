@@ -100,6 +100,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["metal", "flex"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# tmv leaves with _exit (src/bin/tmv.rs).
+libc = "0.2"
 # Not used directly: tauri-plugin-deep-link 2.6.2 does not compile against
 # rust-ini 0.21.2+ (ParseOption gained fields), so hold it back.
 rust-ini = "=0.21.1"

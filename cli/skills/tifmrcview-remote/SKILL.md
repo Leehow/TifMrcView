@@ -93,6 +93,10 @@ once and run `tmv setup --membrane ~/models/membrain.ckpt`. After that
 `tmv tomo` (display) also segments membranes automatically. SPA gets better
 picks with SAM 2.1: `tmv setup --sam` downloads it once (156 MB).
 
+On a server with several GPUs, look at `nvidia-smi` first and run on an idle
+card: prefix the command with `CUDA_VISIBLE_DEVICES=N` (tmv then uses CUDA on
+that card). Never take a card another job is using fully.
+
 Follow progress: `ssh HOST 'tail -n 5 ~/tmv-jobs/NAME/tmv.log'`. Check every
 few minutes, more rarely for long jobs; `pgrep -f "tmv "` tells whether it is
 still running. Do not start several GPU jobs at once on the same GPU.
@@ -116,10 +120,12 @@ input as `INPUT.tmv.json` (`tmv.json` inside a folder):
 ## 6. Copy the results back and open them
 
 Copy back the files named in the JSON, or the whole job folder without the
-raw movies, e.g.:
+raw movies (`*.eer`, `*.tif(f)`, `*.frames.tif`, `*.mrcs`) and the motion-corrected
+micrographs, e.g. (label maps
+`*.labels.tif` are kept):
 
 ```sh
-rsync -a --info=progress2 --exclude '*.eer' --exclude '*.tiff' HOST:tmv-jobs/NAME/ ./NAME/
+rsync -a --info=progress2 --include '*.labels.tif' --exclude '*.eer' --exclude '*.tif' --exclude '*.tiff' --exclude '*.mrcs' --exclude 'motion/' HOST:tmv-jobs/NAME/ ./NAME/
 ```
 
 Then tell the user what to open in **TifMrcView Pro**:

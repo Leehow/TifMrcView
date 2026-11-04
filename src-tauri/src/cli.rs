@@ -55,8 +55,10 @@ OUTPUT
   saved as <input>.tmv.json. Exit status 0 on success, 1 on error
   ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind).
 
-  The GPU is found automatically (CUDA, Vulkan, else CPU). TMV_GPU=cuda|
-  vulkan|cpu forces one. Long runs: nohup tmv … > run.log 2>&1 &
+  The GPU is found automatically (Vulkan, CUDA, else CPU). On a shared
+  server pick the card with CUDA_VISIBLE_DEVICES=N (then CUDA is used);
+  TMV_GPU=cuda|vulkan|cpu forces a backend. Long runs:
+  nohup tmv … > run.log 2>&1 &
 "#;
 
 /// Exit status when the user must choose before the command can go on.
@@ -65,6 +67,11 @@ const NEEDS_CHOICE: i32 = 2;
 /// Runs the tool with `args` (without the program name); returns the exit status.
 pub fn main(args: Vec<String>) -> i32 {
     use_bundled_cuda();
+    // Whoever picks a card with CUDA_VISIBLE_DEVICES (the usual way on shared
+    // servers) gets that card: only CUDA honours it, Vulkan would not.
+    if std::env::var_os("CUDA_VISIBLE_DEVICES").is_some() && std::env::var_os("TMV_GPU").is_none() {
+        std::env::set_var("TMV_GPU", "cuda");
+    }
     let Some(cmd) = args.first().map(String::as_str) else {
         print!("{HELP}");
         return 0;
