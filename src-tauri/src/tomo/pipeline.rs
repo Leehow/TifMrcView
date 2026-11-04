@@ -113,7 +113,16 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
         let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
         let how = Build { alignment: &a, bin: req.bin, params: &req.params, ctf: flip.as_ref().map(|c| (c, &d.optics, px)), ctf_3d: three_d };
-        backend = build(&how, stack, w, h, &angles, &mut |y0, n, z0, nz, block| out.write_block(y0, n, z0, nz, block), &|label, i, n| progress(&format!("{stage}{label}"), i, n))?;
+        // The middle section shows in the workspace as its rows are made.
+        let mid = req.params.thickness / 2;
+        crate::live::begin(&format!("{stage}：中间层"), w, h);
+        backend = build(&how, stack, w, h, &angles, &mut |y0, n, z0, nz, block| {
+            if (z0..z0 + nz).contains(&mid) {
+                let rows: Vec<f32> = (0..n).flat_map(|r| block[(r * nz + mid - z0) * w..][..w].iter().copied()).collect();
+                crate::live::rows(y0, &rows);
+            }
+            out.write_block(y0, n, z0, nz, block)
+        }, &|label, i, n| progress(&format!("{stage}{label}"), i, n))?;
         out.finish()?;
         made.push(Tomogram {
             path,
@@ -277,6 +286,7 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     let (mut v, shape, px) = load(&src.path)?;
     let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
     super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics);
+    crate::live::show_section("反卷积：中间层", &v, shape, shape[2] / 2, &[]);
     let path = output_path(d, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &v, shape, px, false)?;
     progress("反卷积", 1, 1);
@@ -372,6 +382,9 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
             }
             progress("去噪", k * nz + z + 1, inputs.len() * nz);
         }
+        // The middle section so far, in the workspace.
+        let part: Vec<f32> = out[nz / 2 * plane..(nz / 2 + 1) * plane].iter().map(|v| v * inputs.len() as f32 / (k + 1) as f32).collect();
+        crate::live::show("去噪：中间层", w, h, &part, &[]);
     }
     let path = output_path(d, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
@@ -490,6 +503,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     if CANCEL.load(Ordering::SeqCst) {
         bail!("已取消");
     }
+    crate::live::show_section("缺失楔补偿：中间层", &out, shape, shape[2] / 2, &[]);
     let path = output_path(d, &format!("{}_wedge", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
@@ -510,7 +524,9 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     crate::membrane::CANCEL.store(false, Ordering::SeqCst);
     let (v, shape, px) = load(&src.path)?;
     let net = crate::membrane::load(&model, dev)?;
+    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &[]);
     let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &seg.mask);
     progress("微管", 0, 1);
     let tubes = crate::filaments::mask(&crate::filaments::find(&v, shape, px as f32), shape, px as f32);
     drop(v);
