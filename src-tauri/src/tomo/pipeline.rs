@@ -511,8 +511,10 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     let (v, shape, px) = load(&src.path)?;
     let net = crate::membrane::load(&model, dev)?;
     let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    progress("微管", 0, 1);
+    let tubes = crate::filaments::mask(&crate::filaments::find(&v, shape, px as f32), shape, px as f32);
     drop(v);
-    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask, px as f32)?;
+    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask, Some(&tubes), px as f32)?;
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 

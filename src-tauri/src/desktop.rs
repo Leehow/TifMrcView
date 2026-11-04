@@ -951,6 +951,8 @@ struct MembraneResult {
     /// Vesicles found among the membranes (written as "囊泡").
     #[cfg(feature = "pro")]
     vesicles: Vec<crate::membrane::vesicles::Vesicle>,
+    /// Lengths of the microtubules found (written as "微管"), nm.
+    microtubules: Vec<f32>,
 }
 
 /// Segments the membranes of the open tomogram (channel `c`, time `t`) and
@@ -1001,9 +1003,12 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
                 let net = crate::membrane::load(&path, dev)?;
                 crate::membrane::segment(dev, &net, &v, n, pixel_a as f32, crate::membrane::Pass::Official, &mut |p| emit("net", p.done, p.total))
             })?;
+            emit("tubes", 0, 1);
+            let fils = crate::filaments::find(&v, n, pixel_a as f32);
+            let tubes = crate::filaments::mask(&fils, n, pixel_a as f32);
             drop(v);
             let mut e = e.lock().unwrap();
-            let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, n, pixel_a as f32, guard);
+            let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, Some(&tubes), n, pixel_a as f32, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
             Ok(MembraneResult {
@@ -1016,6 +1021,7 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
                 backend: backend.to_string(),
                 seconds: started.elapsed().as_secs_f32(),
                 vesicles,
+                microtubules: fils.iter().map(|f| f.length).collect(),
             })
         })
         .await
