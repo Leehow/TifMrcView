@@ -3,12 +3,13 @@
 //! from the paper, its documentation and the layout of its checkpoints; no
 //! code or weights are taken from it.
 //!
-//! As there: the tomogram is rescaled to 10 Å per voxel and standardised, a
+//! As there: the tomogram is standardised; native-grid patches are Fourier
+//! rescaled to the 10 Å network scale for coarse (>10 Å) data. A
 //! residual 3D U-Net (instance norm, deep supervision) scores every
 //! voxel in overlapping 160³ windows weighted by a Gaussian, the scores of
 //! eight mirrored copies are averaged (test-time augmentation), and voxels with a
 //! positive score are membrane. Small specks are removed and the result is
-//! taken back to the tomogram's own grid.
+//! kept on the tomogram's own grid.
 //!
 //! The network is the published MemBrain-seg model (`dynunet`), from a
 //! checkpoint the user downloads from its authors: the weights carry no
@@ -23,13 +24,14 @@ pub mod augment;
 pub mod dynunet;
 pub mod net;
 pub mod nifti;
+mod rescale;
 pub mod vesicles;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn_store::{ModuleSnapshot, SafetensorsStore};
 use rayon::prelude::*;
@@ -118,19 +120,6 @@ impl Model {
     }
 }
 
-/// Reverses the axis order of a volume (dims `n`, first axis fastest).
-fn transpose(v: &[f32], n: [usize; 3]) -> Vec<f32> {
-    let mut out = vec![0f32; v.len()];
-    out.par_chunks_mut(n[2] * n[1]).enumerate().for_each(|(x, plane)| {
-        for y in 0..n[1] {
-            for z in 0..n[2] {
-                plane[y * n[2] + z] = v[(z * n[1] + y) * n[0] + x];
-            }
-        }
-    });
-    out
-}
-
 /// Whether a safetensors file stores half-precision weights (the published
 /// model does, to halve the download).
 fn is_half(path: &Path) -> Result<bool> {
@@ -182,13 +171,17 @@ pub fn save(net: &MemNet, path: &Path, half: bool) -> Result<()> {
 /// Trilinear resampling of a volume (X fastest) from `n` to `m` voxels,
 /// voxel centres aligned; low-passed first when shrinking.
 pub fn resample(v: &[f32], n: [usize; 3], m: [usize; 3]) -> Vec<f32> {
+    resample_linear(v, n, m, true)
+}
+
+fn resample_linear(v: &[f32], n: [usize; 3], m: [usize; 3], antialias: bool) -> Vec<f32> {
     if n == m {
         return v.to_vec();
     }
     let f: [f32; 3] = std::array::from_fn(|a| n[a] as f32 / m[a] as f32);
     let sigma = f.iter().cloned().fold(0f32, f32::max);
     let src;
-    let v = if sigma > 1.2 {
+    let v = if antialias && sigma > 1.2 {
         // σ ≈ 0.4 × the shrink factor keeps aliasing down.
         src = crate::wedge::smooth(&crate::wedge::Vol { n, v: v.to_vec() }, 0.4 * sigma).v;
         &src[..]
@@ -264,28 +257,6 @@ pub struct Stats {
     pub ms: f64,
 }
 
-/// Mirrors a volume (dims `n`, x fastest) along the axes in `m`.
-fn mirror(v: Vec<f32>, n: [usize; 3], m: [bool; 3]) -> Vec<f32> {
-    if m == [false; 3] {
-        return v;
-    }
-    let mut out = vec![0f32; v.len()];
-    out.par_chunks_mut(n[0] * n[1]).enumerate().for_each(|(z, plane)| {
-        let sz = if m[2] { n[2] - 1 - z } else { z };
-        for y in 0..n[1] {
-            let sy = if m[1] { n[1] - 1 - y } else { y };
-            let src = &v[(sz * n[1] + sy) * n[0]..][..n[0]];
-            let dst = &mut plane[y * n[0]..][..n[0]];
-            if m[0] {
-                dst.iter_mut().zip(src.iter().rev()).for_each(|(d, s)| *d = *s);
-            } else {
-                dst.copy_from_slice(src);
-            }
-        }
-    });
-    out
-}
-
 /// How thoroughly `score` goes over the volume.
 #[derive(Clone, Copy, Debug)]
 pub enum Pass {
@@ -296,8 +267,9 @@ pub enum Pass {
     Budget(f64),
     /// As MemBrain-seg's own `segment`: windows overlapping by half (placed
     /// as MONAI's sliding window does), all eight copies. The app's: on a
-    /// 240 × 160 × 128 tomogram every voxel's score was within 0.015 of
-    /// MemBrain-seg 0.0.10 (Dice 0.99986).
+    /// 512 × 512 × 128 tomogram (36 windows) every voxel's score was within
+    /// 1e-4 of MemBrain-seg 0.0.10 in single precision, no voxel decided
+    /// differently.
     Official,
 }
 
@@ -327,12 +299,25 @@ fn starts_official(n: usize, side: usize) -> Vec<isize> {
 /// where the volume is thinner (as MemBrain-seg; tomograms on the 10 Å
 /// grid are often thinner than a window).
 pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
+    score_patches(dev, net, v, n, pass, WINDOW, progress)
+}
+
+fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, patch: usize, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
+    // Clear the busy marker on success, cancellation and a failed GPU read.
+    struct ClearBusy;
+    impl Drop for ClearBusy {
+        fn drop(&mut self) {
+            crate::live::with(|lv| lv.busy = None);
+        }
+    }
+    let _clear_busy = ClearBusy;
     let t0 = Instant::now();
     if !WINDOW.is_multiple_of(net.align()) {
         bail!("模型的窗口对齐不符");
     }
     let official = matches!(pass, Pass::Official);
-    let side = [WINDOW; 3];
+    let side = [patch; 3];
+    let resize = (patch != WINDOW).then(|| rescale::FourierResize::new(patch, WINDOW));
     let st: [Vec<isize>; 3] = std::array::from_fn(|a| if official { starts_official(n[a], side[a]) } else { starts(n[a], side[a]) });
     let windows = st[0].len() * st[1].len() * st[2].len();
     // Gaussian importance (σ = side/8) so window edges count little, at
@@ -344,74 +329,104 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         (0..side[a]).map(|i| (-((i as f32 - c).powi(2)) / (2.0 * s * s)).exp()).collect()
     });
     let inside = |a: usize, o: isize, i: usize| -> Option<usize> { usize::try_from(o + i as isize).ok().filter(|&k| k < n[a]) };
-    let tile = |o: [isize; 3]| -> Vec<f32> {
+    // Where tile voxel (x, y, z) sits in the network's input and output,
+    // mirrored by `m`: in its axis order (`Model::xyz`), so the tile is
+    // gathered and scattered in one pass on the host.
+    let xyz = net.xyz();
+    let at = |m: [bool; 3], x: usize, y: usize, z: usize| -> usize {
+        let f = |a: usize, i: usize| if m[a] { side[a] - 1 - i } else { i };
+        let (x, y, z) = (f(0, x), f(1, y), f(2, z));
+        if xyz {
+            (x * side[1] + y) * side[2] + z
+        } else {
+            (z * side[1] + y) * side[0] + x
+        }
+    };
+    let tile = |o: [isize; 3], m: [bool; 3]| -> Vec<f32> {
+        // Filled in the network's order: its slowest axis in parallel.
+        let ax = if xyz { [0, 1, 2] } else { [2, 1, 0] };
+        let f = |a: usize, i: usize| if m[a] { side[a] - 1 - i } else { i };
         let mut t = vec![0f32; side[0] * side[1] * side[2]];
-        for z in 0..side[2] {
-            let Some(zz) = inside(2, o[2], z) else { continue };
-            for y in 0..side[1] {
-                let Some(yy) = inside(1, o[1], y) else { continue };
-                for x in 0..side[0] {
-                    if let Some(xx) = inside(0, o[0], x) {
-                        t[(z * side[1] + y) * side[0] + x] = v[(zz * n[1] + yy) * n[0] + xx];
+        t.par_chunks_mut(side[ax[1]] * side[ax[2]]).enumerate().for_each(|(i, slab)| {
+            let mut l = [0usize; 3];
+            l[ax[0]] = f(ax[0], i);
+            for j in 0..side[ax[1]] {
+                l[ax[1]] = f(ax[1], j);
+                for k in 0..side[ax[2]] {
+                    l[ax[2]] = f(ax[2], k);
+                    if let (Some(xx), Some(yy), Some(zz)) = (inside(0, o[0], l[0]), inside(1, o[1], l[1]), inside(2, o[2], l[2])) {
+                        slab[j * side[ax[2]] + k] = v[(zz * n[1] + yy) * n[0] + xx];
                     }
                 }
             }
-        }
+        });
         t
     };
     let len = n[0] * n[1] * n[2];
     let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
+    // Each copy is blended on its own and the copies averaged (as
+    // MemBrain-seg): mirrored windows sit elsewhere, so their weights
+    // differ from copy to copy.
+    let mut total = vec![0f32; len];
     let mut copies = 8;
     let mut done = 0;
     let mut c = 0;
     while c < copies {
-        for &z0 in &st[2] {
-            for &y0 in &st[1] {
-                for &x0 in &st[0] {
+        // MemBrain-seg mirrors the whole volume and then places its
+        // windows, so along a mirrored axis they sit mirrored too (the same
+        // places only when they are spread symmetrically).
+        let m = FLIPS[c];
+        let sc: [Vec<isize>; 3] = std::array::from_fn(|a| st[a].iter().map(|&s| if m[a] { n[a] as isize - side[a] as isize - s } else { s }).collect());
+        for &z0 in &sc[2] {
+            for &y0 in &sc[1] {
+                for &x0 in &sc[0] {
                     check_cancel()?;
                     let clip = |a: usize, o: isize| -> (usize, usize) { (o.max(0) as usize, ((o + side[a] as isize).max(0) as usize).min(n[a])) };
                     let ((bx0, bx1), (by0, by1), (bz0, bz1)) = (clip(0, x0), clip(1, y0), clip(2, z0));
-                    crate::live::with(|m| {
-                        if m.grid == n {
-                            m.busy = Some([bx0, by0, bz0, bx1, by1, bz1]);
+                    crate::live::with(|lv| {
+                        if lv.grid == n {
+                            lv.busy = Some([bx0, by0, bz0, bx1, by1, bz1]);
                         }
                     });
-                    // Mirrored and put in the network's axis order on the host
-                    // (cheap next to the network).
-                    let t = mirror(tile([x0, y0, z0]), side, FLIPS[c]);
-                    let x = if net.xyz() {
-                        Tensor::<5>::from_data(TensorData::new(transpose(&t, side), [1, 1, side[0], side[1], side[2]]), dev)
-                    } else {
-                        Tensor::<5>::from_data(TensorData::new(t, [1, 1, side[2], side[1], side[0]]), dev)
-                    };
-                    let r: Vec<f32> = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
-                    let r = mirror(if net.xyz() { transpose(&r, [side[2], side[1], side[0]]) } else { r }, side, FLIPS[c]);
-                    for z in 0..side[2] {
-                        let Some(zz) = inside(2, z0, z) else { continue };
+                    let dims = [1, 1, WINDOW, WINDOW, WINDOW];
+                    let r = read_window(|| {
+                        let input = tile([x0, y0, z0], m);
+                        let input = if let Some(resize) = &resize { resize.run(&input) } else { input };
+                        let x = Tensor::<5>::from_data(TensorData::new(input, dims), dev);
+                        net.forward(x).try_into_data().map_err(|e| anyhow!("{e}"))
+                    })
+                    .with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies))?;
+                    let r = if resize.is_some() { resample_linear(&r, [WINDOW; 3], side, false) } else { r };
+                    // Each volume plane the window covers, in parallel.
+                    let plane = n[0] * n[1];
+                    acc.par_chunks_mut(plane).zip(wsum.par_chunks_mut(plane)).enumerate().for_each(|(zz, (pa, pw))| {
+                        let z = zz as isize - z0;
+                        if z < 0 || z >= side[2] as isize {
+                            return;
+                        }
+                        let z = z as usize;
                         for y in 0..side[1] {
                             let Some(yy) = inside(1, y0, y) else { continue };
                             let wzy = g[2][z] * g[1][y];
-                            let src = (z * side[1] + y) * side[0];
-                            let dst = (zz * n[1] + yy) * n[0];
                             for x in 0..side[0] {
                                 if let Some(xx) = inside(0, x0, x) {
                                     let w = (wzy * g[0][x]).max(1e-3);
-                                    acc[dst + xx] += w * r[src + x];
-                                    wsum[dst + xx] += w;
+                                    pa[yy * n[0] + xx] += w * r[at(m, x, y, z)];
+                                    pw[yy * n[0] + xx] += w;
                                 }
                             }
                         }
-                    }
+                    });
                     // What the window found so far, for the viewer (`live`).
-                    crate::live::with(|m| {
-                        if m.grid != n {
+                    crate::live::with(|lv| {
+                        if lv.grid != n {
                             return;
                         }
                         for z in bz0..bz1 {
                             for y in by0..by1 {
                                 let i = (z * n[1] + y) * n[0];
                                 for x in bx0..bx1 {
-                                    m.cells[i + x] = u8::from(acc[i + x] > 0.0);
+                                    lv.cells[i + x] = u8::from(acc[i + x] > 0.0);
                                 }
                             }
                         }
@@ -421,6 +436,10 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
                 }
             }
         }
+        total.par_iter_mut().zip(acc.par_iter_mut().zip(wsum.par_iter_mut())).for_each(|(t, (a, w))| {
+            *t += *a / w.max(1e-12);
+            (*a, *w) = (0.0, 0.0);
+        });
         if let (0, Pass::Budget(budget_s)) = (c, pass) {
             // From the first pass's time, as many copies as fit the budget.
             let per = t0.elapsed().as_secs_f64().max(1e-3);
@@ -433,9 +452,19 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         }
         c += 1;
     }
-    crate::live::with(|m| m.busy = None);
-    acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
-    Ok((acc, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
+    total.par_iter_mut().for_each(|t| *t /= copies as f32);
+    Ok((total, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
+}
+
+/// A failed readback must remain an error, before blending or label writes.
+/// Burn can also panic during a launch, before its fallible readback runs.
+fn read_window(forward: impl FnOnce() -> Result<TensorData>) -> Result<Vec<f32>> {
+    let data = crate::ctf_gpu::guarded(forward)??;
+    let values: Vec<f32> = data.convert::<f32>().try_into_vec().map_err(|e| anyhow!("{e:?}"))?;
+    if values.iter().any(|v| !v.is_finite()) {
+        bail!("膜分割产生了非有限数值");
+    }
+    Ok(values)
 }
 
 /// Keeps the 26-connected components of `mask` with at least `min` voxels.
@@ -504,6 +533,23 @@ pub struct Segmentation {
     pub stats: Stats,
 }
 
+/// Mean and spread of every voxel (sums in f64).
+fn exact_stats(v: &[f32]) -> (f32, f32) {
+    let (s, s2) = v.par_iter().fold(|| (0f64, 0f64), |(a, b), &x| (a + x as f64, b + x as f64 * x as f64)).reduce(|| (0.0, 0.0), |p, q| (p.0 + q.0, p.1 + q.1));
+    let k = v.len().max(1) as f64;
+    let mean = s / k;
+    let sd = (s2 / k - mean * mean).max(0.0).sqrt();
+    (mean as f32, if sd > 1e-12 { sd as f32 } else { 1.0 })
+}
+
+/// NumPy rounds to nearest (ties to even), then MemBrain rounds odd sides
+/// upward so Fourier padding is symmetric. This bounded path is used only
+/// for coarse voxels; finer volumes retain the existing global resampling.
+fn physical_patch(pixel_a: f32) -> usize {
+    let rounded = (WINDOW as f64 * PIXEL_A as f64 / pixel_a as f64).round_ties_even() as usize;
+    (rounded + rounded % 2).clamp(2, WINDOW)
+}
+
 /// Segments the membranes of `values` (dims `n`, X fastest, `pixel_a` Å per
 /// voxel).
 pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a: f32, pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<Segmentation> {
@@ -513,16 +559,40 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     if !(pixel_a.is_finite() && pixel_a > 0.5) {
         bail!("需要像素大小（Å）");
     }
-    let (mean, std) = crate::wedge::stats(values);
     let m = grid_at(n, pixel_a);
     if m.iter().any(|&k| k < 8) {
         bail!("体积太小：按 10 Å 体素算每边不到 8 个");
     }
+    // MemBrain's rescale-patches operates on the native grid: normalize the
+    // original tomogram once, FFT-resize each physical patch to 160³, and
+    // resize its logits back before Gaussian blending. Whole-volume spatial
+    // interpolation changes both the input spectrum and window positions.
+    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a > PIXEL_A {
+        let patch = physical_patch(pixel_a);
+        let (mean, std) = exact_stats(values);
+        let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x-mean)/std } else { 0.0 }).collect();
+        // The desktop initially allocates its historical 10 Å preview grid.
+        // Keep live windows and final labels on this inference grid instead.
+        crate::live::with(|map| {
+            if map.full == n && map.grid != n {
+                map.grid = n;
+                map.cells = vec![0; values.len()];
+                map.busy = None;
+            }
+        });
+        let (score, stats) = score_patches(dev, net, &norm, n, pass, patch, progress)?;
+        let min = (MIN_NM3 / (pixel_a/10.0).powi(3)).round().max(1.0) as usize;
+        let (mask, components) = clean(&score.iter().map(|&s| s>0.0).collect::<Vec<_>>(), n, min);
+        return Ok(Segmentation { score, mask, components, stats });
+    }
+    let (mean, std) = crate::wedge::stats(values);
     let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect();
     let small = resample(&norm, n, m);
     drop(norm);
-    // Standardise again at the network's scale (the low-pass narrows it).
-    let (m2, s2) = crate::wedge::stats(&small);
+    // Standardise again at the network's scale (the low-pass narrows it),
+    // over every voxel: a sample (every 16th of 512² × 128) shifted the
+    // scores enough to cost 0.01 Dice against MemBrain-seg.
+    let (m2, s2) = exact_stats(&small);
     let small: Vec<f32> = small.into_par_iter().map(|x| (x - m2) / s2).collect();
     check_cancel()?;
     let (logits, stats) = score(dev, net, &small, m, pass, progress)?;
@@ -669,6 +739,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn window_failure_is_an_error_before_results_are_used() {
+        let failed = read_window(|| bail!("device lost during Metal command"));
+        assert!(format!("{:#}", failed.unwrap_err()).contains("device lost"));
+        let panicked = read_window(|| panic!("failed GPU launch"));
+        assert!(format!("{:#}", panicked.unwrap_err()).contains("failed GPU launch"));
+        assert!(read_window(|| Ok(TensorData::new(vec![f32::NAN], [1]))).is_err());
+        // An empty membrane is legitimate. Do not reject constant finite logits
+        // in place of propagating the actual execution failure.
+        assert_eq!(read_window(|| Ok(TensorData::new(vec![-1.0f32; 8], [8]))).unwrap(), vec![-1.0; 8]);
+    }
+
+    #[test]
     fn save_load_half() {
         let dev = Device::flex();
         let net = MemNet::new(&NetConfig::default(), &dev);
@@ -681,26 +763,6 @@ mod tests {
         let x = Tensor::<5>::random([1, 1, 32, 32, 32], burn::tensor::Distribution::Normal(0.0, 1.0), &dev);
         let (p, q) = (load_own(&a, &dev).unwrap().forward(x.clone()), load_own(&b, &dev).unwrap().forward(x));
         assert!((p - q).abs().max().into_scalar::<f32>() < 0.05);
-    }
-
-    #[test]
-    fn transpose_reverses_axes() {
-        let n = [4, 3, 2];
-        let v: Vec<f32> = (0..24).map(|i| i as f32).collect();
-        let t = transpose(&v, n);
-        // v[x + 4 (y + 3 z)] lands at t[z + 2 (y + 3 x)].
-        assert_eq!(t[1 + 2 * (2 + 3 * 3)], v[3 + 4 * (2 + 3)]);
-        assert_eq!(transpose(&t, [2, 3, 4]), v);
-    }
-
-    #[test]
-    fn mirror_twice_is_identity() {
-        let n = [5, 4, 3];
-        let v: Vec<f32> = (0..60).map(|i| i as f32).collect();
-        for m in FLIPS {
-            assert_eq!(mirror(mirror(v.clone(), n, m), n, m), v);
-        }
-        assert_eq!(mirror(v.clone(), n, [true, false, true])[0], v[4 + 5 * 4 * 2]);
     }
 
     #[test]
@@ -730,6 +792,33 @@ mod tests {
         assert_eq!(c, 1);
         assert!(!k[999]);
         assert_eq!(k.iter().filter(|&&b| b).count(), 64);
+    }
+
+    #[test]
+    fn native_patch_side_matches_reference_rounding() {
+        assert_eq!(physical_patch(13.4807968), 120);
+        assert_eq!(physical_patch(15.252), 106);
+        assert_eq!(physical_patch(10.0), 160);
+        assert_eq!(physical_patch(12.8), 126);
+        assert_eq!(physical_patch(32.0), 50);
+        assert_eq!(physical_patch(128.0), 12); // exact12.5: NumPy ties-to-even
+        assert_eq!(physical_patch(f32::from_bits(10.0f32.to_bits()+1)), 160);
+        assert_eq!(physical_patch(f32::MAX), 2);
+        for pixel in [10.00001,12.0,15.252,100.0,1000.0,f32::MAX] {
+            let side=physical_patch(pixel);
+            assert!((2..=WINDOW).contains(&side) && side.is_multiple_of(2));
+        }
+    }
+
+    #[test]
+    fn patch_logits_use_half_pixel_linear_without_antialias() {
+        let input: Vec<_>=(0..64).map(|i| (i%4+10*(i/4%4)+100*(i/16)) as f32).collect();
+        let out=resample_linear(&input,[4;3],[2;3],false);
+        assert_eq!(out,vec![55.5,57.5,75.5,77.5,255.5,257.5,275.5,277.5]);
+        let up=resample_linear(&[0.0,1.0,10.0,11.0,100.0,101.0,110.0,111.0],[2;3],[4;3],false);
+        assert_eq!(up[0],0.0);
+        assert_eq!(up[21],27.75);
+        assert_eq!(up[63],111.0);
     }
 
     #[test]

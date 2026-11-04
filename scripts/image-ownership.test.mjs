@@ -150,3 +150,89 @@ test('saving identifies the model token at the backend boundary', async () => {
   const call = h.calls.find((c) => c.command === 'wedge_save');
   assert.equal(call.req.token, 1);
 });
+
+const labels = fs.readFileSync(new URL('../ui/pro/labels.js', import.meta.url), 'utf8');
+function membranes() {
+  const elements = new Map(), pending = deferred(), calls = [], callbacks = [];
+  const context = {
+    S: { token: 1, info: { sizeZ: 16 }, t: 0 },
+    L: { token: 1, busy: false, lastError: '', active: 1 },
+    $: (id) => { if (!elements.has(id)) elements.set(id, {}); return elements.get(id); },
+    ready: () => context.L.token === context.S.token,
+    T: { event: { listen: async (_event, callback) => { callbacks.push(callback); return () => {}; } } },
+    window: { TifMrcViewPro: { membrane: { ensure: async () => true } } },
+    editWith: (_command, req) => { calls.push(req); return pending.promise; },
+    channel: () => 0, liveStart: () => {}, liveStop: () => {}, liveFetch: () => {},
+    draw: () => {}, renderList: () => {}, drawVesicles: () => {}, toast: () => {},
+    syncSam: () => {}, syncCls: () => {}, syncUnet: () => {}, any: () => false,
+    sec: { querySelectorAll: () => [] },
+  };
+  vm.createContext(context);
+  const state = labels.indexOf('  const M =');
+  vm.runInContext(labels.slice(state, labels.indexOf('\n', state)) + '\nglobalThis.M = M;', context);
+  vm.runInContext(labels.slice(labels.indexOf('  function syncMem()'), labels.indexOf('  /** Diameter histogram')), context);
+  vm.runInContext(labels.slice(labels.indexOf('  function syncPanel()'), labels.indexOf('  function renderList()')), context);
+  vm.runInContext(labels.slice(labels.indexOf('  async function memRun()'), labels.indexOf('  $("lab-mem-run").addEventListener')), context);
+  return {
+    context, pending, calls, callbacks, run: () => context.memRun(),
+    text: () => { context.syncPanel(); return elements.get('lab-mem-text').textContent; },
+    progress: () => callbacks.at(-1)({ payload: { stage: 'net', done: 1, total: 4 } }),
+  };
+}
+
+test('a membrane cancellation stays on its image but not a newly opened image', async () => {
+  const h = membranes(), done = h.run(); await tick();
+  h.context.L.lastError = '已取消'; h.pending.resolve(null); await done;
+  assert.equal(h.text(), '分割没有完成：已取消');
+  assert.equal(h.text(), '分割没有完成：已取消');
+  h.context.S.token = 2; // image open completed before labels_open
+  assert.equal(h.text(), '');
+  h.context.L.token = 2;
+  assert.equal(h.text(), '');
+});
+
+for (const success of [false, true]) test(`late membrane ${success ? 'success' : 'failure'} cannot belong to a new image`, async () => {
+  const h = membranes(), done = h.run(); await tick();
+  h.progress(); const previous = h.context.M.text;
+  h.context.S.token = 2; h.context.L.token = 2; h.context.L.active = 9;
+  h.progress();
+  assert.equal(h.text(), '');
+  assert.equal(h.context.M.text, previous, 'ignore old progress writes');
+  h.context.L.lastError = 'old failure';
+  h.pending.resolve(success ? { components: 1, backend: 'Metal', seconds: 1, label: 3, vesicles: [{ diameter: 4 }] } : null);
+  await done;
+  assert.equal(h.text(), '');
+  assert.equal(h.context.L.active, 9);
+  assert.equal(h.context.M.token, 0, 'old vesicles must not acquire the new token');
+});
+
+test('changing image during membrane model selection does not start a new-image job', async () => {
+  const h = membranes(), selected = deferred();
+  h.context.window.TifMrcViewPro.membrane.ensure = () => selected.promise;
+  const done = h.run(); await tick();
+  h.context.S.token = 2; h.context.L.token = 2;
+  selected.resolve(true); await tick();
+  // Resolve an unexpected invocation too, so the regression fails without hanging.
+  h.pending.resolve(null); await done;
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.text(), '');
+  assert.equal(h.context.M.busy, false);
+});
+
+test('queued progress after a membrane job finishes cannot erase its result', async () => {
+  const h = membranes(), done = h.run(); await tick();
+  h.pending.resolve({ components: 2, backend: 'Metal', seconds: 3, label: 1 }); await done;
+  const result = h.text(); h.progress();
+  assert.equal(h.text(), result);
+  assert.match(result, /找到 2 片膜/);
+});
+
+test('an obsolete membrane model error cannot attach to the new image', async () => {
+  const h = membranes(), selected = deferred();
+  h.context.window.TifMrcViewPro.membrane.ensure = () => selected.promise;
+  const done = h.run(); await tick();
+  h.context.S.token = 2; h.context.L.token = 2;
+  selected.reject(new Error('old model failure')); await done;
+  assert.equal(h.text(), '');
+  assert.equal(h.context.M.busy, false);
+});

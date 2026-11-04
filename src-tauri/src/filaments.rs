@@ -22,6 +22,9 @@
 use rayon::prelude::*;
 use serde::Serialize;
 
+#[path = "filaments/cylinder.rs"]
+mod cylinder;
+
 /// Working voxel size, nm.
 const WORK_NM: f32 = 2.0;
 /// Microtubule outer radius, nm.
@@ -176,8 +179,12 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
     // depends on the rest of the tomogram. Strictest first; a line is kept
     // unless most of it lies on one kept already.
     let mut kept: Vec<Vec<[f32; 3]>> = vec![];
+    let mut template_lines = Vec::new();
     for k in K_LEVELS {
         for l in lines_at(&score, &axis, m, med + k * sd.max(1e-12)) {
+            if lumen && polyline_len(&l) >= MIN_LENGTH_NM / WORK_NM {
+                template_lines.push(l.clone());
+            }
             if !accept(&l, &light, m, lumen) {
                 continue;
             }
@@ -185,6 +192,19 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
             let on = l.iter().filter(|p| kept.iter().any(|q| q.iter().any(|c| (0..3).map(|a| (p[a] - c[a]).powi(2)).sum::<f32>() <= r2))).count();
             if on * 2 < l.len() {
                 kept.push(l);
+            }
+        }
+    }
+    // A ridge may follow a wall rather than the hollow centre. A finite
+    // cylinder supplies both a centre and an orientation for tracing it.
+    // Keep the existing accepted lines, and require the same geometric and
+    // lumen checks of additional traces. Coarse data cannot resolve the lumen.
+    if lumen {
+        for line in cylinder::trace(&light, m, &template_lines) {
+            let r2 = (RADIUS_NM / WORK_NM).powi(2);
+            let on = line.iter().filter(|p| kept.iter().any(|q| q.iter().any(|c| (0..3).map(|a| (p[a] - c[a]).powi(2)).sum::<f32>() <= r2))).count();
+            if on * 2 < line.len() {
+                kept.push(line);
             }
         }
     }
@@ -548,6 +568,33 @@ mod tests {
         let m = mask(&f, n, 10.0);
         assert!(m[(60 * n[1] + 60) * n[0] + 120]);
         assert!(!m[(85 * n[1] + 150) * n[0] + 60]);
+    }
+
+    #[test]
+    fn finds_tubes_after_axis_permutations() {
+        let (values, n) = scene();
+        for order in [[2, 0, 1], [1, 2, 0]] {
+            let rotated_n = order.map(|a| n[a]);
+            let mut rotated = vec![0.0; values.len()];
+            for z in 0..n[2] {
+                for y in 0..n[1] {
+                    for x in 0..n[0] {
+                        let p = [x, y, z];
+                        let q = order.map(|a| p[a]);
+                        rotated[(q[2] * rotated_n[1] + q[1]) * rotated_n[0] + q[0]] = values[(z * n[1] + y) * n[0] + x];
+                    }
+                }
+            }
+            let f = find(&rotated, rotated_n, 10.0);
+            assert_eq!(f.len(), 2, "axis order {order:?}: {f:?}");
+            let mask = mask(&f, rotated_n, 10.0);
+            let at = |p: [usize; 3]| {
+                let q = order.map(|a| p[a]);
+                mask[(q[2] * rotated_n[1] + q[1]) * rotated_n[0] + q[0]]
+            };
+            assert!(at([120, 60, 60]), "missed rotated tube: {order:?}");
+            assert!(!at([60, 150, 85]), "accepted a rotated ribosome: {order:?}");
+        }
     }
 
     /// On a tomogram: FIL_MRC=<tomogram .mrc> cargo test --release -- --ignored filaments_on_file
