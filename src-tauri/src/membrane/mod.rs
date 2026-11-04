@@ -4,7 +4,7 @@
 //! code or weights are taken from it.
 //!
 //! As there: the tomogram is standardised; native-grid patches are Fourier
-//! rescaled to the 10 Å network scale for coarse (>10 Å) data. A
+//! rescaled to the 10 Å network scale. A
 //! residual 3D U-Net (instance norm, deep supervision) scores every
 //! voxel in overlapping 160³ windows weighted by a Gaussian, the scores of
 //! eight mirrored copies are averaged (test-time augmentation), and voxels with a
@@ -362,6 +362,36 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
         });
         t
     };
+    let fine_tile = |o: [isize; 3], mirrored: [bool; 3]| -> Vec<f32> {
+        // Array axes are fast→slow. MemBrain tensors are [x,y,z], so their
+        // fastest array axis is physical Z rather than physical X.
+        let axes = if xyz { [2, 1, 0] } else { [0, 1, 2] };
+        let bounds = std::array::from_fn(|q| {
+            let a = axes[q];
+            let start = (-o[a]).clamp(0, patch as isize) as usize;
+            let end = (n[a] as isize - o[a]).clamp(0, patch as isize) as usize;
+            if mirrored[a] { patch - end..patch - start } else { start..end }
+        });
+        resize.as_ref().unwrap().shrink_window(bounds, |i, j, k| {
+            let mut local = [0; 3];
+            for (q, value) in [i, j, k].into_iter().enumerate() {
+                let a = axes[q];
+                local[a] = if mirrored[a] { patch - 1 - value } else { value };
+            }
+            let [x, y, z] = std::array::from_fn(|a| (o[a] + local[a] as isize) as usize);
+            v[(z * n[1] + y) * n[0] + x]
+        })
+    };
+    // Interpolate only native voxels actually covered by this window, rather
+    // than allocating a fine-grid patch³ logit cube (which can exceed100GB).
+    let fine_axis: Vec<_> = if patch > WINDOW {
+        let factor = WINDOW as f32 / patch as f32;
+        (0..patch).map(|i| {
+            let p = ((i as f32 + 0.5) * factor - 0.5).clamp(0.0, (WINDOW - 1) as f32);
+            let lo = p.floor() as usize;
+            (lo, (lo + 1).min(WINDOW - 1), p - lo as f32)
+        }).collect()
+    } else { Vec::new() };
     let len = n[0] * n[1] * n[2];
     let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
     // Each copy is blended on its own and the copies averaged (as
@@ -390,13 +420,31 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
                     });
                     let dims = [1, 1, WINDOW, WINDOW, WINDOW];
                     let r = read_window(|| {
-                        let input = tile([x0, y0, z0], m);
-                        let input = if let Some(resize) = &resize { resize.run(&input) } else { input };
+                        let input = if patch > WINDOW {
+                            fine_tile([x0, y0, z0], m)
+                        } else {
+                            let input = tile([x0, y0, z0], m);
+                            if let Some(resize) = &resize { resize.run(&input) } else { input }
+                        };
                         let x = Tensor::<5>::from_data(TensorData::new(input, dims), dev);
                         net.forward(x).try_into_data().map_err(|e| anyhow!("{e}"))
                     })
                     .with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies))?;
-                    let r = if resize.is_some() { resample_linear(&r, [WINDOW; 3], side, false) } else { r };
+                    let r = if patch < WINDOW { resample_linear(&r, [WINDOW; 3], side, false) } else { r };
+                    let value = |x: usize, y: usize, z: usize| {
+                        if patch <= WINDOW { return r[at(m, x, y, z)]; }
+                        let mut q = [x, y, z];
+                        for a in 0..3 { if m[a] { q[a] = patch - 1 - q[a]; } }
+                        if xyz { q.swap(0, 2); }
+                        let [(x0, x1, tx), (y0, y1, ty), (z0, z1, tz)] = q.map(|i| fine_axis[i]);
+                        let at = |x, y, z| r[(z * WINDOW + y) * WINDOW + x];
+                        let l = |x| {
+                            let a = at(x, y0, z0) * (1.0 - ty) + at(x, y1, z0) * ty;
+                            let b = at(x, y0, z1) * (1.0 - ty) + at(x, y1, z1) * ty;
+                            a * (1.0 - tz) + b * tz
+                        };
+                        l(x0) * (1.0 - tx) + l(x1) * tx
+                    };
                     // Each volume plane the window covers, in parallel.
                     let plane = n[0] * n[1];
                     acc.par_chunks_mut(plane).zip(wsum.par_chunks_mut(plane)).enumerate().for_each(|(zz, (pa, pw))| {
@@ -405,13 +453,15 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
                             return;
                         }
                         let z = z as usize;
-                        for y in 0..side[1] {
+                        let yr = if patch > WINDOW { (by0 as isize - y0) as usize..(by1 as isize - y0) as usize } else { 0..side[1] };
+                        let xr = if patch > WINDOW { (bx0 as isize - x0) as usize..(bx1 as isize - x0) as usize } else { 0..side[0] };
+                        for y in yr {
                             let Some(yy) = inside(1, y0, y) else { continue };
                             let wzy = g[2][z] * g[1][y];
-                            for x in 0..side[0] {
+                            for x in xr.clone() {
                                 if let Some(xx) = inside(0, x0, x) {
                                     let w = (wzy * g[0][x]).max(1e-3);
-                                    pa[yy * n[0] + xx] += w * r[at(m, x, y, z)];
+                                    pa[yy * n[0] + xx] += w * value(x, y, z);
                                     pw[yy * n[0] + xx] += w;
                                 }
                             }
@@ -543,11 +593,11 @@ fn exact_stats(v: &[f32]) -> (f32, f32) {
 }
 
 /// NumPy rounds to nearest (ties to even), then MemBrain rounds odd sides
-/// upward so Fourier padding is symmetric. This bounded path is used only
-/// for coarse voxels; finer volumes retain the existing global resampling.
+/// upward so Fourier padding is symmetric. The validated pixel size >0.5 Å
+/// bounds the native side to3200; do not silently clamp fine data to160.
 fn physical_patch(pixel_a: f32) -> usize {
     let rounded = (WINDOW as f64 * PIXEL_A as f64 / pixel_a as f64).round_ties_even() as usize;
-    (rounded + rounded % 2).clamp(2, WINDOW)
+    (rounded + rounded % 2).max(2)
 }
 
 /// Segments the membranes of `values` (dims `n`, X fastest, `pixel_a` Å per
@@ -567,7 +617,7 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     // original tomogram once, FFT-resize each physical patch to 160³, and
     // resize its logits back before Gaussian blending. Whole-volume spatial
     // interpolation changes both the input spectrum and window positions.
-    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a > PIXEL_A {
+    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a != PIXEL_A {
         let patch = physical_patch(pixel_a);
         let (mean, std) = exact_stats(values);
         let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x-mean)/std } else { 0.0 }).collect();
@@ -799,6 +849,9 @@ mod tests {
         assert_eq!(physical_patch(13.4807968), 120);
         assert_eq!(physical_patch(15.252), 106);
         assert_eq!(physical_patch(10.0), 160);
+        assert_eq!(physical_patch(4.5527935), 352);
+        assert_eq!(physical_patch(8.0), 200);
+        assert_eq!(physical_patch(0.5001), 3200);
         assert_eq!(physical_patch(12.8), 126);
         assert_eq!(physical_patch(32.0), 50);
         assert_eq!(physical_patch(128.0), 12); // exact12.5: NumPy ties-to-even
