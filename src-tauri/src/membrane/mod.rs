@@ -3,12 +3,13 @@
 //! from the paper, its documentation and the layout of its checkpoints; no
 //! code or weights are taken from it.
 //!
-//! As there: the tomogram is rescaled to 10 Å per voxel and standardised, a
+//! As there: the tomogram is standardised; native-grid patches are Fourier
+//! rescaled to the 10 Å network scale for coarse (>10 Å) data. A
 //! residual 3D U-Net (instance norm, deep supervision) scores every
 //! voxel in overlapping 160³ windows weighted by a Gaussian, the scores of
 //! eight mirrored copies are averaged (test-time augmentation), and voxels with a
 //! positive score are membrane. Small specks are removed and the result is
-//! taken back to the tomogram's own grid.
+//! kept on the tomogram's own grid.
 //!
 //! The network is the published MemBrain-seg model (`dynunet`), from a
 //! checkpoint the user downloads from its authors: the weights carry no
@@ -23,6 +24,7 @@ pub mod augment;
 pub mod dynunet;
 pub mod net;
 pub mod nifti;
+mod rescale;
 pub mod vesicles;
 
 use std::path::{Path, PathBuf};
@@ -169,13 +171,17 @@ pub fn save(net: &MemNet, path: &Path, half: bool) -> Result<()> {
 /// Trilinear resampling of a volume (X fastest) from `n` to `m` voxels,
 /// voxel centres aligned; low-passed first when shrinking.
 pub fn resample(v: &[f32], n: [usize; 3], m: [usize; 3]) -> Vec<f32> {
+    resample_linear(v, n, m, true)
+}
+
+fn resample_linear(v: &[f32], n: [usize; 3], m: [usize; 3], antialias: bool) -> Vec<f32> {
     if n == m {
         return v.to_vec();
     }
     let f: [f32; 3] = std::array::from_fn(|a| n[a] as f32 / m[a] as f32);
     let sigma = f.iter().cloned().fold(0f32, f32::max);
     let src;
-    let v = if sigma > 1.2 {
+    let v = if antialias && sigma > 1.2 {
         // σ ≈ 0.4 × the shrink factor keeps aliasing down.
         src = crate::wedge::smooth(&crate::wedge::Vol { n, v: v.to_vec() }, 0.4 * sigma).v;
         &src[..]
@@ -293,6 +299,10 @@ fn starts_official(n: usize, side: usize) -> Vec<isize> {
 /// where the volume is thinner (as MemBrain-seg; tomograms on the 10 Å
 /// grid are often thinner than a window).
 pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
+    score_patches(dev, net, v, n, pass, WINDOW, progress)
+}
+
+fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, patch: usize, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
     // Clear the busy marker on success, cancellation and a failed GPU read.
     struct ClearBusy;
     impl Drop for ClearBusy {
@@ -306,7 +316,8 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         bail!("模型的窗口对齐不符");
     }
     let official = matches!(pass, Pass::Official);
-    let side = [WINDOW; 3];
+    let side = [patch; 3];
+    let resize = (patch != WINDOW).then(|| rescale::FourierResize::new(patch, WINDOW));
     let st: [Vec<isize>; 3] = std::array::from_fn(|a| if official { starts_official(n[a], side[a]) } else { starts(n[a], side[a]) });
     let windows = st[0].len() * st[1].len() * st[2].len();
     // Gaussian importance (σ = side/8) so window edges count little, at
@@ -377,12 +388,15 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
                             lv.busy = Some([bx0, by0, bz0, bx1, by1, bz1]);
                         }
                     });
-                    let dims = if xyz { [1, 1, side[0], side[1], side[2]] } else { [1, 1, side[2], side[1], side[0]] };
+                    let dims = [1, 1, WINDOW, WINDOW, WINDOW];
                     let r = read_window(|| {
-                        let x = Tensor::<5>::from_data(TensorData::new(tile([x0, y0, z0], m), dims), dev);
+                        let input = tile([x0, y0, z0], m);
+                        let input = if let Some(resize) = &resize { resize.run(&input) } else { input };
+                        let x = Tensor::<5>::from_data(TensorData::new(input, dims), dev);
                         net.forward(x).try_into_data().map_err(|e| anyhow!("{e}"))
                     })
                     .with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies))?;
+                    let r = if resize.is_some() { resample_linear(&r, [WINDOW; 3], side, false) } else { r };
                     // Each volume plane the window covers, in parallel.
                     let plane = n[0] * n[1];
                     acc.par_chunks_mut(plane).zip(wsum.par_chunks_mut(plane)).enumerate().for_each(|(zz, (pa, pw))| {
@@ -528,6 +542,14 @@ fn exact_stats(v: &[f32]) -> (f32, f32) {
     (mean as f32, if sd > 1e-12 { sd as f32 } else { 1.0 })
 }
 
+/// NumPy rounds to nearest (ties to even), then MemBrain rounds odd sides
+/// upward so Fourier padding is symmetric. This bounded path is used only
+/// for coarse voxels; finer volumes retain the existing global resampling.
+fn physical_patch(pixel_a: f32) -> usize {
+    let rounded = (WINDOW as f64 * PIXEL_A as f64 / pixel_a as f64).round_ties_even() as usize;
+    (rounded + rounded % 2).clamp(2, WINDOW)
+}
+
 /// Segments the membranes of `values` (dims `n`, X fastest, `pixel_a` Å per
 /// voxel).
 pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a: f32, pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<Segmentation> {
@@ -537,11 +559,33 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     if !(pixel_a.is_finite() && pixel_a > 0.5) {
         bail!("需要像素大小（Å）");
     }
-    let (mean, std) = crate::wedge::stats(values);
     let m = grid_at(n, pixel_a);
     if m.iter().any(|&k| k < 8) {
         bail!("体积太小：按 10 Å 体素算每边不到 8 个");
     }
+    // MemBrain's rescale-patches operates on the native grid: normalize the
+    // original tomogram once, FFT-resize each physical patch to 160³, and
+    // resize its logits back before Gaussian blending. Whole-volume spatial
+    // interpolation changes both the input spectrum and window positions.
+    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a > PIXEL_A {
+        let patch = physical_patch(pixel_a);
+        let (mean, std) = exact_stats(values);
+        let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x-mean)/std } else { 0.0 }).collect();
+        // The desktop initially allocates its historical 10 Å preview grid.
+        // Keep live windows and final labels on this inference grid instead.
+        crate::live::with(|map| {
+            if map.full == n && map.grid != n {
+                map.grid = n;
+                map.cells = vec![0; values.len()];
+                map.busy = None;
+            }
+        });
+        let (score, stats) = score_patches(dev, net, &norm, n, pass, patch, progress)?;
+        let min = (MIN_NM3 / (pixel_a/10.0).powi(3)).round().max(1.0) as usize;
+        let (mask, components) = clean(&score.iter().map(|&s| s>0.0).collect::<Vec<_>>(), n, min);
+        return Ok(Segmentation { score, mask, components, stats });
+    }
+    let (mean, std) = crate::wedge::stats(values);
     let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect();
     let small = resample(&norm, n, m);
     drop(norm);
@@ -748,6 +792,33 @@ mod tests {
         assert_eq!(c, 1);
         assert!(!k[999]);
         assert_eq!(k.iter().filter(|&&b| b).count(), 64);
+    }
+
+    #[test]
+    fn native_patch_side_matches_reference_rounding() {
+        assert_eq!(physical_patch(13.4807968), 120);
+        assert_eq!(physical_patch(15.252), 106);
+        assert_eq!(physical_patch(10.0), 160);
+        assert_eq!(physical_patch(12.8), 126);
+        assert_eq!(physical_patch(32.0), 50);
+        assert_eq!(physical_patch(128.0), 12); // exact12.5: NumPy ties-to-even
+        assert_eq!(physical_patch(f32::from_bits(10.0f32.to_bits()+1)), 160);
+        assert_eq!(physical_patch(f32::MAX), 2);
+        for pixel in [10.00001,12.0,15.252,100.0,1000.0,f32::MAX] {
+            let side=physical_patch(pixel);
+            assert!((2..=WINDOW).contains(&side) && side.is_multiple_of(2));
+        }
+    }
+
+    #[test]
+    fn patch_logits_use_half_pixel_linear_without_antialias() {
+        let input: Vec<_>=(0..64).map(|i| (i%4+10*(i/4%4)+100*(i/16)) as f32).collect();
+        let out=resample_linear(&input,[4;3],[2;3],false);
+        assert_eq!(out,vec![55.5,57.5,75.5,77.5,255.5,257.5,275.5,277.5]);
+        let up=resample_linear(&[0.0,1.0,10.0,11.0,100.0,101.0,110.0,111.0],[2;3],[4;3],false);
+        assert_eq!(up[0],0.0);
+        assert_eq!(up[21],27.75);
+        assert_eq!(up[63],111.0);
     }
 
     #[test]
