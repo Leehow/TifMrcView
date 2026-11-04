@@ -61,6 +61,7 @@
       <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
       <div id="cryo-body"></div>
     </details>
+    <figure id="cryo-live" hidden><canvas></canvas><figcaption class="dim"></figcaption></figure>
     <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden>取消</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
@@ -190,6 +191,39 @@
     } catch (e) { W.status(`无法载入：${e}`); }
   };
 
+  // What the running step has made so far (live.rs): the middle section of
+  // the tomogram as it is reconstructed, denoised, corrected, segmented.
+  const live = { on: false, busy: false, last: 0, timer: 0 };
+  async function livePicture() {
+    if (!live.on || live.busy || live.timer) return;
+    const wait = 400 - (performance.now() - live.last);
+    if (wait > 0) {
+      live.timer = setTimeout(() => { live.timer = 0; livePicture(); }, wait);
+      return;
+    }
+    live.busy = true;
+    live.last = performance.now();
+    try {
+      const buf = await invoke("live_picture");
+      if (!live.on || !buf || buf.byteLength < 12) return;
+      const dv = new DataView(buf);
+      const w = dv.getUint32(0, true), h = dv.getUint32(4, true), n = dv.getUint32(8, true);
+      const title = new TextDecoder().decode(new Uint8Array(buf, 12, n));
+      const at = 12 + Math.ceil(n / 4) * 4;
+      if (!w || !h || buf.byteLength < at + w * h * 4) return;
+      const fig = $("cryo-live"), cv = fig.querySelector("canvas");
+      cv.width = w;
+      cv.height = h;
+      cv.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(buf, at, w * h * 4), w, h), 0, 0);
+      fig.querySelector("figcaption").textContent = title;
+      fig.hidden = false;
+    } catch (_) {
+      // Nothing to show yet.
+    } finally {
+      live.busy = false;
+    }
+  }
+
   // Runs a long backend call with progress in the status line and a cancel
   // button; the workspace's buttons are disabled meanwhile.
   W.run = async (label, call, cancel = "tomo_cancel") => {
@@ -200,9 +234,12 @@
     const buttons = [...panel.querySelectorAll("#cryo-body button, #cryo-dataset button, #cryo-auto button")];
     const was = buttons.map((b) => b.disabled);
     buttons.forEach((b) => { b.disabled = true; });
+    await invoke("live_clear").catch(() => {});
+    live.on = true;
     const un = await T.event.listen("tomo-progress", (e) => {
       const p = e.payload;
       W.status(`${p.stage || label} ${p.done} / ${p.total}`);
+      livePicture();
     });
     W.status(`${label}…`);
     try {
@@ -212,6 +249,8 @@
       return null;
     } finally {
       un();
+      live.on = false;
+      $("cryo-live").hidden = true;
       W.busy = false;
       $("cryo-cancel").hidden = true;
       buttons.forEach((b, i) => { b.disabled = was[i]; });

@@ -149,7 +149,24 @@ pub fn train(
     lo: f32,
     hi: f32,
     cfg: &TrainConfig,
+    progress: impl FnMut(usize, usize, f32),
+) -> Result<Trained> {
+    train_live(dev, slices, w, h, lo, hi, cfg, progress, &mut |_| {})
+}
+
+/// As `train`, also handing the network as it is so far to `snapshot` every
+/// few seconds, for the viewer to show its segmentation improving.
+#[allow(clippy::too_many_arguments)]
+pub fn train_live(
+    dev: &Device,
+    slices: &[(Vec<f32>, Vec<u16>)],
+    w: usize,
+    h: usize,
+    lo: f32,
+    hi: f32,
+    cfg: &TrainConfig,
     mut progress: impl FnMut(usize, usize, f32),
+    snapshot: &mut dyn FnMut(Trained),
 ) -> Result<Trained> {
     let mut labels: Vec<u16> = slices.iter().flat_map(|(_, l)| l.iter().copied()).filter(|&v| v != 0).collect();
     labels.sort_unstable();
@@ -177,6 +194,7 @@ pub fn train(
     let mut net = UNet::new(classes, &ad);
     let mut opt = AdamConfig::new().init();
     let (mut loss_avg, mut acc_avg) = (0f32, 0f32);
+    let mut shot = std::time::Instant::now();
     for step in 0..cfg.steps {
         if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
             bail!("已取消");
@@ -230,6 +248,10 @@ pub fn train(
         net = opt.step(lr, net, grads);
         if step % 5 == 4 || step + 1 == cfg.steps {
             progress(step + 1, cfg.steps, loss_avg);
+        }
+        if step + 1 < cfg.steps && shot.elapsed().as_secs_f32() > 2.5 {
+            snapshot(Trained { net: net.valid(), labels: labels.clone(), lo, hi, loss: loss_avg, accuracy: acc_avg });
+            shot = std::time::Instant::now();
         }
     }
     Ok(Trained { net: net.valid(), labels, lo, hi, loss: loss_avg, accuracy: acc_avg })

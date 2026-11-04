@@ -237,6 +237,9 @@
 #cryo-steps button.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
 #cryo-body { flex:1; min-height:0; overflow:auto; padding-top:10px; }
 #cryo-body p { line-height:1.6; }
+#cryo-live { margin:8px 0 0; }
+#cryo-live canvas { display:block; width:100%; height:auto; max-height:320px; object-fit:contain; background:#000; border-radius:4px; image-rendering:pixelated; }
+#cryo-live figcaption { font-size:12px; margin-top:2px; }
 #cryo-foot { display:flex; align-items:center; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
 #cryo-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
 #quickbar #btn-cryoet { width:auto; padding:0 8px; gap:5px; }
