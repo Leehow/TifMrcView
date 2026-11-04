@@ -603,6 +603,44 @@ mod tests {
         }
     }
 
+    /// The app's whole membrane step on a tomogram, as the labels-panel
+    /// button runs it: SEG_TOMO=<tomogram> SEG_MODEL=<MemBrain-seg .ckpt>
+    /// cargo test --release -- --ignored button_path_on_file
+    #[test]
+    #[ignore]
+    fn button_path_on_file() {
+        let path = std::env::var("SEG_TOMO").unwrap();
+        let model = std::path::PathBuf::from(std::env::var("SEG_MODEL").unwrap());
+        let (v, n, px) = crate::tomo::pipeline::load(&path).unwrap();
+        let t = std::time::Instant::now();
+        let (seg, backend) = crate::classify::on_device(|dev| {
+            let net = crate::membrane::load(&model, dev)?;
+            crate::membrane::segment(dev, &net, &v, n, px as f32, crate::membrane::Pass::Official, &mut |_| {})
+        })
+        .unwrap();
+        let t_net = t.elapsed().as_secs_f32();
+        let fils = crate::filaments::find(&v, n, px as f32);
+        let tubes = crate::filaments::mask(&fils, n, px as f32);
+        let mut l = crate::labels::Labels::new(n[0], n[1], n[2]);
+        let (zs, _, ves) = crate::membrane::apply(&mut l, &seg.mask, Some(&tubes), n, px as f32, 0);
+        let d: Vec<f32> = ves.iter().map(|v| v.diameter).collect();
+        eprintln!(
+            "{n:?} {px} Å on {backend}: membranes {} pieces in {t_net:.0} s; {} vesicles (mean {:.1} nm); {} microtubules; {} slices labelled; materials {:?}; total {:.0} s",
+            seg.components,
+            ves.len(),
+            d.iter().sum::<f32>() / d.len().max(1) as f32,
+            fils.len(),
+            zs.len(),
+            l.materials.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
+            t.elapsed().as_secs_f32()
+        );
+        let s = crate::surfaces::Surfaces::build(&l);
+        eprintln!("surfaces: {} objects, {} triangles", s.objects.len(), s.tri.len());
+        if let Ok(out) = std::env::var("SEG_LABELS") {
+            l.save(std::path::Path::new(&crate::labels::labels_path(&out, 0))).unwrap();
+        }
+    }
+
     #[test]
     fn sphere_fit_is_exact_on_a_sphere() {
         let pts: Vec<[f64; 3]> = (0..200)

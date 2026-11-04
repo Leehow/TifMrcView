@@ -523,6 +523,7 @@
     if (!L.token || L.error) return;
     const token = L.token;
     const op = args.op || { kind: cmd };
+    L.lastError = "";
     L.busy = true;
     syncPanel();
     try {
@@ -540,7 +541,8 @@
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
       return st;
     } catch (e) {
-      toast(String(e), 6000);
+      L.lastError = String(e);
+      toast(L.lastError, 6000);
     } finally {
       L.busy = false;
       syncPanel();
@@ -1469,7 +1471,9 @@
     try {
       if (!(await window.TifMrcViewPro.membrane.ensure())) return;
       const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
-      M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : "";
+      // A failure stays on the panel: a toast alone is gone by the time a
+      // long segmentation is looked at again.
+      M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : L.lastError ? `分割没有完成：${L.lastError}` : "";
       if (r) {
         M.vesicles = r.vesicles || [];
         M.token = L.token;
@@ -1487,7 +1491,7 @@
         renderList();
       }
     } catch (e) {
-      M.text = "";
+      M.text = `分割没有完成：${e}`;
       toast(String(e), 8000);
     } finally {
       un();
