@@ -8,7 +8,14 @@ license = "Apache-2.0"
 
 [workspace]
 members = ["thumbnail-ffi", "thumbnail-win", "sam"]
+exclude = ["vendor/wgpu-hal-30.0.1", "vendor/cubecl-wgpu-0.11.3"]
 resolver = "2"
+
+# Keep Metal execution failures from becoming successful tensor readbacks.
+# Same upstream release, with the narrow patch documented beside its source.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal-30.0.1" }
+cubecl-wgpu = { path = "vendor/cubecl-wgpu-0.11.3" }
 
 [[bin]]
 name = "tifmrcview"

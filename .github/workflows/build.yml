@@ -171,6 +171,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node --test scripts/image-ownership.test.mjs
 
+      - name: Metal completion regressions
+        if: runner.os == 'Linux'
+        run: node --test scripts/metal-completion.test.mjs
+
   bundle:
     needs: [version, reuse]
     # Installers take most of the CI time (Pro, macOS universal), so pull

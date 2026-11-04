@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn_store::{ModuleSnapshot, SafetensorsStore};
 use rayon::prelude::*;
@@ -293,6 +293,14 @@ fn starts_official(n: usize, side: usize) -> Vec<isize> {
 /// where the volume is thinner (as MemBrain-seg; tomograms on the 10 Å
 /// grid are often thinner than a window).
 pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<f32>, Stats)> {
+    // Clear the busy marker on success, cancellation and a failed GPU read.
+    struct ClearBusy;
+    impl Drop for ClearBusy {
+        fn drop(&mut self) {
+            crate::live::with(|lv| lv.busy = None);
+        }
+    }
+    let _clear_busy = ClearBusy;
     let t0 = Instant::now();
     if !WINDOW.is_multiple_of(net.align()) {
         bail!("模型的窗口对齐不符");
@@ -370,8 +378,11 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
                         }
                     });
                     let dims = if xyz { [1, 1, side[0], side[1], side[2]] } else { [1, 1, side[2], side[1], side[0]] };
-                    let x = Tensor::<5>::from_data(TensorData::new(tile([x0, y0, z0], m), dims), dev);
-                    let r: Vec<f32> = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().map_err(|e| anyhow!("{e:?}"))?;
+                    let r = read_window(|| {
+                        let x = Tensor::<5>::from_data(TensorData::new(tile([x0, y0, z0], m), dims), dev);
+                        net.forward(x).try_into_data().map_err(|e| anyhow!("{e}"))
+                    })
+                    .with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies))?;
                     // Each volume plane the window covers, in parallel.
                     let plane = n[0] * n[1];
                     acc.par_chunks_mut(plane).zip(wsum.par_chunks_mut(plane)).enumerate().for_each(|(zz, (pa, pw))| {
@@ -427,9 +438,19 @@ pub fn score(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass, pr
         }
         c += 1;
     }
-    crate::live::with(|lv| lv.busy = None);
     total.par_iter_mut().for_each(|t| *t /= copies as f32);
     Ok((total, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
+}
+
+/// A failed readback must remain an error, before blending or label writes.
+/// Burn can also panic during a launch, before its fallible readback runs.
+fn read_window(forward: impl FnOnce() -> Result<TensorData>) -> Result<Vec<f32>> {
+    let data = crate::ctf_gpu::guarded(forward)??;
+    let values: Vec<f32> = data.convert::<f32>().try_into_vec().map_err(|e| anyhow!("{e:?}"))?;
+    if values.iter().any(|v| !v.is_finite()) {
+        bail!("膜分割产生了非有限数值");
+    }
+    Ok(values)
 }
 
 /// Keeps the 26-connected components of `mask` with at least `min` voxels.
@@ -672,6 +693,18 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_failure_is_an_error_before_results_are_used() {
+        let failed = read_window(|| bail!("device lost during Metal command"));
+        assert!(format!("{:#}", failed.unwrap_err()).contains("device lost"));
+        let panicked = read_window(|| panic!("failed GPU launch"));
+        assert!(format!("{:#}", panicked.unwrap_err()).contains("failed GPU launch"));
+        assert!(read_window(|| Ok(TensorData::new(vec![f32::NAN], [1]))).is_err());
+        // An empty membrane is legitimate. Do not reject constant finite logits
+        // in place of propagating the actual execution failure.
+        assert_eq!(read_window(|| Ok(TensorData::new(vec![-1.0f32; 8], [8]))).unwrap(), vec![-1.0; 8]);
+    }
 
     #[test]
     fn save_load_half() {
