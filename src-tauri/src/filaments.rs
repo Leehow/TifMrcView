@@ -32,6 +32,10 @@ const MIN_STRAIGHT: f32 = 0.6;
 /// Lines are joined across gaps up to this, nm, when within this angle.
 const JOIN_NM: f32 = 30.0;
 const JOIN_COS: f32 = 0.9;
+/// The lumen must be this much less dense than the wall, in standard
+/// deviations of the tomogram (wedge-stretched solid particles look like
+/// short rods along the beam but are not hollow).
+const LUMEN_MIN: f32 = 0.12;
 /// The lumen test needs voxels at least this fine, Å.
 const LUMEN_MAX_A: f32 = 16.0;
 
@@ -233,49 +237,101 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-/// Joins lines end to end while two ends are close, the lines point the same
-/// way and the gap runs along them.
-fn join(mut lines: Vec<Vec<[f32; 3]>>) -> Vec<Vec<[f32; 3]>> {
+/// Joins lines end to end where two ends are close, the lines point the same
+/// way and the gap runs along them: candidate pairs of ends (found through a
+/// grid) are linked closest first, each end at most once, and the linked
+/// lines are walked into chains.
+fn join(lines: Vec<Vec<[f32; 3]>>) -> Vec<Vec<[f32; 3]>> {
     let gap = JOIN_NM / WORK_NM;
-    // Direction at an end over the last few points, pointing out of the line.
-    let out_dir = |l: &[[f32; 3]], tail: bool| {
+    // End e of line i: 0 = first point, 1 = last; direction out of the line.
+    let end = |l: &[[f32; 3]], e: usize| if e == 1 { l[l.len() - 1] } else { l[0] };
+    let out_dir = |l: &[[f32; 3]], e: usize| {
         let k = l.len().min(6) - 1;
-        if tail { dir(l[l.len() - 1 - k], l[l.len() - 1]) } else { dir(l[k], l[0]) }
+        if e == 1 { dir(l[l.len() - 1 - k], l[l.len() - 1]) } else { dir(l[k], l[0]) }
     };
-    loop {
-        let mut best: Option<(f32, usize, bool, usize, bool)> = None;
-        for i in 0..lines.len() {
-            for j in i + 1..lines.len() {
-                for ti in [false, true] {
-                    for tj in [false, true] {
-                        let (a, b) = (if ti { *lines[i].last().unwrap() } else { lines[i][0] }, if tj { *lines[j].last().unwrap() } else { lines[j][0] });
-                        let d = (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f32>().sqrt();
-                        if d > gap {
-                            continue;
-                        }
-                        let (oi, oj) = (out_dir(&lines[i], ti), out_dir(&lines[j], tj));
-                        let g = dir(a, b);
-                        if dot(oi, oj) > -JOIN_COS || (d > 1.5 && (dot(oi, g) < JOIN_COS || dot(oj, g) > -JOIN_COS)) {
-                            continue;
-                        }
-                        if best.is_none_or(|x| d < x.0) {
-                            best = Some((d, i, ti, j, tj));
+    let key = |p: [f32; 3]| p.map(|x| (x / gap).floor() as i64);
+    let mut grid: std::collections::HashMap<[i64; 3], Vec<(usize, usize)>> = std::collections::HashMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        for e in 0..2 {
+            grid.entry(key(end(l, e))).or_default().push((i, e));
+        }
+    }
+    let mut pairs: Vec<(f32, (usize, usize), (usize, usize))> = vec![];
+    for (i, l) in lines.iter().enumerate() {
+        for e in 0..2 {
+            let a = end(l, e);
+            let ka = key(a);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let Some(v) = grid.get(&[ka[0] + dx, ka[1] + dy, ka[2] + dz]) else { continue };
+                        for &(j, f) in v {
+                            if j <= i {
+                                continue;
+                            }
+                            let b = end(&lines[j], f);
+                            let d = (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f32>().sqrt();
+                            if d > gap {
+                                continue;
+                            }
+                            let (oi, oj) = (out_dir(l, e), out_dir(&lines[j], f));
+                            let g = dir(a, b);
+                            if dot(oi, oj) > -JOIN_COS || (d > 1.5 && (dot(oi, g) < JOIN_COS || dot(oj, g) > -JOIN_COS)) {
+                                continue;
+                            }
+                            pairs.push((d, (i, e), (j, f)));
                         }
                     }
                 }
             }
         }
-        let Some((_, i, ti, j, tj)) = best else { return lines };
-        let mut b = lines.swap_remove(j);
-        let a = &mut lines[i];
-        if !ti {
-            a.reverse();
-        }
-        if tj {
-            b.reverse();
-        }
-        a.extend(b);
     }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // link[i][e] = the end it is joined to.
+    let mut link: Vec<[Option<(usize, usize)>; 2]> = vec![[None, None]; lines.len()];
+    let mut root: Vec<usize> = (0..lines.len()).collect();
+    fn find(r: &mut [usize], mut i: usize) -> usize {
+        while r[i] != i {
+            r[i] = r[r[i]];
+            i = r[i];
+        }
+        i
+    }
+    for (_, (i, e), (j, f)) in pairs {
+        if link[i][e].is_some() || link[j][f].is_some() {
+            continue;
+        }
+        let (ri, rj) = (find(&mut root, i), find(&mut root, j));
+        if ri == rj {
+            continue; // would close a loop
+        }
+        root[ri] = rj;
+        link[i][e] = Some((j, f));
+        link[j][f] = Some((i, e));
+    }
+    let mut used = vec![false; lines.len()];
+    let mut out = vec![];
+    for s in 0..lines.len() {
+        if used[s] || (link[s][0].is_some() && link[s][1].is_some()) {
+            continue;
+        }
+        // Start at a free end and walk the chain.
+        let (mut i, mut from) = (s, if link[s][0].is_none() { 0 } else { 1 });
+        let mut chain: Vec<[f32; 3]> = vec![];
+        loop {
+            used[i] = true;
+            if from == 0 {
+                chain.extend(lines[i].iter().copied());
+            } else {
+                chain.extend(lines[i].iter().rev().copied());
+            }
+            let Some((j, f)) = link[i][1 - from] else { break };
+            i = j;
+            from = f;
+        }
+        out.push(chain);
+    }
+    out
 }
 
 fn polyline_len(p: &[[f32; 3]]) -> f32 {
@@ -348,7 +404,7 @@ fn accept(centre: &[[f32; 3]], light: &[f32], m: [usize; 3], lumen: bool) -> boo
                 wall += sample(light, m, q) / 8.0;
             }
         }
-        if wall <= mid {
+        if (wall - mid) / (centre.len() as f32) < LUMEN_MIN {
             return false;
         }
     }
@@ -358,7 +414,11 @@ fn accept(centre: &[[f32; 3]], light: &[f32], m: [usize; 3], lumen: bool) -> boo
 /// Marks the voxels within the microtubule radius of the centre lines
 /// (dims `n`, `pixel_a` Å per voxel).
 pub fn mask(fils: &[Filament], n: [usize; 3], pixel_a: f32) -> Vec<bool> {
-    let r = RADIUS_NM * 10.0 / pixel_a;
+    mask_r(fils, n, RADIUS_NM * 10.0 / pixel_a)
+}
+
+/// Voxels within `r` voxels of the centre lines.
+fn mask_r(fils: &[Filament], n: [usize; 3], r: f32) -> Vec<bool> {
     let mut out = vec![false; n[0] * n[1] * n[2]];
     for f in fils {
         // Points every half voxel along the line.
@@ -468,6 +528,42 @@ mod tests {
         eprintln!("{n:?} at {px} Å: {} microtubules in {:.1} s", f.len(), t.elapsed().as_secs_f32());
         for fl in &f {
             eprintln!("  {:.0} nm from {:?} to {:?}", fl.length, fl.points[0].map(|x| x.round()), fl.points.last().unwrap().map(|x| x.round()));
+        }
+        // Against an annotation mask: share of our tube voxels within 2 radii
+        // of annotated microtubule voxels, and share of annotated voxels
+        // within 2 radii of our centre lines.
+        if let Ok(gt) = std::env::var("FIL_GT") {
+            let (g, gn, _) = crate::tomo::pipeline::load(&gt).unwrap();
+            assert_eq!(gn, n);
+            let g: Vec<bool> = g.iter().map(|&x| x > 0.5).collect();
+            let r = RADIUS_NM * 10.0 / px as f32;
+            let ours = mask_r(&f, n, r);
+            let near_ours = mask_r(&f, n, 2.0 * r);
+            let recall = g.iter().zip(&near_ours).filter(|(a, b)| **a && **b).count() as f64 / g.iter().filter(|&&a| a).count().max(1) as f64;
+            // Annotated voxels grown by 2 radii, by marking around each.
+            let mut grown = g.clone();
+            let k = (r as isize).max(1);
+            for z in 0..n[2] as isize {
+                for y in 0..n[1] as isize {
+                    for x in 0..n[0] as isize {
+                        if !g[((z as usize) * n[1] + y as usize) * n[0] + x as usize] {
+                            continue;
+                        }
+                        for dz in [-k, 0, k] {
+                            for dy in [-k, 0, k] {
+                                for dx in [-k, 0, k] {
+                                    let q = [x + dx, y + dy, z + dz];
+                                    if (0..3).all(|a| q[a] >= 0 && q[a] < n[a] as isize) {
+                                        grown[((q[2] as usize) * n[1] + q[1] as usize) * n[0] + q[0] as usize] = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let precision = ours.iter().zip(&grown).filter(|(a, b)| **a && **b).count() as f64 / ours.iter().filter(|&&a| a).count().max(1) as f64;
+            eprintln!("precision {precision:.3}, recall {recall:.3} (annotated voxels {})", g.iter().filter(|&&a| a).count());
         }
         if let Ok(out) = std::env::var("FIL_OUT") {
             let m = mask(&f, n, px as f32);
