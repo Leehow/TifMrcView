@@ -164,7 +164,7 @@ jobs:
       - name: Release script tests
         if: runner.os == 'Linux'
         run: |
-          node --test scripts/make-release.test.mjs
+          node --test scripts/make-release.test.mjs scripts/pack-cli.test.mjs
           node --test scripts/cli-skill.test.mjs
 
       - name: Image ownership regressions
