@@ -106,7 +106,13 @@ impl Dataset {
     pub fn open(stack: &str, sections: usize, pixel_a: Option<f64>) -> Result<Dataset> {
         let file = path_for(stack);
         if file.exists() {
-            let d: Dataset = serde_json::from_slice(&std::fs::read(&file)?)?;
+            let mut d: Dataset = serde_json::from_slice(&std::fs::read(&file)?)?;
+            // The folder was moved (processed elsewhere and copied here).
+            if d.stack != stack {
+                let was = d.stack.clone();
+                d = crate::relocate::relocate(d, &was, stack);
+                d.stack = stack.into();
+            }
             if d.version <= VERSION && d.angles.len() == sections {
                 return Ok(d);
             }

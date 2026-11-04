@@ -69,6 +69,10 @@ fn choice_file() -> Option<PathBuf> {
 
 /// The model file the user picked, while it is still there.
 pub fn model_path() -> Option<PathBuf> {
+    // The command-line tool (`crate::cli`) can name the model for one run.
+    if let Some(p) = std::env::var_os("TMV_MEMBRANE_MODEL").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
+    }
     let p = PathBuf::from(std::fs::read_to_string(choice_file()?).ok()?.trim());
     p.is_file().then_some(p)
 }
@@ -551,15 +555,89 @@ pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], tubes: Option<&[bool]
 /// Writes `mask` and `tubes` (dims `n`) into the label map beside `image`
 /// (see `apply`), keeping labels already there; returns the label file.
 pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&[bool]>, pixel_a: f32) -> Result<String> {
+    Ok(write_labels_found(image, n, mask, tubes, pixel_a)?.0)
+}
+
+/// `write_labels`, also returning the vesicles found.
+fn write_labels_found(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&[bool]>, pixel_a: f32) -> Result<(String, Vec<vesicles::Vesicle>)> {
     let path = crate::labels::labels_path(image, 0);
     let mut l = if Path::new(&path).exists() {
         crate::labels::Labels::load(Path::new(&path), n[0], n[1], n[2])?
     } else {
         crate::labels::Labels::new(n[0], n[1], n[2])
     };
-    apply(&mut l, mask, tubes, n, pixel_a, 0);
+    let (_, _, ves) = apply(&mut l, mask, tubes, n, pixel_a, 0);
     l.save(Path::new(&path))?;
-    Ok(path)
+    Ok((path, ves))
+}
+
+/// What `segment_file` found and wrote.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileResult {
+    /// The tomogram segmented.
+    pub image: String,
+    /// Its label map (materials 膜, 囊泡, 微管), which the app opens with it.
+    pub labels: String,
+    /// `<image>.membranes.json`: this result.
+    pub summary: String,
+    /// `<image>.vesicles.csv`: one vesicle per row.
+    pub vesicles_csv: String,
+    pub pixel_a: f64,
+    pub shape: [usize; 3],
+    pub components: usize,
+    pub voxels: usize,
+    pub vesicles: Vec<vesicles::Vesicle>,
+    /// Lengths of the microtubules found, nm.
+    pub microtubules: Vec<f32>,
+    pub seconds: f64,
+}
+
+/// Segments the membranes of the tomogram file `image` with the model
+/// file `model`, finds vesicles and microtubules, and writes the label map
+/// beside it with a summary (`<image>.membranes.json`) and a vesicle table
+/// (`<image>.vesicles.csv`). `progress` gets (stage, done, total).
+pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
+    let now = Instant::now();
+    CANCEL.store(false, Ordering::SeqCst);
+    progress("读取", 0, 1);
+    let (v, shape, px) = crate::tomo::pipeline::load(image)?;
+    if shape[2] < 8 {
+        bail!("膜分割需要三维断层（至少 8 层）");
+    }
+    if (px - 1.0).abs() < 1e-6 {
+        bail!("文件里没有像素大小，无法换算到 10 Å 体素");
+    }
+    let net = load(model, dev)?;
+    let seg = segment(dev, &net, &v, shape, px as f32, Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    progress("微管", 0, 1);
+    let fils = crate::filaments::find(&v, shape, px as f32);
+    let tubes = crate::filaments::mask(&fils, shape, px as f32);
+    drop(v);
+    progress("囊泡", 0, 1);
+    let (labels, vesicles) = write_labels_found(image, shape, &seg.mask, Some(&tubes), px as f32)?;
+    let summary = format!("{image}.membranes.json");
+    let vesicles_csv = format!("{image}.vesicles.csv");
+    let mut csv = String::from("id,x_px,y_px,z_px,diameter_nm,voxels\n");
+    for (i, ve) in vesicles.iter().enumerate() {
+        csv += &format!("{},{:.1},{:.1},{:.1},{:.2},{}\n", i + 1, ve.center[0], ve.center[1], ve.center[2], ve.diameter, ve.voxels);
+    }
+    std::fs::write(&vesicles_csv, csv)?;
+    let r = FileResult {
+        image: image.into(),
+        labels,
+        summary: summary.clone(),
+        vesicles_csv,
+        pixel_a: px,
+        shape,
+        components: seg.components,
+        voxels: seg.mask.iter().filter(|&&b| b).count(),
+        vesicles,
+        microtubules: fils.iter().map(|f| f.length).collect(),
+        seconds: now.elapsed().as_secs_f64(),
+    };
+    std::fs::write(&summary, serde_json::to_vec_pretty(&r)?)?;
+    Ok(r)
 }
 
 #[cfg(test)]

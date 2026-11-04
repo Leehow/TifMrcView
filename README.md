@@ -179,6 +179,10 @@ Both hosts serve the same deploy directory: `<version>/…`, the three JSON feed
 
 When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a final `[direct-base-url]` argument after `[notes]` to also write `latest-direct.json`. Without it only the original feeds are written; both updater feeds use the same package signatures.
 
+## Command line for servers (`tmv`)
+
+TifMrcView Pro's processing also comes as `tmv`, a command-line tool for Linux GPU servers without a display, made to be driven by Claude Code or Codex over SSH (with a skill that tells them how). One command per purpose: `tmv tomo`, `tmv membranes`, `tmv spa`, `tmv ctf`, `tmv denoise` (or `tmv run` to detect the data). See [cli/README.md](cli/README.md).
+
 ## Project layout
 
 | Path | Contents |

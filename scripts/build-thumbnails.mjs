@@ -3,9 +3,9 @@
 // own identifiers so both editions can be installed side by side.
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { libdevice } from './libdevice.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const target = process.env.TAURI_ENV_TARGET_TRIPLE;
 const pro = process.argv.includes('--pro');
@@ -38,32 +38,8 @@ if (pro) {
   writeFileSync(path.join(dir, 'thumbnail-hooks.nsh'), proHooks(read('packaging/windows/thumbnail-hooks.nsh')));
   writeFileSync(path.join(dir, 'tifmrcview-pro.thumbnailer'), proThumbnailer(read('packaging/linux/tifmrcview.thumbnailer')));
 }
-// Pro on Linux: the CUDA backend compiles its math functions against
-// NVIDIA's libdevice.10.bc, which the packages carry (with NVIDIA's licence:
-// CUDA EULA Attachment A lists it as redistributable) so that no CUDA
-// toolkit is needed. Taken from NVIDIA's own nvcc redistributable.
-const LIBDEVICE = {
-  url: 'https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.9.86-archive.tar.xz',
-  archive: '7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35',
-  file: '9e84b504f25d26ec775ef91f7122e68dac77fa1f776f1044128f5028356265d8',
-};
-const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
-async function libdevice() {
-  const dir = path.join(root, 'src-tauri/target/pro/cuda');
-  const bc = path.join(dir, 'nvvm/libdevice/libdevice.10.bc');
-  if (existsSync(bc) && existsSync(path.join(dir, 'LICENSE')) && sha256(bc) === LIBDEVICE.file) return;
-  mkdirSync(dir, { recursive: true });
-  const archive = path.join(dir, 'nvcc.tar.xz');
-  if (!existsSync(archive) || sha256(archive) !== LIBDEVICE.archive) {
-    const res = await fetch(LIBDEVICE.url);
-    if (!res.ok) throw new Error(`libdevice download: HTTP ${res.status}`);
-    writeFileSync(archive, Buffer.from(await res.arrayBuffer()));
-    if (sha256(archive) !== LIBDEVICE.archive) throw new Error('libdevice download: checksum mismatch');
-  }
-  run('tar', ['-xJf', archive, '-C', dir, '--strip-components=1', '--wildcards', '*/nvvm/libdevice/libdevice.10.bc', '*/LICENSE']);
-  if (sha256(bc) !== LIBDEVICE.file) throw new Error('libdevice.10.bc: checksum mismatch');
-}
-if (pro && process.platform === 'linux') await libdevice();
+// Pro on Linux: NVIDIA's libdevice for the CUDA backend (scripts/libdevice.mjs).
+if (pro && process.platform === 'linux') await libdevice(path.join(root, 'src-tauri/target/pro/cuda'));
 
 if (process.platform === 'darwin') {
   run('bash', ['scripts/build-quicklook.sh', ...(target ? [target] : [])]);

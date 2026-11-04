@@ -214,6 +214,11 @@ impl Project {
         let mut p: Project = serde_json::from_slice(
             &std::fs::read(Project::file(dir)).with_context(|| format!("没有单颗粒工程：{dir}"))?,
         )?;
+        // The folder was moved (processed elsewhere and copied here).
+        if p.dir != dir {
+            let was = p.dir.clone();
+            p = crate::relocate::relocate(p, &was, dir);
+        }
         p.dir = dir.into();
         Ok(p)
     }

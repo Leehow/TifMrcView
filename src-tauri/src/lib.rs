@@ -40,6 +40,7 @@ pub mod plugins;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 mod plugin_assoc;
 pub mod render;
+pub mod relocate;
 pub mod reslice;
 pub mod spectro;
 pub mod particles;
@@ -67,3 +68,7 @@ pub mod motion;
 
 #[cfg(feature = "pro")]
 pub mod spa;
+
+/// The headless command-line tool `tmv` (Pro processing on servers).
+#[cfg(feature = "pro")]
+pub mod cli;
