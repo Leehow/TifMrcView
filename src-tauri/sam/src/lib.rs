@@ -43,38 +43,47 @@ pub fn backends() -> Vec<Backend> {
     // renderer (lavapipe on Linux without a GPU Vulkan driver, as in WSL),
     // which is slower than the CPU backend and fails on large buffers.
     #[cfg(feature = "vulkan")]
-    if vulkan_gpu() {
-        use burn::tensor::DeviceKind;
-        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::DiscreteGpu(0))) });
+    let vk = vulkan_kinds();
+    #[cfg(feature = "vulkan")]
+    if vk.contains(&GpuKind::Discrete) {
+        v.push(Backend { name: "Vulkan", make: GpuKind::Discrete.make_vulkan() });
     }
     // A discrete NVIDIA card without a Vulkan driver beats an integrated GPU.
     #[cfg(feature = "cuda")]
     v.push(Backend { name: "CUDA", make: || Ok(Device::cuda(0)) });
     #[cfg(feature = "vulkan")]
-    if vulkan_gpu() {
-        use burn::tensor::DeviceKind;
-        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::IntegratedGpu(0))) });
-        v.push(Backend { name: "Vulkan", make: || Ok(Device::vulkan(DeviceKind::VirtualGpu(0))) });
+    for kind in vk.iter().filter(|k| **k != GpuKind::Discrete) {
+        v.push(Backend { name: "Vulkan", make: kind.make_vulkan() });
     }
     #[cfg(all(feature = "wgpu", windows))]
     {
-        v.push(Backend { name: "DX12", make: || dx12(0) });
-        v.push(Backend { name: "DX12", make: || dx12(1) });
+        use burn::tensor::wgpu::wgpu::Backends;
+        let kinds = gpu_kinds(Backends::DX12);
+        if kinds.contains(&GpuKind::Discrete) {
+            v.push(Backend { name: "DX12", make: || dx12(0) });
+        }
+        if kinds.contains(&GpuKind::Integrated) {
+            v.push(Backend { name: "DX12", make: || dx12(1) });
+        }
     }
     #[cfg(all(feature = "metal", target_os = "macos"))]
     {
-        use burn::tensor::DeviceKind;
-        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::DiscreteGpu(0))) });
-        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::IntegratedGpu(0))) });
-        v.push(Backend { name: "Metal", make: || Ok(Device::wgpu(DeviceKind::VirtualGpu(0))) });
+        // Apple Silicon GPUs are integrated (unified memory); only kinds
+        // Metal lists are tried, so asking for a discrete GPU that is not
+        // there does not panic inside Burn's device thread on every start.
+        use burn::tensor::wgpu::wgpu::Backends;
+        for kind in gpu_kinds(Backends::METAL) {
+            v.push(Backend { name: "Metal", make: kind.make() });
+        }
     }
     // A build with wgpu but no pinned API for this platform (e.g. Linux
     // without the vulkan feature): leave the API to wgpu.
     #[cfg(all(feature = "wgpu", not(feature = "vulkan"), not(windows), not(all(feature = "metal", target_os = "macos"))))]
     {
-        use burn::tensor::DeviceKind;
-        v.push(Backend { name: "GPU", make: || Ok(Device::wgpu(DeviceKind::DiscreteGpu(0))) });
-        v.push(Backend { name: "GPU", make: || Ok(Device::wgpu(DeviceKind::IntegratedGpu(0))) });
+        use burn::tensor::wgpu::wgpu::Backends;
+        for kind in gpu_kinds(Backends::all()) {
+            v.push(Backend { name: "GPU", make: kind.make() });
+        }
     }
     #[cfg(feature = "flex")]
     v.push(Backend { name: "CPU", make: || Ok(Device::flex()) });
@@ -90,27 +99,81 @@ pub fn backends() -> Vec<Backend> {
     v
 }
 
-/// Whether Vulkan reaches a real GPU (not only a software renderer such as
-/// llvmpipe in WSL). Asked once, so machines without one skip Vulkan
-/// instead of failing (noisily) on each kind of device.
-#[cfg(feature = "vulkan")]
-fn vulkan_gpu() -> bool {
-    use burn::tensor::wgpu::wgpu;
-    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *HAS.get_or_init(|| {
-        // WSL has no GPU Vulkan driver, and listing its software adapters
-        // took about a minute on leehowpc: use CUDA there straight away.
-        if in_wsl() {
-            return false;
+/// A kind of real GPU, in the order they are tried.
+#[cfg(feature = "wgpu")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GpuKind {
+    Discrete,
+    Integrated,
+    Virtual,
+}
+
+#[cfg(feature = "wgpu")]
+impl GpuKind {
+    #[allow(dead_code)]
+    fn make(self) -> fn() -> Result<Device> {
+        use burn::tensor::DeviceKind;
+        match self {
+            GpuKind::Discrete => || Ok(Device::wgpu(DeviceKind::DiscreteGpu(0))),
+            GpuKind::Integrated => || Ok(Device::wgpu(DeviceKind::IntegratedGpu(0))),
+            GpuKind::Virtual => || Ok(Device::wgpu(DeviceKind::VirtualGpu(0))),
         }
-        guarded(|| {
-            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-            desc.backends = wgpu::Backends::VULKAN;
-            let adapters = block_on(wgpu::Instance::new(desc).enumerate_adapters(wgpu::Backends::VULKAN));
-            adapters.iter().any(|a| matches!(a.get_info().device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu))
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn make_vulkan(self) -> fn() -> Result<Device> {
+        use burn::tensor::DeviceKind;
+        match self {
+            GpuKind::Discrete => || Ok(Device::vulkan(DeviceKind::DiscreteGpu(0))),
+            GpuKind::Integrated => || Ok(Device::vulkan(DeviceKind::IntegratedGpu(0))),
+            GpuKind::Virtual => || Ok(Device::vulkan(DeviceKind::VirtualGpu(0))),
+        }
+    }
+}
+
+/// The kinds of real GPU (never a software renderer such as llvmpipe,
+/// lavapipe or WARP) that wgpu lists on these graphics APIs, discrete
+/// first. Asked once per API: Burn panics on its device thread when asked
+/// for a kind the machine does not have (a discrete GPU on Apple Silicon),
+/// so only kinds that exist are tried.
+#[cfg(feature = "wgpu")]
+fn gpu_kinds(apis: burn::tensor::wgpu::wgpu::Backends) -> Vec<GpuKind> {
+    use burn::tensor::wgpu::wgpu;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashMap<u32, Vec<GpuKind>>>> = Mutex::new(None);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    seen.get_or_insert_with(HashMap::new)
+        .entry(apis.bits())
+        .or_insert_with(|| {
+            let types: Vec<wgpu::DeviceType> = guarded(|| {
+                let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+                desc.backends = apis;
+                block_on(wgpu::Instance::new(desc).enumerate_adapters(apis)).iter().map(|a| a.get_info().device_type).collect()
+            })
+            .unwrap_or_default();
+            [
+                (wgpu::DeviceType::DiscreteGpu, GpuKind::Discrete),
+                (wgpu::DeviceType::IntegratedGpu, GpuKind::Integrated),
+                (wgpu::DeviceType::VirtualGpu, GpuKind::Virtual),
+            ]
+            .into_iter()
+            .filter(|(t, _)| types.contains(t))
+            .map(|(_, k)| k)
+            .collect()
         })
-        .unwrap_or(false)
-    })
+        .clone()
+}
+
+/// The kinds of real GPU Vulkan reaches. None in WSL, which has no GPU
+/// Vulkan driver, and where listing its software adapters took about a
+/// minute on leehowpc: CUDA is used there straight away.
+#[cfg(feature = "vulkan")]
+fn vulkan_kinds() -> Vec<GpuKind> {
+    if in_wsl() {
+        return vec![];
+    }
+    gpu_kinds(burn::tensor::wgpu::wgpu::Backends::VULKAN)
 }
 
 #[cfg(feature = "vulkan")]
@@ -122,7 +185,7 @@ fn in_wsl() -> bool {
 
 /// Runs a future to completion on this thread (wgpu's native futures are
 /// ready at once or soon).
-#[cfg(feature = "vulkan")]
+#[cfg(feature = "wgpu")]
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::task::{Context, Poll, Wake, Waker};
     struct Unpark(std::thread::Thread);
@@ -180,7 +243,10 @@ pub fn pick_device() -> (Device, &'static str) {
             (s == 512.0).then_some(d)
         });
         match ok {
-            Ok(Some(d)) => return (d, b.name),
+            Ok(Some(d)) => {
+                eprintln!("GPU: using {}", b.name);
+                return (d, b.name);
+            }
             Ok(None) => eprintln!("GPU: {} backend failed", b.name),
             Err(e) => eprintln!("GPU: {} backend failed: {e:#}", b.name),
         }
