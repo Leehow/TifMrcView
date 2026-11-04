@@ -181,6 +181,7 @@
     syncSam();
     syncCls();
     syncUnet();
+    syncMem();
     $("lab-tol-row").hidden = L.sub !== "wand";
     $("lab-3d-row").hidden = L.sub !== "wand" && L.sub !== "select";
     $("lab-3d-text").textContent = L.sub === "select" ? "整个物体（所有层）" : "三维";
@@ -349,6 +350,7 @@
     if (!S.info || S.axis !== "xy" || L.token === S.token || L.opening === S.token) return;
     const token = S.token;
     L.opening = token;
+    syncMem();
     await flush();
     try {
       const st = await invoke("labels_open", { token });
@@ -1414,7 +1416,7 @@
 
   // ---------- membranes (membrane/) ----------
 
-  const M = { busy: false, text: "", vesicles: [], token: 0 };
+  const M = { busy: false, text: "", run: null, vesicles: [], token: 0 };
 
   // What the running job has found so far (live.rs), drawn over the image
   // so the result builds up in the viewer, window by window.
@@ -1500,9 +1502,10 @@
     }
   }
   function syncMem() {
+    const current = M.run?.token === S.token && L.token === S.token;
     $("lab-mem-run").disabled = M.busy || L.busy || !L.token;
-    $("lab-mem-run").textContent = M.busy ? "分割中…" : "自动分割膜";
-    $("lab-mem-text").textContent = M.text;
+    $("lab-mem-run").textContent = M.busy && current ? "分割中…" : "自动分割膜";
+    $("lab-mem-text").textContent = current ? M.text : "";
     const ves = M.token === L.token ? M.vesicles : [];
     $("lab-ves-csv").hidden = !ves.length;
     $("lab-ves-hist").hidden = ves.length < 2;
@@ -1557,26 +1560,32 @@
   async function memRun() {
     if (!ready() || M.busy) return;
     if (!(S.info && S.info.sizeZ >= 8)) return toast("膜分割需要三维断层");
+    const run = { token: L.token };
+    M.run = run;
+    const current = () => M.run === run && run.token === S.token && run.token === L.token;
     M.busy = true;
     M.text = "";
     syncMem();
     const STAGES = { read: "读取断层", net: "网络推理", tubes: "找微管" };
-    const un = await T.event.listen("membrane-progress", (ev) => {
-      const p = ev.payload;
-      M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
-      syncMem();
-      if (p.stage !== "read") liveFetch();
-    });
-    liveStart();
+    let un = () => {};
     try {
-      if (!(await window.TifMrcViewPro.membrane.ensure())) return;
-      const r = await editWith("membrane_segment", { token: L.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
+      un = await T.event.listen("membrane-progress", (ev) => {
+        if (!M.busy || !current()) return;
+        const p = ev.payload;
+        M.text = `${STAGES[p.stage] || p.stage} ${Math.round((100 * p.done) / Math.max(1, p.total))}%`;
+        syncMem();
+        if (p.stage !== "read") liveFetch();
+      });
+      if (!current() || !(await window.TifMrcViewPro.membrane.ensure()) || !current()) return;
+      liveStart();
+      const r = await editWith("membrane_segment", { token: run.token, c: channel(), t: S.t || 0, guard: L.guard ? L.active : 0, op: { kind: "membrane" } });
+      if (!current()) return;
       // A failure stays on the panel: a toast alone is gone by the time a
       // long segmentation is looked at again.
       M.text = r ? `找到 ${r.components} 片膜 · ${r.backend} · ${r.seconds.toFixed(0)} s` : L.lastError ? `分割没有完成：${L.lastError}` : "";
       if (r) {
         M.vesicles = r.vesicles || [];
-        M.token = L.token;
+        M.token = run.token;
         const d = M.vesicles.map((v) => v.diameter);
         if (d.length) {
           const mean = d.reduce((a, b) => a + b, 0) / d.length;
@@ -1591,6 +1600,7 @@
         renderList();
       }
     } catch (e) {
+      if (!current()) return;
       M.text = `分割没有完成：${e}`;
       toast(String(e), 8000);
     } finally {
