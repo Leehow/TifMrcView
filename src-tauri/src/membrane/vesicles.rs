@@ -535,6 +535,74 @@ mod tests {
         assert!(l.is_empty());
     }
 
+    /// Against annotations, and writing a label file for GUI tests:
+    /// SEG_TOMO=<tomogram> SEG_MEM=<membrane mask> [SEG_VES=<vesicle mask>]
+    /// [SEG_LABELS=<image path the label file is written beside>]
+    /// cargo test --release -- --ignored segmentation_on_file
+    #[test]
+    #[ignore]
+    fn segmentation_on_file() {
+        let load = |k: &str| crate::tomo::pipeline::load(&std::env::var(k).unwrap()).unwrap();
+        let (tomo, n, px) = load("SEG_TOMO");
+        let (mem, mn, _) = load("SEG_MEM");
+        assert_eq!(mn, n);
+        let mask: Vec<bool> = mem.iter().map(|&x| x > 0.5).collect();
+        drop(mem);
+        let t = std::time::Instant::now();
+        let (ves, _) = find(&mask, n, px as f32);
+        eprintln!("{} vesicles in {:.1} s", ves.len(), t.elapsed().as_secs_f32());
+        if std::env::var("SEG_VES").is_ok() {
+            let (gt, _, _) = load("SEG_VES");
+            let inside = |c: [f32; 3]| {
+                let p = c.map(|x| x.round().max(0.0) as usize);
+                p[0] < n[0] && p[1] < n[1] && p[2] < n[2] && gt[(p[2] * n[1] + p[1]) * n[0] + p[0]] > 0.5
+            };
+            let hits = ves.iter().filter(|v| inside(v.center)).count();
+            // Annotated vesicles: 6-connected components of the mask.
+            let g: Vec<bool> = gt.iter().map(|&x| x > 0.5).collect();
+            let mut comp = vec![0u32; g.len()];
+            let mut k = 0u32;
+            for s in 0..g.len() {
+                if !g[s] || comp[s] != 0 {
+                    continue;
+                }
+                k += 1;
+                comp[s] = k;
+                let mut st = vec![s];
+                while let Some(i) = st.pop() {
+                    let p = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])];
+                    for (a, step) in [(0, 1), (1, n[0]), (2, n[0] * n[1])] {
+                        for j in [(p[a] > 0).then(|| i - step), (p[a] + 1 < n[a]).then(|| i + step)].into_iter().flatten() {
+                            if g[j] && comp[j] == 0 {
+                                comp[j] = k;
+                                st.push(j);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut found = std::collections::HashSet::new();
+            for v in &ves {
+                let p = v.center.map(|x| x.round().max(0.0) as usize);
+                if p[0] < n[0] && p[1] < n[1] && p[2] < n[2] {
+                    let c = comp[(p[2] * n[1] + p[1]) * n[0] + p[0]];
+                    if c > 0 {
+                        found.insert(c);
+                    }
+                }
+            }
+            let d: Vec<f32> = ves.iter().map(|v| v.diameter).collect();
+            let mean = d.iter().sum::<f32>() / d.len().max(1) as f32;
+            eprintln!("centres inside annotated vesicles {hits}/{}, annotated vesicles found {}/{k}, diameter {mean:.1} nm", ves.len(), found.len());
+        }
+        if let Ok(image) = std::env::var("SEG_LABELS") {
+            let fils = crate::filaments::find(&tomo, n, px as f32);
+            let tubes = crate::filaments::mask(&fils, n, px as f32);
+            let path = crate::membrane::write_labels(&image, n, &mask, Some(&tubes), px as f32).unwrap();
+            eprintln!("{} microtubules; labels written to {path}", fils.len());
+        }
+    }
+
     #[test]
     fn sphere_fit_is_exact_on_a_sphere() {
         let pts: Vec<[f64; 3]> = (0..200)

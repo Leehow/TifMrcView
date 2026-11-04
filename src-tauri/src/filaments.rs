@@ -7,14 +7,17 @@
 //! cryo-ET), and smoothed at the scale of a 12.5 nm rod. At every voxel the
 //! Hessian's eigenvalues tell the local shape: a rod has two strongly
 //! negative ones across it and one near zero along it, a membrane only one,
-//! a ribosome-sized blob three. Voxels whose rod score stands far above the
-//! tomogram's spread and that are ridges across their own axis are linked
-//! into lines (ridge voxels within 6 nm of each other, so the parallel
-//! ridges a hollow tube leaves become one line), and lines whose ends meet
-//! in line are joined
-//! (noise breaks a ridge); a line counts as a microtubule when it is long
-//! and straight enough and its centre is less dense than a ring 10 nm out
-//! (the hollow lumen), where the voxel size lets the lumen show.
+//! a ribosome-sized blob three. Voxels whose rod score is high (in robust
+//! standard deviations of the tomogram's scores) and that are ridges across
+//! their own axis are linked into lines (ridge voxels within 6 nm of each
+//! other, so the parallel ridges a hollow tube leaves become one line), and
+//! lines whose ends meet in line are joined (noise breaks a ridge). Where a
+//! microtubule merges with its neighbours or breaks up depends on the
+//! threshold and on the rest of the tomogram, so lines are made at several
+//! thresholds and pooled, strictest first. A line counts as a microtubule
+//! when it is long and straight enough and its centre is steadily less
+//! dense than a ring 10 nm out (the hollow lumen), where the voxel size lets
+//! the lumen show.
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -23,8 +26,8 @@ use serde::Serialize;
 const WORK_NM: f32 = 2.0;
 /// Microtubule outer radius, nm.
 pub const RADIUS_NM: f32 = 12.5;
-/// Rod score threshold in robust standard deviations of the score.
-const K_SIGMA: f32 = 6.0;
+/// Rod score thresholds tried, in robust standard deviations of the score.
+const K_LEVELS: [f32; 5] = [8.0, 6.0, 5.0, 4.0, 3.0];
 /// Shortest microtubule kept, nm.
 const MIN_LENGTH_NM: f32 = 100.0;
 /// Least end-to-end length per voxel length of a line (straightness).
@@ -32,10 +35,10 @@ const MIN_STRAIGHT: f32 = 0.6;
 /// Lines are joined across gaps up to this, nm, when within this angle.
 const JOIN_NM: f32 = 30.0;
 const JOIN_COS: f32 = 0.9;
-/// The lumen must be this much less dense than the wall, in standard
-/// deviations of the tomogram (wedge-stretched solid particles look like
-/// short rods along the beam but are not hollow).
-const LUMEN_MIN: f32 = 0.12;
+/// The lumen must be less dense than the wall with at least this t
+/// statistic (wedge-stretched solid particles look like short rods along
+/// the beam but are not hollow).
+const LUMEN_T: f32 = 3.0;
 /// The lumen test needs voxels at least this fine, Å.
 const LUMEN_MAX_A: f32 = 16.0;
 
@@ -166,9 +169,38 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
     let (score, axis) = rods(&g, m);
     drop(g);
     let (med, sd) = robust(&score);
-    let thr = med + K_SIGMA * sd.max(1e-12);
-    // Ridge voxels: above the threshold and a maximum across the axis.
+    let lumen = pixel_a <= LUMEN_MAX_A;
+    let light = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work }, 0.6).v;
+    // Lines come out at several thresholds: too low and a microtubule merges
+    // with its neighbours, too high and it breaks up, and where that happens
+    // depends on the rest of the tomogram. Strictest first; a line is kept
+    // unless most of it lies on one kept already.
+    let mut kept: Vec<Vec<[f32; 3]>> = vec![];
+    for k in K_LEVELS {
+        for l in lines_at(&score, &axis, m, med + k * sd.max(1e-12)) {
+            if !accept(&l, &light, m, lumen) {
+                continue;
+            }
+            let r2 = (RADIUS_NM / WORK_NM).powi(2);
+            let on = l.iter().filter(|p| kept.iter().any(|q| q.iter().any(|c| (0..3).map(|a| (p[a] - c[a]).powi(2)).sum::<f32>() <= r2))).count();
+            if on * 2 < l.len() {
+                kept.push(l);
+            }
+        }
+    }
+    kept.into_iter()
+        .map(|fl| {
+            // Back to the tomogram's voxels.
+            let to = |p: [f32; 3]| std::array::from_fn(|a| (p[a] + 0.5) * n[a] as f32 / m[a] as f32 - 0.5);
+            Filament { points: fl.iter().map(|&p| to(p)).collect(), length: polyline_len(&fl) * WORK_NM }
+        })
+        .collect()
+}
+
+/// Centre lines of the ridges above `thr` (see the module notes).
+fn lines_at(score: &[f32], axis: &[[f32; 3]], m: [usize; 3], thr: f32) -> Vec<Vec<[f32; 3]>> {
     let (w, h) = (m[0], m[1]);
+    // Ridge voxels: above the threshold and a maximum across the axis.
     let ridge: Vec<bool> = (0..score.len())
         .into_par_iter()
         .map(|i| {
@@ -177,15 +209,12 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
             }
             let p = [(i % w) as f32, ((i / w) % h) as f32, (i / (w * h)) as f32];
             let (u, v) = across(axis[i]);
-            [u, v, u.map(|x| -x), v.map(|x| -x)].iter().all(|d| sample(&score, m, [p[0] + d[0], p[1] + d[1], p[2] + d[2]]) <= score[i])
+            [u, v, u.map(|x| -x), v.map(|x| -x)].iter().all(|d| sample(score, m, [p[0] + d[0], p[1] + d[1], p[2] + d[2]]) <= score[i])
         })
         .collect();
     // Lines: ridge voxels within LINK voxels of each other.
     const LINK: i64 = 3;
-    let lumen = pixel_a <= LUMEN_MAX_A;
-    let light = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work }, 0.6).v;
     let mut seen = vec![false; ridge.len()];
-    let mut out = vec![];
     let mut lines = vec![];
     for s in 0..ridge.len() {
         if !ridge[s] || seen[s] {
@@ -217,14 +246,9 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
             lines.push(centre(&pts));
         }
     }
-    let lines = join(lines);
-    for fl in lines.into_iter().filter(|l| accept(l, &light, m, lumen)) {
-        // Back to the tomogram's voxels.
-        let to = |p: [f32; 3]| std::array::from_fn(|a| (p[a] + 0.5) * n[a] as f32 / m[a] as f32 - 0.5);
-        out.push(Filament { points: fl.iter().map(|&p| to(p)).collect(), length: polyline_len(&fl) * WORK_NM });
-    }
-    out
+    join(lines)
 }
+
 
 /// Unit direction from a to b.
 fn dir(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -387,9 +411,11 @@ fn accept(centre: &[[f32; 3]], light: &[f32], m: [usize; 3], lumen: bool) -> boo
         return false;
     }
     if lumen {
-        // Lumen less dense than the wall 10 nm out, averaged along the line.
+        // Lumen less dense than the wall 10 nm out, steadily along the line:
+        // the per-point difference must be positive with a t statistic of at
+        // least LUMEN_T (independent of the tomogram's contrast).
         let r = 10.0 / WORK_NM;
-        let (mut wall, mut mid) = (0f32, 0f32);
+        let mut diffs = Vec::with_capacity(centre.len());
         for (k, p) in centre.iter().enumerate() {
             let next = if k + 1 < centre.len() { centre[k + 1] } else { centre[k] };
             let prev = if k > 0 { centre[k - 1] } else { centre[k] };
@@ -397,14 +423,21 @@ fn accept(centre: &[[f32; 3]], light: &[f32], m: [usize; 3], lumen: bool) -> boo
             let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             d = if l > 1e-6 { d.map(|x| x / l) } else { dir(centre[0], centre[centre.len() - 1]) };
             let (u, v) = across(d);
-            mid += sample(light, m, *p);
+            let mut wall = 0.0;
             for j in 0..8 {
                 let ang = j as f32 * std::f32::consts::FRAC_PI_4;
                 let q = [0, 1, 2].map(|i| p[i] + r * (ang.cos() * u[i] + ang.sin() * v[i]));
                 wall += sample(light, m, q) / 8.0;
             }
+            diffs.push(wall - sample(light, m, *p));
         }
-        if (wall - mid) / (centre.len() as f32) < LUMEN_MIN {
+        // Points one radius apart are roughly independent.
+        let step = (RADIUS_NM / WORK_NM).round().max(1.0) as usize;
+        let d: Vec<f32> = diffs.iter().copied().step_by(step).collect();
+        let mean = d.iter().sum::<f32>() / d.len() as f32;
+        let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / (d.len() as f32 - 1.0).max(1.0);
+        let t = mean / (var.sqrt() / (d.len() as f32).sqrt()).max(1e-12);
+        if t < LUMEN_T {
             return false;
         }
     }
