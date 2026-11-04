@@ -883,6 +883,12 @@ impl Labels {
             self.dirty = false;
             return Ok(false);
         }
+        self.write_stack(path)?;
+        Ok(true)
+    }
+
+    /// Writes all slices as a 16-bit TIFF stack (deflate), including an empty volume.
+    pub fn write_stack(&mut self, path: &Path) -> Result<()> {
         use tiff::encoder::{colortype::Gray16, compression::DeflateLevel, Compression, TiffEncoder};
         use tiff::tags::Tag;
         let tmp = path.with_extension("tif.tmp");
@@ -907,7 +913,7 @@ impl Labels {
         }
         std::fs::rename(&tmp, path)?;
         self.dirty = false;
-        Ok(true)
+        Ok(())
     }
 
     /// Reads a label stack written by `save` (8- or 16-bit, same size).
@@ -1195,6 +1201,18 @@ mod tests {
         assert_eq!(l.slice_labels(), vec![1, 0, 300, 0]);
         l.delete_label(300);
         assert_eq!(l.counts().len(), 2);
+    }
+
+    #[test]
+    fn file_output_empty_stack_keeps_gui_save_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.labels.tif");
+        let mut labels = Labels::new(9, 7, 5);
+        labels.write_stack(&path).unwrap();
+        assert!(path.exists());
+        assert!(!labels.save(&path).unwrap());
+        assert!(!path.exists());
+        assert!(!labels.save(&path).unwrap(), "saving an absent empty file stays harmless");
     }
 
     #[test]
