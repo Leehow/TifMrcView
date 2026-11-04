@@ -521,17 +521,8 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     };
     let Some(src) = src.cloned() else { bail!("先完成重构") };
     let model = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
-    crate::membrane::CANCEL.store(false, Ordering::SeqCst);
-    let (v, shape, px) = load(&src.path)?;
-    let net = crate::membrane::load(&model, dev)?;
-    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &[]);
-    let seg = crate::membrane::segment(dev, &net, &v, shape, px as f32, crate::membrane::Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
-    crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &seg.mask);
-    progress("微管", 0, 1);
-    let tubes = crate::filaments::mask(&crate::filaments::find(&v, shape, px as f32), shape, px as f32);
-    drop(v);
-    let path = crate::membrane::write_labels(&src.path, shape, &seg.mask, Some(&tubes), px as f32)?;
-    Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
+    let r = crate::membrane::segment_file(dev, &model, &src.path, progress)?;
+    Ok(Made { paths: vec![r.labels], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 #[cfg(test)]

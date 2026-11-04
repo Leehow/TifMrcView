@@ -41,6 +41,9 @@ const kinds = [
   { id: "rpm", re: /\.rpm$/, name: `${product}-${version}-1.x86_64.rpm`, os: "linux", label: ".rpm", note: "Fedora / openSUSE", updater: ["linux-x86_64-rpm"] },
   { id: "apk", re: /_arm64\.apk$/, name: `${product}_${version}_arm64.apk`, os: "android", label: "下载 APK", note: "Android 7 及以上，arm64 手机和平板" },
   { id: "appimage", re: /\.AppImage$/, name: `${product}_${version}_amd64.AppImage`, os: "linux", label: ".AppImage", note: "其它发行版，免安装", updater: ["linux-x86_64", "linux-x86_64-appimage"] },
+  // Pro only: the `tmv` command-line tool for servers (scripts/pack-cli.mjs),
+  // which the site's cli/install.sh finds through files.cli.
+  ...(pro ? [{ id: "cli", re: /tmv_.*_linux-x86_64\.tar\.gz$/, name: `tmv_${version}_linux-x86_64.tar.gz`, os: "cli", label: "tmv（命令行）", note: "Linux x86_64 服务器，无需界面" }] : []),
 ];
 
 const files = walk(src);
@@ -48,7 +51,7 @@ const verDir = path.join(out, version);
 fs.mkdirSync(verDir, { recursive: true });
 
 const platforms = {};
-const downloads = { mac: [], win: [], linux: [], android: [] };
+const downloads = { mac: [], win: [], linux: [], android: [], ...(pro ? { cli: [] } : {}) };
 for (const k of kinds) {
   const f = files.find((p) => k.re.test(p));
   if (!f) {
@@ -60,6 +63,12 @@ for (const k of kinds) {
   const url = `${base}/${rel}`;
   console.log(`${k.id}: ${path.basename(f)} -> ${rel}`);
   if (k.os) downloads[k.os].push({ label: k.label, file: rel, note: k.note, size: fs.statSync(f).size });
+  // Checksum beside the tarball, for the install script.
+  if (k.id === "cli" && fs.existsSync(f + ".sha256")) {
+    const sum = fs.readFileSync(f + ".sha256", "utf8").split(/\s+/)[0];
+    fs.writeFileSync(path.join(verDir, k.name + ".sha256"), `${sum}  ${k.name}\n`);
+    downloads.cli[downloads.cli.length - 1].sha256 = sum;
+  }
   // Some browsers and mail filters block a bare unsigned .exe; offer the same
   // installer inside a .zip as a second Windows download.
   if (k.id === "nsis") {

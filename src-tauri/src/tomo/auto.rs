@@ -271,11 +271,12 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
-        let stem = d.stack.strip_suffix(".mrc").unwrap_or(&d.stack);
-        let dir = format!("{stem}_relion5");
-        std::fs::create_dir_all(&dir)?;
-        super::export::run(d, "relion5", &dir, 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
-        relion = Some(dir);
+        // The export makes `<name>_relion5` inside the folder it is given.
+        let stack = std::path::Path::new(&d.stack);
+        let parent = stack.parent().unwrap_or(std::path::Path::new("."));
+        let name = stack.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
+        super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
+        relion = Some(parent.join(format!("{name}_relion5")).to_string_lossy().into_owned());
     }
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();

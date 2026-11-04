@@ -15,6 +15,13 @@ name = "tifmrcview"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+# Headless Pro processing for servers (src/cli.rs): no window, no GTK.
+# cargo build --release --no-default-features --features cli --bin tmv
+[[bin]]
+name = "tmv"
+path = "src/bin/tmv.rs"
+required-features = ["cli"]
+
 [lib]
 name = "tifmrcview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -60,6 +67,8 @@ default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls"]
 # TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
 pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store"]
+# The `tmv` command-line tool (Pro without the desktop parts).
+cli = ["pro"]
 # Training the membrane network (examples/membrane_train.rs) on CUDA or LibTorch.
 train-cuda = ["pro", "burn/cuda"]
 train-tch = ["pro", "burn/tch"]
@@ -91,6 +100,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["metal", "flex"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# tmv leaves with _exit (src/bin/tmv.rs).
+libc = "0.2"
 # Not used directly: tauri-plugin-deep-link 2.6.2 does not compile against
 # rust-ini 0.21.2+ (ParseOption gained fields), so hold it back.
 rust-ini = "=0.21.1"

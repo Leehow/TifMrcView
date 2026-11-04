@@ -11,7 +11,7 @@ const cloudflare = "https://tifmrcview.com/tifmrcview";
 const direct = "https://dl.tifmrcview.com:9443/tifmrcview";
 const artifacts = ["test.dmg", "test.app.tar.gz", "test-setup.exe", "test.deb", "test.rpm", "test.AppImage"];
 
-function release(t, { arg, env, signed = true, edition } = {}) {
+function release(t, { arg, env, signed = true, edition, extra = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tmv-release-test-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const src = path.join(dir, "artifacts"), out = path.join(dir, "release");
@@ -20,6 +20,7 @@ function release(t, { arg, env, signed = true, edition } = {}) {
     fs.writeFileSync(path.join(src, file), `payload of ${file}`);
     if (signed) fs.writeFileSync(path.join(src, file + ".sig"), `signature of ${file}\n`);
   }
+  for (const [file, data] of Object.entries(extra)) fs.writeFileSync(path.join(src, file), data);
   const childEnv = { ...process.env };
   delete childEnv.DIRECT_BASE_URL;
   if (env !== undefined) childEnv.DIRECT_BASE_URL = env;
@@ -85,4 +86,17 @@ test("the Windows installer is also offered inside a .zip", (t) => {
   const exe = execFileSync("unzip", ["-p", path.join(out, win[1].file)]);
   assert.equal(exe.toString(), "payload of test-setup.exe");
   assert.equal(fs.statSync(path.join(out, win[1].file)).size, win[1].size);
+});
+
+test("Pro lists the tmv command-line tarball with its checksum", (t) => {
+  const sum = "ab".repeat(32);
+  const { out, read } = release(t, { edition: "pro", extra: { "tmv_1.2.3_linux-x86_64.tar.gz": "tarball", "tmv_1.2.3_linux-x86_64.tar.gz.sha256": `${sum}  tmv_1.2.3_linux-x86_64.tar.gz\n` } });
+  const cli = read("downloads-pro.json").files.cli;
+  assert.equal(cli.length, 1);
+  assert.equal(cli[0].file, "1.2.3/tmv_1.2.3_linux-x86_64.tar.gz");
+  assert.equal(cli[0].sha256, sum);
+  assert.equal(fs.readFileSync(path.join(out, "1.2.3/tmv_1.2.3_linux-x86_64.tar.gz"), "utf8"), "tarball");
+  assert.match(fs.readFileSync(path.join(out, "1.2.3/tmv_1.2.3_linux-x86_64.tar.gz.sha256"), "utf8"), new RegExp(`^${sum}  tmv_1\\.2\\.3`));
+  const standard = release(t, { extra: { "tmv_1.2.3_linux-x86_64.tar.gz": "tarball" } });
+  assert.equal(standard.read("downloads.json").files.cli, undefined);
 });

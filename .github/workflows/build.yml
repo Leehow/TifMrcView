@@ -163,7 +163,9 @@ jobs:
 
       - name: Release script tests
         if: runner.os == 'Linux'
-        run: node --test scripts/make-release.test.mjs
+        run: |
+          node --test scripts/make-release.test.mjs
+          node --test scripts/cli-skill.test.mjs
 
       - name: Image ownership regressions
         if: runner.os == 'Linux'
@@ -259,6 +261,63 @@ jobs:
             src-tauri/target/**/release/bundle/appimage/*.AppImage*
           if-no-files-found: error
 
+  # tmv: Pro processing on the command line for Linux servers (src/cli.rs),
+  # built against glibc 2.34 (manylinux_2_34, AlmaLinux 9) so that it runs on
+  # RHEL / Rocky 9+, Ubuntu 22.04+ and Debian 12+ (the bundled LLVM's
+  # llvm-config needs 2.34 to build at all). Also on pull requests.
+  cli:
+    needs: [version, reuse]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.reuse.outputs.run_id == '' }}
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_34_x86_64
+    env:
+      CARGO_HOME: /github/home/.cargo
+      RUSTUP_HOME: /github/home/.rustup
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust and Node
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          dnf module -y install nodejs:20 > /dev/null
+          node --version
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: cli
+
+      - name: Build tmv
+        working-directory: src-tauri
+        env:
+          TMV_VERSION: ${{ needs.version.outputs.version }}
+        run: cargo build --release --no-default-features --features cli --bin tmv
+
+      - name: Check tmv
+        shell: bash
+        run: |
+          tmv=src-tauri/target/release/tmv
+          newest=$(objdump -T "$tmv" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
+          echo "needs $newest"
+          [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -n 1)" = GLIBC_2.34 ] || { echo "::error::tmv needs $newest (> 2.34)"; exit 1; }
+          "$tmv" --version | grep -q "${{ needs.version.outputs.version }}"
+          "$tmv" info | tee /tmp/info.json
+          grep -q '"ok": true' /tmp/info.json
+          set +e
+          echo x > /tmp/x.mrc; "$tmv" membranes /tmp/x.mrc > /tmp/err.json; status=$?
+          set -e
+          [ "$status" = 1 ] && grep -q '"ok": false' /tmp/err.json && grep -q '"hint"' /tmp/err.json
+
+      - name: Pack
+        run: node scripts/pack-cli.mjs src-tauri/target/release/tmv dist "${{ needs.version.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TifMrcView-cli-linux-x64
+          path: dist/tmv_*_linux-x86_64.tar.gz*
+          if-no-files-found: error
+
   # Android (arm64 phones and tablets). Signed when the release keystore is
   # set up as secrets; otherwise the artifact is an unsigned APK.
   android:
@@ -332,7 +391,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, reuse, bundle, android]
+    needs: [version, reuse, bundle, android, cli]
     # bundle and android are skipped when the push run's installers are reused.
     if: >-
       ${{ !cancelled() && !contains(needs.*.result, 'failure')
@@ -367,6 +426,13 @@ jobs:
           run-id: ${{ env.ARTIFACT_RUN }}
           github-token: ${{ github.token }}
           path: artifacts/pro
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: TifMrcView-cli-linux-x64
+          run-id: ${{ env.ARTIFACT_RUN }}
+          github-token: ${{ github.token }}
+          path: artifacts/pro/cli
 
       # Only a signed APK (TifMrcView_<version>_arm64.apk) is published.
       - uses: actions/download-artifact@v4

@@ -173,6 +173,10 @@ cd src-tauri && cargo run --release --example probe -- /path/to/file.tif
 | `UPDATE_BASE_URL` | Variable，可选 | 默认 `https://tifmrcview.com/tifmrcview` |
 | `DEPLOY_PATH` | Variable，可选 | 默认 `/var/www/tifmrcview` |
 
+## 服务器命令行版（`tmv`）
+
+TifMrcView Pro 的处理也有命令行版 `tmv`，给没有显示器的 Linux GPU 服务器用，配有让 Claude Code / Codex 通过 SSH 自动操作的技能。一条命令对应一个用途：`tmv tomo`、`tmv membranes`、`tmv spa`、`tmv ctf`、`tmv denoise`（或用 `tmv run` 自动判断）。见 [cli/README.md](cli/README.md)。
+
 ## 代码结构
 
 | 路径 | 内容 |
