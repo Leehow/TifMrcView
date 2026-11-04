@@ -144,10 +144,112 @@ fn fit_sphere(pts: &[[f64; 3]]) -> Option<([f64; 3], f64)> {
     (r2 > 0.0).then(|| ([x[0], x[1], x[2]], r2.sqrt()))
 }
 
+/// Circle in the plane normal to `axis`, allowing its centre to move away
+/// from the candidate sphere's centre. A sphere fitted to part of a tube is
+/// not generally centred on the tube axis.
+fn cylinder_cross_section(points: &[[f64; 3]], axis: [f64; 3]) -> Option<([f64; 3], f64)> {
+    let basis = if axis[0].abs() < 0.8 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let mut u = cross(axis, basis);
+    let len = u.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if len < 1e-9 {
+        return None;
+    }
+    u = u.map(|x| x / len);
+    let v = cross(axis, u);
+    let mut a = [[0.0; 3]; 3];
+    let mut b = [0.0; 3];
+    for p in points {
+        let x = (0..3).map(|i| p[i] * u[i]).sum::<f64>();
+        let y = (0..3).map(|i| p[i] * v[i]).sum::<f64>();
+        let row = [2.0 * x, 2.0 * y, 1.0];
+        for i in 0..3 {
+            b[i] += row[i] * (x * x + y * y);
+            for j in 0..3 {
+                a[i][j] += row[i] * row[j];
+            }
+        }
+    }
+    for c in 0..3 {
+        let pivot = (c..3).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
+        if a[pivot][c].abs() < 1e-9 {
+            return None;
+        }
+        a.swap(c, pivot);
+        b.swap(c, pivot);
+        for i in c + 1..3 {
+            let f = a[i][c] / a[c][c];
+            for j in c..3 {
+                a[i][j] -= f * a[c][j];
+            }
+            b[i] -= f * b[c];
+        }
+    }
+    let mut x = [0.0; 3];
+    for i in (0..3).rev() {
+        x[i] = (b[i] - (i + 1..3).map(|j| a[i][j] * x[j]).sum::<f64>()) / a[i][i];
+    }
+    let r2 = x[2] + x[0] * x[0] + x[1] * x[1];
+    if !r2.is_finite() || r2 <= 0.0 {
+        return None;
+    }
+    Some(([0, 1, 2].map(|i| x[0] * u[i] + x[1] * v[i]), r2.sqrt()))
+}
+
+/// A closed tube end has only one continuing side. Require its fitted wall
+/// in three consecutive half-radius bands, not just another curved patch.
+/// Beam-facing radial directions are omitted, as in the sphere coverage test.
+fn tube_continues(ctx: &[[f64; 3]], c: [f64; 3], r: f64, hits: usize, axis: [f64; 3], offset: [f64; 3], radius: f64) -> bool {
+    let basis = if axis[0].abs() < 0.8 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let mut u = cross(axis, basis);
+    let len = u.iter().map(|x| x * x).sum::<f64>().sqrt();
+    u = u.map(|x| x / len);
+    let v = cross(axis, u);
+    let mut total = [[0usize; 3]; 2];
+    let mut inlier = [[0usize; 3]; 2];
+    let mut bins = [[[false; SECTORS]; 3]; 2];
+    for p in ctx {
+        let rel = [0, 1, 2].map(|i| p[i] - c[i] - offset[i]);
+        let t = (0..3).map(|i| rel[i] * axis[i]).sum::<f64>();
+        let distance = t.abs();
+        if distance < 0.5 * r || distance >= 2.0 * r {
+            continue;
+        }
+        let x = (0..3).map(|i| rel[i] * u[i]).sum::<f64>();
+        let y = (0..3).map(|i| rel[i] * v[i]).sum::<f64>();
+        let q = (x * x + y * y).sqrt();
+        if q > radius + THICK {
+            continue;
+        }
+        let side = usize::from(t > 0.0);
+        let band = ((distance / (0.5 * r)) as usize - 1).min(2);
+        total[side][band] += 1;
+        if (q - radius).abs() <= THICK / 2.0 + 1.0 {
+            inlier[side][band] += 1;
+            let sector = (((y.atan2(x) / std::f64::consts::TAU + 0.5) * SECTORS as f64) as usize).min(SECTORS - 1);
+            bins[side][band][sector] = true;
+        }
+    }
+    let visible: Vec<usize> = (0..SECTORS)
+        .filter(|&sector| {
+            let phi = ((sector as f64 + 0.5) / SECTORS as f64 - 0.5) * std::f64::consts::TAU;
+            (u[2] * phi.cos() + v[2] * phi.sin()).abs() <= WEDGE_COS
+        })
+        .collect();
+    (0..2).any(|side| {
+        (0..3).all(|band| {
+            inlier[side][band] * 2 > total[side][band]
+                && inlier[side][band] as f64 >= 0.1 * hits as f64
+                && visible.iter().filter(|&&s| bins[side][band][s]).count() as f64 >= MIN_COVER * visible.len() as f64
+        })
+    })
+}
+
 /// Whether the membrane around a sphere (centre `c`, radius `r`) goes on
 /// as a tube: of the points of `ctx` a little outside the sphere, most lie
 /// at one distance from the line through `c` along which they spread, on
-/// both sides of it. Only a tube does that; a
+/// both sides of it, or continuously along one side of a closed end. A
 /// touching flat membrane or vesicle does not. Tubes along the beam look
 /// like vesicles in every slice.
 fn tube(ctx: &[[f64; 3]], c: [f64; 3], r: f64, hits: usize, size: [f64; 3]) -> bool {
@@ -199,6 +301,32 @@ fn tube(ctx: &[[f64; 3]], c: [f64; 3], r: f64, hits: usize, size: [f64; 3]) -> b
     }
     if (fore + back) * 2 > beyond.len() && fore.min(back) as f64 >= 0.1 * hits as f64 {
         return true;
+    }
+    // The sphere's centre need not lie on the tube axis. Fit the transverse
+    // circle without changing the direction, context, tolerance or support
+    // requirements above; keep the axis inside the candidate sphere.
+    if let Some((offset, radius)) = cylinder_cross_section(&beyond, a) {
+        if radius <= r + THICK && offset.iter().map(|x| x * x).sum::<f64>() <= r * r {
+            let (mut fore, mut back) = (0usize, 0usize);
+            for p in &beyond {
+                let v = [0, 1, 2].map(|i| p[i] - offset[i]);
+                let t = (0..3).map(|i| v[i] * a[i]).sum::<f64>();
+                let q = (v.iter().map(|x| x * x).sum::<f64>() - t * t).max(0.0).sqrt();
+                if (q - radius).abs() <= THICK / 2.0 + 1.0 {
+                    if t > 0.0 {
+                        fore += 1;
+                    } else {
+                        back += 1;
+                    }
+                }
+            }
+            if (fore + back) * 2 > beyond.len() && fore.min(back) as f64 >= 0.1 * hits as f64 {
+                return true;
+            }
+            if tube_continues(ctx, c, r, hits, a, offset, radius) {
+                return true;
+            }
+        }
     }
     // A tube along the beam, the case the missing wedge hides: points at
     // radius r around the vertical through `c`, above and below the sphere
@@ -651,5 +779,93 @@ mod tests {
             .collect();
         let (c, r) = fit_sphere(&pts).unwrap();
         assert!((r - 7.0).abs() < 1e-9 && (c[0] - 5.0).abs() < 1e-9 && (c[1] + 2.0).abs() < 1e-9 && (c[2] - 1.0).abs() < 1e-9);
+    }
+    #[test]
+    fn offset_axis_is_fitted_without_tolerance_change() {
+        for axis in 0..3 {
+            let mut pts = vec![];
+            for t in -50..=50 {
+                for angle in 0..72 {
+                    let phi = angle as f64 * std::f64::consts::TAU / 72.0;
+                    let mut p = [0.0; 3];
+                    p[axis] = t as f64;
+                    p[(axis + 1) % 3] = 6.0 + 13.0 * phi.cos();
+                    p[(axis + 2) % 3] = -3.0 + 13.0 * phi.sin();
+                    pts.push(p);
+                }
+            }
+            let mut a = [0.0; 3];
+            a[axis] = 1.0;
+            let (offset, r) = cylinder_cross_section(&pts, a).unwrap();
+            assert!((offset[(axis + 1) % 3] - 6.0).abs() < 1e-8);
+            assert!((offset[(axis + 2) % 3] + 3.0).abs() < 1e-8);
+            assert!((r - 13.0).abs() < 1e-8);
+            assert!(tube(&pts, [0.0; 3], 17.0, 1500, [200.0; 3]));
+        }
+    }
+
+    #[test]
+    fn closed_and_curved_tubes_not_vesicles() {
+        for orientation in 0..3 {
+            for bend in [0.0, 0.12] {
+                let n = [96, 96, 96];
+                let mut m = vec![false; n.iter().product()];
+                for z in 0..n[2] {
+                    for y in 0..n[1] {
+                        for x in 0..n[0] {
+                            let p = [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5];
+                            let t = p[orientation] - 48.0;
+                            let radial = ((p[(orientation + 1) % 3] - 48.0 - bend * t * t / 40.0).powi(2) + (p[(orientation + 2) % 3] - 48.0).powi(2)).sqrt();
+                            let distance = if t < -18.0 {
+                                ((t + 18.0).powi(2) + radial * radial).sqrt()
+                            } else if t > 18.0 {
+                                ((t - 18.0).powi(2) + radial * radial).sqrt()
+                            } else {
+                                radial
+                            };
+                            if (distance - 14.0).abs() <= 2.0 {
+                                m[(z * n[1] + y) * n[0] + x] = true;
+                            }
+                        }
+                    }
+                }
+                let (v, _) = find(&m, n, 10.0);
+                assert!(v.is_empty(), "orientation={orientation}, bend={bend}, {v:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn capped_tubes_with_visible_walls_and_diagonal_axes() {
+        for axis in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0]] {
+            let norm = axis.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let a = axis.map(|x| x / norm);
+            let mut u = if a[0].abs() < 0.8 { [0.0, a[2], -a[1]] } else { [-a[2], 0.0, a[0]] };
+            let len = u.iter().map(|x| x * x).sum::<f64>().sqrt();
+            u = u.map(|x| x / len);
+            let v = [a[1] * u[2] - a[2] * u[1], a[2] * u[0] - a[0] * u[2], a[0] * u[1] - a[1] * u[0]];
+            for bend in [0.0, 0.12] {
+                let n = [96, 96, 96];
+                let mut mask = vec![false; n.iter().product()];
+                for z in 0..96 {
+                    for y in 0..96 {
+                        for x in 0..96 {
+                            let p = [x as f64 + 0.5 - 48.0, y as f64 + 0.5 - 48.0, z as f64 + 0.5 - 48.0];
+                            let t = (0..3).map(|i| p[i] * a[i]).sum::<f64>();
+                            let q = (0..3).map(|i| p[i] * u[i]).sum::<f64>() - bend * t * t / 40.0;
+                            let w = (0..3).map(|i| p[i] * v[i]).sum::<f64>();
+                            let end = t - t.clamp(-18.0, 18.0);
+                            let normal = [0, 1, 2].map(|i| q * u[i] + w * v[i] + end * a[i]);
+                            let d = normal.iter().map(|x| x * x).sum::<f64>().sqrt();
+                            if (d - 14.0).abs() <= 2.0 && (normal[2] / d.max(1e-9)).abs() < 0.8 {
+                                mask[(z * 96 + y) * 96 + x] = true;
+                            }
+                        }
+                    }
+                }
+                let (ves, _) = find(&mask, n, 10.0);
+                assert!(ves.is_empty(), "axis={a:?}, bend={bend}, {ves:?}");
+            }
+        }
     }
 }
