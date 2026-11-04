@@ -84,7 +84,11 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 Options that exist (use only when needed): `--pixel Å` and `--kv kV` when
 the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
 when the user knows the point group, `--kind N` for SPA (step 5), `--fresh`
-to redo instead of reusing finished steps.
+to redo instead of reusing finished steps. For SPA movies: a gain reference
+beside them (name with gain, CountRef or `norm-`) is found and applied by
+itself; otherwise `--gain FILE`. `--dose e/Å²` (total per movie) turns on
+dose weighting when no config file gives the dose; with these after a first
+run, add `--fresh`. `"movies"."warnings"` in the result says when to.
 
 Membrane segmentation needs the MemBrain-seg model, which users download
 themselves from the official page (https://github.com/teamtomo/membrain-seg,
@@ -106,7 +110,8 @@ still running. Do not start several GPU jobs at once on the same GPU.
 When the job ends, the log ends with one JSON object, also saved beside the
 input as `INPUT.tmv.json` (`tmv.json` inside a folder):
 - `"ok": true` — `"open"` is the file to look at; other fields hold the
-  numbers to report (resolution, defocus, vesicle count…).
+  numbers to report (resolution, defocus, vesicle count…); `"note"`, when
+  present, is something the user should know (translate it if needed).
 - `"ok": false` — `"error"` (often Chinese, translate it) and maybe `"hint"`
   say what is missing; fix it (e.g. add `--pixel`) and run again. Finished
   steps are reused.

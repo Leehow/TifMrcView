@@ -123,6 +123,10 @@ pub struct Project {
     /// no file gave a dose.
     #[serde(default)]
     pub dose_total: Option<f64>,
+    /// The gain reference found beside the movies, multiplied into each
+    /// frame by motion correction.
+    #[serde(default)]
+    pub gain: Option<String>,
     pub diameter_a: f64,
     pub mics: Vec<Mic>,
     #[serde(default)]
@@ -144,6 +148,13 @@ pub struct Project {
 }
 
 const MIC_EXT: [&str; 6] = ["mrc", "mrcs", "tif", "tiff", "eer", "dm4"];
+
+/// A gain reference by its name: `*.gain` (Falcon), or a name with gain,
+/// CountRef or a Leginon `norm-` prefix.
+fn looks_like_gain(p: &Path) -> bool {
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+    name.ends_with(".gain") || name.contains("gain") || name.contains("countref") || name.starts_with("norm-") || name.starts_with("norm_")
+}
 
 /// Pixel size, voltage, Cs and amplitude contrast: which of them were read
 /// from the image or from a config file in the folder, and that file's name.
@@ -269,6 +280,10 @@ impl Project {
             })
             .collect();
         files.sort();
+        // A gain reference sits among the movies in many depositions; it is
+        // not a movie.
+        let (gains, rest): (Vec<PathBuf>, Vec<PathBuf>) = files.into_iter().partition(|p| looks_like_gain(p));
+        files = rest;
         if files.is_empty() {
             bail!("文件夹里没有显微图或电影（MRC / TIFF / EER）");
         }
@@ -284,6 +299,14 @@ impl Project {
             };
         let img = open_image(&first)?;
         let info = img.info().clone();
+        let gain = if movies && gains.len() == 1 {
+            Some(gains[0].to_string_lossy().into_owned())
+        } else {
+            if movies && gains.len() > 1 {
+                eprintln!("several gain references beside the movies; none used");
+            }
+            None
+        };
         // The header wins for pixel size. Voltage, Cs, amplitude and dose
         // come from a config file in this folder; what is missing stays
         // unknown so the workspace can ask.
@@ -323,6 +346,7 @@ impl Project {
                 file: cfg.file,
             },
             dose_total: cfg.dose_total,
+            gain,
             diameter_a: 150.0,
             mics,
             pick: None,
@@ -422,6 +446,21 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
     std::fs::create_dir_all(&out_dir)?;
     let n = p.mics.len();
     let mut params = params.clone();
+    if params.gain_path.is_none() {
+        params.gain_path = p.gain.clone();
+    }
+    // What the project knows wins over headers that lack it (TIFF movies
+    // carry no pixel size; motion would fall back to 1 Å/px).
+    if params.pixel_a.is_none() && p.optics_found.pixel && p.optics.pixel_a > 0.0 {
+        params.pixel_a = Some(p.optics.pixel_a);
+    }
+    if p.optics_found.kv {
+        params.voltage_kv = p.optics.kv;
+        params.voltage_auto = false;
+    }
+    if params.total_dose.is_none() && params.dose_per_frame.is_none() {
+        params.total_dose = p.dose_total;
+    }
     params.even_odd = false;
     params.unweighted = false;
     for i in 0..n {
@@ -448,13 +487,12 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
                 params: params.clone(),
             };
             let r = crate::motion::run(&req, None, &|_, _, _| {})?;
-            if p.optics.pixel_a <= 1.0 || i == 0 {
+            // 1 Å/px is the placeholder motion uses when nothing knew the
+            // pixel size: never let it replace a known value.
+            let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
+            if r.pixel_a > 0.0 && !placeholder && (i == 0 || p.optics.pixel_a <= 1.0) {
                 p.optics.pixel_a = r.pixel_a;
-                // 1 Å/px is the placeholder motion uses when nothing knew the
-                // pixel size. Don't treat that placeholder as a found value.
-                if r.pixel_a > 0.0 && (p.optics_found.pixel || (r.pixel_a - 1.0).abs() > 1e-6) {
-                    p.optics_found.pixel = true;
-                }
+                p.optics_found.pixel = true;
             }
             p.mics[i].width = r.width;
             p.mics[i].height = r.height;
@@ -1135,4 +1173,20 @@ pub fn auto(
         p.save()?;
     }
     Ok(r)
+}
+
+#[cfg(test)]
+mod gain_tests {
+    use super::looks_like_gain;
+    use std::path::Path;
+
+    #[test]
+    fn gain_references_are_not_movies() {
+        for g in ["norm-amibox05-0.mrc", "20260610_gain.mrc", "CountRef_x.tif", "a.gain"] {
+            assert!(looks_like_gain(Path::new(g)), "{g}");
+        }
+        for m in ["14sep05c_00024sq_00003hl_00002es.frames.tif", "normal_cell_001.mrc", "TS_01.eer"] {
+            assert!(!looks_like_gain(Path::new(m)), "{m}");
+        }
+    }
 }

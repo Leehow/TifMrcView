@@ -36,8 +36,9 @@ USAGE
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
         [--kind N[,M]] [--symmetry C1|D7|…] [--pixel Å] [--kv kV]
-  tmv ctf <folder|micrograph>    CTF of every micrograph (movies are motion corrected)
-        [--pixel Å] [--kv kV]
+        [--dose e/Å²] [--gain file] [--fresh]
+  tmv ctf <folder>               CTF of every micrograph (movies are motion corrected)
+        [--pixel Å] [--kv kV] [--dose e/Å²] [--gain file] [--fresh]
   tmv denoise <image|stack>      Self-supervised denoising → <name>_denoised.mrc
   tmv info                       Version, GPU and models found
   tmv setup [--membrane membrain.ckpt] [--sam]
@@ -139,7 +140,9 @@ fn fail(cmd: &str, e: &anyhow::Error, input: Option<&str>) -> i32 {
 
 /// What to do about the common errors, for whoever reads the JSON.
 fn hint(msg: &str) -> Option<&'static str> {
-    if msg.contains("像素大小") || msg.contains("pixel size") {
+    if msg.contains("像素大小和电压") {
+        Some("pass the pixel size of the raw data and the acceleration voltage: --pixel <Å> --kv <kV>")
+    } else if msg.contains("像素大小") || msg.contains("pixel size") {
         Some("pass the pixel size of the raw data with --pixel <Å>")
     } else if msg.contains("电压") {
         Some("pass the acceleration voltage with --kv <kV>")
@@ -395,6 +398,16 @@ fn tomo(o: &Opts) -> Result<Value> {
     let r = crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, &report))??;
     progress.done();
     let mut v = serde_json::to_value(&r)?;
+    if let Value::Object(o) = &mut v {
+        o.remove("ms");
+    }
+    // The app's note points at its own advanced settings; say it for here.
+    if let Some(note) = &r.note {
+        if note.contains("缺失楔") {
+            let hours = note.split("约需").nth(1).and_then(|t| t.trim().split(' ').next()).unwrap_or("?");
+            v["note"] = json!(format!("missing-wedge filling skipped: this GPU would need about {hours} h for it (a faster GPU does it automatically)"));
+        }
+    }
     v["backend"] = json!(backend);
     v["dataset"] = json!(crate::tomo::dataset::path_for(&d.stack));
     if !motion.is_null() {
@@ -459,8 +472,25 @@ fn membranes(o: &Opts) -> Result<Value> {
 
 /// The SPA project of `input`, with the optics the user gave.
 fn spa_project(o: &Opts) -> Result<crate::spa::project::Project> {
-    let mut p = crate::spa::project::Project::open(o.input()?)?;
+    let input = o.input()?;
+    if o.flag("fresh") {
+        // Start over: motion sums, CTF and particles made before go.
+        let old = std::path::Path::new(input).join(crate::spa::project::DIR);
+        if old.join("spa.json").is_file() {
+            std::fs::remove_dir_all(&old).with_context(|| format!("cannot remove {}", old.display()))?;
+        }
+    }
+    let mut p = crate::spa::project::Project::open(input)?;
     let mut changed = false;
+    if let Some(dose) = o.number("dose")? {
+        p.dose_total = Some(dose);
+        changed = true;
+    }
+    if let Some(gain) = o.get("gain") {
+        let g = std::fs::canonicalize(gain).with_context(|| format!("--gain: no file {gain}"))?;
+        p.gain = Some(g.to_string_lossy().into_owned());
+        changed = true;
+    }
     if let Some(px) = o.number("pixel")? {
         p.optics.pixel_a = px;
         p.optics_found.pixel = true;
@@ -471,11 +501,12 @@ fn spa_project(o: &Opts) -> Result<crate::spa::project::Project> {
         p.optics_found.kv = true;
         changed = true;
     }
-    if !p.optics_found.pixel || p.optics.pixel_a <= 0.0 {
-        bail!("不知道像素大小（文件和配置文件里都没有）");
-    }
-    if !p.optics_found.kv {
-        bail!("不知道电压（文件和配置文件里都没有）");
+    let no_pixel = !p.optics_found.pixel || p.optics.pixel_a <= 0.0;
+    match (no_pixel, !p.optics_found.kv) {
+        (true, true) => bail!("不知道像素大小和电压（文件和配置文件里都没有）"),
+        (true, false) => bail!("不知道像素大小（文件和配置文件里都没有）"),
+        (false, true) => bail!("不知道电压（文件和配置文件里都没有）"),
+        _ => {}
     }
     if changed {
         p.save()?;
@@ -511,6 +542,21 @@ fn spa_prepare(p: &mut crate::spa::project::Project, report: crate::spa::Progres
     Ok(())
 }
 
+/// How the movies were summed, with what to pass when something was missing.
+fn movies_info(p: &crate::spa::project::Project) -> Value {
+    if !p.movies {
+        return Value::Null;
+    }
+    let mut warnings = vec![];
+    if p.gain.is_none() {
+        warnings.push("no gain reference found beside the movies; if they are not gain-corrected already, rerun with --gain <file> --fresh");
+    }
+    if p.dose_total.is_none() {
+        warnings.push("dose unknown, so the sums are not dose-weighted; rerun with --dose <e/Å² per movie> --fresh for better high resolution");
+    }
+    json!({ "gain": p.gain, "doseTotal": p.dose_total, "pixelA": p.optics.pixel_a, "warnings": warnings })
+}
+
 /// Writes `ctf.tsv` in the project folder; returns its path and the defocus range (µm).
 fn ctf_table(p: &crate::spa::project::Project) -> Result<(String, Value)> {
     let mut t = String::from("micrograph\tdefocus1_A\tdefocus2_A\tastig_angle_deg\tfit_resolution_A\tscore\n");
@@ -544,7 +590,7 @@ fn ctf(o: &Opts) -> Result<Value> {
     spa_prepare(&mut p, &|s, i, n| progress.report(s, i, n))?;
     progress.done();
     let (table, stats) = ctf_table(&p)?;
-    Ok(json!({ "project": p.dir, "table": table, "ctf": stats, "pixelA": p.optics.pixel_a, "kv": p.optics.kv }))
+    Ok(json!({ "project": p.dir, "table": table, "ctf": stats, "pixelA": p.optics.pixel_a, "kv": p.optics.kv, "movies": movies_info(&p) }))
 }
 
 /// SAM 2.1, when its model has been downloaded (`tmv setup --sam`).
@@ -600,6 +646,7 @@ fn spa(o: &Opts) -> Result<Value> {
                 "kinds": kinds,
                 "ctf": ctf,
                 "ctfTable": table,
+                "movies": movies_info(&p),
                 "next": format!("look at the png strips, then: tmv spa {} --kind N (several views of the same particle: --kind 1,3; never ice, carbon edges or clumps)", o.input()?),
             }));
         }
@@ -626,6 +673,7 @@ fn spa(o: &Opts) -> Result<Value> {
         "map": r.sharpened,
         "backend": r.backend,
         "samUsed": sam.is_some(),
+        "movies": movies_info(&p),
         "open": r.sharpened,
     }))
 }

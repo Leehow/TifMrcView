@@ -600,7 +600,7 @@ pub struct FileResult {
 pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
     let now = Instant::now();
     CANCEL.store(false, Ordering::SeqCst);
-    progress("读取", 0, 1);
+    progress("膜分割：读取", 0, 1);
     let (v, shape, px) = crate::tomo::pipeline::load(image)?;
     if shape[2] < 8 {
         bail!("膜分割需要三维断层（至少 8 层）");
@@ -610,11 +610,11 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
     }
     let net = load(model, dev)?;
     let seg = segment(dev, &net, &v, shape, px as f32, Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
-    progress("微管", 0, 1);
+    progress("膜分割：微管", 0, 1);
     let fils = crate::filaments::find(&v, shape, px as f32);
     let tubes = crate::filaments::mask(&fils, shape, px as f32);
     drop(v);
-    progress("囊泡", 0, 1);
+    progress("膜分割：囊泡", 0, 1);
     let (labels, vesicles) = write_labels_found(image, shape, &seg.mask, Some(&tubes), px as f32)?;
     let summary = format!("{image}.membranes.json");
     let vesicles_csv = format!("{image}.vesicles.csv");
