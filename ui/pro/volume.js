@@ -697,7 +697,7 @@ void main() { outColor = vec4(1.0); }`;
   // --- UI: quick toolbar button, overlay canvas and settings panel ---
   const btn = document.createElement("button");
   btn.id = "btn-3d";
-  btn.title = "3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，中键或 Shift+拖动平移，滚轮缩放，双击复位）";
+  btn.title = "3D 视图：把 Z 堆栈显示成可以旋转的三维体（拖动旋转，右键拖动（触控板双指按下拖动或 Control+拖动）、中键或 Shift+拖动平移，滚轮或双指捏合缩放，双击复位）";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>';
   btn.disabled = true;
   // At the right end of the quick toolbar, after its own separator.
@@ -1246,15 +1246,18 @@ void main() { outColor = vec4(1.0); }`;
 
   // Drag to rotate, wheel to zoom, double-click to reset.
   let drag = null;
-  // Middle button or Shift + left drag pans.
+  // Right button (a two-finger click-drag on a Mac trackpad, or Control +
+  // drag), middle button or Shift + left drag pans.
   canvas3d.addEventListener("pointerdown", (e) => {
-    if (e.button === 1) e.preventDefault();
-    const pan = e.button === 1 || (e.button === 0 && e.shiftKey);
+    if (e.button === 1 || e.button === 2) e.preventDefault();
+    const pan = e.button === 1 || e.button === 2 || (e.button === 0 && (e.shiftKey || e.ctrlKey));
     drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, yaw: view.yaw, pitch: view.pitch, pan };
     canvas3d.style.cursor = pan ? "move" : "";
     canvas3d.setPointerCapture(e.pointerId);
   });
   canvas3d.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
+  // The right button pans, so no context menu over the 3D view.
+  canvas3d.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas3d.addEventListener("auxclick", (e) => e.preventDefault());
   canvas3d.addEventListener("pointermove", (e) => {
     if (!drag) return;
