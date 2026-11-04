@@ -32,10 +32,12 @@ Ask only for what you cannot see:
 - for tomograms: what the result is for — looking at it / figures (default),
   subtomogram averaging (`--for sta`), or a quick survey (`--for survey`).
 
-Check the server: `ssh HOST 'uname -m; nvidia-smi -L; df -h ~'`. Needs Linux
-x86_64; a GPU is strongly recommended (NVIDIA driver is enough, no CUDA
+Check the server: `ssh HOST 'uname -m; ldd --version | head -1; nvidia-smi -L; df -h ~'`.
+Needs Linux x86_64 with glibc 2.34+ (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+);
+a GPU is strongly recommended (NVIDIA driver is enough, no CUDA
 toolkit needed). Check free disk space before copying (a tilt series of
-movies can be 20–100 GB).
+movies can be 20–100 GB); if the home disk is small, put the job folder on a
+larger disk you can write to.
 
 ## 2. Install or update `tmv` on the server (no root needed)
 

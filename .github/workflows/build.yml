@@ -262,13 +262,14 @@ jobs:
           if-no-files-found: error
 
   # tmv: Pro processing on the command line for Linux servers (src/cli.rs),
-  # built against glibc 2.28 (manylinux_2_28, AlmaLinux 8) so that it runs on
-  # RHEL / Rocky 8+, Ubuntu 20.04+ and Debian 11+. Also on pull requests.
+  # built against glibc 2.34 (manylinux_2_34, AlmaLinux 9) so that it runs on
+  # RHEL / Rocky 9+, Ubuntu 22.04+ and Debian 12+ (the bundled LLVM's
+  # llvm-config needs 2.34 to build at all). Also on pull requests.
   cli:
     needs: [version, reuse]
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.reuse.outputs.run_id == '' }}
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
+    container: quay.io/pypa/manylinux_2_34_x86_64
     env:
       CARGO_HOME: /github/home/.cargo
       RUSTUP_HOME: /github/home/.rustup
@@ -299,7 +300,7 @@ jobs:
           tmv=src-tauri/target/release/tmv
           newest=$(objdump -T "$tmv" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
           echo "needs $newest"
-          [ "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -n 1)" = GLIBC_2.28 ] || { echo "::error::tmv needs $newest (> 2.28)"; exit 1; }
+          [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -n 1)" = GLIBC_2.34 ] || { echo "::error::tmv needs $newest (> 2.34)"; exit 1; }
           "$tmv" --version | grep -q "${{ needs.version.outputs.version }}"
           "$tmv" info | tee /tmp/info.json
           grep -q '"ok": true' /tmp/info.json

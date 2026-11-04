@@ -1,7 +1,7 @@
 # tmv — TifMrcView Pro on servers without a display
 
 `tmv` is TifMrcView Pro's processing as a command-line tool for Linux
-servers (x86_64) with an NVIDIA GPU (or Vulkan, or only CPUs). It is meant
+servers (x86_64, glibc 2.34+: Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+) with an NVIDIA GPU (or Vulkan, or only CPUs). It is meant
 to be driven by coding agents such as Claude Code or Codex over SSH: the
 agent copies the data to the server, runs one command, and copies the
 results back for you to open in the TifMrcView Pro desktop app.
