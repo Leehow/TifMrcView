@@ -696,6 +696,7 @@ pub fn apply(l: &mut crate::labels::Labels, mask: &[bool], tubes: Option<&[bool]
 
 /// Writes `mask` and `tubes` (dims `n`) into the label map beside `image`
 /// (see `apply`), keeping labels already there; returns the label file.
+/// Always writes a stack, including when there are no labels.
 pub fn write_labels(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&[bool]>, pixel_a: f32) -> Result<String> {
     Ok(write_labels_found(image, n, mask, tubes, pixel_a)?.0)
 }
@@ -709,7 +710,7 @@ fn write_labels_found(image: &str, n: [usize; 3], mask: &[bool], tubes: Option<&
         crate::labels::Labels::new(n[0], n[1], n[2])
     };
     let (_, _, ves) = apply(&mut l, mask, tubes, n, pixel_a, 0);
-    l.save(Path::new(&path))?;
+    l.write_stack(Path::new(&path))?;
     Ok((path, ves))
 }
 
@@ -787,6 +788,34 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_output_empty_prediction_is_loadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("empty.mrc");
+        let path = write_labels(image.to_str().unwrap(), [9, 7, 5], &[false; 315], None, 10.0).unwrap();
+        let labels = crate::labels::Labels::load(Path::new(&path), 9, 7, 5)
+            .expect("the returned label path must contain a readable stack even without detections");
+        assert!(labels.is_empty());
+        assert!(crate::labels::Labels::load(Path::new(&path), 9, 7, 6).is_err(), "the stack must have exactly five slices");
+    }
+
+    #[test]
+    fn file_output_empty_prediction_preserves_existing_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("annotated.mrc");
+        let mut existing = crate::labels::Labels::new(9, 7, 5);
+        let mut annotation = [false; 315];
+        annotation[314] = true;
+        existing.apply_volume_mask(&annotation, 1234, 0);
+        let path = crate::labels::labels_path(image.to_str().unwrap(), 0);
+        existing.save(Path::new(&path)).unwrap();
+
+        let path = write_labels(image.to_str().unwrap(), [9, 7, 5], &[false; 315], None, 10.0).unwrap();
+        let labels = crate::labels::Labels::load(Path::new(&path), 9, 7, 5).unwrap();
+        assert_eq!(labels.get(8, 6, 4), 1234);
+        assert_eq!(labels.counts(), existing.counts());
+    }
 
     #[test]
     fn window_failure_is_an_error_before_results_are_used() {
