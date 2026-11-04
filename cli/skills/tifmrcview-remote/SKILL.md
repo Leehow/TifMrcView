@@ -116,7 +116,9 @@ input as `INPUT.tmv.json` (`tmv.json` inside a folder):
   say what is missing; fix it (e.g. add `--pixel`) and run again. Finished
   steps are reused.
 - `"needsChoice": true` (exit status 2, SPA only) — several kinds of
-  particle were found. Copy the `png` strips of `"kinds"` here and **show
+  particle were found. Copy the `png` strips of `"kinds"` here (quote a
+  remote wildcard so the local shell leaves it alone:
+  `rsync -a 'HOST:~/tmv-jobs/NAME/tifmrcview-spa/kind*.png' .`) and **show
   them to the user** (or look at them yourself if the user asked you to
   decide): pick the protein, never ice, carbon edges or clumps; different
   views of the same particle can be picked together. Then run
