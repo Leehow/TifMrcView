@@ -55,8 +55,8 @@ OUTPUT
   saved as <input>.tmv.json. Exit status 0 on success, 1 on error
   ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind).
 
-  The GPU is found automatically (Vulkan, CUDA, else CPU). On a shared
-  server pick the card with CUDA_VISIBLE_DEVICES=N (then CUDA is used);
+  The GPU is found automatically (CUDA with an NVIDIA driver, else Vulkan,
+  else CPU). On a shared server pick the card with CUDA_VISIBLE_DEVICES=N;
   TMV_GPU=cuda|vulkan|cpu forces a backend. Long runs:
   nohup tmv … > run.log 2>&1 &
 "#;
@@ -69,7 +69,11 @@ pub fn main(args: Vec<String>) -> i32 {
     use_bundled_cuda();
     // Whoever picks a card with CUDA_VISIBLE_DEVICES (the usual way on shared
     // servers) gets that card: only CUDA honours it, Vulkan would not.
-    if std::env::var_os("CUDA_VISIBLE_DEVICES").is_some() && std::env::var_os("TMV_GPU").is_none() {
+    // CUDA also comes first wherever the NVIDIA driver is loaded: on an
+    // RTX 3090 server it segmented membranes 1.7x faster than Vulkan
+    // (3.3 vs 5.5 s per window). The CPU stays the fallback.
+    let nvidia = Path::new("/dev/nvidiactl").exists() || Path::new("/dev/dxg").exists();
+    if (nvidia || std::env::var_os("CUDA_VISIBLE_DEVICES").is_some()) && std::env::var_os("TMV_GPU").is_none() {
         std::env::set_var("TMV_GPU", "cuda");
     }
     let Some(cmd) = args.first().map(String::as_str) else {
@@ -212,7 +216,7 @@ impl Opts {
 }
 
 /// Progress on stderr: on a terminal one updating line, otherwise (logs)
-/// a line when the stage changes, every 10 % or every 30 s.
+/// a line when the step changes or every 20 s.
 struct Progress {
     start: Instant,
     tty: bool,
@@ -236,7 +240,11 @@ impl Progress {
             }
             return;
         }
-        if last.0 != stage || last.1 != tenth || last.2.elapsed() > Duration::from_secs(30) {
+        // Logs: a line when the step changes ("第 2/8 步 · …" up to the
+        // dot; sub-stage texts change too often), else at most every 20 s.
+        let step = stage.split(" · ").next().unwrap_or(stage);
+        let last_step = last.0.split(" · ").next().unwrap_or(&last.0).to_string();
+        if last_step != step || (done == total && total > 1 && last.1 != 10) || last.2.elapsed() > Duration::from_secs(20) {
             eprintln!("[{t:7.1} s] {line}");
             *last = (stage.to_string(), tenth, Instant::now());
         }

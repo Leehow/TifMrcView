@@ -22,7 +22,8 @@ autotune = ["burn/autotune"]
 metal = ["wgpu", "burn/metal"]
 # Vulkan with kernels compiled to SPIR-V instead of WGSL (Windows, Linux).
 vulkan = ["wgpu", "burn/vulkan"]
-# NVIDIA machines without Vulkan; needs the driver's libcuda and NVRTC at run time.
+# NVIDIA machines: needs only the driver's libcuda (kernels go through the
+# bundled LLVM, math functions from libdevice.10.bc via CUDA_PATH).
 cuda = ["burn/cuda"]
 
 [dependencies]
