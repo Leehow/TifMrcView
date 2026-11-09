@@ -611,7 +611,20 @@ $("series").addEventListener("change", (e) => {
   e.target.blur();
 });
 
+/** Reuse the last explicit display selection by channel index. Opening a
+ * single-channel image or one without the selected channels must not erase it. */
+function restoreChannelVisibility() {
+  if (S.chans.length <= 1) return;
+  const visible = pref.get("channel-visibility", null);
+  if (!Array.isArray(visible) || !visible.length || !visible.every((v) => typeof v === "boolean")) return;
+  const missing = visible.some(Boolean) && !S.chans.some((_, i) => visible[i] === true);
+  S.chans.forEach((c, i) => { c.visible = missing || visible[i] === true; });
+}
+
 function buildChannels() {
+  // Also runs when Pro restores an existing image tab, so an older per-image
+  // snapshot cannot replace the user's latest display selection.
+  restoreChannelVisibility();
   const box = $("channels");
   box.innerHTML = "";
   if (S.chans.length <= 1) {
@@ -634,6 +647,7 @@ function buildChannels() {
     el.append(cb, sw, nm);
     cb.addEventListener("change", () => {
       c.visible = cb.checked;
+      pref.set("channel-visibility", S.chans.map((c) => c.visible));
       paintChannels();
       requestRender();
     });
