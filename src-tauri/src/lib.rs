@@ -5,6 +5,11 @@ mod assoc;
 pub mod align;
 pub mod ctf;
 pub mod denoise;
+mod denoise_nad;
+#[cfg(feature = "pro")]
+pub mod model_store;
+#[cfg(feature = "pro")]
+pub mod trained_models;
 pub mod diffraction;
 #[cfg(feature = "pro")]
 pub mod ctf_gpu;
@@ -13,6 +18,10 @@ pub mod denoise_gpu;
 #[cfg(feature = "pro")]
 pub mod denoise_learn;
 pub mod edition;
+#[cfg_attr(not(all(feature = "desktop", feature = "pro")), allow(dead_code))]
+mod documents;
+#[cfg_attr(not(all(feature = "desktop", feature = "pro")), allow(dead_code))]
+mod merge_export;
 pub mod fft;
 pub mod formats;
 pub mod imod;
@@ -61,6 +70,8 @@ pub mod thumb;
 
 #[cfg(feature = "desktop")]
 include!("desktop.rs");
+#[cfg(all(feature = "desktop", feature = "pro"))]
+include!("desktop_documents.rs");
 
 #[cfg(feature = "pro")]
 pub mod tomo;

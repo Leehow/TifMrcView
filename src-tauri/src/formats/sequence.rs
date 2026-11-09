@@ -360,6 +360,9 @@ fn trim_num(v: f64) -> String {
 }
 
 impl Source for Sequence {
+    fn model_sources(&self) -> Vec<PathBuf> {
+        self.files.clone()
+    }
     fn info(&self) -> &ImageInfo {
         &self.info
     }

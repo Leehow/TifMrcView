@@ -171,7 +171,7 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         if self.beam > 2 || self.tilt > 2 || self.beam == self.tilt {
             bail!("电子束方向和倾转轴必须是两个不同的坐标轴");
         }

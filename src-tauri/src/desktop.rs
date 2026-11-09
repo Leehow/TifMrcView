@@ -14,6 +14,8 @@ use image::{ImageInfo, OpenImage};
 struct AppState {
     /// The file shown in each window, by window label.
     current: Mutex<HashMap<String, Arc<OpenImage>>>,
+    #[cfg(feature = "pro")]
+    documents: crate::documents::Documents,
     next_token: AtomicU64,
     opening: crate::open_requests::OpenRequests,
     #[cfg_attr(target_os = "android", allow(dead_code))]
@@ -73,7 +75,16 @@ fn take_pending_open(window: WebviewWindow, state: State<'_, AppState>) -> Optio
         state.pending.lock().unwrap().entry(window.label().to_string()).or_default().push(path);
     }
     let mut p = state.pending.lock().unwrap();
-    let path = p.remove(window.label())?.into_iter().last()?;
+    let paths = p.get_mut(window.label())?;
+    let path = if cfg!(feature = "pro") {
+        if paths.is_empty() { return None; }
+        paths.remove(0)
+    } else {
+        let path = paths.pop()?;
+        paths.clear();
+        path
+    };
+    if paths.is_empty() { p.remove(window.label()); }
     state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     Some(path)
 }
@@ -95,8 +106,12 @@ async fn open_image(
         state.showing.lock().unwrap().insert(window.label().to_string(), path.clone());
     }).map_err(err)?;
     // Each window gets an equal share of the page cache.
+    #[cfg(not(feature = "pro"))]
     let others = state.current.lock().unwrap().keys().filter(|l| *l != window.label()).count();
+    #[cfg(not(feature = "pro"))]
     let budget = mem::cache_budget() / (others + 1);
+    #[cfg(feature = "pro")]
+    let budget = mem::cache_budget() / (state.documents.all().len() + 1);
     let img = blocking(move || {
         let src = formats::open_series(Path::new(&path), series.unwrap_or(0))?;
         Ok(OpenImage::new(token, src, budget))
@@ -111,12 +126,19 @@ async fn open_image(
         if window.app_handle().get_webview_window(window.label()).is_none() {
             return Err("window closed".into());
         }
+        #[cfg(feature = "pro")]
+        state.documents.keep(window.label(), img.clone());
         if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
+            #[cfg(not(feature = "pro"))]
             old.cancelled.store(true, Ordering::Relaxed);
+            #[cfg(feature = "pro")]
+            let _ = old;
         }
         state.side.lock().unwrap().remove(window.label());
         Ok(())
     }).map_err(err)??;
+    #[cfg(feature = "pro")]
+    state.documents.rebalance(mem::cache_budget());
     let (center, _) = info.locate(0, info.size_z / 2, 0);
     img.prefetch(center);
     Ok(Opened { token, info })
@@ -153,6 +175,12 @@ fn current(state: &AppState, token: u64) -> CmdResult<Arc<OpenImage>> {
         .find(|i| i.token == token)
         .cloned()
         .or_else(|| state.side.lock().unwrap().values().find(|i| i.token == token).cloned())
+        .or_else(|| {
+            #[cfg(feature = "pro")]
+            { state.documents.find(token) }
+            #[cfg(not(feature = "pro"))]
+            { None }
+        })
         .ok_or_else(|| "stale".to_string())
 }
 
@@ -200,6 +228,8 @@ enum LabelOp {
 /// Saves and drops the label maps of images no window shows any more.
 fn prune_labels(state: &AppState) {
     let open: HashSet<u64> = state.current.lock().unwrap().values().map(|i| i.token).collect();
+    #[cfg(feature = "pro")]
+    let open: HashSet<u64> = open.into_iter().chain(state.documents.all().iter().map(|i| i.token)).collect();
     let gone: Vec<_> = {
         let mut store = state.labels.lock().unwrap();
         let tokens: Vec<u64> = store.keys().copied().filter(|t| !open.contains(t)).collect();
@@ -233,7 +263,7 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
         let e = e.lock().unwrap();
         return Ok(labels_state(&e, vec![]));
     }
-    let img = state.current.lock().unwrap().values().find(|i| i.token == token).cloned().ok_or("stale")?;
+    let img = current(&state, token)?;
     let entry = blocking(move || {
         let info = img.info();
         let path = crate::labels::labels_path(&info.path, info.series_index);
@@ -534,7 +564,7 @@ fn sam_cancel(sam: State<'_, crate::sam::Sam>) {
 // ---------- Pro pixel classifier ----------
 
 /// Which channel the classifier reads and the contrast it scales it with.
-#[derive(serde::Deserialize, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "pro"), allow(dead_code))]
 struct ClassifyReq {
@@ -543,6 +573,36 @@ struct ClassifyReq {
     t: usize,
     lo: f32,
     hi: f32,
+}
+
+#[cfg(feature = "pro")]
+fn checkpoint_event(app: &AppHandle, token: u64, kind: &str, c: usize, t: usize, persistence: &crate::trained_models::Persistence) {
+    let _ = app.emit("trained-model-persistence", serde_json::json!({ "token": token, "kind": kind, "channel": c, "time": t, "persistence": persistence }));
+}
+
+/// Restore an image's own model, never publish a delayed result to a new image.
+#[tauri::command]
+async fn trained_model_restore(window: WebviewWindow, app: AppHandle, token: u64, c: usize, t: usize, kind: String) -> CmdResult<Option<serde_json::Value>> {
+    #[cfg(not(feature = "pro"))]
+    { let _ = (window, app, token, c, t, kind); pro_only() }
+    #[cfg(feature = "pro")]
+    {
+        let img = current(&app.state::<AppState>(), token)?;
+        blocking(move || {
+            let restored = crate::trained_models::restore(&img, &kind, c, t)?;
+            let state = app.state::<AppState>();
+            let images = state.current.lock().unwrap();
+            if !images.get(window.label()).is_some_and(|i| i.token == token) { anyhow::bail!("stale"); }
+            let Some((saved, model)) = restored else { return Ok(None) };
+            match model {
+                crate::trained_models::Model::Wedge(m) => *crate::wedge::MODEL.lock().unwrap() = Some(Arc::new(m)),
+                crate::trained_models::Model::Denoise(m) => *crate::denoise_learn::MODEL.lock().unwrap() = Some(Arc::new(m)),
+                crate::trained_models::Model::Unet(m) => labels_entry(&state, token).map_err(anyhow::Error::msg)?.lock().unwrap().unet = Some(Arc::new(m)),
+                crate::trained_models::Model::Classifier(m) => labels_entry(&state, token).map_err(anyhow::Error::msg)?.lock().unwrap().classifier = Some(Arc::new(m)),
+            }
+            Ok(Some(serde_json::to_value(saved)?))
+        }).await
+    }
 }
 
 #[derive(Serialize)]
@@ -555,6 +615,8 @@ struct ClassifierInfo {
     accuracy: f32,
     backend: String,
     seconds: f32,
+    #[cfg(feature = "pro")]
+    persistence: crate::trained_models::Persistence,
 }
 
 #[cfg(not(feature = "pro"))]
@@ -595,6 +657,8 @@ async fn classify_scribbles(state: State<'_, AppState>, token: u64, z: usize) ->
 /// Drops all scribbles and the trained classifier.
 #[tauri::command]
 async fn classify_clear(state: State<'_, AppState>, token: u64) -> CmdResult<()> {
+    #[cfg(feature = "pro")]
+    crate::model_store::disable(current(&state, token)?.as_ref(), "classifier").map_err(err)?;
     let e = labels_entry(&state, token)?;
     let mut e = e.lock().unwrap();
     e.scribbles = None;
@@ -633,13 +697,17 @@ async fn classify_train(state: State<'_, AppState>, req: ClassifyReq) -> CmdResu
                 slices.push((vals.slice(*z)?, s.as_slice()));
             }
             let cfg = crate::classify::ForestConfig::default();
+            let session = crate::model_store::Session::start(&img, "classifier", req.c, req.t, crate::trained_models::CLASSIFIER,
+                serde_json::json!({"requested": req, "effective": {"config": cfg, "features": crate::classify::feature_names(), "sigmas": crate::classify::SIGMAS, "maxSamplesPerClass": crate::classify::MAX_PER_CLASS}, "trainingSlices": scrib.iter().map(|(z, _)| *z).collect::<Vec<_>>(), "trainingLabelsSha256": crate::model_store::training_labels_sha256(&scrib), "normalization": {"lo": req.lo, "hi": req.hi}}))?;
             let (c, backend) = crate::classify::on_device(|dev| crate::classify::train(dev, &slices, w, h, req.lo, req.hi, &cfg))?;
+            let persistence = crate::trained_models::Persistence::from_result(crate::trained_models::save_classifier(&session, &c, backend));
             let out = ClassifierInfo {
                 labels: c.labels.clone(),
                 samples: c.samples,
                 accuracy: c.forest.oob_accuracy,
                 backend: backend.to_string(),
                 seconds: started.elapsed().as_secs_f32(),
+                persistence,
             };
             eprintln!("classifier: {} samples, {} labels, oob {:.3}, {} in {:.2} s", out.samples, out.labels.len(), out.accuracy, out.backend, out.seconds);
             e.lock().unwrap().classifier = Some(Arc::new(c));
@@ -743,6 +811,8 @@ struct UnetInfo {
     accuracy: f32,
     backend: String,
     seconds: f32,
+    #[cfg(feature = "pro")]
+    persistence: crate::trained_models::Persistence,
 }
 
 /// Trains a U-Net on the slices of the label map that hold labels;
@@ -775,10 +845,15 @@ async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult
             let (w, h) = (info.width, info.height);
             let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
             let mut slices = Vec::with_capacity(labelled.len());
+            let training_zs: Vec<_> = labelled.iter().map(|(z, _)| *z).collect();
+            let labels_digest = crate::model_store::training_labels_sha256(&labelled);
             for (z, l) in labelled {
                 slices.push((vals.slice(z)?, l));
             }
             let cfg = crate::unet::TrainConfig { steps: steps.clamp(10, 20000), ..Default::default() };
+            let session = crate::model_store::Session::start(&img, "unet", req.c, req.t, crate::trained_models::UNET,
+                serde_json::json!({"requested": {"image": req, "steps": steps}, "effective": {"config": cfg, "patch": (cfg.patch.min(w).min(h) / crate::unet::ALIGN * crate::unet::ALIGN).max(crate::unet::ALIGN), "optimizer": "Adam", "learningRateSchedule": "cosine", "loss": "masked cross entropy"}, "trainingSlices": training_zs, "trainingLabelsSha256": labels_digest, "normalization": {"lo": req.lo, "hi": req.hi}}))?;
+            let last_checkpoint = std::cell::Cell::new(None::<std::time::Instant>);
             // Every few seconds the network so far segments the preview
             // (`unet-live`); the earlier network comes back if it fails.
             let before = e.lock().unwrap().unet.clone();
@@ -794,7 +869,12 @@ async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult
                     |step, steps, loss| {
                         let _ = app2.emit("unet-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
                     },
-                    &mut |t| {
+                    &mut |t, step| {
+                        if last_checkpoint.get().is_none_or(|at| at.elapsed().as_secs() >= 30) {
+                            let p = crate::trained_models::Persistence::from_result(crate::trained_models::save_unet(&session, &t, false, serde_json::json!({"step": step, "totalSteps": cfg.steps}), &format!("{dev:?}")));
+                            checkpoint_event(&app2, req.token, "unet", req.c, req.t, &p);
+                            last_checkpoint.set(Some(std::time::Instant::now()));
+                        }
                         e.lock().unwrap().unet = Some(Arc::new(t));
                         let _ = app2.emit("unet-live", ());
                     },
@@ -804,9 +884,11 @@ async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult
                 Ok(r) => r,
                 Err(err) => {
                     e.lock().unwrap().unet = before;
+                    let _ = session.clear_partial();
                     return Err(err);
                 }
             };
+            let persistence = crate::trained_models::Persistence::from_result(crate::trained_models::save_unet(&session, &t, true, serde_json::json!({"step": cfg.steps, "totalSteps": cfg.steps}), backend));
             let out = UnetInfo {
                 labels: t.labels.clone(),
                 slices: slices.len(),
@@ -814,6 +896,7 @@ async fn unet_train(app: AppHandle, req: ClassifyReq, steps: usize) -> CmdResult
                 accuracy: t.accuracy,
                 backend: backend.to_string(),
                 seconds: started.elapsed().as_secs_f32(),
+                persistence,
             };
             eprintln!("unet: {} slices, {} labels, loss {:.3}, acc {:.3}, {} in {:.1} s", out.slices, out.labels.len(), out.loss, out.accuracy, out.backend, out.seconds);
             e.lock().unwrap().unet = Some(Arc::new(t));
@@ -1248,7 +1331,8 @@ async fn pick_file(app: AppHandle) -> Option<String> {
     #[cfg(not(target_os = "android"))]
     {
     use tauri_plugin_dialog::DialogExt;
-    let exts = formats::extensions();
+    let mut exts = formats::extensions();
+    if cfg!(feature = "pro") { exts.push("tmvmerge".into()); }
     let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
     app.dialog()
         .file()
@@ -1931,12 +2015,13 @@ async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq) -> CmdResult
 
 #[tauri::command]
 fn denoise_cancel() {
+    crate::denoise_nad::cancel();
     crate::denoise::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
     #[cfg(feature = "pro")]
     crate::denoise_learn::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DenoiseTrainReq {
     token: u64,
@@ -1964,6 +2049,8 @@ struct DenoiseTrained {
     seconds: f32,
     /// Set when the data does not suit the method (correlated noise).
     warning: Option<String>,
+    #[cfg(feature = "pro")]
+    persistence: crate::trained_models::Persistence,
 }
 
 /// Trains the self-supervised denoiser (Pro) on the open image; reports
@@ -2014,13 +2101,18 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
             let shrink = |v: Vec<f32>| crate::denoise_learn::bin(&v, w, h, k).0;
             let pairs: Vec<_> = pairs.into_iter().map(|(a, b)| (shrink(a), b.map(shrink))).collect();
             let cfg = crate::denoise_learn::TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
+            let training_zs: Vec<_> = match mode {
+                Mode::N2v => spread(nz), Mode::Frames => (0..nz).collect(), Mode::Neighbours => spread(nz - 1),
+            };
+            let session = crate::model_store::Session::start(&img, "denoise", req.c, req.t, crate::trained_models::DENOISE,
+                serde_json::json!({"requested": req, "effective": {"config": cfg, "mode": mode, "bin": k, "slab": if mode == Mode::N2v { req.slab } else { 0 }, "patch": (cfg.patch.min(bw).min(bh) / 4 * 4).max(4), "trainingWidth": bw, "trainingHeight": bh, "optimizer": "Adam", "learningRateSchedule": "cosine", "loss": "masked MSE"}, "trainingSlices": training_zs, "trainingImages": pairs.len()}))?;
+            let last_checkpoint = std::cell::Cell::new(None::<std::time::Instant>);
             let app2 = app.clone();
             // The network so far serves the preview while it trains
             // (`denoise-live`); the earlier model comes back if it fails.
             let before = MODEL.lock().unwrap().clone();
             let source = info.name.clone();
             let trained = crate::classify::on_device(|dev| {
-                let last_loss = std::cell::Cell::new(f32::NAN);
                 crate::denoise_learn::train_live(
                     dev,
                     &pairs,
@@ -2029,11 +2121,16 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
                     mode,
                     &cfg,
                     |step, steps, loss| {
-                        last_loss.set(loss);
                         let _ = app2.emit("denoise-train", serde_json::json!({ "step": step, "steps": steps, "loss": loss }));
                     },
-                    &mut |net, mean, std| {
-                        *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss: last_loss.get(), source: source.clone(), bin: k }));
+                    &mut |net, mean, std, step, loss| {
+                        let model = Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: source.clone(), bin: k });
+                        if last_checkpoint.get().is_none_or(|at| at.elapsed().as_secs() >= 30) {
+                            let p = crate::trained_models::Persistence::from_result(crate::trained_models::save_denoise(&session, &model, false, serde_json::json!({"step": step, "totalSteps": cfg.steps}), &format!("{dev:?}")));
+                            checkpoint_event(&app2, req.token, "denoise", req.c, req.t, &p);
+                            last_checkpoint.set(Some(std::time::Instant::now()));
+                        }
+                        *MODEL.lock().unwrap() = Some(model);
                         let _ = app2.emit("denoise-live", ());
                     },
                 )
@@ -2042,14 +2139,17 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
                 Ok(r) => r,
                 Err(e) => {
                     *MODEL.lock().unwrap() = before;
+                    let _ = session.clear_partial();
                     return Err(e);
                 }
             };
-            *MODEL.lock().unwrap() = Some(Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone(), bin: k }));
+            let model = Arc::new(crate::denoise_learn::Learned { net, mode, mean, std, loss, source: info.name.clone(), bin: k });
+            let persistence = crate::trained_models::Persistence::from_result(crate::trained_models::save_denoise(&session, &model, true, serde_json::json!({"step": cfg.steps, "totalSteps": cfg.steps}), backend));
+            *MODEL.lock().unwrap() = Some(model);
             // Self-supervision assumes noise independent from pixel to pixel.
             let corr = crate::denoise::noise_correlation(&pairs[0].0, bw, bh);
             let warning = (corr.abs() > 0.15).then(|| format!("这份数据的噪声在相邻像素间相关（{corr:+.2}），可能已经滤过波或插值过；自监督降噪对这种数据效果有限"));
-            let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning };
+            let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning, persistence };
             eprintln!("denoise_train: {} on {} images, loss {:.4}, {} in {:.1} s", out.mode, out.images, out.loss, out.backend, out.seconds);
             Ok(out)
         })
@@ -2057,7 +2157,7 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "pro"), allow(dead_code))]
 struct WedgeReq {
@@ -2111,7 +2211,7 @@ async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Val
         blocking(move || {
             let started = std::time::Instant::now();
             let Some(g) = req.geometry else { anyhow::bail!("缺少倾转几何") };
-            let cfg = req.config.unwrap_or_default();
+            let cfg = req.config.clone().unwrap_or_default();
             let (vol, mean, std) = crate::wedge::volume(&img, req.c, req.t, req.bin)?;
             let vol = if cfg.smooth > 0.0 { Arc::new(crate::wedge::smooth(&vol, cfg.smooth)) } else { vol };
             // Cubes no larger than the volume's thinnest side allows.
@@ -2119,37 +2219,39 @@ async fn wedge_train(app: AppHandle, req: WedgeReq) -> CmdResult<serde_json::Val
             while cfg.cube > 16 && vol.n.iter().any(|&k| k < cfg.cube) {
                 cfg.cube /= 2;
             }
+            let session = crate::model_store::Session::start(&img, "wedge", req.c, req.t, crate::trained_models::WEDGE,
+                serde_json::json!({"requested": req, "effective": {"config": cfg, "geometry": g, "bin": req.bin.max(1), "algorithm": "IsoNet-style single-volume", "optimizer": "Adam", "learningRateSchedule": "cosine with 0.1 floor", "loss": "interior L1"}, "trainingSliceRange": [0, img.info().size_z.saturating_sub(1)]}))?;
+            let last_progress = std::cell::Cell::new((0usize, 0usize, 0f32));
             let app2 = app.clone();
             let pixel_a = crate::align::pixel_a(img.info());
-            // After each round the network so far serves the preview
-            // (`wedge-live`); the earlier model comes back if it fails.
             let before = MODEL.lock().unwrap().clone();
             let trained = crate::classify::on_device(|dev| {
-                crate::wedge::train_live(
-                    dev,
-                    &vol,
-                    &g,
-                    &cfg,
-                    |p| {
-                        let _ = app2.emit("wedge-train", p);
-                    },
-                    &mut |net| {
-                        *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss: f32::NAN, token: req.token, pixel_a, c: req.c, t: req.t }));
-                        let _ = app2.emit("wedge-live", ());
-                    },
-                )
+                crate::wedge::train_live(dev, &vol, &g, &cfg, |p| {
+                    last_progress.set((p.iteration, p.step, p.loss));
+                    let _ = app2.emit("wedge-train", p);
+                }, &mut |net| {
+                    let (iteration, step, loss) = last_progress.get();
+                    let model = Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, pixel_a, c: req.c, t: req.t });
+                    let p = crate::trained_models::Persistence::from_result(crate::trained_models::save_wedge(&session, &model, false, serde_json::json!({"iteration": iteration, "iterations": cfg.iterations, "step": step, "stepsPerIteration": cfg.steps}), &format!("{dev:?}")));
+                    checkpoint_event(&app2, req.token, "wedge", req.c, req.t, &p);
+                    *MODEL.lock().unwrap() = Some(model);
+                    let _ = app2.emit("wedge-live", ());
+                })
             });
             let ((net, loss), backend) = match trained {
                 Ok(r) => r,
                 Err(e) => {
                     *MODEL.lock().unwrap() = before;
+                    let _ = session.clear_partial();
                     return Err(e);
                 }
             };
-            *MODEL.lock().unwrap() = Some(Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, pixel_a, c: req.c, t: req.t }));
+            let model = Arc::new(crate::wedge::Trained { net, vol: vol.clone(), geometry: g, bin: req.bin.max(1), mean, std, loss, token: req.token, pixel_a, c: req.c, t: req.t });
+            let persistence = crate::trained_models::Persistence::from_result(crate::trained_models::save_wedge(&session, &model, true, serde_json::json!({"iteration": cfg.iterations, "iterations": cfg.iterations, "step": cfg.steps, "stepsPerIteration": cfg.steps}), backend));
+            *MODEL.lock().unwrap() = Some(model);
             let seconds = started.elapsed().as_secs_f32();
             eprintln!("wedge_train: {:?} cube {} × {} {} it × {} steps, loss {loss:.4}, {backend} in {seconds:.1} s", vol.n, cfg.cube, cfg.count, cfg.iterations, cfg.steps);
-            Ok(serde_json::json!({ "loss": loss, "backend": backend, "seconds": seconds, "dims": vol.n, "cube": cfg.cube }))
+            Ok(serde_json::json!({ "loss": loss, "backend": backend, "seconds": seconds, "dims": vol.n, "cube": cfg.cube, "persistence": persistence }))
         })
         .await
     }
@@ -2269,7 +2371,8 @@ async fn pick_open(app: AppHandle, dir: String) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn pick_open_mac(app: &AppHandle, dir: String) -> Option<String> {
-    let exts = formats::extensions();
+    let mut exts = formats::extensions();
+    if cfg!(feature = "pro") { exts.push("tmvmerge".into()); }
     let (tx, rx) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
         use objc2::MainThreadMarker;
@@ -2531,6 +2634,10 @@ fn target_window(app: &AppHandle, path: &str) -> String {
     if windows.is_empty() || cfg!(target_os = "android") {
         return "main".into();
     }
+    if cfg!(feature = "pro") {
+        return windows.values().find(|w| w.is_focused().unwrap_or(false)).map(|w| w.label().to_string())
+            .unwrap_or_else(|| if windows.contains_key("main") { "main".into() } else { windows.keys().min().unwrap().clone() });
+    }
     let mut labels: Vec<&String> = windows.keys().collect();
     labels.sort();
     let shown = |l: &String| {
@@ -2676,6 +2783,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_pending_open,
             open_image,
+            #[cfg(feature = "pro")] activate_document,
+            #[cfg(feature = "pro")] close_pro_window,
+            #[cfg(feature = "pro")] pick_merge_project,
+            #[cfg(feature = "pro")] close_document,
+            #[cfg(feature = "pro")] open_layer_source,
+            #[cfg(feature = "pro")] read_merge_project,
+            #[cfg(feature = "pro")] save_merge_project,
+            #[cfg(feature = "pro")] save_merged_image,
             open_reslice,
             load_progress,
             render_view,
@@ -2698,6 +2813,7 @@ pub fn run() {
             classify_scribbles,
             classify_clear,
             classify_train,
+            trained_model_restore,
             classify_predict,
             classify_apply,
             classify_cancel,
@@ -2801,6 +2917,8 @@ pub fn run() {
             if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &_event {
                 let state = _app.state::<AppState>();
                 state.opening.close(label);
+                #[cfg(feature = "pro")]
+                state.documents.close_window(label);
                 if let Some(img) = state.current.lock().unwrap().remove(label) {
                     img.cancelled.store(true, Ordering::Relaxed);
                 }
@@ -2812,6 +2930,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = &_event {
                 let state = _app.state::<AppState>();
                 state.current.lock().unwrap().clear();
+                #[cfg(feature = "pro")]
+                state.documents.close_all();
                 prune_labels(&state);
             }
             // macOS delivers double-clicked files as an event, not as argv.

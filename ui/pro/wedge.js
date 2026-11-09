@@ -6,7 +6,7 @@
 // volume as a float32 MRC; the open image is never changed.
 // Shares app.js globals: S, T, invoke, $, pref, visibleRegion, fftChannel, toScreen, ext, requestRender, saveDir, setSaveDir, dirname, openPath.
 (() => {
-  const W = { busy: false, training: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null, model: null };
+  const W = { generation: 0, cache: new Map(), busy: false, training: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null, model: null };
   const AXES = ["X", "Y", "Z"];
   // [beam, tilt axis] choices.
   const GEOMS = [[2, 1], [2, 0], [1, 0], [1, 2], [0, 1], [0, 2]];
@@ -50,6 +50,7 @@
       </label>
       <span class="al-wide"><button id="wg-train" class="small primary">训练</button></span>
       <span class="al-wide dim" id="wg-model"></span>
+      <div class="al-wide dim" id="wg-model-record" hidden></div>
     </div>
     <label class="al-check"><input type="checkbox" id="wg-preview" checked /> 预览（XY、XZ、YZ 视图都可以，XZ 最明显）</label>
     <label class="dn-split">左原图 · 右补偿后 <input type="range" id="wg-split" min="0" max="100" step="1" /></label>
@@ -94,6 +95,35 @@
     requestRender();
   });
   $("wg-preview").addEventListener("change", requestRender);
+
+  const modelContext = () => ({ token: baseToken(), c: fftChannel(), t: S.t });
+  const modelRecords = window.TifMrcViewPro.models.attach("wedge", "wg-model-record", modelContext);
+
+  async function restoreModel() {
+    const info = baseInfo();
+    if (!info || info.sizeZ < 16 || W.training || W.saving) return;
+    const req = modelContext(), key = JSON.stringify(req);
+    if (key === W.restoreKey) return;
+    W.restoreKey = key;
+    W.restoring = true;
+    W.model = null;
+    clearPreviews();
+    const result = await modelRecords.restore(req);
+    if (result.stale || key !== W.restoreKey) return;
+    W.restoring = false;
+    if (result.saved) {
+      const effective = result.saved.record.parameters.effective;
+      const cfg = effective.config, g = effective.geometry;
+      const geom = GEOMS.findIndex(([b, t]) => b === g.beam && t === g.tilt);
+      for (const [id, v] of [["wg-geom", geom], ["wg-min", g.minTilt ?? -g.maxTilt], ["wg-max", g.maxTilt], ["wg-bin", effective.bin], ["wg-cube", cfg.cube], ["wg-count", cfg.count], ["wg-iter", cfg.iterations], ["wg-steps", cfg.steps], ["wg-noise", cfg.noise], ["wg-smooth", cfg.smooth]]) window.TifMrcViewPro.models.setValue(id, v);
+      W.binPath = info.path;
+      W.model = { token: req.token };
+      $("wg-model").textContent = "已自动恢复缺失楔模型，可直接预览和保存";
+      store();
+      clearPreviews();
+      requestRender();
+    }
+  }
 
   /** The stack itself, also while an XZ / YZ side view is shown. */
   function baseInfo() {
@@ -147,6 +177,7 @@
   $("wg-detect").addEventListener("click", detect);
 
   async function train() {
+    if (W.restoring) { status("正在读取已保存的模型…"); return; }
     if (W.training) {
       invoke("wedge_cancel");
       return;
@@ -158,34 +189,33 @@
       const p = ev.payload;
       $("wg-model").textContent = `训练中 第 ${p.iteration}/${p.iterations} 轮 · ${p.step}/${p.steps} 步 · 损失 ${p.loss.toPrecision(3)}` + (W.live ? " · 预览每轮更新" : "");
     });
-    // After each round the network so far: show its result as it improves.
+    const previousModel = W.model;
     const unLive = await T.event.listen("wedge-live", () => {
       W.live = true;
       W.model = { token: req.token };
-      W.key = "";
+      clearPreviews();
     });
-    const prevModel = W.model;
     W.live = false;
     W.training = true;
     $("wg-train").textContent = "取消";
     $("wg-model").textContent = "读取体数据、切子块…";
     try {
       const r = await invoke("wedge_train", { req });
+      if (req.token === baseToken() && req.c === fftChannel() && req.t === S.t) modelRecords.show(r.persistence);
       const g = req.geometry;
       W.model = { token: req.token };
       const t = r.seconds < 120 ? `${r.seconds.toFixed(0)} s` : `${(r.seconds / 60).toFixed(1)} min`;
       $("wg-model").textContent = `已训练：${r.dims.join("×")}（bin ${req.bin}）· 电子束 ${AXES[g.beam]} · ${g.minTilt}°…${g.maxTilt}° · 子块 ${r.cube} · 损失 ${r.loss.toPrecision(3)} · ${t} · ${r.backend}`;
-      W.key = "";
+      clearPreviews();
     } catch (e) {
+      W.model = previousModel;
+      clearPreviews();
       $("wg-model").textContent = String(e).includes("已取消") ? "已取消训练" : "训练失败：" + e;
-      // The backend kept the earlier network.
-      W.model = prevModel;
     } finally {
       un();
       unLive();
       W.training = false;
       W.live = false;
-      W.key = "";
       $("wg-train").textContent = "训练";
     }
   }
@@ -205,8 +235,7 @@
   function close() {
     panel.hidden = true;
     btn.classList.remove("on");
-    W.res = null;
-    W.key = "";
+    clearPreviews();
     requestRender();
   }
 
@@ -231,27 +260,66 @@
     return { rect: u.slice(0, 4), w, h, ms, backend: name, values: new Float32Array(buf.slice(44, 44 + w * h * 4)) };
   }
 
+  function previewKey(req) {
+    return JSON.stringify([W.generation, req]);
+  }
+
+  function clearPreviews() {
+    W.generation++;
+    W.cache.clear();
+    W.res = null;
+    W.key = "";
+    W.imgKey = "";
+  }
+
+  function showPreview(res, key) {
+    W.res = res;
+    W.key = key;
+    W.imgKey = "";
+    const time = res.ms < 1000 ? `${res.ms.toFixed(0)} ms` : `${(res.ms / 1000).toFixed(1)} s`;
+    status(`${res.w}×${res.h} px · ${time} · ${res.backend}`);
+    requestRender();
+  }
+
   async function runPreview() {
-    if (W.busy || (W.training && !W.live) || W.saving || panel.hidden || !$("wg-preview").checked || S.scrubbing) return;
+    if (W.restoring || (W.training && !W.live) || W.saving || panel.hidden || !$("wg-preview").checked || S.scrubbing) return;
     const req = previewReq();
     if (!req) return;
-    const key = JSON.stringify(req);
-    if (key === W.key) return;
+    const key = previewKey(req);
+    const cached = W.cache.get(key);
+    if (cached) {
+      W.cache.delete(key);
+      W.cache.set(key, cached);
+      if (W.key !== key) showPreview(cached, key);
+      return;
+    }
+    if (W.busy || key === W.key) return;
+    const generation = W.generation;
     W.busy = true;
-    status("预览计算中…");
+    status(`第 ${S.z + 1} 层预览计算中…`);
     try {
-      const res = parse(await invoke("wedge_preview", { req }));
-      W.res = { ...res, axis: req.axis, index: req.index, token: req.token };
-      W.key = key;
-      W.imgKey = "";
-      const time = res.ms < 1000 ? `${res.ms.toFixed(0)} ms` : `${(res.ms / 1000).toFixed(1)} s`;
-      status(`${res.w}×${res.h} px · ${time} · ${res.backend}`);
-      requestRender();
+      const res = { ...parse(await invoke("wedge_preview", { req })), axis: req.axis, index: req.index, token: req.token };
+      if (req.token !== baseToken() || generation !== W.generation) return;
+      W.cache.set(key, res);
+      // At most eight layers and 64 MiB; revisiting them needs no inference.
+      let bytes = [...W.cache.values()].reduce((n, r) => n + r.values.byteLength, 0);
+      while (W.cache.size > 1 && (W.cache.size > 8 || bytes > 64 * 1024 * 1024)) {
+        const oldest = W.cache.keys().next().value;
+        bytes -= W.cache.get(oldest).values.byteLength;
+        W.cache.delete(oldest);
+      }
+      const current = previewReq();
+      if (current && previewKey(current) === key) showPreview(res, key);
     } catch (e) {
-      W.key = key;
-      status("预览失败：" + e);
+      const current = previewReq();
+      if (generation === W.generation && current && previewKey(current) === key) {
+        W.key = key;
+        status("预览失败：" + e);
+      }
     } finally {
       W.busy = false;
+      const current = previewReq();
+      if (current && previewKey(current) !== W.key) setTimeout(runPreview, 0);
     }
   }
 
@@ -287,8 +355,10 @@
   }
 
   function overlay(g) {
-    const r = W.res;
+    const req = previewReq();
+    const r = req && W.cache.get(previewKey(req));
     if (!r || panel.hidden || !$("wg-preview").checked || r.token !== baseToken() || r.axis !== S.axis || r.index !== S.z) return;
+    if (W.res !== r) { W.res = r; W.imgKey = ""; }
     const [x, y, w, h] = r.rect;
     const [sx, sy] = toScreen(x, y);
     const [ex, ey] = toScreen(x + w, y + h);
@@ -372,12 +442,14 @@
   // recompute the preview a moment after the view or slice stops changing.
   setInterval(() => {
     const info = baseInfo();
+    if (W.token !== baseToken()) { W.token = baseToken(); clearPreviews(); }
+    restoreModel();
     const ok = !!(info && info.sizeZ >= 16 && !info.isRgb);
     btn.disabled = !ok;
     if (!ok && !panel.hidden && !W.saving && !W.training) close();
     if (panel.hidden || !$("wg-preview").checked) return;
     const req = previewReq();
-    const want = req ? JSON.stringify(req) : "";
+    const want = req ? previewKey(req) : "";
     if (want !== W.want) {
       W.want = want;
       clearTimeout(W.timer);

@@ -53,7 +53,7 @@ const WORDS = [
   ["双指捏合 缩放　拖动 平移　双击 适应屏幕", "Pinch zoom　Drag pan　Double-tap fit", "Zwei Finger zoomen　Ziehen verschiebt　Doppeltippen passt ein", "ピンチで拡大縮小　ドラッグで移動　ダブルタップで全体表示", "Pellizca para zoom　Arrastra para mover　Doble toque para ajustar", "Pincer pour zoomer　Glisser pour déplacer　Double-toucher pour ajuster", "Щипок — масштаб　Перетаскивание — сдвиг　Двойное касание — вписать"],
   ["最近打开", "Recent", "Zuletzt geöffnet", "最近開いたファイル", "Recientes", "Récents", "Недавние"],
   ["还没有打开过图像", "No images opened yet", "Noch kein Bild geöffnet", "まだ画像を開いていません", "Aún no se ha abierto ninguna imagen", "Aucune image ouverte pour l'instant", "Изображения ещё не открывались"],
-  ["四个画面：XY、XZ、YZ，右上角的十字用来改 Z", "Four views: XY, XZ, YZ, and the cross at the upper right moves Z", "Vier Ansichten: XY, XZ, YZ; das Kreuz oben rechts verschiebt Z", "4 画面：XY、XZ、YZ。右上の十字で Z を動かす", "Cuatro vistas: XY, XZ, YZ; la cruz de arriba a la derecha mueve Z", "Quatre vues : XY, XZ, YZ ; la croix en haut à droite déplace Z", "Четыре вида: XY, XZ, YZ; крест справа сверху двигает Z"],
+  ["四个画面：XY、XZ、YZ 和三维切片", "Four views: XY, XZ, YZ, and intersecting 3D slices", "Vier Ansichten: XY, XZ, YZ und 3D-Schnitte", "4 画面：XY、XZ、YZ と 3D スライス", "Cuatro vistas: XY, XZ, YZ y cortes 3D", "Quatre vues : XY, XZ, YZ et coupes 3D", "Четыре вида: XY, XZ, YZ и 3D-срезы"],
   ["直接支持", "Built in", "Integriert", "標準で対応", "Integrado", "Intégré", "Встроенная поддержка"],
   ["Z 堆叠", "Z stacks", "Z-Stapel", "Z スタック", "Pilas Z", "Piles Z", "Z-стеки"],
   ["其他", "Other", "Andere", "その他", "Otros", "Autres", "Другое"],

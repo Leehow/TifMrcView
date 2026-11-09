@@ -93,6 +93,7 @@
     </div>
     <div id="lab-cls" hidden>
       <div class="dim" id="lab-cls-text"></div>
+      <div class="dim" id="lab-cls-model-record" hidden></div>
       <div class="row">
         <button class="small" id="lab-cls-train" title="用所有层上的标注训练分类器">训练</button>
         <label title="在当前层上显示分类结果"><input type="checkbox" id="lab-cls-preview" /> 预览</label>
@@ -152,6 +153,7 @@
     <details id="lab-unet">
       <summary>深度学习 U-Net</summary>
       <div class="dim" id="lab-unet-text"></div>
+      <div class="dim" id="lab-unet-model-record" hidden></div>
       <div class="row">
         <label title="训练步数，越多越准也越慢">步数 <input type="number" id="lab-unet-steps" min="50" max="20000" step="50" value="400" style="width: 72px" /></label>
         <button class="small" id="lab-unet-train" title="用已经画好标签的层训练 U-Net（Esc 停止）">训练</button>
@@ -165,6 +167,30 @@
     </details>
     <div id="lab-file" class="dim"></div>`;
   $("sec-ann").after(sec);
+
+  const modelContext = () => ({ token: S.token, c: channel(), t: S.t });
+  const clsRecords = window.TifMrcViewPro.models.attach("classifier", "lab-cls-model-record", modelContext);
+  const unetRecords = window.TifMrcViewPro.models.attach("unet", "lab-unet-model-record", modelContext);
+
+  async function restoreModels() {
+    if (L.token !== S.token || S.axis !== "xy" || L.busy || L.cls.busy || L.unet.busy) return;
+    const req = modelContext(), key = JSON.stringify(req);
+    if (key === L.restoreModelsKey) return;
+    L.restoreModelsKey = key;
+    L.restoringModels = true;
+    Object.assign(L.cls, { info: null, pred: null, predZ: -1 });
+    Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
+    syncCls(); syncUnet();
+    const [classifier, unet] = await Promise.all([clsRecords.restore(req), unetRecords.restore(req)]);
+    if (key !== L.restoreModelsKey || key !== JSON.stringify(modelContext())) return;
+    L.restoringModels = false;
+    if (classifier.saved) L.cls.info = classifier.saved.summary;
+    if (unet.saved) {
+      L.unet.info = unet.saved.summary;
+      window.TifMrcViewPro.models.setValue("lab-unet-steps", unet.saved.record.parameters.effective.config.steps);
+    }
+    syncCls(); syncUnet(); draw();
+  }
 
   // Quick toolbar button, after the crop tool.
   const btn = document.createElement("button");
@@ -432,6 +458,7 @@
     renderZMarks();
     if (S.axis === "xy" && L.token !== S.token) ensure();
     const ready = S.axis === "xy" && L.token === S.token && !L.error;
+    if (ready) restoreModels();
     if (ready && L.z !== S.z && (any() || S.tool === "label")) fetchSlice();
     if (ready && L.show && L.slice && L.z === S.z && (any() || L.stroke)) {
       const [sx, sy] = toScreen(0, 0);
@@ -1095,7 +1122,7 @@
     $("lab-cls-preview").checked = C.preview;
     $("lab-cls-conf").value = C.minConf;
     $("lab-cls-conf-v").textContent = `${Math.round(C.minConf * 100)}%`;
-    $("lab-cls-train").disabled = C.busy || L.busy;
+    $("lab-cls-train").disabled = C.busy || L.busy || !!L.restoringModels;
     for (const id of ["lab-cls-z", "lab-cls-all"]) $(id).disabled = !info || C.busy || L.busy;
     $("lab-cls-all").hidden = !(S.info && S.info.sizeZ > 1);
   }
@@ -1136,10 +1163,12 @@
     const C = L.cls;
     if (!C.info || C.busy) return;
     const z = S.z;
+    const context = JSON.stringify(modelContext());
     C.busy = true;
     syncCls();
     try {
       const buf = await invoke("classify_predict", { req: clsReq(), z });
+      if (context !== JSON.stringify(modelContext())) return;
       const dv = new DataView(buf), w = dv.getUint32(0, true), h = dv.getUint32(4, true);
       const labels = new Uint16Array(buf.slice(8, 8 + w * h * 2));
       const conf = new Uint8Array(buf, 8 + w * h * 2, w * h);
@@ -1225,12 +1254,17 @@
   }
 
   async function clsTrain() {
+    if (L.restoringModels) return;
     const C = L.cls;
     if (!ready() || C.busy) return;
     C.busy = true;
     syncCls();
     try {
-      C.info = await invoke("classify_train", { req: clsReq() });
+      const context = JSON.stringify(modelContext());
+      const info = await invoke("classify_train", { req: clsReq() });
+      if (context !== JSON.stringify(modelContext())) return;
+      C.info = info;
+      clsRecords.show(info.persistence);
       C.predZ = -1;
     } catch (e) {
       toast(String(e), 6000);
@@ -1280,7 +1314,8 @@
   $("lab-cls-clear").addEventListener("click", async () => {
     try {
       await invoke("classify_clear", { token: L.token });
-    } catch (_) {}
+    } catch (e) { toast(String(e), 6000); return; }
+    clsRecords.clear();
     Object.assign(L.cls, { z: -1, scribbles: null, info: null, pred: null, predZ: -1 });
     syncCls();
     draw();
@@ -1309,7 +1344,7 @@
     $("lab-unet-preview").checked = U.preview;
     $("lab-unet-conf").value = U.minConf;
     $("lab-unet-conf-v").textContent = `${Math.round(U.minConf * 100)}%`;
-    $("lab-unet-train").disabled = U.busy || L.busy || !L.token;
+    $("lab-unet-train").disabled = U.busy || L.busy || !L.token || !!L.restoringModels;
     for (const id of ["lab-unet-z", "lab-unet-all"]) $(id).disabled = !info || U.busy || L.busy;
     $("lab-unet-all").hidden = !(S.info && S.info.sizeZ > 1);
   }
@@ -1325,6 +1360,7 @@
     // While training, the network so far (unet-live) segments the slice.
     if (!(U.info || U.live) || U.predicting || (U.busy && !U.live)) return;
     const z = S.z;
+    const context = JSON.stringify(modelContext());
     const own = !U.busy;
     U.stale = false;
     U.predicting = true;
@@ -1332,6 +1368,7 @@
     syncUnet();
     try {
       const buf = await invoke("unet_predict", { req: clsReq(), z });
+      if (context !== JSON.stringify(modelContext())) return;
       const dv = new DataView(buf), w = dv.getUint32(0, true), h = dv.getUint32(4, true);
       U.pred = { labels: new Uint16Array(buf.slice(8, 8 + w * h * 2)), conf: new Uint8Array(buf, 8 + w * h * 2, w * h) };
       U.predZ = z;
@@ -1362,6 +1399,7 @@
   }
 
   async function unetTrain() {
+    if (L.restoringModels) return;
     const U = L.unet;
     if (!ready() || U.busy) return;
     await flush();
@@ -1377,7 +1415,11 @@
       draw();
     });
     try {
-      U.info = await invoke("unet_train", { req: clsReq(), steps: U.train.steps });
+      const context = JSON.stringify(modelContext());
+      const info = await invoke("unet_train", { req: clsReq(), steps: U.train.steps });
+      if (context !== JSON.stringify(modelContext())) return;
+      U.info = info;
+      unetRecords.show(info.persistence);
       Object.assign(U, { pred: null, predZ: -1 });
     } catch (e) {
       toast(String(e), 6000);

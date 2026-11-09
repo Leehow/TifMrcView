@@ -1,18 +1,19 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, NLM on the GPU), and a self-supervised network
+// means (denoise.rs, NLM on the GPU), IMOD NAD 3D, and a self-supervised network
 // (Noise2Void / Noise2Noise, denoise_learn.rs) trained on the image itself.
 // Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
 // Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
 (() => {
-  const N = { busy: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null };
+  const N = { generation: 0, cache: new Map(), busy: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null };
 
   // Strength slider per method: [label, min, max, step, default, hint].
   const METHODS = {
     nlm: ["h（× 噪声 σ）", 0.2, 3, 0.05, 0.8, "非局部均值：按邻域块的相似度加权平均，保留纹理和膜；越大越平滑"],
     diffusion: ["边缘阈值 K（× 噪声 σ）", 0.5, 8, 0.1, 2, "各向异性扩散：沿边缘平滑、不跨边缘；越大越平滑"],
+    nad3d: ["K（× 体数据标准差 SD）", 0.02, 5, 0.02, 0.1, "IMOD nad_eed_3d：三维边缘增强非线性各向异性扩散（NAD / EED），联合处理 XYZ；K 越大越平滑。需要安装 IMOD"],
     gaussian: ["σ px", 0.3, 6, 0.1, 1, "高斯模糊：最快，细节和边缘也一起变模糊"],
     median: ["半径 px", 1, 7, 1, 1, "中值：去掉坏点和椒盐噪声"],
     learned: ["混合比例（1 = 全用网络结果）", 0, 1, 0.05, 1, "自监督学习：在这张图本身上训练一个小网络，不需要干净图像；先选训练方式，点「训练」"],
@@ -21,7 +22,7 @@
   const btn = document.createElement("button");
   btn.id = "btn-denoise";
   btn.className = "toggle";
-  btn.title = "降噪：非局部均值、各向异性扩散、高斯、中值，预览对比后另存为 32 位浮点 MRC";
+  btn.title = "降噪：NLM、二维 Perona–Malik、IMOD NAD 3D、Gaussian、Median、Noise2Void / Noise2Noise，预览对比后另存为 32 位浮点 MRC";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12c1.5-3 2.5 3 4 0s2.5-5 4 0"/><path d="M13 12c2-1.6 6-1.6 8 0"/><path d="M12 4v16" stroke-dasharray="2 2"/></svg>';
   btn.disabled = true;
   $("btn-3d") ? $("btn-3d").before(btn) : $("quickbar").append(btn);
@@ -38,11 +39,12 @@
     <div class="al-opts">
       <label class="al-wide">方法
         <select id="dn-method">
-          <option value="nlm">非局部均值 NLM（推荐）</option>
-          <option value="diffusion">各向异性扩散</option>
-          <option value="gaussian">高斯</option>
-          <option value="median">中值</option>
-          <option value="learned">自监督学习（Noise2Void / Noise2Noise）</option>
+          <option value="nlm">非局部均值（Non-Local Means / NLM）</option>
+          <option value="diffusion">二维各向异性扩散（Perona–Malik）</option>
+          <option value="nad3d">IMOD 三维非线性各向异性扩散（NAD 3D / EED）</option>
+          <option value="gaussian">高斯滤波（Gaussian）</option>
+          <option value="median">中值滤波（Median）</option>
+          <option value="learned">自监督降噪（Noise2Void / Noise2Noise）</option>
         </select>
       </label>
       <label class="al-wide"><span id="dn-slabel">强度</span>
@@ -61,13 +63,16 @@
       <label class="dn-learn">训练步数 <select id="dn-steps" title="越多越好也越慢；用时取决于步数而不是图像大小，GPU 上 1000 步通常一两分钟（Mac 稍慢）"><option>500</option><option>1000</option><option>2000</option><option>4000</option></select></label>
       <span class="dn-learn dn-trainrow"><button id="dn-train" class="small primary">训练</button></span>
       <span class="al-wide dn-learn dim" id="dn-model"></span>
+      <div class="al-wide dn-learn dim" id="dn-model-record" hidden></div>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
+      <span class="al-wide dn-nad dim">IMOD nad_eed_3d · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
       <label class="al-check al-wide"><input type="checkbox" id="dn-cpu" /> 只用 CPU</label>
     </div>
     <label class="al-check"><input type="checkbox" id="dn-preview" checked /> 预览（视野中间最多 2048 px）</label>
     <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" /></label>
     <div class="al-row"><span id="dn-status" class="dim"></span></div>
+    <div class="al-row"><button id="dn-cancel-preview" class="small" hidden>取消 NAD 3D 计算</button></div>
     <div class="al-row">
       <button id="dn-save-one" class="small" title="当前层降噪后存成 32 位浮点 MRC">保存当前层…</button>
       <button id="dn-save-all" class="small primary" title="每一层降噪后存成 32 位浮点 MRC 叠层">保存全部层…</button>
@@ -94,7 +99,9 @@
     $("dn-method").title = hint;
     $("dn-sval").textContent = (+s.value).toFixed(step < 1 ? 2 : 0);
     for (const el of panel.querySelectorAll(".dn-nlm")) el.hidden = m !== "nlm";
-    for (const el of panel.querySelectorAll(".dn-diff")) el.hidden = m !== "diffusion";
+    for (const el of panel.querySelectorAll(".dn-diff")) el.hidden = m !== "diffusion" && m !== "nad3d";
+    for (const el of panel.querySelectorAll(".dn-nad")) el.hidden = m !== "nad3d";
+    for (const el of panel.querySelectorAll(".dn-z")) el.hidden = m === "nad3d" || !(S.info && S.info.sizeZ > 1);
     for (const el of panel.querySelectorAll(".dn-learn")) el.hidden = m !== "learned";
     syncMode();
   }
@@ -126,6 +133,35 @@
   $("dn-bin").value = P.bin || 1;
   syncMethod();
 
+  const modelContext = () => ({ token: S.token, c: fftChannel(), t: S.t });
+  const modelRecords = window.TifMrcViewPro.models.attach("denoise", "dn-model-record", modelContext);
+
+  async function restoreModel() {
+    if (!S.info || S.axis !== "xy" || N.training || N.saving) return;
+    const req = modelContext(), key = JSON.stringify(req);
+    if (key === N.restoreKey) return;
+    N.restoreKey = key;
+    N.restoring = true;
+    N.restoreError = null;
+    clearPreviews();
+    const result = await modelRecords.restore(req);
+    if (result.stale || key !== N.restoreKey) return;
+    N.restoring = false;
+    N.restoreError = result.error;
+    if (result.saved) {
+      const saved = result.saved, effective = saved.record.parameters.effective;
+      for (const [id, v] of [["dn-mode", effective.mode], ["dn-bin", effective.bin], ["dn-slab", effective.slab], ["dn-steps", effective.config.steps]]) window.TifMrcViewPro.models.setValue(id, v);
+      const name = { n2v: "Noise2Void / N2V", frames: "Noise2Noise / N2N（奇偶帧）", neighbours: "Noise2Noise / N2N（相邻层）" }[effective.mode];
+      N.model = `${name} · ${effective.config.steps} 步`;
+      N.modelToken = req.token;
+      N.frames = effective.mode === "frames";
+      $("dn-model").textContent = `已自动恢复：${N.model}`;
+      store();
+      clearPreviews();
+      requestRender();
+    }
+  }
+
   function store() {
     P.method = $("dn-method").value;
     P.strength[P.method] = +$("dn-strength").value;
@@ -150,7 +186,7 @@
       iterations: P.iterations,
       patch: P.patch,
       search: P.search,
-      slab: S.info && S.info.sizeZ > 1 ? P.slab : 0,
+      slab: method !== "nad3d" && S.info && S.info.sizeZ > 1 ? P.slab : 0,
       device: P.cpu ? "cpu" : "auto",
     };
   }
@@ -175,6 +211,8 @@
   // ---- Self-supervised training ----
 
   async function train() {
+    if (N.restoring) { status("正在读取已保存的模型…"); return; }
+    N.restoreError = null;
     if (N.training) {
       invoke("denoise_cancel");
       return;
@@ -189,7 +227,7 @@
     const unLive = await T.event.listen("denoise-live", () => {
       N.live = true;
       N.modelToken = req.token;
-      N.key = "";
+      clearPreviews();
     });
     const prevToken = N.modelToken;
     N.live = false;
@@ -198,13 +236,14 @@
     $("dn-model").textContent = "准备训练数据…";
     try {
       const r = await invoke("denoise_train", { req });
+      if (req.token === S.token && req.c === fftChannel() && req.t === S.t) modelRecords.show(r.persistence);
       const name = { n2v: "Noise2Void", frames: "Noise2Noise 奇偶帧", neighbours: "Noise2Noise 相邻层" }[r.mode];
       N.model = `${name} · ${r.images} ${r.mode === "n2v" ? "张图" : "对"} · ${req.steps} 步${req.bin > 1 ? ` · 合并 ${req.bin}×${req.bin}` : ""} · 损失 ${r.loss.toPrecision(3)} · ${r.seconds.toFixed(0)} s · ${r.backend}`;
       N.frames = r.mode === "frames";
       N.modelToken = req.token;
       $("dn-model").textContent = `已训练：${N.model}` + (r.warning ? `\n⚠ ${r.warning}` : "");
       // Show the new model's result.
-      N.key = "";
+      clearPreviews();
     } catch (e) {
       $("dn-model").textContent = String(e).includes("已取消") ? "已取消训练" : "训练失败：" + e;
       // The backend kept the earlier network.
@@ -214,7 +253,7 @@
       unLive();
       N.training = false;
       N.live = false;
-      N.key = "";
+      clearPreviews();
       $("dn-train").textContent = "训练";
     }
   }
@@ -230,7 +269,7 @@
     // The right-hand panels share one spot: one at a time.
     if (F.on) setFft(false);
     document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
-    for (const el of panel.querySelectorAll(".dn-z")) el.hidden = !(S.info && S.info.sizeZ > 1);
+    syncMethod();
     syncMode();
     $("dn-save-all").hidden = !(S.info && S.info.sizeZ > 1);
   }
@@ -238,8 +277,7 @@
   function close() {
     panel.hidden = true;
     btn.classList.remove("on");
-    N.res = null;
-    N.key = "";
+    clearPreviews();
     requestRender();
   }
 
@@ -270,28 +308,68 @@
     return { rect, ms, sigma, backend: name, values };
   }
 
+  function previewKey(req) {
+    return JSON.stringify([N.generation, req]);
+  }
+
+  function clearPreviews() {
+    N.generation++;
+    N.cache.clear();
+    N.res = null;
+    N.key = "";
+    N.imgKey = "";
+  }
+
+  function showPreview(res, key) {
+    N.res = res;
+    N.key = key;
+    N.imgKey = "";
+    const time = res.ms < 1000 ? `${res.ms.toFixed(0)} ms` : `${(res.ms / 1000).toFixed(1)} s`;
+    status(`噪声 σ ≈ ${fmtNum(res.sigma)} · ${res.rect[2]}×${res.rect[3]} px · ${time} · ${res.backend}`);
+    requestRender();
+  }
+
   async function runPreview() {
-    if (N.busy || (N.training && !N.live) || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
+    if (N.restoring || (N.restoreError && params().method === "learned") || (N.training && !N.live) || N.saving || panel.hidden || !$("dn-preview").checked || S.scrubbing) return;
     const req = previewReq();
     if (!req) return;
-    const key = JSON.stringify(req);
-    if (key === N.key) return;
+    const key = previewKey(req);
+    const cached = N.cache.get(key);
+    if (cached) {
+      N.cache.delete(key);
+      N.cache.set(key, cached);
+      if (N.key !== key) showPreview(cached, key);
+      return;
+    }
+    if (N.busy || key === N.key) return;
+    const generation = N.generation;
     N.busy = true;
-    status("预览计算中…");
+    $("dn-cancel-preview").hidden = req.params.method !== "nad3d";
+    status(req.params.method === "nad3d" ? "IMOD NAD 3D：正在处理整个体，完成后可逐层对比…" : `第 ${S.z + 1} 层预览计算中…`);
     try {
-      const res = parse(await invoke("denoise_preview", { req }));
-      if (req.token !== S.token) return;
-      N.res = { ...res, token: req.token, z: req.z, t: req.t, c: req.c };
-      N.key = key;
-      N.imgKey = "";
-      const time = res.ms < 1000 ? `${res.ms.toFixed(0)} ms` : `${(res.ms / 1000).toFixed(1)} s`;
-      status(`噪声 σ ≈ ${fmtNum(res.sigma)} · ${res.rect[2]}×${res.rect[3]} px · ${time} · ${res.backend}`);
-      requestRender();
+      const res = { ...parse(await invoke("denoise_preview", { req })), z: req.z, t: req.t, c: req.c, token: req.token };
+      if (req.token !== S.token || generation !== N.generation) return;
+      N.cache.set(key, res);
+      // At most eight layers and 64 MiB; revisiting them needs no inference.
+      let bytes = [...N.cache.values()].reduce((n, r) => n + r.values.byteLength, 0);
+      while (N.cache.size > 1 && (N.cache.size > 8 || bytes > 64 * 1024 * 1024)) {
+        const oldest = N.cache.keys().next().value;
+        bytes -= N.cache.get(oldest).values.byteLength;
+        N.cache.delete(oldest);
+      }
+      const current = previewReq();
+      if (current && previewKey(current) === key) showPreview(res, key);
     } catch (e) {
-      N.key = key;
-      status("预览失败：" + e);
+      const current = previewReq();
+      if (generation === N.generation && current && previewKey(current) === key) {
+        N.key = key;
+        status("预览失败：" + e);
+      }
     } finally {
       N.busy = false;
+      $("dn-cancel-preview").hidden = true;
+      const current = previewReq();
+      if (current && previewKey(current) !== N.key) setTimeout(runPreview, 0);
     }
   }
 
@@ -344,8 +422,10 @@
   }
 
   function overlay(g) {
-    const r = N.res;
+    const req = previewReq();
+    const r = req && N.cache.get(previewKey(req));
     if (!r || panel.hidden || !$("dn-preview").checked || r.token !== S.token || S.axis !== "xy" || r.z !== S.z || r.t !== S.t) return;
+    if (N.res !== r) { N.res = r; N.imgKey = ""; }
     const [x, y, w, h] = r.rect;
     const [sx, sy] = toScreen(x, y);
     const [ex, ey] = toScreen(x + w, y + h);
@@ -374,6 +454,7 @@
   // ---- Save ----
 
   async function save(all) {
+    if (N.restoring || (N.restoreError && params().method === "learned")) { status("模型尚未成功恢复，请检查训练记录"); return; }
     if (N.saving) {
       invoke("denoise_cancel");
       return;
@@ -421,6 +502,7 @@
   function imageChanged() {
     const first = N.token === undefined;
     N.token = S.token;
+    clearPreviews();
     if (first || !S.info) return;
     N.saved = null;
     $("dn-saved").hidden = true;
@@ -434,12 +516,13 @@
   // moment after the view, slice or settings stop changing.
   setInterval(() => {
     if (S.token !== N.token) imageChanged();
+    restoreModel();
     const ok = !!(S.info && S.axis === "xy" && !S.info.isRgb);
     btn.disabled = !ok;
     if (!ok && !panel.hidden && !N.saving) close();
     if (panel.hidden || !$("dn-preview").checked) return;
     const req = previewReq();
-    const want = req ? JSON.stringify(req) : "";
+    const want = req ? previewKey(req) : "";
     if (want !== N.want) {
       N.want = want;
       clearTimeout(N.timer);
@@ -449,4 +532,10 @@
     }
   }, 200);
   $("dn-preview").addEventListener("change", requestRender);
+  $("dn-cancel-preview").addEventListener("click", () => {
+    const req = previewReq();
+    if (req) N.key = previewKey(req);
+    status("已取消 NAD 3D 计算");
+    invoke("denoise_cancel");
+  });
 })();

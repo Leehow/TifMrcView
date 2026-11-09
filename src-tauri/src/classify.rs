@@ -15,6 +15,7 @@ use burn::tensor::module::conv2d;
 use burn::tensor::ops::ConvOptions;
 use burn::tensor::{Device, Int, Tensor, TensorData};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Set to stop a running `classify_apply`.
 pub static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -163,7 +164,7 @@ impl Rng {
 
 /// One node of a tree. A leaf has `feature == LEAF` and its class
 /// probabilities at `left` in `Tree::leaves`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct Node {
     feature: u16,
     threshold: f32,
@@ -173,7 +174,7 @@ struct Node {
 
 const LEAF: u16 = u16::MAX;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Tree {
     nodes: Vec<Node>,
     /// Class probabilities of the leaves, `classes` per leaf.
@@ -182,7 +183,8 @@ struct Tree {
 }
 
 /// Training settings.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ForestConfig {
     pub trees: usize,
     pub max_depth: usize,
@@ -199,7 +201,7 @@ impl Default for ForestConfig {
 }
 
 /// A random forest over `features` inputs and `classes` outputs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Forest {
     trees: Vec<Tree>,
     pub classes: usize,
@@ -505,12 +507,35 @@ impl Builder<'_> {
 
 /// A trained classifier for one image: the forest and the label each class
 /// stands for, with the contrast the features were computed at.
+#[derive(Serialize, Deserialize)]
 pub struct Classifier {
     pub forest: Forest,
     pub labels: Vec<u16>,
     pub lo: f32,
     pub hi: f32,
     pub samples: usize,
+}
+
+impl Classifier {
+    pub(crate) fn validate_checkpoint(&self) -> Result<()> {
+        let f = &self.forest;
+        if !(2..=4096).contains(&self.labels.len()) || self.labels.len() != f.classes || f.features != FEATURES || f.trees.is_empty() || f.trees.len() > 512
+            || !self.labels.windows(2).all(|w| w[0] < w[1]) || self.labels[0] == 0 || !self.lo.is_finite() || !self.hi.is_finite()
+            || !f.oob_accuracy.is_finite() {
+            bail!("分类器模型结构无效");
+        }
+        for tree in &f.trees {
+            if tree.nodes.is_empty() || tree.depth > 64 || tree.leaves.is_empty() || tree.leaves.len() % f.classes != 0
+                || tree.leaves.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) { bail!("分类树模型无效"); }
+            for (i, node) in tree.nodes.iter().enumerate() {
+                if node.feature == LEAF {
+                    if (node.left as usize + 1).checked_mul(f.classes).is_none_or(|n| n > tree.leaves.len()) { bail!("分类树叶节点越界"); }
+                } else if node.feature as usize >= f.features || !node.threshold.is_finite()
+                    || [node.left, node.right].iter().any(|&n| n as usize <= i || n as usize >= tree.nodes.len()) { bail!("分类树节点越界或循环"); }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Scales raw values to about 0..1 with the view's contrast.

@@ -397,6 +397,10 @@ impl ImageInfo {
 /// A decoder for one file. Must be safe to call from several threads at once.
 pub trait Source: Send + Sync {
     fn info(&self) -> &ImageInfo;
+    /// Files that supply pixels, in decoding order, for model provenance.
+    fn model_sources(&self) -> Vec<std::path::PathBuf> {
+        vec![std::path::PathBuf::from(&self.info().path)]
+    }
     /// Decodes one page into one plane per sample.
     fn read_page(&self, page: usize) -> Result<Vec<Plane>>;
     /// The stored bytes of a one-sample page when they sit uncompressed in a
@@ -433,10 +437,14 @@ pub fn bg_pool() -> &'static rayon::ThreadPool {
 pub struct OpenImage {
     pub token: u64,
     pub source: Box<dyn Source>,
+    /// Full-volume NAD result, shared by Z previews and export; dropped with this image.
+    pub(crate) denoise_nad: Mutex<Option<Arc<crate::denoise_nad::Filtered>>>,
+    #[cfg(feature = "pro")]
+    pub(crate) model_identity: Mutex<Option<crate::model_store::Identity>>,
     cache: Mutex<HashMap<usize, Page>>,
     stats: Mutex<HashMap<(usize, usize), Stats>>,
     cached_bytes: AtomicUsize,
-    budget: usize,
+    budget: AtomicUsize,
     pub cancelled: AtomicBool,
     /// The page the user looks at; background reads stay around it.
     focus: AtomicUsize,
@@ -447,10 +455,13 @@ impl OpenImage {
         Arc::new(OpenImage {
             token,
             source,
+            denoise_nad: Mutex::new(None),
+            #[cfg(feature = "pro")]
+            model_identity: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
             stats: Mutex::new(HashMap::new()),
             cached_bytes: AtomicUsize::new(0),
-            budget,
+            budget: AtomicUsize::new(budget),
             cancelled: AtomicBool::new(false),
             focus: AtomicUsize::new(0),
         })
@@ -458,6 +469,18 @@ impl OpenImage {
 
     pub fn info(&self) -> &ImageInfo {
         self.source.info()
+    }
+
+    /// Pro shares its decoded-page allowance across retained tabs and layers.
+    pub(crate) fn set_cache_budget(&self, budget: usize) {
+        self.budget.store(budget, Ordering::Relaxed);
+        let mut cache = self.cache.lock().unwrap();
+        while self.cached_bytes.load(Ordering::Relaxed) > budget && !cache.is_empty() {
+            let focus = self.focus.load(Ordering::Relaxed);
+            let far = *cache.keys().max_by_key(|&&k| k.abs_diff(focus)).unwrap();
+            let gone = cache.remove(&far).unwrap();
+            self.cached_bytes.fetch_sub(gone.iter().map(|p| p.data.byte_len()).sum(), Ordering::Relaxed);
+        }
     }
 
     pub fn cached(&self, page: usize) -> Option<Page> {
@@ -486,7 +509,7 @@ impl OpenImage {
         }
         // Evict the pages farthest from where the user is until the new page fits.
         let focus = self.focus.load(Ordering::Relaxed);
-        while self.cached_bytes.load(Ordering::Relaxed) + bytes > self.budget && !cache.is_empty() {
+        while self.cached_bytes.load(Ordering::Relaxed) + bytes > self.budget.load(Ordering::Relaxed) && !cache.is_empty() {
             let far = *cache.keys().max_by_key(|&&k| k.abs_diff(focus)).unwrap();
             let gone = cache.remove(&far).unwrap();
             let freed: usize = gone.iter().map(|p| p.data.byte_len()).sum();
@@ -517,7 +540,7 @@ impl OpenImage {
             let seen = self.stats.lock().unwrap().keys().filter(|k| k.1 == 0).count();
             return (seen, n, true);
         }
-        let fits = self.info().page_bytes().saturating_mul(n) <= self.budget;
+        let fits = self.info().page_bytes().saturating_mul(n) <= self.budget.load(Ordering::Relaxed);
         (self.cache.lock().unwrap().len(), n, fits)
     }
 
@@ -540,11 +563,11 @@ impl OpenImage {
             // warms the OS file cache and computes statistics, for every page.
             let direct = me.direct();
             // Pages kept on each side of the focus.
-            let reach = if direct { n } else { (me.budget / per_page).max(1).min(n) / 2 };
             let busy = Mutex::new(std::collections::HashSet::new());
             // Pages that failed to decode; never retried in the background.
             let failed = Mutex::new(std::collections::HashSet::new());
             let next = || -> Option<usize> {
+                let reach = if direct { n } else { (me.budget.load(Ordering::Relaxed) / per_page).max(1).min(n) / 2 };
                 let f = me.focus.load(Ordering::Relaxed).min(n - 1);
                 let cache = me.cache.lock().unwrap();
                 let stats = me.stats.lock().unwrap();

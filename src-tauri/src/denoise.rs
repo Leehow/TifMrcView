@@ -10,6 +10,9 @@
 //!   but not across them: flow between neighbours falls off with their
 //!   difference as 1 / (1 + (d / K)²), with K = `strength` × noise σ,
 //!   repeated `iterations` times (time step 0.2).
+//! - "nad3d": IMOD nad_eed_3d on the complete XYZ volume. `strength` is K
+//!   in volume SD, with `iterations` steps of 0.1 and no tensor smoothing.
+//!   Requires an installed IMOD; previews and export share a disk-backed result.
 //! - "nlm": non-local means. Each pixel becomes the weighted mean of the
 //!   pixels within `search` of it, weighted by how alike the patches of
 //!   radius `patch` around the two are: exp(−max(d² − 2σ², 0) / h²) with
@@ -52,6 +55,8 @@ pub enum Method {
     Gaussian,
     Median,
     Diffusion,
+    /// IMOD's full-volume edge-enhancing nonlinear anisotropic diffusion.
+    Nad3d,
     Nlm,
     /// The self-supervised network last trained (`denoise_learn`, Pro);
     /// `strength` mixes its result with the input (1 = all network).
@@ -63,7 +68,7 @@ pub enum Method {
 pub struct Params {
     pub method: Method,
     /// Gaussian σ (px), median radius (px), diffusion K or NLM h (both in
-    /// noise σ).
+    /// noise σ); NAD 3D K is in full-volume SD.
     pub strength: f32,
     /// Diffusion steps.
     #[serde(default = "ten")]
@@ -100,6 +105,7 @@ impl Params {
             Method::Gaussian => kernel_radius(self.strength) + 1,
             Method::Median => self.median_radius(),
             Method::Diffusion => self.iterations.min(200) + 1,
+            Method::Nad3d => 0, // Full-volume result is cached before cropping.
             Method::Nlm => self.search.min(20) + self.patch.min(5) + 1,
             Method::Learned => LEARNED_MARGIN * learned_bin(),
         }
@@ -257,6 +263,11 @@ pub fn frame_halves(img: &OpenImage, c: usize, t: usize) -> Result<[Vec<f32>; 2]
 /// input with the margin the method reads, each part filtered, the parts
 /// averaged. Returns the values, the noise σ and the backend.
 fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 4]) -> Result<(Vec<f32>, f32, &'static str)> {
+    if p.method == Method::Nad3d {
+        let filtered = crate::denoise_nad::prepare(img, c, t, p)?;
+        let sigma = noise_sigma(&input(img, c, z, t, 0)?, img.info().width, img.info().height);
+        return Ok((crop(&filtered.plane(z)?, img.info().width, rect), sigma, "IMOD NAD 3D"));
+    }
     let info = img.info();
     let (w, h) = (info.width, info.height);
     let parts: Vec<Vec<f32>> = if uses_frames(img, p) { frame_halves(img, c, t)?.into() } else { vec![input(img, c, z, t, p.slab)?] };
@@ -282,6 +293,9 @@ fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 
 /// Denoises one whole image of `w` × `h` with noise level `sigma`; returns
 /// the result and the backend that made it.
 pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result<(Vec<f32>, &'static str)> {
+    if p.method == Method::Nad3d {
+        bail!("IMOD NAD 3D 需要完整体数据，不能按二维图像调用");
+    }
     let sigma = sigma.max(f32::MIN_POSITIVE);
     // Only NLM goes to the GPU: diffusion is a few cheap passes that run as
     // fast on the CPU (RTX 5080 even, M1 Max Metal 10–30× slower).
@@ -305,6 +319,7 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
         Method::Gaussian => gaussian(&v, w, h, p.strength),
         Method::Median => median(&v, w, h, p.median_radius()),
         Method::Diffusion => diffusion(v, w, h, p.strength * sigma, p.iterations.min(200)),
+        Method::Nad3d => unreachable!(),
         Method::Nlm => nlm(&v, w, h, p.patch.min(5), p.search.min(20), p.strength * sigma, sigma),
     };
     Ok((out, "CPU"))
@@ -559,6 +574,11 @@ pub fn nlm(v: &[f32], w: usize, h: usize, patch: usize, search: usize, hh: f32, 
 /// Writes the denoised slices as a float32 MRC (the pixel size is kept).
 pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<&'static str> {
     CANCEL.store(false, Ordering::SeqCst);
+    // Compute before creating the export file: installation/cancellation errors
+    // must leave no partial user output. This same result serves every Z layer.
+    if req.params.method == Method::Nad3d {
+        crate::denoise_nad::prepare(img, req.c, req.t, &req.params)?;
+    }
     let info = img.info();
     let (w, h) = (info.width, info.height);
     // A movie denoised from its frame halves gives one image.
@@ -609,6 +629,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
         Method::Gaussian => format!("TifMrcView: denoised, gaussian {:.2} px", p.strength),
         Method::Median => format!("TifMrcView: denoised, median r {}", p.median_radius()),
         Method::Diffusion => format!("TifMrcView: denoised, diffusion K {:.2} sd x{}", p.strength, p.iterations),
+        Method::Nad3d => format!("TifMrcView: IMOD NAD 3D K {:.3} x volume SD x{}", p.strength, p.iterations),
         Method::Nlm => format!("TifMrcView: denoised, NLM h {:.2} sd p{} s{}", p.strength, p.patch, p.search),
         Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(img, p) { " N2N frames" } else { "" }, p.strength),
     } + &if p.slab > 0 { format!(" z+-{}", p.slab) } else { String::new() };

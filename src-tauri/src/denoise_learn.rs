@@ -108,7 +108,8 @@ pub enum Mode {
     Neighbours,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrainConfig {
     pub steps: usize,
     pub batch: usize,
@@ -231,7 +232,7 @@ pub fn train(
     cfg: &TrainConfig,
     progress: impl FnMut(usize, usize, f32),
 ) -> Result<(Net, f32, f32, f32)> {
-    train_live(dev, pairs, w, h, mode, cfg, progress, &mut |_, _, _| {})
+    train_live(dev, pairs, w, h, mode, cfg, progress, &mut |_, _, _, _, _| {})
 }
 
 /// As `train`, also handing the network as it is so far to `snapshot`
@@ -246,7 +247,7 @@ pub fn train_live(
     mode: Mode,
     cfg: &TrainConfig,
     mut progress: impl FnMut(usize, usize, f32),
-    snapshot: &mut dyn FnMut(Net, f32, f32),
+    snapshot: &mut dyn FnMut(Net, f32, f32, usize, f32),
 ) -> Result<(Net, f32, f32, f32)> {
     if pairs.is_empty() {
         bail!("没有训练数据");
@@ -337,7 +338,7 @@ pub fn train_live(
             progress(step + 1, cfg.steps, loss_avg);
         }
         if step + 1 < cfg.steps && shot.elapsed().as_secs_f32() > 2.5 {
-            snapshot(net.valid(), mean, std);
+            snapshot(net.valid(), mean, std, step + 1, loss_avg);
             shot = std::time::Instant::now();
         }
     }

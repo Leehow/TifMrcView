@@ -12,7 +12,7 @@ const $ = (id) => document.getElementById(id);
 // Standard or Pro build (same code; the Pro build has its own product name).
 // Pro loads its extra tools from pro/pro.js.
 const EDITION = { name: "TifMrcView", pro: false };
-T.app.getName().then((name) => {
+const editionReady = T.app.getName().then(async (name) => {
   EDITION.name = name;
   EDITION.pro = name !== "TifMrcView";
   document.title = name;
@@ -20,7 +20,10 @@ T.app.getName().then((name) => {
   document.documentElement.dataset.edition = "pro";
   const s = document.createElement("script");
   s.src = "pro/pro.js";
+  const loaded = new Promise((resolve, reject) => { s.onload = resolve; s.onerror = reject; });
   document.body.appendChild(s);
+  await loaded;
+  await window.TifMrcViewPro.ready;
 }).catch(() => {});
 
 const COLORS = [
@@ -219,8 +222,10 @@ try {
  * Opens `path` (image `series` of a file that holds several); `force`
  * re-reads the file shown now (e.g. after a plugin was switched).
  */
-async function openPath(path, force = false, series = 0) {
+async function openPath(path, force = false, series = 0, inTab = false) {
   if (!path) return;
+  if (!inTab && typeof editionReady !== "undefined") await editionReady;
+  if (!inTab && window.TifMrcViewPro?.documents) return window.TifMrcViewPro.documents.open(path, force, series);
   // Clicking the image already shown changes nothing.
   if (!force && !openPending && S.info && S.info.path === path && S.info.seriesIndex === series && S.axis === "xy") return;
   const request = ++openRequest;
@@ -310,6 +315,7 @@ async function openPath(path, force = false, series = 0) {
     // The single-particle workspace indexes whichever folder is open.
     document.dispatchEvent(new CustomEvent("tmv-opened"));
     watchLoad();
+    return res;
   } catch (e) {
     if (request !== openRequest) return;
     toast(`无法打开 ${basename(path)}：${e}`, needsPlugin(e) ? 8000 : 3500);
@@ -570,8 +576,13 @@ function openAny() {
 }
 
 async function takePending() {
-  const p = await invoke("take_pending_open");
-  if (p) openPath(p);
+  if (typeof editionReady !== "undefined") await editionReady;
+  if (takePending.running) return;
+  takePending.running = true;
+  try {
+    let p;
+    while ((p = await invoke("take_pending_open"))) await openPath(p);
+  } finally { takePending.running = false; }
 }
 
 // ---------- channels ----------
@@ -2581,6 +2592,7 @@ function copyMeta() {
 }
 
 function toggleSidebar(force) {
+  if (window.TifMrcViewPro?.layers?.toggleSidebar) return window.TifMrcViewPro.layers.toggleSidebar(force);
   const sb = $("sidebar");
   const show = force ?? sb.classList.contains("collapsed");
   sb.classList.toggle("collapsed", !show);
@@ -3548,7 +3560,7 @@ $("btn-save").addEventListener("click", saveAs);
 $("btn-undo").addEventListener("click", undo);
 $("btn-redo").addEventListener("click", redo);
 $("btn-annshow").addEventListener("click", () => toggleAnn());
-const AXES = { xy: "正常看每一层", xz: "从侧面看，拉条切换 Y", yz: "从侧面看，拉条切换 X", xyz: "四个画面：XY、XZ、YZ，右上角的十字用来改 Z" };
+const AXES = { xy: "正常看每一层", xz: "从侧面看，拉条切换 Y", yz: "从侧面看，拉条切换 X", xyz: "四个画面：XY、XZ、YZ 和三维切片" };
 $("btn-axis").addEventListener("click", () => {
   if (!S.info || closeMenu($("btn-axis"))) return;
   const items = Object.entries(AXES).map(([v, hint]) => ({ value: v, label: v.toUpperCase(), hint, on: v === "xyz" ? !!S.xyz : S.axis === v && !S.xyz }));
@@ -3941,7 +3953,11 @@ T.webview
   .onDragDropEvent((e) => {
     const { type, paths } = e.payload;
     $("drop-hint").hidden = !(type === "enter" || type === "over");
-    if (type === "drop" && paths.length) openPath(paths[0]);
+    if (type === "drop" && paths.length) {
+      const documents = window.TifMrcViewPro?.documents;
+      if (documents) paths.forEach((path) => documents.open(path));
+      else openPath(paths[0]);
+    }
   })
   .catch(() => {});
 takePending();

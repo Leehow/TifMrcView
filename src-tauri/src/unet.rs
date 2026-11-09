@@ -84,7 +84,8 @@ impl UNet {
 }
 
 /// Training settings.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrainConfig {
     pub steps: usize,
     pub batch: usize,
@@ -151,7 +152,7 @@ pub fn train(
     cfg: &TrainConfig,
     progress: impl FnMut(usize, usize, f32),
 ) -> Result<Trained> {
-    train_live(dev, slices, w, h, lo, hi, cfg, progress, &mut |_| {})
+    train_live(dev, slices, w, h, lo, hi, cfg, progress, &mut |_, _| {})
 }
 
 /// As `train`, also handing the network as it is so far to `snapshot` every
@@ -166,7 +167,7 @@ pub fn train_live(
     hi: f32,
     cfg: &TrainConfig,
     mut progress: impl FnMut(usize, usize, f32),
-    snapshot: &mut dyn FnMut(Trained),
+    snapshot: &mut dyn FnMut(Trained, usize),
 ) -> Result<Trained> {
     let mut labels: Vec<u16> = slices.iter().flat_map(|(_, l)| l.iter().copied()).filter(|&v| v != 0).collect();
     labels.sort_unstable();
@@ -250,7 +251,7 @@ pub fn train_live(
             progress(step + 1, cfg.steps, loss_avg);
         }
         if step + 1 < cfg.steps && shot.elapsed().as_secs_f32() > 2.5 {
-            snapshot(Trained { net: net.valid(), labels: labels.clone(), lo, hi, loss: loss_avg, accuracy: acc_avg });
+            snapshot(Trained { net: net.valid(), labels: labels.clone(), lo, hi, loss: loss_avg, accuracy: acc_avg }, step + 1);
             shot = std::time::Instant::now();
         }
     }

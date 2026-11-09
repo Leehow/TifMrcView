@@ -1,7 +1,7 @@
 "use strict";
 // IMOD-style XYZ window. With a Z stack the axis menu gains XYZ: four panes
 // on one screen (XZ upper left, XY lower left, YZ lower right, and the
-// cross at the upper right that moves Z). X, Y and Z each have their own
+// intersecting slice overview at the upper right). X, Y and Z each have their own
 // slider and marker line. A mark drawn on a slice is drawn again where the
 // other two planes cut it, and an IMOD contour is drawn where it lies in
 // the plane.
@@ -11,7 +11,7 @@
   const cache = { xy: null, xz: null, yz: null };
   let drag = null;
   let gen = 0;
-  let square = null;
+  const overview = { xy: null, xz: null, yz: null };
 
   function info() {
     return S.info;
@@ -176,14 +176,6 @@
     if (av === axis) part[axis] = v;
     setPoint(part);
   }
-  function setFromCross(sx, sy) {
-    if (!square) return;
-    const fx = (sx - square.x) / square.w;
-    const fy = (sy - square.y) / square.h;
-    const f = clamp((fx + fy) / 2, 0, 1);
-    setPoint({ z: f * (info().sizeZ - 1) });
-  }
-
   function visible(g, pane) {
     const [nu, nv] = [g.nu, g.nv];
     const u0 = clamp(Math.floor(g.unmap(pane.x, pane.y)[0]), 0, nu - 1);
@@ -196,8 +188,12 @@
   async function reload(which) {
     if (!S.xyz || !S.info) return;
     const mine = ++gen;
-    const planes = which || ["xy", "xz", "yz"];
-    await Promise.all(planes.map((kind) => fetchPlane(kind, mine)));
+    // A newer request invalidates earlier responses, so request every stale plane.
+    const planes = ["xy", "xz", "yz"];
+    await Promise.all([
+      ...planes.map((kind) => fetchPlane(kind, mine)),
+      ...["xy", "xz", "yz"].map((kind) => fetchOverview(kind, mine)),
+    ]);
     if (mine === gen) paint();
   }
   async function fetchPlane(kind, mine) {
@@ -222,6 +218,85 @@
     } catch (e) {
       if (mine === gen) toast(`三视图失败：${e}`);
     }
+  }
+
+  async function fetchOverview(kind, mine) {
+    const [w, h] = dims(kind);
+    const index = kind === "xy" ? S.xyz.z : kind === "xz" ? S.xyz.y : S.xyz.x;
+    const channels = channelReqs().map((c) => ({ ...c, min: S.chans[c.index].min, max: S.chans[c.index].max }));
+    const scale = Math.min(1, 512 / Math.max(w, h));
+    const outW = Math.max(1, Math.round(w * scale));
+    const outH = Math.max(1, Math.round(h * scale));
+    const key = JSON.stringify([S.token, kind, index, S.t, channels, S.gamma, w, h]);
+    if (overview[kind]?.key === key) return;
+    const req = { token: S.token, z: index, t: S.t, channels, region: [0, 0, w, h], outW, outH, gamma: S.gamma, invert: false, plane: kind === "xy" ? "" : kind };
+    try {
+      const f = parseFrame(await invoke("render_view", { req }));
+      if (mine !== gen || !S.xyz) return;
+      const c = document.createElement("canvas");
+      c.width = f.w; c.height = f.h;
+      c.getContext("2d").putImageData(f.image, 0, 0);
+      overview[kind] = { key, canvas: c, index };
+    } catch (e) {
+      if (mine === gen) toast(`三维切片失败：${e}`);
+    }
+  }
+
+  // Orthographic projection; split at the intersection so nearer patches
+  // occlude farther patches rather than drawing one entire plane on top.
+  function drawOverview(pane) {
+    const i = info(), v = voxel(), p = S.xyz;
+    const size = [i.width * v.x, i.height * v.y, i.sizeZ * v.z];
+    const basis = [[0.866, 0.35], [-0.866, 0.35], [0, 0.8]];
+    const bw = 0.866 * (size[0] + size[1]);
+    const bh = 0.35 * (size[0] + size[1]) + 0.8 * size[2];
+    const scale = Math.min(Math.max(1, pane.w - 40) / bw, Math.max(1, pane.h - 55) / bh);
+    const project = (q) => [pane.x + pane.w / 2 + scale * q.reduce((a, n, j) => a + (n - size[j] / 2) * basis[j][0], 0),
+      pane.y + pane.h / 2 + scale * q.reduce((a, n, j) => a + (n - size[j] / 2) * basis[j][1], 0)];
+    const point = [(p.x + 0.5) * v.x, (p.y + 0.5) * v.y, (p.z + 0.5) * v.z];
+    const specs = [{ kind: "xy", u: 0, v: 1, color: COL.z },
+      { kind: "xz", u: 0, v: 2, color: COL.y },
+      { kind: "yz", u: 1, v: 2, color: COL.x }];
+    const patches = [];
+    for (const spec of specs) {
+      const cutsU = [0, point[spec.u], size[spec.u]];
+      const cutsV = [0, point[spec.v], size[spec.v]];
+      for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
+        const q = [...point]; q[spec.u] = cutsU[a]; q[spec.v] = cutsV[b];
+        const u1 = cutsU[a + 1], v1 = cutsV[b + 1];
+        const center = [...q]; center[spec.u] = (q[spec.u] + u1) / 2; center[spec.v] = (q[spec.v] + v1) / 2;
+        // Camera is above and in front of the volume.
+        const depth = center[0] + center[1] - center[2];
+        patches.push({ spec, q, u1, v1, depth });
+      }
+    }
+    patches.sort((a, b) => a.depth - b.depth);
+    ctx.save(); clip(ctx, pane);
+    ctx.fillStyle = "#111"; ctx.fillRect(pane.x, pane.y, pane.w, pane.h);
+    for (const { spec, q, u1, v1 } of patches) {
+      const candidate = overview[spec.kind];
+      const current = spec.kind === "xy" ? p.z : spec.kind === "xz" ? p.y : p.x;
+      const im = candidate?.index === current ? candidate : null;
+      const qu = [...q], qv = [...q]; qu[spec.u] = u1; qv[spec.v] = v1;
+      const [x, y] = project(q), [xu, yu] = project(qu), [xv, yv] = project(qv);
+      ctx.save();
+      ctx.transform(xu - x, yu - y, xv - x, yv - y, x, y);
+      if (im) {
+        const sw = im.canvas.width, sh = im.canvas.height;
+        ctx.drawImage(im.canvas, q[spec.u] / size[spec.u] * sw, q[spec.v] / size[spec.v] * sh,
+          (u1 - q[spec.u]) / size[spec.u] * sw, (v1 - q[spec.v]) / size[spec.v] * sh, 0, 0, 1, 1);
+      } else { ctx.fillStyle = "#333"; ctx.fillRect(0, 0, 1, 1); }
+      ctx.restore();
+      ctx.strokeStyle = spec.color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(xu, yu);
+      ctx.lineTo(xu + xv - x, yu + yv - y); ctx.lineTo(xv, yv); ctx.closePath(); ctx.stroke();
+    }
+    const [cx, cy] = project(point);
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = "12px sans-serif"; ctx.fillText("XYZ", pane.x + 8, pane.y + 16);
+    ctx.restore();
+    ctx.strokeStyle = COL.z; ctx.lineWidth = 2;
+    ctx.strokeRect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2);
   }
 
   function clip(ctx, pane) {
@@ -441,36 +516,7 @@
     strokeLine(ctx, COL.z, L.yz.x, zh2, L.yz.x + L.yz.w, zh2);
     handle(ctx, COL.x, yv, zh2);
 
-    const pane = L.cross;
-    ctx.save();
-    clip(ctx, pane);
-    ctx.fillStyle = "#f6f8fa";
-    ctx.fillRect(pane.x, pane.y, pane.w, pane.h);
-    const s = Math.max(20, Math.min(pane.w, pane.h) - 48);
-    square = { x: pane.x + (pane.w - s) / 2, y: pane.y + (pane.h - s) / 2, w: s, h: s };
-    const f = info().sizeZ <= 1 ? 0 : S.xyz.z / (info().sizeZ - 1);
-    const cx = square.x + f * square.w;
-    const cy = square.y + f * square.h;
-    ctx.strokeStyle = COL.z;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(square.x, square.y, square.w, square.h);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(square.x, cy);
-    ctx.lineTo(square.x + square.w, cy);
-    ctx.moveTo(cx, square.y);
-    ctx.lineTo(cx, square.y + square.h);
-    ctx.stroke();
-    ctx.fillStyle = COL.z;
-    ctx.fillRect(cx - 5, cy - 5, 10, 10);
-    ctx.fillStyle = "#1f2328";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("十字", pane.x + 8, pane.y + 16);
-    ctx.fillText(`Z ${S.xyz.z + 1} / ${info().sizeZ}`, pane.x + 8, pane.y + pane.h - 10);
-    ctx.restore();
-    ctx.strokeStyle = COL.z;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2);
+    drawOverview(L.cross);
   }
 
   function zoomAt(k, sx, sy, pane) {
@@ -511,6 +557,7 @@
       $("axis-label").textContent = "XYZ";
       syncBars();
       cache.xy = cache.xz = cache.yz = null;
+      overview.xy = overview.xz = overview.yz = null;
       reload();
       paint();
     },
@@ -566,12 +613,7 @@
           canvas.setPointerCapture?.(e.pointerId);
           return true;
         }
-        if (pane === "cross") {
-          drag = { kind: "line", axis: "z", cross: true };
-          setFromCross(sx, sy);
-          canvas.setPointerCapture?.(e.pointerId);
-          return true;
-        }
+        if (pane === "cross") return true;
         if (pane === "xy" && e.button === 0 && (DRAW.has(S.tool) || (S.tool === "select" && annAt(geom("xy").unmap(sx, sy), HIT / (geom("xy").su || 1))))) return false;
         drag = { kind: "nav", pane, cx: e.clientX, cy: e.clientY, moved: false, pan: { ...S.xyz.pan } };
         canvas.setPointerCapture?.(e.pointerId);
@@ -580,8 +622,7 @@
       if (phase === "move") {
         if (!drag) return false;
         if (drag.kind === "line") {
-          if (drag.cross || (drag.axis === "z" && paneAt(sx, sy) === "cross")) setFromCross(sx, sy);
-          else setFromPointer(drag.axis, sx, sy);
+          setFromPointer(drag.axis, sx, sy);
           return true;
         }
         if (Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 4) drag.moved = true;
@@ -624,6 +665,7 @@
         else setPoint({ z: S.xyz.z + dir });
         return true;
       }
+      if (pane === "cross") return true;
       zoomAt(Math.exp(-e.deltaY * 0.0025), sx, sy, pane);
       return true;
     },
