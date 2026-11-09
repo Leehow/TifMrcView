@@ -2,7 +2,7 @@
 
 ## Native NAD replacement — user correction, 2026-11-09
 
-Status: CPU and actual Metal GPU numerical gates passed; prior0.7.178 remains running. Preparing the unified release and native GUI acceptance.
+Status: complete. Optimized stable-signed0.7.183 installed, actual native GUI accepted and local ZIP verified. Source7972f18 includes the integrated features, native NAD, automatic GPU path and removed CPU-only control.
 
 Objective: replace the external IMOD NAD3D adapter with an in-process Rust implementation of the referenced NAD/EED algorithm; compare actual numeric outputs with original software, then update the canonical installed App and perform real GUI acceptance. Retain source/results/models and the installed tabs/layers/autosave/scale-bar/channel-visibility features. No website publishing, remote deployment, dependency refresh or unrelated cleanup.
 
@@ -30,7 +30,9 @@ First actual Metal run failed the strict original-program gate (real low-K 5-ste
 
 GPU final numerical gate passed: all18 original-program synthetic and4 real-volume outputs now equal every reference voxel, including20 iterations. After disabling FMA, rare compensated-weight rounding still seeded amplified differences; conservative weight intervals now mark only potentially changed fp32 updates for the shared CPU step before the next tensor. All8 NAD tests (including actual Metal),6 classical-denoise tests,57 frontend/Metal-completion tests and Standard core check passed. Runtime device/compiler qualification precedes accelerated user data. Optimized kernel probes repaired0.13–0.23% of voxel steps on the real128x128x32 cases. Small-volume GPU/CPU timings are close; no broad speedup claim. A full256x256x128 existing corrected volume also has CPU/GPU maxdelta0; GPU median about0.99s versusCPU1.02s for2 iterations, so this is compatibility-first hybrid execution rather than a substantial measured acceleration.
 
-Next: freeze source including UI simplification and GPU qualification, build offline/stable-sign, preserve current native state and update; verify native NAD full Z, absent CPU checkbox and exported voxels against original, retained features/models and final package/hygiene.
+Final delivery:23 original-program comparisons (18 synthetic,4 real crops,1 full256x256x128 volume) have maxdelta0 on actual Metal. Formal Pro release build passed offline/jobs4 in9m26s. Canonical App GUI showed NAD3D Metal onZ1/17/32, no CPU checkbox; all32-layer export and last-plane export exactly match original, calibration retained. Saved N2V500-step and wedge models automatically restored without training; matching-parameter exports each4096voxels equal pre-update outputs (maxdelta0). N2V's original blend0.6 and user training/save preferences restored. Source/model/output/project10-file hashes and model-source hash unchanged. Existing project copy retained1layer/8handles/20nm/Z65/128/304%/autosaved status; original two raw tabs returned, sourceZ17/32 with NADK3.5/2iterations/Metal preview. Current fit zoom974% after reopen.
+
+Evidence: `/Volumes/samsung/pro-test/native-nad-rust-20261109/acceptance-report.md` and receipts. ZIP `/Volumes/samsung/tifview-build.noindex/packages/TifMrcView-Pro-0.7.183-macos-arm64.zip`; integrity/all11canonical file checks passed.419source hashes and31Mach-O code/data sections match the installed stable-signed build. LaunchServices only canonical; no task stages remain; unowned old test/source bundles retained. No public release/push, no worktree adoption/removal, and pre-existing integration.tmp/ and handoff-workers plan remain untouched.
 
 
 
