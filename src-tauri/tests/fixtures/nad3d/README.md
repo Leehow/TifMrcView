@@ -1,0 +1,7 @@
+# Native NAD3D regression reference
+
+These are generated numerical outputs, not vendored IMOD source. The inputs are synthetic float32 volumes (NumPy PCG64 seed20261109; noise, noisy step, noisy diagonal, ramp, constant and a2x3x4 volume). Arrays are X-fast, little-endian float32, with XYZ sizes in manifest.json. Each original input and reference output has SHA256 in the manifest.
+
+Oracle: installed IMOD5.1.3 `nad_eed_3d`, normal eigenvector solver; arguments `-k <kAbsolute> -n <iterations> -s 0 -t 0.1 -m 2 -F MRC`. The GUI-strength multiplier is converted to absoluteK using the original input's populationSD in float32. OutputMRC headers have been removed; only voxel samples are retained. The regression exercises the actual native prepare/preview cache, without any IMOD installation or environment. A development-only ignored oracle test separately regenerates references from an installed IMOD and real cryo-ET crops.
+
+Theory: Frangakis & Hegerl2001, DOI10.1006/jsbi.2001.4406; [IMOD parameter documentation](https://bio3d.colorado.edu/imod/doc/man/nad_eed_3d.html). This implementation preserves the original's periodic derivative estimation and its upper-Z diagonal boundary convention, and single-precision tensor/evolution rounding. Those details matter for the ill-conditioned, unsmoothed structure tensor. No originalC or GPL library is shipped or linked. Test numerical agreement is algorithm compatibility, not biological validation of a denoised feature.

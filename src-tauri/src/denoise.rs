@@ -55,7 +55,7 @@ pub enum Method {
     Gaussian,
     Median,
     Diffusion,
-    /// IMOD's full-volume edge-enhancing nonlinear anisotropic diffusion.
+    /// Native full-volume edge-enhancing nonlinear anisotropic diffusion (NAD/EED).
     Nad3d,
     Nlm,
     /// The self-supervised network last trained (`denoise_learn`, Pro);
@@ -266,7 +266,7 @@ fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 
     if p.method == Method::Nad3d {
         let filtered = crate::denoise_nad::prepare(img, c, t, p)?;
         let sigma = noise_sigma(&input(img, c, z, t, 0)?, img.info().width, img.info().height);
-        return Ok((crop(&filtered.plane(z)?, img.info().width, rect), sigma, "IMOD NAD 3D"));
+        return Ok((crop(&filtered.plane(z)?, img.info().width, rect), sigma, "NAD 3D (CPU)"));
     }
     let info = img.info();
     let (w, h) = (info.width, info.height);
@@ -294,7 +294,7 @@ fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 
 /// the result and the backend that made it.
 pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result<(Vec<f32>, &'static str)> {
     if p.method == Method::Nad3d {
-        bail!("IMOD NAD 3D 需要完整体数据，不能按二维图像调用");
+        bail!("NAD 3D 需要完整体数据，不能按二维图像调用");
     }
     let sigma = sigma.max(f32::MIN_POSITIVE);
     // Only NLM goes to the GPU: diffusion is a few cheap passes that run as
@@ -629,7 +629,7 @@ pub fn save(img: &Arc<OpenImage>, req: &SaveReq, progress: &(dyn Fn(usize, usize
         Method::Gaussian => format!("TifMrcView: denoised, gaussian {:.2} px", p.strength),
         Method::Median => format!("TifMrcView: denoised, median r {}", p.median_radius()),
         Method::Diffusion => format!("TifMrcView: denoised, diffusion K {:.2} sd x{}", p.strength, p.iterations),
-        Method::Nad3d => format!("TifMrcView: IMOD NAD 3D K {:.3} x volume SD x{}", p.strength, p.iterations),
+        Method::Nad3d => format!("TifMrcView: native NAD 3D / EED K {:.3} x volume SD x{}", p.strength, p.iterations),
         Method::Nlm => format!("TifMrcView: denoised, NLM h {:.2} sd p{} s{}", p.strength, p.patch, p.search),
         Method::Learned => format!("TifMrcView: denoised, self-supervised{} mix {:.2}", if uses_frames(img, p) { " N2N frames" } else { "" }, p.strength),
     } + &if p.slab > 0 { format!(" z+-{}", p.slab) } else { String::new() };

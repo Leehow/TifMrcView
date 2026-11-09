@@ -1,5 +1,30 @@
 # Denoising and trained-model persistence
 
+## Native NAD replacement — user correction, 2026-11-09
+
+Status: native implementation and numerical gates passed; prior0.7.178 remains running. Preparing release and native GUI acceptance.
+
+Objective: replace the external IMOD NAD3D adapter with an in-process Rust implementation of the referenced NAD/EED algorithm; compare actual numeric outputs with original software, then update the canonical installed App and perform real GUI acceptance. Retain source/results/models and the installed tabs/layers/autosave/scale-bar/channel-visibility features. No website publishing, remote deployment, dependency refresh or unrelated cleanup.
+
+Current source: integration branchcodex/handoff-integration-20261104, initialHEAD8cb4250; only pre-existing untracked.tmp/ and handoff-workers plan. Installed0.7.178 receipt points to3c8d94d(channel visibility), owned in a clean other checkout. Reviewed/cherry-picked that14-line app.js feature as4eee7e4, excluding its website documentation follow-up. No worktree created/adopted. Scope: denoise_nad Rust kernel/adapter, required denoise UI/backend labels, regression/reference fixtures and this plan.
+
+Evidence: the installed IMOD shell wrapper withoutIMOD_DIR reproduces screenshotexit127 (/bin/realbin/nad_eed_3d). The actual prepare() regression `IMOD_NAD_PATH=/nonexistent/tmv-regression-no-imod ... cargo test --offline --no-default-features --features pro --lib denoise_nad::tests::native_nad_works_without_imod_installation -- --exact` has been run and FAILS on the real processing seam in0.01s after warm compile. This is a known implementation-design correction; no speculative environment-repair hypothesis loop is needed.
+
+References retained in `/Volumes/samsung/pro-test/native-nad-rust-20261109`: original paper DOI10.1006/jsbi.2001.4406 (published equations/discretization), official https://bio3d.colorado.edu/imod/doc/man/nad_eed_3d.html (EED-only CLI semantics), official source/license page and public source mirror. Independently implement math in Rust; do not embedGPL C program/runtime or translate copied C source into the Apache project. Original executable is a development-only numeric oracle. No large downloads; paper636680bytes, selected C source37105bytes; existing compiler/dependency caches only.
+
+Acceptance gates:
+1. Existing no-IMOD production prepare/preview/export test passes, and production module has no executable lookup/subprocess calls. Deterministic true3D math with explicit boundary behavior, validation, cancellation and bounded memory/cache lifecycle.
+2. Original IMOD comparisons on synthetic flat/step/diagonal/noisy/small/asymmetric volumes and real cryo-ET crops across K and iteration settings. Record absolute/SD-normalized error and boundary/interior, all Z planes; explain any meaningful deviation. Also establish noise/edge capability on known signal; numeric agreement alone is not biological validation.
+3. Z0/middle/last preview and saved outputs use the same full-volume result; no stale cache after parameter/source/channel change. Preserve32bit MRC calibration and source pixels, cancel cleanup.
+4.56+ relevant existing tests, appropriate Pro compilation/build; offline canonical external build root/jobs4/stable certificate. Before replacing current0.7.178 inspect live jobs/unsaved documents and preserve weights/results. Native GUI succeeds without an IMOD runtime/environment; save/restart and latest existing features retained. Package/sign/LS audit and precise evidence.
+
+Completed: in-process native kernel and disk cache integrated. No executable search/subprocess remains.7 backend tests passed with deliberately invalidIMOD_NAD_PATH, including actual prepare/preview/export,18 original-program golden volumes, cancellation/invalid-input/Z coupling and cache retention.56 existing frontend regressions and JS syntax/whitespace passed.18 synthetic volumes and4 real128x128x32 reference runs all match IMOD5.1.3 exactly, all voxels including boundaries (maxdelta0), n up to20. The fixed UI contract remains sigma0/dt0.1; other originalCLI options are not claimed. Initial Jacobi/algebraic shortcuts exposed floating-order sensitivity of the nearly rank-one tensor; independent Householder/QL math and roundoff-compatible evaluation resolved it. `docs/nad3d-native.md` records the algorithm, limits and provenance. Known-signal metrics are retained, including an over-smoothed diagonal case also seen in the original; no universal denoising/biological benefit claimed.
+
+Preservation baseline:10 file hashes (model records/weights and current source/result/project), installed0.7.178 receipt and existing signed ZIP reference under evidence/preserved. Installed-source manifest compared with integration: only the four intended denoise/module/UI files differ; channel visibility and all other existing features match. Native current tabs: original128x128x32 NAD test crop and old NAD export; sourceZ17/32,923%, current methodMedian radius1, split54, CPUfalse, saved foldertabs-autosave.../gui. No unsaved merge marker visible. Inspect live tasks again before quit.
+
+Next: freeze source, build offline/stable-sign, preserve current native state and update; verify native NAD full Z and exported voxels against original, retained features/models and final package/hygiene.
+
+
 
 ## Follow-up authorized after 0.7.173
 

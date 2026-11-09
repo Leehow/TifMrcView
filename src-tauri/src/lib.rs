@@ -7,6 +7,8 @@ pub mod ctf;
 pub mod denoise;
 mod denoise_nad;
 #[cfg(feature = "pro")]
+mod nad_eed;
+#[cfg(feature = "pro")]
 pub mod model_store;
 #[cfg(feature = "pro")]
 pub mod trained_models;

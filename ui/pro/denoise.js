@@ -1,6 +1,6 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, NLM on the GPU), IMOD NAD 3D, and a self-supervised network
+// means (denoise.rs, NLM on the GPU), 内置 NAD 3D, and a self-supervised network
 // (Noise2Void / Noise2Noise, denoise_learn.rs) trained on the image itself.
 // Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
@@ -13,7 +13,7 @@
   const METHODS = {
     nlm: ["h（× 噪声 σ）", 0.2, 3, 0.05, 0.8, "非局部均值：按邻域块的相似度加权平均，保留纹理和膜；越大越平滑"],
     diffusion: ["边缘阈值 K（× 噪声 σ）", 0.5, 8, 0.1, 2, "各向异性扩散：沿边缘平滑、不跨边缘；越大越平滑"],
-    nad3d: ["K（× 体数据标准差 SD）", 0.02, 5, 0.02, 0.1, "IMOD nad_eed_3d：三维边缘增强非线性各向异性扩散（NAD / EED），联合处理 XYZ；K 越大越平滑。需要安装 IMOD"],
+    nad3d: ["K（× 体数据标准差 SD）", 0.02, 5, 0.02, 0.1, "内置三维 NAD：三维边缘增强非线性各向异性扩散（NAD / EED），联合处理 XYZ；K 越大越平滑；无需安装 IMOD"],
     gaussian: ["σ px", 0.3, 6, 0.1, 1, "高斯模糊：最快，细节和边缘也一起变模糊"],
     median: ["半径 px", 1, 7, 1, 1, "中值：去掉坏点和椒盐噪声"],
     learned: ["混合比例（1 = 全用网络结果）", 0, 1, 0.05, 1, "自监督学习：在这张图本身上训练一个小网络，不需要干净图像；先选训练方式，点「训练」"],
@@ -22,7 +22,7 @@
   const btn = document.createElement("button");
   btn.id = "btn-denoise";
   btn.className = "toggle";
-  btn.title = "降噪：NLM、二维 Perona–Malik、IMOD NAD 3D、Gaussian、Median、Noise2Void / Noise2Noise，预览对比后另存为 32 位浮点 MRC";
+  btn.title = "降噪：NLM、二维 Perona–Malik、内置 NAD 3D、Gaussian、Median、Noise2Void / Noise2Noise，预览对比后另存为 32 位浮点 MRC";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12c1.5-3 2.5 3 4 0s2.5-5 4 0"/><path d="M13 12c2-1.6 6-1.6 8 0"/><path d="M12 4v16" stroke-dasharray="2 2"/></svg>';
   btn.disabled = true;
   $("btn-3d") ? $("btn-3d").before(btn) : $("quickbar").append(btn);
@@ -41,7 +41,7 @@
         <select id="dn-method">
           <option value="nlm">非局部均值（Non-Local Means / NLM）</option>
           <option value="diffusion">二维各向异性扩散（Perona–Malik）</option>
-          <option value="nad3d">IMOD 三维非线性各向异性扩散（NAD 3D / EED）</option>
+          <option value="nad3d">三维非线性各向异性扩散（NAD 3D / EED）</option>
           <option value="gaussian">高斯滤波（Gaussian）</option>
           <option value="median">中值滤波（Median）</option>
           <option value="learned">自监督降噪（Noise2Void / Noise2Noise）</option>
@@ -65,7 +65,7 @@
       <span class="al-wide dn-learn dim" id="dn-model"></span>
       <div class="al-wide dn-learn dim" id="dn-model-record" hidden></div>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
-      <span class="al-wide dn-nad dim">IMOD nad_eed_3d · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
+      <span class="al-wide dn-nad dim">内置 NAD 3D / EED · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
       <label class="al-check al-wide"><input type="checkbox" id="dn-cpu" /> 只用 CPU</label>
     </div>
@@ -345,7 +345,7 @@
     const generation = N.generation;
     N.busy = true;
     $("dn-cancel-preview").hidden = req.params.method !== "nad3d";
-    status(req.params.method === "nad3d" ? "IMOD NAD 3D：正在处理整个体，完成后可逐层对比…" : `第 ${S.z + 1} 层预览计算中…`);
+    status(req.params.method === "nad3d" ? "内置 NAD 3D：正在处理整个体，完成后可逐层对比…" : `第 ${S.z + 1} 层预览计算中…`);
     try {
       const res = { ...parse(await invoke("denoise_preview", { req })), z: req.z, t: req.t, c: req.c, token: req.token };
       if (req.token !== S.token || generation !== N.generation) return;
