@@ -1,6 +1,6 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, NLM on the GPU), 内置 NAD 3D, and a self-supervised network
+// means (denoise.rs, NLM on the GPU), native NAD 3D, and a self-supervised network
 // (Noise2Void / Noise2Noise, denoise_learn.rs) trained on the image itself.
 // Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
