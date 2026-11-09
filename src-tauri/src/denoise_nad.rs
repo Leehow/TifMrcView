@@ -20,12 +20,14 @@ struct Key {
     t: usize,
     strength: f32,
     iterations: usize,
+    device: String,
 }
 pub(crate) struct Filtered {
     // Release mapping before scratch cleanup, including on Windows.
     source: MrcSource,
     _scratch: Scratch,
     key: Key,
+    pub backend: &'static str,
 }
 impl Filtered {
     pub fn plane(&self, z: usize) -> Result<Vec<f32>> {
@@ -83,6 +85,7 @@ pub(crate) fn prepare(img: &OpenImage, c: usize, t: usize, p: &Params) -> Result
         t,
         strength: p.strength,
         iterations: p.iterations,
+        device: p.device.clone(),
     };
     let mut cached = img
         .denoise_nad
@@ -119,7 +122,7 @@ pub(crate) fn prepare(img: &OpenImage, c: usize, t: usize, p: &Params) -> Result
         bail!("NAD 的 K 值过大，请减小强度或缩放输入数据");
     }
     // A failed/cancelled computation leaves the last usable result intact.
-    let filtered = crate::nad_eed::diffuse(volume, [w, h, nz], k, p.iterations, &check)?;
+    let (filtered, backend) = filter_volume(volume, [w, h, nz], k, p, &check)?;
     check()?;
     let scratch = Scratch::new()?;
     let output = scratch.0.join("filtered.mrc");
@@ -157,9 +160,74 @@ pub(crate) fn prepare(img: &OpenImage, c: usize, t: usize, p: &Params) -> Result
         source,
         _scratch: scratch,
         key,
+        backend,
     });
     *cached = Some(result.clone());
     Ok(result)
+}
+
+fn filter_volume(
+    volume: Vec<f32>,
+    dims: [usize; 3],
+    k: f32,
+    p: &Params,
+    check: &(impl Fn() -> Result<()> + Sync),
+) -> Result<(Vec<f32>, &'static str)> {
+    #[cfg(feature = "pro")]
+    if p.device != "cpu" && (volume.len() >= 65536 || p.device == "gpu") {
+        if let Some((device, name)) = crate::ctf_gpu::device() {
+            check()?;
+            match crate::ctf_gpu::guarded(|| crate::nad_eed_gpu::Evolution::new(device, dims)) {
+                Ok(Ok(mut gpu)) => {
+                    let mut active = true;
+                    let output = crate::nad_eed::diffuse_with_step(
+                        volume,
+                        dims,
+                        k,
+                        p.iterations,
+                        check,
+                        &mut |image, tensor, next| {
+                            check()?;
+                            if active {
+                                let result =
+                                    crate::ctf_gpu::guarded(|| gpu.step(image, tensor, next));
+                                match result {
+                                    Ok(Ok(())) if next.iter().all(|v| v.is_finite()) => {
+                                        return check()
+                                    }
+                                    failure => {
+                                        eprintln!("NAD GPU failed; continuing on CPU: {failure:?}")
+                                    }
+                                }
+                                active = false;
+                                check()?;
+                            }
+                            crate::nad_eed::cpu_step(image, tensor, next, dims, check)
+                        },
+                    )?;
+                    let backend = if active {
+                        match *name {
+                            "Metal" => "NAD 3D Metal",
+                            "CUDA" => "NAD 3D CUDA",
+                            "Vulkan" => "NAD 3D Vulkan",
+                            "DX12" => "NAD 3D DX12",
+                            _ => "NAD 3D GPU",
+                        }
+                    } else {
+                        "NAD 3D (CPU)"
+                    };
+                    return Ok((output, backend));
+                }
+                Ok(Err(error)) | Err(error) => {
+                    eprintln!("NAD GPU unavailable; using CPU: {error:#}")
+                }
+            }
+        }
+    }
+    Ok((
+        crate::nad_eed::diffuse(volume, dims, k, p.iterations, check)?,
+        "NAD 3D (CPU)",
+    ))
 }
 
 #[cfg(test)]

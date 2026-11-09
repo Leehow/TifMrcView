@@ -2,7 +2,7 @@
 
 ## Native NAD replacement — user correction, 2026-11-09
 
-Status: native implementation and numerical gates passed; prior0.7.178 remains running. Preparing release and native GUI acceptance.
+Status: CPU and actual Metal GPU numerical gates passed; prior0.7.178 remains running. Preparing the unified release and native GUI acceptance.
 
 Objective: replace the external IMOD NAD3D adapter with an in-process Rust implementation of the referenced NAD/EED algorithm; compare actual numeric outputs with original software, then update the canonical installed App and perform real GUI acceptance. Retain source/results/models and the installed tabs/layers/autosave/scale-bar/channel-visibility features. No website publishing, remote deployment, dependency refresh or unrelated cleanup.
 
@@ -24,7 +24,13 @@ Preservation baseline:10 file hashes (model records/weights and current source/r
 
 User follow-up: remove the denoise CPU-only checkbox and always request the existing automatic backend policy, ignoring a legacy saved CPU override. Verified current owning code: learned training/inference use GPU with CPU fallback; NLM has GPU support but automatic selection retains CPU on Metal; Gaussian, median, 2D diffusion and native NAD3D currently run on CPU. No GPU NAD implementation is claimed or added. This small UI removal needs no external design research; existing backend policy and diagnostic/API overrides remain intact.
 
-Next: freeze source including this UI simplification, build offline/stable-sign, preserve current native state and update; verify native NAD full Z, absent CPU checkbox and exported voxels against original, retained features/models and final package/hygiene.
+User expansion: add a genuine GPU implementation of NAD3D, automatically selected, with CPU fallback and original-program numerical validation. The CPU release compile completed; installation is deferred until GPU integration and acceptance. Existing cached Burn/CubeCL is the preferred Rust kernel route, without dependency downloads. Research: official W3C WGSL and NVIDIA floating-point documentation confirm operation reassociation/FMA can change results; ITK's GPU finite-difference filters confirm separate previous/next iterates and per-iteration synchronization. Local CubeCL/Metal reports no native f64. The unsmoothed reference tensor is ill-conditioned, so GPU precision must be validated separately rather than assuming the CPU goldens transfer.
+
+First actual Metal run failed the strict original-program gate (real low-K 5-step RMSE0.058, max0.563); retained `gpu-first-hardware-failure.txt` and generated shader. Shader inspection directly showed implicit FMA replacing the evolution's separately rounded product/add. The cached CubeCL C++/MSL compiler applies InstCombine unconditionally, and Metal passthrough uses default fast math. Required narrow repair: vendor the same cached cubecl-cpp0.11.3 version, skip only this pass for the unique `tmv_nad_eed_` entrypoint prefix, and disable Metal fast math only for that prefix in the existing wgpu-hal patch. No other kernel policy/version changes or Internet payloads. GPU remains a documented hybrid: CPU f64 tensor eigensystem, GPU XYZ stencil. Rerun the complete original-program gate before acceptance.
+
+GPU final numerical gate passed: all18 original-program synthetic and4 real-volume outputs now equal every reference voxel, including20 iterations. After disabling FMA, rare compensated-weight rounding still seeded amplified differences; conservative weight intervals now mark only potentially changed fp32 updates for the shared CPU step before the next tensor. All8 NAD tests (including actual Metal),6 classical-denoise tests,57 frontend/Metal-completion tests and Standard core check passed. Runtime device/compiler qualification precedes accelerated user data. Optimized kernel probes repaired0.13–0.23% of voxel steps on the real128x128x32 cases. Small-volume GPU/CPU timings are close; no broad speedup claim. A full256x256x128 existing corrected volume also has CPU/GPU maxdelta0; GPU median about0.99s versusCPU1.02s for2 iterations, so this is compatibility-first hybrid execution rather than a substantial measured acceleration.
+
+Next: freeze source including UI simplification and GPU qualification, build offline/stable-sign, preserve current native state and update; verify native NAD full Z, absent CPU checkbox and exported voxels against original, retained features/models and final package/hygiene.
 
 
 

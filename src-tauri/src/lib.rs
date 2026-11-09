@@ -8,6 +8,8 @@ pub mod denoise;
 mod denoise_nad;
 mod nad_eed;
 #[cfg(feature = "pro")]
+mod nad_eed_gpu;
+#[cfg(feature = "pro")]
 pub mod model_store;
 #[cfg(feature = "pro")]
 pub mod trained_models;

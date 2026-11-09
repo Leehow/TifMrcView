@@ -65,7 +65,7 @@
       <span class="al-wide dn-learn dim" id="dn-model"></span>
       <div class="al-wide dn-learn dim" id="dn-model-record" hidden></div>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
-      <span class="al-wide dn-nad dim">内置 NAD 3D / EED · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
+      <span class="al-wide dn-nad dim">内置 NAD 3D / EED · 自动加速 · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
     </div>
     <label class="al-check"><input type="checkbox" id="dn-preview" checked /> 预览（视野中间最多 2048 px）</label>

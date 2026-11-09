@@ -266,7 +266,7 @@ fn run(img: &OpenImage, c: usize, z: usize, t: usize, p: &Params, rect: [usize; 
     if p.method == Method::Nad3d {
         let filtered = crate::denoise_nad::prepare(img, c, t, p)?;
         let sigma = noise_sigma(&input(img, c, z, t, 0)?, img.info().width, img.info().height);
-        return Ok((crop(&filtered.plane(z)?, img.info().width, rect), sigma, "NAD 3D (CPU)"));
+        return Ok((crop(&filtered.plane(z)?, img.info().width, rect), sigma, filtered.backend));
     }
     let info = img.info();
     let (w, h) = (info.width, info.height);

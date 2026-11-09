@@ -1301,6 +1301,12 @@ impl crate::Device for super::Device {
                 num_workgroups,
             } => {
                 let options = MTLCompileOptions::new();
+                // Only native NAD requests strict fp32 evaluation. Other
+                // scientific/training kernels keep their existing policy.
+                if source.contains("void tmv_nad_eed_") {
+                    #[allow(deprecated)]
+                    options.setFastMathEnabled(false);
+                }
                 // Obtain the device from shared
                 let device = &self.shared.device;
                 let library = device

@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use rayon::prelude::*;
 
 // Symmetric tensor layout: xx, yy, zz, xy, xz, yz.
-type Tensor = [f32; 6];
+pub(crate) type Tensor = [f32; 6];
 const PAIRS: [(usize, usize, usize); 3] = [(0, 1, 3), (0, 2, 4), (1, 2, 5)];
 // Opposite directions are evaluated from the same old iterate (explicit step).
 const NEIGHBORS: [[isize; 3]; 18] = [
@@ -187,11 +187,31 @@ fn weight(a: Tensor, b: Tensor, direction: [isize; 3]) -> f32 {
 }
 
 pub(crate) fn diffuse(
+    image: Vec<f32>,
+    dims: [usize; 3],
+    k: f32,
+    iterations: usize,
+    check: &(impl Fn() -> Result<()> + Sync),
+) -> Result<Vec<f32>> {
+    diffuse_with_step(
+        image,
+        dims,
+        k,
+        iterations,
+        check,
+        &mut |image, tensor, next| cpu_step(image, tensor, next, dims, check),
+    )
+}
+
+/// CPU tensor construction is shared with accelerated evolution, retaining the
+/// reference's f64 eigensystem even on devices without native double precision.
+pub(crate) fn diffuse_with_step(
     mut image: Vec<f32>,
     dims: [usize; 3],
     k: f32,
     iterations: usize,
     check: &(impl Fn() -> Result<()> + Sync),
+    step: &mut impl FnMut(&[f32], &[Tensor], &mut [f32]) -> Result<()>,
 ) -> Result<Vec<f32>> {
     let [w, h, d] = dims;
     let len = w
@@ -234,47 +254,61 @@ pub(crate) fn diffuse(
                 }
                 Ok(())
             })?;
-        next.par_chunks_mut(w * h)
-            .enumerate()
-            .try_for_each(|(z, plane)| -> Result<()> {
-                for y in 0..h {
-                    check()?;
-                    for x in 0..w {
-                        let i = at(x, y, z);
-                        let mut value = image[i];
-                        for dir in NEIGHBORS {
-                            let p = [
-                                x as isize + dir[0],
-                                y as isize + dir[1],
-                                z as isize + dir[2],
-                            ];
-                            // IMOD5.1's upper-Z face excludes its north/back diagonal
-                            // and keeps the north/front periodic ghost. Retain that
-                            // boundary convention for reference-result compatibility.
-                            let top_diagonal = z + 1 == d && dir == [0, -1, 1];
-                            if z + 1 == d && dir == [0, -1, -1] {
-                                continue;
-                            }
-                            if (0..3).any(|a| {
-                                (p[a] < 0 || p[a] >= dims[a] as isize) && !(a == 2 && top_diagonal)
-                            }) {
-                                continue;
-                            }
-                            let j = at(p[0] as usize, p[1] as usize, p[2] as usize % d);
-                            value += weight(tensor[i], tensor[j], dir) * (image[j] - image[i]);
-                        }
-                        if !value.is_finite() {
-                            bail!("NAD 计算超出浮点范围，请先缩放数据");
-                        }
-                        plane[y * w + x] = value;
-                    }
-                }
-                Ok(())
-            })?;
+        step(&image, &tensor, &mut next)?;
+        if next.iter().any(|v| !v.is_finite()) {
+            bail!("NAD 计算超出浮点范围，请先缩放数据");
+        }
         std::mem::swap(&mut image, &mut next);
     }
     check()?;
     Ok(image)
+}
+
+pub(crate) fn cpu_step(
+    image: &[f32],
+    tensor: &[Tensor],
+    next: &mut [f32],
+    dims: [usize; 3],
+    check: &(impl Fn() -> Result<()> + Sync),
+) -> Result<()> {
+    let [w, _, _] = dims;
+    next.par_chunks_mut(w)
+        .enumerate()
+        .try_for_each(|(row, values)| {
+            check()?;
+            for (x, out) in values.iter_mut().enumerate() {
+                *out = cpu_point(image, tensor, dims, row * w + x);
+                if !out.is_finite() {
+                    bail!("NAD 计算超出浮点范围，请先缩放数据");
+                }
+            }
+            Ok(())
+        })
+}
+
+/// One reference step, shared with the GPU's rare rounding-boundary repairs.
+pub(crate) fn cpu_point(image: &[f32], tensor: &[Tensor], dims: [usize; 3], i: usize) -> f32 {
+    let [w, h, d] = dims;
+    let (x, y, z) = (i % w, i / w % h, i / (w * h));
+    let mut value = image[i];
+    for dir in NEIGHBORS {
+        let p = [
+            x as isize + dir[0],
+            y as isize + dir[1],
+            z as isize + dir[2],
+        ];
+        // Preserve the reference's upper-Z north/front periodic diagonal.
+        let top_diagonal = z + 1 == d && dir == [0, -1, 1];
+        if z + 1 == d && dir == [0, -1, -1] {
+            continue;
+        }
+        if (0..3).any(|a| (p[a] < 0 || p[a] >= dims[a] as isize) && !(a == 2 && top_diagonal)) {
+            continue;
+        }
+        let j = (p[2] as usize % d * h + p[1] as usize) * w + p[0] as usize;
+        value += weight(tensor[i], tensor[j], dir) * (image[j] - image[i]);
+    }
+    value
 }
 
 #[cfg(test)]
