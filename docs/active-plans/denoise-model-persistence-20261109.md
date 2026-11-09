@@ -1,5 +1,20 @@
 # Denoising and trained-model persistence
 
+
+## Final outcome (2026-11-09)
+
+Local software delivery is complete. Optimized, stable-signed `/Applications/TifMrcView Pro.app` is version0.7.173, packaged from implementation commit83f1c22 (with integrated tabs/layers, XYZ, NAD/Z fixes and four-model persistence). The final package and running executable identity match; no push or public updater/site release occurred.
+
+Authoritative final evidence: `/Volumes/samsung/pro-test/denoise-model-persistence-20261109/acceptance-report.md`, `final-source-manifest.json`, `final-install-receipt.json`, `package-receipt.json`, `app-hygiene-audit.json` and `preservation-final-check.json`. Signed ZIP: `/Volumes/samsung/tifview-build.noindex/packages/TifMrcView-Pro-0.7.173-macos-arm64.zip`.
+
+44 combined frontend cases passed; 21 targeted backend cases passed. Native GUI verified N2V/wedge automatic weights/parameters, restart/update inference equality (maximum delta0), real IMOD all32-plane export equality, editable merge save/reopen and PNG/TIFF pixel equality, independent Z, selected-layer dragging/Undo, Retina labels/100% shortcut and real2,000-step Metal training completing across a merge switch. Final one-line cube16 preference compatibility was rechecked on a fresh native restart. Original user save/training preferences restored, original corrected volume reopened at Z65/128.
+
+The historical legacy-model retention gate below could not be met: another chat exited the memory-only old process before export. No verified recoverable old network copy was found. This limitation was reported; original image/labels/corrected voxels and saved composite remain unchanged. Newly trained models demonstrably survive process exit, version update and reopen. Do not describe the preserved corrected MRC as an old network checkpoint.
+
+Task stages and task-copied cache App removed. LaunchServices audit resolves only the canonical App; pre-existing unowned test/source App files remain on disk (Spotlight can see them) and were precisely unregistered. Original checkout changes and pre-existing integration `.tmp/` / handoff plan preserved.
+
+The sections below are chronological execution evidence and superseded gates, retained for audit.
+
 ## Authorized outcome
 
 - Integrate Z comparison preview fixes, IMOD NAD 3D and bilingual algorithm names into `codex/handoff-integration-20261104`, preserving its existing features.
@@ -35,7 +50,7 @@
 - Prior source branch: 21 frontend cases, six classical-denoise cases, three NAD adapter cases including actual IMOD differential output, and one CPU live-snapshot case passed; Pro compilation passed. These are not integration-branch or installed-GUI acceptance.
 - Retained references: Burn 0.22 saving/loading uses strict tensor stores and atomic SafeTensors writes; BioImage.IO records weights, architecture and training provenance. Use these practices without changing dependencies or model algorithms.
 
-Status: implementation in progress; integration tests, packaging and GUI gates are not yet accepted.
+Historical status at initial planning: implementation in progress; integration tests, packaging and GUI gates not yet accepted.
 
 ## Implementation milestone (2026-11-09)
 
