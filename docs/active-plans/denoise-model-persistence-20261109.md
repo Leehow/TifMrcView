@@ -1,6 +1,18 @@
 # Denoising and trained-model persistence
 
 
+## Follow-up authorized after 0.7.173
+
+Status: implementing the next requested UI/autosave batch; installed0.7.173 remains unchanged.
+
+Verified actual user messages in chat01a1beb7-a493-75c2-ab8c-76af2f97db66, IDs01a1bf69-d43f-70f2-bd4b-cce7a2351504 and01a1bf6a-f9c4-7b92-946c-d3866ff4b874: a single image appears as a layer; incoming layers fit the base proportionally/centered; familiar edge/corner transform handles; each edit automatically saves the editable project with no Save button; Delete/Backspace deletes selected layer with Undo while text fields keep normal editing.
+
+- Original chat owns its same seven frontend/test/plan files and will deliver a frozen incremental snapshot. It must not build, sign, install, restart or manipulate the native App. This integration checkout owns backend, integration and final native acceptance.
+- Required new native protocol: `create_merge_project({token, project}) -> absolute path`, verified against this window's retained source token; safe auto filename, no overwrite even under name races; prefer source directory, fallback to App data merge-projects; register successful path for subsequent saves. Existing `save_merge_project` interface continues, with complete same-folder atomic replacement off the UI thread.
+- Precedent: Rust OpenOptions create_new guarantees atomic reservation (https://doc.rust-lang.org/std/fs/struct.OpenOptions.html); Qt QSaveFile stages beside destination and renames (https://doc.qt.io/qt-6/qsavefile.html). The previous annotation writer renames over the destination, so a mere exists check cannot safely create first projects. New project persistence uses a complete synced unique stage and no-clobber publication, with normal atomic replacement for edits; no dependency changes.
+- Backend checks cover safe Unicode/basename names, file/symlink collisions, concurrent first creates, primary-path failure/App-data fallback and failed-save preservation/temporary cleanup. Native tests will verify actual first save without picker, edited/deleted/undone state after close/reopen, fit/handles, and preserve existing denoising/model state.
+- Before any next native update: verify actual current App/model/job/unsaved-document state again; do not assume it is unchanged from the prior completed acceptance. Keep the current signed package, all weight records, user images and projects.
+
 ## Final outcome (2026-11-09)
 
 Local software delivery is complete. Optimized, stable-signed `/Applications/TifMrcView Pro.app` is version0.7.173, packaged from implementation commit83f1c22 (with integrated tabs/layers, XYZ, NAD/Z fixes and four-model persistence). The final package and running executable identity match; no push or public updater/site release occurred.

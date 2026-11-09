@@ -66,12 +66,20 @@ fn read_merge_project(state: State<'_, AppState>, path: String) -> CmdResult<ser
 }
 
 #[tauri::command]
-fn save_merge_project(state: State<'_, AppState>, path: String, project: serde_json::Value) -> CmdResult<()> {
+async fn create_merge_project(window: WebviewWindow, state: State<'_, AppState>, app: AppHandle, token: u64, project: serde_json::Value) -> CmdResult<String> {
+    let source = state.documents.get(window.label(), token).ok_or("stale")?;
+    let source = PathBuf::from(&source.info().path);
+    let fallback = app.path().app_data_dir().ok().map(|p| p.join("merge-projects"));
+    let path = blocking(move || crate::merge_project::create(&source, fallback.as_deref(), &project)).await?;
+    let path = path.to_string_lossy().into_owned();
+    state.save_paths.allow(&path);
+    Ok(path)
+}
+
+#[tauri::command]
+async fn save_merge_project(state: State<'_, AppState>, path: String, project: serde_json::Value) -> CmdResult<()> {
     if !state.save_paths.allowed(&path) { return Err("请选择工程保存位置".into()); }
-    if project["format"] != "tifmrcview-merge" || project["version"] != 1 { return Err("无效的合成工程".into()); }
-    // The previous saved project remains intact if serialization/writing fails.
-    let text = serde_json::to_string_pretty(&project).map_err(err)?;
-    write_annotations_at(Path::new(&path), &text)
+    blocking(move || crate::merge_project::save(Path::new(&path), &project)).await
 }
 
 #[tauri::command]

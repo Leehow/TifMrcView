@@ -2790,6 +2790,7 @@ pub fn run() {
             #[cfg(feature = "pro")] open_layer_source,
             #[cfg(feature = "pro")] read_merge_project,
             #[cfg(feature = "pro")] save_merge_project,
+            #[cfg(feature = "pro")] create_merge_project,
             #[cfg(feature = "pro")] save_merged_image,
             open_reslice,
             load_progress,

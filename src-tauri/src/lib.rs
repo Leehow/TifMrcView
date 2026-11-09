@@ -22,6 +22,8 @@ pub mod edition;
 mod documents;
 #[cfg_attr(not(all(feature = "desktop", feature = "pro")), allow(dead_code))]
 mod merge_export;
+#[cfg_attr(not(all(feature = "desktop", feature = "pro")), allow(dead_code))]
+mod merge_project;
 pub mod fft;
 pub mod formats;
 pub mod imod;
