@@ -4,6 +4,9 @@ Cached upstream cubecl-cpp 0.11.3, with its original MIT/Apache-2.0 licenses.
 No package version changes. Only `src/shared/base.rs` differs from upstream.
 Original cached crate SHA-256:
 `fd9b916049eefb3b8f793a0da10d158c5900e377c35bc32abc235b33b05d5428`.
+The cached crate omitted the workspace-root license texts. These are retained
+from the existing same-version CubeCL vendor and verified against the v0.11.3
+upstream `LICENSE-MIT` and `LICENSE-APACHE` files.
 
 The C++/MSL compiler unconditionally applies InstCombine, replacing separate
 rounded multiply/add/subtract operations with FMA even when the Rust kernel
