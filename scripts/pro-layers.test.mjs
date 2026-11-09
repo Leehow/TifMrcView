@@ -94,3 +94,87 @@ test('changing sidebar or Z bar size preserves image screen position and zoom', 
   assert.ok(Math.abs((before.height / 2 - view.cy * view.scale) - (after.height / 2 - next.cy * next.scale)) < 1e-9);
   assert.deepEqual(view, { cx: 133, cy: 89, scale: 2.75 });
 });
+
+const app = fs.readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8');
+const body = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)));
+const sourceUi = body('function sourceUiActive()', 'function resizeCanvas()');
+function renderingContext() {
+  const calls = [], pending = [];
+  let doc = { type: 'image' };
+  const ctx = vm.createContext({
+    window: { TifMrcViewPro: { documents: { current: () => doc } }, devicePixelRatio: 1 },
+    S: { token: 17, info: {}, axis: 'xy', view: { scale: 9.74 }, z: 1, t: 0, gamma: 1, chans: [], frame: 'source', ov: 'source' },
+    visibleRegion: () => [0, 0, 32, 24], bounds: () => [0, 0, 32, 24], channelReqs: () => [], OV_SIZE: 128,
+    invoke: () => new Promise((resolve) => pending.push(resolve)),
+    parseFrame: () => { calls.push('decode'); return { w: 32, h: 24, image: {}, ranges: [] }; },
+    frameCanvas: {}, frameCtx: { putImageData: () => calls.push('frame') },
+    ovCanvas: { getContext: () => ({ putImageData: () => calls.push('overview') }) },
+  });
+  for (const name of ['syncContrast', 'draw', 'sideDone', 'startFade', 'loadHist', 'pluginEmit', 'scheduleFft', 'scheduleSpec', 'toast']) ctx[name] = () => calls.push(name);
+  vm.runInContext(sourceUi + body('function requestRender()', '/** Re-renders the whole-image') +
+    body('async function refreshOverview()', 'function channelReqs()') +
+    body('async function renderNow()', '// ---------- FFT / power spectrum'), ctx);
+  return { ctx, calls, pending, select: (type) => { doc = { type }; } };
+}
+
+test('source draw, status and new render requests cannot overwrite a merge', async () => {
+  const h = renderingContext(); h.select('merge');
+  vm.runInContext(body('function draw()', '/** Dashed outline') + body('function updateInfo()', 'function togglePlay()'), h.ctx);
+  // No DOM/canvas stubs: any source UI write here would throw.
+  h.ctx.draw(); h.ctx.updateInfo(); h.ctx.requestRender();
+  await h.ctx.renderNow(); await h.ctx.refreshOverview();
+  assert.equal(h.pending.length, 0); assert.deepEqual(h.calls, []);
+  h.select('image'); h.ctx.requestRender();
+  assert.equal(h.pending.length, 1, 'source rendering resumes on return');
+  h.select('merge'); h.pending.shift()(new ArrayBuffer(0));
+  await Promise.resolve();
+});
+
+test('in-flight source frame and overview results are discarded on entering a merge', async () => {
+  for (const method of ['renderNow', 'refreshOverview']) {
+    const h = renderingContext();
+    const done = h.ctx[method]();
+    assert.equal(h.pending.length, 1);
+    h.select('merge'); h.pending.shift()(new ArrayBuffer(0)); await done;
+    assert.deepEqual(h.calls, [], 'no source pixels, overlays or status may be published');
+    assert.equal(h.ctx.S.frame, 'source'); assert.equal(h.ctx.S.ov, 'source');
+    assert.equal(h.ctx.S.view.scale, 9.74);
+    assert.equal(!!h.ctx.S.inflight, false); assert.equal(!!h.ctx.S.ovBusy, false);
+  }
+});
+
+test('late source load progress cannot replace the merge status or keep polling', async () => {
+  const h = renderingContext(); let tick;
+  h.ctx.setTimeout = (fn) => { tick = fn; return 1; };
+  vm.runInContext(body('function watchLoad()', 'function sideDone()'), h.ctx);
+  h.ctx.watchLoad();
+  const done = tick(); assert.equal(h.pending.length, 1);
+  h.select('merge'); h.pending.shift()([1, 10, true]); await done;
+  assert.equal(h.ctx.S.loadTimer, null);
+});
+
+test('Retina merge zoom matches the source and the 1 key selects physical 100%', () => {
+  const layers = fs.readFileSync(new URL('../ui/pro/layers.js', import.meta.url), 'utf8');
+  const update = layers.slice(layers.indexOf('  function updateZoom('), layers.indexOf('  function sync()'));
+  const key = layers.slice(layers.indexOf('    key(e) {'), layers.indexOf('  } };', layers.indexOf('    key(e) {')));
+  for (const dpr of [1, 2]) {
+    const sourceState = { view: { cx: 131, cy: 90, scale: 2.86 }, chans: [], z: 0, t: 0, gamma: 1 };
+    const doc = M.fromImage(source('BF.tif', 1), sourceState);
+    const nodes = { 'btn-zoom': {}, 'st-zoom': {} };
+    let requested = 0, prevented = false;
+    const ctx = vm.createContext({ window: { devicePixelRatio: dpr }, $: (id) => nodes[id], current: () => doc, request: () => requested++ });
+    vm.runInContext(update + `globalThis.keys = { ${key} } };`, ctx);
+    ctx.updateZoom(doc);
+    const sourcePct = `${Math.round(sourceState.view.scale * dpr * 100)}%`;
+    assert.equal(nodes['btn-zoom'].textContent, sourcePct);
+    assert.equal(nodes['st-zoom'].textContent, sourcePct);
+    assert.deepEqual(plain(doc.view), sourceState.view, 'DPR changes labels without changing project geometry');
+    ctx.keys.key({ key: '1', preventDefault: () => { prevented = true; } });
+    ctx.updateZoom(doc);
+    assert.equal(doc.view.scale, 1 / dpr);
+    assert.equal(nodes['btn-zoom'].textContent, '100%');
+    assert.equal(nodes['st-zoom'].textContent, '100%');
+    assert.equal(doc.view.cx, 131); assert.equal(doc.view.cy, 90);
+    assert.equal(requested, 1); assert.equal(prevented, true);
+  }
+});

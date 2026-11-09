@@ -222,6 +222,12 @@
   }
 
   function syncValue(id, value) { if (document.activeElement !== $(id)) $(id).value = value; }
+  function updateZoom(doc) {
+    if (!doc?.view) return;
+    const pct = `${Math.round(doc.view.scale * (window.devicePixelRatio || 1) * 100)}%`;
+    $("btn-zoom").textContent = pct;
+    $("st-zoom").textContent = pct;
+  }
   function sync() {
     const doc = current();
     preview.hidden = !doc;
@@ -297,6 +303,7 @@
     syncValue("merge-background", doc.background);
     syncZBars(doc);
     if (!doc.view) fit(doc);
+    updateZoom(doc);
     request();
   }
 
@@ -411,8 +418,7 @@
       }
       preview.width = output.width; preview.height = output.height;
       preview.getContext("2d").drawImage(output, 0, 0);
-      $("btn-zoom").textContent = `${Math.round(view.scale * 100)}%`;
-      $("st-zoom").textContent = `${Math.round(view.scale * 100)}%`;
+      updateZoom(doc);
       $("st-info").textContent = `合成 · ${doc.width}×${doc.height} · ${doc.layers.length} 个图层`;
       updateThumbnail(doc);
     } catch (e) { if (current() === doc) toast(`合成预览失败：${e}`, 6500); }
@@ -627,7 +633,7 @@
     else if (key === "f") fit();
     else if (key === "+" || key === "=") zoom(1.25);
     else if (key === "-") zoom(0.8);
-    else if (key === "1") { doc.view.scale = 1; request(); }
+    else if (key === "1") { doc.view.scale = 1 / (window.devicePixelRatio || 1); request(); }
     else if (key === "b") toggleSidebar();
     else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) edit((_doc, l) => {
       if (!l) return; const step = e.shiftKey ? 10 : 1;

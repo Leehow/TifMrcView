@@ -429,20 +429,23 @@ async function setAxis(axis) {
  * all is), and the progress of a side view that is still being built.
  */
 function watchLoad() {
+  if (!sourceUiActive()) return;
   if (S.loadTimer) return;
   const tick = async () => {
+    if (!sourceUiActive()) { S.loadTimer = null; return; }
     const token = S.axis === "xy" ? S.token : S.base && S.base.token;
     let done = true;
     if (token != null && S.info) {
       try {
         const [have, total, fits] = await invoke("load_progress", { token });
+        if (!sourceUiActive()) { S.loadTimer = null; return; }
         const pct = Math.floor((have / Math.max(1, total)) * 100);
         const loading = total > 1 && fits && have < total;
         $("st-cache").textContent = loading ? `已载入内存 ${pct}%` : "";
         if (S.sideWait) {
           // Slices read so far for the side view being built.
           const [d, n] = await invoke("load_progress", { token: S.token });
-          if (S.sideWait) {
+          if (S.sideWait && sourceUiActive()) {
             $("loading").textContent = `正在生成 ${S.axis.toUpperCase()} 视图… ${d} / ${n} 层`;
             $("loading").style.setProperty("--p", `${(d / Math.max(1, n)) * 100}%`);
             $("loading").classList.add("progress");
@@ -839,6 +842,7 @@ function setT(t) {
 }
 
 function updateInfo() {
+  if (!sourceUiActive()) return;
   const i = S.info;
   if (!i) return;
   const dims = [`${i.width}×${i.height}`];
@@ -968,12 +972,16 @@ function drawScaleBar(g, outW, outH, k, onScreen) {
 
 // ---------- view / rendering ----------
 
+function sourceUiActive() {
+  return window.TifMrcViewPro?.documents?.current()?.type !== "merge";
+}
+
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   const r = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(r.width * dpr));
   canvas.height = Math.max(1, Math.round(r.height * dpr));
-  if (S.info) clampView();
+  if (S.info && sourceUiActive()) clampView();
   draw();
   requestRender();
 }
@@ -1338,6 +1346,7 @@ function drawModel(g, map, k, unit, z = S.z) {
 }
 
 function draw() {
+  if (!sourceUiActive()) return;
   if (S.xyz) { xyz.paint(); updateZMarks(); return; }
   updateZMarks();
   const dpr = window.devicePixelRatio || 1;
@@ -1476,6 +1485,7 @@ function drawTag(g, text, x, y) {
 }
 
 function requestRender() {
+  if (!sourceUiActive()) return;
   if (S.xyz) { xyz.reload(); return; }
   if (!S.info) return;
   if (S.inflight) {
@@ -1487,6 +1497,7 @@ function requestRender() {
 
 /** Re-renders the whole-image underlay when the slice or display changed. */
 async function refreshOverview() {
+  if (!sourceUiActive()) return;
   const region = bounds();
   // Same contrast as the sharp view, so the two blend without a seam.
   const channels = channelReqs().map((c) => ({ ...c, min: S.chans[c.index].min, max: S.chans[c.index].max }));
@@ -1499,8 +1510,9 @@ async function refreshOverview() {
   S.ovBusy = true;
   try {
     const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };
-    const f = parseFrame(await invoke("render_view", { req }));
-    if (token !== S.token) return;
+    const buf = await invoke("render_view", { req });
+    if (token !== S.token || !sourceUiActive()) return;
+    const f = parseFrame(buf);
     ovCanvas.width = f.w;
     ovCanvas.height = f.h;
     ovCanvas.getContext("2d").putImageData(f.image, 0, 0);
@@ -1526,6 +1538,7 @@ function channelReqs() {
 }
 
 async function renderNow() {
+  if (!sourceUiActive()) return;
   const region = visibleRegion();
   if (!region) {
     S.frame = null;
@@ -1545,7 +1558,7 @@ async function renderNow() {
   S.dirty = false;
   try {
     const buf = await invoke("render_view", { req });
-    if (token !== S.token) return;
+    if (token !== S.token || !sourceUiActive()) return;
     const f = parseFrame(buf);
     frameCanvas.width = f.w;
     frameCanvas.height = f.h;
@@ -1569,6 +1582,7 @@ async function renderNow() {
     scheduleFft();
     scheduleSpec();
   } catch (e) {
+    if (!sourceUiActive()) return;
     if (String(e) !== "stale") toast(`渲染失败：${e}`);
     if (token === S.token) {
       sideDone();
@@ -3397,6 +3411,7 @@ canvas.addEventListener(
 
 let pixelBusy = false;
 async function showPixel(e) {
+  if (!sourceUiActive()) return;
   if (!S.info || pixelBusy) return;
   const [fx, fy] = toImage(e);
   const x = Math.floor(fx);
@@ -3408,6 +3423,7 @@ async function showPixel(e) {
   pixelBusy = true;
   try {
     const v = await invoke("pixel_values", { token: S.token, z: S.z, t: S.t, x, y });
+    if (!sourceUiActive()) return;
     $("st-pixel").textContent = `x ${x}  y ${y}` + (v.length ? `  值 ${v.map(fmt).join(" / ")}` : "");
   } catch (_) {
     // stale token while switching files

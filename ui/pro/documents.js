@@ -9,6 +9,67 @@
   bar.setAttribute("role", "tablist");
   $("toolbar").after(bar);
 
+  // Suspend source tools without their close/reset/cancel handlers: training,
+  // model weights, results and the source view still belong to the image.
+  const sourcePanels = ".pro-panel, .pro-workspace, #align-panel, #cryoet-workspace, #fft-panel, #spec-panel, #vol3d, #vol-panel, .mem-model";
+  const sourceControls = "#stage > #view, #tools, #tools-resizer, .edge-rail, #stage > #size-out, #text-edit, #ann-menu, #loading, #zbar";
+  const sourceSurfaces = `${sourcePanels}, ${sourceControls}`;
+  const suspended = new Map();
+  let sourceUiSuspended = false;
+  function suspendSurface(el) {
+    if (!suspended.has(el)) suspended.set(el, { hidden: el.getAttribute("hidden"), inert: el.inert });
+    if (el.contains(document.activeElement)) document.activeElement.blur();
+    if (el.matches(sourcePanels) && !el.hidden) el.hidden = true;
+    el.inert = true;
+    el.setAttribute("data-merge-suspended", "");
+  }
+  const sourceObserver = new MutationObserver((records) => {
+    if (!sourceUiSuspended) return;
+    for (const r of records) {
+      if (r.type === "attributes" && r.target.matches(sourcePanels)) suspendSurface(r.target);
+      for (const node of r.addedNodes || []) if (node.nodeType === 1) {
+        if (node.matches(sourceSurfaces)) suspendSurface(node);
+        node.querySelectorAll(sourceSurfaces).forEach(suspendSurface);
+      }
+    }
+  });
+  function syncSourceUi() {
+    if (active?.type === "merge") {
+      if (!sourceUiSuspended) {
+        sourceUiSuspended = true;
+        closeMenu();
+        $("ann-menu").hidden = true;
+        clearTimeout(S.loadTimer); S.loadTimer = null;
+        sourceObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+      }
+      document.querySelectorAll(sourceSurfaces).forEach(suspendSurface);
+    } else if (sourceUiSuspended) {
+      sourceObserver.disconnect();
+      sourceUiSuspended = false;
+      closeMenu();
+      for (const [el, saved] of suspended) {
+        el.inert = saved.inert;
+        el.removeAttribute("data-merge-suspended");
+        if (el.matches(sourcePanels)) {
+          if (saved.hidden === null) el.removeAttribute("hidden");
+          else el.setAttribute("hidden", saved.hidden);
+        }
+      }
+      suspended.clear();
+    }
+  }
+  // Inert covers real focus/pointer input; capture also rejects queued or
+  // programmatic UI events before a hidden tool can export the source.
+  for (const type of ["click", "dblclick", "pointerdown", "pointerup", "input", "change", "keydown", "wheel", "contextmenu"]) window.addEventListener(type, (e) => {
+    if (active?.type !== "merge" || !e.target.closest?.(sourceSurfaces)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
+  document.addEventListener("pro-panel", (e) => {
+    if (active?.type !== "merge") return;
+    syncSourceUi();
+    e.stopImmediatePropagation();
+  }, true);
+
   function enqueue(work) {
     const result = tail.then(work).catch((e) => { toast(String(e), 6500); return null; });
     tail = result;
@@ -46,6 +107,7 @@
     bar.append(add);
     bar.querySelector(".selected")?.scrollIntoView({ inline: "nearest", block: "nearest" });
     document.body.classList.toggle("merge-mode", active?.type === "merge");
+    syncSourceUi();
     document.dispatchEvent(new CustomEvent("tmv-document", { detail: active }));
   }
 
@@ -128,7 +190,9 @@
         await releaseUnused();
         changed();
       }
-      if (previous?.type === "merge") setupSliders();
+      if (previous?.type === "merge") {
+        setupSliders(); updateInfo(); draw(); requestRender(); watchLoad();
+      }
       return doc;
     });
   }

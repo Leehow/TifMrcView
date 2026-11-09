@@ -173,3 +173,58 @@ Ready-for-integration: frontend revision complete. Freeze these seven files:
 `ui/pro/merge-model.js`, `ui/app.js`, `scripts/pro-layers.test.mjs`, and this plan.
 `ui/pro/pro.js` and all Rust/Cargo/i18n/XYZ/denoise/model-persistence sources are
 unchanged from the initial handoff snapshot.
+
+## Integration follow-up: source-tool suspension and Retina zoom
+
+The integration owner found a native boundary defect: a source NAD panel stayed
+open over a `.tmvmerge` document, its export still addressed the hidden source,
+and closing it triggered source rendering that overwrote merge zoom labels.
+The owner also requested consistent Retina zoom: source labels use CSS scale ×
+DPR, whereas the merge previously displayed CSS scale alone.
+
+The narrowly scoped fix suspends source processing surfaces in documents.js
+before publishing the document-change event. It stores visibility/inert state,
+hides source panels, rejects their UI events, and clears the old shared menu.
+Late-mounted or asynchronously reopened source panels stay suspended. Returning
+to an image restores those states; normal source metadata rules still apply
+(for example, no spectrum pane for an image without spectrum metadata).
+It never calls the tools' close/reset/cancel handlers or clears model data.
+Global settings/help/plugin dialogs and merge menus remain available.
+
+app.js guards source drawing, render requests, in-flight frame/overview results,
+load progress and pixel status while a merge is active. Source canvas resizing
+does not clamp its saved view while hidden. Opening a new source from a merge
+explicitly restarts its display after ownership changes. Merge zoom labels and
+the `1` shortcut now match the source DPR convention; serialized CSS geometry
+and view scale are unchanged.
+
+Precedent checked: HTML's inert subtree contract and WebKit's shipping support
+confirm focus/input suspension without destroying DOM or computation state.
+https://html.spec.whatwg.org/dev/interaction.html
+https://webkit.org/blog/12669/new-webkit-features-in-safari-15-5/
+
+Follow-up verification:
+
+- 21 focused Node cases pass, including late source frame/overview/progress
+  completion and DPR=1/2 zoom/physical-100% behavior.
+- Browser fixtures: N2V and missing-wedge training promises both finish while
+  the merge is active; no cancel commands occur. The source token, Z and view
+  survive the switch, and trained-result text remains on return. This validates
+  frontend continuity with mocked computation, not real weight persistence.
+- Hidden source export/train/close actions dispatch no IPC. All 12 inspected
+  source panel/workspace/FFT/spectrum/3D roots become hidden/inert; a newly
+  appended panel and a reopened panel are also suspended. Merge export still
+  reaches `save_merged_image`, and its menu survives ordinary merge edits.
+- A held source render released after switching cannot change the merge's zoom
+  or status. A new source opened from the merge renders successfully. Standard
+  still renders without loading the Pro document UI; no browser feature errors.
+- DPR=2 in-place conversion retains tab ID/count, screen origin
+  `[178.40000000000003, 17.40156250000001]` and zoom `572%`; `1` sets CSS scale
+  `0.5` and both zoom labels to `100%`.
+
+Ready-for-integration again. Exact baseline is the seven-file frozen source in
+`/Volumes/samsung/pro-test/tabs-layers-20261109/ux-final-20261109/source`.
+The new incremental snapshot/patch is in
+`/Volumes/samsung/pro-test/tabs-layers-20261109/source-panel-fix-20261109`.
+No native build, signing, installation, restart or App GUI operation occurred
+in this follow-up. The integration owner retains final native acceptance.

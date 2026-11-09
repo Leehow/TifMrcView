@@ -14,6 +14,8 @@ html[data-edition="pro"] #sidebar.collapsed { display:none; }
 #right-sidebar-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .merge-mode #stage > #view, .merge-mode #tools, .merge-mode #tools-resizer, .merge-mode .edge-rail,
 .merge-mode #stage > #size-out, .merge-mode #fft-panel, .merge-mode #spec-panel, .merge-mode #vol3d, .merge-mode #vol-panel { visibility:hidden; pointer-events:none; }
+.merge-mode .pro-panel, .merge-mode .pro-workspace, .merge-mode #align-panel, .merge-mode #cryoet-workspace,
+.merge-mode .mem-model, .merge-mode #ann-menu, .merge-mode [data-merge-suspended] { visibility:hidden !important; pointer-events:none !important; }
 #merge-panel { flex:1; min-height:0; overflow-y:auto; padding:0 10px; font-size:12px; }
 #merge-panel button, #merge-panel input, #merge-panel select { font-size:12px; }
 #merge-panel input[type="text"], #merge-panel input[type="number"], #merge-panel select { width:100%; min-width:0; padding:3px 4px; }
