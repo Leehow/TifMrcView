@@ -54,6 +54,8 @@ html[data-edition="pro"] #sidebar.collapsed { display:none; }
 .merge-actions { display:flex; gap:7px; }
 .merge-actions button { flex:1; justify-content:center; white-space:nowrap; padding:4px; }
 .merge-footer { position:sticky; bottom:0; padding:12px 0; background:var(--surface); border-top:1px solid var(--line); }
+#merge-save-status { margin-top:7px; font-size:11px; text-align:center; overflow-wrap:anywhere; }
+#merge-save-status.error { color:var(--accent); }
 #merge-projects { margin:0 8px; padding:5px 0; border-bottom:1px solid var(--line); }
 #merge-projects > summary { cursor:pointer; padding:7px 2px; color:var(--dim); font-size:12px; font-weight:600; }
 .merge-project-count { float:right; color:var(--faint); font-weight:400; padding-right:3px; }

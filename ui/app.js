@@ -1398,6 +1398,7 @@ function draw() {
   const pct = `${Math.round(S.view.scale * dpr * 100)}%`;
   $("st-zoom").textContent = pct;
   $("btn-zoom").textContent = pct;
+  window.TifMrcViewPro?.layers?.sourceChanged?.();
 }
 
 /** Dashed outline and grab points of the picked annotation. */

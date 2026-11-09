@@ -2,6 +2,7 @@
 // Pro document ownership: source tabs and merge projects share one window.
 (() => {
   const tabs = [], sources = new Map(), pins = new Map();
+  const saveTimers = new Map(), saveTails = new WeakMap();
   let active = null, nextId = 0, tail = Promise.resolve();
   const bar = document.createElement("nav");
   bar.id = "document-tabs";
@@ -76,7 +77,23 @@
     return result;
   }
 
-  function changed() {
+  function scaleBarSnapshot(source, state = null) {
+    const info = source.info, ps = info.pixelSize, unit = normUnit(info.unit || "");
+    const px = state && "px" in state ? state.px
+      : ps?.[0] > 0 && UNIT_M[unit] && plausiblePixel(ps[0], unit, true) ? { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit } : null;
+    const pxM = px?.x * UNIT_M[px?.unit];
+    if (!Number.isFinite(pxM) || pxM <= 0) return null;
+    const scale = Math.max(0.001, state?.view?.scale || 1);
+    const region = state?.crop || [0, 0, info.width, info.height];
+    const length = niceLength(Math.min(120 / scale, region[2] * 0.4) * pxM);
+    const labelUnit = isRecip(px.unit) ? px.unit : px.unit === "Å" && length < 1e-8 ? "Å" : length < 1e-6 ? "nm" : length < 1e-3 ? "µm" : "mm";
+    return { visible: !!(state?.scaleBar ?? pref.get("scalebar-on", true)),
+      pixelSize: { x: px.x, y: px.y > 0 ? px.y : px.x, unit: px.unit },
+      length: length / pxM, label: fmtLength(length, labelUnit), region: [...region],
+      font: 13 / scale, thickness: 4 / scale, margin: 18 / scale };
+  }
+
+  function changed(schedule = true) {
     bar.replaceChildren();
     for (const doc of tabs) {
       const item = document.createElement("div");
@@ -109,10 +126,12 @@
     document.body.classList.toggle("merge-mode", active?.type === "merge");
     syncSourceUi();
     document.dispatchEvent(new CustomEvent("tmv-document", { detail: active }));
+    if (schedule) for (const doc of tabs) if (doc.type === "merge" && doc.dirty) autosave(doc);
   }
 
   async function capture() {
-    if (active?.type !== "image") return;
+    if (active?.type === "merge") return save(active);
+    if (active?.type !== "image") return true;
     finishText(true);
     await flushAnn();
     stopPlay();
@@ -122,6 +141,7 @@
       folder: { ...S.folder }, frame: null, ov: null, fade: null, hist: null,
       op: null, picked: null, cropBox: null, inflight: false, dirty: false,
       playing: null, scrubbing: false, scrubTimer: 0, ovBusy: false, ovKey: null, loadTimer: null };
+    return true;
   }
 
   function restore(doc) {
@@ -154,7 +174,7 @@
 
   async function activate(doc) {
     if (doc === active) return doc;
-    await capture();
+    if (!await capture()) return active;
     if (doc.type === "image") await invoke("activate_document", { token: doc.token });
     active = doc;
     changed();
@@ -173,7 +193,7 @@
       if (/\.tmvmerge$/i.test(path)) return openProject(path);
       const existing = tabs.find((d) => d.type === "image" && d.path === path && d.series === series);
       if (existing && !force) return activate(existing);
-      await capture();
+      if (!await capture()) return null;
       const previous = active;
       const result = await openPath(path, force || previous?.type !== "image", series, true);
       if (!result) return null;
@@ -212,6 +232,7 @@
     for (const d of tabs) {
       if (d.type === "image") used.add(d.token);
       else {
+        if (!d.path && d.autosaveToken) used.add(d.autosaveToken);
         d.layers.forEach((l) => used.add(l.token));
         for (const h of [...(d.history || []), ...(d.future || [])]) h.layers.forEach((l) => used.add(l.token));
       }
@@ -231,7 +252,7 @@
 
   async function addPaths(paths, startNew = false) {
     return enqueue(async () => {
-      await capture();
+      if (!await capture()) return null;
       const previous = active;
       const convert = previous?.type === "image" && !startNew;
       const opened = [];
@@ -241,12 +262,12 @@
           opened.push(await source(path));
         }
       } catch (e) { await releaseUnused(); throw e; }
-      await capture();
+      if (!await capture()) { await releaseUnused(); return null; }
       const before = $("stage").getBoundingClientRect();
       let doc;
       if (convert) {
         const base = sources.get(previous.token);
-        doc = TmvMerge.fromImage(base, previous.state, `${stem(previous.path)}_merge`);
+        doc = TmvMerge.fromImage(base, previous.state, `${stem(previous.path)}_merge`, scaleBarSnapshot(base, previous.state));
         doc.id = previous.id;
         doc.folder = previous.state.folder;
       } else doc = !startNew && previous?.type === "merge" ? previous : newMerge();
@@ -257,7 +278,7 @@
         const settings = state ? { z: state.z, t: state.t, gamma: state.gamma,
           channels: state.chans.flatMap((c, index) => c.visible ? [{ index, color: c.color, min: c.auto ? null : c.min, max: c.auto ? null : c.max }] : []) } : {};
         if (settings.channels && !settings.channels.length) delete settings.channels;
-        added.push(TmvMerge.add(doc, TmvMerge.layer(image, settings)));
+        added.push(TmvMerge.add(doc, TmvMerge.layer(image, { ...settings, scaleBar: scaleBarSnapshot(image, state) })));
       }
       if (convert) {
         tabs.splice(tabs.indexOf(previous), 1, doc);
@@ -280,12 +301,22 @@
     });
   }
 
-  async function openProject(path) {
-    const existing = tabs.find((d) => d.type === "merge" && d.path === path);
+  async function openProject(path, recovery = null) {
+    const existing = tabs.find((d) => d.type === "merge" && (recovery && d.autosaveId === recovery.id || path && d.path === path));
     if (existing) return activate(existing);
-    const data = TmvMerge.validate(await invoke("read_merge_project", { path }));
-    await capture();
+    if (!recovery) {
+      const draft = recoveryList().find((r) => r.path === path);
+      if (draft) {
+        // Opening a saved file also prefers its newer interrupted edit, so two
+        // tabs cannot race to save an old and a recovered copy to one path.
+        try { await invoke("read_merge_project", { path }); } catch (_) { path = null; }
+        recovery = draft;
+      }
+    }
+    const data = TmvMerge.validate(recovery?.project || await invoke("read_merge_project", { path }));
+    if (!await capture()) return null;
     const doc = TmvMerge.create(data.name || stem(path));
+    let migratedScale = false;
     doc.id = `document-${++nextId}`;
     try {
       for (const settings of data.layers) {
@@ -294,81 +325,135 @@
         catch (e) { throw new Error(`无法打开工程图层「${settings.name}」：${settings.path}\n${e}。请恢复原图后重新打开工程。`); }
         if (settings.channels.some((c) => c.index >= opened.info.channels.length)) throw new Error(`图层「${settings.name}」的原图通道已变化`);
         if (settings.z >= opened.info.sizeZ || settings.t >= opened.info.sizeT) throw new Error(`图层「${settings.name}」的原图 Z/T 尺寸已变化`);
-        doc.layers.push(TmvMerge.layer(opened, settings));
+        const layer = TmvMerge.layer(opened, settings);
+        if (!Object.hasOwn(settings, "scaleBar")) {
+          layer.scaleBar = scaleBarSnapshot(opened, { view: { scale: (data.view?.scale || 1) * layer.width / opened.info.width } });
+          migratedScale ||= !!layer.scaleBar;
+        }
+        doc.layers.push(layer);
       }
     } catch (e) { await releaseUnused(); throw e; }
+    if (recovery?.anchor && !doc.layers.length) {
+      const anchor = await source(recovery.anchor.path, recovery.anchor.series || 0);
+      doc.autosaveToken = anchor.token;
+      doc.autosaveSource = recovery.anchor;
+    }
     Object.assign(doc, { width: data.width, height: data.height, background: data.background,
-      path, dirty: false, selected: doc.layers[data.selected]?.id || doc.layers.at(-1)?.id,
+      path, dirty: !!recovery || migratedScale, selected: doc.layers[data.selected]?.id || doc.layers.at(-1)?.id,
       view: data.view || null });
+    if (recovery) doc.autosaveId = recovery.id;
     tabs.push(doc);
     await activate(doc);
     rememberProject(doc);
     return doc;
   }
 
-  async function save(doc = active, saveAs = false) {
+  function recoveryList() {
+    const rows = pref.get("merge-recovery", []);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  function keepRecovery(doc) {
+    doc.autosaveId ||= `merge-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    doc.autosaveToken ||= doc.layers[0]?.token;
+    if (!doc.autosaveSource && doc.layers[0]) doc.autosaveSource = { path: doc.layers[0].path, series: doc.layers[0].series };
+    const row = { id: doc.autosaveId, name: doc.name, path: doc.path,
+      dir: dirname(doc.layers[0]?.path || doc.autosaveSource?.path || doc.path || ""), anchor: doc.autosaveSource, project: TmvMerge.project(doc) };
+    try { pref.set("merge-recovery", [row, ...recoveryList().filter((r) => r.id !== row.id)]); }
+    catch (e) { doc.recoveryError = String(e); }
+    const saved = recoveryList().find((r) => r.id === row.id);
+    if (!saved || JSON.stringify(saved.project) !== JSON.stringify(row.project) || saved.path !== row.path) doc.recoveryError = "本地恢复副本未能写入";
+    else doc.recoveryError = null;
+  }
+
+  function clearRecovery(doc) {
+    try { pref.set("merge-recovery", recoveryList().filter((r) => r.id !== doc.autosaveId)); }
+    catch (_) { /* A redundant recovery copy is safe to retain. */ }
+  }
+
+  function autosave(doc = active) {
     if (doc?.type !== "merge") return false;
-    try {
-      let path = doc.path;
-      if (!path || saveAs) path = await invoke("pick_save_path", {
-        dir: doc.path ? dirname(doc.path) : doc.layers[0] ? dirname(doc.layers[0].path) : "",
-        name: `${doc.name.replace(/\.tmvmerge$/i, "")}.tmvmerge`, filter: "TifMrcView 合成工程", exts: ["tmvmerge"],
-      });
-      if (!path) return false;
-      if (!/\.tmvmerge$/i.test(path)) throw new Error("合成工程请使用 .tmvmerge 扩展名");
-      const revision = doc.revision;
-      const project = TmvMerge.project(doc);
-      project.name = stem(path);
-      await invoke("save_merge_project", { path, project });
-      doc.path = path;
-      doc.name = project.name;
-      if (doc.revision === revision) doc.dirty = false;
-      rememberProject(doc);
-      changed();
-      if (doc === active) T.window.getCurrentWindow().setTitle(`${doc.name}.tmvmerge — ${EDITION.name}`).catch(() => {});
-      toast(`已保存工程：${basename(path)}`);
-      return !doc.dirty;
-    } catch (e) { toast(`工程保存失败：${e}`, 6500); return false; }
+    keepRecovery(doc);
+    clearTimeout(saveTimers.get(doc));
+    saveTimers.set(doc, setTimeout(() => { saveTimers.delete(doc); save(doc); }, 350));
+    document.dispatchEvent(new CustomEvent("tmv-save", { detail: doc }));
+    return true;
+  }
+
+  function touch(doc = active) {
+    if (doc?.type !== "merge") return;
+    doc.dirty = true; doc.revision++;
+    autosave(doc);
+  }
+
+  async function save(doc = active) {
+    if (doc?.type !== "merge") return false;
+    clearTimeout(saveTimers.get(doc)); saveTimers.delete(doc);
+    const task = (saveTails.get(doc) || Promise.resolve()).catch(() => {}).then(async () => {
+      if (!doc.dirty) return true;
+      keepRecovery(doc);
+      doc.saving = true; doc.saveError = null;
+      document.dispatchEvent(new CustomEvent("tmv-save", { detail: doc }));
+      try {
+        // Serialize writes per document. Edits arriving during a write stay
+        // dirty and are flushed in the next iteration, never marked saved early.
+        while (doc.dirty) {
+          const revision = doc.revision, project = TmvMerge.project(doc);
+          if (doc.path) await invoke("save_merge_project", { path: doc.path, project });
+          else {
+            doc.path = await invoke("create_merge_project", { token: doc.autosaveToken, project });
+            // A collision-safe allocation may append a number to the name.
+            if (doc.path && doc.name !== stem(doc.path)) { doc.name = stem(doc.path); doc.revision++; }
+            if (doc === active) T.window.getCurrentWindow().setTitle(`${doc.name}.tmvmerge — ${EDITION.name}`).catch(() => {});
+          }
+          if (!doc.path || !/\.tmvmerge$/i.test(doc.path)) throw new Error("自动保存未返回工程路径");
+          keepRecovery(doc);
+          if (doc.revision === revision) doc.dirty = false;
+          rememberProject(doc);
+        }
+        clearRecovery(doc);
+        doc.recoveryError = null;
+        return true;
+      } catch (e) {
+        doc.saveError = String(e);
+        keepRecovery(doc);
+        return false;
+      } finally {
+        doc.saving = false;
+        changed(false);
+        document.dispatchEvent(new CustomEvent("tmv-save", { detail: doc }));
+      }
+    });
+    saveTails.set(doc, task);
+    return task;
+  }
+
+  function recover(id) {
+    return enqueue(async () => {
+      const row = recoveryList().find((r) => r.id === id);
+      if (!row) return null;
+      let path = row.path;
+      if (path) { try { await invoke("read_merge_project", { path }); } catch (_) { path = null; } }
+      return openProject(path, row);
+    });
   }
 
   function rememberProject(doc) {
     if (!doc.path) return;
     const list = pref.get("merge-projects", []);
+    const origin = doc.layers[0]?.path || doc.autosaveSource?.path;
     const row = { path: doc.path, name: doc.name,
-      dir: dirname(doc.layers[0]?.path || doc.path),
+      dir: origin ? dirname(origin) : (Array.isArray(list) ? list.find((p) => p.path === doc.path)?.dir : null) || dirname(doc.path),
       preview: doc.thumbnail?.toDataURL("image/png") || doc.savedPreview || null };
     // The sidebar's recent-preview cache must never turn a successful project
     // save into a reported failure when local storage is full.
     try { pref.set("merge-projects", [row, ...(Array.isArray(list) ? list : []).filter((p) => p.path !== doc.path)].slice(0, 40)); } catch (_) {}
   }
 
-  function askSave(doc) {
-    return new Promise((resolve) => {
-      const dialog = document.createElement("dialog");
-      dialog.className = "merge-close-dialog";
-      const title = document.createElement("h3");
-      title.textContent = `保存「${doc.name}」的修改？`;
-      const body = document.createElement("p");
-      body.textContent = "保存工程后，下次可以继续调整各个图层。";
-      const row = document.createElement("div");
-      for (const [text, action] of [["取消", "cancel"], ["不保存", "discard"], ["保存工程", "save"]]) {
-        const button = document.createElement("button");
-        button.textContent = text;
-        if (action === "save") button.className = "primary";
-        button.onclick = () => { dialog.close(); dialog.remove(); resolve(action); };
-        row.append(button);
-      }
-      dialog.addEventListener("cancel", () => { dialog.remove(); resolve("cancel"); });
-      dialog.append(title, body, row);
-      document.body.append(dialog);
-      dialog.showModal();
-    });
-  }
-
   async function mayClose(doc) {
-    if (doc.type !== "merge" || !doc.dirty) return true;
-    const action = await askSave(doc);
-    return action === "discard" || action === "save" && await save(doc);
+    if (doc.type !== "merge" || await save(doc)) return true;
+    toast("自动保存失败，工程已保持打开。请检查保存位置后重试。", 6500);
+    return false;
   }
 
   async function closeTab(doc) {
@@ -405,7 +490,7 @@
       const doc = tabs[(tabs.indexOf(active) + (e.shiftKey ? tabs.length - 1 : 1)) % tabs.length];
       enqueue(() => activate(doc));
     } else if (mod && e.key.toLowerCase() === "s" && active?.type === "merge") {
-      e.preventDefault(); e.stopImmediatePropagation(); e.target.blur?.(); save(active, e.shiftKey);
+      e.preventDefault(); e.stopImmediatePropagation(); e.target.blur?.(); save(active);
     } else if (active?.type === "merge" && !input && !(mod && e.key.toLowerCase() === "o") && (mod || !sidebarControl)) {
       // Image tools and slice shortcuts must not edit the hidden source tab.
       e.stopImmediatePropagation();
@@ -427,7 +512,7 @@
   }).catch(() => {});
 
   window.TifMrcViewPro.documents = {
-    tabs, sources, open, source, addPaths, save, changed, enqueue, releaseUnused, rememberProject,
+    tabs, sources, open, source, addPaths, save, autosave, touch, recover, recoveryList, scaleBarSnapshot, changed, enqueue, releaseUnused, rememberProject,
     current: () => active, activate: (doc) => enqueue(() => activate(doc)), close: (doc) => enqueue(() => closeTab(doc)),
     pin(tokens) {
       tokens.forEach((t) => pins.set(t, (pins.get(t) || 0) + 1));

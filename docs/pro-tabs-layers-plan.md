@@ -228,3 +228,134 @@ The new incremental snapshot/patch is in
 `/Volumes/samsung/pro-test/tabs-layers-20261109/source-panel-fix-20261109`.
 No native build, signing, installation, restart or App GUI operation occurred
 in this follow-up. The integration owner retains final native acceptance.
+
+## User refinement: single layer, fitted drops and automatic saving
+
+The next user turn authorizes: show the current image in the layer pane even
+with no additional layers; fit and center dropped images to the base canvas
+with source aspect ratio intact; use a Photoshop-style transform border with
+eight corner/edge handles; automatically persist editing operations and remove
+the manual project-save button. Delete and Backspace delete the selected layer,
+support undo and remain ordinary text editing keys in inputs.
+
+Baseline: `source-panel-fix-20261109/source`, identical to all seven frontend
+files in integration HEAD `ebcabbb` at intake. This lane owns only those seven
+files. The integration owner confirmed installed 0.7.173 and owns backend,
+packaging and the live App. Do not touch/restart the App; preserve source/merge
+and training/model state. No additional dependency or native build is needed in
+this lane.
+
+Decisions: displaying the single source layer is passive; its first layer edit
+promotes the tab in place. New layers fit the canvas without stretching or
+moving the base/view. Use a thin blue transform border and white square handles,
+preserve the opposite anchor, and let Shift temporarily toggle aspect locking.
+No rotation or skew is added. Autosave immediately keeps a recovery draft,
+debounces continuous edits for 350 ms and serializes disk writes. Flush the final
+revision before switching or closing; only successful writes clear dirty state.
+Errors keep the draft, show status and retain the open document. Next edits or
+Ctrl/⌘S retry. The footer keeps export and compact automatic-save status.
+
+The integration owner implements/tests the agreed minimal backend contract:
+`create_merge_project({token, project}) -> absolute path string`. The source
+token must belong to this window. Allocate a non-overwriting `.tmvmerge` beside
+the source (inside a directory source), falling back to
+`app_data_dir()/merge-projects`. Fully publish before returning and register the
+allowed save path. Later writes use existing atomic `save_merge_project`.
+
+Precedent: Adobe documents proportional corner scaling and Shift as its
+temporary toggle; Krita also exposes corner and edge handles. Their Shift
+defaults differ, so follow Adobe as requested. Krita documents recovery across
+unexpected exits; this feature saves after edits as the user explicitly asked.
+https://helpx.adobe.com/photoshop/desktop/create-manage-layers/transform-manipulate-layers/scale-layers-in-photoshop.html
+https://docs.krita.org/en/reference_manual/tools/transform.html
+https://docs.krita.org/en/user_manual/autosave.html
+
+Verification complete in this lane:
+
+- 28 focused Node cases pass. Added size/aspect/anchor coverage for all eight
+  handles and large/small/portrait drops; serialized saving, in-flight edits,
+  failure/retry, allocation-name collisions and an empty-draft source anchor.
+- Browser DOM/canvas: a source tab shows its current layer, thumbnail and
+  controls without converting merely to display it. First color edit converts
+  in place and preserves the entered value. Only export remains in the footer.
+- Real pointer dragging a 1280×720 thumbnail into a 320×240 base creates a
+  centered 320×180 layer at (0,30). Document ID `document-1`, tab count 1, CSS
+  scale `3.005013020833333` and screen origin `[155.19791666666669,0]` all remain
+  unchanged. A 64×256 source fits to 60×240 at (130,0).
+- Corner and side handles work with opposite anchors fixed; Shift permits
+  independent width changes. Other layers stay unchanged. Undo works after
+  leaving a text field for a canvas gesture. Delete and Backspace remove the
+  selected layer and undo restores it; inside an input they only edit text.
+- Deleting the single source layer before the first save still creates exactly
+  one project, retains its source handle and permits undo. Allocated names with
+  numeric suffixes are reflected in the tab/project and later saves.
+- No save picker is called. A held write remains dirty/`自动保存中…`; a switch
+  waits until the newer opacity 0.72 and X=143 have both reached the saved copy.
+  Simulated disk failure displays an error and blocks close/switch. Reloading
+  restores the latest failed opacity 0.63 from the existing composite group;
+  the full recovered project equals the pre-reload draft.
+- Automatic save/close/reopen preserves the full project and flattened RGB
+  hash `3038652657`. No close confirmation appears. PNG/TIFF exports still reach
+  `save_merged_image`. DPR=2 `1` sets CSS scale 0.5, labels 100%, and saves 0.5.
+- 1024×768 has no horizontal body overflow and export stays visible. Standard
+  renders its source without Pro tabs/layers. No feature exceptions occurred;
+  two ResizeObserver loop diagnostics appeared while viewport emulation settled
+  and did not increase during ordinary pane switching. Do not suppress them or
+  treat this fixture run as native acceptance.
+
+Ready-for-integration. Freeze all seven files against
+`/Volumes/samsung/pro-test/tabs-layers-20261109/source-panel-fix-20261109/source`.
+New snapshot/patch/evidence:
+`/Volumes/samsung/pro-test/tabs-layers-20261109/refinement-autosave-20261109`.
+Browser transport is mocked Tauri with synthetic images and mocked file writes;
+the backend owner separately reported five filesystem checks for actual create/
+atomic-update behavior. Native build/installation/GUI acceptance remain theirs.
+This lane did not touch the running App, build/sign/install, Rust, XYZ or models.
+
+## Final addition: calibrated base scale bar
+
+The user additionally requested the scale bar to follow the base image. The
+source conversion had omitted its calibration and the compositor had no scale
+bar drawing, which explains the missing bar. The fix keeps an optional per-layer
+`scaleBar` record in v1: pixel calibration (including manual values), units,
+physical bar length/label, crop region and image-relative text/stroke/margins.
+Draw only the current bottom layer's bar, above the merged channels in neutral
+white, using the same code for preview, thumbnails and flattened export. Moving
+or resizing that layer transforms the bar while preserving physical length.
+The existing toolbar toggle works and undo snapshots copy bar metadata deeply.
+
+Legacy v1 projects remain readable. When the optional field is absent and the
+source file has valid pixel metadata, populate it from that source and autosave.
+Never invent unknown calibration. The integration owner verified the live
+source's 4.5528 Å calibration is explicitly from file metadata and preserved the
+old project before migration; no old in-memory manual calibration is needed for
+that observed case. New manual calibration is retained in the project.
+
+ImageJ keeps scale bars as calibrated overlays and scales overlays with images:
+https://imagej.net/ij/developer/source/ij/plugin/ScaleBar.java.html
+https://github.com/imagej/ImageJ/blob/master/ij/plugin/Scaler.java
+
+Final follow-up evidence:
+
+- 33 Node cases now pass, including bar/crop/move/resize calibration, project
+  validation/roundtrip and legacy readability, deep undo copies, recovery-path
+  registration, and detecting a silently failed localStorage write.
+- Browser: a 20 nm bar moves with the base, shrinks from width 40 to approximately
+  36 image pixels with a 10% image resize (native pointer precision), and keeps
+  physical length 20 nm. Flattened bar-center pixel at 4× rendering is white
+  `[255,255,255,255]`; toolbar hide/undo works without changing the hidden source's
+  scale-bar state. The rendered screenshot visibly contains `20 nm`.
+- A legacy project missing every scaleBar field is opened, migrated from source
+  metadata and written with the bar. A strict mock resets the permitted-path
+  registry on WebView restart: recovery calls `read_merge_project` first, then
+  `save_merge_project`, with no new create. Its full draft, opacity 0.82 and bar
+  are retained. Bar-inclusive close/reopen pixel hash is `1853937629` both times.
+  PNG export reaches the ordinary flattened-image writer; Standard remains intact.
+
+Final app.js ownership boundary: another task concurrently added filled XYZ
+annotation hit-testing and `scripts/xyz-interaction.test.mjs` in this checkout.
+Those changes are preserved and excluded. The handed-off app.js is projected
+from the previous frozen baseline plus only this lane's `sourceChanged` draw
+hook. Apply its incremental hunk, do not replace other owners' app.js changes.
+All other frozen files contain only this lane's work. No commit/push or native
+build/install/App operation was performed in this lane.

@@ -3,7 +3,7 @@
 
 ## Follow-up authorized after 0.7.173
 
-Status: implementing the next requested UI/autosave batch; installed0.7.173 remains unchanged.
+Status: frozen frontend integrated; combined56 frontend tests pass. Preparing optimized native update; installed0.7.173 remains unchanged.
 
 Verified actual user messages in chat01a1beb7-a493-75c2-ab8c-76af2f97db66, IDs01a1bf69-d43f-70f2-bd4b-cce7a2351504 and01a1bf6a-f9c4-7b92-946c-d3866ff4b874: a single image appears as a layer; incoming layers fit the base proportionally/centered; familiar edge/corner transform handles; each edit automatically saves the editable project with no Save button; Delete/Backspace deletes selected layer with Undo while text fields keep normal editing.
 
@@ -12,6 +12,10 @@ Verified actual user messages in chat01a1beb7-a493-75c2-ab8c-76af2f97db66, IDs01
 - Precedent: Rust OpenOptions create_new guarantees atomic reservation (https://doc.rust-lang.org/std/fs/struct.OpenOptions.html); Qt QSaveFile stages beside destination and renames (https://doc.qt.io/qt-6/qsavefile.html). The previous annotation writer renames over the destination, so a mere exists check cannot safely create first projects. New project persistence uses a complete synced unique stage and no-clobber publication, with normal atomic replacement for edits; no dependency changes.
 - Backend checks cover safe Unicode/basename names, file/symlink collisions, concurrent first creates, primary-path failure/App-data fallback and failed-save preservation/temporary cleanup. Native tests will verify actual first save without picker, edited/deleted/undone state after close/reopen, fit/handles, and preserve existing denoising/model state.
 - Before any next native update: verify actual current App/model/job/unsaved-document state again; do not assume it is unchanged from the prior completed acceptance. Keep the current signed package, all weight records, user images and projects.
+- Additional actual user message01a1bf84-195c-7a01-bfae-2d9c589d2ac8 in the same authorized chat requests the scale bar follow the base image. Include its calibration/geometry persistence and export in this frontend batch; no unrelated XYZ edits from the other owner.
+- At08:58 UTC, the running0.7.173 had a newly edited single-layer user merge. Saved it through the native dialog to `/Volumes/samsung/pro-test/amira-126/ui2/sta4p55-roi_wedge_merge.tmvmerge` (previously absent), then copied/hash-verified it in `/Volumes/samsung/pro-test/tabs-autosave-20261109/preserved/`. SHA2567a6e7b9508f93bdea1b014e29b112e4534c022ca518aeda102353f737e49fbf1. Source tab observed Z79/128,211%; merge Z65/128,304%, selected bottom layer with slightly translated geometry. Denoise/wedge panels showed no active train/cancel job. Returned to saved merge. Inspect again immediately before the eventual quit.
+
+- Frozen peer snapshot `/Volumes/samsung/pro-test/tabs-layers-20261109/refinement-autosave-20261109` applied with `git apply --whitespace=error`; all seven baseline/final hashes verified. The only app.js hunk is sourceChanged at draw end. Combined frontend/model/preview/ownership suite:56 passed. Backend create/update tests:5 passed on both Mac temporary and Samsung filesystems. Native follow-up acceptance remains pending.
 
 ## Final outcome (2026-11-09)
 

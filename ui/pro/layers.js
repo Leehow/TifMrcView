@@ -6,6 +6,7 @@
   const stage = $("stage");
   const preview = document.createElement("canvas");
   preview.id = "merge-view";
+  preview.tabIndex = 0;
   preview.hidden = true;
   stage.append(preview);
   const zbars = document.createElement("section");
@@ -39,7 +40,7 @@
         <div id="merge-source" class="dim"></div>
       </details>
       <details class="merge-canvas-settings merge-detail"><summary>画布设置</summary><div class="merge-geometry"><label>宽 <input id="merge-canvas-width" type="number" min="1" /></label><label>高 <input id="merge-canvas-height" type="number" min="1" /></label></div><label>背景 <input id="merge-background" type="color" value="#000000" /></label></details>
-      <div class="merge-actions merge-footer"><button id="merge-save" class="primary" title="保存 .tmvmerge，供下次继续编辑">保存工程</button><button id="merge-export" title="导出当前合成的图像">导出图像…</button></div>
+      <div class="merge-footer"><div class="merge-actions"><button id="merge-export" class="primary" title="导出当前合成的图像">导出图像…</button></div><div id="merge-save-status" class="dim" role="status"></div></div>
     </div>`;
   const imagesPane = document.createElement("section");
   imagesPane.id = "image-browser-pane";
@@ -75,7 +76,7 @@
   const current = () => D.current()?.type === "merge" ? D.current() : null;
   const selected = (doc = current()) => doc?.layers.find((l) => l.id === doc.selected);
   const busyButtons = new Map();
-  let scheduled = false, rendering = false, again = false, drag = null, zkey = "", exportBusy = false;
+  let scheduled = false, rendering = false, again = false, drag = null, zkey = "", exportBusy = false, sourceScheduled = false, promoting = null;
   let sideMode = pref.get("pro-sidebar-pane", "images");
   if (!["images", "layers"].includes(sideMode)) sideMode = "images";
 
@@ -87,7 +88,7 @@
     imagesPane.hidden = mode !== "images";
     panel.hidden = mode !== "layers";
     document.body.dataset.sidebarPane = mode;
-    preview.title = mode === "layers" ? "拖动图层移动；拖动右下角调整大小；Alt 或中键拖动画布" : "拖动画布平移；滚轮缩放";
+    preview.title = mode === "layers" ? "拖动图层移动；拖动边角控制点缩放；Shift 切换等比；Alt 或中键平移" : "拖动画布平移；滚轮缩放";
     for (const [button, name, target] of [[$("btn-show-sidebar"), "images", imagesPane], [show, "layers", panel]]) {
       button.hidden = false;
       button.setAttribute("role", "tab");
@@ -123,10 +124,14 @@
   function syncProjects() {
     const open = D.tabs.filter((d) => d.type === "merge");
     const paths = new Set(open.map((d) => d.path).filter(Boolean));
+    const recovery = D.recoveryList().filter((r) => r?.project && !open.some((d) => d.autosaveId === r.id || r.path && d.path === r.path)
+      && (!S.folder.dir || r.dir === S.folder.dir));
+    const recoveryPaths = new Set(recovery.map((r) => r.path).filter(Boolean));
     const stored = pref.get("merge-projects", []);
-    const saved = (Array.isArray(stored) ? stored : []).filter((p) => p?.path && !paths.has(p.path)
+    const saved = (Array.isArray(stored) ? stored : []).filter((p) => p?.path && !paths.has(p.path) && !recoveryPaths.has(p.path)
       && (!S.folder.dir || p.dir === S.folder.dir || dirname(p.path) === S.folder.dir));
-    const entries = [...open.map((doc) => ({ key: doc.id, doc, ...doc })), ...saved.map((p) => ({ key: p.path, ...p }))];
+    const entries = [...open.map((doc) => ({ key: doc.id, doc, ...doc })),
+      ...recovery.map((r) => ({ ...r, key: r.id, recovery: true })), ...saved.map((p) => ({ key: p.path, ...p }))];
     projects.hidden = entries.length === 0;
     if (!$("folder-name").textContent) $("folder-name").textContent = "图片";
     projectHeading.querySelector(".merge-project-count").textContent = entries.length;
@@ -146,10 +151,11 @@
       }
       row.classList.toggle("cur", entry.doc === D.current());
       row.querySelector(".nm").textContent = `${entry.name.replace(/\.tmvmerge$/i, "")}.tmvmerge`;
-      row.querySelector(".meta").textContent = entry.doc ? `${entry.layers.length} 个图层${entry.dirty ? " · 未保存" : ""}` : "合成工程";
+      row.querySelector(".meta").textContent = entry.recovery ? "恢复上次编辑" : entry.doc
+        ? `${entry.layers.length} 个图层${entry.saveError ? " · 自动保存失败" : entry.dirty ? " · 自动保存中…" : ""}` : "合成工程";
       row.title = entry.path || "未保存的合成图";
       row.setAttribute("aria-label", row.querySelector(".nm").textContent);
-      const select = () => entry.doc ? D.activate(entry.doc) : D.open(entry.path);
+      const select = () => entry.doc ? D.activate(entry.doc) : entry.recovery ? D.recover(entry.id) : D.open(entry.path);
       row.onclick = select;
       row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); select(); } };
       const thumbnail = row.querySelector("canvas");
@@ -186,6 +192,7 @@
       g.globalAlpha = l.opacity; g.globalCompositeOperation = M.operation(l.mode);
       g.drawImage(image, l.x * k, l.y * k, l.width * k, l.height * k);
     }
+    paintScaleBar(doc, g, k);
     doc.thumbnail = output; doc._thumbnailRevision = doc.revision;
     if (doc.path && !doc.dirty) D.rememberProject(doc);
     syncProjects();
@@ -193,16 +200,25 @@
 
   function state(doc) {
     return { width: doc.width, height: doc.height, background: doc.background, selected: doc.selected,
-      layers: doc.layers.map((l) => ({ ...l, channels: M.copy(l.channels) })) };
+      layers: doc.layers.map((l) => ({ ...l, channels: M.copy(l.channels), scaleBar: l.scaleBar && M.copy(l.scaleBar) })) };
   }
   function remember(doc) {
     (doc.history ||= []).push(state(doc));
     if (doc.history.length > 60) doc.history.shift();
     doc.future = [];
   }
-  function edit(change, history = true) {
+  async function edit(change, history = true) {
     const doc = current();
-    if (!doc) return;
+    if (!doc) {
+      // Viewing a single layer stays a source tab. Its first layer edit creates
+      // the editable composition in place, with the source view intact.
+      if (D.current()?.type === "image") {
+        promoting ||= D.addPaths([]).finally(() => { promoting = null; });
+        const result = await promoting;
+        if (result?.doc === D.current()) return edit(change, true);
+      }
+      return;
+    }
     if (history) remember(doc);
     change(doc, selected(doc));
     doc.revision++;
@@ -222,6 +238,23 @@
   }
 
   function syncValue(id, value) { if (document.activeElement !== $(id)) $(id).value = value; }
+  function syncSaveState() {
+    const doc = current(), status = $("merge-save-status");
+    status.hidden = !doc;
+    status.textContent = !doc ? "" : doc.saveError ? doc.recoveryError ? "自动保存失败，请保持工程打开" : "自动保存失败，修改已保留" : doc.dirty || doc.saving ? "自动保存中…" : "已自动保存";
+    status.classList.toggle("error", !!doc?.saveError);
+    status.title = doc?.saveError || doc?.path || "";
+  }
+  function imageDocument() {
+    const raw = D.current();
+    if (raw?.type !== "image" || !S.info) return null;
+    const source = { token: S.token, info: S.info };
+    const doc = M.fromImage(source, S, stem(raw.path), D.scaleBarSnapshot(source, S));
+    doc.id = raw.id;
+    doc.layers[0].id = `source-${S.token}`;
+    doc.selected = doc.layers[0].id;
+    return doc;
+  }
   function updateZoom(doc) {
     if (!doc?.view) return;
     const pct = `${Math.round(doc.view.scale * (window.devicePixelRatio || 1) * 100)}%`;
@@ -230,29 +263,35 @@
   }
   function sync() {
     const doc = current();
+    const shown = doc || imageDocument();
+    syncSaveState();
     preview.hidden = !doc;
     zbars.hidden = !doc;
-    $("merge-intro").hidden = !!doc;
-    $("merge-editor").hidden = !doc;
+    $("merge-intro").hidden = !!shown;
+    $("merge-editor").hidden = !shown;
     $("merge-empty-add").disabled = !S.info && !doc;
     syncProjects();
     // Keep the original image tools from applying to a hidden source tab.
     for (const button of document.querySelectorAll("#toolbar button, #channels input, #channels select, #series")) {
-      if (["btn-open", "btn-save", "btn-settings", "btn-zoom", "btn-zoomin", "btn-zoomout", "btn-undo", "btn-redo", "scroll-left", "scroll-right"].includes(button.id)) continue;
+      if (["btn-open", "btn-save", "btn-settings", "btn-scalebar", "btn-zoom", "btn-zoomin", "btn-zoomout", "btn-undo", "btn-redo", "scroll-left", "scroll-right"].includes(button.id)) continue;
       if (doc) { if (!busyButtons.has(button)) busyButtons.set(button, button.disabled); button.disabled = true; }
       else if (busyButtons.has(button)) { button.disabled = busyButtons.get(button); busyButtons.delete(button); }
     }
-    if (!doc) { zkey = ""; return; }
-    $("st-info").textContent = `合成 · ${doc.width}×${doc.height} · ${doc.layers.length} 个图层`;
-    $("st-pixel").textContent = "";
-    $("st-cache").textContent = "";
-    $("btn-save").disabled = false;
-    $("strip").querySelectorAll(".thumb.cur").forEach((el) => el.classList.remove("cur"));
+    if (!shown) { zkey = ""; return; }
+    $("btn-scalebar").disabled = !!doc && !doc.layers[0]?.scaleBar;
+    if (doc) $("btn-scalebar").classList.toggle("on", !!doc.layers[0]?.scaleBar?.visible);
+    if (doc) {
+      $("st-info").textContent = `合成 · ${doc.width}×${doc.height} · ${doc.layers.length} 个图层`;
+      $("st-pixel").textContent = "";
+      $("st-cache").textContent = "";
+      $("btn-save").disabled = false;
+      $("strip").querySelectorAll(".thumb.cur").forEach((el) => el.classList.remove("cur"));
+    }
     const list = $("merge-list");
     list.replaceChildren();
-    [...doc.layers].reverse().forEach((l) => {
+    [...shown.layers].reverse().forEach((l) => {
       const row = document.createElement("div");
-      row.className = `merge-layer-row${l.id === doc.selected ? " selected" : ""}`;
+      row.className = `merge-layer-row${l.id === shown.selected ? " selected" : ""}`;
       row.dataset.layer = l.id;
       row.setAttribute("role", "listitem");
       const visible = document.createElement("button");
@@ -261,27 +300,27 @@
       visible.setAttribute("aria-label", `显示 ${l.name}`);
       visible.append($("btn-annshow").querySelector("svg").cloneNode(true));
       visible.classList.toggle("off", !l.visible);
-      visible.onclick = () => edit(() => { l.visible = !l.visible; });
+      visible.onclick = () => edit((target, activeLayer) => { const item = target.layers.find((item) => item.id === l.id) || activeLayer; if (item) item.visible = !item.visible; });
       const pick = document.createElement("button");
       pick.className = "merge-layer-pick";
-      pick.setAttribute("aria-pressed", String(l.id === doc.selected));
+      pick.setAttribute("aria-pressed", String(l.id === shown.selected));
       const thumb = document.createElement("canvas");
       thumb.className = "merge-layer-thumb"; thumb.width = 40; thumb.height = 32;
       thumb.setAttribute("aria-hidden", "true");
       const name = document.createElement("span"); name.textContent = l.name;
       pick.append(thumb, name); pick.title = l.path;
-      pick.onclick = () => { doc.selected = l.id; sync(); request(); };
+      pick.onclick = () => { if (doc) { doc.selected = l.id; D.touch(doc); sync(); request(); } };
       pick.ondblclick = () => { $("merge-transform").open = true; $("merge-name").focus(); $("merge-name").select(); };
       row.append(visible, pick); list.append(row);
     });
-    const l = selected(doc);
+    const l = selected(shown);
     $("merge-properties").hidden = !l;
     $("merge-transform").hidden = !l;
     $("merge-levels").hidden = !l;
     for (const id of ["merge-up", "merge-down", "merge-delete"]) $(id).disabled = !l;
     if (l) {
-      const index = doc.layers.indexOf(l);
-      $("merge-up").disabled = index === doc.layers.length - 1;
+      const index = shown.layers.indexOf(l);
+      $("merge-up").disabled = index === shown.layers.length - 1;
       $("merge-down").disabled = index === 0;
       syncValue("merge-name", l.name); syncValue("merge-mode", l.mode);
       const known = ["#ffffff", "#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"];
@@ -299,8 +338,13 @@
       $("merge-source").textContent = `${l.info.width} × ${l.info.height} · ${l.info.sizeZ > 1 ? `Z ${l.z + 1}/${l.info.sizeZ}` : "单张（固定）"}`;
       $("merge-source").title = l.path;
     }
-    syncValue("merge-canvas-width", doc.width); syncValue("merge-canvas-height", doc.height);
-    syncValue("merge-background", doc.background);
+    syncValue("merge-canvas-width", shown.width); syncValue("merge-canvas-height", shown.height);
+    syncValue("merge-background", shown.background);
+    if (!doc) {
+      contain(list.querySelector(".merge-layer-thumb"), S.ov ? ovCanvas : S.frame ? frameCanvas : null);
+      zkey = "";
+      return;
+    }
     syncZBars(doc);
     if (!doc.view) fit(doc);
     updateZoom(doc);
@@ -369,6 +413,19 @@
     return image;
   }
 
+  function paintScaleBar(doc, g, scale) {
+    const bar = M.scaleBarGeometry(doc.layers[0]);
+    if (!bar) return;
+    g.save();
+    g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+    g.fillStyle = "#fff"; g.shadowColor = "#000"; g.shadowBlur = Math.max(1, bar.font * scale * 0.23);
+    g.fillRect(bar.x * scale, bar.y * scale, bar.width * scale, bar.height * scale);
+    g.font = `600 ${bar.font * scale}px -apple-system, "Segoe UI", sans-serif`;
+    g.textAlign = "center"; g.textBaseline = "bottom";
+    g.fillText(bar.label, (bar.x + bar.width / 2) * scale, (bar.y - bar.font * 0.3) * scale);
+    g.restore();
+  }
+
   async function paint(doc, output, origin, scale, full = false) {
     const g = output.getContext("2d");
     g.clearRect(0, 0, output.width, output.height);
@@ -385,6 +442,9 @@
         g.globalAlpha = l.opacity;
         g.drawImage(image, l.x * scale, l.y * scale, l.width * scale, l.height * scale);
       }
+      // Keep the base image's calibrated bar neutral and above the merged
+      // channels. Its geometry is attached to that layer, not the viewport.
+      paintScaleBar(doc, g, scale);
     } finally { g.restore(); }
   }
 
@@ -413,8 +473,13 @@
         const g = output.getContext("2d");
         const x = origin[0] + l.x * scale, y = origin[1] + l.y * scale;
         const w = l.width * scale, h = l.height * scale;
-        g.strokeStyle = "#ffb323"; g.lineWidth = dpr; g.strokeRect(x, y, w, h);
-        g.fillStyle = "#ffb323"; g.fillRect(x + w - 5 * dpr, y + h - 5 * dpr, 10 * dpr, 10 * dpr);
+        g.strokeStyle = "#1686ff"; g.lineWidth = dpr; g.strokeRect(x, y, w, h);
+        const size = 6 * dpr;
+        g.fillStyle = "#ffffff";
+        for (const [, hx, hy] of M.handles) {
+          const left = x + hx * w - size / 2, top = y + hy * h - size / 2;
+          g.fillRect(left, top, size, size); g.strokeRect(left, top, size, size);
+        }
       }
       preview.width = output.width; preview.height = output.height;
       preview.getContext("2d").drawImage(output, 0, 0);
@@ -425,10 +490,10 @@
     finally { rendering = false; if (again) { again = false; request(); } }
   }
 
-  async function exportImage(doc = current(), extension = "tif") {
+  async function exportImage(doc = current() || imageDocument(), extension = "tif") {
     if (!doc || exportBusy) return;
     exportBusy = true;
-    const snapshot = { ...doc, layers: doc.layers.map((l) => ({ ...l, channels: M.copy(l.channels) })) };
+    const snapshot = { ...doc, layers: doc.layers.map((l) => ({ ...l, channels: M.copy(l.channels), scaleBar: l.scaleBar && M.copy(l.scaleBar) })) };
     const unpin = D.pin(snapshot.layers.map((l) => l.token));
     try {
       if (snapshot.width > 16384 || snapshot.height > 16384 || snapshot.width * snapshot.height > 100000000) throw new Error("导出画布最大边长为 16384，且不超过 1 亿像素；请先调整画布尺寸");
@@ -449,10 +514,9 @@
   const addLayer = async () => { const path = await invoke("pick_file"); if (path) D.addPaths([path]); };
   $("merge-add").onclick = addLayer;
   $("merge-empty-add").onclick = addLayer;
-  $("merge-save").onclick = () => D.save();
   $("merge-export").onclick = () => {
     if (closeMenu($("merge-export"))) return;
-    const doc = current();
+    const doc = current() || imageDocument();
     openMenu($("merge-export"), [["tif", "TIFF"], ["png", "PNG"], ["jpg", "JPEG"], ["bmp", "BMP"], ["webp", "WebP"]].map(([value, label]) => ({ value, label })),
       (format) => exportImage(doc, format));
     const menu = $("dropmenu"), r = $("merge-export").getBoundingClientRect();
@@ -460,22 +524,24 @@
   };
   $("merge-more").onclick = () => {
     if (closeMenu($("merge-more"))) return;
-    const doc = current();
     openMenu($("merge-more"), [
       { value: "open", label: "打开合成工程…" },
-      ...(doc ? [{ value: "save-as", label: "另存工程…" }] : []),
     ], async (action) => {
-      if (action === "save-as") D.save(doc, true);
-      else { const path = await invoke("pick_merge_project"); if (path) D.open(path); }
+      const path = await invoke("pick_merge_project"); if (path) D.open(path);
     });
   };
-  for (const [id, key] of [["merge-name", "name"], ["merge-mode", "mode"]]) $(id).onchange = (e) => edit((_doc, l) => { if (l) l[key] = e.target.value; });
-  $("merge-color").onchange = (e) => edit((_doc, l) => { if (l) l.color = e.target.value === "custom" ? $("merge-custom-color").value : e.target.value || null; });
-  $("merge-custom-color").onchange = (e) => edit((_doc, l) => { if (l) l.color = e.target.value; });
+  for (const [id, key] of [["merge-name", "name"], ["merge-mode", "mode"]]) $(id).onchange = (e) => {
+    const value = e.target.value; edit((_doc, l) => { if (l) l[key] = value; });
+  };
+  $("merge-color").onchange = (e) => {
+    const value = e.target.value === "custom" ? $("merge-custom-color").value : e.target.value || null;
+    edit((_doc, l) => { if (l) l.color = value; });
+  };
+  $("merge-custom-color").onchange = (e) => { const value = e.target.value; edit((_doc, l) => { if (l) l.color = value; }); };
   $("merge-opacity").onpointerdown = () => current() && remember(current());
   $("merge-opacity").onkeydown = () => current() && remember(current());
-  $("merge-opacity").oninput = (e) => edit((_doc, l) => { if (l) l.opacity = +e.target.value / 100; }, false);
-  $("merge-aspect").onchange = (e) => edit((_doc, l) => { if (l) l.lockAspect = e.target.checked; });
+  $("merge-opacity").oninput = (e) => { const value = +e.target.value / 100; edit((_doc, l) => { if (l) l.opacity = value; }, false); };
+  $("merge-aspect").onchange = (e) => { const value = e.target.checked; edit((_doc, l) => { if (l) l.lockAspect = value; }); };
   for (const key of ["x", "y", "width", "height"]) $(`merge-${key}`).onchange = (e) => {
     const value = +e.target.value;
     if (!Number.isFinite(value) || Math.abs(value) > 1000000 || (["width", "height"].includes(key) && value <= 0)) return sync();
@@ -492,80 +558,103 @@
     edit((_doc, l) => { l?.channels.forEach((c) => { c[key] = value; }); });
   };
   $("merge-auto").onclick = () => edit((_doc, l) => l?.channels.forEach((c) => { c.min = c.max = null; }));
-  $("merge-time").onchange = (e) => edit((_doc, l) => { if (l) l.t = M.clamp(Math.round(+e.target.value - 1), 0, l.info.sizeT - 1); });
+  $("merge-time").onchange = (e) => { const value = Math.round(+e.target.value - 1); edit((_doc, l) => { if (l) l.t = M.clamp(value, 0, l.info.sizeT - 1); }); };
   for (const key of ["width", "height"]) $(`merge-canvas-${key}`).onchange = (e) => {
     const value = +e.target.value;
     if (Number.isInteger(value) && value > 0 && value <= 1000000) edit((doc) => { doc[key] = value; });
     else sync();
   };
-  $("merge-background").onchange = (e) => edit((doc) => { doc.background = e.target.value; });
+  $("merge-background").onchange = (e) => { const value = e.target.value; edit((doc) => { doc.background = value; }); };
   for (const [id, delta] of [["merge-up", 1], ["merge-down", -1]]) $(id).onclick = () => edit((doc, l) => {
     if (!l) return;
     const i = doc.layers.indexOf(l), j = M.clamp(i + delta, 0, doc.layers.length - 1);
     [doc.layers[i], doc.layers[j]] = [doc.layers[j], doc.layers[i]];
   });
-  $("merge-delete").onclick = () => edit((doc, l) => {
+  const deleteLayer = () => edit((doc, l) => {
     if (!l) return;
     doc.layers.splice(doc.layers.indexOf(l), 1);
     doc.selected = doc.layers.at(-1)?.id;
     // Undo may need this source; all handles are released when its tab closes.
   });
+  $("merge-delete").onclick = deleteLayer;
 
   function point(e, doc) {
     const rect = preview.getBoundingClientRect(), v = doc.view;
     return [(e.clientX - rect.left - rect.width / 2) / v.scale + v.cx, (e.clientY - rect.top - rect.height / 2) / v.scale + v.cy];
   }
+  function handleAt(l, p, scale) {
+    if (!l?.visible) return null;
+    return M.handles.find(([, x, y]) => Math.hypot(p[0] - l.x - x * l.width, p[1] - l.y - y * l.height) * scale <= 9)?.[0] || null;
+  }
+  const handleCursor = (handle) => ({ n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
+    nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize" })[handle] || "move";
   preview.onpointerdown = (e) => {
     const doc = current(); if (!doc?.view || e.button > 1) return;
+    preview.focus({ preventScroll: true });
     const p = point(e, doc), l = selected(doc);
-    const resize = l && Math.hypot(p[0] - l.x - l.width, p[1] - l.y - l.height) * doc.view.scale < 12;
+    const resize = handleAt(l, p, doc.view.scale);
     const contains = (l) => l.visible && p[0] >= l.x && p[0] <= l.x + l.width && p[1] >= l.y && p[1] <= l.y + l.height;
     const hit = resize || l && contains(l) ? l : [...doc.layers].reverse().find(contains);
     const pan = e.button === 1 || e.altKey || !hit || sideMode !== "layers" || $("sidebar").classList.contains("collapsed");
-    if (!pan) { doc.selected = hit.id; remember(doc); }
+    if (!pan) {
+      if (doc.selected !== hit.id) { doc.selected = hit.id; D.touch(doc); }
+      remember(doc);
+    }
     drag = { doc, start: p, client: [e.clientX, e.clientY], pan, resize, layer: hit, view: { ...doc.view }, original: hit ? { x: hit.x, y: hit.y, width: hit.width, height: hit.height } : null, moved: false };
     preview.setPointerCapture(e.pointerId);
     e.preventDefault(); sync();
   };
   preview.onpointermove = (e) => {
-    if (!drag || current() !== drag.doc) return;
+    if (!drag) {
+      const doc = current();
+      preview.style.cursor = doc?.view && sideMode === "layers" && !$("sidebar").classList.contains("collapsed")
+        ? handleCursor(handleAt(selected(doc), point(e, doc), doc.view.scale)) : "grab";
+      return;
+    }
+    if (current() !== drag.doc) return;
     const d = drag, v = d.doc.view;
     const dx = (e.clientX - d.client[0]) / v.scale, dy = (e.clientY - d.client[1]) / v.scale;
     d.moved ||= Math.hypot(dx, dy) > 0;
-    if (d.pan) { v.cx = d.view.cx - dx; v.cy = d.view.cy - dy; request(); return; }
+    if (d.pan) { v.cx = d.view.cx - dx; v.cy = d.view.cy - dy; D.touch(d.doc); request(); return; }
     if (d.resize) {
-      const width = Math.max(1, d.original.width + dx), height = Math.max(1, d.original.height + dy);
-      if (d.layer.lockAspect !== false) { const k = Math.max(width / d.original.width, height / d.original.height); d.layer.width = d.original.width * k; d.layer.height = d.original.height * k; }
-      else { d.layer.width = width; d.layer.height = height; }
+      Object.assign(d.layer, M.resize(d.original, d.resize, dx, dy, (d.layer.lockAspect !== false) !== e.shiftKey));
     } else { d.layer.x = d.original.x + dx; d.layer.y = d.original.y + dy; }
     edit(() => {}, false);
   };
-  const endDrag = () => { if (drag && !drag.moved && !drag.pan) drag.doc.history?.pop(); drag = null; };
+  const endDrag = () => {
+    if (drag && !drag.moved && !drag.pan) drag.doc.history?.pop();
+    if (drag?.moved && current() === drag.doc) D.touch(drag.doc);
+    drag = null;
+  };
   preview.onpointerup = endDrag; preview.onpointercancel = endDrag;
   preview.oncontextmenu = (e) => e.preventDefault();
   preview.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
-  preview.ondblclick = () => fit();
+  preview.ondblclick = () => { fit(); D.touch(); };
   function zoom(factor, e) {
     const doc = current(); if (!doc?.view) return;
     const p = e ? point(e, doc) : null;
     doc.view.scale = M.clamp(doc.view.scale * factor, 0.001, 100);
     if (p) { const q = point(e, doc); doc.view.cx += p[0] - q[0]; doc.view.cy += p[1] - q[1]; }
+    D.touch(doc);
     request();
   }
   preview.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(-e.deltaY * 0.002), e); }, { passive: false });
-  for (const [id, action] of [["btn-save", () => D.save()], ["btn-undo", () => undo()], ["btn-redo", () => undo(true)], ["btn-zoom", () => fit()], ["btn-zoomin", () => zoom(1.25)], ["btn-zoomout", () => zoom(0.8)]]) $(id).addEventListener("click", (e) => {
+  for (const [id, action] of [["btn-save", () => $("merge-export").click()], ["btn-scalebar", () => edit((doc) => { const bar = doc.layers[0]?.scaleBar; if (bar) bar.visible = !bar.visible; })], ["btn-undo", () => undo()], ["btn-redo", () => undo(true)], ["btn-zoom", () => { fit(); D.touch(); }], ["btn-zoomin", () => zoom(1.25)], ["btn-zoomout", () => zoom(0.8)]]) $(id).addEventListener("click", (e) => {
     if (!current()) return;
     e.preventDefault(); e.stopImmediatePropagation(); action();
   }, true);
   $("toolbar").addEventListener("click", (e) => {
     if (!current()) return;
     const button = e.target.closest("button");
-    if (button && ["btn-open", "btn-save", "btn-settings", "btn-undo", "btn-redo", "btn-zoom", "btn-zoomin", "btn-zoomout", "scroll-left", "scroll-right"].includes(button.id)) return;
+    if (button && ["btn-open", "btn-save", "btn-settings", "btn-scalebar", "btn-undo", "btn-redo", "btn-zoom", "btn-zoomin", "btn-zoomout", "scroll-left", "scroll-right"].includes(button.id)) return;
     e.preventDefault(); e.stopImmediatePropagation();
   }, true);
   for (const pane of [imagesPane, panel]) pane.addEventListener("keydown", (e) => {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "o") return;
+    if (!mod && ["Delete", "Backspace"].includes(e.key) && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && e.target.closest("#merge-list")) {
+      e.preventDefault(); e.stopPropagation(); deleteLayer(); return;
+    }
     if (!mod) e.stopPropagation();
   });
 
@@ -623,17 +712,31 @@
     for (const key of cache.keys()) if (!live.has(key)) cache.delete(key);
     sync();
   });
+  document.addEventListener("tmv-save", () => { syncSaveState(); syncProjects(); });
   new ResizeObserver(request).observe(stage);
   window.TifMrcViewPro.layers = { fit, exportImage, paint, sync, request, setPanel,
+    sourceChanged() {
+      if (current() || sideMode !== "layers" || sourceScheduled) return;
+      sourceScheduled = true;
+      requestAnimationFrame(() => {
+        sourceScheduled = false;
+        if (current()) return;
+        const row = $("merge-list").querySelector(`[data-layer="source-${S.token}"]`);
+        // A late source frame must not steal keyboard focus from its layer row.
+        if (row?.contains(document.activeElement)) contain(row.querySelector(".merge-layer-thumb"), S.ov ? ovCanvas : S.frame ? frameCanvas : null);
+        else sync();
+      });
+    },
     toggleSidebar(force) { setPanel(sideMode, force ?? $("sidebar").classList.contains("collapsed")); },
     key(e) {
     const doc = current(); if (!doc) return;
     const key = e.key.toLowerCase(), mod = e.metaKey || e.ctrlKey;
     if (mod && (key === "z" || key === "y")) undo(key === "y" || e.shiftKey);
-    else if (key === "f") fit();
+    else if (!mod && (key === "delete" || key === "backspace")) deleteLayer();
+    else if (key === "f") { fit(); D.touch(doc); }
     else if (key === "+" || key === "=") zoom(1.25);
     else if (key === "-") zoom(0.8);
-    else if (key === "1") { doc.view.scale = 1 / (window.devicePixelRatio || 1); request(); }
+    else if (key === "1") { doc.view.scale = 1 / (window.devicePixelRatio || 1); D.touch(doc); request(); }
     else if (key === "b") toggleSidebar();
     else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) edit((_doc, l) => {
       if (!l) return; const step = e.shiftKey ? 10 : 1;
