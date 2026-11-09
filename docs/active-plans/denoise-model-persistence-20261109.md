@@ -3,7 +3,7 @@
 
 ## Follow-up authorized after 0.7.173
 
-Status: frozen frontend integrated; combined56 frontend tests pass. Preparing optimized native update; installed0.7.173 remains unchanged.
+Status: complete. Optimized stable-signed0.7.176 installed, restarted and real GUI accepted. Local ZIP verified; no public distribution.
 
 Verified actual user messages in chat01a1beb7-a493-75c2-ab8c-76af2f97db66, IDs01a1bf69-d43f-70f2-bd4b-cce7a2351504 and01a1bf6a-f9c4-7b92-946c-d3866ff4b874: a single image appears as a layer; incoming layers fit the base proportionally/centered; familiar edge/corner transform handles; each edit automatically saves the editable project with no Save button; Delete/Backspace deletes selected layer with Undo while text fields keep normal editing.
 
@@ -17,7 +17,13 @@ Verified actual user messages in chat01a1beb7-a493-75c2-ab8c-76af2f97db66, IDs01
 
 - Frozen peer snapshot `/Volumes/samsung/pro-test/tabs-layers-20261109/refinement-autosave-20261109` applied with `git apply --whitespace=error`; all seven baseline/final hashes verified. The only app.js hunk is sourceChanged at draw end. Combined frontend/model/preview/ownership suite:56 passed. Backend create/update tests:5 passed on both Mac temporary and Samsung filesystems. Native follow-up acceptance remains pending.
 
-## Final outcome (2026-11-09)
+## Follow-up final outcome — 0.7.176
+
+Implementation8bcdf70 includes frozen UI and backend8c2817b.56 combined Node tests passed;5 backend filesystem tests passed on Mac and Samsung; final optimized offline build passed. Canonical stable-signed App and running executable verified, ZIP integrity and all bundle files match. Native acceptance verified single-image layer/promotion, real first automatic project creation, fit geometry,8handles/corner drag, Delete/Backspace/Undo/input isolation, base-calibrated scale transformation, immediate-close final-save, full App restart/project/export equality and own-trained N2V/wedge restore+inference exact equality4096voxels each. Original raw/labels/corrected/composite sources and6 model records/weights hash unchanged. User merge layers/Z/geometry/zoom retained, with small viewport navigation change<0.1px recorded. Current final UI is user mergeZ65/128,304%,20nm.
+
+Authoritative follow-up report `/Volumes/samsung/pro-test/tabs-autosave-20261109/acceptance-report.md`; receipts and native GUI outputs alongside. ZIP `/Volumes/samsung/tifview-build.noindex/packages/TifMrcView-Pro-0.7.176-macos-arm64.zip` SHA256e0af64b941ed5c4815381caf0e03f2e50d60480e8bab571163287d78f066acf2. Final LaunchServices only canonical App; no remaining task stages. Historical memory-only legacy weight loss is not repaired or disguised. No push/public updater or server changes.
+
+## Previous delivery outcome — 0.7.173 (2026-11-09)
 
 Local software delivery is complete. Optimized, stable-signed `/Applications/TifMrcView Pro.app` is version0.7.173, packaged from implementation commit83f1c22 (with integrated tabs/layers, XYZ, NAD/Z fixes and four-model persistence). The final package and running executable identity match; no push or public updater/site release occurred.
 
