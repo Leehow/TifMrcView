@@ -65,7 +65,7 @@
   $("wg-geom").value = P.geom;
   $("wg-min").value = P.min;
   $("wg-max").value = P.max;
-  $("wg-cube").value = P.cube;
+  window.TifMrcViewPro.models.setValue("wg-cube", P.cube);
   $("wg-count").value = P.count;
   $("wg-iter").value = P.iterations;
   $("wg-steps").value = P.steps;
