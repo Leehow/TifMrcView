@@ -22,7 +22,9 @@ Completed: in-process native kernel and disk cache integrated. No executable sea
 
 Preservation baseline:10 file hashes (model records/weights and current source/result/project), installed0.7.178 receipt and existing signed ZIP reference under evidence/preserved. Installed-source manifest compared with integration: only the four intended denoise/module/UI files differ; channel visibility and all other existing features match. Native current tabs: original128x128x32 NAD test crop and old NAD export; sourceZ17/32,923%, current methodMedian radius1, split54, CPUfalse, saved foldertabs-autosave.../gui. No unsaved merge marker visible. Inspect live tasks again before quit.
 
-Next: freeze source, build offline/stable-sign, preserve current native state and update; verify native NAD full Z and exported voxels against original, retained features/models and final package/hygiene.
+User follow-up: remove the denoise CPU-only checkbox and always request the existing automatic backend policy, ignoring a legacy saved CPU override. Verified current owning code: learned training/inference use GPU with CPU fallback; NLM has GPU support but automatic selection retains CPU on Metal; Gaussian, median, 2D diffusion and native NAD3D currently run on CPU. No GPU NAD implementation is claimed or added. This small UI removal needs no external design research; existing backend policy and diagnostic/API overrides remain intact.
+
+Next: freeze source including this UI simplification, build offline/stable-sign, preserve current native state and update; verify native NAD full Z, absent CPU checkbox and exported voxels against original, retained features/models and final package/hygiene.
 
 
 

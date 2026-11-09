@@ -67,7 +67,6 @@
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
       <span class="al-wide dn-nad dim">内置 NAD 3D / EED · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
-      <label class="al-check al-wide"><input type="checkbox" id="dn-cpu" /> 只用 CPU</label>
     </div>
     <label class="al-check"><input type="checkbox" id="dn-preview" checked /> 预览（视野中间最多 2048 px）</label>
     <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" /></label>
@@ -80,7 +79,9 @@
     <div class="al-row" id="dn-saved" hidden><span id="dn-saved-name" class="dim"></span><button id="dn-open" class="small">打开</button></div>`;
   $("stage").appendChild(panel);
 
-  const P = { method: "nlm", strength: {}, patch: 1, search: 7, iterations: 10, slab: 0, cpu: false, split: 50, preview: true, ...pref.get("denoise-params", {}) };
+  const P = { method: "nlm", strength: {}, patch: 1, search: 7, iterations: 10, slab: 0, split: 50, preview: true, ...pref.get("denoise-params", {}) };
+  // Backend selection is automatic; discard a legacy user override.
+  delete P.cpu;
 
   function strengthOf(m) {
     const v = P.strength[m];
@@ -125,7 +126,6 @@
   $("dn-search").value = P.search;
   $("dn-iter").value = P.iterations;
   $("dn-slab").value = P.slab;
-  $("dn-cpu").checked = !!P.cpu;
   $("dn-split").value = P.split;
   $("dn-preview").checked = P.preview !== false;
   $("dn-mode").value = P.mode || "n2v";
@@ -169,7 +169,6 @@
     P.search = +$("dn-search").value;
     P.iterations = Math.max(1, Math.min(200, +$("dn-iter").value || 10));
     P.slab = +$("dn-slab").value;
-    P.cpu = $("dn-cpu").checked;
     P.split = +$("dn-split").value;
     P.preview = $("dn-preview").checked;
     P.mode = $("dn-mode").value;
@@ -187,7 +186,7 @@
       patch: P.patch,
       search: P.search,
       slab: method !== "nad3d" && S.info && S.info.sizeZ > 1 ? P.slab : 0,
-      device: P.cpu ? "cpu" : "auto",
+      device: "auto",
     };
   }
 
@@ -200,7 +199,7 @@
     $("dn-sval").textContent = (+$("dn-strength").value).toFixed(step < 1 ? 2 : 0);
     store();
   });
-  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview", "dn-steps", "dn-bin"]) $(id).addEventListener("change", store);
+  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-preview", "dn-steps", "dn-bin"]) $(id).addEventListener("change", store);
   $("dn-mode").addEventListener("change", () => {
     syncMode();
     // Frame halves of counting-mode movies are too sparse at full resolution.
