@@ -107,6 +107,7 @@
     W.restoreKey = key;
     W.restoring = true;
     W.model = null;
+    $("wg-model").textContent = "";
     clearPreviews();
     const result = await modelRecords.restore(req);
     if (result.stale || key !== W.restoreKey) return;
