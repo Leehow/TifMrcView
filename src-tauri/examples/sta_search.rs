@@ -28,6 +28,8 @@ fn main() -> anyhow::Result<()> {
     let mut out = String::from("sta");
     // --average: search, cut and average in one go (all tomograms given), as the app will.
     let mut average = false;
+    // --fine: after the first alignment, again at twice the sampling.
+    let mut fine = false;
     let mut more: Vec<String> = vec![];
     let mut path = None;
     let mut args = std::env::args().skip(1);
@@ -47,6 +49,7 @@ fn main() -> anyhow::Result<()> {
             "--exclude" => exclude = true,
             "--out" => out = args.next().unwrap_or_default(),
             "--average" => average = true,
+            "--fine" => fine = true,
             _ if path.is_some() => more.push(a),
             _ => path = Some(a),
         }
@@ -91,7 +94,7 @@ fn main() -> anyhow::Result<()> {
                 *l = stage.to_string();
             }
         };
-        let report = run_template(&dev, &sources, &cube, voxel, diameter, &out, &progress, &|_| {})?;
+        let report = run_template(&dev, &sources, &cube, voxel, diameter, fine, &out, &progress, &|_| {})?;
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }

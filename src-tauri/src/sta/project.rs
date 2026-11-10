@@ -279,31 +279,36 @@ fn darkest(v: &[f32], dims: [usize; 3], c: [usize; 3], radius: f64, median: f32,
 /// along the beam it is filled with the mean, so particles near a face are
 /// kept; the centre itself and at least half the cube have to be inside.
 fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32>> {
-    let h = (BOX / 2) as isize;
+    cube_n(v, dims, c, BOX)
+}
+
+/// As `cube`, of side `n`.
+fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f32>> {
+    let h = (n / 2) as isize;
     // Across the beam the cube has to be whole: the borders of a tomogram
     // hold reconstruction artefacts, not particles.
-    if c[2] >= dims[2] || (0..2).any(|i| c[i] < BOX / 2 || c[i] + BOX / 2 > dims[i]) {
+    if c[2] >= dims[2] || (0..2).any(|i| c[i] < n / 2 || c[i] + n / 2 > dims[i]) {
         return None;
     }
     let c = c.map(|x| x as isize);
     let inside = |p: isize, n: usize| p >= 0 && p < n as isize;
-    let mut out = vec![f32::NAN; BOX * BOX * BOX];
+    let mut out = vec![f32::NAN; n * n * n];
     let (mut sum, mut sq, mut count) = (0f64, 0f64, 0usize);
-    for z in 0..BOX as isize {
+    for z in 0..n as isize {
         let sz = c[2] - h + z;
         if !inside(sz, dims[2]) {
             continue;
         }
-        for y in 0..BOX as isize {
+        for y in 0..n as isize {
             let sy = c[1] - h + y;
             if !inside(sy, dims[1]) {
                 continue;
             }
-            for x in 0..BOX as isize {
+            for x in 0..n as isize {
                 let sx = c[0] - h + x;
                 if inside(sx, dims[0]) {
                     let val = v[(sz as usize * dims[1] + sy as usize) * dims[0] + sx as usize];
-                    out[((z * BOX as isize + y) * BOX as isize + x) as usize] = val;
+                    out[((z * n as isize + y) * n as isize + x) as usize] = val;
                     sum += val as f64;
                     sq += (val as f64).powi(2);
                     count += 1;
@@ -451,7 +456,8 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     // Results.
     std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
     let file = |name: &str| Path::new(out_dir).join(name).to_string_lossy().into_owned();
-    let shape = [BOX, BOX, BOX];
+    let n = (out.map.len() as f64).cbrt().round() as usize;
+    let shape = [n, n, n];
     output::write_mrc(&file("average.mrc"), &out.map, shape, voxel_a, false)?;
     output::write_mrc(&file("half1.mrc"), &out.halves[0], shape, voxel_a, false)?;
     output::write_mrc(&file("half2.mrc"), &out.halves[1], shape, voxel_a, false)?;
@@ -480,7 +486,7 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.diameter_a = Some(size);
     report.particles = cuts.len();
     report.voxel_a = voxel_a;
-    report.resolution_a = (out.shell > 0.0).then(|| BOX as f64 * voxel_a / out.shell);
+    report.resolution_a = (out.shell > 0.0).then(|| n as f64 * voxel_a / out.shell);
     report.fsc = out.fsc.clone();
     report.map = Some(file("average.mrc"));
     report.halves = Some([file("half1.mrc"), file("half2.mrc")]);
@@ -624,6 +630,7 @@ pub fn run_template(
     template: &[f32],
     voxel_a: f64,
     diameter_a: f64,
+    fine: bool,
     out_dir: &str,
     progress: Progress,
     live: Live,
@@ -682,7 +689,67 @@ pub fn run_template(
     let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
     let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let out = align(&set, template, &poses, progress, live)?;
+    let mut out = align(&set, template, &poses, progress, live)?;
+    if fine {
+        // The same particles at twice the sampling, from where they now
+        // are: at the coarse sampling the resolution ends at its Nyquist
+        // limit, which says nothing about how good the average is.
+        let n = 2 * BOX;
+        let want = voxel / 2.0;
+        let mut big: Vec<Vec<f32>> = vec![];
+        let mut start: Vec<Pose> = vec![];
+        let mut kept: Vec<bool> = vec![];
+        for (i, s) in sources.iter().enumerate() {
+            if !cuts.iter().any(|c| c.source == i) {
+                continue;
+            }
+            check_cancel()?;
+            progress("裁出更细的颗粒", i, sources.len());
+            let (v, dims, got, bin) = binned(&s.path, want)?;
+            for (c, p) in cuts.iter_mut().zip(&out.poses).filter(|(c, _)| c.source == i) {
+                // The particle's centre in source voxels, then in these.
+                let centre: [f64; 3] = std::array::from_fn(|k| c.at[k] + p.t[k] * c.bin as f64);
+                let at = centre.map(|x| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize);
+                match cube_n(&v, dims, at, n) {
+                    Some(cube) => {
+                        big.push(cube);
+                        start.push(Pose { r: p.r, t: [0.0; 3], score: p.score });
+                        c.at = at.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                        c.bin = bin;
+                        kept.push(true);
+                    }
+                    None => kept.push(false),
+                }
+            }
+            voxel = got;
+        }
+        // `kept` follows the order of the sources, as `cuts` does only when
+        // sorted by source: sort both the same way first.
+        let mut order: Vec<usize> = (0..cuts.len()).collect();
+        order.sort_by_key(|i| cuts[*i].source);
+        let mut it = kept.iter();
+        let stays: Vec<bool> = {
+            let mut flags = vec![false; cuts.len()];
+            for i in &order {
+                flags[*i] = *it.next().unwrap();
+            }
+            flags
+        };
+        let mut sorted: Vec<Cut> = vec![];
+        let mut taken: Vec<Option<Cut>> = cuts.drain(..).map(Some).collect();
+        for i in &order {
+            if stays[*i] {
+                sorted.push(taken[*i].take().unwrap());
+            }
+        }
+        cuts = sorted;
+        let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
+        let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+        let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
+        let model = crate::spa::fourier::resample3(&out.map, BOX, n);
+        let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
+        out = align(&set, &model, &start, progress, live)?;
+    }
     let mut report = Report {
         kinds: vec![],
         diameter_a: None,
