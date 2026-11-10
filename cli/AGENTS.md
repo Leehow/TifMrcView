@@ -155,8 +155,9 @@ stderr, if the file is missing.
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
 or several of the same specimen. It writes the cards to `OUT/cards/`, then,
-with `--pick N` (or by itself when one card is `likely`, or several are and
-show the same particle), the
+with `--pick N` (or by itself when one card is `likely`, or several are and one
+kind of particle weighs at least 3 times the next: it then takes the kind's card
+with the most members and says on stderr which cards show another kind), the
 average of everything that looks like card N: `average.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
 `average.mrc`; `"particles"` how many were averaged). The JSON also has

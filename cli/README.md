@@ -47,11 +47,14 @@ from the same tomograms, unchanged; otherwise it is made again, with a line on
 stderr saying why; delete `OUT/cards/` to force it). Then, with
 `--pick N`, it finds everything in the tomograms that looks like card N and
 averages it into `OUT/`. Without `--pick` it goes on by itself only when one
-card is marked `likely`, or several are and they show the same particle (the
-same particle from different size groups: each pair is compared over all
-orientations, and the one with the most members and the most compact is
-taken, with a line on stderr saying which cards matched; the comparison takes
-a few seconds); otherwise it prints the cards as JSON and
+card is marked `likely`, or several are and one kind of particle clearly
+dominates them (cards that show the same particle, from different size groups,
+are one kind: each pair is compared over all orientations, taking a few
+seconds; a kind weighs the sum of `compact` × `members` of its cards, and the
+heaviest must weigh at least 3 times the next one). It then takes the card of
+that kind with the most members, with a line on stderr saying which cards
+matched and, if there is another kind, which cards show it ("choose it with
+`--pick N`"); with several kinds of similar weight it prints the cards as JSON and
 exits with status 2: look at the cards (open the `card_N.mrc` files in
 TifMrcView Pro), then run the same command again with `--pick N`. Rerun it
 with the tomograms it printed, not the tilt series, so they are not made

@@ -56,7 +56,8 @@ USAGE
   does) or tomograms that tmv tomo --for sta wrote. It runs in two steps:
   class-average "cards" of the blobs found go to <out>/cards/ (--out defaults
   to <first input>_sta beside it); then, with --pick N (or by itself when one
-  card is likely, or several are and show the same particle), the average of
+  card is likely, or several are and one kind of particle weighs 3 times the
+  next: it takes that kind's card with most members, naming the others), the average of
   everything that looks like card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
   resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
@@ -626,10 +627,10 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
 }
 
 /// The card to take without asking (see `sta::project::choose`): the only
-/// likely one, or the best of several that show the same particle (compared
-/// now, about three seconds for a pair; a card that cannot be read leaves the
-/// choice to the user). Else None.
-fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<usize> {
+/// likely one, or the best card of the dominant kind among several likely
+/// ones (compared now, about three seconds for a pair; a card that cannot be
+/// read leaves the choice to the user). Else None.
+fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<crate::sta::project::Chosen> {
     use crate::sta::project as sp;
     let similar = if cards.iter().filter(|c| c.likely).count() > 1 {
         match sp::likeness(cards) {
@@ -796,13 +797,15 @@ fn sta(o: &Opts) -> Result<Value> {
     let n = match pick {
         Some(n) => n,
         None => match auto_pick(&cards) {
-            Some(n) => {
+            Some(chosen) => {
+                let n = chosen.id;
                 let c = &cards[n];
-                let likely: Vec<usize> = cards.iter().filter(|c| c.likely).map(|c| c.id).collect();
-                let why = if likely.len() == 1 {
+                let why = if chosen.same.len() > 1 {
+                    format!("cards {} show the same particle", id_list(&chosen.same))
+                } else if chosen.other.is_empty() {
                     "the only one that looks like a single particle".to_string()
                 } else {
-                    format!("cards {} show the same particle", id_list(&likely))
+                    "the kind of particle with the most weight".to_string()
                 };
                 eprintln!(
                     "tmv sta: using card {n} (about {} Å across, {} members; {why}); the other cards are in {}/, choose another with --pick N",
@@ -810,6 +813,15 @@ fn sta(o: &Opts) -> Result<Value> {
                     c.members,
                     cards_dir.display()
                 );
+                if !chosen.other.is_empty() {
+                    let (verb, first) = if chosen.other.len() == 1 { ("shows", chosen.other[0].to_string()) } else { ("show", id_list(&chosen.other)) };
+                    let noun = if chosen.other.len() == 1 { "card" } else { "cards" };
+                    eprintln!(
+                        "tmv sta: another kind of particle was found: {noun} {first} {verb} something else; choose {} with --pick {}",
+                        if chosen.other.len() == 1 { "it" } else { "one of them" },
+                        chosen.other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" or ")
+                    );
+                }
                 n
             }
             None => {
@@ -1317,9 +1329,10 @@ mod tests {
 
     #[test]
     fn the_card_is_picked_only_when_clear() {
-        assert_eq!(auto_pick(&[card(0, true), card(1, false), card(2, false)]), Some(0));
-        assert_eq!(auto_pick(&[card(0, true)]), Some(0));
-        assert_eq!(auto_pick(&[card(0, false), card(1, true)]), Some(1));
+        let id = |c: Option<crate::sta::project::Chosen>| c.map(|c| c.id);
+        assert_eq!(id(auto_pick(&[card(0, true), card(1, false), card(2, false)])), Some(0));
+        assert_eq!(id(auto_pick(&[card(0, true)])), Some(0));
+        assert_eq!(id(auto_pick(&[card(0, false), card(1, true)])), Some(1));
         // Two likely cards are compared from their files: unreadable, so the user chooses.
         assert_eq!(auto_pick(&[card(0, true), card(1, true)]), None);
         assert_eq!(auto_pick(&[card(0, false), card(1, false)]), None);

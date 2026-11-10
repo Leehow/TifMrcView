@@ -1132,15 +1132,72 @@ pub fn likeness(cards: &[Card]) -> Result<Vec<Vec<f64>>> {
     Ok(m)
 }
 
-/// The card to take without asking: the only likely one; or, when several are
-/// likely and every pair of them is `SAME` or more alike (`similar[i][j]`, see
-/// `likeness`), the one with the largest `compact × members` (what `rank`
-/// sorts by, so the first of them); otherwise None, and the user chooses.
-pub fn choose(cards: &[Card], similar: &[Vec<f64>]) -> Option<usize> {
+/// A kind of particle must weigh at least this many times the next heaviest
+/// for `choose` to take it without asking (the weight of a kind is the sum of
+/// `compact × members` of its cards).
+pub const DOMINANT: f64 = 3.0;
+
+/// What `choose` took.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chosen {
+    /// The card to use.
+    pub id: usize,
+    /// The likely cards of its kind (it among them), ascending.
+    pub same: Vec<usize>,
+    /// The likely cards of other kinds, ascending (empty when there is one kind).
+    pub other: Vec<usize>,
+}
+
+/// The card to take without asking. The likely cards are grouped into kinds
+/// (connected groups of cards whose pairwise `similar[i][j]`, see `likeness`,
+/// is `SAME` or more). One kind: its best card, the one with the most members
+/// (ties: the larger `compact`, then the first). Several kinds: the same for the
+/// heaviest kind (weight: the sum of `compact × members` of its cards) when it
+/// weighs at least `DOMINANT` times the second heaviest, and `other` says which
+/// cards show the rest; otherwise None, and the user chooses.
+pub fn choose(cards: &[Card], similar: &[Vec<f64>]) -> Option<Chosen> {
     let likely: Vec<usize> = (0..cards.len()).filter(|i| cards[*i].likely).collect();
-    let first = *likely.first()?;
-    let alike = likely.iter().all(|&i| likely.iter().all(|&j| i >= j || similar.get(i).and_then(|r| r.get(j)).is_some_and(|s| *s >= SAME)));
-    alike.then(|| likely.iter().copied().max_by(|&i, &j| rank(&cards[i]).total_cmp(&rank(&cards[j])).then(j.cmp(&i))).unwrap_or(first))
+    if likely.is_empty() {
+        return None;
+    }
+    let alike = |i: usize, j: usize| similar.get(i).and_then(|r| r.get(j)).is_some_and(|s| *s >= SAME);
+    // Kinds: the first likely card of each group claims the cards linked to it.
+    let mut kinds: Vec<Vec<usize>> = vec![];
+    let mut seen = vec![false; cards.len()];
+    for &s in &likely {
+        if seen[s] {
+            continue;
+        }
+        seen[s] = true;
+        let mut group = vec![s];
+        let mut at = 0;
+        while at < group.len() {
+            let i = group[at];
+            at += 1;
+            for &j in &likely {
+                if !seen[j] && (alike(i, j) || alike(j, i)) {
+                    seen[j] = true;
+                    group.push(j);
+                }
+            }
+        }
+        group.sort_unstable();
+        kinds.push(group);
+    }
+    let weight = |k: &Vec<usize>| k.iter().map(|i| cards[*i].compact * cards[*i].members as f64).sum::<f64>();
+    let mut order: Vec<usize> = (0..kinds.len()).collect();
+    order.sort_by(|a, b| weight(&kinds[*b]).total_cmp(&weight(&kinds[*a])).then(a.cmp(b)));
+    if order.len() > 1 && weight(&kinds[order[0]]) < DOMINANT * weight(&kinds[order[1]]) {
+        return None;
+    }
+    let same = kinds[order[0]].clone();
+    let id = same
+        .iter()
+        .copied()
+        .max_by(|&i, &j| cards[i].members.cmp(&cards[j].members).then(cards[i].compact.total_cmp(&cards[j].compact)).then(j.cmp(&i)))?;
+    let mut other: Vec<usize> = order[1..].iter().flat_map(|k| kinds[*k].iter().copied()).collect();
+    other.sort_unstable();
+    Some(Chosen { id, same, other })
 }
 
 /// A place on a drawn shape (see `shape`).
@@ -1675,28 +1732,46 @@ mod card_tests {
     }
 
     #[test]
-    fn several_likely_cards_are_chosen_only_when_they_show_the_same_particle() {
+    fn a_dominant_kind_among_the_likely_cards_is_chosen() {
         let sim = |v: &[&[f64]]| -> Vec<Vec<f64>> { v.iter().map(|r| r.to_vec()).collect() };
-        // The real case: 160 Å (79 members, 7.72) and 210 Å (52, 10.14), both likely.
+        let id = |c: Option<Chosen>| c.map(|c| c.id);
+        // Two cards of one kind: the one with more members wins whatever the order.
         let two = [likely_card(0, true, 7.72, 79), likely_card(1, true, 10.14, 52)];
-        assert_eq!(choose(&two, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(0));
-        // The larger compact × members wins whatever the order.
+        assert_eq!(id(choose(&two, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(0));
         let swapped = [likely_card(0, true, 10.14, 52), likely_card(1, true, 7.72, 79)];
-        assert_eq!(choose(&swapped, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(1));
+        assert_eq!(id(choose(&swapped, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
         let reversed = [likely_card(0, true, 5.0, 40), likely_card(1, true, 10.14, 52)];
-        assert_eq!(choose(&reversed, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(1));
-        // Not alike: the user decides.
+        assert_eq!(id(choose(&reversed, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
+        // Equal members: the larger compact.
+        let tie = [likely_card(0, true, 5.0, 50), likely_card(1, true, 6.0, 50)];
+        assert_eq!(id(choose(&tie, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
+        // Two kinds of similar weight (or alike by SAME - 0.01): the user decides.
         assert_eq!(choose(&two, &sim(&[&[1.0, 0.3], &[0.3, 1.0]])), None);
         assert_eq!(choose(&two, &sim(&[&[1.0, SAME - 0.01], &[SAME - 0.01, 1.0]])), None);
-        assert_eq!(choose(&two, &sim(&[&[1.0, SAME], &[SAME, 1.0]])), Some(0));
-        // Three: one odd pair spoils it. Cards that are not likely do not count.
+        assert_eq!(id(choose(&two, &sim(&[&[1.0, SAME], &[SAME, 1.0]]))), Some(0));
+        // Two kinds, one at least DOMINANT times the other (weights 600 and 200, then 600 and 201).
+        let heavy = [likely_card(0, true, 10.0, 60), likely_card(1, true, 5.0, 40)];
+        let apart = sim(&[&[1.0, 0.0], &[0.0, 1.0]]);
+        assert_eq!(choose(&heavy, &apart), Some(Chosen { id: 0, same: vec![0], other: vec![1] }));
+        let nearly = [likely_card(0, true, 10.0, 60), likely_card(1, true, 5.025, 40)];
+        assert_eq!(choose(&nearly, &apart), None);
+        // The real case: two ribosome cards (14.07 × 47, 8.52 × 75; alike 0.88) and a
+        // small blob (7.81 × 34; 0.3 and 0.5 to them): 1300 against 266, so the
+        // ribosome, and of its cards the one with 75 members (not the 47, which
+        // has the larger compact × members).
+        let real = [likely_card(0, true, 14.07, 47), likely_card(1, true, 8.52, 75), likely_card(2, true, 7.81, 34)];
+        let m = sim(&[&[1.0, 0.88, 0.3], &[0.88, 1.0, 0.5], &[0.3, 0.5, 1.0]]);
+        assert_eq!(choose(&real, &m), Some(Chosen { id: 1, same: vec![0, 1], other: vec![2] }));
+        // The odd card first or last makes no difference.
+        let odd_first = [likely_card(0, true, 7.81, 34), likely_card(1, true, 14.07, 47), likely_card(2, true, 8.52, 75)];
+        let m = sim(&[&[1.0, 0.3, 0.5], &[0.3, 1.0, 0.88], &[0.5, 0.88, 1.0]]);
+        assert_eq!(choose(&odd_first, &m), Some(Chosen { id: 2, same: vec![1, 2], other: vec![0] }));
+        // A chain is one kind: 0-2 and 2-3 alike, 0-3 not. Cards that are not likely do not count.
         let three = [likely_card(0, true, 8.0, 60), likely_card(1, false, 12.0, 90), likely_card(2, true, 9.0, 50), likely_card(3, true, 7.6, 40)];
-        let m = sim(&[&[1.0, 0.0, 0.9, 0.8], &[0.0; 4], &[0.9, 0.0, 1.0, 0.75], &[0.8, 0.0, 0.75, 1.0]]);
-        assert_eq!(choose(&three, &m), Some(0));
         let m = sim(&[&[1.0, 0.0, 0.9, 0.5], &[0.0; 4], &[0.9, 0.0, 1.0, 0.75], &[0.5, 0.0, 0.75, 1.0]]);
-        assert_eq!(choose(&three, &m), None);
+        assert_eq!(choose(&three, &m), Some(Chosen { id: 0, same: vec![0, 2, 3], other: vec![] }));
         // One likely card (the others may be anything); none; empty; no matrix needed for one.
-        assert_eq!(choose(&[likely_card(0, false, 12.0, 90), likely_card(1, true, 8.0, 50)], &[]), Some(1));
+        assert_eq!(choose(&[likely_card(0, false, 12.0, 90), likely_card(1, true, 8.0, 50)], &[]), Some(Chosen { id: 1, same: vec![1], other: vec![] }));
         assert_eq!(choose(&[likely_card(0, false, 12.0, 90)], &[]), None);
         assert_eq!(choose(&[], &[]), None);
     }
