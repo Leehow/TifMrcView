@@ -1,5 +1,5 @@
 #![cfg_attr(not(feature = "pro"), allow(dead_code))]
-//! Pro: SAM 2.1 click segmentation. The model file is downloaded once into
+//! Pro: native Rust SAM 2.1 / SAM 3.1 click segmentation. The model file is downloaded once into
 //! the app's data folder; the model is loaded on first use and the features
 //! of the last segmented slice are kept, so further clicks only run the
 //! small mask decoder. A mask can be carried along Z: each next slice is
@@ -25,6 +25,66 @@ pub const MODEL_URLS: [&str; 2] = [
 
 pub fn model_path() -> Option<PathBuf> {
     Some(crate::plugins::paths::user_dir()?.parent()?.join("models").join(MODEL_FILE))
+}
+
+/// Installing the official SAM 3.1 checkpoint beside SAM 2.1 opts into the
+/// native interactive image backend. The existing downloader still installs
+/// SAM 2.1; the gated SAM 3.1 model is supplied separately by its owner.
+fn sam31_path() -> Option<PathBuf> {
+    let path = model_path()?.with_file_name("sam3.1_multiplex.pt");
+    path.metadata().is_ok_and(|m| m.is_file() && m.len() == 3_502_755_717).then_some(path)
+}
+
+#[cfg(feature = "pro")]
+enum NativePredictor {
+    Sam21(Box<tmv_sam::Predictor>),
+    Sam31(Box<tmv_sam::sam31::Predictor>),
+}
+
+#[cfg(feature = "pro")]
+impl NativePredictor {
+    fn encode_gray(&self, gray: &[u8], w: usize, h: usize) -> Result<tmv_sam::Encoded> {
+        match self {
+            Self::Sam21(p) => Ok(p.encode_gray(gray, w, h)),
+            Self::Sam31(p) => p.encode_gray(gray, w, h),
+        }
+    }
+
+    fn predict(&self, image: &tmv_sam::Encoded, points: &[tmv_sam::Point], bbox: Option<[f32; 4]>, mask: Option<burn::tensor::Tensor<4>>) -> Result<tmv_sam::Prediction> {
+        match self {
+            Self::Sam21(p) => Ok(p.predict(image, points, bbox, mask)),
+            Self::Sam31(p) => p.predict(image, points, bbox, mask),
+        }
+    }
+
+    fn predict_low_res_many(&self, image: &tmv_sam::Encoded, points: &[tmv_sam::Point]) -> Result<Vec<(Vec<f32>, f32)>> {
+        match self {
+            Self::Sam21(p) => Ok(p.predict_low_res_many(image, points)),
+            Self::Sam31(p) => points.iter().map(|&point| {
+                let result = p.predict(image, &[point], None, None)?;
+                Ok((result.low_res_values(), result.iou))
+            }).collect(),
+        }
+    }
+
+    fn mask_prompt(&self, values: &[f32]) -> Result<burn::tensor::Tensor<4>> {
+        match self {
+            Self::Sam21(p) => Ok(p.mask_prompt(values)),
+            Self::Sam31(p) => {
+                use burn::tensor::{Tensor, TensorData};
+                let n = tmv_sam::sam31::MASK_SIZE;
+                if values.len() != n * n { bail!("SAM 3.1 mask prompt must be 288x288"); }
+                Ok(Tensor::from_data(TensorData::new(values.to_vec(), [1, 1, n, n]), &p.device))
+            }
+        }
+    }
+
+    fn tracker(&self) -> Result<&tmv_sam::Predictor> {
+        match self {
+            Self::Sam21(p) => Ok(p),
+            Self::Sam31(_) => bail!("SAM 3.1 当前只接入点选和框选；原生视频记忆传播尚未接入"),
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Copy, Debug)]
@@ -68,6 +128,8 @@ pub struct Status {
     pub loaded: bool,
     pub backend: Option<String>,
     pub size: u64,
+    pub model: &'static str,
+    pub tracking: bool,
 }
 
 #[derive(Deserialize)]
@@ -114,7 +176,7 @@ pub struct Sam {
 #[derive(Default)]
 struct Inner {
     #[cfg(feature = "pro")]
-    predictor: Option<Arc<tmv_sam::Predictor>>,
+    predictor: Option<Arc<NativePredictor>>,
     backend: Option<String>,
     /// (token, z, c, t, lo, hi, slab, sigma) of `encoded`.
     #[cfg(feature = "pro")]
@@ -128,7 +190,7 @@ impl Sam {
     #[cfg(feature = "pro")]
     pub fn with_predictor(p: tmv_sam::Predictor) -> Self {
         let sam = Sam::default();
-        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        sam.inner.lock().unwrap().predictor = Some(Arc::new(NativePredictor::Sam21(Box::new(p))));
         sam
     }
 
@@ -138,23 +200,39 @@ impl Sam {
         let loaded = inner.predictor.is_some();
         #[cfg(not(feature = "pro"))]
         let loaded = false;
+        #[cfg(feature = "pro")]
+        let sam31 = inner.predictor.as_ref().map(|p| matches!(p.as_ref(), NativePredictor::Sam31(_))).unwrap_or_else(|| sam31_path().is_some());
+        #[cfg(not(feature = "pro"))]
+        let sam31 = sam31_path().is_some();
         Status {
             available: cfg!(feature = "pro"),
-            downloaded: model_path().is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == MODEL_SIZE)),
+            downloaded: sam31 || model_path().is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == MODEL_SIZE)),
             loaded,
             backend: inner.backend.clone(),
-            size: MODEL_SIZE,
+            size: if sam31 { 3_502_755_717 } else { MODEL_SIZE },
+            model: if sam31 { "SAM 3.1" } else { "SAM 2.1" },
+            tracking: !sam31,
         }
     }
 
     #[cfg(feature = "pro")]
-    fn predictor(inner: &mut Inner) -> Result<Arc<tmv_sam::Predictor>> {
+    fn predictor(inner: &mut Inner) -> Result<Arc<NativePredictor>> {
         if inner.predictor.is_none() {
-            let Some(path) = model_path().filter(|p| p.exists()) else { bail!("还没有下载 SAM 模型") };
+            let sam31 = sam31_path();
+            let Some(path) = sam31.clone().or_else(model_path).filter(|p| p.exists()) else { bail!("还没有下载 SAM 模型") };
+            // Model links can target external storage; keep the native
+            // checkpoint reader's temporary view beside the actual weights.
+            let path = path.canonicalize()?;
             #[cfg(target_os = "linux")]
             use_bundled_libdevice();
             let t = std::time::Instant::now();
-            let (p, name) = tmv_sam::load_best(&path, &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+            let (p, name) = if sam31.is_some() {
+                let (device, name) = tmv_sam::pick_device();
+                (NativePredictor::Sam31(Box::new(tmv_sam::sam31::Predictor::load(&path, &device)?)), name)
+            } else {
+                let (p, name) = tmv_sam::load_best(&path, &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+                (NativePredictor::Sam21(Box::new(p)), name)
+            };
             eprintln!("SAM: model ready on {name} in {:.1?}", t.elapsed());
             inner.predictor = Some(Arc::new(p));
             inner.backend = Some(name.to_string());
@@ -174,7 +252,7 @@ impl Sam {
             if inner.key != Some(key) {
                 let t = std::time::Instant::now();
                 let gray = slice_gray(&values, req.z, (w, h, d), (req.lo, req.hi), dn)?;
-                inner.encoded = Some(Arc::new(p.encode_gray(&gray, w, h)));
+                inner.encoded = Some(Arc::new(p.encode_gray(&gray, w, h)?));
                 eprintln!("SAM: encoded slice {} ({w}x{h}) in {:.1?}", req.z, t.elapsed());
                 inner.key = Some(key);
             }
@@ -184,7 +262,7 @@ impl Sam {
         if points.is_empty() && req.bbox.is_none() {
             bail!("请先点一下要分割的物体");
         }
-        let r = predictor.predict(&encoded, &points, req.bbox, None);
+        let r = predictor.predict(&encoded, &points, req.bbox, None)?;
         let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
         let bytes = mask.iter().map(|&m| m as u8).collect();
         *self.last.lock().unwrap() = Some(LastMask { token: req.token, z: req.z, mask, iou: r.iou, low_res: r.low_res_values() });
@@ -201,10 +279,10 @@ impl Sam {
         let mut s: Vec<f32> = img.iter().step_by((img.len() / 100_000).max(1)).copied().collect();
         s.sort_by(f32::total_cmp);
         let (lo, hi) = (s[s.len() / 200], s[s.len() - 1 - s.len() / 200]);
-        let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h);
+        let enc = predictor.encode_gray(&to_gray(img, lo, hi), w, h)?;
         let mut out = vec![];
         let clicks: Vec<tmv_sam::Point> = points.iter().map(|p| tmv_sam::Point { x: p[0], y: p[1], positive: true }).collect();
-        let lows = predictor.predict_low_res_many(&enc, &clicks);
+        let lows = predictor.predict_low_res_many(&enc, &clicks)?;
         for (p, (low, _)) in points.iter().zip(lows) {
             // The low-resolution logits, sampled bilinearly at image pixels
             // as the fill needs them (the full-size mask cost ~0.1 s a click).
@@ -288,6 +366,7 @@ impl Sam {
         if !req.follow_prompts {
             // SAM 2's video tracking: each slice attends to the memories of
             // the start slice and the slices since, so no prompt is needed.
+            let predictor = predictor.tracker()?;
             let gray = |z: usize| slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise);
             let first = predictor.track_start(&predictor.encode_gray(&gray(req.z)?, w, h), &start);
             for (dir, steps) in dirs {
@@ -332,7 +411,7 @@ impl Sam {
                 }
                 let z = (req.z as isize + dir * k as isize) as usize;
                 let Some(prompt) = follow_prompt(&prev, w, h) else { break };
-                let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h);
+                let enc = predictor.encode_gray(&slice_gray(&values, z, (w, h, d), (req.lo, req.hi), req.denoise)?, w, h)?;
                 let pts: Vec<tmv_sam::Point> = prompt.points.iter().map(|p| tmv_sam::Point { x: p.x, y: p.y, positive: true }).collect();
                 // Encoding is the slow part; the decoder is cheap, so each
                 // way of prompting is tried and the one that keeps closest
@@ -340,7 +419,8 @@ impl Sam {
                 let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
                 let mut why = vec![];
                 for (bbox, use_mask) in prompt.variants() {
-                    let r = predictor.predict(&enc, &pts, bbox, use_mask.then(|| predictor.mask_prompt(&prev_low)));
+                    let mask = if use_mask { Some(predictor.mask_prompt(&prev_low)?) } else { None };
+                    let r = predictor.predict(&enc, &pts, bbox, mask)?;
                     let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
                     let grown = mask.iter().filter(|m| **m).count() as f32 / start_area;
                     if grown > 3.0 || !still_same(&prev, &mask, w, h, r.iou, min_iou(start_iou)) {

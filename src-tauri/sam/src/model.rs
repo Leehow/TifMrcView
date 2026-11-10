@@ -150,7 +150,7 @@ impl MultiScaleAttention {
     }
 }
 
-fn window_partition(x: Tensor<4>, ws: usize) -> (Tensor<4>, [usize; 2]) {
+pub(crate) fn window_partition(x: Tensor<4>, ws: usize) -> (Tensor<4>, [usize; 2]) {
     let [b, h, w, c] = x.dims();
     let (ph, pw) = ((ws - h % ws) % ws, (ws - w % ws) % ws);
     let x = if ph > 0 || pw > 0 { x.pad([(0, 0), (0, ph), (0, pw), (0, 0)], burn::tensor::ops::PadMode::Constant(0.0)) } else { x };
@@ -159,7 +159,7 @@ fn window_partition(x: Tensor<4>, ws: usize) -> (Tensor<4>, [usize; 2]) {
     (x, [hp, wp])
 }
 
-fn window_unpartition(x: Tensor<4>, ws: usize, [hp, wp]: [usize; 2], [h, w]: [usize; 2]) -> Tensor<4> {
+pub(crate) fn window_unpartition(x: Tensor<4>, ws: usize, [hp, wp]: [usize; 2], [h, w]: [usize; 2]) -> Tensor<4> {
     let c = x.dims()[3];
     let b = x.dims()[0] / (hp * wp / ws / ws);
     let x = x.reshape([b, hp / ws, wp / ws, ws, ws, c]).permute([0, 1, 3, 2, 4, 5]).reshape([b, hp, wp, c]);
@@ -405,7 +405,7 @@ pub struct PromptEncoder {
 }
 
 impl PromptEncoder {
-    fn new(dev: &Device) -> Self {
+    pub(crate) fn new(dev: &Device) -> Self {
         let emb = || EmbeddingConfig::new(1, D_MODEL).init(dev);
         PromptEncoder {
             pe_layer: PeLayer { positional_encoding_gaussian_matrix: Param::from_tensor(Tensor::zeros([2, D_MODEL / 2], dev)) },
@@ -424,7 +424,10 @@ impl PromptEncoder {
 
     /// Positional encoding of the 64x64 embedding grid, [1, 256, 64, 64].
     pub fn dense_pe(&self, dev: &Device) -> Tensor<4> {
-        let n = IMAGE_SIZE / 16;
+        self.dense_pe_size(IMAGE_SIZE / 16, dev)
+    }
+
+    pub(crate) fn dense_pe_size(&self, n: usize, dev: &Device) -> Tensor<4> {
         let mut g = Vec::with_capacity(n * n * 2);
         for y in 0..n {
             for x in 0..n {
@@ -439,9 +442,13 @@ impl PromptEncoder {
     /// Points in 1024-pixel model coordinates with labels (1 fg, 0 bg,
     /// 2/3 box corners); a padding point is appended as SAM 2 does.
     pub fn sparse(&self, points: &[([f32; 2], i32)], dev: &Device) -> Tensor<3> {
+        self.sparse_size(points, IMAGE_SIZE, dev)
+    }
+
+    pub(crate) fn sparse_size(&self, points: &[([f32; 2], i32)], image_size: usize, dev: &Device) -> Tensor<3> {
         let mut pts: Vec<([f32; 2], i32)> = points.to_vec();
         pts.push(([0.0, 0.0], -1));
-        let coords: Vec<f32> = pts.iter().flat_map(|(p, _)| [(p[0] + 0.5) / IMAGE_SIZE as f32, (p[1] + 0.5) / IMAGE_SIZE as f32]).collect();
+        let coords: Vec<f32> = pts.iter().flat_map(|(p, _)| [(p[0] + 0.5) / image_size as f32, (p[1] + 0.5) / image_size as f32]).collect();
         let pe = self.pe_layer.encode(Tensor::<3>::from_data(burn::tensor::TensorData::new(coords, [1, pts.len(), 2]), dev));
         let rows: Vec<Tensor<3>> = pts
             .iter()
@@ -460,7 +467,10 @@ impl PromptEncoder {
     /// Low-res mask logits [1, 1, 256, 256] -> [1, 256, 64, 64], or the
     /// no-mask embedding.
     pub fn dense(&self, mask: Option<Tensor<4>>, dev: &Device) -> Tensor<4> {
-        let n = IMAGE_SIZE / 16;
+        self.dense_size(mask, IMAGE_SIZE / 16, dev)
+    }
+
+    pub(crate) fn dense_size(&self, mask: Option<Tensor<4>>, n: usize, dev: &Device) -> Tensor<4> {
         match mask {
             Some(m) => {
                 let d = &self.mask_downscaling;
@@ -606,7 +616,7 @@ pub struct Masks {
 }
 
 impl MaskDecoder {
-    fn new(dev: &Device) -> Self {
+    pub(crate) fn new(dev: &Device) -> Self {
         let up = |i: usize, o: usize| ConvTranspose2dConfig::new([i, o], [2, 2]).with_stride([2, 2]).init(dev);
         MaskDecoder {
             transformer: TwoWayTransformer {
