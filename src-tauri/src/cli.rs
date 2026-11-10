@@ -278,8 +278,28 @@ impl Opts {
     }
 }
 
+/// Whether a progress report is printed, given the last one printed
+/// (`(stage, tenth of the stage done)`, `since` ago). On a terminal: every
+/// 200 ms and when the stage changes. In a log: when the step changes ("第 2/8
+/// 步 · …" up to the dot), at the end of a stage, when a stage's text changes
+/// (the next round) or another tenth of it is done, at most every 3 s, and at
+/// least every 20 s. (Counting only 20 s apart showed a round's first tick over
+/// and over when the work before it took longer than the rest of the round.)
+fn due(tty: bool, last: (&str, usize), since: Duration, stage: &str, done: usize, total: usize) -> bool {
+    if tty {
+        return since > Duration::from_millis(200) || last.0 != stage;
+    }
+    let tenth = if total > 0 { done * 10 / total } else { 0 };
+    let step = stage.split(" · ").next().unwrap_or(stage);
+    let last_step = last.0.split(" · ").next().unwrap_or(last.0);
+    last_step != step
+        || (done == total && total > 1 && last.1 != 10)
+        || (since >= Duration::from_secs(3) && (last.0 != stage || tenth != last.1))
+        || since > Duration::from_secs(20)
+}
+
 /// Progress on stderr: on a terminal one updating line, otherwise (logs)
-/// a line when the step changes or every 20 s.
+/// lines as `due` says.
 struct Progress {
     start: Instant,
     tty: bool,
@@ -296,21 +316,15 @@ impl Progress {
         let mut last = self.last.lock().unwrap();
         let line = if total > 1 { format!("{stage} {done}/{total}") } else { stage.to_string() };
         let t = self.start.elapsed().as_secs_f64();
-        if self.tty {
-            if last.2.elapsed() > Duration::from_millis(200) || last.0 != stage {
-                eprint!("\r\x1b[2K[{t:7.1} s] {line}");
-                *last = (stage.to_string(), tenth, Instant::now());
-            }
+        if !due(self.tty, (&last.0, last.1), last.2.elapsed(), stage, done, total) {
             return;
         }
-        // Logs: a line when the step changes ("第 2/8 步 · …" up to the
-        // dot; sub-stage texts change too often), else at most every 20 s.
-        let step = stage.split(" · ").next().unwrap_or(stage);
-        let last_step = last.0.split(" · ").next().unwrap_or(&last.0).to_string();
-        if last_step != step || (done == total && total > 1 && last.1 != 10) || last.2.elapsed() > Duration::from_secs(20) {
+        if self.tty {
+            eprint!("\r\x1b[2K[{t:7.1} s] {line}");
+        } else {
             eprintln!("[{t:7.1} s] {line}");
-            *last = (stage.to_string(), tenth, Instant::now());
         }
+        *last = (stage.to_string(), tenth, Instant::now());
     }
 
     fn done(&self) {
@@ -1172,6 +1186,45 @@ fn download_sam() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    /// The lines a log gets from ticks `(second, stage, done, total)`.
+    fn logged(ticks: &[(f64, &str, usize, usize)]) -> Vec<String> {
+        let (mut last, mut at, mut out) = ((String::new(), usize::MAX), 0.0, vec![]);
+        for &(t, stage, done, total) in ticks {
+            if super::due(false, (&last.0, last.1), Duration::from_secs_f64(t - at), stage, done, total) {
+                out.push(format!("{stage} {done}/{total}"));
+                last = (stage.to_string(), if total > 0 { done * 10 / total } else { 0 });
+                at = t;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_log_shows_the_counter_move_and_every_round() {
+        // The real shape: 10 rounds, each a quiet 25 s of preparation, then
+        // 1656 ticks in 10 s. Printing every 20 s alone caught the first
+        // tick of each round (1/1656) again and again.
+        let mut ticks = vec![];
+        for round in 1..=10 {
+            let stage = format!("第 2/5 步 · 分类 第 {round}/10 轮 210 Å");
+            let start = 25.0 + 35.0 * (round - 1) as f64;
+            for d in 1..=1656 {
+                ticks.push((start + 10.0 * d as f64 / 1656.0, stage.clone(), d, 1656));
+            }
+        }
+        let ticks: Vec<_> = ticks.iter().map(|(t, s, d, n)| (*t, s.as_str(), *d, *n)).collect();
+        let lines = logged(&ticks);
+        for round in 1..=10 {
+            let mine: Vec<&String> = lines.iter().filter(|l| l.contains(&format!("第 {round}/10 轮"))).collect();
+            assert!(mine.len() >= 3 && mine.iter().any(|l| l.ends_with("1656/1656")), "round {round}: {mine:?}");
+            let dones: std::collections::BTreeSet<&str> = mine.iter().map(|l| l.rsplit(' ').next().unwrap()).collect();
+            assert!(dones.len() >= 3, "{mine:?}");
+        }
+        assert!(lines.len() < 100, "{}", lines.len());
+    }
+
     #[test]
     fn the_closing_line_of_sta_says_what_the_dip_means() {
         let mut r = crate::sta::project::Report {

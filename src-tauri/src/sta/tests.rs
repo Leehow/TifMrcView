@@ -603,6 +603,47 @@ fn classes_separate_two_kinds_of_particle() {
     assert!(found.len() == 2 && right >= 81, "{right} of 90 with their own kind");
 }
 
+/// The progress `classes` reports within one round: (done, total) with total
+/// the same throughout, done never going back and ending at total, once per
+/// rotation of each kind, so the counter moves at every step.
+#[test]
+fn classes_count_their_progress_steadily() {
+    use super::refine::{classes, Set};
+    use std::sync::Mutex;
+    let n = 16;
+    let w = wedge(n, -60.0, 60.0);
+    let mut rng = Rng(5);
+    let balls: Vec<f32> = (0..n * n * n)
+        .map(|i| {
+            let (x, y, z) = ((i % n) as f64 - 8.0, (i / n % n) as f64 - 8.0, (i / n / n) as f64 - 8.0);
+            (-((x - 2.0).powi(2) + y * y + z * z) / 8.0).exp() as f32 + (rng.gauss() * 0.05) as f32
+        })
+        .collect();
+    let particles: Vec<Vec<f32>> = (0..8).map(|_| balls.iter().map(|v| v + (rng.gauss() * 0.05) as f32).collect()).collect();
+    let wedges = vec![w];
+    let wedge_of = vec![0; particles.len()];
+    let set = Set { n, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 4.0 };
+    let seen: Mutex<Vec<(String, usize, usize)>> = Mutex::new(vec![]);
+    classes(&set, 2, 1, &|s, a, b| seen.lock().unwrap().push((s.to_string(), a, b)), &|_| {}).unwrap();
+    let seen = seen.into_inner().unwrap();
+    let rounds: Vec<String> = seen.iter().fold(vec![], |mut v, e| {
+        if v.last() != Some(&e.0) {
+            v.push(e.0.clone());
+        }
+        v
+    });
+    assert_eq!(rounds.len(), 10, "{rounds:?}");
+    for round in &rounds {
+        let ticks: Vec<(usize, usize)> = seen.iter().filter(|e| &e.0 == round).map(|e| (e.1, e.2)).collect();
+        let total = ticks[0].1;
+        let each = grid(30.0).len();
+        assert_eq!(total, 2 * each, "{round}");
+        assert!(ticks.iter().all(|t| t.1 == total), "{round}: the total changes");
+        assert!(ticks.windows(2).all(|p| p[1].0 == p[0].0 + 1), "{round}: done does not step by one");
+        assert_eq!((ticks[0].0, ticks.last().unwrap().0), (1, total), "{round}");
+    }
+}
+
 /// Heavy: `project::cards` on the same tomogram; the 210 Å kind has to give
 /// cards that hold the particles (same command as above with
 /// `sta::tests::cards`).
