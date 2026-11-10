@@ -673,15 +673,15 @@ fn the_look_exclusion_mask_comes_from_the_raw_one_and_keeps_the_look_borders() {
     assert!(!m[at(10, 10, 3)] && m[at(11, 10, 3)]);
 }
 
-/// The tomogram `v` (`dims`) made twice as fine by repeating each voxel, the
+/// The tomogram `v` (`dims`) made `f` times as fine by repeating each voxel, the
 /// first `skip` voxels of every axis dropped.
-fn finer(v: &[f32], dims: [usize; 3], skip: usize) -> (Vec<f32>, [usize; 3]) {
-    let big = dims.map(|d| 2 * d - skip);
+fn finer(v: &[f32], dims: [usize; 3], skip: usize, f: usize) -> (Vec<f32>, [usize; 3]) {
+    let big = dims.map(|d| f * d - skip);
     let mut out = vec![0f32; big[0] * big[1] * big[2]];
     for z in 0..big[2] {
         for y in 0..big[1] {
             for x in 0..big[0] {
-                let s = [(x + skip) / 2, (y + skip) / 2, (z + skip) / 2];
+                let s = [(x + skip) / f, (y + skip) / f, (z + skip) / f];
                 out[(z * big[1] + y) * big[0] + x] = v[(s[2] * dims[1] + s[1]) * dims[0] + s[0]];
             }
         }
@@ -732,7 +732,7 @@ fn binned_and_smoothed(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
 /// and the centres (raw voxels) of the gold clusters put into both.
 type LookFixture = (Vec<f32>, [usize; 3], Vec<f32>, [usize; 3], Vec<[usize; 3]>, Vec<f32>, Vec<[f64; 3]>);
 
-fn look_fixture(per_side: usize, noise: f64) -> LookFixture {
+fn look_fixture(per_side: usize, noise: f64, f: usize) -> LookFixture {
     let (base_dims, mut base, places, body) = planted_tomogram(per_side, noise);
     // Two gold markers: 4 base voxels (8 raw) across, very dark, each 8 base
     // voxels beside a copy, one in each layer (so those two copies lie well
@@ -748,20 +748,20 @@ fn look_fixture(per_side: usize, noise: f64) -> LookFixture {
                 }
             }
         }
-        // The cluster's centre, in raw voxels (base voxel b is raw 2 b and 2 b + 1).
-        gold.push(o.map(|x| 2.0 * x as f64 + 3.5));
+        // The cluster's centre, in raw voxels (base voxel b is raw f b .. f b + f − 1).
+        gold.push(o.map(|x| f as f64 * x as f64 + (4.0 * f as f64 - 1.0) / 2.0));
     }
-    let (raw, raw_dims) = finer(&base, base_dims, 0);
+    let (raw, raw_dims) = finer(&base, base_dims, 0, f);
     // The look tomogram: the raw one minus its first 3 voxels, binned by 2 and
     // smoothed. It is left as clean as that makes it (far quieter than the
     // raw one, as a denoised tomogram is): the exclusion rule is not applied
     // to it but to the raw one.
-    let shifted = finer(&base, base_dims, 3);
+    let shifted = finer(&base, base_dims, 3, f);
     let (look, look_dims) = binned_and_smoothed(&shifted.0, shifted.1);
     (raw, raw_dims, look, look_dims, places, body, gold)
 }
 
-/// Heavy: a made-up tomogram at 8.75 Å voxels with 32 dark copies of a
+/// Heavy, as `look_case(2)`: a made-up tomogram at 8.75 Å voxels with 32 dark copies of a
 /// particle, and its "look" version (binned by 2, smoothed, 3 voxels of the
 /// raw one's edge dropped first so the map is no pure doubling: raw = 2 × look
 /// + 3.5). `run_template` searches the look tomogram with a 17.5 Å template
@@ -770,13 +770,29 @@ fn look_fixture(per_side: usize, noise: f64) -> LookFixture {
 #[test]
 #[ignore]
 fn template_on_the_look_tomogram_averages_the_raw_one() {
+    look_case(2, 4);
+}
+
+/// Heavy, the real case's ratios: raw 5.83 Å voxels (the copies are 3 voxels
+/// per template voxel), look 11.67 Å (binned by 2), template 17.5 Å: the
+/// template's voxel is 1.5 × the look tomogram's, which cannot be binned to it.
+#[test]
+#[ignore]
+fn template_on_a_look_tomogram_finer_than_the_template_by_one_and_a_half() {
+    look_case(3, 4);
+}
+
+/// The raw tomogram has `f` voxels per template voxel (17.5 Å), the look
+/// tomogram is the raw one binned by 2.
+fn look_case(f: usize, per_side: usize) {
     use super::project::{run_template, LookSource, Source};
-    let (raw, raw_dims, look, look_dims, places, body, gold) = look_fixture(4, 14.0);
+    let (raw, raw_dims, look, look_dims, places, body, gold) = look_fixture(per_side, 14.0, f);
+    let raw_px = 17.5 / f as f64;
     let dir = std::env::temp_dir().join(format!("tmv-sta-look-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
-    crate::tomo::output::write_mrc(&path("raw.mrc"), &raw, raw_dims, 8.75, false).unwrap();
-    crate::tomo::output::write_mrc(&path("look.mrc"), &look, look_dims, 17.5, false).unwrap();
+    crate::tomo::output::write_mrc(&path("raw.mrc"), &raw, raw_dims, raw_px, false).unwrap();
+    crate::tomo::output::write_mrc(&path("look.mrc"), &look, look_dims, 2.0 * raw_px, false).unwrap();
     // Template: the particle dark, at 17.5 Å, zero mean and unit variance.
     let mean = body.iter().map(|v| *v as f64).sum::<f64>() / body.len() as f64;
     let sd = (body.iter().map(|v| (*v as f64 - mean).powi(2)).sum::<f64>() / body.len() as f64).sqrt();
@@ -791,7 +807,7 @@ fn template_on_the_look_tomogram_averages_the_raw_one() {
     let out = path("out");
     // A copy planted at base voxel o is at raw voxel 2 o + 0.5. Distances
     // (raw voxels) from each particle of a table to the nearest copy.
-    let planted: Vec<[f64; 3]> = places.iter().map(|o| o.map(|x| 2.0 * x as f64 + 0.5)).collect();
+    let planted: Vec<[f64; 3]> = places.iter().map(|o| o.map(|x| f as f64 * x as f64 + (f as f64 - 1.0) / 2.0)).collect();
     let dist = |a: &[f64; 3], b: &[f64; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt();
     let read = |table: String| -> Vec<[f64; 3]> {
         std::fs::read_to_string(table)
@@ -815,6 +831,15 @@ fn template_on_the_look_tomogram_averages_the_raw_one() {
     let base_errors = errors(&read(base.table.unwrap()));
     eprintln!("without look: {} particles, {} candidates, distance to the planted copy: median {:.2}, max {:.2}", base.particles, base.candidates, base_errors[base_errors.len() / 2], base_errors[base_errors.len() - 1]);
     let done = run_template(&dev, &sources, &template, 17.5, 220.0, true, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    // The look tomogram was the one searched, at the voxel `look_search` gives
+    // (bin 2 of the look tomogram, halved: 4 raw voxels' worth × the ratio), and the
+    // raw one at twice the template's.
+    assert_eq!(base.searched.as_deref(), Some("raw"));
+    assert!((base.search_voxel_a.unwrap() - 35.0).abs() < 1e-3, "{:?}", base.search_voxel_a);
+    assert_eq!(done.searched.as_deref(), Some("look"));
+    let want = raw_px * if f == 2 { 4.0 } else { 8.0 };
+    eprintln!("searched {:?} at {:?} Å (raw search {:?} Å)", done.searched, done.search_voxel_a, base.search_voxel_a);
+    assert!((done.search_voxel_a.unwrap() - want).abs() < 1e-3, "{:?} not {want}", done.search_voxel_a);
     eprintln!("{} particles of {} planted, {} candidates, {:?} Å", done.particles, places.len(), done.candidates, done.resolution_a);
     let found = read(done.table.unwrap());
     let errors = errors(&found);
@@ -823,20 +848,32 @@ fn template_on_the_look_tomogram_averages_the_raw_one() {
     // gold (a little more or less for the binning): nothing is reported
     // within 21 of a gold cluster's centre, and every copy 38 or more from
     // all of them (cluster half-diagonal 7 and the binning on top) is found.
-    let near_gold = |p: &[f64; 3], d: f64| gold.iter().any(|g| dist(p, g) <= d);
+    // (Those distances are for 2 raw voxels per template voxel; × f / 2 here.)
+    let k = f as f64 / 2.0;
+    let near_gold = |p: &[f64; 3], d: f64| gold.iter().any(|g| dist(p, g) <= d * k);
     assert!(gold.len() == 2 && planted.iter().filter(|p| near_gold(p, 21.0)).count() >= 2, "the fixture puts copies beside the gold");
     let too_close = found.iter().filter(|f| near_gold(f, 21.0)).count();
     let away: Vec<&[f64; 3]> = planted.iter().filter(|p| !near_gold(p, 38.0)).collect();
-    let hit = away.iter().filter(|p| found.iter().any(|f| dist(f, p) <= 2.0)).count();
+    let hit = away.iter().filter(|p| found.iter().any(|f| dist(f, p) <= 2.0 * k)).count();
     eprintln!("{too_close} particles within 21 raw voxels of gold; {hit} of the {} copies away from gold found within 2 raw voxels", away.len());
     assert_eq!(too_close, 0);
-    assert_eq!(hit, away.len(), "copies away from gold that were not found");
+    // At 3 raw voxels per template voxel the noise is such that even the raw
+    // search misses a few copies (a threshold between two crowds does): the
+    // look search must find at least as many, and at least 4 in 5.
+    let base_found = read(std::fs::canonicalize(&path("base/particles.csv")).unwrap().to_string_lossy().into_owned());
+    let base_hit = away.iter().filter(|p| base_found.iter().any(|f| dist(f, p) <= 2.0 * k)).count();
+    eprintln!("the raw search finds {base_hit} of them");
+    if f == 2 {
+        assert_eq!(hit, away.len(), "copies away from gold that were not found");
+    } else {
+        assert!(hit >= base_hit && 5 * hit >= 4 * away.len(), "{hit} found, the raw search {base_hit}, of {}", away.len());
+    }
     // Within 1.5 raw voxels for most (as without the look tomogram: the
     // alignment in this much noise and the cutting at 2-voxel steps leave
     // that much); a map that was off by the 3.5 voxels of the offset, or by
     // half a binned voxel, would show as a median beyond that.
-    assert!(errors[errors.len() / 2] <= 1.5 && errors[errors.len() - 1] <= 2.0, "median {} worst {}", errors[errors.len() / 2], errors[errors.len() - 1]);
-    assert!(errors[errors.len() / 2] <= base_errors[base_errors.len() / 2] + 0.3);
+    assert!(errors[errors.len() / 2] <= 1.5 * k && errors[errors.len() - 1] <= 2.0 * k, "median {} worst {}", errors[errors.len() / 2], errors[errors.len() - 1]);
+    assert!(errors[errors.len() / 2] <= base_errors[base_errors.len() / 2] + 0.3 * k);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
