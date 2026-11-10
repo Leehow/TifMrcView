@@ -310,7 +310,7 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
     // the kind that stands out most; the phantom's balls are another).
     let size = found.kinds.iter().max_by(|a, b| a.contrast.total_cmp(&b.contrast)).unwrap().diameter_a;
     let done = run(&sources, Some(size), &out, &|_, _, _| {}, &|_| {}).unwrap();
-    eprintln!("{} particles, {:?} Å, fsc {:?}", done.particles, done.resolution_a, done.fsc);
+    eprintln!("{} of {} particles (distinct {:.2}), {:?} Å, fsc {:?}", done.particles, done.candidates, done.distinct, done.resolution_a, done.fsc);
     assert!(done.particles >= 24 && done.particles <= 40, "{}", done.particles);
     assert!(done.resolution_a.unwrap() < 4.0 * done.voxel_a, "{:?}", done.resolution_a);
     assert!(std::path::Path::new(done.map.as_ref().unwrap()).is_file());

@@ -33,8 +33,11 @@ use crate::tomo::{output, pipeline};
 const SEARCH_VOXEL: f64 = 16.0;
 /// Blob diameters looked for, Å.
 const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
-/// Robust z-score a blob needs.
+/// Robust z-score a blob needs to count towards a kind, and the lower one
+/// that makes it a candidate of the chosen kind: candidates are judged
+/// again by how well they match the average (`clean`).
 const MIN_Z: f32 = 5.0;
+const LOOSE_Z: f32 = 3.5;
 /// Side of the cubes, and how many voxels of it the particle spans.
 const BOX: usize = 32;
 const SPAN: f64 = 13.0;
@@ -54,7 +57,12 @@ pub struct Source {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Kind {
+    /// The size on the ladder the blobs answered to (what `run` is asked for).
     pub diameter_a: f64,
+    /// The size measured on the blobs' mean radial density, Å: where it has
+    /// fallen half way to the surroundings. The ladder size tends to be
+    /// small for particles that are not even balls.
+    pub measured_a: f64,
     pub count: usize,
     /// Median robust z-score of its blobs.
     pub contrast: f64,
@@ -67,6 +75,10 @@ pub struct Report {
     /// None when the user has to choose a kind first.
     pub diameter_a: Option<f64>,
     pub particles: usize,
+    /// Blobs of the chosen size tried, and how distinct the ones left out
+    /// were from the ones kept (see `split`).
+    pub candidates: usize,
+    pub distinct: f64,
     pub voxel_a: f64,
     /// Resolution at FSC 0.143 between the halves, Å.
     pub resolution_a: Option<f64>,
@@ -110,21 +122,120 @@ pub fn binned(path: &str, voxel_a: f64) -> Result<(Vec<f32>, [usize; 3], f64, us
 }
 
 /// The sizes found, most common first; sizes with very few blobs are left out.
-pub fn kinds(found: &[Blob], voxel_a: f64) -> Vec<Kind> {
+pub fn kinds(found: &[Blob], voxel_a: f64, profiles: &[Profile]) -> Vec<Kind> {
     let mut out: Vec<Kind> = LADDER
         .iter()
-        .filter_map(|&d| {
+        .zip(profiles)
+        .filter_map(|(&d, profile)| {
             let mut z: Vec<f32> = found.iter().filter(|b| ((b.diameter as f64 * voxel_a) - d).abs() < 1.0).map(|b| b.score).collect();
             if z.len() < 8 {
                 return None;
             }
             z.sort_by(f32::total_cmp);
-            Some(Kind { diameter_a: d, count: z.len(), contrast: z[z.len() / 2] as f64 })
+            Some(Kind { diameter_a: d, measured_a: profile.diameter().unwrap_or(d), count: z.len(), contrast: z[z.len() / 2] as f64 })
         })
         .collect();
     out.sort_by(|a, b| b.count.cmp(&a.count));
     out
 }
+
+/// Mean density of blobs of one ladder size by distance from their centres.
+#[derive(Clone, Debug)]
+pub struct Profile {
+    /// Width of a bin, Å.
+    step: f64,
+    sum: Vec<f64>,
+    count: Vec<f64>,
+}
+
+/// How far out the profile goes, in ladder diameters.
+const REACH: f64 = 1.5;
+/// Blobs of one size and tomogram that go into the profile.
+const SAMPLE: usize = 150;
+
+impl Profile {
+    fn new(diameter_a: f64) -> Self {
+        let bins = 48;
+        Profile { step: REACH * diameter_a / bins as f64, sum: vec![0.0; bins], count: vec![0.0; bins] }
+    }
+
+    /// Adds the surroundings of one centre (voxels of `voxel` Å).
+    fn add(&mut self, v: &[f32], dims: [usize; 3], voxel: f64, c: [f32; 3]) {
+        let reach = self.step * self.sum.len() as f64 / voxel;
+        let r = reach.ceil() as isize;
+        let c = c.map(|x| x.round() as isize);
+        for z in (c[2] - r).max(0)..=(c[2] + r).min(dims[2] as isize - 1) {
+            for y in (c[1] - r).max(0)..=(c[1] + r).min(dims[1] as isize - 1) {
+                for x in (c[0] - r).max(0)..=(c[0] + r).min(dims[0] as isize - 1) {
+                    let d = (((x - c[0]).pow(2) + (y - c[1]).pow(2) + (z - c[2]).pow(2)) as f64).sqrt() * voxel;
+                    let k = (d / self.step) as usize;
+                    if k < self.sum.len() {
+                        self.sum[k] += v[(z as usize * dims[1] + y as usize) * dims[0] + x as usize] as f64;
+                        self.count[k] += 1.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Twice the distance at which the density has come half way from its
+    /// extreme near the centre to the level far out.
+    pub fn diameter(&self) -> Option<f64> {
+        // Bins that hold voxels: (distance in Å, mean density).
+        let p: Vec<(f64, f64)> =
+            (0..self.sum.len()).filter(|k| self.count[*k] > 0.0).map(|k| ((k as f64 + 0.5) * self.step, self.sum[k] / self.count[k])).collect();
+        let reach = self.step * self.sum.len() as f64;
+        let far: Vec<f64> = p.iter().filter(|x| x.0 > 0.8 * reach).map(|x| x.1).collect();
+        if far.is_empty() {
+            return None;
+        }
+        let far = far.iter().sum::<f64>() / far.len() as f64;
+        // Particles are dark: depth below the surroundings. The extreme is
+        // looked for out to half the ladder diameter.
+        let depth: Vec<(f64, f64)> = p.iter().map(|x| (x.0, far - x.1)).collect();
+        let at = (0..depth.len()).filter(|k| depth[*k].0 < reach / 3.0).max_by(|a, b| depth[*a].1.total_cmp(&depth[*b].1))?;
+        let peak = depth[at].1;
+        if peak <= 0.0 {
+            return None;
+        }
+        let k = (at + 1..depth.len()).find(|k| depth[*k].1 < 0.5 * peak)?;
+        let f = ((depth[k - 1].1 - 0.5 * peak) / (depth[k - 1].1 - depth[k].1).max(1e-12)).clamp(0.0, 1.0);
+        Some(2.0 * (depth[k - 1].0 + f * (depth[k].0 - depth[k - 1].0)))
+    }
+}
+
+/// Splits scores into a low and a high group where the groups are most
+/// distinct (Otsu, IEEE Trans SMC 9, 1979): the threshold, and how much of
+/// the spread the split explains (0 to 1; about 0.64 for one bell curve).
+pub fn split(scores: &[f32]) -> (f32, f64) {
+    let mut s: Vec<f32> = scores.to_vec();
+    s.sort_by(f32::total_cmp);
+    let n = s.len();
+    if n < 4 {
+        return (f32::MIN, 0.0);
+    }
+    let total: f64 = s.iter().map(|x| *x as f64).sum();
+    let mean = total / n as f64;
+    let var: f64 = s.iter().map(|x| (*x as f64 - mean).powi(2)).sum::<f64>() / n as f64;
+    if var <= 0.0 {
+        return (f32::MIN, 0.0);
+    }
+    let (mut best, mut cut, mut low) = (0.0, f32::MIN, 0.0);
+    for i in 1..n {
+        low += s[i - 1] as f64;
+        let (a, b) = (low / i as f64, (total - low) / (n - i) as f64);
+        let between = i as f64 * (n - i) as f64 / (n as f64 * n as f64) * (a - b).powi(2);
+        if between > best {
+            best = between;
+            cut = 0.5 * (s[i - 1] + s[i]);
+        }
+    }
+    (cut, best / var)
+}
+
+/// A split has to explain this much of the scores' spread before the low
+/// group is taken for other things than the particle and left out.
+const DISTINCT: f64 = 0.75;
 
 struct Cut {
     source: usize,
@@ -136,25 +247,50 @@ struct Cut {
     cube: Vec<f32>,
 }
 
+/// The cube around voxel `c`, zero mean and unit variance. Where it reaches
+/// past the tomogram (thin tomograms are hardly thicker than the cube) it
+/// is filled with the mean, so particles near a face are kept; the centre
+/// itself and at least half the cube have to be inside.
 fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32>> {
-    let h = BOX / 2;
-    if (0..3).any(|i| c[i] < h || c[i] + h > dims[i]) {
+    let h = (BOX / 2) as isize;
+    if (0..3).any(|i| c[i] >= dims[i]) {
         return None;
     }
-    let mut out = Vec::with_capacity(BOX * BOX * BOX);
-    for z in c[2] - h..c[2] + h {
-        for y in c[1] - h..c[1] + h {
-            let row = (z * dims[1] + y) * dims[0];
-            out.extend_from_slice(&v[row + c[0] - h..row + c[0] + h]);
+    let c = c.map(|x| x as isize);
+    let inside = |p: isize, n: usize| p >= 0 && p < n as isize;
+    let mut out = vec![f32::NAN; BOX * BOX * BOX];
+    let (mut sum, mut sq, mut count) = (0f64, 0f64, 0usize);
+    for z in 0..BOX as isize {
+        let sz = c[2] - h + z;
+        if !inside(sz, dims[2]) {
+            continue;
+        }
+        for y in 0..BOX as isize {
+            let sy = c[1] - h + y;
+            if !inside(sy, dims[1]) {
+                continue;
+            }
+            for x in 0..BOX as isize {
+                let sx = c[0] - h + x;
+                if inside(sx, dims[0]) {
+                    let val = v[(sz as usize * dims[1] + sy as usize) * dims[0] + sx as usize];
+                    out[((z * BOX as isize + y) * BOX as isize + x) as usize] = val;
+                    sum += val as f64;
+                    sq += (val as f64).powi(2);
+                    count += 1;
+                }
+            }
         }
     }
-    let n = out.len() as f64;
-    let mean = out.iter().map(|x| *x as f64).sum::<f64>() / n;
-    let sd = (out.iter().map(|x| (*x as f64 - mean).powi(2)).sum::<f64>() / n).sqrt();
+    if count * 2 < out.len() {
+        return None;
+    }
+    let mean = sum / count as f64;
+    let sd = (sq / count as f64 - mean * mean).max(0.0).sqrt();
     if sd <= 0.0 {
         return None;
     }
-    out.iter_mut().for_each(|x| *x = ((*x as f64 - mean) / sd) as f32);
+    out.iter_mut().for_each(|x| *x = if x.is_nan() { 0.0 } else { ((*x as f64 - mean) / sd) as f32 });
     Some(out)
 }
 
@@ -166,6 +302,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     }
     // 1. Kinds.
     let mut all: Vec<Blob> = vec![];
+    let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
     for (i, s) in sources.iter().enumerate() {
         progress("找颗粒", i, sources.len());
         let (v, dims, voxel, _) = binned(&s.path, SEARCH_VOXEL)?;
@@ -176,14 +313,23 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
             let k = sizes.iter().position(|d| (*d as f32 - b.diameter).abs() < 1e-3).unwrap_or(0);
             b.diameter = (LADDER[k] / SEARCH_VOXEL) as f32;
         }
+        // Strongest first: the first of each size give its profile.
+        profiles.par_iter_mut().enumerate().for_each(|(k, profile)| {
+            let size = (LADDER[k] / SEARCH_VOXEL) as f32;
+            for b in found.iter().filter(|b| b.diameter == size).take(SAMPLE) {
+                profile.add(&v, dims, voxel, b.pos);
+            }
+        });
         all.extend(found);
     }
     progress("找颗粒", sources.len(), sources.len());
-    let kinds = kinds(&all, SEARCH_VOXEL);
+    let kinds = kinds(&all, SEARCH_VOXEL, &profiles);
     let mut report = Report {
         kinds: kinds.clone(),
         diameter_a: None,
         particles: 0,
+        candidates: 0,
+        distinct: 0.0,
         voxel_a: 0.0,
         resolution_a: None,
         fsc: vec![],
@@ -207,7 +353,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
         voxel_a = voxel;
         // Blobs again at this sampling, at the one size: centres are finer.
-        let found = blobs(&v, dims, &[size / voxel], true, MIN_Z)?;
+        let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
         for b in found {
             let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
             if let Some(cube) = cube(&v, dims, c) {
@@ -245,7 +391,27 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         let placed = engine.global(&rest, &wedges, &wedge_of[first..], &model, &rotations, shift, &|a, b| progress("放置全部颗粒", a, b))?;
         poses.extend(placed);
     }
-    let out = align(&set, &model, &poses, progress, live)?;
+    let mut out = align(&set, &model, &poses, progress, live)?;
+
+    // 4. Candidates that match the average clearly worse than the rest are
+    // other things of the same size: leave them out and align again.
+    let scores: Vec<f32> = out.poses.iter().map(|p| p.score).collect();
+    let (threshold, distinct) = split(&scores);
+    let keep: Vec<usize> = (0..cuts.len()).filter(|i| scores[*i] >= threshold).collect();
+    if distinct >= DISTINCT && keep.len() >= 20 && keep.len() < cuts.len() {
+        let poses: Vec<Pose> = keep.iter().map(|i| out.poses[*i]).collect();
+        let particles: Vec<Vec<f32>> = keep.iter().map(|i| particles[*i].clone()).collect();
+        let wedge_of: Vec<usize> = keep.iter().map(|i| wedge_of[*i]).collect();
+        let mut at = 0;
+        cuts.retain(|_| {
+            at += 1;
+            keep.binary_search(&(at - 1)).is_ok()
+        });
+        let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+        out = align(&set, &out.map, &poses, progress, live)?;
+    }
+    report.candidates = scores.len();
+    report.distinct = distinct;
 
     // Results.
     std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
