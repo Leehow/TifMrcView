@@ -1,5 +1,13 @@
 # Denoising and trained-model persistence
 
+## Direct comparison-divider dragging — 2026-11-09
+
+Status: implemented and 62 focused frontend regressions passed; canonical build/update/native GUI acceptance remains. Integration base HEAD 015d99a matches installed 0.7.183 code; only pre-existing untracked .tmp/ and handoff-workers plan. No other worktree ownership change.
+
+Scope: denoise comparison UI and focused pointer-lifecycle regression, then canonical offline build/update/native drag acceptance, preserving existing weights/results/features. The visible line currently has drawing code only. Use the exact same current-preview identity and screen bounds for rendering and hit testing, capture primary pointer gestures before canvas pan/annotation handlers, repaint cached pixels, and release on up/cancel/lost capture/blur/context change. Keep right/middle/modifier panning and existing in-progress edits. No algorithm/model or wedge UI change is required. API precedent checked in MDN setPointerCapture and W3C Pointer Events (capture release on pointerup/cancel and lostpointercapture).
+
+Evidence directory: `/Volumes/samsung/pro-test/denoise-divider-drag-20261109`. Rechecked the live App: no training, two original tabs, NAD K=1.22, two iterations, split 51%, Z=16/32, zoom 974%. Preserve these current settings (the user adjusted them since the previous acceptance). Eleven existing data/model/parameter files match retained hashes. Retain the 0.7.183 signed ZIP. Native acceptance must drag the actual image divider in both directions, synchronize the slider, and verify source view/data/model hashes remain intact.
+
 ## Native NAD replacement — user correction, 2026-11-09
 
 Status: complete. Optimized stable-signed0.7.183 installed, actual native GUI accepted and local ZIP verified. Source7972f18 includes the integrated features, native NAD, automatic GPU path and removed CPU-only control.

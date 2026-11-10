@@ -5,7 +5,7 @@
 // Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
-// Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
+// Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, draw, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
 (() => {
   const N = { generation: 0, cache: new Map(), busy: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null };
 
@@ -69,7 +69,7 @@
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
     </div>
     <label class="al-check"><input type="checkbox" id="dn-preview" checked /> 预览（视野中间最多 2048 px）</label>
-    <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" /></label>
+    <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" title="也可在图像上直接拖动分割线" /></label>
     <div class="al-row"><span id="dn-status" class="dim"></span></div>
     <div class="al-row"><button id="dn-cancel-preview" class="small" hidden>取消 NAD 3D 计算</button></div>
     <div class="al-row">
@@ -259,7 +259,7 @@
   $("dn-train").addEventListener("click", train);
   $("dn-split").addEventListener("input", () => {
     store();
-    requestRender();
+    draw();
   });
 
   function open() {
@@ -420,15 +420,26 @@
     return cv;
   }
 
-  function overlay(g) {
+  function comparisonGeometry() {
+    if (panel.hidden || !$("dn-preview").checked || S.axis !== "xy" || S.xyz) return null;
     const req = previewReq();
-    const r = req && N.cache.get(previewKey(req));
-    if (!r || panel.hidden || !$("dn-preview").checked || r.token !== S.token || S.axis !== "xy" || r.z !== S.z || r.t !== S.t) return;
-    if (N.res !== r) { N.res = r; N.imgKey = ""; }
+    const key = req && previewKey(req);
+    const r = key && N.cache.get(key);
+    if (!r || r.token !== S.token || r.z !== S.z || r.t !== S.t) return null;
     const [x, y, w, h] = r.rect;
     const [sx, sy] = toScreen(x, y);
     const [ex, ey] = toScreen(x + w, y + h);
+    if (!(ex > sx && ey > sy)) return null;
     const split = sx + ((ex - sx) * +$("dn-split").value) / 100;
+    return { r, sx, sy, ex, ey, split, context: JSON.stringify([key, sx, sy, ex, ey]) };
+  }
+
+  function overlay(g) {
+    const geometry = comparisonGeometry();
+    if (N.splitDrag && geometry?.context !== N.splitDrag.context) endSplitDrag();
+    if (!geometry) return;
+    const { r, sx, sy, ex, ey, split } = geometry;
+    if (N.res !== r) { N.res = r; N.imgKey = ""; }
     g.save();
     g.beginPath();
     g.rect(split, sy, ex - split, ey - sy);
@@ -449,6 +460,71 @@
     g.restore();
   }
   ext.overlays.push(overlay);
+
+  // ---- Drag the comparison divider ----
+
+  const splitView = $("view");
+
+  function endSplitDrag() {
+    const drag = N.splitDrag;
+    N.splitDrag = null;
+    if (drag) {
+      if (splitView.hasPointerCapture(drag.id)) splitView.releasePointerCapture(drag.id);
+      store();
+    }
+    if (N.splitHover) {
+      N.splitHover = false;
+      splitView.style.cursor = "";
+    }
+  }
+
+  function splitPointer(e) {
+    const geometry = comparisonGeometry();
+    if (N.splitDrag && geometry?.context !== N.splitDrag.context) endSplitDrag();
+    const drag = N.splitDrag;
+    const onView = e.target === splitView;
+    if (!drag && !onView) { endSplitDrag(); return; }
+    const rect = splitView.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const consume = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    if (drag) {
+      if (e.pointerId !== drag.id) { if (onView) consume(); return; }
+      if (e.type === "pointermove" || e.type === "pointerup") {
+        $("dn-split").value = Math.round(Math.max(0, Math.min(100, (x - drag.offset - geometry.sx) * 100 / (geometry.ex - geometry.sx))));
+        draw();
+      }
+      if (e.type !== "pointermove") endSplitDrag();
+      consume();
+      return;
+    }
+    const near = geometry && !S.op && !S.textEdit && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+      y >= geometry.sy && y <= geometry.ey && Math.abs(x - geometry.split) <= (e.pointerType === "touch" ? 14 : 8);
+    if (e.type === "pointermove") {
+      if (near && !e.buttons) {
+        N.splitHover = true;
+        splitView.style.cursor = "ew-resize";
+        consume();
+      } else endSplitDrag();
+    } else if (e.type === "pointerdown" && near && e.button === 0 && e.isPrimary !== false) {
+      N.splitDrag = { id: e.pointerId, context: geometry.context, offset: x - geometry.split };
+      N.splitHover = true;
+      splitView.style.cursor = "ew-resize";
+      splitView.setPointerCapture(e.pointerId);
+      consume();
+    } else if (e.type === "dblclick" && near && e.button === 0) consume();
+  }
+
+  // Capture on the window before canvas touch/annotation handlers start a
+  // gesture. Pointer capture keeps the divider responsive beyond the image.
+  for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "dblclick"]) window.addEventListener(type, splitPointer, true);
+  window.addEventListener("blur", endSplitDrag);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && N.splitDrag) {
+      endSplitDrag();
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
 
   // ---- Save ----
 
