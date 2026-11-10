@@ -10,11 +10,14 @@
 //! being dense. The template is given the tomogram's missing wedge at each
 //! orientation (Frangakis et al., PNAS 99, 2002; Förster et al., 2005).
 //!
-//! What score makes a particle is not a number to tune: `cutoff` reads the
-//! spread of chance peaks off the search's own peaks and takes the score
-//! beyond which less than one chance peak is expected. (A search with the
-//! template's phases scrambled was tried as the measure of chance and does
-//! not serve: its low frequencies still form a blob that fits any particle.)
+//! What score makes a particle is not a number to tune: `cutoff` splits the
+//! peaks of the search into two groups, high scores (particles) and low
+//! ones (everything else), where the groups are most distinct (Otsu), and
+//! gives up when they are not. (A Gumbel fit to the chance peaks was tried
+//! and failed on real data: its threshold lay above the best score.) The
+//! search itself is kept off the tomogram's X/Y borders and off gold
+//! markers by `allowed`, where reconstruction artefacts and gold outscore
+//! particles.
 //!
 //! The tomogram is worked through in overlapping cubes of side `TILE`, so
 //! the radix-2 transforms of `spa::fourier` do and memory stays small. The
@@ -24,6 +27,8 @@ use rayon::prelude::*;
 
 use super::cc::{ball, rotate, wedge};
 use super::check_cancel;
+use super::pick::robust;
+use super::project::{split, GOLD};
 use crate::spa::fourier::{ft3, ift3};
 use crate::spa::geom::Mat;
 use anyhow::Result;
@@ -315,23 +320,105 @@ pub fn peaks(found: &Found, apart: f64, most: usize) -> Vec<Peak> {
     out
 }
 
-/// The score above which fewer than `expected` peaks would be chance.
-/// Most peaks of a search are chance: each is the best of many places and
-/// orientations around it, so their scores follow an extreme-value
-/// (Gumbel) law, whose place and width are read off the median and the
-/// quartiles of all peaks; particles are the few far beyond it. None when
-/// there are too few peaks to tell.
-pub fn cutoff(all: &[Peak], expected: f64) -> Option<f32> {
+/// The score above which a peak is a particle. The peaks of a search fall
+/// in two groups: places that hold a particle, which score high, and the
+/// rest, which score lower and spread wider. The scores are split where the
+/// groups are most distinct (Otsu, `project::split`), on Fisher's z scale
+/// (atanh) as for any correlation, which keeps the wide low group from
+/// pulling the threshold down into the particles. None when there are too
+/// few peaks, or when the split explains no more of the spread than chance
+/// does in one group alone: for one bell curve or one extreme-value curve
+/// the share is 0.62 to 0.64 (less than 0.66 with 1000 peaks or more, it
+/// scatters upward by about 1 / sqrt(n)); two groups with the quantiles
+/// measured on EMPIAR-10045 give 0.72.
+pub fn cutoff(all: &[Peak]) -> Option<f32> {
     if all.len() < 40 {
         return None;
     }
-    let mut s: Vec<f64> = all.iter().map(|p| p.score as f64).collect();
-    s.sort_by(f64::total_cmp);
-    let q = |f: f64| s[((s.len() - 1) as f64 * f) as usize];
-    // Quantile p of Gumbel(μ, β) is μ − β·ln(−ln p).
-    let g = |p: f64| -(-p.ln()).ln();
-    let beta = ((q(0.75) - q(0.25)) / (g(0.75) - g(0.25))).max(1e-9);
-    let mu = q(0.5) - beta * g(0.5);
-    // n·(1 − F(t)) = expected, with 1 − F(t) ≈ exp(−(t − μ)/β) far out.
-    Some((mu + beta * (s.len() as f64 / expected).ln()) as f32)
+    let z: Vec<f32> = all.iter().map(|p| p.score.clamp(-0.999, 0.999).atanh()).collect();
+    let (threshold, share) = split(&z);
+    (share >= 0.62 + 1.2 / (all.len() as f64).sqrt()).then_some(threshold.tanh())
+}
+
+/// Where a particle centre may lie: false within `radius` voxels of the X
+/// and Y faces (reconstruction artefacts; not Z, particles lie near those
+/// faces) and within `2 * radius` of gold (a voxel more than `GOLD` robust
+/// standard deviations below the median). Same layout as `v`.
+pub fn allowed(v: &[f32], dims: [usize; 3], radius: f64) -> Vec<bool> {
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    let (median, sd) = robust(v);
+    let limit = median - GOLD * sd;
+    // Squared distance to the nearest gold voxel, one axis at a time
+    // (exact; Felzenszwalb and Huttenlocher, Theory of Computing 8, 2012).
+    const FAR: f32 = 1e9;
+    let mut near: Vec<f32> = v.iter().map(|x| if *x < limit { 0.0 } else { FAR }).collect();
+    if near.iter().any(|d| *d == 0.0) {
+        for (len, stride, lines) in [(nx, 1, ny * nz), (ny, nx, nx * nz), (nz, nx * ny, nx * ny)] {
+            let mut line = vec![0f64; len];
+            let mut out = vec![0f64; len];
+            for k in 0..lines {
+                // First voxel of line k: the other two axes counted off.
+                let first = if stride == 1 {
+                    k * nx
+                } else if stride == nx {
+                    (k / nx) * nx * ny + k % nx
+                } else {
+                    k
+                };
+                for i in 0..len {
+                    line[i] = near[first + i * stride] as f64;
+                }
+                squared_distance(&line, &mut out);
+                for i in 0..len {
+                    near[first + i * stride] = out[i].min(FAR as f64) as f32;
+                }
+            }
+        }
+    }
+    let keep = 4.0 * radius * radius;
+    let mut ok = vec![true; v.len()];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let i = (z * ny + y) * nx + x;
+                let edge = (x as f64) < radius || ((nx - 1 - x) as f64) < radius || (y as f64) < radius || ((ny - 1 - y) as f64) < radius;
+                ok[i] = !edge && near[i] as f64 > keep;
+            }
+        }
+    }
+    ok
+}
+
+/// out[q] = min over p of (q - p)² + f[p], in one dimension.
+fn squared_distance(f: &[f64], out: &mut [f64]) {
+    let n = f.len();
+    let mut at = vec![0usize; n];
+    let mut cut = vec![0f64; n + 1];
+    let mut k = 0;
+    cut[0] = f64::NEG_INFINITY;
+    cut[1] = f64::INFINITY;
+    for q in 1..n {
+        loop {
+            let p = at[k];
+            let s = ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2.0 * (q - p) as f64);
+            if s <= cut[k] {
+                k -= 1;
+            } else {
+                k += 1;
+                at[k] = q;
+                cut[k] = s;
+                cut[k + 1] = f64::INFINITY;
+                break;
+            }
+        }
+    }
+    let mut k = 0;
+    for (q, o) in out.iter_mut().enumerate() {
+        while cut[k + 1] < q as f64 {
+            k += 1;
+        }
+        let d = q as f64 - at[k] as f64;
+        *o = d * d + f[at[k]];
+    }
 }

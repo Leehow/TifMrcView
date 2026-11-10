@@ -2,14 +2,15 @@
 //!
 //!   cargo run --release --no-default-features --features cli --example sta_search -- \
 //!     --template average.mrc [--tilts -60,60] [--diameter 250] [--step 30] \
-//!     [--expected 1] [--gpu] [--coarse 2] [--out DIR] TOMOGRAM.mrc
+//!     [--gpu] [--coarse 2] [--exclude] [--out DIR] TOMOGRAM.mrc
 //!
 //! The template is a 32³ cube (`average.mrc` of `sta_coarse`). The tomogram
 //! is binned to its voxel size. Writes `<out>/peaks.csv` (x, y, z in voxels
-//! of the original tomogram, score, kept) and prints a summary.
+//! of the original tomogram, score, kept) and prints a summary. `--exclude`
+//! keeps the search off the X/Y borders and gold markers.
 
 use tifmrcview_lib::sta::project::binned;
-use tifmrcview_lib::sta::search::{cutoff, peaks, search};
+use tifmrcview_lib::sta::search::{allowed, cutoff, peaks, search};
 use tifmrcview_lib::tomo::{output, pipeline};
 
 /// Side of the template cube (`BOX` of `sta::project`).
@@ -20,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     let mut template = None;
     let mut diameter = 250.0;
     let mut step = 30.0;
-    let mut expected = 1.0;
+    let mut exclude = false;
     // --gpu: the convolution search on the GPU; --coarse 2: at half the template's sampling.
     let mut gpu = false;
     let mut coarse = 1usize;
@@ -40,14 +41,14 @@ fn main() -> anyhow::Result<()> {
             "--step" => step = args.next().unwrap_or_default().parse::<f64>()?,
             "--gpu" => gpu = true,
             "--coarse" => coarse = args.next().unwrap_or_default().parse::<usize>()?,
-            "--expected" => expected = args.next().unwrap_or_default().parse::<f64>()?,
+            "--exclude" => exclude = true,
             "--out" => out = args.next().unwrap_or_default(),
             _ => path = Some(a),
         }
     }
     let template = template.ok_or_else(|| anyhow::anyhow!("give --template average.mrc"))?;
     let path = path.ok_or_else(|| anyhow::anyhow!("give a tomogram"))?;
-    anyhow::ensure!(diameter > 0.0 && step > 0.0 && expected > 0.0, "--diameter, --step and --expected must be positive");
+    anyhow::ensure!(diameter > 0.0 && step > 0.0, "--diameter and --step must be positive");
     let start = std::time::Instant::now();
 
     // The template, read like a tomogram.
@@ -82,17 +83,19 @@ fn main() -> anyhow::Result<()> {
     let radius = 0.5 * diameter / voxel;
     let turns = tifmrcview_lib::spa::geom::grid(step);
     eprintln!("tomogram {}x{}x{} at {got:.2} A, {} orientations", dims[0], dims[1], dims[2], turns.len());
+    let mask = exclude.then(|| allowed(&v, dims, radius));
+    let excluded = mask.as_ref().map(|m| m.iter().filter(|ok| !**ok).count() as f64 / m.len() as f64);
     let tick = |done: usize, total: usize| eprintln!("search {done}/{total}");
     let found = if gpu {
         let (dev, name) = tifmrcview_lib::classify::device();
         eprintln!("device: {name}");
-        tifmrcview_lib::sta::search_gpu::search(&dev, &v, dims, &cube, side, radius, tilts, &turns, None, &tick)?
+        tifmrcview_lib::sta::search_gpu::search(&dev, &v, dims, &cube, side, radius, tilts, &turns, mask.as_deref(), &tick)?
     } else {
         anyhow::ensure!(coarse == 1, "--coarse needs --gpu");
-        search(&v, dims, &cube, BOX, radius, tilts, &turns, None, &tick)?
+        search(&v, dims, &cube, BOX, radius, tilts, &turns, mask.as_deref(), &tick)?
     };
     let all = peaks(&found, 2.0 * radius, usize::MAX);
-    let cut = cutoff(&all, expected);
+    let cut = cutoff(&all);
 
     // Binned voxel p lies at p * bin + (bin - 1) / 2 in the original.
     let at = |p: usize| p * bin + (bin - 1) / 2;
@@ -113,6 +116,7 @@ fn main() -> anyhow::Result<()> {
         "dims": dims,
         "orientations": turns.len(),
         "peaks": all.len(),
+        "excluded": excluded,
         "cutoff": cut,
         "kept": kept,
         "scoreAtRank": ranks,

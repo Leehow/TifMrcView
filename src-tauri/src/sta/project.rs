@@ -41,7 +41,7 @@ const MIN_Z: f32 = 5.0;
 const LOOSE_Z: f32 = MIN_Z;
 /// A candidate whose darkest voxel is this many robust standard deviations
 /// below the tomogram's median is a gold marker (see `Cut::darkest`).
-const GOLD: f32 = 10.0;
+pub(crate) const GOLD: f32 = 10.0;
 /// Side of the cubes, and how many voxels of it the particle spans.
 const BOX: usize = 32;
 const SPAN: f64 = 13.0;

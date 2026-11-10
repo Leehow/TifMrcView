@@ -395,6 +395,95 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `n` scores drawn from the distribution with these quantiles (probability,
+/// score), linear in between.
+fn sample(rng: &mut Rng, n: usize, q: &[(f64, f64)]) -> Vec<f32> {
+    (0..n)
+        .map(|_| {
+            let u = rng.unit();
+            let k = (1..q.len()).find(|k| u <= q[*k].0).unwrap_or(q.len() - 1);
+            let (a, b) = (q[k - 1], q[k]);
+            (a.1 + (b.1 - a.1) * (u - a.0) / (b.0 - a.0)) as f32
+        })
+        .collect()
+}
+
+fn as_peaks(scores: &[f32]) -> Vec<super::search::Peak> {
+    scores.iter().map(|s| super::search::Peak { pos: [0; 3], score: *s, turn: 0 }).collect()
+}
+
+#[test]
+fn threshold_splits_the_two_groups_of_peaks() {
+    use super::search::cutoff;
+    let mut rng = Rng(5);
+    // Real data (EMPIAR-10045): 254 peaks on particles, 1426 on the rest.
+    let high = [(0.0, 0.52), (0.05, 0.61), (0.25, 0.72), (0.5, 0.75), (0.75, 0.79), (0.95, 0.84), (1.0, 0.88)];
+    let low = [(0.0, 0.05), (0.05, 0.19), (0.25, 0.35), (0.5, 0.46), (0.75, 0.59), (0.95, 0.78), (1.0, 0.85)];
+    for seed in 0..5 {
+        rng.0 = 5 + seed;
+        let mut s = sample(&mut rng, 254, &high);
+        s.extend(sample(&mut rng, 1426, &low));
+        let t = cutoff(&as_peaks(&s)).expect("two groups");
+        assert!((0.55..=0.68).contains(&t), "{t}");
+    }
+    // One group: bell curve and a skewed one (extreme values).
+    for seed in 0..5 {
+        rng.0 = 50 + seed;
+        let bell: Vec<f32> = (0..800).map(|_| (0.4 + 0.12 * rng.gauss()) as f32).collect();
+        assert!(cutoff(&as_peaks(&bell)).is_none());
+        let gumbel: Vec<f32> = (0..800).map(|_| (0.3 - 0.08 * (-rng.unit().max(1e-9).ln()).ln()) as f32).collect();
+        assert!(cutoff(&as_peaks(&gumbel)).is_none());
+    }
+    // 32 particles, ~200 others.
+    let mut s: Vec<f32> = (0..32).map(|_| 0.67 + 0.09 * rng.unit() as f32).collect();
+    s.extend((0..200).map(|_| 0.15 + 0.18 * rng.unit() as f32));
+    let t = cutoff(&as_peaks(&s)).expect("two groups");
+    assert!((0.33..=0.67).contains(&t), "{t}");
+}
+
+#[test]
+fn exclusion_keeps_off_borders_and_gold() {
+    use super::search::allowed;
+    let dims = [60usize, 56, 20];
+    let mut rng = Rng(8);
+    let mut v: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| rng.gauss() as f32).collect();
+    // A small ball far below the noise.
+    let c = [30.0, 28.0, 10.0];
+    let mut gold = vec![];
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                if (x as f64 - c[0]).powi(2) + (y as f64 - c[1]).powi(2) + (z as f64 - c[2]).powi(2) <= 4.0 {
+                    v[(z * dims[1] + y) * dims[0] + x] = -50.0;
+                    gold.push([x as f64, y as f64, z as f64]);
+                }
+            }
+        }
+    }
+    let r = 5.0;
+    let ok = allowed(&v, dims, r);
+    let (mut off, mut on) = (0, 0);
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let p = [x as f64, y as f64, z as f64];
+                let near = gold.iter().any(|g| (0..3).map(|a| (g[a] - p[a]).powi(2)).sum::<f64>() <= 4.0 * r * r);
+                let edge = p[0] < r || p[0] > 59.0 - r || p[1] < r || p[1] > 55.0 - r;
+                assert_eq!(ok[(z * dims[1] + y) * dims[0] + x], !(near || edge), "{p:?}");
+                off += (near || edge) as usize;
+                on += !(near || edge) as usize;
+            }
+        }
+    }
+    assert!(off > 0 && on > 0);
+    // Z faces are open.
+    assert!(ok[(0 * dims[1] + 20) * dims[0] + 10] && ok[(19 * dims[1] + 20) * dims[0] + 10]);
+    // Without gold only the borders go.
+    let plain: Vec<f32> = v.iter().map(|x| x.max(-5.0)).collect();
+    let ok = allowed(&plain, dims, r);
+    assert!(ok[(10 * dims[1] + 28) * dims[0] + 30]);
+}
+
 /// Heavy: the whole-tomogram search finds 32 copies at random orientations
 /// with their template, and the threshold read off the chance peaks keeps
 /// them and little else (same command as above with `sta::tests::search`).
@@ -443,7 +532,7 @@ fn search_finds_the_copies_and_sets_its_threshold() {
     // Particles do not overlap: peaks are a diameter apart.
     let real = peaks(&found, 20.0, usize::MAX);
     eprintln!("{} turns, {:.0} s; {} peaks, best {:.3}, 32nd {:.3}, 40th {:.3}", turns.len(), started.elapsed().as_secs_f64(), real.len(), real[0].score, real[31].score, real[39].score);
-    let limit = cutoff(&real, 1.0).unwrap();
+    let limit = cutoff(&real).unwrap();
     let kept: Vec<_> = real.iter().filter(|p| p.score >= limit).collect();
     let near = |o: &[usize; 3]| kept.iter().map(|p| (0..3).map(|i| (p.pos[i] as f64 - o[i] as f64).powi(2)).sum::<f64>().sqrt()).fold(f64::MAX, f64::min);
     let hit = places.iter().filter(|o| near(o) < 2.5).count();
