@@ -587,3 +587,116 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
     Ok(report)
 }
+
+/// Half the sampling: the mean of every 2×2×2 voxels.
+fn halve(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
+    let [nx, ny, nz] = dims;
+    let (w, h, d) = (nx / 2, ny / 2, nz / 2);
+    let mut out = vec![0f32; w * h * d];
+    out.par_chunks_mut(w * h).enumerate().for_each(|(z, plane)| {
+        for y in 0..h {
+            for x in 0..w {
+                let mut s = 0f32;
+                for k in 0..2 {
+                    for j in 0..2 {
+                        let row = ((2 * z + k) * ny + 2 * y + j) * nx + 2 * x;
+                        s += v[row] + v[row + 1];
+                    }
+                }
+                plane[y * w + x] = s / 8.0;
+            }
+        }
+    });
+    (out, [w, h, d])
+}
+
+/// The average of everything in the tomograms that looks like `template`
+/// (a `BOX`³ cube of `voxel_a` Å voxels: a class average of found blobs, of
+/// clicked examples, or a map the user has). Each tomogram is searched at
+/// half the template's sampling on `dev`, away from its borders and gold
+/// markers; the peaks the threshold keeps are cut at the template's
+/// sampling, start at the orientation the search found and are aligned in
+/// two halves. `diameter_a` is the particle's size.
+#[allow(clippy::too_many_arguments)]
+pub fn run_template(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    template: &[f32],
+    voxel_a: f64,
+    diameter_a: f64,
+    out_dir: &str,
+    progress: Progress,
+    live: Live,
+) -> Result<Report> {
+    use super::search::{allowed, cutoff, peaks};
+    let started = Instant::now();
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    assert_eq!(template.len(), BOX * BOX * BOX);
+    let small = crate::spa::fourier::resample3(template, BOX, BOX / 2);
+    let turns = grid(30.0);
+    let mut cuts: Vec<Cut> = vec![];
+    let mut poses: Vec<Pose> = vec![];
+    let mut voxel = voxel_a;
+    // (source, coarse peak) of every tomogram, to share one threshold.
+    let mut all: Vec<(usize, super::search::Peak)> = vec![];
+    let mut volumes = vec![];
+    for (i, s) in sources.iter().enumerate() {
+        check_cancel()?;
+        let (v, dims, got, bin) = binned(&s.path, voxel_a)?;
+        voxel = got;
+        let (coarse, cdims) = halve(&v, dims);
+        let radius = 0.25 * diameter_a / voxel;
+        let mask = allowed(&coarse, cdims, radius);
+        let stage = format!("搜索 {}/{}", i + 1, sources.len());
+        let found = super::search_gpu::search(dev, &coarse, cdims, &small, BOX / 2, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
+        // Particles do not overlap, but may touch.
+        all.extend(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (i, p)));
+        volumes.push((v, dims, bin));
+    }
+    let scores: Vec<super::search::Peak> = all.iter().map(|p| p.1).collect();
+    let candidates = scores.len();
+    let Some(limit) = cutoff(&scores) else {
+        bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", candidates);
+    };
+    all.retain(|p| p.1.score >= limit);
+    all.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
+    all.truncate(MOST);
+    for (i, p) in &all {
+        let (v, dims, bin) = &volumes[*i];
+        // Coarse voxel p holds fine voxels 2p and 2p + 1.
+        let c = p.pos.map(|x| 2 * x);
+        if let Some(cube) = cube(v, *dims, c) {
+            let at = c.map(|x| x as f64 * *bin as f64 + (*bin as f64 - 1.0) / 2.0);
+            cuts.push(Cut { source: *i, at, bin: *bin, score: p.score, strength: 0.0, darkest: 0.0, cube });
+            poses.push(Pose { r: turns[p.turn], t: [0.0; 3], score: p.score });
+        }
+    }
+    drop(volumes);
+    if cuts.len() < 20 {
+        bail!("只找到 {} 个颗粒，太少了", cuts.len());
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let out = align(&set, template, &poses, progress, live)?;
+    let mut report = Report {
+        kinds: vec![],
+        diameter_a: None,
+        particles: 0,
+        candidates,
+        distinct: 0.0,
+        voxel_a: 0.0,
+        resolution_a: None,
+        fsc: vec![],
+        map: None,
+        halves: None,
+        table: None,
+        ms: 0,
+    };
+    save(&mut report, sources, &cuts, &out, out_dir, diameter_a, voxel, started)?;
+    Ok(report)
+}

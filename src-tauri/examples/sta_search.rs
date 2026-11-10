@@ -26,6 +26,9 @@ fn main() -> anyhow::Result<()> {
     let mut gpu = false;
     let mut coarse = 1usize;
     let mut out = String::from("sta");
+    // --average: search, cut and average in one go (all tomograms given), as the app will.
+    let mut average = false;
+    let mut more: Vec<String> = vec![];
     let mut path = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -43,6 +46,8 @@ fn main() -> anyhow::Result<()> {
             "--coarse" => coarse = args.next().unwrap_or_default().parse::<usize>()?,
             "--exclude" => exclude = true,
             "--out" => out = args.next().unwrap_or_default(),
+            "--average" => average = true,
+            _ if path.is_some() => more.push(a),
             _ => path = Some(a),
         }
     }
@@ -72,6 +77,24 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if average {
+        use tifmrcview_lib::sta::project::{run_template, Source};
+        let (dev, name) = tifmrcview_lib::classify::device();
+        eprintln!("device: {name}");
+        let mut sources = vec![Source { path: path.clone(), tilts }];
+        sources.extend(more.iter().map(|p| Source { path: p.clone(), tilts }));
+        let last = std::sync::Mutex::new(String::new());
+        let progress = |stage: &str, done: usize, total: usize| {
+            let mut l = last.lock().unwrap();
+            if *l != stage || done == total {
+                eprintln!("{stage} {done}/{total}");
+                *l = stage.to_string();
+            }
+        };
+        let report = run_template(&dev, &sources, &cube, voxel, diameter, &out, &progress, &|_| {})?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     anyhow::ensure!(coarse == 1 || coarse == 2, "--coarse 1 or 2");
     let side = BOX / coarse;
     let cube = tifmrcview_lib::spa::fourier::resample3(&cube, BOX, side);
