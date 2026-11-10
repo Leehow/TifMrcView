@@ -1268,15 +1268,12 @@ pub(crate) fn nearest_bin(px: f64, want: f64) -> usize {
 
 /// Which grid a template search runs on, for a look tomogram of `look_px` Å
 /// voxels and a template of `want` Å voxels: the look tomogram binned by the
-/// integer nearest to the template's voxel, and then halved (`2`) or not (`1`)
-/// so the search voxel is nearest to twice the template's, the voxel the raw
-/// tomogram is searched at. Returns (bin, halving, search voxel).
-pub(crate) fn look_search(look_px: f64, want: f64) -> (usize, usize, f64) {
-    let bin = nearest_bin(look_px, want);
-    let grid = bin as f64 * look_px;
-    let far = |h: usize| (h as f64 * grid / (2.0 * want)).ln().abs();
-    let half = if far(2) <= far(1) { 2 } else { 1 };
-    (bin, half, half as f64 * grid)
+/// one integer (at least 1) that brings its voxel nearest, in the ratio (ties
+/// to the finer grid), to twice the template's, the voxel the raw tomogram is
+/// searched at. Returns (bin, search voxel).
+pub(crate) fn look_search(look_px: f64, want: f64) -> (usize, f64) {
+    let bin = nearest_bin(look_px, 2.0 * want);
+    (bin, bin as f64 * look_px)
 }
 
 /// The `n_in`³ cube `cube` (voxels of `from` Å, centre voxel `n_in / 2`) on a
@@ -1378,8 +1375,7 @@ fn halve(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
 /// threshold; the exclusion mask is made from the raw tomogram and carried
 /// over, see `allowed_on_look`). Its voxel needs no relation to the
 /// template's: it is binned by the integer that brings it nearest to the
-/// template's, halved or not (`look_search`) so the search voxel is nearest to
-/// the raw search's, and the template is resampled to that voxel (`rescale_cube`)
+/// template's twice (`look_search`), as the raw search's, and the template is resampled to that voxel (`rescale_cube`)
 /// for the search only. Each peak is then mapped to the tomogram itself
 /// (`to_raw`) and the cubes for alignment and averaging, in both passes, are
 /// cut from that, so the averages are of the unfiltered data. The template,
@@ -1418,17 +1414,16 @@ pub fn run_template(
         // The raw tomogram the particles are cut from, and the one searched:
         // the look tomogram when there is one, else the raw one. The look
         // tomogram is binned by the integer that brings its voxel nearest
-        // the template's (`look_search`), halved or not so the search voxel
-        // is nearest to the raw search's (twice the template's), and the
+        // twice the template's (`look_search`), the raw search's voxel, and the
         // template is resampled to that voxel for the search only.
         let (v, dims, got, bin) = binned(&s.path, voxel_a)?;
         voxel = got;
         let looked = match &s.look {
             Some(l) => match pixel_of(&l.path).and_then(|px| {
-                let (lbin, half, _) = look_search(px, got);
-                binned(&l.path, lbin as f64 * px).map(|b| (b, half))
+                let (lbin, _) = look_search(px, got);
+                binned(&l.path, lbin as f64 * px)
             }) {
-                Ok((b, half)) => Some((l.clone(), b, half)),
+                Ok(b) => Some((l.clone(), b)),
                 Err(e) => {
                     eprintln!("sta: the look tomogram of {} cannot be used ({e:#}): searching the tomogram itself", s.path);
                     None
@@ -1436,22 +1431,23 @@ pub fn run_template(
             },
             None => None,
         };
-        let (found_on, found_dims, found_voxel, half) = match &looked {
-            Some((_, b, h)) => (&b.0, b.1, b.2, *h),
-            None => (&v, dims, got, 2),
+        let (coarse, cdims, search_voxel) = match &looked {
+            Some((_, b)) => (b.0.clone(), b.1, b.2),
+            None => {
+                let (c, d) = halve(&v, dims);
+                (c, d, 2.0 * got)
+            }
         };
-        let (coarse, cdims) = if half == 2 { halve(found_on, found_dims) } else { (found_on.clone(), found_dims) };
-        let search_voxel = half as f64 * found_voxel;
         searched.push((looked.is_some(), search_voxel));
         let radius = 0.5 * diameter_a / search_voxel;
         let mask = match &looked {
             None => allowed(&coarse, cdims, radius),
             // Exclusion is decided on the raw tomogram, as without a look
             // one, and carried over to the look grid (plus its own borders).
-            Some((l, b, h)) => {
+            Some((l, b)) => {
                 let (raw_coarse, raw_cdims) = halve(&v, dims);
                 let raw_ok = allowed(&raw_coarse, raw_cdims, 0.25 * diameter_a / got);
-                allowed_on_look(&raw_ok, raw_cdims, 2, bin, cdims, *h, b.3, l, radius)
+                allowed_on_look(&raw_ok, raw_cdims, 2, bin, cdims, 1, b.3, l, radius)
             }
         };
         // The template for the search, at the search voxel: the raw path
@@ -1466,7 +1462,7 @@ pub fn run_template(
         let found = super::search_gpu::search(dev, &coarse, cdims, &small, small_n, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
         // Particles do not overlap, but may touch.
         all.extend(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (i, p)));
-        volumes.push((v, dims, bin, looked.map(|(l, b, h)| (l, b.3, h))));
+        volumes.push((v, dims, bin, looked.map(|(l, b)| (l, b.3))));
     }
     let scores: Vec<super::search::Peak> = all.iter().map(|p| p.1).collect();
     let candidates = scores.len();
@@ -1481,11 +1477,10 @@ pub fn run_template(
         // Coarse voxel p holds fine voxels 2p and 2p + 1.
         let c = match look {
             None => p.pos.map(|x| 2 * x),
-            // On the look tomogram the peak is at the middle of the h voxels
-            // it holds, h p + (h − 1)/2; mapped onto the raw tomogram's
-            // binned voxels.
-            Some((look, look_bin, h)) => {
-                let raw = to_raw(p.pos.map(|x| *h as f64 * x as f64 + (*h as f64 - 1.0) / 2.0), *look_bin, *bin, look);
+            // On the look tomogram the peak is at a voxel of the grid binned by
+            // `look_bin`; mapped onto the raw tomogram's binned voxels.
+            Some((look, look_bin)) => {
+                let raw = to_raw(p.pos.map(|x| x as f64), *look_bin, *bin, look);
                 if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
                     continue;
                 }
@@ -1925,15 +1920,15 @@ mod look_grid_tests {
         assert_eq!(nearest_bin(8.68, 8.68), 1);
         assert_eq!(nearest_bin(8.68, 4.0), 1);
         assert_eq!(nearest_bin(8.68, 12.0), 1);
-        let (bin, half, voxel) = look_search(8.68, 13.02);
-        assert_eq!((bin, half), (2, 2));
-        assert!((voxel - 34.72).abs() < 1e-9);
-        // A 17.36 Å card: the same as the raw search's 2 × 17.36.
-        let (bin, half, voxel) = look_search(8.68, 17.36);
-        assert_eq!((bin, half), (2, 2));
-        assert!((voxel - 34.72).abs() < 1e-9);
-        // The look voxel equal to the card's: halved, as the raw tomogram is.
-        assert_eq!(look_search(17.5, 17.5), (1, 2, 35.0));
+        // The search grid: the look voxel × m nearest to 2 × the card's, the
+        // raw search's voxel. The real case: raw 4.34 Å, look 8.68 Å, card 13.02 Å.
+        for (px, card, m, voxel) in [(8.68, 13.02, 3, 26.04), (8.68, 17.36, 4, 34.72), (8.68, 8.68, 2, 17.36), (10.0, 12.0, 2, 20.0)] {
+            let (bin, v) = look_search(px, card);
+            assert_eq!(bin, m, "look {px}, card {card}");
+            assert!((v - voxel).abs() < 1e-9, "look {px}, card {card}: {v}");
+        }
+        // A look voxel coarser than twice the card's: not binned.
+        assert_eq!(look_search(40.0, 10.0), (1, 40.0));
     }
 
     /// Centroid of the cube's excess over its minimum, in voxels.
