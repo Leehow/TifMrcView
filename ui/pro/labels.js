@@ -907,7 +907,7 @@
     $("lab-sam-clear").hidden = !ready;
     $("lab-sam-dn-row").hidden = !ready;
     $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
-    $("lab-sam-z").hidden = !ready || !(S.info.sizeZ > 1);
+    $("lab-sam-z").hidden = !ready || !(S.info.sizeZ > 1) || st.tracking === false;
     $("lab-sam-z").disabled = !L.sam.mask || L.sam.busy;
     let text;
     if (!st.available) text = "SAM 分割只在 TifMrcView Pro 里有";
@@ -917,7 +917,7 @@
     else if (L.sam.busy) text = st.loaded ? "SAM 计算中…" : "正在加载模型和计算图像特征…";
     else if (L.sam.mask) text = `预测质量 ${Math.round(L.sam.iou * 100)}%：回车写进当前标签，Alt+点击去掉多余部分`;
     else text = "点一下要分割的物体；Alt+点击标背景，Shift+拖动拉框";
-    $("lab-sam-text").textContent = text;
+    $("lab-sam-text").textContent = ready && st.model ? `${st.model}：${text}` : text;
     $("lab-sam-backend").textContent = st.backend && ready ? `后端：${st.backend}` : "";
   }
 
