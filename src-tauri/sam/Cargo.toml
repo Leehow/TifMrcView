@@ -2,8 +2,8 @@
 name = "tmv-sam"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
-description = "SAM 2.1 segmentation in Burn for TifMrcView Pro"
+license-file = "LICENSES.md"
+description = "SAM 2.1 and SAM 3.1 interactive segmentation in Rust/Burn for TifMrcView Pro"
 publish = false
 
 [features]
@@ -30,3 +30,12 @@ cuda = ["burn/cuda"]
 anyhow = "1"
 burn = { version = "0.22.1", default-features = false, features = ["std"] }
 burn-store = { version = "0.22.1", default-features = false, features = ["std", "pytorch"] }
+# SAM 3.1's unused complex RoPE buffers need a native metadata compatibility
+# view for pytorch-reader; weights stay byte-for-byte intact.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+sha2 = "0.10"
+tempfile = "3"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde_json = "1"

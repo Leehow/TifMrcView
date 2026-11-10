@@ -8572,6 +8572,11 @@ dependencies = [
  "anyhow",
  "burn",
  "burn-store",
+ "image",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip 9.1.3",
 ]
 
 [[package]]

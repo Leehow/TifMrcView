@@ -5,6 +5,7 @@
 
 pub mod memory;
 pub mod model;
+pub mod sam31;
 
 use std::path::Path;
 
@@ -339,7 +340,8 @@ pub struct Prediction {
     /// Mask logits, row-major `height * width`; > 0 is inside.
     pub logits: Vec<f32>,
     pub iou: f32,
-    /// Low-resolution logits [1, 1, 256, 256] to refine with more clicks.
+    /// Low-resolution logits to refine with more clicks: 256² for SAM 2.1,
+    /// 288² for SAM 3.1.
     pub low_res: Tensor<4>,
 }
 
