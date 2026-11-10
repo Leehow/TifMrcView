@@ -131,3 +131,15 @@ Primary implementation comparisons:
   CPU may use an integer resize with intermediate byte rounding. Native input
   preprocessing deliberately follows the GPU reference used by the SAM 3.1
   oracle. Output resizing follows `align_corners=false` half-pixel coordinates.
+
+## Release validation continuation (2026-11-10)
+
+PR #136 integrated the native implementation and bundled license notices into
+main 4c1f16c. Build run 42851571001 compiled the Linux Pro installer and CLI,
+but its Pro test target found an old ignored SAM 2 sphere fixture assigning
+`Predictor` directly where the new wrapper requires `NativePredictor`.
+The fixture now explicitly wraps SAM 2.1; production inference code is unchanged.
+No artifacts from the failed revision are published. Cross-platform CI and
+public feed checks remain required before release completion.
+Local offline `cargo check --tests --no-default-features --features pro`
+passed after the fixture repair, including compilation of ignored test bodies.
