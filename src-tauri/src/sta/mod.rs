@@ -25,6 +25,7 @@ pub mod cc;
 pub mod pick;
 pub mod project;
 pub mod refine;
+pub mod shape;
 #[cfg(test)]
 mod tests;
 
