@@ -93,6 +93,11 @@ fn random_rotation(rng: &mut Rng) -> Mat {
 /// ends, as a share of the particle: features down to the particle's
 /// radius first, down to a quarter of it at the end.
 const ROUNDS: usize = 6;
+/// Rounds of `classes`: more than the first model, as the kinds have to
+/// settle as well as the poses.
+const CLASS_ROUNDS: usize = 10;
+/// The resolution limit rises over the first of them and then stays.
+const CLASS_RAMP: usize = 6;
 /// Orientation step of the global search, degrees.
 const STEP: f64 = 30.0;
 
@@ -129,6 +134,83 @@ pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Resu
         live(&model);
     }
     Ok((model, poses))
+}
+
+pub struct Class {
+    pub model: Vec<f32>,
+    /// Indices of its particles in the set, and their poses on `model`.
+    pub members: Vec<usize>,
+    pub poses: Vec<Pose>,
+}
+
+/// Sorts the particles into `k` kinds, each with its own model, from the
+/// particles alone (multi-reference alignment: every round each particle
+/// is searched against every model and goes to the one it matches best;
+/// Scheres et al., J Mol Biol 348, 2005, in its hard-assignment form).
+/// What was found by size alone is a mixture (the particle, gold, ice,
+/// borders); one model for all would be pulled about by the densest of
+/// them, while here each kind draws its own. Most populous first.
+pub fn classes(set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -> Result<Vec<Class>> {
+    set.check()?;
+    let m = set.particles.len();
+    let k = k.clamp(1, m / 4);
+    let mut rng = Rng(seed);
+    // Start: k random groups, averaged as they lie.
+    let mut class: Vec<usize> = (0..m).map(|_| rng.below(k)).collect();
+    let mut poses = vec![Pose { r: IDENTITY, t: [0.0; 3], score: 0.0 }; m];
+    let mut models: Vec<Vec<f32>> = (0..k).map(|c| set.average(&poses, |i| class[i] == c).finish()).collect();
+    let n = set.n as f64;
+    let (lo, hi) = (n / (2.0 * set.radius) * 1.5, (n / (2.0 * set.radius) * 5.0).min(n / 2.0 - 3.0));
+    let rotations = grid(STEP);
+    for round in 0..CLASS_ROUNDS {
+        check_cancel()?;
+        let low_pass = (lo + (hi - lo) * round.min(CLASS_RAMP - 1) as f64 / (CLASS_RAMP - 1) as f64).max(2.0);
+        let engine = set.engine(low_pass);
+        let prepared: Vec<_> = (0..m).into_par_iter().map(|i| engine.prepare(&set.particles[i], set.wedge(i))).collect();
+        let turn = random_rotation(&mut rng);
+        let turned: Vec<Mat> = rotations.iter().map(|r| mul(r, &turn)).collect();
+        let mut best = vec![Pose { r: IDENTITY, t: [0.0; 3], score: f32::MIN }; m];
+        for (c, model) in models.iter().enumerate() {
+            let stage = format!("分类 第 {}/{} 轮", round + 1, CLASS_ROUNDS);
+            let found = engine.global(&prepared, set.wedges, set.wedge_of, model, &turned, set.shift(), &|a, b| progress(&stage, c * m + a, k * b))?;
+            for i in 0..m {
+                if found[i].score > best[i].score {
+                    best[i] = found[i];
+                    class[i] = c;
+                }
+            }
+        }
+        poses = best;
+        for c in 0..k {
+            if (0..m).filter(|i| class[*i] == c).count() < 4 {
+                // A kind that drew almost nothing starts again from the
+                // particles that fit their own kind worst.
+                let mut worst: Vec<usize> = (0..m).collect();
+                worst.sort_by(|a, b| poses[*a].score.total_cmp(&poses[*b].score));
+                for &i in worst.iter().take((m / (2 * k)).max(4)) {
+                    class[i] = c;
+                }
+            }
+            let ids: Vec<usize> = (0..m).filter(|i| class[*i] == c).collect();
+            let average = set.average(&poses, |i| class[i] == c).finish();
+            // `centre` moves every pose; only this kind's are its own.
+            let mut own: Vec<Pose> = ids.iter().map(|i| poses[*i]).collect();
+            models[c] = centre(set, &mut own, average);
+            for (j, i) in ids.iter().enumerate() {
+                poses[*i] = own[j];
+            }
+            live(&models[c]);
+        }
+    }
+    let mut out: Vec<Class> = (0..k)
+        .map(|c| {
+            let members: Vec<usize> = (0..m).filter(|i| class[*i] == c).collect();
+            Class { model: models[c].clone(), poses: members.iter().map(|i| poses[*i]).collect(), members }
+        })
+        .filter(|c| !c.members.is_empty())
+        .collect();
+    out.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
+    Ok(out)
 }
 
 /// Rounds of `first_model_known`: the start is already close.

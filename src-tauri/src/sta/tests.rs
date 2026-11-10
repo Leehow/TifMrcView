@@ -451,3 +451,46 @@ fn search_finds_the_copies_and_sets_its_threshold() {
     assert!(hit >= 30, "{hit}");
     assert!(kept.len() <= 36, "{}", kept.len());
 }
+
+/// Heavy: a mixture of the phantom and of a dense ball with a streak (what
+/// a gold marker looks like) is sorted into its two kinds
+/// (same command as above with `sta::tests::classes`).
+#[test]
+#[ignore]
+fn classes_separate_two_kinds_of_particle() {
+    use super::refine::{classes, Set};
+    let truth = phantom();
+    let c = (N / 2) as f64;
+    let gold: Vec<f32> = (0..N * N * N)
+        .map(|i| {
+            let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+            let ball = (-(x * x + y * y + z * z) / (2.0 * 2.5 * 2.5)).exp();
+            let streak = 0.25 * (-(x * x + y * y) / (2.0 * 2.0 * 2.0)).exp() * (-(z * z) / (2.0 * 8.0 * 8.0)).exp();
+            (1.5 * ball + streak) as f32
+        })
+        .collect();
+    let w = wedge(N, -60.0, 60.0);
+    let mut rng = Rng(11);
+    let mut particles = vec![];
+    let mut kind = vec![];
+    for i in 0..90 {
+        // A third are gold; gold streaks all run along the beam.
+        let is_gold = i % 3 == 0;
+        let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
+        let t = [1.5 * rng.gauss(), 1.5 * rng.gauss(), 1.5 * rng.gauss()];
+        let id = axis_angle([0.0, 0.0, 1.0], 0.0);
+        particles.push(particle(if is_gold { &gold } else { &truth }, if is_gold { &id } else { &r }, t, &w, 2.0, &mut rng));
+        kind.push(is_gold);
+    }
+    let wedges = vec![w];
+    let wedge_of = vec![0; particles.len()];
+    let set = Set { n: N, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 10.0 };
+    let found = classes(&set, 2, 3, &|_, _, _| {}, &|_| {}).unwrap();
+    let mut right = 0;
+    for c in &found {
+        let golds = c.members.iter().filter(|i| kind[**i]).count();
+        eprintln!("class of {}: {} gold, {} particles", c.members.len(), golds, c.members.len() - golds);
+        right += golds.max(c.members.len() - golds);
+    }
+    assert!(found.len() == 2 && right >= 81, "{right} of 90 with their own kind");
+}
