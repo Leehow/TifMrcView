@@ -1500,6 +1500,7 @@ pub fn run_template(
         // are: at the coarse sampling the resolution ends at its Nyquist
         // limit, which says nothing about how good the average is.
         let n = 2 * BOX;
+        let coarse = voxel;
         let want = voxel / 2.0;
         let mut big: Vec<Vec<f32>> = vec![];
         let mut start: Vec<Pose> = vec![];
@@ -1551,7 +1552,9 @@ pub fn run_template(
         let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
         let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
         let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
-        let model = crate::spa::fourier::resample3(&out.map, BOX, n);
+        // The tomogram bins by whole numbers only, so the finer voxel is
+        // not always half the coarse one (13.0 Å gives 8.7 Å, not 6.5 Å).
+        let model = if (coarse / voxel - 2.0).abs() < 1e-3 { crate::spa::fourier::resample3(&out.map, BOX, n) } else { rescale_cube(&out.map, BOX, coarse, n, voxel) };
         let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
         out = align(&set, &model, &start, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
     }
