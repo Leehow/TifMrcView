@@ -124,7 +124,8 @@ pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Resu
         let turned: Vec<Mat> = rotations.iter().map(|r| mul(r, &turn)).collect();
         let stage = format!("起始模型 第 {}/{} 轮", round + 1, ROUNDS);
         poses = engine.global(&prepared, set.wedges, set.wedge_of, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
-        model = centre(set, &mut poses, set.average(&poses, |_| true).finish());
+        let average = set.average(&poses, |_| true).finish();
+        model = centre(set, &mut poses, average);
         live(&model);
     }
     Ok((model, poses))
