@@ -169,7 +169,7 @@ jobs:
 
       - name: Image ownership regressions
         if: runner.os == 'Linux'
-        run: node --test scripts/image-ownership.test.mjs
+        run: node --test scripts/image-ownership.test.mjs scripts/denoise-preview.test.mjs scripts/denoise-divider.test.mjs scripts/model-store.test.mjs scripts/pro-layers.test.mjs
 
       - name: Metal completion regressions
         if: runner.os == 'Linux'
