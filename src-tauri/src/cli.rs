@@ -58,13 +58,18 @@ USAGE
   to <first input>_sta beside it); then, with --pick N (or when card 0 is
   the only likely one), the average of everything that looks like card N
   goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+  Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
+  resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
+  diameterFrom "card" says), ctfLimited (true when the FSC falls below 0.143
+  and rises above 0.3 again at higher frequency: the resolution is then
+  limited at a CTF zero and the data holds more) and seconds (the whole run).
 
 OUTPUT
   Files are written beside the input; copy the folder back and open them in
   TifMrcView Pro (label maps open with their tomogram). Progress goes to
   stderr. The result is one JSON object on stdout ({"ok":true,…}), also
   saved as <input>.tmv.json (tmv tomo --for sta|survey: <input>.sta.tmv.json,
-  <input>.survey.tmv.json). Exit status 0 on success, 1 on error
+  <input>.survey.tmv.json; tmv sta: <out>/sta.tmv.json). Exit status 0 on success, 1 on error
   ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind;
   sta: pick a card).
 
@@ -556,6 +561,51 @@ fn sta_out(o: &Opts, first: &str) -> Result<PathBuf> {
     Ok(p.with_file_name(format!("{stem}_sta")))
 }
 
+/// How many steps `tmv sta` counts: finding the blobs and making the cards
+/// (two, when the cards are made now), then the search, the first alignment
+/// and the fine one.
+fn sta_steps(with_cards: bool) -> usize {
+    if with_cards {
+        5
+    } else {
+        3
+    }
+}
+
+/// A progress label of the library, prefixed with the step of the whole run
+/// ("第 k/N 步 · …", as `tmv tomo` does). The steps follow the sequence of
+/// labels `sta::project::cards` and `run_template` report; others pass unchanged.
+fn sta_label(label: &str, with_cards: bool) -> String {
+    let after = if with_cards { 2 } else { 0 };
+    let step = if label.starts_with("找颗粒") {
+        1
+    } else if label.starts_with("裁出颗粒") || label.starts_with("分类") {
+        2
+    } else if label.starts_with("搜索") {
+        after + 1
+    } else if label.starts_with("粗对齐") {
+        after + 2
+    } else if label.starts_with("裁出更细的颗粒") || label.starts_with("精细对齐") {
+        after + 3
+    } else {
+        return label.to_string();
+    };
+    format!("第 {step}/{} 步 · {label}", sta_steps(with_cards))
+}
+
+/// The closing line of `tmv sta` on stderr.
+fn sta_summary(r: &crate::sta::project::Report, ctf_limited: bool) -> String {
+    let map = r.map.as_deref().unwrap_or("average.mrc");
+    let mut s = match r.resolution_a {
+        Some(a) => format!("tmv sta: done: {a:.1} Å resolution (FSC 0.143 between the two halves) from {} particles; the average is {map}", r.particles),
+        None => format!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {map}", r.particles),
+    };
+    if ctf_limited {
+        s += ". The resolution is limited at a CTF zero (the curve falls below 0.143 and rises again at higher frequency), so the data holds more than this number says";
+    }
+    s
+}
+
 /// Card 0 when it is likely and no other card is; else the user must choose.
 fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<usize> {
     (cards.first().is_some_and(|c| c.likely) && cards.iter().filter(|c| c.likely).count() == 1).then_some(0)
@@ -621,7 +671,6 @@ fn sta(o: &Opts) -> Result<Value> {
     let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
     let out = sta_out(o, &inputs[0])?;
     let progress = Progress::new();
-    let report = |s: &str, i: usize, n: usize| progress.report(s, i, n);
 
     // Step 0: a tomogram and its tilt range for each input.
     let mut found: Vec<StaInput> = vec![];
@@ -669,7 +718,11 @@ fn sta(o: &Opts) -> Result<Value> {
             cards.clear();
         }
     }
-    if cards.is_empty() {
+    // The steps of the whole run are counted from here on (a tilt series
+    // was made into a tomogram above, with its own count).
+    let making = cards.is_empty();
+    let report = |s: &str, i: usize, n: usize| progress.report(&sta_label(s, making), i, n);
+    if making {
         cards = sp::cards(&sources, &cards_dir.to_string_lossy(), &report, &|_| {})?;
         std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
         progress.done();
@@ -691,7 +744,13 @@ fn sta(o: &Opts) -> Result<Value> {
         Some(n) => n,
         None => match auto_pick(&cards) {
             Some(n) => {
-                eprintln!("tmv sta: card {n} is the only likely one, using it (--pick N chooses another)");
+                let c = &cards[n];
+                eprintln!(
+                    "tmv sta: using card {n} (about {} Å across, {} members, the only one that looks like a single particle); the other cards are in {}/, choose another with --pick N",
+                    c.diameter_a,
+                    c.members,
+                    cards_dir.display()
+                );
                 n
             }
             None => {
@@ -716,7 +775,15 @@ fn sta(o: &Opts) -> Result<Value> {
     let out_s = out.to_string_lossy().into_owned();
     let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, DIAMETER_FACTOR * card.diameter_a, true, &out_s, &report, &|_| {}))??;
     progress.done();
+    let ctf_limited = sp::ctf_limited(&r.fsc);
+    eprintln!("{}", sta_summary(&r, ctf_limited));
     let mut v = serde_json::to_value(&r)?;
+    if let Value::Object(m) = &mut v {
+        // `seconds` (the whole run) says it; `ms` covered only the average.
+        m.remove("ms");
+    }
+    v["diameterFrom"] = json!("card");
+    v["ctfLimited"] = json!(ctf_limited);
     v["card"] = card_json(card);
     v["out"] = json!(out);
     v["cardsDir"] = json!(cards_dir);
@@ -1075,6 +1142,23 @@ fn download_sam() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sta_steps_are_counted_over_the_whole_run() {
+        // With cards: find, cut and classify (both under step 2), search, coarse and fine alignment.
+        let labels = ["找颗粒", "裁出颗粒 210 Å", "分类 第 3/10 轮 210 Å", "搜索 1/2", "粗对齐 第 1/3 轮", "裁出更细的颗粒", "精细对齐 第 2/3 轮"];
+        let with: Vec<String> = labels.iter().map(|l| sta_label(l, true)).collect();
+        assert_eq!(
+            with,
+            ["第 1/5 步 · 找颗粒", "第 2/5 步 · 裁出颗粒 210 Å", "第 2/5 步 · 分类 第 3/10 轮 210 Å", "第 3/5 步 · 搜索 1/2", "第 4/5 步 · 粗对齐 第 1/3 轮", "第 5/5 步 · 裁出更细的颗粒", "第 5/5 步 · 精细对齐 第 2/3 轮"]
+        );
+        // Reusing the cards: only the last three.
+        assert_eq!(sta_label("搜索 1/1", false), "第 1/3 步 · 搜索 1/1");
+        assert_eq!(sta_label("粗对齐 第 3/3 轮", false), "第 2/3 步 · 粗对齐 第 3/3 轮");
+        assert_eq!(sta_label("精细对齐 第 1/3 轮", false), "第 3/3 步 · 精细对齐 第 1/3 轮");
+        // Not a step of this command: unchanged.
+        assert_eq!(sta_label("起始模型 第 1/6 轮", true), "起始模型 第 1/6 轮");
+    }
+
     use super::*;
 
     #[test]

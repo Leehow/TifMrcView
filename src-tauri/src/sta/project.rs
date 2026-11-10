@@ -155,6 +155,8 @@ pub struct Kind {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
+    /// The sizes found (the blob path only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<Kind>,
     /// None when the user has to choose a kind first.
     pub diameter_a: Option<f64>,
@@ -162,7 +164,9 @@ pub struct Report {
     /// Blobs of the chosen size tried, and how distinct the ones left out
     /// were from the ones kept (see `split`).
     pub candidates: usize,
-    pub distinct: f64,
+    /// None where there was no such split (the template search).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distinct: Option<f64>,
     pub voxel_a: f64,
     /// Resolution at FSC 0.143 between the halves, Å.
     pub resolution_a: Option<f64>,
@@ -317,6 +321,15 @@ pub fn split(scores: &[f32]) -> (f32, f64) {
     (cut, best / var)
 }
 
+/// Whether an FSC curve (by shell, from the lowest frequency) falls below
+/// 0.143 and later, at a higher frequency, rises above 0.3 again. That is not
+/// noise taking over: the halves agree again beyond a CTF zero, where the
+/// signal is missing for a few shells, so the resolution read at 0.143 is
+/// where the first zero lies and the data holds more.
+pub fn ctf_limited(fsc: &[f64]) -> bool {
+    fsc.iter().position(|&x| x < 0.143).is_some_and(|dip| fsc[dip..].iter().any(|&x| x > 0.3))
+}
+
 /// A split has to explain this much of the scores' spread before the low
 /// group is taken for other things than the particle and left out.
 const DISTINCT: f64 = 0.75;
@@ -467,7 +480,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         diameter_a: None,
         particles: 0,
         candidates: 0,
-        distinct: 0.0,
+        distinct: Some(0.0),
         voxel_a: 0.0,
         resolution_a: None,
         fsc: vec![],
@@ -878,7 +891,8 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let small: Vec<Vec<f32>> = particles.par_iter().map(|p| resample3(p, BOX, half)).collect();
         let small_wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(half, s.tilts[0], s.tilts[1])).collect();
         let coarse = Set { n: half, particles: &small, wedges: &small_wedges, wedge_of: &wedge_of, radius: radius / 2.0 };
-        for class in classes(&coarse, 3, 1, progress, live)? {
+        let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
+        for class in classes(&coarse, 3, 1, &kind_progress, live)? {
             if class.members.len() < CARD_MEMBERS {
                 continue;
             }
@@ -1032,7 +1046,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         diameter_a: None,
         particles: 0,
         candidates,
-        distinct,
+        distinct: Some(distinct),
         voxel_a: 0.0,
         resolution_a: None,
         fsc: vec![],
@@ -1189,7 +1203,9 @@ pub fn run_template(
     let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
     let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let mut out = align(&set, template, &poses, progress, live)?;
+    // Told apart in the labels when there are two passes.
+    let first_pass = |s: &str, a: usize, b: usize| progress(&if fine { s.replacen("对齐", "粗对齐", 1) } else { s.to_string() }, a, b);
+    let mut out = align(&set, template, &poses, &first_pass, live)?;
     if fine {
         // The same particles at twice the sampling, from where they now
         // are: at the coarse sampling the resolution ends at its Nyquist
@@ -1248,14 +1264,14 @@ pub fn run_template(
         let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
         let model = crate::spa::fourier::resample3(&out.map, BOX, n);
         let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
-        out = align(&set, &model, &start, progress, live)?;
+        out = align(&set, &model, &start, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
     }
     let mut report = Report {
         kinds: vec![],
         diameter_a: None,
         particles: 0,
         candidates,
-        distinct: 0.0,
+        distinct: None,
         voxel_a: 0.0,
         resolution_a: None,
         fsc: vec![],
@@ -1381,5 +1397,39 @@ mod read_tests {
         output::write_mrc(&flat, &vec![0f32; BOX * BOX * 8], [BOX, BOX, 8], 6.25, false).unwrap();
         assert!(read_card(&flat).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fsc_tests {
+    use super::ctf_limited;
+
+    /// Two real curves (EMPIAR data): the FSC falls to about 0.1, comes back
+    /// above 0.3 beyond a CTF zero and falls again.
+    const DIP_1: [f64; 33] = [
+        1.0, 0.999, 0.998, 0.995, 0.991, 0.982, 0.969, 0.970, 0.957, 0.942, 0.919, 0.915, 0.910, 0.898, 0.857, 0.845, 0.804, 0.726, 0.592, 0.406, 0.147, 0.107, 0.192, 0.305, 0.366,
+        0.379, 0.317, 0.169, 0.063, 0.011, 0.013, 0.060, 0.076,
+    ];
+    const DIP_2: [f64; 33] = [
+        1.0, 0.996, 0.998, 0.998, 0.995, 0.992, 0.990, 0.988, 0.982, 0.975, 0.971, 0.968, 0.966, 0.959, 0.941, 0.928, 0.914, 0.877, 0.810, 0.608, 0.232, 0.078, 0.306, 0.518, 0.577,
+        0.556, 0.495, 0.324, 0.152, 0.054, 0.026, 0.075, 0.077,
+    ];
+
+    #[test]
+    fn a_dip_below_the_threshold_that_rises_again_is_a_ctf_zero() {
+        assert!(ctf_limited(&DIP_1));
+        assert!(ctf_limited(&DIP_2));
+    }
+
+    #[test]
+    fn a_curve_that_only_falls_or_never_falls_is_not() {
+        let falling: Vec<f64> = (0..33).map(|i| (1.0 - i as f64 / 24.0).max(0.0)).collect();
+        assert!(!ctf_limited(&falling));
+        // Noise that wobbles a little after the crossing is not a rise to 0.3.
+        let wobble = [1.0, 0.9, 0.5, 0.2, 0.13, 0.16, 0.1, 0.12, 0.05];
+        assert!(!ctf_limited(&wobble));
+        // Never below 0.143, or too short to say.
+        assert!(!ctf_limited(&[1.0, 0.9, 0.8, 0.5, 0.4, 0.35]));
+        assert!(!ctf_limited(&[]));
     }
 }

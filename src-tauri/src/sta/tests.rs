@@ -327,7 +327,7 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
     // the kind that stands out most; the phantom's balls are another).
     let size = found.kinds.iter().max_by(|a, b| a.contrast.total_cmp(&b.contrast)).unwrap().diameter_a;
     let done = run(&sources, Some(size), &out, &|_, _, _| {}, &|_| {}).unwrap();
-    eprintln!("{} of {} particles (distinct {:.2}), {:?} Å, fsc {:?}", done.particles, done.candidates, done.distinct, done.resolution_a, done.fsc);
+    eprintln!("{} of {} particles (distinct {:.2}), {:?} Å, fsc {:?}", done.particles, done.candidates, done.distinct.unwrap_or(0.0), done.resolution_a, done.fsc);
     assert!(done.particles >= 24 && done.particles <= 40, "{}", done.particles);
     assert!(done.resolution_a.unwrap() < 4.0 * done.voxel_a, "{:?}", done.resolution_a);
     assert!(std::path::Path::new(done.map.as_ref().unwrap()).is_file());
@@ -387,7 +387,7 @@ fn drawn_sphere_gives_one_particle_per_copy() {
         ellipsoid([73.0, 71.0, 72.5], [45.0; 3], 0.5 * size_a / 17.5).into_iter().map(|s| Drawn { source: 0, pos: s.pos, axis: s.axis }).collect();
     let out = dir.join("out").to_string_lossy().into_owned();
     let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
-    eprintln!("{} copies, {} seeds, {} particles (distinct {:.2}), {:?} Å, fsc {:?}", copies.len(), done.candidates, done.particles, done.distinct, done.resolution_a, done.fsc);
+    eprintln!("{} copies, {} seeds, {} particles (distinct {:.2}), {:?} Å, fsc {:?}", copies.len(), done.candidates, done.particles, done.distinct.unwrap_or(0.0), done.resolution_a, done.fsc);
     let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
     let at: Vec<[f64; 3]> = table
         .lines()

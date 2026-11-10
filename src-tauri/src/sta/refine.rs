@@ -172,7 +172,7 @@ pub fn classes(set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -
         let mut best = vec![Pose { r: IDENTITY, t: [0.0; 3], score: f32::MIN }; m];
         for (c, model) in models.iter().enumerate() {
             let stage = format!("分类 第 {}/{} 轮", round + 1, CLASS_ROUNDS);
-            let found = engine.global(&prepared, set.wedges, set.wedge_of, model, &turned, set.shift(), &|a, b| progress(&stage, c * m + a, k * b))?;
+            let found = engine.global(&prepared, set.wedges, set.wedge_of, model, &turned, set.shift(), &|a, b| progress(&stage, c * b + a, k * b))?;
             for i in 0..m {
                 if found[i].score > best[i].score {
                     best[i] = found[i];

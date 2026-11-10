@@ -53,7 +53,16 @@ again. `OUT` defaults to a folder `<first input's name>_sta` beside the first
 input. The tilt range of each tomogram comes from its `*.tomo.json` (the
 views the alignment kept); without one, -60 to 60 is assumed, with a warning.
 Whether the average is good is for you to judge from `average.mrc` and the
-two halves; `sta.json` has the numbers.
+two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
+`resolutionA` (FSC 0.143 between the halves) with the curve `fsc`, `particles`,
+`diameterA` with `diameterFrom: "card"` (1.33 × the card's size), `seconds`
+(the whole run, a tomogram made first included) and `ctfLimited: true` when the
+FSC falls below 0.143 and then rises above 0.3 again at higher frequency: the
+resolution is then limited at a CTF zero and the data holds more than the
+number says. Progress on stderr counts the steps of the whole run ("第 k/N
+步 · …"); when `tmv sta` picks card 0 itself a line says which card and where
+the others are, and the last line gives the resolution, the particle count and
+where `average.mrc` is.
 
 Everything is chosen automatically, as in the app. `--pixel Å` and
 `--kv kV` are needed only when neither the files nor the config files beside

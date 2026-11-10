@@ -156,7 +156,18 @@ or several of the same specimen. It writes the cards to `OUT/cards/`, then,
 with `--pick N` (or by itself when card 0 is the only `likely` one), the
 average of everything that looks like card N: `average.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
-`average.mrc`; `"particles"` how many were averaged). The tilt range comes
+`average.mrc`; `"particles"` how many were averaged). The JSON also has
+`"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
+`"diameterA"` with `"diameterFrom": "card"` (1.33 × the card's size),
+`"candidates"`, `"seconds"` (the whole run, a tomogram made first included)
+and `"ctfLimited": true` when the FSC falls below 0.143 and then rises above
+0.3 again at higher frequency: the resolution is then limited at a CTF zero
+and the data holds more than the number says. (`"kinds"` and `"distinct"`
+are left out; they belong to the blob search.) Progress on stderr counts the
+steps of the whole run ("第 k/N 步 · …"); a line says which card was taken
+and where the others are when `tmv sta` picks card 0 itself, and the last
+line gives the resolution, the particle count and where `average.mrc` is.
+The tilt range comes
 from the `*.tomo.json` beside each tomogram; without one it assumes -60 to 60
 and warns on stderr. Do not quote a resolution unless the user asks: report
 the particle count and let them judge the average and the two halves.
