@@ -143,12 +143,14 @@ one stack's results do not overwrite each other; `tmv sta` saves
 voxel size, denoised and deconvolved) to look at and pick particles on, and
 prints it as `"look"`: its `path`, and `scale` and `offset` with which a voxel
 of the full-detail tomogram is `scale` × the voxel of the look tomogram +
-`offset` (per axis x, y, z). Averaging still uses the full-detail tomogram.
-`tmv sta` finds the cards and the particles on the look tomogram and averages
-the full-detail one (`"look"` per tomogram in its output; `particles.csv`
-stays in full-detail voxels); it finds the look record in the `*.tomo.json`
-beside the tomogram, and goes on without it, with a line on stderr, if the
-file is missing.
+`offset` (per axis x, y, z). Anything that becomes a card or an average comes from the full-detail tomogram.
+`tmv sta` makes the cards from the full-detail tomogram only (the look one
+loses the internal structure that classes and averages need), searches the
+look tomogram for particles with the card as template, and cuts, aligns and
+averages the full-detail one (`"look"` per tomogram in its output;
+`particles.csv` stays in full-detail voxels); it finds the look record in the
+`*.tomo.json` beside the tomogram, and goes on without it, with a line on
+stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one

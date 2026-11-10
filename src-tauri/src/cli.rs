@@ -708,8 +708,8 @@ fn sta(o: &Opts) -> Result<Value> {
     let cards_dir = out.join("cards");
     let cards_json = cards_dir.join("cards.json");
     let inputs_json = cards_dir.join("inputs.json");
-    // The look tomograms count too: the cards are made on them.
-    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()).chain(found.iter().filter_map(|f| f.look.as_ref().map(|l| l.path.as_str()))));
+    // The cards are made from the full-detail tomograms alone (not the look ones).
+    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()));
     let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     if !cards.is_empty() {
         let saved: Option<Vec<InputStamp>> = std::fs::read(&inputs_json).ok().and_then(|b| serde_json::from_slice(&b).ok());

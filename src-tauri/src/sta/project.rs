@@ -65,17 +65,12 @@ pub struct Source {
     pub path: String,
     /// First and last tilt used for it, degrees.
     pub tilts: [f64; 2],
-    /// A clear (denoised) version of it to find particles on: blobs, cards
-    /// and the template search use it, positions are mapped back to `path`.
+    /// A clear (denoised) version of it, for the eyes and for the template
+    /// search (`run_template` finds positions on it and maps them back to
+    /// `path`). Kinds, cards, cutting and averaging never use it: anything
+    /// that becomes a reference or an average comes from `path`.
     #[serde(default)]
     pub look: Option<LookSource>,
-}
-
-impl Source {
-    /// The tomogram blobs and cards are searched on.
-    fn finding(&self) -> &str {
-        self.look.as_ref().map_or(&self.path, |l| &l.path)
-    }
 }
 
 /// Where a position on the binned look tomogram lies on the binned raw one.
@@ -428,7 +423,7 @@ fn find_kinds(sources: &[Source], progress: Progress) -> Result<Vec<Kind>> {
     let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
     for (i, s) in sources.iter().enumerate() {
         progress("找颗粒", i, sources.len());
-        let (v, dims, voxel, _) = binned(s.finding(), SEARCH_VOXEL)?;
+        let (v, dims, voxel, _) = binned(&s.path, SEARCH_VOXEL)?;
         let sizes: Vec<f64> = LADDER.iter().map(|d| d / voxel).collect();
         let mut found = blobs(&v, dims, &sizes, true, MIN_Z)?;
         // Report sizes on the ladder exactly, whatever the voxel size.
@@ -466,9 +461,6 @@ fn without_gold(cuts: &mut Vec<Cut>, size: f64, voxel_a: f64) {
 
 /// `diameter_a` None finds the kinds only (the report then has no map).
 pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
-    // Everything here works on the tomograms themselves.
-    let plain: Vec<Source> = sources.iter().map(|s| Source { look: None, ..s.clone() }).collect();
-    let sources = &plain[..];
     let started = Instant::now();
     if sources.is_empty() {
         bail!("没有断层图");
@@ -816,9 +808,10 @@ const CARD_MEMBERS: usize = 10;
 /// chooses the template for `run_template` from them. The classes are found
 /// on cubes at half sampling (eight times fewer voxels); each card is then
 /// averaged from the full cubes at the
-/// poses found. A source with a look tomogram is searched, cut and
-/// averaged on that one; which blobs are gold or lie too near a border is
-/// still decided on the raw tomogram (`allowed_on_look`, `Cut::darkest`). Cards come best first: the `likely` ones, then by
+/// poses found. Everything here (blobs, gold test, cutting, classes,
+/// averages) uses the raw tomogram `Source::path`; a source's `look` is
+/// ignored, as a look (denoised, deconvolved) tomogram loses the internal
+/// structure the classes and the averages are about. Cards come best first: the `likely` ones, then by
 /// `compact × members` (a compact class that many blobs share); ids follow
 /// that order.
 pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
@@ -840,22 +833,11 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let mut voxel_a = size / SPAN;
         for (i, s) in sources.iter().enumerate() {
             progress(&format!("裁出颗粒 {size} Å"), i, sources.len());
-            let (v, dims, voxel, bin) = binned(s.finding(), size / SPAN)?;
+            let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
             voxel_a = voxel;
             let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
-            // Blobs are found on `v` (the look tomogram, if any); what is
-            // gold or too near a border is decided on the raw tomogram.
             let (median, sd) = super::pick::robust(&v);
-            let (ok, raw) = match &s.look {
-                None => (allowed(&v, dims, 0.5 * size / voxel), None),
-                Some(l) => {
-                    let (rv, rdims, rvoxel, rbin) = binned(&s.path, size / SPAN)?;
-                    let rok = allowed(&rv, rdims, 0.5 * size / rvoxel);
-                    let ok = allowed_on_look(&rok, rdims, 1, rbin, dims, 1, bin, l, 0.5 * size / voxel);
-                    let stats = super::pick::robust(&rv);
-                    (ok, Some((rv, rdims, rvoxel, rbin, stats, l)))
-                }
-            };
+            let ok = allowed(&v, dims, 0.5 * size / voxel);
             for b in found {
                 let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
                 if c.iter().zip(dims).any(|(c, d)| *c >= d) || !ok[(c[2] * dims[1] + c[1]) * dims[0] + c[0]] {
@@ -863,14 +845,7 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                 }
                 if let Some(cube) = cube(&v, dims, c) {
                     let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                    let darkest = match &raw {
-                        None => darkest(&v, dims, c, 0.5 * size / voxel, median, sd),
-                        // The same place on the raw tomogram (inside it: `ok` says so).
-                        Some((rv, rdims, rvoxel, rbin, (rmedian, rsd), l)) => {
-                            let r = to_raw(c.map(|x| x as f64), bin, *rbin, l).map(|x| x.round().max(0.0) as usize);
-                            darkest(rv, *rdims, r, 0.5 * size / rvoxel, *rmedian, *rsd)
-                        }
-                    };
+                    let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
                     cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
                 }
             }

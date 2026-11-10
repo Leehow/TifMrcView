@@ -838,27 +838,16 @@ fn template_on_the_look_tomogram_averages_the_raw_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Heavy: `cards` on the look version of the made-up tomogram (72 copies, two
-/// gold markers in both): the cards are made from the look tomogram, with the
-/// exclusion and gold decisions taken on the raw one, and hold the copies.
+/// Cards are made from the raw tomogram only: a source's look tomogram is not
+/// even opened (here it and the raw file are missing; the error names the raw
+/// one, which the first thing `cards` does is open).
 #[test]
-#[ignore]
-fn cards_on_the_look_tomogram_hold_the_particles() {
+fn cards_ignore_the_look_tomogram() {
     use super::project::{cards, LookSource, Source};
-    let (raw, raw_dims, look, look_dims, _, _, _) = look_fixture(6, 14.0);
-    let dir = std::env::temp_dir().join(format!("tmv-sta-look-cards-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
-    crate::tomo::output::write_mrc(&path("raw.mrc"), &raw, raw_dims, 8.75, false).unwrap();
-    crate::tomo::output::write_mrc(&path("look.mrc"), &look, look_dims, 17.5, false).unwrap();
-    let sources = vec![Source { path: path("raw.mrc"), tilts: [-90.0, 90.0], look: Some(LookSource { path: path("look.mrc"), scale: 2.0, offset: [3.5; 3] }) }];
-    let found = cards(&sources, &path("cards"), &|_, _, _| {}, &|_| {}).unwrap();
-    for c in &found {
-        eprintln!("{c:?}");
-    }
-    let members: usize = found.iter().filter(|c| c.diameter_a == 210.0).map(|c| c.members).sum();
-    assert!(members >= 24, "{members}");
-    let _ = std::fs::remove_dir_all(&dir);
+    let look = Some(LookSource { path: "/nonexistent/look_tomogram.mrc".into(), scale: 2.0, offset: [0.0; 3] });
+    let sources = vec![Source { path: "/nonexistent/raw_tomogram.mrc".into(), tilts: [-60.0, 60.0], look }];
+    let err = format!("{:#}", cards(&sources, "/nonexistent/cards", &|_, _, _| {}, &|_| {}).unwrap_err());
+    assert!(err.contains("raw_tomogram.mrc") && !err.contains("look_tomogram"), "{err}");
 }
 
 
