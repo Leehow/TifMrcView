@@ -63,7 +63,8 @@ OUTPUT
   Files are written beside the input; copy the folder back and open them in
   TifMrcView Pro (label maps open with their tomogram). Progress goes to
   stderr. The result is one JSON object on stdout ({"ok":true,…}), also
-  saved as <input>.tmv.json. Exit status 0 on success, 1 on error
+  saved as <input>.tmv.json (tmv tomo --for sta|survey: <input>.sta.tmv.json,
+  <input>.survey.tmv.json). Exit status 0 on success, 1 on error
   ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind;
   sta: pick a card).
 
@@ -182,7 +183,10 @@ fn hint(msg: &str) -> Option<&'static str> {
 
 /// Where the result of `cmd` is saved: beside the input (`INPUT.tmv.json`,
 /// `tmv.json` in a folder), but `tmv sta` saves `<out>/sta.tmv.json`, as its
-/// input may be a tilt series whose `.tmv.json` `tmv tomo` wrote.
+/// input may be a tilt series whose `.tmv.json` `tmv tomo` wrote. `tmv tomo`
+/// with a purpose other than display adds it (`INPUT.sta.tmv.json`,
+/// `INPUT.survey.tmv.json`), so the results for one stack do not overwrite
+/// each other.
 fn result_file(cmd: &str, o: &Opts) -> Option<PathBuf> {
     let input = o.input.as_deref()?;
     if cmd == "sta" {
@@ -191,7 +195,12 @@ fn result_file(cmd: &str, o: &Opts) -> Option<PathBuf> {
         }
     }
     let p = Path::new(input);
-    Some(if p.is_dir() { p.join("tmv.json") } else { PathBuf::from(format!("{input}.tmv.json")) })
+    let purpose = match (cmd, o.get("for")) {
+        ("tomo", Some("sta" | "averaging")) => ".sta",
+        ("tomo", Some("survey" | "quick")) => ".survey",
+        _ => "",
+    };
+    Some(if p.is_dir() { p.join("tmv.json") } else { PathBuf::from(format!("{input}{purpose}.tmv.json")) })
 }
 
 /// Prints the result and saves it to `file`.
@@ -1115,6 +1124,11 @@ mod tests {
         let o = Opts { input: Some("/data/t.mrc".into()), ..Default::default() };
         assert_eq!(result_file("sta", &o), Some(PathBuf::from("/data/t_sta/sta.tmv.json")));
         assert_eq!(result_file("sta", &Opts::default()), None);
+        let named = |v: &str| Opts { input: Some("/data/t.mrc".into()), named: vec![("for".into(), Some(v.into()))], ..Default::default() };
+        assert_eq!(result_file("tomo", &named("sta")), Some(PathBuf::from("/data/t.mrc.sta.tmv.json")));
+        assert_eq!(result_file("tomo", &named("survey")), Some(PathBuf::from("/data/t.mrc.survey.tmv.json")));
+        assert_eq!(result_file("tomo", &named("display")), Some(PathBuf::from("/data/t.mrc.tmv.json")));
+        assert_eq!(result_file("tomo", &o), Some(PathBuf::from("/data/t.mrc.tmv.json")));
     }
 
     #[test]

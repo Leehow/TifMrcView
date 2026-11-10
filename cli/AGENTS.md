@@ -74,7 +74,7 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | --- | --- |
 | Not sure / "process this" | `tmv run INPUT` (detects the data type) |
 | Tomogram from a tilt series or from movies + mdoc | `tmv tomo ts.mrc` or `tmv tomo ts.mdoc` |
-| … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder) |
+| … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder and a clear `"look"` tomogram) |
 | … just a quick look | `tmv tomo ts.mrc --for survey` |
 | Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` (step 5) |
 | Membranes, vesicles, microtubules of a tomogram | `tmv membranes tomo.mrc` |
@@ -111,7 +111,9 @@ still running. Do not start several GPU jobs at once on the same GPU.
 ## 5. Read the result
 
 When the job ends, the log ends with one JSON object, also saved beside the
-input as `INPUT.tmv.json` (`tmv.json` inside a folder; `tmv sta` saves
+input as `INPUT.tmv.json` (`tmv.json` inside a folder; `tmv tomo --for sta`
+and `--for survey` save `INPUT.sta.tmv.json` and `INPUT.survey.tmv.json`, so
+one stack's results do not overwrite each other; `tmv sta` saves
 `OUT/sta.tmv.json`, so the `.tmv.json` of a tilt series from `tmv tomo` stays):
 - `"ok": true` — `"open"` is the file to look at; other fields hold the
   numbers to report (resolution, defocus, vesicle count…); `"note"`, when
@@ -136,6 +138,12 @@ input as `INPUT.tmv.json` (`tmv.json` inside a folder; `tmv sta` saves
   Then run the command in `"next"` (`tmv sta --pick N TOMOGRAM…`). It names
   the tomograms, so a tilt series is not reconstructed again. The cards are
   kept in `OUT/cards/` (delete it to make them again).
+
+`tmv tomo --for sta` also makes a clear companion of the tomogram (twice the
+voxel size, denoised and deconvolved) to look at and pick particles on, and
+prints it as `"look"`: its `path`, and `scale` and `offset` with which a voxel
+of the full-detail tomogram is `scale` × the voxel of the look tomogram +
+`offset` (per axis x, y, z). Averaging still uses the full-detail tomogram.
 
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one

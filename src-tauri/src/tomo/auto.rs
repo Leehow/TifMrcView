@@ -16,7 +16,9 @@
 //!   - STA: the high resolution kept for subtomogram averaging, about
 //!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
 //!     would change the high frequencies), and a RELION 5 folder beside
-//!     the stack to go on with.
+//!     the stack to go on with. Beside it a second, clear tomogram (twice
+//!     the voxel size, denoised and deconvolved) to look at and find
+//!     particles on, with the exact map between the two (`Look`).
 //! - Levelling and thickness (`level`): a quick bin-8 reconstruction twice
 //!   as thick as likely shows where the specimen is (detail varies there,
 //!   empty ice and vacuum do not); a lamella milled at an angle is laid
@@ -37,6 +39,7 @@
 //!   original independent reconstructions and its output is deconvolved.
 
 use super::{check_cancel, dataset::Dataset, output, pipeline, recon};
+pub use super::dataset::Look;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +80,9 @@ pub struct AutoResult {
     /// The tomogram to look at.
     pub path: String,
     pub raw: String,
+    /// STA: the clear companion of `raw` to look at and pick on (`path` is
+    /// then the raw tomogram too), and how its voxels map onto `raw`'s.
+    pub look: Option<Look>,
     /// The RELION 5 folder (for STA).
     pub relion: Option<String>,
     /// The label map with the membranes (material "膜"), beside `path`.
@@ -138,10 +144,12 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     // Membranes are segmented at the end of a display tomogram when the
     // user has picked the MemBrain-seg model (the app asks beforehand).
     let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
+    let bin = output_bin(w, h, px, req.purpose.voxel());
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Survey => 5,
         Purpose::Display => 7 + membranes as usize,
+        Purpose::Sta if 2 * bin <= 16 => 8,
         Purpose::Sta => 5,
     };
     // When each step was first and last heard from, for `timings` (steps
@@ -224,7 +232,6 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
-    let bin = output_bin(w, h, px, req.purpose.voxel());
     let mut leveled = a.clone();
     let place = level(&img, &mut leveled, px, bin, req.purpose != Purpose::Sta, &stage(3))?;
     if place.tilt_offset != 0.0 {
@@ -233,8 +240,15 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, &stage(4))?;
+    let step = pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false };
+    let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
+    let mut look = None;
+    if req.purpose == Purpose::Sta {
+        check_cancel()?;
+        let (s5, s6, s7) = (stage(5), stage(6), stage(7));
+        look = clear_companion(dev, d, &step, &raw, [&s5, &s6, &s7])?;
+    }
     let mut path = raw.clone();
     let mut relion = None;
     let mut note = None;
@@ -275,7 +289,8 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         let stack = std::path::Path::new(&d.stack);
         let parent = stack.parent().unwrap_or(std::path::Path::new("."));
         let name = stack.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
-        super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
+        let k = if look.is_some() { 8 } else { 5 };
+        super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(k)("导出 RELION 5", i, n))?;
         relion = Some(parent.join(format!("{name}_relion5")).to_string_lossy().into_owned());
     }
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
@@ -284,7 +299,100 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, relion, labels, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, look, relion, labels, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+/// One reconstruction grid along each axis, for `look_map`: voxels of `bin`
+/// pixels, `n` of them, and (along Z) the depth offset of the placement.
+#[derive(Clone, Copy, Debug)]
+pub struct Grid {
+    pub bin: usize,
+    pub n: [usize; 3],
+    pub z_offset: f64,
+}
+
+impl Grid {
+    /// The grid `reconstruct` makes of a stack `w`×`h` pixels at `bin`.
+    pub fn of(w: usize, h: usize, bin: usize, thickness: usize, z_offset: f64) -> Grid {
+        Grid { bin, n: [w / bin, h / bin, thickness], z_offset }
+    }
+}
+
+/// Where the voxels of `look` lie on the grid of `raw`: raw index = scale ×
+/// look index + offset, per axis. Derived from the code, not assumed:
+/// - `output::aligned` bins by box-averaging `bin`×`bin` stack pixels and
+///   crops the odd remainder equally on both sides, so output pixel x of `w`
+///   lies at `bin·(x − (w−1)/2)` stack pixels from the image centre; the
+///   same along Y.
+/// - `recon` sets the volume's X centre `(w−1)/2` and Y row centre on the
+///   view's centre, and a section z at depth `z − (Z−1)/2 + z_offset` output
+///   pixels, i.e. `bin·(z − (Z−1)/2 + z_offset)` stack pixels.
+/// Putting the same physical point on both grids, with k = look.bin/raw.bin:
+/// `i_raw = k·(i_look − (n_look−1)/2 + s_look) + (n_raw−1)/2 − s_raw`, where
+/// s is `z_offset` along Z and 0 along X and Y. (With the look grid exactly
+/// half as large, `n_raw = 2·n_look` and `z_offset` half the raw one, the
+/// offset is 0.5 on every axis: look voxel i spans raw voxels 2i and 2i+1.)
+pub fn look_map(raw: Grid, look: Grid) -> (f64, [f64; 3]) {
+    let k = look.bin as f64 / raw.bin as f64;
+    let offset = std::array::from_fn(|a| {
+        let (s_raw, s_look) = if a == 2 { (raw.z_offset, look.z_offset) } else { (0.0, 0.0) };
+        -k * ((look.n[a] as f64 - 1.0) / 2.0 - s_look) + (raw.n[a] as f64 - 1.0) / 2.0 - s_raw
+    });
+    (k, offset)
+}
+
+/// STA: the clear tomogram to look at and find particles on. The same
+/// levelled alignment and placement as the raw one `raw_step` made, at twice
+/// the binning (half the thickness and depth offset; `y_slope` unchanged),
+/// then Noise2Noise and the deconvolution as the display tomogram gets them;
+/// no missing-wedge step, no membranes. `progress` reports the three steps.
+/// None when there is no coarser binning (above 16) or the placement
+/// has a depth slope (whole-section shifts differ between binnings, so the
+/// map would not be exact). The `Look` is saved with the raw tomogram.
+fn clear_companion(
+    dev: &burn::tensor::Device,
+    d: &mut Dataset,
+    raw_step: &pipeline::ReconStep,
+    raw: &str,
+    progress: [pipeline::Progress; 3],
+) -> Result<Option<Look>> {
+    let Some((made, mut look)) = reconstruct_look(d, raw_step, progress[0])? else { return Ok(None) };
+    check_cancel()?;
+    let path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(made), steps: 1000 }, progress[1])?.paths.remove(0);
+    check_cancel()?;
+    look.path = pipeline::deconvolve(d, Some(&path), progress[2])?.paths.remove(0);
+    attach_look(d, raw, &look)?;
+    Ok(Some(look))
+}
+
+/// Saves `look` with the raw tomogram's entry in the dataset.
+pub fn attach_look(d: &mut Dataset, raw: &str, look: &Look) -> Result<()> {
+    if let Some(t) = d.tomograms.iter_mut().find(|t| t.path == raw) {
+        t.look = Some(look.clone());
+    }
+    d.save()
+}
+
+/// The reconstruction half of `clear_companion`: the tomogram at twice
+/// `raw_step`'s binning with the placement scaled to it, and the `Look`
+/// (whose path is that unprocessed tomogram) mapping it onto the raw one.
+pub fn reconstruct_look(d: &mut Dataset, raw_step: &pipeline::ReconStep, progress: pipeline::Progress) -> Result<Option<(String, Look)>> {
+    let p = &raw_step.params;
+    let bin = 2 * raw_step.bin;
+    if bin > 16 || p.y_slope != 0.0 {
+        return Ok(None);
+    }
+    let (w, h) = {
+        let img = pipeline::open(&d.stack)?;
+        (img.info().width, img.info().height)
+    };
+    let params = recon::Params { thickness: p.thickness.div_ceil(2), z_offset: p.z_offset / 2.0, ..p.clone() };
+    let (raw_grid, look_grid) = (Grid::of(w, h, raw_step.bin, p.thickness, p.z_offset), Grid::of(w, h, bin, params.thickness, params.z_offset));
+    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false };
+    let made = pipeline::reconstruct(d, &step, progress)?;
+    let (scale, offset) = look_map(raw_grid, look_grid);
+    let path = made.paths[0].clone();
+    Ok(Some((path.clone(), Look { path, scale, offset })))
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels

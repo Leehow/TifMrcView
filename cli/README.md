@@ -16,7 +16,7 @@ driver is enough):
 | Command | What it does | Main output |
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
-| `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder (sta) |
+| `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder and a clear `look` tomogram (sta) |
 | `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N] [--out DIR]` | Subtomogram averaging: class-average "cards" of the particle-like blobs, then the average of everything that looks like the card you pick | `*_sta/cards/`, then `*_sta/average.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
@@ -24,6 +24,12 @@ driver is enough):
 | `tmv denoise FILE` | Self-supervised (Noise2Void) denoising trained on the file | `FILE_denoised.mrc` |
 | `tmv info` | Version, GPU, models | |
 | `tmv setup --membrane FILE.ckpt` / `--sam` | Remember the MemBrain-seg model / download SAM 2.1 | |
+
+`tmv tomo --for sta` also makes a clear companion of the tomogram (twice the
+voxel size, denoised and deconvolved) to look at and pick particles on, and
+prints it as `"look"`: its `path`, and `scale` and `offset` with which a voxel
+of the full-detail tomogram is `scale` × the voxel of the look tomogram +
+`offset` (per axis x, y, z). Averaging still uses the full-detail tomogram.
 
 `tmv sta` takes tilt series (their tomogram is made first, as `tmv tomo --for
 sta` does) or tomograms that `tmv tomo --for sta` wrote, one or several. It
@@ -49,7 +55,9 @@ Everything is chosen automatically, as in the app. `--pixel Å` and
 them carry the pixel size and voltage.
 
 Results are written beside the input. The result of each run is printed as
-one JSON object on stdout and saved as `INPUT.tmv.json` (`tmv sta` saves
+one JSON object on stdout and saved as `INPUT.tmv.json` (`tmv tomo --for sta`
+and `--for survey` save `INPUT.sta.tmv.json` and `INPUT.survey.tmv.json`, so
+results for one stack do not overwrite each other; `tmv sta` saves
 `OUT/sta.tmv.json`, so it does not overwrite the one `tmv tomo` made for a
 tilt series). Exit status: 0 done,
 1 error (`"error"`, `"hint"`), 2 a choice is needed (SPA: which kind of

@@ -68,6 +68,23 @@ pub struct Tomogram {
     /// For a full tomogram: its even and odd half tomograms, same geometry.
     #[serde(default)]
     pub halves: Option<[String; 2]>,
+    /// For a full tomogram made for subtomogram averaging: the clear
+    /// (denoised) companion to look at and pick on, and how its voxels map
+    /// onto this one's.
+    #[serde(default)]
+    pub look: Option<Look>,
+}
+
+/// A companion tomogram of the same specimen, sampled twice as coarsely and
+/// denoised, to look at and find particles on. A voxel index (x, y, z) of the
+/// computing tomogram is `scale × look index + offset`, per axis; indices are
+/// voxel centres, so a voxel's centre is its integer index.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Look {
+    pub path: String,
+    pub scale: f64,
+    pub offset: [f64; 3],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

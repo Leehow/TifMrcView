@@ -132,6 +132,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
             method: format!("{:?}{}", req.params.method, if three_d { "+ctf3d" } else { "" }).to_lowercase(),
             phase_flipped: flip.is_some(),
             halves: None,
+            look: None,
         });
     }
     if made.len() == 3 {
