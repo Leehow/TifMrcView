@@ -114,7 +114,7 @@ pub fn main(args: Vec<String>) -> i32 {
     };
     if cmd != "sta" {
         if let Some(extra) = opts.more.first() {
-            return fail(cmd, &anyhow!("unexpected argument `{extra}` (one input at a time)"), opts.input.as_deref());
+            return fail(cmd, &anyhow!("unexpected argument `{extra}` (one input at a time)"), result_file(cmd, &opts));
         }
     }
     let started = Instant::now();
@@ -145,21 +145,21 @@ pub fn main(args: Vec<String>) -> i32 {
                 head.extend(std::mem::take(o));
                 v = Value::Object(head);
             }
-            emit(&v, opts.input.as_deref());
+            emit(&v, result_file(cmd, &opts));
             status
         }
-        Err(e) => fail(cmd, &e, opts.input.as_deref()),
+        Err(e) => fail(cmd, &e, result_file(cmd, &opts)),
     }
 }
 
-fn fail(cmd: &str, e: &anyhow::Error, input: Option<&str>) -> i32 {
+fn fail(cmd: &str, e: &anyhow::Error, file: Option<PathBuf>) -> i32 {
     let msg = format!("{e:#}");
     eprintln!("tmv {cmd}: {msg}");
     let mut v = json!({ "ok": false, "command": cmd, "version": VERSION, "error": msg });
     if let Some(h) = hint(&msg) {
         v["hint"] = json!(h);
     }
-    emit(&v, input);
+    emit(&v, file);
     1
 }
 
@@ -180,14 +180,29 @@ fn hint(msg: &str) -> Option<&'static str> {
     }
 }
 
-/// Prints the result and saves it beside the input.
-fn emit(v: &Value, input: Option<&str>) {
+/// Where the result of `cmd` is saved: beside the input (`INPUT.tmv.json`,
+/// `tmv.json` in a folder), but `tmv sta` saves `<out>/sta.tmv.json`, as its
+/// input may be a tilt series whose `.tmv.json` `tmv tomo` wrote.
+fn result_file(cmd: &str, o: &Opts) -> Option<PathBuf> {
+    let input = o.input.as_deref()?;
+    if cmd == "sta" {
+        if let Ok(out) = sta_out(o, input) {
+            return Some(out.join("sta.tmv.json"));
+        }
+    }
+    let p = Path::new(input);
+    Some(if p.is_dir() { p.join("tmv.json") } else { PathBuf::from(format!("{input}.tmv.json")) })
+}
+
+/// Prints the result and saves it to `file`.
+fn emit(v: &Value, file: Option<PathBuf>) {
     let text = serde_json::to_string_pretty(v).unwrap_or_default();
     println!("{text}");
     let _ = std::io::stdout().flush();
-    if let Some(input) = input {
-        let p = Path::new(input);
-        let file = if p.is_dir() { p.join("tmv.json") } else { PathBuf::from(format!("{input}.tmv.json")) };
+    if let Some(file) = file {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let _ = std::fs::write(file, text + "\n");
     }
 }
@@ -521,6 +536,50 @@ fn card_json(c: &crate::sta::project::Card) -> Value {
     json!({ "id": c.id, "diameterA": c.diameter_a, "members": c.members, "compact": (c.compact * 10.0).round() / 10.0, "likely": c.likely, "path": c.path })
 }
 
+/// An input tomogram as the cards were made from it (`cards/inputs.json`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct InputStamp {
+    path: String,
+    size: u64,
+    /// Modified time, nanoseconds since the epoch (0 when unknown).
+    modified_ns: u128,
+}
+
+fn input_stamps<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<InputStamp> {
+    paths
+        .map(|p| {
+            let abs = std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p));
+            let meta = std::fs::metadata(&abs).ok();
+            let modified_ns = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            InputStamp { path: abs.to_string_lossy().into_owned(), size: meta.map_or(0, |m| m.len()), modified_ns }
+        })
+        .collect()
+}
+
+/// Why saved cards cannot be reused for the present inputs (None: they can,
+/// the inputs are the same, in the same order).
+fn stale(saved: Option<&[InputStamp]>, now: &[InputStamp]) -> Option<String> {
+    let Some(saved) = saved else {
+        return Some("cards/inputs.json is missing or unreadable, so it is not known which tomograms they were made from".into());
+    };
+    if saved.len() != now.len() {
+        return Some(format!("they were made from {} tomogram(s), now there are {}", saved.len(), now.len()));
+    }
+    for (a, b) in saved.iter().zip(now) {
+        if a.path != b.path {
+            return Some(format!("they were made from {}, now {}", a.path, b.path));
+        }
+        if a.size != b.size || a.modified_ns != b.modified_ns {
+            return Some(format!("{} has changed since they were made", b.path));
+        }
+    }
+    None
+}
+
 /// `tmv sta`: the tomogram of each input (made as `tmv tomo --for sta` does),
 /// class-average cards of the blobs in them, then the average of everything
 /// that looks like the chosen card.
@@ -566,9 +625,19 @@ fn sta(o: &Opts) -> Result<Value> {
     // Step 1: the cards (they take minutes, so a finished set is reused).
     let cards_dir = out.join("cards");
     let cards_json = cards_dir.join("cards.json");
+    let inputs_json = cards_dir.join("inputs.json");
+    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()));
     let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if !cards.is_empty() {
+        let saved: Option<Vec<InputStamp>> = std::fs::read(&inputs_json).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if let Some(why) = stale(saved.as_deref(), &stamps) {
+            eprintln!("tmv sta: making the cards again: {why}");
+            cards.clear();
+        }
+    }
     if cards.is_empty() {
         cards = sp::cards(&sources, &cards_dir.to_string_lossy(), &report, &|_| {})?;
+        std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
         progress.done();
     } else {
         eprintln!("tmv sta: reusing the cards in {} (delete that folder to make them again)", cards_dir.display());
@@ -997,7 +1066,7 @@ mod tests {
     }
 
     fn card(id: usize, likely: bool) -> crate::sta::project::Card {
-        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, share: 0.3, path: String::new(), compact: 12.0, likely }
+        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, share: 0.3, path: String::new(), compact: 12.0, likely }
     }
 
     #[test]
@@ -1007,6 +1076,45 @@ mod tests {
         assert_eq!(auto_pick(&[card(0, true), card(1, true)]), None);
         assert_eq!(auto_pick(&[card(0, false), card(1, false)]), None);
         assert_eq!(auto_pick(&[]), None);
+    }
+
+    #[test]
+    fn stale_cards_are_found() {
+        let stamp = |p: &str, size, m| InputStamp { path: p.into(), size, modified_ns: m };
+        let now = vec![stamp("/a.mrc", 10, 5), stamp("/b.mrc", 20, 6)];
+        assert_eq!(stale(Some(&now), &now), None);
+        assert!(stale(None, &now).is_some());
+        assert!(stale(Some(&now[..1]), &now).is_some());
+        assert!(stale(Some(&[stamp("/c.mrc", 10, 5), now[1].clone()]), &now).is_some());
+        assert!(stale(Some(&[stamp("/a.mrc", 11, 5), now[1].clone()]), &now).unwrap().contains("/a.mrc"));
+        assert!(stale(Some(&[now[0].clone(), stamp("/b.mrc", 20, 7)]), &now).unwrap().contains("/b.mrc"));
+        let swapped = vec![now[1].clone(), now[0].clone()];
+        assert!(stale(Some(&swapped), &now).is_some());
+    }
+
+    #[test]
+    fn input_stamps_follow_the_file() {
+        let dir = std::env::temp_dir().join(format!("tmv_stamp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.mrc");
+        std::fs::write(&f, b"abc").unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let a = input_stamps([p.as_str()].into_iter());
+        assert_eq!((a[0].size, a[0].path.as_str()), (3, p.as_str()));
+        assert_eq!(stale(Some(&a), &input_stamps([p.as_str()].into_iter())), None);
+        std::fs::write(&f, b"abcd").unwrap();
+        assert!(stale(Some(&a), &input_stamps([p.as_str()].into_iter())).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sta_saves_its_result_in_the_out_folder() {
+        let o = Opts { input: Some("/data/t.mrc".into()), named: vec![("out".into(), Some("/tmp/x".into()))], ..Default::default() };
+        assert_eq!(result_file("sta", &o), Some(PathBuf::from("/tmp/x/sta.tmv.json")));
+        assert_eq!(result_file("tomo", &o), Some(PathBuf::from("/data/t.mrc.tmv.json")));
+        let o = Opts { input: Some("/data/t.mrc".into()), ..Default::default() };
+        assert_eq!(result_file("sta", &o), Some(PathBuf::from("/data/t_sta/sta.tmv.json")));
+        assert_eq!(result_file("sta", &Opts::default()), None);
     }
 
     #[test]

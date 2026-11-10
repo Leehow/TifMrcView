@@ -523,54 +523,191 @@ pub struct Card {
     /// A `BOX`³ MRC of the class average.
     pub path: String,
     /// How much denser the average's variation is inside the central ball
-    /// than a uniform one would be (see `compactness`).
+    /// than a uniform one would be (see `shape`).
     pub compact: f64,
-    /// Compact and not a single dot: worth offering as the particle.
+    /// How stretched the particle density is: the square root of the ratio of
+    /// the largest to the smallest eigenvalue of its second-moment matrix
+    /// (1 a ball, large a line or a layer; see `shape`).
+    pub elongation: f64,
+    /// Separate blobs in the density at half its maximum; 1 when it is a
+    /// single one at the centre, 0 when it has none there (see `shape`).
+    pub blobs: usize,
+    /// A single compact, not stretched particle: worth offering as the
+    /// particle (see `is_likely`).
     pub likely: bool,
 }
 
-/// Share of a class average's squared deviation from its mean (over the
-/// whole `n`³ box) that lies inside the ball of `radius` voxels around the
-/// centre, divided by the ball's share of the box volume. A particle
-/// concentrated in the ball scores far above 1; a line or a layer running
-/// through the box scores low. Also whether the density in the ball is
-/// spread over it rather than one dot (gold): the largest deviation there
-/// is at most `DOT` times the mean deviation there.
-fn compactness(avg: &[f32], n: usize, radius: f64) -> (f64, bool) {
+/// What a class average (`n`³, z-major, the particle dark) says about its
+/// shape, within the ball of `radius` voxels around the centre `n / 2`
+/// (the particle itself fills about 1/1.2 of it):
+///
+/// * `compact`: the share of the squared deviation from the mean (over the
+///   whole box) that lies inside the ball, divided by the ball's share of the
+///   box volume. A particle concentrated in the ball scores far above 1; a
+///   line or a layer running through the box scores low.
+/// * `elongation`: the density is the darkness below the box's median, kept
+///   where positive, out to `MOMENTS` ball radii. `sqrt(λ1 / λ3)` of the eigenvalues of its second-moment
+///   matrix about its centroid: about 1 for a ball (the missing wedge
+///   stretches it along Z by up to 1.3 to 1.5), `λ1 / λ2` large for a line,
+///   `λ2 / λ3` large for a layer.
+/// * `blobs`: the 6-connected pieces of the density above half its maximum
+///   that hold at least `BLOB_SHARE` of that part. One piece, whose centroid
+///   is within `CENTRED` of the particle radius of the centre, gives 1; if
+///   that single piece lies elsewhere there is no particle at the centre and
+///   the count is 0.
+pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize) {
     let c = (n / 2) as f64;
     let mean = avg.iter().map(|v| *v as f64).sum::<f64>() / avg.len() as f64;
     let (mut all, mut inside, mut voxels) = (0.0, 0.0, 0usize);
-    let (mut peak, mut sum) = (0.0f64, 0.0);
+    let mut ball = vec![false; avg.len()];
+    let mut reach = vec![false; avg.len()];
+    let wide = (MOMENTS * radius).min(c);
     for z in 0..n {
         for y in 0..n {
             for x in 0..n {
-                let d = (avg[(z * n + y) * n + x] as f64 - mean).abs();
+                let i = (z * n + y) * n + x;
+                let d = (avg[i] as f64 - mean).abs();
                 all += d * d;
                 let (a, b, e) = (x as f64 - c, y as f64 - c, z as f64 - c);
+                reach[i] = a * a + b * b + e * e <= wide * wide;
                 if a * a + b * b + e * e <= radius * radius {
                     inside += d * d;
                     voxels += 1;
-                    sum += d;
-                    peak = peak.max(d);
+                    ball[i] = true;
                 }
             }
         }
     }
     if all <= 0.0 || voxels == 0 {
-        return (0.0, false);
+        return (0.0, 0.0, 0);
     }
     let compact = (inside / all) / (voxels as f64 / avg.len() as f64);
-    let typical = sum / voxels as f64;
-    (compact, compact > COMPACT && peak <= DOT * typical)
+
+    // The particle density: darkness below the background, in the ball.
+    let mut sorted: Vec<f32> = avg.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let background = sorted[sorted.len() / 2] as f64;
+    let dens: Vec<f64> = avg.iter().zip(&reach).map(|(v, b)| if *b { (background - *v as f64).max(0.0) } else { 0.0 }).collect();
+    let (mut m, mut mx, mut my, mut mz) = (0.0, 0.0, 0.0, 0.0);
+    for (i, d) in dens.iter().enumerate().filter(|(_, d)| **d > 0.0) {
+        m += d;
+        mx += d * (i % n) as f64;
+        my += d * (i / n % n) as f64;
+        mz += d * (i / n / n) as f64;
+    }
+    if m <= 0.0 {
+        return (compact, 0.0, 0);
+    }
+    let centroid = [mx / m, my / m, mz / m];
+    let mut cov = [[0.0f64; 3]; 3];
+    for (i, d) in dens.iter().enumerate().filter(|(_, d)| **d > 0.0) {
+        let p = [(i % n) as f64 - centroid[0], (i / n % n) as f64 - centroid[1], (i / n / n) as f64 - centroid[2]];
+        for r in 0..3 {
+            for q in 0..3 {
+                cov[r][q] += d * p[r] * p[q] / m;
+            }
+        }
+    }
+    let l = eigenvalues(cov);
+    let elongation = if l[0] <= 0.0 { 0.0 } else { (l[0] / l[2].max(1e-9 * l[0])).sqrt() };
+
+    // Pieces above half the maximum.
+    let top = dens.iter().cloned().fold(0.0, f64::max);
+    let above: Vec<usize> = (0..dens.len()).filter(|i| ball[*i] && dens[*i] >= 0.5 * top).collect();
+    let mut label = vec![usize::MAX; dens.len()];
+    let mut pieces: Vec<(usize, [f64; 3])> = vec![];
+    for &start in &above {
+        if label[start] != usize::MAX {
+            continue;
+        }
+        let id = pieces.len();
+        let (mut count, mut sum) = (0usize, [0.0f64; 3]);
+        label[start] = id;
+        let mut stack = vec![start];
+        while let Some(i) = stack.pop() {
+            let p = [i % n, i / n % n, i / n / n];
+            count += 1;
+            for k in 0..3 {
+                sum[k] += p[k] as f64;
+            }
+            for (axis, step) in [(0usize, 1usize), (1, n), (2, n * n)] {
+                for up in [false, true] {
+                    if if up { p[axis] + 1 >= n } else { p[axis] == 0 } {
+                        continue;
+                    }
+                    let j = if up { i + step } else { i - step };
+                    if ball[j] && dens[j] >= 0.5 * top && label[j] == usize::MAX {
+                        label[j] = id;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        pieces.push((count, sum.map(|s| s / count as f64)));
+    }
+    let big: Vec<&(usize, [f64; 3])> = pieces.iter().filter(|p| p.0 as f64 >= BLOB_SHARE * above.len() as f64).collect();
+    let mut blobs = big.len();
+    if blobs == 1 {
+        let off = big[0].1.iter().map(|v| (v - c) * (v - c)).sum::<f64>().sqrt();
+        if off > CENTRED * radius / 1.2 {
+            blobs = 0;
+        }
+    }
+    (compact, elongation, blobs)
 }
 
-/// A class is `likely` the particle above this `compact`: 10 means 60% of
-/// the variation in a ball that is 6% of the box (a line through the
-/// centre reaches about 8, a layer less, a particle 13 or more).
-const COMPACT: f64 = 10.0;
-/// Most the ball's largest deviation may exceed its mean one (a smooth
-/// particle gives about 2, a dot with a streak 8 or more).
-const DOT: f64 = 4.0;
+/// Eigenvalues of a symmetric 3x3 matrix, largest first (Jacobi sweeps).
+fn eigenvalues(mut a: [[f64; 3]; 3]) -> [f64; 3] {
+    for _ in 0..30 {
+        let off = a[0][1] * a[0][1] + a[0][2] * a[0][2] + a[1][2] * a[1][2];
+        if off < 1e-24 * (a[0][0] * a[0][0] + a[1][1] * a[1][1] + a[2][2] * a[2][2]).max(1e-300) {
+            break;
+        }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if a[p][q].abs() < 1e-300 {
+                continue;
+            }
+            let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+            let t = if theta == 0.0 { 1.0 } else { t };
+            let (c, s) = (1.0 / (t * t + 1.0).sqrt(), t / (t * t + 1.0).sqrt());
+            for k in 0..3 {
+                let (x, y) = (a[k][p], a[k][q]);
+                a[k][p] = c * x - s * y;
+                a[k][q] = s * x + c * y;
+            }
+            for k in 0..3 {
+                let (x, y) = (a[p][k], a[q][k]);
+                a[p][k] = c * x - s * y;
+                a[q][k] = s * x + c * y;
+            }
+        }
+    }
+    let mut l = [a[0][0], a[1][1], a[2][2]];
+    l.sort_by(|x, y| y.total_cmp(x));
+    l
+}
+
+/// A class is `likely` the particle when it is compact above `COMPACT`
+/// (7.5 means 45% of the variation in a ball that is 6% of the box; lines,
+/// layers and pairs of particles measured 3.8 to 7.2 on a real tomogram,
+/// ribosomes 8.0 and 11.1), not stretched (below `ELONGATION`) and one blob.
+fn is_likely(compact: f64, elongation: f64, blobs: usize) -> bool {
+    compact > COMPACT && elongation < ELONGATION && blobs == 1
+}
+
+const COMPACT: f64 = 7.5;
+/// Most `elongation` of a particle: the missing wedge stretches a ball along
+/// Z by up to about 1.3 to 1.5.
+const ELONGATION: f64 = 1.6;
+/// A piece smaller than this share of the voxels above half the maximum is
+/// not a blob.
+/// The moments are taken out to this many ball radii (at most the box's
+/// half width): a line or a layer is cut short by the ball and looks rounder.
+const MOMENTS: f64 = 2.0;
+const BLOB_SHARE: f64 = 0.15;
+/// How far the blob's centroid may be from the centre, in particle radii.
+const CENTRED: f64 = 0.25;
 
 /// Kinds with fewer blobs, and sizes below this (Å), are not offered: at
 /// this sampling they are noise.
@@ -651,7 +788,8 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                 member[*i] = true;
             }
             let average = set.average(&poses, |i| member[i]).finish();
-            let (compact, likely) = compactness(&average, BOX, 0.6 * size / voxel_a);
+            let (compact, elongation, blobs) = shape(&average, BOX, 0.6 * size / voxel_a);
+            let likely = is_likely(compact, elongation, blobs);
             found.push((
                 Card {
                     id: 0,
@@ -662,6 +800,8 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                     share: class.members.len() as f64 / cuts.len() as f64,
                     path: String::new(),
                     compact,
+                    elongation,
+                    blobs,
                     likely,
                 },
                 average,
@@ -984,7 +1124,7 @@ mod card_tests {
     const N: usize = 32;
 
     /// A box filled by `f(x, y, z)`, coordinates from the centre.
-    fn volume(f: impl Fn(f64, f64, f64) -> f64) -> Vec<f32> {
+    fn volume(mut f: impl FnMut(f64, f64, f64) -> f64) -> Vec<f32> {
         let c = (N / 2) as f64;
         (0..N * N * N).map(|i| f((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c) as f32).collect()
     }
@@ -993,27 +1133,82 @@ mod card_tests {
         (-(x * x + y * y + z * z) / (2.0 * s * s)).exp()
     }
 
+    /// The radius `cards` uses for a particle 13 voxels across.
+    const R: f64 = 7.8;
+
     fn card(avg: &[f32], members: usize) -> Card {
-        let (compact, likely) = compactness(avg, N, 7.8);
-        Card { id: 0, diameter_a: 0.0, measured_a: 0.0, voxel_a: 1.0, members, share: 0.0, path: String::new(), compact, likely }
+        let (compact, elongation, blobs) = shape(avg, N, R);
+        let likely = is_likely(compact, elongation, blobs);
+        Card { id: 0, diameter_a: 0.0, measured_a: 0.0, voxel_a: 1.0, members, share: 0.0, path: String::new(), compact, elongation, blobs, likely }
+    }
+
+    /// A class average: the particle dark, a little noise on it.
+    fn dark(f: impl Fn(f64, f64, f64) -> f64, noise: f64) -> Vec<f32> {
+        let mut rng = Rng(5);
+        volume(|x, y, z| -f(x, y, z) + noise * rng.gauss()).iter().map(|v| *v as f32).collect()
+    }
+
+    /// Ball (sigma 3.5), optionally stretched along Z.
+    fn ball(stretch: f64) -> impl Fn(f64, f64, f64) -> f64 {
+        move |x, y, z| blob(x, y, z / stretch, 3.5)
+    }
+
+    fn report(name: &str, c: &Card) {
+        eprintln!("{name}: compact {:.2}, elongation {:.2}, blobs {}, likely {}", c.compact, c.elongation, c.blobs, c.likely);
+    }
+
+    #[test]
+    fn single_particles_are_likely() {
+        for (name, avg) in [
+            ("ball", dark(ball(1.0), 0.0)),
+            ("wedge-stretched ball 1.3", dark(ball(1.3), 0.0)),
+            ("ball with noise", dark(ball(1.0), 0.05)),
+            ("stretched ball with noise", dark(ball(1.3), 0.05)),
+        ] {
+            let c = card(&avg, 50);
+            report(name, &c);
+            assert!(c.likely, "{name}");
+            assert!(c.elongation < 1.5, "{name}");
+        }
+    }
+
+    #[test]
+    fn lines_layers_and_pairs_are_not_likely() {
+        let cases = [
+            ("rod", dark(|x, y, _| blob(x, y, 0.0, 2.5), 0.0)),
+            ("rod along x with noise", dark(|_, y, z| blob(0.0, y, z, 2.5), 0.05)),
+            ("slab", dark(|_, _, z| blob(0.0, 0.0, z, 2.5), 0.0)),
+            ("slab with noise", dark(|_, _, z| blob(0.0, 0.0, z, 2.5), 0.05)),
+            ("two balls", dark(|x, y, z| blob(x - 4.5, y, z, 2.5) + blob(x + 4.5, y, z, 2.5), 0.0)),
+            ("two balls with noise", dark(|x, y, z| blob(x - 4.5, y, z, 2.5) + blob(x + 4.5, y, z, 2.5), 0.05)),
+            ("ball off the centre", dark(|x, y, z| blob(x - 5.0, y, z, 2.5), 0.0)),
+        ];
+        for (name, avg) in cases {
+            let c = card(&avg, 50);
+            report(name, &c);
+            assert!(!c.likely, "{name}");
+        }
+    }
+
+    #[test]
+    fn eigenvalues_of_a_known_matrix() {
+        let l = eigenvalues([[2.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 0.0, 5.0]]);
+        assert!((l[0] - 5.0).abs() < 1e-9 && (l[1] - 3.0).abs() < 1e-9 && (l[2] - 1.0).abs() < 1e-9, "{l:?}");
     }
 
     #[test]
     fn the_compact_particle_ranks_first() {
         // A blurred ball with four sub-blobs.
-        let particle = volume(|x, y, z| blob(x, y, z, 3.5) + [(4.0, 0.0, 0.0), (-4.0, 0.0, 0.0), (0.0, 4.0, 1.0), (0.0, -3.0, -3.0)].iter().map(|p| 0.5 * blob(x - p.0, y - p.1, z - p.2, 1.5)).sum::<f64>());
-        // A line through the box and through the centre, a layer, a dark dot with a streak.
-        let line = volume(|x, y, _| blob(x, y, 0.0, 1.5));
-        let layer = volume(|_, _, z| blob(0.0, 0.0, z, 2.0));
-        let dot = volume(|x, y, z| 3.0 * blob(x, y, z, 1.2) + 0.3 * blob(x, y, 0.0, 2.0) * (-(z * z) / 128.0).exp());
-        let mut cards = vec![card(&line, 60), card(&layer, 70), card(&dot, 30), card(&particle, 50)];
+        let particle = dark(|x, y, z| blob(x, y, z, 3.5) + [(4.0, 0.0, 0.0), (-4.0, 0.0, 0.0), (0.0, 4.0, 1.0), (0.0, -3.0, -3.0)].iter().map(|p| 0.5 * blob(x - p.0, y - p.1, z - p.2, 1.5)).sum::<f64>(), 0.0);
+        let line = dark(|x, y, _| blob(x, y, 0.0, 1.5), 0.0);
+        let layer = dark(|_, _, z| blob(0.0, 0.0, z, 2.0), 0.0);
+        let mut cards = vec![card(&line, 60), card(&layer, 70), card(&particle, 50)];
         for c in &cards {
-            eprintln!("members {}: compact {:.2}, likely {}", c.members, c.compact, c.likely);
+            report(&format!("members {}", c.members), c);
         }
         cards.sort_by(|a, b| rank(b).total_cmp(&rank(a)));
         assert_eq!(cards[0].members, 50);
         assert_eq!(cards.iter().filter(|c| c.likely).count(), 1);
-        assert!(cards[0].likely);
     }
 }
 

@@ -29,7 +29,9 @@ driver is enough):
 sta` does) or tomograms that `tmv tomo --for sta` wrote, one or several. It
 works in two steps. First it writes the cards to `OUT/cards/` (`card_N.mrc`,
 32-voxel class averages, and `cards.json`; this takes minutes, so a finished
-`cards.json` is reused: delete `OUT/cards/` to make them again). Then, with
+`cards.json` is reused only when `OUT/cards/inputs.json` shows it was made
+from the same tomograms, unchanged; otherwise it is made again, with a line on
+stderr saying why; delete `OUT/cards/` to force it). Then, with
 `--pick N`, it finds everything in the tomograms that looks like card N and
 averages it into `OUT/`. Without `--pick` it goes on by itself only when card
 0 is the only one marked `likely`; otherwise it prints the cards as JSON and
@@ -47,7 +49,9 @@ Everything is chosen automatically, as in the app. `--pixel Å` and
 them carry the pixel size and voltage.
 
 Results are written beside the input. The result of each run is printed as
-one JSON object on stdout and saved as `INPUT.tmv.json`. Exit status: 0 done,
+one JSON object on stdout and saved as `INPUT.tmv.json` (`tmv sta` saves
+`OUT/sta.tmv.json`, so it does not overwrite the one `tmv tomo` made for a
+tilt series). Exit status: 0 done,
 1 error (`"error"`, `"hint"`), 2 a choice is needed (SPA: which kind of
 particle, shown as PNG strips; STA: which card).
 

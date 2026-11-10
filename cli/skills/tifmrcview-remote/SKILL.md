@@ -111,7 +111,8 @@ still running. Do not start several GPU jobs at once on the same GPU.
 ## 5. Read the result
 
 When the job ends, the log ends with one JSON object, also saved beside the
-input as `INPUT.tmv.json` (`tmv.json` inside a folder):
+input as `INPUT.tmv.json` (`tmv.json` inside a folder; `tmv sta` saves
+`OUT/sta.tmv.json`, so the `.tmv.json` of a tilt series from `tmv tomo` stays):
 - `"ok": true` — `"open"` is the file to look at; other fields hold the
   numbers to report (resolution, defocus, vesicle count…); `"note"`, when
   present, is something the user should know (translate it if needed).
