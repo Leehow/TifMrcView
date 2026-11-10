@@ -535,7 +535,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         let turn = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
         let rotations: Vec<_> = grid(30.0).iter().map(|r| mul(r, &turn)).collect();
         let shift = (radius / 2.0).ceil().max(2.0) as usize;
-        let placed = engine.global(&rest, &wedges, &wedge_of[first..], &model, &rotations, shift, &|a, b| progress("放置全部颗粒", a, b))?;
+        let placed = engine.global(&rest, &model, &rotations, shift, &|a, b| progress("放置全部颗粒", a, b))?;
         poses.extend(placed);
     }
     let out = align(&set, &model, &poses, progress, live)?;
@@ -996,10 +996,11 @@ pub fn same_kind(a: CardCube, b: CardCube) -> f64 {
     let engine = cc::Engine::new(n, SAME_LOW_PASS, SAME_HIGH_PASS, radius);
     let ones = vec![1f32; n * n * n];
     let x = engine.prepare(&x, &ones);
+    let reference = engine.reference(&reference);
     let mut tried: Vec<Pose> = grid(SAME_STEP)
         .par_iter()
         .map(|r| {
-            let (score, t) = engine.score(&x, &ones, &engine.turn(&reference, r), SAME_SHIFT);
+            let (score, t) = engine.score(&x, &engine.turn(&reference, r), SAME_SHIFT);
             Pose { r: *r, t, score }
         })
         .collect();
@@ -1010,7 +1011,7 @@ pub fn same_kind(a: CardCube, b: CardCube) -> f64 {
         .map(|start| {
             let mut pose = *start;
             for (range, steps) in [(SAME_STEP, 2), (SAME_STEP / 3.0, 2)] {
-                pose = engine.local(&x, &ones, &reference, &pose, &local(range, steps), SAME_SHIFT);
+                pose = engine.local(&x, &reference, &pose, &local(range, steps), SAME_SHIFT);
             }
             pose.score
         })

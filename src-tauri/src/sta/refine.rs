@@ -128,7 +128,7 @@ pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Resu
         let turn = random_rotation(&mut rng);
         let turned: Vec<Mat> = rotations.iter().map(|r| mul(r, &turn)).collect();
         let stage = format!("起始模型 第 {}/{} 轮", round + 1, ROUNDS);
-        poses = engine.global(&prepared, set.wedges, set.wedge_of, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
+        poses = engine.global(&prepared, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
         let average = set.average(&poses, |_| true).finish();
         model = centre(set, &mut poses, average);
         live(&model);
@@ -172,7 +172,7 @@ pub fn classes(set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -
         let mut best = vec![Pose { r: IDENTITY, t: [0.0; 3], score: f32::MIN }; m];
         for (c, model) in models.iter().enumerate() {
             let stage = format!("分类 第 {}/{} 轮", round + 1, CLASS_ROUNDS);
-            let found = engine.global(&prepared, set.wedges, set.wedge_of, model, &turned, set.shift(), &|a, b| progress(&stage, c * b + a, k * b))?;
+            let found = engine.global(&prepared, model, &turned, set.shift(), &|a, b| progress(&stage, c * b + a, k * b))?;
             for i in 0..m {
                 if found[i].score > best[i].score {
                     best[i] = found[i];
@@ -239,6 +239,7 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
         let engine = set.engine(low_pass);
         // A different set of turns each round, so the grid leaves no mark.
         let offset = spin(STEP * rng.unit());
+        let reference = engine.reference(&model);
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("起始模型 第 {}/{} 轮", round + 1, KNOWN_ROUNDS);
         poses = (0..m)
@@ -251,7 +252,7 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
                 let x = engine.prepare(&set.particles[i], set.wedge(i));
                 for r in super::shape::turns(axes[i], STEP, both) {
                     let r = mul(&r, &offset);
-                    let (score, t) = engine.score(&x, set.wedge(i), &engine.turn(&model, &r), set.shift());
+                    let (score, t) = engine.score(&x, &engine.turn(&reference, &r), set.shift());
                     if score > best.score {
                         best = Pose { r, t, score };
                     }
@@ -333,6 +334,16 @@ fn cut(fsc: &[f64]) -> f64 {
     (fsc.len() - 1) as f64
 }
 
+/// The last shell the halves still agree in: with every particle at about
+/// the same defocus the curve falls through 0.143 at a zero of the contrast
+/// transfer and rises again behind it, and that signal is as good for
+/// aligning as the rest (the halves are independent). A shell counts only
+/// with a neighbour above the line too, so a single noisy value does not.
+fn extent(fsc: &[f64]) -> f64 {
+    let ok = |s: usize| fsc.get(s).is_some_and(|v| *v >= 0.143);
+    (2..fsc.len()).rev().find(|&s| ok(s) && (ok(s - 1) || ok(s + 1))).map_or(1.0, |s| s as f64)
+}
+
 /// Local search ranges of the rounds, degrees; each is covered in two
 /// steps per side.
 const RANGES: [f64; 3] = [12.0, 6.0, 3.0];
@@ -352,6 +363,7 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
         check_cancel()?;
         let engine = set.engine(low_pass);
         let steps = local(*range, 2);
+        let against = [engine.reference(&refs[0]), engine.reference(&refs[1])];
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("对齐 第 {}/{} 轮", round + 1, RANGES.len());
         poses = (0..m)
@@ -361,7 +373,7 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
                     return poses[i];
                 }
                 let x = engine.prepare(&set.particles[i], set.wedge(i));
-                let p = engine.local(&x, set.wedge(i), &refs[i % 2], &poses[i], &steps, set.shift());
+                let p = engine.local(&x, &against[i % 2], &poses[i], &steps, set.shift());
                 progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
                 p
             })
@@ -371,7 +383,7 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
         let halves = [a.finish(), b.finish()];
         let fsc = post::fsc(&halves[0], &halves[1], set.n, set.radius + 2.0);
         let shell = cut(&fsc);
-        low_pass = (shell + 1.0).clamp(2.0, set.n as f64 / 2.0 - 3.0);
+        low_pass = (shell.max(extent(&fsc)) + 1.0).clamp(2.0, set.n as f64 / 2.0 - 3.0);
         let mut both = a;
         both.merge(&b);
         let map = both.finish();
@@ -380,4 +392,17 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
         out = Some(Aligned { map, halves, poses: poses.clone(), fsc, shell });
     }
     Ok(out.unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_signal_behind_a_zero_counts_but_a_lone_value_does_not() {
+        let dip = [1.0, 0.99, 0.9, 0.6, 0.147, 0.107, 0.19, 0.3, 0.37, 0.17, 0.06, 0.01, 0.2, 0.0];
+        assert_eq!(cut(&dip).floor(), 4.0);
+        assert_eq!(extent(&dip), 9.0);
+        assert_eq!(extent(&[1.0, 0.9, 0.5, 0.1, 0.0, 0.0]), 2.0);
+    }
 }
