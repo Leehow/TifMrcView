@@ -39,6 +39,9 @@ const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
 /// tell them apart, and the average got worse.)
 const MIN_Z: f32 = 5.0;
 const LOOSE_Z: f32 = MIN_Z;
+/// A candidate whose darkest voxel is this many robust standard deviations
+/// below the tomogram's median is a gold marker (see `Cut::darkest`).
+const GOLD: f32 = 10.0;
 /// Side of the cubes, and how many voxels of it the particle spans.
 const BOX: usize = 32;
 const SPAN: f64 = 13.0;
@@ -273,11 +276,13 @@ fn darkest(v: &[f32], dims: [usize; 3], c: [usize; 3], radius: f64, median: f32,
 
 /// The cube around voxel `c`, zero mean and unit variance. Where it reaches
 /// past the tomogram (thin tomograms are hardly thicker than the cube) it
-/// is filled with the mean, so particles near a face are kept; the centre
-/// itself and at least half the cube have to be inside.
+/// along the beam it is filled with the mean, so particles near a face are
+/// kept; the centre itself and at least half the cube have to be inside.
 fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32>> {
     let h = (BOX / 2) as isize;
-    if (0..3).any(|i| c[i] >= dims[i]) {
+    // Across the beam the cube has to be whole: the borders of a tomogram
+    // hold reconstruction artefacts, not particles.
+    if c[2] >= dims[2] || (0..2).any(|i| c[i] < BOX / 2 || c[i] + BOX / 2 > dims[i]) {
         return None;
     }
     let c = c.map(|x| x as isize);
@@ -390,6 +395,19 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         }
     }
     progress("裁出颗粒", sources.len(), sources.len());
+    // Gold markers and what lies in their streaks: on EMPIAR-10045 gold is
+    // 17 to 25 deviations dark, everything else under 8.
+    let candidates = cuts.len();
+    // Gold also stands out from the candidates themselves (they were at
+    // 4.6 in the median); where all are that dark, they are the particles.
+    let mut dark: Vec<f32> = cuts.iter().map(|c| c.darkest).collect();
+    dark.sort_by(f32::total_cmp);
+    let limit = GOLD.max(2.0 * dark.get(dark.len() / 2).copied().unwrap_or(0.0));
+    let gold: Vec<(usize, [f64; 3])> = cuts.iter().filter(|c| c.darkest > limit).map(|c| (c.source, c.at)).collect();
+    cuts.retain(|c| {
+        let reach = size / voxel_a * c.bin as f64;
+        !gold.iter().any(|(s, at)| *s == c.source && (0..3).map(|i| (at[i] - c.at[i]).powi(2)).sum::<f64>() < reach * reach)
+    });
     if cuts.len() < 20 {
         bail!("这种尺寸的颗粒只找到 {} 个，太少了", cuts.len());
     }
@@ -417,27 +435,12 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         let placed = engine.global(&rest, &wedges, &wedge_of[first..], &model, &rotations, shift, &|a, b| progress("放置全部颗粒", a, b))?;
         poses.extend(placed);
     }
-    let mut out = align(&set, &model, &poses, progress, live)?;
+    let out = align(&set, &model, &poses, progress, live)?;
 
-    // 4. Candidates that match the average clearly worse than the rest are
-    // other things of the same size: leave them out and align again.
-    let scores: Vec<f32> = out.poses.iter().map(|p| p.score).collect();
-    let (threshold, distinct) = split(&scores);
-    let keep: Vec<usize> = (0..cuts.len()).filter(|i| scores[*i] >= threshold).collect();
-    if distinct >= DISTINCT && keep.len() >= 20 && keep.len() < cuts.len() {
-        let poses: Vec<Pose> = keep.iter().map(|i| out.poses[*i]).collect();
-        let particles: Vec<Vec<f32>> = keep.iter().map(|i| particles[*i].clone()).collect();
-        let wedge_of: Vec<usize> = keep.iter().map(|i| wedge_of[*i]).collect();
-        let mut at = 0;
-        cuts.retain(|_| {
-            at += 1;
-            keep.binary_search(&(at - 1)).is_ok()
-        });
-        let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-        out = align(&set, &out.map, &poses, progress, live)?;
-    }
-    report.candidates = scores.len();
-    report.distinct = distinct;
+    // (Leaving out the candidates that match the average worst was tried
+    // on EMPIAR-10045 and removed: at this resolution dense debris matches
+    // better than the particles do.)
+    report.candidates = candidates;
 
     save(&mut report, sources, &cuts, &out, out_dir, size, voxel_a, started)?;
     Ok(report)
