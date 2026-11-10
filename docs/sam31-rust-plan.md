@@ -1,5 +1,25 @@
 # SAM 3.1 native Rust support
 
+## Release continuation (2026-11-10)
+
+The user subsequently authorized committing, rebuilding, packaging and
+uploading. This supersedes the implementation phase's no-publishing boundary
+below. Scope remains SAM 3.1 and the packaging/license changes required to
+distribute it; unrelated dirty work is preserved.
+
+- Source commit: `8eb9eb7` on the original checkout.
+- Clean integration: `/Users/haoli/leehow/tifview-sam31-release`, branch
+  `codex/sam31-native-release`, based on published main `4b3d347` (0.7.192).
+  Cherry-pick `f7760a1` preserves main's later runtime/UI work.
+- Existing GitHub Actions `build.yml` owns cross-platform tests, installers,
+  updater signatures and upload to the established download site. Release
+  verification will inspect the resulting artifact metadata and public feeds.
+- Pro and CLI packages must carry SAM3-LICENSE and the mixed-license notice.
+- No unrelated in-progress feature is included. No model checkpoint or
+  microscopy image is published as part of the code/package upload.
+- Pending: clean-branch validation, integration, package/upload completion,
+  public-feed verification and task-owned worktree closeout.
+
 ## Authorized objective and acceptance
 
 Implement SAM 3.1 interactive image segmentation in the existing Rust/Burn

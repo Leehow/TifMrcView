@@ -9,11 +9,11 @@ import path from 'node:path';
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'tmv-pack-test-'));
-  for (const dir of ['scripts', 'cli/skills/test', 'src-tauri/target/pro/cuda/nvvm/libdevice', 'out', 'bin']) mkdirSync(path.join(root, dir), { recursive: true });
+  for (const dir of ['scripts', 'cli/skills/test', 'src-tauri/sam', 'src-tauri/target/pro/cuda/nvvm/libdevice', 'out', 'bin']) mkdirSync(path.join(root, dir), { recursive: true });
   copyFileSync(new URL('./pack-cli.mjs', import.meta.url), path.join(root, 'scripts/pack-cli.mjs'));
   // Packaging tests must never acquire dependencies from the Internet.
   writeFileSync(path.join(root, 'scripts/libdevice.mjs'), 'export async function libdevice() {}\n');
-  for (const f of ['cli/README.md', 'cli/AGENTS.md', 'cli/skills/test/SKILL.md', 'LICENSE', 'src-tauri/target/pro/cuda/LICENSE', 'src-tauri/target/pro/cuda/nvvm/libdevice/libdevice.10.bc', 'binary']) writeFileSync(path.join(root, f), 'fixture\n');
+  for (const f of ['cli/README.md', 'cli/AGENTS.md', 'cli/skills/test/SKILL.md', 'LICENSE', 'src-tauri/sam/SAM3-LICENSE', 'src-tauri/sam/LICENSES.md', 'src-tauri/target/pro/cuda/LICENSE', 'src-tauri/target/pro/cuda/nvvm/libdevice/libdevice.10.bc', 'binary']) writeFileSync(path.join(root, f), 'fixture\n');
   return root;
 }
 
