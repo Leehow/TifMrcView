@@ -1,11 +1,11 @@
 "use strict";
 // Pro denoising: Gaussian, median, anisotropic diffusion and non-local
-// means (denoise.rs, NLM on the GPU), IMOD NAD 3D, and a self-supervised network
+// means (denoise.rs, NLM on the GPU), native NAD 3D, and a self-supervised network
 // (Noise2Void / Noise2Noise, denoise_learn.rs) trained on the image itself.
 // Previews the middle of the
 // view next to the original, then saves the slice or the whole stack as a
 // float32 MRC; the open image is never changed.
-// Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
+// Shares app.js globals: S, F, T, invoke, $, pref, setFft, visibleRegion, fftChannel, toScreen, ext, draw, requestRender, toast, saveDir, setSaveDir, dirname, openPath.
 (() => {
   const N = { generation: 0, cache: new Map(), busy: false, saving: false, res: null, key: "", want: "", timer: 0, img: null, imgKey: "", saved: null };
 
@@ -13,7 +13,7 @@
   const METHODS = {
     nlm: ["h（× 噪声 σ）", 0.2, 3, 0.05, 0.8, "非局部均值：按邻域块的相似度加权平均，保留纹理和膜；越大越平滑"],
     diffusion: ["边缘阈值 K（× 噪声 σ）", 0.5, 8, 0.1, 2, "各向异性扩散：沿边缘平滑、不跨边缘；越大越平滑"],
-    nad3d: ["K（× 体数据标准差 SD）", 0.02, 5, 0.02, 0.1, "IMOD nad_eed_3d：三维边缘增强非线性各向异性扩散（NAD / EED），联合处理 XYZ；K 越大越平滑。需要安装 IMOD"],
+    nad3d: ["K（× 体数据标准差 SD）", 0.02, 5, 0.02, 0.1, "内置三维 NAD：三维边缘增强非线性各向异性扩散（NAD / EED），联合处理 XYZ；K 越大越平滑；无需安装 IMOD"],
     gaussian: ["σ px", 0.3, 6, 0.1, 1, "高斯模糊：最快，细节和边缘也一起变模糊"],
     median: ["半径 px", 1, 7, 1, 1, "中值：去掉坏点和椒盐噪声"],
     learned: ["混合比例（1 = 全用网络结果）", 0, 1, 0.05, 1, "自监督学习：在这张图本身上训练一个小网络，不需要干净图像；先选训练方式，点「训练」"],
@@ -22,7 +22,7 @@
   const btn = document.createElement("button");
   btn.id = "btn-denoise";
   btn.className = "toggle";
-  btn.title = "降噪：NLM、二维 Perona–Malik、IMOD NAD 3D、Gaussian、Median、Noise2Void / Noise2Noise，预览对比后另存为 32 位浮点 MRC";
+  btn.title = "降噪：NLM、二维 Perona–Malik、内置 NAD 3D、Gaussian、Median、Noise2Void / Noise2Noise，预览对比后另存为 32 位浮点 MRC";
   btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12c1.5-3 2.5 3 4 0s2.5-5 4 0"/><path d="M13 12c2-1.6 6-1.6 8 0"/><path d="M12 4v16" stroke-dasharray="2 2"/></svg>';
   btn.disabled = true;
   $("btn-3d") ? $("btn-3d").before(btn) : $("quickbar").append(btn);
@@ -41,7 +41,7 @@
         <select id="dn-method">
           <option value="nlm">非局部均值（Non-Local Means / NLM）</option>
           <option value="diffusion">二维各向异性扩散（Perona–Malik）</option>
-          <option value="nad3d">IMOD 三维非线性各向异性扩散（NAD 3D / EED）</option>
+          <option value="nad3d">三维非线性各向异性扩散（NAD 3D / EED）</option>
           <option value="gaussian">高斯滤波（Gaussian）</option>
           <option value="median">中值滤波（Median）</option>
           <option value="learned">自监督降噪（Noise2Void / Noise2Noise）</option>
@@ -65,12 +65,11 @@
       <span class="al-wide dn-learn dim" id="dn-model"></span>
       <div class="al-wide dn-learn dim" id="dn-model-record" hidden></div>
       <label class="dn-diff">迭代次数 <input type="number" id="dn-iter" min="1" max="200" step="1" /></label>
-      <span class="al-wide dn-nad dim">IMOD nad_eed_3d · CPU · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
+      <span class="al-wide dn-nad dim">内置 NAD 3D / EED · 自动加速 · 首次预览处理整个体，完成后可切换 Z 逐层对比；保存使用相同结果。大体数据建议先分箱。</span>
       <label class="dn-z" title="先和上下各几层求平均再降噪（断层图、连续切片）；会降低 Z 方向分辨率">Z 邻层 ±<select id="dn-slab"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
-      <label class="al-check al-wide"><input type="checkbox" id="dn-cpu" /> 只用 CPU</label>
     </div>
     <label class="al-check"><input type="checkbox" id="dn-preview" checked /> 预览（视野中间最多 2048 px）</label>
-    <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" /></label>
+    <label class="dn-split">左原图 · 右降噪 <input type="range" id="dn-split" min="0" max="100" step="1" title="也可在图像上直接拖动分割线" /></label>
     <div class="al-row"><span id="dn-status" class="dim"></span></div>
     <div class="al-row"><button id="dn-cancel-preview" class="small" hidden>取消 NAD 3D 计算</button></div>
     <div class="al-row">
@@ -80,7 +79,9 @@
     <div class="al-row" id="dn-saved" hidden><span id="dn-saved-name" class="dim"></span><button id="dn-open" class="small">打开</button></div>`;
   $("stage").appendChild(panel);
 
-  const P = { method: "nlm", strength: {}, patch: 1, search: 7, iterations: 10, slab: 0, cpu: false, split: 50, preview: true, ...pref.get("denoise-params", {}) };
+  const P = { method: "nlm", strength: {}, patch: 1, search: 7, iterations: 10, slab: 0, split: 50, preview: true, ...pref.get("denoise-params", {}) };
+  // Backend selection is automatic; discard a legacy user override.
+  delete P.cpu;
 
   function strengthOf(m) {
     const v = P.strength[m];
@@ -125,7 +126,6 @@
   $("dn-search").value = P.search;
   $("dn-iter").value = P.iterations;
   $("dn-slab").value = P.slab;
-  $("dn-cpu").checked = !!P.cpu;
   $("dn-split").value = P.split;
   $("dn-preview").checked = P.preview !== false;
   $("dn-mode").value = P.mode || "n2v";
@@ -169,7 +169,6 @@
     P.search = +$("dn-search").value;
     P.iterations = Math.max(1, Math.min(200, +$("dn-iter").value || 10));
     P.slab = +$("dn-slab").value;
-    P.cpu = $("dn-cpu").checked;
     P.split = +$("dn-split").value;
     P.preview = $("dn-preview").checked;
     P.mode = $("dn-mode").value;
@@ -187,7 +186,7 @@
       patch: P.patch,
       search: P.search,
       slab: method !== "nad3d" && S.info && S.info.sizeZ > 1 ? P.slab : 0,
-      device: P.cpu ? "cpu" : "auto",
+      device: "auto",
     };
   }
 
@@ -200,7 +199,7 @@
     $("dn-sval").textContent = (+$("dn-strength").value).toFixed(step < 1 ? 2 : 0);
     store();
   });
-  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-cpu", "dn-preview", "dn-steps", "dn-bin"]) $(id).addEventListener("change", store);
+  for (const id of ["dn-patch", "dn-search", "dn-iter", "dn-slab", "dn-preview", "dn-steps", "dn-bin"]) $(id).addEventListener("change", store);
   $("dn-mode").addEventListener("change", () => {
     syncMode();
     // Frame halves of counting-mode movies are too sparse at full resolution.
@@ -260,7 +259,7 @@
   $("dn-train").addEventListener("click", train);
   $("dn-split").addEventListener("input", () => {
     store();
-    requestRender();
+    draw();
   });
 
   function open() {
@@ -345,7 +344,7 @@
     const generation = N.generation;
     N.busy = true;
     $("dn-cancel-preview").hidden = req.params.method !== "nad3d";
-    status(req.params.method === "nad3d" ? "IMOD NAD 3D：正在处理整个体，完成后可逐层对比…" : `第 ${S.z + 1} 层预览计算中…`);
+    status(req.params.method === "nad3d" ? "内置 NAD 3D：正在处理整个体，完成后可逐层对比…" : `第 ${S.z + 1} 层预览计算中…`);
     try {
       const res = { ...parse(await invoke("denoise_preview", { req })), z: req.z, t: req.t, c: req.c, token: req.token };
       if (req.token !== S.token || generation !== N.generation) return;
@@ -421,15 +420,26 @@
     return cv;
   }
 
-  function overlay(g) {
+  function comparisonGeometry() {
+    if (panel.hidden || !$("dn-preview").checked || S.axis !== "xy" || S.xyz) return null;
     const req = previewReq();
-    const r = req && N.cache.get(previewKey(req));
-    if (!r || panel.hidden || !$("dn-preview").checked || r.token !== S.token || S.axis !== "xy" || r.z !== S.z || r.t !== S.t) return;
-    if (N.res !== r) { N.res = r; N.imgKey = ""; }
+    const key = req && previewKey(req);
+    const r = key && N.cache.get(key);
+    if (!r || r.token !== S.token || r.z !== S.z || r.t !== S.t) return null;
     const [x, y, w, h] = r.rect;
     const [sx, sy] = toScreen(x, y);
     const [ex, ey] = toScreen(x + w, y + h);
+    if (!(ex > sx && ey > sy)) return null;
     const split = sx + ((ex - sx) * +$("dn-split").value) / 100;
+    return { r, sx, sy, ex, ey, split, context: JSON.stringify([key, sx, sy, ex, ey]) };
+  }
+
+  function overlay(g) {
+    const geometry = comparisonGeometry();
+    if (N.splitDrag && geometry?.context !== N.splitDrag.context) endSplitDrag();
+    if (!geometry) return;
+    const { r, sx, sy, ex, ey, split } = geometry;
+    if (N.res !== r) { N.res = r; N.imgKey = ""; }
     g.save();
     g.beginPath();
     g.rect(split, sy, ex - split, ey - sy);
@@ -450,6 +460,71 @@
     g.restore();
   }
   ext.overlays.push(overlay);
+
+  // ---- Drag the comparison divider ----
+
+  const splitView = $("view");
+
+  function endSplitDrag() {
+    const drag = N.splitDrag;
+    N.splitDrag = null;
+    if (drag) {
+      if (splitView.hasPointerCapture(drag.id)) splitView.releasePointerCapture(drag.id);
+      store();
+    }
+    if (N.splitHover) {
+      N.splitHover = false;
+      splitView.style.cursor = "";
+    }
+  }
+
+  function splitPointer(e) {
+    const geometry = comparisonGeometry();
+    if (N.splitDrag && geometry?.context !== N.splitDrag.context) endSplitDrag();
+    const drag = N.splitDrag;
+    const onView = e.target === splitView;
+    if (!drag && !onView) { endSplitDrag(); return; }
+    const rect = splitView.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const consume = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    if (drag) {
+      if (e.pointerId !== drag.id) { if (onView) consume(); return; }
+      if (e.type === "pointermove" || e.type === "pointerup") {
+        $("dn-split").value = Math.round(Math.max(0, Math.min(100, (x - drag.offset - geometry.sx) * 100 / (geometry.ex - geometry.sx))));
+        draw();
+      }
+      if (e.type !== "pointermove") endSplitDrag();
+      consume();
+      return;
+    }
+    const near = geometry && !S.op && !S.textEdit && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+      y >= geometry.sy && y <= geometry.ey && Math.abs(x - geometry.split) <= (e.pointerType === "touch" ? 14 : 8);
+    if (e.type === "pointermove") {
+      if (near && !e.buttons) {
+        N.splitHover = true;
+        splitView.style.cursor = "ew-resize";
+        consume();
+      } else endSplitDrag();
+    } else if (e.type === "pointerdown" && near && e.button === 0 && e.isPrimary !== false) {
+      N.splitDrag = { id: e.pointerId, context: geometry.context, offset: x - geometry.split };
+      N.splitHover = true;
+      splitView.style.cursor = "ew-resize";
+      splitView.setPointerCapture(e.pointerId);
+      consume();
+    } else if (e.type === "dblclick" && near && e.button === 0) consume();
+  }
+
+  // Capture on the window before canvas touch/annotation handlers start a
+  // gesture. Pointer capture keeps the divider responsive beyond the image.
+  for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "dblclick"]) window.addEventListener(type, splitPointer, true);
+  window.addEventListener("blur", endSplitDrag);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && N.splitDrag) {
+      endSplitDrag();
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
 
   // ---- Save ----
 

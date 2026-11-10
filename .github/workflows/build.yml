@@ -169,7 +169,7 @@ jobs:
 
       - name: Image ownership regressions
         if: runner.os == 'Linux'
-        run: node --test scripts/image-ownership.test.mjs
+        run: node --test scripts/image-ownership.test.mjs scripts/denoise-preview.test.mjs scripts/denoise-divider.test.mjs scripts/model-store.test.mjs scripts/pro-layers.test.mjs
 
       - name: Metal completion regressions
         if: runner.os == 'Linux'
@@ -197,6 +197,9 @@ jobs:
             platform: ubuntu-22.04
             args: ""
     runs-on: ${{ matrix.platform }}
+    env:
+      TMV_APP_VERSION: ${{ needs.version.outputs.version }}
+      TMV_BUILD_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -296,6 +299,8 @@ jobs:
         working-directory: src-tauri
         env:
           TMV_VERSION: ${{ needs.version.outputs.version }}
+          TMV_APP_VERSION: ${{ needs.version.outputs.version }}
+          TMV_BUILD_REVISION: ${{ github.sha }}
         run: cargo build --release --no-default-features --features cli --bin tmv
 
       - name: Check tmv
