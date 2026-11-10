@@ -2,14 +2,19 @@
 //!
 //!   cargo run --release --no-default-features --features cli --example sta_search -- \
 //!     --template average.mrc [--tilts -60,60] [--diameter 250] [--step 30] \
-//!     [--gpu] [--coarse 2] [--exclude] [--out DIR] TOMOGRAM.mrc
+//!     [--gpu] [--coarse 2] [--exclude] [--out DIR]
+//!     [--look LOOK.mrc --look-map scale,ox,oy,oz] TOMOGRAM.mrc
 //!
 //! The template is a 32³ cube (`average.mrc` of `sta_coarse`). The tomogram
 //! is binned to its voxel size. Writes `<out>/peaks.csv` (x, y, z in voxels
 //! of the original tomogram, score, kept) and prints a summary. `--exclude`
-//! keeps the search off the X/Y borders and gold markers.
+//! keeps the search off the X/Y borders and gold markers. `--look` searches
+//! the clear companion tomogram of `tmv tomo --for sta` instead (its `"look"`
+//! JSON gives the file and `scale`, `offset`: raw voxel = scale × look voxel
+//! + offset) and reports the places in the raw tomogram; with `--average` the
+//! cubes are then cut from the raw one (single tomogram use).
 
-use tifmrcview_lib::sta::project::binned;
+use tifmrcview_lib::sta::project::{binned, to_raw, LookSource};
 use tifmrcview_lib::sta::search::{allowed, cutoff, peaks, search};
 
 /// Side of the template cube (`BOX` of `sta::project`).
@@ -30,6 +35,8 @@ fn main() -> anyhow::Result<()> {
     // --fine: after the first alignment, again at twice the sampling.
     let mut fine = false;
     let mut more: Vec<String> = vec![];
+    let mut look_path = None;
+    let mut look_map = None;
     let mut path = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -49,6 +56,13 @@ fn main() -> anyhow::Result<()> {
             "--out" => out = args.next().unwrap_or_default(),
             "--average" => average = true,
             "--fine" => fine = true,
+            "--look" => look_path = Some(args.next().unwrap_or_default()),
+            "--look-map" => {
+                let v = args.next().unwrap_or_default();
+                let p: Vec<f64> = v.split(',').filter_map(|s| s.parse().ok()).collect();
+                anyhow::ensure!(p.len() == 4, "--look-map scale,ox,oy,oz");
+                look_map = Some((p[0], [p[1], p[2], p[3]]));
+            }
             _ if path.is_some() => more.push(a),
             _ => path = Some(a),
         }
@@ -56,6 +70,12 @@ fn main() -> anyhow::Result<()> {
     let template = template.ok_or_else(|| anyhow::anyhow!("give --template average.mrc"))?;
     let path = path.ok_or_else(|| anyhow::anyhow!("give a tomogram"))?;
     anyhow::ensure!(diameter > 0.0 && step > 0.0, "--diameter and --step must be positive");
+    let look = match (look_path, look_map) {
+        (Some(path), Some((scale, offset))) => Some(LookSource { path, scale, offset }),
+        (None, None) => None,
+        _ => anyhow::bail!("--look and --look-map go together"),
+    };
+    anyhow::ensure!(look.is_none() || more.is_empty(), "--look is for a single tomogram");
     let start = std::time::Instant::now();
 
     // The template, read like a tomogram.
@@ -65,8 +85,8 @@ fn main() -> anyhow::Result<()> {
         use tifmrcview_lib::sta::project::{run_template, Source};
         let (dev, name) = tifmrcview_lib::classify::device();
         eprintln!("device: {name}");
-        let mut sources = vec![Source { path: path.clone(), tilts }];
-        sources.extend(more.iter().map(|p| Source { path: p.clone(), tilts }));
+        let mut sources = vec![Source { path: path.clone(), tilts, look: look.clone() }];
+        sources.extend(more.iter().map(|p| Source { path: p.clone(), tilts, look: None }));
         let last = std::sync::Mutex::new(String::new());
         let progress = |stage: &str, done: usize, total: usize| {
             let mut l = last.lock().unwrap();
@@ -83,7 +103,8 @@ fn main() -> anyhow::Result<()> {
     let side = BOX / coarse;
     let cube = tifmrcview_lib::spa::fourier::resample3(&cube, BOX, side);
     let voxel = voxel * coarse as f64;
-    let (v, dims, got, bin) = binned(&path, voxel)?;
+    // With a look tomogram the search runs on it; places are mapped to `path`.
+    let (v, dims, got, bin) = binned(look.as_ref().map_or(&path, |l| &l.path), voxel)?;
     if (got / voxel - 1.0).abs() > 0.02 {
         eprintln!("warning: the tomogram is binned to {got:.2} A, the template has {voxel:.2} A");
     }
@@ -104,14 +125,21 @@ fn main() -> anyhow::Result<()> {
     let all = peaks(&found, 2.0 * radius, usize::MAX);
     let cut = cutoff(&all);
 
-    // Binned voxel p lies at p * bin + (bin - 1) / 2 in the original.
-    let at = |p: usize| p * bin + (bin - 1) / 2;
+    // Binned voxel p lies at p * bin + (bin - 1) / 2 in the original; a
+    // look tomogram's places are mapped through its scale and offset.
+    let at = |p: [usize; 3]| -> [f64; 3] {
+        match &look {
+            Some(l) => to_raw(p.map(|x| x as f64), bin, 1, l),
+            None => p.map(|x| (x * bin + (bin - 1) / 2) as f64),
+        }
+    };
     let mut csv = String::from("x,y,z,score,kept\n");
     let mut kept = 0;
     for p in &all {
         let k = cut.is_some_and(|c| p.score >= c);
         kept += k as usize;
-        csv.push_str(&format!("{},{},{},{:.5},{}\n", at(p.pos[0]), at(p.pos[1]), at(p.pos[2]), p.score, k as u8));
+        let a = at(p.pos);
+        csv.push_str(&format!("{},{},{},{:.5},{}\n", a[0], a[1], a[2], p.score, k as u8));
     }
     std::fs::create_dir_all(&out)?;
     std::fs::write(format!("{out}/peaks.csv"), csv)?;

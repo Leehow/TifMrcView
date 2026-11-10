@@ -487,6 +487,26 @@ struct StaInput {
     tomogram: String,
     tilts: [f64; 2],
     tilts_from: &'static str,
+    /// The clear companion `tmv tomo --for sta` made (blobs and the template
+    /// are searched on it; the averages are of `tomogram`).
+    look: Option<crate::tomo::dataset::Look>,
+}
+
+/// The look record kept with `tomogram` in its dataset, when its file is
+/// there (also if the folder was copied: then the file beside the tomogram).
+fn look_of(d: Option<&crate::tomo::dataset::Dataset>, tomogram: &str) -> Option<crate::tomo::dataset::Look> {
+    let name = Path::new(tomogram).file_name()?;
+    let mut look = d?.tomograms.iter().find(|t| Path::new(&t.path).file_name() == Some(name))?.look.clone()?;
+    if !Path::new(&look.path).is_file() {
+        let beside = Path::new(tomogram).with_file_name(Path::new(&look.path).file_name()?);
+        if beside.is_file() {
+            look.path = beside.to_string_lossy().into_owned();
+        } else {
+            eprintln!("tmv sta: the look tomogram {} of {tomogram} is missing: using the tomogram alone", look.path);
+            return None;
+        }
+    }
+    Some(look)
 }
 
 /// First and last tilt angle (°) of `angles`; None with fewer than two or all equal.
@@ -626,16 +646,21 @@ fn sta(o: &Opts) -> Result<Value> {
                 ([-60.0, 60.0], "default -60…60")
             }
         };
-        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from });
+        let look = look_of(dataset.as_ref(), &tomogram);
+        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from, look });
     }
-    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts }).collect();
-    let tomograms: Vec<Value> = found.iter().map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from })).collect();
+    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts, look: f.look.clone() }).collect();
+    let tomograms: Vec<Value> = found
+        .iter()
+        .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
+        .collect();
 
     // Step 1: the cards (they take minutes, so a finished set is reused).
     let cards_dir = out.join("cards");
     let cards_json = cards_dir.join("cards.json");
     let inputs_json = cards_dir.join("inputs.json");
-    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()));
+    // The look tomograms count too: the cards are made on them.
+    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()).chain(found.iter().filter_map(|f| f.look.as_ref().map(|l| l.path.as_str()))));
     let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     if !cards.is_empty() {
         let saved: Option<Vec<InputStamp>> = std::fs::read(&inputs_json).ok().and_then(|b| serde_json::from_slice(&b).ok());

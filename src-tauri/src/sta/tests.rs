@@ -261,6 +261,18 @@ fn first_model_and_alignment_from_particles_alone() {
 /// to a new temporary directory: the directory and the sources.
 fn particle_tomogram(per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<super::project::Source>) {
     use super::project::Source;
+    let (dims, v, _, _) = planted_tomogram(per_side, noise);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    // 17.5 Å voxels, so nothing is binned.
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    (dir, vec![Source { path: tomo, tilts: [-90.0, 90.0], look: None }])
+}
+
+/// The tomogram of `particle_tomogram`: its size, values (dark copies, z-major),
+/// the voxel each copy's centre is planted at and the copy's body.
+fn planted_tomogram(per_side: usize, noise: f64) -> ([usize; 3], Vec<f32>, Vec<[usize; 3]>, Vec<f32>) {
     let truth = phantom();
     // A particle has a body: a large soft ball with the phantom's balls as detail.
     let c = (N / 2) as f64;
@@ -276,12 +288,14 @@ fn particle_tomogram(per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<su
     let mut rng = Rng(21);
     let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
     let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    let mut places = vec![];
     for k in 0..2 {
         for j in 0..per_side {
             for i in 0..per_side {
                 let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
                 let p = rotate(&body, N, &r);
                 let o = [22 + 38 * i + rng.below(5), 22 + 38 * j + rng.below(5), 24 + 46 * k + rng.below(5)];
+                places.push(o);
                 for z in 0..N {
                     for y in 0..N {
                         for x in 0..N {
@@ -294,12 +308,7 @@ fn particle_tomogram(per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<su
         }
     }
     v.iter_mut().for_each(|x| *x += (noise * sd * rng.gauss()) as f32);
-    let dir = std::env::temp_dir().join(format!("tmv-sta-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
-    // 17.5 Å voxels, so nothing is binned.
-    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
-    (dir, vec![Source { path: tomo, tilts: [-90.0, 90.0] }])
+    (dims, v, places, body)
 }
 
 /// Heavy: a made-up tomogram with 32 dark copies of the phantom, found,
@@ -371,7 +380,7 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
     crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
-    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0] }];
+    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None }];
     // What the sphere tool gives: a slightly wrong sphere, sampled densely.
     let size_a = 227.5;
     let drawn: Vec<Drawn> =
@@ -616,3 +625,174 @@ fn cards_hold_the_particles_of_a_kind() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn look_positions_map_onto_the_raw_tomogram_with_the_binning_half_voxels() {
+    use super::project::{to_raw, LookSource};
+    let look = |scale, o| LookSource { path: String::new(), scale, offset: [o; 3] };
+    let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-12);
+    // Unbinned on both, scale 2, offset 0.5: look voxel p spans raw 2p and 2p + 1.
+    assert!(close(to_raw([3.0; 3], 1, 1, &look(2.0, 0.5)), [6.5; 3]));
+    // Raw binned by 2: its voxel q is centred on unbinned 2q + 0.5, so 6.5 is q = 3.
+    assert!(close(to_raw([3.0; 3], 1, 2, &look(2.0, 0.5)), [3.0; 3]));
+    // Look binned by 2 (voxel p centred on 2p + 0.5), raw by 4: they coincide.
+    assert!(close(to_raw([5.0, 0.0, 7.5], 2, 4, &look(2.0, 0.5)), [5.0, 0.0, 7.5]));
+    // Both binned by 2, scale 2 and a shift of 3.5: voxel 10 is unbinned 20.5,
+    // raw 2 × 20.5 + 3.5 = 44.5, which is binned voxel (44.5 − 0.5) / 2 = 22.
+    assert!(close(to_raw([10.0; 3], 2, 2, &look(2.0, 3.5)), [22.0; 3]));
+    // Scale 1: only the binnings' centres differ.
+    assert!(close(to_raw([4.0; 3], 4, 1, &look(1.0, 0.0)), [4.0 * 4.0 + 1.5; 3]));
+    assert!(close(to_raw([4.0; 3], 1, 4, &look(1.0, 0.0)), [(4.0 - 1.5) / 4.0; 3]));
+}
+
+/// The tomogram `v` (`dims`) made twice as fine by repeating each voxel, the
+/// first `skip` voxels of every axis dropped.
+fn finer(v: &[f32], dims: [usize; 3], skip: usize) -> (Vec<f32>, [usize; 3]) {
+    let big = dims.map(|d| 2 * d - skip);
+    let mut out = vec![0f32; big[0] * big[1] * big[2]];
+    for z in 0..big[2] {
+        for y in 0..big[1] {
+            for x in 0..big[0] {
+                let s = [(x + skip) / 2, (y + skip) / 2, (z + skip) / 2];
+                out[(z * big[1] + y) * big[0] + x] = v[(s[2] * dims[1] + s[1]) * dims[0] + s[0]];
+            }
+        }
+    }
+    (out, big)
+}
+
+/// `v` binned by 2: the mean of every 2×2×2 voxels.
+fn bin2(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
+    let d = dims.map(|n| n / 2);
+    let mut out = vec![0f32; d[0] * d[1] * d[2]];
+    for z in 0..d[2] {
+        for y in 0..d[1] {
+            for x in 0..d[0] {
+                let mut s = 0.0;
+                for k in 0..8 {
+                    s += v[((2 * z + k / 4) * dims[1] + 2 * y + k / 2 % 2) * dims[0] + 2 * x + k % 2];
+                }
+                out[(z * d[1] + y) * d[0] + x] = s / 8.0;
+            }
+        }
+    }
+    (out, d)
+}
+
+/// `v` binned by 2 and smoothed (Gaussian, σ 0.7 voxel).
+fn binned_and_smoothed(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
+    let (mut out, d) = bin2(v, dims);
+    let kernel: Vec<f32> = (-2..=2).map(|i: i32| (-(i * i) as f32 / (2.0 * 0.49)).exp()).collect();
+    let norm: f32 = kernel.iter().sum();
+    for axis in 0..3 {
+        let stride = [1, d[0], d[0] * d[1]][axis];
+        let src = out.clone();
+        for i in 0..out.len() {
+            let p = [i % d[0], i / d[0] % d[1], i / d[0] / d[1]][axis] as isize;
+            let mut s = 0.0;
+            for (j, w) in kernel.iter().enumerate() {
+                let q = (p + j as isize - 2).clamp(0, d[axis] as isize - 1);
+                s += w * src[(i as isize + (q - p) * stride as isize) as usize];
+            }
+            out[i] = s / norm;
+        }
+    }
+    (out, d)
+}
+
+/// The raw tomogram, its look version and what was planted (see the test below).
+#[allow(clippy::type_complexity)]
+fn look_fixture(per_side: usize, noise: f64) -> (Vec<f32>, [usize; 3], Vec<f32>, [usize; 3], Vec<[usize; 3]>, Vec<f32>) {
+    // Noise this strong keeps the particles from being taken for gold.
+    let (base_dims, base, places, body) = planted_tomogram(per_side, noise);
+    let (raw, raw_dims) = finer(&base, base_dims, 0);
+    // The look tomogram: the raw one minus its first 3 voxels, binned by 2.
+    let shifted = finer(&base, base_dims, 3);
+    let (mut look, look_dims) = binned_and_smoothed(&shifted.0, shifted.1);
+    // Binning and smoothing take most of the noise away, and a particle in
+    // so quiet a tomogram looks like gold to the search's exclusion rule
+    // (more than 10 robust deviations dark). Noise is added back until the
+    // look tomogram is as noisy at the search's sampling as the raw one.
+    // (The raw tomogram is binned to the template's sampling first: ×2, then ×2.)
+    let spread = |v: &[f32], dims: [usize; 3]| super::pick::robust(&bin2(v, dims).0).1 as f64;
+    let (own, wanted) = (spread(&look, look_dims), spread(&bin2(&raw, raw_dims).0, [raw_dims[0] / 2, raw_dims[1] / 2, raw_dims[2] / 2]));
+    let extra = (wanted * wanted - own * own).max(0.0).sqrt();
+    let mut rng = Rng(77);
+    look.iter_mut().for_each(|x| *x += (extra * rng.gauss()) as f32);
+    eprintln!("noise spread of the look tomogram at the search sampling {own:.3}, raw {wanted:.3}: adding {extra:.3}");
+    (raw, raw_dims, look, look_dims, places, body)
+}
+
+/// Heavy: a made-up tomogram at 8.75 Å voxels with 32 dark copies of a
+/// particle, and its "look" version (binned by 2, smoothed, 3 voxels of the
+/// raw one's edge dropped first so the map is no pure doubling: raw = 2 × look
+/// + 3.5). `run_template` searches the look tomogram with a 17.5 Å template
+/// and has to cut and average the raw one at the places planted. Run:
+/// `CARGO_PROFILE_TEST_OPT_LEVEL=2 cargo test --no-default-features --features cli --lib sta::tests::template_on_the_look -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn template_on_the_look_tomogram_averages_the_raw_one() {
+    use super::project::{run_template, LookSource, Source};
+    let (raw, raw_dims, look, look_dims, places, body) = look_fixture(4, 14.0);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-look-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    crate::tomo::output::write_mrc(&path("raw.mrc"), &raw, raw_dims, 8.75, false).unwrap();
+    crate::tomo::output::write_mrc(&path("look.mrc"), &look, look_dims, 17.5, false).unwrap();
+    // Template: the particle dark, at 17.5 Å, zero mean and unit variance.
+    let mean = body.iter().map(|v| *v as f64).sum::<f64>() / body.len() as f64;
+    let sd = (body.iter().map(|v| (*v as f64 - mean).powi(2)).sum::<f64>() / body.len() as f64).sqrt();
+    let template: Vec<f32> = body.iter().map(|v| (-(*v as f64 - mean) / sd) as f32).collect();
+    let sources = vec![Source {
+        path: path("raw.mrc"),
+        tilts: [-90.0, 90.0],
+        look: Some(LookSource { path: path("look.mrc"), scale: 2.0, offset: [3.5; 3] }),
+    }];
+    let (dev, name) = crate::classify::device();
+    eprintln!("device {name}");
+    let out = path("out");
+    // A copy planted at base voxel o is at raw voxel 2 o + 0.5. Distances
+    // (raw voxels) from each particle of a table to the nearest copy.
+    let planted: Vec<[f64; 3]> = places.iter().map(|o| o.map(|x| 2.0 * x as f64 + 0.5)).collect();
+    let dist = |a: &[f64; 3], b: &[f64; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt();
+    let read = |table: String| -> Vec<[f64; 3]> {
+        std::fs::read_to_string(table)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|l| {
+                let f: Vec<f64> = l.split(',').skip(1).take(3).map(|x| x.parse().unwrap()).collect();
+                [f[0], f[1], f[2]]
+            })
+            .collect()
+    };
+    let errors = |found: &[[f64; 3]]| -> Vec<f64> {
+        let mut e: Vec<f64> = found.iter().map(|f| planted.iter().map(|p| dist(f, p)).fold(f64::MAX, f64::min)).collect();
+        e.sort_by(f64::total_cmp);
+        e
+    };
+    // The same without the look tomogram, for comparison.
+    let plain = vec![Source { look: None, ..sources[0].clone() }];
+    let base = run_template(&dev, &plain, &template, 17.5, 220.0, true, &path("base"), &|_, _, _| {}, &|_| {}).unwrap();
+    let base_errors = errors(&read(base.table.unwrap()));
+    eprintln!("without look: {} particles, {} candidates, distance to the planted copy: median {:.2}, max {:.2}", base.particles, base.candidates, base_errors[base_errors.len() / 2], base_errors[base_errors.len() - 1]);
+    let done = run_template(&dev, &sources, &template, 17.5, 220.0, true, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("{} particles of {} planted, {} candidates, {:?} Å", done.particles, places.len(), done.candidates, done.resolution_a);
+    let found = read(done.table.unwrap());
+    let errors = errors(&found);
+    eprintln!("distance to the nearest planted copy (raw voxels): median {:.2}, max {:.2}", errors[errors.len() / 2], errors[errors.len() - 1]);
+    let hit = planted.iter().filter(|p| found.iter().any(|f| dist(f, p) <= 1.5)).count();
+    eprintln!("{hit} of {} planted copies have a particle within 1.5 raw voxels", planted.len());
+    assert_eq!(found.len(), planted.len());
+    assert!(hit * 10 >= planted.len() * 7, "{hit}");
+    // Within 1.5 raw voxels for most (as without the look tomogram: the
+    // alignment in this much noise and the cutting at 2-voxel steps leave
+    // that much); a map that was off by the 3.5 voxels of the offset, or by
+    // half a binned voxel, would show as a median beyond that.
+    assert!(errors[errors.len() / 2] <= 1.5 && errors[errors.len() - 1] <= 2.0, "median {} worst {}", errors[errors.len() / 2], errors[errors.len() - 1]);
+    assert!(errors[errors.len() / 2] <= base_errors[base_errors.len() / 2] + 0.3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+
+

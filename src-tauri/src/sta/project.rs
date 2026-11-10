@@ -30,6 +30,9 @@ use crate::spa::fourier::resample3;
 use crate::spa::Rng;
 use crate::tomo::{output, pipeline};
 
+/// How far (as a share) a look tomogram's binned voxel may be from the
+/// template's before it is not searched.
+const LOOK_SAMPLING: f64 = 0.25;
 /// Voxel size the tomograms are searched at, Å.
 const SEARCH_VOXEL: f64 = 16.0;
 /// Blob diameters looked for, Å.
@@ -50,13 +53,44 @@ const SPAN: f64 = 13.0;
 const FIRST: usize = 200;
 const MOST: usize = 3000;
 
+/// The clear companion of a source's tomogram (`tomo::auto`, `--for sta`):
+/// raw voxel index = `scale` × look voxel index + `offset`, per axis (x, y, z).
+pub use crate::tomo::dataset::Look as LookSource;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
-    /// A tomogram (X, Y = tilt axis, Z = beam).
+    /// A tomogram (X, Y = tilt axis, Z = beam): the one particles are cut
+    /// from and averaged.
     pub path: String,
     /// First and last tilt used for it, degrees.
     pub tilts: [f64; 2],
+    /// A clear (denoised) version of it to find particles on: blobs, cards
+    /// and the template search use it, positions are mapped back to `path`.
+    #[serde(default)]
+    pub look: Option<LookSource>,
+}
+
+impl Source {
+    /// The tomogram blobs and cards are searched on.
+    fn finding(&self) -> &str {
+        self.look.as_ref().map_or(&self.path, |l| &l.path)
+    }
+}
+
+/// Where a position on the binned look tomogram lies on the binned raw one.
+/// `pos` is a (fractional) index of a look voxel binned by `look_bin`, a
+/// voxel's centre being its integer index. Binned voxel p averages the
+/// `bin` unbinned voxels from p·bin, so its centre is the unbinned index
+/// p·bin + (bin − 1)/2 (the half-voxel terms); the look map takes unbinned
+/// look indices to unbinned raw ones.
+pub fn to_raw(pos: [f64; 3], look_bin: usize, raw_bin: usize, look: &LookSource) -> [f64; 3] {
+    let (lb, rb) = (look_bin as f64, raw_bin as f64);
+    std::array::from_fn(|k| {
+        let look_voxel = pos[k] * lb + (lb - 1.0) / 2.0;
+        let raw_voxel = look.scale * look_voxel + look.offset[k];
+        (raw_voxel - (rb - 1.0) / 2.0) / rb
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -336,7 +370,7 @@ fn find_kinds(sources: &[Source], progress: Progress) -> Result<Vec<Kind>> {
     let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
     for (i, s) in sources.iter().enumerate() {
         progress("找颗粒", i, sources.len());
-        let (v, dims, voxel, _) = binned(&s.path, SEARCH_VOXEL)?;
+        let (v, dims, voxel, _) = binned(s.finding(), SEARCH_VOXEL)?;
         let sizes: Vec<f64> = LADDER.iter().map(|d| d / voxel).collect();
         let mut found = blobs(&v, dims, &sizes, true, MIN_Z)?;
         // Report sizes on the ladder exactly, whatever the voxel size.
@@ -374,6 +408,9 @@ fn without_gold(cuts: &mut Vec<Cut>, size: f64, voxel_a: f64) {
 
 /// `diameter_a` None finds the kinds only (the report then has no map).
 pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
+    // Everything here works on the tomograms themselves.
+    let plain: Vec<Source> = sources.iter().map(|s| Source { look: None, ..s.clone() }).collect();
+    let sources = &plain[..];
     let started = Instant::now();
     if sources.is_empty() {
         bail!("没有断层图");
@@ -721,7 +758,8 @@ const CARD_MEMBERS: usize = 10;
 /// chooses the template for `run_template` from them. The classes are found
 /// on cubes at half sampling (eight times fewer voxels); each card is then
 /// averaged from the full cubes at the
-/// poses found. Cards come best first: the `likely` ones, then by
+/// poses found. A source with a look tomogram is searched, cut and
+/// averaged on that one. Cards come best first: the `likely` ones, then by
 /// `compact × members` (a compact class that many blobs share); ids follow
 /// that order.
 pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
@@ -743,7 +781,7 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let mut voxel_a = size / SPAN;
         for (i, s) in sources.iter().enumerate() {
             progress(&format!("裁出颗粒 {size} Å"), i, sources.len());
-            let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
+            let (v, dims, voxel, bin) = binned(s.finding(), size / SPAN)?;
             voxel_a = voxel;
             let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
             let (median, sd) = super::pick::robust(&v);
@@ -972,6 +1010,14 @@ fn halve(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
 /// markers; the peaks the threshold keeps are cut at the template's
 /// sampling, start at the orientation the search found and are aligned in
 /// two halves. `diameter_a` is the particle's size.
+///
+/// A source with a look tomogram (`Source::look`, a clear version of the same
+/// tomogram) is searched on that one instead (the exclusion mask, the
+/// search, the peaks and the threshold), binned to the template's voxel size;
+/// each peak is then mapped to the tomogram itself (`to_raw`) and the cubes
+/// for alignment and averaging, in both passes, are cut from that, so the
+/// averages are of the unfiltered data. The template, made from look data,
+/// is only the reference the alignment starts from.
 #[allow(clippy::too_many_arguments)]
 pub fn run_template(
     dev: &burn::tensor::Device,
@@ -1000,16 +1046,36 @@ pub fn run_template(
     let mut volumes = vec![];
     for (i, s) in sources.iter().enumerate() {
         check_cancel()?;
+        // The raw tomogram the particles are cut from, and the one searched:
+        // the look tomogram when there is one that has the template's
+        // sampling (its voxels are twice as large, so not for a template
+        // finer than that), else the raw one.
         let (v, dims, got, bin) = binned(&s.path, voxel_a)?;
         voxel = got;
-        let (coarse, cdims) = halve(&v, dims);
-        let radius = 0.25 * diameter_a / voxel;
+        let looked = match &s.look {
+            Some(l) => {
+                let b = binned(&l.path, voxel_a)?;
+                if (b.2 / voxel_a - 1.0).abs() <= LOOK_SAMPLING {
+                    Some((l.clone(), b))
+                } else {
+                    eprintln!("sta: the look tomogram of {} has {:.1} Å voxels, too coarse for a template of {voxel_a:.1} Å: searching the tomogram itself", s.path, b.2);
+                    None
+                }
+            }
+            None => None,
+        };
+        let (found_on, found_dims, found_voxel) = match &looked {
+            Some((_, b)) => (&b.0, b.1, b.2),
+            None => (&v, dims, got),
+        };
+        let (coarse, cdims) = halve(found_on, found_dims);
+        let radius = 0.25 * diameter_a / found_voxel;
         let mask = allowed(&coarse, cdims, radius);
         let stage = format!("搜索 {}/{}", i + 1, sources.len());
         let found = super::search_gpu::search(dev, &coarse, cdims, &small, BOX / 2, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
         // Particles do not overlap, but may touch.
         all.extend(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (i, p)));
-        volumes.push((v, dims, bin));
+        volumes.push((v, dims, bin, looked.map(|(l, b)| (l, b.3))));
     }
     let scores: Vec<super::search::Peak> = all.iter().map(|p| p.1).collect();
     let candidates = scores.len();
@@ -1020,9 +1086,20 @@ pub fn run_template(
     all.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
     all.truncate(MOST);
     for (i, p) in &all {
-        let (v, dims, bin) = &volumes[*i];
+        let (v, dims, bin, look) = &volumes[*i];
         // Coarse voxel p holds fine voxels 2p and 2p + 1.
-        let c = p.pos.map(|x| 2 * x);
+        let c = match look {
+            None => p.pos.map(|x| 2 * x),
+            // On the look tomogram the peak is at the middle of the pair,
+            // 2p + 1/2; mapped onto the raw tomogram's binned voxels.
+            Some((look, look_bin)) => {
+                let raw = to_raw(p.pos.map(|x| 2.0 * x as f64 + 0.5), *look_bin, *bin, look);
+                if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
+                    continue;
+                }
+                raw.map(|x| x.round() as usize)
+            }
+        };
         if let Some(cube) = cube(v, *dims, c) {
             let at = c.map(|x| x as f64 * *bin as f64 + (*bin as f64 - 1.0) / 2.0);
             cuts.push(Cut { source: *i, at, bin: *bin, score: p.score, strength: 0.0, darkest: 0.0, cube });
