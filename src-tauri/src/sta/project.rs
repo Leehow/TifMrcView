@@ -673,6 +673,10 @@ pub struct Card {
     /// Separate blobs in the density at half its maximum; 1 when it is a
     /// single one at the centre, 0 when it has none there (see `shape`).
     pub blobs: usize,
+    /// How far the single piece's centroid lies from the centre, in particle
+    /// radii (0 when there is not exactly one piece; see `shape`).
+    #[serde(default)]
+    pub offset: f64,
     /// A single compact, not stretched particle: worth offering as the
     /// particle (see `is_likely`).
     pub likely: bool,
@@ -691,12 +695,31 @@ pub struct Card {
 ///   matrix about its centroid: about 1 for a ball (the missing wedge
 ///   stretches it along Z by up to 1.3 to 1.5), `λ1 / λ2` large for a line,
 ///   `λ2 / λ3` large for a layer.
-/// * `blobs`: the 6-connected pieces of the density above half its maximum
-///   that hold at least `BLOB_SHARE` of that part. One piece, whose centroid
-///   is within `CENTRED` of the particle radius of the centre, gives 1; if
-///   that single piece lies elsewhere there is no particle at the centre and
-///   the count is 0.
-pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize) {
+/// * `blobs`: the number of 6-connected pieces of the density above half its
+///   maximum that hold at least `BLOB_SHARE` of that part. Where the piece
+///   lies does not matter here.
+/// * `offset`: with exactly one piece, the distance of its centroid from the
+///   centre in particle radii (`radius / 1.2`); otherwise 0.
+pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64) {
+    let (compact, elongation, blobs, offset, _) = measure(avg, n, radius);
+    (compact, elongation, blobs, offset)
+}
+
+/// The class average moved so that the centroid of its single piece (when
+/// there is exactly one and it is within `OFF_CENTRE` of the centre) sits at
+/// the cube centre `n / 2`; unchanged otherwise. A centred template makes
+/// the peaks of the later search sit on particle centres.
+pub fn centred(avg: Vec<f32>, n: usize, radius: f64) -> Vec<f32> {
+    let (_, _, blobs, offset, at) = measure(&avg, n, radius);
+    if blobs != 1 || offset >= OFF_CENTRE || offset == 0.0 {
+        return avg;
+    }
+    let c = (n / 2) as f64;
+    // transform: out(p) = vol(p + t), so t = centroid - centre brings it to the centre.
+    cc::transform(&avg, n, &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [at[0] - c, at[1] - c, at[2] - c])
+}
+
+fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3]) {
     let c = (n / 2) as f64;
     let mean = avg.iter().map(|v| *v as f64).sum::<f64>() / avg.len() as f64;
     let (mut all, mut inside, mut voxels) = (0.0, 0.0, 0usize);
@@ -720,7 +743,7 @@ pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize) {
         }
     }
     if all <= 0.0 || voxels == 0 {
-        return (0.0, 0.0, 0);
+        return (0.0, 0.0, 0, 0.0, [c; 3]);
     }
     let compact = (inside / all) / (voxels as f64 / avg.len() as f64);
 
@@ -737,7 +760,7 @@ pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize) {
         mz += d * (i / n / n) as f64;
     }
     if m <= 0.0 {
-        return (compact, 0.0, 0);
+        return (compact, 0.0, 0, 0.0, [c; 3]);
     }
     let centroid = [mx / m, my / m, mz / m];
     let mut cov = [[0.0f64; 3]; 3];
@@ -787,14 +810,12 @@ pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize) {
         pieces.push((count, sum.map(|s| s / count as f64)));
     }
     let big: Vec<&(usize, [f64; 3])> = pieces.iter().filter(|p| p.0 as f64 >= BLOB_SHARE * above.len() as f64).collect();
-    let mut blobs = big.len();
-    if blobs == 1 {
-        let off = big[0].1.iter().map(|v| (v - c) * (v - c)).sum::<f64>().sqrt();
-        if off > CENTRED * radius / 1.2 {
-            blobs = 0;
-        }
+    let (mut offset, mut at) = (0.0, [c; 3]);
+    if big.len() == 1 {
+        at = big[0].1;
+        offset = at.iter().map(|v| (v - c) * (v - c)).sum::<f64>().sqrt() / (radius / 1.2);
     }
-    (compact, elongation, blobs)
+    (compact, elongation, big.len(), offset, at)
 }
 
 /// Eigenvalues of a symmetric 3x3 matrix, largest first (Jacobi sweeps).
@@ -832,9 +853,10 @@ fn eigenvalues(mut a: [[f64; 3]; 3]) -> [f64; 3] {
 /// A class is `likely` the particle when it is compact above `COMPACT`
 /// (7.5 means 45% of the variation in a ball that is 6% of the box; lines,
 /// layers and pairs of particles measured 3.8 to 7.2 on a real tomogram,
-/// ribosomes 8.0 and 11.1), not stretched (below `ELONGATION`) and one blob.
-fn is_likely(compact: f64, elongation: f64, blobs: usize) -> bool {
-    compact > COMPACT && elongation < ELONGATION && blobs == 1
+/// ribosomes 8.0 and 11.1), not stretched (below `ELONGATION`), one blob and
+/// not far off the centre (`OFF_CENTRE`).
+fn is_likely(compact: f64, elongation: f64, blobs: usize, offset: f64) -> bool {
+    compact > COMPACT && elongation < ELONGATION && blobs == 1 && offset < OFF_CENTRE
 }
 
 const COMPACT: f64 = 7.5;
@@ -847,8 +869,9 @@ const ELONGATION: f64 = 1.6;
 /// half width): a line or a layer is cut short by the ball and looks rounder.
 const MOMENTS: f64 = 2.0;
 const BLOB_SHARE: f64 = 0.15;
-/// How far the blob's centroid may be from the centre, in particle radii.
-const CENTRED: f64 = 0.25;
+/// A single piece further than this from the centre, in particle radii, is a
+/// neighbour, not the particle.
+const OFF_CENTRE: f64 = 0.5;
 
 /// Kinds with fewer blobs, and sizes below this (Å), are not offered: at
 /// this sampling they are noise.
@@ -932,9 +955,13 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                 poses[*i] = Pose { t: p.t.map(|v| 2.0 * v), ..*p };
                 member[*i] = true;
             }
+            // Only the written average is moved to put the particle at the
+            // centre; the member poses are not stored or used afterwards.
             let average = set.average(&poses, |i| member[i]).finish();
-            let (compact, elongation, blobs) = shape(&average, BOX, 0.6 * size / voxel_a);
-            let likely = is_likely(compact, elongation, blobs);
+            let ball = 0.6 * size / voxel_a;
+            let average = centred(average, BOX, ball);
+            let (compact, elongation, blobs, offset) = shape(&average, BOX, ball);
+            let likely = is_likely(compact, elongation, blobs, offset);
             found.push((
                 Card {
                     id: 0,
@@ -947,6 +974,7 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                     compact,
                     elongation,
                     blobs,
+                    offset,
                     likely,
                 },
                 average,
@@ -1565,7 +1593,7 @@ mod card_tests {
     use super::*;
 
     fn likely_card(id: usize, likely: bool, compact: f64, members: usize) -> Card {
-        Card { id, diameter_a: 160.0, measured_a: 150.0, voxel_a: 12.0, members, share: 0.3, path: String::new(), compact, elongation: 1.1, blobs: 1, likely }
+        Card { id, diameter_a: 160.0, measured_a: 150.0, voxel_a: 12.0, members, share: 0.3, path: String::new(), compact, elongation: 1.1, blobs: 1, offset: 0.0, likely }
     }
 
     #[test]
@@ -1611,9 +1639,9 @@ mod card_tests {
     const R: f64 = 7.8;
 
     fn card(avg: &[f32], members: usize) -> Card {
-        let (compact, elongation, blobs) = shape(avg, N, R);
-        let likely = is_likely(compact, elongation, blobs);
-        Card { id: 0, diameter_a: 0.0, measured_a: 0.0, voxel_a: 1.0, members, share: 0.0, path: String::new(), compact, elongation, blobs, likely }
+        let (compact, elongation, blobs, offset) = shape(avg, N, R);
+        let likely = is_likely(compact, elongation, blobs, offset);
+        Card { id: 0, diameter_a: 0.0, measured_a: 0.0, voxel_a: 1.0, members, share: 0.0, path: String::new(), compact, elongation, blobs, offset, likely }
     }
 
     /// A class average: the particle dark, a little noise on it.
@@ -1628,7 +1656,7 @@ mod card_tests {
     }
 
     fn report(name: &str, c: &Card) {
-        eprintln!("{name}: compact {:.2}, elongation {:.2}, blobs {}, likely {}", c.compact, c.elongation, c.blobs, c.likely);
+        eprintln!("{name}: compact {:.2}, elongation {:.2}, blobs {}, offset {:.2}, likely {}", c.compact, c.elongation, c.blobs, c.offset, c.likely);
     }
 
     #[test]
@@ -1655,12 +1683,45 @@ mod card_tests {
             ("slab with noise", dark(|_, _, z| blob(0.0, 0.0, z, 2.5), 0.05)),
             ("two balls", dark(|x, y, z| blob(x - 4.5, y, z, 2.5) + blob(x + 4.5, y, z, 2.5), 0.0)),
             ("two balls with noise", dark(|x, y, z| blob(x - 4.5, y, z, 2.5) + blob(x + 4.5, y, z, 2.5), 0.05)),
-            ("ball off the centre", dark(|x, y, z| blob(x - 5.0, y, z, 2.5), 0.0)),
+            ("ball off the centre by 0.8 radius", dark(|x, y, z| blob(x - 5.2, y, z, 2.5), 0.0)),
         ];
         for (name, avg) in cases {
             let c = card(&avg, 50);
             report(name, &c);
             assert!(!c.likely, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_ball_a_little_off_centre_is_likely_and_gets_centred() {
+        let off = dark(|x, y, z| blob(x - 1.95, y, z, 3.5), 0.0);
+        let c = card(&off, 50);
+        report("ball off by 0.3 radius", &c);
+        assert!(c.likely && c.blobs == 1 && (c.offset - 0.3).abs() < 0.05, "{c:?}");
+        let fixed = centred(off, N, R);
+        let c = card(&fixed, 50);
+        report("  centred", &c);
+        assert!(c.likely && c.offset < 0.1, "{c:?}");
+        // Not moved when far off the centre.
+        let far = dark(|x, y, z| blob(x - 5.2, y, z, 2.5), 0.0);
+        assert_eq!(centred(far.clone(), N, R), far);
+    }
+
+    #[test]
+    fn centring_moves_a_planted_blob_to_the_centre() {
+        let planted = dark(|x, y, z| blob(x - 2.0, y + 1.0, z - 3.0, 3.0), 0.0);
+        let moved = centred(planted, N, 12.0);
+        let c = (N / 2) as f64;
+        let (mut m, mut p) = (0.0, [0.0; 3]);
+        for (i, v) in moved.iter().enumerate() {
+            let w = (-*v as f64).max(0.0);
+            m += w;
+            p[0] += w * (i % N) as f64;
+            p[1] += w * (i / N % N) as f64;
+            p[2] += w * (i / N / N) as f64;
+        }
+        for k in 0..3 {
+            assert!((p[k] / m - c).abs() < 0.2, "axis {k}: {}", p[k] / m);
         }
     }
 

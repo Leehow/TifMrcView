@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     fn card(id: usize, likely: bool) -> crate::sta::project::Card {
-        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, share: 0.3, path: String::new(), compact: 12.0, likely }
+        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, offset: 0.0, share: 0.3, path: String::new(), compact: 12.0, likely }
     }
 
     #[test]
