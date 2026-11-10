@@ -4,7 +4,7 @@
 //!    dark blobs of a ladder of sizes (`pick`). The sizes found are the
 //!    "kinds" offered to the user; gold beads, ice and dense debris make
 //!    kinds of their own that are simply not chosen.
-//! 2. For the chosen size the tomograms are binned again so the particle
+//! 2. For the chosen size the tomograms are binned again so that size
 //!    spans about `SPAN` voxels of a `BOX`³ cube, the cubes are cut at the
 //!    blob centres and brought to zero mean and unit variance.
 //! 3. The strongest `FIRST` blobs make a first model (`refine::first_model`),
@@ -37,7 +37,7 @@ const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
 const MIN_Z: f32 = 5.0;
 /// Side of the cubes, and how many voxels of it the particle spans.
 const BOX: usize = 32;
-const SPAN: f64 = 16.0;
+const SPAN: f64 = 13.0;
 /// Particles in the first model, and most particles averaged here.
 const FIRST: usize = 200;
 const MOST: usize = 3000;
@@ -224,7 +224,9 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     cuts.sort_by(|a, b| b.score.total_cmp(&a.score));
     cuts.truncate(MOST);
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
-    let radius = 0.5 * size / voxel_a;
+    // Sizes from the scale space are rough and tend to be small: masks
+    // and search ranges allow for a particle 1.6 times as large.
+    let radius = 0.8 * size / voxel_a;
 
     // 3. First model from the strongest, then everything.
     let first = cuts.len().min(FIRST);

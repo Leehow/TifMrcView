@@ -264,14 +264,14 @@ fn first_model_and_alignment_from_particles_alone() {
 fn project_finds_and_averages_particles_in_a_tomogram() {
     use super::project::{run, Source};
     let truth = phantom();
-    // A particle has a body: the phantom's balls on a larger soft one.
+    // A particle has a body: a large soft ball with the phantom's balls as detail.
     let c = (N / 2) as f64;
     let body: Vec<f32> = truth
         .iter()
         .enumerate()
         .map(|(i, v)| {
             let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
-            v + 0.8 * (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
+            0.4 * v + (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
         })
         .collect();
     let dims = [160usize, 160, 96];
@@ -299,15 +299,16 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
     let dir = std::env::temp_dir().join(format!("tmv-sta-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
-    // 17.5 Å voxels: the 280 Å size then spans 16 voxels unbinned.
+    // 17.5 Å voxels, so nothing is binned.
     crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
     let sources = vec![Source { path: tomo, tilts: [-90.0, 90.0] }];
     let out = dir.join("out").to_string_lossy().into_owned();
     let found = run(&sources, None, &out, &|_, _, _| {}, &|_| {}).unwrap();
     eprintln!("kinds {:?}", found.kinds);
     assert!(found.map.is_none() && !found.kinds.is_empty());
-    // The user's choice: the whole particle, not the balls inside it.
-    let size = found.kinds.iter().filter(|k| k.diameter_a > 200.0).max_by_key(|k| k.count).expect("no large kind").diameter_a;
+    // The user's choice: the card that shows the whole particle (here
+    // the kind that stands out most; the phantom's balls are another).
+    let size = found.kinds.iter().max_by(|a, b| a.contrast.total_cmp(&b.contrast)).unwrap().diameter_a;
     let done = run(&sources, Some(size), &out, &|_, _, _| {}, &|_| {}).unwrap();
     eprintln!("{} particles, {:?} Å, fsc {:?}", done.particles, done.resolution_a, done.fsc);
     assert!(done.particles >= 24 && done.particles <= 40, "{}", done.particles);

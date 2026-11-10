@@ -4,11 +4,14 @@
 //! Lindeberg, Int J Comput Vis 30, 1998; Voss et al., J Struct Biol 2009).
 //!
 //! For a ball of radius r the response G(σ) − G(1.6σ) is largest at its
-//! centre when σ ≈ r/√3, so each diameter asked for has its own σ. The
-//! responses are turned into robust z-scores per size (median and MAD of
-//! the whole tomogram), which makes sizes comparable; a voxel is a blob
-//! centre when it is the largest of its 26 neighbours and scores at least
-//! `min_z`. Where blobs of any sizes overlap, the strongest is kept.
+//! centre when σ·√1.6 ≈ r/√3, so each diameter asked for has its own σ. With a
+//! fixed ratio of the two widths the response is scale-normalised: an
+//! object answers most strongly at its own size, which is how the size is
+//! chosen. Whether a response is a blob at all is judged per size by its
+//! robust z-score (median and MAD of the whole tomogram, since smoothing
+//! lowers the noise differently at each size): a voxel is a blob centre
+//! when it is the largest of its 26 neighbours and scores at least
+//! `min_z`. Where blobs of any sizes overlap, the strongest response is kept.
 
 use rayon::prelude::*;
 
@@ -21,8 +24,10 @@ pub struct Blob {
     pub pos: [f32; 3],
     /// Diameter in voxels (the size whose response was strongest).
     pub diameter: f32,
-    /// Robust z-score of the response.
+    /// Robust z-score of the response among all voxels at this size.
     pub score: f32,
+    /// The response itself, comparable between sizes.
+    pub strength: f32,
 }
 
 fn kernel(sigma: f64) -> Vec<f32> {
@@ -86,7 +91,8 @@ pub fn blobs(v: &[f32], dims: [usize; 3], diameters: &[f64], dark: bool, min_z: 
     let mut found: Vec<Blob> = vec![];
     for &d in diameters {
         check_cancel()?;
-        let sigma = d / 2.0 / 3f64.sqrt();
+        // The pair (σ, 1.6σ) acts like one Gaussian of width √1.6·σ.
+        let sigma = d / 2.0 / 3f64.sqrt() / 1.6f64.sqrt();
         let (fine, coarse) = (gauss(v, dims, sigma), gauss(v, dims, 1.6 * sigma));
         let sign = if dark { -1.0 } else { 1.0 };
         let dog: Vec<f32> = fine.par_iter().zip(&coarse).map(|(a, b)| sign * (a - b)).collect();
@@ -115,7 +121,7 @@ pub fn blobs(v: &[f32], dims: [usize; 3], diameters: &[f64], dark: bool, min_z: 
                             }
                         }
                         if peak {
-                            out.push(Blob { pos: [x as f32, y as f32, z as f32], diameter: d as f32, score });
+                            out.push(Blob { pos: [x as f32, y as f32, z as f32], diameter: d as f32, score, strength: c });
                         }
                     }
                 }
@@ -124,7 +130,7 @@ pub fn blobs(v: &[f32], dims: [usize; 3], diameters: &[f64], dark: bool, min_z: 
             .collect();
         found.extend(layer);
     }
-    found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    found.sort_by(|a, b| b.strength.total_cmp(&a.strength));
     // Strongest first; a weaker blob whose centre lies inside a kept one
     // (or that holds a kept one's centre) is the same object.
     let mut kept: Vec<Blob> = vec![];
