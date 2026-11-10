@@ -93,8 +93,9 @@ pub struct AutoResult {
     pub timings: Vec<(String, f64)>,
     /// The batches that chose which views to leave out.
     pub selection: Vec<super::select::Batch>,
-    /// How far the specimen was turned to lie flat (°): about Y (the tilt
-    /// offset) and about X (the depth slope along Y).
+    /// How far the specimen was turned to lie flat (°): about Y (the
+    /// alignment's whole tilt offset, also when an earlier run did the
+    /// turning) and about X (the depth slope along Y, found afresh each run).
     pub levelled: [f64; 2],
     pub bin: usize,
     pub thickness: usize,
@@ -234,13 +235,16 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let ctf = d.ctf.clone().unwrap();
     let mut leveled = a.clone();
     let place = level(&img, &mut leveled, px, bin, req.purpose != Purpose::Sta, &stage(3))?;
+    // The alignment's own offset, so a rerun on an alignment levelled before
+    // still reports how far the specimen was turned (this run adds none).
+    let tilt_offset = leveled.tilt_offset;
     if place.tilt_offset != 0.0 {
         d.alignment = Some(leveled);
         d.save()?;
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let step = pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false };
+    let step = pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false, label: None };
     let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
     let mut look = None;
@@ -299,8 +303,13 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, look, relion, labels, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, look, relion, labels, note, timings, selection, levelled: [tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
+
+/// The tag in the file names of the look tomogram and what is made from it
+/// (`<stem>_sart3_b4_flip_look_n2n_deconv.mrc`): the display tomogram at that
+/// binning has the same name without it.
+pub const LOOK_LABEL: &str = "look";
 
 /// One reconstruction grid along each axis, for `look_map`: voxels of `bin`
 /// pixels, `n` of them, and (along Z) the depth offset of the placement.
@@ -388,7 +397,7 @@ pub fn reconstruct_look(d: &mut Dataset, raw_step: &pipeline::ReconStep, progres
     };
     let params = recon::Params { thickness: p.thickness.div_ceil(2), z_offset: p.z_offset / 2.0, ..p.clone() };
     let (raw_grid, look_grid) = (Grid::of(w, h, raw_step.bin, p.thickness, p.z_offset), Grid::of(w, h, bin, params.thickness, params.z_offset));
-    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false };
+    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false, label: Some(LOOK_LABEL.into()) };
     let made = pipeline::reconstruct(d, &step, progress)?;
     let (scale, offset) = look_map(raw_grid, look_grid);
     let path = made.paths[0].clone();

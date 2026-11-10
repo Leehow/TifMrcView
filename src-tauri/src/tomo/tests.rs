@@ -400,6 +400,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
         halves: true,
         phase_flip: false,
         ctf_3d: false,
+        label: None,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
@@ -420,6 +421,15 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let again = dataset::Dataset::open(&imgs[0].info().path, 5, None).unwrap();
     assert_eq!(again.tomograms.len(), 3);
     assert_eq!(again.tomograms[0].halves.as_ref().unwrap()[1], out.paths[2]);
+    // A labelled step (the look tomogram) names the halves too, and leaves the unlabelled ones as they are.
+    let mut labelled = d.clone();
+    let tagged = pipeline::reconstruct(&mut labelled, &pipeline::ReconStep { label: Some("look".into()), ..step.clone() }, &|_, _, _| {}).unwrap();
+    assert!(tagged.paths[0].ends_with("ts_wbp_b2_look.mrc") && tagged.paths[1].ends_with("ts_wbp_b2_look_even.mrc") && tagged.paths[2].ends_with("ts_wbp_b2_look_odd.mrc"), "{:?}", tagged.paths);
+    assert_eq!(labelled.tomograms.len(), 6);
+    assert!(out.paths.iter().all(|p| labelled.tomograms.iter().any(|t| &t.path == p)));
+    for p in &tagged.paths {
+        std::fs::remove_file(p).unwrap();
+    }
     d.optics.pixel_a = Some(2.276);
     let files = export::run(&d, "relion5", dir.path().to_str().unwrap(), 1, &|_, _| {}).unwrap();
     let series = std::fs::read_to_string(&files[1]).unwrap();
@@ -647,10 +657,21 @@ fn look_mapping(w: usize, h: usize, thickness: usize, z_offset: f64) {
         halves: false,
         phase_flip: false,
         ctf_3d: false,
+        label: None,
     };
     let raw = pipeline::reconstruct(&mut d, &raw_step, &|_, _, _| {}).unwrap().paths.remove(0);
+    // A display tomogram the user already has, at the look's binning (the name
+    // the look tomogram used to take).
+    let display = pipeline::reconstruct(&mut d, &pipeline::ReconStep { bin: 4, ..raw_step.clone() }, &|_, _, _| {}).unwrap().paths.remove(0);
+    let display_bytes = std::fs::read(&display).unwrap();
     let (path, look) = auto::reconstruct_look(&mut d, &raw_step, &|_, _, _| {}).unwrap().unwrap();
     assert_eq!(path, look.path);
+    // The look has a name of its own, and the display tomogram and its entry survive untouched.
+    assert!(look.path.ends_with("beads_wbp_b4_look.mrc") && display.ends_with("beads_wbp_b4.mrc"), "{} {display}", look.path);
+    assert_ne!(look.path, display);
+    assert!(d.tomograms.iter().any(|t| t.path == display && t.kind == "full"));
+    assert!(d.tomograms.iter().any(|t| t.path == look.path));
+    assert_eq!(std::fs::read(&display).unwrap(), display_bytes);
     assert_eq!(look.scale, 2.0);
     let (rv, rs, _) = pipeline::load(&raw).unwrap();
     let (lv, ls, _) = pipeline::load(&look.path).unwrap();

@@ -58,6 +58,12 @@ pub struct ReconStep {
     /// depth, each from views phase flipped for that depth.
     #[serde(default)]
     pub ctf_3d: bool,
+    /// Added to the file names (`…_flip_look`), so that a tomogram built for
+    /// another purpose at the same binning (the look companion of
+    /// `auto::reconstruct_look`) does not take the plain name of one the user
+    /// has. Everything made from it (`_n2n`, `_deconv`) keeps the tag.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Largest defocus change across one 3D-CTF slab, Å.
@@ -100,7 +106,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
     if req.ctf_3d && flip.is_none() {
         bail!("3D CTF 校正需要先完成 CTF 估计并勾选相位翻转");
     }
-    let tag = format!("{method}_b{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" });
+    let tag = format!("{method}_b{}{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" }, req.label.as_ref().map_or(String::new(), |l| format!("_{l}")));
     let mut made: Vec<Tomogram> = Vec::new();
     let mut backend = String::new();
     for (kind, src) in sources {
