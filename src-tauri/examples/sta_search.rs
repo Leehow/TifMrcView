@@ -2,7 +2,7 @@
 //!
 //!   cargo run --release --no-default-features --features cli --example sta_search -- \
 //!     --template average.mrc [--tilts -60,60] [--diameter 250] [--step 30] \
-//!     [--expected 1] [--out DIR] TOMOGRAM.mrc
+//!     [--expected 1] [--gpu] [--coarse 2] [--out DIR] TOMOGRAM.mrc
 //!
 //! The template is a 32³ cube (`average.mrc` of `sta_coarse`). The tomogram
 //! is binned to its voxel size. Writes `<out>/peaks.csv` (x, y, z in voxels
@@ -21,6 +21,9 @@ fn main() -> anyhow::Result<()> {
     let mut diameter = 250.0;
     let mut step = 30.0;
     let mut expected = 1.0;
+    // --gpu: the convolution search on the GPU; --coarse 2: at half the template's sampling.
+    let mut gpu = false;
+    let mut coarse = 1usize;
     let mut out = String::from("sta");
     let mut path = None;
     let mut args = std::env::args().skip(1);
@@ -35,6 +38,8 @@ fn main() -> anyhow::Result<()> {
             "--template" => template = Some(args.next().unwrap_or_default()),
             "--diameter" => diameter = args.next().unwrap_or_default().parse::<f64>()?,
             "--step" => step = args.next().unwrap_or_default().parse::<f64>()?,
+            "--gpu" => gpu = true,
+            "--coarse" => coarse = args.next().unwrap_or_default().parse::<usize>()?,
             "--expected" => expected = args.next().unwrap_or_default().parse::<f64>()?,
             "--out" => out = args.next().unwrap_or_default(),
             _ => path = Some(a),
@@ -66,6 +71,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    anyhow::ensure!(coarse == 1 || coarse == 2, "--coarse 1 or 2");
+    let side = BOX / coarse;
+    let cube = tifmrcview_lib::spa::fourier::resample3(&cube, BOX, side);
+    let voxel = voxel * coarse as f64;
     let (v, dims, got, bin) = binned(&path, voxel)?;
     if (got / voxel - 1.0).abs() > 0.02 {
         eprintln!("warning: the tomogram is binned to {got:.2} A, the template has {voxel:.2} A");
@@ -74,7 +83,14 @@ fn main() -> anyhow::Result<()> {
     let turns = tifmrcview_lib::spa::geom::grid(step);
     eprintln!("tomogram {}x{}x{} at {got:.2} A, {} orientations", dims[0], dims[1], dims[2], turns.len());
     let tick = |done: usize, total: usize| eprintln!("search {done}/{total}");
-    let found = search(&v, dims, &cube, BOX, radius, tilts, &turns, None, &tick)?;
+    let found = if gpu {
+        let (dev, name) = tifmrcview_lib::classify::device();
+        eprintln!("device: {name}");
+        tifmrcview_lib::sta::search_gpu::search(&dev, &v, dims, &cube, side, radius, tilts, &turns, None, &tick)?
+    } else {
+        anyhow::ensure!(coarse == 1, "--coarse needs --gpu");
+        search(&v, dims, &cube, BOX, radius, tilts, &turns, None, &tick)?
+    };
     let all = peaks(&found, 2.0 * radius, usize::MAX);
     let cut = cutoff(&all, expected);
 

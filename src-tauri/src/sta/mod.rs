@@ -26,6 +26,7 @@ pub mod pick;
 pub mod project;
 pub mod refine;
 pub mod search;
+pub mod search_gpu;
 pub mod shape;
 #[cfg(test)]
 mod tests;

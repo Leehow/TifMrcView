@@ -48,7 +48,8 @@ fn kernel(template: &[f32], n: usize, mask: &[f32], wedge: &[f32], r: &Mat, k: u
     re[0] = 0.0;
     im[0] = 0.0;
     let full = ift3(n, &re, &im);
-    let o = (n - k) / 2;
+    // k is odd: its middle voxel is the template's centre, n/2.
+    let o = n / 2 - k / 2;
     let mut out = Vec::with_capacity(k * k * k);
     for z in 0..k {
         for y in 0..k {
@@ -170,12 +171,11 @@ pub fn search(
         let spread = (m2 - m1.clone() * m1 / count).clamp_min(1e-12).sqrt();
         let mut best = vec![f32::MIN; len];
         let mut which = vec![0u32; len];
-        for (b, (w, rows)) in kernels.iter().enumerate() {
+        for (b, (w, _)) in kernels.iter().enumerate() {
             check_cancel()?;
             let cc = conv3d(x.clone(), w.clone(), None, options.clone()) / spread.clone();
             let top = pull(cc.clone().max_dim(1).reshape([len]))?;
             let arg: Vec<i64> = cc.argmax(1).reshape([len]).into_data().convert::<i64>().try_into_vec::<i64>().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            let _ = rows;
             for i in 0..len {
                 if top[i] > best[i] {
                     best[i] = top[i];
@@ -208,7 +208,7 @@ pub fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spa::geom::{axis_angle, grid};
+    use crate::spa::geom::grid;
     use crate::spa::Rng;
 
     /// The convolution finds a planted, turned copy where the transform
@@ -239,7 +239,6 @@ mod tests {
                 }
             }
         }
-        let _ = axis_angle;
         let dev = Device::flex();
         let gpu = search(&dev, &v, dims, &template, n, 5.0, [-90.0, 90.0], &turns, None, &|_, _| {}).unwrap();
         let cpu = super::super::search::search(&v, dims, &template, n, 5.0, [-90.0, 90.0], &turns, None, &|_, _| {}).unwrap();
