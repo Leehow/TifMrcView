@@ -33,11 +33,12 @@ use crate::tomo::{output, pipeline};
 const SEARCH_VOXEL: f64 = 16.0;
 /// Blob diameters looked for, Å.
 const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
-/// Robust z-score a blob needs to count towards a kind, and the lower one
-/// that makes it a candidate of the chosen kind: candidates are judged
-/// again by how well they match the average (`clean`).
+/// Robust z-score a blob needs, as a kind and as a candidate of the chosen
+/// kind. (Weaker candidates were tried on EMPIAR-10045: at z ≥ 3.5 they
+/// more than doubled the candidates, the match with the average did not
+/// tell them apart, and the average got worse.)
 const MIN_Z: f32 = 5.0;
-const LOOSE_Z: f32 = 3.5;
+const LOOSE_Z: f32 = MIN_Z;
 /// Side of the cubes, and how many voxels of it the particle spans.
 const BOX: usize = 32;
 const SPAN: f64 = 13.0;
