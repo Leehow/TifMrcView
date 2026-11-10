@@ -324,7 +324,7 @@ pub struct Aligned {
 
 /// The shell (fractional) where the FSC first falls below 0.143 after
 /// the first two.
-fn cut(fsc: &[f64]) -> f64 {
+pub(crate) fn cut(fsc: &[f64]) -> f64 {
     for s in 2..fsc.len() {
         if fsc[s] < 0.143 {
             let (a, b) = (fsc[s - 1], fsc[s]);
@@ -339,7 +339,7 @@ fn cut(fsc: &[f64]) -> f64 {
 /// transfer and rises again behind it, and that signal is as good for
 /// aligning as the rest (the halves are independent). A shell counts only
 /// with a neighbour above the line too, so a single noisy value does not.
-fn extent(fsc: &[f64]) -> f64 {
+pub(crate) fn extent(fsc: &[f64]) -> f64 {
     let ok = |s: usize| fsc.get(s).is_some_and(|v| *v >= 0.143);
     (2..fsc.len()).rev().find(|&s| ok(s) && (ok(s - 1) || ok(s + 1))).map_or(1.0, |s| s as f64)
 }

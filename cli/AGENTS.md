@@ -162,10 +162,13 @@ average of everything that looks like card N: `average.mrc`, `half1.mrc`,
 `average.mrc`; `"particles"` how many were averaged). The JSON also has
 `"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
 `"diameterA"` with `"diameterFrom": "card"` (1.33 × the card's size),
-`"candidates"`, `"seconds"` (the whole run, a tomogram made first included)
-and `"ctfLimited": true` when the FSC falls below 0.143 and then rises above
-0.3 again at higher frequency: the resolution is then limited at a CTF zero
-and the data holds more than the number says. (`"kinds"` and `"distinct"`
+`"candidates"`, `"seconds"` (the whole run, a tomogram made first included),
+`"searched"` (`"look"` or `"raw"`: which tomogram the template was searched
+on) with `"searchVoxelA"`, and `"ctfLimited": true` when the FSC has a dip
+that rises again (a local minimum below 0.5 followed by a value 0.15 higher):
+the halves disagree at a zero of the contrast transfer and agree again behind
+it. `"resolutionA"` is then the dip and `"signalA"` is where they last agree
+(finer; the data holds that much); both are steady from run to run. (`"kinds"` and `"distinct"`
 are left out; they belong to the blob search.) Progress on stderr counts the
 steps of the whole run ("第 k/N 步 · …"); a line says which card was taken
 and where the others are when `tmv sta` picks a card itself, and the last

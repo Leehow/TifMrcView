@@ -169,6 +169,13 @@ pub struct Report {
     pub search_voxel_a: Option<f64>,
     /// Resolution at FSC 0.143 between the halves, Å.
     pub resolution_a: Option<f64>,
+    /// With a dip in the FSC (`resolution`, a zero of the contrast transfer):
+    /// the resolution where the halves last agree, Å, finer than
+    /// `resolution_a`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_a: Option<f64>,
+    /// `resolution_a` is limited at a zero of the contrast transfer.
+    pub ctf_limited: bool,
     pub fsc: Vec<f64>,
     pub map: Option<String>,
     pub halves: Option<[String; 2]>,
@@ -320,13 +327,49 @@ pub fn split(scores: &[f32]) -> (f32, f64) {
     (cut, best / var)
 }
 
-/// Whether an FSC curve (by shell, from the lowest frequency) falls below
-/// 0.143 and later, at a higher frequency, rises above 0.3 again. That is not
-/// noise taking over: the halves agree again beyond a CTF zero, where the
-/// signal is missing for a few shells, so the resolution read at 0.143 is
-/// where the first zero lies and the data holds more.
-pub fn ctf_limited(fsc: &[f64]) -> bool {
-    fsc.iter().position(|&x| x < 0.143).is_some_and(|dip| fsc[dip..].iter().any(|&x| x > 0.3))
+/// Where a resolution is read on an FSC curve, in (fractional) shells.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shells {
+    /// The resolution limit: where the curve first falls through 0.143, or,
+    /// with a dip, the dip when the curve has not fallen through it by then.
+    pub limit: f64,
+    /// Where the halves last agree (the curve crosses 0.143 for the last
+    /// time, with a neighbour above the line too: `refine::extent`). Equal to
+    /// `limit` without a dip.
+    pub signal: f64,
+    /// The curve has a dip: a local minimum at shell 2 or later below 0.5 that
+    /// is followed, at a higher shell, by a value at least 0.15 above it. That
+    /// is not noise taking over: with every particle at about the same defocus
+    /// the halves agree again beyond a zero of the contrast transfer, so the
+    /// limit is where the zero lies and the data holds more.
+    pub dip: bool,
+}
+
+/// The resolution limit and signal extent of an FSC curve (by shell, from the
+/// lowest frequency), which do not flip with the noise at a CTF zero: whether
+/// the curve dips to 0.17 or 0.11 there makes no difference to either.
+pub(crate) fn resolution(fsc: &[f64]) -> Shells {
+    use super::refine::{cut, extent};
+    if fsc.is_empty() {
+        return Shells { limit: 0.0, signal: 0.0, dip: false };
+    }
+    let falls = |s: usize| fsc[s - 1] > fsc[s] && fsc.get(s + 1).is_none_or(|n| fsc[s] <= *n);
+    let dip = (2..fsc.len()).find(|&m| fsc[m] < 0.5 && falls(m) && fsc[m + 1..].iter().any(|&x| x >= fsc[m] + 0.15));
+    let first = cut(fsc);
+    match dip {
+        None => Shells { limit: first, signal: first, dip: false },
+        Some(m) => {
+            // `cut` is the first crossing; it counts if it is not behind the dip.
+            let crossed = (2..=m).any(|s| fsc[s] < 0.143);
+            let s = extent(fsc);
+            let a = fsc.get(s as usize).copied().unwrap_or(0.0);
+            let signal = match fsc.get(s as usize + 1) {
+                Some(&b) if a > b => s + (a - 0.143) / (a - b),
+                _ => s,
+            };
+            Shells { limit: if crossed { first } else { m as f64 }, signal, dip: true }
+        }
+    }
 }
 
 /// A split has to explain this much of the scores' spread before the low
@@ -481,6 +524,8 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         searched: None,
         search_voxel_a: None,
         resolution_a: None,
+        signal_a: None,
+        ctf_limited: false,
         fsc: vec![],
         map: None,
         halves: None,
@@ -590,7 +635,10 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.diameter_a = Some(size);
     report.particles = cuts.len();
     report.voxel_a = voxel_a;
-    report.resolution_a = (out.shell > 0.0).then(|| n as f64 * voxel_a / out.shell);
+    let shells = resolution(&out.fsc);
+    report.resolution_a = (shells.limit > 0.0).then(|| n as f64 * voxel_a / shells.limit);
+    report.signal_a = (shells.dip && shells.signal > 0.0).then(|| n as f64 * voxel_a / shells.signal);
+    report.ctf_limited = shells.dip;
     report.fsc = out.fsc.clone();
     report.map = Some(file("average.mrc"));
     report.halves = Some([file("half1.mrc"), file("half2.mrc")]);
@@ -1144,6 +1192,8 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         searched: None,
         search_voxel_a: None,
         resolution_a: None,
+        signal_a: None,
+        ctf_limited: false,
         fsc: vec![],
         map: None,
         halves: None,
@@ -1487,6 +1537,8 @@ pub fn run_template(
         searched: None,
         search_voxel_a: None,
         resolution_a: None,
+        signal_a: None,
+        ctf_limited: false,
         fsc: vec![],
         map: None,
         halves: None,
@@ -1657,7 +1709,7 @@ mod read_tests {
 
 #[cfg(test)]
 mod fsc_tests {
-    use super::ctf_limited;
+    use super::resolution;
 
     /// Two real curves (EMPIAR data): the FSC falls to about 0.1, comes back
     /// above 0.3 beyond a CTF zero and falls again.
@@ -1670,22 +1722,50 @@ mod fsc_tests {
         0.556, 0.495, 0.324, 0.152, 0.054, 0.026, 0.075, 0.077,
     ];
 
+    /// A real run: the FSC dips to 0.177 at the zero (not below 0.143), where an
+    /// earlier run of the same data dipped to 0.107.
+    const DIP_3: [f64; 33] = [
+        1.0, 0.998, 0.998, 0.993, 0.992, 0.990, 0.983, 0.983, 0.979, 0.971, 0.958, 0.955, 0.956, 0.947, 0.930, 0.927, 0.902, 0.865, 0.805, 0.650, 0.378, 0.177, 0.326, 0.496, 0.565,
+        0.575, 0.488, 0.329, 0.143, 0.021, 0.060, 0.109, 0.125,
+    ];
+
     #[test]
-    fn a_dip_below_the_threshold_that_rises_again_is_a_ctf_zero() {
-        assert!(ctf_limited(&DIP_1));
-        assert!(ctf_limited(&DIP_2));
+    fn a_dip_that_rises_again_is_a_ctf_zero() {
+        for dip in [&DIP_1[..], &DIP_2[..], &DIP_3[..]] {
+            assert!(resolution(dip).dip);
+        }
+        // The curve that dips to 0.177: the limit is the dip (shell 21), the
+        // signal reaches shell 28.
+        let r = resolution(&DIP_3);
+        assert_eq!(r.limit, 21.0);
+        assert!((r.signal - 28.0).abs() < 0.05, "{}", r.signal);
+        // The same data in an earlier run, 0.107 at the dip: the same numbers.
+        let mut lower = DIP_3;
+        lower[21] = 0.107;
+        let l = resolution(&lower);
+        assert!((l.limit - 20.0 - (0.378 - 0.143) / (0.378 - 0.107)).abs() < 1e-9 && l.dip);
+        assert!((l.limit - r.limit).abs() < 1.0 && l.signal == r.signal);
+        // Falling through 0.143 before the dip: the crossing is the limit.
+        let r = resolution(&DIP_1);
+        assert!((r.limit - 20.1).abs() < 0.01 && (r.signal - 27.0).abs() < 1.0, "{r:?}");
+        let r = resolution(&DIP_2);
+        assert!((r.limit - 20.58).abs() < 0.01 && (r.signal - 28.0).abs() < 1.0, "{r:?}");
     }
 
     #[test]
     fn a_curve_that_only_falls_or_never_falls_is_not() {
         let falling: Vec<f64> = (0..33).map(|i| (1.0 - i as f64 / 24.0).max(0.0)).collect();
-        assert!(!ctf_limited(&falling));
-        // Noise that wobbles a little after the crossing is not a rise to 0.3.
+        let r = resolution(&falling);
+        assert!(!r.dip && r.limit == r.signal && (r.limit - 20.5).abs() < 1.0, "{r:?}");
+        // Noise that wobbles a little after the crossing is not a rise of 0.15.
         let wobble = [1.0, 0.9, 0.5, 0.2, 0.13, 0.16, 0.1, 0.12, 0.05];
-        assert!(!ctf_limited(&wobble));
+        assert!(!resolution(&wobble).dip);
         // Never below 0.143, or too short to say.
-        assert!(!ctf_limited(&[1.0, 0.9, 0.8, 0.5, 0.4, 0.35]));
-        assert!(!ctf_limited(&[]));
+        assert!(!resolution(&[1.0, 0.9, 0.8, 0.5, 0.4, 0.35]).dip);
+        assert!(!resolution(&[]).dip);
+        // A dip at 0.5 or above, or before shell 2, is not a zero.
+        assert!(!resolution(&[1.0, 0.9, 0.8, 0.6, 0.55, 0.8, 0.9, 0.7, 0.3, 0.1]).dip);
+        assert!(!resolution(&[1.0, 0.2, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05]).dip);
     }
 }
 

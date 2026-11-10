@@ -62,10 +62,14 @@ Whether the average is good is for you to judge from `average.mrc` and the
 two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
 `resolutionA` (FSC 0.143 between the halves) with the curve `fsc`, `particles`,
 `diameterA` with `diameterFrom: "card"` (1.33 × the card's size), `seconds`
-(the whole run, a tomogram made first included) and `ctfLimited: true` when the
-FSC falls below 0.143 and then rises above 0.3 again at higher frequency: the
-resolution is then limited at a CTF zero and the data holds more than the
-number says. Progress on stderr counts the steps of the whole run ("第 k/N
+(the whole run, a tomogram made first included), `searched` (`look` or `raw`:
+which tomogram the template was searched on) with `searchVoxelA`, and
+`ctfLimited: true` when the FSC has a dip that rises again (a local minimum
+below 0.5 followed by a value 0.15 higher): the halves disagree at a zero of
+the contrast transfer and agree again behind it. `resolutionA` is then the
+dip, and `signalA` is where they last agree (finer; the data holds that
+much). Both are steady from run to run, where a read at 0.143 jumped
+between them as the dip fell just above or below the line. Progress on stderr counts the steps of the whole run ("第 k/N
 步 · …"); when `tmv sta` picks a card itself a line says which card and where
 the others are, and the last line gives the resolution, the particle count and
 where `average.mrc` is.

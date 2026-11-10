@@ -60,9 +60,11 @@ USAGE
   everything that looks like card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
   resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
-  diameterFrom "card" says), ctfLimited (true when the FSC falls below 0.143
-  and rises above 0.3 again at higher frequency: the resolution is then
-  limited at a CTF zero and the data holds more) and seconds (the whole run).
+  diameterFrom "card" says), searched ("look" or "raw": the tomogram the template
+  was searched on) with searchVoxelA, ctfLimited (true when the FSC has a dip
+  that rises again, a local minimum below 0.5 followed by a value 0.15 higher:
+  a zero of the contrast transfer; resolutionA is then the dip and signalA
+  is where the halves last agree, finer) and seconds (the whole run).
 
 OUTPUT
   Files are written beside the input; copy the folder back and open them in
@@ -594,16 +596,16 @@ fn sta_label(label: &str, with_cards: bool) -> String {
 }
 
 /// The closing line of `tmv sta` on stderr.
-fn sta_summary(r: &crate::sta::project::Report, ctf_limited: bool) -> String {
+fn sta_summary(r: &crate::sta::project::Report) -> String {
     let map = r.map.as_deref().unwrap_or("average.mrc");
-    let mut s = match r.resolution_a {
-        Some(a) => format!("tmv sta: done: {a:.1} Å resolution (FSC 0.143 between the two halves) from {} particles; the average is {map}", r.particles),
-        None => format!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {map}", r.particles),
-    };
-    if ctf_limited {
-        s += ". The resolution is limited at a CTF zero (the curve falls below 0.143 and rises again at higher frequency), so the data holds more than this number says";
+    match (r.resolution_a, r.signal_a) {
+        (Some(a), Some(signal)) if r.ctf_limited => format!(
+            "tmv sta: done: {a:.1} Å resolution (limited at a zero of the contrast transfer; the two halves agree again behind it, out to about {signal:.0} Å) from {} particles; the average is {map}",
+            r.particles
+        ),
+        (Some(a), _) => format!("tmv sta: done: {a:.1} Å resolution (FSC 0.143 between the two halves) from {} particles; the average is {map}", r.particles),
+        (None, _) => format!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {map}", r.particles),
     }
-    s
 }
 
 /// The card to take without asking (see `sta::project::choose`): the only
@@ -805,15 +807,13 @@ fn sta(o: &Opts) -> Result<Value> {
     let out_s = out.to_string_lossy().into_owned();
     let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, DIAMETER_FACTOR * card.diameter_a, true, &out_s, &report, &|_| {}))??;
     progress.done();
-    let ctf_limited = sp::ctf_limited(&r.fsc);
-    eprintln!("{}", sta_summary(&r, ctf_limited));
+    eprintln!("{}", sta_summary(&r));
     let mut v = serde_json::to_value(&r)?;
     if let Value::Object(m) = &mut v {
         // `seconds` (the whole run) says it; `ms` covered only the average.
         m.remove("ms");
     }
     v["diameterFrom"] = json!("card");
-    v["ctfLimited"] = json!(ctf_limited);
     v["card"] = card_json(card);
     v["out"] = json!(out);
     v["cardsDir"] = json!(cards_dir);
@@ -1172,6 +1172,36 @@ fn download_sam() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_closing_line_of_sta_says_what_the_dip_means() {
+        let mut r = crate::sta::project::Report {
+            kinds: vec![],
+            diameter_a: None,
+            particles: 533,
+            candidates: 600,
+            distinct: None,
+            voxel_a: 13.0,
+            searched: Some("look".into()),
+            search_voxel_a: Some(34.7),
+            resolution_a: Some(27.84),
+            signal_a: None,
+            ctf_limited: false,
+            fsc: vec![],
+            map: Some("o/average.mrc".into()),
+            halves: None,
+            table: None,
+            ms: 0,
+        };
+        assert_eq!(super::sta_summary(&r), "tmv sta: done: 27.8 Å resolution (FSC 0.143 between the two halves) from 533 particles; the average is o/average.mrc");
+        (r.signal_a, r.ctf_limited) = (Some(19.8), true);
+        assert_eq!(
+            super::sta_summary(&r),
+            "tmv sta: done: 27.8 Å resolution (limited at a zero of the contrast transfer; the two halves agree again behind it, out to about 20 Å) from 533 particles; the average is o/average.mrc"
+        );
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!((json["ctfLimited"].as_bool(), json["signalA"].as_f64(), json["resolutionA"].as_f64()), (Some(true), Some(19.8), Some(27.84)));
+    }
+
     #[test]
     fn sta_steps_are_counted_over_the_whole_run() {
         // With cards: find, cut and classify (both under step 2), search, coarse and fine alignment.
