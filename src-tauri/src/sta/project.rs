@@ -93,6 +93,51 @@ pub fn to_raw(pos: [f64; 3], look_bin: usize, raw_bin: usize, look: &LookSource)
     })
 }
 
+/// The exclusion mask of a look tomogram, from the raw one. Exclusion (X/Y
+/// borders, gold) is a property of the specimen, and its rule (voxels more than
+/// `GOLD` robust deviations dark) is calibrated on raw reconstructions: a
+/// denoised tomogram has a much smaller spread and the rule misfires there.
+/// `raw_ok` is `allowed` of the raw tomogram on a grid `raw_dims` whose voxel
+/// p is the binned raw voxel(s) `raw_h` p .. `raw_h` p + `raw_h` − 1 (1 for the
+/// binned tomogram, 2 for its halved copy); the result is on the look grid
+/// `look_dims`, built the same way with `look_h`. A look voxel is allowed when
+/// the raw voxel nearest its centre is (outside the raw grid: not), and it
+/// lies at least `look_radius` voxels from the look grid's X and Y faces.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn allowed_on_look(
+    raw_ok: &[bool],
+    raw_dims: [usize; 3],
+    raw_h: usize,
+    raw_bin: usize,
+    look_dims: [usize; 3],
+    look_h: usize,
+    look_bin: usize,
+    look: &LookSource,
+    look_radius: f64,
+) -> Vec<bool> {
+    let [nx, ny, nz] = look_dims;
+    let mut out = vec![false; nx * ny * nz];
+    // Voxel p of a grid made of `h`-fold voxels is centred on binned voxel h p + (h − 1)/2.
+    let (lh, rh) = ((look_h as f64 - 1.0) / 2.0, (raw_h as f64 - 1.0) / 2.0);
+    out.par_chunks_mut(nx * ny).enumerate().for_each(|(z, plane)| {
+        for y in 0..ny {
+            for x in 0..nx {
+                let edge = (x as f64) < look_radius || ((nx - 1 - x) as f64) < look_radius || (y as f64) < look_radius || ((ny - 1 - y) as f64) < look_radius;
+                if edge {
+                    continue;
+                }
+                let at = [x, y, z].map(|p| p as f64 * look_h as f64 + lh);
+                let q = to_raw(at, look_bin, raw_bin, look);
+                let q = q.map(|b| ((b - rh) / raw_h as f64).round());
+                if (0..3).all(|k| q[k] >= 0.0 && q[k] < raw_dims[k] as f64) {
+                    plane[y * nx + x] = raw_ok[((q[2] as usize) * raw_dims[1] + q[1] as usize) * raw_dims[0] + q[0] as usize];
+                }
+            }
+        }
+    });
+    out
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Kind {
@@ -759,7 +804,8 @@ const CARD_MEMBERS: usize = 10;
 /// on cubes at half sampling (eight times fewer voxels); each card is then
 /// averaged from the full cubes at the
 /// poses found. A source with a look tomogram is searched, cut and
-/// averaged on that one. Cards come best first: the `likely` ones, then by
+/// averaged on that one; which blobs are gold or lie too near a border is
+/// still decided on the raw tomogram (`allowed_on_look`, `Cut::darkest`). Cards come best first: the `likely` ones, then by
 /// `compact × members` (a compact class that many blobs share); ids follow
 /// that order.
 pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
@@ -784,8 +830,19 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
             let (v, dims, voxel, bin) = binned(s.finding(), size / SPAN)?;
             voxel_a = voxel;
             let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
+            // Blobs are found on `v` (the look tomogram, if any); what is
+            // gold or too near a border is decided on the raw tomogram.
             let (median, sd) = super::pick::robust(&v);
-            let ok = allowed(&v, dims, 0.5 * size / voxel);
+            let (ok, raw) = match &s.look {
+                None => (allowed(&v, dims, 0.5 * size / voxel), None),
+                Some(l) => {
+                    let (rv, rdims, rvoxel, rbin) = binned(&s.path, size / SPAN)?;
+                    let rok = allowed(&rv, rdims, 0.5 * size / rvoxel);
+                    let ok = allowed_on_look(&rok, rdims, 1, rbin, dims, 1, bin, l, 0.5 * size / voxel);
+                    let stats = super::pick::robust(&rv);
+                    (ok, Some((rv, rdims, rvoxel, rbin, stats, l)))
+                }
+            };
             for b in found {
                 let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
                 if c.iter().zip(dims).any(|(c, d)| *c >= d) || !ok[(c[2] * dims[1] + c[1]) * dims[0] + c[0]] {
@@ -793,7 +850,14 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
                 }
                 if let Some(cube) = cube(&v, dims, c) {
                     let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                    let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
+                    let darkest = match &raw {
+                        None => darkest(&v, dims, c, 0.5 * size / voxel, median, sd),
+                        // The same place on the raw tomogram (inside it: `ok` says so).
+                        Some((rv, rdims, rvoxel, rbin, (rmedian, rsd), l)) => {
+                            let r = to_raw(c.map(|x| x as f64), bin, *rbin, l).map(|x| x.round().max(0.0) as usize);
+                            darkest(rv, *rdims, r, 0.5 * size / rvoxel, *rmedian, *rsd)
+                        }
+                    };
                     cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
                 }
             }
@@ -1012,8 +1076,9 @@ fn halve(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
 /// two halves. `diameter_a` is the particle's size.
 ///
 /// A source with a look tomogram (`Source::look`, a clear version of the same
-/// tomogram) is searched on that one instead (the exclusion mask, the
-/// search, the peaks and the threshold), binned to the template's voxel size;
+/// tomogram) is searched on that one instead (the search, the peaks and the
+/// threshold; the exclusion mask is made from the raw tomogram and carried
+/// over, see `allowed_on_look`), binned to the template's voxel size;
 /// each peak is then mapped to the tomogram itself (`to_raw`) and the cubes
 /// for alignment and averaging, in both passes, are cut from that, so the
 /// averages are of the unfiltered data. The template, made from look data,
@@ -1070,7 +1135,16 @@ pub fn run_template(
         };
         let (coarse, cdims) = halve(found_on, found_dims);
         let radius = 0.25 * diameter_a / found_voxel;
-        let mask = allowed(&coarse, cdims, radius);
+        let mask = match &looked {
+            None => allowed(&coarse, cdims, radius),
+            // Exclusion is decided on the raw tomogram, as without a look
+            // one, and carried over to the look grid (plus its own borders).
+            Some((l, b)) => {
+                let (raw_coarse, raw_cdims) = halve(&v, dims);
+                let raw_ok = allowed(&raw_coarse, raw_cdims, 0.25 * diameter_a / got);
+                allowed_on_look(&raw_ok, raw_cdims, 2, bin, cdims, 2, b.3, l, radius)
+            }
+        };
         let stage = format!("搜索 {}/{}", i + 1, sources.len());
         let found = super::search_gpu::search(dev, &coarse, cdims, &small, BOX / 2, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
         // Particles do not overlap, but may touch.
