@@ -23,6 +23,7 @@
 pub mod average;
 pub mod cc;
 pub mod pick;
+pub mod project;
 pub mod refine;
 #[cfg(test)]
 mod tests;

@@ -255,3 +255,65 @@ fn first_model_and_alignment_from_particles_alone() {
     assert!(first > 0.5 && last > 0.75 && last >= first - 0.02, "first {first} aligned {last}");
     assert!(out.shell > 5.0, "{}", out.shell);
 }
+
+/// Heavy: a made-up tomogram with 32 dark copies of the phantom, found,
+/// cut out and averaged by `project::run` (same command as above with
+/// `sta::tests::project`).
+#[test]
+#[ignore]
+fn project_finds_and_averages_particles_in_a_tomogram() {
+    use super::project::{run, Source};
+    let truth = phantom();
+    // A particle has a body: the phantom's balls on a larger soft one.
+    let c = (N / 2) as f64;
+    let body: Vec<f32> = truth
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+            v + 0.8 * (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
+        })
+        .collect();
+    let dims = [160usize, 160, 96];
+    let mut rng = Rng(21);
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    for k in 0..2 {
+        for j in 0..4 {
+            for i in 0..4 {
+                let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
+                let p = rotate(&body, N, &r);
+                let o = [22 + 38 * i + rng.below(5), 22 + 38 * j + rng.below(5), 24 + 46 * k + rng.below(5)];
+                for z in 0..N {
+                    for y in 0..N {
+                        for x in 0..N {
+                            // Dark on light, as cryo data are.
+                            v[((o[2] + z - N / 2) * dims[1] + o[1] + y - N / 2) * dims[0] + o[0] + x - N / 2] -= p[(z * N + y) * N + x];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    v.iter_mut().for_each(|x| *x += (1.0 * sd * rng.gauss()) as f32);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    // 17.5 Å voxels: the 280 Å size then spans 16 voxels unbinned.
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    let sources = vec![Source { path: tomo, tilts: [-90.0, 90.0] }];
+    let out = dir.join("out").to_string_lossy().into_owned();
+    let found = run(&sources, None, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("kinds {:?}", found.kinds);
+    assert!(found.map.is_none() && !found.kinds.is_empty());
+    // The user's choice: the whole particle, not the balls inside it.
+    let size = found.kinds.iter().filter(|k| k.diameter_a > 200.0).max_by_key(|k| k.count).expect("no large kind").diameter_a;
+    let done = run(&sources, Some(size), &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("{} particles, {:?} Å, fsc {:?}", done.particles, done.resolution_a, done.fsc);
+    assert!(done.particles >= 24 && done.particles <= 40, "{}", done.particles);
+    assert!(done.resolution_a.unwrap() < 4.0 * done.voxel_a, "{:?}", done.resolution_a);
+    assert!(std::path::Path::new(done.map.as_ref().unwrap()).is_file());
+    let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
+    assert_eq!(table.lines().count(), done.particles + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

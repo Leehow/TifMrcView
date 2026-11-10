@@ -196,3 +196,7 @@ required-features = ["pro"]
 [[example]]
 name = "cryoet_align_select"
 required-features = ["pro"]
+
+[[example]]
+name = "sta_coarse"
+required-features = ["pro"]
