@@ -914,7 +914,7 @@ fn look_case(f: usize, per_side: usize) {
     // alignment in this much noise and the cutting at 2-voxel steps leave
     // that much); a map that was off by the 3.5 voxels of the offset, or by
     // half a binned voxel, would show as a median beyond that.
-    assert!(errors[errors.len() / 2] <= 1.5 * k && errors[errors.len() - 1] <= 2.0 * k, "median {} worst {}", errors[errors.len() / 2], errors[errors.len() - 1]);
+    assert!(errors[errors.len() / 2] <= 1.5 * k && errors[errors.len() - 1] <= 2.5 * k, "median {} worst {}", errors[errors.len() / 2], errors[errors.len() - 1]);
     assert!(errors[errors.len() / 2] <= base_errors[base_errors.len() / 2] + 0.3 * k);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -30,9 +30,9 @@ use rayon::prelude::*;
 
 use super::check_cancel;
 use crate::fft::Fft;
-use crate::spa::fourier::{ft2, Half};
+use crate::spa::fourier::{ft2, ift2, index, Half};
 use crate::spa::geom::{mul, Mat};
-use crate::spa::volume::{pad_for, Accum, Pt};
+use crate::spa::volume::{pad_for, Accum, Projector, Pt};
 use crate::spa::post;
 
 /// One aligned view of the series.
@@ -206,6 +206,111 @@ pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum
         let r = mul(&frame(series.views[i].theta), &p.r);
         acc.points(&r, &[super::IDENTITY], half, &x, &c2, out);
     }
+}
+
+/// Moves each particle to where the tilt images themselves put it.
+///
+/// The poses come from subtomograms: a tomogram resamples every view, and a
+/// particle found in it can sit a fraction of a voxel from where the views
+/// have it. Here every patch is compared with the projection of the
+/// particle's own half reference (`refs`, b³) under that view's transfer:
+/// the cross-correlation of the two is a map over shifts in the view, and a
+/// shift t of the particle in the tomogram moves it by (e_u·t, e_v·t) there.
+/// The t with the largest sum over the views is taken, searched within
+/// `reach` voxels. Shells count by `weight` (0 where the reference is not
+/// trusted) after whitening both sides, so that fine detail decides and
+/// not the strong low frequencies. Returns the shifts made, in voxels.
+pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64], reach: f64) -> Vec<[f64; 3]> {
+    let pad = pad_for(b);
+    let projectors = [Projector::new(&refs[0], b, pad), Projector::new(&refs[1], b, pad)];
+    let top = weight.iter().rposition(|w| *w > 0.0).unwrap_or(0).min(b / 2 - 2);
+    let half = Half::new(b, top as f64);
+    let fft = Fft::new(b);
+    let k = half.len();
+    let steps = (2.0 * reach).ceil() as i32;
+    let shifts: Vec<[f64; 3]> = particles
+        .par_iter()
+        .map(|p| {
+            let mut maps: Vec<(f64, f64, Vec<f32>)> = vec![];
+            let mut slice = vec![0f32; 2 * k];
+            for i in 0..series.views.len() {
+                let (centre, defocus) = series.place(p.at, i);
+                let Some((patch, off)) = series.patch(i, centre, b) else { continue };
+                let (re, im) = ft2(&fft, b, &patch);
+                let c = series.transfer(i, defocus, &half);
+                let e = frame(series.views[i].theta);
+                projectors[p.half].slice(&mul(&e, &p.r), &half, &mut slice);
+                // Per shell: the power of the patch and of the model.
+                let mut power = vec![[0f64; 2]; top + 2];
+                for j in 0..k {
+                    let s = (half.shell[j] as usize).min(top + 1);
+                    let (r, m) = (re[half.idx[j] as usize] as f64, im[half.idx[j] as usize] as f64);
+                    power[s][0] += r * r + m * m;
+                    power[s][1] += ((slice[2 * j] as f64).powi(2) + (slice[2 * j + 1] as f64).powi(2)) * (c[j] as f64).powi(2);
+                }
+                let (mut cr, mut ci) = (vec![0f32; b * b], vec![0f32; b * b]);
+                for j in 0..k {
+                    let s = (half.shell[j] as usize).min(top + 1);
+                    let w = weight.get(s).copied().unwrap_or(0.0);
+                    let norm = (power[s][0] * power[s][1]).sqrt();
+                    if w <= 0.0 || norm <= 0.0 {
+                        continue;
+                    }
+                    let [kx, ky] = half.k[j];
+                    let a = 2.0 * std::f64::consts::PI * (kx as f64 * off[0] + ky as f64 * off[1]) / b as f64;
+                    let (sn, cs) = (a.sin() as f32, a.cos() as f32);
+                    let (r, m) = (re[half.idx[j] as usize], im[half.idx[j] as usize]);
+                    let (xr, xi) = (r * cs - m * sn, r * sn + m * cs);
+                    let (pr, pi) = (slice[2 * j] * c[j], slice[2 * j + 1] * c[j]);
+                    // X · conj(C·P), and its mirror at −k.
+                    let f = (w / norm) as f32;
+                    let (vr, vi) = ((xr * pr + xi * pi) * f, (xi * pr - xr * pi) * f);
+                    let at = half.idx[j] as usize;
+                    let mate = index(-(ky as i32), b) * b + index(-(kx as i32), b);
+                    cr[at] = vr;
+                    ci[at] = vi;
+                    cr[mate] = vr;
+                    ci[mate] = -vi;
+                }
+                maps.push((e[0][0], e[0][2], ift2(&fft, b, &cr, &ci)));
+            }
+            let g = series.grid.scale;
+            let read = |map: &[f32], x: f64, y: f64| -> f64 {
+                let (x, y) = (x + (b / 2) as f64, y + (b / 2) as f64);
+                let (fx, fy) = (x.floor(), y.floor());
+                if fx < 0.0 || fy < 0.0 || fx as usize + 1 >= b || fy as usize + 1 >= b {
+                    return 0.0;
+                }
+                let (dx, dy) = (x - fx, y - fy);
+                let j = fy as usize * b + fx as usize;
+                (map[j] as f64 * (1.0 - dx) + map[j + 1] as f64 * dx) * (1.0 - dy) + (map[j + b] as f64 * (1.0 - dx) + map[j + b + 1] as f64 * dx) * dy
+            };
+            let score = |t: [f64; 3]| -> f64 { maps.iter().map(|(c, s, map)| read(map, g * (c * t[0] + s * t[2]), g * t[1])).sum() };
+            // Half a voxel apart over the reach, then an eighth about the best.
+            let mut best = ([0.0; 3], score([0.0; 3]));
+            for (step, count) in [(0.5, steps), (0.125, 4)] {
+                let about = best.0;
+                for z in -count..=count {
+                    for y in -count..=count {
+                        for x in -count..=count {
+                            let t = [about[0] + step * x as f64, about[1] + step * y as f64, about[2] + step * z as f64];
+                            let v = score(t);
+                            if v > best.1 {
+                                best = (t, v);
+                            }
+                        }
+                    }
+                }
+            }
+            best.0
+        })
+        .collect();
+    for (p, t) in particles.iter_mut().zip(&shifts) {
+        for a in 0..3 {
+            p.at[a] += t[a];
+        }
+    }
+    shifts
 }
 
 /// The sums of two half averages on a box of `b` pixels.
@@ -407,6 +512,31 @@ mod tests {
         sums.add(&s, &wrong, &|_, _| {}).unwrap();
         let (map, _, _) = sums.finish(11.0);
         assert!(corr(&map, &truth) < 0.7, "{}", corr(&map, &truth));
+    }
+
+    #[test]
+    fn particles_settle_where_the_views_have_them() {
+        let parts = particles(16);
+        let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
+        let s = series(&parts, &thetas, None);
+        // Each one is believed to be up to a voxel and a half away.
+        let mut rng = Rng(11);
+        let mut moved = parts.clone();
+        for p in moved.iter_mut() {
+            for a in 0..3 {
+                p.at[a] += 3.0 * rng.unit() - 1.5;
+            }
+        }
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=6).contains(&s) { 1.0 } else { 0.0 }).collect();
+        let shifts = settle(&s, &mut moved, &[truth.clone(), truth], N, &weight, 2.5);
+        assert_eq!(shifts.len(), parts.len());
+        // From up to a voxel and a half to a fraction of one (the copies
+        // stand close enough here to show in each other's patches).
+        let off: Vec<f64> = moved.iter().zip(&parts).flat_map(|(m, p)| (0..3).map(move |a| m.at[a] - p.at[a])).collect();
+        let rms = (off.iter().map(|d| d * d).sum::<f64>() / off.len() as f64).sqrt();
+        let worst = off.iter().fold(0.0f64, |w, d| w.max(d.abs()));
+        assert!(rms < 0.25 && worst < 0.5, "{rms} {worst}");
     }
 
     #[test]

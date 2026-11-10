@@ -1657,6 +1657,7 @@ pub fn run_template(
     );
     report.search_voxel_a = searched.first().map(|s| s.1);
     // The same particles, where they now are, from the tilt images.
+    let mut spare: Option<super::refine::Aligned> = None;
     if fine && sources.iter().all(|s| s.series.is_some()) {
         match from_tilts(sources, &cuts, &out, voxel, diameter_a, progress) {
             Ok(tilted) => {
@@ -1664,7 +1665,8 @@ pub fn run_template(
                 let better = area(&tilted.fsc) >= area(&out.fsc);
                 let (kept, other) = if better { (tilted, out) } else { (out, tilted) };
                 report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
-                report.fsc_other = Some(other.fsc);
+                report.fsc_other = Some(other.fsc.clone());
+                spare = Some(other);
                 out = kept;
                 live(&out.map);
             }
@@ -1672,6 +1674,13 @@ pub fn run_template(
         }
     }
     save(&mut report, sources, &cuts, &out, out_dir, diameter_a, voxel, started)?;
+    if let Some(other) = spare {
+        // The one not kept, to compare with.
+        let n = (other.map.len() as f64).cbrt().round() as usize;
+        for (name, v) in [("other_average.mrc", &other.map), ("other_half1.mrc", &other.halves[0]), ("other_half2.mrc", &other.halves[1])] {
+            output::write_mrc(&Path::new(out_dir).join(name).to_string_lossy(), v, [n, n, n], voxel, false)?;
+        }
+    }
     Ok(report)
 }
 
@@ -1680,7 +1689,10 @@ pub fn run_template(
 fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
     use super::tilt::{Particle, Series, Sums};
     let n = (out.map.len() as f64).cbrt().round() as usize;
-    let mut sums = Sums::new(n, n as f64 / 2.0 - 2.0);
+    // Every series is read once; the particles are then put where the views
+    // have them (twice: against the halves from the tomograms, then against
+    // those the views gave) before the average that is kept.
+    let mut all: Vec<(Series, Vec<Particle>)> = vec![];
     for (i, s) in sources.iter().enumerate() {
         let particles: Vec<Particle> = cuts
             .iter()
@@ -1711,14 +1723,46 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
             bail!("倾斜图像的像素（{px:.3} Å）凑不成平均图的体素（{voxel:.3} Å）");
         }
         let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
-        let series = Series::open(&d, &t, dims, bin, &|a, b| progress(&label, a, 2 * b))?;
-        sums.add(&series, &particles, &|a, b| progress(&label, b + a, 2 * b))?;
+        let series = Series::open(&d, &t, dims, bin, &|a, b| progress(&label, a, b))?;
+        all.push((series, particles));
     }
-    if sums.count < 4 {
+    if all.iter().map(|(_, p)| p.len()).sum::<usize>() < 4 {
         bail!("颗粒太少");
     }
     let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
-    let (map, halves, fsc) = sums.finish(radius + 2.0);
+    const ROUNDS: usize = 2;
+    let mut refs = out.halves.clone();
+    let mut trusted = out.fsc.clone();
+    let mut made = None;
+    for round in 0..=ROUNDS {
+        check_cancel()?;
+        if round > 0 {
+            // Shells up to where the halves agree, by how well they do.
+            let top = super::refine::extent(&trusted);
+            let weight: Vec<f64> = trusted.iter().enumerate().map(|(s, f)| if s >= 2 && s as f64 <= top { (2.0 * f.max(0.0) / (1.0 + f.max(0.0))).sqrt() } else { 0.0 }).collect();
+            let mut moved: Vec<[f64; 3]> = vec![];
+            for (series, particles) in all.iter_mut() {
+                moved.extend(super::tilt::settle(series, particles, &refs, n, &weight, 2.0));
+            }
+            let mean: [f64; 3] = std::array::from_fn(|a| moved.iter().map(|m| m[a]).sum::<f64>() / moved.len().max(1) as f64);
+            let mut size: Vec<f64> = moved.iter().map(|m| (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt()).collect();
+            size.sort_by(f64::total_cmp);
+            eprintln!("sta: settling on the tilt images, round {round}: median move {:.2} voxels, mean ({:+.2}, {:+.2}, {:+.2})", size[size.len() / 2], mean[0], mean[1], mean[2]);
+        }
+        let mut sums = Sums::new(n, n as f64 / 2.0 - 2.0);
+        let total: usize = all.iter().map(|(_, p)| p.len()).sum();
+        let mut before = 0;
+        for (series, particles) in &all {
+            sums.add(series, particles, &|a, _| progress("从倾斜图像平均", round * total + before + a, (ROUNDS + 1) * total))?;
+            before += particles.len();
+        }
+        let (map, halves, fsc) = sums.finish(radius + 2.0);
+        eprintln!("sta: from the tilt images, round {round}: FSC {}", fsc.iter().map(|f| format!("{f:.3}")).collect::<Vec<_>>().join(" "));
+        refs = halves.clone();
+        trusted = fsc.clone();
+        made = Some((map, halves, fsc));
+    }
+    let (map, halves, fsc) = made.unwrap();
     let shell = super::refine::cut(&fsc);
     Ok(super::refine::Aligned { map, halves, poses: out.poses.clone(), fsc, shell })
 }
