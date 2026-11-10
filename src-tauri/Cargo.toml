@@ -200,3 +200,7 @@ required-features = ["pro"]
 [[example]]
 name = "sta_coarse"
 required-features = ["pro"]
+
+[[example]]
+name = "sta_search"
+required-features = ["pro"]
