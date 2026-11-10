@@ -73,6 +73,12 @@ pub struct Tomogram {
     /// onto this one's.
     #[serde(default)]
     pub look: Option<Look>,
+    /// Where the tomogram's middle section lies from the tilt axis, in its
+    /// sections (`recon::Params::z_offset`); None for one made with a slope
+    /// along Y or before this was kept. With it a point of the tomogram can
+    /// be found again in the tilt images (`sta::tilt`).
+    #[serde(default)]
+    pub z_offset: Option<f64>,
 }
 
 /// A companion tomogram of the same specimen, sampled twice as coarsely and

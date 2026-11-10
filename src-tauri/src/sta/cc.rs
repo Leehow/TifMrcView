@@ -323,7 +323,7 @@ impl Engine {
         let mut cube = vec![0f32; side * side * side];
         let mut line = vec![(0f32, 0f32); side];
         let mut current = i16::MIN;
-        let mut flush = |kz: i16, plane: &mut Vec<(f32, f32)>, cube: &mut Vec<f32>| {
+        let flush = |kz: i16, plane: &mut Vec<(f32, f32)>, cube: &mut Vec<f32>| {
             let w = wave_of(kz);
             for (tz, (c, d)) in w.iter().enumerate() {
                 let out = &mut cube[tz * side * side..][..side * side];

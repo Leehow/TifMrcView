@@ -139,6 +139,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
             phase_flipped: flip.is_some(),
             halves: None,
             look: None,
+            z_offset: (req.params.y_slope == 0.0).then_some(req.params.z_offset),
         });
     }
     if made.len() == 3 {

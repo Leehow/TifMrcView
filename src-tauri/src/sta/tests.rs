@@ -116,7 +116,6 @@ fn aligns_noisy_wedged_particles_and_fills_the_wedge() {
         })
         .collect();
     let parts: Vec<Vec<f32>> = poses.iter().map(|(r, t)| particle(&truth, r, *t, &w[0], 1.5 * sd, &mut rng)).collect();
-    let wedge_of = vec![0usize; parts.len()];
 
     // One wedged, noisy copy is a poor picture of the particle.
     let alone = transform(&parts[0], N, &poses[0].0, poses[0].1);
@@ -269,7 +268,7 @@ fn particle_tomogram(per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<su
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
     // 17.5 Å voxels, so nothing is binned.
     crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
-    (dir, vec![Source { path: tomo, tilts: [-90.0, 90.0], look: None }])
+    (dir, vec![Source { path: tomo, tilts: [-90.0, 90.0], look: None, series: None }])
 }
 
 /// The tomogram of `particle_tomogram`: its size, values (dark copies, z-major),
@@ -382,7 +381,7 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
     crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
-    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None }];
+    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None, series: None }];
     // What the sphere tool gives: a slightly wrong sphere, sampled densely.
     let size_a = 227.5;
     let drawn: Vec<Drawn> =
@@ -842,6 +841,7 @@ fn look_case(f: usize, per_side: usize) {
         path: path("raw.mrc"),
         tilts: [-90.0, 90.0],
         look: Some(LookSource { path: path("look.mrc"), scale: 2.0, offset: [3.5; 3] }),
+        series: None,
     }];
     let (dev, name) = crate::classify::device();
     eprintln!("device {name}");
@@ -925,7 +925,7 @@ fn look_case(f: usize, per_side: usize) {
 fn cards_ignore_the_look_tomogram() {
     use super::project::{cards, LookSource, Source};
     let look = Some(LookSource { path: "/nonexistent/look_tomogram.mrc".into(), scale: 2.0, offset: [0.0; 3] });
-    let sources = vec![Source { path: "/nonexistent/raw_tomogram.mrc".into(), tilts: [-60.0, 60.0], look }];
+    let sources = vec![Source { path: "/nonexistent/raw_tomogram.mrc".into(), tilts: [-60.0, 60.0], look, series: None }];
     let err = format!("{:#}", cards(&sources, "/nonexistent/cards", &|_, _, _| {}, &|_| {}).unwrap_err());
     assert!(err.contains("raw_tomogram.mrc") && !err.contains("look_tomogram"), "{err}");
 }

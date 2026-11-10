@@ -85,8 +85,8 @@ fn main() -> anyhow::Result<()> {
         use tifmrcview_lib::sta::project::{run_template, Source};
         let (dev, name) = tifmrcview_lib::classify::device();
         eprintln!("device: {name}");
-        let mut sources = vec![Source { path: path.clone(), tilts, look: look.clone() }];
-        sources.extend(more.iter().map(|p| Source { path: p.clone(), tilts, look: None }));
+        let mut sources = vec![Source { path: path.clone(), tilts, look: look.clone(), series: None }];
+        sources.extend(more.iter().map(|p| Source { path: p.clone(), tilts, look: None, series: None }));
         let last = std::sync::Mutex::new(String::new());
         let progress = |stage: &str, done: usize, total: usize| {
             let mut l = last.lock().unwrap();

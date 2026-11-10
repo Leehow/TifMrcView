@@ -28,6 +28,7 @@ pub mod refine;
 pub mod search;
 pub mod search_gpu;
 pub mod shape;
+pub mod tilt;
 #[cfg(test)]
 mod tests;
 

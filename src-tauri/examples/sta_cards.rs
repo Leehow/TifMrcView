@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     anyhow::ensure!(!paths.is_empty(), "give at least one tomogram");
-    let sources: Vec<Source> = paths.into_iter().map(|path| Source { path, tilts, look: None }).collect();
+    let sources: Vec<Source> = paths.into_iter().map(|path| Source { path, tilts, look: None, series: None }).collect();
     let last = std::sync::Mutex::new(String::new());
     let progress = |stage: &str, done: usize, total: usize| {
         let mut l = last.lock().unwrap();

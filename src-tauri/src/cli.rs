@@ -511,6 +511,9 @@ struct StaInput {
     /// The clear companion `tmv tomo --for sta` made (blobs and the template
     /// are searched on it; the averages are of `tomogram`).
     look: Option<crate::tomo::dataset::Look>,
+    /// The dataset of the tilt series, when the tomogram's place in the
+    /// series is on record: the final average then comes from the tilt images.
+    series: Option<String>,
 }
 
 /// The look record kept with `tomogram` in its dataset, when its file is
@@ -736,9 +739,19 @@ fn sta(o: &Opts) -> Result<Value> {
             }
         };
         let look = look_of(dataset.as_ref(), &tomogram);
-        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from, look });
+        let name = Path::new(&tomogram).file_name();
+        let series = dataset.as_ref().and_then(|d| {
+            let placed = d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == name && t.z_offset.is_some());
+            // Beside the tomogram, also when the folder was moved.
+            let file = Path::new(&tomogram).with_file_name(crate::tomo::dataset::path_for(&d.stack).file_name()?);
+            (placed && file.is_file()).then(|| file.to_string_lossy().into_owned())
+        });
+        if series.is_none() && dataset.is_some() {
+            eprintln!("tmv sta: {tomogram} was made by an older version: the average will come from the tomogram only (run tmv tomo --for sta again to use the tilt images)");
+        }
+        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from, look, series });
     }
-    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts, look: f.look.clone() }).collect();
+    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts, look: f.look.clone(), series: f.series.clone() }).collect();
     let tomograms: Vec<Value> = found
         .iter()
         .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
@@ -1240,6 +1253,8 @@ mod tests {
             signal_a: None,
             ctf_limited: false,
             fsc: vec![],
+            averaged_from: None,
+            fsc_other: None,
             map: Some("o/average.mrc".into()),
             halves: None,
             table: None,

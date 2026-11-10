@@ -68,6 +68,11 @@ pub struct Source {
     /// that becomes a reference or an average comes from `path`.
     #[serde(default)]
     pub look: Option<LookSource>,
+    /// The tilt series' dataset (`<stack>.tomo.json`) the tomogram was made
+    /// from: with it the final average is made from the tilt images
+    /// themselves (`tilt`).
+    #[serde(default)]
+    pub series: Option<String>,
 }
 
 /// Where a position on the binned look tomogram lies on the binned raw one.
@@ -177,6 +182,12 @@ pub struct Report {
     /// `resolution_a` is limited at a zero of the contrast transfer.
     pub ctf_limited: bool,
     pub fsc: Vec<f64>,
+    /// What the average was made from, when there was a choice: "tilt
+    /// images" or "tomogram"; and the FSC of the one not kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub averaged_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fsc_other: Option<Vec<f64>>,
     pub map: Option<String>,
     pub halves: Option<[String; 2]>,
     pub table: Option<String>,
@@ -527,6 +538,8 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         signal_a: None,
         ctf_limited: false,
         fsc: vec![],
+        averaged_from: None,
+        fsc_other: None,
         map: None,
         halves: None,
         table: None,
@@ -1223,6 +1236,8 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         signal_a: None,
         ctf_limited: false,
         fsc: vec![],
+        averaged_from: None,
+        fsc_other: None,
         map: None,
         halves: None,
         table: None,
@@ -1571,6 +1586,8 @@ pub fn run_template(
         signal_a: None,
         ctf_limited: false,
         fsc: vec![],
+        averaged_from: None,
+        fsc_other: None,
         map: None,
         halves: None,
         table: None,
@@ -1587,8 +1604,71 @@ pub fn run_template(
         .to_string(),
     );
     report.search_voxel_a = searched.first().map(|s| s.1);
+    // The same particles, where they now are, from the tilt images.
+    if fine && sources.iter().all(|s| s.series.is_some()) {
+        match from_tilts(sources, &cuts, &out, voxel, diameter_a, progress) {
+            Ok(tilted) => {
+                let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
+                let better = area(&tilted.fsc) >= area(&out.fsc);
+                let (kept, other) = if better { (tilted, out) } else { (out, tilted) };
+                report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
+                report.fsc_other = Some(other.fsc);
+                out = kept;
+                live(&out.map);
+            }
+            Err(e) => eprintln!("sta: the average from the tilt images could not be made ({e}); keeping the one from the tomograms"),
+        }
+    }
     save(&mut report, sources, &cuts, &out, out_dir, diameter_a, voxel, started)?;
     Ok(report)
+}
+
+/// The average of the aligned particles made from the tilt images (`tilt`),
+/// on the grid of `out` (voxels of `voxel` Å), with the same halves.
+fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
+    use super::tilt::{Particle, Series, Sums};
+    let n = (out.map.len() as f64).cbrt().round() as usize;
+    let mut sums = Sums::new(n, n as f64 / 2.0 - 2.0);
+    for (i, s) in sources.iter().enumerate() {
+        let particles: Vec<Particle> = cuts
+            .iter()
+            .zip(&out.poses)
+            .enumerate()
+            .filter(|(_, (c, _))| c.source == i)
+            .map(|(j, (c, p))| Particle { at: std::array::from_fn(|k| c.at[k] + p.t[k] * c.bin as f64), r: p.r, half: j % 2 })
+            .collect();
+        if particles.is_empty() {
+            continue;
+        }
+        check_cancel()?;
+        let file = s.series.as_ref().unwrap();
+        let mut d: crate::tomo::dataset::Dataset = serde_json::from_slice(&std::fs::read(file).with_context(|| format!("无法读取 {file}"))?)?;
+        // The folder may have been moved: then the stack is beside the dataset.
+        if !Path::new(&d.stack).is_file() {
+            if let (Some(dir), Some(name)) = (Path::new(file).parent(), Path::new(&d.stack).file_name()) {
+                d.stack = dir.join(name).to_string_lossy().into_owned();
+            }
+        }
+        let name = Path::new(&s.path).file_name();
+        let Some(t) = d.tomograms.iter().find(|t| Path::new(&t.path).file_name() == name).cloned() else { bail!("{file} 里没有 {} 的记录", s.path) };
+        let info = pipeline::open(&s.path)?;
+        let dims = [info.info().width, info.info().height, info.info().size_z];
+        let Some(px) = d.optics.pixel_a else { bail!("不知道像素大小") };
+        let bin = (voxel / px).round().max(1.0) as usize;
+        if (bin as f64 * px / voxel - 1.0).abs() > 0.01 {
+            bail!("倾斜图像的像素（{px:.3} Å）凑不成平均图的体素（{voxel:.3} Å）");
+        }
+        let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
+        let series = Series::open(&d, &t, dims, bin, &|a, b| progress(&label, a, 2 * b))?;
+        sums.add(&series, &particles, &|a, b| progress(&label, b + a, 2 * b))?;
+    }
+    if sums.count < 4 {
+        bail!("颗粒太少");
+    }
+    let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
+    let (map, halves, fsc) = sums.finish(radius + 2.0);
+    let shell = super::refine::cut(&fsc);
+    Ok(super::refine::Aligned { map, halves, poses: out.poses.clone(), fsc, shell })
 }
 
 #[cfg(test)]
