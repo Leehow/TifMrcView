@@ -11,7 +11,6 @@
 
 use tifmrcview_lib::sta::project::binned;
 use tifmrcview_lib::sta::search::{allowed, cutoff, peaks, search};
-use tifmrcview_lib::tomo::{output, pipeline};
 
 /// Side of the template cube (`BOX` of `sta::project`).
 const BOX: usize = 32;
@@ -60,25 +59,7 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // The template, read like a tomogram.
-    let img = pipeline::open(&template)?;
-    let info = img.info();
-    anyhow::ensure!(
-        info.width == BOX && info.height == BOX && info.size_z == BOX,
-        "the template must be {BOX}x{BOX}x{BOX}, this one is {}x{}x{}",
-        info.width,
-        info.height,
-        info.size_z
-    );
-    let voxel = output::pixel_a(&img);
-    let mut cube = vec![0f32; BOX * BOX * BOX];
-    for z in 0..BOX {
-        let (page, s) = info.locate(0, z, 0);
-        let p = img.page(page)?;
-        let p = &p[s.min(p.len() - 1)];
-        for (i, o) in cube[z * BOX * BOX..(z + 1) * BOX * BOX].iter_mut().enumerate() {
-            *o = p.data.get_f64(i) as f32;
-        }
-    }
+    let (cube, voxel) = tifmrcview_lib::sta::project::read_card(&template)?;
 
     if average {
         use tifmrcview_lib::sta::project::{run_template, Source};

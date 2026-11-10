@@ -508,7 +508,7 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
 }
 
 /// A class average of the blobs of one size, to choose a template from.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Card {
     pub id: usize,
@@ -677,6 +677,27 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
     let out: Vec<Card> = found.into_iter().map(|f| f.0).collect();
     std::fs::write(file("cards.json"), serde_json::to_string_pretty(&out)?)?;
     Ok(out)
+}
+
+/// Reads a card (or any `BOX`³ template MRC): the cube, z-major, and its
+/// voxel size, Å.
+pub fn read_card(path: &str) -> Result<(Vec<f32>, f64)> {
+    let img = pipeline::open(path).with_context(|| format!("cannot open {path}"))?;
+    let info = img.info();
+    if info.width != BOX || info.height != BOX || info.size_z != BOX {
+        bail!("the template must be {BOX}x{BOX}x{BOX}, {path} is {}x{}x{}", info.width, info.height, info.size_z);
+    }
+    let voxel = output::pixel_a(&img);
+    let mut cube = vec![0f32; BOX * BOX * BOX];
+    for z in 0..BOX {
+        let (page, s) = info.locate(0, z, 0);
+        let p = img.page(page)?;
+        let p = &p[s.min(p.len() - 1)];
+        for (i, o) in cube[z * BOX * BOX..(z + 1) * BOX * BOX].iter_mut().enumerate() {
+            *o = p.data.get_f64(i) as f32;
+        }
+    }
+    Ok((cube, voxel))
 }
 
 /// Sort key of a card: the likely ones first, then `compact × members`.
@@ -993,5 +1014,26 @@ mod card_tests {
         assert_eq!(cards[0].members, 50);
         assert_eq!(cards.iter().filter(|c| c.likely).count(), 1);
         assert!(cards[0].likely);
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    #[test]
+    fn a_card_reads_back_with_its_voxel_size() {
+        let dir = std::env::temp_dir().join(format!("tmv_card_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("card_0.mrc").to_string_lossy().into_owned();
+        let cube: Vec<f32> = (0..BOX * BOX * BOX).map(|i| (i % 97) as f32 - 40.0).collect();
+        output::write_mrc(&path, &cube, [BOX; 3], 6.25, false).unwrap();
+        let (back, voxel) = read_card(&path).unwrap();
+        assert_eq!(back, cube);
+        assert!((voxel - 6.25).abs() < 1e-3, "voxel {voxel}");
+        let flat = dir.join("flat.mrc").to_string_lossy().into_owned();
+        output::write_mrc(&flat, &vec![0f32; BOX * BOX * 8], [BOX, BOX, 8], 6.25, false).unwrap();
+        assert!(read_card(&flat).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

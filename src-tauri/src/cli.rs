@@ -32,6 +32,9 @@ USAGE
   tmv run <path>                 Detect what <path> is and run the right command
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
         [--for display|sta|survey] [--pixel Å]
+  tmv sta <tilt-series|tomogram> [MORE …]
+                                 Subtomogram averaging: cards, then the average
+        [--pick N] [--out DIR] [--pixel Å]
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -49,12 +52,20 @@ USAGE
   wedge filled, membranes when a model is set), sta (subtomogram averaging:
   full detail + RELION 5 folder), survey (quick look).
 
+  tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
+  does) or tomograms that tmv tomo --for sta wrote. It runs in two steps:
+  class-average "cards" of the blobs found go to <out>/cards/ (--out defaults
+  to <first input>_sta beside it); then, with --pick N (or when card 0 is
+  the only likely one), the average of everything that looks like card N
+  goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+
 OUTPUT
   Files are written beside the input; copy the folder back and open them in
   TifMrcView Pro (label maps open with their tomogram). Progress goes to
   stderr. The result is one JSON object on stdout ({"ok":true,…}), also
   saved as <input>.tmv.json. Exit status 0 on success, 1 on error
-  ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind).
+  ({"ok":false,"error":…}), 2 when a choice is needed (spa: pick a kind;
+  sta: pick a card).
 
   The GPU is found automatically (CUDA with an NVIDIA driver, else Vulkan,
   else CPU). On a shared server pick the card with CUDA_VISIBLE_DEVICES=N;
@@ -64,6 +75,10 @@ OUTPUT
 
 /// Exit status when the user must choose before the command can go on.
 const NEEDS_CHOICE: i32 = 2;
+
+/// `tmv sta` asks `run_template` for this times the card's size: the blobs
+/// the cards are made from read small (a 210 Å card goes with a 280 Å particle).
+const DIAMETER_FACTOR: f64 = 1.33;
 
 /// Runs the tool with `args` (without the program name); returns the exit status.
 pub fn main(args: Vec<String>) -> i32 {
@@ -89,17 +104,27 @@ pub fn main(args: Vec<String>) -> i32 {
         println!("tmv {VERSION}");
         return 0;
     }
+    if args[1..].iter().any(|a| matches!(a.as_str(), "-h" | "--help")) {
+        print!("{HELP}");
+        return 0;
+    }
     let opts = match Opts::parse(&args[1..]) {
         Ok(o) => o,
         Err(e) => return fail(cmd, &e, None),
     };
+    if cmd != "sta" {
+        if let Some(extra) = opts.more.first() {
+            return fail(cmd, &anyhow!("unexpected argument `{extra}` (one input at a time)"), opts.input.as_deref());
+        }
+    }
     let started = Instant::now();
-    if matches!(cmd, "run" | "tomo" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") {
+    if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") {
         let _ = gpu();
     }
     let result = match cmd {
         "run" => run(&opts),
         "tomo" => tomo(&opts),
+        "sta" => sta(&opts),
         "membranes" | "membrane" => membranes(&opts),
         "spa" => spa(&opts),
         "ctf" => ctf(&opts),
@@ -171,6 +196,8 @@ fn emit(v: &Value, input: Option<&str>) {
 #[derive(Default)]
 struct Opts {
     input: Option<String>,
+    /// Further inputs (only `tmv sta` takes them).
+    more: Vec<String>,
     named: Vec<(String, Option<String>)>,
 }
 
@@ -187,13 +214,15 @@ impl Opts {
                     None => (k.to_string(), Some(it.next().cloned().with_context(|| format!("{a} needs a value"))?)),
                 };
                 o.named.push((k, v));
-            } else if o.input.is_none() {
+            } else {
                 let p = Path::new(a);
                 // Absolute, so the paths saved in project files stay valid.
-                let abs = std::fs::canonicalize(p).with_context(|| format!("{a}: no such file or folder"))?;
-                o.input = Some(abs.to_string_lossy().into_owned());
-            } else {
-                bail!("unexpected argument `{a}` (one input at a time)");
+                let abs = std::fs::canonicalize(p).with_context(|| format!("{a}: no such file or folder"))?.to_string_lossy().into_owned();
+                if o.input.is_none() {
+                    o.input = Some(abs);
+                } else {
+                    o.more.push(abs);
+                }
             }
         }
         Ok(o)
@@ -425,6 +454,172 @@ fn tomo(o: &Opts) -> Result<Value> {
         }
     }
     v["open"] = json!(r.path);
+    Ok(v)
+}
+
+/// What `tmv sta` knows about one input after its tomogram exists.
+struct StaInput {
+    input: String,
+    tomogram: String,
+    tilts: [f64; 2],
+    tilts_from: &'static str,
+}
+
+/// First and last tilt angle (°) of `angles`; None with fewer than two or all equal.
+fn range_of(angles: &[f64]) -> Option<[f64; 2]> {
+    let lo = angles.iter().copied().filter(|a| a.is_finite()).fold(f64::INFINITY, f64::min);
+    let hi = angles.iter().copied().filter(|a| a.is_finite()).fold(f64::NEG_INFINITY, f64::max);
+    (hi > lo).then_some([lo, hi])
+}
+
+/// The tilts used for the tomogram: the refined angles (levelling included)
+/// of the alignment's views that were not left out, else the series' angles.
+fn tilt_range(d: &crate::tomo::dataset::Dataset) -> Option<([f64; 2], &'static str)> {
+    if let Some(a) = &d.alignment {
+        let used: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
+        if let Some(r) = range_of(&used) {
+            return Some((r, "alignment"));
+        }
+    }
+    range_of(&d.angles).map(|r| (r, "tilt angles"))
+}
+
+/// The dataset (`*.tomo.json`) beside `tomogram` that lists it.
+fn dataset_of(tomogram: &str) -> Option<crate::tomo::dataset::Dataset> {
+    use crate::tomo::dataset::Dataset;
+    let p = Path::new(tomogram);
+    let name = p.file_name()?;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(p.parent()?)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".tomo.json")))
+        .collect();
+    files.sort();
+    files.into_iter().find_map(|f| {
+        let d: Dataset = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
+        d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == Some(name)).then_some(d)
+    })
+}
+
+/// `--out`, else `<stem>_sta` beside the first input.
+fn sta_out(o: &Opts, first: &str) -> Result<PathBuf> {
+    if let Some(d) = o.get("out") {
+        return std::path::absolute(d).with_context(|| format!("--out {d}"));
+    }
+    let p = Path::new(first);
+    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+    Ok(p.with_file_name(format!("{stem}_sta")))
+}
+
+/// Card 0 when it is likely and no other card is; else the user must choose.
+fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<usize> {
+    (cards.first().is_some_and(|c| c.likely) && cards.iter().filter(|c| c.likely).count() == 1).then_some(0)
+}
+
+fn card_json(c: &crate::sta::project::Card) -> Value {
+    json!({ "id": c.id, "diameterA": c.diameter_a, "members": c.members, "compact": (c.compact * 10.0).round() / 10.0, "likely": c.likely, "path": c.path })
+}
+
+/// `tmv sta`: the tomogram of each input (made as `tmv tomo --for sta` does),
+/// class-average cards of the blobs in them, then the average of everything
+/// that looks like the chosen card.
+fn sta(o: &Opts) -> Result<Value> {
+    use crate::sta::project as sp;
+    let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();
+    if inputs.is_empty() {
+        bail!("give at least one tilt series or tomogram: tmv sta [--pick N] [--out DIR] [--pixel Å] INPUT [MORE …]");
+    }
+    let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
+    let out = sta_out(o, &inputs[0])?;
+    let progress = Progress::new();
+    let report = |s: &str, i: usize, n: usize| progress.report(s, i, n);
+
+    // Step 0: a tomogram and its tilt range for each input.
+    let mut found: Vec<StaInput> = vec![];
+    for input in &inputs {
+        let (tomogram, dataset) = if dataset_of(input).is_none() && (ext(input) == "mdoc" || has_tilts(input, open_image(input)?.info().size_z)) {
+            eprintln!("tmv sta: {input} is a tilt series → tmv tomo --for sta");
+            let mut named = vec![("for".to_string(), Some("sta".to_string()))];
+            if let Some(px) = o.get("pixel") {
+                named.push(("pixel".into(), Some(px.into())));
+            }
+            let v = tomo(&Opts { input: Some(input.clone()), more: vec![], named })?;
+            let path = v["open"].as_str().context("tmv tomo made no tomogram")?.to_string();
+            let d = v["dataset"].as_str().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).or_else(|| dataset_of(&path));
+            (path, d)
+        } else {
+            (input.clone(), dataset_of(input))
+        };
+        let (tilts, tilts_from) = match dataset.as_ref().and_then(tilt_range) {
+            Some(t) => t,
+            None => {
+                eprintln!("warning: no tilt series dataset (*.tomo.json) found for {tomogram}: assuming tilts -60…60");
+                ([-60.0, 60.0], "default -60…60")
+            }
+        };
+        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from });
+    }
+    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts }).collect();
+    let tomograms: Vec<Value> = found.iter().map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from })).collect();
+
+    // Step 1: the cards (they take minutes, so a finished set is reused).
+    let cards_dir = out.join("cards");
+    let cards_json = cards_dir.join("cards.json");
+    let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if cards.is_empty() {
+        cards = sp::cards(&sources, &cards_dir.to_string_lossy(), &report, &|_| {})?;
+        progress.done();
+    } else {
+        eprintln!("tmv sta: reusing the cards in {} (delete that folder to make them again)", cards_dir.display());
+        // The folder may have been copied elsewhere.
+        for c in &mut cards {
+            if !Path::new(&c.path).is_file() {
+                c.path = cards_dir.join(format!("card_{}.mrc", c.id)).to_string_lossy().into_owned();
+            }
+        }
+    }
+    if cards.is_empty() {
+        bail!("no card: no kind of blob with enough members was found in these tomograms (is it a tomogram made with --for sta, and does it hold particles?)");
+    }
+
+    // Choosing.
+    let n = match pick {
+        Some(n) => n,
+        None => match auto_pick(&cards) {
+            Some(n) => {
+                eprintln!("tmv sta: card {n} is the only likely one, using it (--pick N chooses another)");
+                n
+            }
+            None => {
+                let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
+                let rerun = format!("tmv sta --pick N{} {}", if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() }, tomos.join(" "));
+                eprintln!("tmv sta: choose a card: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
+                return Ok(json!({
+                    "needsChoice": true,
+                    "cardsDir": cards_dir,
+                    "cards": cards.iter().map(card_json).collect::<Vec<_>>(),
+                    "tomograms": tomograms,
+                    "next": rerun,
+                }));
+            }
+        },
+    };
+    let card = cards.get(n).with_context(|| format!("--pick {n}: there are only {} cards (0 to {})", cards.len(), cards.len() - 1))?;
+
+    // Step 2: the average.
+    let (cube, voxel) = sp::read_card(&card.path)?;
+    let (dev, backend) = device();
+    let out_s = out.to_string_lossy().into_owned();
+    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, DIAMETER_FACTOR * card.diameter_a, true, &out_s, &report, &|_| {}))??;
+    progress.done();
+    let mut v = serde_json::to_value(&r)?;
+    v["card"] = card_json(card);
+    v["out"] = json!(out);
+    v["cardsDir"] = json!(cards_dir);
+    v["tomograms"] = json!(tomograms);
+    v["backend"] = json!(backend);
+    v["open"] = json!(r.map);
     Ok(v)
 }
 
@@ -789,6 +984,41 @@ mod tests {
         assert!(Path::new(o.input().unwrap()).is_absolute());
         assert!(Opts::parse(&["--kind".into()]).is_err());
         assert!(Opts::parse(&["--pixel".into(), "x".into()]).unwrap().number("pixel").is_err());
+    }
+
+    #[test]
+    fn sta_takes_several_inputs_and_only_sta() {
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        let o = Opts::parse(&[dir.clone(), dir.clone(), "--pick".into(), "2".into()]).unwrap();
+        assert_eq!(o.more.len(), 1);
+        assert_eq!(o.get("pick"), Some("2"));
+        assert_eq!(main(vec!["tomo".into(), dir.clone(), dir]), 1);
+        assert_eq!(main(vec!["sta".into()]), 1);
+    }
+
+    fn card(id: usize, likely: bool) -> crate::sta::project::Card {
+        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, share: 0.3, path: String::new(), compact: 12.0, likely }
+    }
+
+    #[test]
+    fn the_card_is_picked_only_when_clear() {
+        assert_eq!(auto_pick(&[card(0, true), card(1, false), card(2, false)]), Some(0));
+        assert_eq!(auto_pick(&[card(0, true)]), Some(0));
+        assert_eq!(auto_pick(&[card(0, true), card(1, true)]), None);
+        assert_eq!(auto_pick(&[card(0, false), card(1, false)]), None);
+        assert_eq!(auto_pick(&[]), None);
+    }
+
+    #[test]
+    fn tilt_range_and_default_folder() {
+        assert_eq!(range_of(&[-3.0, 57.0, 0.0, -57.0, 3.0]), Some([-57.0, 57.0]));
+        assert_eq!(range_of(&[10.0]), None);
+        assert_eq!(range_of(&[]), None);
+        assert_eq!(range_of(&[f64::NAN, -40.0, 60.0]), Some([-40.0, 60.0]));
+        let o = Opts::default();
+        assert_eq!(sta_out(&o, "/data/a/X_sart3_b2_flip.mrc").unwrap(), Path::new("/data/a/X_sart3_b2_flip_sta"));
+        let o = Opts { named: vec![("out".into(), Some("/tmp/x".into()))], ..Default::default() };
+        assert_eq!(sta_out(&o, "/data/a/t.mrc").unwrap(), Path::new("/tmp/x"));
     }
 
     #[test]

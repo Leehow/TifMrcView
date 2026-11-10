@@ -76,6 +76,7 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | Tomogram from a tilt series or from movies + mdoc | `tmv tomo ts.mrc` or `tmv tomo ts.mdoc` |
 | … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder) |
 | … just a quick look | `tmv tomo ts.mrc --for survey` |
+| Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` (step 5) |
 | Membranes, vesicles, microtubules of a tomogram | `tmv membranes tomo.mrc` |
 | Single-particle reconstruction | `tmv spa FOLDER` (see step 5) |
 | Defocus / CTF of micrographs | `tmv ctf FOLDER` |
@@ -83,7 +84,9 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 
 Options that exist (use only when needed): `--pixel Å` and `--kv kV` when
 the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
-when the user knows the point group, `--kind N` for SPA (step 5), `--fresh`
+when the user knows the point group, `--kind N` for SPA and `--pick N` for
+STA (step 5), `--out DIR` for STA (default: a folder `<first input's name>_sta`
+beside the first input), `--fresh`
 to redo instead of reusing finished steps. For SPA movies: a gain reference
 beside them (name with gain, CountRef or `norm-`) is found and applied by
 itself; otherwise `--gain FILE`. `--dose e/Å²` (total per movie) turns on
@@ -123,6 +126,26 @@ input as `INPUT.tmv.json` (`tmv.json` inside a folder):
   decide): pick the protein, never ice, carbon edges or clumps; different
   views of the same particle can be picked together. Then run
   `tmv spa FOLDER --kind N` (or `--kind 1,3`).
+- `"needsChoice": true` (exit status 2, STA) — `tmv sta` made class-average
+  "cards" of the blobs in the tomograms (`"cards"`: `id`, `diameterA`,
+  `members`, `compact`, `likely`, `path`; the files are `card_N.mrc` in
+  `"cardsDir"`). Copy them here, **show them to the user** in TifMrcView Pro
+  (or look at them yourself if the user asked you to decide): pick the card
+  that looks like the particle, never gold beads, ice or a line or layer.
+  Then run the command in `"next"` (`tmv sta --pick N TOMOGRAM…`). It names
+  the tomograms, so a tilt series is not reconstructed again. The cards are
+  kept in `OUT/cards/` (delete it to make them again).
+
+`tmv sta` takes tilt series (their tomogram is made first, exactly as
+`tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
+or several of the same specimen. It writes the cards to `OUT/cards/`, then,
+with `--pick N` (or by itself when card 0 is the only `likely` one), the
+average of everything that looks like card N: `average.mrc`, `half1.mrc`,
+`half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
+`average.mrc`; `"particles"` how many were averaged). The tilt range comes
+from the `*.tomo.json` beside each tomogram; without one it assumes -60 to 60
+and warns on stderr. Do not quote a resolution unless the user asks: report
+the particle count and let them judge the average and the two halves.
 
 ## 6. Copy the results back and open them
 
@@ -139,6 +162,8 @@ Then tell the user what to open in **TifMrcView Pro**:
 - tomogram: the `"open"` file; its label map (`*.labels.tif`, materials
   膜 membrane / 囊泡 vesicle / 微管 microtubule) opens with it, and the 3D view
   shows them; vesicle sizes are in `*.vesicles.csv`;
+- STA: `average.mrc` (and the half maps `half1.mrc`, `half2.mrc`); the
+  picked particles are listed in `particles.csv`;
 - SPA: the sharpened map (`"map"`) in the 3D view; opening the folder in the
   SPA workspace shows every step (project files move with the folder);
 - the cryo-ET workspace likewise reopens the dataset (`*.tomo.json`).
