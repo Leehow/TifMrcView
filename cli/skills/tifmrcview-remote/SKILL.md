@@ -155,7 +155,8 @@ stderr, if the file is missing.
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
 or several of the same specimen. It writes the cards to `OUT/cards/`, then,
-with `--pick N` (or by itself when card 0 is the only `likely` one), the
+with `--pick N` (or by itself when one card is `likely`, or several are and
+show the same particle), the
 average of everything that looks like card N: `average.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
 `average.mrc`; `"particles"` how many were averaged). The JSON also has
@@ -167,7 +168,7 @@ and `"ctfLimited": true` when the FSC falls below 0.143 and then rises above
 and the data holds more than the number says. (`"kinds"` and `"distinct"`
 are left out; they belong to the blob search.) Progress on stderr counts the
 steps of the whole run ("第 k/N 步 · …"); a line says which card was taken
-and where the others are when `tmv sta` picks card 0 itself, and the last
+and where the others are when `tmv sta` picks a card itself, and the last
 line gives the resolution, the particle count and where `average.mrc` is.
 The tilt range comes
 from the `*.tomo.json` beside each tomogram; without one it assumes -60 to 60

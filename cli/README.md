@@ -46,8 +46,12 @@ works in two steps. First it writes the cards to `OUT/cards/` (`card_N.mrc`,
 from the same tomograms, unchanged; otherwise it is made again, with a line on
 stderr saying why; delete `OUT/cards/` to force it). Then, with
 `--pick N`, it finds everything in the tomograms that looks like card N and
-averages it into `OUT/`. Without `--pick` it goes on by itself only when card
-0 is the only one marked `likely`; otherwise it prints the cards as JSON and
+averages it into `OUT/`. Without `--pick` it goes on by itself only when one
+card is marked `likely`, or several are and they show the same particle (the
+same particle from different size groups: each pair is compared over all
+orientations, and the one with the most members and the most compact is
+taken, with a line on stderr saying which cards matched; the comparison takes
+a few seconds); otherwise it prints the cards as JSON and
 exits with status 2: look at the cards (open the `card_N.mrc` files in
 TifMrcView Pro), then run the same command again with `--pick N`. Rerun it
 with the tomograms it printed, not the tilt series, so they are not made
@@ -62,7 +66,7 @@ two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
 FSC falls below 0.143 and then rises above 0.3 again at higher frequency: the
 resolution is then limited at a CTF zero and the data holds more than the
 number says. Progress on stderr counts the steps of the whole run ("第 k/N
-步 · …"); when `tmv sta` picks card 0 itself a line says which card and where
+步 · …"); when `tmv sta` picks a card itself a line says which card and where
 the others are, and the last line gives the resolution, the particle count and
 where `average.mrc` is.
 

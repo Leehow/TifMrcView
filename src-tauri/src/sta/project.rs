@@ -936,6 +936,117 @@ fn rank(c: &Card) -> f64 {
     c.compact * c.members as f64 + if c.likely { 1e12 } else { 0.0 }
 }
 
+/// Two likely cards show the same particle when their best masked normalised
+/// cross-correlation (see `same_kind`) is at least this. Measured on made-up
+/// cards (`sta::tests::cards_of_the_same_particle_correlate`): the same
+/// object turned, smoothed, noisy and at another voxel size 0.93 to 0.96; a
+/// rod 0.59; a ball twice as large 0.09; another arrangement of three balls
+/// 0.79.
+pub const SAME: f64 = 0.7;
+/// Orientation step of the all-orientations pass of `same_kind`, degrees, and
+/// the band of its comparison (Fourier voxels of the `BOX` cube: the lowest
+/// frequencies, which only say "a blob in a ball", are left out).
+const SAME_STEP: f64 = 20.0;
+const SAME_LOW_PASS: f64 = 10.0;
+const SAME_HIGH_PASS: f64 = 3.0;
+/// Most shift (voxels) allowed between two cards.
+const SAME_SHIFT: usize = 2;
+
+/// A card's cube for `same_kind`: `BOX`³ voxels of `voxel_a` Å, and the
+/// radius (Å) of the particle it holds.
+#[derive(Clone, Copy)]
+pub struct CardCube<'a> {
+    pub cube: &'a [f32],
+    pub voxel_a: f64,
+    pub radius_a: f64,
+}
+
+impl<'a> CardCube<'a> {
+    /// The cube of a card read with `read_card`; the particle radius is the
+    /// 0.8 × the card's size `run_template` and `cards` align within.
+    pub fn of(card: &Card, cube: &'a [f32]) -> CardCube<'a> {
+        CardCube { cube, voxel_a: card.voxel_a, radius_a: 0.8 * card.diameter_a }
+    }
+}
+
+/// How alike two cards are: the best normalised cross-correlation between
+/// them over every orientation (a coarse `SAME_STEP` grid, then two local
+/// refinements of its best three) and a shift of a few voxels, within a ball
+/// of the smaller card's radius. 1 is identical, near 0 unrelated. The card
+/// with the smaller voxel is first resampled to the other's voxel size. Cards
+/// are class averages and hold no missing wedge worth masking, so none is
+/// applied; the comparison is low-passed, as the cards are only a few resolved
+/// features across.
+pub fn same_kind(a: CardCube, b: CardCube) -> f64 {
+    use crate::spa::geom::local;
+    let n = BOX;
+    let voxel = a.voxel_a.max(b.voxel_a);
+    let radius = a.radius_a.min(b.radius_a) / voxel;
+    let mask = cc::ball(n, radius, 3.0);
+    let prepare = |c: CardCube| -> Vec<f32> {
+        let f = voxel / c.voxel_a;
+        let mut v = if (f - 1.0).abs() < 1e-6 { c.cube.to_vec() } else { cc::transform(c.cube, n, &[[f, 0.0, 0.0], [0.0, f, 0.0], [0.0, 0.0, f]], [0.0; 3]) };
+        // Zero mean within the ball, then the ball itself.
+        let (sum, weight) = v.iter().zip(&mask).fold((0f64, 0f64), |(s, w), (x, m)| (s + (*x * *m) as f64, w + *m as f64));
+        let mean = (sum / weight.max(1e-9)) as f32;
+        v.iter_mut().zip(&mask).for_each(|(x, m)| *x = (*x - mean) * m);
+        v
+    };
+    let (x, reference) = (prepare(a), prepare(b));
+    let engine = cc::Engine::new(n, SAME_LOW_PASS, SAME_HIGH_PASS, radius);
+    let ones = vec![1f32; n * n * n];
+    let x = engine.prepare(&x, &ones);
+    let mut tried: Vec<Pose> = grid(SAME_STEP)
+        .par_iter()
+        .map(|r| {
+            let (score, t) = engine.score(&x, &ones, &engine.turn(&reference, r), SAME_SHIFT);
+            Pose { r: *r, t, score }
+        })
+        .collect();
+    tried.sort_by(|p, q| q.score.total_cmp(&p.score));
+    let best = tried
+        .iter()
+        .take(3)
+        .map(|start| {
+            let mut pose = *start;
+            for (range, steps) in [(SAME_STEP, 2), (SAME_STEP / 3.0, 2)] {
+                pose = engine.local(&x, &ones, &reference, &pose, &local(range, steps), SAME_SHIFT);
+            }
+            pose.score
+        })
+        .fold(f32::MIN, f32::max);
+    (best as f64).clamp(-1.0, 1.0)
+}
+
+/// `same_kind` between the likely cards, as a matrix indexed like `cards`
+/// (1 on the diagonal; the pairs that involve a card that is not likely are
+/// not computed and are 0). Reads each likely card's file; the cards are
+/// usually two, a pair takes about a second.
+pub fn likeness(cards: &[Card]) -> Result<Vec<Vec<f64>>> {
+    let likely: Vec<usize> = (0..cards.len()).filter(|i| cards[*i].likely).collect();
+    let cubes: Vec<Vec<f32>> = likely.iter().map(|i| read_card(&cards[*i].path).map(|c| c.0)).collect::<Result<_>>()?;
+    let mut m = vec![vec![0.0; cards.len()]; cards.len()];
+    for (k, &i) in likely.iter().enumerate() {
+        m[i][i] = 1.0;
+        for (l, &j) in likely.iter().enumerate().skip(k + 1) {
+            m[i][j] = same_kind(CardCube::of(&cards[i], &cubes[k]), CardCube::of(&cards[j], &cubes[l]));
+            m[j][i] = m[i][j];
+        }
+    }
+    Ok(m)
+}
+
+/// The card to take without asking: the only likely one; or, when several are
+/// likely and every pair of them is `SAME` or more alike (`similar[i][j]`, see
+/// `likeness`), the one with the largest `compact × members` (what `rank`
+/// sorts by, so the first of them); otherwise None, and the user chooses.
+pub fn choose(cards: &[Card], similar: &[Vec<f64>]) -> Option<usize> {
+    let likely: Vec<usize> = (0..cards.len()).filter(|i| cards[*i].likely).collect();
+    let first = *likely.first()?;
+    let alike = likely.iter().all(|&i| likely.iter().all(|&j| i >= j || similar.get(i).and_then(|r| r.get(j)).is_some_and(|s| *s >= SAME)));
+    alike.then(|| likely.iter().copied().max_by(|&i, &j| rank(&cards[i]).total_cmp(&rank(&cards[j])).then(j.cmp(&i))).unwrap_or(first))
+}
+
 /// A place on a drawn shape (see `shape`).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1262,6 +1373,37 @@ pub fn run_template(
 #[cfg(test)]
 mod card_tests {
     use super::*;
+
+    fn likely_card(id: usize, likely: bool, compact: f64, members: usize) -> Card {
+        Card { id, diameter_a: 160.0, measured_a: 150.0, voxel_a: 12.0, members, share: 0.3, path: String::new(), compact, elongation: 1.1, blobs: 1, likely }
+    }
+
+    #[test]
+    fn several_likely_cards_are_chosen_only_when_they_show_the_same_particle() {
+        let sim = |v: &[&[f64]]| -> Vec<Vec<f64>> { v.iter().map(|r| r.to_vec()).collect() };
+        // The real case: 160 Å (79 members, 7.72) and 210 Å (52, 10.14), both likely.
+        let two = [likely_card(0, true, 7.72, 79), likely_card(1, true, 10.14, 52)];
+        assert_eq!(choose(&two, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(0));
+        // The larger compact × members wins whatever the order.
+        let swapped = [likely_card(0, true, 10.14, 52), likely_card(1, true, 7.72, 79)];
+        assert_eq!(choose(&swapped, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(1));
+        let reversed = [likely_card(0, true, 5.0, 40), likely_card(1, true, 10.14, 52)];
+        assert_eq!(choose(&reversed, &sim(&[&[1.0, 0.8], &[0.8, 1.0]])), Some(1));
+        // Not alike: the user decides.
+        assert_eq!(choose(&two, &sim(&[&[1.0, 0.3], &[0.3, 1.0]])), None);
+        assert_eq!(choose(&two, &sim(&[&[1.0, SAME - 0.01], &[SAME - 0.01, 1.0]])), None);
+        assert_eq!(choose(&two, &sim(&[&[1.0, SAME], &[SAME, 1.0]])), Some(0));
+        // Three: one odd pair spoils it. Cards that are not likely do not count.
+        let three = [likely_card(0, true, 8.0, 60), likely_card(1, false, 12.0, 90), likely_card(2, true, 9.0, 50), likely_card(3, true, 7.6, 40)];
+        let m = sim(&[&[1.0, 0.0, 0.9, 0.8], &[0.0; 4], &[0.9, 0.0, 1.0, 0.75], &[0.8, 0.0, 0.75, 1.0]]);
+        assert_eq!(choose(&three, &m), Some(0));
+        let m = sim(&[&[1.0, 0.0, 0.9, 0.5], &[0.0; 4], &[0.9, 0.0, 1.0, 0.75], &[0.5, 0.0, 0.75, 1.0]]);
+        assert_eq!(choose(&three, &m), None);
+        // One likely card (the others may be anything); none; empty; no matrix needed for one.
+        assert_eq!(choose(&[likely_card(0, false, 12.0, 90), likely_card(1, true, 8.0, 50)], &[]), Some(1));
+        assert_eq!(choose(&[likely_card(0, false, 12.0, 90)], &[]), None);
+        assert_eq!(choose(&[], &[]), None);
+    }
 
     const N: usize = 32;
 

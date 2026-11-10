@@ -852,3 +852,79 @@ fn cards_ignore_the_look_tomogram() {
 
 
 
+
+/// A made-up card: soft balls `(centre Å, radius Å)` seen from orientation
+/// `r` on a 32³ grid of `voxel` Å, a little smoothed, with noise.
+fn made_up_card(voxel: f64, r: &Mat, balls: &[([f64; 3], f64)], noise: f64, seed: u64) -> Vec<f32> {
+    let c = (N / 2) as f64;
+    let rt = transpose(r);
+    let mut v = vec![0f32; N * N * N];
+    for z in 0..N {
+        for y in 0..N {
+            for x in 0..N {
+                let q = [(x as f64 - c) * voxel, (y as f64 - c) * voxel, (z as f64 - c) * voxel];
+                let p: [f64; 3] = std::array::from_fn(|i| rt[i][0] * q[0] + rt[i][1] * q[1] + rt[i][2] * q[2]);
+                v[(z * N + y) * N + x] = balls
+                    .iter()
+                    .map(|(b, rad)| {
+                        let d = ((p[0] - b[0]).powi(2) + (p[1] - b[1]).powi(2) + (p[2] - b[2]).powi(2)).sqrt();
+                        1.0 / (1.0 + ((d - rad) / (0.2 * rad)).exp())
+                    })
+                    .sum::<f64>() as f32;
+            }
+        }
+    }
+    // Smoothed by a [1 2 1] kernel along each axis.
+    for axis in [1, N, N * N] {
+        let old = v.clone();
+        for i in 0..v.len() {
+            let (lo, hi) = (if (i / axis) % N > 0 { old[i - axis] } else { old[i] }, if (i / axis) % N < N - 1 { old[i + axis] } else { old[i] });
+            v[i] = 0.25 * lo + 0.5 * old[i] + 0.25 * hi;
+        }
+    }
+    let mut rng = Rng(seed);
+    v.iter_mut().for_each(|x| *x += (noise * rng.gauss()) as f32);
+    v
+}
+
+/// `same_kind` tells a card from a turned, smoothed, noisy copy of itself at
+/// another voxel size (well above `SAME`), and from a rod or a ball twice as
+/// large (well below). The numbers are printed (`--nocapture`). Heavy in a
+/// debug build (about 25 s a pair; about a second with
+/// `CARGO_PROFILE_TEST_OPT_LEVEL=2 cargo test --no-default-features --features cli --lib sta::tests::cards_of_the_same -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn cards_of_the_same_particle_correlate() {
+    use super::project::{same_kind, CardCube, SAME};
+    // Three balls of different sizes, no symmetry: 160 Å card, 12.3 Å voxels.
+    let three = [([0.0, 0.0, 0.0], 45.0), ([70.0, 0.0, 0.0], 32.0), ([-25.0, 60.0, 0.0], 24.0)];
+    let radius = 0.8 * 160.0;
+    let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let a = made_up_card(12.3, &id, &three, 0.0, 1);
+    let ca = CardCube { cube: &a, voxel_a: 12.3, radius_a: radius };
+    // The same object turned about an odd axis, at 16.1 Å voxels (a 210 Å card), noisy.
+    let turned = axis_angle([0.3, -0.5, 0.8], 137.0);
+    let b = made_up_card(16.1, &turned, &three, 0.12, 2);
+    let started = std::time::Instant::now();
+    let same = same_kind(ca, CardCube { cube: &b, voxel_a: 16.1, radius_a: 0.8 * 210.0 });
+    eprintln!("one comparison: {:?}", started.elapsed());
+    // The other way round, and the same voxel size.
+    let same_back = same_kind(CardCube { cube: &b, voxel_a: 16.1, radius_a: 0.8 * 210.0 }, ca);
+    let b2 = made_up_card(12.3, &turned, &three, 0.12, 3);
+    let same_voxel = same_kind(ca, CardCube { cube: &b2, voxel_a: 12.3, radius_a: radius });
+    // A rod (25 Å radius, longer than the mask) and a ball of twice the size.
+    let rod: Vec<([f64; 3], f64)> = (-8..=8).map(|i| ([i as f64 * 15.0, 0.0, 0.0], 25.0)).collect();
+    let rod = made_up_card(12.3, &id, &rod, 0.12, 4);
+    let ball = made_up_card(12.3, &id, &[([0.0; 3], 90.0)], 0.12, 5);
+    let vs_rod = same_kind(ca, CardCube { cube: &rod, voxel_a: 12.3, radius_a: radius });
+    let vs_ball = same_kind(ca, CardCube { cube: &ball, voxel_a: 12.3, radius_a: radius });
+    // A different asymmetric object of the same extent.
+    let other = [([0.0, 0.0, 0.0], 30.0), ([60.0, 40.0, 0.0], 38.0), ([-50.0, 0.0, 55.0], 28.0)];
+    let other = made_up_card(12.3, &turned, &other, 0.12, 6);
+    let vs_other = same_kind(ca, CardCube { cube: &other, voxel_a: 12.3, radius_a: radius });
+    eprintln!("same object, other voxel size, turned, noisy: {same:.3} (other way round {same_back:.3}); same voxel size: {same_voxel:.3}; rod: {vs_rod:.3}; 2x ball: {vs_ball:.3}; other 3-ball object: {vs_other:.3}");
+    assert!(same >= SAME && same_back >= SAME && same_voxel >= SAME, "{same} {same_back} {same_voxel}");
+    // An arrangement of the same kind of parts is more alike than a rod or a ball, but less than the object itself.
+    assert!(vs_rod < SAME - 0.1 && vs_ball < SAME - 0.1, "{vs_rod} {vs_ball}");
+    assert!(vs_other < same - 0.1, "{vs_other} {same}");
+}

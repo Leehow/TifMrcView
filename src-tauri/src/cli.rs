@@ -55,9 +55,9 @@ USAGE
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
   does) or tomograms that tmv tomo --for sta wrote. It runs in two steps:
   class-average "cards" of the blobs found go to <out>/cards/ (--out defaults
-  to <first input>_sta beside it); then, with --pick N (or when card 0 is
-  the only likely one), the average of everything that looks like card N
-  goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+  to <first input>_sta beside it); then, with --pick N (or by itself when one
+  card is likely, or several are and show the same particle), the average of
+  everything that looks like card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
   resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
   diameterFrom "card" says), ctfLimited (true when the FSC falls below 0.143
@@ -606,9 +606,33 @@ fn sta_summary(r: &crate::sta::project::Report, ctf_limited: bool) -> String {
     s
 }
 
-/// Card 0 when it is likely and no other card is; else the user must choose.
+/// The card to take without asking (see `sta::project::choose`): the only
+/// likely one, or the best of several that show the same particle (compared
+/// now, about three seconds for a pair; a card that cannot be read leaves the
+/// choice to the user). Else None.
 fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<usize> {
-    (cards.first().is_some_and(|c| c.likely) && cards.iter().filter(|c| c.likely).count() == 1).then_some(0)
+    use crate::sta::project as sp;
+    let similar = if cards.iter().filter(|c| c.likely).count() > 1 {
+        match sp::likeness(cards) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("tmv sta: could not compare the cards ({e:#}): choose one yourself");
+                return None;
+            }
+        }
+    } else {
+        vec![]
+    };
+    sp::choose(cards, &similar)
+}
+
+/// "0 and 1", "0, 1 and 3".
+fn id_list(ids: &[usize]) -> String {
+    match ids {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+    }
 }
 
 fn card_json(c: &crate::sta::project::Card) -> Value {
@@ -745,8 +769,14 @@ fn sta(o: &Opts) -> Result<Value> {
         None => match auto_pick(&cards) {
             Some(n) => {
                 let c = &cards[n];
+                let likely: Vec<usize> = cards.iter().filter(|c| c.likely).map(|c| c.id).collect();
+                let why = if likely.len() == 1 {
+                    "the only one that looks like a single particle".to_string()
+                } else {
+                    format!("cards {} show the same particle", id_list(&likely))
+                };
                 eprintln!(
-                    "tmv sta: using card {n} (about {} Å across, {} members, the only one that looks like a single particle); the other cards are in {}/, choose another with --pick N",
+                    "tmv sta: using card {n} (about {} Å across, {} members; {why}); the other cards are in {}/, choose another with --pick N",
                     c.diameter_a,
                     c.members,
                     cards_dir.display()
@@ -1191,9 +1221,18 @@ mod tests {
     fn the_card_is_picked_only_when_clear() {
         assert_eq!(auto_pick(&[card(0, true), card(1, false), card(2, false)]), Some(0));
         assert_eq!(auto_pick(&[card(0, true)]), Some(0));
+        assert_eq!(auto_pick(&[card(0, false), card(1, true)]), Some(1));
+        // Two likely cards are compared from their files: unreadable, so the user chooses.
         assert_eq!(auto_pick(&[card(0, true), card(1, true)]), None);
         assert_eq!(auto_pick(&[card(0, false), card(1, false)]), None);
         assert_eq!(auto_pick(&[]), None);
+    }
+
+    #[test]
+    fn card_numbers_are_listed() {
+        assert_eq!(id_list(&[0]), "0");
+        assert_eq!(id_list(&[0, 1]), "0 and 1");
+        assert_eq!(id_list(&[0, 2, 3]), "0, 2 and 3");
     }
 
     #[test]
