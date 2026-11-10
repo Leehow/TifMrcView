@@ -394,3 +394,60 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     assert!(done.resolution_a.unwrap() < 6.0 * done.voxel_a, "{:?}", done.resolution_a);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Heavy: the whole-tomogram search finds 32 copies at random orientations
+/// with their template, and the threshold read off the chance peaks keeps
+/// them and little else (same command as above with `sta::tests::search`).
+#[test]
+#[ignore]
+fn search_finds_the_copies_and_sets_its_threshold() {
+    use super::search::{cutoff, peaks, search};
+    let truth = phantom();
+    let c = (N / 2) as f64;
+    let body: Vec<f32> = truth
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+            0.4 * v + (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
+        })
+        .collect();
+    let dims = [150usize, 170, 90];
+    let mut rng = Rng(33);
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    let mut places = vec![];
+    for k in 0..2 {
+        for j in 0..4 {
+            for i in 0..4 {
+                let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
+                let p = rotate(&body, N, &r);
+                let o = [18 + 36 * i + rng.below(5), 20 + 40 * j + rng.below(5), 20 + 44 * k + rng.below(5)];
+                places.push(o);
+                for z in 0..N {
+                    for y in 0..N {
+                        for x in 0..N {
+                            v[((o[2] + z - N / 2) * dims[1] + o[1] + y - N / 2) * dims[0] + o[0] + x - N / 2] -= p[(z * N + y) * N + x];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    v.iter_mut().for_each(|x| *x += (2.0 * sd * rng.gauss()) as f32);
+    // Dark on light, like the data.
+    let template: Vec<f32> = body.iter().map(|x| -x).collect();
+    let turns = grid(30.0);
+    let started = std::time::Instant::now();
+    let found = search(&v, dims, &template, N, 10.0, [-60.0, 60.0], &turns, None, &|_, _| {}).unwrap();
+    // Particles do not overlap: peaks are a diameter apart.
+    let real = peaks(&found, 20.0, usize::MAX);
+    eprintln!("{} turns, {:.0} s; {} peaks, best {:.3}, 32nd {:.3}, 40th {:.3}", turns.len(), started.elapsed().as_secs_f64(), real.len(), real[0].score, real[31].score, real[39].score);
+    let limit = cutoff(&real, 1.0).unwrap();
+    let kept: Vec<_> = real.iter().filter(|p| p.score >= limit).collect();
+    let near = |o: &[usize; 3]| kept.iter().map(|p| (0..3).map(|i| (p.pos[i] as f64 - o[i] as f64).powi(2)).sum::<f64>().sqrt()).fold(f64::MAX, f64::min);
+    let hit = places.iter().filter(|o| near(o) < 2.5).count();
+    eprintln!("threshold {limit:.3}: {} kept, {hit} of 32 copies among them", kept.len());
+    assert!(hit >= 30, "{hit}");
+    assert!(kept.len() <= 36, "{}", kept.len());
+}
