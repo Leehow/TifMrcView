@@ -790,7 +790,7 @@ mod tests {
         let sam = Sam::default();
         let (p, backend) = tmv_sam::load_best(path.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90)).unwrap();
         println!("backend {backend}");
-        sam.inner.lock().unwrap().predictor = Some(Arc::new(p));
+        sam.inner.lock().unwrap().predictor = Some(Arc::new(NativePredictor::Sam21(Box::new(p))));
         let req = PredictReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, points: vec![PromptPoint { x: 80.0, y: 60.0, positive: true }], bbox: None, denoise: Denoise::default() };
         sam.predict(&req, (w, h, d), |z| Ok(slice(z))).unwrap();
         let along = PropagateReq { token: 1, z: 10, c: 0, t: 0, lo: 0.0, hi: 255.0, up: true, down: true, max: 100, denoise: Denoise::default(), follow_prompts: false };
