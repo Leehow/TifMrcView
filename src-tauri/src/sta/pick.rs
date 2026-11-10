@@ -73,7 +73,7 @@ pub fn gauss(v: &[f32], dims: [usize; 3], sigma: f64) -> Vec<f32> {
 }
 
 /// Median and MAD-based standard deviation from an even subsample.
-fn robust(v: &[f32]) -> (f32, f32) {
+pub(crate) fn robust(v: &[f32]) -> (f32, f32) {
     let step = (v.len() / 500_000).max(1);
     let mut s: Vec<f32> = v.iter().step_by(step).copied().collect();
     s.sort_by(f32::total_cmp);

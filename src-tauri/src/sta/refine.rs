@@ -131,6 +131,61 @@ pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Resu
     Ok((model, poses))
 }
 
+/// Rounds of `first_model_known`: the start is already close.
+const KNOWN_ROUNDS: usize = 4;
+
+/// A first model for particles cut along a drawn shape, where each one's
+/// Z axis is known (`axes`: along the filament or out of the surface;
+/// `both` when its sense is not, as for a filament). The start is every
+/// particle with its axis upright and a random turn about it; each round
+/// then searches the turn about the axis and the shift only.
+pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    set.check()?;
+    let m = set.particles.len();
+    assert_eq!(axes.len(), m);
+    let mut rng = Rng(seed);
+    let spin = |deg: f64| super::cc_axis(deg);
+    let mut poses: Vec<Pose> =
+        axes.iter().map(|a| Pose { r: mul(&super::shape::frame(*a), &spin(360.0 * rng.unit())), t: [0.0; 3], score: 0.0 }).collect();
+    let mut model = set.average(&poses, |_| true).finish();
+    live(&model);
+    let n = set.n as f64;
+    let (lo, hi) = (n / (2.0 * set.radius) * 1.5, (n / (2.0 * set.radius) * 5.0).min(n / 2.0 - 3.0));
+    for round in 0..KNOWN_ROUNDS {
+        check_cancel()?;
+        let low_pass = (lo + (hi - lo) * round as f64 / (KNOWN_ROUNDS - 1) as f64).max(2.0);
+        let engine = set.engine(low_pass);
+        // A different set of turns each round, so the grid leaves no mark.
+        let offset = spin(STEP * rng.unit());
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let stage = format!("起始模型 第 {}/{} 轮", round + 1, KNOWN_ROUNDS);
+        poses = (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let mut best = Pose { score: f32::MIN, ..poses[i] };
+                if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                    return poses[i];
+                }
+                let x = engine.prepare(&set.particles[i], set.wedge(i));
+                for r in super::shape::turns(axes[i], STEP, both) {
+                    let r = mul(&r, &offset);
+                    let (score, t) = engine.score(&x, set.wedge(i), &engine.turn(&model, &r), set.shift());
+                    if score > best.score {
+                        best = Pose { r, t, score };
+                    }
+                }
+                progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
+                best
+            })
+            .collect();
+        check_cancel()?;
+        let average = set.average(&poses, |_| true).finish();
+        model = centre(set, &mut poses, average);
+        live(&model);
+    }
+    Ok((model, poses))
+}
+
 /// Moves the model's centre of mass (of what stands out from the
 /// background) to the box centre and the poses with it, so the particle
 /// does not drift out of the mask over the rounds.

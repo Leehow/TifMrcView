@@ -55,3 +55,8 @@ pub struct Pose {
 }
 
 pub const IDENTITY: Mat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// A turn about the Z axis.
+pub(crate) fn cc_axis(deg: f64) -> Mat {
+    crate::spa::geom::axis_angle([0.0, 0.0, 1.0], deg)
+}

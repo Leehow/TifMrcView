@@ -13,7 +13,7 @@
 //!
 //! Results go to `<out>/`: `average.mrc`, `half1.mrc`, `half2.mrc`,
 //! `particles.csv` (tomogram, position in tomogram voxels, RELION-style
-//! rot/tilt/psi, score) and `sta.json`.
+//! rot/tilt/psi, score, half, and what the blob looked like) and `sta.json`.
 
 use std::path::Path;
 use std::time::Instant;
@@ -244,7 +244,30 @@ struct Cut {
     /// Source voxels per working voxel.
     bin: usize,
     score: f32,
+    /// The response of the blob detector itself (0 for drawn places).
+    strength: f32,
+    /// The darkest voxel within the particle, in robust standard
+    /// deviations below the tomogram's median: gold and other very dense
+    /// things stand far out.
+    darkest: f32,
     cube: Vec<f32>,
+}
+
+/// See `Cut::darkest`. `c` and `radius` in voxels of `v`.
+fn darkest(v: &[f32], dims: [usize; 3], c: [usize; 3], radius: f64, median: f32, sd: f32) -> f32 {
+    let r = radius.ceil() as isize;
+    let mut low = f32::MAX;
+    for z in (c[2] as isize - r).max(0)..=(c[2] as isize + r).min(dims[2] as isize - 1) {
+        for y in (c[1] as isize - r).max(0)..=(c[1] as isize + r).min(dims[1] as isize - 1) {
+            for x in (c[0] as isize - r).max(0)..=(c[0] as isize + r).min(dims[0] as isize - 1) {
+                let d2 = (x - c[0] as isize).pow(2) + (y - c[1] as isize).pow(2) + (z - c[2] as isize).pow(2);
+                if (d2 as f64) <= radius * radius {
+                    low = low.min(v[(z as usize * dims[1] + y as usize) * dims[0] + x as usize]);
+                }
+            }
+        }
+    }
+    (median - low) / sd
 }
 
 /// The cube around voxel `c`, zero mean and unit variance. Where it reaches
@@ -354,12 +377,14 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         voxel_a = voxel;
         // Blobs again at this sampling, at the one size: centres are finer.
         let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
+        let (median, sd) = super::pick::robust(&v);
         for b in found {
             let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
             if let Some(cube) = cube(&v, dims, c) {
                 // The centre of working voxel c in source voxels.
                 let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                cuts.push(Cut { source: i, at, bin, score: b.score, cube });
+                let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
+                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
             }
         }
     }
@@ -413,6 +438,12 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     report.candidates = scores.len();
     report.distinct = distinct;
 
+    save(&mut report, sources, &cuts, &out, out_dir, size, voxel_a, started)?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, out_dir: &str, size: f64, voxel_a: f64, started: Instant) -> Result<()> {
     // Results.
     std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
     let file = |name: &str| Path::new(out_dir).join(name).to_string_lossy().into_owned();
@@ -420,13 +451,13 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     output::write_mrc(&file("average.mrc"), &out.map, shape, voxel_a, false)?;
     output::write_mrc(&file("half1.mrc"), &out.halves[0], shape, voxel_a, false)?;
     output::write_mrc(&file("half2.mrc"), &out.halves[1], shape, voxel_a, false)?;
-    let mut csv = String::from("tomogram,x,y,z,rot,tilt,psi,score,half\n");
+    let mut csv = String::from("tomogram,x,y,z,rot,tilt,psi,score,half,blob,strength,darkest\n");
     for (i, (c, p)) in cuts.iter().zip(&out.poses).enumerate() {
         let Pose { r, t, score } = *p;
         let [rot, tilt, psi] = angles(&r);
         let k = c.bin as f64;
         csv += &format!(
-            "{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.4},{}\n",
+            "{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.4},{},{:.2},{:.4},{:.2}\n",
             sources[c.source].path,
             c.at[0] + t[0] * k,
             c.at[1] + t[1] * k,
@@ -435,7 +466,10 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
             tilt,
             psi,
             score,
-            i % 2 + 1
+            i % 2 + 1,
+            c.score,
+            c.strength,
+            c.darkest
         );
     }
     std::fs::write(file("particles.csv"), csv)?;
@@ -443,11 +477,109 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     report.particles = cuts.len();
     report.voxel_a = voxel_a;
     report.resolution_a = (out.shell > 0.0).then(|| BOX as f64 * voxel_a / out.shell);
-    report.fsc = out.fsc;
+    report.fsc = out.fsc.clone();
     report.map = Some(file("average.mrc"));
     report.halves = Some([file("half1.mrc"), file("half2.mrc")]);
     report.table = Some(file("particles.csv"));
     report.ms = started.elapsed().as_millis();
     std::fs::write(file("sta.json"), serde_json::to_string_pretty(&report)?)?;
+    Ok(())
+}
+
+/// A place on a drawn shape (see `shape`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Drawn {
+    /// Which of the sources.
+    pub source: usize,
+    /// Position in voxels of that tomogram, (x, y, z).
+    pub pos: [f64; 3],
+    /// The filament axis or the surface normal there.
+    pub axis: [f64; 3],
+}
+
+/// The average of what lies on drawn shapes. `drawn` samples the shapes
+/// more densely than the particles sit (about `size_a` / 2 apart; `size_a`
+/// is the size of one particle, Å); `both` when the sense of the axes is
+/// not known. Seeds that end on the same particle are merged.
+pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
+    let started = Instant::now();
+    let mut cuts: Vec<Cut> = vec![];
+    let mut axes: Vec<[f64; 3]> = vec![];
+    let mut voxel_a = size_a / SPAN;
+    for (i, s) in sources.iter().enumerate() {
+        progress("裁出颗粒", i, sources.len());
+        if !drawn.iter().any(|d| d.source == i) {
+            continue;
+        }
+        let (v, dims, voxel, bin) = binned(&s.path, size_a / SPAN)?;
+        voxel_a = voxel;
+        let (median, sd) = super::pick::robust(&v);
+        for d in drawn.iter().filter(|d| d.source == i) {
+            // Source voxel p lies in working voxel p / bin.
+            let c = d.pos.map(|p| (p / bin as f64).floor().max(0.0) as usize);
+            if let Some(cube) = cube(&v, dims, c) {
+                let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
+                cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
+                axes.push(d.axis);
+            }
+        }
+    }
+    progress("裁出颗粒", sources.len(), sources.len());
+    if cuts.len() < 20 {
+        bail!("画出的范围里只取到 {} 个位置，太少了", cuts.len());
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let radius = 0.8 * size_a / voxel_a;
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let (model, poses) = super::refine::first_model_known(&set, &axes, both, 1, progress, live)?;
+
+    // Seeds that moved onto the same particle: the best of each stays.
+    let mut keep: Vec<usize> = vec![];
+    for s in 0..sources.len() {
+        let of: Vec<usize> = (0..cuts.len()).filter(|i| cuts[*i].source == s).collect();
+        let at: Vec<[f64; 3]> = of.iter().map(|i| std::array::from_fn(|k| cuts[*i].at[k] / cuts[*i].bin as f64 + poses[*i].t[k])).collect();
+        let scores: Vec<f32> = of.iter().map(|i| poses[*i].score).collect();
+        keep.extend(super::shape::merge(&at, &scores, 0.5 * size_a / voxel_a).into_iter().map(|k| of[k]));
+    }
+    // Stretches of the shape that carry no particle match clearly worse.
+    let scores: Vec<f32> = keep.iter().map(|i| poses[*i].score).collect();
+    let (threshold, distinct) = split(&scores);
+    if distinct >= DISTINCT && scores.iter().filter(|s| **s >= threshold).count() >= 4 {
+        keep.retain(|i| poses[*i].score >= threshold);
+    }
+    keep.sort_unstable();
+    let candidates = cuts.len();
+    let poses: Vec<Pose> = keep.iter().map(|i| poses[*i]).collect();
+    let particles: Vec<Vec<f32>> = keep.iter().map(|i| particles[*i].clone()).collect();
+    let wedge_of: Vec<usize> = keep.iter().map(|i| wedge_of[*i]).collect();
+    let mut at = 0;
+    cuts.retain(|_| {
+        at += 1;
+        keep.binary_search(&(at - 1)).is_ok()
+    });
+    if cuts.len() < 4 {
+        bail!("合并重复位置后只剩 {} 个颗粒", cuts.len());
+    }
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let out = align(&set, &model, &poses, progress, live)?;
+    let mut report = Report {
+        kinds: vec![],
+        diameter_a: None,
+        particles: 0,
+        candidates,
+        distinct,
+        voxel_a: 0.0,
+        resolution_a: None,
+        fsc: vec![],
+        map: None,
+        halves: None,
+        table: None,
+        ms: 0,
+    };
+    save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
     Ok(report)
 }

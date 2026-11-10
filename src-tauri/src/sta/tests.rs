@@ -318,3 +318,79 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
     assert_eq!(table.lines().count(), done.particles + 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Heavy: copies of the phantom on a sphere, their Z axes pointing out;
+/// the sphere is "drawn", sampled twice as densely as the copies sit, and
+/// `project::run_drawn` has to end with about one particle per copy
+/// (same command as above with `sta::tests::drawn`).
+#[test]
+#[ignore]
+fn drawn_sphere_gives_one_particle_per_copy() {
+    use super::project::{run_drawn, Drawn, Source};
+    use super::shape::{ellipsoid, frame};
+    let truth = phantom();
+    let c = (N / 2) as f64;
+    let body: Vec<f32> = truth
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+            0.4 * v + (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
+        })
+        .collect();
+    let dims = [144usize, 144, 144];
+    let centre = [72.0, 72.0, 72.0];
+    let mut rng = Rng(5);
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    let copies = ellipsoid(centre, [44.0; 3], 26.0);
+    let mut places = vec![];
+    for s in &copies {
+        let r = mul(&frame(s.axis), &axis_angle([0.0, 0.0, 1.0], 360.0 * rng.unit()));
+        let p = rotate(&body, N, &r);
+        let o = s.pos.map(|x| x.round() as usize);
+        places.push(o);
+        for z in 0..N {
+            for y in 0..N {
+                for x in 0..N {
+                    v[((o[2] + z - N / 2) * dims[1] + o[1] + y - N / 2) * dims[0] + o[0] + x - N / 2] -= p[(z * N + y) * N + x];
+                }
+            }
+        }
+    }
+    let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    v.iter_mut().for_each(|x| *x += (1.0 * sd * rng.gauss()) as f32);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-drawn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0] }];
+    // What the sphere tool gives: a slightly wrong sphere, sampled densely.
+    let size_a = 227.5;
+    let drawn: Vec<Drawn> =
+        ellipsoid([73.0, 71.0, 72.5], [45.0; 3], 0.5 * size_a / 17.5).into_iter().map(|s| Drawn { source: 0, pos: s.pos, axis: s.axis }).collect();
+    let out = dir.join("out").to_string_lossy().into_owned();
+    let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("{} copies, {} seeds, {} particles (distinct {:.2}), {:?} Å, fsc {:?}", copies.len(), done.candidates, done.particles, done.distinct, done.resolution_a, done.fsc);
+    let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
+    let at: Vec<[f64; 3]> = table
+        .lines()
+        .skip(1)
+        .map(|l| {
+            let f: Vec<f64> = l.split(',').skip(1).take(3).map(|x| x.parse().unwrap()).collect();
+            [f[0], f[1], f[2]]
+        })
+        .collect();
+    let near = |o: &[usize; 3]| at.iter().map(|a| (0..3).map(|i| (a[i] - o[i] as f64).powi(2)).sum::<f64>().sqrt()).fold(f64::MAX, f64::min);
+    let mut d: Vec<f64> = places.iter().map(|o| near(o)).collect();
+    d.sort_by(f64::total_cmp);
+    eprintln!("nearest: min {:.1} quartile {:.1} median {:.1} upper {:.1} max {:.1}", d[0], d[d.len() / 4], d[d.len() / 2], d[d.len() * 3 / 4], d[d.len() - 1]);
+    let radial: Vec<f64> = at.iter().map(|a| (0..3).map(|i| (a[i] - 72.0).powi(2)).sum::<f64>().sqrt()).collect();
+    eprintln!("radius of particles: mean {:.1}", radial.iter().sum::<f64>() / radial.len() as f64);
+    let hit = places.iter().filter(|o| near(o) < 3.0).count();
+    eprintln!("{hit} of {} copies have a particle within 3 voxels", places.len());
+    assert!(hit * 10 >= places.len() * 8, "{hit}");
+    assert!(done.particles as f64 <= 1.5 * copies.len() as f64, "{}", done.particles);
+    // Few particles: the resolution only has to be a sensible one.
+    assert!(done.resolution_a.unwrap() < 6.0 * done.voxel_a, "{:?}", done.resolution_a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
