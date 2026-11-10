@@ -204,3 +204,7 @@ required-features = ["pro"]
 [[example]]
 name = "sta_search"
 required-features = ["pro"]
+
+[[example]]
+name = "sta_cards"
+required-features = ["pro"]

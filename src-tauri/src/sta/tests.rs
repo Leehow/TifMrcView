@@ -256,13 +256,11 @@ fn first_model_and_alignment_from_particles_alone() {
     assert!(out.shell > 5.0, "{}", out.shell);
 }
 
-/// Heavy: a made-up tomogram with 32 dark copies of the phantom, found,
-/// cut out and averaged by `project::run` (same command as above with
-/// `sta::tests::project`).
-#[test]
-#[ignore]
-fn project_finds_and_averages_particles_in_a_tomogram() {
-    use super::project::{run, Source};
+/// A made-up tomogram with `per_side`² × 2 dark copies of the phantom (each
+/// with a soft body) in noise of `noise` times the phantom's spread, written
+/// to a new temporary directory: the directory and the sources.
+fn particle_tomogram(per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<super::project::Source>) {
+    use super::project::Source;
     let truth = phantom();
     // A particle has a body: a large soft ball with the phantom's balls as detail.
     let c = (N / 2) as f64;
@@ -274,13 +272,13 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
             0.4 * v + (-(x * x + y * y + z * z) / (2.0 * 5.0 * 5.0)).exp() as f32
         })
         .collect();
-    let dims = [160usize, 160, 96];
+    let dims = [38 * per_side + 8, 38 * per_side + 8, 96];
     let mut rng = Rng(21);
     let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
     let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
     for k in 0..2 {
-        for j in 0..4 {
-            for i in 0..4 {
+        for j in 0..per_side {
+            for i in 0..per_side {
                 let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
                 let p = rotate(&body, N, &r);
                 let o = [22 + 38 * i + rng.below(5), 22 + 38 * j + rng.below(5), 24 + 46 * k + rng.below(5)];
@@ -295,13 +293,23 @@ fn project_finds_and_averages_particles_in_a_tomogram() {
             }
         }
     }
-    v.iter_mut().for_each(|x| *x += (1.0 * sd * rng.gauss()) as f32);
+    v.iter_mut().for_each(|x| *x += (noise * sd * rng.gauss()) as f32);
     let dir = std::env::temp_dir().join(format!("tmv-sta-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
     // 17.5 Å voxels, so nothing is binned.
     crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
-    let sources = vec![Source { path: tomo, tilts: [-90.0, 90.0] }];
+    (dir, vec![Source { path: tomo, tilts: [-90.0, 90.0] }])
+}
+
+/// Heavy: a made-up tomogram with 32 dark copies of the phantom, found,
+/// cut out and averaged by `project::run` (same command as above with
+/// `sta::tests::project`).
+#[test]
+#[ignore]
+fn project_finds_and_averages_particles_in_a_tomogram() {
+    use super::project::run;
+    let (dir, sources) = particle_tomogram(4, 1.0);
     let out = dir.join("out").to_string_lossy().into_owned();
     let found = run(&sources, None, &out, &|_, _, _| {}, &|_| {}).unwrap();
     eprintln!("kinds {:?}", found.kinds);
@@ -582,4 +590,29 @@ fn classes_separate_two_kinds_of_particle() {
         right += golds.max(c.members.len() - golds);
     }
     assert!(found.len() == 2 && right >= 81, "{right} of 90 with their own kind");
+}
+
+/// Heavy: `project::cards` on the same tomogram; the 210 Å kind has to give
+/// cards that hold the particles (same command as above with
+/// `sta::tests::cards`).
+#[test]
+#[ignore]
+fn cards_hold_the_particles_of_a_kind() {
+    use super::project::cards;
+    // 72 copies, as a kind needs 40 blobs to make cards, and noisy enough
+    // that the copies are not taken for gold markers.
+    let (dir, sources) = particle_tomogram(6, 3.0);
+    let out = dir.join("cards").to_string_lossy().into_owned();
+    let found = cards(&sources, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    for c in &found {
+        eprintln!("{c:?}");
+    }
+    let members: usize = found.iter().filter(|c| c.diameter_a == 210.0).map(|c| c.members).sum();
+    assert!(members >= 24, "{members}");
+    for c in &found {
+        assert!(std::path::Path::new(&c.path).is_file());
+        // A 1024-byte header and 32³ floats.
+        assert_eq!(std::fs::metadata(&c.path).unwrap().len(), 1024 + 4 * 32 * 32 * 32);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

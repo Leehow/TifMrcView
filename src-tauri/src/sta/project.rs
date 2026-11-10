@@ -23,7 +23,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::pick::{blobs, Blob};
-use super::refine::{align, first_model, Live, Progress, Set};
+use super::refine::{align, classes, first_model, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
 use crate::spa::geom::{angles, axis_angle, grid, mul};
 use crate::spa::Rng;
@@ -328,13 +328,9 @@ fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f3
     Some(out)
 }
 
-/// `diameter_a` None finds the kinds only (the report then has no map).
-pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
-    let started = Instant::now();
-    if sources.is_empty() {
-        bail!("没有断层图");
-    }
-    // 1. Kinds.
+/// Step 1 of `run`: every tomogram searched for blobs of the ladder sizes
+/// at `SEARCH_VOXEL`, and the sizes found.
+fn find_kinds(sources: &[Source], progress: Progress) -> Result<Vec<Kind>> {
     let mut all: Vec<Blob> = vec![];
     let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
     for (i, s) in sources.iter().enumerate() {
@@ -357,7 +353,32 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         all.extend(found);
     }
     progress("找颗粒", sources.len(), sources.len());
-    let kinds = kinds(&all, SEARCH_VOXEL, &profiles);
+    Ok(kinds(&all, SEARCH_VOXEL, &profiles))
+}
+
+/// Leaves out the candidates that are gold markers or lie in their streaks:
+/// on EMPIAR-10045 gold is 17 to 25 deviations dark, everything else under 8.
+/// Gold also stands out from the candidates themselves (they were at 4.6 in
+/// the median); where all are that dark, they are the particles.
+fn without_gold(cuts: &mut Vec<Cut>, size: f64, voxel_a: f64) {
+    let mut dark: Vec<f32> = cuts.iter().map(|c| c.darkest).collect();
+    dark.sort_by(f32::total_cmp);
+    let limit = GOLD.max(2.0 * dark.get(dark.len() / 2).copied().unwrap_or(0.0));
+    let gold: Vec<(usize, [f64; 3])> = cuts.iter().filter(|c| c.darkest > limit).map(|c| (c.source, c.at)).collect();
+    cuts.retain(|c| {
+        let reach = size / voxel_a * c.bin as f64;
+        !gold.iter().any(|(s, at)| *s == c.source && (0..3).map(|i| (at[i] - c.at[i]).powi(2)).sum::<f64>() < reach * reach)
+    });
+}
+
+/// `diameter_a` None finds the kinds only (the report then has no map).
+pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
+    let started = Instant::now();
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    // 1. Kinds.
+    let kinds = find_kinds(sources, progress)?;
     let mut report = Report {
         kinds: kinds.clone(),
         diameter_a: None,
@@ -400,19 +421,8 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         }
     }
     progress("裁出颗粒", sources.len(), sources.len());
-    // Gold markers and what lies in their streaks: on EMPIAR-10045 gold is
-    // 17 to 25 deviations dark, everything else under 8.
     let candidates = cuts.len();
-    // Gold also stands out from the candidates themselves (they were at
-    // 4.6 in the median); where all are that dark, they are the particles.
-    let mut dark: Vec<f32> = cuts.iter().map(|c| c.darkest).collect();
-    dark.sort_by(f32::total_cmp);
-    let limit = GOLD.max(2.0 * dark.get(dark.len() / 2).copied().unwrap_or(0.0));
-    let gold: Vec<(usize, [f64; 3])> = cuts.iter().filter(|c| c.darkest > limit).map(|c| (c.source, c.at)).collect();
-    cuts.retain(|c| {
-        let reach = size / voxel_a * c.bin as f64;
-        !gold.iter().any(|(s, at)| *s == c.source && (0..3).map(|i| (at[i] - c.at[i]).powi(2)).sum::<f64>() < reach * reach)
-    });
+    without_gold(&mut cuts, size, voxel_a);
     if cuts.len() < 20 {
         bail!("这种尺寸的颗粒只找到 {} 个，太少了", cuts.len());
     }
@@ -494,6 +504,102 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.ms = started.elapsed().as_millis();
     std::fs::write(file("sta.json"), serde_json::to_string_pretty(&report)?)?;
     Ok(())
+}
+
+/// A class average of the blobs of one size, to choose a template from.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    pub id: usize,
+    /// The ladder size of the blobs it was made from (what `run` is asked for).
+    pub diameter_a: f64,
+    /// The size measured on the blobs of that size (see `Kind`).
+    pub measured_a: f64,
+    pub voxel_a: f64,
+    pub members: usize,
+    /// Members as a share of the blobs of its size that were classified.
+    pub share: f64,
+    /// A `BOX`³ MRC of the class average.
+    pub path: String,
+}
+
+/// Kinds with fewer blobs, and sizes below this (Å), are not offered: at
+/// this sampling they are noise.
+const CARD_BLOBS: usize = 40;
+const CARD_SIZE: f64 = 120.0;
+/// Classes with fewer members make no card.
+const CARD_MEMBERS: usize = 10;
+
+/// Class averages of the strongest blobs of each kind found, written to
+/// `<out_dir>/card_<id>.mrc` and listed in `<out_dir>/cards.json`. The user
+/// chooses the template for `run_template` from them.
+pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
+    use super::search::allowed;
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    let kinds = find_kinds(sources, progress)?;
+    let mut sizes: Vec<&Kind> = kinds.iter().filter(|k| k.count >= CARD_BLOBS && k.diameter_a >= CARD_SIZE).collect();
+    sizes.sort_by(|a, b| a.diameter_a.total_cmp(&b.diameter_a));
+    std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
+    let file = |name: &str| Path::new(out_dir).join(name).to_string_lossy().into_owned();
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let mut out: Vec<Card> = vec![];
+    for kind in sizes {
+        let size = kind.diameter_a;
+        // Cubes at the working voxel size, one tomogram in memory at a time.
+        let mut cuts: Vec<Cut> = vec![];
+        let mut voxel_a = size / SPAN;
+        for (i, s) in sources.iter().enumerate() {
+            progress(&format!("裁出颗粒 {size} Å"), i, sources.len());
+            let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
+            voxel_a = voxel;
+            let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
+            let (median, sd) = super::pick::robust(&v);
+            let ok = allowed(&v, dims, 0.5 * size / voxel);
+            for b in found {
+                let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
+                if c.iter().zip(dims).any(|(c, d)| *c >= d) || !ok[(c[2] * dims[1] + c[1]) * dims[0] + c[0]] {
+                    continue;
+                }
+                if let Some(cube) = cube(&v, dims, c) {
+                    let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                    let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
+                    cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
+                }
+            }
+        }
+        progress(&format!("裁出颗粒 {size} Å"), sources.len(), sources.len());
+        without_gold(&mut cuts, size, voxel_a);
+        cuts.sort_by(|a, b| b.score.total_cmp(&a.score));
+        cuts.truncate(FIRST);
+        if cuts.len() < CARD_BLOBS {
+            continue;
+        }
+        let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+        let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+        let radius = 0.8 * size / voxel_a;
+        let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+        for class in classes(&set, 3, 1, progress, live)? {
+            if class.members.len() < CARD_MEMBERS {
+                continue;
+            }
+            let id = out.len();
+            let path = file(&format!("card_{id}.mrc"));
+            output::write_mrc(&path, &class.model, [BOX; 3], voxel_a, false)?;
+            out.push(Card {
+                id,
+                diameter_a: size,
+                measured_a: kind.measured_a,
+                voxel_a,
+                members: class.members.len(),
+                share: class.members.len() as f64 / cuts.len() as f64,
+                path,
+            });
+        }
+    }
+    std::fs::write(file("cards.json"), serde_json::to_string_pretty(&out)?)?;
+    Ok(out)
 }
 
 /// A place on a drawn shape (see `shape`).
