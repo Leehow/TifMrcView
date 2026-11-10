@@ -26,6 +26,7 @@ use super::pick::{blobs, Blob};
 use super::refine::{align, classes, first_model, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
 use crate::spa::geom::{angles, axis_angle, grid, mul};
+use crate::spa::fourier::resample3;
 use crate::spa::Rng;
 use crate::tomo::{output, pipeline};
 
@@ -521,7 +522,55 @@ pub struct Card {
     pub share: f64,
     /// A `BOX`³ MRC of the class average.
     pub path: String,
+    /// How much denser the average's variation is inside the central ball
+    /// than a uniform one would be (see `compactness`).
+    pub compact: f64,
+    /// Compact and not a single dot: worth offering as the particle.
+    pub likely: bool,
 }
+
+/// Share of a class average's squared deviation from its mean (over the
+/// whole `n`³ box) that lies inside the ball of `radius` voxels around the
+/// centre, divided by the ball's share of the box volume. A particle
+/// concentrated in the ball scores far above 1; a line or a layer running
+/// through the box scores low. Also whether the density in the ball is
+/// spread over it rather than one dot (gold): the largest deviation there
+/// is at most `DOT` times the mean deviation there.
+fn compactness(avg: &[f32], n: usize, radius: f64) -> (f64, bool) {
+    let c = (n / 2) as f64;
+    let mean = avg.iter().map(|v| *v as f64).sum::<f64>() / avg.len() as f64;
+    let (mut all, mut inside, mut voxels) = (0.0, 0.0, 0usize);
+    let (mut peak, mut sum) = (0.0f64, 0.0);
+    for z in 0..n {
+        for y in 0..n {
+            for x in 0..n {
+                let d = (avg[(z * n + y) * n + x] as f64 - mean).abs();
+                all += d * d;
+                let (a, b, e) = (x as f64 - c, y as f64 - c, z as f64 - c);
+                if a * a + b * b + e * e <= radius * radius {
+                    inside += d * d;
+                    voxels += 1;
+                    sum += d;
+                    peak = peak.max(d);
+                }
+            }
+        }
+    }
+    if all <= 0.0 || voxels == 0 {
+        return (0.0, false);
+    }
+    let compact = (inside / all) / (voxels as f64 / avg.len() as f64);
+    let typical = sum / voxels as f64;
+    (compact, compact > COMPACT && peak <= DOT * typical)
+}
+
+/// A class is `likely` the particle above this `compact`: 10 means 60% of
+/// the variation in a ball that is 6% of the box (a line through the
+/// centre reaches about 8, a layer less, a particle 13 or more).
+const COMPACT: f64 = 10.0;
+/// Most the ball's largest deviation may exceed its mean one (a smooth
+/// particle gives about 2, a dot with a streak 8 or more).
+const DOT: f64 = 4.0;
 
 /// Kinds with fewer blobs, and sizes below this (Å), are not offered: at
 /// this sampling they are noise.
@@ -532,7 +581,12 @@ const CARD_MEMBERS: usize = 10;
 
 /// Class averages of the strongest blobs of each kind found, written to
 /// `<out_dir>/card_<id>.mrc` and listed in `<out_dir>/cards.json`. The user
-/// chooses the template for `run_template` from them.
+/// chooses the template for `run_template` from them. The classes are found
+/// on cubes at half sampling (eight times fewer voxels); each card is then
+/// averaged from the full cubes at the
+/// poses found. Cards come best first: the `likely` ones, then by
+/// `compact × members` (a compact class that many blobs share); ids follow
+/// that order.
 pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
     use super::search::allowed;
     if sources.is_empty() {
@@ -544,7 +598,7 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
     std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
     let file = |name: &str| Path::new(out_dir).join(name).to_string_lossy().into_owned();
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
-    let mut out: Vec<Card> = vec![];
+    let mut found: Vec<(Card, Vec<f32>)> = vec![];
     for kind in sizes {
         let size = kind.diameter_a;
         // Cubes at the working voxel size, one tomogram in memory at a time.
@@ -580,26 +634,54 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
         let radius = 0.8 * size / voxel_a;
         let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-        for class in classes(&set, 3, 1, progress, live)? {
+        // Classification at half sampling.
+        let half = BOX / 2;
+        let small: Vec<Vec<f32>> = particles.par_iter().map(|p| resample3(p, BOX, half)).collect();
+        let small_wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(half, s.tilts[0], s.tilts[1])).collect();
+        let coarse = Set { n: half, particles: &small, wedges: &small_wedges, wedge_of: &wedge_of, radius: radius / 2.0 };
+        for class in classes(&coarse, 3, 1, progress, live)? {
             if class.members.len() < CARD_MEMBERS {
                 continue;
             }
-            let id = out.len();
-            let path = file(&format!("card_{id}.mrc"));
-            output::write_mrc(&path, &class.model, [BOX; 3], voxel_a, false)?;
-            out.push(Card {
-                id,
-                diameter_a: size,
-                measured_a: kind.measured_a,
-                voxel_a,
-                members: class.members.len(),
-                share: class.members.len() as f64 / cuts.len() as f64,
-                path,
-            });
+            // The poses at full sampling: shifts double.
+            let mut poses = vec![Pose { r: super::IDENTITY, t: [0.0; 3], score: 0.0 }; cuts.len()];
+            let mut member = vec![false; cuts.len()];
+            for (i, p) in class.members.iter().zip(&class.poses) {
+                poses[*i] = Pose { t: p.t.map(|v| 2.0 * v), ..*p };
+                member[*i] = true;
+            }
+            let average = set.average(&poses, |i| member[i]).finish();
+            let (compact, likely) = compactness(&average, BOX, 0.6 * size / voxel_a);
+            found.push((
+                Card {
+                    id: 0,
+                    diameter_a: size,
+                    measured_a: kind.measured_a,
+                    voxel_a,
+                    members: class.members.len(),
+                    share: class.members.len() as f64 / cuts.len() as f64,
+                    path: String::new(),
+                    compact,
+                    likely,
+                },
+                average,
+            ));
         }
     }
+    found.sort_by(|a, b| rank(&b.0).total_cmp(&rank(&a.0)));
+    for (id, (card, average)) in found.iter_mut().enumerate() {
+        card.id = id;
+        card.path = file(&format!("card_{id}.mrc"));
+        output::write_mrc(&card.path, average, [BOX; 3], card.voxel_a, false)?;
+    }
+    let out: Vec<Card> = found.into_iter().map(|f| f.0).collect();
     std::fs::write(file("cards.json"), serde_json::to_string_pretty(&out)?)?;
     Ok(out)
+}
+
+/// Sort key of a card: the likely ones first, then `compact × members`.
+fn rank(c: &Card) -> f64 {
+    c.compact * c.members as f64 + if c.likely { 1e12 } else { 0.0 }
 }
 
 /// A place on a drawn shape (see `shape`).
@@ -872,4 +954,44 @@ pub fn run_template(
     };
     save(&mut report, sources, &cuts, &out, out_dir, diameter_a, voxel, started)?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+
+    const N: usize = 32;
+
+    /// A box filled by `f(x, y, z)`, coordinates from the centre.
+    fn volume(f: impl Fn(f64, f64, f64) -> f64) -> Vec<f32> {
+        let c = (N / 2) as f64;
+        (0..N * N * N).map(|i| f((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c) as f32).collect()
+    }
+
+    fn blob(x: f64, y: f64, z: f64, s: f64) -> f64 {
+        (-(x * x + y * y + z * z) / (2.0 * s * s)).exp()
+    }
+
+    fn card(avg: &[f32], members: usize) -> Card {
+        let (compact, likely) = compactness(avg, N, 7.8);
+        Card { id: 0, diameter_a: 0.0, measured_a: 0.0, voxel_a: 1.0, members, share: 0.0, path: String::new(), compact, likely }
+    }
+
+    #[test]
+    fn the_compact_particle_ranks_first() {
+        // A blurred ball with four sub-blobs.
+        let particle = volume(|x, y, z| blob(x, y, z, 3.5) + [(4.0, 0.0, 0.0), (-4.0, 0.0, 0.0), (0.0, 4.0, 1.0), (0.0, -3.0, -3.0)].iter().map(|p| 0.5 * blob(x - p.0, y - p.1, z - p.2, 1.5)).sum::<f64>());
+        // A line through the box and through the centre, a layer, a dark dot with a streak.
+        let line = volume(|x, y, _| blob(x, y, 0.0, 1.5));
+        let layer = volume(|_, _, z| blob(0.0, 0.0, z, 2.0));
+        let dot = volume(|x, y, z| 3.0 * blob(x, y, z, 1.2) + 0.3 * blob(x, y, 0.0, 2.0) * (-(z * z) / 128.0).exp());
+        let mut cards = vec![card(&line, 60), card(&layer, 70), card(&dot, 30), card(&particle, 50)];
+        for c in &cards {
+            eprintln!("members {}: compact {:.2}, likely {}", c.members, c.compact, c.likely);
+        }
+        cards.sort_by(|a, b| rank(b).total_cmp(&rank(a)));
+        assert_eq!(cards[0].members, 50);
+        assert_eq!(cards.iter().filter(|c| c.likely).count(), 1);
+        assert!(cards[0].likely);
+    }
 }
