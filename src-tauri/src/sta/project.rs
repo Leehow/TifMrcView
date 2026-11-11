@@ -1132,10 +1132,108 @@ pub fn likeness(cards: &[Card]) -> Result<Vec<Vec<f64>>> {
     Ok(m)
 }
 
-/// A kind of particle must weigh at least this many times the next heaviest
-/// for `choose` to take it without asking (the weight of a kind is the sum of
-/// `compact × members` of its cards).
-pub const DOMINANT: f64 = 3.0;
+/// The most cards tried as a template (the first ones in card order).
+pub const TRIALS: usize = 12;
+/// A card is as good as the best one when its `strength` is at least this
+/// share of the best's.
+pub const CLOSE: f64 = 0.75;
+
+/// The size `run_template` is asked for with a card: the particle's diameter,
+/// 1.33 × the size the card was made for (the blobs are a little smaller than
+/// the particle they sit in).
+pub const DIAMETER_FACTOR: f64 = 1.33;
+
+pub fn template_diameter(card: &Card) -> f64 {
+    DIAMETER_FACTOR * card.diameter_a
+}
+
+/// What one card gave as a template: the coarse average of what the search
+/// found with it (`run_template` without the fine pass). A card that is a
+/// layer, a line or a small blob finds no group of particles that stands out
+/// (`ok` false, `reason` says why); a particle gives an average whose halves
+/// agree far out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trial {
+    /// The card's id.
+    pub card: usize,
+    pub ok: bool,
+    /// Why it failed.
+    pub reason: Option<String>,
+    pub particles: usize,
+    pub candidates: usize,
+    /// FSC between the halves of that average, per shell (0 to the Nyquist).
+    pub fsc: Vec<f64>,
+    /// The voxel size of that average, Å.
+    pub voxel_a: f64,
+    /// `strength` of the `fsc`.
+    pub strength: f64,
+    pub seconds: f64,
+}
+
+/// How far out and how well the two halves of an average agree: the area
+/// under the FSC over the spatial frequency, 1/Å (the shells are `1 / (n ·
+/// voxel_a)` apart, `n` the box size, twice the last shell). Negative values
+/// count as 0, shell 0 (always 1) is left out. Comparable between cards of
+/// different voxel sizes, which a resolution read at one threshold is not
+/// when the curve ends at the Nyquist limit.
+pub fn strength(fsc: &[f64], voxel_a: f64) -> f64 {
+    if fsc.len() < 2 || voxel_a <= 0.0 {
+        return 0.0;
+    }
+    let n = 2.0 * (fsc.len() - 1) as f64;
+    fsc.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>() / (n * voxel_a)
+}
+
+/// Every card (the first `TRIALS`, in card order) as the template of a coarse
+/// run, written to `<out_dir>/card_<id>/`. Judging a card by what it makes
+/// avoids guessing from its look. A run that fails (no particles stand out, too few
+/// found) is a failed trial, not an error; only a cancellation is. `each` is
+/// told of every trial as it finishes.
+pub fn trials(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    cards: &[Card],
+    out_dir: &str,
+    progress: Progress,
+    live: Live,
+    each: &(dyn Fn(&Trial) + Sync),
+) -> Result<Vec<Trial>> {
+    let total = cards.len().min(TRIALS);
+    let mut out = vec![];
+    for (k, card) in cards.iter().take(total).enumerate() {
+        check_cancel()?;
+        let started = Instant::now();
+        let label = format!("试跑卡片 {}/{total}", k + 1);
+        let (cube, voxel) = read_card(&card.path)?;
+        let dir = Path::new(out_dir).join(format!("card_{}", card.id)).to_string_lossy().into_owned();
+        let inner = |_: &str, a: usize, b: usize| progress(&label, a, b);
+        progress(&label, 0, 1);
+        let r = run_template(dev, sources, &cube, voxel, template_diameter(card), false, &dir, &inner, live);
+        let seconds = started.elapsed().as_secs_f64();
+        let trial = match r {
+            Ok(r) => {
+                let voxel_a = if r.voxel_a > 0.0 { r.voxel_a } else { voxel };
+                Trial { card: card.id, ok: true, reason: None, particles: r.particles, candidates: r.candidates, strength: strength(&r.fsc, voxel_a), fsc: r.fsc, voxel_a, seconds }
+            }
+            // A cancelled run says so with the same kind of error: not a verdict on the card.
+            Err(e) if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) => return Err(e),
+            Err(e) => Trial { card: card.id, ok: false, reason: Some(format!("{e:#}")), particles: 0, candidates: 0, fsc: vec![], voxel_a: voxel, strength: 0.0, seconds },
+        };
+        each(&trial);
+        out.push(trial);
+    }
+    Ok(out)
+}
+
+/// The cards (ids, ascending) whose trial worked and gave at least `CLOSE`
+/// of the best strength.
+pub fn good(trials: &[Trial]) -> Vec<usize> {
+    let best = trials.iter().filter(|t| t.ok).map(|t| t.strength).fold(0.0, f64::max);
+    let mut ids: Vec<usize> = trials.iter().filter(|t| t.ok && t.strength >= CLOSE * best).map(|t| t.card).collect();
+    ids.sort_unstable();
+    ids
+}
 
 /// What `choose` took.
 #[derive(Clone, Debug, PartialEq)]
@@ -1723,7 +1821,9 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
             bail!("倾斜图像的像素（{px:.3} Å）凑不成平均图的体素（{voxel:.3} Å）");
         }
         let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
-        let series = Series::open(&d, &t, dims, bin, &|a, b| progress(&label, a, b))?;
+        // Views twice as fine as the average where they can be: see `Series::fold`.
+        let fold = if bin % 2 == 0 { 2 } else { 1 };
+        let series = Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b))?;
         all.push((series, particles));
     }
     if all.iter().map(|(_, p)| p.len()).sum::<usize>() < 4 {

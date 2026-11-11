@@ -30,7 +30,7 @@ use rayon::prelude::*;
 
 use super::check_cancel;
 use crate::fft::Fft;
-use crate::spa::fourier::{ft2, ift2, index, Half};
+use crate::spa::fourier::{ft2, ift2, index, resize2, Half};
 use crate::spa::geom::{mul, Mat};
 use crate::spa::volume::{pad_for, Accum, Projector, Pt};
 use crate::spa::post;
@@ -70,6 +70,12 @@ pub struct Series {
     /// (kV, Cs mm, amplitude contrast).
     pub optics: [f64; 3],
     pub grid: Grid,
+    /// Pixels of the views per pixel of a patch as it is used: patches are
+    /// cut `fold` times larger and finer and brought down by cropping their
+    /// transform. (Views binned all the way by averaging pixels fold the
+    /// noise from beyond the new limit back into the band: a quarter more
+    /// noise at half of it.)
+    pub fold: usize,
 }
 
 /// A particle: its centre in tomogram voxels, its orientation and its half.
@@ -83,7 +89,7 @@ pub struct Particle {
 impl Series {
     /// The series of `dataset` on the grid of its tomogram `tomogram`
     /// (`dims` voxels), views binned by `bin`.
-    pub fn open(dataset: &crate::tomo::dataset::Dataset, tomogram: &crate::tomo::dataset::Tomogram, dims: [usize; 3], bin: usize, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Series> {
+    pub fn open(dataset: &crate::tomo::dataset::Dataset, tomogram: &crate::tomo::dataset::Tomogram, dims: [usize; 3], bin: usize, fold: usize, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Series> {
         let Some(a) = &dataset.alignment else { bail!("倾斜序列还没有对齐") };
         let Some(z_offset) = tomogram.z_offset else { bail!("这张断层图是旧版本重建的，没有记录它在倾斜序列里的位置：请重新重建一次") };
         let Some(px) = dataset.optics.pixel_a else { bail!("不知道像素大小") };
@@ -109,6 +115,7 @@ impl Series {
             gradient: dataset.ctf.as_ref().map_or(0, |c| c.gradient),
             optics: [dataset.optics.kv, dataset.optics.cs_mm, dataset.optics.amplitude],
             grid: Grid { dims, scale: tomogram.bin as f64 / bin as f64, z_offset },
+            fold,
         })
     }
 
@@ -129,7 +136,7 @@ impl Series {
     /// The b × b patch of view `i` about `centre`, mean 0 and deviation 1,
     /// its edge tapered, and how far the centre lies from pixel b/2 of it
     /// (a fraction of a pixel); None when it leaves the image.
-    fn patch(&self, i: usize, centre: [f64; 2], b: usize) -> Option<(Vec<f32>, [f64; 2])> {
+    fn patch_at(&self, i: usize, centre: [f64; 2], b: usize) -> Option<(Vec<f32>, [f64; 2])> {
         let whole = [centre[0].round(), centre[1].round()];
         let (x0, y0) = (whole[0] as isize - (b / 2) as isize, whole[1] as isize - (b / 2) as isize);
         if x0 < 0 || y0 < 0 || x0 as usize + b > self.w || y0 as usize + b > self.h {
@@ -157,12 +164,23 @@ impl Series {
         Some((out, [centre[0] - whole[0], centre[1] - whole[1]]))
     }
 
+    /// The transform of the patch of `b` pixels (each `fold` of the view's)
+    /// about `centre` in view `i`, and how far the centre lies from pixel
+    /// b/2 of it, in those pixels.
+    fn patch(&self, i: usize, centre: [f64; 2], b: usize, fft: &Fft) -> Option<(Vec<f32>, Vec<f32>, [f64; 2])> {
+        let f = self.fold.max(1);
+        let (cut, off) = self.patch_at(i, centre, f * b)?;
+        let (re, im) = ft2(fft, f * b, &cut);
+        let (re, im) = if f == 1 { (re, im) } else { resize2(&re, &im, f * b, b) };
+        Some((re, im, [off[0] / f as f64, off[1] / f as f64]))
+    }
+
     /// sin γ at the half plane's frequencies for view `i` with `extra` Å of
     /// defocus (1 everywhere without a CTF).
     fn transfer(&self, i: usize, extra: f64, half: &Half) -> Vec<f32> {
         let Some([df1, df2, angle]) = self.views[i].ctf else { return vec![1.0; half.len()] };
         let o = crate::ctf::Optics::of(self.optics[0], self.optics[1], self.optics[2]);
-        let scale = 1.0 / (half.b as f64 * self.pixel_a);
+        let scale = 1.0 / (half.b as f64 * self.pixel_a * self.fold.max(1) as f64);
         let (mean, astig) = (0.5 * (df1 + df2) + extra, 0.5 * (df1 - df2));
         half.k
             .iter()
@@ -189,8 +207,7 @@ pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum
     let (mut x, mut c2) = (vec![0f32; 2 * k], vec![0f32; k]);
     for i in 0..series.views.len() {
         let (centre, defocus) = series.place(p.at, i);
-        let Some((patch, off)) = series.patch(i, centre, b) else { continue };
-        let (re, im) = ft2(fft, b, &patch);
+        let Some((re, im, off)) = series.patch(i, centre, b, fft) else { continue };
         let c = series.transfer(i, defocus, half);
         for j in 0..k {
             let [kx, ky] = half.k[j];
@@ -225,7 +242,12 @@ pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2],
     let projectors = [Projector::new(&refs[0], b, pad), Projector::new(&refs[1], b, pad)];
     let top = weight.iter().rposition(|w| *w > 0.0).unwrap_or(0).min(b / 2 - 2);
     let half = Half::new(b, top as f64);
-    let fft = Fft::new(b);
+    let fft = Fft::new(series.fold.max(1) * b);
+    // The correlation maps are made FINER times finer than the pixels: read
+    // between the pixels of a coarse one, the best place is always a pixel.
+    const FINER: usize = 4;
+    let wide = FINER * b;
+    let fft_wide = Fft::new(wide);
     let k = half.len();
     let steps = (2.0 * reach).ceil() as i32;
     let shifts: Vec<[f64; 3]> = particles
@@ -235,8 +257,7 @@ pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2],
             let mut slice = vec![0f32; 2 * k];
             for i in 0..series.views.len() {
                 let (centre, defocus) = series.place(p.at, i);
-                let Some((patch, off)) = series.patch(i, centre, b) else { continue };
-                let (re, im) = ft2(&fft, b, &patch);
+                let Some((re, im, off)) = series.patch(i, centre, b, &fft) else { continue };
                 let c = series.transfer(i, defocus, &half);
                 let e = frame(series.views[i].theta);
                 projectors[p.half].slice(&mul(&e, &p.r), &half, &mut slice);
@@ -248,7 +269,7 @@ pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2],
                     power[s][0] += r * r + m * m;
                     power[s][1] += ((slice[2 * j] as f64).powi(2) + (slice[2 * j + 1] as f64).powi(2)) * (c[j] as f64).powi(2);
                 }
-                let (mut cr, mut ci) = (vec![0f32; b * b], vec![0f32; b * b]);
+                let (mut cr, mut ci) = (vec![0f32; wide * wide], vec![0f32; wide * wide]);
                 for j in 0..k {
                     let s = (half.shell[j] as usize).min(top + 1);
                     let w = weight.get(s).copied().unwrap_or(0.0);
@@ -265,25 +286,25 @@ pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2],
                     // X · conj(C·P), and its mirror at −k.
                     let f = (w / norm) as f32;
                     let (vr, vi) = ((xr * pr + xi * pi) * f, (xi * pr - xr * pi) * f);
-                    let at = half.idx[j] as usize;
-                    let mate = index(-(ky as i32), b) * b + index(-(kx as i32), b);
+                    let at = index(ky as i32, wide) * wide + index(kx as i32, wide);
+                    let mate = index(-(ky as i32), wide) * wide + index(-(kx as i32), wide);
                     cr[at] = vr;
                     ci[at] = vi;
                     cr[mate] = vr;
                     ci[mate] = -vi;
                 }
-                maps.push((e[0][0], e[0][2], ift2(&fft, b, &cr, &ci)));
+                maps.push((e[0][0], e[0][2], ift2(&fft_wide, wide, &cr, &ci)));
             }
-            let g = series.grid.scale;
+            let g = series.grid.scale / series.fold.max(1) as f64 * FINER as f64;
             let read = |map: &[f32], x: f64, y: f64| -> f64 {
-                let (x, y) = (x + (b / 2) as f64, y + (b / 2) as f64);
+                let (x, y) = (x + (wide / 2) as f64, y + (wide / 2) as f64);
                 let (fx, fy) = (x.floor(), y.floor());
-                if fx < 0.0 || fy < 0.0 || fx as usize + 1 >= b || fy as usize + 1 >= b {
+                if fx < 0.0 || fy < 0.0 || fx as usize + 1 >= wide || fy as usize + 1 >= wide {
                     return 0.0;
                 }
                 let (dx, dy) = (x - fx, y - fy);
-                let j = fy as usize * b + fx as usize;
-                (map[j] as f64 * (1.0 - dx) + map[j + 1] as f64 * dx) * (1.0 - dy) + (map[j + b] as f64 * (1.0 - dx) + map[j + b + 1] as f64 * dx) * dy
+                let j = fy as usize * wide + fx as usize;
+                (map[j] as f64 * (1.0 - dx) + map[j + 1] as f64 * dx) * (1.0 - dy) + (map[j + wide] as f64 * (1.0 - dx) + map[j + wide + 1] as f64 * dx) * dy
             };
             let score = |t: [f64; 3]| -> f64 { maps.iter().map(|(c, s, map)| read(map, g * (c * t[0] + s * t[2]), g * t[1])).sum() };
             // Half a voxel apart over the reach, then an eighth about the best.
@@ -331,7 +352,7 @@ impl Sums {
 
     /// Adds the particles of one series.
     pub fn add(&mut self, series: &Series, particles: &[Particle], tick: &(dyn Fn(usize, usize) + Sync)) -> Result<()> {
-        let fft = Fft::new(self.b);
+        let fft = Fft::new(series.fold.max(1) * self.b);
         let mut done = 0;
         for chunk in particles.chunks(32) {
             check_cancel()?;
@@ -417,8 +438,14 @@ mod tests {
     /// reconstruction says it projects. `ctf`: (defocus at the axis per
     /// view, Å) applied to the whole image.
     fn series(particles: &[Particle], thetas: &[f64], ctf: Option<&[f64]>) -> Series {
-        let (w, h) = (128usize, 128usize);
-        let grid = Grid { dims: [128, 128, 40], scale: 1.0, z_offset: 2.5 };
+        series_at(particles, thetas, ctf, 1)
+    }
+
+    /// The same with views `fine` times finer than the tomogram's voxels.
+    fn series_at(particles: &[Particle], thetas: &[f64], ctf: Option<&[f64]>, fine: usize) -> Series {
+        let (w, h) = (128 * fine, 128 * fine);
+        let px = 8.0 / fine as f64;
+        let grid = Grid { dims: [128, 128, 40], scale: fine as f64, z_offset: 2.5 };
         let truth = phantom();
         let c = (N / 2) as f64;
         let mut s = Series {
@@ -426,10 +453,11 @@ mod tests {
             w,
             h,
             views: thetas.iter().enumerate().map(|(i, t)| View { theta: *t, ctf: ctf.map(|d| [d[i], d[i], 0.0]) }).collect(),
-            pixel_a: 8.0,
+            pixel_a: px,
             gradient: 0,
             optics: [300.0, 2.7, 0.07],
             grid,
+            fold: fine,
         };
         let planes: Vec<Vec<f32>> = (0..thetas.len())
             .into_par_iter()
@@ -462,7 +490,7 @@ mod tests {
                     let o = crate::ctf::Optics::of(300.0, 2.7, 0.07);
                     for ky in 0..h {
                         for kx in 0..w {
-                            let (fx, fy) = (crate::spa::fourier::freq(kx, w) as f64 / (w as f64 * 8.0), crate::spa::fourier::freq(ky, h) as f64 / (h as f64 * 8.0));
+                            let (fx, fy) = (crate::spa::fourier::freq(kx, w) as f64 / (w as f64 * px), crate::spa::fourier::freq(ky, h) as f64 / (h as f64 * px));
                             let t = o.gamma(d[i], fx * fx + fy * fy, 0.0).sin() as f32;
                             re[ky * w + kx] *= t;
                             im[ky * w + kx] *= t;
@@ -515,6 +543,27 @@ mod tests {
     }
 
     #[test]
+    fn finer_views_are_brought_down_by_cropping_their_transform() {
+        let parts = particles(16);
+        let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
+        let defocus: Vec<f64> = (0..21).map(|i| 20000.0 + 1000.0 * i as f64).collect();
+        let s = series_at(&parts, &thetas, Some(&defocus), 2);
+        let mut sums = Sums::new(N, 13.0);
+        sums.add(&s, &parts, &|_, _| {}).unwrap();
+        let (map, _, _) = sums.finish(11.0);
+        let c = corr(&map, &phantom());
+        assert!(c > 0.9, "{c}");
+        // And a particle believed elsewhere is found where it is.
+        let mut moved = parts.clone();
+        moved[3].at = [parts[3].at[0] + 1.3, parts[3].at[1] - 0.8, parts[3].at[2]];
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=6).contains(&s) { 1.0 } else { 0.0 }).collect();
+        settle(&s, &mut moved, &[truth.clone(), truth], N, &weight, 2.5);
+        let d = [moved[3].at[0] - parts[3].at[0], moved[3].at[1] - parts[3].at[1]];
+        assert!(d[0].abs() < 0.3 && d[1].abs() < 0.3, "{d:?}");
+    }
+
+    #[test]
     fn particles_settle_where_the_views_have_them() {
         let parts = particles(16);
         let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
@@ -536,7 +585,7 @@ mod tests {
         let off: Vec<f64> = moved.iter().zip(&parts).flat_map(|(m, p)| (0..3).map(move |a| m.at[a] - p.at[a])).collect();
         let rms = (off.iter().map(|d| d * d).sum::<f64>() / off.len() as f64).sqrt();
         let worst = off.iter().fold(0.0f64, |w, d| w.max(d.abs()));
-        assert!(rms < 0.25 && worst < 0.5, "{rms} {worst}");
+        assert!(rms < 0.12 && worst < 0.3, "{rms} {worst}");
     }
 
     #[test]
