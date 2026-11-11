@@ -1989,6 +1989,80 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
     }).await
 }
 
+/// "Find them all" (Pro), the first half of the particle routes: the template
+/// search runs alone and what it found is saved in `found.json` for the user
+/// to check (`sta::review`). `pick` (a card of `out`) or else `marks` (the
+/// clicked particles, 1 to 3 are examples) names the example; `out` is the
+/// output folder. Same events as `sta_run`; returns the review of the first
+/// tomogram (see `sta_review`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, marks: Option<Vec<crate::sta::marks::Mark>>, out: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        match (pick, marks) {
+            (Some(n), _) => crate::sta::review::find_card(&inputs, n, &out, &device, &emit, &base64),
+            (None, Some(m)) => crate::sta::review::find_points(&inputs, &m, &out, &device, &emit, &base64),
+            (None, None) => Err(anyhow::anyhow!("请先选一张卡片，或在颗粒上点几下")),
+        }
+    }).await
+}
+
+/// What was found in `out` (`which`: "card" for the cards' route, "marked" for
+/// clicked particles) as the review of the open file `tomogram` (a searched
+/// tomogram or its look companion), or null when nothing was found there:
+/// {total, keep, kept, sure, unsure, limit, removed, added, perTomogram:
+/// [{name, path, kept}], scores, etaSeconds, places: [{i, pos, score, state}],
+/// radius, open, route, card, stale, foundMs, averageMs}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review(out: String, which: String, tomogram: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || {
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        crate::sta::review::review(&dir, &tomogram)
+    }).await
+}
+
+/// Changes the user's edits of a review and returns it (`sta_review`): `keep`
+/// (the slider), `toggle` (a place's index: kept to removed and back, below to
+/// added and back), `addAt` (a click, [x, y, z] in voxels of `tomogram`, where
+/// no circle is: the nearest place within a radius is added, else an error),
+/// `reset` (back to the program's suggestion).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false) };
+        crate::sta::review::set_review(&dir, &tomogram, &edit)
+    }).await
+}
+
+/// Averages what the review of `out`/`which` keeps (second half of the
+/// particle routes). Same events and result as `sta_run` with a card (or as
+/// `sta_run_drawn` for clicked particles).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_average_found(app: AppHandle, out: String, which: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        crate::sta::review::average_found(&dir, &device, &emit, &base64)
+    }).await
+}
+
 /// The marks saved in an output folder: {marks, size}.
 #[cfg(feature = "pro")]
 #[tauri::command]
@@ -3031,6 +3105,10 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_siblings,
             #[cfg(feature = "pro")] sta_cancel,
             #[cfg(feature = "pro")] sta_run_drawn,
+            #[cfg(feature = "pro")] sta_find,
+            #[cfg(feature = "pro")] sta_review,
+            #[cfg(feature = "pro")] sta_review_set,
+            #[cfg(feature = "pro")] sta_average_found,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,

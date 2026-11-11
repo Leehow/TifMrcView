@@ -13,6 +13,7 @@
 // only for looking: averages are always of the raw tomogram). Everything shown
 // below the list (status, progress, live preview, cards, result, ticks)
 // belongs to the output folder, so a tab of another folder shows its own.
+// "找出全部" (found.js) replaces the direct run of a card: the particles like it are found and shown first.
 // Backend: sta_run, sta_cards, sta_result, sta_out, sta_siblings, sta_cancel (marks: draw.js); events
 // sta-progress {label, done, total}, sta-live {png}, sta-note {kind, …}.
 // Every call is guarded: under the web demo the commands are missing and the
@@ -44,7 +45,7 @@
   panel.hidden = true;
   panel.innerHTML = `
     <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><span class="sta-head-btns"><button id="sta-fold" class="small" title="收起面板，让出图像" aria-expanded="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button><button id="sta-close" class="small" title="关闭">✕</button></span></div>
-    <p class="dim">选好断层图，按“找候选”：程序做出候选的“卡片”，然后停下来，由你在清晰的断层图上决定平均什么；你选定之后，其余的（找到所有同样的颗粒、对齐、平均）都由程序完成。</p>
+    <p class="dim">选好断层图，按“找候选”：程序做出候选的“卡片”，然后停下来，由你在清晰的断层图上决定平均什么；你选定之后，其余的（找出所有同样的颗粒给你看、对齐、平均）都由程序完成。</p>
     <div id="sta-data" class="sta-data"></div>
     <div class="al-row"><button id="sta-add" class="small" title="再加入别的文件夹里的断层图一起平均">添加断层图…</button></div>
     <div class="al-row">
@@ -57,7 +58,7 @@
       <h4>① 点一张卡片</h4>
       <p id="sta-cards-hint" class="dim"></p>
       <div id="sta-cards" class="sta-cards"></div>
-      <div class="al-row"><button id="sta-again" class="primary" disabled>平均这一类</button></div>
+      <div class="al-row"><button id="sta-again" class="primary" disabled>找出全部</button></div>
     </div>
     <h4 id="sta-mark-head">② 或者自己标</h4>
     <div id="sta-draw-slot"></div>
@@ -192,7 +193,7 @@
     const again = $("sta-again");
     again.disabled = s.selected == null || W.busy;
     again.title = s.selected == null ? "先点一张卡片" : "";
-    $("sta-cards-hint").textContent = "点你要平均的那一类，再按“平均这一类”。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。";
+    $("sta-cards-hint").textContent = "点你要平均的那一类作例子，再按“找出全部”：程序会把同类的都找出来给你看，你确认后才平均。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。";
   }
   // The line the run ends with while it waits for the user's choice.
   const PROMPT = "请选择要平均什么：点一张卡片，或用标注工具在图上点、涂、画出来";
@@ -391,10 +392,12 @@
     return go((inputs, out) => invoke("sta_run", { inputs, pick: pick ?? null, out }), pick == null);
   };
   W.go = go;
+  W.st = st;
+  W.cur = cur;
   W.status = status;
   W.renderData = renderData;
   $("sta-run").onclick = () => run(null);
-  $("sta-again").onclick = () => { const n = cur().selected; if (n != null) run(n); };
+  $("sta-again").onclick = () => { const n = cur().selected; if (n != null) (W.found ? W.found.find(n) : run(n)); };
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
   $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
 

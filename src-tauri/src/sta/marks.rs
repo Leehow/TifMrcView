@@ -163,7 +163,7 @@ fn strokes(points: &[[f64; 3]]) -> Vec<Vec<[f64; 3]>> {
 /// The viewer may have shown the look file, and the workspace lists it among
 /// the tomograms: it is not averaged as one of its own beside the tomogram
 /// it belongs to.
-fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, Vec<Source>) {
+pub fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, Vec<Source>) {
     let looks: Vec<String> = sources.iter().filter_map(|s| s.look.as_ref().map(|l| l.path.clone())).collect();
     inputs.iter().cloned().zip(sources).filter(|(_, s)| !looks.contains(&s.path)).unzip()
 }

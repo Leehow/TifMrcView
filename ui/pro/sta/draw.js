@@ -8,9 +8,10 @@
 // hand: points on it, the fallback), 球 (a vesicle: the centre, then a point
 // on its surface). The software completes the shape and the size (see
 // src-tauri/src/sta/marks.rs); nothing is typed.
-// 点 alone: click at least MIN_POINTS particles and the program finds all the
-// others like them (their directions are unknown, so no shape is drawn);
-// points and shapes are averaged separately.
+// 点 alone: click 2–3 particles (one is allowed, more is fine) and the program
+// finds all the others like them (their directions are unknown, so no shape is
+// drawn) and SHOWS them before averaging (found.js: 找出全部同类); points and
+// shapes are averaged separately.
 // A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane", tomogram,
 // points: [[x, y, z]…], flip, strokes: [{points, cut}…]} (strokes: membranes
 // only, each on one section; a cut stroke ends a sheet where two membranes
@@ -37,7 +38,7 @@
   if (!W) return;
   const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [] };
   const KINDS = {
-    point: { name: "点", color: "#0969da", hint: "在几个颗粒的中心各点一下（至少 4 个，多点几个更准），程序会找出其余的同类颗粒" },
+    point: { name: "点", color: "#0969da", hint: "在 2–3 个颗粒的中心各点一下，程序会找出其余的同类颗粒给你看，你确认后才平均" },
     line: { name: "线", color: "#2da44e", hint: "沿着丝状物依次点几个点，点完按“完成这一条”" },
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
@@ -50,8 +51,8 @@
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
   };
-  // Fewest particles a 点 run needs (MIN_POINTS in src-tauri/src/sta/project.rs).
-  const MIN_POINTS = 4;
+  // A 点 run needs one click at least; two or three examples are more exact.
+  const GOOD_POINTS = 2;
   const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
 
   const box = document.createElement("div");
@@ -245,7 +246,8 @@
     const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
     const shapes = D.marks.some(usable);
     const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
-    $("sta-draw-hint").textContent = D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "";
+    const few = pointsN > 0 && pointsN < GOOD_POINTS && !D.marks.some((m) => m.kind !== "point");
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : ""].filter(Boolean).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = D.kind === "membrane" ? M.line : "";
     ml.hidden = !ml.textContent;
@@ -282,9 +284,11 @@
     const last = D.marks[D.open != null ? D.open : D.marks.length - 1];
     $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : "去掉最后点的一个点";
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
-    const ok = shapes || (pointsOnly && pointsN >= MIN_POINTS);
+    const ok = shapes || pointsOnly;
+    // Points alone find everything like them first; shapes are averaged directly.
+    $("sta-draw-run").textContent = pointsOnly && !shapes ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg;
-    $("sta-draw-run").title = ok ? "" : pointsOnly ? `再点 ${MIN_POINTS - pointsN} 个颗粒（至少 ${MIN_POINTS} 个）` : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
+    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
     draw();
   }
 
@@ -342,8 +346,10 @@
   };
   $("sta-draw-run").onclick = () => {
     const marks = plain();
+    const onlyPoints = marks.length > 0 && marks.every((m) => m.kind === "point");
     D.open = null;
     setKind(null);
+    if (onlyPoints && W.found) return W.found.findPoints(marks);
     W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks, out, size: D.size }), false);
   };
 

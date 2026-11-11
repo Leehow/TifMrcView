@@ -322,7 +322,7 @@
 #sta-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #sta-workspace[hidden], #sta-workspace [hidden] { display:none; }
 #sta-workspace .ws-img { display:block; width:100%; max-width:480px; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
-#sta-workspace.marking { width:min(360px, calc(100% - 20px)); }
+#sta-workspace.marking, #sta-workspace.reviewing { width:min(360px, calc(100% - 20px)); }
 @media (max-width:700px) { #sta-workspace.marking { top:auto; height:48%; } }
 #sta-workspace .sta-head-btns { display:flex; gap:4px; }
 #sta-workspace.folded { bottom:auto; width:min(360px, calc(100% - 20px)); overflow:hidden; }
@@ -363,3 +363,15 @@
 #sta-draw .sta-mark .warn { color:#cf222e; font-size:12px; }
 #sta-draw-membrane:empty { display:none; }
 #sta-draw .sta-mark.on { background:var(--muted); border-color:var(--accent); border-left-color:var(--mark); }
+#sta-found { margin-top:10px; padding:8px 10px; border:1px solid var(--accent); border-radius:8px; background:color-mix(in srgb, var(--accent) 5%, transparent); }
+#sta-workspace #sta-found h4 { margin:0 0 2px; font-size:14px; }
+#sta-found .sta-found-per { margin:0 0 4px; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:2px 12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+#sta-found .warn { color:#9a6700; margin:2px 0; }
+#sta-found .sta-found-slider { display:flex; align-items:center; gap:8px; margin-top:4px; }
+#sta-found .sta-found-slider input { flex:1; min-width:0; }
+#sta-found-curve { display:block; width:100%; height:44px; margin-top:2px; border:1px solid var(--line); border-radius:6px; background:var(--subtle); }
+#sta-found .sta-found-legend { margin:4px 0; }
+#sta-found-add.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+#sta-found-msg:empty { display:none; }
+#sta-found-go { font-size:13px; padding:6px 18px; }
+#sta-found-go:disabled { opacity:.5; cursor:not-allowed; }

@@ -32,6 +32,7 @@ pub mod pick;
 pub mod project;
 pub mod refine;
 pub mod review;
+pub mod review;
 pub mod search;
 pub mod search_gpu;
 pub mod shape;
