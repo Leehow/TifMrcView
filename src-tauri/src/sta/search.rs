@@ -13,9 +13,13 @@
 //! What score makes a particle is not a number to tune: `cutoff` splits the
 //! peaks of the search into two groups, high scores (particles) and low
 //! ones (everything else), where the groups are most distinct (Otsu), and
-//! gives up when they are not. (A Gumbel fit to the chance peaks was tried
-//! and failed on real data: its threshold lay above the best score.) The
-//! search itself is kept off the tomogram's X/Y borders and off gold
+//! gives up when they are not. A tomogram packed with the particle has one
+//! group only; there the peaks are held against those of the same search
+//! made with the template's phases scrambled (`scrambled`), which finds
+//! what chance alone scores in that tomogram (`beyond_chance`). (A Gumbel
+//! curve fitted to the scores, to their peaks or to their quartiles, was
+//! tried twice and failed on real data: its threshold lay above the best
+//! score a correlation can have.) The search itself is kept off the tomogram's X/Y borders and off gold
 //! markers by `allowed`, where reconstruction artefacts and gold outscore
 //! particles.
 //!
@@ -340,49 +344,61 @@ pub fn cutoff(all: &[Peak]) -> Option<f32> {
     (share >= 0.62 + 1.2 / (all.len() as f64).sqrt()).then_some(threshold.tanh())
 }
 
-/// At most this many scores of a search are sorted for `above_noise`.
-const NOISE_SAMPLE: usize = 2_000_000;
-/// At least this many peaks have to stand out of the noise for `sure` to
-/// take them without a second group to part them from.
+/// At least this many peaks have to stand out of chance for
+/// `beyond_chance` to take them without a second group to part them from.
 const FEWEST_ABOVE: usize = 20;
+/// Of the peaks taken as beyond chance, at most this share may be chance.
+const CHANCE: f64 = 0.01;
 
-/// The score a peak has to pass to stand out of what the search scores
-/// where there is nothing, or None when the search holds too little to
-/// say. A voxel's score is the best over many orientations, so where there
-/// is only noise the scores follow an extreme-value (Gumbel) curve: its
-/// location and scale are read from the quartiles of all the scores (the
-/// bulk of a tomogram is not particle centres, however many particles
-/// there are), and the score returned is the one that one voxel in the
-/// whole search is expected to pass by chance.
-pub fn above_noise(found: &Found) -> Option<f32> {
-    let all = found.score.iter().filter(|s| **s != f32::MIN).count();
-    let step = all.div_ceil(NOISE_SAMPLE).max(1);
-    let mut s: Vec<f32> = found.score.iter().copied().filter(|s| *s != f32::MIN).step_by(step).collect();
-    if s.len() < 1000 {
-        return None;
+/// The template with its phases scrambled: the same power at every
+/// frequency (so it answers to the tomogram's noise and shading as the
+/// template does), in the shape of nothing. What a search with it scores
+/// is what the template scores by chance (the phase-randomised control of
+/// template matching). `n`³, like the template.
+pub fn scrambled(template: &[f32], n: usize) -> Vec<f32> {
+    use crate::spa::fourier::{ft3, ift3};
+    let mut rng = crate::spa::Rng(0x5c7a);
+    let noise: Vec<f32> = (0..template.len()).map(|_| rng.gauss() as f32).collect();
+    let (mut re, mut im) = ft3(n, template);
+    // The phases of real noise: those of a real map again.
+    let (nr, ni) = ft3(n, &noise);
+    for i in 0..re.len() {
+        let amplitude = (re[i] * re[i] + im[i] * im[i]).sqrt();
+        let length = (nr[i] * nr[i] + ni[i] * ni[i]).sqrt().max(1e-20);
+        re[i] = amplitude * nr[i] / length;
+        im[i] = amplitude * ni[i] / length;
     }
-    s.sort_by(f32::total_cmp);
-    let q = |p: f64| s[((s.len() - 1) as f64 * p).round() as usize] as f64;
-    // Gumbel: the quartiles are 1.5725 scales apart and the median 0.3665
-    // scales above the location.
-    let scale = (q(0.75) - q(0.25)) / 1.5725;
-    if scale <= 0.0 {
-        return None;
-    }
-    Some((q(0.5) - 0.3665 * scale + scale * (all as f64).ln()) as f32)
+    ift3(n, &re, &im)
 }
 
-/// The score above which a peak is a particle, for the peaks of one or
-/// more searches (`floors`: `above_noise` of each). Where the scores fall
-/// in two groups, the split between them (`cutoff`). Where they are one
-/// group (a tomogram packed with the particle has no other places to
-/// score), the highest floor, when enough peaks pass it: they are
-/// particles all the same.
-pub fn sure(all: &[Peak], floors: &[Option<f32>]) -> Option<f32> {
-    cutoff(all).or_else(|| {
-        let floor = floors.iter().copied().collect::<Option<Vec<f32>>>()?.into_iter().reduce(f32::max)?;
-        (all.iter().filter(|p| p.score >= floor).count() >= FEWEST_ABOVE).then_some(floor)
-    })
+/// The score above which the peaks of a search are particles, when they
+/// are one group with nothing to part them from: held against `chance`,
+/// the peaks of the same search made with a scrambled template, each with
+/// the number of such peaks it stands for (the control searches a part of
+/// the tomogram only). The lowest score at which no more than `CHANCE` of
+/// the peaks above it are expected to be chance (the step-up rule of
+/// Benjamini and Hochberg, J. R. Stat. Soc. B 57, 1995), when at least
+/// `FEWEST_ABOVE` peaks pass it. None when the peaks score as chance does.
+pub fn beyond_chance(all: &[Peak], chance: &[(f32, f64)]) -> Option<f32> {
+    if chance.is_empty() {
+        return None;
+    }
+    let mut real: Vec<f32> = all.iter().map(|p| p.score).collect();
+    real.sort_by(|a, b| b.total_cmp(a));
+    let mut by_chance = chance.to_vec();
+    by_chance.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (mut next, mut expected) = (0, 0f64);
+    let mut last = None;
+    for (k, score) in real.iter().enumerate() {
+        while next < by_chance.len() && by_chance[next].0 >= *score {
+            expected += by_chance[next].1;
+            next += 1;
+        }
+        if expected <= CHANCE * (k + 1) as f64 {
+            last = Some(k);
+        }
+    }
+    last.filter(|k| k + 1 >= FEWEST_ABOVE).map(|k| real[k])
 }
 
 /// The voxels where a tomogram holds nothing: the borders a reconstruction

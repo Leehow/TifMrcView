@@ -2966,12 +2966,13 @@ impl Place {
 pub struct Found {
     /// Every peak, best first.
     pub places: Vec<Place>,
-    /// The score that parts the particles from the rest (`search::sure`):
-    /// between the two groups the scores fall into, or, when they are one
-    /// group that stands out of the noise, where the noise ends.
+    /// The score that parts the particles from the rest: between the two
+    /// groups the scores fall into (`search::cutoff`), or, when they are
+    /// one group, where they pass what chance scores
+    /// (`search::beyond_chance`).
     pub limit: Option<f32>,
-    /// The score a place has to pass to stand out of the noise of the
-    /// search (`search::above_noise`, the highest of the tomograms).
+    /// The best score chance had in the control search (`chance`), when
+    /// the scores were one group and one was made.
     #[serde(default)]
     pub noise: Option<f32>,
     /// Voxel of the cubes the places are cut at, Å.
@@ -3000,7 +3001,7 @@ fn cube_fits(dims: [usize; 3], c: [usize; 3], n: usize) -> bool {
 /// looks like `template` (a `BOX`³ cube at `voxel_a`; `diameter_a` the
 /// particle's size), best first. A trial searches more coarsely.
 pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &[f32], voxel_a: f64, diameter_a: f64, trial: bool, progress: Progress) -> Result<Found> {
-    use super::search::{above_noise, allowed, peaks, sure};
+    use super::search::{beyond_chance, cutoff, peaks};
     if sources.is_empty() {
         bail!("没有断层图");
     }
@@ -3010,17 +3011,89 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
     let mut places: Vec<Place> = vec![];
     // (look searched, search voxel Å) per source.
     let mut searched: Vec<(bool, f64)> = vec![];
-    // What a score has to pass to stand out of the noise, per source.
-    let mut floors: Vec<Option<f32>> = vec![];
     for (i, s) in sources.iter().enumerate() {
         check_cancel()?;
-        // The raw tomogram the particles are cut from, and the one searched:
-        // the look tomogram when there is one, else the raw one. The look
-        // tomogram is binned by the integer that brings its voxel nearest
-        // twice the template's (`look_search`), the raw search's voxel, and the
-        // template is resampled to that voxel for the search only.
+        let g = SearchGrid::of(s, template, voxel_a, diameter_a, trial)?;
+        voxel = g.voxel_a;
+        searched.push((g.look.is_some(), g.search_voxel_a));
+        let stage = format!("搜索 {}/{}", i + 1, sources.len());
+        let found = super::search_gpu::search(dev, &g.coarse, g.cdims, &g.small, g.small_n, g.radius, s.tilts, &turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+        // Particles do not overlap, but may touch.
+        for p in peaks(&found, 1.8 * g.radius, MOST) {
+            // Coarse voxel p holds fine voxels 2p and 2p + 1.
+            let c = match &g.look {
+                None => p.pos.map(|x| 2 * x),
+                // On the look tomogram the peak is at a voxel of the grid binned by
+                // `look_bin`; mapped onto the raw tomogram's binned voxels.
+                Some((look, look_bin)) => {
+                    let raw = to_raw(p.pos.map(|x| x as f64), *look_bin, g.bin, look);
+                    if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
+                        continue;
+                    }
+                    raw.map(|x| x.round() as usize)
+                }
+            };
+            if cube_fits(g.dims, c, BOX) {
+                places.push(Place { source: i, c, bin: g.bin, turn: p.turn, score: p.score });
+            }
+        }
+    }
+    places.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let scores: Vec<super::search::Peak> = places.iter().map(|p| super::search::Peak { pos: p.c, score: p.score, turn: p.turn }).collect();
+    let mut limit = cutoff(&scores);
+    let mut noise = None;
+    if limit.is_none() && !scores.is_empty() {
+        // One group: all particles (a tomogram packed with them) or none.
+        // What chance scores here says which.
+        let mut by_chance: Vec<(f32, f64)> = vec![];
+        for (i, s) in sources.iter().enumerate() {
+            check_cancel()?;
+            let g = SearchGrid::of(s, template, voxel_a, diameter_a, trial)?;
+            let stage = format!("搜索对照 {}/{}", i + 1, sources.len());
+            by_chance.extend(chance(dev, &g.coarse, g.cdims, &g.mask, &g.small, g.small_n, g.radius, s.tilts, &turns, &|a, b| progress(&stage, a, b))?);
+        }
+        noise = by_chance.iter().map(|c| c.0).reduce(f32::max);
+        limit = beyond_chance(&scores, &by_chance);
+    }
+    let kind = if searched.iter().all(|s| s.0) {
+        "look"
+    } else if searched.iter().all(|s| !s.0) {
+        "raw"
+    } else {
+        "mixed"
+    };
+    Ok(Found { places, limit, noise, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
+}
+
+/// What one tomogram is searched as: the grid, where a particle may lie on
+/// it, and the template at its voxel.
+struct SearchGrid {
+    /// The raw tomogram's binned size, its voxel (Å) and bin: what the
+    /// particles are cut from.
+    dims: [usize; 3],
+    voxel_a: f64,
+    bin: usize,
+    /// The look tomogram searched and its bin, when there is one.
+    look: Option<(LookSource, usize)>,
+    coarse: Vec<f32>,
+    cdims: [usize; 3],
+    search_voxel_a: f64,
+    /// The particle's radius in search voxels.
+    radius: f64,
+    mask: Vec<bool>,
+    small: Vec<f32>,
+    small_n: usize,
+}
+
+impl SearchGrid {
+    /// The raw tomogram the particles are cut from, and the one searched:
+    /// the look tomogram when there is one, else the raw one. The look
+    /// tomogram is binned by the integer that brings its voxel nearest
+    /// twice the template's (`look_search`), the raw search's voxel, and the
+    /// template is resampled to that voxel for the search only.
+    fn of(s: &Source, template: &[f32], voxel_a: f64, diameter_a: f64, trial: bool) -> Result<SearchGrid> {
+        use super::search::allowed;
         let (v, dims, got, bin) = binned(&s.path, voxel_a)?;
-        voxel = got;
         let looked = match &s.look {
             Some(l) => match pixel_of(&l.path).and_then(|px| {
                 // A trial only has to show whether particles stand out: it
@@ -3037,15 +3110,14 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
             },
             None => None,
         };
-        let (coarse, cdims, search_voxel) = match &looked {
+        let (coarse, cdims, search_voxel_a) = match &looked {
             Some((_, b)) => (b.0.clone(), b.1, b.2),
             None => {
                 let (c, d) = halve(&v, dims);
                 (c, d, 2.0 * got)
             }
         };
-        searched.push((looked.is_some(), search_voxel));
-        let radius = 0.5 * diameter_a / search_voxel;
+        let radius = 0.5 * diameter_a / search_voxel_a;
         let mask = match &looked {
             None => allowed(&coarse, cdims, radius),
             // Exclusion is decided on the raw tomogram, as without a look
@@ -3062,44 +3134,61 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
             (crate::spa::fourier::resample3(template, BOX, BOX / 2), BOX / 2)
         } else {
             let n = if 2.0 * radius + 4.0 <= (BOX / 2) as f64 { BOX / 2 } else { BOX };
-            (rescale_cube(template, BOX, got, n, search_voxel), n)
+            (rescale_cube(template, BOX, got, n, search_voxel_a), n)
         };
-        let stage = format!("搜索 {}/{}", i + 1, sources.len());
-        let found = super::search_gpu::search(dev, &coarse, cdims, &small, small_n, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
-        floors.push(above_noise(&found));
-        // Particles do not overlap, but may touch.
-        let look = looked.map(|(l, b)| (l, b.3));
-        for p in peaks(&found, 1.8 * radius, MOST) {
-            // Coarse voxel p holds fine voxels 2p and 2p + 1.
-            let c = match &look {
-                None => p.pos.map(|x| 2 * x),
-                // On the look tomogram the peak is at a voxel of the grid binned by
-                // `look_bin`; mapped onto the raw tomogram's binned voxels.
-                Some((look, look_bin)) => {
-                    let raw = to_raw(p.pos.map(|x| x as f64), *look_bin, bin, look);
-                    if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
-                        continue;
-                    }
-                    raw.map(|x| x.round() as usize)
-                }
-            };
-            if cube_fits(dims, c, BOX) {
-                places.push(Place { source: i, c, bin, turn: p.turn, score: p.score });
-            }
+        Ok(SearchGrid { dims, voxel_a: got, bin, look: looked.map(|(l, b)| (l, b.3)), coarse, cdims, search_voxel_a, radius, mask, small, small_n })
+    }
+}
+
+/// The control search takes this share of the tomogram's tiles (and never
+/// fewer than `CONTROL_FEWEST`, or all there are).
+const CONTROL_SHARE: usize = 4;
+const CONTROL_FEWEST: usize = 8;
+
+/// What chance scores in a search: the peaks of the same search with the
+/// template's phases scrambled (`search::scrambled`), over some of the
+/// tomogram's tiles spread through it, each peak with the number of peaks
+/// of the whole tomogram it stands for. For `search::beyond_chance`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn chance(
+    dev: &burn::tensor::Device,
+    v: &[f32],
+    dims: [usize; 3],
+    allowed: &[bool],
+    template: &[f32],
+    n: usize,
+    radius: f64,
+    tilts: [f64; 2],
+    turns: &[crate::spa::geom::Mat],
+    tick: &(dyn Fn(usize, usize) + Sync),
+) -> Result<Vec<(f32, f64)>> {
+    use super::search::{peaks, scrambled};
+    let t = super::search_gpu::TILE;
+    let [nx, ny, nz] = dims;
+    let tiles = [nx.div_ceil(t), ny.div_ceil(t), nz.div_ceil(t)];
+    let tile_of = |i: usize| (i / (nx * ny) / t * tiles[1] + i / nx % ny / t) * tiles[0] + i % nx / t;
+    // Allowed voxels per tile.
+    let mut held = vec![0usize; tiles[0] * tiles[1] * tiles[2]];
+    for (i, ok) in allowed.iter().enumerate() {
+        if *ok {
+            held[tile_of(i)] += 1;
         }
     }
-    places.sort_by(|a, b| b.score.total_cmp(&a.score));
-    let scores: Vec<super::search::Peak> = places.iter().map(|p| super::search::Peak { pos: p.c, score: p.score, turn: p.turn }).collect();
-    let limit = sure(&scores, &floors);
-    let noise = floors.iter().copied().collect::<Option<Vec<f32>>>().and_then(|f| f.into_iter().reduce(f32::max));
-    let kind = if searched.iter().all(|s| s.0) {
-        "look"
-    } else if searched.iter().all(|s| !s.0) {
-        "raw"
-    } else {
-        "mixed"
-    };
-    Ok(Found { places, limit, noise, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
+    let mut order: Vec<usize> = (0..held.len()).filter(|k| held[*k] > 0).collect();
+    if order.is_empty() {
+        return Ok(vec![]);
+    }
+    // Spread through the tomogram, the same every time.
+    order.sort_by_key(|k| (*k as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    let take = order.len().div_ceil(CONTROL_SHARE).max(CONTROL_FEWEST.min(order.len()));
+    let mut taken = vec![false; held.len()];
+    order[..take].iter().for_each(|k| taken[*k] = true);
+    let part: Vec<bool> = allowed.iter().enumerate().map(|(i, ok)| *ok && taken[tile_of(i)]).collect();
+    let all: usize = held.iter().sum();
+    let here: usize = order[..take].iter().map(|k| held[*k]).sum();
+    let each = all as f64 / here as f64;
+    let found = super::search_gpu::search(dev, v, dims, &scrambled(template, n), n, radius, tilts, turns, Some(&part), tick)?;
+    Ok(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (p.score, each)).collect())
 }
 
 /// The cubes at `places` (and the poses the search found them at), one
@@ -3142,7 +3231,7 @@ pub fn run_template(
     let Some(limit) = found.limit else {
         let best = found.places.first().map_or(0.0, |p| p.score);
         match found.noise {
-            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也没有高出背景的：最高 {best:.3}，高出背景要 {noise:.3}）", found.places.len()),
+            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也不比一个打乱的模板碰巧得到的分数高：最高 {best:.3}，碰巧的最高 {noise:.3}）", found.places.len()),
             None => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len()),
         }
     };

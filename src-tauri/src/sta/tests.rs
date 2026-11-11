@@ -621,47 +621,113 @@ fn threshold_splits_the_two_groups_of_peaks() {
     assert!((0.33..=0.67).contains(&t), "{t}");
 }
 
-/// A tomogram packed with the particle: every peak is one, so the scores
-/// are one group and nothing parts them, yet they stand far out of what
-/// the rest of the search scores. A search of noise alone has peaks too,
-/// and none of them stands out.
+/// Peaks that are one group are particles when chance, scored by the
+/// control search, stays below them, and are not when it scores as they do.
 #[test]
-fn peaks_that_are_all_particles_are_told_from_peaks_that_are_all_noise() {
-    use super::search::{above_noise, cutoff, sure, Found};
+fn one_group_of_peaks_is_held_against_what_chance_scores() {
+    use super::search::beyond_chance;
     let mut rng = Rng(21);
-    // What a voxel scores where there is nothing: the best of many
-    // orientations (an extreme-value curve), 64³ voxels.
-    let dims = [64usize; 3];
-    let mut noise = |rng: &mut Rng| (0.10 - 0.012 * (-rng.unit().max(1e-12).ln()).ln()) as f32;
-    let score: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| noise(&mut rng)).collect();
-    let empty = Found { score: score.clone(), turn: vec![0; score.len()], dims };
-    let floor = above_noise(&empty).expect("a floor");
-    // One voxel of 262144 is expected to pass it by chance.
-    let passing = score.iter().filter(|s| **s >= floor).count();
-    assert!(passing <= 3, "{passing} voxels of noise above {floor}");
-    // Its peaks: the best voxel of each 8³ block.
-    let mut tops: Vec<f32> = vec![];
-    for z in (0..64).step_by(8) {
-        for y in (0..64).step_by(8) {
-            for x in (0..64).step_by(8) {
-                tops.push((0..512).map(|k| score[((z + k / 64) * 64 + y + k / 8 % 8) * 64 + x + k % 8]).fold(f32::MIN, f32::max));
+    // 500 particles at 0.33 ± 0.03 and, of a quarter of the tomogram, 150
+    // chance peaks at 0.12 ± 0.02, each standing for 4.
+    let particles: Vec<f32> = (0..500).map(|_| (0.33 + 0.03 * rng.gauss()) as f32).collect();
+    let by_chance: Vec<(f32, f64)> = (0..150).map(|_| ((0.12 + 0.02 * rng.gauss()) as f32, 4.0)).collect();
+    let limit = beyond_chance(&as_peaks(&particles), &by_chance).expect("they stand out");
+    assert!(particles.iter().all(|p| *p >= limit), "limit {limit}");
+    // With the 600 chance peaks of the whole tomogram among them, those
+    // are left out again: at most one in a hundred of what is taken.
+    let mut mixed = particles.clone();
+    mixed.extend((0..600).map(|_| (0.12 + 0.02 * rng.gauss()) as f32));
+    let limit = beyond_chance(&as_peaks(&mixed), &by_chance).expect("the particles stand out");
+    let taken = mixed.iter().filter(|p| **p >= limit).count();
+    assert!((500..=520).contains(&taken), "{taken} taken above {limit}");
+    // Peaks that score as chance does are not particles, nor are a few.
+    let nothing: Vec<f32> = (0..600).map(|_| (0.12 + 0.02 * rng.gauss()) as f32).collect();
+    assert!(beyond_chance(&as_peaks(&nothing), &by_chance).is_none());
+    assert!(beyond_chance(&as_peaks(&particles[..10]), &by_chance).is_none());
+    // No control, no answer.
+    assert!(beyond_chance(&as_peaks(&particles), &[]).is_none());
+}
+
+/// A template with its phases scrambled has the template's power at every
+/// frequency and none of its shape.
+#[test]
+fn a_scrambled_template_keeps_the_power_and_loses_the_shape() {
+    use super::search::scrambled;
+    use crate::spa::fourier::ft3;
+    let template = phantom();
+    let other = scrambled(&template, N);
+    let (a, b) = (ft3(N, &template), ft3(N, &other));
+    for i in (0..a.0.len()).step_by(37) {
+        let (p, q) = ((a.0[i] * a.0[i] + a.1[i] * a.1[i]).sqrt(), (b.0[i] * b.0[i] + b.1[i] * b.1[i]).sqrt());
+        assert!((p - q).abs() <= 1e-3 * p.max(1.0), "{i}: {p} {q}");
+    }
+    let mean = |v: &[f32]| v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64;
+    let (ma, mb) = (mean(&template), mean(&other));
+    let dot: f64 = template.iter().zip(&other).map(|(x, y)| (*x as f64 - ma) * (*y as f64 - mb)).sum();
+    let power = |v: &[f32], m: f64| v.iter().map(|x| (*x as f64 - m).powi(2)).sum::<f64>();
+    let cc = dot / (power(&template, ma) * power(&other, mb)).sqrt();
+    assert!(cc.abs() < 0.1, "{cc}");
+}
+
+/// A tomogram packed with the particle: every peak of the search is one,
+/// so the scores are one group with nothing to part them from, and the
+/// control search shows that chance scores far lower. The same search of
+/// noise alone has as many peaks, and they score as chance does.
+#[test]
+fn a_tomogram_packed_with_the_particle_is_told_from_one_of_noise() {
+    use super::project::chance;
+    use super::search::{beyond_chance, peaks};
+    use crate::spa::geom::grid;
+    let n = 16;
+    let c = (n / 2) as f64;
+    // Three balls with no symmetry, 10 voxels across.
+    let template: Vec<f32> = (0..n * n * n)
+        .map(|i| {
+            let p = [(i % n) as f64 - c, (i / n % n) as f64 - c, (i / n / n) as f64 - c];
+            let ball = |q: [f64; 3], s: f64| (-(0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>() / (2.0 * s * s)).exp();
+            (ball([2.0, 0.0, 0.0], 1.5) + 0.8 * ball([-1.0, 2.5, 0.0], 1.2) + 0.6 * ball([0.0, -1.0, -2.5], 1.2)) as f32
+        })
+        .collect();
+    let dims = [60usize, 60, 36];
+    let turns = grid(60.0);
+    let mut rng = Rng(8);
+    let sd = (template.iter().map(|x| (x * x) as f64).sum::<f64>() / template.len() as f64).sqrt();
+    let noise: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| (1.5 * sd * rng.gauss()) as f32).collect();
+    // 4 × 4 × 2 copies, 12 voxels apart: touching.
+    let mut packed = noise.clone();
+    for k in 0..32 {
+        let at = [12 + 12 * (k % 4), 12 + 12 * (k / 4 % 4), 12 + 12 * (k / 16)];
+        let copy = rotate(&template, n, &turns[rng.below(turns.len())]);
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    packed[((at[2] + z - n / 2) * dims[1] + at[1] + y - n / 2) * dims[0] + at[0] + x - n / 2] += copy[(z * n + y) * n + x];
+                }
             }
         }
     }
-    assert!(sure(&as_peaks(&tops), &[Some(floor)]).is_none());
-    // Packed: a particle in every block, scoring 0.33 ± 0.03.
-    let particles: Vec<f32> = (0..512).map(|_| (0.33 + 0.03 * rng.gauss()) as f32).collect();
-    let mut packed = score.clone();
-    for (k, p) in particles.iter().enumerate() {
-        packed[((k / 64 * 8 + 4) * 64 + k / 8 % 8 * 8 + 4) * 64 + k % 8 * 8 + 4] = *p;
+    let dev = burn::tensor::Device::flex();
+    let radius = 5.0;
+    // Centres where a whole particle fits.
+    let allowed: Vec<bool> = (0..dims[0] * dims[1] * dims[2])
+        .map(|i| {
+            let p = [i % dims[0], i / dims[0] % dims[1], i / dims[0] / dims[1]];
+            (0..3).all(|a| p[a] >= 6 && p[a] + 6 < dims[a])
+        })
+        .collect();
+    let mut limits = vec![];
+    for v in [&packed, &noise] {
+        let found = super::search_gpu::search(&dev, v, dims, &template, n, radius, [-90.0, 90.0], &turns, Some(&allowed), &|_, _| {}).unwrap();
+        let real = peaks(&found, 1.8 * radius, 3000);
+        let by_chance = chance(&dev, v, dims, &allowed, &template, n, radius, [-90.0, 90.0], &turns, &|_, _| {}).unwrap();
+        assert!(!by_chance.is_empty() && by_chance.iter().all(|c| c.1 == 1.0), "one tile: every peak stands for itself");
+        let top = by_chance.iter().map(|c| c.0).fold(f32::MIN, f32::max);
+        eprintln!("{} peaks, best {:.3}; chance: {} peaks, best {top:.3}", real.len(), real[0].score, by_chance.len());
+        limits.push(beyond_chance(&real, &by_chance).map(|l| (l, real.iter().filter(|p| p.score >= l).count())));
     }
-    let packed = Found { score: packed, turn: vec![0; score.len()], dims };
-    let floor = above_noise(&packed).expect("a floor");
-    assert!(cutoff(&as_peaks(&particles)).is_none());
-    let limit = sure(&as_peaks(&particles), &[Some(floor)]).expect("they stand out");
-    assert!(particles.iter().filter(|p| **p >= limit).count() >= 500, "limit {limit}");
-    // A search that has no floor says nothing.
-    assert!(sure(&as_peaks(&particles), &[Some(floor), None]).is_none());
+    let (limit, taken) = limits[0].expect("the packed particles stand out of chance");
+    assert!((28..=36).contains(&taken), "{taken} taken above {limit}");
+    assert!(limits[1].is_none(), "noise taken for particles: {:?}", limits[1]);
 }
 
 #[test]
