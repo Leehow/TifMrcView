@@ -648,11 +648,22 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.diameter_a = Some(size);
     report.particles = cuts.len();
     report.voxel_a = voxel_a;
-    let shells = resolution(&out.fsc);
+    // What is reported: the agreement of the halves inside the particle's
+    // sphere, less what the sphere itself adds to it (the same halves with
+    // their phases scrambled beyond where they agree well still agree a
+    // little under one mask).
+    let radius = (0.5 * size / voxel_a + 2.0).min(n as f64 / 2.0 - 3.0) + 2.0;
+    let masked = |v: &[f32]| {
+        let mut v = v.to_vec();
+        crate::spa::volume::mask_sphere(&mut v, n, radius, 6.0);
+        v
+    };
+    let fsc = crate::spa::post::corrected_fsc(&out.halves[0], &out.halves[1], &masked, n);
+    let shells = resolution(&fsc);
     report.resolution_a = (shells.limit > 0.0).then(|| n as f64 * voxel_a / shells.limit);
     report.signal_a = (shells.dip && shells.signal > 0.0).then(|| n as f64 * voxel_a / shells.signal);
     report.ctf_limited = shells.dip;
-    report.fsc = out.fsc.clone();
+    report.fsc = fsc;
     report.map = Some(file("average.mrc"));
     report.halves = Some([file("half1.mrc"), file("half2.mrc")]);
     report.table = Some(file("particles.csv"));
