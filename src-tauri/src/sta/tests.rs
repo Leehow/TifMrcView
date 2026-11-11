@@ -1057,11 +1057,24 @@ fn clicks_near_particles_make_a_card_of_the_particle() {
     let alike4 = same_kind(CardCube::of(&four, &cube4), CardCube { cube: &truth, voxel_a: 17.5, radius_a: 0.8 * four.diameter_a });
     eprintln!("four clicks: {alike4:.3}");
     assert!(four.members == 4 && alike4 >= SAME, "{} {alike4}", four.members);
+    // Two clicks are examples: the card is the class of blobs they fell into.
+    match card_from_points(&sources, &points[..2], &dir.join("two").to_string_lossy(), &|_, _, _| {}, &|_| {}) {
+        Ok(two) => {
+            let (cube2, _) = read_card(&two.path).unwrap();
+            let alike2 = same_kind(CardCube::of(&two, &cube2), CardCube { cube: &truth, voxel_a: 17.5, radius_a: 0.8 * two.diameter_a });
+            eprintln!("two clicks: {} members, {alike2:.3}", two.members);
+            assert!(two.members >= 10 && alike2 >= SAME, "{} {alike2}", two.members);
+        }
+        // Eighteen copies can split into classes too small for a card: then the message asks for more clicks.
+        Err(e) => {
+            eprintln!("two clicks: {e:#}");
+            assert!(format!("{e:#}").contains("多点几个"), "{e:#}");
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Clicks where nothing is give the message that says so; too few clicks are
-/// refused before anything is read.
+/// Clicks where nothing is give the message that says so, few or many.
 #[test]
 fn clicks_on_empty_places_or_too_few_are_refused() {
     use super::project::{card_from_points, MIN_POINTS};
@@ -1072,7 +1085,7 @@ fn clicks_on_empty_places_or_too_few_are_refused() {
     let e = format!("{:#}", card_from_points(&sources, &empty, &out, &|_, _, _| {}, &|_| {}).unwrap_err());
     assert!(e.contains("没有找到颗粒"), "{e}");
     let few = format!("{:#}", card_from_points(&sources, &empty[..MIN_POINTS - 1], "/nonexistent/marked", &|_, _, _| {}, &|_| {}).unwrap_err());
-    assert!(few.contains("至少要点"), "{few}");
+    assert!(few.contains("没有找到颗粒"), "{few}");
     assert!(!std::path::Path::new(&out).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }

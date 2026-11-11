@@ -1134,7 +1134,6 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
 /// `cards`, with the classification's global searches on `dev` when one is
 /// given (the same scores as on the CPU, `cc_gpu`).
 pub fn cards_on(dev: Option<&burn::tensor::Device>, sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
-    use super::search::allowed;
     if sources.is_empty() {
         bail!("没有断层图");
     }
@@ -1147,29 +1146,7 @@ pub fn cards_on(dev: Option<&burn::tensor::Device>, sources: &[Source], out_dir:
     let mut found: Vec<(Card, Vec<f32>)> = vec![];
     for kind in sizes {
         let size = kind.diameter_a;
-        // Cubes at the working voxel size, one tomogram in memory at a time.
-        let mut cuts: Vec<Cut> = vec![];
-        let mut voxel_a = size / SPAN;
-        for (i, s) in sources.iter().enumerate() {
-            progress(&format!("裁出颗粒 {size} Å"), i, sources.len());
-            let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
-            voxel_a = voxel;
-            let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
-            let (median, sd) = super::pick::robust(&v);
-            let ok = allowed(&v, dims, 0.5 * size / voxel);
-            for b in found {
-                let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
-                if c.iter().zip(dims).any(|(c, d)| *c >= d) || !ok[(c[2] * dims[1] + c[1]) * dims[0] + c[0]] {
-                    continue;
-                }
-                if let Some(cube) = cube(&v, dims, c) {
-                    let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                    let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
-                    cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
-                }
-            }
-        }
-        progress(&format!("裁出颗粒 {size} Å"), sources.len(), sources.len());
+        let (mut cuts, voxel_a) = kind_cuts(sources, size, progress)?;
         without_gold(&mut cuts, size, voxel_a);
         cuts.sort_by(|a, b| b.score.total_cmp(&a.score));
         cuts.truncate(FIRST);
@@ -1199,11 +1176,80 @@ pub fn cards_on(dev: Option<&burn::tensor::Device>, sources: &[Source], out_dir:
     Ok(out)
 }
 
-/// Fewest particles `card_from_points` works from. `classes` (the routine
-/// the automatic cards align with) refuses fewer than 4 cubes
+/// The blobs of ladder size `size` (Å) in every source, as cubes at the
+/// working voxel size (returned), one tomogram in memory at a time.
+fn kind_cuts(sources: &[Source], size: f64, progress: Progress) -> Result<(Vec<Cut>, f64)> {
+    use super::search::allowed;
+    let mut cuts: Vec<Cut> = vec![];
+    let mut voxel_a = size / SPAN;
+    for (i, s) in sources.iter().enumerate() {
+        progress(&format!("裁出颗粒 {size} Å"), i, sources.len());
+        let (v, dims, voxel, bin) = binned(&s.path, size / SPAN)?;
+        voxel_a = voxel;
+        let found = blobs(&v, dims, &[size / voxel], true, LOOSE_Z)?;
+        let (median, sd) = super::pick::robust(&v);
+        let ok = allowed(&v, dims, 0.5 * size / voxel);
+        for b in found {
+            let c = [b.pos[0].round() as usize, b.pos[1].round() as usize, b.pos[2].round() as usize];
+            if c.iter().zip(dims).any(|(c, d)| *c >= d) || !ok[(c[2] * dims[1] + c[1]) * dims[0] + c[0]] {
+                continue;
+            }
+            if let Some(cube) = cube(&v, dims, c) {
+                let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
+                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
+            }
+        }
+    }
+    progress(&format!("裁出颗粒 {size} Å"), sources.len(), sources.len());
+    Ok((cuts, voxel_a))
+}
+
+/// The card for a few clicks (fewer than `MIN_POINTS`): too few cubes to
+/// average by themselves, but enough to say which kind is meant. The blobs
+/// of the clicked size in all the tomograms are sorted into classes as
+/// `cards` does, and the class most of the clicked particles fell into is
+/// the card: an average of many particles, chosen by the user's examples.
+/// `place`: the clicks (source, raw voxels) after the snap to their blobs.
+#[allow(clippy::too_many_arguments)]
+fn card_of_examples(sources: &[Source], place: &[(usize, [f64; 3])], size: f64, measured_a: f64, progress: Progress, live: Live) -> Result<(Card, Vec<f32>)> {
+    let (mut cuts, voxel_a) = kind_cuts(sources, size, progress)?;
+    without_gold(&mut cuts, size, voxel_a);
+    // A blob is a clicked one when a click lies within half a particle of it.
+    let clicked = |c: &Cut| {
+        let reach = 0.5 * size / (voxel_a / c.bin as f64);
+        place.iter().any(|(s, p)| *s == c.source && (0..3).map(|k| (p[k] - c.at[k]).powi(2)).sum::<f64>().sqrt() <= reach)
+    };
+    // The clicked ones stay whatever their score.
+    cuts.sort_by(|a, b| clicked(b).cmp(&clicked(a)).then(b.score.total_cmp(&a.score)));
+    cuts.truncate(FIRST);
+    let marked: Vec<bool> = cuts.iter().map(clicked).collect();
+    if !marked.iter().any(|m| *m) {
+        bail!("点的位置上没有找到颗粒，请点在颗粒中心，或再多点几个");
+    }
+    if cuts.len() < CARD_MEMBERS {
+        bail!("这种大小的东西在断层图里只找到 {} 个，太少了；请多点几个（至少 {MIN_POINTS} 个）", cuts.len());
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 0.8 * size / voxel_a };
+    let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
+    let classes = coarse_classes(None, &set, sources, 3, &kind_progress, live)?;
+    let hits = |c: &Class| c.members.iter().filter(|i| marked[**i]).count();
+    let class = classes.iter().max_by_key(|c| (hits(c), c.members.len())).context("没有对齐出平均")?;
+    if hits(class) == 0 || class.members.len() < CARD_MEMBERS {
+        bail!("和你点的同类的只找到 {} 个，太少了；请多点几个（至少 {MIN_POINTS} 个）", class.members.len());
+    }
+    Ok(class_card(&set, class, size, measured_a, voxel_a))
+}
+
+/// Fewest particles `card_from_points` averages by themselves. `classes`
+/// (the routine the automatic cards align with) refuses fewer than 4 cubes
 /// (`Set::check`), and 4 is also about the least for which the average
 /// of cubes of unknown orientation is more than one noisy cube; more clicks
-/// give a better card (10 or more is better).
+/// give a better card (10 or more is better). Fewer clicks (2 or 3 are
+/// asked for, 1 is taken) are examples of a kind instead: `card_of_examples`.
 pub const MIN_POINTS: usize = 4;
 
 /// A card made from particles the user clicked on (tool "点"): the clicks are
@@ -1230,8 +1276,8 @@ pub fn card_from_points(sources: &[Source], points: &[(usize, [f64; 3])], out_di
     if sources.is_empty() {
         bail!("没有断层图");
     }
-    if points.len() < MIN_POINTS {
-        bail!("至少要点 {MIN_POINTS} 个颗粒，现在只有 {} 个", points.len());
+    if points.is_empty() {
+        bail!("请先在颗粒上点 2 到 3 个作例子");
     }
     if let Some((s, _)) = points.iter().find(|(s, _)| *s >= sources.len()) {
         bail!("点所在的断层图（第 {} 张）不在要平均的断层图里", s + 1);
@@ -1270,6 +1316,18 @@ pub fn card_from_points(sources: &[Source], points: &[(usize, [f64; 3])], out_di
     let ladder = votes[votes.len() / 2];
     let size = LADDER[ladder];
     let measured_a = profiles[ladder].diameter().unwrap_or(size);
+    let write = |mut card: Card, average: Vec<f32>| -> Result<Card> {
+        std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
+        card.path = Path::new(out_dir).join("card.mrc").to_string_lossy().into_owned();
+        output::write_mrc(&card.path, &average, [BOX; 3], card.voxel_a, false)?;
+        std::fs::write(Path::new(out_dir).join("card.json"), serde_json::to_string_pretty(&card)?)?;
+        Ok(card)
+    };
+    if points.len() < MIN_POINTS {
+        let snapped: Vec<(usize, [f64; 3])> = points.iter().zip(&place).map(|(p, at)| (p.0, *at)).collect();
+        let (card, average) = card_of_examples(sources, &snapped, size, measured_a, progress, live)?;
+        return write(card, average);
+    }
 
     // Cubes at the working voxel size, one tomogram in memory at a time.
     let mut particles: Vec<Vec<f32>> = vec![];
@@ -1296,12 +1354,8 @@ pub fn card_from_points(sources: &[Source], points: &[(usize, [f64; 3])], out_di
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 0.8 * size / voxel_a };
     let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
     let class = coarse_classes(None, &set, sources, 1, &kind_progress, live)?.into_iter().next().context("没有对齐出平均")?;
-    let (mut card, average) = class_card(&set, &class, size, measured_a, voxel_a);
-    std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
-    card.path = Path::new(out_dir).join("card.mrc").to_string_lossy().into_owned();
-    output::write_mrc(&card.path, &average, [BOX; 3], card.voxel_a, false)?;
-    std::fs::write(Path::new(out_dir).join("card.json"), serde_json::to_string_pretty(&card)?)?;
-    Ok(card)
+    let (card, average) = class_card(&set, &class, size, measured_a, voxel_a);
+    write(card, average)
 }
 
 /// Reads a card (or any `BOX`³ template MRC): the cube, z-major, and its
