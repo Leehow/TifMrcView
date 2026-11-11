@@ -17,7 +17,7 @@ driver is enough):
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
 | `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder and a clear `look` tomogram (sta) |
-| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N] [--out DIR]` | Subtomogram averaging: class-average "cards" of the particle-like blobs, each tried as a template, then the average of everything that looks like the card that gives the best average (or the one you pick) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
+| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, each tried as a template, then the average of everything that looks like the card that gives the best average (or the one you pick) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
 | `tmv ctf FOLDER` | CTF of every micrograph (movies motion corrected first) | `FOLDER/tifmrcview-spa/ctf.tsv` |

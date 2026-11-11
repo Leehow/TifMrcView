@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::pick::{blobs, Blob};
-use super::refine::{align, classes, first_model, Live, Progress, Set};
+use super::refine::{align, classes, first_model, Class, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
 use crate::spa::geom::{angles, axis_angle, grid, mul};
 use crate::spa::fourier::resample3;
@@ -496,6 +496,28 @@ fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f3
     Some(out)
 }
 
+/// One tomogram searched for blobs of the ladder sizes at `SEARCH_VOXEL`:
+/// the blobs (diameters reported on the ladder exactly, whatever the voxel
+/// size) and the binned tomogram they were found in.
+struct Searched {
+    blobs: Vec<Blob>,
+    v: Vec<f32>,
+    dims: [usize; 3],
+    voxel: f64,
+    bin: usize,
+}
+
+fn search_one(path: &str) -> Result<Searched> {
+    let (v, dims, voxel, bin) = binned(path, SEARCH_VOXEL)?;
+    let sizes: Vec<f64> = LADDER.iter().map(|d| d / voxel).collect();
+    let mut found = blobs(&v, dims, &sizes, true, MIN_Z)?;
+    for b in &mut found {
+        let k = sizes.iter().position(|d| (*d as f32 - b.diameter).abs() < 1e-3).unwrap_or(0);
+        b.diameter = (LADDER[k] / SEARCH_VOXEL) as f32;
+    }
+    Ok(Searched { blobs: found, v, dims, voxel, bin })
+}
+
 /// Step 1 of `run`: every tomogram searched for blobs of the ladder sizes
 /// at `SEARCH_VOXEL`, and the sizes found.
 fn find_kinds(sources: &[Source], progress: Progress) -> Result<Vec<Kind>> {
@@ -503,14 +525,7 @@ fn find_kinds(sources: &[Source], progress: Progress) -> Result<Vec<Kind>> {
     let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
     for (i, s) in sources.iter().enumerate() {
         progress("找颗粒", i, sources.len());
-        let (v, dims, voxel, _) = binned(&s.path, SEARCH_VOXEL)?;
-        let sizes: Vec<f64> = LADDER.iter().map(|d| d / voxel).collect();
-        let mut found = blobs(&v, dims, &sizes, true, MIN_Z)?;
-        // Report sizes on the ladder exactly, whatever the voxel size.
-        for b in &mut found {
-            let k = sizes.iter().position(|d| (*d as f32 - b.diameter).abs() < 1e-3).unwrap_or(0);
-            b.diameter = (LADDER[k] / SEARCH_VOXEL) as f32;
-        }
+        let Searched { blobs: found, v, dims, voxel, .. } = search_one(&s.path)?;
         // Strongest first: the first of each size give its profile.
         profiles.par_iter_mut().enumerate().for_each(|(k, profile)| {
             let size = (LADDER[k] / SEARCH_VOXEL) as f32;
@@ -1048,6 +1063,52 @@ const CARD_SIZE: f64 = 120.0;
 /// Classes with fewer members make no card.
 const CARD_MEMBERS: usize = 10;
 
+/// Sorts the cubes of `set` (cut at `BOX`³) into `k` classes, reference-free,
+/// at half sampling (the classification of `cards`).
+fn coarse_classes(set: &Set, sources: &[Source], k: usize, progress: Progress, live: Live) -> Result<Vec<Class>> {
+    let half = BOX / 2;
+    let small: Vec<Vec<f32>> = set.particles.par_iter().map(|p| resample3(p, BOX, half)).collect();
+    let small_wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(half, s.tilts[0], s.tilts[1])).collect();
+    let coarse = Set { n: half, particles: &small, wedges: &small_wedges, wedge_of: set.wedge_of, radius: set.radius / 2.0 };
+    classes(&coarse, k, 1, progress, live)
+}
+
+/// The card (and its `BOX`³ average, particle centred) of one class found by
+/// `coarse_classes` of `set`; `size` is the ladder size the cubes were cut for.
+fn class_card(set: &Set, class: &Class, size: f64, measured_a: f64, voxel_a: f64) -> (Card, Vec<f32>) {
+    // The poses at full sampling: shifts double.
+    let mut poses = vec![Pose { r: super::IDENTITY, t: [0.0; 3], score: 0.0 }; set.particles.len()];
+    let mut member = vec![false; set.particles.len()];
+    for (i, p) in class.members.iter().zip(&class.poses) {
+        poses[*i] = Pose { t: p.t.map(|v| 2.0 * v), ..*p };
+        member[*i] = true;
+    }
+    // Only the written average is moved to put the particle at the
+    // centre; the member poses are not stored or used afterwards.
+    let average = set.average(&poses, |i| member[i]).finish();
+    let ball = 0.6 * size / voxel_a;
+    let average = centred(average, BOX, ball);
+    let (compact, elongation, blobs, offset) = shape(&average, BOX, ball);
+    let likely = is_likely(compact, elongation, blobs, offset);
+    (
+        Card {
+            id: 0,
+            diameter_a: size,
+            measured_a,
+            voxel_a,
+            members: class.members.len(),
+            share: class.members.len() as f64 / set.particles.len() as f64,
+            path: String::new(),
+            compact,
+            elongation,
+            blobs,
+            offset,
+            likely,
+        },
+        average,
+    )
+}
+
 /// Class averages of the strongest blobs of each kind found, written to
 /// `<out_dir>/card_<id>.mrc` and listed in `<out_dir>/cards.json`. The user
 /// chooses the template for `run_template` from them. The classes are found
@@ -1106,47 +1167,12 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
         let radius = 0.8 * size / voxel_a;
         let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-        // Classification at half sampling.
-        let half = BOX / 2;
-        let small: Vec<Vec<f32>> = particles.par_iter().map(|p| resample3(p, BOX, half)).collect();
-        let small_wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(half, s.tilts[0], s.tilts[1])).collect();
-        let coarse = Set { n: half, particles: &small, wedges: &small_wedges, wedge_of: &wedge_of, radius: radius / 2.0 };
         let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
-        for class in classes(&coarse, 3, 1, &kind_progress, live)? {
+        for class in coarse_classes(&set, sources, 3, &kind_progress, live)? {
             if class.members.len() < CARD_MEMBERS {
                 continue;
             }
-            // The poses at full sampling: shifts double.
-            let mut poses = vec![Pose { r: super::IDENTITY, t: [0.0; 3], score: 0.0 }; cuts.len()];
-            let mut member = vec![false; cuts.len()];
-            for (i, p) in class.members.iter().zip(&class.poses) {
-                poses[*i] = Pose { t: p.t.map(|v| 2.0 * v), ..*p };
-                member[*i] = true;
-            }
-            // Only the written average is moved to put the particle at the
-            // centre; the member poses are not stored or used afterwards.
-            let average = set.average(&poses, |i| member[i]).finish();
-            let ball = 0.6 * size / voxel_a;
-            let average = centred(average, BOX, ball);
-            let (compact, elongation, blobs, offset) = shape(&average, BOX, ball);
-            let likely = is_likely(compact, elongation, blobs, offset);
-            found.push((
-                Card {
-                    id: 0,
-                    diameter_a: size,
-                    measured_a: kind.measured_a,
-                    voxel_a,
-                    members: class.members.len(),
-                    share: class.members.len() as f64 / cuts.len() as f64,
-                    path: String::new(),
-                    compact,
-                    elongation,
-                    blobs,
-                    offset,
-                    likely,
-                },
-                average,
-            ));
+            found.push(class_card(&set, &class, size, kind.measured_a, voxel_a));
         }
     }
     found.sort_by(|a, b| rank(&b.0).total_cmp(&rank(&a.0)));
@@ -1158,6 +1184,111 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
     let out: Vec<Card> = found.into_iter().map(|f| f.0).collect();
     std::fs::write(file("cards.json"), serde_json::to_string_pretty(&out)?)?;
     Ok(out)
+}
+
+/// Fewest particles `card_from_points` works from. `classes` (the routine
+/// the automatic cards align with) refuses fewer than 4 cubes
+/// (`Set::check`), and 4 is also about the least for which the average
+/// of cubes of unknown orientation is more than one noisy cube; more clicks
+/// give a better card (10 or more is better).
+pub const MIN_POINTS: usize = 4;
+
+/// A card made from particles the user clicked on (tool "点"): the clicks are
+/// positions in voxels of the raw tomogram `Source::path` (`Drawn::pos`'s
+/// frame), `(source, (x, y, z))`; their orientations are unknown.
+///
+/// * Size. The blob finder of `cards` runs on the tomograms with clicks; each
+///   click takes the nearest blob within one blob diameter (of its own size).
+///   The particle's size is the median ladder size of those blobs, and
+///   `measured_a` is measured on their density as `kinds` does. Clicks with no
+///   blob nearby do not vote.
+/// * Snap. A click with a blob nearby moves to that blob's centre (users click
+///   roughly); the others stay where they were clicked.
+/// * Cubes are cut as `cards` cuts them for that size (binned so the size
+///   spans `SPAN` voxels of the `BOX` cube, zero mean, unit variance), and
+///   aligned reference-free into ONE class (`coarse_classes`, `class_card`),
+///   which is centred and measured as an automatic card is.
+///
+/// Written as `<out_dir>/card.mrc` and `<out_dir>/card.json`, apart from
+/// the automatic `cards/`. The card's id is 0 and means nothing outside
+/// `out_dir`: a marked card never goes into a list of automatic cards, so
+/// ids cannot collide; `run_template` takes the card by its cube and size.
+pub fn card_from_points(sources: &[Source], points: &[(usize, [f64; 3])], out_dir: &str, progress: Progress, live: Live) -> Result<Card> {
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    if points.len() < MIN_POINTS {
+        bail!("至少要点 {MIN_POINTS} 个颗粒，现在只有 {} 个", points.len());
+    }
+    if let Some((s, _)) = points.iter().find(|(s, _)| *s >= sources.len()) {
+        bail!("点所在的断层图（第 {} 张）不在要平均的断层图里", s + 1);
+    }
+    // Where each click goes (raw voxels), and the blob it voted with.
+    let mut place: Vec<[f64; 3]> = points.iter().map(|p| p.1).collect();
+    let mut votes: Vec<usize> = vec![];
+    let mut profiles: Vec<Profile> = LADDER.iter().map(|d| Profile::new(*d)).collect();
+    let tomograms: Vec<usize> = (0..sources.len()).filter(|i| points.iter().any(|p| p.0 == *i)).collect();
+    for (n, &i) in tomograms.iter().enumerate() {
+        progress("找颗粒", n, tomograms.len());
+        let Searched { blobs: found, v, dims, voxel, bin } = search_one(&sources[i].path)?;
+        let half = (bin as f64 - 1.0) / 2.0;
+        for (k, (_, raw)) in points.iter().enumerate().filter(|(_, p)| p.0 == i) {
+            // The click in voxels of the search volume.
+            let at = raw.map(|x| (x - half) / bin as f64);
+            let near = found
+                .iter()
+                .map(|b| ((0..3).map(|a| (b.pos[a] as f64 - at[a]).powi(2)).sum::<f64>().sqrt(), b))
+                .filter(|(d, b)| *d <= b.diameter as f64)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, b)) = near {
+                // `search_one` reports diameters on the ladder exactly.
+                let ladder = LADDER.iter().position(|d| (d / SEARCH_VOXEL - b.diameter as f64).abs() < 1e-3).unwrap_or(0);
+                votes.push(ladder);
+                profiles[ladder].add(&v, dims, voxel, b.pos);
+                place[k] = b.pos.map(|x| x.round() as f64 * bin as f64 + half);
+            }
+        }
+    }
+    progress("找颗粒", tomograms.len(), tomograms.len());
+    if votes.is_empty() {
+        bail!("点的位置上没有找到颗粒，请点在颗粒中心");
+    }
+    votes.sort_unstable();
+    let ladder = votes[votes.len() / 2];
+    let size = LADDER[ladder];
+    let measured_a = profiles[ladder].diameter().unwrap_or(size);
+
+    // Cubes at the working voxel size, one tomogram in memory at a time.
+    let mut particles: Vec<Vec<f32>> = vec![];
+    let mut wedge_of: Vec<usize> = vec![];
+    let mut voxel_a = size / SPAN;
+    for (n, &i) in tomograms.iter().enumerate() {
+        progress(&format!("裁出颗粒 {size} Å"), n, tomograms.len());
+        let (v, dims, voxel, bin) = binned(&sources[i].path, size / SPAN)?;
+        voxel_a = voxel;
+        for (k, _) in points.iter().enumerate().filter(|(_, p)| p.0 == i) {
+            // Source voxel p lies in working voxel p / bin (as `run_drawn`).
+            let c = place[k].map(|p| (p / bin as f64).floor().max(0.0) as usize);
+            if let Some(cube) = cube(&v, dims, c) {
+                particles.push(cube);
+                wedge_of.push(i);
+            }
+        }
+    }
+    progress(&format!("裁出颗粒 {size} Å"), tomograms.len(), tomograms.len());
+    if particles.len() < MIN_POINTS {
+        bail!("点的位置里能用的只有 {} 个（太靠近断层图边缘的不能用），至少要 {MIN_POINTS} 个", particles.len());
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 0.8 * size / voxel_a };
+    let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
+    let class = coarse_classes(&set, sources, 1, &kind_progress, live)?.into_iter().next().context("没有对齐出平均")?;
+    let (mut card, average) = class_card(&set, &class, size, measured_a, voxel_a);
+    std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
+    card.path = Path::new(out_dir).join("card.mrc").to_string_lossy().into_owned();
+    output::write_mrc(&card.path, &average, [BOX; 3], card.voxel_a, false)?;
+    std::fs::write(Path::new(out_dir).join("card.json"), serde_json::to_string_pretty(&card)?)?;
+    Ok(card)
 }
 
 /// Reads a card (or any `BOX`³ template MRC): the cube, z-major, and its

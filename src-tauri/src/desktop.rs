@@ -1969,7 +1969,11 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
     blocking(move || {
         let _job = job;
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
-        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), out.as_deref(), &emit, &base64)
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), out.as_deref(), &device, &emit, &base64)
     }).await
 }
 

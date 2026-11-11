@@ -94,6 +94,7 @@
     trialsReused: () => "沿用上次的试跑结果",
     trialsMade: () => "试跑完成，正在选择",
     compareFailed: () => "卡片无法互相比较，各算一种",
+    marked: (n) => `用你点的 ${n.points} 个颗粒做了模板，大小 ${n.sizeA} Å`,
     using: (n) => `使用第 ${n.card + 1} 张卡片${n.other?.length ? `；还有 ${n.other.length} 种也不错` : ""}`,
   };
 

@@ -1009,3 +1009,70 @@ fn cards_of_the_same_particle_correlate() {
     assert!(vs_rod < SAME - 0.1 && vs_ball < SAME - 0.1, "{vs_rod} {vs_ball}");
     assert!(vs_other < same - 0.1, "{vs_other} {same}");
 }
+
+/// The made-up tomogram of `planted_tomogram` written to its own folder: the
+/// folder, the sources, the centres (voxels) of the copies and the copy's body.
+fn marked_tomogram(tag: &str, per_side: usize, noise: f64) -> (std::path::PathBuf, Vec<super::project::Source>, Vec<[usize; 3]>, Vec<f32>) {
+    let (dims, v, places, body) = planted_tomogram(per_side, noise);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    (dir, vec![super::project::Source { path: tomo, tilts: [-90.0, 90.0], look: None, series: None }], places, body)
+}
+
+/// Clicks a voxel or two beside the middle of some copies give a card of the
+/// copy: its size on the ladder is the one the automatic cards of this
+/// tomogram have (210 Å, see `cards_hold_the_particles_of_a_kind`), the
+/// clicks snap to the blobs, and the average is the copy (compared over every
+/// orientation, as cards of the same particle are) at or above `SAME`.
+#[test]
+fn clicks_near_particles_make_a_card_of_the_particle() {
+    use super::project::{card_from_points, read_card, same_kind, CardCube, SAME};
+    let (dir, sources, places, body) = marked_tomogram("marked", 3, 3.0);
+    let mut rng = Rng(3);
+    // Nine of the 18 copies, each clicked up to 2 voxels off in every direction.
+    let points: Vec<(usize, [f64; 3])> =
+        places.iter().step_by(2).map(|o| (0, std::array::from_fn(|k| o[k] as f64 + 4.0 * rng.unit() - 2.0))).collect();
+    let out = dir.join("marked").to_string_lossy().into_owned();
+    let started = std::time::Instant::now();
+    let card = card_from_points(&sources, &points, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("{:?} in {:?}", card, started.elapsed());
+    assert_eq!(card.diameter_a, 210.0);
+    assert!(card.measured_a > 120.0 && card.measured_a < 320.0, "{}", card.measured_a);
+    assert!(card.members >= 6 && card.members <= points.len(), "{}", card.members);
+    assert_eq!(card.path, format!("{out}/card.mrc"));
+    let (cube, voxel) = read_card(&card.path).unwrap();
+    assert!((voxel - 17.5).abs() < 0.01, "{voxel}");
+    assert!(std::path::Path::new(&out).join("card.json").is_file());
+    // The copy is bright in `body` and dark in the tomogram.
+    let truth: Vec<f32> = body.iter().map(|v| -v).collect();
+    let alike = same_kind(CardCube::of(&card, &cube), CardCube { cube: &truth, voxel_a: 17.5, radius_a: 0.8 * card.diameter_a });
+    eprintln!("card against the copy: {alike:.3}");
+    assert!(alike >= SAME, "{alike}");
+    // The fewest clicks allowed still give a card, only a rougher one.
+    let four = card_from_points(&sources, &points[..4], &dir.join("four").to_string_lossy(), &|_, _, _| {}, &|_| {}).unwrap();
+    let (cube4, _) = read_card(&four.path).unwrap();
+    let alike4 = same_kind(CardCube::of(&four, &cube4), CardCube { cube: &truth, voxel_a: 17.5, radius_a: 0.8 * four.diameter_a });
+    eprintln!("four clicks: {alike4:.3}");
+    assert!(four.members == 4 && alike4 >= SAME, "{} {alike4}", four.members);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Clicks where nothing is give the message that says so; too few clicks are
+/// refused before anything is read.
+#[test]
+fn clicks_on_empty_places_or_too_few_are_refused() {
+    use super::project::{card_from_points, MIN_POINTS};
+    let (dir, sources, _, _) = marked_tomogram("empty", 3, 3.0);
+    let out = dir.join("marked").to_string_lossy().into_owned();
+    // Between the two layers of copies (z 24..29 and 70..75) and clear of every column.
+    let empty: Vec<(usize, [f64; 3])> = (0..6).map(|i| (0, [41.0 + 38.0 * (i % 3) as f64, 41.0 + 38.0 * (i / 3) as f64, 48.0])).collect();
+    let e = format!("{:#}", card_from_points(&sources, &empty, &out, &|_, _, _| {}, &|_| {}).unwrap_err());
+    assert!(e.contains("没有找到颗粒"), "{e}");
+    let few = format!("{:#}", card_from_points(&sources, &empty[..MIN_POINTS - 1], "/nonexistent/marked", &|_, _, _| {}, &|_| {}).unwrap_err());
+    assert!(few.contains("至少要点"), "{few}");
+    assert!(!std::path::Path::new(&out).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

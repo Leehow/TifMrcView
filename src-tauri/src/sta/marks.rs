@@ -12,7 +12,10 @@
 //! (a protein on a vesicle is a fraction of its radius, `SPHERE_SHARE`);
 //! lines and surfaces carry no size, so the workspace offers three
 //! (`Size`). Single points have no known direction, which `run_drawn`
-//! needs, so on their own they cannot be averaged yet.
+//! needs: when the marks are points only they make one template card
+//! instead (`project::card_from_points`) and the ordinary template run
+//! follows (`auto::auto_points`). Points beside shapes are left out of the
+//! run of the shapes (`route`): the two are averaged separately.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +23,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::auto::{default_out, live_png, note_json, result_value, resolve_tomogram, Emit, Note};
+use super::auto::{auto_points, default_out, live_png, note_json, result_value, resolve_tomogram, Device, Emit, Note, Outcome, MARKED};
 use super::project::{self as sp, to_raw, Drawn, Source};
 use super::shape;
 
@@ -142,6 +145,37 @@ fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, Vec<S
     inputs.iter().cloned().zip(sources).filter(|(_, s)| !looks.contains(&s.path)).unzip()
 }
 
+/// What a set of marks is averaged by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// Only points: one template card from them, then the template run.
+    Points,
+    /// Lines, surfaces and spheres (or nothing marked yet): `run_drawn`.
+    Shapes,
+    /// Both: `run_drawn` on the shapes; the points are not averaged in it.
+    Mixed,
+}
+
+pub fn route(marks: &[Mark]) -> Route {
+    let points = marks.iter().filter(|m| m.kind == Kind::Point).count();
+    match (points, marks.len() - points) {
+        (0, _) => Route::Shapes,
+        (_, 0) => Route::Points,
+        _ => Route::Mixed,
+    }
+}
+
+/// The clicks of the point marks as `project::card_from_points` takes them:
+/// (source, voxels of that source's tomogram).
+pub fn points_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Result<Vec<(usize, [f64; 3])>> {
+    let mut out = vec![];
+    for m in marks.iter().filter(|m| m.kind == Kind::Point) {
+        let Some((i, p)) = to_source(m, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
+        out.extend(p.into_iter().map(|p| (i, p)));
+    }
+    Ok(out)
+}
+
 /// What the marks give `run_drawn`: the seeds, whether the sense of the axes
 /// is unknown, and the particle size (Å). `pixels` are the voxel sizes (Å)
 /// of the sources' tomograms.
@@ -210,7 +244,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
 /// The workspace's run for marks: like `auto::run_inputs`, the same events
 /// (`sta-progress`, `sta-live`, `sta-note`) and the same result value; the
 /// average goes to `<out>/drawn` so an automatic result in `out` stays.
-pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Option<&str>, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     let Some(first) = inputs.first() else { bail!("请先选择断层图") };
@@ -221,8 +255,7 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
     let note = |n: Note| emit("sta-note", note_json(&n));
     let sources: Vec<Source> = inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
     let (inputs, sources) = without_looks(inputs, sources);
-    let pixels: Vec<f64> = sources.iter().map(|s| sp::pixel_of(&s.path)).collect::<Result<_>>()?;
-    let (drawn, both, size_a) = drawn_of(marks, &inputs, &sources, &pixels, Size::parse(size))?;
+    let route = route(marks);
     let before = Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
     let last = Mutex::new((before, before));
     let due = |slot: usize, gap: u64| {
@@ -246,11 +279,25 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
             }
         }
     };
+    if route == Route::Points {
+        let points = points_of(marks, &inputs, &sources)?;
+        let outcome = auto_points(&sources, &points, &out, device, &progress, &live, &note)?;
+        let Outcome::Done(d) = outcome else { bail!("没有得到平均") };
+        let dir = out.join(MARKED);
+        return Ok(json!({
+            "needsChoice": false, "report": serde_json::to_value(&d.report)?, "result": result_value(&dir, b64)?,
+            "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "points": points.len(),
+            "sizeA": d.card.measured_a,
+        }));
+    }
+    let pixels: Vec<f64> = sources.iter().map(|s| sp::pixel_of(&s.path)).collect::<Result<_>>()?;
+    let (drawn, both, size_a) = drawn_of(marks, &inputs, &sources, &pixels, Size::parse(size))?;
     let dir = out.join("drawn");
     let report = sp::run_drawn(&sources, &drawn, both, size_a, &dir.to_string_lossy(), &progress, &live)?;
     Ok(json!({
         "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
         "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "sizeA": size_a,
+        "pointsLeftOut": route == Route::Mixed,
     }))
 }
 
@@ -331,6 +378,26 @@ mod tests {
         assert!(e.contains("点"), "{e}");
         let away = mark(Kind::Line, "/t/zzz.mrc", &[[0.0; 3], [1.0; 3]]);
         assert!(drawn_of(&[away], &inputs, &sources, &[10.0], Size::Medium).is_err());
+    }
+
+    #[test]
+    fn points_alone_go_to_the_template_path_shapes_to_the_drawn_one() {
+        let pt = mark(Kind::Point, "/t/a.mrc", &[[1.0, 1.0, 1.0], [5.0, 5.0, 5.0]]);
+        let line = mark(Kind::Line, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]);
+        let ball = mark(Kind::Sphere, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]);
+        assert_eq!(route(&[]), Route::Shapes);
+        assert_eq!(route(&[pt.clone(), pt.clone()]), Route::Points);
+        assert_eq!(route(&[line.clone(), ball.clone()]), Route::Shapes);
+        assert_eq!(route(&[pt.clone(), line, ball]), Route::Mixed);
+        // The clicks of every point mark, with the source they lie on; look-file clicks are carried over.
+        let look = Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [0.0; 3] };
+        let sources = vec![source("/t/a.mrc", Some(look))];
+        let inputs = vec!["/t/a.mrc".to_string()];
+        let on_look = mark(Kind::Point, "/t/a_look.mrc", &[[10.0, 20.0, 30.0]]);
+        let got = points_of(&[pt, on_look], &inputs, &sources).unwrap();
+        assert_eq!(got.len(), 3);
+        assert!(got.iter().all(|g| g.0 == 0) && close(got[2].1, [20.0, 40.0, 60.0]));
+        assert!(points_of(&[mark(Kind::Point, "/t/other.mrc", &[[1.0; 3]])], &inputs, &sources).is_err());
     }
 
     #[test]

@@ -59,6 +59,9 @@ pub enum Note {
     /// The card taken by itself, and why (`same`: cards showing the same
     /// particle; `other`: other good cards, other kinds).
     Using { card: sp::Card, same: Vec<usize>, other: Vec<usize>, dir: String },
+    /// The card made from the particles the user clicked on: how many were
+    /// used and the size measured (Å).
+    Marked { points: usize, size_a: f64 },
 }
 
 /// A finished run.
@@ -405,12 +408,46 @@ pub fn auto(
     let card = cards.get(n).with_context(|| format!("--pick {n}: there are only {} cards (0 to {})", cards.len(), cards.len() - 1))?.clone();
 
     // The average.
-    let (cube, voxel) = sp::read_card(&card.path)?;
-    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, sources, &cube, voxel, sp::template_diameter(&card), sp::Pass::Fine, &out_s, &report, live))??;
+    let r = average_with(dev, sources, &card, &out_s, &report, live)?;
     // Which card this average is of (the workspace marks it when reopened).
     let _ = std::fs::write(out.join(CHOSEN), json!({ "card": card.id, "auto": chosen.is_some() }).to_string());
     Ok(Outcome::Done(Box::new(Done { report: r, card, cards, trials, chosen, cards_dir, out: out.to_path_buf(), backend: backend.to_string() })))
 }
+
+/// The end of every run: the tomograms searched with `card` as the template
+/// and the average made of what it found (`sta::project::run_template`).
+fn average_with(dev: &burn::tensor::Device, sources: &[sp::Source], card: &sp::Card, out: &str, progress: Progress, live: Live) -> Result<sp::Report> {
+    let (cube, voxel) = sp::read_card(&card.path)?;
+    crate::ctf_gpu::guarded(|| sp::run_template(dev, sources, &cube, voxel, sp::template_diameter(card), sp::Pass::Fine, out, progress, live))?
+}
+
+/// The run for particles the user clicked on (tool "点"): their orientations
+/// are unknown, so they become one card (`sta::project::card_from_points`) and
+/// the ordinary template run follows, as in `auto` with a card asked for. All
+/// goes to `out/marked/`, so the automatic result in `out` and the drawn one in
+/// `out/drawn/` stay. `points`: (source, raw-tomogram voxels).
+pub fn auto_points(
+    sources: &[sp::Source],
+    points: &[(usize, [f64; 3])],
+    out: &Path,
+    device: Device,
+    progress: Progress,
+    live: Live,
+    note: &(dyn Fn(Note) + Sync),
+) -> Result<Outcome> {
+    let dir = out.join(MARKED);
+    // The card (found blobs, cubes, classes) then the three steps of the template run.
+    let plan = Plan { cards: true, trials: false };
+    let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
+    let card = sp::card_from_points(sources, points, &dir.to_string_lossy(), &report, live)?;
+    note(Note::Marked { points: card.members, size_a: card.measured_a });
+    let (dev, backend) = device()?;
+    let r = average_with(dev, sources, &card, &dir.to_string_lossy(), &report, live)?;
+    Ok(Outcome::Done(Box::new(Done { report: r, cards: vec![card.clone()], card, trials: vec![], chosen: None, cards_dir: dir.clone(), out: dir, backend: backend.to_string() })))
+}
+
+/// Where `auto_points` keeps its card and its average, under the output folder.
+pub const MARKED: &str = "marked";
 
 /// Beside the average: which card it was made from, and whether the program chose it.
 pub const CHOSEN: &str = "chosen.json";
@@ -448,6 +485,7 @@ pub fn note_json(n: &Note) -> Value {
         Note::TrialsMade => json!({ "kind": "trialsMade" }),
         Note::CompareFailed { error } => json!({ "kind": "compareFailed", "error": error }),
         Note::Using { card, same, other, .. } => json!({ "kind": "using", "card": card.id, "same": same, "other": other }),
+        Note::Marked { points, size_a } => json!({ "kind": "marked", "points": points, "sizeA": size_a.round() }),
     }
 }
 

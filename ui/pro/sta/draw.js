@@ -5,6 +5,9 @@
 // (a filament: points along it), 面 (a membrane: points on it), 球 (a
 // vesicle: the centre, then a point on its surface). The software completes
 // the shape and the size (see src-tauri/src/sta/marks.rs); nothing is typed.
+// 点 alone: click at least MIN_POINTS particles and the program finds all the
+// others like them (their directions are unknown, so no shape is drawn);
+// points and shapes are averaged separately.
 // A mark is {kind: "point"|"line"|"surface"|"sphere", tomogram, points: [[x, y, z]…]}
 // in voxels of the file that was open when it was clicked (the tomogram or
 // its clear companion: the backend converts). Marks are kept in
@@ -18,7 +21,7 @@
   if (!W) return;
   const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "" };
   const KINDS = {
-    point: { name: "点", color: "#0969da", hint: "在每个颗粒上点一下" },
+    point: { name: "点", color: "#0969da", hint: "在几个颗粒的中心各点一下（至少 4 个，多点几个更准），程序会找出其余的同类颗粒" },
     line: { name: "线", color: "#2da44e", hint: "沿着丝状物依次点几个点，点完按“完成这一条”" },
     surface: { name: "面", color: "#bf8700", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
@@ -29,6 +32,8 @@
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
   };
+  // Fewest particles a 点 run needs (MIN_POINTS in src-tauri/src/sta/project.rs).
+  const MIN_POINTS = 4;
   const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
 
   const box = document.createElement("div");
@@ -103,7 +108,10 @@
 
   function render() {
     for (const [k, b] of Object.entries(btn)) { b.classList.toggle("on", D.kind === k); b.disabled = W.busy; }
-    $("sta-draw-hint").textContent = D.kind ? KINDS[D.kind].hint : "";
+    const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
+    const shapes = D.marks.some(usable);
+    const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
+    $("sta-draw-hint").textContent = D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球要分开平均：这次只平均线、面、球，点先不算" : "";
     const needSize = D.marks.some((m) => m.kind === "line" || m.kind === "surface");
     $("sta-draw-sizes").hidden = !needSize;
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
@@ -123,9 +131,10 @@
     }));
     $("sta-draw-del").disabled = D.sel == null || W.busy;
     $("sta-draw-undo").disabled = !D.marks.length || W.busy;
-    const ok = D.marks.some(usable);
+    const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
+    const ok = shapes || (pointsOnly && pointsN >= MIN_POINTS);
     $("sta-draw-run").disabled = !ok || W.busy;
-    $("sta-draw-run").title = ok ? "" : D.marks.length ? "只有“点”还不能平均，请再标一条线、一片面或一个球" : "先在图上标一个东西";
+    $("sta-draw-run").title = ok ? "" : pointsOnly ? `再点 ${MIN_POINTS - pointsN} 个颗粒（至少 ${MIN_POINTS} 个）` : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点" : "先在图上标一个东西";
     draw();
   }
 

@@ -35,7 +35,7 @@ USAGE
         [--for display|sta|survey] [--pixel Å]
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: cards, then the average
-        [--pick N] [--out DIR] [--pixel Å]
+        [--pick N | --points marks.json] [--out DIR] [--pixel Å]
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -572,6 +572,7 @@ fn sta_note(n: &auto_sta::Note, progress: &Progress) {
         }
         Note::TrialsMade => progress.done(),
         Note::CompareFailed { error } => eprintln!("tmv sta: could not compare the cards ({error}): each is taken for a kind of its own"),
+        Note::Marked { points, size_a } => eprintln!("tmv sta: made the template from the {points} particles you marked (about {size_a:.0} Å across)"),
         Note::Using { card, same, other, dir } => {
             let why = if same.len() > 1 { format!("cards {} show the same particle", id_list(same)) } else { "the card that gives the best average".to_string() };
             eprintln!(
@@ -592,7 +593,7 @@ fn sta(o: &Opts) -> Result<Value> {
     use crate::sta::project as sp;
     let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();
     if inputs.is_empty() {
-        bail!("give at least one tilt series or tomogram: tmv sta [--pick N] [--out DIR] [--pixel Å] INPUT [MORE …]");
+        bail!("give at least one tilt series or tomogram: tmv sta [--pick N | --points marks.json] [--out DIR] [--pixel Å] INPUT [MORE …]");
     }
     let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
     let out = sta_out(o, &inputs[0])?;
@@ -623,6 +624,26 @@ fn sta(o: &Opts) -> Result<Value> {
         .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
         .collect();
 
+    if let Some(file) = o.get("points") {
+        // The marks the workspace keeps (`marks.json`): its point marks make one template, then the usual template run.
+        use crate::sta::marks::{points_of, Mark, Saved};
+        let bytes = std::fs::read(file).with_context(|| format!("--points {file}: cannot read"))?;
+        let marks: Vec<Mark> = serde_json::from_slice::<Saved>(&bytes).map(|s| s.marks).or_else(|_| serde_json::from_slice::<Vec<Mark>>(&bytes)).with_context(|| format!("--points {file}: not a marks.json"))?;
+        let points = points_of(&marks, &inputs, &sources)?;
+        let dir = out.join(auto_sta::MARKED);
+        let outcome = auto_sta::auto_points(&sources, &points, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
+        progress.done();
+        let auto_sta::Outcome::Done(d) = outcome else { bail!("no average") };
+        eprintln!("{}", sta_summary(&d.report));
+        let mut v = serde_json::to_value(&d.report)?;
+        v["card"] = card_json(&d.card);
+        v["points"] = json!(points.len());
+        v["out"] = json!(dir);
+        v["tomograms"] = json!(tomograms);
+        v["backend"] = json!(d.backend);
+        v["open"] = json!(d.report.map);
+        return Ok(v);
+    }
     let outcome = auto_sta::auto(&sources, pick, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
     let cards_dir = out.join("cards");
     let d = match outcome {
