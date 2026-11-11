@@ -133,8 +133,9 @@ one stack's results do not overwrite each other; `tmv sta` saves
   "cards" of the blobs in the tomograms (`"cards"`: `id`, `diameterA`,
   `members`, `compact`, `likely`, `path`; the files are `card_N.mrc` in
   `"cardsDir"`) and tried each as a template (`"trials"`: per card `ok`,
-  `reason`, `particles`, `agreement`, `fsc`). Several kinds of particle gave
-  a good average, so it did not choose. Copy the cards that worked
+  `reason`, `particles`, `agreement`, `fsc`). No card gave an average (when
+  several kinds average well, `tmv sta` takes the strongest itself, names the
+  others on stderr and does not stop; `--pick N` chooses another). Copy the cards
   (`"ok": true`, a high `"agreement"`) here, **show them to the user** in
   TifMrcView Pro (or look at them yourself if the user asked you to decide):
   pick the card that looks like the particle, never gold beads, ice or a line
@@ -168,12 +169,12 @@ when the cards within 0.75 of the best agreement show one kind of particle
 (it takes the best of them and says on stderr which cards show the same
 particle), the average of everything that looks like card N: `average.mrc`, `average_raw.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
-`average.mrc`, weighted by the half agreement, sharpened (`"sharpenB"`, Å², negative; absent when no fit was possible) and cut at the resolution; `average_raw.mrc` is the plain average; `"particles"` how many were averaged). The JSON also has
+`average.mrc`, weighted by the half agreement, sharpened (`"sharpenB"`, Å², negative; absent when no fit was possible) and cut at the resolution; `average_raw.mrc` is the plain average; `"particles"` how many were averaged). Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view and the defocus of each tomogram, shared by all its particles, are refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The JSON also has
 `"trials"` (when the cards were tried), `"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
 `"diameterA"` with `"diameterFrom": "card"` (1.33 × the card's size),
 `"candidates"`, `"seconds"` (the whole run, a tomogram made first included),
 `"searched"` (`"look"` or `"raw"`: which tomogram the template was searched
-on) with `"searchVoxelA"`, and `"ctfLimited": true` when the FSC has a dip
+on) with `"searchVoxelA"`, and `"viewsRefined"` (present when the views were refined; `true` when that was kept), and `"ctfLimited": true` when the FSC has a dip
 that rises again (a local minimum below 0.5 followed by a value 0.15 higher):
 the halves disagree at a zero of the contrast transfer and agree again behind
 it. `"resolutionA"` is then the dip and `"signalA"` is where they last agree

@@ -66,8 +66,8 @@ USAGE
   card N goes to <out>/ (average.mrc: weighted by the half agreement, sharpened and cut at the
   resolution; average_raw.mrc: as averaged; half1.mrc, half2.mrc, particles.csv,
   sta.json).
-  With several kinds among the good cards it stops with exit status 2 and the
-  trials in the JSON: look at the cards, then rerun with --pick N.
+  When no card gave an average it stops with exit status 2 and the trials in
+  the JSON: look at the cards, then rerun with --pick N.
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
   trials (per card: ok, reason, particles, agreement, fsc), resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
   diameterFrom "card" says), searched ("look" or "raw": the tomogram the template
@@ -1341,6 +1341,7 @@ mod tests {
             fsc: vec![],
             averaged_from: None,
             fsc_other: None,
+            views_refined: None,
             map: Some("o/average.mrc".into()),
             halves: None,
             table: None,

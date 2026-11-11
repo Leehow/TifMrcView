@@ -58,7 +58,8 @@ into `OUT/`: N is `--pick N`, or by itself the card with the best agreement when
 all the cards within 0.75 of it show one kind of particle (cards that show the
 same particle, from different size groups, are one kind: each pair is compared
 over all orientations, taking a few seconds). A line on stderr says which
-cards matched. With several kinds among the good cards, or no card that
+cards matched; when several kinds average well it takes the strongest and
+names the others (choose another with `--pick N`). With no card that
 worked, it prints the trials and cards as JSON and
 exits with status 2: look at the cards (open the `card_N.mrc` files in
 TifMrcView Pro), then run the same command again with `--pick N`. Rerun it
@@ -68,7 +69,7 @@ input. The tilt range of each tomogram comes from its `*.tomo.json` (the
 views the alignment kept); without one, -60 to 60 is assumed, with a warning.
 Whether the average is good is for you to judge from `average.mrc` (weighted by
 the half agreement, sharpened and cut at the resolution; `average_raw.mrc` is the
-plain average) and the two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
+plain average) and the two halves; `sta.json` has the numbers. Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view and the defocus of each tomogram, shared by all its particles, are refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The result (`OUT/sta.tmv.json`) has
 `trials` (per card: `ok`, `reason`, `particles`, `agreement`, `fsc`, when the cards were tried), `resolutionA` (FSC 0.143 between the halves) with the curve `fsc`, `particles`,
 `diameterA` with `diameterFrom: "card"` (1.33 × the card's size), `seconds`
 (the whole run, a tomogram made first included), `searched` (`look` or `raw`:
