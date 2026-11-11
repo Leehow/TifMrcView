@@ -37,7 +37,7 @@ USAGE
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
         [--pick N | --points marks.json | --marks marks.json [--size small|medium|large]
-         | --auto] [--out DIR] [--pixel Å]
+         | --template map.mrc | --auto] [--out DIR] [--pixel Å]
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -69,7 +69,9 @@ USAGE
   as centre + a point on the surface, painted membranes; shapes are averaged on
   seeds along them with their directions, into <out>/drawn/; --size small|medium|
   large is the particle size of lines, surfaces and membranes; a sphere takes it
-  from its radius). Everything after
+  from its radius), or --template map.mrc|.em (a density map the user already
+  has is the template: everything like it is found and averaged without
+  stopping, into <out>/own/). Everything after
   the choice is automatic. The hints per card (likely a particle, line/layer-like)
   are only hints. --auto is the unattended batch mode, only for when the user
   asked for it: every card (at most 12) is tried as the template of a coarse run
@@ -561,6 +563,12 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
     }
 }
 
+/// The stderr line saying a repeating pattern was found in the layers of a drawn surface and used to align, when so.
+fn pattern_line(rows_a: f64, inside_a: f64) -> String {
+    let side = if inside_a < 0.0 { "outside" } else { "inside" };
+    format!("tmv sta: found a repeating pattern {:.0} Å {side} the surface (rows {:.0} Å apart) and aligned by it", inside_a.abs(), rows_a)
+}
+
 /// "0 and 1", "0, 1 and 3".
 fn id_list(ids: &[usize]) -> String {
     match ids {
@@ -626,6 +634,8 @@ enum StaMode {
     Points(String),
     /// Every kind of mark (points, lines, surfaces, spheres, painted membranes), as the workspace runs them.
     Marks(String),
+    /// A density map (MRC or EM) the user brings as the template.
+    Template(String),
     Auto,
 }
 
@@ -633,14 +643,16 @@ fn sta_mode(o: &Opts) -> Result<StaMode> {
     let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
     let points = o.get("points");
     let marks = o.get("marks");
+    let template = o.get("template");
     let auto = o.flag("auto");
-    if [pick.is_some(), points.is_some(), marks.is_some(), auto].iter().filter(|b| **b).count() > 1 {
-        bail!("--pick, --points, --marks and --auto exclude each other (--pick N / --points or --marks marks.json: what the user chose; --auto: the program chooses)");
+    if [pick.is_some(), points.is_some(), marks.is_some(), template.is_some(), auto].iter().filter(|b| **b).count() > 1 {
+        bail!("--pick, --points, --marks, --template and --auto exclude each other (--pick N / --points or --marks marks.json / --template map.mrc: what the user chose; --auto: the program chooses)");
     }
     Ok(match (pick, points) {
         (Some(n), _) => StaMode::Pick(n),
         (_, Some(f)) => StaMode::Points(f.to_string()),
         _ if marks.is_some() => StaMode::Marks(marks.unwrap().to_string()),
+        _ if template.is_some() => StaMode::Template(template.unwrap().to_string()),
         _ if auto => StaMode::Auto,
         _ => StaMode::Find,
     })
@@ -679,6 +691,9 @@ fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, pro
         Some(a) => eprintln!("tmv sta: done: {a:.1} Å resolution from {} particles; the average is {map}", r["particles"]),
         None => eprintln!("tmv sta: done: {} particles averaged, no resolution from the halves; the average is {map}", r["particles"]),
     }
+    if let (Some(rows), Some(inside)) = (r["pattern"]["rowsA"].as_f64(), r["pattern"]["insideA"].as_f64()) {
+        eprintln!("{}", pattern_line(rows, inside));
+    }
     if let Value::Object(m) = &mut v {
         m.remove("result");
         m.remove("cards");
@@ -688,6 +703,51 @@ fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, pro
     v["marks"] = json!(marks.len());
     v["tomograms"] = json!(tomograms);
     v["open"] = v["report"]["map"].clone();
+    Ok(v)
+}
+
+/// `tmv sta --template map.mrc|.em`: the map the user already has is the
+/// template (`sta::review::own_map`), everything like it is found in the
+/// inputs (`find_own`) and all that is found is averaged (`average_found`),
+/// without stopping, into `<out>/own/`; prints the report as the other routes do.
+fn sta_template(map: &str, found: &[auto_sta::Resolved], out: &Path, progress: &Progress, tomograms: Vec<Value>) -> Result<Value> {
+    use crate::sta::review;
+    let map = std::fs::canonicalize(map).with_context(|| format!("--template {map}: no such file"))?.to_string_lossy().into_owned();
+    let inputs: Vec<String> = found.iter().map(|f| f.tomogram.clone()).collect();
+    let out_s = out.to_string_lossy().into_owned();
+    let emit = |name: &str, v: Value| match name {
+        "sta-progress" => progress.report(v["label"].as_str().unwrap_or(""), v["done"].as_u64().unwrap_or(0) as usize, v["total"].as_u64().unwrap_or(0) as usize),
+        "sta-note" => eprintln!("tmv sta: {v}"),
+        _ => {}
+    };
+    let dev = || Ok(device());
+    let b64 = |_: &[u8]| String::new();
+    let own = review::own_map(&inputs, &map, &out_s, &b64).with_context(|| format!("--template {map}"))?;
+    if own["assumed"] == true {
+        eprintln!("tmv sta: the map does not say its voxel size; the tomogram's is taken");
+    }
+    review::find_own(&inputs, &out_s, &dev, &emit, &b64)?;
+    let dir = review::own_dir(out);
+    let mut v = review::average_found(&dir, &dev, &emit, &b64)?;
+    progress.done();
+    let r = v["report"].clone();
+    let shown = r["map"].as_str().unwrap_or("average.mrc");
+    match r["resolutionA"].as_f64() {
+        Some(a) => eprintln!("tmv sta: done: {a:.1} Å resolution (FSC 0.143 between the two halves) from {} particles; the average is {shown}", r["particles"]),
+        None => eprintln!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {shown}", r["particles"]),
+    }
+    if let (Some(rows), Some(inside)) = (r["pattern"]["rowsA"].as_f64(), r["pattern"]["insideA"].as_f64()) {
+        eprintln!("{}", pattern_line(rows, inside));
+    }
+    if let Value::Object(m) = &mut v {
+        m.remove("result");
+        m.remove("cards");
+        m.remove("trials");
+        m.remove("chosen");
+    }
+    v["template"] = json!(map);
+    v["tomograms"] = json!(tomograms);
+    v["open"] = r["map"].clone();
     Ok(v)
 }
 
@@ -716,7 +776,7 @@ fn sta(o: &Opts) -> Result<Value> {
     use crate::sta::project as sp;
     let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();
     if inputs.is_empty() {
-        bail!("give at least one tilt series or tomogram: tmv sta [--pick N | --points marks.json | --auto] [--out DIR] [--pixel Å] INPUT [MORE …]");
+        bail!("give at least one tilt series or tomogram: tmv sta [--pick N | --points marks.json | --template map.mrc | --auto] [--out DIR] [--pixel Å] INPUT [MORE …]");
     }
     let mode = sta_mode(o)?;
     let out = sta_out(o, &inputs[0])?;
@@ -773,6 +833,9 @@ fn sta(o: &Opts) -> Result<Value> {
     if let StaMode::Marks(file) = &mode {
         return sta_marks(o, file, &found, &out, &progress, tomograms);
     }
+    if let StaMode::Template(map) = &mode {
+        return sta_template(map, &found, &out, &progress, tomograms);
+    }
     if let StaMode::Points(file) = &mode {
         // The marks the workspace keeps (`marks.json`): its point marks make one template, then the usual template run.
         use crate::sta::marks::{points_of, Mark, Saved};
@@ -784,6 +847,9 @@ fn sta(o: &Opts) -> Result<Value> {
         progress.done();
         let auto_sta::Outcome::Done(d) = outcome else { bail!("no average") };
         eprintln!("{}", sta_summary(&d.report));
+        if let Some(p) = &d.report.pattern {
+            eprintln!("{}", pattern_line(p.rows_a, p.inside_a));
+        }
         let mut v = serde_json::to_value(&d.report)?;
         v["card"] = card_json(&d.card);
         v["points"] = json!(points.len());
@@ -823,6 +889,9 @@ fn sta(o: &Opts) -> Result<Value> {
     progress.done();
     let r = d.report;
     eprintln!("{}", sta_summary(&r));
+    if let Some(p) = &r.pattern {
+        eprintln!("{}", pattern_line(p.rows_a, p.inside_a));
+    }
     let mut v = serde_json::to_value(&r)?;
     if let Value::Object(m) = &mut v {
         // `seconds` (the whole run) says it; `ms` covered only the average.
@@ -1331,6 +1400,10 @@ mod tests {
         assert_eq!(mode(&["--points", "m.json"]).unwrap(), StaMode::Points("m.json".into()));
         assert_eq!(mode(&["--marks", "m.json"]).unwrap(), StaMode::Marks("m.json".into()));
         assert!(mode(&["--marks", "m.json", "--points", "m.json"]).is_err());
+        assert_eq!(mode(&["--template", "map.mrc"]).unwrap(), StaMode::Template("map.mrc".into()));
+        assert_eq!(mode(&["--template=map.em"]).unwrap(), StaMode::Template("map.em".into()));
+        assert!(mode(&["--template", "map.mrc", "--auto"]).is_err());
+        assert!(mode(&["--template", "map.mrc", "--pick", "1"]).is_err());
         // --auto is a flag without a value and goes before or after the input.
         assert_eq!(mode(&["--auto"]).unwrap(), StaMode::Auto);
         let o = Opts::parse(&["--auto".into(), dir.clone()]).unwrap();

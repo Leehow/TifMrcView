@@ -840,21 +840,9 @@ pub fn own_map(inputs: &[String], map: &str, out: &str, b64: &dyn Fn(&[u8]) -> S
     own_value(&dir, b64).context("无法保存这张密度图")
 }
 
-/// `auto::result_pick` with the average of the map route (`out/own`) among the results.
+/// `auto::result_pick` (which lists the map route, `out/own`, too).
 pub fn result_pick(out: &Path, which: Option<&str>, b64: &dyn Fn(&[u8]) -> String) -> Result<Option<Value>> {
-    let mut all = auto::results_of(out);
-    let own = own_dir(out);
-    if let Some(t) = millis(&own.join("average.mrc")) {
-        // Where its time puts it among the others (newest first).
-        let at = all.iter().position(|(_, d)| millis(&d.join("average.mrc")).unwrap_or(0) < t).unwrap_or(all.len());
-        all.insert(at, (OWN, own));
-    }
-    let Some((w, dir)) = which.and_then(|w| all.iter().find(|(n, _)| *n == w)).or(all.first()) else { return Ok(None) };
-    let Some(mut v) = result_value(dir, b64)? else { return Ok(None) };
-    v["which"] = json!(w);
-    v["available"] = json!(all.iter().map(|(n, _)| *n).collect::<Vec<_>>());
-    v["base"] = json!(out);
-    Ok(Some(v))
+    auto::result_pick(out, which, b64)
 }
 
 // ---- only on the shapes the user marked ----

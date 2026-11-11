@@ -266,14 +266,15 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "现成的图" };
+  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板" };
   function renderResult() {
     const r = cur().result;
     W.result = r;
     $("sta-result").hidden = !r;
     if (!r) return;
     const res = r.resolutionA != null ? `分辨率 ${fmt(r.resolutionA)} Å · ${r.particles} 个颗粒` : `${r.particles} 个颗粒 · 两半图不够一致，没有给出分辨率`;
-    $("sta-summary").textContent = res;
+    const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å），已按它对齐` : "";
+    $("sta-summary").textContent = res + pt;
     $("sta-used").textContent = usedText(r.used);
     $("sta-slices").src = r.png ? `data:image/png;base64,${r.png}` : "";
     $("sta-fsc").innerHTML = fscSvg(r);

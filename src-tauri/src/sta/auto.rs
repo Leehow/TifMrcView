@@ -628,9 +628,9 @@ pub fn used_of(dir: &Path) -> Value {
 }
 
 /// The results an output folder holds, newest first: the automatic one in
-/// `out`, the one of the clicked particles in `out/marked`, the drawn one in `out/drawn`.
+/// `out`, the one of the clicked particles in `out/marked`, the drawn one in `out/drawn`, the one of a map the user brought in `out/own`.
 pub fn results_of(out: &Path) -> Vec<(&'static str, PathBuf)> {
-    let mut found: Vec<(std::time::SystemTime, &'static str, PathBuf)> = [("auto", out.to_path_buf()), ("points", out.join(MARKED)), ("drawn", out.join(DRAWN))]
+    let mut found: Vec<(std::time::SystemTime, &'static str, PathBuf)> = [("auto", out.to_path_buf()), ("points", out.join(MARKED)), ("drawn", out.join(DRAWN)), (crate::sta::review::OWN, crate::sta::review::own_dir(out))]
         .into_iter()
         .filter_map(|(which, dir)| {
             let t = std::fs::metadata(dir.join("average.mrc")).ok().filter(|m| m.is_file())?.modified().ok().unwrap_or(std::time::UNIX_EPOCH);
@@ -642,7 +642,7 @@ pub fn results_of(out: &Path) -> Vec<(&'static str, PathBuf)> {
 }
 
 /// The result of an output folder for the workspace: the newest one, or the
-/// one `which` names ("auto", "points", "drawn"), as `result_value` plus
+/// one `which` names ("auto", "points", "drawn", "own"), as `result_value` plus
 /// `which` and `available` (all the results there, newest first).
 pub fn result_pick(out: &Path, which: Option<&str>, b64: &dyn Fn(&[u8]) -> String) -> Result<Option<Value>> {
     let all = results_of(out);

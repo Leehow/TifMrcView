@@ -17,7 +17,7 @@ driver is enough):
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
 | `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `2_tomograms/*.mrc` and `*.tomo.json`, `3_clean/` (clear `look` tomogram, denoised …) and `*.labels.tif` beside the tomogram they label, `4_sta/` RELION 5 folder (sta) |
-| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json \| --auto] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, then it stops (exit status 2): you choose the card (`--pick N`) or mark the particles (`--points`), and the average of everything that looks like it follows (with `--auto`, for unattended batches: each card is tried as a template and the one that gives the best average is taken) | `4_sta/cards/`, then `4_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
+| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json \| --template map.mrc \| --auto] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, then it stops (exit status 2): you choose the card (`--pick N`) or mark the particles (`--points`), and the average of everything that looks like it follows (with `--auto`, for unattended batches: each card is tried as a template and the one that gives the best average is taken) | `4_sta/cards/`, then `4_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
 | `tmv ctf FOLDER` | CTF of every micrograph (movies motion corrected first) | `FOLDER/tifmrcview-spa/ctf.tsv` |
@@ -47,7 +47,9 @@ members, hints: likely a particle, line-like or layer-like; hints only), and
 exits with status 2 and `"needsChoice": true`, `"cards"` and `"next"` in the
 JSON. Look at the cards (an AI agent must show them to the user and ask which
 one, not guess), then run the command in `"next"` with `--pick N`, or with
-`--points marks.json` for what you marked; everything after the choice is
+`--points marks.json` for what you marked, or `--template map.mrc` (or `.em`)
+when you already have a density map of the particle: everything like it is
+found and averaged without stopping, into `OUT/own/`; everything after the choice is
 automatic. `--auto` is for unattended batch runs and only when the user asked
 for it: the program then chooses, in the three steps below. First it writes the cards to `OUT/cards/` (`card_N.mrc`,
 32-voxel class averages, and `cards.json`; this takes minutes, so a finished

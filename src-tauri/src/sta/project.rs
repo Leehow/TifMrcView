@@ -2809,7 +2809,8 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel:
         // The folder may have been moved: then the stack is beside the dataset.
         if !Path::new(&d.stack).is_file() {
             if let (Some(dir), Some(name)) = (Path::new(file).parent(), Path::new(&d.stack).file_name()) {
-                d.stack = dir.join(name).to_string_lossy().into_owned();
+                // Also in the project's other folders (the stack is in the parent of `2_tomograms/`).
+                d.stack = crate::project_dirs::find_near(dir, &d.stack).unwrap_or_else(|| dir.join(name)).to_string_lossy().into_owned();
             }
         }
         let name = Path::new(&s.path).file_name();

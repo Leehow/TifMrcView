@@ -169,10 +169,10 @@ stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
-or several of the same specimen. Without `--pick`, `--points` or `--auto` it
+or several of the same specimen. Without `--pick`, `--points`, `--template` or `--auto` it
 only writes the cards to `OUT/cards/` and stops (exit status 2): the user
 chooses what to average, then you rerun with `--pick N` or `--points
-marks.json`, and everything after the choice is automatic. With `--auto` it
+marks.json`, and everything after the choice is automatic. `--template map.mrc` (or `.em`) uses a density map the user already has as the template and runs to the end without stopping (result in `OUT/own/`). With `--auto` it
 tries every card (at most 12) as the template of a coarse run (`OUT/trials/`, the
 results kept in `OUT/cards/trials.json`; a card that is a layer, a line or a
 small blob finds no group of particles that stands out, a particle gives an
