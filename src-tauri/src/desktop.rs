@@ -2186,13 +2186,26 @@ async fn sta_shapes_section(out: String, id: usize, tomogram: String, z: usize) 
 
 /// Changes the user's edits of the shapes review and returns it (`sta_shapes_review`):
 /// `drop` (an item's id: dropped, or taken back), `flip` (an item's id: turned
-/// to the other side), `flipAll`, `reset` (the program's suggestion).
+/// to the other side), `flipAll`, `reset` (the program's suggestion), `only`
+/// (ids: exactly these are kept).
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip: Option<usize>, flip_all: Option<bool>, reset: Option<bool>) -> CmdResult<serde_json::Value> {
+async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip: Option<usize>, flip_all: Option<bool>, reset: Option<bool>, only: Option<Vec<usize>>) -> CmdResult<serde_json::Value> {
     blocking(move || {
-        let edit = crate::sta::shapes::Edit { drop, flip, flip_all: flip_all.unwrap_or(false), reset: reset.unwrap_or(false) };
+        let edit = crate::sta::shapes::Edit { drop, flip, flip_all: flip_all.unwrap_or(false), reset: reset.unwrap_or(false), only };
         crate::sta::shapes::set_review(&crate::sta::shapes::dir_of(&out), &tomogram, &edit)
+    }).await
+}
+
+/// The picture of pit `id` of the shapes review of `out` (the section along
+/// its axis, the pit pointing down): "data:image/png;base64,…".
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_tile(out: String, id: usize) -> CmdResult<String> {
+    blocking(move || {
+        let png = crate::sta::shapes::tile_path(&crate::sta::shapes::dir_of(&out), id);
+        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
+        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
     }).await
 }
 
@@ -3316,6 +3329,7 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_shapes_review,
             #[cfg(feature = "pro")] sta_shapes_section,
             #[cfg(feature = "pro")] sta_shapes_set,
+            #[cfg(feature = "pro")] sta_shapes_tile,
             #[cfg(feature = "pro")] sta_shapes_average,
             #[cfg(feature = "pro")] sta_kinds,
             #[cfg(feature = "pro")] sta_kinds_saved,

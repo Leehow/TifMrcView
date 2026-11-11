@@ -1881,6 +1881,76 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     Ok(report)
 }
 
+/// The average of pits of a membrane (`funnels`): one particle each, cut
+/// about the middle of its mouth (`pits`: position and the axis into the
+/// pit), which stands along the model's Z. `size_a` is what holds a whole
+/// pit, Å. Pits differ in depth and width, so the average shows what they
+/// share: the rim, and the wall as far as it is alike.
+pub fn run_pits(sources: &[Source], pits: &[Drawn], size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
+    let started = Instant::now();
+    let mut cuts: Vec<Cut> = vec![];
+    let mut axes: Vec<[f64; 3]> = vec![];
+    let mut voxel_a = size_a / SPAN;
+    for (i, s) in sources.iter().enumerate() {
+        progress("裁出凹陷", i, sources.len());
+        if !pits.iter().any(|d| d.source == i) {
+            continue;
+        }
+        check_cancel()?;
+        let (v, dims, voxel, bin) = binned(&s.path, size_a / SPAN)?;
+        voxel_a = voxel;
+        let (median, sd) = super::pick::robust(&v);
+        for d in pits.iter().filter(|d| d.source == i) {
+            let c = d.pos.map(|p| (p / bin as f64).floor().max(0.0) as usize);
+            if let Some(cube) = cube(&v, dims, c) {
+                let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
+                cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
+                axes.push(d.axis);
+            }
+        }
+    }
+    progress("裁出凹陷", sources.len(), sources.len());
+    if cuts.len() < MIN_PITS {
+        bail!("能完整裁出的凹陷只有 {} 个，至少要 {MIN_PITS} 个（太靠近断层图边缘的裁不出）", cuts.len());
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let radius = (0.8 * size_a / voxel_a).min(BOX as f64 / 2.0 - 3.0);
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let (model, poses) = super::refine::first_model_known(&set, &axes, false, 1, progress, live)?;
+    let out = align(&set, &model, &poses, progress, live)?;
+    let mut report = Report {
+        kinds: vec![],
+        diameter_a: None,
+        particles: 0,
+        candidates: pits.len(),
+        distinct: None,
+        voxel_a: 0.0,
+        searched: None,
+        search_voxel_a: None,
+        resolution_a: None,
+        signal_a: None,
+        sharpen_b: None,
+        ctf_limited: false,
+        fsc: vec![],
+        averaged_from: None,
+        fsc_other: None,
+        views_refined: None,
+        pattern: None,
+        map: None,
+        halves: None,
+        table: None,
+        ms: 0,
+    };
+    save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
+    Ok(report)
+}
+
+/// Fewest pits that are averaged.
+pub const MIN_PITS: usize = 4;
+
 /// One row of a saved `particles.csv`.
 struct Row {
     source: usize,

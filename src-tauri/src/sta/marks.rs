@@ -38,6 +38,10 @@ pub enum Kind {
     Sphere,
     /// Painted over a membrane: `strokes`, not `points`; see `paint`.
     Membrane,
+    /// Clicks into pits of a membrane (places where it takes something in
+    /// or buds off), each point one example; see `funnels`. They are only
+    /// searched from (`shapes::find_in`), never averaged as drawn.
+    Pit,
 }
 
 /// One thing marked: the clicks, in voxels of the file `tomogram`.
@@ -226,7 +230,7 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
-        Kind::Point | Kind::Membrane => vec![],
+        Kind::Point | Kind::Membrane | Kind::Pit => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
         for s in &mut seeds {
@@ -278,6 +282,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Surface => p.len() >= 2,
         Kind::Sphere => p.len() >= 2,
         Kind::Membrane => paint::has_stroke(m),
+        Kind::Pit => false,
     });
     if usable.clone().next().is_none() {
         if points_only > 0 {
