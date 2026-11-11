@@ -1996,6 +1996,15 @@ fn sta_marks_load(out: String) -> crate::sta::marks::Saved {
     crate::sta::marks::load(std::path::Path::new(&out))
 }
 
+/// Where the seeds of the line, surface and sphere marks are and which way
+/// they face, in voxels of the open file `tomogram` (at most 60 per mark):
+/// [{mark, kind, seeds: [{pos: [x, y, z], axis: [x, y, z]}]}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_mark_preview(marks: Vec<crate::sta::marks::Mark>, tomogram: String, size: Option<String>) -> CmdResult<serde_json::Value> {
+    crate::sta::marks::preview_marks(&marks, &tomogram, size.as_deref()).map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 fn sta_marks_save(out: String, marks: Vec<crate::sta::marks::Mark>, size: Option<String>) -> CmdResult<()> {
@@ -2982,6 +2991,7 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_run_drawn,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
+            #[cfg(feature = "pro")] sta_mark_preview,
             diffraction_find,
             diffraction_zones,
             eds_quant,

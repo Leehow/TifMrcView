@@ -15,13 +15,17 @@
 // open file converted (a mark made on the look file shows on the tomogram and
 // the other way round). Touch rule: no long press; tap a mark in the list to
 // select it, then use the delete button.
-// Backend: sta_run_drawn, sta_marks_load, sta_marks_save. Every call is
+// A surface or sphere has a side that faces out (every particle starts along
+// the normal, as in Dynamo): the 翻面 button flips it, and arrows on the image
+// (sta_mark_preview: sampled points and axes in the open file's voxels) show
+// where particles will be taken and which way they face.
+// Backend: sta_run_drawn, sta_marks_load, sta_marks_save, sta_mark_preview. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
 // Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw, toast.
 (() => {
   const W = window.TifMrcViewPro.sta;
   if (!W) return;
-  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "" };
+  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [] };
   const KINDS = {
     point: { name: "点", color: "#0969da", hint: "在几个颗粒的中心各点一下（至少 4 个，多点几个更准），程序会找出其余的同类颗粒" },
     line: { name: "线", color: "#2da44e", hint: "沿着丝状物依次点几个点，点完按“完成这一条”" },
@@ -45,12 +49,14 @@
     <p class="dim">程序找不到、或者不是你想要的？自己在断层图上标出来：选一个工具，在图上点几下，其余的交给程序。</p>
     <div id="sta-draw-tools" class="al-row"></div>
     <p id="sta-draw-hint" class="dim"></p>
+    <p id="sta-draw-side" class="dim" hidden>箭头指向颗粒朝外的一侧；不对就点「翻面」</p>
     <div id="sta-draw-sizes" class="al-row" hidden><span class="dim" title="线和面看不出颗粒多大，请选最接近的一个">颗粒大小</span></div>
     <div id="sta-draw-list" class="sta-marks"></div>
     <div class="al-row">
       <button id="sta-draw-done" class="small" hidden>完成</button>
       <button id="sta-draw-undo" class="small" title="去掉最后点的一个点">撤销一个点</button>
       <button id="sta-draw-del" class="small" title="先在列表里点一下要删的标注">删除所选</button>
+      <button id="sta-draw-flip" class="small" title="把朝外的一侧换到另一边" hidden>翻面</button>
     </div>
     <div class="al-row"><button id="sta-draw-run" class="primary">平均我标的</button></div>`;
   $("sta-draw-slot").append(box);
@@ -85,9 +91,26 @@
     return `${name} · ${count(m)} 个点`;
   };
 
+  const plain = () => D.marks.map(({ kind, tomogram, points, flip }) => ({ kind, tomogram, points, flip: !!flip }));
+  // The sampled points of the shapes, for the arrows; the latest answer wins.
+  let timer = 0, asked = 0;
+  function refresh(wait = 0) {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const mine = ++asked;
+      const open = S.info?.path;
+      if (!open || !D.marks.some((m) => m.kind !== "point" && m.points.length >= 2)) { D.preview = []; draw(); return; }
+      try {
+        const r = await invoke("sta_mark_preview", { marks: plain(), tomogram: open, size: D.size });
+        if (mine === asked) { D.preview = Array.isArray(r) ? r : []; draw(); }
+      } catch (_) { if (mine === asked) { D.preview = []; draw(); } /* no backend (demo) */ }
+    }, wait);
+  }
+  D.refresh = refresh;
   async function save() {
     if (!W.out) return;
-    try { await invoke("sta_marks_save", { out: W.out, marks: D.marks.map(({ kind, tomogram, points }) => ({ kind, tomogram, points })), size: D.size }); } catch (_) { /* no backend (demo) */ }
+    try { await invoke("sta_marks_save", { out: W.out, marks: plain(), size: D.size }); } catch (_) { /* no backend (demo) */ }
+    refresh(300);
   }
   async function load(out) {
     if (!out || out === D.loaded) return;
@@ -101,6 +124,7 @@
       D.size = r.size || "medium";
       D.sel = D.open = null;
       render();
+      refresh();
     } catch (_) { /* no backend (demo) */ }
   }
 
@@ -137,6 +161,11 @@
       return row;
     }));
     $("sta-draw-del").disabled = D.sel == null || W.busy;
+    const side = D.sel != null && (D.marks[D.sel]?.kind === "surface" || D.marks[D.sel]?.kind === "sphere") ? D.marks[D.sel] : null;
+    $("sta-draw-flip").hidden = !side;
+    $("sta-draw-flip").classList.toggle("on", !!side?.flip);
+    $("sta-draw-flip").disabled = W.busy;
+    $("sta-draw-side").hidden = !side;
     $("sta-draw-undo").disabled = !D.marks.length || W.busy;
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
     const ok = shapes || (pointsOnly && pointsN >= MIN_POINTS);
@@ -173,6 +202,7 @@
     m.points.pop();
     if (!m.points.length) {
       D.marks.splice(i, 1);
+      D.preview = [];
       D.open = null;
     }
     D.sel = null;
@@ -182,13 +212,22 @@
   $("sta-draw-del").onclick = () => {
     if (D.sel == null) return;
     D.marks.splice(D.sel, 1);
+    D.preview = [];
     D.open = null;
     D.sel = null;
     save();
     render();
   };
+  $("sta-draw-flip").onclick = () => {
+    const m = D.sel != null ? D.marks[D.sel] : null;
+    if (!m || (m.kind !== "surface" && m.kind !== "sphere")) return;
+    m.flip = !m.flip;
+    save();
+    refresh(0);
+    render();
+  };
   $("sta-draw-run").onclick = () => {
-    const marks = D.marks.map(({ kind, tomogram, points }) => ({ kind, tomogram, points }));
+    const marks = plain();
     D.open = null;
     setKind(null);
     W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks, out, size: D.size }), false);
@@ -283,9 +322,34 @@
       }
       for (const p of m.points) dot(p, alpha(Math.abs(p[2] - S.z)));
     });
+    // The sampled points as short arrows (a line with a dot at the tip) along
+    // the axis seen from above: the way each particle faces.
+    ctx.lineCap = "round";
+    ctx.setLineDash([]);
+    for (const pv of D.preview) {
+      const mark = D.marks[pv.mark];
+      if (!mark || mark.kind !== pv.kind) continue;
+      ctx.strokeStyle = ctx.fillStyle = KINDS[mark.kind].color;
+      ctx.lineWidth = D.sel === pv.mark ? 2 : 1.4;
+      for (const s of pv.seeds) {
+        const a = alpha(Math.abs(s.pos[2] - S.z));
+        if (!a) continue;
+        const [x, y] = at(s.pos);
+        const flat = Math.hypot(s.axis[0], s.axis[1]);
+        const tx = flat ? x + 16 * s.axis[0] : x, ty = flat ? y + 16 * s.axis[1] : y;
+        ctx.globalAlpha = a;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(tx, ty, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
     ctx.restore();
   });
-  document.addEventListener("tmv-opened", () => draw());
+  document.addEventListener("tmv-opened", () => { draw(); refresh(0); });
 
   document.addEventListener("sta-out", (e) => { load(e.detail); draw(); });
   document.addEventListener("sta-busy", () => render());
