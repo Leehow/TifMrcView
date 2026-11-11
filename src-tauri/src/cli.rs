@@ -35,7 +35,8 @@ USAGE
         [--for display|sta|survey] [--pixel Å]
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
-        [--pick N | --points marks.json | --auto] [--out DIR] [--pixel Å]
+        [--pick N | --points marks.json | --marks marks.json [--size small|medium|large]
+         | --auto] [--out DIR] [--pixel Å]
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -61,7 +62,12 @@ USAGE
   2: {"needsChoice": true, "cards": […], "next": …}, one line per card on stderr.
   Show the cards (and the clear "look" tomogram) to the user, let them choose,
   then rerun with --pick N (average the card they chose) or --points marks.json
-  (average what they marked: the marks file of the workspace). Everything after
+  (average what they marked: the point marks of the workspace's marks file), or
+  --marks marks.json (every kind of mark: points, lines, surfaces, spheres given
+  as centre + a point on the surface, painted membranes; shapes are averaged on
+  seeds along them with their directions, into <out>/drawn/; --size small|medium|
+  large is the particle size of lines, surfaces and membranes; a sphere takes it
+  from its radius). Everything after
   the choice is automatic. The hints per card (likely a particle, line/layer-like)
   are only hints. --auto is the unattended batch mode, only for when the user
   asked for it: every card (at most 12) is tried as the template of a coarse run
@@ -600,22 +606,71 @@ enum StaMode {
     Find,
     Pick(usize),
     Points(String),
+    /// Every kind of mark (points, lines, surfaces, spheres, painted membranes), as the workspace runs them.
+    Marks(String),
     Auto,
 }
 
 fn sta_mode(o: &Opts) -> Result<StaMode> {
     let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
     let points = o.get("points");
+    let marks = o.get("marks");
     let auto = o.flag("auto");
-    if [pick.is_some(), points.is_some(), auto].iter().filter(|b| **b).count() > 1 {
-        bail!("--pick, --points and --auto exclude each other (--pick N / --points marks.json: what the user chose; --auto: the program chooses)");
+    if [pick.is_some(), points.is_some(), marks.is_some(), auto].iter().filter(|b| **b).count() > 1 {
+        bail!("--pick, --points, --marks and --auto exclude each other (--pick N / --points or --marks marks.json: what the user chose; --auto: the program chooses)");
     }
     Ok(match (pick, points) {
         (Some(n), _) => StaMode::Pick(n),
         (_, Some(f)) => StaMode::Points(f.to_string()),
+        _ if marks.is_some() => StaMode::Marks(marks.unwrap().to_string()),
         _ if auto => StaMode::Auto,
         _ => StaMode::Find,
     })
+}
+
+/// `tmv sta --marks marks.json`: what the user marked (points, lines,
+/// surfaces, spheres, painted membranes), averaged as the workspace's
+/// "average what I marked" does (`sta::marks::run_marks`): points make a
+/// template, shapes give seeds with their directions. The marks name the
+/// tomogram (or its look file) they were made on, which must be among the
+/// inputs. `--size small|medium|large` (or the `size` saved with the marks)
+/// is the particle size for lines, surfaces and membranes.
+fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, progress: &Progress, tomograms: Vec<Value>) -> Result<Value> {
+    use crate::sta::marks::{run_marks, Mark, Saved};
+    let bytes = std::fs::read(file).with_context(|| format!("--marks {file}: cannot read"))?;
+    let (marks, saved_size): (Vec<Mark>, Option<String>) = serde_json::from_slice::<Saved>(&bytes)
+        .map(|s| (s.marks, s.size))
+        .or_else(|_| serde_json::from_slice::<Vec<Mark>>(&bytes).map(|m| (m, None)))
+        .with_context(|| format!("--marks {file}: not a marks.json"))?;
+    if marks.is_empty() {
+        bail!("--marks {file}: no marks in it");
+    }
+    let size = o.get("size").map(str::to_string).or(saved_size);
+    let inputs: Vec<String> = found.iter().map(|f| f.tomogram.clone()).collect();
+    let emit = |name: &str, v: Value| match name {
+        "sta-progress" => progress.report(v["label"].as_str().unwrap_or(""), v["done"].as_u64().unwrap_or(0) as usize, v["total"].as_u64().unwrap_or(0) as usize),
+        "sta-note" => eprintln!("tmv sta: {v}"),
+        _ => {}
+    };
+    let dev = || Ok(device());
+    let mut v = run_marks(&inputs, &marks, size.as_deref(), Some(&out.to_string_lossy()), &dev, &emit, &|_| String::new())?;
+    progress.done();
+    let r = &v["report"];
+    let map = r["map"].as_str().unwrap_or("average.mrc");
+    match r["resolutionA"].as_f64() {
+        Some(a) => eprintln!("tmv sta: done: {a:.1} Å resolution from {} particles; the average is {map}", r["particles"]),
+        None => eprintln!("tmv sta: done: {} particles averaged, no resolution from the halves; the average is {map}", r["particles"]),
+    }
+    if let Value::Object(m) = &mut v {
+        m.remove("result");
+        m.remove("cards");
+        m.remove("trials");
+        m.remove("chosen");
+    }
+    v["marks"] = json!(marks.len());
+    v["tomograms"] = json!(tomograms);
+    v["open"] = v["report"]["map"].clone();
+    Ok(v)
 }
 
 /// The hints shown with a card on stderr; only hints, they never choose.
@@ -696,6 +751,9 @@ fn sta(o: &Opts) -> Result<Value> {
             "tomograms": tomograms,
             "next": next,
         }));
+    }
+    if let StaMode::Marks(file) = &mode {
+        return sta_marks(o, file, &found, &out, &progress, tomograms);
     }
     if let StaMode::Points(file) = &mode {
         // The marks the workspace keeps (`marks.json`): its point marks make one template, then the usual template run.
@@ -1252,6 +1310,8 @@ mod tests {
         assert_eq!(mode(&["--pick", "2"]).unwrap(), StaMode::Pick(2));
         assert_eq!(mode(&["--pick=0"]).unwrap(), StaMode::Pick(0));
         assert_eq!(mode(&["--points", "m.json"]).unwrap(), StaMode::Points("m.json".into()));
+        assert_eq!(mode(&["--marks", "m.json"]).unwrap(), StaMode::Marks("m.json".into()));
+        assert!(mode(&["--marks", "m.json", "--points", "m.json"]).is_err());
         // --auto is a flag without a value and goes before or after the input.
         assert_eq!(mode(&["--auto"]).unwrap(), StaMode::Auto);
         let o = Opts::parse(&["--auto".into(), dir.clone()]).unwrap();
