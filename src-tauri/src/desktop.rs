@@ -2063,6 +2063,77 @@ async fn sta_average_found(app: AppHandle, out: String, which: String) -> CmdRes
     }).await
 }
 
+/// "Find them all" for membranes and vesicles (Pro): the painted membranes or
+/// marked spheres of `marks` are the examples; every membrane and vesicle like
+/// them is found in the files of `inputs` (`sta::shapes`) and saved in
+/// `<out>/drawn/shapes.json` for the user to check. Returns `{needSegment:
+/// [files]}` when some file has no membrane segmentation (nothing was done:
+/// run `sta_membrane_segment` on each and call again), else the review of the
+/// first tomogram (see `sta_shapes_review`). Same events as `sta_run`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_find(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, size: Option<String>, out: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::shapes::find_shapes(&inputs, &marks, size.as_deref(), &out, &emit, &base64)
+    }).await
+}
+
+/// What `sta_shapes_find` found in `out` as the review of the open file
+/// `tomogram` (a searched tomogram or its look companion), or null when
+/// nothing was found: {total, kept, dropped, flipped, membranes, balls,
+/// lines, unsure, seeds, perTomogram: [{name, path, membranes, balls}],
+/// items: [{id, kind: "membrane"|"ball", example, state: "kept"|"dropped",
+/// sideSure, flipped, centre, radius?, voxels?, arrows: [{pos, axis}]}],
+/// open, etaSeconds, stale, needSegment: [], out, foundMs, averageMs}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_review(out: String, tomogram: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || Ok(crate::sta::shapes::review(&crate::sta::shapes::dir_of(&out), &tomogram))).await
+}
+
+/// The voxels membrane item `id` takes on section `z` of the open file
+/// `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight. Empty
+/// for vesicles.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_section(out: String, id: usize, tomogram: String, z: usize) -> CmdResult<Vec<[usize; 3]>> {
+    blocking(move || {
+        let dir = crate::sta::shapes::dir_of(&out);
+        match crate::sta::shapes::load(&dir) {
+            Some(s) => crate::sta::shapes::section_runs(&s, &dir, id, &tomogram, z),
+            None => Ok(vec![]),
+        }
+    }).await
+}
+
+/// Changes the user's edits of the shapes review and returns it (`sta_shapes_review`):
+/// `drop` (an item's id: dropped, or taken back), `flip` (an item's id: turned
+/// to the other side), `flipAll`, `reset` (the program's suggestion).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip: Option<usize>, flip_all: Option<bool>, reset: Option<bool>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let edit = crate::sta::shapes::Edit { drop, flip, flip_all: flip_all.unwrap_or(false), reset: reset.unwrap_or(false) };
+        crate::sta::shapes::set_review(&crate::sta::shapes::dir_of(&out), &tomogram, &edit)
+    }).await
+}
+
+/// Averages what the shapes review of `out` keeps (second half). Same events
+/// and result as `sta_run_drawn`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_average(app: AppHandle, out: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::shapes::average_shapes(&out, &emit, &base64)
+    }).await
+}
+
 /// The marks saved in an output folder: {marks, size}.
 #[cfg(feature = "pro")]
 #[tauri::command]
@@ -3109,6 +3180,11 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_review,
             #[cfg(feature = "pro")] sta_review_set,
             #[cfg(feature = "pro")] sta_average_found,
+            #[cfg(feature = "pro")] sta_shapes_find,
+            #[cfg(feature = "pro")] sta_shapes_review,
+            #[cfg(feature = "pro")] sta_shapes_section,
+            #[cfg(feature = "pro")] sta_shapes_set,
+            #[cfg(feature = "pro")] sta_shapes_average,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,

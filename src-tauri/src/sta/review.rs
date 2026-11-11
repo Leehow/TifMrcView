@@ -433,7 +433,7 @@ pub fn kept_places(s: &State) -> Result<Vec<Place>> {
 }
 
 /// The progress, live and note callbacks of a run, as `auto::run_inputs` makes them.
-fn events<R>(emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync), f: impl FnOnce(Progress, Live, &(dyn Fn(Note) + Sync)) -> Result<R>) -> Result<R> {
+pub(super) fn events<R>(emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync), f: impl FnOnce(Progress, Live, &(dyn Fn(Note) + Sync)) -> Result<R>) -> Result<R> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     let before = Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);

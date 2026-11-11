@@ -29,6 +29,10 @@
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
 // (sta_mark_section: runs [y, x0, x1) of the voxels on that section).
+// Painted membranes and marked spheres are EXAMPLES: 找出全部同类 finds all of that
+// kind in every ticked tomogram and shows them for checking (shapes.js,
+// sta::shapes); 点 does the same for particles (found.js). Lines and surfaces
+// alone keep the direct run 「平均我标的」.
 // Backend: sta_run_drawn, sta_marks_load, sta_marks_save, sta_mark_preview,
 // sta_membrane_status, sta_membrane_segment, sta_mark_section. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
@@ -90,6 +94,8 @@
     const b = document.createElement("button");
     b.className = "small";
     b.textContent = label;
+    // 小/中/大 stay as they are in every interface language (the word list turns a lone 中 into "Medium").
+    b.setAttribute("data-no-i18n", "");
     b.onclick = () => { D.size = k; save(); render(); };
     $("sta-draw-sizes").append(b);
     sizes[k] = b;
@@ -98,6 +104,8 @@
   const count = (m) => m.points.length;
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
   const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && count(m) >= 2);
+  // A painted membrane or a complete sphere is an example of what to find (shapes.js).
+  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || (m.kind === "sphere" && count(m) >= 2);
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
@@ -247,7 +255,10 @@
     const shapes = D.marks.some(usable);
     const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
     const few = pointsN > 0 && pointsN < GOOD_POINTS && !D.marks.some((m) => m.kind !== "point");
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : ""].filter(Boolean).join("。");
+    // Membranes and vesicles are examples: all of that kind are found and shown first (shapes.js).
+    const examples = D.marks.filter(isExample).length;
+    const fewShapes = examples === 1;
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : ""].filter(Boolean).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = D.kind === "membrane" ? M.line : "";
     ml.hidden = !ml.textContent;
@@ -286,9 +297,10 @@
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
     const ok = shapes || pointsOnly;
     // Points alone find everything like them first; shapes are averaged directly.
-    $("sta-draw-run").textContent = pointsOnly && !shapes ? "找出全部同类" : "平均我标的";
+    const finds = (pointsOnly && !shapes) || examples > 0;
+    $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg;
-    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
+    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
     draw();
   }
 
@@ -350,6 +362,8 @@
     D.open = null;
     setKind(null);
     if (onlyPoints && W.found) return W.found.findPoints(marks);
+    // Membranes and vesicles: find all of that kind, show them, average after the user confirms.
+    if (W.shapes && marks.some(isExample)) return W.shapes.find(marks, D.size);
     W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks, out, size: D.size }), false);
   };
 
@@ -430,7 +444,8 @@
 
   // Marks over the image: faint on the slices near the clicked one.
   ext.overlays.push((ctx) => {
-    if (W.panel.hidden || !S.info || S.axis !== "xy") return;
+    // While the found membranes and vesicles are shown, the examples are among them.
+    if (W.panel.hidden || !S.info || S.axis !== "xy" || W.shapes?.shown()) return;
     const sc = toScreen(1, 0)[0] - toScreen(0, 0)[0];
     const at = (p) => toScreen(p[0] + 0.5, p[1] + 0.5);
     const alpha = (dz) => (dz <= 1 ? 1 : dz <= 6 ? 0.35 : 0);

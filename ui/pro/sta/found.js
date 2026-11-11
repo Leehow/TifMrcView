@@ -9,7 +9,7 @@
 // kept beside the cards (the cards' route) or in marked/ (clicked particles),
 // so closing the app loses nothing; the review shows again when the folder is
 // reopened and there is no newer average.
-// Shapes (线 面 球 膜) are not part of this: they keep their direct run.
+// Membranes and vesicles (膜 球) have their own review in shapes.js; lines and surfaces keep their direct run.
 // Backend: sta_find {inputs, pick|marks, out}, sta_review {out, which, tomogram},
 // sta_review_set {out, which, tomogram, keep?, toggle?, addAt?, reset?},
 // sta_average_found {out, which}; `which` is "card" or "marked".
@@ -21,7 +21,7 @@
   if (!W) return;
   const MIN_KEPT = 20; // as sta::review::MIN_KEPT
   // `d` is the last review the backend gave (null: none to show), for the folder `out`.
-  const R = { d: null, out: "", which: "", gen: 0, add: false, queue: Promise.resolve(), pending: 0, shown: "", dismissed: new Map() };
+  const R = { d: null, out: "", which: "", gen: 0, add: false, queue: Promise.resolve(), pending: 0, shown: "", dismissed: new Map(), raw: null };
 
   const box = document.createElement("div");
   box.id = "sta-found";
@@ -71,8 +71,11 @@
 
   const key = () => `${R.out}|${R.which}`;
   // Puts the review `d` (or none) on the screen; the viewer is the place the user checks it on.
-  function apply(d) {
+  // Of two reviews (particles here, membranes and vesicles in shapes.js) the newer one shows.
+  function apply(d, quiet) {
     if (d && R.dismissed.get(key()) === d.foundMs) d = null;
+    R.raw = d;
+    if (d && (W.shapes?.pendingMs?.() || 0) > d.foundMs) d = null;
     R.d = d;
     const id = d ? `${key()}|${d.foundMs}` : "";
     const fresh = !!d && id !== R.shown;
@@ -81,6 +84,7 @@
     if (d && fresh) { try { box.scrollIntoView({ block: "nearest" }); } catch (_) { /* old webview */ } }
     if (d && fresh && S.tool !== "mark") activate();
     if (!d && S.tool === "found") setTool("select");
+    if (!quiet) W.shapes?.recheck?.();
   }
   function activate() { if (S.tool !== "found") setTool("found"); }
 
@@ -217,6 +221,7 @@
     await W.go(async (inputs, out) => { await task(inputs, out); return { drawn: true }; }, false);
     R.dismissed.clear();
     await load();
+    if (R.d && R.d.foundMs !== before) W.shapes?.dismiss?.();
     if (R.d && R.d.foundMs !== before) W.status(`找到 ${R.d.total} 个：看看图上的圈对不对，调好后按“平均这 ${R.d.kept} 个”`);
   }
   W.found = {
@@ -224,6 +229,16 @@
     find: (pick) => find((inputs, out) => invoke("sta_find", { inputs, pick, marks: null, out })),
     // Clicked particles (point marks) are the examples.
     findPoints: (marks) => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks, out })),
+    // For shapes.js: the time of the review shown (0: none), showing it again after the other one changed, putting it away.
+    pendingMs: () => R.d?.foundMs || 0,
+    recheck: () => apply(R.raw, true),
+    dismiss: () => {
+      if (R.d) R.dismissed.set(key(), R.d.foundMs);
+      R.d = R.raw = null;
+      R.add = false;
+      render();
+      if (S.tool === "found") setTool("select");
+    },
   };
 
   // ---- on the image ----

@@ -36,6 +36,7 @@ pub mod refine;
 pub mod review;
 pub mod search;
 pub mod search_gpu;
+pub mod shapes;
 pub mod shape;
 pub mod sheet;
 pub mod tilt;

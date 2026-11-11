@@ -93,11 +93,11 @@ pub struct Saved {
 }
 
 /// A protein on a vesicle is about this share of the vesicle's radius.
-const SPHERE_SHARE: f64 = 0.5;
+pub const SPHERE_SHARE: f64 = 0.5;
 /// Particle sizes `run_drawn` can serve, Å.
-const SIZE_RANGE: (f64, f64) = (90.0, 490.0);
+pub const SIZE_RANGE: (f64, f64) = (90.0, 490.0);
 /// Seeds beyond this are thinned out evenly (memory: one cube each).
-const MOST_SEEDS: usize = 3000;
+pub const MOST_SEEDS: usize = 3000;
 
 fn marks_file(out: &Path) -> PathBuf {
     out.join("marks.json")
