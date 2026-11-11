@@ -26,6 +26,7 @@ pub mod average;
 pub mod cc;
 pub mod cc_gpu;
 pub mod filaments;
+pub mod flat;
 pub mod gallery;
 pub mod marks;
 pub mod membranes;
@@ -44,6 +45,8 @@ pub mod shape;
 pub mod sheet;
 pub mod taught;
 pub mod tilt;
+#[cfg(test)]
+mod real;
 #[cfg(test)]
 mod tests;
 

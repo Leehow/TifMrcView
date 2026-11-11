@@ -413,6 +413,66 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A membrane (the plane y = 40, its normal along the tilt axis) with a
+/// hexagonal pattern 6 voxels behind it, rows 4 voxels apart, under noise;
+/// the membrane is "drawn" 2 voxels off. `project::run_drawn` has to find
+/// the pattern by itself and end with its places: wherever one is, each of
+/// the pattern's three waves has the same phase (also the one whose rows
+/// the missing wedge hides from the alignment).
+#[test]
+fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
+    use super::project::{run_drawn, Drawn, Source};
+    let dims = [128usize, 64, 128];
+    let waves: Vec<[f64; 2]> = [10f64, 70.0, 130.0].iter().map(|d| [d.to_radians().cos(), d.to_radians().sin()]).collect();
+    let k = std::f64::consts::TAU / 4.0;
+    let mut rng = Rng(11);
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let pattern: f64 = waves.iter().map(|w| (k * (x as f64 * w[0] + z as f64 * w[1])).cos()).sum();
+                let value = -(-0.5 * ((y as f64 - 40.0) / 1.2).powi(2)).exp() - 0.25 * pattern * (-0.5 * ((y as f64 - 34.0) / 1.5).powi(2)).exp();
+                v[(z * dims[1] + y) * dims[0] + x] = (value + 0.5 * rng.gauss()) as f32;
+            }
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("tmv-sta-lattice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 16.0, false).unwrap();
+    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None, series: None }];
+    let mut drawn = vec![];
+    for z in (24..=104).step_by(7) {
+        for x in (24..=104).step_by(7) {
+            drawn.push(Drawn { source: 0, pos: [x as f64, 42.0, z as f64], axis: [0.0, 1.0, 0.0] });
+        }
+    }
+    let out = dir.join("out").to_string_lossy().into_owned();
+    let done = run_drawn(&sources, &drawn, false, 208.0, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
+    let at: Vec<[f64; 3]> = table
+        .lines()
+        .skip(1)
+        .map(|l| {
+            let f: Vec<f64> = l.split(',').skip(1).take(3).map(|x| x.parse().unwrap()).collect();
+            [f[0], f[1], f[2]]
+        })
+        .collect();
+    assert!(at.len() >= 100, "{} places", at.len());
+    // On the pattern's layer, not on the membrane.
+    let depth = at.iter().map(|p| p[1]).sum::<f64>() / at.len() as f64;
+    assert!((depth - 34.0).abs() < 1.5, "places at y = {depth:.1}");
+    for w in &waves {
+        let (c, s) = at.iter().fold((0.0, 0.0), |(c, s), p| {
+            let phase = k * (p[0] * w[0] + p[2] * w[1]);
+            (c + phase.cos(), s + phase.sin())
+        });
+        let together = c.hypot(s) / at.len() as f64;
+        assert!(together > 0.7, "the places agree to {together:.2} on a wave");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `n` scores drawn from the distribution with these quantiles (probability,
 /// score), linear in between.
 fn sample(rng: &mut Rng, n: usize, q: &[(f64, f64)]) -> Vec<f32> {

@@ -1734,22 +1734,44 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let mut cuts: Vec<Cut> = vec![];
     let mut axes: Vec<[f64; 3]> = vec![];
     let mut voxel_a = size_a / SPAN;
-    for (i, s) in sources.iter().enumerate() {
-        progress("裁出颗粒", i, sources.len());
-        if !drawn.iter().any(|d| d.source == i) {
-            continue;
+    // On a surface the places are first put on the layer that is really
+    // there, and a pattern that repeats in it is aligned for itself.
+    let mut on_layer: Vec<Drawn> = vec![];
+    let mut lattice = None;
+    if !both {
+        match on_surfaces(sources, drawn, size_a, progress, live)? {
+            Surfaces::Lattice(l) => lattice = Some(l),
+            Surfaces::Plain(d) => on_layer = d,
         }
-        let (v, dims, voxel, bin) = binned(&s.path, size_a / SPAN)?;
-        voxel_a = voxel;
-        let (median, sd) = super::pick::robust(&v);
-        for d in drawn.iter().filter(|d| d.source == i) {
-            // Source voxel p lies in working voxel p / bin.
-            let c = d.pos.map(|p| (p / bin as f64).floor().max(0.0) as usize);
-            if let Some(cube) = cube(&v, dims, c) {
-                let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
-                cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
-                axes.push(d.axis);
+    }
+    let mut start: Option<(Vec<f32>, Vec<Pose>)> = None;
+    let mut apart = None;
+    let mut detail = None;
+    let drawn: &[Drawn] = if both || lattice.is_some() { drawn } else { &on_layer };
+    if let Some(l) = lattice {
+        cuts = l.cuts;
+        voxel_a = l.voxel_a;
+        apart = Some(l.apart);
+        detail = Some((l.band, l.slide));
+        start = Some((l.model, l.poses));
+    } else {
+        for (i, s) in sources.iter().enumerate() {
+            progress("裁出颗粒", i, sources.len());
+            if !drawn.iter().any(|d| d.source == i) {
+                continue;
+            }
+            let (v, dims, voxel, bin) = binned(&s.path, size_a / SPAN)?;
+            voxel_a = voxel;
+            let (median, sd) = super::pick::robust(&v);
+            for d in drawn.iter().filter(|d| d.source == i) {
+                // Source voxel p lies in working voxel p / bin.
+                let c = d.pos.map(|p| (p / bin as f64).floor().max(0.0) as usize);
+                if let Some(cube) = cube(&v, dims, c) {
+                    let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
+                    let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
+                    cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
+                    axes.push(d.axis);
+                }
             }
         }
     }
@@ -1762,7 +1784,12 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
     let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let (model, poses) = super::refine::first_model_known(&set, &axes, both, 1, progress, live)?;
+    let (model, poses) = match start {
+        Some(start) => start,
+        None => super::refine::first_model_known(&set, &axes, both, 1, progress, live)?,
+    };
+    // Places closer than this are one particle.
+    let apart = apart.unwrap_or(0.5 * size_a / voxel_a);
 
     // Seeds that moved onto the same particle: the best of each stays.
     let mut keep: Vec<usize> = vec![];
@@ -1770,7 +1797,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         let of: Vec<usize> = (0..cuts.len()).filter(|i| cuts[*i].source == s).collect();
         let at: Vec<[f64; 3]> = of.iter().map(|i| std::array::from_fn(|k| cuts[*i].at[k] / cuts[*i].bin as f64 + poses[*i].t[k])).collect();
         let scores: Vec<f32> = of.iter().map(|i| poses[*i].score).collect();
-        keep.extend(super::shape::merge(&at, &scores, 0.5 * size_a / voxel_a).into_iter().map(|k| of[k]));
+        keep.extend(super::shape::merge(&at, &scores, apart).into_iter().map(|k| of[k]));
     }
     // Stretches of the shape that carry no particle match clearly worse.
     let scores: Vec<f32> = keep.iter().map(|i| poses[*i].score).collect();
@@ -1796,7 +1823,20 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         bail!("合并重复位置后只剩 {} 个颗粒", cuts.len());
     }
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let out = align(&set, &model, &poses, progress, live)?;
+    let out = match detail {
+        // The pattern was found at this detail: the first round must see it
+        // too and may not slide a place onto the next row.
+        Some((band, slide)) => super::refine::align_from(&set, &model, &poses, band, slide, progress, live)?,
+        None => align(&set, &model, &poses, progress, live)?,
+    };
+    // A pattern is found at a sampling that only just shows it; what its
+    // places look like is averaged from finer voxels where there are any.
+    let (mut cuts, mut out) = (cuts, out);
+    if detail.is_some() {
+        if let Some((fine, average, voxel)) = finer(sources, &cuts, &out, radius, voxel_a, progress, live)? {
+            (cuts, out, voxel_a) = (fine, average, voxel);
+        }
+    }
     let mut report = Report {
         kinds: vec![],
         diameter_a: None,
@@ -1821,6 +1861,277 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     };
     save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
     Ok(report)
+}
+
+/// Side of the cubes of `finer`.
+const FINE_BOX: usize = 64;
+/// The most voxels of a tomogram `finer` loads.
+const FINE_MOST: usize = 600_000_000;
+
+/// The average of aligned places from cubes of half the voxel they were
+/// aligned on (`voxel_a`; `radius` in those voxels), at the poses found,
+/// where every tomogram has voxels that fine. The cubes are cut, added and
+/// dropped a few at a time. The poses never saw detail beyond the coarse
+/// sampling, so what the halves share beyond it is in the data.
+/// Returns the places on the finer grid, the average and its voxel (Å);
+/// None when there is nothing finer.
+fn finer(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius: f64, voxel_a: f64, progress: Progress, live: Live) -> Result<Option<(Vec<Cut>, super::refine::Aligned, f64)>> {
+    use super::average::Sum;
+    let n = FINE_BOX;
+    let m = cuts.len();
+    // The finer grid of each tomogram, as `binned` makes it.
+    let mut grids: Vec<Option<(usize, [usize; 3])>> = vec![None; sources.len()];
+    for c in cuts {
+        if grids[c.source].is_none() {
+            let img = pipeline::open(&sources[c.source].path)?;
+            let info = img.info();
+            let bin = ((0.5 * voxel_a / output::pixel_a(&img)).round() as usize).max(1);
+            let dims = [info.width / bin, info.height / bin, info.size_z / bin];
+            if bin >= c.bin || dims.iter().product::<usize>() > FINE_MOST {
+                return Ok(None);
+            }
+            grids[c.source] = Some((bin, dims));
+        }
+    }
+    // Where each place is on its finer grid, and whether a cube fits there.
+    let place = |i: usize| -> ([usize; 3], [f64; 3], bool) {
+        let c = &cuts[i];
+        let (bin, dims) = grids[c.source].expect("every source of a cut");
+        let half = (bin as f64 - 1.0) / 2.0;
+        let q: [f64; 3] = std::array::from_fn(|k| (c.at[k] + out.poses[i].t[k] * c.bin as f64 - half) / bin as f64);
+        let at = q.map(|x| x.round().max(0.0) as usize);
+        let whole = (0..2).all(|k| at[k] >= n / 2 && at[k] + n / 2 <= dims[k]) && {
+            let (lo, hi) = (at[2] as isize - (n / 2) as isize, at[2] as isize + (n / 2) as isize);
+            2 * (hi.min(dims[2] as isize) - lo.max(0)).max(0) as usize >= n
+        };
+        (at, std::array::from_fn(|k| q[k] - at[k] as f64), whole)
+    };
+    let places: Vec<([usize; 3], [f64; 3], bool)> = (0..m).map(place).collect();
+    // Even and odd places are the halves: a place that does not fit takes
+    // the other of its pair with it, so the rest stay in their halves.
+    let kept: Vec<usize> = (0..m).filter(|i| places[*i].2 && (i ^ 1 >= m || places[i ^ 1].2)).collect();
+    if kept.len() < 4 {
+        return Ok(None);
+    }
+    let order: std::collections::HashMap<usize, usize> = kept.iter().enumerate().map(|(k, i)| (*i, k)).collect();
+    let empty = || [Sum::new(n), Sum::new(n)];
+    let mut sums = empty();
+    let mut fine_voxel = 0.5 * voxel_a;
+    let mut scale = 2.0;
+    let mut done = 0;
+    for s in 0..sources.len() {
+        let of: Vec<usize> = kept.iter().copied().filter(|i| cuts[*i].source == s).collect();
+        if of.is_empty() {
+            continue;
+        }
+        check_cancel()?;
+        let (v, dims, voxel, bin) = binned(&sources[s].path, 0.5 * voxel_a)?;
+        fine_voxel = voxel;
+        scale = cuts[of[0]].bin as f64 / bin as f64;
+        let wedge = cc::wedge(n, sources[s].tilts[0], sources[s].tilts[1]);
+        for chunk in of.chunks(32) {
+            check_cancel()?;
+            let part = chunk
+                .par_iter()
+                .fold(empty, |mut sum, &i| {
+                    if let Some(cube) = cube_n(&v, dims, places[i].0, n) {
+                        sum[order[&i] % 2].add(&cube, &wedge, &Pose { r: out.poses[i].r, t: places[i].1, score: out.poses[i].score });
+                    }
+                    sum
+                })
+                .reduce(empty, |mut a, b| {
+                    a[0].merge(&b[0]);
+                    a[1].merge(&b[1]);
+                    a
+                });
+            sums[0].merge(&part[0]);
+            sums[1].merge(&part[1]);
+            done += chunk.len();
+            progress("精细平均", done, kept.len());
+        }
+    }
+    let halves = [sums[0].finish(), sums[1].finish()];
+    let fsc = crate::spa::post::fsc(&halves[0], &halves[1], n, (radius * scale + 2.0).min(n as f64 / 2.0 - 1.0));
+    let shell = super::refine::cut(&fsc);
+    let [mut both, other] = sums;
+    both.merge(&other);
+    let map = both.finish();
+    live(&map);
+    let fine: Vec<Cut> = kept
+        .iter()
+        .map(|&i| {
+            let c = &cuts[i];
+            let (bin, _) = grids[c.source].expect("every source of a cut");
+            let half = (bin as f64 - 1.0) / 2.0;
+            Cut { source: c.source, at: places[i].0.map(|x| x as f64 * bin as f64 + half), bin, score: c.score, strength: c.strength, darkest: c.darkest, cube: vec![] }
+        })
+        .collect();
+    let poses = kept.iter().map(|&i| Pose { r: out.poses[i].r, t: places[i].1, score: out.poses[i].score }).collect();
+    Ok(Some((fine, super::refine::Aligned { map, halves, poses, fsc, shell }, fine_voxel)))
+}
+
+/// A profile across a membrane is averaged over a disc of this radius, Å.
+const SNAP_DISC_A: f64 = 60.0;
+/// A drawn surface may be this far off the layer it stands for, Å.
+const SNAP_RANGE_A: f64 = 100.0;
+
+/// What `on_surfaces` found on the drawn surfaces.
+enum Surfaces {
+    /// A pattern that repeats in the layer: the places on it, aligned.
+    Lattice(OnLattice),
+    /// No such pattern: the drawn places, moved onto the real layer.
+    Plain(Vec<Drawn>),
+}
+
+struct OnLattice {
+    /// One cube per place of the pattern, cut straight from the tomogram.
+    cuts: Vec<Cut>,
+    poses: Vec<Pose>,
+    /// Their average at those poses.
+    model: Vec<f32>,
+    voxel_a: f64,
+    /// Places closer than this (voxels) are the same one.
+    apart: f64,
+    /// The detail the pattern needs (cycles across the box) and how far a
+    /// place may still slide (voxels) without leaving its own.
+    band: f64,
+    slide: usize,
+}
+
+/// One tomogram at the working sampling.
+struct Held {
+    which: usize,
+    v: Vec<f32>,
+    dims: [usize; 3],
+    voxel: f64,
+    bin: usize,
+    median: f32,
+    sd: f32,
+}
+
+fn hold<'a>(held: &'a mut Option<Held>, sources: &[Source], which: usize, voxel_a: f64) -> Result<&'a Held> {
+    if held.as_ref().is_none_or(|h| h.which != which) {
+        *held = None;
+        let (v, dims, voxel, bin) = binned(&sources[which].path, voxel_a)?;
+        let (median, sd) = super::pick::robust(&v);
+        *held = Some(Held { which, v, dims, voxel, bin, median, sd });
+    }
+    Ok(held.as_ref().expect("just loaded"))
+}
+
+/// The drawn places of surfaces (`drawn`, their normals known), put on the
+/// layer that is really there (`flat::snap`), and, when a pattern repeats
+/// in the layers (`flat::lattice`), the places of that pattern: unbent
+/// cubes centred on its depth are aligned in the layer (how the pattern
+/// lies in each is first read from the cube, `flat::rows`, then
+/// `refine::in_layer`: turn about the normal, slide along the surface),
+/// what was found is
+/// carried back to the tomogram, and cubes are cut straight there.
+fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progress, live: Live) -> Result<Surfaces> {
+    use super::flat;
+    use super::shape::Seed;
+    let mut held: Option<Held> = None;
+    let mut seeds: Vec<Vec<Seed>> = vec![vec![]; sources.len()];
+    let mut scale: Vec<(usize, f64)> = vec![(1, size_a / SPAN); sources.len()];
+    let mut found: Option<flat::Lattice> = None;
+    let used: Vec<usize> = (0..sources.len()).filter(|i| drawn.iter().any(|d| d.source == *i)).collect();
+    for (step, &i) in used.iter().enumerate() {
+        progress("找准膜面", step, used.len());
+        check_cancel()?;
+        let h = hold(&mut held, sources, i, size_a / SPAN)?;
+        let radius = 0.8 * size_a / h.voxel;
+        let half = (h.bin as f64 - 1.0) / 2.0;
+        // Source voxel p is working voxel (p − half) / bin.
+        let at: Vec<Seed> = drawn.iter().filter(|d| d.source == i).map(|d| Seed { pos: d.pos.map(|p| (p - half) / h.bin as f64), axis: d.axis }).collect();
+        let on_layer = flat::snap(&h.v, h.dims, &at, SNAP_DISC_A / h.voxel, SNAP_RANGE_A / h.voxel, 1.5 * radius, sources[i].tilts);
+        let lattice = flat::lattice(&h.v, h.dims, &flat::patches(&on_layer, 1.5 * radius), BOX, radius.ceil() as usize);
+        if let Some(l) = lattice.filter(|l| found.is_none_or(|f| l.strength > f.strength)) {
+            found = Some(l);
+        }
+        seeds[i] = on_layer;
+        scale[i] = (h.bin, h.voxel);
+    }
+    progress("找准膜面", used.len(), used.len());
+    let Some(lattice) = found else {
+        let on_layer = used
+            .iter()
+            .flat_map(|&i| {
+                let (bin, _) = scale[i];
+                let half = (bin as f64 - 1.0) / 2.0;
+                seeds[i].iter().map(move |s| Drawn { source: i, pos: s.pos.map(|p| p * bin as f64 + half), axis: s.axis })
+            })
+            .collect();
+        return Ok(Surfaces::Plain(on_layer));
+    };
+
+    // Unbent cubes about the pattern's depth.
+    let mut cubes: Vec<Vec<f32>> = vec![];
+    let mut wedges: Vec<Vec<f32>> = vec![];
+    let mut origin: Vec<(usize, flat::Patch)> = vec![];
+    let mut radius = 0.8 * size_a / scale[used[0]].1;
+    for (step, &i) in used.iter().enumerate() {
+        progress("裁出颗粒", step, used.len());
+        check_cancel()?;
+        let h = hold(&mut held, sources, i, size_a / SPAN)?;
+        radius = 0.8 * size_a / h.voxel;
+        let moved: Vec<Seed> = seeds[i].iter().map(|s| Seed { pos: std::array::from_fn(|k| s.pos[k] + lattice.depth * s.axis[k]), axis: s.axis }).collect();
+        for patch in flat::patches(&moved, 1.5 * radius) {
+            if let Some(cube) = flat::cut(&h.v, h.dims, &patch, BOX, radius) {
+                cubes.push(flat::pattern(&cube, BOX, 2.0 * lattice.period));
+                wedges.push(flat::wedge(BOX, &patch.frame, sources[i].tilts[0], sources[i].tilts[1]));
+                origin.push((i, patch));
+            }
+        }
+    }
+    progress("裁出颗粒", used.len(), used.len());
+    if cubes.len() < 20 {
+        bail!("画出的范围里只取到 {} 个位置，太少了", cubes.len());
+    }
+    let band = (1.5 * BOX as f64 / lattice.period).min(BOX as f64 / 2.0 - 3.0);
+    let slide = (0.5 * lattice.period).ceil() as usize + 1;
+    let wedge_of: Vec<usize> = (0..cubes.len()).collect();
+    let set = Set { n: BOX, particles: &cubes, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let start = flat::rows(&cubes, BOX, lattice.period);
+    let (_, found) = super::refine::in_layer(&set, band, slide, start.as_deref(), 1, progress, live)?;
+    drop((cubes, wedges));
+
+    // Back to the tomogram: where each place is and how it stands there.
+    let mut cuts: Vec<Cut> = vec![];
+    let mut poses: Vec<Pose> = vec![];
+    let apart = 0.5 * lattice.period;
+    for (step, &i) in used.iter().enumerate() {
+        progress("放回原图", step, used.len());
+        check_cancel()?;
+        let of: Vec<usize> = (0..origin.len()).filter(|k| origin[*k].0 == i).collect();
+        let at: Vec<[f64; 3]> = of.iter().map(|k| origin[*k].1.lift(found[*k].t)).collect();
+        let scores: Vec<f32> = of.iter().map(|k| found[*k].score).collect();
+        let h = hold(&mut held, sources, i, size_a / SPAN)?;
+        let half = (h.bin as f64 - 1.0) / 2.0;
+        for j in super::shape::merge(&at, &scores, apart) {
+            let (p, k) = (at[j], of[j]);
+            if p.iter().any(|x| *x < 0.0) {
+                continue;
+            }
+            let c = p.map(|x| x.round() as usize);
+            let Some(cube) = cube(&h.v, h.dims, c) else { continue };
+            let r = mul(&origin[k].1.frame_at(found[k].t[0], found[k].t[1]), &found[k].r);
+            let darkest = darkest(&h.v, h.dims, c, 0.5 * size_a / h.voxel, h.median, h.sd);
+            cuts.push(Cut { source: i, at: c.map(|x| x as f64 * h.bin as f64 + half), bin: h.bin, score: 0.0, strength: 0.0, darkest, cube });
+            poses.push(Pose { r, t: std::array::from_fn(|d| p[d] - c[d] as f64), score: found[k].score });
+        }
+    }
+    progress("放回原图", used.len(), used.len());
+    if cuts.len() < 20 {
+        bail!("画出的范围里只取到 {} 个位置，太少了", cuts.len());
+    }
+    let voxel_a = scale[used[0]].1;
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let model = set.average(&poses, |_| true).finish();
+    live(&model);
+    Ok(Surfaces::Lattice(OnLattice { cuts, poses, model, voxel_a, apart, band, slide: 1 }))
 }
 
 /// The order in which places become the two halves of `align` (even

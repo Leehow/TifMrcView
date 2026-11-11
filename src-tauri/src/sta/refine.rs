@@ -242,20 +242,14 @@ pub fn classes_on(dev: Option<&Device>, set: &Set, k: usize, seed: u64, progress
     Ok(out)
 }
 
-/// Rounds of `first_model_known`. The axis is known but the turn about it
-/// starts random, so the first model is a cylinder: a lattice on a surface
-/// (6-fold, 60° period) only appears once the noise has broken that
-/// symmetry and the turns have settled, which takes more rounds than the
-/// axis alone would.
-const KNOWN_ROUNDS: usize = 8;
-/// Rounds over which its resolution limit rises; it then stays at the top.
-const KNOWN_RAMP: usize = 4;
-/// How far the rim of the mask moves per step of the turn about the axis,
-/// voxels. 30° (the global step) is two samples per 60° period: a 6-fold
-/// lattice can never lock on that.
+/// Rounds of `first_model_known`: the start is already close.
+const KNOWN_ROUNDS: usize = 4;
+/// How far the rim of the mask moves per step of the turn about Z in
+/// `in_layer`, voxels. 30° (the global step) is two samples per 60°: a
+/// six-fold pattern can never lock on that.
 const KNOWN_RIM: f64 = 1.5;
 
-/// The step of the turn about a known axis, degrees, for a mask of
+/// The step of the turn about Z of `in_layer`, degrees, for a mask of
 /// `radius` voxels: the rim moves `KNOWN_RIM` voxels.
 fn known_step(radius: f64) -> f64 {
     (KNOWN_RIM / radius.max(1.0)).to_degrees().clamp(3.0, STEP)
@@ -278,14 +272,12 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
     live(&model);
     let n = set.n as f64;
     let (lo, hi) = (n / (2.0 * set.radius) * 1.5, (n / (2.0 * set.radius) * 5.0).min(n / 2.0 - 3.0));
-    let step = known_step(set.radius);
     for round in 0..KNOWN_ROUNDS {
         check_cancel()?;
-        let ramp = (round as f64 / (KNOWN_RAMP - 1) as f64).min(1.0);
-        let low_pass = (lo + (hi - lo) * ramp).max(2.0);
+        let low_pass = (lo + (hi - lo) * round as f64 / (KNOWN_ROUNDS - 1) as f64).max(2.0);
         let engine = set.engine(low_pass);
         // A different set of turns each round, so the grid leaves no mark.
-        let offset = spin(step * rng.unit());
+        let offset = spin(STEP * rng.unit());
         let reference = engine.reference(&model);
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("起始模型 第 {}/{} 轮", round + 1, KNOWN_ROUNDS);
@@ -297,27 +289,101 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
                     return poses[i];
                 }
                 let x = engine.prepare(&set.particles[i], set.wedge(i));
-                for r in super::shape::turns(axes[i], step, both) {
+                for r in super::shape::turns(axes[i], STEP, both) {
                     let r = mul(&r, &offset);
                     let (score, t) = engine.score(&x, &engine.turn(&reference, &r), set.shift());
                     if score > best.score {
                         best = Pose { r, t, score };
                     }
                 }
-                // Along the shape the place is free (a lattice repeats), so
-                // only the shift across it is kept here: places sliding
-                // sideways would tilt the curved shape in the box, and the
-                // turns would then follow its curvature, not its pattern.
-                let a = [best.r[0][2], best.r[1][2], best.r[2][2]];
-                let along = (0..3).map(|k| best.t[k] * a[k]).sum::<f64>();
-                best.t = a.map(|v| along * v);
                 progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
                 best
             })
             .collect();
         check_cancel()?;
         let average = set.average(&poses, |_| true).finish();
-        model = centre_along(set, &mut poses, average, true);
+        model = centre(set, &mut poses, average);
+        live(&model);
+    }
+    Ok((model, poses))
+}
+
+/// Rounds of `in_layer`.
+const LAYER_ROUNDS: usize = 8;
+
+/// Rounds of `in_layer` from a start that is already about right.
+const LAYER_ROUNDS_KNOWN: usize = 4;
+
+/// A first model for cubes cut unbent along a surface (`flat`): the layers
+/// are flat sheets across Z in every one, so all that is searched is the
+/// turn about Z and a slide of at most `slide` voxels, and only the pattern
+/// in the layers decides. `band` is the detail the pattern needs, in cycles
+/// across the box: it is there from the first round on. `start` is each
+/// cube's turn (degrees) and slide as read from the cube itself
+/// (`flat::rows`); without it every cube starts at a random turn, the first
+/// model is the same all the way round, and only what the noise leaves of
+/// the pattern can break that.
+pub fn in_layer(set: &Set, band: f64, slide: usize, start: Option<&[(f64, [f64; 2])]>, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    set.check()?;
+    let m = set.particles.len();
+    let mut rng = Rng(seed);
+    let mut poses: Vec<Pose> = match start {
+        Some(start) => start.iter().map(|(turn, slide)| Pose { r: super::cc_axis(*turn), t: [slide[0], slide[1], 0.0], score: 0.0 }).collect(),
+        None => (0..m).map(|_| Pose { r: super::cc_axis(360.0 * rng.unit()), t: [0.0; 3], score: 0.0 }).collect(),
+    };
+    assert_eq!(poses.len(), m);
+    let mut model = set.average(&poses, |_| true).finish();
+    live(&model);
+    let engine = set.engine(band.clamp(2.0, set.n as f64 / 2.0 - 3.0));
+    let turns = (360.0 / known_step(set.radius)).round().max(1.0) as usize;
+    let rounds = if start.is_some() { LAYER_ROUNDS_KNOWN } else { LAYER_ROUNDS };
+    for round in 0..rounds {
+        check_cancel()?;
+        // A different set of turns each round, so the grid leaves no mark.
+        let first = 360.0 / turns as f64 * rng.unit();
+        let reference = engine.reference(&model);
+        let turned: Vec<(Mat, super::cc::Turned)> = (0..turns)
+            .into_par_iter()
+            .map(|k| {
+                let r = super::cc_axis(first + 360.0 * k as f64 / turns as f64);
+                (r, engine.turn(&reference, &r))
+            })
+            .collect();
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let stage = format!("起始模型 第 {}/{} 轮", round + 1, rounds);
+        poses = (0..m)
+            .into_par_iter()
+            .map(|i| {
+                if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                    return poses[i];
+                }
+                let x = engine.prepare(&set.particles[i], set.wedge(i));
+                let mut best = Pose { score: f32::MIN, ..poses[i] };
+                for (r, reference) in &turned {
+                    let (score, t) = engine.score(&x, reference, slide);
+                    if score > best.score {
+                        best = Pose { r: *r, t, score };
+                    }
+                }
+                progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
+                best
+            })
+            .collect();
+        check_cancel()?;
+        // A pattern that repeats can be anywhere under the box: the model
+        // must not wander off with the mean of the slides.
+        let mut mean = [0.0f64; 3];
+        for p in &poses {
+            for k in 0..3 {
+                mean[k] += (0..3).map(|j| p.r[j][k] * p.t[j]).sum::<f64>() / m as f64;
+            }
+        }
+        for p in &mut poses {
+            for j in 0..3 {
+                p.t[j] -= (0..3).map(|k| p.r[j][k] * mean[k]).sum::<f64>();
+            }
+        }
+        model = set.average(&poses, |_| true).finish();
         live(&model);
     }
     Ok((model, poses))
@@ -327,12 +393,6 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
 /// background) to the box centre and the poses with it, so the particle
 /// does not drift out of the mask over the rounds.
 fn centre(set: &Set, poses: &mut [Pose], model: Vec<f32>) -> Vec<f32> {
-    centre_along(set, poses, model, false)
-}
-
-/// `centre`; with `axis_only` only along the model's Z axis (the known
-/// axis of `first_model_known`: across a surface, along a filament).
-fn centre_along(set: &Set, poses: &mut [Pose], model: Vec<f32>, axis_only: bool) -> Vec<f32> {
     let n = set.n;
     let c = (n / 2) as f64;
     let mean = model.iter().map(|v| *v as f64).sum::<f64>() / model.len() as f64;
@@ -357,7 +417,7 @@ fn centre_along(set: &Set, poses: &mut [Pose], model: Vec<f32>, axis_only: bool)
     if w <= 0.0 {
         return model;
     }
-    let g = if axis_only { [0.0, 0.0, g[2] / w] } else { [g[0] / w, g[1] / w, g[2] / w] };
+    let g = [g[0] / w, g[1] / w, g[2] / w];
     if g.iter().map(|v| v * v).sum::<f64>().sqrt() < 0.25 {
         return model;
     }
@@ -445,6 +505,14 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
     align_on(None, set, model, start, progress, live)
 }
 
+/// `align` for a start that is already right to the detail of `band`
+/// cycles across the box (a pattern aligned in its layer, `in_layer`): the
+/// first round sees that detail, and no round shifts a particle by more
+/// than `shift` voxels, so none ends on the next row of the pattern.
+pub fn align_from(set: &Set, model: &[f32], start: &[Pose], band: f64, shift: usize, progress: Progress, live: Live) -> Result<Aligned> {
+    align_within(None, set, model, start, Some((band, shift)), progress, live)
+}
+
 /// Whether `align_on` runs its local searches on the device. Measured on
 /// Metal (M1 Max, `cc_gpu::tests::times`, 500 particles × 33 steps, warm
 /// kernels): the CPU engine is as fast or faster at every size a run uses
@@ -457,12 +525,23 @@ const LOCAL_ON_DEVICE: bool = false;
 /// CPU engine, for many particles and steps at once (`cc_gpu`). A device
 /// that fails hands the round back to the CPU.
 pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], progress: Progress, live: Live) -> Result<Aligned> {
+    align_within(dev, set, model, start, None, progress, live)
+}
+
+fn align_within(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], known: Option<(f64, usize)>, progress: Progress, live: Live) -> Result<Aligned> {
     set.check()?;
     let m = set.particles.len();
     let mut poses = start.to_vec();
     let mut refs = [model.to_vec(), model.to_vec()];
     // The shared start is trusted only at low resolution.
-    let mut low_pass = (set.n as f64 / (2.0 * set.radius) * 3.0).clamp(2.0, set.n as f64 / 2.0 - 3.0);
+    let top = set.n as f64 / 2.0 - 3.0;
+    let mut low_pass = (set.n as f64 / (2.0 * set.radius) * 3.0).clamp(2.0, top);
+    let mut shift = set.shift();
+    if let Some((band, most)) = known {
+        low_pass = low_pass.max(band).min(top);
+        shift = shift.min(most);
+    }
+    let floor = known.map_or(2.0, |(band, _)| band.min(top));
     let mut out = None;
     for (round, range) in RANGES.iter().enumerate() {
         check_cancel()?;
@@ -490,7 +569,7 @@ pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
                         return poses[i];
                     }
                     let x = engine.prepare(&set.particles[i], set.wedge(i));
-                    let p = engine.local(&x, &against[i % 2], &poses[i], &steps, set.shift());
+                    let p = engine.local(&x, &against[i % 2], &poses[i], &steps, shift);
                     progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
                     p
                 })
@@ -501,7 +580,7 @@ pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
         let halves = [a.finish(), b.finish()];
         let fsc = post::fsc(&halves[0], &halves[1], set.n, set.radius + 2.0);
         let shell = cut(&fsc);
-        low_pass = (shell.max(extent(&fsc)) + 1.0).clamp(2.0, set.n as f64 / 2.0 - 3.0);
+        low_pass = (shell.max(extent(&fsc)) + 1.0).clamp(floor, top);
         let mut both = a;
         both.merge(&b);
         let map = both.finish();
