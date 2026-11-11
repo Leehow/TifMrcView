@@ -473,6 +473,67 @@ fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A saved average of 98 particles, a third of them with a partner bound:
+/// `project::kinds_of` finds the two kinds from the files alone, and
+/// `project::keep_kinds` averages the kind that is kept.
+#[test]
+fn the_kinds_of_a_saved_average_are_found_and_one_is_kept() {
+    use super::project::{keep_kinds, kinds_of, Source};
+    use crate::spa::geom::angles;
+    let plain = phantom();
+    let c = (N / 2) as f64;
+    let bound: Vec<f32> = plain
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let (x, y, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+            v + 1.2 * (-((x - 5.0).powi(2) + (y + 4.0).powi(2) + (z + 3.0).powi(2)) / (2.0 * 2.5 * 2.5)).exp() as f32
+        })
+        .collect();
+    let dims = [176usize, 176, 72];
+    let mut rng = Rng(29);
+    let mut v: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| rng.gauss() as f32).collect();
+    let dir = std::env::temp_dir().join(format!("tmv-sta-kinds-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    let mut csv = String::from("tomogram,x,y,z,rot,tilt,psi,score,half,blob,strength,darkest\n");
+    let mut with = vec![];
+    for k in 0..98 {
+        let o = [28 + 20 * (k % 7), 28 + 20 * (k / 7 % 7), 20 + 32 * (k / 49)];
+        let has = k % 3 == 0;
+        let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
+        let p = rotate(if has { &bound } else { &plain }, N, &r);
+        for z in 0..N {
+            for y in 0..N {
+                for x in 0..N {
+                    v[((o[2] + z - N / 2) * dims[1] + o[1] + y - N / 2) * dims[0] + o[0] + x - N / 2] += p[(z * N + y) * N + x];
+                }
+            }
+        }
+        let [rot, tilt, psi] = angles(&r);
+        csv += &format!("{tomo},{},{},{},{rot:.2},{tilt:.2},{psi:.2},0.5,{},0,0,0\n", o[0], o[1], o[2], k % 2 + 1);
+        with.push(has);
+    }
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("particles.csv"), csv).unwrap();
+    std::fs::write(out.join("sta.json"), serde_json::json!({ "diameterA": 350.0, "voxelA": 17.5, "resolutionA": 70.0, "fsc": vec![0.5; N / 2 + 1] }).to_string()).unwrap();
+    let sources = vec![Source { path: tomo, tilts: [-90.0, 90.0], look: None, series: None }];
+    let out = out.to_string_lossy().into_owned();
+    let found = kinds_of(&sources, &out, &|_, _, _| {}).unwrap();
+    let kinds = found["kinds"].as_array().unwrap();
+    assert_eq!(kinds.len(), 2, "{found}");
+    let rows = |k: usize| -> Vec<usize> { kinds[k]["rows"].as_array().unwrap().iter().map(|r| r.as_u64().unwrap() as usize).collect() };
+    let right = rows(0).iter().filter(|i| !with[**i]).count() + rows(1).iter().filter(|i| with[**i]).count();
+    assert!(right >= 92, "{right} of 98 with their own kind");
+    assert!(std::path::Path::new(kinds[1]["map"].as_str().unwrap()).exists());
+    let kept = keep_kinds(&sources, &out, &[1], &|_, _, _| {}, &|_| {}).unwrap();
+    assert!(kept.particles >= 50 && kept.particles <= rows(0).len(), "{}", kept.particles);
+    assert!(std::path::Path::new(&kept.map.unwrap()).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `n` scores drawn from the distribution with these quantiles (probability,
 /// score), linear in between.
 fn sample(rng: &mut Rng, n: usize, q: &[(f64, f64)]) -> Vec<f32> {

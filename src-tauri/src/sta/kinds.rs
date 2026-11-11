@@ -29,7 +29,7 @@ use crate::spa::fourier::{ft3, index};
 use crate::spa::Rng;
 
 /// Detail the particles are compared to, cycles across the box, at most.
-const BAND: f64 = 8.0;
+pub(super) const BAND: f64 = 8.0;
 /// Directions worked out; the last ones say what the rest looks like.
 const DIRECTIONS: usize = 12;
 /// A direction counts when the particles spread this much more along it

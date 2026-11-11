@@ -1881,6 +1881,234 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     Ok(report)
 }
 
+/// One row of a saved `particles.csv`.
+struct Row {
+    source: usize,
+    /// Centre, voxels of the source tomogram.
+    at: [f64; 3],
+    r: crate::spa::geom::Mat,
+    score: f32,
+    /// 1 or 2.
+    half: usize,
+    blob: f32,
+    strength: f32,
+    darkest: f32,
+}
+
+/// A saved average as the steps after it need it: its particles, the size
+/// (Å), the voxel (Å) and the side of its map, and its resolution (Å).
+struct Saved {
+    rows: Vec<Row>,
+    size_a: f64,
+    voxel_a: f64,
+    n: usize,
+    resolution_a: Option<f64>,
+}
+
+fn saved(sources: &[Source], dir: &str) -> Result<Saved> {
+    let dir = Path::new(dir);
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("sta.json")).with_context(|| format!("{} 里没有平均结果", dir.display()))?)?;
+    let same = |a: &str, b: &str| a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(x, y)| x == y);
+    let text = std::fs::read_to_string(dir.join("particles.csv")).context("读不到颗粒表")?;
+    let mut rows = vec![];
+    for line in text.lines().skip(1) {
+        // The tomogram's path may hold commas: the numbers are the last eleven fields.
+        let f: Vec<&str> = line.rsplitn(12, ',').collect();
+        if f.len() < 12 {
+            continue;
+        }
+        let n = |k: usize| f[k].trim().parse::<f64>().with_context(|| format!("颗粒表里有读不懂的一行：{line}"));
+        let Some(source) = sources.iter().position(|s| same(&s.path, f[11])) else { bail!("平均里用到的断层图不在这次选的里面：{}", f[11]) };
+        rows.push(Row {
+            source,
+            at: [n(10)?, n(9)?, n(8)?],
+            r: crate::spa::geom::euler(n(7)?, n(6)?, n(5)?),
+            score: n(4)? as f32,
+            half: if n(3)? as usize == 2 { 2 } else { 1 },
+            blob: n(2)? as f32,
+            strength: n(1)? as f32,
+            darkest: n(0)? as f32,
+        });
+    }
+    let number = |key: &str| report[key].as_f64();
+    let fsc = report["fsc"].as_array().map_or(0, |a| a.len());
+    if fsc < 3 {
+        bail!("平均结果不完整");
+    }
+    Ok(Saved { rows, size_a: number("diameterA").context("平均结果不完整")?, voxel_a: number("voxelA").context("平均结果不完整")?, n: 2 * (fsc - 1), resolution_a: number("resolutionA") })
+}
+
+/// Where a row lies on a tomogram's grid of `bin`: the voxel its cube is
+/// cut about and what is left to that voxel's centre.
+fn on_grid(at: [f64; 3], bin: usize) -> ([usize; 3], [f64; 3]) {
+    let half = (bin as f64 - 1.0) / 2.0;
+    let q = at.map(|x| (x - half) / bin as f64);
+    let c = q.map(|x| x.round().max(0.0) as usize);
+    (c, std::array::from_fn(|k| q[k] - c[k] as f64))
+}
+
+/// The kinds among the particles of the saved average in `dir`
+/// (`kinds::kinds`): each kind's average is written to
+/// `<dir>/kinds/kind_<k>.mrc` and the whole to `<dir>/kinds/kinds.json`
+/// (`kinds`: id from 1, count, map, rows of `particles.csv` from 0; empty
+/// when the particles are all one kind), which is also returned.
+pub fn kinds_of(sources: &[Source], dir: &str, progress: Progress) -> Result<serde_json::Value> {
+    let saved = saved(sources, dir)?;
+    // Compared on cubes of side `BOX`, however fine the average is.
+    let want = saved.voxel_a * (saved.n as f64 / BOX as f64).max(1.0);
+    let mut particles: Vec<Vec<f32>> = vec![];
+    let mut poses: Vec<Pose> = vec![];
+    let mut row_of: Vec<usize> = vec![];
+    let mut voxel = want;
+    for s in 0..sources.len() {
+        if !saved.rows.iter().any(|r| r.source == s) {
+            continue;
+        }
+        check_cancel()?;
+        progress("裁出颗粒", s, sources.len());
+        let (v, dims, got, bin) = binned(&sources[s].path, want)?;
+        voxel = got;
+        for (i, row) in saved.rows.iter().enumerate().filter(|(_, r)| r.source == s) {
+            let (c, t) = on_grid(row.at, bin);
+            if let Some(cube) = cube(&v, dims, c) {
+                particles.push(cube);
+                poses.push(Pose { r: row.r, t, score: row.score });
+                row_of.push(i);
+            }
+        }
+    }
+    progress("裁出颗粒", sources.len(), sources.len());
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let wedge_of: Vec<usize> = row_of.iter().map(|i| saved.rows[*i].source).collect();
+    let radius = (0.5 * saved.size_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let shell = saved.resolution_a.map_or(super::kinds::BAND, |r| BOX as f64 * voxel / r);
+    let found = super::kinds::kinds(&set, &poses, shell, progress)?;
+    let out = Path::new(dir).join("kinds");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).with_context(|| format!("无法创建 {}", out.display()))?;
+    let mut list = vec![];
+    for (k, kind) in found.iter().flat_map(|f| f.kinds.iter()).enumerate() {
+        let map = out.join(format!("kind_{}.mrc", k + 1)).to_string_lossy().into_owned();
+        output::write_mrc(&map, &kind.map, [BOX; 3], voxel, false)?;
+        let rows: Vec<usize> = kind.members.iter().map(|i| row_of[*i]).collect();
+        list.push(serde_json::json!({ "id": k + 1, "count": rows.len(), "map": map, "rows": rows }));
+    }
+    let value = serde_json::json!({ "kinds": list, "apart": found.as_ref().map(|f| f.apart), "particles": row_of.len(), "voxelA": voxel });
+    std::fs::write(out.join("kinds.json"), serde_json::to_vec_pretty(&value)?)?;
+    Ok(value)
+}
+
+/// The average of the particles of the kinds `keep` (ids of
+/// `kinds_of`) alone, at the poses they have, from the tomograms at the
+/// saved average's own voxel: written like any average to
+/// `<dir>/kinds/kept`. The two halves stay the halves they were (the
+/// larger loses its extra particles).
+pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progress, live: Live) -> Result<Report> {
+    use super::average::Sum;
+    let started = Instant::now();
+    let saved = saved(sources, dir)?;
+    let listed: serde_json::Value = serde_json::from_slice(&std::fs::read(Path::new(dir).join("kinds").join("kinds.json")).context("还没有分过种类")?)?;
+    let mut rows: Vec<usize> = listed["kinds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|k| k["id"].as_u64().is_some_and(|id| keep.contains(&(id as usize))))
+        .flat_map(|k| k["rows"].as_array().into_iter().flatten().filter_map(|r| r.as_u64().map(|r| r as usize)))
+        .filter(|r| *r < saved.rows.len())
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+    // Even places one half, odd the other, as everywhere.
+    let of_half = |h: usize| rows.iter().copied().filter(|r| saved.rows[*r].half == h).collect::<Vec<_>>();
+    let (first, second) = (of_half(1), of_half(2));
+    let order: Vec<usize> = first.iter().zip(&second).flat_map(|(a, b)| [*a, *b]).collect();
+    if order.len() < 4 {
+        bail!("选中的种类里颗粒太少（{} 个）", rows.len());
+    }
+    let n = saved.n;
+    let empty = || [Sum::new(n), Sum::new(n)];
+    let mut sums = empty();
+    let mut cuts: Vec<Option<Cut>> = (0..order.len()).map(|_| None).collect();
+    let mut poses = vec![Pose { r: saved.rows[0].r, t: [0.0; 3], score: 0.0 }; order.len()];
+    let mut voxel = saved.voxel_a;
+    let mut done = 0;
+    for s in 0..sources.len() {
+        let of: Vec<usize> = (0..order.len()).filter(|k| saved.rows[order[*k]].source == s).collect();
+        if of.is_empty() {
+            continue;
+        }
+        check_cancel()?;
+        let (v, dims, got, bin) = binned(&sources[s].path, saved.voxel_a)?;
+        voxel = got;
+        let wedge = cc::wedge(n, sources[s].tilts[0], sources[s].tilts[1]);
+        let half = (bin as f64 - 1.0) / 2.0;
+        for k in &of {
+            let row = &saved.rows[order[*k]];
+            let (c, t) = on_grid(row.at, bin);
+            poses[*k] = Pose { r: row.r, t, score: row.score };
+            cuts[*k] = Some(Cut { source: s, at: c.map(|x| x as f64 * bin as f64 + half), bin, score: row.blob, strength: row.strength, darkest: row.darkest, cube: vec![] });
+        }
+        for chunk in of.chunks(32) {
+            check_cancel()?;
+            let part = chunk
+                .par_iter()
+                .fold(empty, |mut sum, &k| {
+                    let (c, _) = on_grid(saved.rows[order[k]].at, bin);
+                    if let Some(cube) = cube_n(&v, dims, c, n) {
+                        sum[k % 2].add(&cube, &wedge, &poses[k]);
+                    }
+                    sum
+                })
+                .reduce(empty, |mut a, b| {
+                    a[0].merge(&b[0]);
+                    a[1].merge(&b[1]);
+                    a
+                });
+            sums[0].merge(&part[0]);
+            sums[1].merge(&part[1]);
+            done += chunk.len();
+            progress("平均选中的种类", done, order.len());
+        }
+    }
+    let halves = [sums[0].finish(), sums[1].finish()];
+    let radius = (0.5 * saved.size_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
+    let fsc = crate::spa::post::fsc(&halves[0], &halves[1], n, radius + 2.0);
+    let shell = super::refine::cut(&fsc);
+    let [mut both, other] = sums;
+    both.merge(&other);
+    let map = both.finish();
+    live(&map);
+    let cuts: Vec<Cut> = cuts.into_iter().map(|c| c.expect("every place has its tomogram")).collect();
+    let out = super::refine::Aligned { map, halves, poses, fsc, shell };
+    let mut report = Report {
+        kinds: vec![],
+        diameter_a: None,
+        particles: 0,
+        candidates: saved.rows.len(),
+        distinct: None,
+        voxel_a: 0.0,
+        searched: None,
+        search_voxel_a: None,
+        resolution_a: None,
+        signal_a: None,
+        sharpen_b: None,
+        ctf_limited: false,
+        fsc: vec![],
+        averaged_from: None,
+        fsc_other: None,
+        views_refined: None,
+        pattern: None,
+        map: None,
+        halves: None,
+        table: None,
+        ms: 0,
+    };
+    let kept = Path::new(dir).join("kinds").join("kept");
+    save(&mut report, sources, &cuts, &out, &kept.to_string_lossy(), saved.size_a, voxel, started)?;
+    Ok(report)
+}
+
 /// Side of the cubes of `finer`.
 const FINE_BOX: usize = 64;
 /// The most voxels of a tomogram `finer` loads.
