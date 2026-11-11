@@ -151,6 +151,8 @@ pub struct Status {
     pub size: u64,
     pub model: &'static str,
     pub tracking: bool,
+    /// SAM 2.1 tiny is downloaded: the smart selection tool answers at once.
+    pub fast: bool,
 }
 
 #[derive(Deserialize)]
@@ -264,6 +266,12 @@ struct Inner {
     #[cfg(feature = "pro")]
     predictor: Option<Arc<NativePredictor>>,
     backend: Option<String>,
+    /// The model the smart selection tool uses, and whether it answers
+    /// quickly enough to preview under the pointer: SAM 2.1 tiny when it is
+    /// downloaded, even with SAM 3.1 installed (seconds per view, where the
+    /// small model takes a tenth of one).
+    #[cfg(feature = "pro")]
+    fast: Option<(Arc<NativePredictor>, bool)>,
     /// (token, z, c, t, lo, hi, slab, sigma) of `encoded`.
     #[cfg(feature = "pro")]
     key: Option<(u64, usize, usize, usize, u32, u32, usize, u32)>,
@@ -308,6 +316,7 @@ impl Sam {
             size: if sam31 { 3_502_755_717 } else { MODEL_SIZE },
             model: if sam31 { "SAM 3.1" } else { "SAM 2.1" },
             tracking: !sam31,
+            fast: model_path().is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == MODEL_SIZE)),
         }
     }
 

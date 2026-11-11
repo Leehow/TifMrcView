@@ -966,7 +966,7 @@
     syncSam();
     // Load the model before the first click needs it.
     const st = L.sam.status;
-    if (st.available && st.downloaded && !st.loaded && !L.sam.warmed && S.tool === "label") {
+    if (st.available && st.downloaded && !L.sam.warmed && S.tool === "label") {
       L.sam.warmed = true;
       invoke("sam_warm").catch(() => {}).finally(samStatus);
     }
@@ -976,7 +976,8 @@
     const box = $("lab-sam");
     const st = L.sam.status;
     if (!st) { box.hidden = true; samStatus(); return; }
-    const need = !!st.available && !st.downloaded;
+    // SAM 3.1 alone takes seconds per click; the small model is what the tool wants.
+    const need = !!st.available && !st.fast;
     box.hidden = L.sub !== "smart" || !(need || L.sam.progress || L.sam.along);
     $("lab-sam-get").hidden = !need || !!L.sam.progress;
     let text = "";

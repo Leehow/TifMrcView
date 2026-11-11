@@ -284,14 +284,34 @@ impl Sam {
         Ok(data)
     }
 
-    /// The model, loaded on first use; None when it is not downloaded.
+    /// The model the tool uses, loaded on first use; None when none is
+    /// downloaded. SAM 2.1 tiny is preferred over an installed SAM 3.1:
+    /// a click has to be answered at once.
     fn model(&self) -> Result<Option<Arc<NativePredictor>>> {
         let mut inner = self.inner.lock().unwrap();
-        let have = inner.predictor.is_some() || super::sam31_path().is_some() || super::model_path().is_some_and(|p| p.metadata().is_ok_and(|m| m.len() == super::MODEL_SIZE));
-        if !have {
-            return Ok(None);
+        if let Some((p, _)) = &inner.fast {
+            return Ok(Some(p.clone()));
         }
-        Self::predictor(&mut inner).map(Some)
+        let tiny = super::model_path().filter(|p| p.metadata().is_ok_and(|m| m.len() == super::MODEL_SIZE));
+        let small_loaded = inner.predictor.as_ref().is_some_and(|p| matches!(p.as_ref(), NativePredictor::Sam21(_)));
+        let fast = match tiny {
+            Some(path) if !small_loaded && (inner.predictor.is_some() || super::sam31_path().is_some()) => {
+                #[cfg(target_os = "linux")]
+                super::use_bundled_libdevice();
+                let t = std::time::Instant::now();
+                let (p, name) = tmv_sam::load_best(&path.canonicalize()?, &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+                eprintln!("SAM: selection model ready on {name} in {:.1?}", t.elapsed());
+                (Arc::new(NativePredictor::Sam21(Box::new(p))), name != "CPU")
+            }
+            None if inner.predictor.is_none() && super::sam31_path().is_none() => return Ok(None),
+            _ => {
+                let p = Self::predictor(&mut inner)?;
+                let quick = matches!(p.as_ref(), NativePredictor::Sam21(_)) && inner.backend.as_deref() != Some("CPU");
+                (p, quick)
+            }
+        };
+        inner.fast = Some(fast.clone());
+        Ok(Some(fast.0))
     }
 
     /// Loads the model ahead of the first click.
@@ -299,10 +319,10 @@ impl Sam {
         self.model().map(|_| ())
     }
 
-    /// The model if it is in memory, and whether it runs on a GPU.
+    /// The model if it is in memory, and whether it is quick enough to
+    /// encode a new view for a preview.
     fn loaded(&self) -> Option<(Arc<NativePredictor>, bool)> {
-        let inner = self.inner.lock().unwrap();
-        inner.predictor.clone().map(|p| (p, inner.backend.as_deref() != Some("CPU")))
+        self.inner.lock().unwrap().fast.clone()
     }
 
     fn has_tile(&self, key: SliceKey, rect: [usize; 4]) -> bool {

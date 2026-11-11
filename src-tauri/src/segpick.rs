@@ -275,9 +275,10 @@ pub fn alike(c: &Look, examples: &[Look]) -> f32 {
     // (value, tolerance below the examples' range, tolerance above it) per
     // count; areas and contrasts compare as ratios. An object that stands
     // out more than the examples is still one of them, so contrast and
-    // brightness only count against a candidate on the weak side.
+    // brightness only count against a candidate on the weak side; one much
+    // larger is something else (a glow around a group of spots).
     let terms: [(fn(&Look) -> f32, f32, f32); 5] = [
-        (|l| l.area.max(1.0).ln(), 0.8, 0.8),
+        (|l| l.area.max(1.0).ln(), 0.8, 0.55),
         (|l| l.contrast.abs().max(0.1).ln(), 0.5, 3.0),
         (|l| l.level * l.contrast.signum(), 1.5, 30.0),
         (|l| l.elongation.ln(), 0.5, 0.5),
