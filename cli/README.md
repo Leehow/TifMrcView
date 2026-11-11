@@ -16,8 +16,8 @@ driver is enough):
 | Command | What it does | Main output |
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
-| `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder and a clear `look` tomogram (sta) |
-| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json \| --auto] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, then it stops (exit status 2): you choose the card (`--pick N`) or mark the particles (`--points`), and the average of everything that looks like it follows (with `--auto`, for unattended batches: each card is tried as a template and the one that gives the best average is taken) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
+| `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `2_tomograms/*.mrc` and `*.tomo.json`, `3_clean/` (clear `look` tomogram, denoised …) and `*.labels.tif` beside the tomogram they label, `4_sta/` RELION 5 folder (sta) |
+| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json \| --auto] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, then it stops (exit status 2): you choose the card (`--pick N`) or mark the particles (`--points`), and the average of everything that looks like it follows (with `--auto`, for unattended batches: each card is tried as a template and the one that gives the best average is taken) | `4_sta/cards/`, then `4_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
 | `tmv ctf FOLDER` | CTF of every micrograph (movies motion corrected first) | `FOLDER/tifmrcview-spa/ctf.tsv` |
@@ -35,7 +35,8 @@ loses the internal structure that classes and averages need), searches the
 look tomogram for particles with the card as template, and cuts, aligns and
 averages the full-detail one (`"look"` per tomogram in its output;
 `particles.csv` stays in full-detail voxels); it finds the look record in the
-`*.tomo.json` beside the tomogram, and goes on without it, with a line on
+`*.tomo.json` (in `2_tomograms/`, or beside the tomogram of an older flat
+project), and goes on without it, with a line on
 stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, as `tmv tomo --for
@@ -72,8 +73,9 @@ worked, it prints the trials and cards as JSON and
 exits with status 2: look at the cards (open the `card_N.mrc` files in
 TifMrcView Pro), then run the same command again with `--pick N`. Rerun it
 with the tomograms it printed, not the tilt series, so they are not made
-again. `OUT` defaults to a folder `<first input's name>_sta` beside the first
-input. The tilt range of each tomogram comes from its `*.tomo.json` (the
+again. `OUT` defaults to `4_sta/` in the project folder (for a tomogram of an older
+flat project or from elsewhere: a folder `<first input's name>_sta` beside
+the first input). The tilt range of each tomogram comes from its `*.tomo.json` (the
 views the alignment kept); without one, -60 to 60 is assumed, with a warning.
 Whether the average is good is for you to judge from `average.mrc` (weighted by
 the half agreement, sharpened and cut at the resolution; `average_raw.mrc` is the
@@ -96,7 +98,14 @@ Everything is chosen automatically, as in the app. `--pixel Å` and
 `--kv kV` are needed only when neither the files nor the config files beside
 them carry the pixel size and voltage.
 
-Results are written beside the input. The result of each run is printed as
+Results are written in the project folder, the folder of the raw tilt series
+or frames, which is never changed: each step gets a subfolder, `1_motion/`
+(tilt series motion-corrected from movie frames), `2_tomograms/` (the dataset
+`<stem>.tomo.json`, tomograms and their halves), `3_clean/` (the clear `look`
+tomogram, denoised, deconvolved and missing-wedge-corrected files) and
+`4_sta/` (subtomogram averaging). Label maps stay beside the image they label.
+A project made by an older version, with everything flat beside the tilt
+series (its `<stem>.tomo.json` beside the stack), stays flat. The result of each run is printed as
 one JSON object on stdout and saved as `INPUT.tmv.json` (`tmv tomo --for sta`
 and `--for survey` save `INPUT.sta.tmv.json` and `INPUT.survey.tmv.json`, so
 results for one stack do not overwrite each other; `tmv sta` saves

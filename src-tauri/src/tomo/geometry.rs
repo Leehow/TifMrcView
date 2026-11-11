@@ -85,10 +85,16 @@ pub fn parse_mdoc(text: &str) -> Result<Metadata> {
 pub fn metadata(path: &str, nz: usize) -> Result<Metadata> {
     let p = Path::new(path);
     let mut m = Metadata::default();
-    for f in [
-        p.with_extension("mdoc"),
-        std::path::PathBuf::from(format!("{path}.mdoc")),
-    ] {
+    // Also in the project folder: a stack made from frames lies in `1_motion/`
+    // and the mdoc of the acquisition beside the frames.
+    let root = crate::project_dirs::root_of(p);
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut candidates = vec![p.with_extension("mdoc"), std::path::PathBuf::from(format!("{path}.mdoc"))];
+    if Some(root.as_path()) != p.parent() {
+        candidates.push(root.join(&name).with_extension("mdoc"));
+        candidates.push(root.join(format!("{name}.mdoc")));
+    }
+    for f in candidates {
         if f.exists() {
             m = parse_mdoc(&std::fs::read_to_string(f)?)?;
             break;

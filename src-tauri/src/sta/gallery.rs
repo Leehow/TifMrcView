@@ -4,8 +4,9 @@
 //! opens the one to mark examples on.
 //!
 //! `tiles` lists them from the datasets (`*.tomo.json`) in the folder of
-//! the open file and the folders beside it, and the tilt series there that
-//! were never reconstructed. `thumbnail` draws one: the section with the
+//! the open file and the folders beside it (for a new project, the step
+//! folders of `project_dirs` and, for a project folder given as the path,
+//! those inside it), and the tilt series there that were never reconstructed. `thumbnail` draws one: the section with the
 //! most in it, not the middle one (the middle of a tomogram is often
 //! empty), found as the section whose coarse picture varies most. Thumbnails
 //! are kept in `thumbnails/` beside the tomogram and made again only when
@@ -57,22 +58,21 @@ fn has_angles(stack: &Path) -> bool {
 }
 
 /// The tomograms and tilt series of the project of `path` (a tomogram, its
-/// clean companion, or a folder): in that folder and the folders beside it.
+/// clean companion, or a folder): in that folder and the folders beside it,
+/// or the step folders of a project (see `project_dirs::scan_folders`).
 pub fn tiles(path: &str) -> Vec<Tile> {
     let p = Path::new(path);
     let (dir, open_name) = if p.is_dir() { (p.to_path_buf(), None) } else { (p.parent().map(Path::to_path_buf).unwrap_or_default(), p.file_name().map(|n| n.to_owned())) };
-    let mut folders: Vec<PathBuf> = vec![dir.clone()];
-    if let Some(rd) = dir.parent().and_then(|up| std::fs::read_dir(up).ok()) {
-        let mut beside_it: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|f| f.is_dir() && *f != dir).collect();
-        beside_it.sort();
-        folders.extend(beside_it.into_iter().take(200));
-    }
+    // A new project: its step folders (and the project folder for the raw
+    // tilt series); the old flat layout: the folder and the folders beside it.
+    let folders = crate::project_dirs::scan_folders(&dir);
     let name_of = |f: &str| Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut out: Vec<Tile> = vec![];
-    let mut stacks_seen: Vec<String> = vec![];
+    // The tilt series that have a dataset, in any folder (a new project keeps
+    // the datasets in `2_tomograms/` and the raw stacks in the project folder).
+    let stacks_seen: Vec<String> = folders.iter().flat_map(|f| datasets_in(f)).map(|d| name_of(&d.stack)).collect();
     for folder in &folders {
         for d in datasets_in(folder) {
-            stacks_seen.push(name_of(&d.stack));
             let stack = beside(folder, &d.stack);
             let full: Vec<_> = d.tomograms.iter().filter(|t| t.kind == "full").collect();
             let mut any = false;
@@ -285,5 +285,37 @@ mod tests {
         // A folder works as well as a file of it; then nothing is open.
         assert_eq!(tiles(&dir.to_string_lossy()).iter().filter(|x| x.open).count(), 0);
         assert_eq!(tiles(&dir.to_string_lossy()).len(), 5);
+    }
+
+    #[test]
+    fn the_project_folder_lists_the_tomograms_of_its_step_folders_and_its_raw_series() {
+        let up = tempfile::tempdir().unwrap();
+        let dir = up.path().join("proj");
+        let (tomograms, clean) = (dir.join("2_tomograms"), dir.join("3_clean"));
+        std::fs::create_dir_all(&tomograms).unwrap();
+        std::fs::create_dir_all(&clean).unwrap();
+        // Another project beside it must not be listed.
+        std::fs::create_dir_all(up.path().join("other/2_tomograms")).unwrap();
+        std::fs::write(up.path().join("other/2_tomograms/x.mrc"), b"x").unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        for (f, at) in [("05.mrc", &dir), ("05.tlt", &dir), ("09.st", &dir), ("09.rawtlt", &dir), ("05_sart.mrc", &tomograms), ("05_look.mrc", &clean), ("06_sart.mrc", &tomograms)] {
+            std::fs::write(at.join(f), b"x").unwrap();
+        }
+        let tomo = |raw: &str, look: Option<&str>| serde_json::json!({ "path": p(raw), "kind": "full", "bin": 4, "thickness": 200, "method": "sart", "look": look.map(|l| serde_json::json!({ "path": p(l), "scale": 2.0, "offset": [0.5, 0.5, 1.5] })) });
+        let d5 = serde_json::json!({ "version": 1, "stack": p("05.mrc"), "angles": [-60.0, 0.0, 60.0], "tomograms": [tomo("2_tomograms/05_sart.mrc", Some("3_clean/05_look.mrc"))] });
+        let d6 = serde_json::json!({ "version": 1, "stack": p("06.mrc"), "angles": [-60.0, 0.0, 60.0], "tomograms": [tomo("2_tomograms/06_sart.mrc", None)] });
+        std::fs::write(tomograms.join("05.tomo.json"), d5.to_string()).unwrap();
+        std::fs::write(tomograms.join("06.tomo.json"), d6.to_string()).unwrap();
+        let listed = |t: &[Tile]| t.iter().map(|x| (x.name.clone(), x.status, x.open)).collect::<Vec<_>>();
+        let expected = [("05_sart.mrc".to_string(), "ready", false), ("06_sart.mrc".to_string(), "noLook", false), ("09.st".to_string(), "notBuilt", false)];
+        // The folder itself: the dataset's stack 05.mrc is not listed again as a raw series.
+        let t = tiles(&dir.to_string_lossy());
+        assert_eq!(listed(&t), expected);
+        assert_eq!(t[0].shown(), Some(p("3_clean/05_look.mrc").as_str()));
+        assert_eq!(t[0].stack.as_deref(), Some(p("05.mrc").as_str()));
+        assert_eq!(t[2].stack.as_deref(), Some(p("09.st").as_str()));
+        // A file of a step folder gives the same list, with that one open.
+        let t = tiles(&p("3_clean/05_look.mrc"));
+        assert_eq!(listed(&t), [("05_sart.mrc".to_string(), "ready", true), expected[1].clone(), expected[2].clone()]);
     }
 }

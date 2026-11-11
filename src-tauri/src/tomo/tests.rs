@@ -405,6 +405,10 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
     assert!(out.paths[0].ends_with("ts_wbp_b2.mrc") && out.paths[1].ends_with("ts_wbp_b2_even.mrc"));
+    // A new project: the tomograms and their dataset go to `2_tomograms/`.
+    let root = Path::new(&imgs[0].info().path).parent().unwrap().to_path_buf();
+    assert!(out.paths.iter().all(|p| Path::new(p).parent() == Some(root.join("2_tomograms").as_path())), "{:?}", out.paths);
+    assert!(root.join("2_tomograms/ts.tomo.json").is_file() && !root.join("ts.tomo.json").exists());
     let open = |path: &str| OpenImage::new(9, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
     use std::path::Path;
     let e = open(&out.paths[1]);
@@ -425,6 +429,8 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let mut labelled = d.clone();
     let tagged = pipeline::reconstruct(&mut labelled, &pipeline::ReconStep { label: Some("look".into()), ..step.clone() }, &|_, _, _| {}).unwrap();
     assert!(tagged.paths[0].ends_with("ts_wbp_b2_look.mrc") && tagged.paths[1].ends_with("ts_wbp_b2_look_even.mrc") && tagged.paths[2].ends_with("ts_wbp_b2_look_odd.mrc"), "{:?}", tagged.paths);
+    // The look companion (and its halves) is made to look at: `3_clean/`.
+    assert!(tagged.paths.iter().all(|p| Path::new(p).parent() == Some(root.join("3_clean").as_path())), "{:?}", tagged.paths);
     assert_eq!(labelled.tomograms.len(), 6);
     assert!(out.paths.iter().all(|p| labelled.tomograms.iter().any(|t| &t.path == p)));
     for p in &tagged.paths {

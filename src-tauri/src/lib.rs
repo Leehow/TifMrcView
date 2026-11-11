@@ -76,6 +76,9 @@ include!("desktop.rs");
 include!("desktop_documents.rs");
 
 #[cfg(feature = "pro")]
+pub mod project_dirs;
+
+#[cfg(feature = "pro")]
 pub mod tomo;
 
 #[cfg(feature = "pro")]

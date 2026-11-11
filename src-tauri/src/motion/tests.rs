@@ -350,6 +350,11 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
         [0.0, 4.0, 7.0]
     );
     assert!(r.records[0].skipped.is_some());
+    // A tilt series made from frames lies in `1_motion/` of the frames' folder.
+    let target = dir.path().join("1_motion/series.mrc");
+    assert_eq!(r.path.as_deref(), Some(target.to_string_lossy().as_ref()));
+    assert!(!dir.path().join("series.mrc").exists());
+    assert!(dir.path().join("2_tomograms/series.tomo.json").is_file() && !dir.path().join("1_motion/series.tomo.json").exists());
     assert_eq!(
         std::fs::read_to_string(target.with_extension("tlt")).unwrap(),
         "-3.000000\n3.000000\n"

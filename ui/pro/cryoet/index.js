@@ -1,6 +1,7 @@
 "use strict";
 // The Cryo-ET workspace: one tilt series and its dataset (tomo::dataset,
-// kept as <stack>.tomo.json) carried through motion correction, CTF, tilt
+// kept as <stem>.tomo.json in 2_tomograms/ of the project folder, beside the
+// stack in an old flat project) carried through motion correction, CTF, tilt
 // alignment, reconstruction and post-processing. The dataset is held by the
 // stack's path, so the workspace keeps it while its tomograms are open.
 // The step modules (motion.js, ctf.js, align.js, recon.js, post.js) fill

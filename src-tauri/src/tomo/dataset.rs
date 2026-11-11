@@ -1,5 +1,6 @@
 //! A tilt series and what the Cryo-ET steps made of it, kept in
-//! `<stack>.tomo.json` beside the stack so the steps hand their results on
+//! `<stem>.tomo.json` (in `2_tomograms/` of the project, beside the stack
+//! for an old flat project) so the steps hand their results on
 //! (and a session can be resumed): the even/odd half stacks from motion
 //! correction, angles, optics, the alignment, per-tilt CTF and the
 //! tomograms. Paths are stored as given (absolute).
@@ -118,22 +119,24 @@ pub struct Dataset {
     pub tomograms: Vec<Tomogram>,
 }
 
-/// `<dir>/<stem>.tomo.json` for a stack.
+/// Where the dataset of a stack is kept: `2_tomograms/<stem>.tomo.json` of
+/// its project, or beside the stack for a project made with the old flat
+/// layout (see `project_dirs`).
 pub fn path_for(stack: &str) -> PathBuf {
-    let p = Path::new(stack);
-    p.with_file_name(format!("{}.tomo.json", p.file_stem().and_then(|s| s.to_str()).unwrap_or("stack")))
+    crate::project_dirs::dataset_path(stack)
 }
 
 impl Dataset {
-    /// The dataset saved beside the stack, or a new one from its metadata.
+    /// The dataset saved for the stack (`path_for`), or a new one from its metadata.
     pub fn open(stack: &str, sections: usize, pixel_a: Option<f64>) -> Result<Dataset> {
         let file = path_for(stack);
         if file.exists() {
             let mut d: Dataset = serde_json::from_slice(&std::fs::read(&file)?)?;
-            // The folder was moved (processed elsewhere and copied here).
+            // The project folder was moved (processed elsewhere and copied
+            // here): what lies under the old project folder is now under this one.
             if d.stack != stack {
                 let was = d.stack.clone();
-                d = crate::relocate::relocate(d, &was, stack);
+                d = crate::relocate::relocate_dirs(d, crate::project_dirs::root_str(&was), crate::project_dirs::root_str(stack));
                 d.stack = stack.into();
             }
             if d.version <= VERSION && d.angles.len() == sections {
@@ -161,6 +164,9 @@ impl Dataset {
             bail!("还没有倾转角，无法保存数据集");
         }
         let file = path_for(&self.stack);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         let part = file.with_extension("json.part");
         std::fs::write(&part, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&part, &file)?;
@@ -179,4 +185,92 @@ fn sibling(stack: &str, half: &str) -> Option<String> {
     let p = Path::new(stack);
     let f = p.with_file_name(format!("{}_{half}.{}", p.file_stem()?.to_str()?, p.extension()?.to_str()?));
     f.exists().then(|| f.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    fn started(stack: &str) -> Dataset {
+        let mut d = Dataset::open(stack, 3, Some(2.0)).unwrap();
+        d.angles = vec![-30.0, 0.0, 30.0];
+        d
+    }
+
+    fn copy_all(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (f, t) = (e.path(), to.join(e.file_name()));
+            if f.is_dir() {
+                copy_all(&f, &t);
+            } else {
+                std::fs::copy(&f, &t).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_project_keeps_its_dataset_in_the_tomograms_folder_and_survives_a_copy() {
+        let up = tempfile::tempdir().unwrap();
+        let old = up.path().join("disk1/proj");
+        std::fs::create_dir_all(&old).unwrap();
+        let stack = s(&old.join("ts.mrc"));
+        let mut d = started(&stack);
+        d.add_tomogram(Tomogram { path: s(&old.join("2_tomograms/ts_wbp.mrc")), kind: "full".into(), bin: 4, thickness: 10, method: "wbp".into(), phase_flipped: false, halves: None, look: Some(Look { path: s(&old.join("3_clean/ts_look.mrc")), scale: 2.0, offset: [0.0; 3] }), z_offset: None });
+        d.save().unwrap();
+        assert_eq!(path_for(&stack), old.join("2_tomograms/ts.tomo.json"));
+        assert!(old.join("2_tomograms/ts.tomo.json").is_file());
+        assert!(!old.join("ts.tomo.json").exists(), "nothing beside the raw stack");
+        assert_eq!(Dataset::open(&stack, 3, None).unwrap().tomograms.len(), 1);
+        // The whole project folder copied to another disk: the recorded paths are re-rooted.
+        let new = up.path().join("disk2/proj");
+        copy_all(&old, &new);
+        let moved = Dataset::open(&s(&new.join("ts.mrc")), 3, None).unwrap();
+        assert_eq!(moved.stack, s(&new.join("ts.mrc")));
+        assert_eq!(moved.tomograms[0].path, s(&new.join("2_tomograms/ts_wbp.mrc")));
+        assert_eq!(moved.tomograms[0].look.as_ref().unwrap().path, s(&new.join("3_clean/ts_look.mrc")));
+    }
+
+    #[test]
+    fn a_stack_made_from_frames_lies_in_the_motion_folder_and_the_whole_project_moves_with_it() {
+        let up = tempfile::tempdir().unwrap();
+        let old = up.path().join("a/frames");
+        std::fs::create_dir_all(old.join("1_motion")).unwrap();
+        let stack = s(&old.join("1_motion/ts.mrc"));
+        let mut d = started(&stack);
+        d.even = Some(s(&old.join("1_motion/ts_even.mrc")));
+        d.add_tomogram(Tomogram { path: s(&old.join("2_tomograms/ts_wbp.mrc")), kind: "full".into(), bin: 4, thickness: 10, method: "wbp".into(), phase_flipped: false, halves: None, look: None, z_offset: None });
+        d.save().unwrap();
+        assert!(old.join("2_tomograms/ts.tomo.json").is_file());
+        assert!(!old.join("1_motion/ts.tomo.json").exists());
+        let new = up.path().join("b/frames");
+        copy_all(&old, &new);
+        let moved = Dataset::open(&s(&new.join("1_motion/ts.mrc")), 3, None).unwrap();
+        assert_eq!(moved.even.as_deref(), Some(s(&new.join("1_motion/ts_even.mrc")).as_str()));
+        assert_eq!(moved.tomograms[0].path, s(&new.join("2_tomograms/ts_wbp.mrc")));
+    }
+
+    #[test]
+    fn an_old_flat_project_keeps_its_dataset_beside_the_stack() {
+        let up = tempfile::tempdir().unwrap();
+        let dir = up.path().join("flat");
+        std::fs::create_dir_all(&dir).unwrap();
+        let stack = s(&dir.join("ts.mrc"));
+        // Made by an earlier version: the json lies beside the stack.
+        let old = serde_json::json!({ "version": 1, "stack": stack, "angles": [-30.0, 0.0, 30.0], "tomograms": [{ "path": s(&dir.join("ts_wbp.mrc")), "kind": "full", "bin": 4, "thickness": 10, "method": "wbp" }] });
+        std::fs::write(dir.join("ts.tomo.json"), old.to_string()).unwrap();
+        let mut d = Dataset::open(&stack, 3, None).unwrap();
+        assert_eq!(d.tomograms.len(), 1);
+        d.optics.kv = 200.0;
+        d.save().unwrap();
+        assert_eq!(path_for(&stack), dir.join("ts.tomo.json"));
+        assert_eq!(Dataset::open(&stack, 3, None).unwrap().optics.kv, 200.0);
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["ts.tomo.json"], "no step folder appears and nothing moves");
+    }
 }

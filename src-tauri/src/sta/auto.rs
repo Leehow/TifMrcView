@@ -96,9 +96,11 @@ pub(super) fn look_of(d: Option<&Dataset>, tomogram: &str, note: &(dyn Fn(Note) 
     let name = Path::new(tomogram).file_name()?;
     let mut look = d?.tomograms.iter().find(|t| Path::new(&t.path).file_name() == Some(name))?.look.clone()?;
     if !Path::new(&look.path).is_file() {
-        let beside = Path::new(tomogram).with_file_name(Path::new(&look.path).file_name()?);
-        if beside.is_file() {
-            look.path = beside.to_string_lossy().into_owned();
+        // The look is in the folder of the tomogram or one that goes with it
+        // (`3_clean/` beside `2_tomograms/` in a new project).
+        let dir = Path::new(tomogram).parent().unwrap_or(Path::new("."));
+        if let Some(found) = crate::project_dirs::find_near(dir, &look.path) {
+            look.path = found.to_string_lossy().into_owned();
         } else {
             note(Note::LookMissing { look: look.path.clone(), tomogram: tomogram.to_string() });
             return None;
@@ -126,21 +128,13 @@ pub fn tilt_range(d: &Dataset) -> Option<([f64; 2], &'static str)> {
     range_of(&d.angles).map(|r| (r, "tilt angles"))
 }
 
-/// The dataset (`*.tomo.json`) beside `tomogram` that lists it.
+/// The dataset (`*.tomo.json`) beside `tomogram` that lists it: in its own
+/// folder, and for a file of a step folder (`3_clean/`) in the folders that
+/// go with it (`2_tomograms/` holds the datasets of a new project).
 pub fn dataset_of(tomogram: &str) -> Option<Dataset> {
     let p = Path::new(tomogram);
     let name = p.file_name()?;
-    let mut files: Vec<PathBuf> = std::fs::read_dir(p.parent()?)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".tomo.json")))
-        .collect();
-    files.sort();
-    files.into_iter().find_map(|f| {
-        let d: Dataset = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
-        d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == Some(name)).then_some(d)
-    })
+    crate::project_dirs::relatives(p.parent()?).into_iter().find_map(|dir| datasets_in(&dir).into_iter().find(|d| d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == Some(name))))
 }
 
 /// The datasets (`*.tomo.json`) in `dir`, by file name.
@@ -153,13 +147,10 @@ pub(super) fn datasets_in(dir: &Path) -> Vec<Dataset> {
 
 /// A tomogram recorded in a dataset as a file of `dir` (also if the folder
 /// was copied: then the file of that name beside the dataset), else as recorded.
+/// In a new project the folders of the other steps and the project folder
+/// count as beside it too.
 pub(super) fn beside(dir: &Path, recorded: &str) -> Option<String> {
-    let f = dir.join(Path::new(recorded).file_name()?);
-    if f.is_file() {
-        Some(f.to_string_lossy().into_owned())
-    } else {
-        Path::new(recorded).is_file().then(|| recorded.to_string())
-    }
+    crate::project_dirs::find_near(dir, recorded).map(|f| f.to_string_lossy().into_owned())
 }
 
 /// When `path` is the clear "look" companion of a tomogram, that tomogram's
@@ -168,10 +159,13 @@ pub(super) fn beside(dir: &Path, recorded: &str) -> Option<String> {
 pub fn raw_of_look(path: &str) -> Result<Option<String>> {
     let p = Path::new(path);
     let (Some(name), Some(dir)) = (p.file_name(), p.parent()) else { return Ok(None) };
-    for d in datasets_in(dir) {
-        for t in &d.tomograms {
-            if t.look.as_ref().is_some_and(|l| Path::new(&l.path).file_name() == Some(name)) {
-                return beside(dir, &t.path).map(Some).with_context(|| format!("{} 是清晰版断层图，但它对应的断层图 {} 不见了，无法平均", path, t.path));
+    // A look file lies in `3_clean/` of a new project, its dataset in `2_tomograms/`.
+    for folder in crate::project_dirs::relatives(dir) {
+        for d in datasets_in(&folder) {
+            for t in &d.tomograms {
+                if t.look.as_ref().is_some_and(|l| Path::new(&l.path).file_name() == Some(name)) {
+                    return beside(&folder, &t.path).map(Some).with_context(|| format!("{} 是清晰版断层图，但它对应的断层图 {} 不见了，无法平均", path, t.path));
+                }
             }
         }
     }
@@ -218,12 +212,8 @@ pub fn siblings(path: &str) -> Vec<Sibling> {
     let mut items: Vec<Sibling> = vec![];
     // The folder of the open file, then the folders beside it: a tomogram
     // often has a folder of its own (05/, 06/, …) under the one of the session.
-    let mut folders: Vec<PathBuf> = vec![dir.to_path_buf()];
-    if let Some(rd) = dir.parent().and_then(|up| std::fs::read_dir(up).ok()) {
-        let mut beside_it: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|f| f.is_dir() && f != dir).collect();
-        beside_it.sort();
-        folders.extend(beside_it.into_iter().take(200));
-    }
+    // (In a new project: the step folders of the project.)
+    let folders = crate::project_dirs::scan_folders(dir);
     for (folder, d) in folders.iter().flat_map(|f| datasets_in(f).into_iter().map(move |d| (f, d))) {
         let ranged = tilt_range(&d).is_some();
         for t in d.tomograms.iter().filter(|t| t.kind == "full") {
@@ -271,8 +261,9 @@ pub fn resolve(input: &str, tomogram: String, dataset: Option<Dataset>, note: &(
     let series = dataset.as_ref().and_then(|d| {
         let placed = d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == name && t.z_offset.is_some());
         // Beside the tomogram, also when the folder was moved.
-        let file = Path::new(&tomogram).with_file_name(crate::tomo::dataset::path_for(&d.stack).file_name()?);
-        (placed && file.is_file()).then(|| file.to_string_lossy().into_owned())
+        let name = crate::tomo::dataset::path_for(&d.stack).file_name()?.to_string_lossy().into_owned();
+        let file = crate::project_dirs::relatives(Path::new(&tomogram).parent().unwrap_or(Path::new("."))).into_iter().map(|d| d.join(&name)).find(|f| f.is_file());
+        placed.then(|| file.map(|f| f.to_string_lossy().into_owned())).flatten()
     });
     if series.is_none() && dataset.is_some() {
         note(Note::OlderVersion { tomogram: tomogram.clone() });
@@ -285,11 +276,11 @@ pub fn resolve_tomogram(tomogram: &str, note: &(dyn Fn(Note) + Sync)) -> Resolve
     resolve(tomogram, tomogram.to_string(), dataset_of(tomogram), note)
 }
 
-/// The default output folder: `<stem>_sta` beside the first input.
+/// The default output folder: `4_sta` of the project for a tomogram of a
+/// new project, else (old flat project, tomogram from elsewhere) `<stem>_sta`
+/// beside the first input.
 pub fn default_out(first: &str) -> PathBuf {
-    let p = Path::new(first);
-    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
-    p.with_file_name(format!("{stem}_sta"))
+    crate::project_dirs::sta_dir(first)
 }
 
 /// The output folder of the workspace for the first listed tomogram `first`:
@@ -1153,5 +1144,67 @@ mod tests {
     #[test]
     fn the_default_folder_is_beside_the_first_input() {
         assert_eq!(default_out("/data/a/t.mrc"), Path::new("/data/a/t_sta"));
+    }
+
+    /// A project made with the step folders: tomograms and dataset in `2_tomograms/`, look files in `3_clean/`.
+    fn project(name: &str) -> PathBuf {
+        let dir = temp(name);
+        let (tomograms, clean) = (dir.join("2_tomograms"), dir.join("3_clean"));
+        std::fs::create_dir_all(&tomograms).unwrap();
+        std::fs::create_dir_all(&clean).unwrap();
+        std::fs::write(dir.join("ts.mrc"), b"x").unwrap();
+        for f in ["ts_sart3.mrc", "ts_sart3_even.mrc"] {
+            std::fs::write(tomograms.join(f), b"x").unwrap();
+        }
+        std::fs::write(clean.join("ts_look.mrc"), b"x").unwrap();
+        let look = json!({ "path": clean.join("ts_look.mrc"), "scale": 2.0, "offset": [0.5, 0.5, 1.5] });
+        let full = json!({ "path": tomograms.join("ts_sart3.mrc"), "kind": "full", "bin": 4, "thickness": 200, "method": "sart", "look": look });
+        let d = json!({ "version": 1, "stack": dir.join("ts.mrc"), "angles": [-60.0, 0.0, 60.0], "tomograms": [full] });
+        std::fs::write(tomograms.join("ts.tomo.json"), d.to_string()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_look_file_in_the_clean_folder_finds_its_tomogram_and_dataset_in_the_tomograms_folder() {
+        let dir = project("newproject");
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        assert_eq!(raw_of_look(&p("3_clean/ts_look.mrc")).unwrap(), Some(p("2_tomograms/ts_sart3.mrc")));
+        assert_eq!(raw_of_look(&p("2_tomograms/ts_sart3.mrc")).unwrap(), None);
+        // The dataset is found from the tomogram and from the look file.
+        assert_eq!(dataset_of(&p("2_tomograms/ts_sart3.mrc")).unwrap().stack, p("ts.mrc"));
+        assert_eq!(dataset_of(&p("3_clean/ts_look.mrc")).map(|d| d.tomograms.len()), None, "the look is no tomogram of the dataset");
+        // Both files open give the one tomogram, with its look beside in the clean folder.
+        for open in ["3_clean/ts_look.mrc", "2_tomograms/ts_sart3.mrc"] {
+            let v = siblings(&p(open));
+            assert_eq!(v.iter().map(|i| (i.raw.as_str(), i.look.as_deref(), i.open)).collect::<Vec<_>>(), [(p("2_tomograms/ts_sart3.mrc").as_str(), Some(p("3_clean/ts_look.mrc").as_str()), true)]);
+        }
+        // Averaging goes to the project's own folder, whichever file is given.
+        assert_eq!(out_of(&p("3_clean/ts_look.mrc")), dir.join("4_sta"));
+        assert_eq!(out_of(&p("2_tomograms/ts_sart3.mrc")), dir.join("4_sta"));
+        assert_eq!(default_out(&p("2_tomograms/ts_sart3.mrc")), dir.join("4_sta"));
+        // The look record resolves, and the dataset is the tilt series' record for the tomogram.
+        let r = resolve_tomogram(&p("2_tomograms/ts_sart3.mrc"), &|_| {});
+        assert_eq!(r.look.map(|l| l.path), Some(p("3_clean/ts_look.mrc")));
+        // A copy of the project (recorded paths are stale) still finds the look beside.
+        let copy = temp("newproject_copy");
+        for f in ["2_tomograms/ts_sart3.mrc", "2_tomograms/ts.tomo.json", "3_clean/ts_look.mrc"] {
+            std::fs::create_dir_all(copy.join(f).parent().unwrap()).unwrap();
+            std::fs::copy(dir.join(f), copy.join(f)).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let c = |n: &str| copy.join(n).to_string_lossy().into_owned();
+        assert_eq!(resolve_tomogram(&c("2_tomograms/ts_sart3.mrc"), &|_| {}).look.map(|l| l.path), Some(c("3_clean/ts_look.mrc")));
+        assert_eq!(raw_of_look(&c("3_clean/ts_look.mrc")).unwrap(), Some(c("2_tomograms/ts_sart3.mrc")));
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+
+    #[test]
+    fn an_old_flat_project_still_averages_beside_its_tomogram() {
+        let dir = dataset_folder("flatsta");
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        assert_eq!(out_of(&p("06_look.mrc")), dir.join("06_sart3_sta"));
+        assert_eq!(default_out(&p("07_sart3.mrc")), dir.join("07_sart3_sta"));
+        assert_eq!(dataset_of(&p("06_sart3.mrc")).unwrap().stack, dir.join("06.mrc").to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

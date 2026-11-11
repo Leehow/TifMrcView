@@ -296,6 +296,13 @@ pub fn run(
             found_gain = Some(g);
         }
     }
+    // A tilt series made from frames goes to `1_motion/` of the project (the
+    // frames' folder), its halves and the run's records with it; an old flat
+    // project (its dataset beside the stack) stays flat.
+    req.output = crate::project_dirs::motion_output(&req.output);
+    if let Some(dir) = Path::new(&req.output).parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
     let req = &req;
     output::protect(&req.mdoc, &req.output)?;
     for v in &doc.views {

@@ -87,8 +87,9 @@ the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
 when the user knows the point group, `--kind N` for SPA and `--pick N` for
 STA (step 5; the user's choice: see the `needsChoice` entry below; `--auto`
 lets the program choose, only for unattended batch runs the user asked for),
-`--out DIR` for STA (default: a folder `<first input's name>_sta`
-beside the first input), `--fresh`
+`--out DIR` for STA (default: `4_sta/` in the project folder; for a
+tomogram of an older flat project or from elsewhere, a folder
+`<first input's name>_sta` beside it), `--fresh`
 to redo instead of reusing finished steps. For SPA movies: a gain reference
 beside them (name with gain, CountRef or `norm-`) is found and applied by
 itself; otherwise `--gain FILE`. `--dose e/Å²` (total per movie) turns on
@@ -162,7 +163,8 @@ loses the internal structure that classes and averages need), searches the
 look tomogram for particles with the card as template, and cuts, aligns and
 averages the full-detail one (`"look"` per tomogram in its output;
 `particles.csv` stays in full-detail voxels); it finds the look record in the
-`*.tomo.json` beside the tomogram, and goes on without it, with a line on
+`*.tomo.json` (in `2_tomograms/`, or beside the tomogram of an older flat
+project), and goes on without it, with a line on
 stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
@@ -194,7 +196,8 @@ steps of the whole run ("第 k/N 步 · …"); a line per trial says what each c
 and one says which card was taken and where the others are when `--auto` picks a card itself, and the last
 line gives the resolution, the particle count and where `average.mrc` is.
 The tilt range comes
-from the `*.tomo.json` beside each tomogram; without one it assumes -60 to 60
+from the `*.tomo.json` of each tomogram (`2_tomograms/`, or beside it in an
+older flat project); without one it assumes -60 to 60
 and warns on stderr. Do not quote a resolution unless the user asks: report
 the particle count and let them judge the average and the two halves.
 
@@ -217,7 +220,22 @@ Then tell the user what to open in **TifMrcView Pro**:
   picked particles are listed in `particles.csv`;
 - SPA: the sharpened map (`"map"`) in the 3D view; opening the folder in the
   SPA workspace shows every step (project files move with the folder);
-- the cryo-ET workspace likewise reopens the dataset (`*.tomo.json`).
+- the cryo-ET workspace likewise reopens the dataset (`*.tomo.json`, in
+  `2_tomograms/` of the project folder).
+
+Where a cryo-ET job's files go: the folder that holds the raw tilt series
+(or the movie frames and the `.mdoc`) is the project folder, and each step
+gets a subfolder in it; the raw files are never moved or changed. `1_motion/`
+motion-corrected tilt series made from movie frames (and their even/odd halves);
+`2_tomograms/` the dataset `<stem>.tomo.json` and the reconstructed tomograms
+(and halves); `3_clean/` what is made from a tomogram to look at (the `look`
+tomogram, denoised, deconvolved, missing-wedge-corrected files); `4_sta/`
+subtomogram averaging (`cards/`, `average.mrc`, …, and the RELION 5 folder).
+A label map stays beside the image it labels (`*.labels.tif`), so the
+membranes of a clean tomogram lie in `3_clean/`. A project made by an older
+version has everything flat beside the tilt series (its `<stem>.tomo.json`
+lies beside the stack); it stays flat and keeps working.
+
 
 Report briefly: what ran, how long, the key numbers from the JSON, and the
 paths. Remove large intermediate files on the server only if the user agrees.

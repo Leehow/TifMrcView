@@ -289,9 +289,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
-        // The export makes `<name>_relion5` inside the folder it is given.
+        // The export makes `<name>_relion5` inside the folder it is given:
+        // `4_sta` of the project (beside the stack for an old flat project).
         let stack = std::path::Path::new(&d.stack);
-        let parent = stack.parent().unwrap_or(std::path::Path::new("."));
+        let parent = &crate::project_dirs::dir_for(&d.stack, crate::project_dirs::STA);
+        std::fs::create_dir_all(parent)?;
         let name = stack.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
         let k = if look.is_some() { 8 } else { 5 };
         super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(k)("导出 RELION 5", i, n))?;

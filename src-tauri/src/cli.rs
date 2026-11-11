@@ -5,7 +5,8 @@
 //!
 //! The commands are the app's one-click flows with the same code and the
 //! same automatic choices: no method switches or tuning knobs. Results are
-//! written beside the input (as the app writes them), so copying the folder
+//! written in the input's project folder (as the app writes them: step
+//! folders 1_motion … 4_sta, flat beside the input for an old project), so copying the folder
 //! back is enough. Progress goes to stderr; the result is one JSON object
 //! on stdout and is also saved as `<input>.tmv.json`.
 
@@ -58,7 +59,8 @@ USAGE
   does) or tomograms that tmv tomo --for sta wrote. What to average is the
   user's choice, never the program's, so without --pick, --points or --auto it
   only makes the class-average "cards" of the blobs found (<out>/cards/card_N.mrc,
-  32³; --out defaults to <first input>_sta beside it) and stops with exit status
+  32³; --out defaults to 4_sta/ in the project folder of the first input,
+  or <first input>_sta beside it for a tomogram outside a project) and stops with exit status
   2: {"needsChoice": true, "cards": […], "next": …}, one line per card on stderr.
   Show the cards (and the clear "look" tomogram) to the user, let them choose,
   then rerun with --pick N (average the card they chose) or --points marks.json
@@ -91,7 +93,9 @@ USAGE
   applied to average.mrc; left out when no fit was possible) and seconds (the whole run).
 
 OUTPUT
-  Files are written beside the input; copy the folder back and open them in
+  Files are written in the input's folder, each step in a subfolder of its own
+  (1_motion, 2_tomograms, 3_clean, 4_sta; an older project stays flat beside the
+  input); copy the folder back and open them in
   TifMrcView Pro (label maps open with their tomogram). Progress goes to
   stderr. The result is one JSON object on stdout ({"ok":true,…}), also
   saved as <input>.tmv.json (tmv tomo --for sta|survey: <input>.sta.tmv.json,
@@ -522,10 +526,24 @@ fn tomo(o: &Opts) -> Result<Value> {
     Ok(v)
 }
 
-/// `--out`, else `<stem>_sta` beside the first input.
+/// `--out`, else the project's `4_sta/` for a tomogram of a new project (or
+/// a raw tilt series of one: `tmv sta` first makes its tomogram there), else
+/// `<stem>_sta` beside the first input (old flat project, or a tomogram from elsewhere).
 fn sta_out(o: &Opts, first: &str) -> Result<PathBuf> {
     if let Some(d) = o.get("out") {
         return std::path::absolute(d).with_context(|| format!("--out {d}"));
+    }
+    // A tilt series not yet processed (no dataset beside it, none of an old
+    // flat project) belongs to a new project: its tomogram goes to `2_tomograms/`.
+    let series = if ext(first) == "mdoc" {
+        Some(format!("{}.mrc", first.strip_suffix(".mdoc").map(|s| s.strip_suffix(".mrc").unwrap_or(s)).unwrap_or(first)))
+    } else if auto_sta::dataset_of(first).is_none() && Path::new(first).is_file() && open_image(first).is_ok_and(|img| has_tilts(first, img.info().size_z)) {
+        Some(first.to_string())
+    } else {
+        None
+    };
+    if let Some(stack) = series.filter(|s| !crate::project_dirs::is_legacy(s)) {
+        return Ok(crate::project_dirs::root_of(Path::new(&stack)).join(crate::project_dirs::STA));
     }
     Ok(auto_sta::default_out(first))
 }
@@ -1439,6 +1457,23 @@ mod tests {
         assert_eq!(sta_out(&o, "/data/a/X_sart3_b2_flip.mrc").unwrap(), Path::new("/data/a/X_sart3_b2_flip_sta"));
         let o = Opts { named: vec![("out".into(), Some("/tmp/x".into()))], ..Default::default() };
         assert_eq!(sta_out(&o, "/data/a/t.mrc").unwrap(), Path::new("/tmp/x"));
+    }
+
+    #[test]
+    fn sta_works_in_the_project_folder_of_a_new_project_and_beside_an_old_one() {
+        let o = Opts::default();
+        // A tomogram (or its look file) of a new project: the project's own folder.
+        assert_eq!(sta_out(&o, "/data/p/2_tomograms/X_sart3.mrc").unwrap(), Path::new("/data/p/4_sta"));
+        assert_eq!(sta_out(&o, "/data/p/3_clean/X_look.mrc").unwrap(), Path::new("/data/p/4_sta"));
+        // A tilt series not yet processed, given as its mdoc: the folder of the frames.
+        assert_eq!(sta_out(&o, "/data/p/ts_01.mrc.mdoc").unwrap(), Path::new("/data/p/4_sta"));
+        // The same series of an old flat project (its dataset beside the stack) stays flat.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ts_01.tomo.json"), b"{}").unwrap();
+        let mdoc = dir.path().join("ts_01.mrc.mdoc").to_string_lossy().into_owned();
+        assert_eq!(sta_out(&o, &mdoc).unwrap(), dir.path().join("ts_01.mrc_sta"));
+        let tomogram = dir.path().join("ts_01_sart3.mrc").to_string_lossy().into_owned();
+        assert_eq!(sta_out(&o, &tomogram).unwrap(), dir.path().join("ts_01_sart3_sta"));
     }
 
     #[test]
