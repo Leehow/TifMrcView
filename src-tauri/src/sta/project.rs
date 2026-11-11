@@ -359,6 +359,9 @@ pub struct Shells {
 /// The resolution limit and signal extent of an FSC curve (by shell, from the
 /// lowest frequency), which do not flip with the noise at a CTF zero: whether
 /// the curve dips to 0.17 or 0.11 there makes no difference to either.
+/// See `resolution`.
+const FILLED: f64 = 0.3;
+
 pub(crate) fn resolution(fsc: &[f64]) -> Shells {
     use super::refine::{cut, extent};
     if fsc.is_empty() {
@@ -378,6 +381,14 @@ pub(crate) fn resolution(fsc: &[f64]) -> Shells {
                 Some(&b) if a > b => s + (a - 0.143) / (a - b),
                 _ => s,
             };
+            // A dip that stays well above the line is no limit: particles at
+            // different defocus fill each other's zeros (0.36 at the bottom
+            // with seven tomograms, where two of one defocus gave 0.07 to
+            // 0.28). Just above the line it still is: the same data falls
+            // through it in the next run.
+            if fsc[m] >= FILLED {
+                return Shells { limit: first, signal: first, dip: false };
+            }
             Shells { limit: if crossed { first } else { m as f64 }, signal, dip: true }
         }
     }
@@ -2224,6 +2235,14 @@ mod fsc_tests {
         assert!((l.limit - 20.0 - (0.378 - 0.143) / (0.378 - 0.107)).abs() < 1e-9 && l.dip);
         assert!((l.limit - r.limit).abs() < 1.0 && l.signal == r.signal);
         // Falling through 0.143 before the dip: the crossing is the limit.
+        // Seven tomograms at different defocus: 0.355 at the bottom is no
+        // limit; the halves agree to shell 29.
+        let filled = [
+            1.0, 1.0, 1.0, 0.998, 0.998, 0.996, 0.989, 0.989, 0.986, 0.973, 0.963, 0.956, 0.954, 0.954, 0.939, 0.919, 0.894, 0.832, 0.691, 0.461, 0.355, 0.466, 0.613, 0.647, 0.625,
+            0.546, 0.383, 0.231, 0.147, 0.149, 0.115, 0.065, 0.017,
+        ];
+        let f = resolution(&filled);
+        assert!(!f.dip && (f.limit - 29.2).abs() < 0.2 && f.signal == f.limit, "{f:?}");
         let r = resolution(&DIP_1);
         assert!((r.limit - 20.1).abs() < 0.01 && (r.signal - 27.0).abs() < 1.0, "{r:?}");
         let r = resolution(&DIP_2);
