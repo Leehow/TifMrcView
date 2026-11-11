@@ -421,7 +421,7 @@ fn drawn_sphere_gives_one_particle_per_copy() {
 /// the missing wedge hides from the alignment).
 #[test]
 fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
-    pattern_on_a_membrane(208.0, 24, 7, "lattice");
+    pattern_on_a_membrane(208.0, 24, 7, 1, "lattice");
 }
 
 /// The same when the particle size given is twice too large to show the
@@ -429,42 +429,67 @@ fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
 /// finer sampling and everything goes on there.
 #[test]
 fn a_pattern_finer_than_the_size_asked_for_is_still_found() {
-    pattern_on_a_membrane(416.0, 30, 13, "lattice-coarse");
+    pattern_on_a_membrane(416.0, 30, 13, 1, "lattice-coarse");
+}
+
+/// The same in a tomogram of half the voxel, the pattern with detail that
+/// only those voxels hold (rows half as far apart again): it is found at
+/// the coarse sampling, and the places are then aligned and averaged on
+/// the finer cubes, with the turns the pattern repeats itself by.
+#[test]
+fn a_pattern_is_aligned_again_on_finer_voxels_and_averaged_with_its_turns() {
+    pattern_on_a_membrane(208.0, 24, 7, 2, "lattice-fine");
 }
 
 /// The membrane is drawn from `from` voxels off the sides with a place
-/// every `step` voxels, for particles of `size_a`.
-fn pattern_on_a_membrane(size_a: f64, from: usize, step: usize, name: &str) {
+/// every `step` voxels, for particles of `size_a`; all in voxels of 16 Å,
+/// of which the tomogram has `fine` to a side.
+fn pattern_on_a_membrane(size_a: f64, from: usize, step: usize, fine: usize, name: &str) {
     use super::project::{run_drawn, Drawn, Source};
-    let dims = [128usize, 64, 128];
+    let f = fine as f64;
+    let dims = [128 * fine, 64 * fine, 128 * fine];
     let waves: Vec<[f64; 2]> = [10f64, 70.0, 130.0].iter().map(|d| [d.to_radians().cos(), d.to_radians().sin()]).collect();
-    let k = std::f64::consts::TAU / 4.0;
+    let k = std::f64::consts::TAU / (4.0 * f);
     let mut rng = Rng(11);
+    // Finer voxels are averaged to the coarse ones the pattern is found
+    // at: the same noise there.
+    let noise = 0.5 * f.powf(1.5);
     let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
-                let pattern: f64 = waves.iter().map(|w| (k * (x as f64 * w[0] + z as f64 * w[1])).cos()).sum();
-                let value = -(-0.5 * ((y as f64 - 40.0) / 1.2).powi(2)).exp() - 0.25 * pattern * (-0.5 * ((y as f64 - 34.0) / 1.5).powi(2)).exp();
-                v[(z * dims[1] + y) * dims[0] + x] = (value + 0.5 * rng.gauss()) as f32;
+                let along = |w: &[f64; 2]| x as f64 * w[0] + z as f64 * w[1];
+                let mut pattern: f64 = waves.iter().map(|w| (k * along(w)).cos()).sum();
+                if fine > 1 {
+                    pattern += waves.iter().map(|w| (2.0 * k * along(w)).cos()).sum::<f64>();
+                }
+                let value = -(-0.5 * ((y as f64 / f - 40.0) / 1.2).powi(2)).exp() - 0.25 * pattern * (-0.5 * ((y as f64 / f - 34.0) / 1.5).powi(2)).exp();
+                v[(z * dims[1] + y) * dims[0] + x] = (value + noise * rng.gauss()) as f32;
             }
         }
     }
     let dir = std::env::temp_dir().join(format!("tmv-sta-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
-    crate::tomo::output::write_mrc(&tomo, &v, dims, 16.0, false).unwrap();
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 16.0 / f, false).unwrap();
     let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None, series: None }];
     let mut drawn = vec![];
     for z in (from..=128 - from).step_by(step) {
         for x in (from..=128 - from).step_by(step) {
-            drawn.push(Drawn { source: 0, pos: [x as f64, 42.0, z as f64], axis: [0.0, 1.0, 0.0] });
+            drawn.push(Drawn { source: 0, pos: [x as f64 * f, 42.0 * f, z as f64 * f], axis: [0.0, 1.0, 0.0] });
         }
     }
     let out = dir.join("out").to_string_lossy().into_owned();
     let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
-    assert!((done.voxel_a - 16.0).abs() < 1e-6 || done.voxel_a < 16.0, "voxel {}", done.voxel_a);
-    assert!(done.pattern.is_some_and(|p| (p.rows_a - 64.0).abs() < 6.0), "{:?}", done.pattern);
+    assert!((done.voxel_a - 16.0 / f).abs() < 1e-6, "voxel {}", done.voxel_a);
+    let pattern = done.pattern.expect("a pattern");
+    assert!((pattern.rows_a - 64.0).abs() < 6.0, "{pattern:?}");
+    if fine > 1 {
+        // Averaged with its turns, and the halves agree on the detail the
+        // coarse voxels (32 Å at best) do not hold.
+        assert!(pattern.fold > 1 && pattern.symmetric, "{pattern:?}");
+        assert!(done.resolution_a.is_some_and(|a| a < 30.0), "{:?} Å", done.resolution_a);
+    }
     let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
     let at: Vec<[f64; 3]> = table
         .lines()
@@ -476,7 +501,7 @@ fn pattern_on_a_membrane(size_a: f64, from: usize, step: usize, name: &str) {
         .collect();
     assert!(at.len() >= 100, "{} places", at.len());
     // On the pattern's layer, not on the membrane.
-    let depth = at.iter().map(|p| p[1]).sum::<f64>() / at.len() as f64;
+    let depth = at.iter().map(|p| p[1]).sum::<f64>() / at.len() as f64 / f;
     assert!((depth - 34.0).abs() < 1.5, "places at y = {depth:.1}");
     for w in &waves {
         let (c, s) = at.iter().fold((0.0, 0.0), |(c, s), p| {

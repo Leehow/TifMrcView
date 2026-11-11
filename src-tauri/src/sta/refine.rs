@@ -513,6 +513,15 @@ pub fn align_from(set: &Set, model: &[f32], start: &[Pose], band: f64, shift: us
     align_within(None, set, model, start, Some((band, shift)), progress, live)
 }
 
+/// Local search ranges of `align_fine`, degrees.
+const RANGES_FINE: [f64; 2] = [4.0, 2.0];
+
+/// `align_from` for places already aligned at twice the voxel: they stand
+/// right to a few degrees, so the rounds search `RANGES_FINE` only.
+pub fn align_fine(set: &Set, model: &[f32], start: &[Pose], band: f64, shift: usize, progress: Progress, live: Live) -> Result<Aligned> {
+    align_ranges(None, set, model, start, Some((band, shift)), &RANGES_FINE, progress, live)
+}
+
 /// Whether `align_on` runs its local searches on the device. Measured on
 /// Metal (M1 Max, `cc_gpu::tests::times`, 500 particles × 33 steps, warm
 /// kernels): the CPU engine is as fast or faster at every size a run uses
@@ -529,6 +538,12 @@ pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
 }
 
 fn align_within(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], known: Option<(f64, usize)>, progress: Progress, live: Live) -> Result<Aligned> {
+    align_ranges(dev, set, model, start, known, &RANGES, progress, live)
+}
+
+/// `align_within` with the local search range of each round given, degrees.
+#[allow(clippy::too_many_arguments)]
+fn align_ranges(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], known: Option<(f64, usize)>, ranges: &[f64], progress: Progress, live: Live) -> Result<Aligned> {
     set.check()?;
     let m = set.particles.len();
     let mut poses = start.to_vec();
@@ -543,13 +558,13 @@ fn align_within(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
     }
     let floor = known.map_or(2.0, |(band, _)| band.min(top));
     let mut out = None;
-    for (round, range) in RANGES.iter().enumerate() {
+    for (round, range) in ranges.iter().enumerate() {
         check_cancel()?;
         let engine = set.engine(low_pass);
         let steps = local(*range, 2);
         let against = [engine.reference(&refs[0]), engine.reference(&refs[1])];
         let done = std::sync::atomic::AtomicUsize::new(0);
-        let stage = format!("对齐 第 {}/{} 轮", round + 1, RANGES.len());
+        let stage = format!("对齐 第 {}/{} 轮", round + 1, ranges.len());
         let on_device = dev.filter(|_| LOCAL_ON_DEVICE).and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, &steps, &|n| progress(&stage, n, m))) {
             Ok(Ok(found)) => Some(found),
             Ok(Err(e)) | Err(e) => {

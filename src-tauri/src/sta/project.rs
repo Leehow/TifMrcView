@@ -2274,7 +2274,7 @@ const FINE_HOLD: usize = 4000;
 /// The places of `finer` aligned on their finer cubes (`cuts` and `out`
 /// as it returns them; `radius` in those voxels): each half against its
 /// own average, a few degrees and voxels about where it stands
-/// (`refine::align_from`), down to the detail the halves agree to.
+/// (`refine::align_fine`), down to the detail the halves agree to.
 ///
 /// `fold` is how many times round the pattern repeats itself about the
 /// axis the places are on (`flat::axis`; the model's Z). The average is
@@ -2311,7 +2311,7 @@ fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radiu
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
     let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
     let set = Set { n, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let aligned = super::refine::align_from(&set, &out.map, &out.poses, out.shell + 1.0, 2, progress, live)?;
+    let aligned = super::refine::align_fine(&set, &out.map, &out.poses, out.shell + 1.0, 2, progress, live)?;
     if fold < 2 {
         return Ok(Some((aligned, false)));
     }
