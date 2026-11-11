@@ -440,7 +440,9 @@ pub fn auto_points(
     let plan = Plan { cards: true, trials: false };
     let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
     let card = sp::card_from_points(sources, points, &dir.to_string_lossy(), &report, live)?;
-    note(Note::Marked { points: card.members, size_a: card.measured_a });
+    // The size said is the one the search works with (from the blobs under
+    // the clicks): measured on the average of a handful of particles it is not to be trusted.
+    note(Note::Marked { points: card.members, size_a: card.diameter_a });
     let (dev, backend) = device()?;
     let r = average_with(dev, sources, &card, &dir.to_string_lossy(), &report, live)?;
     Ok(Outcome::Done(Box::new(Done { report: r, cards: vec![card.clone()], card, trials: vec![], chosen: None, cards_dir: dir.clone(), out: dir, backend: backend.to_string() })))
