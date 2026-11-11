@@ -3,7 +3,8 @@
 //! where a path is `x,y` (a click) or `x,y;x,y;...` (a drawn stroke). Each
 //! path is selected (red; every reading of it is listed), then the objects
 //! like the selected ones are looked for unless the score is `-` (green at or
-//! over the score, yellow under it).
+//! over the score, yellow under it). `TMV_SAM_MODEL=<sam2.1 .pt>` uses that
+//! SAM 2.1 checkpoint instead of the model the app would load.
 use tifmrcview_lib::image::OpenImage;
 use tifmrcview_lib::labels::{ChannelValues, Values};
 use tifmrcview_lib::{formats, sam};
@@ -18,8 +19,15 @@ fn main() -> anyhow::Result<()> {
     let vals = ChannelValues { img: img.clone(), c: 0, t: 0 };
     let view: [f32; 4] = if a[2] == "all" { [0.0, 0.0, w as f32, h as f32] } else { let v: Vec<f32> = a[2].split(',').map(|s| s.parse().unwrap()).collect(); [v[0], v[1], v[2], v[3]] };
     println!("{w}x{h}, model at {:?}", sam::model_path());
-    let s = sam::Sam::default();
     let t = std::time::Instant::now();
+    let s = match std::env::var_os("TMV_SAM_MODEL") {
+        Some(p) => {
+            let (p, backend) = tmv_sam::load_best(p.as_ref(), &tmv_sam::Sam2Config::tiny(), std::time::Duration::from_secs(90))?;
+            println!("SAM 2.1 from TMV_SAM_MODEL on {backend}");
+            sam::Sam::with_predictor(p)
+        }
+        None => sam::Sam::default(),
+    };
     s.warm()?;
     println!("model ready in {:.1?}", t.elapsed());
     let dn = sam::Denoise { slab: 0, sigma: 0.0 };
