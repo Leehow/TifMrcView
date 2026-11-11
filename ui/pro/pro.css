@@ -340,3 +340,8 @@
 #sta-workspace .sta-badge.runs { background:#fff8c5; color:#3b2300; }
 #sta-workspace .sta-fsc { display:block; width:100%; max-width:360px; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; font-size:9px; fill:var(--dim); }
 #sta-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
+#sta-draw-tools button { display:inline-flex; align-items:center; gap:4px; }
+#sta-draw-hint:empty { display:none; }
+#sta-draw .sta-marks { display:flex; flex-direction:column; gap:2px; margin-top:6px; }
+#sta-draw .sta-mark { padding:4px 8px; border:1px solid var(--line); border-left:3px solid var(--mark); border-radius:6px; cursor:pointer; }
+#sta-draw .sta-mark.on { background:var(--muted); border-color:var(--accent); border-left-color:var(--mark); }

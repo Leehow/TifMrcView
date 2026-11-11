@@ -6,7 +6,7 @@
 // FSC. The user may click another card and average again from it; nothing is
 // asked otherwise. Results live in <first tomogram>_sta/ beside the tomogram,
 // so reopening the workspace shows them without a rerun.
-// Backend: sta_run, sta_cards, sta_result, sta_out, sta_cancel; events
+// Backend: sta_run, sta_cards, sta_result, sta_out, sta_cancel (marks: draw.js); events
 // sta-progress {label, done, total}, sta-live {png}, sta-note {kind, …}.
 // Every call is guarded: under the web demo the commands are missing and the
 // panel only says so. Shares app.js globals: S, T, F, invoke, $, setFft, openPath.
@@ -32,8 +32,8 @@
     <div id="sta-data" class="sta-data"></div>
     <div class="al-row">
       <button id="sta-run" class="primary">一键平均</button>
-      <!-- Hook: a "自己标注" button (点 / 线 / 面 / 球) goes here; it will hand the drawn particles to the same pipeline. -->
     </div>
+    <div id="sta-draw-slot"></div>
     <p id="sta-line" class="dim"></p>
     <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <div id="sta-cards-box" hidden>
@@ -168,6 +168,8 @@
     if (!first || W.busy) return;
     try {
       const out = await invoke("sta_out", { first });
+      W.out = out;
+      document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
       const [cards, result] = await Promise.all([invoke("sta_cards", { out }), invoke("sta_result", { out })]);
       if (gen !== W.gen || W.busy) return;
       W.out = out;
@@ -181,17 +183,21 @@
     }
   }
 
-  async function run(pick) {
+  // One run of any kind: `task(inputs, out)` calls the backend and gives its
+  // result. The drawn run (draw.js) goes through here too.
+  async function go(task, fresh) {
     if (W.busy) return;
     const inputs = W.items.filter((i) => !W.off.has(i.path)).map((i) => i.path);
     if (!inputs.length) return status("请先打开一张断层图并勾选要平均的断层图");
     W.busy = true;
     W.trials = {};
-    if (pick == null) { W.cards = []; renderResult(null); }
+    if (fresh) { W.cards = []; }
+    renderResult(null);
     renderCards();
     $("sta-run").disabled = true;
     $("sta-cancel").hidden = false;
     $("sta-cancel").onclick = () => invoke("sta_cancel").catch(() => {});
+    document.dispatchEvent(new CustomEvent("sta-busy", { detail: true }));
     const t0 = performance.now();
     const unlisten = [];
     try {
@@ -214,8 +220,8 @@
       });
       status("开始…");
       W.out = await invoke("sta_out", { first: W.items[0].path });
-      const r = await invoke("sta_run", { inputs, pick: pick ?? null, out: W.out });
-      W.cards = r.cards || [];
+      const r = await task(inputs, W.out);
+      if (!r.drawn) W.cards = r.cards || [];
       W.selected = null;
       renderResult(r.result);
       status(r.needsChoice ? "没有一张卡片能平均出结果：这批断层图里可能没有成群的颗粒" : `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
@@ -229,12 +235,17 @@
       $("sta-live").hidden = true;
       $("sta-line").textContent = "";
       renderCards();
+      document.dispatchEvent(new CustomEvent("sta-busy", { detail: false }));
     }
   }
+  const run = (pick) => go((inputs, out) => invoke("sta_run", { inputs, pick: pick ?? null, out }), pick == null);
+  W.go = go;
+  W.status = status;
+  W.renderData = renderData;
   $("sta-run").onclick = () => run(null);
   $("sta-again").onclick = () => run(W.selected);
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
-  $("sta-folder").onclick = () => W.out && invoke("open_folder", { path: W.out }).catch((e) => status(`${e}`));
+  $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
 
   function close() {
     panel.hidden = true;

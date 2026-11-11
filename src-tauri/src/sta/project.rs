@@ -1622,7 +1622,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
 }
 
 /// The pixel size of a tomogram file, Å.
-fn pixel_of(path: &str) -> Result<f64> {
+pub(crate) fn pixel_of(path: &str) -> Result<f64> {
     Ok(output::pixel_a(&pipeline::open(path)?))
 }
 

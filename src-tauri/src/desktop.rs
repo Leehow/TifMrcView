@@ -1959,6 +1959,33 @@ fn sta_out(first: String) -> String {
     crate::sta::auto::default_out(&first).to_string_lossy().into_owned()
 }
 
+/// "Mark it yourself" (Pro): the marks made on the tomogram are completed to
+/// shapes and averaged (`sta::marks`). Same events and result as `sta_run`;
+/// the average goes to `<out>/drawn`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, out: Option<String>, size: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), out.as_deref(), &emit, &base64)
+    }).await
+}
+
+/// The marks saved in an output folder: {marks, size}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_marks_load(out: String) -> crate::sta::marks::Saved {
+    crate::sta::marks::load(std::path::Path::new(&out))
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_marks_save(out: String, marks: Vec<crate::sta::marks::Mark>, size: Option<String>) -> CmdResult<()> {
+    crate::sta::marks::save(std::path::Path::new(&out), &crate::sta::marks::Saved { marks, size }).map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 fn sta_cancel() {
@@ -2935,6 +2962,9 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_result,
             #[cfg(feature = "pro")] sta_out,
             #[cfg(feature = "pro")] sta_cancel,
+            #[cfg(feature = "pro")] sta_run_drawn,
+            #[cfg(feature = "pro")] sta_marks_load,
+            #[cfg(feature = "pro")] sta_marks_save,
             diffraction_find,
             diffraction_zones,
             eds_quant,
