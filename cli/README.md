@@ -69,7 +69,7 @@ input. The tilt range of each tomogram comes from its `*.tomo.json` (the
 views the alignment kept); without one, -60 to 60 is assumed, with a warning.
 Whether the average is good is for you to judge from `average.mrc` (weighted by
 the half agreement, sharpened and cut at the resolution; `average_raw.mrc` is the
-plain average) and the two halves; `sta.json` has the numbers. Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view and the defocus of each tomogram, shared by all its particles, are refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The result (`OUT/sta.tmv.json`) has
+plain average) and the two halves; `sta.json` has the numbers. Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view, shared by all the particles of its tomogram, is refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The result (`OUT/sta.tmv.json`) has
 `trials` (per card: `ok`, `reason`, `particles`, `agreement`, `fsc`, when the cards were tried), `resolutionA` (FSC 0.143 between the halves) with the curve `fsc`, `particles`,
 `diameterA` with `diameterFrom: "card"` (1.33 × the card's size), `seconds`
 (the whole run, a tomogram made first included), `searched` (`look` or `raw`:
