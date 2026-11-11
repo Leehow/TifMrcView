@@ -111,7 +111,8 @@ that card). Never take a card another job is using fully.
 
 Follow progress: `ssh HOST 'tail -n 5 ~/tmv-jobs/NAME/tmv.log'`. Check every
 few minutes, more rarely for long jobs; `pgrep -f "tmv "` tells whether it is
-still running. Do not start several GPU jobs at once on the same GPU.
+still running. A second tmv job on the same GPU waits for the first to finish
+by itself (two at once run out of GPU memory); it says so in its log.
 
 ## 5. Read the result
 
