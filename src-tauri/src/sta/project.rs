@@ -1780,14 +1780,18 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     }
     keep.sort_unstable();
     let candidates = cuts.len();
+    // `align` takes even and odd places as the two halves. Places cut along
+    // one shape overlap their neighbours, so a half must take whole shapes
+    // (or whole pieces of one), or the halves share data and their FSC
+    // stays high to Nyquist.
+    let at: Vec<[f64; 3]> = keep.iter().map(|i| std::array::from_fn(|k| cuts[*i].at[k] / cuts[*i].bin as f64 + poses[*i].t[k])).collect();
+    let of: Vec<usize> = keep.iter().map(|i| cuts[*i].source).collect();
+    let keep: Vec<usize> = halves_by_groups(&at, &of, 1.5 * 0.5 * size_a / voxel_a).into_iter().map(|j| keep[j]).collect();
     let poses: Vec<Pose> = keep.iter().map(|i| poses[*i]).collect();
     let particles: Vec<Vec<f32>> = keep.iter().map(|i| particles[*i].clone()).collect();
     let wedge_of: Vec<usize> = keep.iter().map(|i| wedge_of[*i]).collect();
-    let mut at = 0;
-    cuts.retain(|_| {
-        at += 1;
-        keep.binary_search(&(at - 1)).is_ok()
-    });
+    let mut taken: Vec<Option<Cut>> = cuts.into_iter().map(Some).collect();
+    let cuts: Vec<Cut> = keep.iter().map(|i| taken[*i].take().expect("each place once")).collect();
     if cuts.len() < 4 {
         bail!("合并重复位置后只剩 {} 个颗粒", cuts.len());
     }
@@ -1817,6 +1821,69 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     };
     save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
     Ok(report)
+}
+
+/// The order in which places become the two halves of `align` (even
+/// places one half, odd the other): places closer than `gap` (same source)
+/// are one group, a shape or a piece of one, and whole groups are dealt to
+/// the half that has fewer so far, largest first. A group of more than
+/// `MOST_OF_ONE` of all is cut in two by a plane through its middle across
+/// its longest extent first, so one large shape does not make one half.
+/// The larger half loses its extra places, so the two interleave exactly.
+fn halves_by_groups(at: &[[f64; 3]], source: &[usize], gap: f64) -> Vec<usize> {
+    const MOST_OF_ONE: f64 = 0.6;
+    let n = at.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            if source[i] == source[j] && (0..3).map(|k| (at[i][k] - at[j][k]).powi(2)).sum::<f64>() <= gap * gap {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a] = b;
+            }
+        }
+    }
+    let mut groups: Vec<Vec<usize>> = vec![];
+    let mut index = std::collections::HashMap::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        let g = *index.entry(r).or_insert_with(|| {
+            groups.push(vec![]);
+            groups.len() - 1
+        });
+        groups[g].push(i);
+    }
+    // Cut the groups too large to share out.
+    let mut k = 0;
+    while k < groups.len() {
+        if groups[k].len() as f64 > MOST_OF_ONE * n as f64 && groups[k].len() >= 2 {
+            let g = std::mem::take(&mut groups[k]);
+            let mean: [f64; 3] = std::array::from_fn(|d| g.iter().map(|i| at[*i][d]).sum::<f64>() / g.len() as f64);
+            let spread: Vec<f64> = (0..3).map(|d| g.iter().map(|i| (at[*i][d] - mean[d]).powi(2)).sum::<f64>()).collect();
+            let d = (0..3).max_by(|a, b| spread[*a].total_cmp(&spread[*b])).unwrap();
+            let mut sorted = g;
+            sorted.sort_by(|a, b| at[*a][d].total_cmp(&at[*b][d]));
+            let back = sorted.split_off(sorted.len() / 2);
+            groups[k] = sorted;
+            groups.push(back);
+        } else {
+            k += 1;
+        }
+    }
+    groups.sort_by(|a, b| b.len().cmp(&a.len()).then(a[0].cmp(&b[0])));
+    let mut half: [Vec<usize>; 2] = [vec![], vec![]];
+    for g in groups {
+        let h = if half[0].len() <= half[1].len() { 0 } else { 1 };
+        half[h].extend(g);
+    }
+    let m = half[0].len().min(half[1].len());
+    (0..m).flat_map(|i| [half[0][i], half[1][i]]).collect()
 }
 
 /// The pixel size of a tomogram file, Å.
@@ -2973,5 +3040,51 @@ mod polish_tests {
         assert!(b.is_none_or(|b| (SHARPEN_B_MIN..=0.0).contains(&b)), "{b:?}");
         // Nothing to cut at: the plain mean.
         assert_eq!(polish(&h1, &h2, &[], 0.0, N, PX, RADIUS).1, None);
+    }
+}
+
+#[cfg(test)]
+mod halves_tests {
+    use super::halves_by_groups;
+
+    /// Places along three separate lines: no line may give places to both halves.
+    #[test]
+    fn whole_shapes_go_to_one_half() {
+        let mut at = vec![];
+        let mut source = vec![];
+        for (line, len) in [(0.0, 10), (100.0, 7), (200.0, 5)] {
+            for k in 0..len {
+                at.push([k as f64 * 2.0, line, 0.0]);
+                source.push(0);
+            }
+        }
+        let order = halves_by_groups(&at, &source, 3.0);
+        let line_of = |i: usize| (at[i][1] / 100.0).round() as usize;
+        let mut lines = [[false; 2]; 3];
+        for (k, i) in order.iter().enumerate() {
+            lines[line_of(*i)][k % 2] = true;
+        }
+        assert!(lines.iter().all(|l| !(l[0] && l[1])), "{lines:?}");
+        // 10 against 7 + 5: each half keeps 10.
+        assert_eq!(order.len(), 20);
+    }
+
+    /// One shape with nearly everything is cut by a plane: each half takes one side.
+    #[test]
+    fn one_large_shape_is_cut_in_two() {
+        let at: Vec<[f64; 3]> = (0..40).map(|k| [k as f64, 0.0, 0.0]).collect();
+        let order = halves_by_groups(&at, &vec![0; 40], 1.5);
+        assert_eq!(order.len(), 40);
+        let (a, b): (Vec<_>, Vec<_>) = order.iter().enumerate().partition(|(k, _)| k % 2 == 0);
+        let side = |v: &Vec<(usize, &usize)>| v.iter().all(|(_, i)| **i < 20) || v.iter().all(|(_, i)| **i >= 20);
+        assert!(side(&a) && side(&b));
+    }
+
+    /// The same place in two tomograms is not one group.
+    #[test]
+    fn sources_are_apart() {
+        let at = vec![[0.0; 3], [0.0; 3]];
+        let order = halves_by_groups(&at, &[0, 1], 5.0);
+        assert_eq!(order.len(), 2);
     }
 }
