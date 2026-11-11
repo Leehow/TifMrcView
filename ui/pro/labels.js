@@ -1334,6 +1334,13 @@
         o += 20 + w * h;
       }
       cand.busy = false;
+      // Nothing alike enough at the usual setting: show the best there are.
+      if (n && !again && !candOn(cand).length) {
+        const best = Math.max(...cand.items.map((it) => it.score));
+        const v = Math.min(1, Math.log(0.8 / (best * 0.6)) / Math.log(0.8 / 0.02));
+        $("lab-cand-thr").value = v;
+        cand.thr = Math.min(thrOf(v), best);
+      }
       if (L.cand === cand && !n) {
         L.cand = null;
         toast("这一层没有找到和它相似的物体", 4000);
