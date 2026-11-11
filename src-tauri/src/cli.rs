@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
+use crate::sta::auto::{self as auto_sta, card_json, trial_json};
 use crate::{formats, image::OpenImage};
 
 /// The release version (CI sets TMV_VERSION), else the crate's.
@@ -509,121 +510,12 @@ fn tomo(o: &Opts) -> Result<Value> {
     Ok(v)
 }
 
-/// What `tmv sta` knows about one input after its tomogram exists.
-struct StaInput {
-    input: String,
-    tomogram: String,
-    tilts: [f64; 2],
-    tilts_from: &'static str,
-    /// The clear companion `tmv tomo --for sta` made (blobs and the template
-    /// are searched on it; the averages are of `tomogram`).
-    look: Option<crate::tomo::dataset::Look>,
-    /// The dataset of the tilt series, when the tomogram's place in the
-    /// series is on record: the final average then comes from the tilt images.
-    series: Option<String>,
-}
-
-/// The look record kept with `tomogram` in its dataset, when its file is
-/// there (also if the folder was copied: then the file beside the tomogram).
-fn look_of(d: Option<&crate::tomo::dataset::Dataset>, tomogram: &str) -> Option<crate::tomo::dataset::Look> {
-    let name = Path::new(tomogram).file_name()?;
-    let mut look = d?.tomograms.iter().find(|t| Path::new(&t.path).file_name() == Some(name))?.look.clone()?;
-    if !Path::new(&look.path).is_file() {
-        let beside = Path::new(tomogram).with_file_name(Path::new(&look.path).file_name()?);
-        if beside.is_file() {
-            look.path = beside.to_string_lossy().into_owned();
-        } else {
-            eprintln!("tmv sta: the look tomogram {} of {tomogram} is missing: using the tomogram alone", look.path);
-            return None;
-        }
-    }
-    Some(look)
-}
-
-/// First and last tilt angle (°) of `angles`; None with fewer than two or all equal.
-fn range_of(angles: &[f64]) -> Option<[f64; 2]> {
-    let lo = angles.iter().copied().filter(|a| a.is_finite()).fold(f64::INFINITY, f64::min);
-    let hi = angles.iter().copied().filter(|a| a.is_finite()).fold(f64::NEG_INFINITY, f64::max);
-    (hi > lo).then_some([lo, hi])
-}
-
-/// The tilts used for the tomogram: the refined angles (levelling included)
-/// of the alignment's views that were not left out, else the series' angles.
-fn tilt_range(d: &crate::tomo::dataset::Dataset) -> Option<([f64; 2], &'static str)> {
-    if let Some(a) = &d.alignment {
-        let used: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
-        if let Some(r) = range_of(&used) {
-            return Some((r, "alignment"));
-        }
-    }
-    range_of(&d.angles).map(|r| (r, "tilt angles"))
-}
-
-/// The dataset (`*.tomo.json`) beside `tomogram` that lists it.
-fn dataset_of(tomogram: &str) -> Option<crate::tomo::dataset::Dataset> {
-    use crate::tomo::dataset::Dataset;
-    let p = Path::new(tomogram);
-    let name = p.file_name()?;
-    let mut files: Vec<PathBuf> = std::fs::read_dir(p.parent()?)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".tomo.json")))
-        .collect();
-    files.sort();
-    files.into_iter().find_map(|f| {
-        let d: Dataset = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
-        d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == Some(name)).then_some(d)
-    })
-}
-
 /// `--out`, else `<stem>_sta` beside the first input.
 fn sta_out(o: &Opts, first: &str) -> Result<PathBuf> {
     if let Some(d) = o.get("out") {
         return std::path::absolute(d).with_context(|| format!("--out {d}"));
     }
-    let p = Path::new(first);
-    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
-    Ok(p.with_file_name(format!("{stem}_sta")))
-}
-
-/// What a run of `tmv sta` does, to count its steps: making the cards (two
-/// steps), trying them as templates (one), then the search, the first
-/// alignment and the fine one.
-#[derive(Clone, Copy)]
-struct Plan {
-    cards: bool,
-    trials: bool,
-}
-
-impl Plan {
-    fn steps(self) -> usize {
-        3 + if self.cards { 2 } else { 0 } + usize::from(self.trials)
-    }
-}
-
-/// A progress label of the library, prefixed with the step of the whole run
-/// ("第 k/N 步 · …", as `tmv tomo` does). The steps follow the sequence of
-/// labels `sta::project::cards`, `trials` and `run_template` report; others pass unchanged.
-fn sta_label(label: &str, plan: Plan) -> String {
-    let cards = if plan.cards { 2 } else { 0 };
-    let after = cards + usize::from(plan.trials);
-    let step = if label.starts_with("找颗粒") {
-        1
-    } else if label.starts_with("裁出颗粒") || label.starts_with("分类") {
-        2
-    } else if label.starts_with("试跑卡片") {
-        cards + 1
-    } else if label.starts_with("搜索") {
-        after + 1
-    } else if label.starts_with("粗对齐") {
-        after + 2
-    } else if label.starts_with("裁出更细的颗粒") || label.starts_with("精细对齐") {
-        after + 3
-    } else {
-        return label.to_string();
-    };
-    format!("第 {step}/{} 步 · {label}", plan.steps())
+    Ok(auto_sta::default_out(first))
 }
 
 /// The closing line of `tmv sta` on stderr.
@@ -639,28 +531,6 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
     }
 }
 
-/// The card to take without asking (see `sta::project::choose`): the one
-/// that gave the best average of the trials, when the cards close to it show
-/// one kind of particle (compared now when there are several, about a second
-/// for a pair; a card that cannot be read leaves the choice to the user).
-/// Else None.
-fn auto_pick(cards: &[crate::sta::project::Card], trials: &[crate::sta::project::Trial], found: Option<(&str, &[crate::sta::project::Source])>) -> Option<crate::sta::project::Chosen> {
-    use crate::sta::project as sp;
-    let good = sp::good(trials);
-    let similar = if good.len() > 1 {
-        match sp::likeness(cards, &good, found) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("tmv sta: could not compare the cards ({e:#}): each is taken for a kind of its own");
-                vec![]
-            }
-        }
-    } else {
-        vec![]
-    };
-    sp::choose(cards, trials, &similar)
-}
-
 /// "0 and 1", "0, 1 and 3".
 fn id_list(ids: &[usize]) -> String {
     match ids {
@@ -668,13 +538,6 @@ fn id_list(ids: &[usize]) -> String {
         [one] => one.to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
     }
-}
-
-fn trial_json(t: &crate::sta::project::Trial) -> Value {
-    json!({
-        "card": t.card, "ok": t.ok, "reason": t.reason, "particles": t.particles, "candidates": t.candidates,
-        "agreement": (t.strength * 1e5).round() / 1e5, "voxelA": t.voxel_a, "fsc": t.fsc, "seconds": (t.seconds * 10.0).round() / 10.0, "elongation": t.elongation, "runsOn": t.runs_on(),
-    })
 }
 
 /// The stderr line of one trial.
@@ -690,57 +553,41 @@ fn trial_line(t: &crate::sta::project::Trial) -> String {
     }
 }
 
-fn card_json(c: &crate::sta::project::Card) -> Value {
-    json!({ "id": c.id, "diameterA": c.diameter_a, "members": c.members, "compact": (c.compact * 10.0).round() / 10.0, "likely": c.likely, "path": c.path })
-}
-
-/// An input tomogram as the cards were made from it (`cards/inputs.json`).
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-struct InputStamp {
-    path: String,
-    size: u64,
-    /// Modified time, nanoseconds since the epoch (0 when unknown).
-    modified_ns: u128,
-}
-
-fn input_stamps<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<InputStamp> {
-    paths
-        .map(|p| {
-            let abs = std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p));
-            let meta = std::fs::metadata(&abs).ok();
-            let modified_ns = meta
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos());
-            InputStamp { path: abs.to_string_lossy().into_owned(), size: meta.map_or(0, |m| m.len()), modified_ns }
-        })
-        .collect()
-}
-
-/// Why saved cards cannot be reused for the present inputs (None: they can,
-/// the inputs are the same, in the same order).
-fn stale(saved: Option<&[InputStamp]>, now: &[InputStamp]) -> Option<String> {
-    let Some(saved) = saved else {
-        return Some("cards/inputs.json is missing or unreadable, so it is not known which tomograms they were made from".into());
-    };
-    if saved.len() != now.len() {
-        return Some(format!("they were made from {} tomogram(s), now there are {}", saved.len(), now.len()));
-    }
-    for (a, b) in saved.iter().zip(now) {
-        if a.path != b.path {
-            return Some(format!("they were made from {}, now {}", a.path, b.path));
+/// The English line of a note of `sta::auto`, printed on stderr.
+fn sta_note(n: &auto_sta::Note, progress: &Progress) {
+    use auto_sta::Note;
+    match n {
+        Note::NoDataset { tomogram } => eprintln!("warning: no tilt series dataset (*.tomo.json) found for {tomogram}: assuming tilts -60…60"),
+        Note::LookMissing { look, tomogram } => eprintln!("tmv sta: the look tomogram {look} of {tomogram} is missing: using the tomogram alone"),
+        Note::OlderVersion { tomogram } => eprintln!("tmv sta: {tomogram} was made by an older version: the average will come from the tomogram only (run tmv tomo --for sta again to use the tilt images)"),
+        Note::CardsStale { why } => eprintln!("tmv sta: making the cards again: {why}"),
+        Note::CardsReused { dir } => eprintln!("tmv sta: reusing the cards in {dir} (delete that folder to make them again)"),
+        Note::CardsMade { .. } => progress.done(),
+        Note::TrialsReused { dir } => eprintln!("tmv sta: reusing the trials in {dir} (delete trials.json to try the cards again)"),
+        Note::Trial { trial, reused } => {
+            if !reused {
+                progress.done();
+            }
+            eprintln!("{}", trial_line(trial));
         }
-        if a.size != b.size || a.modified_ns != b.modified_ns {
-            return Some(format!("{} has changed since they were made", b.path));
+        Note::TrialsMade => progress.done(),
+        Note::CompareFailed { error } => eprintln!("tmv sta: could not compare the cards ({error}): each is taken for a kind of its own"),
+        Note::Using { card, same, other, dir } => {
+            let why = if same.len() > 1 { format!("cards {} show the same particle", id_list(same)) } else { "the card that gives the best average".to_string() };
+            eprintln!(
+                "tmv sta: using card {} (about {} Å across, {} members; {why}); the other cards are in {dir}/, choose another with --pick N",
+                card.id, card.diameter_a, card.members
+            );
+            if !other.is_empty() {
+                eprintln!("tmv sta: something else averages well too (card {}): choose it with --pick N", other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "));
+            }
         }
     }
-    None
 }
 
 /// `tmv sta`: the tomogram of each input (made as `tmv tomo --for sta` does),
 /// class-average cards of the blobs in them, then the average of everything
-/// that looks like the chosen card.
+/// that looks like the chosen card (`sta::auto::auto`).
 fn sta(o: &Opts) -> Result<Value> {
     use crate::sta::project as sp;
     let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();
@@ -750,11 +597,12 @@ fn sta(o: &Opts) -> Result<Value> {
     let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
     let out = sta_out(o, &inputs[0])?;
     let progress = Progress::new();
+    let note = |n: auto_sta::Note| sta_note(&n, &progress);
 
     // Step 0: a tomogram and its tilt range for each input.
-    let mut found: Vec<StaInput> = vec![];
+    let mut found: Vec<auto_sta::Resolved> = vec![];
     for input in &inputs {
-        let (tomogram, dataset) = if dataset_of(input).is_none() && (ext(input) == "mdoc" || has_tilts(input, open_image(input)?.info().size_z)) {
+        let (tomogram, dataset) = if auto_sta::dataset_of(input).is_none() && (ext(input) == "mdoc" || has_tilts(input, open_image(input)?.info().size_z)) {
             eprintln!("tmv sta: {input} is a tilt series → tmv tomo --for sta");
             let mut named = vec![("for".to_string(), Some("sta".to_string()))];
             if let Some(px) = o.get("pixel") {
@@ -762,162 +610,48 @@ fn sta(o: &Opts) -> Result<Value> {
             }
             let v = tomo(&Opts { input: Some(input.clone()), more: vec![], named })?;
             let path = v["open"].as_str().context("tmv tomo made no tomogram")?.to_string();
-            let d = v["dataset"].as_str().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).or_else(|| dataset_of(&path));
+            let d = v["dataset"].as_str().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).or_else(|| auto_sta::dataset_of(&path));
             (path, d)
         } else {
-            (input.clone(), dataset_of(input))
+            (input.clone(), auto_sta::dataset_of(input))
         };
-        let (tilts, tilts_from) = match dataset.as_ref().and_then(tilt_range) {
-            Some(t) => t,
-            None => {
-                eprintln!("warning: no tilt series dataset (*.tomo.json) found for {tomogram}: assuming tilts -60…60");
-                ([-60.0, 60.0], "default -60…60")
-            }
-        };
-        let look = look_of(dataset.as_ref(), &tomogram);
-        let name = Path::new(&tomogram).file_name();
-        let series = dataset.as_ref().and_then(|d| {
-            let placed = d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == name && t.z_offset.is_some());
-            // Beside the tomogram, also when the folder was moved.
-            let file = Path::new(&tomogram).with_file_name(crate::tomo::dataset::path_for(&d.stack).file_name()?);
-            (placed && file.is_file()).then(|| file.to_string_lossy().into_owned())
-        });
-        if series.is_none() && dataset.is_some() {
-            eprintln!("tmv sta: {tomogram} was made by an older version: the average will come from the tomogram only (run tmv tomo --for sta again to use the tilt images)");
-        }
-        found.push(StaInput { input: input.clone(), tomogram, tilts, tilts_from, look, series });
+        found.push(auto_sta::resolve(input, tomogram, dataset, &note));
     }
-    let sources: Vec<sp::Source> = found.iter().map(|f| sp::Source { path: f.tomogram.clone(), tilts: f.tilts, look: f.look.clone(), series: f.series.clone() }).collect();
+    let sources: Vec<sp::Source> = found.iter().map(auto_sta::Resolved::source).collect();
     let tomograms: Vec<Value> = found
         .iter()
         .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
         .collect();
 
-    // Step 1: the cards (they take minutes, so a finished set is reused).
+    let outcome = auto_sta::auto(&sources, pick, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
     let cards_dir = out.join("cards");
-    let cards_json = cards_dir.join("cards.json");
-    let inputs_json = cards_dir.join("inputs.json");
-    // The cards are made from the full-detail tomograms alone (not the look ones).
-    let stamps = input_stamps(found.iter().map(|f| f.tomogram.as_str()));
-    let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if !cards.is_empty() {
-        let saved: Option<Vec<InputStamp>> = std::fs::read(&inputs_json).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        if let Some(why) = stale(saved.as_deref(), &stamps) {
-            eprintln!("tmv sta: making the cards again: {why}");
-            cards.clear();
-        }
-    }
-    // The steps of the whole run are counted from here on (a tilt series
-    // was made into a tomogram above, with its own count).
-    let making = cards.is_empty();
-    // The trials belong to these cards: reused with them, and only when they
-    // are all there (as many as the cards, at most `TRIALS`).
-    let trials_json = cards_dir.join("trials.json");
-    let mut trials: Vec<sp::Trial> = vec![];
-    if !making && pick.is_none() {
-        trials = std::fs::read(&trials_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        if trials.len() != cards.len().min(sp::TRIALS) || trials.iter().zip(0..).any(|(t, i)| t.card != i) {
-            trials.clear();
-        }
-    }
-    let plan = Plan { cards: making, trials: pick.is_none() && trials.is_empty() };
-    let report = |s: &str, i: usize, n: usize| progress.report(&sta_label(s, plan), i, n);
-    if making {
-        // Trials of older cards say nothing about these.
-        let _ = std::fs::remove_file(&trials_json);
-        cards = sp::cards(&sources, &cards_dir.to_string_lossy(), &report, &|_| {})?;
-        std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
-        progress.done();
-    } else {
-        eprintln!("tmv sta: reusing the cards in {} (delete that folder to make them again)", cards_dir.display());
-        // The folder may have been copied elsewhere.
-        for c in &mut cards {
-            if !Path::new(&c.path).is_file() {
-                c.path = cards_dir.join(format!("card_{}.mrc", c.id)).to_string_lossy().into_owned();
-            }
-        }
-    }
-    if cards.is_empty() {
-        bail!("no card: no kind of blob with enough members was found in these tomograms (is it a tomogram made with --for sta, and does it hold particles?)");
-    }
-
-    // Choosing: each card is tried as the template of a coarse run, and the one that gives the best average wins.
-    let (dev, backend) = device();
-    let out_s = out.to_string_lossy().into_owned();
-    if pick.is_none() {
-        if plan.trials {
-            let dir = out.join("trials").to_string_lossy().into_owned();
-            let each = |t: &sp::Trial| {
-                progress.done();
-                eprintln!("{}", trial_line(t));
-            };
-            trials = crate::ctf_gpu::guarded(|| sp::trials(dev, &sources, &cards, &dir, &report, &|_| {}, &each))??;
-            progress.done();
-            std::fs::write(&trials_json, serde_json::to_string_pretty(&trials)?)?;
-        } else {
-            eprintln!("tmv sta: reusing the trials in {} (delete trials.json to try the cards again)", cards_dir.display());
-            for t in &trials {
-                eprintln!("{}", trial_line(t));
-            }
-        }
-    }
-    let trials_value: Vec<Value> = trials.iter().map(trial_json).collect();
-    let n = match pick {
-        Some(n) => n,
-        None => match auto_pick(&cards, &trials, Some((&out.join("trials").to_string_lossy(), &sources))) {
-            Some(chosen) => {
-                let n = chosen.id;
-                let c = &cards[n];
-                let why = if chosen.same.len() > 1 {
-                    format!("cards {} show the same particle", id_list(&chosen.same))
-                } else {
-                    "the card that gives the best average".to_string()
-                };
+    let d = match outcome {
+        auto_sta::Outcome::Done(d) => d,
+        auto_sta::Outcome::NeedsChoice { cards, trials, good, cards_dir } => {
+            let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
+            let rerun = format!("tmv sta --pick N{} {}", if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() }, tomos.join(" "));
+            if good.is_empty() {
+                eprintln!("tmv sta: no card gave an average as a template: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
+            } else {
+                let list: Vec<String> = trials.iter().filter(|t| good.contains(&t.card)).map(|t| format!("card {} (agreement {:.4})", t.card, t.strength)).collect();
                 eprintln!(
-                    "tmv sta: using card {n} (about {} Å across, {} members; {why}); the other cards are in {}/, choose another with --pick N",
-                    c.diameter_a,
-                    c.members,
+                    "tmv sta: several kinds of particle give a good average: {}; look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}",
+                    list.join(", "),
                     cards_dir.display()
                 );
-                if !chosen.other.is_empty() {
-                    eprintln!(
-                        "tmv sta: something else averages well too (card {}): choose it with --pick N",
-                        chosen.other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
-                    );
-                }
-                n
             }
-            None => {
-                let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
-                let rerun = format!("tmv sta --pick N{} {}", if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() }, tomos.join(" "));
-                let good = sp::good(&trials);
-                if good.is_empty() {
-                    eprintln!("tmv sta: no card gave an average as a template: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
-                } else {
-                    let list: Vec<String> = trials.iter().filter(|t| good.contains(&t.card)).map(|t| format!("card {} (agreement {:.4})", t.card, t.strength)).collect();
-                    eprintln!(
-                        "tmv sta: several kinds of particle give a good average: {}; look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}",
-                        list.join(", "),
-                        cards_dir.display()
-                    );
-                }
-                return Ok(json!({
-                    "needsChoice": true,
-                    "cardsDir": cards_dir,
-                    "cards": cards.iter().map(card_json).collect::<Vec<_>>(),
-                    "trials": trials_value,
-                    "tomograms": tomograms,
-                    "next": rerun,
-                }));
-            }
-        },
+            return Ok(json!({
+                "needsChoice": true,
+                "cardsDir": cards_dir,
+                "cards": cards.iter().map(card_json).collect::<Vec<_>>(),
+                "trials": trials.iter().map(trial_json).collect::<Vec<_>>(),
+                "tomograms": tomograms,
+                "next": rerun,
+            }));
+        }
     };
-    let card = cards.get(n).with_context(|| format!("--pick {n}: there are only {} cards (0 to {})", cards.len(), cards.len() - 1))?;
-
-    // Step 2: the average.
-    let (cube, voxel) = sp::read_card(&card.path)?;
-    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, sp::template_diameter(card), sp::Pass::Fine, &out_s, &report, &|_| {}))??;
     progress.done();
+    let r = d.report;
     eprintln!("{}", sta_summary(&r));
     let mut v = serde_json::to_value(&r)?;
     if let Value::Object(m) = &mut v {
@@ -925,12 +659,12 @@ fn sta(o: &Opts) -> Result<Value> {
         m.remove("ms");
     }
     v["diameterFrom"] = json!("card");
-    v["card"] = card_json(card);
+    v["card"] = card_json(&d.card);
     v["out"] = json!(out);
     v["cardsDir"] = json!(cards_dir);
-    v["trials"] = json!(trials_value);
+    v["trials"] = json!(d.trials.iter().map(trial_json).collect::<Vec<_>>());
     v["tomograms"] = json!(tomograms);
-    v["backend"] = json!(backend);
+    v["backend"] = json!(d.backend);
     v["open"] = json!(r.map);
     Ok(v)
 }
@@ -1390,6 +1124,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::sta::auto::{auto_pick, input_stamps, range_of, sta_label, stale, InputStamp, Plan};
 
     #[test]
     fn options_parse() {
@@ -1437,15 +1172,15 @@ mod tests {
         let id = |c: Option<crate::sta::project::Chosen>| c.map(|c| c.id);
         let cards = [card(0), card(1), card(2)];
         // One card works: it is taken, however the others look.
-        assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
+        assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)], None, &|_| {})), Some(1));
         // One works well, the other is too weak to count (0.018 / 0.0274 < 0.75).
-        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
+        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)], None, &|_| {})), Some(1));
         // Two close ones are compared from their files: unreadable here, so the stronger is taken.
-        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
+        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)], None, &|_| {})), Some(1));
         // None works; nothing tried.
-        assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)], None), None);
-        assert_eq!(auto_pick(&cards, &[], None), None);
-        assert_eq!(auto_pick(&[], &[], None), None);
+        assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)], None, &|_| {}), None);
+        assert_eq!(auto_pick(&cards, &[], None, &|_| {}), None);
+        assert_eq!(auto_pick(&[], &[], None, &|_| {}), None);
     }
 
     #[test]
