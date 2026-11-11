@@ -141,6 +141,10 @@ name = "sam_slice"
 required-features = ["pro"]
 
 [[example]]
+name = "pick_probe"
+required-features = ["pro"]
+
+[[example]]
 name = "gpu_bench"
 required-features = ["pro"]
 

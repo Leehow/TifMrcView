@@ -67,6 +67,27 @@ impl NativePredictor {
         }
     }
 
+    /// Every mask the model offers for a prompt, as low-resolution logits
+    /// over the encoded image with the quality of each. SAM 2.1: the
+    /// single-mask output, then part, object and whole; SAM 3.1: one.
+    fn predict_multi(&self, image: &tmv_sam::Encoded, points: &[tmv_sam::Point], bbox: Option<[f32; 4]>) -> Result<Vec<(Vec<f32>, f32)>> {
+        match self {
+            Self::Sam21(p) => Ok(p.predict_multi(image, points, bbox)),
+            Self::Sam31(p) => {
+                let r = p.predict(image, points, bbox, None)?;
+                Ok(vec![(r.low_res_values(), r.iou)])
+            }
+        }
+    }
+
+    /// `predict_multi` for many single clicks on one image.
+    fn predict_multi_many(&self, image: &tmv_sam::Encoded, points: &[tmv_sam::Point]) -> Result<Vec<Vec<(Vec<f32>, f32)>>> {
+        match self {
+            Self::Sam21(p) => Ok(p.predict_multi_many(image, points)),
+            Self::Sam31(_) => points.iter().map(|&q| self.predict_multi(image, &[q], None)).collect(),
+        }
+    }
+
     fn mask_prompt(&self, values: &[f32]) -> Result<burn::tensor::Tensor<4>> {
         match self {
             Self::Sam21(p) => Ok(p.mask_prompt(values)),
@@ -153,6 +174,70 @@ pub struct PropagateReq {
     pub follow_prompts: bool,
 }
 
+/// A click or a stroke of the smart selection tool.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickReq {
+    pub token: u64,
+    pub z: usize,
+    pub c: usize,
+    pub t: usize,
+    pub lo: f32,
+    pub hi: f32,
+    #[serde(default)]
+    pub denoise: Denoise,
+    /// One point for a click, more for a stroke drawn on the image: a loop
+    /// around the object or a line along it. Image pixels.
+    pub path: Vec<[f32; 2]>,
+    /// The part of the image on screen (x0, y0, x1, y1): an object is
+    /// looked for at the scale it is looked at.
+    pub view: [f32; 4],
+    /// Which of the alternatives, smallest first; None: the likeliest.
+    #[serde(default)]
+    pub choice: Option<usize>,
+    /// A preview under the pointer: skips the network where it would take long.
+    #[serde(default)]
+    pub preview: bool,
+}
+
+/// What a click or stroke selected.
+pub struct Picked {
+    /// Bounding box x0, y0, width, height and its mask, row-major.
+    pub rect: [usize; 4],
+    pub mask: Vec<u8>,
+    /// How many alternatives there are and which one this is.
+    pub choices: usize,
+    pub choice: usize,
+    /// 0..1, how sure the outline is.
+    pub quality: f32,
+    /// A pixel inside it.
+    pub seed: [usize; 2],
+    /// SAM was left out of a preview (not loaded, or slow on this machine).
+    pub waiting: bool,
+}
+
+/// "Find the others like these": the examples are the parts of one label
+/// on the slice.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarReq {
+    pub token: u64,
+    pub z: usize,
+    pub c: usize,
+    pub t: usize,
+    pub lo: f32,
+    pub hi: f32,
+    #[serde(default)]
+    pub denoise: Denoise,
+}
+
+/// The candidates of the last search, kept for `sam_similar_apply`.
+pub struct LastFound {
+    pub token: u64,
+    pub z: usize,
+    pub found: Vec<crate::segpick::Found>,
+}
+
 /// The mask of the last prediction, kept for `sam_apply`.
 pub struct LastMask {
     pub token: u64,
@@ -171,6 +256,7 @@ pub struct Sam {
     pub cancel: AtomicBool,
     inner: Mutex<Inner>,
     pub last: Mutex<Option<LastMask>>,
+    pub found: Mutex<Option<LastFound>>,
 }
 
 #[derive(Default)]
@@ -183,7 +269,17 @@ struct Inner {
     key: Option<(u64, usize, usize, usize, u32, u32, usize, u32)>,
     #[cfg(feature = "pro")]
     encoded: Option<Arc<tmv_sam::Encoded>>,
+    /// The slice the smart tool works on and the parts of it SAM has
+    /// encoded, most recently used last.
+    #[cfg(feature = "pro")]
+    slice: Option<Arc<pick::SliceData>>,
+    #[cfg(feature = "pro")]
+    tiles: Vec<(pick::SliceKey, [usize; 4], Arc<tmv_sam::Encoded>)>,
 }
+
+#[cfg(feature = "pro")]
+#[path = "sam_pick.rs"]
+mod pick;
 
 impl Sam {
     /// A Sam with an already loaded model (developer tools, tests).
@@ -419,6 +515,10 @@ impl Sam {
                 let mut best: Option<(f32, Vec<bool>, Vec<f32>)> = None;
                 let mut why = vec![];
                 for (bbox, use_mask) in prompt.variants() {
+                    // A mask from the smart tool has no logits to prompt with.
+                    if use_mask && prev_low.is_empty() {
+                        continue;
+                    }
                     let mask = if use_mask { Some(predictor.mask_prompt(&prev_low)?) } else { None };
                     let r = predictor.predict(&enc, &pts, bbox, mask)?;
                     let mask: Vec<bool> = r.logits.iter().map(|&v| v > 0.0).collect();
@@ -452,6 +552,22 @@ impl Sam {
     #[cfg(not(feature = "pro"))]
     pub fn predict(&self, _: &PredictReq, _: (usize, usize, usize), _: impl Fn(usize) -> Result<Vec<f32>>) -> Result<(Vec<u8>, f32)> {
         bail!("SAM 分割只在 TifMrcView Pro 里有")
+    }
+
+    #[cfg(not(feature = "pro"))]
+    pub fn pick(&self, _: &PickReq, _: (usize, usize, usize), _: impl Fn(usize) -> Result<Vec<f32>>) -> Result<Picked> {
+        bail!("智能选取只在 TifMrcView Pro 里有")
+    }
+
+    #[cfg(not(feature = "pro"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn similar(&self, _: &SimilarReq, _: (usize, usize, usize), _: impl Fn(usize) -> Result<Vec<f32>>, _: &[Vec<usize>], _: &[bool], _: impl Fn(usize, usize)) -> Result<Vec<crate::segpick::Found>> {
+        bail!("智能选取只在 TifMrcView Pro 里有")
+    }
+
+    #[cfg(not(feature = "pro"))]
+    pub fn warm(&self) -> Result<()> {
+        Ok(())
     }
 
     #[cfg(not(feature = "pro"))]

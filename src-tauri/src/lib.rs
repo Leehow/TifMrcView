@@ -71,6 +71,8 @@ mod update;
 mod update;
 #[cfg(any(feature = "desktop", feature = "pro"))]
 pub mod sam;
+#[cfg(any(feature = "desktop", feature = "pro"))]
+pub mod segpick;
 pub mod thumb;
 
 #[cfg(feature = "desktop")]

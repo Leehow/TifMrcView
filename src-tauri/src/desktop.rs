@@ -220,6 +220,8 @@ enum LabelOp {
     Delete { label: u16 },
     MoveRegion { x: usize, y: usize, z: usize, dx: i64, dy: i64, three_d: bool },
     DeleteRegion { x: usize, y: usize, z: usize, three_d: bool },
+    RelabelRegion { x: usize, y: usize, z: usize, to: u16, three_d: bool },
+    Merge { from: u16, to: u16 },
     Materials { materials: Vec<crate::labels::Material> },
     Undo,
     Redo,
@@ -309,6 +311,8 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
             LabelOp::Delete { label } => l.delete_label(label),
             LabelOp::MoveRegion { x, y, z, dx, dy, three_d } => l.move_region(x, y, z, dx, dy, three_d),
             LabelOp::DeleteRegion { x, y, z, three_d } => l.delete_region(x, y, z, three_d),
+            LabelOp::RelabelRegion { x, y, z, to, three_d } => l.relabel_region(x, y, z, to, three_d),
+            LabelOp::Merge { from, to } => l.merge_label(from, to),
             LabelOp::Materials { materials } => {
                 l.set_materials(materials);
                 vec![]
@@ -510,9 +514,10 @@ async fn sam_predict(app: AppHandle, req: crate::sam::PredictReq) -> CmdResult<R
     Ok(Response::new(bytes))
 }
 
-/// Paints the last SAM mask into the label map.
+/// Paints the last SAM mask into the label map. With `replace` the step
+/// before it is taken back first (another reading of the same click).
 #[tauri::command]
-async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16, trim: Option<bool>) -> CmdResult<LabelsState> {
+async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16, trim: Option<bool>, replace: Option<bool>) -> CmdResult<LabelsState> {
     let e = labels_entry(&app.state::<AppState>(), token)?;
     let app2 = app.clone();
     blocking(move || {
@@ -522,7 +527,10 @@ async fn sam_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16,
             anyhow::bail!("没有可以应用的分割结果");
         };
         let mut e = e.lock().unwrap();
-        let zs = e.labels.apply_mask(z, &m.mask, label, guard, trim.unwrap_or(false));
+        let mut zs = if replace.unwrap_or(false) { e.labels.undo() } else { vec![] };
+        zs.extend(e.labels.apply_mask(z, &m.mask, label, guard, trim.unwrap_or(false)));
+        zs.sort_unstable();
+        zs.dedup();
         Ok(labels_state(&e, zs))
     })
     .await
@@ -552,6 +560,211 @@ async fn sam_propagate(app: AppHandle, req: crate::sam::PropagateReq, label: u16
         let mut e = e.lock().unwrap();
         let zs = e.labels.apply_masks(&refs, label, guard, false);
         Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+/// The object a click or a drawn stroke means (the smart selection tool);
+/// kept as the last mask, so `sam_apply` paints it. Reply: u32 x, y, width,
+/// height of the mask's box, u32 choices, u32 choice, f32 quality, u32
+/// seed x, y, u32 waiting (the model is still loading or encoding, so a
+/// better preview may follow), then one byte per pixel of the box.
+#[tauri::command]
+async fn sam_pick(app: AppHandle, req: crate::sam::PickReq) -> CmdResult<Response> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let app2 = app.clone();
+    let bytes = blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let info = img.info();
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
+            use crate::labels::Values;
+            vals.slice(z)
+        };
+        let p = sam.pick(&req, (info.width, info.height, info.size_z), values)?;
+        let mut out = Vec::with_capacity(40 + p.mask.len());
+        for v in p.rect.iter().chain([&p.choices, &p.choice]) {
+            out.extend_from_slice(&(*v as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&p.quality.to_le_bytes());
+        for v in [p.seed[0], p.seed[1], p.waiting as usize] {
+            out.extend_from_slice(&(v as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&p.mask);
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Loads the SAM model ahead of the first click.
+#[tauri::command]
+async fn sam_warm(app: AppHandle) -> CmdResult<()> {
+    blocking(move || app.state::<crate::sam::Sam>().warm()).await
+}
+
+/// Makes the labelled object at (x, y, z) the last mask, so it can be
+/// carried along Z with `sam_propagate`.
+#[tauri::command]
+async fn sam_use_region(app: AppHandle, token: u64, x: usize, y: usize, z: usize) -> CmdResult<()> {
+    let e = labels_entry(&app.state::<AppState>(), token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let e = e.lock().unwrap();
+        let l = &e.labels;
+        let n = l.w * l.h;
+        let label = if x < l.w && y < l.h && z < l.d { l.get(x, y, z) } else { 0 };
+        let Some(s) = l.slice(z).filter(|_| label != 0) else { anyhow::bail!("先选中一个对象") };
+        let mut mask = vec![false; n];
+        let mut stack = vec![y * l.w + x];
+        mask[stack[0]] = true;
+        while let Some(i) = stack.pop() {
+            let (px, py) = (i % l.w, i / l.w);
+            for j in [(px > 0).then(|| i - 1), (px + 1 < l.w).then(|| i + 1), (py > 0).then(|| i - l.w), (py + 1 < l.h).then(|| i + l.w)].into_iter().flatten() {
+                if !mask[j] && s[j] == label {
+                    mask[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        *app2.state::<crate::sam::Sam>().last.lock().unwrap() = Some(crate::sam::LastMask { token, z, mask, iou: 0.9, low_res: vec![] });
+        Ok(())
+    })
+    .await
+}
+
+/// Proposes the objects on a slice that look like the examples: the
+/// object at `seed`, or every object of `label` on the slice. Reports
+/// `sam-similar` {done, total}. Reply: u32 count, then per object u32 x, y,
+/// width, height, f32 score and one byte per pixel of its box; best first.
+#[tauri::command]
+async fn sam_similar(app: AppHandle, req: crate::sam::SimilarReq, label: u16, seed: Option<[usize; 2]>) -> CmdResult<Response> {
+    let img = current(&app.state::<AppState>(), req.token)?;
+    let e = labels_entry(&app.state::<AppState>(), req.token)?;
+    let app2 = app.clone();
+    let bytes = blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let info = img.info();
+        let (w, h) = (info.width, info.height);
+        let (examples, taken) = {
+            let e = e.lock().unwrap();
+            let l = &e.labels;
+            let slice = l.slice(req.z);
+            let taken: Vec<bool> = slice.map_or_else(|| vec![false; w * h], |s| s.iter().map(|v| *v != 0).collect());
+            let label = match seed {
+                Some([x, y]) if x < w && y < h => l.get(x, y, req.z),
+                _ => label,
+            };
+            let mut parts = if label == 0 { vec![] } else { l.components(req.z, label) };
+            if let Some([x, y]) = seed {
+                parts.retain(|p| p.contains(&(y * w + x)));
+            }
+            (parts, taken)
+        };
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: req.c, t: req.t };
+        let values = |z| {
+            use crate::labels::Values;
+            vals.slice(z)
+        };
+        let progress = |done, total| {
+            let _ = app2.emit("sam-similar", serde_json::json!({ "done": done, "total": total }));
+        };
+        let found = sam.similar(&req, (w, h, info.size_z), values, &examples, &taken, progress)?;
+        let mut out = (found.len() as u32).to_le_bytes().to_vec();
+        for f in &found {
+            for v in f.rect {
+                out.extend_from_slice(&(v as u32).to_le_bytes());
+            }
+            out.extend_from_slice(&f.score.to_le_bytes());
+            out.extend(f.mask.iter().map(|m| *m as u8));
+        }
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Paints the proposals of the last `sam_similar` numbered in `keep` as
+/// one undo step.
+#[tauri::command]
+async fn sam_similar_apply(app: AppHandle, token: u64, z: usize, label: u16, guard: u16, keep: Vec<usize>) -> CmdResult<LabelsState> {
+    let e = labels_entry(&app.state::<AppState>(), token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let found = sam.found.lock().unwrap();
+        let Some(f) = found.as_ref().filter(|f| f.token == token && f.z == z) else {
+            anyhow::bail!("没有可以加入的候选");
+        };
+        let mut e = e.lock().unwrap();
+        let w = e.labels.w;
+        let mut mask = vec![false; w * e.labels.h];
+        for o in keep.iter().filter_map(|&k| f.found.get(k)) {
+            let [x0, y0, bw, _] = o.rect;
+            for (i, _) in o.mask.iter().enumerate().filter(|(_, m)| **m) {
+                mask[(y0 + i / bw) * w + x0 + i % bw] = true;
+            }
+        }
+        let zs = e.labels.apply_mask(z, &mask, label, guard, false);
+        Ok(labels_state(&e, zs))
+    })
+    .await
+}
+
+/// Objects (4-connected parts) of each label on a slice, indexed by label.
+#[tauri::command]
+async fn labels_objects(state: State<'_, AppState>, token: u64, z: usize) -> CmdResult<Vec<u32>> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let e = e.lock().unwrap();
+        let l = &e.labels;
+        let Some(s) = l.slice(z) else { return Ok(vec![]) };
+        let w = l.w;
+        // A pixel starts an object when neither its left nor its upper
+        // neighbour joins it to one already met (union-find over runs).
+        let mut parent: Vec<u32> = Vec::new();
+        let mut of: Vec<u16> = Vec::new();
+        fn root(p: &mut [u32], mut i: u32) -> u32 {
+            while p[i as usize] != i {
+                p[i as usize] = p[p[i as usize] as usize];
+                i = p[i as usize];
+            }
+            i
+        }
+        let mut above = vec![u32::MAX; w];
+        let mut row = vec![u32::MAX; w];
+        for y in 0..l.h {
+            for x in 0..w {
+                let v = s[y * w + x];
+                row[x] = u32::MAX;
+                if v == 0 {
+                    continue;
+                }
+                let left = (x > 0 && s[y * w + x - 1] == v).then(|| row[x - 1]);
+                let up = (y > 0 && s[(y - 1) * w + x] == v).then(|| above[x]);
+                row[x] = match (left, up) {
+                    (Some(a), Some(b)) => {
+                        let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                        parent[ra.max(rb) as usize] = ra.min(rb);
+                        ra.min(rb)
+                    }
+                    (Some(a), None) | (None, Some(a)) => a,
+                    (None, None) => {
+                        parent.push(parent.len() as u32);
+                        of.push(v);
+                        parent.len() as u32 - 1
+                    }
+                };
+            }
+            std::mem::swap(&mut above, &mut row);
+        }
+        let mut counts = vec![0u32; of.iter().copied().max().map_or(0, |m| m as usize + 1)];
+        for i in 0..parent.len() {
+            if parent[i] == i as u32 {
+                counts[of[i] as usize] += 1;
+            }
+        }
+        Ok(counts)
     })
     .await
 }
@@ -2810,6 +3023,12 @@ pub fn run() {
             sam_apply,
             sam_propagate,
             sam_cancel,
+            sam_pick,
+            sam_warm,
+            sam_use_region,
+            sam_similar,
+            sam_similar_apply,
+            labels_objects,
             classify_scribble,
             classify_scribbles,
             classify_clear,
