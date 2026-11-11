@@ -787,6 +787,24 @@ fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64,
         }
     });
     let mut out = fourier::ift3(n, &re, &im);
+    // The mask brings the map to zero outside; the surroundings of the
+    // particle are not at zero, so first they are put there: otherwise the
+    // edge of the mask shows as a step all around the particle.
+    let c = n as f64 / 2.0;
+    let (mut sum, mut count) = (0f64, 0usize);
+    for z in 0..n {
+        for y in 0..n {
+            for x in 0..n {
+                let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2)).sqrt();
+                if d >= radius && d < radius + 6.0 {
+                    sum += out[(z * n + y) * n + x] as f64;
+                    count += 1;
+                }
+            }
+        }
+    }
+    let level = (sum / count.max(1) as f64) as f32;
+    out.iter_mut().for_each(|v| *v -= level);
     crate::spa::volume::mask_sphere(&mut out, n, radius, 6.0);
     (out, b)
 }
