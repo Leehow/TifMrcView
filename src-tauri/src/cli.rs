@@ -641,11 +641,11 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
 /// one kind of particle (compared now when there are several, about a second
 /// for a pair; a card that cannot be read leaves the choice to the user).
 /// Else None.
-fn auto_pick(cards: &[crate::sta::project::Card], trials: &[crate::sta::project::Trial]) -> Option<crate::sta::project::Chosen> {
+fn auto_pick(cards: &[crate::sta::project::Card], trials: &[crate::sta::project::Trial], found: Option<(&str, &[crate::sta::project::Source])>) -> Option<crate::sta::project::Chosen> {
     use crate::sta::project as sp;
     let good = sp::good(trials);
     let similar = if good.len() > 1 {
-        match sp::likeness(cards, &good) {
+        match sp::likeness(cards, &good, found) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("tmv sta: could not compare the cards ({e:#}): choose one yourself");
@@ -859,7 +859,7 @@ fn sta(o: &Opts) -> Result<Value> {
     let trials_value: Vec<Value> = trials.iter().map(trial_json).collect();
     let n = match pick {
         Some(n) => n,
-        None => match auto_pick(&cards, &trials) {
+        None => match auto_pick(&cards, &trials, Some((&out.join("trials").to_string_lossy(), &sources))) {
             Some(chosen) => {
                 let n = chosen.id;
                 let c = &cards[n];
@@ -1429,15 +1429,15 @@ mod tests {
         let id = |c: Option<crate::sta::project::Chosen>| c.map(|c| c.id);
         let cards = [card(0), card(1), card(2)];
         // One card works: it is taken, however the others look.
-        assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)])), Some(1));
+        assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
         // One works well, the other is too weak to count (0.018 / 0.0274 < 0.75).
-        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)])), Some(1));
+        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
         // Two close ones are compared from their files: unreadable here, so the user chooses.
-        assert_eq!(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)]), None);
+        assert_eq!(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)], None), None);
         // None works; nothing tried.
-        assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)]), None);
-        assert_eq!(auto_pick(&cards, &[]), None);
-        assert_eq!(auto_pick(&[], &[]), None);
+        assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)], None), None);
+        assert_eq!(auto_pick(&cards, &[], None), None);
+        assert_eq!(auto_pick(&[], &[], None), None);
     }
 
     #[test]

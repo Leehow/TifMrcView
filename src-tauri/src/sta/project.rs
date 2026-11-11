@@ -1129,17 +1129,62 @@ pub fn same_kind(a: CardCube, b: CardCube) -> f64 {
 /// indexed like `cards` (1 on the diagonal; the pairs that involve another
 /// card are not computed and are 0). Reads each of those cards' file; they are
 /// usually two or three, a pair takes about a second.
-pub fn likeness(cards: &[Card], which: &[usize]) -> Result<Vec<Vec<f64>>> {
+pub fn likeness(cards: &[Card], which: &[usize], found: Option<(&str, &[Source])>) -> Result<Vec<Vec<f64>>> {
     let cubes: Vec<Vec<f32>> = which.iter().map(|i| read_card(&cards[*i].path).map(|c| c.0)).collect::<Result<_>>()?;
+    // Where each card's trial found its particles (`trials` writes them under
+    // `found.0`), and the tomograms' voxel, Å.
+    let places: Vec<Vec<(String, [f64; 3])>> = which.iter().map(|i| found.map_or(vec![], |(dir, _)| places_of(&Path::new(dir).join(format!("card_{}", cards[*i].id)).join("particles.csv")))).collect();
+    let px = found.and_then(|(_, s)| s.first()).and_then(|s| pixel_of(&s.path).ok()).unwrap_or(0.0);
     let mut m = vec![vec![0.0; cards.len()]; cards.len()];
     for (k, &i) in which.iter().enumerate() {
         m[i][i] = 1.0;
         for (l, &j) in which.iter().enumerate().skip(k + 1) {
             m[i][j] = same_kind(CardCube::of(&cards[i], &cubes[k]), CardCube::of(&cards[j], &cubes[l]));
+            // Two cards that find their particles in the same places show
+            // the same particle, however unlike they look (one the whole of
+            // it, the other a part).
+            if px > 0.0 && together(&places[k], &places[l], TOGETHER_REACH * cards[i].diameter_a.min(cards[j].diameter_a) / px) >= TOGETHER {
+                m[i][j] = 1.0;
+            }
             m[j][i] = m[i][j];
         }
     }
     Ok(m)
+}
+
+/// The share of one card's places that must be another's too, and how near
+/// (in sizes of the smaller card) counts as the same place. By chance a
+/// tenth coincide where particles stand close.
+const TOGETHER: f64 = 0.5;
+const TOGETHER_REACH: f64 = 0.4;
+
+/// (tomogram, place in its voxels) per row of a `particles.csv`; empty when
+/// it cannot be read.
+fn places_of(csv: &Path) -> Vec<(String, [f64; 3])> {
+    let Ok(text) = std::fs::read_to_string(csv) else { return vec![] };
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            // The tomogram's path may hold commas: the numbers are the last eleven fields.
+            let f: Vec<&str> = line.rsplitn(12, ',').collect();
+            if f.len() < 12 {
+                return None;
+            }
+            let n = |k: usize| f[k].trim().parse::<f64>().ok();
+            Some((f[11].to_string(), [n(10)?, n(9)?, n(8)?]))
+        })
+        .collect()
+}
+
+/// The share of the smaller set's places that have one of the other set
+/// within `reach` voxels in the same tomogram.
+fn together(a: &[(String, [f64; 3])], b: &[(String, [f64; 3])], reach: f64) -> f64 {
+    let (few, many) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if few.is_empty() {
+        return 0.0;
+    }
+    let near = |p: &(String, [f64; 3])| many.iter().any(|q| q.0 == p.0 && (0..3).map(|k| (q.1[k] - p.1[k]).powi(2)).sum::<f64>() <= reach * reach);
+    few.iter().filter(|p| near(p)).count() as f64 / few.len() as f64
 }
 
 /// The most cards tried as a template (the first ones in card order).
@@ -1913,6 +1958,20 @@ mod card_tests {
         assert!((strength(&[1.0, 1.0, 1.0], 10.0) - 2.0 / 40.0).abs() < 1e-12);
         assert_eq!(strength(&[], 10.0), 0.0);
         assert_eq!(strength(&[1.0], 10.0), 0.0);
+    }
+
+    #[test]
+    fn cards_that_find_the_same_places_are_together() {
+        let dir = std::env::temp_dir().join(format!("tmv-sta-places-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("particles.csv");
+        std::fs::write(&file, "tomogram,x,y,z,rot,tilt,psi,score,half,blob,strength,darkest\n/a,b/t.mrc,10.00,20.00,30.00,0,0,0,0.5,0,1,1,1\n/a,b/t.mrc,100.00,20.00,30.00,0,0,0,0.5,1,1,1,1\n").unwrap();
+        let a = places_of(&file);
+        assert_eq!(a, vec![("/a,b/t.mrc".to_string(), [10.0, 20.0, 30.0]), ("/a,b/t.mrc".to_string(), [100.0, 20.0, 30.0])]);
+        let b = vec![("/a,b/t.mrc".to_string(), [12.0, 21.0, 30.0]), ("/other.mrc".to_string(), [100.0, 20.0, 30.0]), ("/a,b/t.mrc".to_string(), [300.0, 0.0, 0.0])];
+        assert_eq!(together(&a, &b, 5.0), 0.5);
+        assert_eq!(together(&a, &[], 5.0), 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
