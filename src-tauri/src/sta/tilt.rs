@@ -357,14 +357,21 @@ impl Matcher {
         Some(Parts { xp, pp, c, defocus })
     }
 
-    /// The cross-correlation map over shifts of the patch, `wide` × `wide`,
-    /// FINER times finer than the patch's pixels, shift 0 at pixel wide/2: the
-    /// transform of X · conj(C·P) and its mirror at −k.
-    fn map(&self, parts: &Parts) -> Vec<f32> {
+    /// The cross-spectrum X · conj(C·P) of a patch with the model, on the
+    /// half plane's points: what `place` turns into a map. Linear, so the
+    /// spectra of many patches can be added before the one transform.
+    fn spectrum(&self, parts: &Parts) -> Vec<[f32; 2]> {
+        parts.xp.iter().zip(&parts.c).map(|(x, c)| [x[0] * c, x[1] * c]).collect()
+    }
+
+    /// The cross-correlation map over shifts, `wide` × `wide`, FINER times
+    /// finer than the patch's pixels, shift 0 at pixel wide/2: the transform
+    /// of a (summed) `spectrum` and its mirror at −k.
+    fn place(&self, spec: &[[f32; 2]]) -> Vec<f32> {
         let wide = self.wide;
         let (mut cr, mut ci) = (vec![0f32; wide * wide], vec![0f32; wide * wide]);
         for (j, &[kx, ky]) in self.half.k.iter().enumerate() {
-            let (vr, vi) = (parts.xp[j][0] * parts.c[j], parts.xp[j][1] * parts.c[j]);
+            let [vr, vi] = spec[j];
             let at = index(ky as i32, wide) * wide + index(kx as i32, wide);
             let mate = index(-(ky as i32), wide) * wide + index(-(kx as i32), wide);
             cr[at] = vr;
@@ -373,6 +380,57 @@ impl Matcher {
             ci[mate] = -vi;
         }
         ift2(&self.fft_wide, wide, &cr, &ci)
+    }
+
+    /// The cross-correlation map of one patch (see `place`).
+    fn map(&self, parts: &Parts) -> Vec<f32> {
+        self.place(&self.spectrum(parts))
+    }
+
+    /// Per view, the sum over `particles` (cut at the views' places, `shift`
+    /// beyond) of the correlation maps; empty for a view no patch of which
+    /// lies in the image. The spectra are summed on the half plane and each
+    /// view is transformed once, not each patch.
+    fn summed_maps(&self, series: &Series, particles: &[Particle]) -> Vec<Vec<f32>> {
+        let nv = series.views.len();
+        let k = self.half.len();
+        // Per view: the spectrum so far (empty until a patch comes).
+        let add = |sum: &mut Vec<[f32; 2]>, spec: &[[f32; 2]]| {
+            if sum.is_empty() {
+                sum.extend_from_slice(spec);
+            } else {
+                sum.iter_mut().zip(spec).for_each(|(a, b)| {
+                    a[0] += b[0];
+                    a[1] += b[1];
+                });
+            }
+        };
+        let sums: Vec<Vec<[f32; 2]>> = particles
+            .par_iter()
+            .fold(
+                || vec![Vec::<[f32; 2]>::new(); nv],
+                |mut acc, p| {
+                    for (i, sum) in acc.iter_mut().enumerate() {
+                        if let Some(parts) = self.parts(series, p, i, [0.0, 0.0]) {
+                            add(sum, &self.spectrum(&parts));
+                        }
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![Vec::<[f32; 2]>::new(); nv],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(&b) {
+                        if !y.is_empty() {
+                            add(x, y);
+                        }
+                    }
+                    a
+                },
+            );
+        debug_assert!(sums.iter().all(|s| s.is_empty() || s.len() == k));
+        sums.par_iter().map(|s| if s.is_empty() { vec![] } else { self.place(s) }).collect()
     }
 }
 
@@ -489,31 +547,28 @@ const FLAT: f64 = 3.0;
 /// `series.fixes` (shift per view, the same defocus in all). Shells count by
 /// `weight`, as in `settle`.
 pub fn views(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64], reach: f64) -> Vec<Fix> {
-    let nv = series.views.len();
     let m = Matcher::new(series, refs, b, weight);
+    let (mut fixes, sure) = shifts_of(series, particles, &m, reach);
+    if let Some(d) = defocus_offset(series, particles, &m, &fixes, &sure) {
+        fixes.iter_mut().for_each(|f| f.defocus = d);
+    }
+    fixes
+}
+
+/// `views` without the defocus: only the shift per view (`defocus` 0 in all
+/// fixes). The defocus search re-cuts the patches of up to
+/// `DEFOCUS_PARTICLES` particles in every view for each candidate and costs
+/// a good part of the run, so a caller that does not use it calls this.
+pub fn view_shifts(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64], reach: f64) -> Vec<Fix> {
+    let m = Matcher::new(series, refs, b, weight);
+    shifts_of(series, particles, &m, reach).0
+}
+
+/// The shift per view and whether it is sure.
+fn shifts_of(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -> (Vec<Fix>, Vec<bool>) {
+    let nv = series.views.len();
     let wide = m.wide;
-    let sums: Vec<Vec<f32>> = particles
-        .par_iter()
-        .fold(
-            || vec![Vec::<f32>::new(); nv],
-            |mut acc, p| {
-                for (i, sum) in acc.iter_mut().enumerate() {
-                    if let Some(parts) = m.parts(series, p, i, [0.0, 0.0]) {
-                        add_map(sum, &m.map(&parts));
-                    }
-                }
-                acc
-            },
-        )
-        .reduce(
-            || vec![Vec::<f32>::new(); nv],
-            |mut a, b| {
-                for (x, y) in a.iter_mut().zip(&b) {
-                    add_map(x, y);
-                }
-                a
-            },
-        );
+    let sums = m.summed_maps(series, particles);
     // Map pixels per pixel of the view: the map's pixels are 1/FINER of the
     // patch's, and a patch pixel is `fold` pixels of the view.
     let to_view = series.fold.max(1) as f64 / FINER as f64;
@@ -563,18 +618,7 @@ pub fn views(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2], b: u
         fixes[i].shift = [fx * to_view, fy * to_view];
         sure[i] = true;
     }
-    if let Some(d) = defocus_offset(series, particles, &m, &fixes, &sure) {
-        fixes.iter_mut().for_each(|f| f.defocus = d);
-    }
-    fixes
-}
-
-fn add_map(sum: &mut Vec<f32>, map: &[f32]) {
-    if sum.is_empty() {
-        sum.extend_from_slice(map);
-    } else {
-        sum.iter_mut().zip(map).for_each(|(a, b)| *a += *b);
-    }
+    (fixes, sure)
 }
 
 /// The defocus offset (Å) for the whole series, or None when the series has
@@ -965,6 +1009,65 @@ mod tests {
             eprintln!("declared {offset}: found {d}");
             assert!((d + offset).abs() <= step, "{d} for {offset}");
             assert!(found.iter().all(|f| f.defocus == d));
+        }
+    }
+
+    /// The way `views` summed before: one inverse transform per patch.
+    fn summed_per_patch(m: &Matcher, series: &Series, particles: &[Particle]) -> Vec<Vec<f32>> {
+        let nv = series.views.len();
+        let add = |sum: &mut Vec<f32>, map: &[f32]| {
+            if sum.is_empty() {
+                sum.extend_from_slice(map);
+            } else {
+                sum.iter_mut().zip(map).for_each(|(a, b)| *a += *b);
+            }
+        };
+        particles
+            .par_iter()
+            .fold(
+                || vec![Vec::<f32>::new(); nv],
+                |mut acc, p| {
+                    for (i, sum) in acc.iter_mut().enumerate() {
+                        if let Some(parts) = m.parts(series, p, i, [0.0, 0.0]) {
+                            add(sum, &m.map(&parts));
+                        }
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![Vec::<f32>::new(); nv],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(&b) {
+                        add(x, y);
+                    }
+                    a
+                },
+            )
+    }
+
+    #[test]
+    fn one_transform_per_view_gives_the_sum_of_the_maps() {
+        let parts = particles(40);
+        let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
+        let defocus: Vec<f64> = (0..21).map(|i| 5000.0 + 250.0 * i as f64).collect();
+        let s = series(&parts, &thetas, Some(&defocus));
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=6).contains(&s) { 1.0 } else { 0.0 }).collect();
+        let m = Matcher::new(&s, &[truth.clone(), truth], N, &weight);
+        let t = std::time::Instant::now();
+        let old = summed_per_patch(&m, &s, &parts);
+        let t_old = t.elapsed();
+        let t = std::time::Instant::now();
+        let new = m.summed_maps(&s, &parts);
+        let t_new = t.elapsed();
+        eprintln!("40 particles x 21 views, box {N}: per-patch maps {t_old:?}, summed spectra {t_new:?}, factor {:.1}", t_old.as_secs_f64() / t_new.as_secs_f64());
+        assert_eq!(old.len(), new.len());
+        for (i, (o, n)) in old.iter().zip(&new).enumerate() {
+            assert_eq!(o.len(), n.len(), "view {i}");
+            let peak = o.iter().fold(0f32, |a, v| a.max(v.abs())).max(1e-20);
+            let worst = o.iter().zip(n).fold(0f32, |a, (x, y)| a.max((x - y).abs()));
+            assert!(worst / peak < 1e-3, "view {i}: {worst} of {peak}");
         }
     }
 }
