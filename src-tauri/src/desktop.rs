@@ -1137,6 +1137,9 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
             let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, Some(&tubes), n, pixel_a as f32, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
+            if let Some(note) = &seg.stats.cut_short {
+                eprintln!("membrane: {note}");
+            }
             Ok(MembraneResult {
                 labels: labels_state(&e, zs),
                 label,

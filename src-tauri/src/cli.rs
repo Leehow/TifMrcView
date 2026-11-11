@@ -116,7 +116,8 @@ OUTPUT
 
   The GPU is found automatically (CUDA with an NVIDIA driver, else Vulkan,
   else CPU). On a shared server pick the card with CUDA_VISIBLE_DEVICES=N;
-  TMV_GPU=cuda|vulkan|cpu forces a backend. Long runs:
+  TMV_GPU=cuda|vulkan|cpu forces a backend. A job that needs the GPU waits for
+  another tmv job using it to finish (TMV_GPU_SHARE=1: run alongside it). Long runs:
   nohup tmv … > run.log 2>&1 &
 "#;
 
@@ -161,9 +162,8 @@ pub fn main(args: Vec<String>) -> i32 {
         }
     }
     let started = Instant::now();
-    if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") {
-        let _ = gpu();
-    }
+    // Held until this job ends.
+    let _turn = if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") { gpu_turn() } else { None };
     let result = match cmd {
         "run" => run(&opts),
         "tomo" => tomo(&opts),
@@ -400,6 +400,40 @@ fn quiet<T>(f: impl FnOnce() -> T) -> T {
 /// The GPU found (Vulkan, CUDA, … see `tmv_sam::backends`), or None.
 fn gpu() -> Option<&'static (burn::tensor::Device, &'static str)> {
     quiet(crate::ctf_gpu::device)
+}
+
+/// This job's turn on the GPU: two jobs at once on one GPU run it out of
+/// memory, and the one that fails may be hours in. So a job waits for the
+/// one before it (a lock file in the temporary folder, one per choice of
+/// CUDA_VISIBLE_DEVICES, released when the job ends however it ends).
+/// None when there is no GPU, when TMV_GPU_SHARE is set, or when the lock
+/// cannot be had at all (the job then runs as before).
+fn gpu_turn() -> Option<std::fs::File> {
+    gpu()?;
+    if std::env::var_os("TMV_GPU_SHARE").is_some() {
+        return None;
+    }
+    let which: String = std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
+    let name = if which.is_empty() { "tifmrcview-gpu.lock".to_string() } else { format!("tifmrcview-gpu-{which}.lock") };
+    take_turn(&std::env::temp_dir().join(name), &|| {
+        eprintln!("tmv: another tmv job is using the GPU: waiting for it to finish (two at once run out of GPU memory). TMV_GPU_SHARE=1 runs alongside it instead.")
+    })
+}
+
+/// The lock on `path`, waiting for whoever holds it (`waiting` is called
+/// once before the wait). None when the file cannot be opened or locked.
+fn take_turn(path: &Path, waiting: &dyn Fn()) -> Option<std::fs::File> {
+    // Another user's file can be read, and a lock needs no more.
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).or_else(|_| std::fs::File::open(path)).ok()?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            waiting();
+            file.lock().ok()?;
+        }
+        Err(_) => return None,
+    }
+    Some(file)
 }
 
 /// The GPU (CPU with a warning when there is none).
@@ -1058,6 +1092,9 @@ fn membranes(o: &Opts) -> Result<Value> {
     let (dev, backend) = device();
     let r = crate::ctf_gpu::guarded(|| crate::membrane::segment_file(dev, &model, input, &|s, i, n| progress.report(s, i, n)))??;
     progress.done();
+    if let Some(note) = &r.note {
+        eprintln!("tmv membranes: {note}");
+    }
     let diam: Vec<f32> = r.vesicles.iter().map(|v| v.diameter).collect();
     let mut v = json!({
         "image": r.image,
@@ -1072,6 +1109,8 @@ fn membranes(o: &Opts) -> Result<Value> {
         "microtubules": r.microtubules.len(),
         "microtubuleLengthNm": r.microtubules,
         "backend": backend,
+        "copies": r.copies,
+        "note": r.note,
         "open": r.image,
     });
     if !diam.is_empty() {
@@ -1426,6 +1465,30 @@ mod tests {
             assert!(dones.len() >= 3, "{mine:?}");
         }
         assert!(lines.len() < 100, "{}", lines.len());
+    }
+
+    /// A second job waits for the first one's turn on the GPU to end.
+    #[test]
+    fn a_job_waits_for_the_turn_of_the_one_before() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gpu.lock");
+        let first = super::take_turn(&path, &|| panic!("nobody to wait for")).expect("the lock");
+        let waited = std::sync::Arc::new(AtomicBool::new(false));
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let (w, d, p) = (waited.clone(), done.clone(), path.clone());
+        let second = std::thread::spawn(move || {
+            let turn = super::take_turn(&p, &|| w.store(true, Ordering::SeqCst));
+            d.store(true, Ordering::SeqCst);
+            turn.is_some()
+        });
+        while !waited.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!done.load(Ordering::SeqCst), "the second job ran while the first held the GPU");
+        drop(first);
+        assert!(second.join().unwrap());
     }
 
     #[test]
