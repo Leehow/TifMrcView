@@ -802,16 +802,19 @@ fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64,
         }
     });
     let mut out = fourier::ift3(n, &re, &im);
-    // The mask brings the map to zero outside; the surroundings of the
-    // particle are not at zero, so first they are put there: otherwise the
-    // edge of the mask shows as a step all around the particle.
+    // The map shown keeps what surrounds the particle: weighted and cut at
+    // the resolution it carries little noise there, and a mask close about
+    // the particle cuts through the bright ring the transfer leaves around
+    // it, which shows as an edge. Only the corners of the box are taken
+    // away, softly, from the level the map has there.
     let c = n as f64 / 2.0;
+    let (wide, edge) = ((c - 10.0).max(radius.min(c - 4.0)), 8.0);
     let (mut sum, mut count) = (0f64, 0usize);
     for z in 0..n {
         for y in 0..n {
             for x in 0..n {
                 let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2) + (z as f64 - c).powi(2)).sqrt();
-                if d >= radius && d < radius + 6.0 {
+                if d >= wide && d < wide + edge {
                     sum += out[(z * n + y) * n + x] as f64;
                     count += 1;
                 }
@@ -820,7 +823,7 @@ fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64,
     }
     let level = (sum / count.max(1) as f64) as f32;
     out.iter_mut().for_each(|v| *v -= level);
-    crate::spa::volume::mask_sphere(&mut out, n, radius, 6.0);
+    crate::spa::volume::mask_sphere(&mut out, n, wide, edge);
     (out, b)
 }
 
