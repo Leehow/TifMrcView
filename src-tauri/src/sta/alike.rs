@@ -76,21 +76,56 @@ pub fn traits(seeds: &[Seed], voxels: usize, spacing: f64) -> Option<Traits> {
     Some(Traits { extent, open, round, thick })
 }
 
+/// The separate pieces of `mask` (dims `n`): the sorted voxel indices of
+/// each, voxels joined through faces, edges or corners. One pass over the
+/// mask, whatever the number of pieces (a segmentation of a large tomogram
+/// has thousands of specks).
+pub fn components(mask: &[bool], n: [usize; 3]) -> Vec<Vec<u32>> {
+    assert_eq!(mask.len(), n[0] * n[1] * n[2]);
+    let mut left = mask.to_vec();
+    let mut out = vec![];
+    for start in 0..left.len() {
+        if !left[start] {
+            continue;
+        }
+        left[start] = false;
+        let mut queue: Vec<u32> = vec![start as u32];
+        let mut head = 0;
+        while head < queue.len() {
+            let i = queue[head] as usize;
+            head += 1;
+            let (x, y, z) = ((i % n[0]) as i64, (i / n[0] % n[1]) as i64, (i / (n[0] * n[1])) as i64);
+            for dz in -1..=1i64 {
+                for dy in -1..=1i64 {
+                    for dx in -1..=1i64 {
+                        let (a, b, c) = (x + dx, y + dy, z + dz);
+                        if a < 0 || b < 0 || c < 0 || a >= n[0] as i64 || b >= n[1] as i64 || c >= n[2] as i64 {
+                            continue;
+                        }
+                        let j = (c as usize * n[1] + b as usize) * n[0] + a as usize;
+                        if left[j] {
+                            left[j] = false;
+                            queue.push(j as u32);
+                        }
+                    }
+                }
+            }
+        }
+        queue.sort_unstable();
+        out.push(queue);
+    }
+    out
+}
+
 /// The separate membranes of `mask` (dims `n`) with at least `least` seeds
 /// at `spacing`, largest first.
 pub fn pieces(mask: &[bool], n: [usize; 3], spacing: f64, least: usize) -> Vec<Piece> {
-    let mut left = mask.to_vec();
     let mut out = vec![];
-    for i in 0..left.len() {
-        if !left[i] {
+    for voxels in components(mask, n) {
+        // A seed takes several voxels: a speck cannot give `least` of them.
+        if voxels.len() < least.max(4) {
             continue;
         }
-        let p = [(i % n[0]) as f64, (i / n[0] % n[1]) as f64, (i / (n[0] * n[1])) as f64];
-        let voxels = sheet::touched(&left, n, &[vec![p]], &[]);
-        for &v in &voxels {
-            left[v as usize] = false;
-        }
-        left[i] = false;
         let seeds = sheet::seeds(&voxels, n, spacing);
         if seeds.len() < least.max(4) {
             continue;

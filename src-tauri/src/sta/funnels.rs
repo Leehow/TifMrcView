@@ -22,6 +22,7 @@ use super::membranes::density;
 use super::paint;
 use super::pits::{pits, Pit};
 use super::shape::Seed;
+use super::sheet;
 
 type P = [f64; 3];
 
@@ -39,6 +40,8 @@ const MOUTH: f64 = 0.8;
 const WHOLE: f64 = 0.8;
 /// A stretch is at least this many voxels, or the file is too coarse for it.
 const FEWEST: f64 = 12.0;
+/// A membrane has at least this many sampling points, or it is a speck.
+const SEEDS: usize = 8;
 /// The density beside a membrane is measured from this far off its middle
 /// and over this much, Å (as `membranes`).
 const BESIDE_A: (f64, f64) = (25.0, 50.0);
@@ -135,6 +138,8 @@ pub fn find(marks: &[Mark], files: &[String]) -> Result<Search> {
     // normals towards the pit).
     let mut seen: Vec<&String> = vec![];
     let mut held: Vec<Vec<(usize, f64, (f64, f64))>> = vec![];
+    // The membranes of the files clicked on, kept for the search below.
+    let mut membranes: Vec<(String, Vec<Vec<u32>>)> = vec![];
     for (file, _) in &clicks {
         if seen.contains(&file) {
             continue;
@@ -144,27 +149,36 @@ pub fn find(marks: &[Mark], files: &[String]) -> Result<Search> {
         let here: Vec<P> = clicks.iter().filter(|c| &c.0 == file).map(|c| c.1).collect();
         let mut of: Vec<Vec<(usize, f64, (f64, f64))>> = vec![vec![]; here.len()];
         let mut vol: Option<(Vec<f32>, [usize; 3])> = None;
+        let pieces = alike::components(&mask.mask, mask.n);
+        let n = mask.n;
+        let at_voxel = |v: u32| [(v as usize % n[0]) as f64, (v as usize / n[0] % n[1]) as f64, (v as usize / (n[0] * n[1])) as f64];
         for (k, wide_a) in LADDER_A.iter().enumerate() {
             let Some((spacing, wide, off)) = scale(*wide_a, mask.px) else { continue };
-            for piece in alike::pieces(&mask.mask, mask.n, spacing, 8) {
-                let near = |c: P| piece.seeds.iter().any(|s| dot(sub(s.pos, c), sub(s.pos, c)) <= wide * wide);
+            for voxels in pieces.iter().filter(|v| v.len() >= SEEDS) {
+                // Only the membranes a click lies near are sampled at every stretch.
+                let near = |c: P| voxels.iter().any(|v| dot(sub(at_voxel(*v), c), sub(at_voxel(*v), c)) <= wide * wide);
                 if !here.iter().any(|c| near(*c)) {
                     continue;
                 }
-                let found: Vec<Pit> = pits(&piece.seeds, spacing, wide, off).into_iter().filter(|p| p.mouth <= MOUTH * wide).collect();
+                let seeds = sheet::seeds(voxels, n, spacing);
+                if seeds.len() < SEEDS {
+                    continue;
+                }
+                let found: Vec<Pit> = pits(&seeds, spacing, wide, off).into_iter().filter(|p| p.mouth <= MOUTH * wide).collect();
                 for (c, of) in here.iter().zip(of.iter_mut()) {
-                    let at = found.iter().filter_map(|p| holds(p, &piece.seeds, *c, spacing).map(|d| (d, p))).min_by(|a, b| a.0.total_cmp(&b.0));
+                    let at = found.iter().filter_map(|p| holds(p, &seeds, *c, spacing).map(|d| (d, p))).min_by(|a, b| a.0.total_cmp(&b.0));
                     let Some((_, pit)) = at else { continue };
                     if vol.is_none() {
                         vol = Some(density(file)?);
                     }
                     let (v, n) = vol.as_ref().unwrap();
-                    let own = lean(v, *n, &piece.seeds, mask.px);
+                    let own = lean(v, *n, &seeds, mask.px);
                     of.push((k, pit.depth * mask.px, (pit.side as f64 * own.0, own.1)));
                 }
             }
         }
         held.extend(of);
+        membranes.push((file.clone(), pieces));
     }
     // A stretch too small for a pit shows pieces of it, shallower than the
     // pit is; from the right stretch on the depth stays. Each click's own
@@ -197,12 +211,20 @@ pub fn find(marks: &[Mark], files: &[String]) -> Result<Search> {
         let Some((spacing, wide, off)) = scale(out.wide_a, mask.px) else { continue };
         let here: Vec<P> = clicks.iter().filter(|c| &c.0 == file).map(|c| c.1).collect();
         let mut vol: Option<(Vec<f32>, [usize; 3])> = None;
-        for piece in alike::pieces(&mask.mask, mask.n, spacing, 8) {
-            let found: Vec<Pit> = pits(&piece.seeds, spacing, wide, off).into_iter().filter(|p| p.mouth <= MOUTH * wide).collect();
+        let pieces = match membranes.iter().position(|m| &m.0 == file) {
+            Some(at) => membranes.swap_remove(at).1,
+            None => alike::components(&mask.mask, mask.n),
+        };
+        for voxels in pieces.iter().filter(|v| v.len() >= SEEDS) {
+            let seeds = sheet::seeds(voxels, mask.n, spacing);
+            if seeds.len() < SEEDS {
+                continue;
+            }
+            let found: Vec<Pit> = pits(&seeds, spacing, wide, off).into_iter().filter(|p| p.mouth <= MOUTH * wide).collect();
             if found.is_empty() {
                 continue;
             }
-            let clicked: Vec<bool> = found.iter().map(|p| here.iter().any(|c| holds(p, &piece.seeds, *c, spacing).is_some())).collect();
+            let clicked: Vec<bool> = found.iter().map(|p| here.iter().any(|c| holds(p, &seeds, *c, spacing).is_some())).collect();
             // The side of this membrane the pits are wanted on: +1 that of
             // its normals, −1 the other, None when it cannot be told.
             let side: Option<f64> = match found.iter().zip(&clicked).find(|(_, c)| **c) {
@@ -212,9 +234,9 @@ pub fn find(marks: &[Mark], files: &[String]) -> Result<Search> {
                         vol = Some(density(file)?);
                     }
                     let (v, n) = vol.as_ref().unwrap();
-                    let own = lean(v, *n, &piece.seeds, mask.px);
-                    let mut turned = piece.seeds.clone();
-                    alike::face(&mut turned, example, own).then(|| if dot(turned[0].axis, piece.seeds[0].axis) < 0.0 { -1.0 } else { 1.0 })
+                    let own = lean(v, *n, &seeds, mask.px);
+                    let mut turned = seeds.clone();
+                    alike::face(&mut turned, example, own).then(|| if dot(turned[0].axis, seeds[0].axis) < 0.0 { -1.0 } else { 1.0 })
                 }
             };
             for (mut pit, example) in found.into_iter().zip(clicked) {
