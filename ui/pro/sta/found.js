@@ -20,7 +20,8 @@
 // sta_review_again {out, which, tomogram}, sta_average_found {out, which}.
 // The review is of the file open in the viewer (the tomogram or its look
 // companion): places come back in that file's voxels. Every call is guarded.
-// Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw.
+// At the end: 「在图上看这些颗粒」, the particles of a finished average drawn on the clean tomogram with the same overlay (no editing).
+// Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw, openPath.
 (() => {
   const W = window.TifMrcViewPro.sta;
   if (!W) return;
@@ -102,6 +103,7 @@
     const d = R.d;
     const show = !!d && !(W.busy && W.runOut === W.out) && !W.panel.hidden;
     box.hidden = !show;
+    if (show && P.on) placedOff();
     W.reviewed.found = show ? d.perTomogram.map((t) => ({ path: t.path, n: t.kept })) : [];
     document.dispatchEvent(new CustomEvent("sta-review"));
     W.panel.classList.toggle("reviewing", show);
@@ -374,6 +376,129 @@
     },
     active(on) { if (!on) { press = null; R.add = false; if (R.d) render(); } },
   };
+
+
+  // ---- where the averaged particles lie (「在图上看这些颗粒」) ----
+  // After an average: the clean (look) version of a tomogram of the result is opened, as for a review, and
+  // every particle of particles.csv near the shown section is drawn with the overlay above: a dot at its
+  // centre and a short line for the direction of its Z axis ("up"), coloured by kind when kinds were looked for.
+  // Backend: sta_placed {inputs, out, which, tomogram} -> {places: [{i, pos, axis, kind, score}], radius, open, look,
+  // perTomogram: [{name, path, look, n}], kinds: [{id, count}], particles}; places are in the voxels of the shown file.
+  // No editing in this view.
+  const P = { d: null, on: false, out: "", which: "", gen: 0 };
+  const pbox = $("sta-placed-box");
+  const norm = (p) => (p || "").replace(/\\/g, "/");
+  const sameFile = (a, b) => !!a && !!b && norm(a) === norm(b);
+  const KIND_COLOURS = ["#0969da", "#cf222e", "#1a7f37", "#bf8700", "#8250df", "#bf3989", "#0a7e8c", "#6e7781"];
+  const kindColour = (k) => (k == null ? css().getPropertyValue("--accent").trim() || KIND_COLOURS[0] : KIND_COLOURS[(k - 1) % KIND_COLOURS.length]);
+  const pInputs = () => W.items.filter((i) => !W.cur().off.has(i.path)).map((i) => i.path);
+
+  function placedOff() {
+    P.on = false;
+    P.d = null;
+    P.gen++;
+    pbox.hidden = true;
+    $("sta-placed").classList.remove("on");
+    draw();
+  }
+  function placedRender() {
+    const d = P.d;
+    pbox.hidden = !P.on;
+    $("sta-placed").classList.toggle("on", P.on);
+    if (!P.on || !d) return draw();
+    const per = $("sta-placed-per");
+    per.hidden = d.perTomogram.length < 2;
+    per.replaceChildren(...d.perTomogram.map((t) => {
+      const b = document.createElement("button");
+      const shown = t.look || t.path;
+      b.className = `small${sameFile(S.info?.path, shown) || sameFile(S.info?.path, t.path) ? " on" : ""}`;
+      b.textContent = `${t.name} · ${t.n}`;
+      b.title = t.path;
+      b.onclick = async () => { if (!W.busy) { try { await openPath(shown); } catch (e) { W.status(`${e}`); } } };
+      return b;
+    }));
+    const legend = $("sta-placed-legend");
+    legend.replaceChildren(...(d.kinds || []).map((k) => {
+      const el = document.createElement("span");
+      const sw = document.createElement("i");
+      sw.style.background = kindColour(k.id);
+      el.append(sw, `第 ${k.id} 种 · ${k.count} 个`);
+      return el;
+    }));
+    $("sta-placed-msg").textContent = d.open ? `这张断层图上有 ${d.places.length} 个颗粒（共 ${d.particles} 个）` : "这张断层图不在这个结果里，看不到颗粒";
+    draw();
+  }
+  // The places on the file now open; the clean version of the first tomogram of the result is opened when this one is not in it.
+  async function placedFetch(want) {
+    const gen = ++P.gen;
+    const d = await invoke("sta_placed", { inputs: pInputs(), out: P.out, which: P.which, tomogram: want || open() });
+    if (gen !== P.gen || !P.on) return null;
+    P.d = d;
+    return d;
+  }
+  async function placedShow() {
+    const r = W.result;
+    if (!r || r.kept || W.busy) return;
+    P.out = W.out;
+    P.which = r.which;
+    P.on = true;
+    try {
+      let d = await placedFetch();
+      if (!d) return;
+      const t = d.perTomogram.find((x) => sameFile(x.path, open()) || sameFile(x.look, open())) || d.perTomogram[0];
+      if (!t) { placedOff(); return W.status("这个结果里没有颗粒表"); }
+      const want = t.look || t.path;
+      if (!sameFile(S.info?.path, want)) {
+        await openPath(want);
+        d = await placedFetch(want);
+        if (!d) return;
+      }
+      placedRender();
+      if (!d.open) W.status("这张断层图不在这个结果里");
+    } catch (e) {
+      placedOff();
+      W.status(`${e}`);
+    }
+  }
+  W.found.placed = {
+    toggle: () => (P.on ? placedOff() : placedShow()),
+    // index.js tells when the result shown changed: the marks go when it is no longer the one they belong to.
+    sync: () => { if (P.on && (!W.result || W.result.kept || W.result.which !== P.which || W.out !== P.out || W.panel.hidden)) placedOff(); },
+  };
+  $("sta-placed-off").onclick = placedOff;
+  // Another tomogram opened (from the wall or the buttons): its particles.
+  document.addEventListener("tmv-opened", async () => {
+    if (!P.on) return;
+    try { if (await placedFetch()) placedRender(); } catch (_) { /* stays as it was */ }
+  });
+
+  ext.overlays.push((ctx) => {
+    const d = P.d;
+    if (!P.on || !d || !d.open || !S.info || S.axis !== "xy") return;
+    const sc = toScreen(1, 0)[0] - toScreen(0, 0)[0];
+    const R = d.radius || 10;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 2;
+    for (const p of d.places) {
+      const dz = Math.abs(p.pos[2] - S.z);
+      if (dz >= R) continue;
+      const colour = kindColour(p.kind);
+      const [x, y] = toScreen(p.pos[0] + 0.5, p.pos[1] + 0.5);
+      const [ex, ey] = toScreen(p.pos[0] + 0.5 + p.axis[0] * R * 0.9, p.pos[1] + 0.5 + p.axis[1] * R * 0.9);
+      ctx.globalAlpha = dz <= 0.25 * R ? 1 : 0.4;
+      ctx.strokeStyle = colour;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(2.5, Math.min(5, 0.3 * R * sc)), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
 
   document.addEventListener("tmv-opened", () => { if (!W.panel.hidden) load(); });
   document.addEventListener("sta-out", () => load());

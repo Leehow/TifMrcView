@@ -33,7 +33,7 @@
   // What belongs to one output folder; kept while the app runs.
   const states = new Map();
   const st = (out) => {
-    if (!states.has(out)) states.set(out, { status: "", line: "", live: null, cards: [], trials: {}, selected: null, result: null, off: new Set(), added: [], own: null });
+    if (!states.has(out)) states.set(out, { status: "", line: "", live: null, cards: [], trials: {}, selected: null, result: null, off: new Set(), added: [], own: null, kinds: new Map(), kindsAsk: new Set(), full: null });
     return states.get(out);
   };
   const cur = () => st(W.out);
@@ -71,11 +71,25 @@
     <div id="sta-result" hidden>
       <h4>结果</h4>
       <div id="sta-which" class="al-row sta-which" hidden></div>
+      <div id="sta-kept-row" class="al-row" hidden><span id="sta-kept" class="dim"></span><button id="sta-kept-back" class="small">回到完整结果</button></div>
       <p id="sta-summary"></p>
       <p id="sta-used" class="dim"></p>
       <img id="sta-slices" class="ws-img" alt="平均结构的三个中心截面（XY、XZ、YZ）">
       <div id="sta-fsc"></div>
       <div class="al-row"><button id="sta-open" class="small primary">在查看器中打开</button><button id="sta-folder" class="small">打开结果文件夹</button></div>
+      <div class="al-row sta-more"><button id="sta-placed" class="small" title="在清晰的断层图上，标出这些颗粒在哪里、朝哪个方向">在图上看这些颗粒</button><button id="sta-kinds-go" class="small" title="看这些颗粒是不是有几种不同的样子">看看有没有不同种类</button></div>
+      <div id="sta-placed-box" class="sta-placed" hidden>
+        <p class="dim">图上：小圆点是颗粒的位置，短线指向颗粒的“上”。</p>
+        <div id="sta-placed-per" class="al-row sta-which"></div>
+        <div id="sta-placed-legend" class="sta-placed-legend"></div>
+        <p id="sta-placed-msg" class="dim"></p>
+        <div class="al-row"><button id="sta-placed-off" class="small">收起</button></div>
+      </div>
+      <div id="sta-kinds-box" class="sta-kinds" hidden>
+        <p id="sta-kinds-head"></p>
+        <div id="sta-kinds-list" class="sta-cards"></div>
+        <div class="al-row"><button id="sta-kinds-keep" class="primary" hidden></button></div>
+      </div>
     </div>
     <div class="ws-foot"><span id="sta-status" role="status" class="dim"></span><button id="sta-cancel" class="small" hidden>取消</button></div>`;
   $("stage").append(panel);
@@ -271,7 +285,7 @@
     const r = cur().result;
     W.result = r;
     $("sta-result").hidden = !r;
-    if (!r) return;
+    if (!r) { W.found?.placed?.sync(); return renderKinds(); }
     const res = r.resolutionA != null ? `分辨率 ${fmt(r.resolutionA)} Å · ${r.particles} 个颗粒` : `${r.particles} 个颗粒 · 两半图不够一致，没有给出分辨率`;
     const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å），已按它对齐` : "";
     $("sta-summary").textContent = res + pt;
@@ -281,7 +295,7 @@
     // Several results in the folder: small tabs to switch.
     const tabs = $("sta-which");
     const all = r.available || [];
-    tabs.hidden = all.length < 2;
+    tabs.hidden = all.length < 2 || !!r.kept;
     tabs.replaceChildren(...all.map((w) => {
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
@@ -292,12 +306,106 @@
         const out = W.out;
         try {
           const nr = await invoke("sta_result", { out, which: w });
-          if (nr) { st(out).result = nr; if (out === W.out) renderResult(); }
+          if (nr) { st(out).result = nr; st(out).full = null; if (out === W.out) renderResult(); }
         } catch (e) { status(`${e}`); }
       };
       return b;
     }));
+    // The average of some kinds only: what it is made from, and the way back.
+    $("sta-kept-row").hidden = !r.kept;
+    if (r.kept) {
+      const k = r.kept;
+      $("sta-kept").textContent = `只用了选中的 ${k.n ?? r.particles} 个颗粒，按原来的位置和朝向，从断层图平均而成（采样和原来的平均相同）${k.tilt ? "；第一次的平均用了倾转图，可能更清晰一些" : ""}`;
+    }
+    $("sta-placed").hidden = !!r.kept;
+    W.found?.placed?.sync();
+    renderKinds();
+    // The kinds found before (the panel survives a reopen).
+    if (!r.kept && !cur().kinds.has(r.which) && !cur().kindsAsk.has(r.which)) {
+      const out = W.out, which = r.which;
+      cur().kindsAsk.add(which);
+      invoke("sta_kinds_saved", { out, which }).then((d) => {
+        if (!d) return;
+        st(out).kinds.set(which, { data: d, off: new Set() });
+        if (out === W.out) renderKinds();
+      }).catch(() => { /* no backend, or none saved */ });
+    }
   }
+
+  // "看看有没有不同种类": the kinds of the shown average as cards to tick, then only the ticked ones are averaged.
+  function renderKinds() {
+    const s = cur(), r = s.result;
+    const k = r && !r.kept ? s.kinds.get(r.which) : null;
+    $("sta-kinds-go").hidden = !r || !!r.kept;
+    $("sta-kinds-go").disabled = W.busy;
+    $("sta-kinds-box").hidden = !k;
+    if (!k) return;
+    const list = k.data.kinds || [];
+    const keep = $("sta-kinds-keep");
+    if (!list.length) {
+      $("sta-kinds-head").textContent = "没有发现明显不同的种类";
+      $("sta-kinds-list").replaceChildren();
+      keep.hidden = true;
+      return;
+    }
+    $("sta-kinds-head").textContent = `这些颗粒分成了 ${list.length} 种。不要的点一下去掉，再按下面的按钮`;
+    const toggle = (id) => { if (W.busy) return; if (k.off.has(id)) k.off.delete(id); else k.off.add(id); renderKinds(); };
+    $("sta-kinds-list").replaceChildren(...list.map((x) => {
+      const fig = document.createElement("figure");
+      const on = !k.off.has(x.id);
+      fig.className = on ? "on" : "off";
+      fig.tabIndex = 0;
+      fig.setAttribute("role", "checkbox");
+      fig.setAttribute("aria-checked", String(on));
+      const img = new Image();
+      if (x.png) img.src = `data:image/png;base64,${x.png}`;
+      img.alt = `第 ${x.id} 种`;
+      const cap = document.createElement("figcaption");
+      cap.textContent = `${on ? "☑" : "☐"} ${x.count} 个 · ${Math.round(100 * (x.share || 0))}%`;
+      fig.append(img, cap);
+      fig.onclick = () => toggle(x.id);
+      fig.onkeydown = (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(x.id); } };
+      return fig;
+    }));
+    const ticked = list.filter((x) => !k.off.has(x.id));
+    const n = ticked.reduce((a, x) => a + x.count, 0);
+    keep.hidden = false;
+    keep.textContent = `只平均选中的 ${n} 个`;
+    keep.disabled = W.busy || ticked.length === 0 || ticked.length === list.length;
+    keep.title = ticked.length === list.length ? "先点掉不要的种类" : ticked.length === 0 ? "至少留一种" : "";
+  }
+  async function findKinds() {
+    const r = cur().result;
+    if (!r || r.kept || W.busy) return;
+    const which = r.which;
+    let got = null;
+    await go(async (inputs, out) => { got = await invoke("sta_kinds", { inputs, out, which }); return { drawn: true }; }, false, { keepResult: true });
+    if (!got) return;
+    const s = cur();
+    s.kinds.set(which, { data: got, off: new Set() });
+    s.kindsAsk.add(which);
+    status("");
+    renderKinds();
+  }
+  async function keepKinds() {
+    const full = cur().result, k = full && !full.kept ? cur().kinds.get(full.which) : null;
+    if (!k || W.busy) return;
+    const keep = (k.data.kinds || []).filter((x) => !k.off.has(x.id)).map((x) => x.id);
+    if (!keep.length) return;
+    const which = full.which;
+    let got = null;
+    await go(async (inputs, out) => { got = await invoke("sta_kinds_keep", { inputs, out, which, keep }); return { drawn: true }; }, false, { keepResult: true });
+    if (!got?.result) return;
+    const s = cur();
+    s.full = full;
+    s.result = { ...got.result, which, available: full.available, base: full.base, kept: { ids: keep, n: got.result.particles, tilt: !!got.fromTiltImages } };
+    status("");
+    paint();
+  }
+  $("sta-kinds-go").onclick = findKinds;
+  $("sta-kinds-keep").onclick = keepKinds;
+  $("sta-kept-back").onclick = () => { const s = cur(); if (s.full) { s.result = s.full; s.full = null; renderResult(); } };
+  $("sta-placed").onclick = () => W.found?.placed?.toggle();
 
   // Everything of the current output folder onto the screen.
   function paint() {
@@ -381,7 +489,8 @@
 
   // One run of any kind: `task(inputs, out)` calls the backend and gives its
   // result. The drawn run (draw.js) goes through here too.
-  async function go(task, fresh) {
+  // `opts.keepResult`: the result shown stays while it runs and after it (kinds).
+  async function go(task, fresh, opts = {}) {
     if (W.busy) return;
     const inputs = W.items.filter((i) => !cur().off.has(i.path)).map((i) => i.path);
     if (!inputs.length) return status("请先打开一张断层图并勾选要平均的断层图");
@@ -394,7 +503,12 @@
     s.trials = {};
     s.live = null;
     s.line = "";
-    s.result = null;
+    if (!opts.keepResult) {
+      s.result = null;
+      s.full = null;
+      s.kinds.clear();
+      s.kindsAsk.clear();
+    }
     if (fresh) s.cards = [];
     paint();
     $("sta-cancel").onclick = () => invoke("sta_cancel").catch(() => {});
@@ -428,9 +542,11 @@
       if (!r.drawn) s.cards = r.cards || [];
       s.selected = null;
       // The newest result of the folder (this one), with what else is there.
-      let res = r.result;
-      try { res = (await invoke("sta_result", { out })) || res; } catch (_) { /* demo */ }
-      s.result = res;
+      if (!opts.keepResult) {
+        let res = r.result;
+        try { res = (await invoke("sta_result", { out })) || res; } catch (_) { /* demo */ }
+        s.result = res;
+      }
       // The run found the cards and stopped: the user chooses what to average.
       if (r.waiting) setStatus(out, s.cards.length ? PROMPT : "没有找到候选卡片：这批断层图里可能没有成群的颗粒，可以用下面的标注工具自己标");
       else setStatus(out, `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);

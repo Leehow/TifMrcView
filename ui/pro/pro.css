@@ -412,6 +412,16 @@
 #sta-shapes-go { font-size:13px; padding:6px 18px; }
 #sta-shapes-go:disabled { opacity:.5; cursor:not-allowed; }
 /* 「用现成的密度图」: the last tile of the cards */
+#sta-workspace .sta-more { margin-top:4px; }
+#sta-workspace .sta-kinds, #sta-workspace .sta-placed { margin-top:8px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+#sta-workspace .sta-kinds p { margin:0 0 6px; }
+#sta-workspace .sta-kinds .sta-cards figure.off { opacity:.5; }
+#sta-workspace .sta-kinds .sta-cards figure:focus-visible { outline:2px solid var(--accent); }
+#sta-workspace .sta-kinds-keep:disabled, #sta-kinds-keep:disabled { opacity:.5; cursor:not-allowed; }
+#sta-workspace .sta-placed .sta-placed-legend { display:flex; flex-wrap:wrap; gap:2px 12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+#sta-workspace .sta-placed-legend i { display:inline-block; width:10px; height:10px; margin-right:4px; border-radius:50%; vertical-align:-1px; }
+#sta-workspace .sta-placed p { margin:0 0 4px; }
+#sta-placed.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 #sta-workspace .sta-cards figure.own { position:relative; }
 #sta-workspace .sta-cards .own-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim); }
 #sta-workspace .sta-cards .own-swap { margin-left:6px; padding:0 8px; font-size:11px; line-height:18px; }
