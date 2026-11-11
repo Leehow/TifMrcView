@@ -274,17 +274,29 @@ fn mean_embedding(emb: &[f32], c: usize, n: usize, pix: &[usize], w: usize, r: [
     out
 }
 
-/// A region that is a large part of the slice, or a large part of the
-/// view at the level most of the slice has.
-fn background_like(pix: &[usize], smooth: &[f32], med: f32, sd: f32, view_area: usize) -> bool {
+/// A region that is a large part of the slice, or a uniform, not bright
+/// part of the view that is large or runs out to the side of the image.
+fn background_like(pix: &[usize], smooth: &[f32], w: usize, med: f32, sd: f32, view_area: usize) -> bool {
     if pix.len() * 5 > smooth.len() {
         return true;
     }
-    if pix.len() * 10 <= view_area * 3 {
+    // Featureless inside and not brighter than the image is overall, and
+    // either a tenth of what is on screen or a part of it that reaches the
+    // side of the image: the empty area around the sample (dark in
+    // fluorescence, its mean well under the median). A dark object of the
+    // same size lies inside the image and stays an object.
+    if pix.len() * 100 < view_area {
         return false;
     }
-    let mean = pix.iter().map(|&i| smooth[i] as f64).sum::<f64>() / pix.len() as f64;
-    (mean as f32 - med).abs() < 0.5 * sd
+    let h = smooth.len() / w.max(1);
+    let edge = pix.iter().any(|&i| i % w == 0 || i / w == 0 || i % w + 1 == w || i / w + 1 == h);
+    if !edge && pix.len() * 10 < view_area {
+        return false;
+    }
+    let n = pix.len() as f64;
+    let mean = pix.iter().map(|&i| smooth[i] as f64).sum::<f64>() / n;
+    let spread = (pix.iter().map(|&i| (smooth[i] as f64 - mean).powi(2)).sum::<f64>() / n).sqrt();
+    spread < 0.35 * sd as f64 && mean < (med + 0.5 * sd) as f64
 }
 
 impl Sam {
@@ -554,7 +566,7 @@ impl Sam {
         // drawn loop still selects it.
         if matches!(drawn, Stroke::Click(_)) {
             let view_area = ((view[2] - view[0]).max(1.0) * (view[3] - view[1]).max(1.0)) as usize;
-            cands.retain(|c| !background_like(&c.pix, &sd.smooth, sd.med, sd.sd, view_area));
+            cands.retain(|c| !background_like(&c.pix, &sd.smooth, w, sd.med, sd.sd, view_area));
             if cands.is_empty() {
                 bail!("这里像是背景；要选它请绕着它画一圈");
             }
@@ -848,13 +860,17 @@ mod tests {
         let dark: Vec<usize> = (0..10_000).filter(|i| i % 100 >= 10 && i % 100 < 50).collect();
         let bright: Vec<usize> = (0..10_000).filter(|i| i % 100 < 10).collect();
         // Two fifths of the slice.
-        assert!(background_like(&dark, &smooth, 1.0, 10.0, 10_000));
+        assert!(background_like(&dark, &smooth, 100, 1.0, 10.0, 10_000));
         // A large part of a zoomed view, at the background level.
-        assert!(background_like(&dark[..1500], &smooth, 1.0, 10.0, 4_000));
+        assert!(background_like(&dark[..1500], &smooth, 100, 1.0, 10.0, 4_000));
         // A bright object filling the view stays an object.
-        assert!(!background_like(&bright, &smooth, 1.0, 10.0, 1_200));
-        // A small dark patch too.
-        assert!(!background_like(&dark[..100], &smooth, 1.0, 10.0, 4_000));
+        assert!(!background_like(&bright, &smooth, 100, 1.0, 10.0, 1_200));
+        // A small dark patch inside the image too...
+        let inside: Vec<usize> = (40..44).flat_map(|y| (20..45).map(move |x| y * 100 + x)).collect();
+        assert!(!background_like(&inside, &smooth, 100, 1.0, 10.0, 4_000));
+        // ...but the same at the side of the image is the empty area there.
+        let side: Vec<usize> = (0..4).flat_map(|y| (20..45).map(move |x| y * 100 + x)).collect();
+        assert!(background_like(&side, &smooth, 100, 1.0, 10.0, 4_000));
     }
 
     #[test]
