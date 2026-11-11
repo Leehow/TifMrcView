@@ -18,10 +18,17 @@
 // the examples ("weak") is found but not counted until the user takes it back
 // (dashed in the found colour, with a ?). It has no side, so no arrows and no
 // 翻面. Hand-drawn surfaces are not searched for: they are averaged as drawn.
+// Pits of a membrane (the 凹陷 tool, sta::funnels) are another kind of review: a
+// click or two INTO a pit, all pits are found and put in the order of their
+// stage, shallow to deep. Each is a circle with one arrow into it on the image,
+// and a strip of small pictures (sta_shapes_tile) under the legend shows them
+// all in that order: a click drops or takes one back, two sliders keep a part
+// of the order only. No sides to flip, no size, at least d.fewestPits to average.
 // Backend: sta_shapes_find {inputs, marks, size, out} (→ {needSegment: [files]}
 // or the review), sta_shapes_review {out, tomogram}, sta_shapes_section {out, id,
 // tomogram, z} (→ [[y, x0, x1], …]), sta_shapes_set {out, tomogram, drop?, flip?,
-// flipAll?, reset?}, sta_shapes_average {out}; sta_membrane_segment for files
+// flipAll?, reset?, only?: [ids]}, sta_shapes_tile {out, id} (→ data URL),
+// sta_shapes_average {out}; sta_membrane_segment for files
 // that have no segmentation (once). The review is of the file open in the
 // viewer: voxels of that file. Every call is guarded; late answers are ignored.
 // Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw, T.
@@ -31,9 +38,11 @@
   const MIN_SEEDS = 20; // as sta::shapes::MIN_SEEDS
   const FOUND_COLOR = "#0e8a7d", DROPPED_COLOR = "#8c959f";
   // `d` is the last review the backend gave (null: none to show), for the folder `out`.
-  const R = { d: null, raw: null, out: "", gen: 0, sel: null, queue: Promise.resolve(), pending: 0, shown: "", dismissed: new Map() };
+  const R = { d: null, raw: null, out: "", gen: 0, sel: null, queue: Promise.resolve(), pending: 0, shown: "", dismissed: new Map(), range: null, pitSig: "" };
   // The membrane each item takes on a section: runs [y, x0, x1), per (folder, file, id, z).
   const secs = new Map();
+  // Pictures of the pits, per (folder, id) of the search shown (R.pitSig): a data URL, or "" while asked.
+  const tiles = new Map();
   let secGen = 0, secTimer = 0, secWant = "";
 
   const box = document.createElement("div");
@@ -47,6 +56,17 @@
     <p id="sta-shapes-weak" class="dim" hidden></p>
     <p id="sta-shapes-unsure" class="warn" hidden></p>
     <p id="sta-shapes-legend" class="dim sta-found-legend"></p>
+    <div id="sta-pits" hidden>
+      <div id="sta-pits-strip" class="sta-pits-strip"></div>
+      <div class="sta-pits-axis dim"><span>左上：早期（浅）</span><span>右下：晚期（深）</span></div>
+      <div class="sta-pits-range">
+        <span class="dim">只取这一段</span>
+        <label class="dim">从 <span>早期</span><input id="sta-pits-lo" type="range" min="1" max="1" step="1" aria-label="从第几个"></label>
+        <label class="dim">到 <span>晚期</span><input id="sta-pits-hi" type="range" min="1" max="1" step="1" aria-label="到第几个"></label>
+        <span id="sta-pits-text" class="dim"></span>
+        <button id="sta-pits-all" class="small" title="取回全部">全部</button>
+      </div>
+    </div>
     <div class="al-row"><button id="sta-shapes-flipall" class="small" title="把找到的全部换到另一侧">全部翻面</button><button id="sta-shapes-reset" class="small">恢复程序的建议</button></div>
     <div id="sta-shapes-sel" class="al-row sta-shapes-sel" hidden><span id="sta-shapes-selname" class="dim"></span><button id="sta-shapes-flip" class="small" title="把朝外的一侧换到另一边">翻面</button><button id="sta-shapes-drop" class="small"></button></div>
     <p id="sta-shapes-msg" class="dim"></p>
@@ -92,8 +112,10 @@
   }
   function activate() { if (S.tool !== "shapes") setTool("shapes"); }
 
-  const KIND_NAME = { membrane: "膜", ball: "囊泡", line: "纤维" };
+  const KIND_NAME = { membrane: "膜", ball: "囊泡", line: "纤维", pit: "凹陷" };
+  const pitMode = (d) => !!d && (d.pits > 0 || !!d.pitList?.length);
   const plural = (d) => {
+    if (pitMode(d)) return `${d.pits} 个凹陷`;
     const bits = [];
     if (d.membranes > 0) bits.push(`${d.membranes} 片膜`);
     if (d.balls > 0) bits.push(`${d.balls} 个囊泡`);
@@ -105,7 +127,7 @@
     const d = R.d;
     const show = !!d && !(W.busy && W.runOut === W.out) && !W.panel.hidden;
     box.hidden = !show;
-    W.reviewed.shapes = show ? d.perTomogram.map((t) => ({ path: t.path, n: (t.membranes || 0) + (t.balls || 0) + (t.lines || 0) })) : [];
+    W.reviewed.shapes = show ? d.perTomogram.map((t) => ({ path: t.path, n: (t.membranes || 0) + (t.balls || 0) + (t.lines || 0) + (t.pits || 0) })) : [];
     document.dispatchEvent(new CustomEvent("sta-review"));
     W.panel.classList.toggle("reviewing-shapes", show);
     if (!show) { draw(); return; }
@@ -114,7 +136,7 @@
     per.hidden = d.perTomogram.length < 2;
     per.replaceChildren(...d.perTomogram.map((t) => {
       const li = document.createElement("li");
-      li.textContent = `${t.name}：${[t.membranes ? `${t.membranes} 片膜` : "", t.balls ? `${t.balls} 个囊泡` : "", t.lines ? `${t.lines} 条纤维` : ""].filter(Boolean).join("、") || "0 个"}`;
+      li.textContent = `${t.name}：${[t.membranes ? `${t.membranes} 片膜` : "", t.balls ? `${t.balls} 个囊泡` : "", t.lines ? `${t.lines} 条纤维` : "", t.pits ? `${t.pits} 个凹陷` : ""].filter(Boolean).join("、") || "0 个"}`;
       li.title = t.path;
       return li;
     }));
@@ -123,33 +145,145 @@
     $("sta-shapes-weak").hidden = !(d.weak > 0);
     $("sta-shapes-weak").textContent = d.weak > 0 ? `另有 ${d.weak} 条不太确定，先没算上；点一下虚线可以要回来` : "";
     const un = $("sta-shapes-unsure");
-    un.hidden = !(d.unsure > 0);
+    const pits = pitMode(d);
+    un.hidden = pits || !(d.unsure > 0);
     un.textContent = d.unsure > 0 ? `有 ${d.unsure} 个程序拿不准朝向（带 ? 的），请看一眼箭头` : "";
     // Two short sentences that name only what is there: no talk of arrows and sides for filaments alone, no filaments when there are none.
     const sides = d.membranes + d.balls > 0, lines = d.lines > 0 || d.weak > 0;
-    $("sta-shapes-legend").textContent = "图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的。" + (!sides ? "点一条纤维可以去掉它。" : lines ? "箭头指向朝外的一侧（纤维没有箭头），带 ? 的拿不准；点一个可以翻面或去掉。" : "箭头指向朝外的一侧，带 ? 的拿不准；点一个可以翻面或去掉。");
-    $("sta-shapes-flipall").hidden = d.membranes + d.balls === 0 && (d.lines > 0 || d.weak > 0);
+    $("sta-shapes-legend").textContent = pits ? "圆圈是找到的凹陷，箭头指向凹陷里面。下面的小图按从浅到深排好，点一张可以去掉或拿回来。" : "图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的。" + (!sides ? "点一条纤维可以去掉它。" : lines ? "箭头指向朝外的一侧（纤维没有箭头），带 ? 的拿不准；点一个可以翻面或去掉。" : "箭头指向朝外的一侧，带 ? 的拿不准；点一个可以翻面或去掉。");
+    $("sta-shapes-flipall").hidden = pits || (d.membranes + d.balls === 0 && (d.lines > 0 || d.weak > 0));
     $("sta-shapes-flipall").disabled = W.busy;
     $("sta-shapes-reset").disabled = W.busy;
     const it = R.sel != null ? item(R.sel) : null;
     $("sta-shapes-sel").hidden = !it;
     if (it) {
       $("sta-shapes-selname").textContent = `已选：${KIND_NAME[it.kind] || "膜"}${it.example ? "（例子）" : ""}${it.weak ? "（不太确定）" : ""}${it.score != null && !it.example ? `，像例子的程度 ${Math.round(it.score * 100)}%` : ""}`;
-      $("sta-shapes-flip").hidden = it.kind === "line";
+      $("sta-shapes-flip").hidden = it.kind === "line" || it.kind === "pit";
+      $("sta-shapes-selname").title = it.kind === "pit" && !it.sideSure ? PIT_UNSURE : "";
       $("sta-shapes-flip").disabled = W.busy || it.state === "dropped";
       $("sta-shapes-flip").classList.toggle("on", !!it.flipped);
       $("sta-shapes-drop").textContent = it.state === "dropped" ? "要回来" : "不要这个";
       $("sta-shapes-drop").disabled = W.busy;
     }
-    const small = d.seeds < MIN_SEEDS;
+    const small = tooFew(d);
     const go = $("sta-shapes-go");
-    go.textContent = `平均这些 · ${minutes(d.etaSeconds)}`;
+    go.textContent = pits ? `平均这 ${d.pits} 个凹陷` : `平均这些 · ${minutes(d.etaSeconds)}`;
     go.disabled = small || W.busy;
-    go.title = small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个` : `将平均 ${plural(d)}，${minutes(d.etaSeconds)}`;
+    go.title = small ? (pits ? `至少要 ${d.fewestPits || 4} 个` : `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个`) : `将平均 ${plural(d)}，${minutes(d.etaSeconds)}`;
+    renderPits(d);
     const msg = $("sta-shapes-msg");
-    if (!msg.dataset.err) msg.textContent = small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个：点灰色或虚线的把它要回来，或多标几个例子` : d.open ? "" : "这张断层图不在找出的断层图里，看不到标记";
+    if (!msg.dataset.err) msg.textContent = small && pits ? `至少要 ${d.fewestPits || 4} 个：点灰色的小图把它拿回来，或放宽「只取这一段」` : small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个：点灰色或虚线的把它要回来，或多标几个例子` : d.open ? "" : "这张断层图不在找出的断层图里，看不到标记";
     draw();
   }
+  const PIT_UNSURE = "这片膜分不出内外，两侧的凹陷都列出来了";
+  // Pits need a few; the other shapes need enough sampling points.
+  const tooFew = (d) => (pitMode(d) ? d.pits < (d.fewestPits || 4) : d.seeds < MIN_SEEDS);
+
+  // ---- pits: the strip of pictures and the part of the order ----
+  // shapes.json is rewritten by every edit (foundMs moves), so a search is told by its pits' sizes instead.
+  const tileKey = (id) => `${R.pitSig}|${id}`;
+  let tileBusy = 0;
+  const tileWait = [];
+  // At most four pictures are asked at a time; an answer to an older search is ignored.
+  function tileAsk(id) {
+    const k = tileKey(id), out = R.out;
+    if (tiles.has(k)) return;
+    tiles.set(k, "");
+    tileWait.push({ id, k, out });
+    tilePump();
+  }
+  function tilePump() {
+    while (tileBusy < 4 && tileWait.length) {
+      const t = tileWait.shift();
+      if (t.k !== tileKey(t.id)) { tiles.delete(t.k); continue; }
+      tileBusy++;
+      invoke("sta_shapes_tile", { out: t.out, id: t.id }).then((url) => {
+        if (typeof url !== "string" || !url) { tiles.delete(t.k); return; }
+        if (t.k !== tileKey(t.id)) return;
+        tiles.set(t.k, url);
+        for (const img of $("sta-pits-strip").querySelectorAll(`[data-id="${t.id}"] img`)) img.src = url;
+      }).catch(() => { tiles.delete(t.k); /* no backend (demo) */ }).finally(() => { tileBusy--; tilePump(); });
+    }
+  }
+  let seen = null;
+  function watchTiles() {
+    seen?.disconnect();
+    seen = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => {
+      for (const e of es) if (e.isIntersecting) { tileAsk(+e.target.dataset.id); seen.unobserve(e.target); }
+    }, { root: $("sta-pits-strip"), rootMargin: "120px" }) : null;
+  }
+  // The pits in the range [lo, hi] (1-based, of the whole order) from the sliders.
+  const rangeIds = (d, lo, hi) => d.pitList.slice(lo - 1, hi).map((p) => p.id);
+  function renderPits(d) {
+    const list = pitMode(d) ? d.pitList || [] : [];
+    $("sta-pits").hidden = !list.length;
+    if (!list.length) return;
+    const n = list.length;
+    const sig = `${R.out}|${list.map((p) => `${p.widthA}x${p.depthA}`).join()}`;
+    if (sig !== R.pitSig) { R.pitSig = sig; tiles.clear(); tileWait.length = 0; R.range = null; }
+    let [lo, hi] = R.range || [1, n];
+    lo = Math.max(1, Math.min(lo, n));
+    hi = Math.max(lo, Math.min(hi, n));
+    const sLo = $("sta-pits-lo"), sHi = $("sta-pits-hi");
+    for (const el of [sLo, sHi]) { el.max = n; el.disabled = W.busy || n < 2; }
+    sLo.value = lo;
+    sHi.value = hi;
+    $("sta-pits-text").textContent = `从第 ${lo} 个到第 ${hi} 个，共 ${hi - lo + 1} 个`;
+    $("sta-pits-all").disabled = W.busy || (!R.range && !list.some((p) => p.state === "dropped"));
+    const names = d.perTomogram.map((t) => t.name);
+    const strip = $("sta-pits-strip");
+    const top = strip.scrollTop;
+    watchTiles();
+    strip.replaceChildren(...list.map((p, i) => {
+      const b = document.createElement("button");
+      const off = p.state === "dropped";
+      b.type = "button";
+      b.className = `sta-pit${off ? " off" : ""}${p.example ? " ex" : ""}${R.sel === p.id ? " sel" : ""}`;
+      b.dataset.id = p.id;
+      b.title = `第 ${i + 1} 个${p.example ? "（你点的例子）" : ""} · 宽 ${p.widthA} Å · 深 ${p.depthA} Å${names[p.source] ? ` · ${names[p.source]}` : ""}${off ? " · 已去掉，点一下拿回来" : "，点一下去掉"}${p.sideSure ? "" : ` · ${PIT_UNSURE}`}`;
+      b.setAttribute("aria-pressed", off ? "false" : "true");
+      const img = document.createElement("img");
+      img.alt = "";
+      img.draggable = false;
+      const url = tiles.get(tileKey(p.id));
+      if (url) img.src = url;
+      b.append(img);
+      if (p.example) { const m = document.createElement("i"); m.className = "ex"; m.textContent = "例"; b.append(m); }
+      if (!p.sideSure) { const m = document.createElement("i"); m.className = "unsure"; m.textContent = "?"; b.append(m); }
+      b.onclick = () => { if (!W.busy) edit({ drop: p.id }); };
+      if (url) { /* already there */ } else if (seen) seen.observe(b); else tileAsk(p.id);
+      return b;
+    }));
+    strip.scrollTop = top;
+  }
+  const rangeLine = () => {
+    const d = R.d;
+    if (!d?.pitList) return;
+    const lo = +$("sta-pits-lo").value, hi = +$("sta-pits-hi").value;
+    $("sta-pits-text").textContent = `从第 ${lo} 个到第 ${hi} 个，共 ${hi - lo + 1} 个`;
+  };
+  // Dragging only moves the numbers; letting go keeps that part of the order and drops the rest.
+  function takeRange(which) {
+    const d = R.d;
+    if (!d?.pitList?.length) return;
+    let lo = +$("sta-pits-lo").value, hi = +$("sta-pits-hi").value;
+    if (which === "lo" && lo > hi) hi = lo;
+    if (which === "hi" && hi < lo) lo = hi;
+    R.range = [lo, hi];
+    activate();
+    edit({ only: rangeIds(d, lo, hi) });
+  }
+  for (const [id, which] of [["sta-pits-lo", "lo"], ["sta-pits-hi", "hi"]]) {
+    $(id).oninput = () => {
+      const lo = $("sta-pits-lo"), hi = $("sta-pits-hi");
+      if (which === "lo" && +lo.value > +hi.value) hi.value = lo.value;
+      if (which === "hi" && +hi.value < +lo.value) lo.value = hi.value;
+      rangeLine();
+    };
+    $(id).onchange = () => takeRange(which);
+  }
+  $("sta-pits-all").onclick = () => { R.range = null; activate(); edit({ reset: true }); };
+
   function say(t) { const m = $("sta-shapes-msg"); m.textContent = t; if (t) m.dataset.err = "1"; else delete m.dataset.err; }
 
   // Edits go to the backend one after another (each reads and writes shapes.json);
@@ -170,7 +304,7 @@
     return R.queue;
   }
   $("sta-shapes-flipall").onclick = () => { activate(); edit({ flipAll: true }); };
-  $("sta-shapes-reset").onclick = () => { activate(); edit({ reset: true }); };
+  $("sta-shapes-reset").onclick = () => { R.range = null; activate(); edit({ reset: true }); };
   $("sta-shapes-flip").onclick = () => { if (R.sel != null) edit({ flip: R.sel }); };
   $("sta-shapes-drop").onclick = () => { if (R.sel != null) edit({ drop: R.sel }); };
   function dismiss() {
@@ -186,7 +320,7 @@
   };
   $("sta-shapes-go").onclick = async () => {
     const d = R.d;
-    if (!d || W.busy || d.seeds < MIN_SEEDS) return;
+    if (!d || W.busy || tooFew(d)) return;
     const { out } = R;
     await R.queue;
     await W.go(async (_inputs, o) => {
@@ -274,7 +408,7 @@
     return dz < it.radius ? Math.sqrt(it.radius * it.radius - dz * dz) : null;
   };
   // Whether an item is seen on this section, and so carries its ? and can be clicked.
-  const seenOn = (it) => (it.kind === "ball" ? circle(it) != null : !!runsOf(it.id)?.length);
+  const seenOn = (it) => (it.kind === "ball" || it.kind === "pit" ? circle(it) != null : !!runsOf(it.id)?.length);
 
   // A filament: the part within two sections of the one shown solid and thick, the rest thin and faint.
   const NEAR = 2;
@@ -397,7 +531,7 @@
     let best = null, bestD = Infinity;
     for (const it of R.d?.items || []) {
       let dist = Infinity;
-      if (it.kind === "ball") {
+      if (it.kind === "ball" || it.kind === "pit") {
         const r = circle(it);
         if (r == null) continue;
         const dc = Math.hypot(it.centre[0] - x, it.centre[1] - y);

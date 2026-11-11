@@ -1,18 +1,19 @@
 "use strict";
 // "自己标注" in the subtomogram-averaging workspace: the user marks on the
 // tomogram open in the viewer what to average, and one click averages it.
-// Five tools, each a click or a few: 点 (every click is one particle), 线
+// Six tools, each a click or a few: 点 (every click is one particle), 线
 // (a filament: points along it), 膜 (drag a scribble over a membrane: the
 // program takes the whole membrane under it from the automatic membrane
 // segmentation, see src-tauri/src/sta/paint.rs), 面 (a membrane drawn by
 // hand: points on it, the fallback), 球 (a vesicle: the centre, then a point
-// on its surface). The software completes the shape and the size (see
+// on its surface), 凹陷 (a pit of a membrane: a click into the middle of it,
+// every click is an example; sta::funnels). The software completes the shape and the size (see
 // src-tauri/src/sta/marks.rs); nothing is typed.
 // 点 alone: click 2–3 particles (one is allowed, more is fine) and the program
 // finds all the others like them (their directions are unknown, so no shape is
 // drawn) and SHOWS them before averaging (found.js: 找出全部同类); points and
 // shapes are averaged separately.
-// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane", tomogram,
+// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"pit", tomogram,
 // points: [[x, y, z]…], flip, strokes: [{points, cut}…]} (strokes: membranes
 // only, each on one section; a cut stroke ends a sheet where two membranes
 // are joined: Alt-drag on a selected membrane) in voxels of the file that was open when it was clicked (the tomogram or
@@ -25,7 +26,7 @@
 // the normal, as in Dynamo): the 翻面 button flips it, and arrows on the image
 // (sta_mark_preview: sampled points and axes in the open file's voxels) show
 // where particles will be taken and which way they face.
-// Membranes need the automatic segmentation of the open file: choosing 膜
+// Membranes and pits need the automatic segmentation of the open file: choosing 膜 or 凹陷
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
 // (sta_mark_section: runs [y, x0, x1) of the voxels on that section).
@@ -47,6 +48,7 @@
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
+    pit: { name: "凹陷", color: "#c2570c", title: "膜向内凹进去或向外鼓出去的地方", hint: "点在凹陷的中间；点 2–3 个不一样的就够，其余的程序会找出来" },
   };
   const ICONS = {
     point: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/>',
@@ -54,6 +56,7 @@
     membrane: '<path d="M3 13c3-5 6-5 9-1s6 3 9-3"/><path d="M5 19c4-2 9-2 14 0" stroke-dasharray="2 3"/>',
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
+    pit: '<path d="M2 7h6v5a4 4 0 0 0 8 0V7h6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>',
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
@@ -103,13 +106,15 @@
 
   const count = (m) => m.points.length;
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
-  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && count(m) >= 2);
+  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && m.kind !== "pit" && count(m) >= 2);
   // A painted membrane or a complete sphere is an example of what to find (shapes.js).
   // A complete line (a filament) is one too: all filaments like it are found.
-  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
+  // Every click of a pit mark is an example of its own.
+  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || (m.kind === "pit" && count(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
+    if (m.kind === "pit") return `凹陷 · ${count(m)} 个例子`;
     const name = `${KINDS[m.kind].name} ${n}`;
     if (m.kind === "membrane") {
       const cuts = (m.strokes || []).length - taking(m);
@@ -159,6 +164,8 @@
     } catch (_) { /* no backend (demo) */ }
   }
 
+  // Membrane marks and pits both need the segmentation of the open file.
+  const needsSeg = (k) => k === "membrane" || k === "pit";
   // The membrane each membrane mark takes, on the section shown: runs
   // [y, x0, x1) from sta_mark_section, kept per (file, mark, section) until
   // the marks change. Asked ~120 ms after the section stops changing; an
@@ -199,10 +206,10 @@
   const NO_MODEL = "还没有膜分割模型：请先在标签面板的「自动分割膜」里载入一次权重";
   async function checkMembrane() {
     const open = S.info?.path;
-    if (D.kind !== "membrane" || !open || M.seg || M.have[open] === true) return render();
+    if (!needsSeg(D.kind) || !open || M.seg || M.have[open] === true) return render();
     let st;
     try { st = await invoke("sta_membrane_status", { tomogram: open }); } catch (_) { return render(); /* no backend (demo) */ }
-    if (D.kind !== "membrane" || S.info?.path !== open || M.seg) return;
+    if (!needsSeg(D.kind) || S.info?.path !== open || M.seg) return;
     M.have[open] = !!st?.ready;
     M.model = st?.model !== false;
     M.line = "";
@@ -243,7 +250,7 @@
   function setKind(k) {
     D.kind = k;
     D.open = null;
-    if (k === "membrane") { M.tried.delete(S.info?.path); M.line = ""; checkMembrane(); }
+    if (needsSeg(k)) { M.tried.delete(S.info?.path); M.line = ""; checkMembrane(); }
     if (k) { if (S.tool !== "mark") setTool("mark"); } else if (S.tool === "mark") setTool("select");
     render();
   }
@@ -257,13 +264,15 @@
     const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
     const few = pointsN > 0 && pointsN < GOOD_POINTS && !D.marks.some((m) => m.kind !== "point");
     // Membranes and vesicles are examples: all of that kind are found and shown first (shapes.js).
-    const examples = D.marks.filter(isExample).length;
+    const pitN = D.marks.filter((m) => m.kind === "pit").reduce((n, m) => n + count(m), 0);
+    const examples = D.marks.filter((m) => m.kind !== "pit" && isExample(m)).length + pitN;
+    const hasPits = pitN > 0;
     const fewShapes = examples === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : ""].filter(Boolean).join("。");
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", hasPits && D.marks.some((m) => m.kind !== "pit") ? "标了凹陷时只找凹陷，其余的标注先放着" : ""].filter(Boolean).join("。");
     const ml = $("sta-draw-membrane");
-    ml.textContent = D.kind === "membrane" ? M.line : "";
+    ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;
-    const needSize = D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
+    const needSize = !hasPits && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
     $("sta-draw-sizes").hidden = !needSize;
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
     const open = D.open != null ? D.marks[D.open] : null;
@@ -296,12 +305,12 @@
     const last = D.marks[D.open != null ? D.open : D.marks.length - 1];
     $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : "去掉最后点的一个点";
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
-    const ok = shapes || pointsOnly;
+    const ok = shapes || pointsOnly || pitN > 0;
     // Points alone find everything like them first; shapes are averaged directly.
     const finds = (pointsOnly && !shapes) || examples > 0;
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg;
-    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
+    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，凹陷要点在凹陷的中间" : "先在图上标一个东西";
     draw();
     W.wall?.render();
   }
@@ -314,6 +323,8 @@
     if (v[0] < -0.5 || v[1] < -0.5 || v[0] > S.info.width - 0.5 || v[1] > S.info.height - 0.5) return;
     let m = D.open != null ? D.marks[D.open] : null;
     if (m && (m.kind !== D.kind || m.tomogram !== S.info.path)) m = null;
+    // One pit mark per tomogram: every click is one more example.
+    if (D.kind === "pit") m = D.marks.find((x) => x.kind === "pit" && x.tomogram === S.info.path) || null;
     if (!m) {
       m = { kind: D.kind, tomogram: S.info.path, points: [] };
       D.marks.push(m);
@@ -321,6 +332,7 @@
     }
     m.points.push(v);
     if (m.kind === "sphere" && m.points.length >= 2) D.open = null;
+    if (m.kind === "pit") D.open = D.marks.indexOf(m);
     D.sel = null;
     save();
     render();
@@ -529,7 +541,7 @@
         }
         return;
       }
-      if (m.kind !== "point") {
+      if (m.kind !== "point" && m.kind !== "pit") {
         for (let k = 1; k < m.points.length; k++) {
           const a = alpha(Math.max(Math.abs(m.points[k][2] - S.z), Math.abs(m.points[k - 1][2] - S.z)));
           if (!a) continue;
@@ -572,7 +584,7 @@
     }
     ctx.restore();
   });
-  document.addEventListener("tmv-opened", () => { draw(); refresh(0); if (D.kind === "membrane") checkMembrane(); });
+  document.addEventListener("tmv-opened", () => { draw(); refresh(0); if (needsSeg(D.kind)) checkMembrane(); });
 
   document.addEventListener("sta-out", (e) => { load(e.detail); draw(); });
   document.addEventListener("sta-busy", () => render());
