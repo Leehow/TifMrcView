@@ -1841,8 +1841,10 @@ pub fn run_template(
     report.search_voxel_a = searched.first().map(|s| s.1);
     // The same particles, where they now are, from the tilt images.
     let mut spare: Option<super::refine::Aligned> = None;
+    let mut final_voxel = voxel;
     if fine && sources.iter().all(|s| s.series.is_some()) {
-        match from_tilts(sources, &cuts, &out, voxel, diameter_a, progress) {
+        let n = (out.map.len() as f64).cbrt().round() as usize;
+        match from_tilts(sources, &cuts, &out.poses, n, voxel, diameter_a, progress) {
             Ok(tilted) => {
                 let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
                 let better = area(&tilted.fsc) >= area(&out.fsc);
@@ -1852,11 +1854,28 @@ pub fn run_template(
                 spare = Some(other);
                 out = kept;
                 live(&out.map);
+                // Where the halves agree nearly to the limit of this sampling,
+                // the views hold more than it shows: the same particles, the
+                // same poses, voxels half the size. Kept when the halves then
+                // agree over more (the area under the curve, 1/Å).
+                if better && super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 {
+                    match from_tilts(sources, &cuts, &out.poses, 2 * n, voxel / 2.0, diameter_a, progress) {
+                        Ok(finer) => {
+                            eprintln!("sta: at half the voxel size, FSC {}", finer.fsc.iter().map(|f| format!("{f:.3}")).collect::<Vec<_>>().join(" "));
+                            if strength(&finer.fsc, voxel / 2.0) >= strength(&out.fsc, voxel) {
+                                out = finer;
+                                final_voxel = voxel / 2.0;
+                                live(&out.map);
+                            }
+                        }
+                        Err(e) => eprintln!("sta: no average at half the voxel size ({e:#})"),
+                    }
+                }
             }
             Err(e) => eprintln!("sta: the average from the tilt images could not be made ({e}); keeping the one from the tomograms"),
         }
     }
-    save(&mut report, sources, &cuts, &out, out_dir, diameter_a, voxel, started)?;
+    save(&mut report, sources, &cuts, &out, out_dir, diameter_a, final_voxel, started)?;
     if let Some(other) = spare {
         // The one not kept, to compare with.
         let n = (other.map.len() as f64).cbrt().round() as usize;
@@ -1869,9 +1888,8 @@ pub fn run_template(
 
 /// The average of the aligned particles made from the tilt images (`tilt`),
 /// on the grid of `out` (voxels of `voxel` Å), with the same halves.
-fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
+fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
     use super::tilt::{Particle, Series, Sums};
-    let n = (out.map.len() as f64).cbrt().round() as usize;
     // One series in memory at a time (half a gigabyte each). The particles
     // stay where the tomograms have them: put where the views have them
     // (`tilt::settle`) they moved by half a voxel and the halves agreed no
@@ -1883,7 +1901,7 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
     for (i, s) in sources.iter().enumerate() {
         let particles: Vec<Particle> = cuts
             .iter()
-            .zip(&out.poses)
+            .zip(poses)
             .enumerate()
             .filter(|(_, (c, _))| c.source == i)
             .map(|(j, (c, p))| Particle { at: std::array::from_fn(|k| c.at[k] + p.t[k] * c.bin as f64), r: p.r, half: j % 2 })
@@ -1911,8 +1929,12 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
         }
         let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
         // Views twice as fine as the average where they can be: see `Series::fold`.
-        let fold = if bin % 2 == 0 { 2 } else { 1 };
-        let mut series = Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b))?;
+        // (Not when the finer views do not fit in memory.)
+        let open = |fold: usize| Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b));
+        let (mut series, fold) = match if bin % 2 == 0 { open(2).ok() } else { None } {
+            Some(s) => (s, 2),
+            None => (open(1)?, 1),
+        };
         // The particle's disc and what the transfer spreads beyond it.
         series.window = fold as f64 * ((0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0) + 6.0).min(n as f64 / 2.0 - 2.0);
         sums.add(&series, &particles, &|a, _| progress("从倾斜图像平均", before + a, total))?;
@@ -1924,7 +1946,7 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
     let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
     let (map, halves, fsc) = sums.finish(radius + 2.0);
     let shell = super::refine::cut(&fsc);
-    Ok(super::refine::Aligned { map, halves, poses: out.poses.clone(), fsc, shell })
+    Ok(super::refine::Aligned { map, halves, poses: poses.to_vec(), fsc, shell })
 }
 
 #[cfg(test)]
