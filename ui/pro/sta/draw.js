@@ -108,6 +108,8 @@
 
   function render() {
     for (const [k, b] of Object.entries(btn)) { b.classList.toggle("on", D.kind === k); b.disabled = W.busy; }
+    // While marking, the panel makes room: the image has to be visible to click on.
+    W.panel.classList.toggle("marking", !!D.kind);
     const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
     const shapes = D.marks.some(usable);
     const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
