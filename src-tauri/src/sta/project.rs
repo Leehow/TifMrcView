@@ -1973,31 +1973,72 @@ const TRIAL_SOURCES: usize = 2;
 /// Voxels across the particle in the search of a trial.
 const TRIAL_ACROSS: f64 = 6.5;
 
-pub fn run_template(
-    dev: &burn::tensor::Device,
-    sources: &[Source],
-    template: &[f32],
-    voxel_a: f64,
-    diameter_a: f64,
-    pass: Pass,
-    out_dir: &str,
-    progress: Progress,
-    live: Live,
-) -> Result<Report> {
+/// A place the template search found: a candidate particle.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Place {
+    /// Which of the sources.
+    pub source: usize,
+    /// Centre in voxels of the source tomogram binned by `bin`, (x, y, z).
+    pub c: [usize; 3],
+    /// Source voxels per working voxel.
+    pub bin: usize,
+    /// Index into `grid(30.0)`: the orientation the template matched at.
+    pub turn: usize,
+    pub score: f32,
+}
+
+impl Place {
+    /// The centre in voxels of the source tomogram (unbinned).
+    pub fn at(&self) -> [f64; 3] {
+        self.c.map(|x| x as f64 * self.bin as f64 + (self.bin as f64 - 1.0) / 2.0)
+    }
+}
+
+/// What a template search found, before anything is averaged: the
+/// workspace shows it for the user to check (`run_places` averages what is
+/// kept).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Found {
+    /// Every peak, best first.
+    pub places: Vec<Place>,
+    /// The score that parts the particles from the rest, when the scores
+    /// fall into two groups (`search::cutoff`).
+    pub limit: Option<f32>,
+    /// Voxel of the cubes the places are cut at, Å.
+    pub voxel_a: f64,
+    /// "look", "raw" or "mixed": which tomograms were searched.
+    pub searched: String,
+    pub search_voxel_a: Option<f64>,
+}
+
+impl Found {
+    /// How many places the program would keep by itself.
+    pub fn sure(&self) -> usize {
+        match self.limit {
+            Some(l) => self.places.iter().filter(|p| p.score >= l).count().min(MOST),
+            None => 0,
+        }
+    }
+}
+
+/// Whether `cube_n` gives a cube of side `n` around voxel `c`.
+fn cube_fits(dims: [usize; 3], c: [usize; 3], n: usize) -> bool {
+    c[2] < dims[2] && (0..2).all(|i| c[i] >= n / 2 && c[i] + n / 2 <= dims[i])
+}
+
+/// The search of `run_template` alone: every place in the tomograms that
+/// looks like `template` (a `BOX`³ cube at `voxel_a`; `diameter_a` the
+/// particle's size), best first. A trial searches more coarsely.
+pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &[f32], voxel_a: f64, diameter_a: f64, trial: bool, progress: Progress) -> Result<Found> {
     use super::search::{allowed, cutoff, peaks};
-    let (trial, fine) = (pass == Pass::Trial, pass == Pass::Fine);
-    let started = Instant::now();
     if sources.is_empty() {
         bail!("没有断层图");
     }
     assert_eq!(template.len(), BOX * BOX * BOX);
     let turns = grid(30.0);
-    let mut cuts: Vec<Cut> = vec![];
-    let mut poses: Vec<Pose> = vec![];
     let mut voxel = voxel_a;
-    // (source, coarse peak) of every tomogram, to share one threshold.
-    let mut all: Vec<(usize, super::search::Peak)> = vec![];
-    let mut volumes = vec![];
+    let mut places: Vec<Place> = vec![];
     // (look searched, search voxel Å) per source.
     let mut searched: Vec<(bool, f64)> = vec![];
     for (i, s) in sources.iter().enumerate() {
@@ -2055,39 +2096,105 @@ pub fn run_template(
         let stage = format!("搜索 {}/{}", i + 1, sources.len());
         let found = super::search_gpu::search(dev, &coarse, cdims, &small, small_n, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
         // Particles do not overlap, but may touch.
-        all.extend(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (i, p)));
-        volumes.push((v, dims, bin, looked.map(|(l, b)| (l, b.3))));
-    }
-    let scores: Vec<super::search::Peak> = all.iter().map(|p| p.1).collect();
-    let candidates = scores.len();
-    let Some(limit) = cutoff(&scores) else {
-        bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", candidates);
-    };
-    all.retain(|p| p.1.score >= limit);
-    all.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
-    all.truncate(MOST);
-    for (i, p) in &all {
-        let (v, dims, bin, look) = &volumes[*i];
-        // Coarse voxel p holds fine voxels 2p and 2p + 1.
-        let c = match look {
-            None => p.pos.map(|x| 2 * x),
-            // On the look tomogram the peak is at a voxel of the grid binned by
-            // `look_bin`; mapped onto the raw tomogram's binned voxels.
-            Some((look, look_bin)) => {
-                let raw = to_raw(p.pos.map(|x| x as f64), *look_bin, *bin, look);
-                if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
-                    continue;
+        let look = looked.map(|(l, b)| (l, b.3));
+        for p in peaks(&found, 1.8 * radius, MOST) {
+            // Coarse voxel p holds fine voxels 2p and 2p + 1.
+            let c = match &look {
+                None => p.pos.map(|x| 2 * x),
+                // On the look tomogram the peak is at a voxel of the grid binned by
+                // `look_bin`; mapped onto the raw tomogram's binned voxels.
+                Some((look, look_bin)) => {
+                    let raw = to_raw(p.pos.map(|x| x as f64), *look_bin, bin, look);
+                    if raw.iter().any(|x| !x.is_finite() || x.round() < 0.0) {
+                        continue;
+                    }
+                    raw.map(|x| x.round() as usize)
                 }
-                raw.map(|x| x.round() as usize)
+            };
+            if cube_fits(dims, c, BOX) {
+                places.push(Place { source: i, c, bin, turn: p.turn, score: p.score });
             }
-        };
-        if let Some(cube) = cube(v, *dims, c) {
-            let at = c.map(|x| x as f64 * *bin as f64 + (*bin as f64 - 1.0) / 2.0);
-            cuts.push(Cut { source: *i, at, bin: *bin, score: p.score, strength: 0.0, darkest: 0.0, cube });
-            poses.push(Pose { r: turns[p.turn], t: [0.0; 3], score: p.score });
         }
     }
-    drop(volumes);
+    places.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let scores: Vec<super::search::Peak> = places.iter().map(|p| super::search::Peak { pos: p.c, score: p.score, turn: p.turn }).collect();
+    let limit = cutoff(&scores);
+    let kind = if searched.iter().all(|s| s.0) {
+        "look"
+    } else if searched.iter().all(|s| !s.0) {
+        "raw"
+    } else {
+        "mixed"
+    };
+    Ok(Found { places, limit, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
+}
+
+/// The cubes at `places` (and the poses the search found them at), one
+/// tomogram in memory at a time. Places whose cube cannot be cut are left out.
+fn cut_places(sources: &[Source], places: &[Place], voxel_a: f64) -> Result<(Vec<Cut>, Vec<Pose>)> {
+    let turns = grid(30.0);
+    let mut cuts: Vec<(usize, Cut, Pose)> = vec![];
+    for (i, s) in sources.iter().enumerate() {
+        if !places.iter().any(|p| p.source == i) {
+            continue;
+        }
+        check_cancel()?;
+        let (v, dims, _, bin) = binned(&s.path, voxel_a)?;
+        for (k, p) in places.iter().enumerate().filter(|(_, p)| p.source == i && p.bin == bin) {
+            if let (Some(cube), Some(r)) = (cube(&v, dims, p.c), turns.get(p.turn)) {
+                cuts.push((k, Cut { source: i, at: p.at(), bin, score: p.score, strength: 0.0, darkest: 0.0, cube }, Pose { r: *r, t: [0.0; 3], score: p.score }));
+            }
+        }
+    }
+    // In the order of `places` (best first), as the search gave them.
+    cuts.sort_by_key(|c| c.0);
+    Ok(cuts.into_iter().map(|(_, c, p)| (c, p)).unzip())
+}
+
+/// The whole template run: `find_template`, the places whose scores stand
+/// out (`Found::limit`), then `run_places`.
+#[allow(clippy::too_many_arguments)]
+pub fn run_template(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    template: &[f32],
+    voxel_a: f64,
+    diameter_a: f64,
+    pass: Pass,
+    out_dir: &str,
+    progress: Progress,
+    live: Live,
+) -> Result<Report> {
+    let found = find_template(dev, sources, template, voxel_a, diameter_a, pass == Pass::Trial, progress)?;
+    let Some(limit) = found.limit else {
+        bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len());
+    };
+    let keep: Vec<Place> = found.places.iter().filter(|p| p.score >= limit).take(MOST).copied().collect();
+    run_places(dev, sources, template, diameter_a, &found, &keep, pass, out_dir, progress, live)
+}
+
+/// The average of the particles at `places` (those of `found` the caller
+/// keeps: the program's own choice in `run_template`, the user's in the
+/// workspace): aligned to `template`, then as `pass` says.
+#[allow(clippy::too_many_arguments)]
+pub fn run_places(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    template: &[f32],
+    diameter_a: f64,
+    found: &Found,
+    places: &[Place],
+    pass: Pass,
+    out_dir: &str,
+    progress: Progress,
+    live: Live,
+) -> Result<Report> {
+    let fine = pass == Pass::Fine;
+    let started = Instant::now();
+    assert_eq!(template.len(), BOX * BOX * BOX);
+    let candidates = found.places.len();
+    let mut voxel = found.voxel_a;
+    let (mut cuts, poses) = cut_places(sources, places, found.voxel_a)?;
     if cuts.len() < 20 {
         bail!("只找到 {} 个颗粒，太少了", cuts.len());
     }
@@ -2184,17 +2291,8 @@ pub fn run_template(
         table: None,
         ms: 0,
     };
-    report.searched = Some(
-        if searched.iter().all(|s| s.0) {
-            "look"
-        } else if searched.iter().all(|s| !s.0) {
-            "raw"
-        } else {
-            "mixed"
-        }
-        .to_string(),
-    );
-    report.search_voxel_a = searched.first().map(|s| s.1);
+    report.searched = Some(found.searched.clone());
+    report.search_voxel_a = found.search_voxel_a;
     // The same particles, where they now are, from the tilt images.
     let mut spare: Option<super::refine::Aligned> = None;
     let mut final_voxel = voxel;
