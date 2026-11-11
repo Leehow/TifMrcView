@@ -213,10 +213,18 @@ pub fn siblings(path: &str) -> Vec<Sibling> {
     let p = Path::new(path);
     let (Some(name), Some(dir)) = (p.file_name(), p.parent()) else { return vec![] };
     let mut items: Vec<Sibling> = vec![];
-    for d in datasets_in(dir) {
+    // The folder of the open file, then the folders beside it: a tomogram
+    // often has a folder of its own (05/, 06/, …) under the one of the session.
+    let mut folders: Vec<PathBuf> = vec![dir.to_path_buf()];
+    if let Some(rd) = dir.parent().and_then(|up| std::fs::read_dir(up).ok()) {
+        let mut beside_it: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|f| f.is_dir() && f != dir).collect();
+        beside_it.sort();
+        folders.extend(beside_it.into_iter().take(200));
+    }
+    for (folder, d) in folders.iter().flat_map(|f| datasets_in(f).into_iter().map(move |d| (f, d))) {
         let ranged = tilt_range(&d).is_some();
         for t in d.tomograms.iter().filter(|t| t.kind == "full") {
-            let Some(raw) = beside(dir, &t.path) else { continue };
+            let Some(raw) = beside(folder, &t.path) else { continue };
             let raw_name = Path::new(&raw).file_name().map(|n| n.to_owned());
             if items.iter().any(|i| Path::new(&i.raw).file_name().map(|n| n.to_owned()) == raw_name) {
                 continue;
@@ -846,10 +854,30 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tmv_auto_{name}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        // A folder of its own one level down: the folders beside a tomogram's are looked into.
+        let up = std::env::temp_dir().join(format!("tmv_auto_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&up);
+        let d = up.join("d");
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn tomograms_in_folders_beside_the_open_one_are_listed_too() {
+        let a = dataset_folder("beside");
+        let b = a.parent().unwrap().join("e");
+        std::fs::create_dir_all(&b).unwrap();
+        for f in std::fs::read_dir(&a).unwrap().flatten() {
+            let name = f.file_name().to_string_lossy().replace("05", "15").replace("06", "16").replace("07", "17");
+            let text = std::fs::read(f.path()).unwrap();
+            let text = if name.ends_with(".json") { String::from_utf8_lossy(&text).replace("05", "15").replace("06", "16").replace("07", "17").replace("/d/", "/e/").into_bytes() } else { text };
+            std::fs::write(b.join(name), text).unwrap();
+        }
+        let v = siblings(&a.join("05_sart3.mrc").to_string_lossy());
+        let names: Vec<&str> = v.iter().map(|i| i.name.as_str()).collect();
+        assert!(names.contains(&"05_sart3.mrc") && names.contains(&"06_sart3.mrc"), "{names:?}");
+        assert!(names.contains(&"15_sart3.mrc") && names.contains(&"16_sart3.mrc"), "{names:?}");
+        assert_eq!(v.iter().filter(|i| i.open).count(), 1);
     }
 
     fn ball(n: usize) -> Vec<f32> {
