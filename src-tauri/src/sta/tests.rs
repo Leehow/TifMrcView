@@ -9,7 +9,7 @@ use crate::spa::Rng;
 const N: usize = 32;
 
 /// A handful of Gaussian balls with no symmetry.
-fn phantom() -> Vec<f32> {
+pub(super) fn phantom() -> Vec<f32> {
     let balls = [
         ([0.0, 0.0, 0.0], 3.0, 1.0),
         ([6.0, 1.0, -2.0], 2.2, 1.2),
@@ -38,7 +38,7 @@ fn phantom() -> Vec<f32> {
     v
 }
 
-fn corr(a: &[f32], b: &[f32]) -> f64 {
+pub(super) fn corr(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len() as f64;
     let (ma, mb) = (a.iter().map(|v| *v as f64).sum::<f64>() / n, b.iter().map(|v| *v as f64).sum::<f64>() / n);
     let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
@@ -52,7 +52,7 @@ fn corr(a: &[f32], b: &[f32]) -> f64 {
 }
 
 /// The reference at pose (r, t), with noise, seen through a wedge.
-fn particle(reference: &[f32], r: &Mat, t: [f64; 3], w: &[f32], noise: f64, rng: &mut Rng) -> Vec<f32> {
+pub(super) fn particle(reference: &[f32], r: &Mat, t: [f64; 3], w: &[f32], noise: f64, rng: &mut Rng) -> Vec<f32> {
     // particle(x) = reference(Rᵀ·(x − c) + c − Rᵀ·t).
     let rt = transpose(r);
     let s = [

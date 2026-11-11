@@ -20,10 +20,11 @@ use anyhow::{bail, Result};
 use rayon::prelude::*;
 
 use super::average::Sum;
-use super::cc::Engine;
+use super::cc::{Engine, Prepared};
 use super::{check_cancel, Pose, IDENTITY};
 use crate::spa::geom::{axis_angle, grid, local, mul, Mat};
 use crate::spa::{post, Rng};
+use burn::tensor::Device;
 
 /// Subtomograms of side `n` with the wedge mask each one has.
 pub struct Set<'a> {
@@ -84,6 +85,24 @@ impl Set<'_> {
     }
 }
 
+/// `Engine::global`, on the device when there is one (`cc_gpu`, the same
+/// scores). A device that fails (Burn reports a failed kernel as a panic)
+/// is left for the rest of the call: the CPU search runs instead.
+fn global_on(dev: Option<&Device>, engine: &Engine, prepared: &[Prepared], model: &[f32], rotations: &[Mat], shift: usize, tick: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<Pose>> {
+    if let Some(dev) = dev {
+        match crate::ctf_gpu::guarded(|| super::cc_gpu::global(dev, engine, prepared, model, rotations, shift, tick)) {
+            Ok(Ok(found)) => return Ok(found),
+            Ok(Err(e)) | Err(e) => {
+                if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(e);
+                }
+                eprintln!("sta: the global search on the GPU failed ({e:#}); on the CPU instead");
+            }
+        }
+    }
+    engine.global(prepared, model, rotations, shift, tick)
+}
+
 fn random_rotation(rng: &mut Rng) -> Mat {
     let axis = [rng.gauss(), rng.gauss(), rng.gauss()];
     axis_angle(axis, 360.0 * rng.unit())
@@ -105,6 +124,11 @@ const STEP: f64 = 30.0;
 /// resolution limit (Fourier voxels) rises from `n / (2·radius)`-ish to
 /// about four times that.
 pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    first_model_on(None, set, seed, progress, live)
+}
+
+/// `first_model`, with the global searches on `dev` when given.
+pub fn first_model_on(dev: Option<&Device>, set: &Set, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
     set.check()?;
     let m = set.particles.len();
     let mut rng = Rng(seed);
@@ -128,7 +152,7 @@ pub fn first_model(set: &Set, seed: u64, progress: Progress, live: Live) -> Resu
         let turn = random_rotation(&mut rng);
         let turned: Vec<Mat> = rotations.iter().map(|r| mul(r, &turn)).collect();
         let stage = format!("起始模型 第 {}/{} 轮", round + 1, ROUNDS);
-        poses = engine.global(&prepared, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
+        poses = global_on(dev, &engine, &prepared, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
         let average = set.average(&poses, |_| true).finish();
         model = centre(set, &mut poses, average);
         live(&model);
@@ -151,6 +175,11 @@ pub struct Class {
 /// borders); one model for all would be pulled about by the densest of
 /// them, while here each kind draws its own. Most populous first.
 pub fn classes(set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -> Result<Vec<Class>> {
+    classes_on(None, set, k, seed, progress, live)
+}
+
+/// `classes`, with the global searches on `dev` when given.
+pub fn classes_on(dev: Option<&Device>, set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -> Result<Vec<Class>> {
     set.check()?;
     let m = set.particles.len();
     let k = k.clamp(1, m / 4);
@@ -172,7 +201,7 @@ pub fn classes(set: &Set, k: usize, seed: u64, progress: Progress, live: Live) -
         let mut best = vec![Pose { r: IDENTITY, t: [0.0; 3], score: f32::MIN }; m];
         for (c, model) in models.iter().enumerate() {
             let stage = format!("分类 第 {}/{} 轮", round + 1, CLASS_ROUNDS);
-            let found = engine.global(&prepared, model, &turned, set.shift(), &|a, b| progress(&stage, c * b + a, k * b))?;
+            let found = global_on(dev, &engine, &prepared, model, &turned, set.shift(), &|a, b| progress(&stage, c * b + a, k * b))?;
             for i in 0..m {
                 if found[i].score > best[i].score {
                     best[i] = found[i];
@@ -310,6 +339,33 @@ fn centre(set: &Set, poses: &mut [Pose], model: Vec<f32>) -> Vec<f32> {
     super::cc::transform(&model, n, &IDENTITY, g)
 }
 
+/// One round of `align` on the device: the particles are prepared a chunk
+/// at a time (the CPU part, the transform of each), and each chunk's two
+/// halves are searched against their own references. `tick(done)` follows.
+fn local_on(dev: &Device, set: &Set, engine: &Engine, against: &[super::cc::Reference; 2], poses: &[Pose], steps: &[Mat], tick: &(dyn Fn(usize) + Sync)) -> Result<Vec<Pose>> {
+    use super::cc_gpu::{chunk_of, Gpu};
+    let gpu = Gpu::new(dev, engine, set.shift());
+    let bound = [gpu.bind(&against[0]), gpu.bind(&against[1])];
+    let m = set.particles.len();
+    let mut out = poses.to_vec();
+    let chunk = chunk_of(engine);
+    for first in (0..m).step_by(chunk) {
+        check_cancel()?;
+        let ids: Vec<usize> = (first..(first + chunk).min(m)).collect();
+        let prepared: Vec<Prepared> = ids.par_iter().map(|i| engine.prepare(&set.particles[*i], set.wedge(*i))).collect();
+        for half in 0..2 {
+            let mine: Vec<usize> = (0..ids.len()).filter(|j| ids[*j] % 2 == half).collect();
+            let xs: Vec<&Prepared> = mine.iter().map(|j| &prepared[*j]).collect();
+            let from: Vec<Pose> = mine.iter().map(|j| poses[ids[*j]]).collect();
+            for (j, p) in mine.iter().zip(bound[half].local(&xs, &from, steps)?) {
+                out[ids[*j]] = p;
+            }
+        }
+        tick(first + ids.len());
+    }
+    Ok(out)
+}
+
 pub struct Aligned {
     /// The average of both halves.
     pub map: Vec<f32>,
@@ -355,6 +411,13 @@ const RANGES: [f64; 3] = [12.0, 6.0, 3.0];
 /// is the even particles, half B the odd ones; callers that oversample
 /// positions put neighbours in the same half by ordering them so.
 pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live: Live) -> Result<Aligned> {
+    align_on(None, set, model, start, progress, live)
+}
+
+/// `align`, with the local searches on `dev` when given: the scores of the
+/// CPU engine, for many particles and steps at once (`cc_gpu`). A device
+/// that fails hands the round back to the CPU.
+pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], progress: Progress, live: Live) -> Result<Aligned> {
     set.check()?;
     let m = set.particles.len();
     let mut poses = start.to_vec();
@@ -369,18 +432,31 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
         let against = [engine.reference(&refs[0]), engine.reference(&refs[1])];
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("对齐 第 {}/{} 轮", round + 1, RANGES.len());
-        poses = (0..m)
-            .into_par_iter()
-            .map(|i| {
+        let on_device = dev.and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, &steps, &|n| progress(&stage, n, m))) {
+            Ok(Ok(found)) => Some(found),
+            Ok(Err(e)) | Err(e) => {
                 if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
-                    return poses[i];
+                    return None;
                 }
-                let x = engine.prepare(&set.particles[i], set.wedge(i));
-                let p = engine.local(&x, &against[i % 2], &poses[i], &steps, set.shift());
-                progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
-                p
-            })
-            .collect();
+                eprintln!("sta: the local search on the GPU failed ({e:#}); on the CPU instead");
+                None
+            }
+        });
+        poses = match on_device {
+            Some(found) => found,
+            None => (0..m)
+                .into_par_iter()
+                .map(|i| {
+                    if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                        return poses[i];
+                    }
+                    let x = engine.prepare(&set.particles[i], set.wedge(i));
+                    let p = engine.local(&x, &against[i % 2], &poses[i], &steps, set.shift());
+                    progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
+                    p
+                })
+                .collect(),
+        };
         check_cancel()?;
         let (a, b) = (set.average(&poses, |i| i % 2 == 0), set.average(&poses, |i| i % 2 == 1));
         let halves = [a.finish(), b.finish()];

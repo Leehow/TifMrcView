@@ -480,7 +480,9 @@ pub fn auto(
     if making {
         // Trials of older cards say nothing about these.
         let _ = std::fs::remove_file(&trials_json);
-        cards = sp::cards(sources, &cards_dir.to_string_lossy(), &report, live)?;
+        // The device is asked for here too, for the classification; without one the cards are made on the CPU.
+        let gpu = device().ok().map(|d| d.0);
+        cards = sp::cards_on(gpu, sources, &cards_dir.to_string_lossy(), &report, live)?;
         std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
         note(Note::CardsMade { count: cards.len() });
     } else {

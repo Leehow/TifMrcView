@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::pick::{blobs, Blob};
-use super::refine::{align, classes, first_model, Class, Live, Progress, Set};
+use super::refine::{align, align_on, classes_on, first_model, Class, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
 use crate::spa::geom::{angles, axis_angle, grid, mul};
 use crate::spa::fourier::resample3;
@@ -1072,12 +1072,12 @@ const CARD_MEMBERS: usize = 10;
 
 /// Sorts the cubes of `set` (cut at `BOX`³) into `k` classes, reference-free,
 /// at half sampling (the classification of `cards`).
-fn coarse_classes(set: &Set, sources: &[Source], k: usize, progress: Progress, live: Live) -> Result<Vec<Class>> {
+fn coarse_classes(dev: Option<&burn::tensor::Device>, set: &Set, sources: &[Source], k: usize, progress: Progress, live: Live) -> Result<Vec<Class>> {
     let half = BOX / 2;
     let small: Vec<Vec<f32>> = set.particles.par_iter().map(|p| resample3(p, BOX, half)).collect();
     let small_wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(half, s.tilts[0], s.tilts[1])).collect();
     let coarse = Set { n: half, particles: &small, wedges: &small_wedges, wedge_of: set.wedge_of, radius: set.radius / 2.0 };
-    classes(&coarse, k, 1, progress, live)
+    classes_on(dev, &coarse, k, 1, progress, live)
 }
 
 /// The card (and its `BOX`³ average, particle centred) of one class found by
@@ -1128,6 +1128,12 @@ fn class_card(set: &Set, class: &Class, size: f64, measured_a: f64, voxel_a: f64
 /// `compact × members` (a compact class that many blobs share); ids follow
 /// that order.
 pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
+    cards_on(None, sources, out_dir, progress, live)
+}
+
+/// `cards`, with the classification's global searches on `dev` when one is
+/// given (the same scores as on the CPU, `cc_gpu`).
+pub fn cards_on(dev: Option<&burn::tensor::Device>, sources: &[Source], out_dir: &str, progress: Progress, live: Live) -> Result<Vec<Card>> {
     use super::search::allowed;
     if sources.is_empty() {
         bail!("没有断层图");
@@ -1175,7 +1181,7 @@ pub fn cards(sources: &[Source], out_dir: &str, progress: Progress, live: Live) 
         let radius = 0.8 * size / voxel_a;
         let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
         let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
-        for class in coarse_classes(&set, sources, 3, &kind_progress, live)? {
+        for class in coarse_classes(dev, &set, sources, 3, &kind_progress, live)? {
             if class.members.len() < CARD_MEMBERS {
                 continue;
             }
@@ -1289,7 +1295,7 @@ pub fn card_from_points(sources: &[Source], points: &[(usize, [f64; 3])], out_di
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 0.8 * size / voxel_a };
     let kind_progress = |s: &str, a: usize, b: usize| progress(&format!("{s} {size} Å"), a, b);
-    let class = coarse_classes(&set, sources, 1, &kind_progress, live)?.into_iter().next().context("没有对齐出平均")?;
+    let class = coarse_classes(None, &set, sources, 1, &kind_progress, live)?.into_iter().next().context("没有对齐出平均")?;
     let (mut card, average) = class_card(&set, &class, size, measured_a, voxel_a);
     std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
     card.path = Path::new(out_dir).join("card.mrc").to_string_lossy().into_owned();
@@ -2038,7 +2044,7 @@ pub fn run_template(
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     // Told apart in the labels when there are two passes.
     let first_pass = |s: &str, a: usize, b: usize| progress(&if fine { s.replacen("对齐", "粗对齐", 1) } else { s.to_string() }, a, b);
-    let mut out = align(&set, template, &poses, &first_pass, live)?;
+    let mut out = align_on(Some(dev), &set, template, &poses, &first_pass, live)?;
     if fine {
         // The same particles at twice the sampling, from where they now
         // are: at the coarse sampling the resolution ends at its Nyquist
@@ -2100,7 +2106,7 @@ pub fn run_template(
         // not always half the coarse one (13.0 Å gives 8.7 Å, not 6.5 Å).
         let model = if (coarse / voxel - 2.0).abs() < 1e-3 { crate::spa::fourier::resample3(&out.map, BOX, n) } else { rescale_cube(&out.map, BOX, coarse, n, voxel) };
         let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
-        out = align(&set, &model, &start, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
+        out = align_on(Some(dev), &set, &model, &start, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
     }
     let mut report = Report {
         kinds: vec![],

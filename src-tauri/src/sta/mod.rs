@@ -23,6 +23,7 @@
 pub mod auto;
 pub mod average;
 pub mod cc;
+pub mod cc_gpu;
 pub mod marks;
 pub mod pick;
 pub mod project;

@@ -119,33 +119,33 @@ pub fn ball(n: usize, radius: f64, edge: f64) -> Vec<f32> {
 /// at −k is the conjugate of that at k, so every sum over the band is
 /// twice the real part of the sum over a half (the origin counts half).
 /// Points are in rows along kx.
-struct Band {
+pub(super) struct Band {
     /// (kx, ky, kz).
-    k: Vec<[i16; 3]>,
+    pub(super) k: Vec<[i16; 3]>,
     /// Index in an n³ transform.
     at: Vec<u32>,
     /// Band weight, halved at the origin.
-    weight: Vec<f32>,
+    pub(super) weight: Vec<f32>,
     /// (ky, kz, first point, one past the last).
     rows: Vec<(i16, i16, u32, u32)>,
     /// Largest |k| per axis.
-    reach: i32,
+    pub(super) reach: i32,
 }
 
 /// A particle ready for scoring: B·W·FT(particle) on the band, which
 /// frequencies its wedge measured, and Σ|·|².
 pub struct Prepared {
-    re: Vec<f32>,
-    im: Vec<f32>,
-    open: Vec<bool>,
-    norm: f64,
+    pub(super) re: Vec<f32>,
+    pub(super) im: Vec<f32>,
+    pub(super) open: Vec<bool>,
+    pub(super) norm: f64,
 }
 
 /// A reference ready to be turned: the transform of the masked reference
 /// in a box twice the size, so it is sampled at half steps of frequency.
 pub struct Reference {
-    re: Vec<f32>,
-    im: Vec<f32>,
+    pub(super) re: Vec<f32>,
+    pub(super) im: Vec<f32>,
 }
 
 /// A turned reference ready for scoring: B·FT(rotate(mask · reference, R))
@@ -163,7 +163,7 @@ pub struct Turned {
 /// an inverse transform of the whole cube.
 pub struct Engine {
     pub n: usize,
-    band: Band,
+    pub(super) band: Band,
     mask: Vec<f32>,
 }
 
