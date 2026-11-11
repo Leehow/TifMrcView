@@ -112,6 +112,32 @@ pub fn patches(seeds: &[Seed], reach: f64) -> Vec<Patch> {
         .collect()
 }
 
+/// The same surfaces sampled about `to` apart where the seeds are about
+/// `from` apart (all in voxels; `reach` as for `patches`): each seed's own
+/// stretch of its surface is sampled on a grid of `to`, and of points that
+/// come closer than that from neighbouring seeds one stays. Normals are
+/// the surfaces' own there. With `to` larger than `from` the seeds are
+/// thinned.
+pub fn respaced(seeds: &[Seed], reach: f64, from: f64, to: f64) -> Vec<Seed> {
+    let m = (0.5 * from / to).floor() as i64;
+    let mut out: Vec<Seed> = vec![];
+    let mut scores: Vec<f32> = vec![];
+    for p in patches(seeds, reach) {
+        for j in -m..=m {
+            for i in -m..=m {
+                let (x, y) = (i as f64 * to, j as f64 * to);
+                out.push(Seed { pos: p.lift([x, y, 0.0]), axis: col(&p.frame_at(x, y), 2) });
+                // A seed's own place before what its neighbours put near it.
+                scores.push(-((i * i + j * j) as f32));
+            }
+        }
+    }
+    let at: Vec<P> = out.iter().map(|s| s.pos).collect();
+    let mut keep = super::shape::merge(&at, &scores, 0.7 * to);
+    keep.sort_unstable();
+    keep.into_iter().map(|k| out[k]).collect()
+}
+
 impl Patch {
     fn height(&self, x: f64, y: f64) -> f64 {
         self.bend[0] * x * x + 2.0 * self.bend[1] * x * y + self.bend[2] * y * y
@@ -467,6 +493,12 @@ fn spectra(v: &[f32], dims: [usize; 3], patches: &[Patch], n: usize, deep: usize
         })
 }
 
+/// A pattern has at least this many rows across a section. Fewer are not
+/// told from what else varies slowly in a layer (a neighbour, the surface
+/// itself where the sheet is not quite flat); a pattern that coarse shows
+/// at a coarser sampling (`project::pattern_elsewhere`).
+const FEWEST_ROWS: usize = 5;
+
 /// The pattern that repeats in the layers about the patches' surface, if
 /// one does: unbent sections of side `n` are looked at from `deep` voxels
 /// inside the surface to `deep` outside. None when no ring of the spectrum
@@ -481,7 +513,7 @@ pub fn lattice(v: &[f32], dims: [usize; 3], patches: &[Patch], n: usize, deep: u
     };
     let mut best = (1.0, 0, 0);
     for d in 0..sum.len() {
-        for k in 3..rings.saturating_sub(2) {
+        for k in FEWEST_ROWS..rings.saturating_sub(2) {
             let e = out_of(d, k);
             if e > best.0 {
                 best = (e, d, k);
@@ -495,7 +527,7 @@ pub fn lattice(v: &[f32], dims: [usize; 3], patches: &[Patch], n: usize, deep: u
     // Between the rings and between the depths: where the excess has its
     // centre.
     let over = |d: usize, k: usize| (out_of(d, k) - 1.0).max(0.0);
-    let ks: Vec<usize> = (k.max(4) - 1..=(k + 1).min(rings - 3)).collect();
+    let ks: Vec<usize> = (k.max(FEWEST_ROWS + 1) - 1..=(k + 1).min(rings - 3)).collect();
     let ring = ks.iter().map(|k| *k as f64 * over(d, *k)).sum::<f64>() / ks.iter().map(|k| over(d, *k)).sum::<f64>();
     let half = 0.5 * (strength - 1.0);
     let (mut lo, mut hi) = (d, d);
@@ -542,6 +574,162 @@ pub fn cut(v: &[f32], dims: [usize; 3], patch: &Patch, n: usize, radius: f64) ->
     }
     out.iter_mut().for_each(|x| *x = if x.is_nan() { 0.0 } else { ((*x as f64 - mean) / sd) as f32 });
     Some(out)
+}
+
+/// How many times round a pattern may repeat itself about an axis along
+/// the normal, most first, each with the fewer times round that the same
+/// axis then holds as well.
+const FOLDS: [(usize, &[usize]); 4] = [(6, &[3, 2]), (4, &[2]), (3, &[]), (2, &[])];
+/// A model has an axis when it agrees with itself turned about it at least
+/// this well (correlation).
+const SAME: f64 = 0.3;
+/// An axis of more turns is also one of fewer: there the model has to
+/// agree this nearly as well as about the best axis of the fewer.
+const NEARLY: f64 = 0.85;
+
+/// The axis the pattern of an unbent model (`n`³, layers across Z, as
+/// `refine::in_layer` averages it) repeats itself about, if it has one:
+/// how many times round, and where an axis near the centre stands, voxels
+/// from the centre along X and Y. `period` is the pattern's row spacing
+/// and `radius` what of the model counts, voxels.
+///
+/// A place of a pattern is the point of each cube that lies on the model's
+/// centre. Where the pattern repeats itself turned (six times round for a
+/// hexagonal one), a cube fits the model at each of those turns alike, and
+/// its place is the same point of the pattern at every one of them only
+/// when the model's centre is on the axis: otherwise the places of one
+/// kind of site scatter round it. The model turned about its centre is the
+/// model moved by (R − 1)·a when the axis is at `a`, so the move that
+/// makes the two agree gives the axis.
+///
+/// The axis of the most turns is taken that the model shows at all and
+/// that is as good an axis of its fewer turns as any (a sixfold axis is a
+/// threefold and a twofold one too): a model that shows the more turns
+/// only faintly (rows the missing wedge hides) loses nothing by it, and
+/// one that has them is not left on an axis of the fewer, of which a cell
+/// has several that are not the same site.
+pub fn axis(model: &[f32], n: usize, period: f64, radius: f64) -> Option<(usize, [f64; 2])> {
+    // Sections twice as fine (in Fourier space): rows a few voxels apart
+    // do not survive being turned between the voxels otherwise.
+    const FINER: usize = 2;
+    let depth = n;
+    let model: Vec<f32> = model.par_chunks(n * n).flat_map_iter(|section| crate::spa::fourier::resample2(section, n, FINER * n)).collect();
+    let (n, period, radius, tall) = (FINER * n, FINER as f64 * period, FINER as f64 * radius, radius);
+    let c = (n / 2) as f64;
+    let reach = ((1.2 * period).ceil() as isize).clamp(1, n as isize / 4);
+    let side = (2 * reach + 1) as usize;
+    let at = |x: isize, y: isize, z: usize| -> Option<f32> { (x >= 0 && y >= 0 && x < n as isize && y < n as isize).then(|| model[(z * n + y as usize) * n + x as usize]) };
+    let inside = |x: usize, y: usize, z: usize| (x as f64 - c).powi(2) + (y as f64 - c).powi(2) <= radius * radius && (z as f64 - (depth / 2) as f64).abs() <= tall;
+    // The model turned by one step of `fold`: its value at x is the
+    // model's at Rᵀ(x − c) + c.
+    let turned = |r: &Mat| -> Vec<f32> {
+        let mut out = vec![0f32; n * n * depth];
+        out.par_chunks_mut(n * n).enumerate().for_each(|(z, plane)| {
+            for y in 0..n {
+                for x in 0..n {
+                    let (u, v) = (x as f64 - c, y as f64 - c);
+                    let (sx, sy) = (r[0][0] * u + r[1][0] * v + c, r[0][1] * u + r[1][1] * v + c);
+                    let (fx, fy) = (sx.floor(), sy.floor());
+                    let (tx, ty) = ((sx - fx) as f32, (sy - fy) as f32);
+                    let (ix, iy) = (fx as isize, fy as isize);
+                    let (Some(a), Some(b), Some(d), Some(e)) = (at(ix, iy, z), at(ix + 1, iy, z), at(ix, iy + 1, z), at(ix + 1, iy + 1, z)) else { continue };
+                    plane[y * n + x] = (a + (b - a) * tx) * (1.0 - ty) + (d + (e - d) * tx) * ty;
+                }
+            }
+        });
+        out
+    };
+    // How well the model moved by (dx, dy) agrees with a turned one.
+    let agree = |turned: &[f32], dx: isize, dy: isize| -> f64 {
+        let (mut ab, mut aa, mut bb) = (0f64, 0f64, 0f64);
+        for z in 0..depth {
+            for y in 0..n {
+                for x in 0..n {
+                    if !inside(x, y, z) {
+                        continue;
+                    }
+                    let Some(a) = at(x as isize - dx, y as isize - dy, z) else { continue };
+                    let b = turned[(z * n + y) * n + x];
+                    ab += (a * b) as f64;
+                    aa += (a * a) as f64;
+                    bb += (b * b) as f64;
+                }
+            }
+        }
+        if aa > 0.0 && bb > 0.0 { ab / (aa * bb).sqrt() } else { 0.0 }
+    };
+    // The move (R − 1)·a of an axis at `a`, and back.
+    let less = |r: &Mat| [[r[0][0] - 1.0, r[0][1]], [r[1][0], r[1][1] - 1.0]];
+    let move_of = |r: &Mat, a: [f64; 2]| {
+        let m = less(r);
+        [m[0][0] * a[0] + m[0][1] * a[1], m[1][0] * a[0] + m[1][1] * a[1]]
+    };
+    let axis_of = |r: &Mat, d: [f64; 2]| {
+        let m = less(r);
+        let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+        [(m[1][1] * d[0] - m[0][1] * d[1]) / det, (m[0][0] * d[1] - m[1][0] * d[0]) / det]
+    };
+    // Each way round: the model turned, how well it agrees at its best
+    // move, and the axis that move stands for.
+    struct Way {
+        fold: usize,
+        turn: Mat,
+        turned: Vec<f32>,
+        best: f64,
+        at: [f64; 2],
+    }
+    let ways: Vec<Way> = FOLDS
+        .iter()
+        .map(|&(fold, _)| {
+            let turn = super::cc_axis(360.0 / fold as f64);
+            let turned = turned(&turn);
+            let grid: Vec<f64> = (0..side * side).into_par_iter().map(|k| agree(&turned, (k % side) as isize - reach, (k / side) as isize - reach)).collect();
+            let value = |dx: isize, dy: isize| grid[((dy + reach) * side as isize + dx + reach) as usize];
+            // Of moves that agree alike (the axes of every cell), a short one.
+            let (mut top, mut dx, mut dy) = (f64::MIN, 0, 0);
+            for y in -reach..=reach {
+                for x in -reach..=reach {
+                    let v = value(x, y) - 0.02 * ((x * x + y * y) as f64).sqrt() / reach as f64;
+                    if v > top {
+                        (top, dx, dy) = (v, x, y);
+                    }
+                }
+            }
+            // Between the voxels: a parabola through the neighbours.
+            let between = |lo: f64, mid: f64, hi: f64| {
+                let bend = lo - 2.0 * mid + hi;
+                if bend < 0.0 { (0.5 * (lo - hi) / bend).clamp(-0.5, 0.5) } else { 0.0 }
+            };
+            let best = value(dx, dy);
+            let fx = if dx.abs() < reach { between(value(dx - 1, dy), best, value(dx + 1, dy)) } else { 0.0 };
+            let fy = if dy.abs() < reach { between(value(dx, dy - 1), best, value(dx, dy + 1)) } else { 0.0 };
+            let at = axis_of(&turn, [dx as f64 + fx, dy as f64 + fy]);
+            Way { fold, turn, turned, best, at }
+        })
+        .collect();
+    let way = |fold: usize| ways.iter().find(|w| w.fold == fold).expect("every fold of FOLDS");
+    // How well the model agrees with itself turned `fold` times round
+    // about an axis at `a`.
+    let about = |fold: usize, a: [f64; 2]| -> f64 {
+        let w = way(fold);
+        let d = move_of(&w.turn, a);
+        let (x, y) = (d[0].round() as isize, d[1].round() as isize);
+        (-1..=1).flat_map(|j| (-1..=1).map(move |i| (i, j))).map(|(i, j)| agree(&w.turned, x + i, y + j)).fold(f64::MIN, f64::max)
+    };
+    let mut found: Option<(usize, f64, [f64; 2])> = None;
+    for (fold, fewer) in FOLDS {
+        let w = way(fold);
+        if w.best < SAME || found.is_some_and(|f| f.1 >= w.best) {
+            continue;
+        }
+        if fewer.iter().all(|f| about(*f, w.at) >= NEARLY * way(*f).best) {
+            found = Some((fold, w.best, w.at));
+            if !fewer.is_empty() {
+                break;
+            }
+        }
+    }
+    found.map(|(fold, _, a)| (fold, a.map(|x| x / FINER as f64)))
 }
 
 /// The cube with everything that changes only slowly across each of its
@@ -914,5 +1102,78 @@ mod tests {
     fn the_wedge_of_the_plain_frame_is_the_plain_wedge() {
         let f = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         assert_eq!(wedge(16, &f, -60.0, 60.0), crate::sta::cc::wedge(16, -60.0, 60.0));
+    }
+
+    /// A model of side 32 with waves of period 4 voxels along `degrees` in
+    /// its middle layers, all at their crest at `a` from the centre, and
+    /// some noise.
+    fn waves(degrees: &[f64], a: [f64; 2]) -> Vec<f32> {
+        let n = 32;
+        let mut rng = crate::spa::Rng(5);
+        let mut m = vec![0f32; n * n * n];
+        for z in 0..n {
+            let layer = (-0.5 * ((z as f64 - 16.0) / 2.0).powi(2)).exp();
+            for y in 0..n {
+                for x in 0..n {
+                    let (u, v) = (x as f64 - 16.0 - a[0], y as f64 - 16.0 - a[1]);
+                    let p: f64 = degrees.iter().map(|d| (std::f64::consts::TAU / 4.0 * (u * d.to_radians().cos() + v * d.to_radians().sin())).cos()).sum();
+                    m[(z * n + y) * n + x] = (layer * p + 0.2 * rng.gauss()) as f32;
+                }
+            }
+        }
+        m
+    }
+
+    /// How far `found` is from a crest of every wave, as a part of a period
+    /// (0: on one).
+    fn off_crest(degrees: &[f64], a: [f64; 2], found: [f64; 2]) -> f64 {
+        degrees
+            .iter()
+            .map(|d| {
+                let along = ((found[0] - a[0]) * d.to_radians().cos() + (found[1] - a[1]) * d.to_radians().sin()) / 4.0;
+                (along - along.round()).abs()
+            })
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn the_axis_of_a_pattern_is_found_off_the_centre() {
+        // Hexagonal: six times round, about the point all three waves crest at.
+        let hex = [10.0, 70.0, 130.0];
+        let (fold, at) = axis(&waves(&hex, [1.3, -0.8]), 32, 4.0, 10.0).expect("an axis");
+        assert_eq!(fold, 6);
+        assert!(off_crest(&hex, [1.3, -0.8], at) < 0.05, "{at:?}");
+        // Square: four times.
+        let square = [20.0, 110.0];
+        let (fold, at) = axis(&waves(&square, [-0.6, 1.1]), 32, 4.0, 10.0).expect("an axis");
+        assert_eq!(fold, 4);
+        assert!(off_crest(&square, [-0.6, 1.1], at) < 0.05, "{at:?}");
+        // Rows crossing at 50°: only upside down is the same (about a crest
+        // or a trough of each).
+        let skew = [0.0, 50.0];
+        let (fold, at) = axis(&waves(&skew, [0.4, 0.9]), 32, 4.0, 10.0).expect("an axis");
+        assert_eq!(fold, 2);
+        let half: Vec<f64> = skew.iter().map(|d: &f64| ((at[0] - 0.4) * d.to_radians().cos() + (at[1] - 0.9) * d.to_radians().sin()) / 2.0).collect();
+        assert!(half.iter().all(|h| (h - h.round()).abs() < 0.05), "{at:?}");
+        // Nothing but noise has none.
+        let mut rng = crate::spa::Rng(9);
+        let noise: Vec<f32> = (0..32 * 32 * 32).map(|_| rng.gauss() as f32).collect();
+        assert!(axis(&noise, 32, 4.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn a_surface_is_sampled_again_closer_or_wider() {
+        let seeds: Vec<Seed> = (0..6).flat_map(|j| (0..6).map(move |i| Seed { pos: [20.0 + 10.0 * i as f64, 30.0, 20.0 + 10.0 * j as f64], axis: [0.0, 1.0, 0.0] })).collect();
+        let closer = respaced(&seeds, 25.0, 10.0, 5.0);
+        // A place every 5 voxels over the same stretch and half a step beyond.
+        assert_eq!(closer.len(), 13 * 13, "{}", closer.len());
+        assert!(closer.iter().all(|s| (s.pos[1] - 30.0).abs() < 1e-6 && s.axis[1] > 0.999));
+        let wider = respaced(&seeds, 25.0, 10.0, 20.0);
+        assert!(wider.len() >= 9 && wider.len() <= 18, "{}", wider.len());
+        for (i, a) in wider.iter().enumerate() {
+            for b in &wider[i + 1..] {
+                assert!((0..3).map(|k| (a.pos[k] - b.pos[k]).powi(2)).sum::<f64>().sqrt() >= 14.0);
+            }
+        }
     }
 }

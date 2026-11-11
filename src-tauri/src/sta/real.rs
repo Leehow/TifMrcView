@@ -62,3 +62,28 @@ fn v17_kinds() {
     let kinds: Vec<String> = v["kinds"].as_array().unwrap().iter().map(|k| format!("kind {}: {}", k["id"], k["count"])).collect();
     eprintln!("{} particles, apart {}, {kinds:?}, {:.0} s", v["particles"], v["apart"], started.elapsed().as_secs_f64());
 }
+
+/// The same vesicles given as for particles twice as large (the rows of
+/// the lattice are then finer than the sampling the size asks for).
+#[test]
+#[ignore]
+fn v17_spheres_coarse() {
+    use super::project::{run_drawn, Drawn, Source};
+    let file = std::env::var("TMV_V17").expect("TMV_V17 = the path of v17.rec");
+    let out = std::env::var("TMV_OUT").expect("TMV_OUT = a folder for the result");
+    let size_a = 450.0;
+    let drawn: Vec<Drawn> = V17
+        .iter()
+        .flat_map(|(c, r)| super::shape::ellipsoid(*c, [*r; 3], 0.5 * size_a / 8.0))
+        .map(|s| Drawn { source: 0, pos: s.pos, axis: s.axis })
+        .collect();
+    let sources = vec![Source { path: file, tilts: [-60.0, 60.0], look: None, series: None }];
+    let started = std::time::Instant::now();
+    let r = run_drawn(&sources, &drawn, false, size_a, &out, &|label, done, total| {
+        if done == total {
+            eprintln!("{:6.1} s  {label}", started.elapsed().as_secs_f64());
+        }
+    }, &|_| {})
+    .unwrap();
+    eprintln!("{} seeds, {} particles, {:?} Å, voxel {} Å, pattern {:?}, {:.0} s", drawn.len(), r.particles, r.resolution_a, r.voxel_a, r.pattern, started.elapsed().as_secs_f64());
+}

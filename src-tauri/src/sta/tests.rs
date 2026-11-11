@@ -421,6 +421,20 @@ fn drawn_sphere_gives_one_particle_per_copy() {
 /// the missing wedge hides from the alignment).
 #[test]
 fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
+    pattern_on_a_membrane(208.0, 24, 7, "lattice");
+}
+
+/// The same when the particle size given is twice too large to show the
+/// rows (two voxels a row at its sampling): the pattern is found at the
+/// finer sampling and everything goes on there.
+#[test]
+fn a_pattern_finer_than_the_size_asked_for_is_still_found() {
+    pattern_on_a_membrane(416.0, 30, 13, "lattice-coarse");
+}
+
+/// The membrane is drawn from `from` voxels off the sides with a place
+/// every `step` voxels, for particles of `size_a`.
+fn pattern_on_a_membrane(size_a: f64, from: usize, step: usize, name: &str) {
     use super::project::{run_drawn, Drawn, Source};
     let dims = [128usize, 64, 128];
     let waves: Vec<[f64; 2]> = [10f64, 70.0, 130.0].iter().map(|d| [d.to_radians().cos(), d.to_radians().sin()]).collect();
@@ -436,19 +450,21 @@ fn a_pattern_on_a_drawn_membrane_is_found_and_its_places_agree() {
             }
         }
     }
-    let dir = std::env::temp_dir().join(format!("tmv-sta-lattice-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tmv-sta-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
     crate::tomo::output::write_mrc(&tomo, &v, dims, 16.0, false).unwrap();
     let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None, series: None }];
     let mut drawn = vec![];
-    for z in (24..=104).step_by(7) {
-        for x in (24..=104).step_by(7) {
+    for z in (from..=128 - from).step_by(step) {
+        for x in (from..=128 - from).step_by(step) {
             drawn.push(Drawn { source: 0, pos: [x as f64, 42.0, z as f64], axis: [0.0, 1.0, 0.0] });
         }
     }
     let out = dir.join("out").to_string_lossy().into_owned();
-    let done = run_drawn(&sources, &drawn, false, 208.0, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    assert!((done.voxel_a - 16.0).abs() < 1e-6 || done.voxel_a < 16.0, "voxel {}", done.voxel_a);
+    assert!(done.pattern.is_some_and(|p| (p.rows_a - 64.0).abs() < 6.0), "{:?}", done.pattern);
     let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
     let at: Vec<[f64; 3]> = table
         .lines()

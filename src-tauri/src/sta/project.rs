@@ -217,6 +217,9 @@ pub struct Pattern {
     pub rows_a: f64,
     /// How far inside the drawn surface it lies, Å (negative: outside).
     pub inside_a: f64,
+    /// How many times round it repeats itself about the axes its places
+    /// are on (1: it does not).
+    pub fold: usize,
 }
 
 /// A tomogram averaged over `bin`³ voxels: values, size, voxel size (Å).
@@ -1746,6 +1749,7 @@ pub struct Drawn {
 /// not known. Seeds that end on the same particle are merged.
 pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
     let started = Instant::now();
+    let mut size_a = size_a;
     let mut cuts: Vec<Cut> = vec![];
     let mut axes: Vec<[f64; 3]> = vec![];
     let mut voxel_a = size_a / SPAN;
@@ -1754,7 +1758,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let mut on_layer: Vec<Drawn> = vec![];
     let mut lattice = None;
     if !both {
-        match on_surfaces(sources, drawn, size_a, progress, live)? {
+        match on_surfaces(sources, drawn, size_a, true, progress, live)? {
             Surfaces::Lattice(l) => lattice = Some(l),
             Surfaces::Plain(d) => on_layer = d,
         }
@@ -1766,6 +1770,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let drawn: &[Drawn] = if both || lattice.is_some() { drawn } else { &on_layer };
     if let Some(l) = lattice {
         cuts = l.cuts;
+        size_a = l.size_a;
         voxel_a = l.voxel_a;
         apart = Some(l.apart);
         detail = Some((l.band, l.slide));
@@ -2303,6 +2308,9 @@ struct OnLattice {
     /// One cube per place of the pattern, cut straight from the tomogram.
     cuts: Vec<Cut>,
     poses: Vec<Pose>,
+    /// The size the cubes were cut for, Å: the one asked for, or the one
+    /// that shows the pattern when that did not (`pattern_elsewhere`).
+    size_a: f64,
     /// Their average at those poses.
     model: Vec<f32>,
     voxel_a: f64,
@@ -2344,7 +2352,7 @@ fn hold<'a>(held: &'a mut Option<Held>, sources: &[Source], which: usize, voxel_
 /// `refine::in_layer`: turn about the normal, slide along the surface),
 /// what was found is
 /// carried back to the tomogram, and cubes are cut straight there.
-fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progress, live: Live) -> Result<Surfaces> {
+fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, probe: bool, progress: Progress, live: Live) -> Result<Surfaces> {
     use super::flat;
     use super::shape::Seed;
     let mut held: Option<Held> = None;
@@ -2369,6 +2377,19 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progr
         scale[i] = (h.bin, h.voxel);
     }
     progress("找准膜面", used.len(), used.len());
+    // No pattern at this sampling, or a faint one: a pattern finer or
+    // coarser than the sampling shows, and a faint ring may be the noise of
+    // a few sections. The samplings beside this one are looked at as well,
+    // and where one of them shows a pattern clearly better, the same again
+    // there.
+    if probe && found.is_none_or(|l| l.strength < SURE) {
+        drop(held.take());
+        if let Some((size, denser)) = pattern_elsewhere(sources, &used, &seeds, &scale, size_a, found.map(|l| l.strength))? {
+            if let Surfaces::Lattice(l) = on_surfaces(sources, &denser, size, false, progress, live)? {
+                return Ok(Surfaces::Lattice(l));
+            }
+        }
+    }
     let Some(lattice) = found else {
         let on_layer = used
             .iter()
@@ -2409,8 +2430,18 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progr
     let wedge_of: Vec<usize> = (0..cubes.len()).collect();
     let set = Set { n: BOX, particles: &cubes, wedges: &wedges, wedge_of: &wedge_of, radius };
     let start = flat::rows(&cubes, BOX, lattice.period);
-    let (_, found) = super::refine::in_layer(&set, band, slide, start.as_deref(), 1, progress, live)?;
+    let (unbent, mut found) = super::refine::in_layer(&set, band, slide, start.as_deref(), 1, progress, live)?;
     drop((cubes, wedges));
+    // A pattern that repeats itself turned: its axis is the place (see
+    // `flat::axis`). The model moved by a is each cube moved by R·a.
+    let axis = flat::axis(&unbent, BOX, lattice.period, radius);
+    if let Some((_, a)) = axis {
+        for p in &mut found {
+            for j in 0..3 {
+                p.t[j] += p.r[j][0] * a[0] + p.r[j][1] * a[1];
+            }
+        }
+    }
 
     // Back to the tomogram: where each place is and how it stands there.
     let mut cuts: Vec<Cut> = vec![];
@@ -2448,8 +2479,76 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progr
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let model = set.average(&poses, |_| true).finish();
     live(&model);
-    let pattern = Pattern { rows_a: lattice.period * voxel_a, inside_a: -lattice.depth * voxel_a };
-    Ok(Surfaces::Lattice(OnLattice { cuts, poses, model, voxel_a, apart, band, slide: 1, pattern }))
+    let pattern = Pattern { rows_a: lattice.period * voxel_a, inside_a: -lattice.depth * voxel_a, fold: axis.map_or(1, |a| a.0) };
+    Ok(Surfaces::Lattice(OnLattice { cuts, poses, size_a, model, voxel_a, apart, band, slide: 1, pattern }))
+}
+
+/// A ring that stands out this much at the sampling the size asks for is
+/// taken as it is; below, the samplings beside it are looked at too.
+const SURE: f64 = 1.8;
+/// To be taken instead, a ring at another sampling stands out this many
+/// times further (its excess over 1 against the excess here).
+const CLEARER: f64 = 1.5;
+/// Samplings looked at beside the one the size asks for: this many,
+/// nearest first.
+const ELSEWHERE: usize = 3;
+/// They lie between these, Å per voxel.
+const ELSEWHERE_A: (f64, f64) = (6.0, 40.0);
+/// Voxels per row of a pattern at the sampling it is then aligned at.
+const ROW_VOXELS: f64 = 4.0;
+
+/// Whether a pattern repeats in the layers of the surfaces at a sampling
+/// other than the one the particle size asks for (rows closer than two and
+/// a half voxels, or further apart than a third of the box, do not show).
+/// `seeds` are the places on their layers and `scale` the (bin, voxel) of
+/// each source, as `on_surfaces` has them; the source with the most places
+/// is looked at. Gives the size (Å) whose sampling has `ROW_VOXELS` voxels
+/// per row, and the same surfaces sampled for that size (`flat::respaced`).
+/// `here` is how far the ring stands out at the size's own sampling, when
+/// one does: only a ring `CLEARER` than it counts.
+fn pattern_elsewhere(sources: &[Source], used: &[usize], seeds: &[Vec<super::shape::Seed>], scale: &[(usize, f64)], size_a: f64, here: Option<f64>) -> Result<Option<(f64, Vec<Drawn>)>> {
+    use super::flat;
+    use super::shape::Seed;
+    let Some(&i) = used.iter().max_by_key(|i| seeds[**i].len()) else { return Ok(None) };
+    let (bin, voxel) = scale[i];
+    let px = voxel / bin as f64;
+    // Source voxels of a source's places.
+    let raw = |i: usize| -> Vec<Seed> {
+        let (bin, _) = scale[i];
+        let half = (bin as f64 - 1.0) / 2.0;
+        seeds[i].iter().map(|s| Seed { pos: s.pos.map(|p| p * bin as f64 + half), axis: s.axis }).collect()
+    };
+    let mut bins: Vec<usize> = (1..=2 * bin).filter(|b| *b != bin && (ELSEWHERE_A.0..=ELSEWHERE_A.1).contains(&(px * *b as f64))).collect();
+    bins.sort_by_key(|b| (b.abs_diff(bin), *b));
+    // The clearest of them: (strength, rows in Å).
+    let mut best: Option<(f64, f64)> = None;
+    let least = here.map_or(1.0, |s| 1.0 + CLEARER * (s - 1.0));
+    for b in bins.into_iter().take(ELSEWHERE) {
+        check_cancel()?;
+        let Ok((v, dims, voxel, b)) = binned(&sources[i].path, px * b as f64) else { continue };
+        let half = (b as f64 - 1.0) / 2.0;
+        let at: Vec<Seed> = raw(i).iter().map(|s| Seed { pos: s.pos.map(|p| (p - half) / b as f64), axis: s.axis }).collect();
+        let radius = 0.8 * size_a / voxel;
+        if let Some(l) = flat::lattice(&v, dims, &flat::patches(&at, 1.5 * radius), BOX, radius.ceil() as usize) {
+            if l.strength > least && best.is_none_or(|(s, _)| l.strength > s) {
+                best = Some((l.strength, l.period * voxel));
+            }
+        }
+    }
+    let Some((_, rows_a)) = best else { return Ok(None) };
+    let size = SPAN * px * (rows_a / ROW_VOXELS / px).round().max(1.0);
+    let mut denser: Vec<Drawn> = vec![];
+    for &i in used {
+        let px = scale[i].1 / scale[i].0 as f64;
+        let again = flat::respaced(&raw(i), 1.5 * 0.8 * size_a / px, 0.5 * size_a / px, 0.5 * size / px);
+        denser.extend(again.into_iter().map(|s| Drawn { source: i, pos: s.pos, axis: s.axis }));
+    }
+    let most = super::marks::MOST_SEEDS;
+    if denser.len() > most {
+        let n = denser.len();
+        denser = (0..most).map(|k| denser[k * n / most].clone()).collect();
+    }
+    Ok(Some((size, denser)))
 }
 
 /// The order in which places become the two halves of `align` (even
