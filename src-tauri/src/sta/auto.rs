@@ -92,7 +92,7 @@ pub type Device<'a> = &'a dyn Fn() -> Result<(&'static burn::tensor::Device, &'s
 
 /// The look record kept with `tomogram` in its dataset, when its file is
 /// there (also if the folder was copied: then the file beside the tomogram).
-fn look_of(d: Option<&Dataset>, tomogram: &str, note: &(dyn Fn(Note) + Sync)) -> Option<Look> {
+pub(super) fn look_of(d: Option<&Dataset>, tomogram: &str, note: &(dyn Fn(Note) + Sync)) -> Option<Look> {
     let name = Path::new(tomogram).file_name()?;
     let mut look = d?.tomograms.iter().find(|t| Path::new(&t.path).file_name() == Some(name))?.look.clone()?;
     if !Path::new(&look.path).is_file() {
@@ -144,7 +144,7 @@ pub fn dataset_of(tomogram: &str) -> Option<Dataset> {
 }
 
 /// The datasets (`*.tomo.json`) in `dir`, by file name.
-fn datasets_in(dir: &Path) -> Vec<Dataset> {
+pub(super) fn datasets_in(dir: &Path) -> Vec<Dataset> {
     let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
     let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".tomo.json"))).collect();
     files.sort();
@@ -153,7 +153,7 @@ fn datasets_in(dir: &Path) -> Vec<Dataset> {
 
 /// A tomogram recorded in a dataset as a file of `dir` (also if the folder
 /// was copied: then the file of that name beside the dataset), else as recorded.
-fn beside(dir: &Path, recorded: &str) -> Option<String> {
+pub(super) fn beside(dir: &Path, recorded: &str) -> Option<String> {
     let f = dir.join(Path::new(recorded).file_name()?);
     if f.is_file() {
         Some(f.to_string_lossy().into_owned())
