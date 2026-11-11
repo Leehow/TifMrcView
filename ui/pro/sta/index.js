@@ -8,10 +8,11 @@
 // tomogram, search, alignment, average, FSC). Card tags are hints only.
 // Results live in <first tomogram>_sta/ beside the tomogram, so reopening the
 // workspace shows the cards (and the average, if there is one) without a rerun.
-// The tomograms listed are the raw ones of the open file's dataset/folder
+// The tomograms taken are the raw ones of the open file's dataset/folder
 // (sta_siblings; the open file may be the clear "look" companion, which is
-// only for looking: averages are always of the raw tomogram). Everything shown
-// below the list (status, progress, live preview, cards, result, ticks)
+// only for looking: averages are always of the raw tomogram). They are shown
+// as a wall of thumbnails (wall.js, sta_gallery / sta_thumbnail), each with a
+// tick box. Everything shown below the wall (status, progress, live preview, cards, result, ticks)
 // belongs to the output folder, so a tab of another folder shows its own.
 // "找出全部" (found.js) replaces the direct run of a card: the particles like it are found and shown first.
 // Backend: sta_run, sta_cards, sta_result, sta_out, sta_siblings, sta_cancel (marks: draw.js); events
@@ -19,7 +20,8 @@
 // Every call is guarded: under the web demo the commands are missing and the
 // panel only says so. Shares app.js globals: S, T, F, invoke, $, setFft, openPath.
 (() => {
-  const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false };
+  // `reviewed`: what the review shown found per tomogram ([{path, n}]), for the badges of the wall.
+  const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false, reviewed: { found: [], shapes: [] } };
   const fmt = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
   const name = (p) => p?.split(/[\\/]/).pop() || "";
 
@@ -46,8 +48,7 @@
   panel.innerHTML = `
     <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><span class="sta-head-btns"><button id="sta-fold" class="small" title="收起面板，让出图像" aria-expanded="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button><button id="sta-close" class="small" title="关闭">✕</button></span></div>
     <p class="dim">选好断层图，按“找候选”：程序做出候选的“卡片”，然后停下来，由你在清晰的断层图上决定平均什么；你选定之后，其余的（找出所有同样的颗粒给你看、对齐、平均）都由程序完成。</p>
-    <div id="sta-data" class="sta-data"></div>
-    <div class="al-row"><button id="sta-add" class="small" title="再加入别的文件夹里的断层图一起平均">添加断层图…</button></div>
+    <div id="sta-data"></div>
     <div class="al-row">
       <button id="sta-run" class="primary" title="自动做出候选卡片；不会替你选，也不会平均">找候选</button>
     </div>
@@ -99,31 +100,8 @@
     }
     return collect();
   }
-  function renderData() {
-    const box = $("sta-data");
-    box.replaceChildren();
-    if (!W.items.length) {
-      box.innerHTML = '<span class="dim">先打开一张断层图，或在 Cryo-ET 工作区里完成“子断层平均”用途的重构</span>';
-      return;
-    }
-    const off = cur().off;
-    for (const it of W.items) {
-      const label = document.createElement("label");
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = !off.has(it.path);
-      cb.onchange = () => { cb.checked ? off.delete(it.path) : off.add(it.path); };
-      label.append(cb, ` ${it.name}`);
-      if (it.open) {
-        const tag = document.createElement("span");
-        tag.className = "dim";
-        tag.textContent = ` · 当前${it.look && S.info?.path === it.look ? "（正在看它的清晰版）" : ""}`;
-        label.append(tag);
-      }
-      label.title = it.look ? `${it.path}\n清晰版（只用来看和标）：${it.look}` : it.path;
-      box.append(label);
-    }
-  }
+  // The wall of tomograms (wall.js) shows W.items and the ticks.
+  const renderData = () => W.wall?.render();
 
   const NOTES = {
     noDataset: () => "没找到这张断层图的倾转信息，按 ±60° 处理",
@@ -267,6 +245,7 @@
     const base = await listed();
     if (gen !== W.gen) return;
     W.items = base;
+    W.wall?.load();
     const first = base[0]?.path;
     if (!first) return paint();
     let out;
@@ -296,21 +275,28 @@
     }
   }
 
-  async function addTomogram() {
-    let p;
-    try { p = await invoke("pick_file"); } catch (e) { return status(`${e}`); }
-    if (!p) return;
+  // Takes a tomogram into the list and ticks it (with its clean companion, when it has one).
+  async function addItem(p) {
     let one = { path: p, name: name(p) };
     try {
       const o = (await invoke("sta_siblings", { path: p })).find((s) => s.open);
       if (o) one = { path: o.raw, name: o.name || name(o.raw), look: o.look || null, scale: o.lookScale, offset: o.lookOffset };
     } catch (_) { /* no backend */ }
     const s = cur();
-    if (!W.items.some((i) => i.path === one.path)) { s.added.push(one); W.items.push(one); }
+    const have = W.items.find((i) => i.path === one.path);
+    if (!have) { s.added.push(one); W.items.push(one); }
     s.off.delete(one.path);
+    return have || one;
+  }
+  async function addTomogram() {
+    let p;
+    try { p = await invoke("pick_file"); } catch (e) { return status(`${e}`); }
+    if (!p) return;
+    await addItem(p);
     renderData();
   }
-  $("sta-add").onclick = addTomogram;
+  W.addItem = addItem;
+  W.addTomogram = addTomogram;
 
   // One run of any kind: `task(inputs, out)` calls the backend and gives its
   // result. The drawn run (draw.js) goes through here too.
@@ -422,6 +408,7 @@
     panel.hidden = false;
     button.classList.add("on");
     fold(W.folded);
+    W.wall?.reset();
     refresh();
   };
   $("sta-close").onclick = close;

@@ -302,6 +302,7 @@
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg;
     $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔" : "先在图上标一个东西";
     draw();
+    W.wall?.render();
   }
 
   function add(p) {

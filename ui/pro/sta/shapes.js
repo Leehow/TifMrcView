@@ -97,6 +97,8 @@
     const d = R.d;
     const show = !!d && !(W.busy && W.runOut === W.out) && !W.panel.hidden;
     box.hidden = !show;
+    W.reviewed.shapes = show ? d.perTomogram.map((t) => ({ path: t.path, n: (t.membranes || 0) + (t.balls || 0) + (t.lines || 0) })) : [];
+    document.dispatchEvent(new CustomEvent("sta-review"));
     W.panel.classList.toggle("reviewing-shapes", show);
     if (!show) { draw(); return; }
     $("sta-shapes-head").textContent = `找到 ${plural(d)}`;

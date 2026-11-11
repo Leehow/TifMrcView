@@ -341,8 +341,34 @@
 #sta-draw > h4:first-child { display:none; }
 #sta-lookhint { margin:2px 0; }
 #quickbar #btn-sta { width:auto; padding:0 8px; gap:5px; }
-#sta-workspace .sta-data { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
-#sta-workspace .sta-data label { display:flex; align-items:center; gap:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The wall of tomograms: three tiles per row, scrolling by itself beyond about two and a half rows. */
+#sta-workspace .sta-wall { position:relative; display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:4px 0 2px; padding:2px; overflow-y:auto; align-content:start; }
+#sta-workspace .sta-tile { position:relative; min-width:0; }
+#sta-workspace .sta-tile .pic { position:relative; display:block; aspect-ratio:1; overflow:hidden; border-radius:8px; border:1px solid var(--line); background:var(--muted); }
+#sta-workspace .sta-tile .pic.clickable { cursor:pointer; }
+#sta-workspace .sta-tile .pic img { display:block; width:100%; height:100%; object-fit:contain; background:#222; }
+#sta-workspace .sta-tile.open .pic { outline:3px solid var(--accent); outline-offset:1px; }
+#sta-workspace .sta-tile .ph { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:11px; }
+#sta-workspace .sta-tile .ph.wait { background:linear-gradient(100deg, var(--muted) 30%, color-mix(in srgb, var(--muted) 60%, var(--surface)) 50%, var(--muted) 70%); background-size:300% 100%; animation:sta-shimmer 1.8s ease-in-out infinite; }
+@keyframes sta-shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+@media (prefers-reduced-motion:reduce) { #sta-workspace .sta-tile .ph.wait { animation:none; } }
+#sta-workspace .sta-tile .tick { position:absolute; top:5px; left:5px; display:flex; padding:3px; border-radius:6px; background:color-mix(in srgb, var(--surface) 88%, transparent); box-shadow:0 0 0 1px var(--line); line-height:0; }
+#sta-workspace .sta-tile .tick input { margin:0; width:15px; height:15px; }
+#sta-workspace .sta-tile .marks { position:absolute; left:4px; right:4px; bottom:4px; display:flex; flex-wrap:wrap; gap:3px; }
+#sta-workspace .sta-tile .marks span { padding:0 6px; border-radius:8px; font-size:10px; line-height:16px; color:#fff; background:rgba(0,0,0,.62); }
+#sta-workspace .sta-tile .marks .fd { background:var(--accent); }
+#sta-workspace .sta-tile .nm { display:flex; margin-top:3px; white-space:pre; }
+#sta-workspace .sta-tile .nm .a { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+#sta-workspace .sta-tile .nm .b { flex:none; }
+#sta-workspace .sta-tile .note { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim); min-height:15px; }
+#sta-workspace .sta-tile.off .pic, #sta-workspace .sta-tile.off .nm { opacity:.5; }
+#sta-workspace .sta-tile.off .pic img { filter:grayscale(1); }
+#sta-workspace .sta-tile.off .tick { opacity:.5; }
+#sta-workspace .sta-tile:not(.ticked):not(.off) .pic img { opacity:.72; }
+#sta-workspace .sta-tile.plus { align-self:start; width:100%; box-sizing:border-box; padding:0; aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; border:1.5px dashed var(--line); border-radius:8px; background:transparent; color:var(--dim); cursor:pointer; font:inherit; }
+#sta-workspace .sta-tile.plus b { font-size:22px; font-weight:400; line-height:1; }
+#sta-workspace .sta-tile.plus:hover { border-color:var(--accent); color:var(--accent); }
+#sta-workspace #sta-wall-count { margin:2px 0 6px; }
 #sta-workspace .sta-live { margin:6px 0 0; }
 #sta-workspace .sta-live img { display:block; width:100%; max-width:360px; border:1px solid var(--line); border-radius:6px; }
 #sta-workspace .sta-cards { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }

@@ -92,6 +92,8 @@
     const d = R.d;
     const show = !!d && !(W.busy && W.runOut === W.out) && !W.panel.hidden;
     box.hidden = !show;
+    W.reviewed.found = show ? d.perTomogram.map((t) => ({ path: t.path, n: t.kept })) : [];
+    document.dispatchEvent(new CustomEvent("sta-review"));
     W.panel.classList.toggle("reviewing", show);
     if (!show) { R.add = false; draw(); return; }
     $("sta-found-head").textContent = `找到 ${d.total} 个`;

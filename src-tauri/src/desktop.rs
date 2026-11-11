@@ -1971,6 +1971,27 @@ fn sta_siblings(path: String) -> Vec<crate::sta::auto::Sibling> {
     crate::sta::auto::siblings(&path)
 }
 
+/// The tomograms of the project of `path` (the open file, or a folder), as
+/// tiles without thumbnails (`sta::gallery::tiles`): [{name, raw, look, stack,
+/// status: "ready" | "noLook" | "notBuilt" | "unusable", reason, open}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_gallery(path: String) -> CmdResult<Vec<crate::sta::gallery::Tile>> {
+    blocking(move || Ok(crate::sta::gallery::tiles(&path))).await
+}
+
+/// The thumbnail of a tomogram file (made once, then kept on disk by
+/// `sta::gallery::thumbnail`): {dataUrl: "data:image/png;base64,…", section}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_thumbnail(file: String) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let (png, section) = crate::sta::gallery::thumbnail(&file)?;
+        let bytes = std::fs::read(&png)?;
+        Ok(serde_json::json!({"dataUrl": format!("data:image/png;base64,{}", base64(&bytes)), "section": section}))
+    }).await
+}
+
 /// "Mark it yourself" (Pro): the marks made on the tomogram are completed to
 /// shapes and averaged (`sta::marks`). Same events and result as `sta_run`;
 /// the average goes to `<out>/drawn`.
@@ -3174,6 +3195,8 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_result,
             #[cfg(feature = "pro")] sta_out,
             #[cfg(feature = "pro")] sta_siblings,
+            #[cfg(feature = "pro")] sta_gallery,
+            #[cfg(feature = "pro")] sta_thumbnail,
             #[cfg(feature = "pro")] sta_cancel,
             #[cfg(feature = "pro")] sta_run_drawn,
             #[cfg(feature = "pro")] sta_find,
