@@ -172,7 +172,7 @@ stderr, if the file is missing.
 or several of the same specimen. Without `--pick`, `--points`, `--template` or `--auto` it
 only writes the cards to `OUT/cards/` and stops (exit status 2): the user
 chooses what to average, then you rerun with `--pick N` or `--points
-marks.json`, and everything after the choice is automatic. `--template map.mrc` (or `.em`) uses a density map the user already has as the template and runs to the end without stopping (result in `OUT/own/`). With `--auto` it
+marks.json`, and everything after the choice is automatic. `--template map.mrc` (or `.em`) uses a density map the user already has as the template and runs to the end without stopping (result in `OUT/own/`). `--kinds` (with the same tomograms and `--out`, on a finished average) sorts its particles into kinds and lists them (JSON `kinds`: `id`, `count`, `share`, `map`; an empty list means one kind, say so plainly); `--kinds --keep 1,3` then averages only those kinds at their poses into `OUT/…/kinds/kept/` and prints the usual summary (`kept` in the JSON); the user chooses which kinds to keep. With `--auto` it
 tries every card (at most 12) as the template of a coarse run (`OUT/trials/`, the
 results kept in `OUT/cards/trials.json`; a card that is a layer, a line or a
 small blob finds no group of particles that stands out, a particle gives an

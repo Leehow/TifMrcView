@@ -38,6 +38,8 @@ USAGE
                                  Subtomogram averaging: makes the cards, then STOPS
         [--pick N | --points marks.json | --marks marks.json [--size small|medium|large]
          | --template map.mrc | --auto] [--out DIR] [--pixel Å]
+  tmv sta <tomogram> [MORE …] --kinds [--keep 1,3] [--out DIR]
+                                 Sort the particles of a finished average into kinds
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -71,7 +73,11 @@ USAGE
   large is the particle size of lines, surfaces and membranes; a sphere takes it
   from its radius), or --template map.mrc|.em (a density map the user already
   has is the template: everything like it is found and averaged without
-  stopping, into <out>/own/). Everything after
+  stopping, into <out>/own/). --kinds (on a folder that already holds an
+  average; give the same tomograms and --out) sorts its particles into kinds
+  (<out>/…/kinds/kind_N.mrc, kinds.json; JSON "kinds": [{id, count, share, map}],
+  empty when the particles are all of one kind) and prints them; --kinds --keep 1,3
+  then averages only those kinds at their poses into …/kinds/kept/ and prints the usual summary. Everything after
   the choice is automatic. The hints per card (likely a particle, line/layer-like)
   are only hints. --auto is the unattended batch mode, only for when the user
   asked for it: every card (at most 12) is tried as the template of a coarse run
@@ -260,7 +266,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 3] = ["--sam", "--fresh", "--auto"];
+        const FLAGS: [&str; 4] = ["--sam", "--fresh", "--auto", "--kinds"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -636,6 +642,8 @@ enum StaMode {
     Marks(String),
     /// A density map (MRC or EM) the user brings as the template.
     Template(String),
+    /// The kinds among the particles of a finished average, and (`--keep`) the average of some of them.
+    Kinds(Option<Vec<usize>>),
     Auto,
 }
 
@@ -645,8 +653,15 @@ fn sta_mode(o: &Opts) -> Result<StaMode> {
     let marks = o.get("marks");
     let template = o.get("template");
     let auto = o.flag("auto");
-    if [pick.is_some(), points.is_some(), marks.is_some(), template.is_some(), auto].iter().filter(|b| **b).count() > 1 {
-        bail!("--pick, --points, --marks, --template and --auto exclude each other (--pick N / --points or --marks marks.json / --template map.mrc: what the user chose; --auto: the program chooses)");
+    let kinds = o.flag("kinds");
+    if o.get("keep").is_some() && !kinds {
+        bail!("--keep goes with --kinds (tmv sta --kinds --keep 1,3 …)");
+    }
+    if [pick.is_some(), points.is_some(), marks.is_some(), template.is_some(), auto, kinds].iter().filter(|b| **b).count() > 1 {
+        bail!("--pick, --points, --marks, --template, --kinds and --auto exclude each other (--pick N / --points or --marks marks.json / --template map.mrc: what the user chose; --kinds: look at a finished average; --auto: the program chooses)");
+    }
+    if kinds {
+        return Ok(StaMode::Kinds(o.get("keep").map(crate::sta::placed::parse_keep).transpose()?));
     }
     Ok(match (pick, points) {
         (Some(n), _) => StaMode::Pick(n),
@@ -751,6 +766,72 @@ fn sta_template(map: &str, found: &[auto_sta::Resolved], out: &Path, progress: &
     Ok(v)
 }
 
+/// `tmv sta --kinds [--keep 1,3]`: the particles of the finished average in
+/// `out` are sorted into kinds (`sta::placed::run_kinds`; kept in
+/// `kinds/kinds.json`), listed, and with `--keep` only those kinds are
+/// averaged (`run_keep`; the kinds already saved for this average are used).
+fn sta_kinds(keep: Option<&[usize]>, found: &[auto_sta::Resolved], out: &Path, progress: &Progress, tomograms: Vec<Value>) -> Result<Value> {
+    use crate::sta::placed;
+    let inputs: Vec<String> = found.iter().map(|f| f.tomogram.clone()).collect();
+    let out_s = out.to_string_lossy().into_owned();
+    let emit = |name: &str, v: Value| match name {
+        "sta-progress" => progress.report(v["label"].as_str().unwrap_or(""), v["done"].as_u64().unwrap_or(0) as usize, v["total"].as_u64().unwrap_or(0) as usize),
+        "sta-note" => eprintln!("tmv sta: {v}"),
+        _ => {}
+    };
+    let b64 = |_: &[u8]| String::new();
+    let saved = if keep.is_some() { placed::kinds_saved(&out_s, None, &b64).ok().flatten() } else { None };
+    let mut v = match saved {
+        Some(v) => v,
+        None => {
+            let v = placed::run_kinds(&inputs, &out_s, None, &emit, &b64)?;
+            progress.done();
+            v
+        }
+    };
+    let list = v["kinds"].as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        eprintln!("tmv sta: the particles are all of one kind as far as can be told (no clearly different kinds found)");
+    } else {
+        eprintln!("tmv sta: {} kinds among {} particles:", list.len(), v["particles"]);
+        for k in &list {
+            eprintln!("  kind {}: {} particles ({:.0} %), average {}", k["id"], k["count"], 100.0 * k["share"].as_f64().unwrap_or(0.0), k["map"].as_str().unwrap_or(""));
+        }
+    }
+    for k in v["kinds"].as_array_mut().into_iter().flatten() {
+        if let Value::Object(m) = k {
+            m.remove("png");
+        }
+    }
+    v["tomograms"] = json!(tomograms);
+    if let Some(keep) = keep {
+        let have: Vec<usize> = list.iter().filter_map(|k| k["id"].as_u64().map(|i| i as usize)).collect();
+        if have.is_empty() {
+            bail!("--keep: there is only one kind, nothing to choose from");
+        }
+        if let Some(bad) = keep.iter().find(|k| !have.contains(k)) {
+            bail!("--keep: there is no kind {bad} (the kinds are {})", have.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "));
+        }
+        let mut kept = placed::run_keep(&inputs, &out_s, None, keep, &emit, &b64)?;
+        progress.done();
+        let r = kept["report"].clone();
+        let shown = r["map"].as_str().unwrap_or("average.mrc");
+        match r["resolutionA"].as_f64() {
+            Some(a) => eprintln!("tmv sta: done: {a:.1} Å resolution (FSC 0.143 between the two halves) from {} particles of kinds {}; the average is {shown}", r["particles"], keep.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+            None => eprintln!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {shown}", r["particles"]),
+        }
+        if kept["fromTiltImages"] == true {
+            eprintln!("tmv sta: the first average came from the tilt images and may be sharper; this one is from the tomograms at the same sampling");
+        }
+        if let Value::Object(m) = &mut kept {
+            m.remove("result");
+        }
+        v["open"] = r["map"].clone();
+        v["kept"] = kept;
+    }
+    Ok(v)
+}
+
 /// The hints shown with a card on stderr; only hints, they never choose.
 fn card_hints(c: &crate::sta::project::Card) -> Vec<&'static str> {
     let mut h = vec![];
@@ -829,6 +910,9 @@ fn sta(o: &Opts) -> Result<Value> {
             "tomograms": tomograms,
             "next": next,
         }));
+    }
+    if let StaMode::Kinds(keep) = &mode {
+        return sta_kinds(keep.as_deref(), &found, &out, &progress, tomograms);
     }
     if let StaMode::Marks(file) = &mode {
         return sta_marks(o, file, &found, &out, &progress, tomograms);
@@ -1404,6 +1488,14 @@ mod tests {
         assert_eq!(mode(&["--template=map.em"]).unwrap(), StaMode::Template("map.em".into()));
         assert!(mode(&["--template", "map.mrc", "--auto"]).is_err());
         assert!(mode(&["--template", "map.mrc", "--pick", "1"]).is_err());
+        // --kinds is a flag; --keep goes with it only.
+        assert_eq!(mode(&["--kinds"]).unwrap(), StaMode::Kinds(None));
+        assert_eq!(mode(&["--kinds", "--keep", "1,3"]).unwrap(), StaMode::Kinds(Some(vec![1, 3])));
+        assert_eq!(mode(&["--keep=2", "--kinds"]).unwrap(), StaMode::Kinds(Some(vec![2])));
+        assert!(mode(&["--keep", "1"]).is_err());
+        assert!(mode(&["--kinds", "--keep", "0"]).is_err());
+        assert!(mode(&["--kinds", "--pick", "1"]).is_err());
+        assert!(mode(&["--kinds", "--auto"]).is_err());
         // --auto is a flag without a value and goes before or after the input.
         assert_eq!(mode(&["--auto"]).unwrap(), StaMode::Auto);
         let o = Opts::parse(&["--auto".into(), dir.clone()]).unwrap();

@@ -2209,6 +2209,57 @@ async fn sta_shapes_average(app: AppHandle, out: String) -> CmdResult<serde_json
     }).await
 }
 
+/// "Are there different kinds?" (Pro): the particles of the average `which`
+/// ("auto", "points", "drawn", "own"; none: the newest) of `out` are sorted into
+/// kinds (`sta::placed::run_kinds`). Events as `sta_run`. Returns {kinds: [{id
+/// (from 1), count, share (0–1), map, png (base64, three sections)}], apart,
+/// particles, voxelA, dir, fromTiltImages}; `kinds` is empty when the
+/// particles are of one kind as far as can be told.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds(app: AppHandle, inputs: Vec<String>, out: String, which: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::placed::run_kinds(&inputs, &out, which.as_deref(), &emit, &base64)
+    }).await
+}
+
+/// The kinds saved for the average `which` of `out` (same answer as `sta_kinds`),
+/// or null when there are none (or the average was made again since).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds_saved(out: String, which: Option<String>) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || crate::sta::placed::kinds_saved(&out, which.as_deref(), &base64)).await
+}
+
+/// Averages only the kinds `keep` (ids of `sta_kinds`) at the poses they have;
+/// the result is saved in `<dir>/kinds/kept`. Same events as `sta_run` and
+/// `sta-live` pictures. Returns {report, result (as `sta_result`, of the kept
+/// average), ids, fromTiltImages, dir}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds_keep(app: AppHandle, inputs: Vec<String>, out: String, which: Option<String>, keep: Vec<usize>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::placed::run_keep(&inputs, &out, which.as_deref(), &keep, &emit, &base64)
+    }).await
+}
+
+/// Where the particles of the average `which` of `out` lie on the open file
+/// `tomogram` (one of the average's tomograms or its clear companion), in that
+/// file's voxels: {places: [{i, pos: [x, y, z], axis: [x, y, z] (where the
+/// particle's Z axis points), kind (id or null), score}], radius, open, look,
+/// perTomogram: [{name, path, look, n}], kinds: [{id, count}], particles}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_placed(inputs: Vec<String>, out: String, which: Option<String>, tomogram: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::placed::placed(&out, which.as_deref(), &inputs, &tomogram)).await
+}
+
 /// The marks saved in an output folder: {marks, size}.
 #[cfg(feature = "pro")]
 #[tauri::command]
@@ -3266,6 +3317,10 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_shapes_section,
             #[cfg(feature = "pro")] sta_shapes_set,
             #[cfg(feature = "pro")] sta_shapes_average,
+            #[cfg(feature = "pro")] sta_kinds,
+            #[cfg(feature = "pro")] sta_kinds_saved,
+            #[cfg(feature = "pro")] sta_kinds_keep,
+            #[cfg(feature = "pro")] sta_placed,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,

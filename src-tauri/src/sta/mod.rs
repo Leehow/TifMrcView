@@ -35,6 +35,7 @@ pub mod near;
 pub mod own_map;
 pub mod paint;
 pub mod pick;
+pub mod placed;
 pub mod pits;
 pub mod project;
 pub mod refine;
