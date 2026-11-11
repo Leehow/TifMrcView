@@ -414,6 +414,14 @@ pub fn align(set: &Set, model: &[f32], start: &[Pose], progress: Progress, live:
     align_on(None, set, model, start, progress, live)
 }
 
+/// Whether `align_on` runs its local searches on the device. Measured on
+/// Metal (M1 Max, `cc_gpu::tests::times`, 500 particles × 33 steps, warm
+/// kernels): the CPU engine is as fast or faster at every size a run uses
+/// (box 32: 0.06–0.48 s CPU against 0.10–0.81 s; box 64: 0.42–6.5 s
+/// against 0.54–8.1 s), so the CPU does them. The global search, where the
+/// device wins (1.85 s against 1.31 s), stays on the device (`global_on`).
+const LOCAL_ON_DEVICE: bool = false;
+
 /// `align`, with the local searches on `dev` when given: the scores of the
 /// CPU engine, for many particles and steps at once (`cc_gpu`). A device
 /// that fails hands the round back to the CPU.
@@ -432,7 +440,7 @@ pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
         let against = [engine.reference(&refs[0]), engine.reference(&refs[1])];
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("对齐 第 {}/{} 轮", round + 1, RANGES.len());
-        let on_device = dev.and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, &steps, &|n| progress(&stage, n, m))) {
+        let on_device = dev.filter(|_| LOCAL_ON_DEVICE).and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, &steps, &|n| progress(&stage, n, m))) {
             Ok(Ok(found)) => Some(found),
             Ok(Err(e)) | Err(e) => {
                 if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {

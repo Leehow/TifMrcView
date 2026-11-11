@@ -36,7 +36,7 @@ use crate::spa::geom::{mul, Mat};
 
 /// Values in the largest block a batch builds (the dense products); a
 /// batch holds as many pairs as fit, so the device never needs much memory.
-const BLOCK: usize = 1 << 24;
+const BLOCK: usize = 1 << 26;
 /// Orientations in a batch of a global search at most; the turned reference
 /// of those is read once and shared by all the particles of the batch.
 const MOST_TURNS: usize = 64;
@@ -573,11 +573,17 @@ mod tests {
                 let gpu = Gpu::new(dev, &e, shift);
                 let bound = gpu.bind(&reference);
                 let xs: Vec<&Prepared> = prep.iter().collect();
+                // The first call also compiles the kernels for these shapes;
+                // a run repeats them over chunks and rounds, so the second
+                // call is what a run pays.
+                let t = Instant::now();
+                let _ = bound.local(&xs, &from, &steps).unwrap();
+                let t_first = t.elapsed().as_secs_f64();
                 let t = Instant::now();
                 let found = bound.local(&xs, &from, &steps).unwrap();
                 let t_dev = t.elapsed().as_secs_f64();
                 let same = cpu.iter().zip(&found).filter(|(a, b)| distance(&a.r, &b.r) < 0.05).count();
-                eprintln!("box {n} low-pass {low}: prepare {t_prepare:.2}s; local {} steps x {count} particles: CPU {t_cpu:.2}s, device {t_dev:.2}s (same step for {same})", steps.len());
+                eprintln!("box {n} low-pass {low}: prepare {t_prepare:.2}s; local {} steps x {count} particles: CPU {t_cpu:.2}s, device {t_dev:.2}s (first call {t_first:.2}s; same step for {same})", steps.len());
             }
         }
         // The global search of the first model: box 32, the 30 degree grid.
@@ -595,9 +601,12 @@ mod tests {
         let cpu = e.global(&prep, &model, &rotations, 5, &|_, _| {}).unwrap();
         let t_cpu = t.elapsed().as_secs_f64();
         let t = Instant::now();
+        let _ = global(dev, &e, &prep, &model, &rotations, 5, &|_, _| {}).unwrap();
+        let t_first = t.elapsed().as_secs_f64();
+        let t = Instant::now();
         let found = global(dev, &e, &prep, &model, &rotations, 5, &|_, _| {}).unwrap();
         let t_dev = t.elapsed().as_secs_f64();
         let same = cpu.iter().zip(&found).filter(|(a, b)| distance(&a.r, &b.r) < 0.05).count();
-        eprintln!("global {} rotations x {count} particles (box 32): CPU {t_cpu:.2}s, device {t_dev:.2}s (same rotation for {same})", rotations.len());
+        eprintln!("global {} rotations x {count} particles (box 32): CPU {t_cpu:.2}s, device {t_dev:.2}s (first call {t_first:.2}s; same rotation for {same})", rotations.len());
     }
 }
