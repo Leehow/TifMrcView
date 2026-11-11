@@ -42,6 +42,7 @@ pub mod search_gpu;
 pub mod shapes;
 pub mod shape;
 pub mod sheet;
+pub mod taught;
 pub mod tilt;
 #[cfg(test)]
 mod tests;
