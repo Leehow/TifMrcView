@@ -28,6 +28,7 @@ pub mod cc_gpu;
 pub mod filaments;
 pub mod flat;
 pub mod gallery;
+pub mod kinds;
 pub mod marks;
 pub mod membranes;
 pub mod near;

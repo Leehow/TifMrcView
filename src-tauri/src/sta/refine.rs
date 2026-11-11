@@ -42,7 +42,7 @@ pub type Progress<'a> = &'a (dyn Fn(&str, usize, usize) + Sync);
 pub type Live<'a> = &'a (dyn Fn(&[f32]) + Sync);
 
 impl Set<'_> {
-    fn check(&self) -> Result<()> {
+    pub(super) fn check(&self) -> Result<()> {
         if self.particles.len() < 4 {
             bail!("颗粒太少，无法平均");
         }
@@ -52,7 +52,7 @@ impl Set<'_> {
         Ok(())
     }
 
-    fn wedge(&self, i: usize) -> &[f32] {
+    pub(super) fn wedge(&self, i: usize) -> &[f32] {
         &self.wedges[self.wedge_of[i]]
     }
 
