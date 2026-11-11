@@ -18,6 +18,11 @@
 // the tiles are the plain list and have no pictures.
 // Small badges: 已标 N (the user's marks on that tomogram, draw.js) and 找到 N
 // (what the review shown found there, found.js / shapes.js via W.reviewed).
+// While a review box (found.js, shapes.js) is showing the wall folds to one line, 「8 个断层图，已选 3 个 ▸」,
+// that unfolds on click, so the review is not pushed down the panel.
+// Default ticks: every "ready" tomogram of the project starts ticked (the ones sta_siblings did not list are
+// added through W.addItem); "noLook" ones only when no tomogram has a clean version (else they start unticked).
+// This is decided once per tomogram and folder, so the user's own ticks are never undone.
 // Shares app.js globals: S, $, invoke, openPath.
 (() => {
   const W = window.TifMrcViewPro.sta;
@@ -30,9 +35,13 @@
 
   const box = document.createElement("div");
   box.id = "sta-wall-box";
-  box.innerHTML = '<div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>';
+  box.innerHTML = '<button id="sta-wall-fold" type="button" class="sta-wall-fold" hidden aria-expanded="false"></button><div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>';
   $("sta-data").replaceWith(box);
   const wall = $("sta-wall");
+  const foldBtn = $("sta-wall-fold");
+  // The wall is folded while a review shows, until the user unfolds it (once per review).
+  let reviewing = false, unfolded = false;
+  foldBtn.onclick = () => { unfolded = !unfolded; render(); };
 
   // ---- the tiles ----
   const keyOf = (t) => t.raw || t.stack || t.name;
@@ -58,9 +67,39 @@
     if (path) { try { const r = await invoke("sta_gallery", { path }); if (Array.isArray(r)) list = r; } catch (_) { /* no backend (web demo): the plain list */ } }
     if (gen !== G.gen) return;
     G.tiles = list;
+    G.loaded = gen;
     render();
+    defaults(list, gen);
   }
   G.load = load;
+
+  // The ticks a tomogram starts with (see the head of this file).
+  const decided = new Set();
+  async function defaults(list, gen) {
+    if (!list.length || !W.items.length) return;
+    let out = "";
+    try { out = await invoke("sta_out", { first: W.items[0].path }); } catch (_) { return; }
+    if (gen !== G.gen || !out || out !== W.out) return;
+    const clean = list.some((t) => t.raw && t.status === "ready");
+    let changed = false;
+    for (const t of list) {
+      const k = `${out}|${t.raw}`;
+      if (!t.raw || !usable(t) || decided.has(k)) continue;
+      decided.add(k);
+      const it = itemOf(t);
+      if (t.status === "ready" || !clean) {
+        if (!it) { try { await W.addItem(t.raw); changed = true; } catch (_) { decided.delete(k); } }
+      } else if (it && !W.cur().off.has(it.path)) {
+        W.cur().off.add(it.path);
+        changed = true;
+      }
+      if (gen !== G.gen) return;
+    }
+    if (changed) render();
+  }
+
+  // The folder is known a moment after the tiles may be (index.js asks for it after the list): try again then.
+  document.addEventListener("sta-out", () => { if (G.loaded === G.gen) defaults(G.tiles, G.gen); });
 
   // ---- thumbnails: one after another, the ticked and visible ones first ----
   // file -> {s: "busy" | "ok" | "fail", url, section, stale}
@@ -211,6 +250,17 @@
     // The line under the wall.
     const total = list.length, on = list.filter(ticked).length, no = list.filter((t) => !usable(t)).length;
     $("sta-wall-count").textContent = total ? `共 ${total} 个断层图，已选 ${on} 个${no ? `，${no} 个还不能用` : ""}` : "先打开一张断层图，或在 Cryo-ET 工作区里完成“子断层平均”用途的重构";
+    // Folded while a review shows.
+    const rev = (W.reviewed?.found?.length || 0) + (W.reviewed?.shapes?.length || 0) > 0 && total > 0;
+    if (rev && !reviewing) unfolded = false;
+    reviewing = rev;
+    const folded = rev && !unfolded;
+    foldBtn.hidden = !rev;
+    foldBtn.textContent = `${total} 个断层图，已选 ${on} 个 ${unfolded ? "▾" : "▸"}`;
+    foldBtn.title = unfolded ? "收起断层图" : "展开，看看是哪几个断层图";
+    foldBtn.setAttribute("aria-expanded", String(!folded));
+    wall.hidden = folded;
+    $("sta-wall-count").hidden = folded;
     fit();
     // The open one in sight (once per change).
     const o = list.find(isOpen);

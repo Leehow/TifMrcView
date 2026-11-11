@@ -46,7 +46,7 @@
     <p id="sta-shapes-lines" class="dim" hidden></p>
     <p id="sta-shapes-weak" class="dim" hidden></p>
     <p id="sta-shapes-unsure" class="warn" hidden></p>
-    <p class="dim sta-found-legend">图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的；箭头指向颗粒朝外的一侧，带 ? 的是程序拿不准朝向的。点一片膜、一个囊泡或一条纤维，可以给它翻面（纤维没有朝向）或去掉。</p>
+    <p id="sta-shapes-legend" class="dim sta-found-legend"></p>
     <div class="al-row"><button id="sta-shapes-flipall" class="small" title="把找到的全部换到另一侧">全部翻面</button><button id="sta-shapes-reset" class="small">恢复程序的建议</button></div>
     <div id="sta-shapes-sel" class="al-row sta-shapes-sel" hidden><span id="sta-shapes-selname" class="dim"></span><button id="sta-shapes-flip" class="small" title="把朝外的一侧换到另一边">翻面</button><button id="sta-shapes-drop" class="small"></button></div>
     <p id="sta-shapes-msg" class="dim"></p>
@@ -125,6 +125,9 @@
     const un = $("sta-shapes-unsure");
     un.hidden = !(d.unsure > 0);
     un.textContent = d.unsure > 0 ? `有 ${d.unsure} 个程序拿不准朝向（带 ? 的），请看一眼箭头` : "";
+    // Two short sentences that name only what is there: no talk of arrows and sides for filaments alone, no filaments when there are none.
+    const sides = d.membranes + d.balls > 0, lines = d.lines > 0 || d.weak > 0;
+    $("sta-shapes-legend").textContent = "图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的。" + (!sides ? "点一条纤维可以去掉它。" : lines ? "箭头指向朝外的一侧（纤维没有箭头），带 ? 的拿不准；点一个可以翻面或去掉。" : "箭头指向朝外的一侧，带 ? 的拿不准；点一个可以翻面或去掉。");
     $("sta-shapes-flipall").hidden = d.membranes + d.balls === 0 && (d.lines > 0 || d.weak > 0);
     $("sta-shapes-flipall").disabled = W.busy;
     $("sta-shapes-reset").disabled = W.busy;
