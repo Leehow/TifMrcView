@@ -20,6 +20,7 @@
 //! says where the particle is: particle(x) = reference(Rᵀ·(x − c − t) + c),
 //! the reference turned by R about the centre c and then moved by t voxels.
 
+pub mod alike;
 pub mod auto;
 pub mod average;
 pub mod cc;
