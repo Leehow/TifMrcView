@@ -276,6 +276,10 @@ pub enum Pass {
     /// 1e-4 of MemBrain-seg 0.0.10 in single precision, no voxel decided
     /// differently.
     Official,
+    /// As `Official`, with this many of the eight mirrored copies (1 to
+    /// 8): the same windows on the same grid, an eighth of the time per
+    /// copy left out.
+    Copies(usize),
 }
 
 /// Starts of windows of `side` covering `n`, overlapping by about a third;
@@ -320,7 +324,7 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
     if !WINDOW.is_multiple_of(net.align()) {
         bail!("模型的窗口对齐不符");
     }
-    let official = matches!(pass, Pass::Official);
+    let official = matches!(pass, Pass::Official | Pass::Copies(_));
     let side = [patch; 3];
     let resize = (patch != WINDOW).then(|| rescale::FourierResize::new(patch, WINDOW));
     let st: [Vec<isize>; 3] = std::array::from_fn(|a| if official { starts_official(n[a], side[a]) } else { starts(n[a], side[a]) });
@@ -403,7 +407,7 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
     // MemBrain-seg): mirrored windows sit elsewhere, so their weights
     // differ from copy to copy.
     let mut total = vec![0f32; len];
-    let mut copies = 8;
+    let mut copies = if let Pass::Copies(k) = pass { k.clamp(1, 8) } else { 8 };
     let mut done = 0;
     let mut c = 0;
     let mut cut_short = None;
@@ -636,7 +640,7 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     // original tomogram once, FFT-resize each physical patch to 160³, and
     // resize its logits back before Gaussian blending. Whole-volume spatial
     // interpolation changes both the input spectrum and window positions.
-    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a != PIXEL_A {
+    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official | Pass::Copies(_)) && pixel_a != PIXEL_A {
         let patch = physical_patch(pixel_a);
         let (mean, std) = exact_stats(values);
         let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x-mean)/std } else { 0.0 }).collect();

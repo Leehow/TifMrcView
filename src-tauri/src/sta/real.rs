@@ -108,3 +108,56 @@ fn card_shapes() {
         );
     }
 }
+
+/// How a membrane segmentation with fewer mirrored copies (`TMV_COPIES`,
+/// 1 by default) compares with the one already beside `TMV_TOMO` (all
+/// eight, from `tmv membranes`): the time, how much of each mask the two
+/// share, and how much of each lies within a voxel of the other.
+#[test]
+#[ignore]
+fn membrane_copies() {
+    use crate::membrane::{load, model_path, segment, Pass};
+    let tomogram = std::env::var("TMV_TOMO").expect("TMV_TOMO = a tomogram segmented by tmv membranes");
+    let copies: usize = std::env::var("TMV_COPIES").ok().and_then(|c| c.parse().ok()).unwrap_or(1);
+    let all = super::paint::mask_of(&tomogram).unwrap().expect("the membranes of the eight-copy run beside the tomogram");
+    let (v, n, px) = crate::tomo::pipeline::load(&tomogram).unwrap();
+    assert_eq!(n, all.n);
+    let model = model_path().expect("a membrane model set up");
+    let started = std::time::Instant::now();
+    let (seg, backend) = crate::classify::on_device(|dev| {
+        let net = load(&model, dev)?;
+        segment(dev, &net, &v, n, px as f32, Pass::Copies(copies), &mut |p| {
+            if p.done % 20 == 0 {
+                eprintln!("window {}/{}", p.done, p.total);
+            }
+        })
+    })
+    .unwrap();
+    let seconds = started.elapsed().as_secs_f64();
+    let (a, b) = (&seg.mask, &all.mask);
+    let count = |m: &[bool]| m.iter().filter(|x| **x).count();
+    let both = a.iter().zip(b).filter(|(x, y)| **x && **y).count();
+    // A mask grown by one voxel along each axis.
+    let grown = |m: &[bool]| -> Vec<bool> {
+        (0..m.len())
+            .map(|i| {
+                let p = [i % n[0], i / n[0] % n[1], i / (n[0] * n[1])];
+                m[i] || [(0, 1), (1, n[0]), (2, n[0] * n[1])].iter().any(|(axis, step)| (p[*axis] > 0 && m[i - step]) || (p[*axis] + 1 < n[*axis] && m[i + step]))
+            })
+            .collect()
+    };
+    let near = |m: &[bool], other: &[bool]| {
+        let g = grown(other);
+        m.iter().zip(&g).filter(|(x, y)| **x && **y).count() as f64 / count(m).max(1) as f64
+    };
+    eprintln!(
+        "{copies} copies on {backend}: {seconds:.0} s, {} windows, {} membrane voxels ({} with eight copies), Dice {:.4}; within a voxel of the other: {:.4} of this one, {:.4} of the eight-copy one; cut short: {:?}",
+        seg.stats.windows,
+        count(a),
+        count(b),
+        2.0 * both as f64 / (count(a) + count(b)).max(1) as f64,
+        near(a, b),
+        near(b, a),
+        seg.stats.cut_short
+    );
+}
