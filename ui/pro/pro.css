@@ -317,3 +317,26 @@
 
 /* MemBrain-seg model picker (membrane.js): centred, above the panels. */
 .dialog.mem-model { top: 25%; left: 50%; right: auto; transform: translateX(-50%); width: 380px; z-index: 30; }
+
+/* Subtomogram-averaging workspace (same frame as the single-particle one). */
+#sta-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
+#sta-workspace[hidden], #sta-workspace [hidden] { display:none; }
+#sta-workspace p { line-height:1.6; }
+#sta-workspace h4 { margin:12px 0 2px; font-size:12px; }
+#sta-run { font-size:13px; padding:6px 18px; }
+#quickbar #btn-sta { width:auto; padding:0 8px; gap:5px; }
+#sta-workspace .sta-data { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
+#sta-workspace .sta-data label { display:flex; align-items:center; gap:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sta-workspace .sta-live { margin:6px 0 0; }
+#sta-workspace .sta-live img { display:block; width:100%; max-width:360px; border:1px solid var(--line); border-radius:6px; }
+#sta-workspace .sta-cards { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+#sta-workspace .sta-cards figure { flex:none; width:192px; margin:0; padding:3px; border:2px solid var(--line); border-radius:8px; cursor:pointer; }
+#sta-workspace .sta-cards figure.chosen { border-color:var(--accent); }
+#sta-workspace .sta-cards figure.on { background:color-mix(in srgb, var(--accent) 10%, transparent); }
+#sta-workspace .sta-cards img { display:block; width:100%; border-radius:4px; }
+#sta-workspace .sta-cards figcaption { margin-top:2px; font-variant-numeric:tabular-nums; }
+#sta-workspace .sta-badge { display:inline-block; margin:2px 3px 0 0; padding:0 6px; border-radius:8px; font-size:10px; background:var(--muted); color:var(--dim); }
+#sta-workspace .sta-badge.pick { background:var(--accent); color:#fff; }
+#sta-workspace .sta-badge.runs { background:#fff8c5; color:#3b2300; }
+#sta-workspace .sta-fsc { display:block; width:100%; max-width:360px; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; font-size:9px; fill:var(--dim); }
+#sta-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }

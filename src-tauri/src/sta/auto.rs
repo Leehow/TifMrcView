@@ -453,7 +453,7 @@ pub fn note_json(n: &Note) -> Value {
 
 fn trial_view(t: &sp::Trial) -> Value {
     json!({
-        "ok": t.ok, "reason": t.reason, "particles": t.particles,
+        "card": t.card, "ok": t.ok, "reason": t.reason, "particles": t.particles,
         "agreement": (t.strength * 1e5).round() / 1e5, "elongation": t.elongation, "runsOn": t.runs_on(),
         "noGroup": t.reason.as_deref().is_some_and(|r| r.contains("分不出两群")),
     })
@@ -697,6 +697,7 @@ mod tests {
         let t = Note::Trial { trial: trial(2, false, 0.0, None), reused: true };
         let v = note_json(&t);
         assert_eq!((v["kind"].as_str(), v["reused"].as_bool(), v["trial"]["noGroup"].as_bool()), (Some("trial"), Some(true), Some(true)));
+        assert_eq!(v["trial"]["card"], 2);
         assert_eq!(note_json(&Note::CardsMade { count: 4 })["count"], 4);
     }
 
