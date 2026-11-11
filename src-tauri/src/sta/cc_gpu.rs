@@ -36,7 +36,9 @@ use crate::spa::geom::{mul, Mat};
 
 /// Values in the largest block a batch builds (the dense products); a
 /// batch holds as many pairs as fit, so the device never needs much memory.
-const BLOCK: usize = 1 << 26;
+/// 2^26 won the global-search microbenchmark but made the whole 05 run
+/// slower (card trials 274 s against 215 s with 2^24), so 2^24 stays.
+const BLOCK: usize = 1 << 24;
 /// Orientations in a batch of a global search at most; the turned reference
 /// of those is read once and shared by all the particles of the batch.
 const MOST_TURNS: usize = 64;
