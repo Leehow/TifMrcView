@@ -157,8 +157,9 @@ function membranes() {
   const context = {
     S: { token: 1, info: { sizeZ: 16 }, t: 0 },
     L: { token: 1, busy: false, lastError: '', active: 1 },
-    $: (id) => { if (!elements.has(id)) elements.set(id, {}); return elements.get(id); },
+    $: (id) => { if (!elements.has(id)) elements.set(id, { classList: { toggle: () => {} } }); return elements.get(id); },
     ready: () => context.L.token === context.S.token,
+    EYE: '', EYE_OFF: '',
     T: { event: { listen: async (_event, callback) => { callbacks.push(callback); return () => {}; } } },
     window: { TifMrcViewPro: { membrane: { ensure: async () => true } } },
     editWith: (_command, req) => { calls.push(req); return pending.promise; },
