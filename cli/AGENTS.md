@@ -76,7 +76,7 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | Tomogram from a tilt series or from movies + mdoc | `tmv tomo ts.mrc` or `tmv tomo ts.mdoc` |
 | … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder and a clear `"look"` tomogram) |
 | … just a quick look | `tmv tomo ts.mrc --for survey` |
-| Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` (step 5) |
+| Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` makes the cards and stops; the user chooses, then `--pick N` (step 5) |
 | Membranes, vesicles, microtubules of a tomogram | `tmv membranes tomo.mrc` |
 | Single-particle reconstruction | `tmv spa FOLDER` (see step 5) |
 | Defocus / CTF of micrographs | `tmv ctf FOLDER` |
@@ -85,7 +85,9 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 Options that exist (use only when needed): `--pixel Å` and `--kv kV` when
 the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
 when the user knows the point group, `--kind N` for SPA and `--pick N` for
-STA (step 5), `--out DIR` for STA (default: a folder `<first input's name>_sta`
+STA (step 5; the user's choice: see the `needsChoice` entry below; `--auto`
+lets the program choose, only for unattended batch runs the user asked for),
+`--out DIR` for STA (default: a folder `<first input's name>_sta`
 beside the first input), `--fresh`
 to redo instead of reusing finished steps. For SPA movies: a gain reference
 beside them (name with gain, CountRef or `norm-`) is found and applied by
@@ -129,20 +131,26 @@ one stack's results do not overwrite each other; `tmv sta` saves
   decide): pick the protein, never ice, carbon edges or clumps; different
   views of the same particle can be picked together. Then run
   `tmv spa FOLDER --kind N` (or `--kind 1,3`).
-- `"needsChoice": true` (exit status 2, STA) — `tmv sta` made class-average
+- `"needsChoice": true` (exit status 2, STA) — plain `tmv sta` made class-average
   "cards" of the blobs in the tomograms (`"cards"`: `id`, `diameterA`,
   `members`, `compact`, `likely`, `path`; the files are `card_N.mrc` in
-  `"cardsDir"`) and tried each as a template (`"trials"`: per card `ok`,
-  `reason`, `particles`, `agreement`, `fsc`). No card gave an average (when
-  several kinds average well, `tmv sta` takes the strongest itself, names the
-  others on stderr and does not stop; `--pick N` chooses another). Copy the cards
-  (`"ok": true`, a high `"agreement"`) here, **show them to the user** in
-  TifMrcView Pro (or look at them yourself if the user asked you to decide):
-  pick the card that looks like the particle, never gold beads, ice or a line
-  or layer. `likely` and `compact` only describe the card's shape.
-  Then run the command in `"next"` (`tmv sta --pick N TOMOGRAM…`). It names
-  the tomograms, so a tilt series is not reconstructed again. The cards are
-  kept in `OUT/cards/` (delete it to make them again).
+  `"cardsDir"`) and **stopped on purpose**: what to average is the user's
+  choice, never yours, and nothing has been averaged. Copy the cards here,
+  **show them to the user** (in TifMrcView Pro, best on the clear `look`
+  tomogram, where they can also mark particles, lines, surfaces or spheres and
+  save `marks.json`) and **ask which one**; do not guess, and do not pick the
+  card that "looks best" for them. `likely` and `compact` and the hints on
+  stderr (likely a particle, line-like or layer-like) only describe the card's
+  shape. Then run the command in `"next"` (`tmv sta --pick N TOMOGRAM…`) with
+  the card the user chose, or `tmv sta --points marks.json …` for what they
+  marked. It names the tomograms, so a tilt series is not reconstructed again.
+  The cards are kept in `OUT/cards/` (delete it to make them again). Only when
+  the user explicitly asked for an unattended batch run, add `--auto`: then
+  `tmv sta` tries each card as a template (`"trials"`: per card `ok`, `reason`,
+  `particles`, `agreement`, `fsc`) and takes the strongest itself (it names the
+  others on stderr); it stops with this status only when no card gave an average,
+  and then the same rule holds: show the cards (`"ok": true` and a high
+  `"agreement"` in `"trials"` are hints) and ask which one.
 
 `tmv tomo --for sta` also makes a clear companion of the tomogram (twice the
 voxel size, denoised and deconvolved) to look at and pick particles on, and
@@ -159,15 +167,17 @@ stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, exactly as
 `tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
-or several of the same specimen. It writes the cards to `OUT/cards/`, tries
-every card (at most 12) as the template of a coarse run (`OUT/trials/`, the
+or several of the same specimen. Without `--pick`, `--points` or `--auto` it
+only writes the cards to `OUT/cards/` and stops (exit status 2): the user
+chooses what to average, then you rerun with `--pick N` or `--points
+marks.json`, and everything after the choice is automatic. With `--auto` it
+tries every card (at most 12) as the template of a coarse run (`OUT/trials/`, the
 results kept in `OUT/cards/trials.json`; a card that is a layer, a line or a
 small blob finds no group of particles that stands out, a particle gives an
 average whose two halves agree far out: its `"agreement"` is the area under
-their FSC, 1/Å), then, with `--pick N` (which skips the trials) or by itself
-when the cards within 0.75 of the best agreement show one kind of particle
+their FSC, 1/Å), then, by itself when the cards within 0.75 of the best agreement show one kind of particle
 (it takes the best of them and says on stderr which cards show the same
-particle), the average of everything that looks like card N: `average.mrc`, `average_raw.mrc`, `half1.mrc`,
+particle; with `--pick N` it skips the trials), the average of everything that looks like card N: `average.mrc`, `average_raw.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
 `average.mrc`, weighted by the half agreement, sharpened (`"sharpenB"`, Å², negative; absent when no fit was possible) and cut at the resolution; `average_raw.mrc` is the plain average; `"particles"` how many were averaged). Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view, shared by all the particles of its tomogram, is refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The JSON also has
 `"trials"` (when the cards were tried), `"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
@@ -181,7 +191,7 @@ it. `"resolutionA"` is then the dip and `"signalA"` is where they last agree
 (finer; the data holds that much); both are steady from run to run. (`"kinds"` and `"distinct"`
 are left out; they belong to the blob search.) Progress on stderr counts the
 steps of the whole run ("第 k/N 步 · …"); a line per trial says what each card gave,
-and one says which card was taken and where the others are when `tmv sta` picks a card itself, and the last
+and one says which card was taken and where the others are when `--auto` picks a card itself, and the last
 line gives the resolution, the particle count and where `average.mrc` is.
 The tilt range comes
 from the `*.tomo.json` beside each tomogram; without one it assumes -60 to 60

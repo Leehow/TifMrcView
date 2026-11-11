@@ -34,8 +34,8 @@ USAGE
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
         [--for display|sta|survey] [--pixel Å]
   tmv sta <tilt-series|tomogram> [MORE …]
-                                 Subtomogram averaging: cards, then the average
-        [--pick N | --points marks.json] [--out DIR] [--pixel Å]
+                                 Subtomogram averaging: makes the cards, then STOPS
+        [--pick N | --points marks.json | --auto] [--out DIR] [--pixel Å]
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -54,21 +54,27 @@ USAGE
   full detail + RELION 5 folder), survey (quick look).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
-  does) or tomograms that tmv tomo --for sta wrote. It runs in three steps:
-  class-average "cards" of the blobs found go to <out>/cards/ (--out defaults
-  to <first input>_sta beside it); then every card (at most 12) is tried as the
-  template of a coarse run (<out>/trials/card_N/, kept in cards/trials.json)
-  and judged by what it gives: a card that is a layer, a line or a small blob
-  finds no group of particles that stands out, a particle gives an average
-  whose two halves agree far out (the "agreement": the area under their FSC,
-  1/Å). With --pick N (which skips the trials), or by itself when the cards
-  within 0.75 of the best agreement show one kind of particle (it takes the
-  best of them, naming the others), the average of everything that looks like
-  card N goes to <out>/ (average.mrc: weighted by the half agreement, sharpened and cut at the
+  does) or tomograms that tmv tomo --for sta wrote. What to average is the
+  user's choice, never the program's, so without --pick, --points or --auto it
+  only makes the class-average "cards" of the blobs found (<out>/cards/card_N.mrc,
+  32³; --out defaults to <first input>_sta beside it) and stops with exit status
+  2: {"needsChoice": true, "cards": […], "next": …}, one line per card on stderr.
+  Show the cards (and the clear "look" tomogram) to the user, let them choose,
+  then rerun with --pick N (average the card they chose) or --points marks.json
+  (average what they marked: the marks file of the workspace). Everything after
+  the choice is automatic. The hints per card (likely a particle, line/layer-like)
+  are only hints. --auto is the unattended batch mode, only for when the user
+  asked for it: every card (at most 12) is tried as the template of a coarse run
+  (<out>/trials/card_N/, kept in cards/trials.json) and judged by what it gives
+  (a card that is a layer, a line or a small blob finds no group of particles
+  that stands out, a particle gives an average whose two halves agree far out:
+  the "agreement", the area under their FSC, 1/Å); when the cards within 0.75
+  of the best agreement show one kind of particle it takes the best of them,
+  naming the others. The average of everything that looks like card N goes to
+  <out>/ (average.mrc: weighted by the half agreement, sharpened and cut at the
   resolution; average_raw.mrc: as averaged; half1.mrc, half2.mrc, particles.csv,
-  sta.json).
-  When no card gave an average it stops with exit status 2 and the trials in
-  the JSON: look at the cards, then rerun with --pick N.
+  sta.json). With --auto, when no card gave an average it also stops with exit
+  status 2 and the trials in the JSON: look at the cards, then rerun with --pick N.
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
   trials (per card: ok, reason, particles, agreement, fsc), resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
   diameterFrom "card" says), searched ("look" or "raw": the tomogram the template
@@ -242,7 +248,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 2] = ["--sam", "--fresh"];
+        const FLAGS: [&str; 3] = ["--sam", "--fresh", "--auto"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -586,16 +592,60 @@ fn sta_note(n: &auto_sta::Note, progress: &Progress) {
     }
 }
 
+/// What `tmv sta` does after the cards: nothing (the user chooses), the card
+/// the user named, the marks the user made, or (`--auto`, unattended batch
+/// runs only) whatever the program picks.
+#[derive(Debug, PartialEq)]
+enum StaMode {
+    Find,
+    Pick(usize),
+    Points(String),
+    Auto,
+}
+
+fn sta_mode(o: &Opts) -> Result<StaMode> {
+    let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
+    let points = o.get("points");
+    let auto = o.flag("auto");
+    if [pick.is_some(), points.is_some(), auto].iter().filter(|b| **b).count() > 1 {
+        bail!("--pick, --points and --auto exclude each other (--pick N / --points marks.json: what the user chose; --auto: the program chooses)");
+    }
+    Ok(match (pick, points) {
+        (Some(n), _) => StaMode::Pick(n),
+        (_, Some(f)) => StaMode::Points(f.to_string()),
+        _ if auto => StaMode::Auto,
+        _ => StaMode::Find,
+    })
+}
+
+/// The hints shown with a card on stderr; only hints, they never choose.
+fn card_hints(c: &crate::sta::project::Card) -> Vec<&'static str> {
+    let mut h = vec![];
+    if c.likely {
+        h.push("likely a particle");
+    }
+    if c.elongation >= crate::sta::project::ELONGATION {
+        h.push("line-like or layer-like");
+    }
+    h
+}
+
+fn card_line(c: &crate::sta::project::Card) -> String {
+    let hints = card_hints(c);
+    format!("  card {}: about {:.0} Å, {} members{}", c.id, c.diameter_a, c.members, if hints.is_empty() { String::new() } else { format!(" ({})", hints.join(", ")) })
+}
+
 /// `tmv sta`: the tomogram of each input (made as `tmv tomo --for sta` does),
-/// class-average cards of the blobs in them, then the average of everything
-/// that looks like the chosen card (`sta::auto::auto`).
+/// class-average cards of the blobs in them, then (when the user has chosen:
+/// `--pick`, `--points`; or `--auto`) the average of everything that looks
+/// like the chosen card (`sta::auto::auto`). Without a choice it stops at the cards.
 fn sta(o: &Opts) -> Result<Value> {
     use crate::sta::project as sp;
     let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();
     if inputs.is_empty() {
-        bail!("give at least one tilt series or tomogram: tmv sta [--pick N | --points marks.json] [--out DIR] [--pixel Å] INPUT [MORE …]");
+        bail!("give at least one tilt series or tomogram: tmv sta [--pick N | --points marks.json | --auto] [--out DIR] [--pixel Å] INPUT [MORE …]");
     }
-    let pick = o.get("pick").map(|s| s.parse::<usize>().with_context(|| format!("--pick: `{s}` is not a card number (0, 1, 2, …)"))).transpose()?;
+    let mode = sta_mode(o)?;
     let out = sta_out(o, &inputs[0])?;
     let progress = Progress::new();
     let note = |n: auto_sta::Note| sta_note(&n, &progress);
@@ -624,7 +674,30 @@ fn sta(o: &Opts) -> Result<Value> {
         .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
         .collect();
 
-    if let Some(file) = o.get("points") {
+    if let StaMode::Find = mode {
+        let cards = auto_sta::find(&sources, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
+        progress.done();
+        let cards_dir = out.join("cards");
+        let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
+        let out_arg = if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() };
+        let next = format!("tmv sta --pick N{out_arg} {}", tomos.join(" "));
+        eprintln!("tmv sta: {} cards made in {}:", cards.len(), cards_dir.display());
+        for c in &cards {
+            eprintln!("{}", card_line(c));
+        }
+        eprintln!(
+            "tmv sta: nothing is averaged until the user chooses. Look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro, best on the clear look tomogram), show them to the user and ask which one; then rerun with --pick N ({next}), or --points marks.json for what the user marked. (--auto lets the program choose, for unattended batch runs only.)",
+            cards_dir.display()
+        );
+        return Ok(json!({
+            "needsChoice": true,
+            "cardsDir": cards_dir,
+            "cards": cards.iter().map(card_json).collect::<Vec<_>>(),
+            "tomograms": tomograms,
+            "next": next,
+        }));
+    }
+    if let StaMode::Points(file) = &mode {
         // The marks the workspace keeps (`marks.json`): its point marks make one template, then the usual template run.
         use crate::sta::marks::{points_of, Mark, Saved};
         let bytes = std::fs::read(file).with_context(|| format!("--points {file}: cannot read"))?;
@@ -644,7 +717,7 @@ fn sta(o: &Opts) -> Result<Value> {
         v["open"] = json!(d.report.map);
         return Ok(v);
     }
-    let outcome = auto_sta::auto(&sources, pick, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
+    let outcome = auto_sta::auto(&sources, if let StaMode::Pick(n) = mode { Some(n) } else { None }, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
     let cards_dir = out.join("cards");
     let d = match outcome {
         auto_sta::Outcome::Done(d) => d,
@@ -1167,6 +1240,38 @@ mod tests {
         assert_eq!(o.get("pick"), Some("2"));
         assert_eq!(main(vec!["tomo".into(), dir.clone(), dir]), 1);
         assert_eq!(main(vec!["sta".into()]), 1);
+    }
+
+    #[test]
+    fn sta_stops_at_the_cards_unless_told() {
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        let mode = |extra: &[&str]| sta_mode(&Opts::parse(&[vec![dir.clone()], extra.iter().map(|s| s.to_string()).collect()].concat()).unwrap());
+        // No choice: the cards only.
+        assert_eq!(mode(&[]).unwrap(), StaMode::Find);
+        assert_eq!(mode(&["--out", "x"]).unwrap(), StaMode::Find);
+        assert_eq!(mode(&["--pick", "2"]).unwrap(), StaMode::Pick(2));
+        assert_eq!(mode(&["--pick=0"]).unwrap(), StaMode::Pick(0));
+        assert_eq!(mode(&["--points", "m.json"]).unwrap(), StaMode::Points("m.json".into()));
+        // --auto is a flag without a value and goes before or after the input.
+        assert_eq!(mode(&["--auto"]).unwrap(), StaMode::Auto);
+        let o = Opts::parse(&["--auto".into(), dir.clone()]).unwrap();
+        assert_eq!((sta_mode(&o).unwrap(), o.input.is_some()), (StaMode::Auto, true));
+        // One way to choose at a time; a card number is a number.
+        assert!(mode(&["--auto", "--pick", "1"]).is_err());
+        assert!(mode(&["--auto", "--points", "m.json"]).is_err());
+        assert!(mode(&["--pick", "1", "--points", "m.json"]).is_err());
+        assert!(mode(&["--pick", "x"]).is_err());
+    }
+
+    #[test]
+    fn cards_are_listed_with_hints_only() {
+        let mut c = card(3);
+        assert_eq!(card_line(&c), "  card 3: about 210 Å, 50 members");
+        c.likely = true;
+        assert_eq!(card_line(&c), "  card 3: about 210 Å, 50 members (likely a particle)");
+        c.likely = false;
+        c.elongation = 2.4;
+        assert_eq!(card_line(&c), "  card 3: about 210 Å, 50 members (line-like or layer-like)");
     }
 
     fn card(id: usize) -> crate::sta::project::Card {

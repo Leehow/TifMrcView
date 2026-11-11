@@ -17,7 +17,7 @@ driver is enough):
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
 | `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder and a clear `look` tomogram (sta) |
-| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, each tried as a template, then the average of everything that looks like the card that gives the best average (or the one you pick) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
+| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N \| --points marks.json \| --auto] [--out DIR]` | Subtomogram averaging (with `--points`: the point marks of a workspace `marks.json`, at least 4, make the one template, output in `OUT/marked/`): class-average "cards" of the particle-like blobs, then it stops (exit status 2): you choose the card (`--pick N`) or mark the particles (`--points`), and the average of everything that looks like it follows (with `--auto`, for unattended batches: each card is tried as a template and the one that gives the best average is taken) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
 | `tmv ctf FOLDER` | CTF of every micrograph (movies motion corrected first) | `FOLDER/tifmrcview-spa/ctf.tsv` |
@@ -39,13 +39,21 @@ averages the full-detail one (`"look"` per tomogram in its output;
 stderr, if the file is missing.
 
 `tmv sta` takes tilt series (their tomogram is made first, as `tmv tomo --for
-sta` does) or tomograms that `tmv tomo --for sta` wrote, one or several. It
-works in three steps. First it writes the cards to `OUT/cards/` (`card_N.mrc`,
+sta` does) or tomograms that `tmv tomo --for sta` wrote, one or several. What
+to average is your choice, never the program's: plain `tmv sta` only makes the
+cards (`OUT/cards/card_N.mrc`), prints one line per card on stderr (size,
+members, hints: likely a particle, line-like or layer-like; hints only), and
+exits with status 2 and `"needsChoice": true`, `"cards"` and `"next"` in the
+JSON. Look at the cards (an AI agent must show them to the user and ask which
+one, not guess), then run the command in `"next"` with `--pick N`, or with
+`--points marks.json` for what you marked; everything after the choice is
+automatic. `--auto` is for unattended batch runs and only when the user asked
+for it: the program then chooses, in the three steps below. First it writes the cards to `OUT/cards/` (`card_N.mrc`,
 32-voxel class averages, and `cards.json`; this takes minutes, so a finished
 `cards.json` is reused only when `OUT/cards/inputs.json` shows it was made
 from the same tomograms, unchanged; otherwise it is made again, with a line on
-stderr saying why; delete `OUT/cards/` to force it). Then, unless you give
-`--pick N`, it tries every card (at most 12) as the template of a coarse run
+stderr saying why; delete `OUT/cards/` to force it). Then, with `--auto` (and
+not `--pick N`), it tries every card (at most 12) as the template of a coarse run
 (`OUT/trials/card_N/`, the results kept in `OUT/cards/trials.json` and reused
 with the cards), because a card is judged by what it gives, not by how it
 looks: a card that is a layer, a line or a small blob finds no group of
@@ -59,7 +67,7 @@ all the cards within 0.75 of it show one kind of particle (cards that show the
 same particle, from different size groups, are one kind: each pair is compared
 over all orientations, taking a few seconds). A line on stderr says which
 cards matched; when several kinds average well it takes the strongest and
-names the others (choose another with `--pick N`). With no card that
+names the others (choose another with `--pick N`). With `--auto` and no card that
 worked, it prints the trials and cards as JSON and
 exits with status 2: look at the cards (open the `card_N.mrc` files in
 TifMrcView Pro), then run the same command again with `--pick N`. Rerun it
@@ -80,7 +88,7 @@ the contrast transfer and agree again behind it. `resolutionA` is then the
 dip, and `signalA` is where they last agree (finer; the data holds that
 much). Both are steady from run to run, where a read at 0.143 jumped
 between them as the dip fell just above or below the line. Progress on stderr counts the steps of the whole run ("第 k/N
-步 · …"); `tmv sta` prints a line per card tried and, when it picks a card itself, a line saying which card and where
+步 · …"); `tmv sta --auto` prints a line per card tried and, when `--auto` picks a card itself, a line saying which card and where
 the others are, and the last line gives the resolution, the particle count and
 where `average.mrc` is.
 

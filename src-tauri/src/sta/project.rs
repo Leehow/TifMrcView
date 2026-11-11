@@ -1052,7 +1052,7 @@ fn is_likely(compact: f64, elongation: f64, blobs: usize, offset: f64) -> bool {
 const COMPACT: f64 = 7.5;
 /// Most `elongation` of a particle: the missing wedge stretches a ball along
 /// Z by up to about 1.3 to 1.5.
-const ELONGATION: f64 = 1.6;
+pub const ELONGATION: f64 = 1.6;
 /// A piece smaller than this share of the voxels above half the maximum is
 /// not a blob.
 /// The moments are taken out to this many ball radii (at most the box's
