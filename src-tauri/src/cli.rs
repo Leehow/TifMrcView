@@ -874,6 +874,12 @@ fn sta(o: &Opts) -> Result<Value> {
                     c.members,
                     cards_dir.display()
                 );
+                if !chosen.other.is_empty() {
+                    eprintln!(
+                        "tmv sta: something else averages well too, found in fewer places (card {}): choose it with --pick N",
+                        chosen.other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+                    );
+                }
                 n
             }
             None => {

@@ -1234,6 +1234,9 @@ pub fn good(trials: &[Trial]) -> Vec<usize> {
     ids
 }
 
+/// See `choose`.
+pub const DOMINANT: f64 = 2.0;
+
 /// What `choose` took.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chosen {
@@ -1241,16 +1244,16 @@ pub struct Chosen {
     pub id: usize,
     /// The good cards of its kind (it among them), ascending.
     pub same: Vec<usize>,
-    /// The good cards of other kinds, ascending (always empty: with several
-    /// kinds `choose` leaves the choice to the user).
+    /// The good cards of other kinds, ascending.
     pub other: Vec<usize>,
 }
 
 /// The card to take without asking: of the `good` ones (see `trials`) the
 /// one with the highest strength, when they all show one kind of particle
 /// (connected groups of cards whose pairwise `similar[i][j]`, see `likeness`,
-/// is `SAME` or more; only the good cards need entries). Several kinds, or no
-/// trial that worked: None, and the user chooses. Ties: the lower id.
+/// is `SAME` or more; only the good cards need entries), or when one kind
+/// was found in at least `DOMINANT` times as many places as any other. Else,
+/// or with no trial that worked: None, and the user chooses. Ties: the lower id.
 pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<Chosen> {
     let strong: std::collections::HashMap<usize, f64> = trials.iter().filter(|t| t.ok).map(|t| (t.card, t.strength)).collect();
     let good: Vec<usize> = good(trials).into_iter().filter(|i| *i < cards.len()).collect();
@@ -1259,13 +1262,12 @@ pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<
     }
     let alike = |i: usize, j: usize| similar.get(i).and_then(|r| r.get(j)).is_some_and(|s| *s >= SAME);
     // Kinds: the first good card of each group claims the cards linked to it.
-    let mut kinds = 0;
+    let mut kinds: Vec<Vec<usize>> = vec![];
     let mut seen = vec![false; cards.len()];
     for &s in &good {
         if seen[s] {
             continue;
         }
-        kinds += 1;
         seen[s] = true;
         let mut group = vec![s];
         let mut at = 0;
@@ -1279,12 +1281,22 @@ pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<
                 }
             }
         }
+        group.sort_unstable();
+        kinds.push(group);
     }
-    if kinds > 1 {
+    // Several kinds that all average well (a particle, and a filament
+    // beside it): the one found in far more places is what the tomograms
+    // are of. A kind is found as often as its card that found the most.
+    let found = |kind: &Vec<usize>| kind.iter().map(|i| trials.iter().find(|t| t.card == *i).map_or(0, |t| t.particles)).max().unwrap_or(0);
+    kinds.sort_by_key(|k| std::cmp::Reverse(found(k)));
+    if kinds.len() > 1 && (found(&kinds[0]) as f64) < DOMINANT * found(&kinds[1]) as f64 {
         return None;
     }
-    let id = good.iter().copied().max_by(|&i, &j| strong[&i].total_cmp(&strong[&j]).then(j.cmp(&i)))?;
-    Some(Chosen { id, same: good, other: vec![] })
+    let same = kinds.remove(0);
+    let id = same.iter().copied().max_by(|&i, &j| strong[&i].total_cmp(&strong[&j]).then(j.cmp(&i)))?;
+    let mut other: Vec<usize> = kinds.into_iter().flatten().collect();
+    other.sort_unstable();
+    Some(Chosen { id, same, other })
 }
 
 /// A place on a drawn shape (see `shape`).
@@ -1913,6 +1925,18 @@ mod card_tests {
         assert!((strength(&[1.0, 1.0, 1.0], 10.0) - 2.0 / 40.0).abs() < 1e-12);
         assert_eq!(strength(&[], 10.0), 0.0);
         assert_eq!(strength(&[1.0], 10.0), 0.0);
+    }
+
+    #[test]
+    fn a_kind_found_in_far_more_places_is_chosen_over_another_that_averages_well() {
+        // Two tomograms: cards 0 and 1 are the particle, card 2 a straight line.
+        let cards: Vec<Card> = (0..3).map(|i| likely_card(i, true, 8.0, 50)).collect();
+        let trial = |card: usize, particles: usize, strength: f64| Trial { card, ok: true, reason: None, particles, candidates: 3000, fsc: vec![], voxel_a: 13.0, strength, seconds: 1.0 };
+        let sim = vec![vec![1.0, 0.9, 0.2], vec![0.9, 1.0, 0.2], vec![0.2, 0.2, 1.0]];
+        let got = choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 336, 0.0264)], &sim);
+        assert_eq!(got, Some(Chosen { id: 1, same: vec![0, 1], other: vec![2] }));
+        // Found about as often: the user decides.
+        assert_eq!(choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 700, 0.0264)], &sim), None);
     }
 
     #[test]
