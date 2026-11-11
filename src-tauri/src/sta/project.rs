@@ -199,10 +199,24 @@ pub struct Report {
     /// halves agree better and was kept. None when it was not tried.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub views_refined: Option<bool>,
+    /// On a drawn surface: the pattern that was found repeating in its
+    /// layers and aligned (`flat::lattice`). None where there was none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<Pattern>,
     pub map: Option<String>,
     pub halves: Option<[String; 2]>,
     pub table: Option<String>,
     pub ms: u128,
+}
+
+/// A pattern repeating in the layers of a surface, as measured.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pattern {
+    /// How far apart its rows are, Å.
+    pub rows_a: f64,
+    /// How far inside the drawn surface it lies, Å (negative: outside).
+    pub inside_a: f64,
 }
 
 /// A tomogram averaged over `bin`³ voxels: values, size, voxel size (Å).
@@ -579,6 +593,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        pattern: None,
         map: None,
         halves: None,
         table: None,
@@ -1747,12 +1762,14 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let mut start: Option<(Vec<f32>, Vec<Pose>)> = None;
     let mut apart = None;
     let mut detail = None;
+    let mut pattern = None;
     let drawn: &[Drawn] = if both || lattice.is_some() { drawn } else { &on_layer };
     if let Some(l) = lattice {
         cuts = l.cuts;
         voxel_a = l.voxel_a;
         apart = Some(l.apart);
         detail = Some((l.band, l.slide));
+        pattern = Some(l.pattern);
         start = Some((l.model, l.poses));
     } else {
         for (i, s) in sources.iter().enumerate() {
@@ -1854,6 +1871,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        pattern,
         map: None,
         halves: None,
         table: None,
@@ -1996,6 +2014,7 @@ struct OnLattice {
     /// place may still slide (voxels) without leaving its own.
     band: f64,
     slide: usize,
+    pattern: Pattern,
 }
 
 /// One tomogram at the working sampling.
@@ -2131,7 +2150,8 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, progress: Progr
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let model = set.average(&poses, |_| true).finish();
     live(&model);
-    Ok(Surfaces::Lattice(OnLattice { cuts, poses, model, voxel_a, apart, band, slide: 1 }))
+    let pattern = Pattern { rows_a: lattice.period * voxel_a, inside_a: -lattice.depth * voxel_a };
+    Ok(Surfaces::Lattice(OnLattice { cuts, poses, model, voxel_a, apart, band, slide: 1, pattern }))
 }
 
 /// The order in which places become the two halves of `align` (even
@@ -2664,6 +2684,7 @@ pub fn run_places(
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        pattern: None,
         map: None,
         halves: None,
         table: None,

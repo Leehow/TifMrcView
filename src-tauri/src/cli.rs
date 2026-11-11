@@ -1246,6 +1246,7 @@ mod tests {
             averaged_from: None,
             fsc_other: None,
             views_refined: None,
+            pattern: None,
             map: Some("o/average.mrc".into()),
             halves: None,
             table: None,
