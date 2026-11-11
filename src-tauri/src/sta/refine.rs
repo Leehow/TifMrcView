@@ -341,7 +341,10 @@ pub(crate) fn cut(fsc: &[f64]) -> f64 {
 /// with a neighbour above the line too, so a single noisy value does not.
 pub(crate) fn extent(fsc: &[f64]) -> f64 {
     let ok = |s: usize| fsc.get(s).is_some_and(|v| *v >= 0.143);
-    (2..fsc.len()).rev().find(|&s| ok(s) && (ok(s - 1) || ok(s + 1))).map_or(1.0, |s| s as f64)
+    // Not the last two shells: at the sampling limit the maps hold what
+    // resampling and the particles' common mask put there, the same in both
+    // halves (0.15 to 0.2 in maps whose unmasked halves agree to 0.04 there).
+    (2..fsc.len().saturating_sub(2)).rev().find(|&s| ok(s) && (ok(s - 1) || ok(s + 1))).map_or(1.0, |s| s as f64)
 }
 
 /// Local search ranges of the rounds, degrees; each is covered in two
