@@ -1235,6 +1235,20 @@ pub struct Trial {
     /// `strength` of the `fsc`.
     pub strength: f64,
     pub seconds: f64,
+    /// `shape`'s elongation of that average: about 1.4 for a particle, 1.8
+    /// and more for what runs out of the box (a line, a layer, an edge).
+    #[serde(default)]
+    pub elongation: Option<f64>,
+}
+
+impl Trial {
+    /// Whether the average is of something that runs on beyond the box.
+    /// Such things average well (they are stiff and there is much of them)
+    /// and are averaged on purpose, drawn by the user; left to itself the
+    /// program takes a particle.
+    pub fn runs_on(&self) -> bool {
+        self.elongation.is_some_and(|e| e >= ELONGATION)
+    }
 }
 
 /// How far out and how well the two halves of an average agree: the area
@@ -1280,11 +1294,15 @@ pub fn trials(
         let trial = match r {
             Ok(r) => {
                 let voxel_a = if r.voxel_a > 0.0 { r.voxel_a } else { voxel };
-                Trial { card: card.id, ok: true, reason: None, particles: r.particles, candidates: r.candidates, strength: strength(&r.fsc, voxel_a), fsc: r.fsc, voxel_a, seconds }
+                let elongation = r.map.as_ref().and_then(|m| read_card(m).ok()).map(|(avg, v)| {
+                    let n = (avg.len() as f64).cbrt().round() as usize;
+                    shape(&avg, n, 0.5 * template_diameter(card) / v).1
+                });
+                Trial { card: card.id, ok: true, reason: None, particles: r.particles, candidates: r.candidates, strength: strength(&r.fsc, voxel_a), fsc: r.fsc, voxel_a, seconds, elongation }
             }
             // A cancelled run says so with the same kind of error: not a verdict on the card.
             Err(e) if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) => return Err(e),
-            Err(e) => Trial { card: card.id, ok: false, reason: Some(format!("{e:#}")), particles: 0, candidates: 0, fsc: vec![], voxel_a: voxel, strength: 0.0, seconds },
+            Err(e) => Trial { card: card.id, ok: false, reason: Some(format!("{e:#}")), particles: 0, candidates: 0, fsc: vec![], voxel_a: voxel, strength: 0.0, seconds, elongation: None },
         };
         each(&trial);
         out.push(trial);
@@ -1295,8 +1313,11 @@ pub fn trials(
 /// The cards (ids, ascending) whose trial worked and gave at least `CLOSE`
 /// of the best strength.
 pub fn good(trials: &[Trial]) -> Vec<usize> {
-    let best = trials.iter().filter(|t| t.ok).map(|t| t.strength).fold(0.0, f64::max);
-    let mut ids: Vec<usize> = trials.iter().filter(|t| t.ok && t.strength >= CLOSE * best).map(|t| t.card).collect();
+    // Among the particles when there is one; else among all that worked.
+    let particle = trials.iter().any(|t| t.ok && !t.runs_on());
+    let counts = |t: &&Trial| t.ok && (!particle || !t.runs_on());
+    let best = trials.iter().filter(counts).map(|t| t.strength).fold(0.0, f64::max);
+    let mut ids: Vec<usize> = trials.iter().filter(counts).filter(|t| t.strength >= CLOSE * best).map(|t| t.card).collect();
     ids.sort_unstable();
     ids
 }
@@ -1965,11 +1986,11 @@ mod card_tests {
     const FSC7: [f64; 17] = [1.0, 0.998, 0.995, 0.964, 0.934, 0.840, 0.606, 0.310, 0.238, 0.074, -0.019, 0.012, 0.009, 0.038, 0.030, -0.022, -0.009];
 
     fn worked(card: usize, fsc: &[f64], voxel_a: f64) -> Trial {
-        Trial { card, ok: true, reason: None, particles: 100, candidates: 300, fsc: fsc.to_vec(), voxel_a, strength: strength(fsc, voxel_a), seconds: 1.0 }
+        Trial { card, ok: true, reason: None, particles: 100, candidates: 300, fsc: fsc.to_vec(), voxel_a, strength: strength(fsc, voxel_a), seconds: 1.0, elongation: None }
     }
 
     fn failed(card: usize) -> Trial {
-        Trial { card, ok: false, reason: Some("没有找到明显像模板的颗粒".into()), particles: 0, candidates: 0, fsc: vec![], voxel_a: 10.0, strength: 0.0, seconds: 1.0 }
+        Trial { card, ok: false, reason: Some("没有找到明显像模板的颗粒".into()), particles: 0, candidates: 0, fsc: vec![], voxel_a: 10.0, strength: 0.0, seconds: 1.0, elongation: None }
     }
 
     #[test]
@@ -1986,6 +2007,16 @@ mod card_tests {
         assert!((strength(&[1.0, 1.0, 1.0], 10.0) - 2.0 / 40.0).abs() < 1e-12);
         assert_eq!(strength(&[], 10.0), 0.0);
         assert_eq!(strength(&[1.0], 10.0), 0.0);
+    }
+
+    #[test]
+    fn a_line_that_averages_best_is_not_taken_while_there_is_a_particle() {
+        // Seven tomograms tried on two: the line (card 2) agrees best.
+        let trial = |card: usize, strength: f64, elongation: f64| Trial { card, ok: true, reason: None, particles: 900, candidates: 3000, fsc: vec![], voxel_a: 13.0, strength, seconds: 1.0, elongation: Some(elongation) };
+        let trials = [trial(0, 0.0204, 1.39), trial(1, 0.0156, 1.3), trial(2, 0.0229, 1.9), trial(5, 0.0164, 2.4)];
+        assert_eq!(good(&trials), vec![0, 1]);
+        // Only things that run on: the best of them.
+        assert_eq!(good(&[trial(2, 0.0229, 1.9), trial(5, 0.0164, 2.4)]), vec![2]);
     }
 
     #[test]
@@ -2006,7 +2037,7 @@ mod card_tests {
     fn of_several_kinds_that_average_well_the_strongest_is_chosen_and_the_others_named() {
         // Two tomograms: cards 0 and 1 are the particle, card 2 a straight line.
         let cards: Vec<Card> = (0..3).map(|i| likely_card(i, true, 8.0, 50)).collect();
-        let trial = |card: usize, particles: usize, strength: f64| Trial { card, ok: true, reason: None, particles, candidates: 3000, fsc: vec![], voxel_a: 13.0, strength, seconds: 1.0 };
+        let trial = |card: usize, particles: usize, strength: f64| Trial { card, ok: true, reason: None, particles, candidates: 3000, fsc: vec![], voxel_a: 13.0, strength, seconds: 1.0, elongation: None };
         let sim = vec![vec![1.0, 0.9, 0.2], vec![0.9, 1.0, 0.2], vec![0.2, 0.2, 1.0]];
         let got = choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 336, 0.0264)], &sim);
         assert_eq!(got, Some(Chosen { id: 1, same: vec![0, 1], other: vec![2] }));

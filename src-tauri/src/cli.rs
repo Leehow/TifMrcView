@@ -670,14 +670,16 @@ fn id_list(ids: &[usize]) -> String {
 fn trial_json(t: &crate::sta::project::Trial) -> Value {
     json!({
         "card": t.card, "ok": t.ok, "reason": t.reason, "particles": t.particles, "candidates": t.candidates,
-        "agreement": (t.strength * 1e5).round() / 1e5, "voxelA": t.voxel_a, "fsc": t.fsc, "seconds": (t.seconds * 10.0).round() / 10.0,
+        "agreement": (t.strength * 1e5).round() / 1e5, "voxelA": t.voxel_a, "fsc": t.fsc, "seconds": (t.seconds * 10.0).round() / 10.0, "elongation": t.elongation, "runsOn": t.runs_on(),
     })
 }
 
 /// The stderr line of one trial.
 fn trial_line(t: &crate::sta::project::Trial) -> String {
     if t.ok {
-        format!("tmv sta: card {} as a template: {} particles, agreement {:.4}", t.card, t.particles, t.strength)
+        let runs = if t.runs_on() { "; it runs on beyond the box (a line, a layer or an edge)" } else { "" };
+        let long = t.elongation.map_or(String::new(), |e| format!(", elongation {e:.2}"));
+        format!("tmv sta: card {} as a template: {} particles, agreement {:.4}{long}{runs}", t.card, t.particles, t.strength)
     } else if t.reason.as_deref().is_some_and(|r| r.contains("分不出两群")) {
         format!("tmv sta: card {} as a template: no group of particles stands out", t.card)
     } else {
@@ -1421,6 +1423,7 @@ mod tests {
             voxel_a: 13.0,
             strength: strength.unwrap_or(0.0),
             seconds: 1.0,
+            elongation: None,
         }
     }
 
