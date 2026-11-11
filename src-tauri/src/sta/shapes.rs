@@ -905,10 +905,14 @@ pub fn kept_pits(s: &State, dir: &Path) -> Result<(Vec<Drawn>, f64)> {
 /// What the average's `chosen.json` says it was made of.
 pub fn used_of(s: &State) -> Value {
     let n = |k: ItemKind| s.kept().filter(|i| i.kind == k).count();
-    json!({
+    // How many of the kept ones the user drew or marked (the rest the program found).
+    let own = |k: ItemKind| s.kept().filter(|i| i.kind == k && i.example).count();
+    let used = json!({
         "kind": "shapes", "membranes": n(ItemKind::Membrane), "balls": n(ItemKind::Ball), "spheres": n(ItemKind::Ball), "lines": n(ItemKind::Line), "pits": n(ItemKind::Pit), "surfaces": s.surfaces,
+        "membranesDrawn": own(ItemKind::Membrane), "spheresDrawn": own(ItemKind::Ball), "linesDrawn": own(ItemKind::Line), "pitsDrawn": own(ItemKind::Pit),
         "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(), "sizeA": if s.pits() { s.pit_size_a().round() } else { s.size_a.round() },
-    })
+    });
+    auto::with_tilt(used, s.inputs.iter().map(String::as_str))
 }
 
 fn out_of(inputs: &[String], out: &str) -> Result<PathBuf> {
@@ -1309,6 +1313,8 @@ mod tests {
         assert!(d[36..].iter().all(|x| x.pos == [5.0; 3] && x.source == 1));
         let u = used_of(&s);
         assert_eq!((u["membranes"].as_u64(), u["balls"].as_u64(), u["dropped"].as_u64(), u["flipped"].as_u64(), u["kind"].as_str()), (Some(2), Some(1), Some(1), Some(1), Some("shapes")));
+        // Of the kept ones only the first membrane was drawn by the user; the ball was found.
+        assert_eq!((u["membranesDrawn"].as_u64(), u["spheresDrawn"].as_u64(), u["tiltAssumed"].as_bool()), (Some(1), Some(0), Some(true)));
         // Too few: one item of 12 seeds.
         let mut few = s.clone();
         few.drawn.clear();

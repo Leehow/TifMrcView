@@ -94,6 +94,7 @@
     $("sta-pixel-text").textContent = `这 ${n} 张图的文件头里没有写像素大小，请填一下：`;
     W.pixelLine = `这 ${n} 张图的文件头里没有写像素大小，请先在断层图下面填像素大小`;
     pixLine.hidden = !n;
+    pixLine.title = need.map(name).join("\n");
     if (was !== need.join("\n")) document.dispatchEvent(new CustomEvent("sta-pixel"));
   }
   $("sta-pixel-ok").onclick = async () => {
@@ -223,12 +224,13 @@
     el.classList.toggle("off", !usableNow);
     el.classList.toggle("ticked", ticked(t));
     el.querySelector(".pic").classList.toggle("clickable", !!t.raw || (!!t.stack && !!window.TifMrcViewPro.cryoet?.load));
-    // The name: the middle is cut off, the end (often the telling part) stays.
+    // The name: when it does not fit the middle is cut off (the CSS puts the ellipsis there), the start and
+    // the end (often the telling part) stay; the tooltip has the whole path.
     const nm = t.name || "";
-    const cut = nm.length > 16 ? nm.length - 8 : nm.length;
+    const cut = nm.length > 20 ? nm.length - 11 : nm.length;
     el.querySelector(".a").textContent = nm.slice(0, cut);
     el.querySelector(".b").textContent = nm.slice(cut);
-    el.querySelector(".nm").title = nm;
+    el.querySelector(".nm").title = t.raw || t.stack || nm;
     const cryo = window.TifMrcViewPro.cryoet;
     const note = el.querySelector(".note");
     let text = "", why = "";

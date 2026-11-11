@@ -482,7 +482,7 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
     let (drawn, both, size_a) = drawn_of(marks, &inputs, &sources, &pixels, Size::parse(size))?;
     let dir = out.join(DRAWN);
     let report = sp::run_drawn(&sources, &drawn, both, size_a, &dir.to_string_lossy(), &progress, &live)?;
-    write_used(&dir, &shapes_used(marks, size_a));
+    write_used(&dir, &super::auto::with_tilt(shapes_used(marks, size_a), sources.iter().map(|s| s.path.as_str())));
     Ok(json!({
         "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
         "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "sizeA": size_a,

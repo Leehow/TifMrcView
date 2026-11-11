@@ -330,6 +330,8 @@
 #sta-workspace.folded .al-head { margin-bottom:0; }
 #sta-fold svg { display:block; transition:transform .15s; }
 #sta-workspace.folded #sta-fold svg { transform:rotate(180deg); }
+#sta-workspace .sta-old { display:inline-block; margin:0 0 4px; padding:1px 8px; border-radius:8px; background:var(--muted); border:1px solid var(--line); color:var(--dim); font-size:12px; }
+#sta-workspace .sta-old[hidden] { display:none; }
 #sta-workspace .sta-which { gap:4px; }
 #sta-workspace .sta-which button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 #sta-workspace p { line-height:1.6; }

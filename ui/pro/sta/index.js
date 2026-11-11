@@ -27,6 +27,11 @@
 (() => {
   // `reviewed`: what the review shown found per tomogram ([{path, n}]), for the badges of the wall.
   const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false, pixelNeed: [], pixelLine: "这些图的文件头里没有写像素大小，请先在断层图下面填像素大小", reviewed: { found: [], shapes: [] } };
+  // "2026-11-11 14:05", the local time.
+  const stamp = (ms) => {
+    const d = new Date(ms), z = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+  };
   const fmt = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
   const name = (p) => p?.split(/[\\/]/).pop() || "";
 
@@ -72,6 +77,7 @@
       <h4>结果</h4>
       <div id="sta-which" class="al-row sta-which" hidden></div>
       <div id="sta-kept-row" class="al-row" hidden><span id="sta-kept" class="dim"></span><button id="sta-kept-back" class="small">回到完整结果</button></div>
+      <p id="sta-old" class="sta-old" hidden></p>
       <p id="sta-summary"></p>
       <p id="sta-used" class="dim"></p>
       <img id="sta-slices" class="ws-img" alt="平均结构的三个中心截面（XY、XZ、YZ）">
@@ -129,21 +135,44 @@
     cardsStale: () => "断层图变了，重新做卡片",
     cardsReused: () => "沿用上次的卡片",
     cardsMade: (n) => `做出了 ${n.count} 张卡片`,
-    marked: (n) => `用你点的 ${n.points} 个颗粒做了模板，大小 ${n.sizeA} Å`,
+    marked: (n) => markedText(n.clicked, n.members, n.sizeA),
     using: (n) => `平均第 ${n.card + 1} 张卡片`,
   };
+  // The template made from clicked particles: how many were clicked, how many particles like them it is
+  // the average of (when that is another number), and the size measured on them.
+  function markedText(clicked, members, sizeA) {
+    const size = sizeA != null ? `，大小约 ${fmt(sizeA, 0)} Å` : "";
+    if (clicked == null) return `用你点的颗粒做了模板${size}`;
+    if (members > clicked) return `你点了 ${clicked} 个例子，模板是 ${members} 个和它们相像的颗粒的平均${size}`;
+    return `用你点的 ${clicked} 个颗粒做了模板${size}`;
+  }
+  // Shapes: what the user drew and what the program found, kind by kind.
+  const SHAPES = [["lines", "linesDrawn", "条纤维"], ["surfaces", null, "片面"], ["spheres", "spheresDrawn", "个球"], ["membranes", "membranesDrawn", "片膜"], ["pits", "pitsDrawn", "个凹陷"]];
+  function shapesText(u) {
+    const parts = [];
+    for (const [k, dk, word] of SHAPES) {
+      const n = u[k] || 0;
+      if (n <= 0) continue;
+      const mine = dk && u[dk] != null ? Math.min(n, u[dk]) : n, found = n - mine;
+      if (!found) parts.push(`你画的 ${n} ${word}`);
+      else if (!mine) parts.push(`程序找到的 ${n} ${word}`);
+      else parts.push(`你画的 ${mine} ${word}和程序找到的 ${found} ${word[0]}`);
+    }
+    return parts.length ? `用了${parts.join("，")}` : "用了你画的标注";
+  }
   // The line under the result: what the average was made from.
   function usedText(u) {
     if (!u) return "";
     const size = u.sizeA != null ? fmt(u.sizeA, 0) : null;
-    if (u.kind === "own") return `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
-    if (u.kind === "points") return `用你点的 ${u.points} 个颗粒做了模板，大小 ${size ?? "—"} Å`;
-    if (u.kind === "shapes") {
-      const parts = [[u.lines, "条纤维"], [u.surfaces, "片面"], [u.spheres, "个球"], [u.membranes, "片膜"], [u.pits, "个凹陷"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
-      return `用了你画的标注（${parts.join(" / ") || "—"}）${size ? `，颗粒约 ${size} Å` : ""}`;
-    }
-    if (u.card == null) return "";
-    return `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
+    let t = "";
+    if (u.kind === "own") t = `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
+    else if (u.kind === "points") t = markedText(u.clicked, u.members, u.sizeA);
+    else if (u.kind === "shapes") t = `${shapesText(u)}${size ? `，颗粒约 ${size} Å` : ""}`;
+    else if (u.card != null) t = `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
+    // The review kept more places than the average could use: the ones whose cube reaches past the tomogram.
+    if (u.kept != null && u.averaged != null && u.averaged < u.kept) t += `${t ? "。" : ""}你留下的 ${u.kept} 个里有 ${u.kept - u.averaged} 个太靠近图的边缘，切不出完整的方块，没有用上`;
+    if (u.tiltAssumed) t += `${t ? "。" : ""}没有找到倾转角范围，按 ±60° 处理`;
+    return t;
   }
   W.usedText = usedText;
 
@@ -155,7 +184,7 @@
     img.alt = `第 ${c.id + 1} 张`;
     const cap = document.createElement("figcaption");
     const t = c.trial;
-    const bits = [`约 ${fmt(c.diameterA, 0)} Å`];
+    const bits = [`约 ${fmt(c.measuredA ?? c.diameterA, 0)} Å`];
     if (t?.ok) bits.push(`${t.particles} 个颗粒`);
     else if (t) bits.push(t.noGroup ? "没有成群的颗粒" : "试跑失败");
     cap.textContent = bits.join(" · ");
@@ -290,6 +319,10 @@
     const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å${r.pattern.fold > 1 ? `，${r.pattern.fold} 重对称，颗粒中心已放在对称轴上${r.pattern.symmetric ? "，并按这个对称性做了平均" : ""}` : ""}），已按它对齐` : "";
     $("sta-summary").textContent = res + pt;
     $("sta-used").textContent = usedText(r.used);
+    // A result read from the folder, not made in this session: say when it is from, until a new run ends.
+    const old = $("sta-old");
+    old.hidden = !r.old;
+    old.textContent = r.old ? `上次的结果${r.modifiedMs ? `（${stamp(r.modifiedMs)}）` : ""}` : "";
     $("sta-slices").src = r.png ? `data:image/png;base64,${r.png}` : "";
     $("sta-fsc").innerHTML = fscSvg(r);
     // Several results in the folder: small tabs to switch.
@@ -306,7 +339,7 @@
         const out = W.out;
         try {
           const nr = await invoke("sta_result", { out, which: w });
-          if (nr) { st(out).result = nr; st(out).full = null; if (out === W.out) renderResult(); }
+          if (nr) { st(out).result = { ...nr, old: true }; st(out).full = null; if (out === W.out) renderResult(); }
         } catch (e) { status(`${e}`); }
       };
       return b;
@@ -457,7 +490,9 @@
       s.cards = cards.cards || [];
       s.own = own || null;
       if (s.selected != null && !(s.selected === "own" ? s.own : s.cards.some((c) => c.id === s.selected))) s.selected = null;
-      s.result = result;
+      // The result this session made stays "new"; one read from the folder is the last time's.
+      const same = s.result && !s.result.old && result && s.result.modifiedMs === result.modifiedMs && s.result.which === result.which;
+      s.result = result && !same ? { ...result, old: true } : result ? { ...result, old: false } : result;
       if (out === W.out) { paint(); }
     } catch (_) {
       // Nothing there yet: the panel stays as it is.
@@ -545,7 +580,7 @@
       if (!opts.keepResult) {
         let res = r.result;
         try { res = (await invoke("sta_result", { out })) || res; } catch (_) { /* demo */ }
-        s.result = res;
+        s.result = res && { ...res, old: false };
       }
       // The run found the cards and stopped: the user chooses what to average.
       if (r.waiting) setStatus(out, s.cards.length ? PROMPT : "没有找到候选卡片：这批断层图里可能没有成群的颗粒，可以用下面的标注工具自己标");

@@ -645,7 +645,7 @@ fn sta_note(n: &auto_sta::Note, progress: &Progress) {
         }
         Note::TrialsMade => progress.done(),
         Note::CompareFailed { error } => eprintln!("tmv sta: could not compare the cards ({error}): each is taken for a kind of its own"),
-        Note::Marked { points, size_a } => eprintln!("tmv sta: made the template from the {points} particles you marked (about {size_a:.0} Å across)"),
+        Note::Marked { clicked, members, size_a } => eprintln!("tmv sta: you marked {clicked} particles; the template is the average of {members} like them (about {size_a:.0} Å across)"),
         Note::Using { card, same, other, dir } => {
             let why = if same.len() > 1 { format!("cards {} show the same particle", id_list(same)) } else { "the card that gives the best average".to_string() };
             eprintln!(

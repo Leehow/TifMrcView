@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::auto::{beside, datasets_in, grey_of, grey_range, look_of, tilt_range};
+use super::auto::{averaged_tomograms, beside, datasets_in, grey_of, grey_range, look_of, tilt_range};
 use crate::tomo::pipeline;
 
 /// One tomogram (or tilt series) of the project.
@@ -74,7 +74,7 @@ pub fn tiles(path: &str) -> Vec<Tile> {
     for folder in &folders {
         for d in datasets_in(folder) {
             let stack = beside(folder, &d.stack);
-            let full: Vec<_> = d.tomograms.iter().filter(|t| t.kind == "full").collect();
+            let full = averaged_tomograms(&d);
             let mut any = false;
             for t in &full {
                 let Some(raw) = beside(folder, &t.path) else { continue };
@@ -317,5 +317,48 @@ mod tests {
         // A file of a step folder gives the same list, with that one open.
         let t = tiles(&p("3_clean/05_look.mrc"));
         assert_eq!(listed(&t), [("05_sart.mrc".to_string(), "ready", true), expected[1].clone(), expected[2].clone()]);
+    }
+
+    #[test]
+    fn the_files_the_program_derives_from_a_tomogram_are_not_tiles_of_their_own() {
+        let up = tempfile::tempdir().unwrap();
+        let dir = up.path().join("proj");
+        let (tomograms, clean) = (dir.join("2_tomograms"), dir.join("3_clean"));
+        std::fs::create_dir_all(&tomograms).unwrap();
+        std::fs::create_dir_all(&clean).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let entry = |path: &str, kind: &str, bin: u32, look: Option<&str>| serde_json::json!({ "path": p(path), "kind": kind, "bin": bin, "thickness": 200, "method": "sart", "look": look.map(|l| serde_json::json!({ "path": p(l), "scale": 2.0, "offset": [0.5, 0.5, 1.5] })) });
+        // Series 01 and 02 were made for averaging as the program names its files: the tomogram,
+        // the unprocessed look reconstruction (a "full" entry too), its denoised and deconvolved versions.
+        for ts in ["ts_01", "ts_02"] {
+            let raw = format!("2_tomograms/{ts}_sart3_b4.mrc");
+            let stage = format!("3_clean/{ts}_sart3_b8_look.mrc");
+            let denoised = format!("3_clean/{ts}_sart3_b8_look_n2n.mrc");
+            let clear = format!("3_clean/{ts}_sart3_b8_look_n2n_deconv.mrc");
+            for f in [&raw, &stage, &denoised, &clear] {
+                std::fs::write(dir.join(f), b"x").unwrap();
+            }
+            std::fs::write(dir.join(format!("{ts}.mrc")), b"x").unwrap();
+            let d = serde_json::json!({ "version": 1, "stack": p(&format!("{ts}.mrc")), "angles": [-60.0, 0.0, 60.0], "tomograms": [
+                entry(&raw, "full", 4, Some(&clear)), entry(&stage, "full", 8, None), entry(&denoised, "denoised", 8, None), entry(&clear, "deconvolved", 8, None)] });
+            std::fs::write(tomograms.join(format!("{ts}.tomo.json")), d.to_string()).unwrap();
+        }
+        // Series 03 has the same tomogram at two binnings, none made for averaging.
+        for f in ["2_tomograms/ts_03_wbp_b4.mrc", "2_tomograms/ts_03_wbp_b8.mrc", "ts_03.mrc"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let d3 = serde_json::json!({ "version": 1, "stack": p("ts_03.mrc"), "angles": [-60.0, 0.0, 60.0], "tomograms": [entry("2_tomograms/ts_03_wbp_b4.mrc", "full", 4, None), entry("2_tomograms/ts_03_wbp_b8.mrc", "full", 8, None)] });
+        std::fs::write(tomograms.join("ts_03.tomo.json"), d3.to_string()).unwrap();
+        let names = |t: &[Tile]| t.iter().map(|x| (x.name.clone(), x.status)).collect::<Vec<_>>();
+        let expected = [("ts_01_sart3_b4.mrc".to_string(), "ready"), ("ts_02_sart3_b4.mrc".to_string(), "ready"), ("ts_03_wbp_b8.mrc".to_string(), "noLook")];
+        assert_eq!(names(&tiles(&dir.to_string_lossy())), expected);
+        // Opening the clear version of one shows the same tiles, that one open.
+        let t = tiles(&p("3_clean/ts_01_sart3_b8_look_n2n_deconv.mrc"));
+        assert_eq!(names(&t), expected);
+        assert_eq!(t.iter().filter(|x| x.open).count(), 1);
+        assert!(t[0].open && t[0].shown() == Some(p("3_clean/ts_01_sart3_b8_look_n2n_deconv.mrc").as_str()));
+        // The workspace list has the same three.
+        let s = crate::sta::auto::siblings(&p("2_tomograms/ts_01_sart3_b4.mrc"));
+        assert_eq!(s.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["ts_01_sart3_b4.mrc", "ts_02_sart3_b4.mrc"]);
     }
 }

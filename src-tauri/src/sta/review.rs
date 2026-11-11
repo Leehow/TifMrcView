@@ -704,7 +704,7 @@ pub fn find_points(inputs: &[String], marks: &[Mark], out: &str, device: Device,
             bail!("请先在颗粒上点 1 到 3 个作例子");
         }
         let card = sp::card_from_points(&sources, &points, &dir.to_string_lossy(), progress, live)?;
-        note(Note::Marked { points: card.members, size_a: card.diameter_a });
+        note(Note::Marked { clicked: points.len(), members: card.members, size_a: card.measured_a });
         let route = Route { kind: "points".into(), card: None, points: Some(points.len()) };
         let state = search_and_save(&out, &dir, card, inputs.clone(), &sources, route, device, progress)?;
         Ok(review_value(&state, &dir, &inputs[0]))
@@ -727,10 +727,14 @@ pub fn average_found(dir: &Path, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]
         let (again_out, again_in) = s.again_counts();
         let counts = json!({ "found": s.total(), "kept": places.len(), "removed": removed, "added": added, "onShapes": s.filter.is_some() && s.edits.on_shapes, "againOut": again_out, "againIn": again_in });
         let mut used = match s.route.kind.as_str() {
-            "points" => json!({ "kind": "points", "points": s.card.members, "sizeA": s.card.diameter_a.round() }),
-            "own" => json!({ "kind": "own", "name": own_file(dir).map(|o| o.name), "sizeA": s.card.diameter_a.round() }),
-            _ => json!({ "kind": "auto", "card": s.card.id, "auto": false, "sizeA": s.card.diameter_a.round() }),
+            "points" => json!({ "kind": "points", "clicked": s.route.points, "members": s.card.members, "sizeA": s.card.measured_a.round() }),
+            "own" => json!({ "kind": "own", "name": own_file(dir).map(|o| o.name), "sizeA": s.card.measured_a.round() }),
+            _ => json!({ "kind": "auto", "card": s.card.id, "auto": false, "sizeA": s.card.measured_a.round() }),
         };
+        // `kept` places went in; `averaged` of them could be cut out of their tomogram
+        // (`run_places` leaves out those whose cube reaches past the edge of the tomogram).
+        used["averaged"] = json!(report.particles);
+        used = auto::with_tilt(used, sources.iter().map(|s| s.path.as_str()));
         for (k, v) in counts.as_object().into_iter().flatten() {
             used[k] = v.clone();
         }

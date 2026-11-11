@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use super::project as sp;
 use super::refine::{Live, Progress};
-use crate::tomo::dataset::{Dataset, Look};
+use crate::tomo::dataset::{Dataset, Look, Tomogram};
 
 /// What one input is after its tomogram exists.
 pub struct Resolved {
@@ -63,8 +63,8 @@ pub enum Note {
     /// particle; `other`: other good cards, other kinds).
     Using { card: sp::Card, same: Vec<usize>, other: Vec<usize>, dir: String },
     /// The card made from the particles the user clicked on: how many were
-    /// used and the size measured (Å).
-    Marked { points: usize, size_a: f64 },
+    /// clicked, how many particles the card averages, and the size measured (Å).
+    Marked { clicked: usize, members: usize, size_a: f64 },
 }
 
 /// A finished run.
@@ -135,6 +135,30 @@ pub fn dataset_of(tomogram: &str) -> Option<Dataset> {
     let p = Path::new(tomogram);
     let name = p.file_name()?;
     crate::project_dirs::relatives(p.parent()?).into_iter().find_map(|dir| datasets_in(&dir).into_iter().find(|d| d.tomograms.iter().any(|t| Path::new(&t.path).file_name() == Some(name))))
+}
+
+/// Whether `t` is a stage of making the clear companion (the unprocessed
+/// reconstruction `reconstruct_look` saves, `<stem>_sart3_b8_look.mrc` in
+/// `3_clean/`) and not a tomogram of its own.
+fn is_look_stage(t: &Tomogram, d: &Dataset) -> bool {
+    let p = Path::new(&t.path);
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    stem.split('_').any(|w| w == crate::tomo::auto::LOOK_LABEL)
+        || p.parent().and_then(Path::file_name).is_some_and(|n| n == crate::project_dirs::CLEAN)
+        || d.tomograms.iter().any(|o| o.look.as_ref().is_some_and(|l| l.path == t.path))
+}
+
+/// The tomogram of a dataset to average: its full tomogram made for averaging
+/// (the one with a clear companion), else the newest full one. The look
+/// stages and the other reconstructions of the same tilt series belong to it
+/// and are not tomograms of their own.
+pub(super) fn averaged_tomograms(d: &Dataset) -> Vec<&Tomogram> {
+    let full: Vec<&Tomogram> = d.tomograms.iter().filter(|t| t.kind == "full" && !is_look_stage(t, d)).collect();
+    let made: Vec<&Tomogram> = full.iter().copied().filter(|t| t.look.is_some()).collect();
+    if !made.is_empty() {
+        return made;
+    }
+    full.last().copied().into_iter().collect()
 }
 
 /// The datasets (`*.tomo.json`) in `dir`, by file name.
@@ -216,7 +240,7 @@ pub fn siblings(path: &str) -> Vec<Sibling> {
     let folders = crate::project_dirs::scan_folders(dir);
     for (folder, d) in folders.iter().flat_map(|f| datasets_in(f).into_iter().map(move |d| (f, d))) {
         let ranged = tilt_range(&d).is_some();
-        for t in d.tomograms.iter().filter(|t| t.kind == "full") {
+        for t in averaged_tomograms(&d) {
             let Some(raw) = beside(folder, &t.path) else { continue };
             let raw_name = Path::new(&raw).file_name().map(|n| n.to_owned());
             if items.iter().any(|i| Path::new(&i.raw).file_name().map(|n| n.to_owned()) == raw_name) {
@@ -366,7 +390,7 @@ pub fn trial_json(t: &sp::Trial) -> Value {
 }
 
 pub fn card_json(c: &sp::Card) -> Value {
-    json!({ "id": c.id, "diameterA": c.diameter_a, "members": c.members, "compact": (c.compact * 10.0).round() / 10.0, "likely": c.likely, "path": c.path })
+    json!({ "id": c.id, "diameterA": c.diameter_a, "measuredA": c.measured_a, "members": c.members, "compact": (c.compact * 10.0).round() / 10.0, "likely": c.likely, "path": c.path })
 }
 
 /// An input tomogram as the cards were made from it (`cards/inputs.json`).
@@ -553,7 +577,7 @@ pub fn auto(
     // The average.
     let r = average_with(dev, sources, &card, &out_s, &report, live)?;
     // Which card this average is of (the workspace marks it when reopened).
-    write_used(out, &json!({ "kind": "auto", "card": card.id, "auto": chosen.is_some(), "sizeA": card.diameter_a.round() }));
+    write_used(out, &with_tilt(json!({ "kind": "auto", "card": card.id, "auto": chosen.is_some(), "sizeA": card.measured_a.round() }), sources.iter().map(|s| s.path.as_str())));
     Ok(Outcome::Done(Box::new(Done { report: r, card, cards, trials, chosen, cards_dir, out: out.to_path_buf(), backend: backend.to_string() })))
 }
 
@@ -583,12 +607,12 @@ pub fn auto_points(
     let plan = Plan { cards: true, trials: false, average: true };
     let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
     let card = sp::card_from_points(sources, points, &dir.to_string_lossy(), &report, live)?;
-    // The size said is the one the search works with (from the blobs under
-    // the clicks): measured on the average of a handful of particles it is not to be trusted.
-    note(Note::Marked { points: card.members, size_a: card.diameter_a });
+    // The size said is the one measured on the blobs under the clicks; the
+    // card's own `diameter_a` is a step of the size ladder the search works with.
+    note(Note::Marked { clicked: points.len(), members: card.members, size_a: card.measured_a });
     let (dev, backend) = device()?;
     let r = average_with(dev, sources, &card, &dir.to_string_lossy(), &report, live)?;
-    write_used(&dir, &json!({ "kind": "points", "points": card.members, "sizeA": card.diameter_a.round() }));
+    write_used(&dir, &with_tilt(json!({ "kind": "points", "clicked": points.len(), "members": card.members, "sizeA": card.measured_a.round() }), sources.iter().map(|s| s.path.as_str())));
     Ok(Outcome::Done(Box::new(Done { report: r, cards: vec![card.clone()], card, trials: vec![], chosen: None, cards_dir: dir.clone(), out: dir, backend: backend.to_string() })))
 }
 
@@ -599,9 +623,17 @@ pub const MARKED: &str = "marked";
 pub const DRAWN: &str = "drawn";
 
 /// Beside the average: what it was made from (`kind`: "auto" with the `card`
-/// and whether the program chose it, "points" with their count, "shapes" with
-/// the number of lines, surfaces and spheres) and the particle size (`sizeA`).
+/// and whether the program chose it, "points" with the clicks (`clicked`) and
+/// the particles the template averages (`members`), "shapes" with the number
+/// of lines, surfaces and spheres) and the particle size measured (`sizeA`, Å).
 pub const CHOSEN: &str = "chosen.json";
+
+/// Adds `tiltAssumed` to `used`: no dataset beside one of the tomograms
+/// `paths` gives its tilt range, so ±60° was assumed for it (`resolve`).
+pub fn with_tilt<'a>(mut used: Value, paths: impl IntoIterator<Item = &'a str>) -> Value {
+    used["tiltAssumed"] = json!(paths.into_iter().any(|p| dataset_of(p).as_ref().and_then(tilt_range).is_none()));
+    used
+}
 
 /// Keeps what an average was made from beside it (`CHOSEN`).
 pub fn write_used(dir: &Path, used: &Value) {
@@ -621,7 +653,7 @@ pub fn used_of(dir: &Path) -> Value {
     }
     if v["kind"] == "auto" && v["sizeA"].is_null() {
         if let Some(c) = v["card"].as_u64().and_then(|n| saved(dir).0.into_iter().find(|c| c.id == n as usize)) {
-            v["sizeA"] = json!(c.diameter_a.round());
+            v["sizeA"] = json!(c.measured_a.round());
         }
     }
     v
@@ -712,7 +744,7 @@ pub fn note_json(n: &Note) -> Value {
         Note::TrialsMade => json!({ "kind": "trialsMade" }),
         Note::CompareFailed { error } => json!({ "kind": "compareFailed", "error": error }),
         Note::Using { card, same, other, .. } => json!({ "kind": "using", "card": card.id, "same": same, "other": other }),
-        Note::Marked { points, size_a } => json!({ "kind": "marked", "points": points, "sizeA": size_a.round() }),
+        Note::Marked { clicked, members, size_a } => json!({ "kind": "marked", "clicked": clicked, "members": members, "sizeA": size_a.round() }),
     }
 }
 
@@ -737,7 +769,7 @@ pub fn cards_value(out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Value> {
             let png = sp::read_card(&c.path).ok().and_then(|(cube, _)| slices_png(&cube, 32, 64).ok());
             let trial = trials.iter().find(|t| t.card == c.id);
             json!({
-                "id": c.id, "diameterA": c.diameter_a, "members": c.members, "likely": c.likely,
+                "id": c.id, "diameterA": c.diameter_a, "measuredA": c.measured_a, "members": c.members, "likely": c.likely,
                 "trial": trial.map(trial_view), "good": good.contains(&c.id), "chosen": chosen == Some(c.id),
                 "runsOn": trial.is_some_and(|t| t.runs_on()), "png": png.map(|p| b64(&p)),
             })
@@ -762,7 +794,10 @@ pub fn result_value(out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Option<
     let n = 2.0 * fsc.len().saturating_sub(1) as f64;
     let freq: Vec<f64> = if voxel > 0.0 && n > 0.0 { (0..fsc.len()).map(|i| i as f64 / (n * voxel)).collect() } else { vec![] };
     let png = slices_png(&vol, dims[0], 160).ok().map(|p| b64(&p));
+    // When the average was made, ms since the epoch: the workspace says so when it shows a result from earlier.
+    let modified_ms = std::fs::metadata(&map).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
     Ok(Some(json!({
+        "modifiedMs": modified_ms,
         "map": map, "out": out, "png": png, "fsc": fsc, "freq": freq, "voxelA": voxel,
         "resolutionA": report["resolutionA"], "signalA": report["signalA"], "ctfLimited": report["ctfLimited"],
         "particles": report["particles"], "sharpenB": report["sharpenB"], "used": used_of(out),
@@ -1107,13 +1142,13 @@ mod tests {
         let out = temp("used");
         write_used(&out, &json!({ "kind": "auto", "card": 2, "auto": true, "sizeA": 210.0 }));
         assert_eq!(used_of(&out)["card"], 2);
-        // An older chosen.json holds only the card: read as automatic, size from the cards.
+        // An older chosen.json holds only the card: read as automatic, size (measured) from the cards.
         let old = temp("used_old");
         std::fs::create_dir_all(old.join("cards")).unwrap();
         std::fs::write(old.join("cards").join("cards.json"), serde_json::to_string(&[card(0, "a"), card(1, "b")]).unwrap()).unwrap();
         std::fs::write(old.join(CHOSEN), r#"{"card":1,"auto":false}"#).unwrap();
         let u = used_of(&old);
-        assert_eq!((u["kind"].as_str(), u["card"].as_u64(), u["sizeA"].as_f64()), (Some("auto"), Some(1), Some(210.0)));
+        assert_eq!((u["kind"].as_str(), u["card"].as_u64(), u["sizeA"].as_f64()), (Some("auto"), Some(1), Some(200.0)));
         assert!(used_of(&temp("used_none")).is_null());
         // Three results, the points one the newest.
         let ball = ball(16);
@@ -1124,11 +1159,11 @@ mod tests {
             let t = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
             std::fs::File::options().write(true).open(&f).unwrap().set_modified(t).unwrap();
         }
-        write_used(&out.join(MARKED), &json!({ "kind": "points", "points": 7, "sizeA": 190.0 }));
+        write_used(&out.join(MARKED), &json!({ "kind": "points", "clicked": 3, "members": 7, "sizeA": 190.0 }));
         let v = result_pick(&out, None, &b64).unwrap().unwrap();
         assert_eq!(v["which"], "points");
         assert_eq!(v["available"], json!(["points", "auto", "drawn"]));
-        assert_eq!(v["used"]["points"], 7);
+        assert_eq!((v["used"]["clicked"].as_u64(), v["used"]["members"].as_u64()), (Some(3), Some(7)));
         let a = result_pick(&out, Some("auto"), &b64).unwrap().unwrap();
         assert_eq!((a["which"].as_str(), a["used"]["card"].as_u64()), (Some("auto"), Some(2)));
         assert!(result_pick(&temp("used_empty"), None, &b64).unwrap().is_none());
