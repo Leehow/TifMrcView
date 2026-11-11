@@ -17,7 +17,7 @@ driver is enough):
 | --- | --- | --- |
 | `tmv run PATH` | Detects the data type and runs the command below | |
 | `tmv tomo TS.mrc\|TS.mdoc [--for display\|sta\|survey]` | One-click cryo-ET: motion correction (from an mdoc), alignment, CTF, reconstruction; for display also denoising, missing-wedge filling and membranes | `*_rec*.mrc`, `*.labels.tif`, RELION 5 folder and a clear `look` tomogram (sta) |
-| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N] [--out DIR]` | Subtomogram averaging: class-average "cards" of the particle-like blobs, each tried as a template, then the average of everything that looks like the card that gives the best average (or the one you pick) | `*_sta/cards/`, then `*_sta/average.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
+| `tmv sta TS.mrc\|TOMO.mrc [MORE …] [--pick N] [--out DIR]` | Subtomogram averaging: class-average "cards" of the particle-like blobs, each tried as a template, then the average of everything that looks like the card that gives the best average (or the one you pick) | `*_sta/cards/`, then `*_sta/average.mrc`, `average_raw.mrc`, `half1.mrc`, `half2.mrc`, `particles.csv`, `sta.json` |
 | `tmv membranes TOMO.mrc [--model membrain.ckpt]` | Membranes, vesicles (split and measured) and microtubules | `TOMO.mrc.labels.tif`, `TOMO.mrc.membranes.json`, `TOMO.mrc.vesicles.csv` |
 | `tmv spa FOLDER [--kind N] [--symmetry D7]` | One-click single-particle analysis | `FOLDER/tifmrcview-spa/` with the sharpened map |
 | `tmv ctf FOLDER` | CTF of every micrograph (movies motion corrected first) | `FOLDER/tifmrcview-spa/ctf.tsv` |
@@ -66,8 +66,9 @@ with the tomograms it printed, not the tilt series, so they are not made
 again. `OUT` defaults to a folder `<first input's name>_sta` beside the first
 input. The tilt range of each tomogram comes from its `*.tomo.json` (the
 views the alignment kept); without one, -60 to 60 is assumed, with a warning.
-Whether the average is good is for you to judge from `average.mrc` and the
-two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
+Whether the average is good is for you to judge from `average.mrc` (weighted by
+the half agreement, sharpened and cut at the resolution; `average_raw.mrc` is the
+plain average) and the two halves; `sta.json` has the numbers. The result (`OUT/sta.tmv.json`) has
 `trials` (per card: `ok`, `reason`, `particles`, `agreement`, `fsc`, when the cards were tried), `resolutionA` (FSC 0.143 between the halves) with the curve `fsc`, `particles`,
 `diameterA` with `diameterFrom: "card"` (1.33 × the card's size), `seconds`
 (the whole run, a tomogram made first included), `searched` (`look` or `raw`:

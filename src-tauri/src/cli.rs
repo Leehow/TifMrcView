@@ -63,7 +63,9 @@ USAGE
   1/Å). With --pick N (which skips the trials), or by itself when the cards
   within 0.75 of the best agreement show one kind of particle (it takes the
   best of them, naming the others), the average of everything that looks like
-  card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+  card N goes to <out>/ (average.mrc: weighted by the half agreement, sharpened and cut at the
+  resolution; average_raw.mrc: as averaged; half1.mrc, half2.mrc, particles.csv,
+  sta.json).
   With several kinds among the good cards it stops with exit status 2 and the
   trials in the JSON: look at the cards, then rerun with --pick N.
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
@@ -72,7 +74,8 @@ USAGE
   was searched on) with searchVoxelA, ctfLimited (true when the FSC has a dip
   that rises again, a local minimum below 0.5 followed by a value 0.15 higher:
   a zero of the contrast transfer; resolutionA is then the dip and signalA
-  is where the halves last agree, finer) and seconds (the whole run).
+  is where the halves last agree, finer), sharpenB (the B factor in Å², negative,
+  applied to average.mrc; left out when no fit was possible) and seconds (the whole run).
 
 OUTPUT
   Files are written beside the input; copy the folder back and open them in
@@ -1333,6 +1336,7 @@ mod tests {
             search_voxel_a: Some(34.7),
             resolution_a: Some(27.84),
             signal_a: None,
+            sharpen_b: None,
             ctf_limited: false,
             fsc: vec![],
             averaged_from: None,

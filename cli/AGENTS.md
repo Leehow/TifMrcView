@@ -166,9 +166,9 @@ average whose two halves agree far out: its `"agreement"` is the area under
 their FSC, 1/Å), then, with `--pick N` (which skips the trials) or by itself
 when the cards within 0.75 of the best agreement show one kind of particle
 (it takes the best of them and says on stderr which cards show the same
-particle), the average of everything that looks like card N: `average.mrc`, `half1.mrc`,
+particle), the average of everything that looks like card N: `average.mrc`, `average_raw.mrc`, `half1.mrc`,
 `half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
-`average.mrc`; `"particles"` how many were averaged). The JSON also has
+`average.mrc`, weighted by the half agreement, sharpened (`"sharpenB"`, Å², negative; absent when no fit was possible) and cut at the resolution; `average_raw.mrc` is the plain average; `"particles"` how many were averaged). The JSON also has
 `"trials"` (when the cards were tried), `"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
 `"diameterA"` with `"diameterFrom": "card"` (1.33 × the card's size),
 `"candidates"`, `"seconds"` (the whole run, a tomogram made first included),
@@ -202,7 +202,7 @@ Then tell the user what to open in **TifMrcView Pro**:
 - tomogram: the `"open"` file; its label map (`*.labels.tif`, materials
   膜 membrane / 囊泡 vesicle / 微管 microtubule) opens with it, and the 3D view
   shows them; vesicle sizes are in `*.vesicles.csv`;
-- STA: `average.mrc` (and the half maps `half1.mrc`, `half2.mrc`); the
+- STA: `average.mrc` (weighted by the half agreement, sharpened, cut at the resolution; `average_raw.mrc` is the plain one; and the half maps `half1.mrc`, `half2.mrc`); the
   picked particles are listed in `particles.csv`;
 - SPA: the sharpened map (`"map"`) in the 3D view; opening the folder in the
   SPA workspace shows every step (project files move with the folder);

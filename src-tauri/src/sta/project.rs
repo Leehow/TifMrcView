@@ -11,7 +11,8 @@
 //!    every particle is then placed on it by a global search, and the two
 //!    halves are aligned locally (`refine::align`).
 //!
-//! Results go to `<out>/`: `average.mrc`, `half1.mrc`, `half2.mrc`,
+//! Results go to `<out>/`: `average.mrc` (weighted by the half agreement,
+//! sharpened, cut at the resolution), `average_raw.mrc`, `half1.mrc`, `half2.mrc`,
 //! `particles.csv` (tomogram, position in tomogram voxels, RELION-style
 //! rot/tilt/psi, score, half, and what the blob looked like) and `sta.json`.
 
@@ -179,6 +180,11 @@ pub struct Report {
     /// `resolution_a`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal_a: Option<f64>,
+    /// The B factor (Å², negative: sharpening) applied to `average.mrc`; none
+    /// when the shells were too few to fit one and the map was only weighted
+    /// and low-passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sharpen_b: Option<f64>,
     /// `resolution_a` is limited at a zero of the contrast transfer.
     pub ctf_limited: bool,
     pub fsc: Vec<f64>,
@@ -547,6 +553,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         search_voxel_a: None,
         resolution_a: None,
         signal_a: None,
+        sharpen_b: None,
         ctf_limited: false,
         fsc: vec![],
         averaged_from: None,
@@ -631,7 +638,7 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     let file = |name: &str| Path::new(out_dir).join(name).to_string_lossy().into_owned();
     let n = (out.map.len() as f64).cbrt().round() as usize;
     let shape = [n, n, n];
-    output::write_mrc(&file("average.mrc"), &out.map, shape, voxel_a, false)?;
+    output::write_mrc(&file("average_raw.mrc"), &out.map, shape, voxel_a, false)?;
     output::write_mrc(&file("half1.mrc"), &out.halves[0], shape, voxel_a, false)?;
     output::write_mrc(&file("half2.mrc"), &out.halves[1], shape, voxel_a, false)?;
     let mut csv = String::from("tomogram,x,y,z,rot,tilt,psi,score,half,blob,strength,darkest\n");
@@ -674,6 +681,12 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.resolution_a = (shells.limit > 0.0).then(|| n as f64 * voxel_a / shells.limit);
     report.signal_a = (shells.dip && shells.signal > 0.0).then(|| n as f64 * voxel_a / shells.signal);
     report.ctf_limited = shells.dip;
+    // The map to look at: weighted by how well the halves agree, sharpened
+    // and cut at the resolution. The raw one stays next to it.
+    let cut = if shells.dip { shells.signal } else { shells.limit };
+    let (polished, sharpen_b) = polish(&out.halves[0], &out.halves[1], &fsc, cut, n, voxel_a, radius);
+    output::write_mrc(&file("average.mrc"), &polished, shape, voxel_a, false)?;
+    report.sharpen_b = sharpen_b;
     report.fsc = fsc;
     report.map = Some(file("average.mrc"));
     report.halves = Some([file("half1.mrc"), file("half2.mrc")]);
@@ -681,6 +694,102 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     report.ms = started.elapsed().as_millis();
     std::fs::write(file("sta.json"), serde_json::to_string_pretty(&report)?)?;
     Ok(())
+}
+
+/// Guinier fit of the sharpening: shells coarser than this (Å) are left out,
+/// because at low frequency the amplitudes follow the particle's shape and
+/// not the fall-off of the data.
+const SHARPEN_COARSE_A: f64 = 60.0;
+/// Fewest shells the fit needs. Our maps are 15 to 30 Å, where the usual fit
+/// (10 Å and finer) does not exist; a few shells between 60 Å and the
+/// resolution limit are all there is, and fewer than this say nothing.
+const SHARPEN_MIN_SHELLS: usize = 5;
+/// Limits of the B factor, Å². Only sharpening (never blurring), and not more
+/// than this: at low resolution the fit reads the mask and the shape as much
+/// as the fall-off, and a large boost would only amplify noise.
+const SHARPEN_B_MIN: f64 = -600.0;
+
+/// The average to present, from the unfiltered half maps: their mean inside
+/// the soft sphere, each shell weighted by sqrt(2·FSC/(1+FSC)) (FSC floored at
+/// 0, the corrected one), sharpened with the B factor of a Guinier fit over
+/// the shells from `SHARPEN_COARSE_A` to `cut` (the resolution limit in
+/// shells), low-passed softly at `cut`, and masked again. Returns the map and
+/// the B used (none when the fit was not possible and the map was only
+/// weighted and low-passed).
+fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64, radius: f64) -> (Vec<f32>, Option<f64>) {
+    use crate::spa::fourier;
+    let mut mean: Vec<f32> = h1.iter().zip(h2).map(|(a, b)| 0.5 * (a + b)).collect();
+    if cut <= 0.0 || fsc.is_empty() {
+        return (mean, None);
+    }
+    crate::spa::volume::mask_sphere(&mut mean, n, radius, 6.0);
+    let (mut re, mut im) = fourier::ft3(n, &mean);
+    let shell_of = |z: usize, y: usize, x: usize| {
+        let (fx, fy, fz) = (fourier::freq(x, n), fourier::freq(y, n), fourier::freq(z, n));
+        ((fx * fx + fy * fy + fz * fz) as f64).sqrt()
+    };
+    // Power per shell of the mean and of the noise in it (half the difference
+    // of the halves): the noise floor would otherwise flatten the fall-off
+    // and the fit would find too little blur.
+    let shells = n / 2 + 1;
+    let power = |re: &[f32], im: &[f32]| {
+        let (mut p, mut c) = (vec![0f64; shells], vec![0f64; shells]);
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    let r = shell_of(z, y, x).round() as usize;
+                    if r < shells {
+                        let j = (z * n + y) * n + x;
+                        p[r] += (re[j] * re[j] + im[j] * im[j]) as f64;
+                        c[r] += 1.0;
+                    }
+                }
+            }
+        }
+        (p, c)
+    };
+    let (pm, cnt) = power(&re, &im);
+    let diff = masked_diff(h1, h2, n, radius);
+    let (dr, di) = fourier::ft3(n, &diff);
+    let (pn, _) = power(&dr, &di);
+    let amp: Vec<f64> = (0..shells).map(|r| (pm[r] - pn[r]).max(0.0).sqrt()).collect();
+    let width = n as f64 * voxel_a;
+    let r_lo = ((width / SHARPEN_COARSE_A).ceil() as usize).max(1);
+    let r_hi = (cut.floor() as usize).min(shells - 1);
+    let pts: Vec<(f64, f64)> =
+        (r_lo..=r_hi).filter(|&r| amp[r] > 0.0).map(|r| ((r as f64 / width).powi(2), (amp[r] / cnt[r].sqrt()).ln())).collect();
+    let b = (pts.len() >= SHARPEN_MIN_SHELLS).then(|| {
+        let m = pts.len() as f64;
+        let (mx, my) = (pts.iter().map(|p| p.0).sum::<f64>() / m, pts.iter().map(|p| p.1).sum::<f64>() / m);
+        let num: f64 = pts.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+        let den: f64 = pts.iter().map(|p| (p.0 - mx).powi(2)).sum();
+        // ln|F| = c + slope·s², and the amplitudes fall as exp(−B/4·s²) for a
+        // blur of B, so the sharpening B of the convention is 4·slope (< 0).
+        if den > 0.0 { (4.0 * num / den).clamp(SHARPEN_B_MIN, 0.0) } else { 0.0 }
+    });
+    re.par_chunks_mut(n * n).zip(im.par_chunks_mut(n * n)).enumerate().for_each(|(z, (pr, pi))| {
+        for y in 0..n {
+            for x in 0..n {
+                let s = shell_of(z, y, x);
+                let f = fsc.get(s.round() as usize).copied().unwrap_or(0.0).max(0.0);
+                let w = (2.0 * f / (1.0 + f)).sqrt();
+                let boost = b.map_or(1.0, |b| (-b / 4.0 * (s / width).powi(2)).exp());
+                let g = (w * boost * crate::spa::data::soft(s, cut, 2.0) as f64) as f32;
+                pr[y * n + x] *= g;
+                pi[y * n + x] *= g;
+            }
+        }
+    });
+    let mut out = fourier::ift3(n, &re, &im);
+    crate::spa::volume::mask_sphere(&mut out, n, radius, 6.0);
+    (out, b)
+}
+
+/// Half the difference of the halves inside the sphere: the noise of their mean.
+fn masked_diff(h1: &[f32], h2: &[f32], n: usize, radius: f64) -> Vec<f32> {
+    let mut d: Vec<f32> = h1.iter().zip(h2).map(|(a, b)| 0.5 * (a - b)).collect();
+    crate::spa::volume::mask_sphere(&mut d, n, radius, 6.0);
+    d
 }
 
 /// A class average of the blobs of one size, to choose a template from.
@@ -1473,6 +1582,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         search_voxel_a: None,
         resolution_a: None,
         signal_a: None,
+        sharpen_b: None,
         ctf_limited: false,
         fsc: vec![],
         averaged_from: None,
@@ -1840,6 +1950,7 @@ pub fn run_template(
         search_voxel_a: None,
         resolution_a: None,
         signal_a: None,
+        sharpen_b: None,
         ctf_limited: false,
         fsc: vec![],
         averaged_from: None,
@@ -2379,5 +2490,99 @@ mod look_grid_tests {
         // The same voxel: the same cube.
         let same = rescale_cube(&cube, n, 1.0, n, 1.0);
         assert!(same.iter().zip(&cube).all(|(a, b)| (a - b).abs() < 1e-5));
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use super::*;
+    use crate::spa::{fourier, Rng};
+
+    const N: usize = 64;
+    const PX: f64 = 4.0;
+    const RADIUS: f64 = 22.0;
+
+    /// Multiplies the amplitudes by exp(−B/4·s²): a blur of B Å².
+    fn blur(v: &[f32], b: f64) -> Vec<f32> {
+        let (mut re, mut im) = fourier::ft3(N, v);
+        for z in 0..N {
+            for y in 0..N {
+                for x in 0..N {
+                    let (fx, fy, fz) = (fourier::freq(x, N), fourier::freq(y, N), fourier::freq(z, N));
+                    let s = ((fx * fx + fy * fy + fz * fz) as f64).sqrt() / (N as f64 * PX);
+                    let g = (-b / 4.0 * s * s).exp() as f32;
+                    let j = (z * N + y) * N + x;
+                    re[j] *= g;
+                    im[j] *= g;
+                }
+            }
+        }
+        fourier::ift3(N, &re, &im)
+    }
+
+    fn masked(v: &[f32]) -> Vec<f32> {
+        let mut v = v.to_vec();
+        crate::spa::volume::mask_sphere(&mut v, N, RADIUS, 6.0);
+        v
+    }
+
+    fn corr(a: &[f32], b: &[f32]) -> f64 {
+        let (a, b) = (masked(a), masked(b));
+        let (ma, mb) = (a.iter().sum::<f32>() as f64 / a.len() as f64, b.iter().sum::<f32>() as f64 / b.len() as f64);
+        let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+        for (x, y) in a.iter().zip(&b) {
+            let (x, y) = (*x as f64 - ma, *y as f64 - mb);
+            ab += x * y;
+            aa += x * x;
+            bb += y * y;
+        }
+        ab / (aa * bb).sqrt()
+    }
+
+    fn halves(sigma: f64) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let mut rng = Rng(7);
+        let phantom = masked(&(0..N * N * N).map(|_| rng.gauss() as f32).collect::<Vec<_>>());
+        let blurred = blur(&phantom, 300.0);
+        let half = |seed: u64| {
+            let mut r = Rng(seed);
+            blurred.iter().map(|v| v + (sigma * r.gauss()) as f32).collect::<Vec<_>>()
+        };
+        let (h1, h2) = (half(11), half(12));
+        (phantom, h1, h2)
+    }
+
+    #[test]
+    fn sharpening_undoes_the_blur_and_cuts_the_noise() {
+        let (phantom, h1, h2) = halves(1.5);
+        let fsc = crate::spa::post::corrected_fsc(&h1, &h2, &masked, N);
+        let shells = resolution(&fsc);
+        let cut = if shells.dip { shells.signal } else { shells.limit };
+        eprintln!("limit {:.1} Å", N as f64 * PX / cut);
+        let (out, b) = polish(&h1, &h2, &fsc, cut, N, PX, RADIUS);
+        let mean: Vec<f32> = h1.iter().zip(&h2).map(|(a, c)| 0.5 * (a + c)).collect();
+        let reference = crate::spa::refine::lowpass(&phantom, N, PX, N as f64 * PX / cut);
+        let (before, after) = (corr(&mean, &reference), corr(&out, &reference));
+        let b = b.expect("enough shells for a fit");
+        eprintln!("corr {before:.3} -> {after:.3}, B {b:.0}");
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert!(after > before, "{before} -> {after}");
+        assert!((-450.0..=-200.0).contains(&b), "B {b} for an applied blur of 300");
+    }
+
+    #[test]
+    fn at_30_a_it_stays_finite_and_skips_or_clamps() {
+        let (_, h1, h2) = halves(4.0);
+        // The FSC of a 30 Å map: good to shell 3, gone by shell 9.
+        let fsc: Vec<f64> = (0..=N / 2).map(|r| (1.0 - (r as f64 - 3.0).max(0.0) / 6.0).clamp(0.0, 1.0)).collect();
+        let cut = N as f64 * PX / 30.0;
+        let (out, b) = polish(&h1, &h2, &fsc, cut, N, PX, RADIUS);
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert_eq!(b, None, "four shells between 60 Å and 30 Å are too few");
+        // 20 Å: the fit runs, and stays within the limits.
+        let (out, b) = polish(&h1, &h2, &fsc, N as f64 * PX / 20.0, N, PX, RADIUS);
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert!(b.is_none_or(|b| (SHARPEN_B_MIN..=0.0).contains(&b)), "{b:?}");
+        // Nothing to cut at: the plain mean.
+        assert_eq!(polish(&h1, &h2, &[], 0.0, N, PX, RADIUS).1, None);
     }
 }
