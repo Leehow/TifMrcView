@@ -6,14 +6,28 @@
 // FSC. The user may click another card and average again from it; nothing is
 // asked otherwise. Results live in <first tomogram>_sta/ beside the tomogram,
 // so reopening the workspace shows them without a rerun.
-// Backend: sta_run, sta_cards, sta_result, sta_out, sta_cancel (marks: draw.js); events
+// The tomograms listed are the raw ones of the open file's dataset/folder
+// (sta_siblings; the open file may be the clear "look" companion, which is
+// only for looking: averages are always of the raw tomogram). Everything shown
+// below the list (status, progress, live preview, cards, result, ticks)
+// belongs to the output folder, so a tab of another folder shows its own.
+// Backend: sta_run, sta_cards, sta_result, sta_out, sta_siblings, sta_cancel (marks: draw.js); events
 // sta-progress {label, done, total}, sta-live {png}, sta-note {kind, …}.
 // Every call is guarded: under the web demo the commands are missing and the
 // panel only says so. Shares app.js globals: S, T, F, invoke, $, setFft, openPath.
 (() => {
-  const W = window.TifMrcViewPro.sta = { busy: false, items: [], off: new Set(), out: "", cards: [], selected: null, trials: {}, gen: 0 };
+  const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false };
   const fmt = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
   const name = (p) => p?.split(/[\\/]/).pop() || "";
+
+  // What belongs to one output folder; kept while the app runs.
+  const states = new Map();
+  const st = (out) => {
+    if (!states.has(out)) states.set(out, { status: "", line: "", live: null, cards: [], trials: {}, selected: null, result: null, off: new Set(), added: [] });
+    return states.get(out);
+  };
+  const cur = () => st(W.out);
+  const here = () => W.busy && W.runOut === W.out;
 
   const button = document.createElement("button");
   button.id = "btn-sta";
@@ -27,9 +41,10 @@
   panel.className = "pro-workspace";
   panel.hidden = true;
   panel.innerHTML = `
-    <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><button id="sta-close" class="small" title="关闭">✕</button></div>
+    <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><span class="sta-head-btns"><button id="sta-fold" class="small" title="收起面板，让出图像" aria-expanded="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button><button id="sta-close" class="small" title="关闭">✕</button></span></div>
     <p class="dim">选好断层图，按下面的按钮：程序自己找出颗粒、做出候选的“卡片”、挑最合适的一张，再把所有同样的颗粒对齐平均。</p>
     <div id="sta-data" class="sta-data"></div>
+    <div class="al-row"><button id="sta-add" class="small" title="再加入别的文件夹里的断层图一起平均">添加断层图…</button></div>
     <div class="al-row">
       <button id="sta-run" class="primary">一键平均</button>
     </div>
@@ -44,7 +59,9 @@
     </div>
     <div id="sta-result" hidden>
       <h4>结果</h4>
+      <div id="sta-which" class="al-row sta-which" hidden></div>
       <p id="sta-summary"></p>
+      <p id="sta-used" class="dim"></p>
       <img id="sta-slices" class="ws-img" alt="平均结构的三个中心截面（XY、XZ、YZ）">
       <div id="sta-fsc"></div>
       <div class="al-row"><button id="sta-open" class="small primary">在查看器中打开</button><button id="sta-folder" class="small">打开结果文件夹</button></div>
@@ -52,10 +69,13 @@
     <div class="ws-foot"><span id="sta-status" role="status" class="dim"></span><button id="sta-cancel" class="small" hidden>取消</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
-  const status = (t) => { $("sta-status").textContent = t; };
+  // Status of the folder `out` (shown only while it is the current one).
+  const setStatus = (out, t) => { st(out).status = t; if (out === W.out) $("sta-status").textContent = t; };
+  const status = (t) => setStatus(W.out, t);
 
-  // The tomograms: the one open in the viewer, then the other full tomograms
-  // of the cryo-ET dataset (those made for averaging, with a clear companion, when there are any).
+  // The tomograms to average: those of the open file's dataset/folder (the
+  // raw ones; the open file may be their look companion), else the old guess
+  // from the Cryo-ET workspace's dataset.
   function collect() {
     const items = [];
     const add = (p) => { if (p && !items.some((i) => i.path === p)) items.push({ path: p, name: name(p) }); };
@@ -64,22 +84,38 @@
     for (const t of all.some((x) => x.look) ? all.filter((x) => x.look) : all) add(t.path);
     return items;
   }
+  async function listed() {
+    const open = S.info?.path;
+    if (open && S.info.sizeZ >= 3) {
+      try {
+        const l = await invoke("sta_siblings", { path: open });
+        if (l?.length) return l.map((s) => ({ path: s.raw, name: s.name || name(s.raw), look: s.look || null, scale: s.lookScale, offset: s.lookOffset, open: !!s.open }));
+      } catch (_) { /* no backend (web demo) */ }
+    }
+    return collect();
+  }
   function renderData() {
-    W.items = collect();
     const box = $("sta-data");
     box.replaceChildren();
     if (!W.items.length) {
       box.innerHTML = '<span class="dim">先打开一张断层图，或在 Cryo-ET 工作区里完成“子断层平均”用途的重构</span>';
       return;
     }
+    const off = cur().off;
     for (const it of W.items) {
       const label = document.createElement("label");
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = !W.off.has(it.path);
-      cb.onchange = () => { cb.checked ? W.off.delete(it.path) : W.off.add(it.path); };
+      cb.checked = !off.has(it.path);
+      cb.onchange = () => { cb.checked ? off.delete(it.path) : off.add(it.path); };
       label.append(cb, ` ${it.name}`);
-      label.title = it.path;
+      if (it.open) {
+        const tag = document.createElement("span");
+        tag.className = "dim";
+        tag.textContent = ` · 当前${it.look && S.info?.path === it.look ? "（正在看它的清晰版）" : ""}`;
+        label.append(tag);
+      }
+      label.title = it.look ? `${it.path}\n清晰版（只用来看和标）：${it.look}` : it.path;
       box.append(label);
     }
   }
@@ -97,10 +133,23 @@
     marked: (n) => `用你点的 ${n.points} 个颗粒做了模板，大小 ${n.sizeA} Å`,
     using: (n) => `使用第 ${n.card + 1} 张卡片${n.other?.length ? `；还有 ${n.other.length} 种也不错` : ""}`,
   };
+  // The line under the result: what the average was made from.
+  function usedText(u) {
+    if (!u) return "";
+    const size = u.sizeA != null ? fmt(u.sizeA, 0) : null;
+    if (u.kind === "points") return `用你点的 ${u.points} 个颗粒做了模板，大小 ${size ?? "—"} Å`;
+    if (u.kind === "shapes") {
+      const parts = [[u.lines, "条线"], [u.surfaces, "片面"], [u.spheres, "个球"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
+      return `用了你画的标注（${parts.join(" / ") || "—"}）${size ? `，颗粒约 ${size} Å` : ""}`;
+    }
+    if (u.card == null) return "";
+    return `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
+  }
+  W.usedText = usedText;
 
   function cardEl(c) {
     const fig = document.createElement("figure");
-    fig.className = (W.selected === c.id ? "on" : "") + (c.chosen ? " chosen" : "");
+    fig.className = (cur().selected === c.id ? "on" : "") + (c.chosen ? " chosen" : "");
     const img = new Image();
     if (c.png) img.src = `data:image/png;base64,${c.png}`;
     img.alt = `第 ${c.id + 1} 张`;
@@ -127,17 +176,18 @@
     }
     fig.onclick = () => {
       if (W.busy) return;
-      W.selected = c.id;
+      cur().selected = c.id;
       renderCards();
     };
     return fig;
   }
   function renderCards() {
-    const cards = W.cards.map((c) => ({ ...c, trial: c.trial || W.trials[c.id] || null }));
+    const s = cur();
+    const cards = s.cards.map((c) => ({ ...c, trial: c.trial || s.trials[c.id] || null }));
     $("sta-cards-box").hidden = !cards.length;
     $("sta-cards").replaceChildren(...cards.map(cardEl));
-    const chosen = W.cards.find((c) => c.chosen)?.id;
-    const other = W.selected != null && W.selected !== chosen;
+    const chosen = s.cards.find((c) => c.chosen)?.id;
+    const other = s.selected != null && s.selected !== chosen;
     $("sta-again").hidden = !other || W.busy;
     $("sta-cards-hint").textContent = chosen == null ? "程序会逐张试跑，挑出平均得最好的一张。" : "程序已经选了标“选中”的一张。想换一张，点它，再点“用这个重新平均”。标“线状/层状”的会延伸到框外，一般不是颗粒。";
   }
@@ -151,91 +201,166 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  function renderResult(r) {
+  const WHICH = { auto: "自动", points: "点", drawn: "画的" };
+  function renderResult() {
+    const r = cur().result;
+    W.result = r;
     $("sta-result").hidden = !r;
     if (!r) return;
-    W.result = r;
     const res = r.resolutionA != null ? `分辨率 ${fmt(r.resolutionA)} Å · ${r.particles} 个颗粒` : `${r.particles} 个颗粒 · 两半图不够一致，没有给出分辨率`;
     $("sta-summary").textContent = res;
+    $("sta-used").textContent = usedText(r.used);
     $("sta-slices").src = r.png ? `data:image/png;base64,${r.png}` : "";
     $("sta-fsc").innerHTML = fscSvg(r);
+    // Several results in the folder: small tabs to switch.
+    const tabs = $("sta-which");
+    const all = r.available || [];
+    tabs.hidden = all.length < 2;
+    tabs.replaceChildren(...all.map((w) => {
+      const b = document.createElement("button");
+      b.className = `small${w === r.which ? " on" : ""}`;
+      b.textContent = WHICH[w] || w;
+      b.title = { auto: "程序自己找颗粒的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果" }[w] || "";
+      b.onclick = async () => {
+        if (w === r.which) return;
+        const out = W.out;
+        try {
+          const nr = await invoke("sta_result", { out, which: w });
+          if (nr) { st(out).result = nr; if (out === W.out) renderResult(); }
+        } catch (e) { status(`${e}`); }
+      };
+      return b;
+    }));
   }
 
-  // Shows what the output folder holds (also when nothing runs).
+  // Everything of the current output folder onto the screen.
+  function paint() {
+    const s = cur();
+    $("sta-status").textContent = s.status;
+    $("sta-line").textContent = s.line;
+    const live = $("sta-live");
+    live.hidden = !(here() && s.live);
+    if (s.live) live.querySelector("img").src = s.live;
+    $("sta-cancel").hidden = !here();
+    $("sta-run").disabled = W.busy;
+    $("sta-run").title = W.busy && !here() ? "另一个断层图的平均正在运行" : "";
+    renderData();
+    renderCards();
+    renderResult();
+  }
+
+  // Shows what the output folder of the open file holds (also when nothing runs).
   async function refresh() {
     const gen = ++W.gen;
-    renderData();
-    const first = W.items[0]?.path;
-    if (!first || W.busy) return;
+    const base = await listed();
+    if (gen !== W.gen) return;
+    W.items = base;
+    const first = base[0]?.path;
+    if (!first) return paint();
+    let out;
     try {
-      const out = await invoke("sta_out", { first });
-      W.out = out;
-      document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
-      const [cards, result] = await Promise.all([invoke("sta_cards", { out }), invoke("sta_result", { out })]);
-      if (gen !== W.gen || W.busy) return;
-      W.out = out;
-      W.cards = cards.cards || [];
-      W.selected = null;
-      W.trials = {};
-      renderCards();
-      renderResult(result);
+      out = await invoke("sta_out", { first });
     } catch (_) {
-      // No backend (web demo) or nothing there yet: the panel stays as it is.
+      // No backend (web demo): the list only.
+      return renderData();
+    }
+    if (gen !== W.gen) return;
+    W.out = out;
+    // Tomograms added from elsewhere stay with the folder.
+    W.items = [...base, ...cur().added.filter((a) => !base.some((b) => b.path === a.path))];
+    paint();
+    document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
+    if (W.busy && W.runOut === out) return;
+    try {
+      const [cards, result] = await Promise.all([invoke("sta_cards", { out }), invoke("sta_result", { out })]);
+      if (gen !== W.gen || (W.busy && W.runOut === out)) return;
+      const s = st(out);
+      s.cards = cards.cards || [];
+      if (s.selected != null && !s.cards.some((c) => c.id === s.selected)) s.selected = null;
+      s.result = result;
+      if (out === W.out) { renderCards(); renderResult(); }
+    } catch (_) {
+      // Nothing there yet: the panel stays as it is.
     }
   }
+
+  async function addTomogram() {
+    let p;
+    try { p = await invoke("pick_file"); } catch (e) { return status(`${e}`); }
+    if (!p) return;
+    let one = { path: p, name: name(p) };
+    try {
+      const o = (await invoke("sta_siblings", { path: p })).find((s) => s.open);
+      if (o) one = { path: o.raw, name: o.name || name(o.raw), look: o.look || null, scale: o.lookScale, offset: o.lookOffset };
+    } catch (_) { /* no backend */ }
+    const s = cur();
+    if (!W.items.some((i) => i.path === one.path)) { s.added.push(one); W.items.push(one); }
+    s.off.delete(one.path);
+    renderData();
+  }
+  $("sta-add").onclick = addTomogram;
 
   // One run of any kind: `task(inputs, out)` calls the backend and gives its
   // result. The drawn run (draw.js) goes through here too.
   async function go(task, fresh) {
     if (W.busy) return;
-    const inputs = W.items.filter((i) => !W.off.has(i.path)).map((i) => i.path);
+    const inputs = W.items.filter((i) => !cur().off.has(i.path)).map((i) => i.path);
     if (!inputs.length) return status("请先打开一张断层图并勾选要平均的断层图");
     W.busy = true;
-    W.trials = {};
-    if (fresh) { W.cards = []; }
-    renderResult(null);
-    renderCards();
-    $("sta-run").disabled = true;
-    $("sta-cancel").hidden = false;
+    let out = W.out;
+    try { out = await invoke("sta_out", { first: W.items[0].path }); } catch (_) { /* demo */ }
+    W.runOut = out;
+    W.out = out;
+    const s = st(out);
+    s.trials = {};
+    s.live = null;
+    s.line = "";
+    s.result = null;
+    if (fresh) s.cards = [];
+    paint();
     $("sta-cancel").onclick = () => invoke("sta_cancel").catch(() => {});
     document.dispatchEvent(new CustomEvent("sta-busy", { detail: true }));
     const t0 = performance.now();
     const unlisten = [];
+    const show = () => { if (out === W.out) { renderCards(); } };
     try {
       const on = async (ev, fn) => { try { unlisten.push(await T.event.listen(ev, (e) => fn(e.payload))); } catch (_) { /* no events in the demo */ } };
       await on("sta-progress", (p) => {
-        const s = (performance.now() - t0) / 1000;
-        status(`${p.label}${p.total > 1 ? ` ${p.done}/${p.total}` : ""} · ${s < 120 ? s.toFixed(0) + " s" : (s / 60).toFixed(1) + " min"}`);
+        const sec = (performance.now() - t0) / 1000;
+        setStatus(out, `${p.label}${p.total > 1 ? ` ${p.done}/${p.total}` : ""} · ${sec < 120 ? sec.toFixed(0) + " s" : (sec / 60).toFixed(1) + " min"}`);
       });
-      await on("sta-live", (p) => { $("sta-live").hidden = false; $("sta-live").querySelector("img").src = `data:image/png;base64,${p.png}`; });
+      await on("sta-live", (p) => {
+        s.live = `data:image/png;base64,${p.png}`;
+        if (out === W.out) { $("sta-live").hidden = false; $("sta-live").querySelector("img").src = s.live; }
+      });
       await on("sta-note", async (n) => {
         if (n.kind === "trial") {
-          W.trials[n.trial.card] = n.trial;
-          renderCards();
+          s.trials[n.trial.card] = n.trial;
+          show();
           return;
         }
-        if (NOTES[n.kind]) $("sta-line").textContent = NOTES[n.kind](n);
+        if (NOTES[n.kind]) { s.line = NOTES[n.kind](n); if (out === W.out) $("sta-line").textContent = s.line; }
         if (n.kind === "cardsMade" || n.kind === "cardsReused") {
-          try { W.cards = (await invoke("sta_cards", { out: W.out })).cards; renderCards(); } catch (_) { /* shown at the end */ }
+          try { s.cards = (await invoke("sta_cards", { out })).cards; show(); } catch (_) { /* shown at the end */ }
         }
       });
-      status("开始…");
-      W.out = await invoke("sta_out", { first: W.items[0].path });
-      const r = await task(inputs, W.out);
-      if (!r.drawn) W.cards = r.cards || [];
-      W.selected = null;
-      renderResult(r.result);
-      status(r.needsChoice ? "没有一张卡片能平均出结果：这批断层图里可能没有成群的颗粒" : `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+      setStatus(out, "开始…");
+      const r = await task(inputs, out);
+      if (!r.drawn) s.cards = r.cards || [];
+      s.selected = null;
+      // The newest result of the folder (this one), with what else is there.
+      let res = r.result;
+      try { res = (await invoke("sta_result", { out })) || res; } catch (_) { /* demo */ }
+      s.result = res;
+      setStatus(out, r.needsChoice ? "没有一张卡片能平均出结果：这批断层图里可能没有成群的颗粒" : `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
     } catch (e) {
-      status(`${e}`.includes("已取消") ? "已取消" : `失败：${e}`);
+      setStatus(out, `${e}`.includes("已取消") ? "已取消" : `失败：${e}`);
     } finally {
       unlisten.forEach((u) => { try { u(); } catch (_) { /* gone */ } });
       W.busy = false;
-      $("sta-run").disabled = false;
-      $("sta-cancel").hidden = true;
-      $("sta-live").hidden = true;
-      $("sta-line").textContent = "";
-      renderCards();
+      s.live = null;
+      s.line = "";
+      paint();
       document.dispatchEvent(new CustomEvent("sta-busy", { detail: false }));
     }
   }
@@ -244,9 +369,19 @@
   W.status = status;
   W.renderData = renderData;
   $("sta-run").onclick = () => run(null);
-  $("sta-again").onclick = () => run(W.selected);
+  $("sta-again").onclick = () => run(cur().selected);
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
   $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
+
+  // Folding the panel to its head frees the image; the state lasts while the app runs.
+  function fold(on) {
+    W.folded = on;
+    panel.classList.toggle("folded", on);
+    const b = $("sta-fold");
+    b.title = on ? "展开面板" : "收起面板，让出图像";
+    b.setAttribute("aria-expanded", String(!on));
+  }
+  $("sta-fold").onclick = () => fold(!W.folded);
 
   function close() {
     panel.hidden = true;
@@ -258,10 +393,11 @@
     document.dispatchEvent(new CustomEvent("pro-panel", { detail: panel.id }));
     panel.hidden = false;
     button.classList.add("on");
+    fold(W.folded);
     refresh();
   };
   $("sta-close").onclick = close;
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
-  document.addEventListener("tmv-opened", () => { if (!panel.hidden && !W.busy) refresh(); });
+  document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
   $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
 })();

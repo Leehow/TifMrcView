@@ -324,6 +324,14 @@
 #sta-workspace .ws-img { display:block; width:100%; max-width:480px; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
 #sta-workspace.marking { width:min(360px, calc(100% - 20px)); }
 @media (max-width:700px) { #sta-workspace.marking { top:auto; height:48%; } }
+#sta-workspace .sta-head-btns { display:flex; gap:4px; }
+#sta-workspace.folded { bottom:auto; width:min(360px, calc(100% - 20px)); overflow:hidden; }
+#sta-workspace.folded > :not(.al-head) { display:none; }
+#sta-workspace.folded .al-head { margin-bottom:0; }
+#sta-fold svg { display:block; transition:transform .15s; }
+#sta-workspace.folded #sta-fold svg { transform:rotate(180deg); }
+#sta-workspace .sta-which { gap:4px; }
+#sta-workspace .sta-which button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 #sta-workspace p { line-height:1.6; }
 #sta-workspace h4 { margin:12px 0 2px; font-size:12px; }
 #sta-run { font-size:13px; padding:6px 18px; }

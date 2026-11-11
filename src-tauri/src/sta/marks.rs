@@ -23,7 +23,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::auto::{auto_points, default_out, live_png, note_json, result_value, resolve_tomogram, Device, Emit, Note, Outcome, MARKED};
+use super::auto::{auto_points, default_out, live_png, note_json, raw_inputs, result_value, resolve_tomogram, write_used, Device, Emit, Note, Outcome, DRAWN, MARKED};
 use super::project::{self as sp, to_raw, Drawn, Source};
 use super::shape;
 
@@ -145,6 +145,13 @@ fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, Vec<S
     inputs.iter().cloned().zip(sources).filter(|(_, s)| !looks.contains(&s.path)).unzip()
 }
 
+/// What a drawn average is made of, as `auto::used_of` reads it: how many
+/// lines, surfaces and spheres were complete enough to be used, and the size (Å).
+pub fn shapes_used(marks: &[Mark], size_a: f64) -> Value {
+    let n = |k: Kind| marks.iter().filter(|m| m.kind == k && m.points.len() >= 2).count();
+    json!({ "kind": "shapes", "lines": n(Kind::Line), "surfaces": n(Kind::Surface), "spheres": n(Kind::Sphere), "sizeA": size_a.round() })
+}
+
 /// What a set of marks is averaged by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -247,6 +254,9 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
 pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
+    // Averages are of the tomograms: a look companion handed over is replaced
+    // by its tomogram (marks made on the look file are carried over by `to_source`).
+    let inputs = raw_inputs(inputs)?;
     let Some(first) = inputs.first() else { bail!("请先选择断层图") };
     let out = match out.filter(|o| !o.is_empty()) {
         Some(o) => PathBuf::from(o),
@@ -254,7 +264,7 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
     };
     let note = |n: Note| emit("sta-note", note_json(&n));
     let sources: Vec<Source> = inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
-    let (inputs, sources) = without_looks(inputs, sources);
+    let (inputs, sources) = without_looks(&inputs, sources);
     let route = route(marks);
     let before = Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
     let last = Mutex::new((before, before));
@@ -292,8 +302,9 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
     }
     let pixels: Vec<f64> = sources.iter().map(|s| sp::pixel_of(&s.path)).collect::<Result<_>>()?;
     let (drawn, both, size_a) = drawn_of(marks, &inputs, &sources, &pixels, Size::parse(size))?;
-    let dir = out.join("drawn");
+    let dir = out.join(DRAWN);
     let report = sp::run_drawn(&sources, &drawn, both, size_a, &dir.to_string_lossy(), &progress, &live)?;
+    write_used(&dir, &shapes_used(marks, size_a));
     Ok(json!({
         "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
         "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "sizeA": size_a,
@@ -407,6 +418,50 @@ mod tests {
         let (inputs, sources) = without_looks(&["/t/a_look.mrc".to_string(), "/t/a.mrc".to_string()], sources);
         assert_eq!(inputs, vec!["/t/a.mrc".to_string()]);
         assert_eq!(sources.len(), 1);
+    }
+
+    #[test]
+    fn a_marks_run_given_a_look_file_works_on_its_tomogram() {
+        use std::sync::Mutex;
+        let dir = std::env::temp_dir().join(format!("tmv-marks-look-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["a_raw.mrc", "a_look.mrc"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let d = json!({ "version": 1, "stack": dir.join("a.mrc"), "angles": [-60.0, 60.0], "tomograms": [
+            { "path": dir.join("a_raw.mrc"), "kind": "full", "bin": 4, "thickness": 100, "method": "sart",
+              "look": { "path": dir.join("a_look.mrc"), "scale": 2.0, "offset": [0.0, 0.0, 0.0] } } ] });
+        std::fs::write(dir.join("a.tomo.json"), d.to_string()).unwrap();
+        let seen = Mutex::new(vec![]);
+        let emit = |name: &str, v: Value| {
+            if name == "sta-note" && v["kind"] == "olderVersion" {
+                seen.lock().unwrap().push(v["tomogram"].as_str().unwrap().to_string());
+            }
+        };
+        let device: Device = &|| bail!("no device");
+        let line = mark(Kind::Line, &p("a_look.mrc"), &[[1.0; 3], [5.0; 3]]);
+        let _ = run_marks(&[p("a_look.mrc")], &[line], None, None, device, &emit, &|_| String::new());
+        assert_eq!(*seen.lock().unwrap(), [p("a_raw.mrc")]);
+        // A look mark is carried onto the tomogram that the input became.
+        let sources = vec![source(&p("a_raw.mrc"), Some(Look { path: p("a_look.mrc"), scale: 2.0, offset: [0.0; 3] }))];
+        let (i, pts) = to_source(&mark(Kind::Line, &p("a_look.mrc"), &[[3.0; 3]]), &[p("a_raw.mrc")], &sources).unwrap();
+        assert!(i == 0 && close(pts[0], [6.0; 3]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_drawn_average_counts_the_shapes_it_was_made_of() {
+        let marks = [
+            mark(Kind::Line, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]),
+            mark(Kind::Line, "/t/a.mrc", &[[0.0; 3]]),
+            mark(Kind::Surface, "/t/a.mrc", &[[0.0; 3], [9.0; 3], [5.0; 3]]),
+            mark(Kind::Sphere, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]),
+            mark(Kind::Point, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]),
+        ];
+        let v = shapes_used(&marks, 219.6);
+        assert_eq!((v["lines"].as_u64(), v["surfaces"].as_u64(), v["spheres"].as_u64(), v["sizeA"].as_f64()), (Some(1), Some(1), Some(1), Some(220.0)));
     }
 
     #[test]

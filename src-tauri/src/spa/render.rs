@@ -49,6 +49,11 @@ pub fn mic_preview(img: &[f32], w: usize, h: usize, picks: &[[f32; 3]], radius_p
 
 /// Class averages in a grid of `cols` columns, each scaled to `cell` pixels.
 pub fn gallery(avgs: &[Vec<f32>], b: usize, cols: usize, cell: usize) -> Result<Vec<u8>> {
+    gallery_with(avgs, b, cols, cell, &to_gray)
+}
+
+/// `gallery` with its own grey mapping of each panel.
+pub fn gallery_with(avgs: &[Vec<f32>], b: usize, cols: usize, cell: usize, to_gray: &dyn Fn(&[f32]) -> Vec<u8>) -> Result<Vec<u8>> {
     let rows = avgs.len().div_ceil(cols.max(1)).max(1);
     let (w, h) = (cols * cell, rows * cell);
     let mut gray = vec![0u8; w * h];

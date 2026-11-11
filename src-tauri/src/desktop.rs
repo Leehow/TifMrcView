@@ -1945,18 +1945,30 @@ async fn sta_cards(out: String) -> CmdResult<serde_json::Value> {
     blocking(move || crate::sta::auto::cards_value(std::path::Path::new(&out), &base64)).await
 }
 
-/// The average saved in an output folder (slices PNG, FSC, resolution, particles), or null.
+/// The average saved in an output folder (slices PNG, FSC, resolution, particles,
+/// `used`: what it was made from), or null. With several (the automatic one
+/// in `out`, `out/marked`, `out/drawn`) the newest, or the one `which` names
+/// ("auto", "points", "drawn"); `which` and `available` say which and what there is.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_result(out: String) -> CmdResult<Option<serde_json::Value>> {
-    blocking(move || crate::sta::auto::result_value(std::path::Path::new(&out), &base64)).await
+async fn sta_result(out: String, which: Option<String>) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || crate::sta::auto::result_pick(std::path::Path::new(&out), which.as_deref(), &base64)).await
 }
 
-/// The default output folder for these tomograms: beside the first one.
+/// The default output folder for these tomograms: beside the first one
+/// (beside its tomogram when that is a look companion).
 #[cfg(feature = "pro")]
 #[tauri::command]
 fn sta_out(first: String) -> String {
-    crate::sta::auto::default_out(&first).to_string_lossy().into_owned()
+    crate::sta::auto::out_of(&first).to_string_lossy().into_owned()
+}
+
+/// The tomograms to average together with the open file (a tomogram or its
+/// look companion): `sta::auto::siblings`, [{raw, look, lookScale, lookOffset, name, open}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_siblings(path: String) -> Vec<crate::sta::auto::Sibling> {
+    crate::sta::auto::siblings(&path)
 }
 
 /// "Mark it yourself" (Pro): the marks made on the tomogram are completed to
@@ -2965,6 +2977,7 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_cards,
             #[cfg(feature = "pro")] sta_result,
             #[cfg(feature = "pro")] sta_out,
+            #[cfg(feature = "pro")] sta_siblings,
             #[cfg(feature = "pro")] sta_cancel,
             #[cfg(feature = "pro")] sta_run_drawn,
             #[cfg(feature = "pro")] sta_marks_load,

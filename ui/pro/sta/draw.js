@@ -10,8 +10,10 @@
 // points and shapes are averaged separately.
 // A mark is {kind: "point"|"line"|"surface"|"sphere", tomogram, points: [[x, y, z]…]}
 // in voxels of the file that was open when it was clicked (the tomogram or
-// its clear companion: the backend converts). Marks are kept in
-// <out>/marks.json. Touch rule: no long press; tap a mark in the list to
+// its clear companion: the backend converts). Marks are kept in the one
+// <out>/marks.json of the tomograms' output folder, and are drawn on the
+// open file converted (a mark made on the look file shows on the tomogram and
+// the other way round). Touch rule: no long press; tap a mark in the list to
 // select it, then use the delete button.
 // Backend: sta_run_drawn, sta_marks_load, sta_marks_save. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
@@ -90,6 +92,9 @@
   async function load(out) {
     if (!out || out === D.loaded) return;
     D.loaded = out;
+    D.marks = [];
+    D.sel = D.open = null;
+    render();
     try {
       const r = await invoke("sta_marks_load", { out });
       D.marks = r.marks || [];
@@ -108,8 +113,8 @@
 
   function render() {
     for (const [k, b] of Object.entries(btn)) { b.classList.toggle("on", D.kind === k); b.disabled = W.busy; }
-    // While marking, the panel makes room: the image has to be visible to click on.
-    W.panel.classList.toggle("marking", !!D.kind);
+    // While marking, and once there are marks, the panel makes room: the image has to be visible to click on.
+    W.panel.classList.toggle("marking", !!D.kind || D.marks.length > 0);
     const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
     const shapes = D.marks.some(usable);
     const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
@@ -202,6 +207,22 @@
     active(on) { if (!on && D.kind) { D.kind = null; D.open = null; render(); } },
   };
 
+  // The points of a mark in voxels of the file open in the viewer: marks made
+  // on the tomogram show on its look companion and the other way round
+  // (raw = scale × look + offset, as the backend carries them over); null when
+  // the mark belongs to a file that is neither.
+  function onOpen(m) {
+    const open = S.info?.path;
+    if (m.tomogram === open) return m.points;
+    for (const it of W.items) {
+      if (!it.look || it.scale == null || !it.offset) continue;
+      if (it.look === m.tomogram && it.path === open) return m.points.map((p) => p.map((v, k) => it.scale * v + it.offset[k]));
+      if (it.path === m.tomogram && it.look === open) return m.points.map((p) => p.map((v, k) => (v - it.offset[k]) / it.scale));
+    }
+    return null;
+  }
+  D.onOpen = onOpen;
+
   // Marks over the image: faint on the slices near the clicked one.
   ext.overlays.push((ctx) => {
     if (W.panel.hidden || !S.info || S.axis !== "xy") return;
@@ -210,8 +231,10 @@
     const alpha = (dz) => (dz <= 1 ? 1 : dz <= 6 ? 0.35 : 0);
     ctx.save();
     ctx.lineJoin = "round";
-    D.marks.forEach((m, i) => {
-      if (m.tomogram !== S.info.path) return;
+    D.marks.forEach((mark, i) => {
+      const pts = onOpen(mark);
+      if (!pts) return;
+      const m = { kind: mark.kind, points: pts };
       const col = KINDS[m.kind].color;
       const on = D.sel === i;
       const dot = (p, a) => {
@@ -264,7 +287,7 @@
   });
   document.addEventListener("tmv-opened", () => draw());
 
-  document.addEventListener("sta-out", (e) => load(e.detail));
+  document.addEventListener("sta-out", (e) => { load(e.detail); draw(); });
   document.addEventListener("sta-busy", () => render());
   // Closing the workspace puts the tool away.
   new MutationObserver(() => { if (W.panel.hidden && D.kind) setKind(null); }).observe(W.panel, { attributes: true, attributeFilter: ["hidden"] });
