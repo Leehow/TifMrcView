@@ -39,7 +39,7 @@ fn v17_spheres() {
     let dev = || Ok((CPU.get_or_init(|| crate::classify::device().0), "CPU"));
     let v = run_marks(&[file.clone()], &marks, None, Some(&out), &dev, &emit, &|_| String::new()).unwrap();
     let r = &v["report"];
-    eprintln!("{} particles, {} Å, voxel {} Å, {:.0} s", r["particles"], r["resolutionA"], r["voxelA"], started.elapsed().as_secs_f64());
+    eprintln!("{} particles, {} Å, voxel {} Å, pattern {}, {:.0} s", r["particles"], r["resolutionA"], r["voxelA"], r["pattern"], started.elapsed().as_secs_f64());
     eprintln!("fsc {}", r["fsc"]);
 }
 

@@ -1080,7 +1080,7 @@ mod tests {
     /// 60 places over two tomograms, scores falling, `limit` between the 30th and 31st.
     fn state(limit: Option<f32>) -> State {
         let places: Vec<Place> = (0..60).map(|i| place(i % 2, 10 + 5 * i, 1.0 - i as f32 * 0.01)).collect();
-        let found = Found { places, limit, voxel_a: 16.0, searched: "look".into(), search_voxel_a: Some(32.0) };
+        let found = Found { places, limit, noise: None, voxel_a: 16.0, searched: "look".into(), search_voxel_a: Some(32.0) };
         let look = Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [4.0, 6.0, 8.0] };
         State::new(found, "/nowhere/card_3.mrc".into(), 266.0, card(), vec!["/t/a.mrc".into(), "/t/b.mrc".into()], vec![Some(look), None], vec![10.0, 10.0], Route { kind: "card".into(), card: Some(3), points: None })
     }
@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn only_the_best_keep_plus_a_margin_are_shown_per_tomogram() {
         let places: Vec<Place> = (0..2000).map(|i| place(0, i, 2.0 - i as f32 * 0.001)).collect();
-        let found = Found { places, limit: Some(1.8995), voxel_a: 16.0, searched: "raw".into(), search_voxel_a: None };
+        let found = Found { places, limit: Some(1.8995), noise: None, voxel_a: 16.0, searched: "raw".into(), search_voxel_a: None };
         let s = State::new(found, "x".into(), 266.0, card(), vec!["/t/a.mrc".into()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None });
         assert_eq!(s.edits.keep, 101);
         assert_eq!(s.shown(0).len(), 101 + MARGIN);
@@ -1357,7 +1357,7 @@ mod tests {
             };
             places.push(Place { source: 0, c, bin: 1, turn: 0, score: 1.0 - i as f32 * 0.01 });
         }
-        let found = Found { places, limit: Some(0.0), voxel_a: 10.0, searched: "raw".into(), search_voxel_a: None };
+        let found = Found { places, limit: Some(0.0), noise: None, voxel_a: 10.0, searched: "raw".into(), search_voxel_a: None };
         State::new(found, "x".into(), 266.0, card(), vec![a.to_string()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None })
     }
 

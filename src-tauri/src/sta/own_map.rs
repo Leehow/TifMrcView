@@ -179,6 +179,23 @@ pub fn cube_of(map: &[f32], n: [usize; 3], voxel_a: f64, tomogram_a: f64) -> Res
     let measured_a = (2.0 * radius + 1.0) * voxel_a;
     let largest = LADDER[LADDER.len() - 1];
     if FILL * measured_a > OVER * largest {
+        // Something that runs out of the map (a membrane, a sheet of
+        // particles) is dark at the faces of the map too, a good part as
+        // much as inside it; a particle is not there at all.
+        let (mut at_faces, mut faces, mut within, mut inner) = (0.0, 0usize, 0.0, 0usize);
+        for i in 0..count {
+            let p = at(i);
+            if (0..3).any(|a| p[a] < 2.0 || p[a] > n[a] as f64 - 3.0) {
+                at_faces += dark(i);
+                faces += 1;
+            } else {
+                within += dark(i);
+                inner += 1;
+            }
+        }
+        if faces > 0 && inner > 0 && at_faces / faces as f64 >= 0.25 * within / inner as f64 {
+            bail!("这张图里的东西一直延伸到图的边缘（像一层膜，或成片排列的颗粒），不是单个颗粒，不能当模板去找。要平均膜上的排列：在干净图上用“球”或“膜”标出那层膜，程序会自己在膜上找出重复的排列并对齐");
+        }
         bail!("图里的颗粒约 {:.0} Å，太大了（最大约 {:.0} Å）；如果体素大小不对，请先改正", measured_a, largest);
     }
     let diameter_a = *LADDER.iter().min_by(|a, b| (*a - FILL * measured_a).abs().total_cmp(&(*b - FILL * measured_a).abs())).unwrap();
@@ -305,6 +322,23 @@ mod tests {
         let dark = cube_of(&map(-1.0), N, 5.0, 4.0).unwrap();
         assert!(!dark.inverted);
         assert!(corr(&dark.cube, &fitted.cube) > 0.999);
+    }
+
+    /// A template with a membrane across it (a particle on its membrane, as
+    /// maps of membrane arrays are) is no single particle: the message says
+    /// what to do instead. A particle that is only too large is told so.
+    #[test]
+    fn a_map_with_a_layer_across_it_is_sent_to_the_membrane_tools() {
+        let mut v = map(-1.0);
+        for z in 44..50 {
+            for i in 0..N[0] * N[1] {
+                v[z * N[0] * N[1] + i] = -1.0;
+            }
+        }
+        let e = cube_of(&v, N, 12.0, 4.0).err().expect("refused").to_string();
+        assert!(e.contains("延伸到图的边缘"), "{e}");
+        let e = cube_of(&map(1.0), N, 40.0, 4.0).err().expect("refused").to_string();
+        assert!(e.contains("太大了"), "{e}");
     }
 
     #[test]

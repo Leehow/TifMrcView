@@ -287,7 +287,7 @@
     $("sta-result").hidden = !r;
     if (!r) { W.found?.placed?.sync(); return renderKinds(); }
     const res = r.resolutionA != null ? `分辨率 ${fmt(r.resolutionA)} Å · ${r.particles} 个颗粒` : `${r.particles} 个颗粒 · 两半图不够一致，没有给出分辨率`;
-    const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å${r.pattern.fold > 1 ? `，${r.pattern.fold} 重对称，颗粒中心已放在对称轴上` : ""}），已按它对齐` : "";
+    const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å${r.pattern.fold > 1 ? `，${r.pattern.fold} 重对称，颗粒中心已放在对称轴上${r.pattern.symmetric ? "，并按这个对称性做了平均" : ""}` : ""}），已按它对齐` : "";
     $("sta-summary").textContent = res + pt;
     $("sta-used").textContent = usedText(r.used);
     $("sta-slices").src = r.png ? `data:image/png;base64,${r.png}` : "";

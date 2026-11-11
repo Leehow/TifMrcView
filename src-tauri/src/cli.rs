@@ -594,9 +594,13 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
 }
 
 /// The stderr line saying a repeating pattern was found in the layers of a drawn surface and used to align, when so.
-fn pattern_line(rows_a: f64, inside_a: f64, fold: u64) -> String {
+fn pattern_line(rows_a: f64, inside_a: f64, fold: u64, symmetric: bool) -> String {
     let side = if inside_a < 0.0 { "outside" } else { "inside" };
-    let axes = if fold > 1 { format!("; it repeats itself {fold} times round, and the particles are centred on those axes") } else { String::new() };
+    let axes = match (fold > 1, symmetric) {
+        (true, true) => format!("; it repeats itself {fold} times round: the particles are centred on those axes and the average is made with those turns (C{fold})"),
+        (true, false) => format!("; it repeats itself {fold} times round, and the particles are centred on those axes"),
+        _ => String::new(),
+    };
     format!("tmv sta: found a repeating pattern {:.0} Å {side} the surface (rows {:.0} Å apart) and aligned by it{axes}", inside_a.abs(), rows_a)
 }
 
@@ -732,7 +736,7 @@ fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, pro
         None => eprintln!("tmv sta: done: {} particles averaged, no resolution from the halves; the average is {map}", r["particles"]),
     }
     if let (Some(rows), Some(inside)) = (r["pattern"]["rowsA"].as_f64(), r["pattern"]["insideA"].as_f64()) {
-        eprintln!("{}", pattern_line(rows, inside, r["pattern"]["fold"].as_u64().unwrap_or(1)));
+        eprintln!("{}", pattern_line(rows, inside, r["pattern"]["fold"].as_u64().unwrap_or(1), r["pattern"]["symmetric"].as_bool().unwrap_or(false)));
     }
     if let Value::Object(m) = &mut v {
         m.remove("result");
@@ -777,7 +781,7 @@ fn sta_template(map: &str, found: &[auto_sta::Resolved], out: &Path, progress: &
         None => eprintln!("tmv sta: done: {} particles averaged, the halves did not agree well enough to give a resolution; the average is {shown}", r["particles"]),
     }
     if let (Some(rows), Some(inside)) = (r["pattern"]["rowsA"].as_f64(), r["pattern"]["insideA"].as_f64()) {
-        eprintln!("{}", pattern_line(rows, inside, r["pattern"]["fold"].as_u64().unwrap_or(1)));
+        eprintln!("{}", pattern_line(rows, inside, r["pattern"]["fold"].as_u64().unwrap_or(1), r["pattern"]["symmetric"].as_bool().unwrap_or(false)));
     }
     if let Value::Object(m) = &mut v {
         m.remove("result");
@@ -964,7 +968,7 @@ fn sta(o: &Opts) -> Result<Value> {
         let auto_sta::Outcome::Done(d) = outcome else { bail!("no average") };
         eprintln!("{}", sta_summary(&d.report));
         if let Some(p) = &d.report.pattern {
-            eprintln!("{}", pattern_line(p.rows_a, p.inside_a, p.fold as u64));
+            eprintln!("{}", pattern_line(p.rows_a, p.inside_a, p.fold as u64, p.symmetric));
         }
         let mut v = serde_json::to_value(&d.report)?;
         v["card"] = card_json(&d.card);
@@ -1006,7 +1010,7 @@ fn sta(o: &Opts) -> Result<Value> {
     let r = d.report;
     eprintln!("{}", sta_summary(&r));
     if let Some(p) = &r.pattern {
-        eprintln!("{}", pattern_line(p.rows_a, p.inside_a, p.fold as u64));
+        eprintln!("{}", pattern_line(p.rows_a, p.inside_a, p.fold as u64, p.symmetric));
     }
     let mut v = serde_json::to_value(&r)?;
     if let Value::Object(m) = &mut v {

@@ -596,6 +596,49 @@ fn threshold_splits_the_two_groups_of_peaks() {
     assert!((0.33..=0.67).contains(&t), "{t}");
 }
 
+/// A tomogram packed with the particle: every peak is one, so the scores
+/// are one group and nothing parts them, yet they stand far out of what
+/// the rest of the search scores. A search of noise alone has peaks too,
+/// and none of them stands out.
+#[test]
+fn peaks_that_are_all_particles_are_told_from_peaks_that_are_all_noise() {
+    use super::search::{above_noise, cutoff, sure, Found};
+    let mut rng = Rng(21);
+    // What a voxel scores where there is nothing: the best of many
+    // orientations (an extreme-value curve), 64³ voxels.
+    let dims = [64usize; 3];
+    let mut noise = |rng: &mut Rng| (0.10 - 0.012 * (-rng.unit().max(1e-12).ln()).ln()) as f32;
+    let score: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| noise(&mut rng)).collect();
+    let empty = Found { score: score.clone(), turn: vec![0; score.len()], dims };
+    let floor = above_noise(&empty).expect("a floor");
+    // One voxel of 262144 is expected to pass it by chance.
+    let passing = score.iter().filter(|s| **s >= floor).count();
+    assert!(passing <= 3, "{passing} voxels of noise above {floor}");
+    // Its peaks: the best voxel of each 8³ block.
+    let mut tops: Vec<f32> = vec![];
+    for z in (0..64).step_by(8) {
+        for y in (0..64).step_by(8) {
+            for x in (0..64).step_by(8) {
+                tops.push((0..512).map(|k| score[((z + k / 64) * 64 + y + k / 8 % 8) * 64 + x + k % 8]).fold(f32::MIN, f32::max));
+            }
+        }
+    }
+    assert!(sure(&as_peaks(&tops), &[Some(floor)]).is_none());
+    // Packed: a particle in every block, scoring 0.33 ± 0.03.
+    let particles: Vec<f32> = (0..512).map(|_| (0.33 + 0.03 * rng.gauss()) as f32).collect();
+    let mut packed = score.clone();
+    for (k, p) in particles.iter().enumerate() {
+        packed[((k / 64 * 8 + 4) * 64 + k / 8 % 8 * 8 + 4) * 64 + k % 8 * 8 + 4] = *p;
+    }
+    let packed = Found { score: packed, turn: vec![0; score.len()], dims };
+    let floor = above_noise(&packed).expect("a floor");
+    assert!(cutoff(&as_peaks(&particles)).is_none());
+    let limit = sure(&as_peaks(&particles), &[Some(floor)]).expect("they stand out");
+    assert!(particles.iter().filter(|p| **p >= limit).count() >= 500, "limit {limit}");
+    // A search that has no floor says nothing.
+    assert!(sure(&as_peaks(&particles), &[Some(floor), None]).is_none());
+}
+
 #[test]
 fn exclusion_keeps_off_borders_and_gold() {
     use super::search::allowed;
@@ -1240,7 +1283,7 @@ fn find_again_cuts_the_places_cubes_and_turns_them_back() {
     // A place in the corner: no whole cube there.
     places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1 });
     let n = places.len();
-    let found = Found { places: places.clone(), limit: None, voxel_a: 17.5, searched: "raw".into(), search_voxel_a: None };
+    let found = Found { places: places.clone(), limit: None, noise: None, voxel_a: 17.5, searched: "raw".into(), search_voxel_a: None };
     let got = super::review::cubes_of(&sources, &found, 0, &(0..n).collect::<Vec<_>>()).unwrap();
     assert_eq!(got.len(), n - 1);
     assert!(got.iter().all(|(i, c)| *i < n - 1 && c.len() == N * N * N));

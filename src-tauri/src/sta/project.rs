@@ -220,6 +220,9 @@ pub struct Pattern {
     /// How many times round it repeats itself about the axes its places
     /// are on (1: it does not).
     pub fold: usize,
+    /// Whether the average was made with every place at each of those
+    /// turns (`refined`).
+    pub symmetric: bool,
 }
 
 /// A tomogram averaged over `bin`³ voxels: values, size, voxel size (Å).
@@ -902,7 +905,9 @@ pub struct Card {
 ///   where positive, out to `MOMENTS` ball radii. `sqrt(λ1 / λ3)` of the eigenvalues of its second-moment
 ///   matrix about its centroid: about 1 for a ball (the missing wedge
 ///   stretches it along Z by up to 1.3 to 1.5), `λ1 / λ2` large for a line,
-///   `λ2 / λ3` large for a layer.
+///   `λ2 / λ3` large for a layer. When the piece at the centre (above half
+///   the maximum) ends inside that reach, the moments are of that piece
+///   alone: a particle among neighbours packed beside it is not a layer.
 /// * `blobs`: the number of 6-connected pieces of the density above half its
 ///   maximum that hold at least `BLOB_SHARE` of that part. Where the piece
 ///   lies does not matter here.
@@ -981,10 +986,65 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
         }
     }
     let l = eigenvalues(cov);
-    let elongation = if l[0] <= 0.0 { 0.0 } else { (l[0] / l[2].max(1e-9 * l[0])).sqrt() };
+    let mut elongation = if l[0] <= 0.0 { 0.0 } else { (l[0] / l[2].max(1e-9 * l[0])).sqrt() };
+
+    // What stands at the centre: the piece above half the maximum nearest
+    // it, followed as far as it goes. Where it ends before the moments'
+    // reach does, it is a thing of its own and the elongation is its own
+    // (particles packed side by side are no layer); where it runs on to
+    // the edge, the elongation of all the density stays.
+    let top = dens.iter().cloned().fold(0.0, f64::max);
+    let off = |i: usize| ((i % n) as f64 - c).powi(2) + ((i / n % n) as f64 - c).powi(2) + ((i / n / n) as f64 - c).powi(2);
+    let nearest = (0..dens.len()).filter(|i| dens[*i] >= 0.5 * top && off(*i) <= 0.25 * radius * radius).min_by(|a, b| off(*a).total_cmp(&off(*b)));
+    if let Some(start) = nearest {
+        let mut seen = vec![false; dens.len()];
+        seen[start] = true;
+        let mut stack = vec![start];
+        let mut piece = vec![];
+        let mut runs_on = false;
+        while let Some(i) = stack.pop() {
+            piece.push(i);
+            runs_on |= off(i).sqrt() >= wide - 1.5;
+            let p = [i % n, i / n % n, i / n / n];
+            for (axis, step) in [(0usize, 1usize), (1, n), (2, n * n)] {
+                for up in [false, true] {
+                    if if up { p[axis] + 1 >= n } else { p[axis] == 0 } {
+                        continue;
+                    }
+                    let j = if up { i + step } else { i - step };
+                    if dens[j] >= 0.5 * top && !seen[j] {
+                        seen[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        if !runs_on {
+            let m: f64 = piece.iter().map(|i| dens[*i]).sum();
+            let mut centre = [0.0f64; 3];
+            for &i in &piece {
+                let p = [(i % n) as f64, (i / n % n) as f64, (i / n / n) as f64];
+                for k in 0..3 {
+                    centre[k] += dens[i] * p[k] / m;
+                }
+            }
+            let mut cov = [[0.0f64; 3]; 3];
+            for &i in &piece {
+                let p = [(i % n) as f64 - centre[0], (i / n % n) as f64 - centre[1], (i / n / n) as f64 - centre[2]];
+                for r in 0..3 {
+                    for q in 0..3 {
+                        cov[r][q] += dens[i] * p[r] * p[q] / m;
+                    }
+                }
+            }
+            let l = eigenvalues(cov);
+            if l[0] > 0.0 {
+                elongation = (l[0] / l[2].max(1e-9 * l[0])).sqrt();
+            }
+        }
+    }
 
     // Pieces above half the maximum.
-    let top = dens.iter().cloned().fold(0.0, f64::max);
     let above: Vec<usize> = (0..dens.len()).filter(|i| ball[*i] && dens[*i] >= 0.5 * top).collect();
     let mut label = vec![usize::MAX; dens.len()];
     let mut pieces: Vec<(usize, [f64; 3])> = vec![];
@@ -1766,7 +1826,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let mut start: Option<(Vec<f32>, Vec<Pose>)> = None;
     let mut apart = None;
     let mut detail = None;
-    let mut pattern = None;
+    let mut pattern: Option<Pattern> = None;
     let drawn: &[Drawn] = if both || lattice.is_some() { drawn } else { &on_layer };
     if let Some(l) = lattice {
         cuts = l.cuts;
@@ -1855,8 +1915,23 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     // places look like is averaged from finer voxels where there are any.
     let (mut cuts, mut out) = (cuts, out);
     if detail.is_some() {
-        if let Some((fine, average, voxel)) = finer(sources, &cuts, &out, radius, voxel_a, progress, live)? {
+        let mut radius = radius;
+        for _ in 0..FINE_LEVELS {
+            let Some((fine, average, voxel)) = finer(sources, &cuts, &out, radius, voxel_a, progress, live)? else { break };
+            radius = (radius * voxel_a / voxel).min(FINE_BOX as f64 / 2.0 - 3.0);
             (cuts, out, voxel_a) = (fine, average, voxel);
+            // There the places are aligned again: the poses had only seen
+            // the coarse sampling.
+            let Some((better, with_turns)) = refined(sources, &cuts, &out, radius, pattern.map_or(1, |p| p.fold), progress, live)? else { break };
+            out = better;
+            if let Some(p) = &mut pattern {
+                p.symmetric = with_turns;
+            }
+            // Finer still only when the halves agree nearly as far as this
+            // sampling holds.
+            if out.shell < NEAR_FULL * FINE_BOX as f64 / 2.0 {
+                break;
+            }
         }
     }
     let mut report = Report {
@@ -2186,6 +2261,84 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
 
 /// Side of the cubes of `finer`.
 const FINE_BOX: usize = 64;
+/// At most this many times is the sampling halved after a pattern was
+/// aligned.
+const FINE_LEVELS: usize = 3;
+/// The sampling is halved again when the halves agree to this part of the
+/// way to its limit.
+const NEAR_FULL: f64 = 0.75;
+/// At most this many places have their finer cubes held at once for
+/// `refined` (a cube is a megabyte).
+const FINE_HOLD: usize = 4000;
+
+/// The places of `finer` aligned on their finer cubes (`cuts` and `out`
+/// as it returns them; `radius` in those voxels): each half against its
+/// own average, a few degrees and voxels about where it stands
+/// (`refine::align_from`), down to the detail the halves agree to.
+///
+/// `fold` is how many times round the pattern repeats itself about the
+/// axis the places are on (`flat::axis`; the model's Z). The average is
+/// then also made with every place at each of those turns, and that one is
+/// kept when its halves agree at least as far: turns the pattern really
+/// has add data to every voxel, turns it does not have blur what differs
+/// and the halves agree less. Whether it was kept is returned.
+///
+/// None when the cubes are too many to hold or one cannot be cut.
+fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius: f64, fold: usize, progress: Progress, live: Live) -> Result<Option<(super::refine::Aligned, bool)>> {
+    use super::average::Sum;
+    let n = FINE_BOX;
+    if cuts.len() > FINE_HOLD {
+        return Ok(None);
+    }
+    let mut particles: Vec<Vec<f32>> = vec![vec![]; cuts.len()];
+    for s in 0..sources.len() {
+        let of: Vec<usize> = (0..cuts.len()).filter(|i| cuts[*i].source == s).collect();
+        let Some(&first) = of.first() else { continue };
+        check_cancel()?;
+        let bin = cuts[first].bin;
+        let img = pipeline::open(&sources[s].path)?;
+        let (v, dims, _, got) = binned(&sources[s].path, output::pixel_a(&img) * bin as f64)?;
+        if got != bin {
+            return Ok(None);
+        }
+        let half = (bin as f64 - 1.0) / 2.0;
+        let cubes: Vec<Option<Vec<f32>>> = of.par_iter().map(|&i| cube_n(&v, dims, cuts[i].at.map(|x| ((x - half) / bin as f64).round().max(0.0) as usize), n)).collect();
+        for (i, cube) in of.into_iter().zip(cubes) {
+            let Some(cube) = cube else { return Ok(None) };
+            particles[i] = cube;
+        }
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let aligned = super::refine::align_from(&set, &out.map, &out.poses, out.shell + 1.0, 2, progress, live)?;
+    if fold < 2 {
+        return Ok(Some((aligned, false)));
+    }
+    progress("按对称性平均", 0, fold);
+    let mut sums = [Sum::new(n), Sum::new(n)];
+    for k in 0..fold {
+        check_cancel()?;
+        // The model is the same turned by S, so a place at R is as well at R·S.
+        let turn = super::cc_axis(360.0 * k as f64 / fold as f64);
+        let turned: Vec<Pose> = aligned.poses.iter().map(|p| Pose { r: mul(&p.r, &turn), ..*p }).collect();
+        for (half, sum) in sums.iter_mut().enumerate() {
+            sum.merge(&set.average(&turned, |i| i % 2 == half));
+        }
+        progress("按对称性平均", k + 1, fold);
+    }
+    let halves = [sums[0].finish(), sums[1].finish()];
+    let fsc = crate::spa::post::fsc(&halves[0], &halves[1], n, radius + 2.0);
+    let shell = super::refine::cut(&fsc);
+    if shell < aligned.shell {
+        return Ok(Some((aligned, false)));
+    }
+    let [mut both, other] = sums;
+    both.merge(&other);
+    let map = both.finish();
+    live(&map);
+    Ok(Some((super::refine::Aligned { map, halves, poses: aligned.poses, fsc, shell }, true)))
+}
 /// The most voxels of a tomogram `finer` loads.
 const FINE_MOST: usize = 600_000_000;
 
@@ -2479,7 +2632,7 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, probe: bool, pr
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let model = set.average(&poses, |_| true).finish();
     live(&model);
-    let pattern = Pattern { rows_a: lattice.period * voxel_a, inside_a: -lattice.depth * voxel_a, fold: axis.map_or(1, |a| a.0) };
+    let pattern = Pattern { rows_a: lattice.period * voxel_a, inside_a: -lattice.depth * voxel_a, fold: axis.map_or(1, |a| a.0), symmetric: false };
     Ok(Surfaces::Lattice(OnLattice { cuts, poses, size_a, model, voxel_a, apart, band, slide: 1, pattern }))
 }
 
@@ -2797,9 +2950,14 @@ impl Place {
 pub struct Found {
     /// Every peak, best first.
     pub places: Vec<Place>,
-    /// The score that parts the particles from the rest, when the scores
-    /// fall into two groups (`search::cutoff`).
+    /// The score that parts the particles from the rest (`search::sure`):
+    /// between the two groups the scores fall into, or, when they are one
+    /// group that stands out of the noise, where the noise ends.
     pub limit: Option<f32>,
+    /// The score a place has to pass to stand out of the noise of the
+    /// search (`search::above_noise`, the highest of the tomograms).
+    #[serde(default)]
+    pub noise: Option<f32>,
     /// Voxel of the cubes the places are cut at, Å.
     pub voxel_a: f64,
     /// "look", "raw" or "mixed": which tomograms were searched.
@@ -2826,7 +2984,7 @@ fn cube_fits(dims: [usize; 3], c: [usize; 3], n: usize) -> bool {
 /// looks like `template` (a `BOX`³ cube at `voxel_a`; `diameter_a` the
 /// particle's size), best first. A trial searches more coarsely.
 pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &[f32], voxel_a: f64, diameter_a: f64, trial: bool, progress: Progress) -> Result<Found> {
-    use super::search::{allowed, cutoff, peaks};
+    use super::search::{above_noise, allowed, peaks, sure};
     if sources.is_empty() {
         bail!("没有断层图");
     }
@@ -2836,6 +2994,8 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
     let mut places: Vec<Place> = vec![];
     // (look searched, search voxel Å) per source.
     let mut searched: Vec<(bool, f64)> = vec![];
+    // What a score has to pass to stand out of the noise, per source.
+    let mut floors: Vec<Option<f32>> = vec![];
     for (i, s) in sources.iter().enumerate() {
         check_cancel()?;
         // The raw tomogram the particles are cut from, and the one searched:
@@ -2890,6 +3050,7 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
         };
         let stage = format!("搜索 {}/{}", i + 1, sources.len());
         let found = super::search_gpu::search(dev, &coarse, cdims, &small, small_n, radius, s.tilts, &turns, Some(&mask), &|a, b| progress(&stage, a, b))?;
+        floors.push(above_noise(&found));
         // Particles do not overlap, but may touch.
         let look = looked.map(|(l, b)| (l, b.3));
         for p in peaks(&found, 1.8 * radius, MOST) {
@@ -2913,7 +3074,8 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
     }
     places.sort_by(|a, b| b.score.total_cmp(&a.score));
     let scores: Vec<super::search::Peak> = places.iter().map(|p| super::search::Peak { pos: p.c, score: p.score, turn: p.turn }).collect();
-    let limit = cutoff(&scores);
+    let limit = sure(&scores, &floors);
+    let noise = floors.iter().copied().collect::<Option<Vec<f32>>>().and_then(|f| f.into_iter().reduce(f32::max));
     let kind = if searched.iter().all(|s| s.0) {
         "look"
     } else if searched.iter().all(|s| !s.0) {
@@ -2921,7 +3083,7 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
     } else {
         "mixed"
     };
-    Ok(Found { places, limit, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
+    Ok(Found { places, limit, noise, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
 }
 
 /// The cubes at `places` (and the poses the search found them at), one
@@ -2962,7 +3124,11 @@ pub fn run_template(
 ) -> Result<Report> {
     let found = find_template(dev, sources, template, voxel_a, diameter_a, pass == Pass::Trial, progress)?;
     let Some(limit) = found.limit else {
-        bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len());
+        let best = found.places.first().map_or(0.0, |p| p.score);
+        match found.noise {
+            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也没有高出背景的：最高 {best:.3}，高出背景要 {noise:.3}）", found.places.len()),
+            None => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len()),
+        }
     };
     let keep: Vec<Place> = found.places.iter().filter(|p| p.score >= limit).take(MOST).copied().collect();
     run_places(dev, sources, template, diameter_a, &found, &keep, pass, out_dir, progress, live)
@@ -3468,6 +3634,21 @@ mod card_tests {
             report(name, &c);
             assert!(!c.likely, "{name}");
         }
+    }
+
+    /// Particles packed side by side in a layer: the one at the centre and
+    /// six about it, fainter (they do not stand at the same place in every
+    /// member of the class). It ends where the gaps are, so it is not
+    /// stretched; a slab runs on.
+    #[test]
+    fn a_particle_among_packed_neighbours_is_not_a_layer() {
+        let around: Vec<(f64, f64)> = (0..6).map(|k| (60.0 * k as f64).to_radians()).map(|a| (11.0 * a.cos(), 11.0 * a.sin())).collect();
+        let packed = dark(|x, y, z| blob(x, y, z / 1.3, 3.0) + around.iter().map(|(u, v)| 0.6 * blob(x - u, y - v, z / 1.3, 3.0)).sum::<f64>(), 0.03);
+        let c = card(&packed, 50);
+        report("packed layer", &c);
+        assert!(c.elongation < ELONGATION, "{c:?}");
+        let slab = card(&dark(|_, _, z| blob(0.0, 0.0, z, 2.5), 0.03), 50);
+        assert!(slab.elongation >= ELONGATION, "{slab:?}");
     }
 
     #[test]

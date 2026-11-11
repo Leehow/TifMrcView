@@ -340,6 +340,51 @@ pub fn cutoff(all: &[Peak]) -> Option<f32> {
     (share >= 0.62 + 1.2 / (all.len() as f64).sqrt()).then_some(threshold.tanh())
 }
 
+/// At most this many scores of a search are sorted for `above_noise`.
+const NOISE_SAMPLE: usize = 2_000_000;
+/// At least this many peaks have to stand out of the noise for `sure` to
+/// take them without a second group to part them from.
+const FEWEST_ABOVE: usize = 20;
+
+/// The score a peak has to pass to stand out of what the search scores
+/// where there is nothing, or None when the search holds too little to
+/// say. A voxel's score is the best over many orientations, so where there
+/// is only noise the scores follow an extreme-value (Gumbel) curve: its
+/// location and scale are read from the quartiles of all the scores (the
+/// bulk of a tomogram is not particle centres, however many particles
+/// there are), and the score returned is the one that one voxel in the
+/// whole search is expected to pass by chance.
+pub fn above_noise(found: &Found) -> Option<f32> {
+    let all = found.score.iter().filter(|s| **s != f32::MIN).count();
+    let step = all.div_ceil(NOISE_SAMPLE).max(1);
+    let mut s: Vec<f32> = found.score.iter().copied().filter(|s| *s != f32::MIN).step_by(step).collect();
+    if s.len() < 1000 {
+        return None;
+    }
+    s.sort_by(f32::total_cmp);
+    let q = |p: f64| s[((s.len() - 1) as f64 * p).round() as usize] as f64;
+    // Gumbel: the quartiles are 1.5725 scales apart and the median 0.3665
+    // scales above the location.
+    let scale = (q(0.75) - q(0.25)) / 1.5725;
+    if scale <= 0.0 {
+        return None;
+    }
+    Some((q(0.5) - 0.3665 * scale + scale * (all as f64).ln()) as f32)
+}
+
+/// The score above which a peak is a particle, for the peaks of one or
+/// more searches (`floors`: `above_noise` of each). Where the scores fall
+/// in two groups, the split between them (`cutoff`). Where they are one
+/// group (a tomogram packed with the particle has no other places to
+/// score), the highest floor, when enough peaks pass it: they are
+/// particles all the same.
+pub fn sure(all: &[Peak], floors: &[Option<f32>]) -> Option<f32> {
+    cutoff(all).or_else(|| {
+        let floor = floors.iter().copied().collect::<Option<Vec<f32>>>()?.into_iter().reduce(f32::max)?;
+        (all.iter().filter(|p| p.score >= floor).count() >= FEWEST_ABOVE).then_some(floor)
+    })
+}
+
 /// Where a particle centre may lie: false within `radius` voxels of the X
 /// and Y faces (reconstruction artefacts; not Z, particles lie near those
 /// faces) and within `2 * radius` of gold (a voxel more than `GOLD` robust
