@@ -2,6 +2,9 @@
 //! `tmv sta` and the Pro workspace: the tomograms of the inputs → class-average
 //! cards (kept, reused while the inputs are the same) → every card tried as a
 //! template (kept in `cards/trials.json`) → the card to take → the average.
+//! That is `tmv sta`, which runs unattended. In the workspace the program
+//! does not choose: the run stops at the cards (`find`) and goes on with the
+//! card the user takes, or with what the user marks (`marks`).
 //!
 //! What the caller used to read off the screen comes as data (`Note`), so the
 //! command line writes English lines from it and the workspace Chinese ones.
@@ -302,11 +305,13 @@ pub fn out_of(first: &str) -> PathBuf {
 pub struct Plan {
     pub cards: bool,
     pub trials: bool,
+    /// False when the run ends with the cards (the user chooses next).
+    pub average: bool,
 }
 
 impl Plan {
     pub fn steps(self) -> usize {
-        3 + if self.cards { 2 } else { 0 } + usize::from(self.trials)
+        3 * usize::from(self.average) + 2 * usize::from(self.cards) + usize::from(self.trials)
     }
 }
 
@@ -436,6 +441,58 @@ fn fix_paths(cards: &mut [sp::Card], dir: &Path) {
     }
 }
 
+/// The cards saved in `cards_dir` when they are of these tomograms (else
+/// none), and whether they have to be made.
+fn saved_cards(sources: &[sp::Source], cards_dir: &Path, note: &(dyn Fn(Note) + Sync)) -> (Vec<sp::Card>, bool) {
+    // The cards are made from the full-detail tomograms alone (not the look ones).
+    let stamps = input_stamps(sources.iter().map(|s| s.path.as_str()));
+    let mut cards: Vec<sp::Card> = std::fs::read(cards_dir.join("cards.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if !cards.is_empty() {
+        let saved: Option<Vec<InputStamp>> = std::fs::read(cards_dir.join("inputs.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if let Some(why) = stale(saved.as_deref(), &stamps) {
+            note(Note::CardsStale { why });
+            cards.clear();
+        }
+    }
+    let making = cards.is_empty();
+    (cards, making)
+}
+
+/// Makes the cards (`making`) or takes the saved ones; fails when there is none.
+#[allow(clippy::too_many_arguments)]
+fn make_cards(cards: &mut Vec<sp::Card>, making: bool, sources: &[sp::Source], cards_dir: &Path, device: Device, report: Progress, live: Live, note: &(dyn Fn(Note) + Sync)) -> Result<()> {
+    if making {
+        // Trials of older cards say nothing about these.
+        let _ = std::fs::remove_file(cards_dir.join("trials.json"));
+        // The device is asked for here too, for the classification; without one the cards are made on the CPU.
+        let gpu = device().ok().map(|d| d.0);
+        *cards = sp::cards_on(gpu, sources, &cards_dir.to_string_lossy(), report, live)?;
+        let stamps = input_stamps(sources.iter().map(|s| s.path.as_str()));
+        std::fs::write(cards_dir.join("inputs.json"), serde_json::to_string_pretty(&stamps)?)?;
+        note(Note::CardsMade { count: cards.len() });
+    } else {
+        note(Note::CardsReused { dir: cards_dir.to_string_lossy().into_owned() });
+        fix_paths(cards, cards_dir);
+    }
+    if cards.is_empty() {
+        bail!("no card: no kind of blob with enough members was found in these tomograms (is it a tomogram made with --for sta, and does it hold particles?)");
+    }
+    Ok(())
+}
+
+/// The first half of a run in the workspace: the kinds of thing found in the
+/// tomograms, as cards (reused while the inputs are the same). No card is
+/// tried and none is taken: what to average is the user's choice, a card or
+/// something marked (`marks`).
+pub fn find(sources: &[sp::Source], out: &Path, device: Device, progress: Progress, live: Live, note: &(dyn Fn(Note) + Sync)) -> Result<Vec<sp::Card>> {
+    let cards_dir = out.join("cards");
+    let (mut cards, making) = saved_cards(sources, &cards_dir, note);
+    let plan = Plan { cards: making, trials: false, average: false };
+    let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
+    make_cards(&mut cards, making, sources, &cards_dir, device, &report, live, note)?;
+    Ok(cards)
+}
+
 /// The run: cards (reused while the inputs are the same), trials (reused
 /// with them), the card to take, the average. `pick` takes that card (and
 /// skips the trials); otherwise the program chooses and, when it cannot
@@ -452,19 +509,7 @@ pub fn auto(
     note: &(dyn Fn(Note) + Sync),
 ) -> Result<Outcome> {
     let cards_dir = out.join("cards");
-    let cards_json = cards_dir.join("cards.json");
-    let inputs_json = cards_dir.join("inputs.json");
-    // The cards are made from the full-detail tomograms alone (not the look ones).
-    let stamps = input_stamps(sources.iter().map(|s| s.path.as_str()));
-    let mut cards: Vec<sp::Card> = std::fs::read(&cards_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if !cards.is_empty() {
-        let saved: Option<Vec<InputStamp>> = std::fs::read(&inputs_json).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        if let Some(why) = stale(saved.as_deref(), &stamps) {
-            note(Note::CardsStale { why });
-            cards.clear();
-        }
-    }
-    let making = cards.is_empty();
+    let (mut cards, making) = saved_cards(sources, &cards_dir, note);
     // The trials belong to these cards: reused with them, and only when they
     // are all there (as many as the cards, at most `TRIALS`).
     let trials_json = cards_dir.join("trials.json");
@@ -475,23 +520,9 @@ pub fn auto(
             trials.clear();
         }
     }
-    let plan = Plan { cards: making, trials: pick.is_none() && trials.is_empty() };
+    let plan = Plan { cards: making, trials: pick.is_none() && trials.is_empty(), average: true };
     let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
-    if making {
-        // Trials of older cards say nothing about these.
-        let _ = std::fs::remove_file(&trials_json);
-        // The device is asked for here too, for the classification; without one the cards are made on the CPU.
-        let gpu = device().ok().map(|d| d.0);
-        cards = sp::cards_on(gpu, sources, &cards_dir.to_string_lossy(), &report, live)?;
-        std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
-        note(Note::CardsMade { count: cards.len() });
-    } else {
-        note(Note::CardsReused { dir: cards_dir.to_string_lossy().into_owned() });
-        fix_paths(&mut cards, &cards_dir);
-    }
-    if cards.is_empty() {
-        bail!("no card: no kind of blob with enough members was found in these tomograms (is it a tomogram made with --for sta, and does it hold particles?)");
-    }
+    make_cards(&mut cards, making, sources, &cards_dir, device, &report, live, note)?;
 
     // Choosing: each card is tried as the template of a coarse run, and the one that gives the best average wins.
     let (dev, backend) = device()?;
@@ -558,7 +589,7 @@ pub fn auto_points(
 ) -> Result<Outcome> {
     let dir = out.join(MARKED);
     // The card (found blobs, cubes, classes) then the three steps of the template run.
-    let plan = Plan { cards: true, trials: false };
+    let plan = Plan { cards: true, trials: false, average: true };
     let report = |s: &str, i: usize, n: usize| progress(&sta_label(s, plan), i, n);
     let card = sp::card_from_points(sources, points, &dir.to_string_lossy(), &report, live)?;
     // The size said is the one the search works with (from the blobs under
@@ -770,10 +801,11 @@ pub type Emit<'a> = &'a (dyn Fn(&str, Value) + Sync);
 /// (those of a cryo-ET dataset), `out` the folder (default: beside the first).
 /// Events: `sta-progress` {label, done, total}, `sta-live` {png} (an
 /// intermediate average, three central slices, at most 3 a second),
-/// `sta-note` (see `note_json`). Never stops to ask: when the program cannot
-/// decide it takes the card with the best trial; the result says
-/// `needsChoice` only when no card gave an average. Returns `outcome_value`
-/// with `out`. The caller clears `CANCEL` before.
+/// `sta-note` (see `note_json`). What to average is the user's choice, so
+/// the run has two halves: without `pick` it makes the cards and returns
+/// them (`needsChoice` and `waiting` true; no card is tried or taken), with
+/// `pick` it averages that card and returns `outcome_value` with `out`. The
+/// caller clears `CANCEL` before.
 pub fn run_inputs(inputs: &[String], pick: Option<usize>, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -809,23 +841,14 @@ pub fn run_inputs(inputs: &[String], pick: Option<usize>, out: Option<&str>, dev
             }
         }
     };
-    let mut fell_back = false;
-    let mut outcome = auto(&sources, pick, &out, device, &progress, &live, &note)?;
-    if let Outcome::NeedsChoice { trials, .. } = &outcome {
-        if let Some(n) = best_card(trials) {
-            note(Note::Using { card: saved(&out).0.get(n).cloned().context("card missing")?, same: vec![], other: vec![], dir: out.join("cards").to_string_lossy().into_owned() });
-            outcome = auto(&sources, Some(n), &out, device, &progress, &live, &note)?;
-            // The program took this card, not the user.
-            let size = saved(&out).0.get(n).map(|c| c.diameter_a.round());
-            write_used(&out, &json!({ "kind": "auto", "card": n, "auto": true, "sizeA": size }));
-            fell_back = true;
-        }
-    }
-    let mut v = outcome_value(&outcome, &out, b64)?;
-    if fell_back {
-        v["auto"] = json!(true);
-    }
-    Ok(v)
+    // No card named: the run ends with the cards and the user chooses.
+    let Some(n) = pick else {
+        find(&sources, &out, device, &progress, &live, &note)?;
+        let cards = cards_value(&out, b64)?;
+        return Ok(json!({ "needsChoice": true, "waiting": true, "cards": cards["cards"], "chosen": Value::Null, "out": out, "result": result_value(&out, b64)?, "trials": [] }));
+    };
+    let outcome = auto(&sources, Some(n), &out, device, &progress, &live, &note)?;
+    outcome_value(&outcome, &out, b64)
 }
 
 #[cfg(test)]

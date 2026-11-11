@@ -1114,7 +1114,7 @@ mod tests {
 
     #[test]
     fn sta_steps_are_counted_over_the_whole_run() {
-        let plan = |cards, trials| Plan { cards, trials };
+        let plan = |cards, trials| Plan { cards, trials, average: true };
         // With cards and trials: find, cut and classify (both under step 2), the trials, search, coarse and fine alignment.
         let labels = ["找颗粒", "裁出颗粒 210 Å", "分类 第 3/10 轮 210 Å", "试跑卡片 2/9", "搜索 1/2", "粗对齐 第 1/3 轮", "裁出更细的颗粒", "精细对齐 第 2/3 轮"];
         let all: Vec<String> = labels.iter().map(|l| sta_label(l, plan(true, true))).collect();
