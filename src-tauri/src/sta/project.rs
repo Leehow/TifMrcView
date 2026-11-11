@@ -743,8 +743,11 @@ fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64,
     if cut <= 0.0 || fsc.is_empty() {
         return (mean, None);
     }
+    // The fall of the amplitudes is measured on the particle alone (masked);
+    // the map shown is the whole box, filtered.
+    let whole = mean.clone();
     crate::spa::volume::mask_sphere(&mut mean, n, radius, 6.0);
-    let (mut re, mut im) = fourier::ft3(n, &mean);
+    let (re, im) = fourier::ft3(n, &mean);
     let shell_of = |z: usize, y: usize, x: usize| {
         let (fx, fy, fz) = (fourier::freq(x, n), fourier::freq(y, n), fourier::freq(z, n));
         ((fx * fx + fy * fy + fz * fz) as f64).sqrt()
@@ -788,6 +791,7 @@ fn polish(h1: &[f32], h2: &[f32], fsc: &[f64], cut: f64, n: usize, voxel_a: f64,
         // blur of B, so the sharpening B of the convention is 4·slope (< 0).
         if den > 0.0 { (4.0 * num / den).clamp(SHARPEN_B_MIN, 0.0) } else { 0.0 }
     });
+    let (mut re, mut im) = fourier::ft3(n, &whole);
     re.par_chunks_mut(n * n).zip(im.par_chunks_mut(n * n)).enumerate().for_each(|(z, (pr, pi))| {
         for y in 0..n {
             for x in 0..n {
