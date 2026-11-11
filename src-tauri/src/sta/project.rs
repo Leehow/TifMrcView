@@ -1830,7 +1830,9 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
         let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
         // Views twice as fine as the average where they can be: see `Series::fold`.
         let fold = if bin % 2 == 0 { 2 } else { 1 };
-        let series = Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b))?;
+        let mut series = Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b))?;
+        // The particle's disc and what the transfer spreads beyond it.
+        series.window = fold as f64 * ((0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0) + 6.0).min(n as f64 / 2.0 - 2.0);
         all.push((series, particles));
     }
     if all.iter().map(|(_, p)| p.len()).sum::<usize>() < 4 {
@@ -1846,7 +1848,7 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, vo
         if round > 0 {
             // Shells up to where the halves agree, by how well they do.
             let top = super::refine::extent(&trusted);
-            let weight: Vec<f64> = trusted.iter().enumerate().map(|(s, f)| if s >= 2 && s as f64 <= top { (2.0 * f.max(0.0) / (1.0 + f.max(0.0))).sqrt() } else { 0.0 }).collect();
+            let weight: Vec<f64> = trusted.iter().enumerate().map(|(s, f)| if s >= 2 && s as f64 <= top { 2.0 * f.max(0.0) / (1.0 + f.max(0.0)) } else { 0.0 }).collect();
             let mut moved: Vec<[f64; 3]> = vec![];
             for (series, particles) in all.iter_mut() {
                 moved.extend(super::tilt::settle(series, particles, &refs, n, &weight, 2.0));

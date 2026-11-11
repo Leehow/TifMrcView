@@ -76,6 +76,9 @@ pub struct Series {
     /// noise from beyond the new limit back into the band: a quarter more
     /// noise at half of it.)
     pub fold: usize,
+    /// Radius of the disc of a patch that is kept, pixels of the views
+    /// (0: all of it).
+    pub window: f64,
 }
 
 /// A particle: its centre in tomogram voxels, its orientation and its half.
@@ -116,6 +119,7 @@ impl Series {
             optics: [dataset.optics.kv, dataset.optics.cs_mm, dataset.optics.amplitude],
             grid: Grid { dims, scale: tomogram.bin as f64 / bin as f64, z_offset },
             fold,
+            window: 0.0,
         })
     }
 
@@ -161,7 +165,21 @@ impl Series {
                 *v = (((*v as f64 - mean) / sd) * taper(x) * taper(y)) as f32;
             }
         }
-        Some((out, [centre[0] - whole[0], centre[1] - whole[1]]))
+        let off = [centre[0] - whole[0], centre[1] - whole[1]];
+        if self.window > 0.0 {
+            // Only the disc the particle projects into, softly: what lies
+            // beside it (its neighbours, where they stand close) is not part
+            // of it, and a reconstruction on a grid lets some of that in.
+            let soft = (self.window / 4.0).max(3.0);
+            for y in 0..b {
+                for x in 0..b {
+                    let d = ((x as f64 - (b / 2) as f64 - off[0]).powi(2) + (y as f64 - (b / 2) as f64 - off[1]).powi(2)).sqrt();
+                    let w = if d <= self.window { 1.0 } else if d >= self.window + soft { 0.0 } else { 0.5 + 0.5 * (std::f64::consts::PI * (d - self.window) / soft).cos() };
+                    out[y * b + x] *= w as f32;
+                }
+            }
+        }
+        Some((out, off))
     }
 
     /// The transform of the patch of `b` pixels (each `fold` of the view's)
@@ -235,8 +253,7 @@ pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum
 /// shift t of the particle in the tomogram moves it by (e_u·t, e_v·t) there.
 /// The t with the largest sum over the views is taken, searched within
 /// `reach` voxels. Shells count by `weight` (0 where the reference is not
-/// trusted) after whitening both sides, so that fine detail decides and
-/// not the strong low frequencies. Returns the shifts made, in voxels.
+/// trusted) over the power of the patch there. Returns the shifts made, in voxels.
 pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64], reach: f64) -> Vec<[f64; 3]> {
     let pad = pad_for(b);
     let projectors = [Projector::new(&refs[0], b, pad), Projector::new(&refs[1], b, pad)];
@@ -273,8 +290,13 @@ pub fn settle(series: &Series, particles: &mut [Particle], refs: &[Vec<f32>; 2],
                 for j in 0..k {
                     let s = (half.shell[j] as usize).min(top + 1);
                     let w = weight.get(s).copied().unwrap_or(0.0);
-                    let norm = (power[s][0] * power[s][1]).sqrt();
-                    if w <= 0.0 || norm <= 0.0 {
+                    // By the patch's power alone (nearly all noise): the
+                    // model keeps its own fall, so shells it hardly reaches
+                    // count for little. Whitened as well, those shells
+                    // decide, and what a particle finds there is its own
+                    // noise in the reference, exactly where it already is.
+                    let norm = power[s][0];
+                    if w <= 0.0 || norm <= 0.0 || power[s][1] <= 0.0 {
                         continue;
                     }
                     let [kx, ky] = half.k[j];
@@ -458,6 +480,7 @@ mod tests {
             optics: [300.0, 2.7, 0.07],
             grid,
             fold: fine,
+            window: 0.0,
         };
         let planes: Vec<Vec<f32>> = (0..thetas.len())
             .into_par_iter()
