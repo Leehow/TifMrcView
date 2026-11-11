@@ -119,7 +119,7 @@
     const size = u.sizeA != null ? fmt(u.sizeA, 0) : null;
     if (u.kind === "points") return `用你点的 ${u.points} 个颗粒做了模板，大小 ${size ?? "—"} Å`;
     if (u.kind === "shapes") {
-      const parts = [[u.lines, "条线"], [u.surfaces, "片面"], [u.spheres, "个球"], [u.membranes, "片膜"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
+      const parts = [[u.lines, "条纤维"], [u.surfaces, "片面"], [u.spheres, "个球"], [u.membranes, "片膜"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
       return `用了你画的标注（${parts.join(" / ") || "—"}）${size ? `，颗粒约 ${size} Å` : ""}`;
     }
     if (u.card == null) return "";

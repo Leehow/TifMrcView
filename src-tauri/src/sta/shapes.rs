@@ -26,8 +26,12 @@
 //! carried to the file the viewer has open; seeds are carried to the raw
 //! tomogram when they are averaged.
 //!
-//! Lines and hand-drawn surfaces are not searched for: they are kept as
-//! seeds (raw voxels) and averaged as drawn.
+//! Lines are searched for like membranes: the lines the user drew are the
+//! examples, every filament of that thickness in the ticked tomograms is
+//! found (`filaments::find`) and is an item with its sampling points along
+//! it. A filament much weaker than the examples is found but not taken
+//! unless the user takes it (`Edits::kept`). Hand-drawn surfaces are not
+//! searched for: they are kept as seeds (raw voxels) and averaged as drawn.
 
 use std::path::{Path, PathBuf};
 
@@ -37,11 +41,12 @@ use serde_json::{json, Value};
 
 use super::auto::{self, input_stamps, note_json, raw_inputs, resolve_tomogram, result_value, write_used, Emit, InputStamp, DRAWN};
 use super::marks::{self, Kind, Mark, Size, MOST_SEEDS, SIZE_RANGE, SPHERE_SHARE};
+use super::filaments;
 use super::membranes;
 use super::paint;
 use super::project::{self as sp, to_raw, Drawn, Source};
 use super::review::events;
-use super::shape::Seed;
+use super::shape::{self, Seed};
 use crate::tomo::dataset::Look;
 
 /// The file in `<out>/drawn` that holds the search and the edits.
@@ -57,15 +62,19 @@ pub const ETA_PER_SEED_S: f64 = 0.25;
 pub const MIN_SEEDS: usize = 20;
 /// Most arrows shown per item.
 pub const MOST_ARROWS: usize = 40;
+/// Most points of a filament sent to the screen.
+pub const MOST_LINE: usize = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ItemKind {
     Membrane,
     Ball,
+    /// A filament: its sampling points lie along its middle line.
+    Line,
 }
 
-/// One membrane or vesicle found (or given as an example).
+/// One membrane, vesicle or filament found (or given as an example).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
@@ -90,6 +99,19 @@ pub struct Item {
     pub n: [usize; 3],
     /// How many sampling points it has.
     pub seeds: usize,
+    /// Filaments: strength as a share of the examples' (1 for an example).
+    #[serde(default)]
+    pub score: f32,
+    /// Filaments: length along the line, voxels of its file.
+    #[serde(default)]
+    pub length: f64,
+    /// Filaments: the voxel size of its file, Å (0: not known).
+    #[serde(default)]
+    pub px: f64,
+    /// Filaments: found, but weaker than `filaments::SURE` and not an example:
+    /// not taken unless the user takes it.
+    #[serde(default)]
+    pub weak: bool,
 }
 
 /// What the user changed from the program's suggestion (item ids).
@@ -99,6 +121,9 @@ pub struct Edits {
     pub dropped: Vec<usize>,
     #[serde(default)]
     pub flipped: Vec<usize>,
+    /// Weak items the user takes after all.
+    #[serde(default)]
+    pub kept: Vec<usize>,
 }
 
 /// A sampling point of a line or hand-drawn surface, raw voxels.
@@ -122,10 +147,12 @@ pub struct State {
     pub looks: Vec<Option<Look>>,
     /// The particle size, Å.
     pub size_a: f64,
-    /// Lines (and hand-drawn surfaces) are among the marks: the sense of the axes is unknown.
+    /// The sense of the axes is unknown for what was drawn (see `State::both`).
+    #[serde(default)]
     pub both: bool,
-    /// How many line and surface marks were used.
-    pub lines: usize,
+    /// How many hand-drawn surfaces were used (named `lines` in older files).
+    #[serde(alias = "lines", default)]
+    pub surfaces: usize,
     /// Their sampling points.
     pub drawn: Vec<Placed>,
 }
@@ -196,19 +223,21 @@ pub fn size_of(marks: &[Mark], size: Size, pixel: &dyn Fn(&str) -> Option<f64>) 
 /// lines). The files searched are, for every input, the kind of file the
 /// examples were marked on (the look companion when they are on those; an
 /// input without one is searched on its raw file). When any of them is not
-/// segmented nothing is searched and the list of them comes back.
+/// segmented nothing is searched and the list of them comes back (lines need
+/// no segmentation).
 pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size, size_a: f64, pixel: &dyn Fn(&str) -> Option<f64>, progress: &dyn Fn(&str, usize, usize)) -> Result<Found> {
     let membranes_marked = marks.iter().any(|m| m.kind == Kind::Membrane && paint::has_stroke(m));
     let spheres_marked = marks.iter().any(|m| m.kind == Kind::Sphere && m.points.len() >= 2);
-    if !membranes_marked && !spheres_marked {
-        bail!("请先在膜上涂一笔，或标一个球作例子");
+    let lines_marked = marks.iter().any(|m| m.kind == Kind::Line && m.points.len() >= 2);
+    if !membranes_marked && !spheres_marked && !lines_marked {
+        bail!("请先在膜上涂一笔，或标一个球、画一条线作例子");
     }
     // Every mark must lie on a tomogram that is ticked.
     let mut on_look = 0;
     let mut on_raw = 0;
     for m in marks.iter().filter(|m| m.kind != Kind::Point) {
         let Some((_, look)) = where_is(&m.tomogram, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
-        let example = (m.kind == Kind::Membrane && paint::has_stroke(m)) || (m.kind == Kind::Sphere && m.points.len() >= 2);
+        let example = (m.kind == Kind::Membrane && paint::has_stroke(m)) || (m.kind == Kind::Sphere && m.points.len() >= 2) || (m.kind == Kind::Line && m.points.len() >= 2);
         if example {
             if look { on_look += 1 } else { on_raw += 1 }
         }
@@ -229,7 +258,8 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         }
     }
     let mut need: Vec<String> = vec![];
-    for f in &all {
+    // Only membranes and vesicles are read off the segmentation.
+    for f in all.iter().filter(|_| membranes_marked || spheres_marked) {
         if paint::mask_of(f)?.is_none() && !need.contains(f) {
             need.push(f.clone());
         }
@@ -241,7 +271,7 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
     let mut sides: Vec<Side> = vec![];
     let place = |file: &str| where_is(file, inputs, sources).context("有标注所在的断层图没有被勾选");
     if membranes_marked {
-        progress("找同类的膜", 0, 2);
+        progress("找同类的膜", 0, 3);
         let found = membranes::find(marks, &files, size_a)?;
         if !found.unsegmented.is_empty() {
             return Ok(Found::NeedSegment(found.unsegmented));
@@ -252,27 +282,45 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         for m in found.membranes {
             let (source, on_look) = place(&m.tomogram)?;
             let n = paint::mask_of(&m.tomogram)?.map_or([0; 3], |k| k.n);
-            items.push(Item { id: items.len(), kind: ItemKind::Membrane, source, on_look, example: m.example, side_sure: m.side_sure, centre: m.centre, radius: 0.0, voxels: m.voxels, n, seeds: m.seeds.len() });
+            items.push(Item { id: items.len(), kind: ItemKind::Membrane, source, on_look, example: m.example, side_sure: m.side_sure, centre: m.centre, radius: 0.0, voxels: m.voxels, n, seeds: m.seeds.len(), score: 0.0, length: 0.0, px: 0.0, weak: false });
             sides.push(Side { seeds: m.seeds, mask: m.mask });
         }
     }
     if spheres_marked {
-        progress("找同类的囊泡", 1, 2);
+        progress("找同类的囊泡", 1, 3);
         let found = membranes::find_balls(marks, &files, size_a, pixel)?;
         if !found.unsegmented.is_empty() {
             return Ok(Found::NeedSegment(found.unsegmented));
         }
         for b in found.balls {
             let (source, on_look) = place(&b.tomogram)?;
-            items.push(Item { id: items.len(), kind: ItemKind::Ball, source, on_look, example: b.example, side_sure: b.side_sure, centre: b.centre, radius: b.radius, voxels: 0, n: [0; 3], seeds: b.seeds.len() });
+            items.push(Item { id: items.len(), kind: ItemKind::Ball, source, on_look, example: b.example, side_sure: b.side_sure, centre: b.centre, radius: b.radius, voxels: 0, n: [0; 3], seeds: b.seeds.len(), score: 0.0, length: 0.0, px: 0.0, weak: false });
             sides.push(Side { seeds: b.seeds, mask: vec![] });
+        }
+    }
+    if lines_marked {
+        progress("找同类的纤维", 2, 3);
+        let found = filaments::find(marks, &files)?;
+        for f in found.filaments {
+            let (source, on_look) = place(&f.tomogram)?;
+            let px = pixel(&f.tomogram).context("读不出体素大小")?;
+            // As for membranes: half a particle apart, in voxels of the file it was found in.
+            let seeds = shape::line(&f.filament.line, 0.5 * size_a / px);
+            if seeds.is_empty() {
+                continue;
+            }
+            let line = &f.filament.line;
+            let mid = line[line.len() / 2];
+            let weak = f.filament.score < filaments::SURE && !f.filament.example;
+            items.push(Item { id: items.len(), kind: ItemKind::Line, source, on_look, example: f.filament.example, side_sure: true, centre: mid, radius: 0.0, voxels: 0, n: [0; 3], seeds: seeds.len(), score: f.filament.score, length: f.filament.length, px, weak });
+            sides.push(Side { seeds, mask: vec![] });
         }
     }
     if items.is_empty() {
         bail!("没有找到像例子的东西");
     }
-    // Lines and hand-drawn surfaces are used as drawn.
-    let others: Vec<Mark> = marks.iter().filter(|m| matches!(m.kind, Kind::Line | Kind::Surface) && m.points.len() >= 2).cloned().collect();
+    // Hand-drawn surfaces are used as drawn.
+    let others: Vec<Mark> = marks.iter().filter(|m| m.kind == Kind::Surface && m.points.len() >= 2).cloned().collect();
     let (mut drawn, mut both) = (vec![], false);
     if !others.is_empty() {
         let pixels: Vec<f64> = sources.iter().map(|s| pixel(&s.path).context("读不出体素大小")).collect::<Result<_>>()?;
@@ -280,7 +328,7 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         drawn = d.into_iter().map(|d| Placed { source: d.source, pos: d.pos, axis: d.axis }).collect();
         both = b;
     }
-    progress("找同类", 2, 2);
+    progress("找同类", 3, 3);
     let state = State {
         items,
         edits: Edits::default(),
@@ -289,7 +337,7 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         looks: sources.iter().map(|s| s.look.clone()).collect(),
         size_a,
         both,
-        lines: others.len(),
+        surfaces: others.len(),
         drawn,
     };
     Ok(Found::Done(Box::new(state), sides))
@@ -383,8 +431,25 @@ impl State {
         self.looks.iter().position(|l| l.as_ref().is_some_and(|l| same(&l.path, open))).map(|i| (i, true))
     }
 
+    /// Whether an item is left out: one the user dropped, or a weak one the
+    /// user did not take.
     pub fn dropped(&self, id: usize) -> bool {
-        self.edits.dropped.contains(&id)
+        if self.items.get(id).is_some_and(|i| i.weak) {
+            !self.edits.kept.contains(&id)
+        } else {
+            self.edits.dropped.contains(&id)
+        }
+    }
+
+    /// Weak items that are not taken.
+    pub fn left_weak(&self) -> usize {
+        self.items.iter().filter(|i| i.weak && self.dropped(i.id)).count()
+    }
+
+    /// Whether the sense of the axes is unknown: a filament is among what is
+    /// averaged (nothing tells which way along it is up), or the drawn ones say so.
+    pub fn both(&self) -> bool {
+        self.both || self.kept().any(|i| i.kind == ItemKind::Line)
     }
 
     pub fn flipped(&self, id: usize) -> bool {
@@ -432,22 +497,30 @@ impl State {
         Ok(())
     }
 
-    /// Drops an item, or takes a dropped one back.
+    /// Drops an item, or takes a dropped one back; for a weak item (left out
+    /// at first) that is taking it, or leaving it out again.
     pub fn toggle_drop(&mut self, id: usize) -> Result<()> {
         self.check(id)?;
-        Self::toggle(&mut self.edits.dropped, id);
+        if self.items[id].weak {
+            Self::toggle(&mut self.edits.kept, id);
+        } else {
+            Self::toggle(&mut self.edits.dropped, id);
+        }
         Ok(())
     }
 
+    /// Turns an item to the other side (a filament has none: nothing happens).
     pub fn toggle_flip(&mut self, id: usize) -> Result<()> {
         self.check(id)?;
-        Self::toggle(&mut self.edits.flipped, id);
+        if self.items[id].kind != ItemKind::Line {
+            Self::toggle(&mut self.edits.flipped, id);
+        }
         Ok(())
     }
 
-    /// Turns every item to the other side.
+    /// Turns every item to the other side (filaments have none).
     pub fn flip_all(&mut self) {
-        let all: Vec<usize> = (0..self.items.len()).collect();
+        let all: Vec<usize> = (0..self.items.len()).filter(|i| self.items[*i].kind != ItemKind::Line).collect();
         self.edits.flipped = all.into_iter().filter(|i| !self.flipped(*i)).collect();
     }
 
@@ -474,12 +547,17 @@ impl State {
 }
 
 /// What the review panel and the overlay show for the tomogram `open`:
-/// `{ total, kept, dropped, flipped, membranes, balls, lines, unsure, seeds, perTomogram: [{name, path,
-///    membranes, balls}], items, open, etaSeconds, stale, needSegment: [], out, foundMs, averageMs }`.
-/// `membranes`, `balls`, the per-tomogram counts and `kept` count what is
-/// kept; `total` also the dropped. `items` are those of the open tomogram:
+/// `{ total, kept, dropped, flipped, membranes, balls, lines, surfaces, weak, unsure, seeds, perTomogram: [{name, path,
+///    membranes, balls, lines}], items, open, etaSeconds, stale, needSegment: [], out, foundMs, averageMs }`.
+/// `membranes`, `balls`, `lines` (filaments), the per-tomogram counts and
+/// `kept` count what is kept; `total` also the dropped; `dropped` is what the
+/// user dropped, `weak` the weak filaments not taken, `surfaces` the hand-drawn
+/// surfaces. `items` are those of the open tomogram:
 /// `{id, kind, example, state, sideSure, flipped, centre, radius?, voxels?,
-/// arrows: [{pos, axis}]}` in the open file's voxels, arrows with the flip applied.
+/// arrows: [{pos, axis}]}` in the open file's voxels, arrows with the flip applied;
+/// a filament (`kind: "line"`) has `line: [[x, y, z], …]` (its sampling points,
+/// at most `MOST_LINE` of them, no arrows), `score`, `weak`, and its length as
+/// `lengthA` (Å) when the voxel size is known, else `lengthVoxels`.
 pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
     let count = |kind: ItemKind, src: Option<usize>| s.kept().filter(|i| i.kind == kind && src.is_none_or(|x| x == i.source)).count();
     let per: Vec<Value> = s
@@ -488,7 +566,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         .enumerate()
         .map(|(i, p)| {
             let name = Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
-            json!({ "name": name, "path": p, "membranes": count(ItemKind::Membrane, Some(i)), "balls": count(ItemKind::Ball, Some(i)) })
+            json!({ "name": name, "path": p, "membranes": count(ItemKind::Membrane, Some(i)), "balls": count(ItemKind::Ball, Some(i)), "lines": count(ItemKind::Line, Some(i)) })
         })
         .collect();
     let frame = s.frame(open);
@@ -502,7 +580,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
                 let flipped = s.flipped(i.id);
                 let c = s.convert(src, i.on_look, to_look, i.centre);
                 let mut arrows: Vec<Value> = vec![];
-                if !dropped {
+                if !dropped && i.kind != ItemKind::Line {
                     if let Ok(side) = read_side(dir, i.id) {
                         let n = side.seeds.len();
                         let take = n.min(MOST_ARROWS);
@@ -523,6 +601,32 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
                 match i.kind {
                     ItemKind::Ball => v["radius"] = json!(r1(i.radius * s.zoom(src, i.on_look, to_look))),
                     ItemKind::Membrane => v["voxels"] = json!(i.voxels),
+                    ItemKind::Line => {
+                        // Dropped ones are drawn too (grey, dashed), so the line is always there.
+                        let pts: Vec<Value> = match read_side(dir, i.id) {
+                            Ok(side) => {
+                                let n = side.seeds.len();
+                                let take = n.min(MOST_LINE);
+                                (0..take)
+                                    .map(|j| {
+                                        // Evenly, the last point included.
+                                        let k = if take > 1 { j * (n - 1) / (take - 1) } else { 0 };
+                                        let p = s.convert(src, i.on_look, to_look, side.seeds[k].pos);
+                                        json!([r1(p[0]), r1(p[1]), r1(p[2])])
+                                    })
+                                    .collect()
+                            }
+                            Err(_) => vec![],
+                        };
+                        v["line"] = json!(pts);
+                        v["score"] = json!(r3(i.score as f64));
+                        v["weak"] = json!(i.weak);
+                        if i.px > 0.0 {
+                            v["lengthA"] = json!((i.length * i.px).round());
+                        } else {
+                            v["lengthVoxels"] = json!((i.length * s.zoom(src, i.on_look, to_look)).round());
+                        }
+                    }
                 }
                 v
             })
@@ -532,7 +636,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
     let seeds = s.seeds();
     json!({
         "total": s.items.len(), "kept": s.kept().count(), "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(),
-        "membranes": count(ItemKind::Membrane, None), "balls": count(ItemKind::Ball, None), "lines": s.lines,
+        "membranes": count(ItemKind::Membrane, None), "balls": count(ItemKind::Ball, None), "lines": count(ItemKind::Line, None), "surfaces": s.surfaces, "weak": s.left_weak(),
         "unsure": s.unsure(), "seeds": seeds.min(MOST_SEEDS), "perTomogram": per, "items": items,
         "open": frame.map(|(source, look)| json!({ "source": source, "look": look })),
         "etaSeconds": State::eta(seeds).round(), "stale": s.stale(), "needSegment": [],
@@ -673,14 +777,14 @@ pub fn kept_drawn(s: &State, dir: &Path) -> Result<(Vec<Drawn>, bool)> {
         let n = out.len();
         out = (0..MOST_SEEDS).map(|k| out[k * n / MOST_SEEDS].clone()).collect();
     }
-    Ok((out, s.both))
+    Ok((out, s.both()))
 }
 
 /// What the average's `chosen.json` says it was made of.
 pub fn used_of(s: &State) -> Value {
     let n = |k: ItemKind| s.kept().filter(|i| i.kind == k).count();
     json!({
-        "kind": "shapes", "membranes": n(ItemKind::Membrane), "balls": n(ItemKind::Ball), "spheres": n(ItemKind::Ball), "lines": s.lines,
+        "kind": "shapes", "membranes": n(ItemKind::Membrane), "balls": n(ItemKind::Ball), "spheres": n(ItemKind::Ball), "lines": n(ItemKind::Line), "surfaces": s.surfaces,
         "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(), "sizeA": s.size_a.round(),
     })
 }
@@ -805,9 +909,9 @@ mod tests {
         let list: Vec<Item> = items
             .iter()
             .enumerate()
-            .map(|(id, (kind, on_look, example))| Item { id, kind: *kind, source: id % 2, on_look: *on_look && id % 2 == 0, example: *example, side_sure: *example, centre: [10.0, 20.0, 30.0], radius: if *kind == ItemKind::Ball { 7.0 } else { 0.0 }, voxels: 0, n: [0; 3], seeds: 12 })
+            .map(|(id, (kind, on_look, example))| Item { id, kind: *kind, source: id % 2, on_look: *on_look && id % 2 == 0, example: *example, side_sure: *example, centre: [10.0, 20.0, 30.0], radius: if *kind == ItemKind::Ball { 7.0 } else { 0.0 }, voxels: 0, n: [0; 3], seeds: 12, score: 0.0, length: 0.0, px: 0.0, weak: false })
             .collect();
-        let s = State { items: list, edits: Edits::default(), stamps: input_stamps(inputs.iter().map(String::as_str)), inputs, looks: vec![Some(look), None], size_a: 130.0, both: false, lines: 0, drawn: vec![] };
+        let s = State { items: list, edits: Edits::default(), stamps: input_stamps(inputs.iter().map(String::as_str)), inputs, looks: vec![Some(look), None], size_a: 130.0, both: false, surfaces: 0, drawn: vec![] };
         let sides: Vec<Side> = s.items.iter().map(|_| side_with(12, [1.0, 0.0, 0.0])).collect();
         save_new(dir, &s, &sides).unwrap();
         s
@@ -890,8 +994,124 @@ mod tests {
         let mixed: Vec<Mark> = marks.iter().cloned().chain([line]).collect();
         assert_eq!(size_of(&mixed, Size::Large, &px), 360.0);
         let (m, _) = done(find_in(&[source(&a, None)], &[a.clone()], &mixed, Size::Small, 130.0, &px, &quiet).unwrap());
-        assert_eq!(m.lines, 1);
-        assert!(m.both && !m.drawn.is_empty());
+        // A line is searched for, not used as drawn: the one drawn is an example (the sheets of this volume may add weak "filaments").
+        assert!(m.surfaces == 0 && !m.both && m.drawn.is_empty());
+        let lines: Vec<&Item> = m.items.iter().filter(|i| i.kind == ItemKind::Line).collect();
+        assert!(lines.iter().filter(|i| i.example).count() == 1 && lines.iter().all(|i| i.example || i.weak == (i.score < filaments::SURE)), "{lines:?}");
+        assert!(m.both(), "a line is kept, so the sense of the axes is unknown");
+    }
+
+
+    /// Noise of unit spread with three dark threads along x (y = 30, 64, 98; z = 24), half-width 2.
+    fn threads(dir: &Path) -> String {
+        let n = [128usize, 128, 48];
+        let mut seed = 7u64;
+        let mut noise = || {
+            let mut sum = 0.0f32;
+            for _ in 0..12 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                sum += (seed >> 40) as f32 / (1u64 << 24) as f32;
+            }
+            sum - 6.0
+        };
+        let mut v = vec![0f32; n[0] * n[1] * n[2]];
+        for z in 0..n[2] {
+            for y in 0..n[1] {
+                for x in 0..n[0] {
+                    let d = [30.0, 64.0, 98.0].iter().map(|yc| ((y as f64 - yc).powi(2) + (z as f64 - 24.0).powi(2)).sqrt()).fold(f64::INFINITY, f64::min);
+                    let on = if (14..=114).contains(&x) { (-3.0 * (-0.5 * (d / 2.0).powi(2)).exp()) as f32 } else { 0.0 };
+                    v[(z * n[1] + y) * n[0] + x] = noise() + on;
+                }
+            }
+        }
+        let path = dir.join("threads.mrc").to_string_lossy().into_owned();
+        crate::tomo::output::write_mrc(&path, &v, n, 10.0, false).unwrap();
+        path
+    }
+
+    fn drawn_line(tomogram: &str) -> Mark {
+        let points = (20..=80).step_by(12).enumerate().map(|(k, x)| [x as f64, 30.0 + if k % 2 == 0 { 1.0 } else { -1.0 }, 24.0]).collect();
+        Mark { kind: Kind::Line, tomogram: tomogram.into(), points, flip: false, strokes: vec![] }
+    }
+
+    #[test]
+    fn one_drawn_line_finds_all_filaments_like_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = threads(dir.path());
+        // Lines alone are a valid search: no segmentation is needed.
+        let (s, sides) = done(find_in(&[source(&a, None)], &[a.clone()], &[drawn_line(&a)], Size::Small, 80.0, &px, &quiet).unwrap());
+        assert_eq!(s.items.len(), 3, "{:?}", s.items.iter().map(|i| (i.score, i.length)).collect::<Vec<_>>());
+        assert!(s.items.iter().all(|i| i.kind == ItemKind::Line && i.side_sure && i.px == 10.0 && i.seeds == sides[i.id].seeds.len() && i.seeds >= 10 && !i.weak));
+        assert_eq!(s.items.iter().filter(|i| i.example).count(), 1);
+        // Half a particle (4 voxels) apart along a filament about 100 voxels long.
+        assert!(s.items.iter().all(|i| (15..=35).contains(&i.seeds)), "{:?}", s.items.iter().map(|i| i.seeds).collect::<Vec<_>>());
+        assert!(s.drawn.is_empty() && s.surfaces == 0 && s.both());
+        // The review carries the course of each, counts them and says which were kept.
+        let out = dir.path().join("out");
+        save_new(&out, &s, &sides).unwrap();
+        let r = review(&out, &a).unwrap();
+        assert_eq!((r["lines"].as_u64(), r["membranes"].as_u64(), r["weak"].as_u64(), r["surfaces"].as_u64()), (Some(3), Some(0), Some(0), Some(0)));
+        assert_eq!(r["perTomogram"][0]["lines"], 3);
+        let it = &r["items"][0];
+        assert!(it["kind"] == "line" && it["arrows"].as_array().unwrap().is_empty() && it["lengthA"].as_f64().unwrap() > 800.0);
+        let pts = it["line"].as_array().unwrap();
+        assert!(pts.len() == s.items[0].seeds && pts.len() <= MOST_LINE);
+        // No membrane segmentation was needed, and a line gives nothing to the section highlight.
+        assert!(section_runs(&s, &out, 0, &a, 24).unwrap().is_empty());
+    }
+
+    #[test]
+    fn weak_filaments_wait_for_the_user_and_flips_do_nothing_to_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = made(dir.path(), &[(ItemKind::Line, false, true), (ItemKind::Line, false, false), (ItemKind::Line, false, false), (ItemKind::Membrane, false, false)]);
+        for i in &mut s.items[..3] {
+            i.score = 0.9;
+            i.length = 50.0;
+        }
+        s.items[0].score = 1.0;
+        s.items[1].weak = true;
+        s.items[1].score = 0.4;
+        s.items[1].px = 10.0;
+        s.edits.dropped = vec![3];
+        save(dir.path(), &s).unwrap();
+        // The weak one is left out at first.
+        assert!(s.dropped(1) && !s.dropped(0) && !s.dropped(2) && s.dropped(3));
+        assert_eq!((s.kept().count(), s.left_weak(), s.seeds()), (2, 1, 24));
+        let r = review(dir.path(), "/t/a.mrc").unwrap();
+        assert_eq!((r["kept"].as_u64(), r["lines"].as_u64(), r["weak"].as_u64(), r["dropped"].as_u64()), (Some(2), Some(2), Some(1), Some(1)));
+        let weak = r["items"].as_array().unwrap().iter().find(|i| i["id"] == 0).unwrap();
+        assert!(weak["weak"] == false && weak["state"] == "kept" && weak["lengthVoxels"] == 50.0);
+        // Items 0 and 2 are input 0's (id % 2), 1 and 3 input 1's.
+        let b = review(dir.path(), "/t/b.mrc").unwrap();
+        let weak = b["items"].as_array().unwrap().iter().find(|i| i["id"] == 1).unwrap();
+        assert!(weak["weak"] == true && weak["state"] == "dropped" && weak["lengthA"] == 500.0 && (weak["score"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+        // Only the kept lines are averaged; the sense along a filament is unknown.
+        let (d, both) = kept_drawn(&s, dir.path()).unwrap();
+        assert!(both && !s.both);
+        assert_eq!(d.len(), 24);
+        assert!(d[..12].iter().all(|x| x.source == 0) && d[12..].iter().all(|x| x.source == 0));
+        // Taking the weak one, and leaving it out again.
+        let r = set_review(dir.path(), "/t/a.mrc", &Edit { drop: Some(1), ..Edit::default() }).unwrap();
+        assert_eq!((r["kept"].as_u64(), r["weak"].as_u64(), r["dropped"].as_u64()), (Some(3), Some(0), Some(1)));
+        assert_eq!(load(dir.path()).unwrap().edits.kept, vec![1]);
+        assert_eq!(kept_drawn(&load(dir.path()).unwrap(), dir.path()).unwrap().0.len(), 36);
+        let r = set_review(dir.path(), "/t/a.mrc", &Edit { drop: Some(1), ..Edit::default() }).unwrap();
+        assert_eq!(r["kept"], 2);
+        // A strong one is dropped the usual way; a flip does nothing to a line.
+        set_review(dir.path(), "/t/a.mrc", &Edit { drop: Some(2), flip: Some(2), ..Edit::default() }).unwrap();
+        let r = set_review(dir.path(), "/t/a.mrc", &Edit { flip_all: true, ..Edit::default() }).unwrap();
+        let s = load(dir.path()).unwrap();
+        assert_eq!((s.edits.dropped.clone(), s.edits.flipped.clone()), (vec![3, 2], vec![3]));
+        assert_eq!(r["items"][0]["flipped"], false);
+        // Reset: the weak one is out again, the user's drops are forgotten.
+        set_review(dir.path(), "/t/a.mrc", &Edit { drop: Some(1), ..Edit::default() }).unwrap();
+        let r = set_review(dir.path(), "/t/a.mrc", &Edit { reset: true, ..Edit::default() }).unwrap();
+        let s = load(dir.path()).unwrap();
+        assert_eq!((s.edits.kept.len(), s.edits.dropped.len(), s.edits.flipped.len()), (0, 0, 0));
+        assert_eq!((r["kept"].as_u64(), r["weak"].as_u64()), (Some(3), Some(1)));
+        // A saved file of before has no `kept`, `weak` or `score`, and `lines` meant surfaces.
+        let old: Edits = serde_json::from_str(r#"{"dropped":[1],"flipped":[]}"#).unwrap();
+        assert!(old.kept.is_empty());
     }
 
     #[test]

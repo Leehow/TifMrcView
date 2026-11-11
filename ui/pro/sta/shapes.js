@@ -1,8 +1,9 @@
 "use strict";
-// "Find them all, show them, then average" for membranes and vesicles
-// (sta::shapes), the same loop found.js has for particles. The user gives 2–3
-// EXAMPLES on the clean tomogram (paints membranes with 膜, marks vesicles with
-// 球); the program FINDS every membrane / vesicle of that kind in all the
+// "Find them all, show them, then average" for membranes, vesicles and
+// filaments (sta::shapes), the same loop found.js has for particles. The user
+// gives 2–3 EXAMPLES on the clean tomogram (paints membranes with 膜, marks
+// vesicles with 球, draws filaments with 线); the program FINDS every
+// membrane / vesicle / filament of that kind in all the
 // ticked tomograms, works out which side each faces, and SHOWS them before
 // anything is averaged: membranes filled, vesicles as circles, an arrow per
 // sampling point (the side that faces out), a small ? where the program could
@@ -11,8 +12,12 @@
 // Examples are drawn in the accent colour, the ones found in a second colour,
 // dropped ones grey and dashed with no arrows. The state (shapes.json) is kept
 // in <out>/drawn, so the review shows again when the folder is reopened and no
-// newer average exists. Lines and hand-drawn surfaces are not searched for:
-// they are averaged as drawn, beside the rest.
+// newer average exists. A filament is drawn as a polyline: the part within
+// about two sections of the section shown solid and thick, the rest thin and
+// faint, so its course in 3D shows while paging. A filament much weaker than
+// the examples ("weak") is found but not counted until the user takes it back
+// (dashed in the found colour, with a ?). It has no side, so no arrows and no
+// 翻面. Hand-drawn surfaces are not searched for: they are averaged as drawn.
 // Backend: sta_shapes_find {inputs, marks, size, out} (→ {needSegment: [files]}
 // or the review), sta_shapes_review {out, tomogram}, sta_shapes_section {out, id,
 // tomogram, z} (→ [[y, x0, x1], …]), sta_shapes_set {out, tomogram, drop?, flip?,
@@ -39,8 +44,9 @@
     <h4 id="sta-shapes-head"></h4>
     <ul id="sta-shapes-per" class="sta-found-per"></ul>
     <p id="sta-shapes-lines" class="dim" hidden></p>
+    <p id="sta-shapes-weak" class="dim" hidden></p>
     <p id="sta-shapes-unsure" class="warn" hidden></p>
-    <p class="dim sta-found-legend">图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的；箭头指向颗粒朝外的一侧，带 ? 的是程序拿不准朝向的。点一片膜或一个囊泡，可以给它翻面或去掉。</p>
+    <p class="dim sta-found-legend">图上：深色的是你给的例子，另一种颜色是程序找到的，灰色虚线的是你去掉的；箭头指向颗粒朝外的一侧，带 ? 的是程序拿不准朝向的。点一片膜、一个囊泡或一条纤维，可以给它翻面（纤维没有朝向）或去掉。</p>
     <div class="al-row"><button id="sta-shapes-flipall" class="small" title="把找到的全部换到另一侧">全部翻面</button><button id="sta-shapes-reset" class="small">恢复程序的建议</button></div>
     <div id="sta-shapes-sel" class="al-row sta-shapes-sel" hidden><span id="sta-shapes-selname" class="dim"></span><button id="sta-shapes-flip" class="small" title="把朝外的一侧换到另一边">翻面</button><button id="sta-shapes-drop" class="small"></button></div>
     <p id="sta-shapes-msg" class="dim"></p>
@@ -86,11 +92,13 @@
   }
   function activate() { if (S.tool !== "shapes") setTool("shapes"); }
 
+  const KIND_NAME = { membrane: "膜", ball: "囊泡", line: "纤维" };
   const plural = (d) => {
     const bits = [];
     if (d.membranes > 0) bits.push(`${d.membranes} 片膜`);
     if (d.balls > 0) bits.push(`${d.balls} 个囊泡`);
-    return bits.join("、") || "0 片膜";
+    if (d.lines > 0) bits.push(`${d.lines} 条纤维`);
+    return bits.join("、") || (d.weak > 0 ? "0 条纤维" : "0 片膜");
   };
 
   function render() {
@@ -106,21 +114,25 @@
     per.hidden = d.perTomogram.length < 2;
     per.replaceChildren(...d.perTomogram.map((t) => {
       const li = document.createElement("li");
-      li.textContent = `${t.name}：${[t.membranes ? `${t.membranes} 片膜` : "", t.balls ? `${t.balls} 个囊泡` : ""].filter(Boolean).join("、") || "0 个"}`;
+      li.textContent = `${t.name}：${[t.membranes ? `${t.membranes} 片膜` : "", t.balls ? `${t.balls} 个囊泡` : "", t.lines ? `${t.lines} 条纤维` : ""].filter(Boolean).join("、") || "0 个"}`;
       li.title = t.path;
       return li;
     }));
-    $("sta-shapes-lines").hidden = !d.lines;
-    $("sta-shapes-lines").textContent = d.lines ? `另有你画的 ${d.lines} 条线或面，按你画的算进去` : "";
+    $("sta-shapes-lines").hidden = !d.surfaces;
+    $("sta-shapes-lines").textContent = d.surfaces ? `另有你画的 ${d.surfaces} 片面，按你画的算进去` : "";
+    $("sta-shapes-weak").hidden = !(d.weak > 0);
+    $("sta-shapes-weak").textContent = d.weak > 0 ? `另有 ${d.weak} 条不太确定，先没算上；点一下虚线可以要回来` : "";
     const un = $("sta-shapes-unsure");
     un.hidden = !(d.unsure > 0);
     un.textContent = d.unsure > 0 ? `有 ${d.unsure} 个程序拿不准朝向（带 ? 的），请看一眼箭头` : "";
+    $("sta-shapes-flipall").hidden = d.membranes + d.balls === 0 && (d.lines > 0 || d.weak > 0);
     $("sta-shapes-flipall").disabled = W.busy;
     $("sta-shapes-reset").disabled = W.busy;
     const it = R.sel != null ? item(R.sel) : null;
     $("sta-shapes-sel").hidden = !it;
     if (it) {
-      $("sta-shapes-selname").textContent = `已选：${it.kind === "ball" ? "囊泡" : "膜"}${it.example ? "（例子）" : ""}`;
+      $("sta-shapes-selname").textContent = `已选：${KIND_NAME[it.kind] || "膜"}${it.example ? "（例子）" : ""}${it.weak ? "（不太确定）" : ""}${it.score != null && !it.example ? `，像例子的程度 ${Math.round(it.score * 100)}%` : ""}`;
+      $("sta-shapes-flip").hidden = it.kind === "line";
       $("sta-shapes-flip").disabled = W.busy || it.state === "dropped";
       $("sta-shapes-flip").classList.toggle("on", !!it.flipped);
       $("sta-shapes-drop").textContent = it.state === "dropped" ? "要回来" : "不要这个";
@@ -132,7 +144,7 @@
     go.disabled = small || W.busy;
     go.title = small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个` : `将平均 ${plural(d)}，${minutes(d.etaSeconds)}`;
     const msg = $("sta-shapes-msg");
-    if (!msg.dataset.err) msg.textContent = small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个：点灰色的膜把它要回来，或多标几个例子` : d.open ? "" : "这张断层图不在找出的断层图里，看不到标记";
+    if (!msg.dataset.err) msg.textContent = small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个：点灰色或虚线的把它要回来，或多标几个例子` : d.open ? "" : "这张断层图不在找出的断层图里，看不到标记";
     draw();
   }
   function say(t) { const m = $("sta-shapes-msg"); m.textContent = t; if (t) m.dataset.err = "1"; else delete m.dataset.err; }
@@ -226,7 +238,7 @@
 
   // ---- on the image ----
   const css = () => getComputedStyle(document.documentElement);
-  const colorOf = (it) => (it.state === "dropped" ? DROPPED_COLOR : it.example ? css().getPropertyValue("--accent").trim() || "#0969da" : FOUND_COLOR);
+  const colorOf = (it) => (it.state === "dropped" && !it.weak ? DROPPED_COLOR : it.example ? css().getPropertyValue("--accent").trim() || "#0969da" : FOUND_COLOR);
 
   // The membranes' runs on the section shown: asked ~120 ms after the section stops changing, kept until a new search.
   function sections() {
@@ -261,6 +273,50 @@
   // Whether an item is seen on this section, and so carries its ? and can be clicked.
   const seenOn = (it) => (it.kind === "ball" ? circle(it) != null : !!runsOf(it.id)?.length);
 
+  // A filament: the part within two sections of the one shown solid and thick, the rest thin and faint.
+  const NEAR = 2;
+  function drawLine(ctx, it, col, on, dropped, at) {
+    const pts = it.line;
+    if (!pts?.length) return;
+    ctx.strokeStyle = ctx.fillStyle = col;
+    ctx.setLineDash(dropped ? [5, 4] : []);
+    const path = (keep) => {
+      ctx.beginPath();
+      let pen = false;
+      for (let k = 0; k < pts.length; k++) {
+        if (k && keep(pts[k - 1], pts[k])) {
+          const [x0, y0] = at(pts[k - 1]), [x1, y1] = at(pts[k]);
+          if (!pen) ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          pen = true;
+        } else pen = false;
+      }
+    };
+    ctx.globalAlpha = dropped ? 0.3 : 0.35;
+    ctx.lineWidth = 1;
+    path(() => true);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = on ? 4.5 : dropped ? 2 : 3;
+    path((a, b) => Math.abs(a[2] - S.z) <= NEAR && Math.abs(b[2] - S.z) <= NEAR);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // A small ? on a weak one, where it is nearest the section shown.
+    if (it.weak) {
+      let best = pts[0];
+      for (const p of pts) if (Math.abs(p[2] - S.z) < Math.abs(best[2] - S.z)) best = p;
+      const [x, y] = at(best);
+      ctx.globalAlpha = Math.abs(best[2] - S.z) <= NEAR ? 1 : 0.5;
+      ctx.font = "bold 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#fff";
+      ctx.strokeText("?", x, y - 9);
+      ctx.fillStyle = "#9a6700";
+      ctx.fillText("?", x, y - 9);
+    }
+  }
   ext.overlays.push((ctx) => {
     if (box.hidden || !R.d || !S.info || S.axis !== "xy") return;
     sections();
@@ -272,6 +328,7 @@
     ctx.lineCap = "round";
     for (const it of R.d.items) {
       const col = colorOf(it), on = R.sel === it.id, dropped = it.state === "dropped";
+      if (it.kind === "line") { drawLine(ctx, it, col, on, dropped, at); continue; }
       if (it.kind === "membrane") {
         const runs = runsOf(it.id);
         if (!runs?.length) continue;
@@ -343,6 +400,16 @@
         const dc = Math.hypot(it.centre[0] - x, it.centre[1] - y);
         // On the circle, or inside it: the nearer circle edge wins over a bigger one around it.
         if (dc <= r + near) dist = Math.abs(dc - r);
+      } else if (it.kind === "line") {
+        // The nearest stretch of the course seen from above; a stretch far from this section counts a little less.
+        const p = it.line || [];
+        for (let k = 1; k < p.length; k++) {
+          const [ax, ay] = p[k - 1], [bx, by] = p[k];
+          const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+          const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+          const d = Math.hypot(x - (ax + t * vx), y - (ay + t * vy));
+          if (d <= near) dist = Math.min(dist, d + 0.05 * Math.abs((p[k][2] + p[k - 1][2]) / 2 - S.z));
+        }
       } else {
         for (const [ry, x0, x1] of runsOf(it.id) || []) {
           if (Math.abs(ry - y) > near) continue;

@@ -29,10 +29,10 @@
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
 // (sta_mark_section: runs [y, x0, x1) of the voxels on that section).
-// Painted membranes and marked spheres are EXAMPLES: 找出全部同类 finds all of that
-// kind in every ticked tomogram and shows them for checking (shapes.js,
-// sta::shapes); 点 does the same for particles (found.js). Lines and surfaces
-// alone keep the direct run 「平均我标的」.
+// Painted membranes, marked spheres and drawn lines are EXAMPLES: 找出全部同类 finds
+// all of that kind in every ticked tomogram and shows them for checking
+// (shapes.js, sta::shapes); 点 does the same for particles (found.js). Hand-drawn
+// surfaces alone keep the direct run 「平均我标的」.
 // Backend: sta_run_drawn, sta_marks_load, sta_marks_save, sta_mark_preview,
 // sta_membrane_status, sta_membrane_segment, sta_mark_section. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
@@ -105,7 +105,8 @@
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
   const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && count(m) >= 2);
   // A painted membrane or a complete sphere is an example of what to find (shapes.js).
-  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || (m.kind === "sphere" && count(m) >= 2);
+  // A complete line (a filament) is one too: all filaments like it are found.
+  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
