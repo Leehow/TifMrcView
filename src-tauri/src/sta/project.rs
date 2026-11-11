@@ -1208,7 +1208,7 @@ pub fn trials(
         let dir = Path::new(out_dir).join(format!("card_{}", card.id)).to_string_lossy().into_owned();
         let inner = |_: &str, a: usize, b: usize| progress(&label, a, b);
         progress(&label, 0, 1);
-        let r = run_template(dev, sources, &cube, voxel, template_diameter(card), false, &dir, &inner, live);
+        let r = run_template(dev, sources, &cube, voxel, template_diameter(card), Pass::Trial, &dir, &inner, live);
         let seconds = started.elapsed().as_secs_f64();
         let trial = match r {
             Ok(r) => {
@@ -1527,18 +1527,33 @@ fn halve(v: &[f32], dims: [usize; 3]) -> (Vec<f32>, [usize; 3]) {
 /// its own voxel size. The look tomogram is left out only when it cannot be
 /// read. `Report::searched` and `search_voxel_a` say what was done.
 #[allow(clippy::too_many_arguments)]
+/// How far `run_template` goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    /// A card tried as a template: a rougher search, the coarse average.
+    Trial,
+    /// The search and the coarse average.
+    Coarse,
+    /// And the fine pass after it.
+    Fine,
+}
+
+/// Voxels across the particle in the search of a trial.
+const TRIAL_ACROSS: f64 = 6.5;
+
 pub fn run_template(
     dev: &burn::tensor::Device,
     sources: &[Source],
     template: &[f32],
     voxel_a: f64,
     diameter_a: f64,
-    fine: bool,
+    pass: Pass,
     out_dir: &str,
     progress: Progress,
     live: Live,
 ) -> Result<Report> {
     use super::search::{allowed, cutoff, peaks};
+    let (trial, fine) = (pass == Pass::Trial, pass == Pass::Fine);
     let started = Instant::now();
     if sources.is_empty() {
         bail!("没有断层图");
@@ -1564,7 +1579,10 @@ pub fn run_template(
         voxel = got;
         let looked = match &s.look {
             Some(l) => match pixel_of(&l.path).and_then(|px| {
-                let (lbin, _) = look_search(px, got);
+                // A trial only has to show whether particles stand out: it
+                // searches where the particle is `TRIAL_ACROSS` voxels across,
+                // several times less work for a small one.
+                let lbin = if trial { nearest_bin(px, diameter_a / TRIAL_ACROSS) } else { look_search(px, got).0 };
                 binned(&l.path, lbin as f64 * px)
             }) {
                 Ok(b) => Some((l.clone(), b)),

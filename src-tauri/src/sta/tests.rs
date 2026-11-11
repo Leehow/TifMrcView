@@ -868,10 +868,10 @@ fn look_case(f: usize, per_side: usize) {
     };
     // The same without the look tomogram, for comparison.
     let plain = vec![Source { look: None, ..sources[0].clone() }];
-    let base = run_template(&dev, &plain, &template, 17.5, 220.0, true, &path("base"), &|_, _, _| {}, &|_| {}).unwrap();
+    let base = run_template(&dev, &plain, &template, 17.5, 220.0, super::project::Pass::Fine, &path("base"), &|_, _, _| {}, &|_| {}).unwrap();
     let base_errors = errors(&read(base.table.unwrap()));
     eprintln!("without look: {} particles, {} candidates, distance to the planted copy: median {:.2}, max {:.2}", base.particles, base.candidates, base_errors[base_errors.len() / 2], base_errors[base_errors.len() - 1]);
-    let done = run_template(&dev, &sources, &template, 17.5, 220.0, true, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    let done = run_template(&dev, &sources, &template, 17.5, 220.0, super::project::Pass::Fine, &out, &|_, _, _| {}, &|_| {}).unwrap();
     // The look tomogram was the one searched, at the voxel `look_search` gives
     // (the look voxel binned by the integer nearest to twice the template's:
     // 2 × 17.5 Å here, as the raw search's).

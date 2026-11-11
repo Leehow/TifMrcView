@@ -95,7 +95,7 @@ fn main() -> anyhow::Result<()> {
                 *l = stage.to_string();
             }
         };
-        let report = run_template(&dev, &sources, &cube, voxel, diameter, fine, &out, &progress, &|_| {})?;
+        let report = run_template(&dev, &sources, &cube, voxel, diameter, if fine { tifmrcview_lib::sta::project::Pass::Fine } else { tifmrcview_lib::sta::project::Pass::Coarse }, &out, &progress, &|_| {})?;
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }

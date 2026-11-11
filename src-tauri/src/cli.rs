@@ -905,7 +905,7 @@ fn sta(o: &Opts) -> Result<Value> {
 
     // Step 2: the average.
     let (cube, voxel) = sp::read_card(&card.path)?;
-    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, sp::template_diameter(card), true, &out_s, &report, &|_| {}))??;
+    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, sp::template_diameter(card), sp::Pass::Fine, &out_s, &report, &|_| {}))??;
     progress.done();
     eprintln!("{}", sta_summary(&r));
     let mut v = serde_json::to_value(&r)?;
