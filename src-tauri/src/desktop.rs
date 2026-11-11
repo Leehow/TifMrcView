@@ -1948,11 +1948,11 @@ async fn sta_cards(out: String) -> CmdResult<serde_json::Value> {
 /// The average saved in an output folder (slices PNG, FSC, resolution, particles,
 /// `used`: what it was made from), or null. With several (the automatic one
 /// in `out`, `out/marked`, `out/drawn`) the newest, or the one `which` names
-/// ("auto", "points", "drawn"); `which` and `available` say which and what there is.
+/// ("auto", "points", "drawn", "own"); `which` and `available` say which and what there is.
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn sta_result(out: String, which: Option<String>) -> CmdResult<Option<serde_json::Value>> {
-    blocking(move || crate::sta::auto::result_pick(std::path::Path::new(&out), which.as_deref(), &base64)).await
+    blocking(move || crate::sta::review::result_pick(std::path::Path::new(&out), which.as_deref(), &base64)).await
 }
 
 /// The default output folder for these tomograms: beside the first one
@@ -2013,12 +2013,14 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
 /// "Find them all" (Pro), the first half of the particle routes: the template
 /// search runs alone and what it found is saved in `found.json` for the user
 /// to check (`sta::review`). `pick` (a card of `out`) or else `marks` (the
-/// clicked particles, 1 to 3 are examples) names the example; `out` is the
-/// output folder. Same events as `sta_run`; returns the review of the first
+/// clicked particles, 1 to 3 are examples) names the example, or `which`
+/// "own" says the map brought with `sta_own_map` is (`pick` and `marks` are
+/// then not read); `out` is the output folder. When shapes were marked for
+/// `out` (`sta_shapes_review`) the places are also checked against them. Same events as `sta_run`; returns the review of the first
 /// tomogram (see `sta_review`).
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, marks: Option<Vec<crate::sta::marks::Mark>>, out: String) -> CmdResult<serde_json::Value> {
+async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, marks: Option<Vec<crate::sta::marks::Mark>>, out: String, which: Option<String>) -> CmdResult<serde_json::Value> {
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
@@ -2027,6 +2029,9 @@ async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, mark
             Some((dev, name)) => Ok((dev, *name)),
             None => Err(anyhow::anyhow!("没有可用 GPU")),
         };
+        if which.as_deref() == Some(crate::sta::review::OWN) {
+            return crate::sta::review::find_own(&inputs, &out, &device, &emit, &base64);
+        }
         match (pick, marks) {
             (Some(n), _) => crate::sta::review::find_card(&inputs, n, &out, &device, &emit, &base64),
             (None, Some(m)) => crate::sta::review::find_points(&inputs, &m, &out, &device, &emit, &base64),
@@ -2036,11 +2041,12 @@ async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, mark
 }
 
 /// What was found in `out` (`which`: "card" for the cards' route, "marked" for
-/// clicked particles) as the review of the open file `tomogram` (a searched
+/// clicked particles, "own" for a map the user brought) as the review of the open file `tomogram` (a searched
 /// tomogram or its look companion), or null when nothing was found there:
 /// {total, keep, kept, sure, unsure, limit, removed, added, perTomogram:
 /// [{name, path, kept}], scores, etaSeconds, places: [{i, pos, score, state}],
-/// radius, open, route, card, stale, foundMs, averageMs}.
+/// radius, open, route, card, stale, foundMs, averageMs, onShapes: {available,
+/// on, near, standing, kinds}, again: {out, in, ran}}.
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn sta_review(out: String, which: String, tomogram: String) -> CmdResult<Option<serde_json::Value>> {
@@ -2054,15 +2060,63 @@ async fn sta_review(out: String, which: String, tomogram: String) -> CmdResult<O
 /// (the slider), `toggle` (a place's index: kept to removed and back, below to
 /// added and back), `addAt` (a click, [x, y, z] in voxels of `tomogram`, where
 /// no circle is: the nearest place within a radius is added, else an error),
-/// `reset` (back to the program's suggestion).
+/// `reset` (back to the program's suggestion), `onShapes` (only the places on
+/// the shapes the user marked count, or all again), `undoAgain` (takes back
+/// what `sta_review_again` did, nothing else).
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>) -> CmdResult<serde_json::Value> {
+async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>, on_shapes: Option<bool>, undo_again: Option<bool>) -> CmdResult<serde_json::Value> {
     blocking(move || {
         let dir = crate::sta::review::dir_of(&out, &which)?;
-        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false) };
+        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false), on_shapes, undo_again: undo_again.unwrap_or(false) };
         crate::sta::review::set_review(&dir, &tomogram, &edit)
     }).await
+}
+
+/// "Find again" (Pro): the places the user did not click are judged again by
+/// what the user kept and dropped (`sta::review::find_again`); needs two kept
+/// and one dropped by hand, else the error 「先去掉几个不要的，再按这个」.
+/// Same events as `sta_find`; returns the review of `tomogram` (default: the
+/// first of the search), with `again: {out, in, ran}`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_again(app: AppHandle, out: String, which: String, tomogram: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        let open = tomogram.or_else(|| crate::sta::review::load(&dir).and_then(|s| s.inputs.first().cloned())).unwrap_or_default();
+        crate::sta::review::find_again(&dir, &open, &emit, &base64)
+    }).await
+}
+
+/// "Use a map I already have" (Pro): the MRC or EM file `map` becomes a card
+/// for the tomograms of `inputs` and is kept under `out` (a second map
+/// replaces the first); `which: "own"` then goes through `sta_find`,
+/// `sta_review`, `sta_review_set` and `sta_average_found` like the other
+/// routes. Returns {card, png (the card's slices, as the cards have), name,
+/// assumed (the map did not say its voxel size: the tomogram's was taken),
+/// changed (the file is gone or changed since)}. Errors are Chinese sentences.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_own_map(map: String, inputs: Vec<String>, out: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::review::own_map(&inputs, &map, &out, &base64)).await
+}
+
+/// The map kept by `sta_own_map` for `out` (same answer), or null.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_own_saved(out: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || Ok(crate::sta::review::own_saved(&out, &base64))).await
+}
+
+/// The file dialog of 「用现成的密度图」: an MRC or EM map; its path, or null when the user cancels.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_pick_map(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog().file().set_title("选一张现成的密度图").add_filter("密度图（MRC 或 EM 格式）", &["mrc", "map", "rec", "em", "MRC", "MAP", "REC", "EM"]).blocking_pick_file().and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Averages what the review of `out`/`which` keeps (second half of the
@@ -3203,6 +3257,10 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_review,
             #[cfg(feature = "pro")] sta_review_set,
             #[cfg(feature = "pro")] sta_average_found,
+            #[cfg(feature = "pro")] sta_review_again,
+            #[cfg(feature = "pro")] sta_own_map,
+            #[cfg(feature = "pro")] sta_own_saved,
+            #[cfg(feature = "pro")] sta_pick_map,
             #[cfg(feature = "pro")] sta_shapes_find,
             #[cfg(feature = "pro")] sta_shapes_review,
             #[cfg(feature = "pro")] sta_shapes_section,

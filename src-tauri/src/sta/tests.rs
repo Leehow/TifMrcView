@@ -1089,3 +1089,39 @@ fn clicks_on_empty_places_or_too_few_are_refused() {
     assert!(!std::path::Path::new(&out).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// "Find again" cuts the cube of every place of a search (one tomogram at a
+/// time) and turns it back by the orientation found: the cubes are those
+/// `run_places` cuts, in the template's frame, and a place whose cube does
+/// not fit is left out.
+#[test]
+fn find_again_cuts_the_places_cubes_and_turns_them_back() {
+    use super::project::{cut_places, Found, Place};
+    let (dir, sources, centres, _) = marked_tomogram("again", 3, 0.2);
+    let turns = grid(30.0);
+    let mut places: Vec<Place> = centres.iter().enumerate().map(|(k, c)| Place { source: 0, c: *c, bin: 1, turn: if k % 2 == 0 { 0 } else { 5 }, score: 1.0 - k as f32 * 0.01 }).collect();
+    // A place in the corner: no whole cube there.
+    places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1 });
+    let n = places.len();
+    let found = Found { places: places.clone(), limit: None, voxel_a: 17.5, searched: "raw".into(), search_voxel_a: None };
+    let got = super::review::cubes_of(&sources, &found, 0, &(0..n).collect::<Vec<_>>()).unwrap();
+    assert_eq!(got.len(), n - 1);
+    assert!(got.iter().all(|(i, c)| *i < n - 1 && c.len() == N * N * N));
+    // Each is the cut cube turned back.
+    let (cuts, _) = cut_places(&sources, &places, 17.5).unwrap();
+    assert_eq!(cuts.len(), n - 1);
+    for ((i, cube), cut) in got.iter().zip(&cuts) {
+        let want = rotate(&cut.cube, N, &transpose(&turns[places[*i].turn]));
+        assert!(cube.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+    // The copies are dark at their middle.
+    let c = N / 2;
+    for (_, cube) in &got {
+        let mid: f32 = (c - 1..=c + 1).flat_map(|z| (c - 1..=c + 1).flat_map(move |y| (c - 1..=c + 1).map(move |x| (z, y, x)))).map(|(z, y, x)| cube[(z * N + y) * N + x]).sum();
+        assert!(mid < 0.0, "{mid}");
+    }
+    // Only the places asked for, and none of a source with no place.
+    assert_eq!(super::review::cubes_of(&sources, &found, 0, &[1, 4]).unwrap().iter().map(|g| g.0).collect::<Vec<_>>(), vec![1, 4]);
+    assert!(super::review::cubes_of(&sources, &found, 1, &[1]).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

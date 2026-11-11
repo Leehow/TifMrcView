@@ -15,6 +15,11 @@
 // tick box. Everything shown below the wall (status, progress, live preview, cards, result, ticks)
 // belongs to the output folder, so a tab of another folder shows its own.
 // "找出全部" (found.js) replaces the direct run of a card: the particles like it are found and shown first.
+// The last tile of the cards, 「＋ 用现成的密度图」, takes a map the user already has (an average from
+// earlier work, a map from a data bank; MRC or EM): sta_pick_map asks for the file, sta_own_map makes
+// the card of it (kept under the output folder, a second map replaces the first, sta_own_saved gives
+// it back when the workspace is reopened). It is selected like a card and "找出全部" then runs the
+// route "own" (found.js). `selected` is a card's number, or "own".
 // Backend: sta_run, sta_cards, sta_result, sta_out, sta_siblings, sta_cancel (marks: draw.js); events
 // sta-progress {label, done, total}, sta-live {png}, sta-note {kind, …}.
 // Every call is guarded: under the web demo the commands are missing and the
@@ -28,7 +33,7 @@
   // What belongs to one output folder; kept while the app runs.
   const states = new Map();
   const st = (out) => {
-    if (!states.has(out)) states.set(out, { status: "", line: "", live: null, cards: [], trials: {}, selected: null, result: null, off: new Set(), added: [] });
+    if (!states.has(out)) states.set(out, { status: "", line: "", live: null, cards: [], trials: {}, selected: null, result: null, off: new Set(), added: [], own: null });
     return states.get(out);
   };
   const cur = () => st(W.out);
@@ -56,7 +61,7 @@
     <p id="sta-lookhint" class="dim" hidden>这张断层图没有清晰版，可在原图上选择</p>
     <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <div id="sta-cards-box" hidden>
-      <h4>① 点一张卡片</h4>
+      <h4>① 点一张卡片，或用现成的密度图</h4>
       <p id="sta-cards-hint" class="dim"></p>
       <div id="sta-cards" class="sta-cards"></div>
       <div class="al-row"><button id="sta-again" class="primary" disabled>找出全部</button></div>
@@ -117,6 +122,7 @@
   function usedText(u) {
     if (!u) return "";
     const size = u.sizeA != null ? fmt(u.sizeA, 0) : null;
+    if (u.kind === "own") return `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
     if (u.kind === "points") return `用你点的 ${u.points} 个颗粒做了模板，大小 ${size ?? "—"} Å`;
     if (u.kind === "shapes") {
       const parts = [[u.lines, "条纤维"], [u.surfaces, "片面"], [u.spheres, "个球"], [u.membranes, "片膜"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
@@ -163,15 +169,88 @@
     };
     return fig;
   }
+  // The last tile: the map the user brought (selected like a card), or the invitation to bring one.
+  function ownEl() {
+    const s = cur(), o = s.own;
+    if (!o) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "sta-own-add";
+      b.title = "以前解出来的平均图，或数据库里下载的图；MRC 或 EM 格式";
+      b.innerHTML = "<b>＋</b><span>用现成的密度图</span>";
+      b.disabled = W.busy;
+      b.onclick = () => pickMap();
+      return b;
+    }
+    const fig = document.createElement("figure");
+    fig.className = `own${s.selected === "own" ? " on" : ""}`;
+    const img = new Image();
+    if (o.png) img.src = `data:image/png;base64,${o.png}`;
+    img.alt = "你给的密度图";
+    const nm = document.createElement("figcaption");
+    nm.className = "own-name";
+    nm.textContent = o.name || "密度图";
+    nm.title = o.name || "";
+    const cap = document.createElement("figcaption");
+    cap.textContent = `约 ${fmt(o.card?.diameterA, 0)} Å`;
+    const swap = document.createElement("button");
+    swap.type = "button";
+    swap.className = "small own-swap";
+    swap.textContent = "换一张";
+    swap.title = "换成另一张现成的密度图";
+    swap.disabled = W.busy;
+    swap.onclick = (e) => { e.stopPropagation(); pickMap(); };
+    cap.append(swap);
+    fig.append(img, nm, cap);
+    const notes = [];
+    if (o.assumed) notes.push("这张图没写体素大小，按断层图的体素算");
+    if (o.changed) notes.push("这个文件之后改过，用的还是当时的版本");
+    for (const n of notes) {
+      const p = document.createElement("p");
+      p.className = "dim own-note";
+      p.textContent = n;
+      fig.append(p);
+    }
+    fig.onclick = () => {
+      if (W.busy) return;
+      cur().selected = "own";
+      renderCards();
+    };
+    return fig;
+  }
+  // Asks for the file and makes the card of it; the tile becomes the map's card, selected.
+  async function pickMap() {
+    if (W.busy) return;
+    const out = W.out;
+    let map;
+    try { map = await invoke("sta_pick_map"); } catch (e) { return status(`${e}`); }
+    if (!map) return;
+    const inputs = W.items.filter((i) => !cur().off.has(i.path)).map((i) => i.path);
+    if (!inputs.length) return status("请先打开一张断层图并勾选要平均的断层图");
+    status("读取密度图…");
+    try {
+      const r = await invoke("sta_own_map", { map, inputs, out });
+      const s = st(out);
+      s.own = r;
+      s.selected = "own";
+      setStatus(out, "");
+    } catch (e) {
+      setStatus(out, `失败：${e}`);
+    }
+    if (out === W.out) renderCards();
+  }
   function renderCards() {
     const s = cur();
     const cards = s.cards.map((c) => ({ ...c, trial: c.trial || s.trials[c.id] || null }));
-    $("sta-cards-box").hidden = !cards.length;
-    $("sta-cards").replaceChildren(...cards.map(cardEl));
+    // Always there once the folder is known: the tile of a map of one's own is a way in without cards.
+    $("sta-cards-box").hidden = !W.out;
+    $("sta-cards").replaceChildren(...cards.map(cardEl), ownEl());
     const again = $("sta-again");
     again.disabled = s.selected == null || W.busy;
-    again.title = s.selected == null ? "先点一张卡片" : "";
-    $("sta-cards-hint").textContent = "点你要平均的那一类作例子，再按“找出全部”：程序会把同类的都找出来给你看，你确认后才平均。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。";
+    again.title = s.selected == null ? "先点一张卡片，或选一张现成的密度图" : "";
+    $("sta-cards-hint").textContent = cards.length
+      ? "点你要平均的那一类作例子，再按“找出全部”：程序会把同类的都找出来给你看，你确认后才平均。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。也可以用你已有的密度图作例子。"
+      : "还没有候选卡片。可以先按“找候选”，也可以直接用你已有的密度图作例子，再按“找出全部”。";
   }
   // The line the run ends with while it waits for the user's choice.
   const PROMPT = "请选择要平均什么：点一张卡片，或用标注工具在图上点、涂、画出来";
@@ -187,7 +266,7 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  const WHICH = { auto: "卡片", points: "点", drawn: "画的" };
+  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "现成的图" };
   function renderResult() {
     const r = cur().result;
     W.result = r;
@@ -206,7 +285,7 @@
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
       b.textContent = WHICH[w] || w;
-      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果" }[w] || "";
+      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果" }[w] || "";
       b.onclick = async () => {
         if (w === r.which) return;
         const out = W.out;
@@ -263,11 +342,12 @@
     document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
     if (W.busy && W.runOut === out) return;
     try {
-      const [cards, result] = await Promise.all([invoke("sta_cards", { out }), invoke("sta_result", { out })]);
+      const [cards, result, own] = await Promise.all([invoke("sta_cards", { out }), invoke("sta_result", { out }), invoke("sta_own_saved", { out }).catch(() => null)]);
       if (gen !== W.gen || (W.busy && W.runOut === out)) return;
       const s = st(out);
       s.cards = cards.cards || [];
-      if (s.selected != null && !s.cards.some((c) => c.id === s.selected)) s.selected = null;
+      s.own = own || null;
+      if (s.selected != null && !(s.selected === "own" ? s.own : s.cards.some((c) => c.id === s.selected))) s.selected = null;
       s.result = result;
       if (out === W.out) { paint(); }
     } catch (_) {
@@ -383,7 +463,12 @@
   W.status = status;
   W.renderData = renderData;
   $("sta-run").onclick = () => run(null);
-  $("sta-again").onclick = () => { const n = cur().selected; if (n != null) (W.found ? W.found.find(n) : run(n)); };
+  $("sta-again").onclick = () => {
+    const n = cur().selected;
+    if (n == null) return;
+    if (n === "own") return W.found?.findOwn();
+    W.found ? W.found.find(n) : run(n);
+  };
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
   $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
 

@@ -411,3 +411,24 @@
 #sta-shapes-msg:empty { display:none; }
 #sta-shapes-go { font-size:13px; padding:6px 18px; }
 #sta-shapes-go:disabled { opacity:.5; cursor:not-allowed; }
+/* 「用现成的密度图」: the last tile of the cards */
+#sta-workspace .sta-cards figure.own { position:relative; }
+#sta-workspace .sta-cards .own-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim); }
+#sta-workspace .sta-cards .own-swap { margin-left:6px; padding:0 8px; font-size:11px; line-height:18px; }
+#sta-workspace .sta-cards .own-note { margin:2px 0 0; font-size:11px; line-height:1.35; }
+#sta-workspace .sta-cards .sta-own-add { flex:none; width:192px; min-height:96px; box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:6px; border:1.5px dashed var(--line); border-radius:8px; background:transparent; color:var(--dim); cursor:pointer; font:inherit; }
+#sta-workspace .sta-cards .sta-own-add b { font-size:22px; font-weight:400; line-height:1; }
+#sta-workspace .sta-cards .sta-own-add:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+#sta-workspace .sta-cards .sta-own-add:disabled { opacity:.5; cursor:not-allowed; }
+/* the wall folded to one line while a review shows */
+#sta-workspace .sta-wall-fold { display:block; width:100%; margin:4px 0 2px; padding:5px 8px; text-align:left; border:1px solid var(--line); border-radius:6px; background:var(--subtle); color:inherit; cursor:pointer; font:inherit; }
+#sta-workspace .sta-wall-fold:hover { border-color:var(--accent); }
+/* the particle review: only-on-shapes tick box and 再找一次 */
+#sta-found .sta-found-shapes { display:flex; align-items:center; gap:6px; margin:6px 0 2px; cursor:pointer; }
+#sta-found .sta-found-shapes[hidden] { display:none; }
+#sta-found .sta-found-shapes input { margin:0; }
+#sta-found .sta-found-again { align-items:baseline; flex-wrap:wrap; gap:4px 8px; }
+#sta-found .link { padding:0; border:0; background:none; color:var(--accent); text-decoration:underline; cursor:pointer; font:inherit; }
+#sta-found .link:disabled { opacity:.5; cursor:not-allowed; }
+#sta-found .link[hidden] { display:none; }
+#sta-workspace .sta-wall[hidden], #sta-workspace #sta-wall-count[hidden], #sta-workspace .sta-wall-fold[hidden] { display:none; }

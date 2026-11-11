@@ -409,10 +409,10 @@ pub(crate) fn resolution(fsc: &[f64]) -> Shells {
 /// group is taken for other things than the particle and left out.
 const DISTINCT: f64 = 0.75;
 
-struct Cut {
-    source: usize,
+pub(super) struct Cut {
+    pub(super) source: usize,
     /// Centre in voxels of the source tomogram (unbinned).
-    at: [f64; 3],
+    pub(super) at: [f64; 3],
     /// Source voxels per working voxel.
     bin: usize,
     score: f32,
@@ -422,7 +422,7 @@ struct Cut {
     /// deviations below the tomogram's median: gold and other very dense
     /// things stand far out.
     darkest: f32,
-    cube: Vec<f32>,
+    pub(super) cube: Vec<f32>,
 }
 
 /// See `Cut::darkest`. `c` and `radius` in voxels of `v`.
@@ -2198,7 +2198,7 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
 
 /// The cubes at `places` (and the poses the search found them at), one
 /// tomogram in memory at a time. Places whose cube cannot be cut are left out.
-fn cut_places(sources: &[Source], places: &[Place], voxel_a: f64) -> Result<(Vec<Cut>, Vec<Pose>)> {
+pub(super) fn cut_places(sources: &[Source], places: &[Place], voxel_a: f64) -> Result<(Vec<Cut>, Vec<Pose>)> {
     let turns = grid(30.0);
     let mut cuts: Vec<(usize, Cut, Pose)> = vec![];
     for (i, s) in sources.iter().enumerate() {

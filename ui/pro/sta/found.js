@@ -10,9 +10,14 @@
 // so closing the app loses nothing; the review shows again when the folder is
 // reopened and there is no newer average.
 // Membranes and vesicles (膜 球) have their own review in shapes.js; lines and surfaces keep their direct run.
-// Backend: sta_find {inputs, pick|marks, out}, sta_review {out, which, tomogram},
-// sta_review_set {out, which, tomogram, keep?, toggle?, addAt?, reset?},
-// sta_average_found {out, which}; `which` is "card" or "marked".
+// Three routes (`which`): "card" (a card), "marked" (clicked particles) and "own" (a map the user brought, index.js).
+// When the user has marked shapes (shapes.js) the review says so (`onShapes`): a tick box 「只要在你标的…上的」
+// keeps only the places on them; unticking brings the others back (their state is "off" while ticked and not drawn).
+// 「再找一次」 judges the places the user did not touch again by what the user dropped and kept
+// (sta_review_again; the answer is `again: {out, in, ran}`, 「撤销」 takes it back).
+// Backend: sta_find {inputs, pick|marks|which:"own", out}, sta_review {out, which, tomogram},
+// sta_review_set {out, which, tomogram, keep?, toggle?, addAt?, reset?, onShapes?, undoAgain?},
+// sta_review_again {out, which, tomogram}, sta_average_found {out, which}.
 // The review is of the file open in the viewer (the tomogram or its look
 // companion): places come back in that file's voxels. Every call is guarded.
 // Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw.
@@ -33,8 +38,10 @@
     <p id="sta-found-unsure" class="warn" hidden>程序分不清哪些是，请拖动滑块自己定</p>
     <div class="sta-found-slider"><span class="dim">严格</span><input id="sta-found-keep" type="range" min="1" max="1" step="1" aria-label="保留多少个，从最像的开始"><span class="dim">宽松</span></div>
     <canvas id="sta-found-curve" height="44" aria-label="每个候选和例子的相似度，从高到低"></canvas>
-    <p class="dim sta-found-legend">图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是你去掉的，绿圈是你加上的。点一个圈去掉或加上它。</p>
+    <p class="dim sta-found-legend">图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的。点一个圈去掉或加上它。</p>
+    <label id="sta-found-shapes-row" class="sta-found-shapes" hidden><input id="sta-found-shapes" type="checkbox"><span id="sta-found-shapes-text"></span></label>
     <div class="al-row"><button id="sta-found-add" class="small" aria-pressed="false" title="图上有漏掉的？打开后，点在它的中心，程序把最近的一个候选加进来">补一个</button><button id="sta-found-reset" class="small">恢复程序的建议</button></div>
+    <div class="al-row sta-found-again"><button id="sta-found-again" class="small">再找一次</button><span id="sta-found-again-text" class="dim"></span><button id="sta-found-undo" class="link" data-no-i18n hidden>撤销</button></div>
     <p id="sta-found-msg" class="dim"></p>
     <div class="al-row"><button id="sta-found-go" class="primary"></button><button id="sta-found-other" class="small" title="回到选例子">换一个例子</button></div>`;
   // Above the cards: what was found is what the user looks at next.
@@ -43,12 +50,15 @@
 
   const pendingOf = (d) => !!d && !d.stale && (d.averageMs == null || d.foundMs > d.averageMs);
   const open = () => S.info?.path || W.items?.[0]?.path || "";
+  const KIND = { membrane: "膜", ball: "囊泡", line: "纤维" };
+  // 「膜、囊泡或纤维」
+  const orOf = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join("、")}或${a[a.length - 1]}`);
   const minutes = (s) => { const m = Math.max(1, Math.round(s / 60)); return `约 ${m} 分钟`; };
 
   // The review to show for the output folder `out`: of the two routes the newer one that no average followed.
   async function fetchBoth(out, tomogram) {
     const got = [];
-    for (const which of ["card", "marked"]) {
+    for (const which of ["card", "marked", "own"]) {
       try {
         const d = await invoke("sta_review", { out, which, tomogram });
         if (pendingOf(d)) got.push({ which, d });
@@ -109,6 +119,20 @@
     $("sta-found-add").setAttribute("aria-pressed", String(R.add));
     $("sta-found-add").disabled = W.busy;
     $("sta-found-reset").disabled = W.busy;
+    // Only on the shapes the user marked.
+    const sh = d.onShapes || {};
+    $("sta-found-shapes-row").hidden = !sh.available;
+    $("sta-found-shapes").checked = !!sh.on;
+    $("sta-found-shapes").disabled = W.busy;
+    $("sta-found-shapes-text").textContent = `只要在你标的${orOf((sh.kinds || []).map((k) => KIND[k]).filter(Boolean)) || "形状"}上的（${sh.near ?? 0} 个）`;
+    // Find again: once something was dropped by hand.
+    const ag = d.again || {};
+    const dropped = d.removed > 0;
+    $("sta-found-again").disabled = W.busy || !dropped;
+    $("sta-found-again").title = dropped ? "" : "先在图上点掉几个不要的";
+    $("sta-found-again-text").textContent = ag.ran ? (ag.out || ag.in ? `又去掉 ${ag.out} 个像你去掉的，补回 ${ag.in} 个` : "重新判断过了，没有要改的") : "按你去掉和补上的，把其余的重新判断一遍";
+    $("sta-found-undo").hidden = !ag.ran;
+    $("sta-found-undo").disabled = W.busy;
     const small = d.kept < MIN_KEPT;
     const go = $("sta-found-go");
     go.textContent = `平均这 ${d.kept} 个 · ${minutes(d.etaSeconds)}`;
@@ -191,6 +215,18 @@
     keepTimer = setTimeout(() => edit({ keep }), 200);
   };
   $("sta-found-reset").onclick = () => { activate(); edit({ reset: true }); };
+  $("sta-found-shapes").onchange = (e) => { activate(); edit({ onShapes: e.target.checked }); };
+  $("sta-found-undo").onclick = () => { activate(); edit({ undoAgain: true }); };
+  $("sta-found-again").onclick = async () => {
+    const d = R.d;
+    if (!d || W.busy || !(d.removed > 0)) return;
+    const { out, which } = R;
+    clearTimeout(keepTimer);
+    await R.queue;
+    const tomogram = open();
+    await W.go(async () => { await invoke("sta_review_again", { out, which, tomogram }); return { drawn: true }; }, false);
+    load();
+  };
   $("sta-found-add").onclick = () => { R.add = !R.add; if (R.add) activate(); render(); };
   $("sta-found-other").onclick = () => {
     if (R.d) R.dismissed.set(key(), R.d.foundMs);
@@ -229,6 +265,8 @@
   W.found = {
     // A card of the folder is the example.
     find: (pick) => find((inputs, out) => invoke("sta_find", { inputs, pick, marks: null, out })),
+    // The map the user brought (index.js) is the example.
+    findOwn: () => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks: null, out, which: "own" })),
     // Clicked particles (point marks) are the examples.
     findPoints: (marks) => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks, out })),
     // For shapes.js: the time of the review shown (0: none), showing it again after the other one changed, putting it away.
@@ -254,7 +292,7 @@
     const out = [];
     for (const p of d.places) {
       const dz = Math.abs(p.pos[2] - S.z);
-      if (dz >= d.radius) continue;
+      if (dz >= d.radius || p.state === "off") continue;
       out.push({ p, r: Math.sqrt(d.radius * d.radius - dz * dz), a: dz <= 0.25 * d.radius ? 1 : 0.4 });
     }
     return out;
@@ -266,6 +304,7 @@
     ctx.save();
     ctx.lineCap = "round";
     for (const { p, r, a } of seen()) {
+      if (p.state === "off") continue;
       const [x, y] = toScreen(p.pos[0] + 0.5, p.pos[1] + 0.5);
       const rr = Math.max(3, r * sc);
       ctx.globalAlpha = a;
@@ -273,10 +312,10 @@
       if (p.state === "kept") {
         ctx.strokeStyle = accent;
         ctx.lineWidth = 2;
-      } else if (p.state === "added") {
+      } else if (p.state === "added" || p.state === "taughtIn") {
         ctx.strokeStyle = "#1a7f37";
         ctx.lineWidth = 2.4;
-      } else if (p.state === "removed") {
+      } else if (p.state === "removed" || p.state === "taughtOut") {
         ctx.strokeStyle = "#cf222e";
         ctx.lineWidth = 1.4;
       } else {
@@ -287,7 +326,7 @@
       ctx.beginPath();
       ctx.arc(x, y, rr, 0, 2 * Math.PI);
       ctx.stroke();
-      if (p.state === "removed") {
+      if (p.state === "removed" || p.state === "taughtOut") {
         const k = rr * 0.6;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -326,7 +365,7 @@
       }
       if (hit) {
         // Shown at once, confirmed by the answer.
-        hit.state = { kept: "removed", removed: "kept", below: "added", added: "below" }[hit.state];
+        hit.state = { kept: "removed", removed: "kept", below: "added", added: "below", taughtOut: "added", taughtIn: "below" }[hit.state];
         render();
         edit({ toggle: hit.i });
       } else if (R.add) {
