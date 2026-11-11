@@ -906,16 +906,25 @@ pub struct Card {
 ///   matrix about its centroid: about 1 for a ball (the missing wedge
 ///   stretches it along Z by up to 1.3 to 1.5), `λ1 / λ2` large for a line,
 ///   `λ2 / λ3` large for a layer. When the piece at the centre (above half
-///   the maximum) ends inside that reach, the moments are of that piece
-///   alone: a particle among neighbours packed beside it is not a layer.
+///   the maximum) ends inside that reach, it is no line and no layer: the
+///   value is then the smaller of that piece's own and the one above, and
+///   stays below `ELONGATION`.
 /// * `blobs`: the number of 6-connected pieces of the density above half its
 ///   maximum that hold at least `BLOB_SHARE` of that part. Where the piece
 ///   lies does not matter here.
 /// * `offset`: with exactly one piece, the distance of its centroid from the
 ///   centre in particle radii (`radius / 1.2`); otherwise 0.
 pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64) {
-    let (compact, elongation, blobs, offset, _) = measure(avg, n, radius);
+    let (compact, elongation, blobs, offset, _, _) = measure(avg, n, radius);
     (compact, elongation, blobs, offset)
+}
+
+/// What `shape`'s elongation is made of: that of all the density, and,
+/// when a piece stands at the centre, that piece's own and whether it runs
+/// on to the edge of the reach.
+#[cfg(test)]
+pub(super) fn elongations(avg: &[f32], n: usize, radius: f64) -> (f64, Option<(f64, bool)>) {
+    measure(avg, n, radius).5
 }
 
 /// The class average moved so that the centroid of its single piece (when
@@ -923,7 +932,7 @@ pub fn shape(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64) {
 /// the cube centre `n / 2`; unchanged otherwise. A centred template makes
 /// the peaks of the later search sit on particle centres.
 pub fn centred(avg: Vec<f32>, n: usize, radius: f64) -> Vec<f32> {
-    let (_, _, blobs, offset, at) = measure(&avg, n, radius);
+    let (_, _, blobs, offset, at, _) = measure(&avg, n, radius);
     if blobs != 1 || offset >= OFF_CENTRE || offset == 0.0 {
         return avg;
     }
@@ -932,7 +941,8 @@ pub fn centred(avg: Vec<f32>, n: usize, radius: f64) -> Vec<f32> {
     cc::transform(&avg, n, &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [at[0] - c, at[1] - c, at[2] - c])
 }
 
-fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3]) {
+#[allow(clippy::type_complexity)]
+fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3], (f64, Option<(f64, bool)>)) {
     let c = (n / 2) as f64;
     let mean = avg.iter().map(|v| *v as f64).sum::<f64>() / avg.len() as f64;
     let (mut all, mut inside, mut voxels) = (0.0, 0.0, 0usize);
@@ -956,7 +966,7 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
         }
     }
     if all <= 0.0 || voxels == 0 {
-        return (0.0, 0.0, 0, 0.0, [c; 3]);
+        return (0.0, 0.0, 0, 0.0, [c; 3], (0.0, None));
     }
     let compact = (inside / all) / (voxels as f64 / avg.len() as f64);
 
@@ -973,7 +983,7 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
         mz += d * (i / n / n) as f64;
     }
     if m <= 0.0 {
-        return (compact, 0.0, 0, 0.0, [c; 3]);
+        return (compact, 0.0, 0, 0.0, [c; 3], (0.0, None));
     }
     let centroid = [mx / m, my / m, mz / m];
     let mut cov = [[0.0f64; 3]; 3];
@@ -987,12 +997,14 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
     }
     let l = eigenvalues(cov);
     let mut elongation = if l[0] <= 0.0 { 0.0 } else { (l[0] / l[2].max(1e-9 * l[0])).sqrt() };
+    let mut parts = (elongation, None);
 
     // What stands at the centre: the piece above half the maximum nearest
     // it, followed as far as it goes. Where it ends before the moments'
-    // reach does, it is a thing of its own and the elongation is its own
-    // (particles packed side by side are no layer); where it runs on to
-    // the edge, the elongation of all the density stays.
+    // reach does, it is a thing of its own (particles packed side by side
+    // are no layer): the elongation is the smaller of its own and that of
+    // all the density, and below `ELONGATION`. Where it runs on to the
+    // edge, the elongation of all the density stays.
     let top = dens.iter().cloned().fold(0.0, f64::max);
     let off = |i: usize| ((i % n) as f64 - c).powi(2) + ((i / n % n) as f64 - c).powi(2) + ((i / n / n) as f64 - c).powi(2);
     let nearest = (0..dens.len()).filter(|i| dens[*i] >= 0.5 * top && off(*i) <= 0.25 * radius * radius).min_by(|a, b| off(*a).total_cmp(&off(*b)));
@@ -1019,7 +1031,7 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
                 }
             }
         }
-        if !runs_on {
+        {
             let m: f64 = piece.iter().map(|i| dens[*i]).sum();
             let mut centre = [0.0f64; 3];
             for &i in &piece {
@@ -1038,8 +1050,12 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
                 }
             }
             let l = eigenvalues(cov);
-            if l[0] > 0.0 {
-                elongation = (l[0] / l[2].max(1e-9 * l[0])).sqrt();
+            // What ends is no line and no layer, however it is shaped and
+            // whatever stands beside it.
+            let own = if l[0] > 0.0 { (l[0] / l[2].max(1e-9 * l[0])).sqrt() } else { elongation };
+            parts.1 = Some((own, runs_on));
+            if !runs_on {
+                elongation = elongation.min(own).min(ELONGATION - 0.01);
             }
         }
     }
@@ -1083,7 +1099,7 @@ fn measure(avg: &[f32], n: usize, radius: f64) -> (f64, f64, usize, f64, [f64; 3
         at = big[0].1;
         offset = at.iter().map(|v| (v - c) * (v - c)).sum::<f64>().sqrt() / (radius / 1.2);
     }
-    (compact, elongation, big.len(), offset, at)
+    (compact, elongation, big.len(), offset, at, parts)
 }
 
 /// Eigenvalues of a symmetric 3x3 matrix, largest first (Jacobi sweeps).

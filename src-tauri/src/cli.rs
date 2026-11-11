@@ -425,6 +425,19 @@ fn ext(path: &str) -> String {
     Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// The options of this run that the same run with another choice needs
+/// again: where the results go and the pixel size the files do not say.
+fn again(o: &Opts, out: &Path) -> String {
+    let mut s = String::new();
+    if o.get("out").is_some() {
+        s += &format!(" --out {}", out.display());
+    }
+    if let Some(p) = o.get("pixel") {
+        s += &format!(" --pixel {p}");
+    }
+    s
+}
+
 /// Makes sure the pixel size of the tomogram or tilt series `path` is known
 /// for `cmd`: the file's own (header or mdoc) always wins; for a file that
 /// does not say it, `--pixel` is remembered for it (`tomo::output::set_pixel`),
@@ -442,7 +455,7 @@ fn require_pixel(cmd: &str, path: &str, img: &std::sync::Arc<OpenImage>, pixel: 
             set_pixel(path, Some(g));
             Ok(g)
         }
-        (None, None) => bail!("tmv {cmd}: {path} does not say its pixel size (the header has 0 or 1): pass it with --pixel <Å>"),
+        (None, None) => bail!("{path} does not say its pixel size (the header has 0 or 1): pass it with --pixel <Å>"),
     }
 }
 
@@ -929,8 +942,7 @@ fn sta(o: &Opts) -> Result<Value> {
         progress.done();
         let cards_dir = out.join("cards");
         let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
-        let out_arg = if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() };
-        let next = format!("tmv sta --pick N{out_arg} {}", tomos.join(" "));
+        let next = format!("tmv sta --pick N{} {}", again(o, &out), tomos.join(" "));
         eprintln!("tmv sta: {} cards made in {}:", cards.len(), cards_dir.display());
         for c in &cards {
             eprintln!("{}", card_line(c));
@@ -985,7 +997,7 @@ fn sta(o: &Opts) -> Result<Value> {
         auto_sta::Outcome::Done(d) => d,
         auto_sta::Outcome::NeedsChoice { cards, trials, good, cards_dir } => {
             let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
-            let rerun = format!("tmv sta --pick N{} {}", if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() }, tomos.join(" "));
+            let rerun = format!("tmv sta --pick N{} {}", again(o, &out), tomos.join(" "));
             if good.is_empty() {
                 eprintln!("tmv sta: no card gave an average as a template: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
             } else {

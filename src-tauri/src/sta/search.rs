@@ -385,19 +385,67 @@ pub fn sure(all: &[Peak], floors: &[Option<f32>]) -> Option<f32> {
     })
 }
 
+/// The voxels where a tomogram holds nothing: the borders a reconstruction
+/// leaves blank where the tilted images did not reach. There every voxel
+/// has exactly the value of all its neighbours (data never has), and the
+/// blank reaches an X or Y face of the volume. Same layout as `v`.
+pub fn blank(v: &[f32], dims: [usize; 3]) -> Vec<bool> {
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    // The same value as both neighbours along x, then that along y, then z.
+    let mut flat: Vec<bool> = (0..v.len())
+        .into_par_iter()
+        .map(|i| {
+            let x = i % nx;
+            (x == 0 || v[i - 1] == v[i]) && (x + 1 == nx || v[i + 1] == v[i])
+        })
+        .collect();
+    for (len, stride) in [(ny, nx), (nz, nx * ny)] {
+        let before = flat.clone();
+        flat.par_iter_mut().enumerate().for_each(|(i, f)| {
+            let k = i / stride % len;
+            *f = *f && (k == 0 || (before[i - stride] && v[i - stride] == v[i])) && (k + 1 == len || (before[i + stride] && v[i + stride] == v[i]));
+        });
+    }
+    // Only what is joined to an X or Y face.
+    let mut out = vec![false; v.len()];
+    let mut stack: Vec<usize> = (0..v.len()).filter(|i| flat[*i] && (i % nx == 0 || i % nx == nx - 1 || i / nx % ny == 0 || i / nx % ny == ny - 1)).collect();
+    stack.iter().for_each(|i| out[*i] = true);
+    while let Some(i) = stack.pop() {
+        let p = [i % nx, i / nx % ny, i / (nx * ny)];
+        for (axis, step, len) in [(0usize, 1usize, nx), (1, nx, ny), (2, nx * ny, nz)] {
+            for up in [false, true] {
+                if if up { p[axis] + 1 >= len } else { p[axis] == 0 } {
+                    continue;
+                }
+                let j = if up { i + step } else { i - step };
+                if flat[j] && !out[j] {
+                    out[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Where a particle centre may lie: false within `radius` voxels of the X
 /// and Y faces (reconstruction artefacts; not Z, particles lie near those
 /// faces) and within `2 * radius` of gold (a voxel more than `GOLD` robust
-/// standard deviations below the median). Same layout as `v`.
+/// standard deviations below the median) or of a blank border (`blank`).
+/// Same layout as `v`.
 pub fn allowed(v: &[f32], dims: [usize; 3], radius: f64) -> Vec<bool> {
     let [nx, ny, nz] = dims;
     assert_eq!(v.len(), nx * ny * nz);
-    let (median, sd) = robust(v);
+    let blank = blank(v, dims);
+    // What the tomogram is like where it holds something.
+    let held: Vec<f32> = v.iter().zip(&blank).filter(|(_, b)| !**b).map(|(x, _)| *x).collect();
+    let (median, sd) = robust(if held.len() >= 1000 { &held } else { v });
     let limit = median - GOLD * sd;
-    // Squared distance to the nearest gold voxel, one axis at a time
-    // (exact; Felzenszwalb and Huttenlocher, Theory of Computing 8, 2012).
+    // Squared distance to the nearest gold or blank voxel, one axis at a
+    // time (exact; Felzenszwalb and Huttenlocher, Theory of Computing 8, 2012).
     const FAR: f32 = 1e9;
-    let mut near: Vec<f32> = v.iter().map(|x| if *x < limit { 0.0 } else { FAR }).collect();
+    let mut near: Vec<f32> = v.iter().zip(&blank).map(|(x, b)| if *x < limit || *b { 0.0 } else { FAR }).collect();
     if near.iter().any(|d| *d == 0.0) {
         for (len, stride, lines) in [(nx, 1, ny * nz), (ny, nx, nx * nz), (nz, nx * ny, nx * ny)] {
             let mut line = vec![0f64; len];

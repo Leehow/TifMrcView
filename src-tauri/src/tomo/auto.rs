@@ -624,8 +624,11 @@ fn least_squares(p: &[&(f64, f64, f64, f64)]) -> Option<[f64; 3]> {
 
 /// The range of sections with structure: per section, the variance of a
 /// band-passed copy (`band_pass`), smoothed along the depth; the specimen
-/// is the run of sections around the peak that stay clearly above the
-/// quiet sections' level (median + 3 × their spread).
+/// reaches from the first to the last run of sections that stay clearly
+/// above the quiet sections' level (median + 3 × their spread). All the
+/// runs, not the one with the most detail only: hollow things (virus-like
+/// particles, vesicles) show detail at their surfaces and little inside,
+/// and a layer of gold beside them shows more than they do.
 pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usize) {
     use rayon::prelude::*;
     let plane = w * h;
@@ -651,22 +654,75 @@ pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usi
     if peak < median + 4.0 * spread {
         return (z / 4, 3 * z / 4);
     }
-    // From the peak out to where the level is back near the quiet one.
     let cut = median + 3.0 * spread;
-    let top = (0..z).max_by(|&a, &b| detail[a].total_cmp(&detail[b])).unwrap();
-    let mut lo = top;
-    while lo > 0 && detail[lo - 1] >= cut {
-        lo -= 1;
+    // Runs above the cut, as (first, one past the last); one or two
+    // sections alone are not a structure (the level is smoothed over five).
+    let mut runs: Vec<(usize, usize)> = vec![];
+    let mut k = 0;
+    while k < z {
+        if detail[k] >= cut {
+            let first = k;
+            while k < z && detail[k] >= cut {
+                k += 1;
+            }
+            if k - first >= 3 {
+                runs.push((first, k));
+            }
+        } else {
+            k += 1;
+        }
     }
-    let mut hi = top;
-    while hi + 1 < z && detail[hi + 1] >= cut {
-        hi += 1;
+    match (runs.first(), runs.last()) {
+        (Some(a), Some(b)) => (a.0, b.1),
+        _ => {
+            // Only the peak itself stands out: out from it to the quiet level.
+            let top = (0..z).max_by(|&a, &b| detail[a].total_cmp(&detail[b])).unwrap();
+            let mut lo = top;
+            while lo > 0 && detail[lo - 1] >= cut {
+                lo -= 1;
+            }
+            let mut hi = top;
+            while hi + 1 < z && detail[hi + 1] >= cut {
+                hi += 1;
+            }
+            (lo, hi + 1)
+        }
     }
-    (lo, hi + 1)
 }
 
 #[cfg(test)]
 mod tests {
+    /// Hollow particles over a layer of gold: the gold has the most detail,
+    /// the particles' two surfaces less and their inside next to none. The
+    /// specimen is all of it.
+    #[test]
+    fn the_specimen_reaches_over_all_its_layers_of_detail() {
+        let (w, h, z) = (64usize, 64usize, 96usize);
+        let mut seed = 11u64;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1000) as f32 / 1000.0 - 0.5
+        };
+        let mut vol = vec![0f32; w * h * z];
+        for k in 0..z {
+            let amount = match k {
+                30..=37 => 0.5,
+                38..=52 => 0.06,
+                53..=60 => 0.5,
+                64..=69 => 1.0,
+                _ => 0.05,
+            };
+            for i in 0..w * h {
+                vol[k * w * h + i] = noise() * amount;
+            }
+        }
+        let (lo, hi) = super::specimen_extent(&vol, w, h, z);
+        assert!((27..=31).contains(&lo), "lo {lo}");
+        assert!((69..=73).contains(&hi), "hi {hi}");
+    }
+
     #[test]
     fn plane_follows_a_tilted_band() {
         let (w, h, z) = (96usize, 64usize, 48usize);

@@ -87,3 +87,24 @@ fn v17_spheres_coarse() {
     .unwrap();
     eprintln!("{} seeds, {} particles, {:?} Å, voxel {} Å, pattern {:?}, {:.0} s", drawn.len(), r.particles, r.resolution_a, r.voxel_a, r.pattern, started.elapsed().as_secs_f64());
 }
+
+/// What the cards of a run (`TMV_CARDS`: its `cards` folder) measure as:
+/// the parts of each card's elongation and the hints that follow.
+#[test]
+#[ignore]
+fn card_shapes() {
+    use super::project::{elongations, read_card, shape, Card, BOX};
+    let dir = std::path::PathBuf::from(std::env::var("TMV_CARDS").expect("TMV_CARDS = the cards folder of a run"));
+    let cards: Vec<Card> = serde_json::from_slice(&std::fs::read(dir.join("cards.json")).unwrap()).unwrap();
+    for c in cards {
+        let path = if std::path::Path::new(&c.path).exists() { std::path::PathBuf::from(&c.path) } else { dir.join(std::path::Path::new(&c.path).file_name().unwrap()) };
+        let (avg, voxel) = read_card(&path.to_string_lossy()).unwrap();
+        let ball = 0.6 * c.diameter_a / voxel;
+        let (compact, elongation, blobs, offset) = shape(&avg, BOX, ball);
+        let (all, piece) = elongations(&avg, BOX, ball);
+        eprintln!(
+            "card {}: {} Å, {} members, voxel {voxel:.2}, ball {ball:.1}; saved: compact {:.2} elongation {:.2} blobs {} likely {}; now: compact {compact:.2} elongation {elongation:.2} blobs {blobs} offset {offset:.2}; all density {all:.2}, centre piece {piece:?} (own elongation, runs on to the edge)",
+            c.id, c.diameter_a, c.members, c.compact, c.elongation, c.blobs, c.likely
+        );
+    }
+}
