@@ -1918,6 +1918,71 @@ impl Drop for SpaJob {
     fn drop(&mut self) { SPA_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
 }
 
+/// Subtomogram averaging (Pro): the whole of `sta::auto` for tomograms of a
+/// cryo-ET dataset. Reports `sta-progress` {label, done, total}, `sta-live`
+/// {png} (intermediate averages) and `sta-note` {kind, …}; returns
+/// `sta::auto::outcome_value` ({needsChoice, report, result, cards, chosen, auto, out, trials}).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_run(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, out: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        crate::sta::auto::run_inputs(&inputs, pick, out.as_deref(), &device, &emit, &base64)
+    }).await
+}
+
+/// The cards saved in an output folder, each with its slices as base64 PNG,
+/// size, members, trial and the `good` / `chosen` marks.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_cards(out: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::auto::cards_value(std::path::Path::new(&out), &base64)).await
+}
+
+/// The average saved in an output folder (slices PNG, FSC, resolution, particles), or null.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_result(out: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || crate::sta::auto::result_value(std::path::Path::new(&out), &base64)).await
+}
+
+/// The default output folder for these tomograms: beside the first one.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_out(first: String) -> String {
+    crate::sta::auto::default_out(&first).to_string_lossy().into_owned()
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_cancel() {
+    crate::sta::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(feature = "pro")]
+static STA_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct StaJob;
+#[cfg(feature = "pro")]
+impl StaJob {
+    fn begin() -> CmdResult<Self> {
+        use std::sync::atomic::Ordering;
+        STA_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "子断层平均正在运行".to_string())?;
+        crate::sta::CANCEL.store(false, Ordering::SeqCst);
+        Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for StaJob {
+    fn drop(&mut self) { STA_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
 /// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
 #[tauri::command]
 async fn stem4d_analyze(app: AppHandle, req: crate::stem4d::Req) -> CmdResult<crate::stem4d::Result4d> {
@@ -2865,6 +2930,11 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_export,
             #[cfg(feature = "pro")] spa_kinds,
             #[cfg(feature = "pro")] spa_cancel,
+            #[cfg(feature = "pro")] sta_run,
+            #[cfg(feature = "pro")] sta_cards,
+            #[cfg(feature = "pro")] sta_result,
+            #[cfg(feature = "pro")] sta_out,
+            #[cfg(feature = "pro")] sta_cancel,
             diffraction_find,
             diffraction_zones,
             eds_quant,

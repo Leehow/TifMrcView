@@ -407,5 +407,307 @@ pub fn auto(
     // The average.
     let (cube, voxel) = sp::read_card(&card.path)?;
     let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, sources, &cube, voxel, sp::template_diameter(&card), sp::Pass::Fine, &out_s, &report, live))??;
+    // Which card this average is of (the workspace marks it when reopened).
+    let _ = std::fs::write(out.join(CHOSEN), json!({ "card": card.id, "auto": chosen.is_some() }).to_string());
     Ok(Outcome::Done(Box::new(Done { report: r, card, cards, trials, chosen, cards_dir, out: out.to_path_buf(), backend: backend.to_string() })))
+}
+
+/// Beside the average: which card it was made from, and whether the program chose it.
+pub const CHOSEN: &str = "chosen.json";
+
+/// The three central slices of a cubic volume (`n`³, z-major) side by side
+/// (XY, XZ, YZ), each `cell` pixels, as a PNG.
+pub fn slices_png(vol: &[f32], n: usize, cell: usize) -> Result<Vec<u8>> {
+    if n < 2 || vol.len() != n * n * n {
+        bail!("not a cube: {} values for side {n}", vol.len());
+    }
+    let m = n / 2;
+    let xy = vol[m * n * n..(m + 1) * n * n].to_vec();
+    let xz: Vec<f32> = (0..n).flat_map(|z| (0..n).map(move |x| (z, x))).map(|(z, x)| vol[z * n * n + m * n + x]).collect();
+    let yz: Vec<f32> = (0..n).flat_map(|z| (0..n).map(move |y| (z, y))).map(|(z, y)| vol[z * n * n + y * n + m]).collect();
+    crate::spa::render::gallery(&[xy, xz, yz], n, 3, cell)
+}
+
+/// A volume handed to the `live` callback as a preview PNG, when it is a cube.
+pub fn live_png(vol: &[f32], cell: usize) -> Option<Vec<u8>> {
+    let n = (vol.len() as f64).cbrt().round() as usize;
+    slices_png(vol, n, cell).ok()
+}
+
+/// A note as JSON, for the workspace (`kind` says which).
+pub fn note_json(n: &Note) -> Value {
+    match n {
+        Note::NoDataset { tomogram } => json!({ "kind": "noDataset", "tomogram": tomogram }),
+        Note::LookMissing { look, tomogram } => json!({ "kind": "lookMissing", "look": look, "tomogram": tomogram }),
+        Note::OlderVersion { tomogram } => json!({ "kind": "olderVersion", "tomogram": tomogram }),
+        Note::CardsStale { why } => json!({ "kind": "cardsStale", "why": why }),
+        Note::CardsReused { .. } => json!({ "kind": "cardsReused" }),
+        Note::CardsMade { count } => json!({ "kind": "cardsMade", "count": count }),
+        Note::TrialsReused { .. } => json!({ "kind": "trialsReused" }),
+        Note::Trial { trial, reused } => json!({ "kind": "trial", "reused": reused, "trial": trial_view(trial) }),
+        Note::TrialsMade => json!({ "kind": "trialsMade" }),
+        Note::CompareFailed { error } => json!({ "kind": "compareFailed", "error": error }),
+        Note::Using { card, same, other, .. } => json!({ "kind": "using", "card": card.id, "same": same, "other": other }),
+    }
+}
+
+fn trial_view(t: &sp::Trial) -> Value {
+    json!({
+        "ok": t.ok, "reason": t.reason, "particles": t.particles,
+        "agreement": (t.strength * 1e5).round() / 1e5, "elongation": t.elongation, "runsOn": t.runs_on(),
+        "noGroup": t.reason.as_deref().is_some_and(|r| r.contains("分不出两群")),
+    })
+}
+
+/// The cards saved in `out` for the workspace: each with its three central
+/// slices (`png`, via `b64`), size, members, trial (`null` before it ran),
+/// `good` (its trial is among the best) and `chosen`; `chosen` also on its own.
+pub fn cards_value(out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Value> {
+    let (cards, trials) = saved(out);
+    let good = sp::good(&trials);
+    let chosen = std::fs::read(out.join(CHOSEN)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v["card"].as_u64()).map(|n| n as usize);
+    let list: Vec<Value> = cards
+        .iter()
+        .map(|c| {
+            let png = sp::read_card(&c.path).ok().and_then(|(cube, _)| slices_png(&cube, 32, 64).ok());
+            let trial = trials.iter().find(|t| t.card == c.id);
+            json!({
+                "id": c.id, "diameterA": c.diameter_a, "members": c.members, "likely": c.likely,
+                "trial": trial.map(trial_view), "good": good.contains(&c.id), "chosen": chosen == Some(c.id),
+                "runsOn": trial.is_some_and(|t| t.runs_on()), "png": png.map(|p| b64(&p)),
+            })
+        })
+        .collect();
+    Ok(json!({ "cards": list, "chosen": chosen, "out": out }))
+}
+
+/// The average saved in `out`: three central slices (`png`), the FSC with the
+/// spatial frequency of each shell (1/Å), resolution, particles, sharpening.
+/// None when there is no `average.mrc` there yet.
+pub fn result_value(out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Option<Value>> {
+    let map = out.join("average.mrc");
+    if !map.is_file() {
+        return Ok(None);
+    }
+    let (vol, dims, _) = crate::spa::data::read_volume(&map.to_string_lossy())?;
+    let report: Value = std::fs::read(out.join("sta.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+    let voxel = report["voxelA"].as_f64().filter(|v| *v > 0.0).unwrap_or(0.0);
+    let fsc: Vec<f64> = report["fsc"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+    // The shells are 1 / (n · voxel) apart, n the box (twice the last shell).
+    let n = 2.0 * fsc.len().saturating_sub(1) as f64;
+    let freq: Vec<f64> = if voxel > 0.0 && n > 0.0 { (0..fsc.len()).map(|i| i as f64 / (n * voxel)).collect() } else { vec![] };
+    let png = slices_png(&vol, dims[0], 160).ok().map(|p| b64(&p));
+    Ok(Some(json!({
+        "map": map, "out": out, "png": png, "fsc": fsc, "freq": freq, "voxelA": voxel,
+        "resolutionA": report["resolutionA"], "signalA": report["signalA"], "ctfLimited": report["ctfLimited"],
+        "particles": report["particles"], "sharpenB": report["sharpenB"],
+    })))
+}
+
+/// What `sta_run` hands back: the report, the average, the cards.
+pub fn outcome_value(o: &Outcome, out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Value> {
+    let cards = cards_value(out, b64)?;
+    Ok(match o {
+        Outcome::Done(d) => json!({
+            "needsChoice": false, "report": serde_json::to_value(&d.report)?, "result": result_value(out, b64)?,
+            "cards": cards["cards"], "chosen": d.card.id, "auto": d.chosen.is_some(), "out": out,
+            "trials": d.trials.iter().map(trial_json).collect::<Vec<_>>(),
+        }),
+        Outcome::NeedsChoice { good, trials, .. } => json!({
+            "needsChoice": true, "good": good, "cards": cards["cards"], "chosen": Value::Null, "out": out,
+            "trials": trials.iter().map(trial_json).collect::<Vec<_>>(),
+        }),
+    })
+}
+
+/// Receives (event name, payload): the workspace turns it into window events.
+pub type Emit<'a> = &'a (dyn Fn(&str, Value) + Sync);
+
+/// The workspace's run, `tmv sta` for tomograms: `inputs` are tomogram files
+/// (those of a cryo-ET dataset), `out` the folder (default: beside the first).
+/// Events: `sta-progress` {label, done, total}, `sta-live` {png} (an
+/// intermediate average, three central slices, at most 3 a second),
+/// `sta-note` (see `note_json`). Never stops to ask: when the program cannot
+/// decide it takes the card with the best trial; the result says
+/// `needsChoice` only when no card gave an average. Returns `outcome_value`
+/// with `out`. The caller clears `CANCEL` before.
+pub fn run_inputs(inputs: &[String], pick: Option<usize>, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    let Some(first) = inputs.first() else { bail!("请先选择断层图") };
+    let out = match out.filter(|o| !o.is_empty()) {
+        Some(o) => PathBuf::from(o),
+        None => default_out(first),
+    };
+    let note = |n: Note| emit("sta-note", note_json(&n));
+    let sources: Vec<sp::Source> = inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
+    let before = Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
+    let last = Mutex::new((before, before));
+    let due = |slot: usize, gap: u64| {
+        let mut l = last.lock().unwrap();
+        let t = if slot == 0 { &mut l.0 } else { &mut l.1 };
+        let ok = t.elapsed() >= Duration::from_millis(gap);
+        if ok {
+            *t = Instant::now();
+        }
+        ok
+    };
+    let progress = |label: &str, done: usize, total: usize| {
+        if done >= total || due(0, 100) {
+            emit("sta-progress", json!({ "label": label, "done": done, "total": total }));
+        }
+    };
+    let live = |vol: &[f32]| {
+        if due(1, 350) {
+            if let Some(png) = live_png(vol, 120) {
+                emit("sta-live", json!({ "png": b64(&png) }));
+            }
+        }
+    };
+    let mut fell_back = false;
+    let mut outcome = auto(&sources, pick, &out, device, &progress, &live, &note)?;
+    if let Outcome::NeedsChoice { trials, .. } = &outcome {
+        if let Some(n) = best_card(trials) {
+            note(Note::Using { card: saved(&out).0.get(n).cloned().context("card missing")?, same: vec![], other: vec![], dir: out.join("cards").to_string_lossy().into_owned() });
+            outcome = auto(&sources, Some(n), &out, device, &progress, &live, &note)?;
+            // The program took this card, not the user.
+            let _ = std::fs::write(out.join(CHOSEN), json!({ "card": n, "auto": true }).to_string());
+            fell_back = true;
+        }
+    }
+    let mut v = outcome_value(&outcome, &out, b64)?;
+    if fell_back {
+        v["auto"] = json!(true);
+    }
+    Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card(id: usize, path: &str) -> sp::Card {
+        sp::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, offset: 0.0, share: 0.3, path: path.into(), compact: 12.0, likely: false }
+    }
+
+    fn trial(card: usize, ok: bool, strength: f64, elongation: Option<f64>) -> sp::Trial {
+        sp::Trial {
+            card,
+            ok,
+            reason: (!ok).then(|| "分不出两群".to_string()),
+            particles: 80,
+            candidates: 100,
+            fsc: vec![],
+            voxel_a: 16.0,
+            strength,
+            seconds: 1.0,
+            elongation,
+        }
+    }
+
+    fn b64(b: &[u8]) -> String {
+        format!("{}b", b.len())
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tmv_auto_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn ball(n: usize) -> Vec<f32> {
+        let c = n as f32 / 2.0;
+        (0..n * n * n).map(|i| ((i % n) as f32 - c).hypot(((i / n) % n) as f32 - c).hypot((i / (n * n)) as f32 - c)).map(|r| (-r * r / 40.0).exp()).collect()
+    }
+
+    #[test]
+    fn slices_are_one_png_of_three_panels() {
+        let png = slices_png(&ball(32), 32, 40).unwrap();
+        assert_eq!(&png[..4], b"\x89PNG");
+        let img = image::load_from_memory(&png).unwrap();
+        assert_eq!((img.width(), img.height()), (120, 40));
+        assert!(slices_png(&[0.0; 10], 32, 40).is_err());
+        assert!(live_png(&ball(16), 40).is_some());
+        assert!(live_png(&[0.0; 10], 40).is_none());
+    }
+
+    #[test]
+    fn the_best_good_card_is_the_workspace_fallback() {
+        // Two close ones of different kinds: the stronger.
+        assert_eq!(best_card(&[trial(0, true, 0.02, None), trial(1, true, 0.025, None), trial(2, false, 0.0, None)]), Some(1));
+        // Ties: the lower id. A line is passed over for a particle.
+        assert_eq!(best_card(&[trial(0, true, 0.02, None), trial(1, true, 0.02, None)]), Some(0));
+        assert_eq!(best_card(&[trial(0, true, 0.05, Some(2.5)), trial(1, true, 0.01, Some(1.3))]), Some(1));
+        assert_eq!(best_card(&[trial(0, false, 0.0, None)]), None);
+        assert_eq!(best_card(&[]), None);
+    }
+
+    #[test]
+    fn saved_cards_come_with_their_trials_and_marks() {
+        let out = temp("cards");
+        let dir = out.join("cards");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cards = vec![];
+        for id in 0..3 {
+            let p = dir.join(format!("card_{id}.mrc"));
+            crate::tomo::output::write_mrc(&p.to_string_lossy(), &ball(32), [32; 3], 16.0, false).unwrap();
+            // A path from another computer: found again beside cards.json.
+            cards.push(card(id, &format!("/elsewhere/card_{id}.mrc")));
+        }
+        std::fs::write(dir.join("cards.json"), serde_json::to_string(&cards).unwrap()).unwrap();
+        std::fs::write(dir.join("trials.json"), serde_json::to_string(&[trial(0, true, 0.03, Some(1.3)), trial(1, true, 0.029, Some(2.4)), trial(2, false, 0.0, None)]).unwrap()).unwrap();
+        std::fs::write(out.join(CHOSEN), r#"{"card":0,"auto":true}"#).unwrap();
+        let v = cards_value(&out, &b64).unwrap();
+        let list = v["cards"].as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(v["chosen"], 0);
+        assert_eq!((list[0]["chosen"].as_bool(), list[1]["chosen"].as_bool()), (Some(true), Some(false)));
+        assert_eq!(list[1]["runsOn"], true);
+        assert_eq!(list[0]["runsOn"], false);
+        assert_eq!(list[0]["good"], true);
+        assert_eq!(list[2]["good"], false);
+        assert_eq!(list[2]["trial"]["noGroup"], true);
+        assert!(list[0]["png"].as_str().unwrap().ends_with('b'));
+        assert_eq!(list[0]["trial"]["agreement"], 0.03);
+        // Nothing saved: no cards, no error.
+        let none = cards_value(&temp("nocards"), &b64).unwrap();
+        assert_eq!(none["cards"].as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn the_result_is_read_from_the_average_and_its_report() {
+        let out = temp("result");
+        assert!(result_value(&out, &b64).unwrap().is_none());
+        crate::tomo::output::write_mrc(&out.join("average.mrc").to_string_lossy(), &ball(32), [32; 3], 8.0, false).unwrap();
+        std::fs::write(out.join("sta.json"), r#"{"voxelA":8.0,"resolutionA":24.5,"particles":321,"sharpenB":-120.0,"ctfLimited":false,"fsc":[1.0,0.9,0.5,0.1]}"#).unwrap();
+        let v = result_value(&out, &b64).unwrap().unwrap();
+        assert_eq!(v["resolutionA"], 24.5);
+        assert_eq!(v["particles"], 321);
+        assert_eq!(v["fsc"].as_array().unwrap().len(), 4);
+        // Four shells: a 6-voxel box, shells 1/(6 · 8 Å) apart.
+        assert!((v["freq"][1].as_f64().unwrap() - 1.0 / 48.0).abs() < 1e-12);
+        assert!(v["png"].as_str().is_some());
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn notes_are_json_with_a_kind() {
+        let t = Note::Trial { trial: trial(2, false, 0.0, None), reused: true };
+        let v = note_json(&t);
+        assert_eq!((v["kind"].as_str(), v["reused"].as_bool(), v["trial"]["noGroup"].as_bool()), (Some("trial"), Some(true), Some(true)));
+        assert_eq!(note_json(&Note::CardsMade { count: 4 })["count"], 4);
+    }
+
+    #[test]
+    fn a_run_needs_a_tomogram() {
+        let device: Device = &|| bail!("no device");
+        assert!(run_inputs(&[], None, None, device, &|_, _| {}, &b64).is_err());
+    }
+
+    #[test]
+    fn the_default_folder_is_beside_the_first_input() {
+        assert_eq!(default_out("/data/a/t.mrc"), Path::new("/data/a/t_sta"));
+    }
 }
