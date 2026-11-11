@@ -1290,9 +1290,6 @@ pub fn good(trials: &[Trial]) -> Vec<usize> {
     ids
 }
 
-/// See `choose`.
-pub const DOMINANT: f64 = 2.0;
-
 /// What `choose` took.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chosen {
@@ -1307,9 +1304,9 @@ pub struct Chosen {
 /// The card to take without asking: of the `good` ones (see `trials`) the
 /// one with the highest strength, when they all show one kind of particle
 /// (connected groups of cards whose pairwise `similar[i][j]`, see `likeness`,
-/// is `SAME` or more; only the good cards need entries), or when one kind
-/// was found in at least `DOMINANT` times as many places as any other. Else,
-/// or with no trial that worked: None, and the user chooses. Ties: the lower id.
+/// is `SAME` or more; only the good cards need entries). With several kinds
+/// it is the kind of the strongest card, and `other` names the rest. None
+/// only when no trial worked. Ties: the lower id.
 pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<Chosen> {
     let strong: std::collections::HashMap<usize, f64> = trials.iter().filter(|t| t.ok).map(|t| (t.card, t.strength)).collect();
     let good: Vec<usize> = good(trials).into_iter().filter(|i| *i < cards.len()).collect();
@@ -1340,14 +1337,12 @@ pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<
         group.sort_unstable();
         kinds.push(group);
     }
-    // Several kinds that all average well (a particle, and a filament
-    // beside it): the one found in far more places is what the tomograms
-    // are of. A kind is found as often as its card that found the most.
-    let found = |kind: &Vec<usize>| kind.iter().map(|i| trials.iter().find(|t| t.card == *i).map_or(0, |t| t.particles)).max().unwrap_or(0);
-    kinds.sort_by_key(|k| std::cmp::Reverse(found(k)));
-    if kinds.len() > 1 && (found(&kinds[0]) as f64) < DOMINANT * found(&kinds[1]) as f64 {
-        return None;
-    }
+    // Several kinds that all average well (a particle, a filament beside
+    // it, something smaller): the one whose halves agree best is taken and
+    // the others are named, to be chosen instead. How often each was found
+    // does not tell them apart: every search fills up to its limit.
+    let best = |kind: &Vec<usize>| kind.iter().map(|i| strong[i]).fold(0.0, f64::max);
+    kinds.sort_by(|a, b| best(b).total_cmp(&best(a)).then(a[0].cmp(&b[0])));
     let same = kinds.remove(0);
     let id = same.iter().copied().max_by(|&i, &j| strong[&i].total_cmp(&strong[&j]).then(j.cmp(&i)))?;
     let mut other: Vec<usize> = kinds.into_iter().flatten().collect();
@@ -1975,15 +1970,15 @@ mod card_tests {
     }
 
     #[test]
-    fn a_kind_found_in_far_more_places_is_chosen_over_another_that_averages_well() {
+    fn of_several_kinds_that_average_well_the_strongest_is_chosen_and_the_others_named() {
         // Two tomograms: cards 0 and 1 are the particle, card 2 a straight line.
         let cards: Vec<Card> = (0..3).map(|i| likely_card(i, true, 8.0, 50)).collect();
         let trial = |card: usize, particles: usize, strength: f64| Trial { card, ok: true, reason: None, particles, candidates: 3000, fsc: vec![], voxel_a: 13.0, strength, seconds: 1.0 };
         let sim = vec![vec![1.0, 0.9, 0.2], vec![0.9, 1.0, 0.2], vec![0.2, 0.2, 1.0]];
         let got = choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 336, 0.0264)], &sim);
         assert_eq!(got, Some(Chosen { id: 1, same: vec![0, 1], other: vec![2] }));
-        // Found about as often: the user decides.
-        assert_eq!(choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 700, 0.0264)], &sim), None);
+        // However often the other was found.
+        assert_eq!(choose(&cards, &[trial(0, 880, 0.0241), trial(1, 1023, 0.0305), trial(2, 2900, 0.0264)], &sim).map(|c| c.id), Some(1));
     }
 
     #[test]
@@ -2016,7 +2011,7 @@ mod card_tests {
         // The same two cards are two kinds when they do not look alike (0.53 at most): the user decides.
         m[0][1] = 0.53;
         m[1][0] = 0.53;
-        assert_eq!(choose(&cards, &trials, &m), None);
+        assert_eq!(choose(&cards, &trials, &m), Some(Chosen { id: 1, same: vec![1], other: vec![0] }));
         // The best alone: the others are too weak (card 3 at 0.0159 is 0.59 of card 1).
         assert_eq!(choose(&cards, &[worked(1, &FSC1, 13.02), worked(3, &FSC3, 9.77), failed(2)], &[]), Some(Chosen { id: 1, same: vec![1], other: vec![] }));
         // Only cards 4 and 7 worked: within CLOSE of each other (0.0120 and 0.0145), so both are good;
@@ -2029,7 +2024,7 @@ mod card_tests {
         assert_eq!(choose(&cards, &weak, &m), Some(Chosen { id: 7, same: vec![4, 7], other: vec![] }));
         m[4][7] = 0.3;
         m[7][4] = 0.3;
-        assert_eq!(choose(&cards, &weak, &m), None);
+        assert_eq!(choose(&cards, &weak, &m), Some(Chosen { id: 7, same: vec![7], other: vec![4] }));
         // The alikeness is read either way round, and a chain is one kind (SAME is enough).
         let mut m = vec![vec![0.0; 9]; 9];
         m[7][4] = SAME;

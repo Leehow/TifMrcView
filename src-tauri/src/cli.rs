@@ -648,8 +648,8 @@ fn auto_pick(cards: &[crate::sta::project::Card], trials: &[crate::sta::project:
         match sp::likeness(cards, &good, found) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("tmv sta: could not compare the cards ({e:#}): choose one yourself");
-                return None;
+                eprintln!("tmv sta: could not compare the cards ({e:#}): each is taken for a kind of its own");
+                vec![]
             }
         }
     } else {
@@ -876,7 +876,7 @@ fn sta(o: &Opts) -> Result<Value> {
                 );
                 if !chosen.other.is_empty() {
                     eprintln!(
-                        "tmv sta: something else averages well too, found in fewer places (card {}): choose it with --pick N",
+                        "tmv sta: something else averages well too (card {}): choose it with --pick N",
                         chosen.other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
                     );
                 }
@@ -1432,8 +1432,8 @@ mod tests {
         assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
         // One works well, the other is too weak to count (0.018 / 0.0274 < 0.75).
         assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
-        // Two close ones are compared from their files: unreadable here, so the user chooses.
-        assert_eq!(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)], None), None);
+        // Two close ones are compared from their files: unreadable here, so the stronger is taken.
+        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)], None)), Some(1));
         // None works; nothing tried.
         assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)], None), None);
         assert_eq!(auto_pick(&cards, &[], None), None);
