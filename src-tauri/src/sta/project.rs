@@ -34,7 +34,7 @@ use crate::tomo::{output, pipeline};
 /// Voxel size the tomograms are searched at, Å.
 const SEARCH_VOXEL: f64 = 16.0;
 /// Blob diameters looked for, Å.
-const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
+pub(super) const LADDER: [f64; 7] = [90.0, 120.0, 160.0, 210.0, 280.0, 370.0, 490.0];
 /// Robust z-score a blob needs, as a kind and as a candidate of the chosen
 /// kind. (Weaker candidates were tried on EMPIAR-10045: at z ≥ 3.5 they
 /// more than doubled the candidates, the match with the average did not
@@ -45,8 +45,8 @@ const LOOSE_Z: f32 = MIN_Z;
 /// below the tomogram's median is a gold marker (see `Cut::darkest`).
 pub(crate) const GOLD: f32 = 10.0;
 /// Side of the cubes, and how many voxels of it the particle spans.
-const BOX: usize = 32;
-const SPAN: f64 = 13.0;
+pub(super) const BOX: usize = 32;
+pub(super) const SPAN: f64 = 13.0;
 /// Particles in the first model, and most particles averaged here.
 const FIRST: usize = 200;
 const MOST: usize = 3000;
@@ -1045,7 +1045,7 @@ fn eigenvalues(mut a: [[f64; 3]; 3]) -> [f64; 3] {
 /// layers and pairs of particles measured 3.8 to 7.2 on a real tomogram,
 /// ribosomes 8.0 and 11.1), not stretched (below `ELONGATION`), one blob and
 /// not far off the centre (`OFF_CENTRE`).
-fn is_likely(compact: f64, elongation: f64, blobs: usize, offset: f64) -> bool {
+pub(super) fn is_likely(compact: f64, elongation: f64, blobs: usize, offset: f64) -> bool {
     compact > COMPACT && elongation < ELONGATION && blobs == 1 && offset < OFF_CENTRE
 }
 

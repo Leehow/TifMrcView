@@ -95,7 +95,7 @@ fn snap(sigma: f64) -> f64 {
 }
 
 /// Gaussian blur with edge values repeated.
-fn blur(v: &[f32], n: [usize; 3], sigma: f64) -> Vec<f32> {
+pub(super) fn blur(v: &[f32], n: [usize; 3], sigma: f64) -> Vec<f32> {
     let r = (3.0 * sigma).ceil() as isize;
     let mut k: Vec<f32> = (-r..=r).map(|i| (-0.5 * (i as f64 / sigma).powi(2)).exp() as f32).collect();
     let sum: f32 = k.iter().sum();
