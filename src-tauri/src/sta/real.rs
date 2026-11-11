@@ -42,3 +42,23 @@ fn v17_spheres() {
     eprintln!("{} particles, {} Å, voxel {} Å, {:.0} s", r["particles"], r["resolutionA"], r["voxelA"], started.elapsed().as_secs_f64());
     eprintln!("fsc {}", r["fsc"]);
 }
+
+/// The kinds among the particles of the average `v17_spheres` left in
+/// `TMV_OUT` (same variables).
+#[test]
+#[ignore]
+fn v17_kinds() {
+    let file = std::env::var("TMV_V17").expect("TMV_V17 = the path of v17.rec");
+    let out = std::env::var("TMV_OUT").expect("TMV_OUT = the folder v17_spheres wrote to");
+    let dir = std::path::Path::new(&out).join("drawn");
+    let sources = vec![super::project::Source { path: file, tilts: [-60.0, 60.0], look: None, series: None }];
+    let started = std::time::Instant::now();
+    let v = super::project::kinds_of(&sources, &dir.to_string_lossy(), &|label, done, total| {
+        if done == total {
+            eprintln!("{:6.1} s  {label}", started.elapsed().as_secs_f64());
+        }
+    })
+    .unwrap();
+    let kinds: Vec<String> = v["kinds"].as_array().unwrap().iter().map(|k| format!("kind {}: {}", k["id"], k["count"])).collect();
+    eprintln!("{} particles, apart {}, {kinds:?}, {:.0} s", v["particles"], v["apart"], started.elapsed().as_secs_f64());
+}
