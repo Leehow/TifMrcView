@@ -258,6 +258,19 @@ fn blob_quality(r: &segpick::Region) -> f32 {
     (1.0 - (-r.edge / 6.0).exp()) * if r.alone { 1.0 } else { 0.8 }
 }
 
+/// A region that is a large part of the slice, or a large part of the
+/// view at the level most of the slice has.
+fn background_like(pix: &[usize], smooth: &[f32], med: f32, sd: f32, view_area: usize) -> bool {
+    if pix.len() * 5 > smooth.len() {
+        return true;
+    }
+    if pix.len() * 10 <= view_area * 3 {
+        return false;
+    }
+    let mean = pix.iter().map(|&i| smooth[i] as f64).sum::<f64>() / pix.len() as f64;
+    (mean as f32 - med).abs() < 0.5 * sd
+}
+
 impl Sam {
     fn slice_data(&self, key: SliceKey, (w, h, d): (usize, usize, usize), values: &impl Fn(usize) -> Result<Vec<f32>>, (lo, hi): (f32, f32), dn: Denoise) -> Result<Arc<SliceData>> {
         if let Some(s) = self.inner.lock().unwrap().slice.clone().filter(|s| s.key == key) {
@@ -521,6 +534,15 @@ impl Sam {
         if cands.is_empty() {
             bail!("这里没有认出物体，试试绕着它画一圈");
         }
+        // A click on the background would label the whole empty area. A
+        // drawn loop still selects it.
+        if matches!(drawn, Stroke::Click(_)) {
+            let view_area = ((view[2] - view[0]).max(1.0) * (view[3] - view[1]).max(1.0)) as usize;
+            cands.retain(|c| !background_like(&c.pix, &sd.smooth, sd.med, sd.sd, view_area));
+            if cands.is_empty() {
+                bail!("这里像是背景；要选它请绕着它画一圈");
+            }
+        }
         // Smallest first; of two nearly equal ones the surer stays.
         cands.sort_by_key(|c| c.pix.len());
         let mut kept: Vec<Cand> = vec![];
@@ -758,6 +780,21 @@ impl Sam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_is_not_an_object() {
+        let smooth: Vec<f32> = (0..10_000).map(|i| if i % 100 < 10 { 50.0 } else { 1.0 }).collect();
+        let dark: Vec<usize> = (0..10_000).filter(|i| i % 100 >= 10 && i % 100 < 50).collect();
+        let bright: Vec<usize> = (0..10_000).filter(|i| i % 100 < 10).collect();
+        // Two fifths of the slice.
+        assert!(background_like(&dark, &smooth, 1.0, 10.0, 10_000));
+        // A large part of a zoomed view, at the background level.
+        assert!(background_like(&dark[..1500], &smooth, 1.0, 10.0, 4_000));
+        // A bright object filling the view stays an object.
+        assert!(!background_like(&bright, &smooth, 1.0, 10.0, 1_200));
+        // A small dark patch too.
+        assert!(!background_like(&dark[..100], &smooth, 1.0, 10.0, 4_000));
+    }
 
     #[test]
     fn tiles_snap_and_stay_inside() {
