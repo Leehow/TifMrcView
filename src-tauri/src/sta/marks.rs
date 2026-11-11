@@ -440,6 +440,33 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
             }
         }
     };
+    if super::funnels::marked(marks) {
+        // Clicks into pits are examples (`funnels`). Here nobody looks at
+        // what is found first (the command line; the workspace goes through
+        // the review of `shapes`): every pit found is averaged, and a
+        // tomogram that has no membrane segmentation yet gets one.
+        use super::shapes::{self, Found};
+        let pixel = |p: &str| sp::pixel_of(p).ok();
+        let find = || shapes::find_in(&sources, &inputs, marks, Size::parse(size), 0.0, &pixel, &progress);
+        let mut found = find()?;
+        if let Found::NeedSegment(files) = &found {
+            for f in files {
+                paint::segment(f, &progress)?;
+            }
+            found = find()?;
+        }
+        let Found::Done(state, sides) = found else { bail!("膜没有分割出来，找不了凹陷") };
+        let dir = out.join(DRAWN);
+        shapes::save_new(&dir, &state, &sides)?;
+        let (pits, size_a) = shapes::kept_pits(&state, &dir)?;
+        let report = sp::run_pits(&sources, &pits, size_a, &dir.to_string_lossy(), &progress, &live)?;
+        write_used(&dir, &shapes::used_of(&state));
+        return Ok(json!({
+            "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
+            "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "sizeA": size_a,
+            "pits": pits.len(), "pointsLeftOut": false,
+        }));
+    }
     if route == Route::Points {
         let points = points_of(marks, &inputs, &sources)?;
         let outcome = auto_points(&sources, &points, &out, device, &progress, &live, &note)?;

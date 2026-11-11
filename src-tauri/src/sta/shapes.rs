@@ -1499,4 +1499,18 @@ mod tests {
         apply(&mut s, &Edit { only: Some(vec![0, 1]), ..Edit::default() }).unwrap();
         assert!(kept_pits(&s, &dir).err().unwrap().to_string().contains("至少要"));
     }
+
+    #[test]
+    fn marks_with_a_pit_clicked_average_every_pit_found_without_a_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, _) = pitted(tmp.path());
+        let out = tmp.path().join("out").to_string_lossy().into_owned();
+        let click = Mark { kind: Kind::Pit, tomogram: a.clone(), points: vec![[100.0, 100.0, 28.0]], flip: false, strokes: vec![] };
+        let dev = || -> Result<(&'static burn::tensor::Device, &'static str)> { bail!("no device is needed for pits") };
+        let v = marks::run_marks(&[a.clone()], &[click], None, Some(&out), &dev, &|_, _| {}, &|_| String::new()).unwrap();
+        assert_eq!(v["pits"], 9, "{v:#}");
+        assert_eq!(v["report"]["particles"], 9, "{v:#}");
+        let dir = Path::new(&out).join(DRAWN);
+        assert!(dir.join("average.mrc").is_file() && load(&dir).is_some_and(|s| s.pits()));
+    }
 }

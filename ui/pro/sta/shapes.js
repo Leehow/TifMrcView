@@ -316,7 +316,7 @@
   }
   $("sta-shapes-other").onclick = () => {
     dismiss();
-    W.status("请再涂几片膜、或标几个球作例子，再按“找出全部同类”");
+    W.status("请再给几个例子（涂膜、标球、画线或点凹陷），再按“找出全部同类”");
   };
   $("sta-shapes-go").onclick = async () => {
     const d = R.d;

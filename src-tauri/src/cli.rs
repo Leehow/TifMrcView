@@ -71,7 +71,9 @@ USAGE
   as centre + a point on the surface, painted membranes; shapes are averaged on
   seeds along them with their directions, into <out>/drawn/; --size small|medium|
   large is the particle size of lines, surfaces and membranes; a sphere takes it
-  from its radius), or --template map.mrc|.em (a density map the user already
+  from its radius; clicks into pits of a membrane, kind "pit", are examples:
+  every pit of every membrane in the inputs is found and all are averaged, the
+  membranes segmented first where they are not yet), or --template map.mrc|.em (a density map the user already
   has is the template: everything like it is found and averaged without
   stopping, into <out>/own/). --kinds (on a folder that already holds an
   average; give the same tomograms and --out) sorts its particles into kinds
