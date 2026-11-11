@@ -32,3 +32,9 @@ References:
 
 Remove this local copy when an upstream release provides equivalent error
 propagation and the application readback regression passes against it.
+
+Native NAD additionally disables Metal fast math only for passthrough MSL
+source containing its unique `void tmv_nad_eed_` entrypoint prefix. This retains
+separate float32 rounding required by original-program numerical regression;
+all other kernels keep their existing compiler options. The corresponding
+cubecl-cpp patch prevents implicit FMA before the Metal compiler sees the code.

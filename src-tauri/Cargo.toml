@@ -8,7 +8,7 @@ license = "Apache-2.0"
 
 [workspace]
 members = ["thumbnail-ffi", "thumbnail-win", "sam"]
-exclude = ["vendor/wgpu-hal-30.0.1", "vendor/cubecl-wgpu-0.11.3"]
+exclude = ["vendor/wgpu-hal-30.0.1", "vendor/cubecl-wgpu-0.11.3", "vendor/cubecl-cpp-0.11.3"]
 resolver = "2"
 
 # Keep Metal execution failures from becoming successful tensor readbacks.
@@ -16,6 +16,7 @@ resolver = "2"
 [patch.crates-io]
 wgpu-hal = { path = "vendor/wgpu-hal-30.0.1" }
 cubecl-wgpu = { path = "vendor/cubecl-wgpu-0.11.3" }
+cubecl-cpp = { path = "vendor/cubecl-cpp-0.11.3" }
 
 [[bin]]
 name = "tifmrcview"
@@ -66,6 +67,8 @@ tmv-sam = { path = "sam", optional = true, default-features = false, features = 
 # Pro: the CTF fit on the same GPU backend (features come from tmv-sam).
 burn = { version = "0.22.1", optional = true, default-features = false, features = ["std", "autodiff", "optim", "signal"] }
 burn-store = { version = "0.22.1", optional = true, default-features = false, features = ["std", "safetensors", "pytorch"] }
+# Custom NAD stencil kernels share the existing Burn device and runtime.
+burn-cubecl = { version = "=0.22.1", optional = true, default-features = false }
 # Imaris LZ4 chunks (HDF5 filter 32004).
 lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-decode"] }
 
@@ -99,7 +102,6 @@ webpki-root-certs = "1"
 # Select the already-installed fp32 implicit-GEMM kernel for membrane convs.
 # Runtime extension access is needed only on Metal; other targets stay unchanged.
 burn = { version = "0.22.1", optional = true, default-features = false, features = ["extension"] }
-burn-cubecl = { version = "=0.22.1", optional = true, default-features = false }
 core-foundation = "0.10"
 libc = "0.2"
 # NSOpenPanel for the folder button (choose an image or a folder in one panel).
@@ -136,6 +138,10 @@ opt-level = 2
 
 [[example]]
 name = "sam_slice"
+required-features = ["pro"]
+
+[[example]]
+name = "pick_probe"
 required-features = ["pro"]
 
 [[example]]

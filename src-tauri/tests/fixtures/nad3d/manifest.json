@@ -1,0 +1,211 @@
+{
+  "version": "IMOD5.1.3",
+  "sigma": 0,
+  "timeStep": 0.1,
+  "cases": [
+    {
+      "name": "noise",
+      "shape": [
+        11,
+        9,
+        7
+      ],
+      "inputSha256": "4551e4a23230cb1b7c829c381d4fa5183f597566108795d965ed2e0b24ec8f3f",
+      "sd": 1.016762309348096,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 0.10167622566223145,
+          "iterations": 1,
+          "output": "noise-k0.1-n1.f32",
+          "sha256": "88bb510f53c23a49b5ab9620cf48efafc126b5d0d9b273b8d7ad366f707d14d0"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 0.8134098052978516,
+          "iterations": 3,
+          "output": "noise-k0.8-n3.f32",
+          "sha256": "06d1827b32bb38ecc5cf9919eebcf236ea9348607dc7b1414e3dccc244021452"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 3.5586678981781006,
+          "iterations": 2,
+          "output": "noise-k3.5-n2.f32",
+          "sha256": "b9226a83c34f871b682b3cca642ec84289dc76f26afb0b0c8f626a9cfa415e73"
+        }
+      ],
+      "input": "noise.f32"
+    },
+    {
+      "name": "membrane",
+      "shape": [
+        11,
+        9,
+        7
+      ],
+      "inputSha256": "16c881cc87e51496c3191ec24d1500e3149264efaf1609dc7340dba23cb71ba9",
+      "sd": 2.500821098549321,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 0.2500821053981781,
+          "iterations": 1,
+          "output": "membrane-k0.1-n1.f32",
+          "sha256": "f2447fcb011821864ee6c6adcf257c9e79867e6f2b33fd3cfb332d07d71e1b22"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 2.000656843185425,
+          "iterations": 3,
+          "output": "membrane-k0.8-n3.f32",
+          "sha256": "89179679fd664ac97ec6b852a4fe85cba679f84fda1acdf0815ef86924e8b596"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 8.752874374389648,
+          "iterations": 2,
+          "output": "membrane-k3.5-n2.f32",
+          "sha256": "d5061baf95cc1968bae43af9dc8b3236251d19bd0833ab005cbfa062a6a1f140"
+        }
+      ],
+      "input": "membrane.f32"
+    },
+    {
+      "name": "diagonal",
+      "shape": [
+        11,
+        9,
+        7
+      ],
+      "inputSha256": "c184c015fc5fe70bdcfc7d19a6c5d62e531c6c6d0565c45c76c92a6a268e09e9",
+      "sd": 1.9921766335780693,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 0.19921766221523285,
+          "iterations": 1,
+          "output": "diagonal-k0.1-n1.f32",
+          "sha256": "ef5877d0a3152d3114b19a3a65a2bf099fd2451c07dda494cb9ec108a32c8401"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 1.5937412977218628,
+          "iterations": 3,
+          "output": "diagonal-k0.8-n3.f32",
+          "sha256": "3ea2c9338c32e5e0ce148c928f3d76d7c917587859fb3455d81d1bd7c58c7e11"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 6.972618103027344,
+          "iterations": 2,
+          "output": "diagonal-k3.5-n2.f32",
+          "sha256": "09b4db5cb30d7c30c77e4f44d3f022e2208d65f2bb214ad951a4aaf5ed765953"
+        }
+      ],
+      "input": "diagonal.f32"
+    },
+    {
+      "name": "ramp",
+      "shape": [
+        11,
+        9,
+        7
+      ],
+      "inputSha256": "a95c7811cad2fae4513dc830de137110bc8860b91a9ea356f9157e5f5fa86d81",
+      "sd": 1.704894912422981,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 0.17048949003219604,
+          "iterations": 1,
+          "output": "ramp-k0.1-n1.f32",
+          "sha256": "fd0cd4362e8aada2516b44deb64380a6c8f5887aeac226607811cd292b618de6"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 1.3639159202575684,
+          "iterations": 3,
+          "output": "ramp-k0.8-n3.f32",
+          "sha256": "9ac20cb5d2f5ed8680d560e164e40af1cdf785590c7efc79369d0e5036071861"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 5.967132091522217,
+          "iterations": 2,
+          "output": "ramp-k3.5-n2.f32",
+          "sha256": "f93e6a942e3c22cf50f215796ee8b9279f29c01f8c6715f78d7fc1a292076303"
+        }
+      ],
+      "input": "ramp.f32"
+    },
+    {
+      "name": "constant",
+      "shape": [
+        11,
+        9,
+        7
+      ],
+      "inputSha256": "553a54d8ac22ae1fe3bdf6c39592b0445ee8406c6ba93fd468cd6a782bdbccb3",
+      "sd": 0.0,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 1.1754943508222875e-38,
+          "iterations": 1,
+          "output": "constant-k0.1-n1.f32",
+          "sha256": "553a54d8ac22ae1fe3bdf6c39592b0445ee8406c6ba93fd468cd6a782bdbccb3"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 1.1754943508222875e-38,
+          "iterations": 3,
+          "output": "constant-k0.8-n3.f32",
+          "sha256": "553a54d8ac22ae1fe3bdf6c39592b0445ee8406c6ba93fd468cd6a782bdbccb3"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 1.1754943508222875e-38,
+          "iterations": 2,
+          "output": "constant-k3.5-n2.f32",
+          "sha256": "553a54d8ac22ae1fe3bdf6c39592b0445ee8406c6ba93fd468cd6a782bdbccb3"
+        }
+      ],
+      "input": "constant.f32"
+    },
+    {
+      "name": "small",
+      "shape": [
+        4,
+        3,
+        2
+      ],
+      "inputSha256": "13f0edf4c8443ae5fc592eaaeead899049d44df467113b95485c61943f134a44",
+      "sd": 1.0570766349363017,
+      "references": [
+        {
+          "strength": 0.1,
+          "kAbsolute": 0.10570766776800156,
+          "iterations": 1,
+          "output": "small-k0.1-n1.f32",
+          "sha256": "4d07164c72c8ed21237534d149a5c0e95717089895d2ecf277c2be76fb79687b"
+        },
+        {
+          "strength": 0.8,
+          "kAbsolute": 0.8456613421440125,
+          "iterations": 3,
+          "output": "small-k0.8-n3.f32",
+          "sha256": "66a0090e68ee3d71f92cc7bd34d2f52a2569e93cd953c73fe7454585b08b933c"
+        },
+        {
+          "strength": 3.5,
+          "kAbsolute": 3.699768543243408,
+          "iterations": 2,
+          "output": "small-k3.5-n2.f32",
+          "sha256": "220cbd3bad4f345a463c1ee4f60404fd9bd841d796f4972675521bb58626492b"
+        }
+      ],
+      "input": "small.f32"
+    }
+  ]
+}

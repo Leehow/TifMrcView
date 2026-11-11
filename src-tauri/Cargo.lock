@@ -1941,8 +1941,6 @@ dependencies = [
 [[package]]
 name = "cubecl-cpp"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd9b916049eefb3b8f793a0da10d158c5900e377c35bc32abc235b33b05d5428"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -8574,6 +8572,11 @@ dependencies = [
  "anyhow",
  "burn",
  "burn-store",
+ "image",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip 9.1.3",
 ]
 
 [[package]]

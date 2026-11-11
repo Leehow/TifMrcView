@@ -43,6 +43,9 @@ try {
   for (const f of ['README.md', 'AGENTS.md']) copyFileSync(path.join(root, 'cli', f), path.join(stage, f));
   cpSync(path.join(root, 'cli/skills'), path.join(stage, 'skills'), { recursive: true });
   copyFileSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
+  mkdirSync(path.join(stage, 'licenses'), { recursive: true });
+  copyFileSync(path.join(root, 'src-tauri/sam/SAM3-LICENSE'), path.join(stage, 'licenses/SAM3-LICENSE'));
+  copyFileSync(path.join(root, 'src-tauri/sam/LICENSES.md'), path.join(stage, 'licenses/tmv-sam-LICENSES.md'));
   writeFileSync(path.join(stage, 'VERSION'), version + '\n');
   const tarball = path.join(out, `${name}_linux-x86_64.tar.gz`);
   const pending = path.join(stagingRoot, `${name}_linux-x86_64.tar.gz`);

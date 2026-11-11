@@ -22,6 +22,10 @@
     ]
   },
   "bundle": {
+    "resources": {
+      "sam/SAM3-LICENSE": "licenses/SAM3-LICENSE",
+      "sam/LICENSES.md": "licenses/tmv-sam-LICENSES.md"
+    },
     "icon": [
       "icons-pro/32x32.png",
       "icons-pro/128x128.png",

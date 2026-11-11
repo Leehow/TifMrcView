@@ -1,6 +1,8 @@
 "use strict";
-// Pro segmentation labels: one label per pixel of the stack, painted with a
-// brush or filled by the magic wand, threshold and watershed tools. The label
+// Pro segmentation labels: one label per pixel of the stack, made with the
+// smart selection tool (click or draw around an object, then "find similar"),
+// a brush, the magic wand, threshold and watershed tools. The labels are
+// listed as rows of the Layers panel, above the image's layers. The label
 // map lives in Rust (labels.rs) and is saved next to the image as
 // <image>.labels.tif; this file draws the current slice over the image.
 // Shares app.js globals: S, ext, invoke, $, setTool, showPanel, toScreen, toast, draw.
@@ -22,7 +24,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "brush",     // select | brush | eraser | lasso | wand | sam | classify
+    sub: "smart",     // smart | brush | eraser | lasso | wand | classify
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -35,9 +37,14 @@
     hover: null,      // pointer in image pixels
     stroke: null,
     lasso: null,      // {z, pts, erase} while a lasso is drawn
-    sel: null,        // picked region {z, x, y} (a pixel in it) for the select tool
+    sel: null,        // selected object {z, x, y} (a pixel in it)
     selDrag: null,    // {a: pointer at press, dx, dy} while it is dragged
-    sam: { points: [], box: null, drag: null, z: -1, mask: null, iou: 0, busy: false, status: null, progress: null, along: null },
+    sam: { busy: false, status: null, progress: null, along: null, denoise: false, warmed: false },
+    // Smart tool: the preview under the pointer, the stroke being drawn and
+    // the last result (so it can be swapped for a smaller or larger reading).
+    pick: { hover: null, timer: 0, running: false, again: false, path: null, last: null },
+    cand: null,       // proposals of "find similar": {z, label, items, thr, busy, done, total}
+    objects: [],      // objects of each label on the shown slice
     // Pixel classifier: scribbles of the shown slice, the trained forest's
     // summary and the prediction of the shown slice.
     cls: { z: -1, scribbles: null, stroke: null, info: null, preview: true, pred: null, predZ: -1, minConf: 0, busy: false, fetching: false, along: null },
@@ -57,6 +64,12 @@
   };
   const channel = () => Math.min(S.sel, S.chans.length - 1);
 
+  const EYE = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
+  const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+  const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+  const GRIP = '<svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>';
+
   // ---------- panel ----------
 
   const sec = document.createElement("section");
@@ -64,32 +77,25 @@
   sec.innerHTML = `
     <h3>标签分割 <span class="dim" id="lab-busy"></span></h3>
     <div class="row" id="lab-tools">
-      <button class="small" data-sub="select" title="选择：点一块分割区域选中它，拖动挪位置，Delete 删除（勾上“整个物体”就连同其他层一起）"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg><span>选择</span></button>
-      <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg><span>画笔</span></button>
-      <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg><span>橡皮</span></button>
-      <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg><span>套索</span></button>
-      <button class="small" data-sub="sam" title="SAM 点选：点一下物体自动分割（Alt+点击标背景，Shift+拖动拉框），回车写进当前标签"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.3L20 9l-4.4 3.8L17 18.5 12 15.6 7 18.5l1.4-5.7L4 9l5.8-.7z"/></svg><span>SAM</span></button>
-      <button class="small" data-sub="classify" title="像素分类：用画笔给每种结构（包括背景）各画几笔不同的标签，训练后自动分出整层或整个栈（按住 Alt 擦掉标注）"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 17h6M17 14v6"/></svg><span>分类</span></button>
-      <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg><span>魔棒</span></button>
+      <button class="small" data-sub="smart" title="智能选择：在物体上点一下就选出它；绕着它画一圈、或者沿着它画一笔，选得更准。按住 Alt 是减去。选中后可以「找同类」"><svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.2-6.8L20 11z"/><path d="M17 3v3M15.5 4.5h3M20 16v2M19 17h2"/></svg></button>
+      <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg></button>
+      <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg></button>
+      <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg></button>
+      <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg></button>
+      <button class="small" data-sub="classify" title="像素分类：用画笔给每种结构（包括背景）各画几笔不同的标签，训练后自动分出整层或整个栈（按住 Alt 擦掉标注）"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 17h6M17 14v6"/></svg></button>
     </div>
+    <div class="dim" id="lab-hint">在物体上点一下，或者绕着它画一圈。选中后点「找同类」，一次找出所有一样的。</div>
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
     <label class="slider" id="lab-tol-row">容差 <input type="range" id="lab-tol" min="0" max="0.5" step="0.005" /><span id="lab-tol-v"></span></label>
     <div class="row">
       <label id="lab-3d-row" title="魔棒沿 Z 方向一起长到相邻的层"><input type="checkbox" id="lab-3d" /> <span id="lab-3d-text">三维</span></label>
-      <button class="small" id="lab-sel-del" title="删除选中的区域（Delete）">删除选中</button>
       <label title="画笔和魔棒只涂没有标签的地方；橡皮只擦当前标签"><input type="checkbox" id="lab-guard" /> 不覆盖其他标签</label>
     </div>
     <div id="lab-sam" hidden>
       <div class="dim" id="lab-sam-text"></div>
-      <div class="dim" id="lab-sam-backend"></div>
       <div class="row">
         <button class="small" id="lab-sam-get">下载模型</button>
-        <button class="small" id="lab-sam-apply" title="把预览的分割写进当前标签（回车）">应用</button>
-        <button class="small" id="lab-sam-trim" title="写入预览的分割，并清掉这一层里当前标签在分割以外的部分（先用画笔粗涂、再用 SAM 精修时用）">清除外围</button>
-        <button class="small" id="lab-sam-z" title="从这一层开始，逐层向上和向下自动分割同一个物体，直到找不到它为止（Esc 停止）">沿 Z 传播</button>
-        <button class="small" id="lab-sam-clear" title="清除这次的点和预览（Esc）">清除</button>
       </div>
-      <label id="lab-sam-dn-row" title="先把相邻几层平均再模糊一点，然后交给 SAM；噪声大的冷冻电镜断层会分得更完整"><input type="checkbox" id="lab-sam-dn" /> 去噪后再分割</label>
     </div>
     <div id="lab-cls" hidden>
       <div class="dim" id="lab-cls-text"></div>
@@ -105,16 +111,10 @@
         <button class="small" id="lab-cls-all" title="对每一层分类并写进标签，一步就能撤回（Esc 停止）">应用到所有层</button>
       </div>
     </div>
-    <div id="lab-list"></div>
     <div class="row">
       <button class="small" id="lab-3d-surf" title="把所有标签做成光滑的三维表面，叠在断层切片上显示；点一个物体可以隐藏、删除或换标签">3D 表面</button>
       <button class="small" id="lab-interp" title="隔几层画一个轮廓，再按这里，把当前标签画过的层之间的层按形状自动补齐">隔层插值</button>
     </div>
-    <div class="row">
-      <button class="small" id="lab-new" title="换一个新的标签号继续画">＋ 新标签</button>
-      <label><input type="checkbox" id="lab-show" checked /> 显示</label>
-    </div>
-    <label class="slider">不透明度 <input type="range" id="lab-op" min="0.05" max="1" step="0.05" /><span id="lab-op-v"></span></label>
     <details id="lab-th">
       <summary>阈值</summary>
       <div class="row">
@@ -168,6 +168,28 @@
     <div id="lab-file" class="dim"></div>`;
   $("sec-ann").after(sec);
 
+  // The labels are rows of the Layers panel (layers.js), above the image's
+  // layers: select, show, lock, rename, reorder and merge them there.
+  const layersBox = document.createElement("div");
+  layersBox.id = "label-layers";
+  layersBox.hidden = true;
+  layersBox.innerHTML = `
+    <div class="ll-head"><b>标签</b><span class="ll-space"></span>
+      <input type="range" id="lab-op" min="0.05" max="1" step="0.05" title="标签的不透明度" aria-label="标签的不透明度" />
+      <button class="ll-btn" id="lab-show" title="显示 / 隐藏所有标签"></button>
+      <button class="ll-btn" id="lab-new" title="新标签：之后选出来的东西放进一个新的标签">＋</button>
+    </div>
+    <div id="lab-list" role="list" aria-label="标签"></div>`;
+  if ($("merge-list")) $("merge-list").before(layersBox);
+  else sec.querySelector("#lab-th").before(layersBox);
+
+  function syncLayersBox() {
+    const D = window.TifMrcViewPro.documents;
+    const merge = D && D.current() && D.current().type === "merge";
+    layersBox.hidden = !S.info || merge || S.axis !== "xy" || L.token !== S.token || !!L.error || !(any() || S.tool === "label");
+  }
+  document.addEventListener("tmv-document", () => setTimeout(syncLayersBox));
+
   const modelContext = () => ({ token: S.token, c: channel(), t: S.t });
   const clsRecords = window.TifMrcViewPro.models.attach("classifier", "lab-cls-model-record", modelContext);
   const unetRecords = window.TifMrcViewPro.models.attach("unet", "lab-unet-model-record", modelContext);
@@ -203,58 +225,66 @@
 
   function syncPanel() {
     for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
-    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "sam" || L.sub === "select";
+    $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "smart";
+    $("lab-hint").hidden = L.sub !== "smart";
     syncSam();
     syncCls();
     syncUnet();
     syncMem();
     $("lab-tol-row").hidden = L.sub !== "wand";
-    $("lab-3d-row").hidden = L.sub !== "wand" && L.sub !== "select";
-    $("lab-3d-text").textContent = L.sub === "select" ? "整个物体（所有层）" : "三维";
-    $("lab-3d-row").title = L.sub === "select" ? "挪动和删除时连同相邻层里连着的部分一起" : "魔棒沿 Z 方向一起长到相邻的层";
-    $("lab-sel-del").hidden = L.sub !== "select";
-    $("lab-sel-del").disabled = !L.sel || L.busy;
+    $("lab-3d-row").hidden = L.sub !== "wand" && !(L.sub === "smart" && S.info && S.info.sizeZ > 1);
+    $("lab-3d-text").textContent = L.sub === "smart" ? "整个物体（所有层）" : "三维";
+    $("lab-3d-row").title = L.sub === "smart" ? "挪动、删除和换标签时连同相邻层里连着的部分一起" : "魔棒沿 Z 方向一起长到相邻的层";
     $("lab-size").value = L.radius;
     $("lab-size-v").textContent = `${L.radius * 2}`;
     $("lab-tol").value = L.tol;
     $("lab-tol-v").textContent = `${Math.round(L.tol * 100)}%`;
     $("lab-op").value = L.opacity;
-    $("lab-op-v").textContent = `${Math.round(L.opacity * 100)}%`;
     $("lab-3d").checked = L.threeD;
     $("lab-guard").checked = L.guard;
-    $("lab-show").checked = L.show;
+    $("lab-show").innerHTML = L.show ? EYE : EYE_OFF;
+    $("lab-show").classList.toggle("off", !L.show);
     $("lab-busy").textContent = L.busy ? "处理中…" : "";
     for (const b of sec.querySelectorAll("#lab-th button, #lab-ws button, #lab-interp")) b.disabled = L.busy || !L.token;
     $("lab-3d-surf").disabled = L.busy || !any() || !(S.info && S.info.sizeZ > 1);
   }
 
-  function renderList() {
-    const list = $("lab-list");
-    list.textContent = "";
+  // Place in the list: where the user dragged it, otherwise by label number.
+  const orderOf = (k) => mat(k).order ?? 1e6 + k;
+  /** Labels in the list, top first: the ones in use and the active one. */
+  function listed() {
     const ks = [];
     for (let k = 1; k < L.counts.length; k++) if (L.counts[k] > 0) ks.push(k);
     if (!ks.includes(L.active)) ks.push(L.active);
-    ks.sort((a, b) => a - b);
+    return ks.sort((a, b) => orderOf(a) - orderOf(b) || a - b);
+  }
+
+  function renderList() {
+    syncLayersBox();
+    const list = $("lab-list");
+    list.textContent = "";
+    const ks = listed();
     // Thousands of regions after a split: list the active one and the first few.
     const shown = ks.length > 200 ? ks.filter((k, i) => i < 200 || k === L.active) : ks;
     for (const k of shown) {
       const row = document.createElement("div");
-      row.className = "lab-row" + (k === L.active ? " on" : "");
+      row.className = "lab-row" + (k === L.active ? " on" : "") + (hidden(k) ? " off" : "") + (locked(k) ? " locked" : "");
+      row.dataset.label = k;
+      row.setAttribute("role", "listitem");
       const n = L.counts[k] || 0;
-      row.className += (hidden(k) ? " off" : "") + (locked(k) ? " locked" : "");
-      row.innerHTML = `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span><span class="n dim"></span>`
+      row.innerHTML = `<span class="grip" title="拖动排序；拖到另一个标签上，把两个合并">${GRIP}</span>`
         + `<button class="eye" title="显示 / 隐藏（2D 和 3D）">${hidden(k) ? EYE_OFF : EYE}</button>`
+        + `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span><span class="n dim"></span>`
         + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
         + `<button class="del" title="删除这个标签">✕</button>`;
       const hex = "#" + colorOf(k).map((x) => x.toString(16).padStart(2, "0")).join("");
       row.querySelector(".sw").style.background = hex;
       row.querySelector(".name").textContent = nameOf(k);
       row.querySelector(".name").addEventListener("dblclick", () => rename(k, row.querySelector(".name")));
-      row.querySelector(".n").textContent = n ? sizeText(n) : "";
-      row.querySelector(".n").title = n ? sizeText(n) : "";
       row.querySelector(".del").hidden = !n;
+      row.querySelector(".grip").addEventListener("pointerdown", (e) => gripDown(e, k, row));
       row.addEventListener("click", (e) => {
-        const b = e.target.closest("button, label, input");
+        const b = e.target.closest("button, label, input, .grip");
         if (b && b.classList.contains("sw")) return pickColor(k, b, hex);
         if (b && b.classList.contains("del")) return edit({ kind: "delete", label: k });
         if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
@@ -272,12 +302,64 @@
       more.textContent = `共 ${ks.length} 个标签，只列出前 200 个`;
       list.appendChild(more);
     }
+    syncCounts();
   }
 
-  const EYE = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-  const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
-  const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
-  const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+  /** The number beside each label: its objects on the shown slice. */
+  function syncCounts() {
+    for (const row of $("lab-list").querySelectorAll(".lab-row")) {
+      const k = +row.dataset.label, n = L.counts[k] || 0, el = row.querySelector(".n");
+      const objs = L.z === S.z ? L.objects[k] || 0 : 0;
+      el.textContent = objs ? `${objs}` : "";
+      el.title = n ? (objs ? `这一层 ${objs} 个对象 · ${sizeText(n)}` : sizeText(n)) : "";
+    }
+  }
+
+  /** Dragging a row by its grip: between two rows reorders, onto a row merges. */
+  function gripDown(e, k, row) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const grip = e.currentTarget, list = $("lab-list");
+    grip.setPointerCapture(e.pointerId);
+    let target = null;
+    const clear = () => { for (const r of list.children) r.classList.remove("drop-before", "drop-after", "drop-into", "dragging"); };
+    const move = (ev) => {
+      clear();
+      row.classList.add("dragging");
+      target = null;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const over = el && el.closest("#lab-list .lab-row");
+      if (!over || over === row) return;
+      const r = over.getBoundingClientRect(), f = (ev.clientY - r.top) / r.height;
+      target = { k: +over.dataset.label, where: f < 0.28 ? "before" : f > 0.72 ? "after" : "into" };
+      over.classList.add(`drop-${target.where}`);
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      clear();
+      if (!target) return;
+      if (target.where === "into") return mergeInto(k, target.k);
+      const ks = listed().filter((x) => x !== k);
+      ks.splice(ks.indexOf(target.k) + (target.where === "after" ? 1 : 0), 0, k);
+      setMaterials(Object.fromEntries(ks.map((x, i) => [x, { order: i }])));
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  }
+
+  async function mergeInto(from, to) {
+    if (!(L.counts[from] > 0)) return toast("这个标签还是空的，没有可合并的");
+    if (locked(from) || locked(to)) return toast("这个标签锁定了");
+    const text = `「${nameOf(from)}」并入了「${nameOf(to)}」`;
+    const st = await edit({ kind: "merge", from, to });
+    if (!st) return;
+    if (L.active === from) L.active = to;
+    renderList();
+    toast(text, 4000);
+  }
 
   // The colour picker: one input shared by all rows (see #lab-color in pro.css).
   const colorInput = document.createElement("input");
@@ -308,11 +390,12 @@
   colorInput.addEventListener("input", () => takeColor(false));
   colorInput.addEventListener("change", () => takeColor(true));
 
-  /** Changes one label's material and stores it with the label file. */
-  function setMaterial(k, patch) {
-    const m = { label: k, name: "", color: null, hidden: false, locked: false, ...mat(k), ...patch };
-    L.materials = { ...L.materials, [k]: m };
-    const list = Object.values(L.materials).filter((m) => m.name || m.color || m.hidden || m.locked);
+  /** Changes labels' materials ({label: patch}) and stores them with the label file. */
+  function setMaterials(patches) {
+    const next = { ...L.materials };
+    for (const [k, patch] of Object.entries(patches)) next[k] = { label: +k, name: "", color: null, hidden: false, locked: false, order: null, ...mat(k), ...patch };
+    L.materials = next;
+    const list = Object.values(next).filter((m) => m.name || m.color || m.hidden || m.locked || m.order != null);
     if (L.slice) repaint(0, 0, S.info.width, S.info.height);
     renderList();
     renderZMarks();
@@ -320,6 +403,7 @@
     draw();
     edit({ kind: "materials", materials: list });
   }
+  const setMaterial = (k, patch) => setMaterials({ [k]: patch });
 
   function rename(k, el) {
     const input = document.createElement("input");
@@ -384,8 +468,10 @@
       // Noisy tomograms segment better denoised (same rule as the 3D view's invert).
       const i = S.info;
       const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
-      Object.assign(L.sam, { points: [], box: null, mask: null, z: -1, denoise: tomo });
-      $("lab-sam-dn").checked = tomo;
+      L.sam.denoise = tomo;
+      Object.assign(L.pick, { hover: null, path: null, last: null });
+      Object.assign(L, { cand: null, sel: null, objects: [] });
+      syncCand();
       Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
       Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
       Object.assign(L, { token, path: st.path, counts: st.counts, slices: st.slices, materials: matMap(st.materials), error: "", z: -1, slice: null, active: Math.max(1, maxUsedOf(st.counts)) });
@@ -418,6 +504,11 @@
       L.slice = new Uint16Array(buf);
       L.z = z;
       repaint(0, 0, S.info.width, S.info.height);
+      invoke("labels_objects", { token, z }).then((o) => {
+        if (token !== L.token || L.z !== z) return;
+        L.objects = o;
+        syncCounts();
+      }).catch(() => {});
     } catch (_) {
       // A new image is opening; the next draw asks again.
     } finally {
@@ -471,8 +562,9 @@
     drawLive(g);
     drawCls(g);
     drawUnet(g);
-    drawSam(g);
+    drawPick(g);
     drawSelection(g);
+    placeChips();
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
       g.save();
       g.beginPath();
@@ -549,10 +641,12 @@
   const edit = (op) => editWith("labels_edit", { token: L.token, op });
 
   /** Runs a label-changing command and takes over the new label state. */
-  async function editWith(cmd, args) {
+  async function editWith(cmd, args, replaces = false) {
     if (!L.token || L.error) return;
     const token = L.token;
     const op = args.op || { kind: cmd };
+    L.pick.last = null;
+    L.pick.hover = null;
     L.lastError = "";
     L.busy = true;
     syncPanel();
@@ -566,7 +660,8 @@
       if (st.zs.includes(S.z) || L.z !== S.z) L.z = -1;
       if (st.zs.length || op.kind === "materials") scheduleSave();
       // A step labels.rs can undo goes into the app's shared history.
-      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials") ext.pushUndo("label");
+      // (Not one that replaces the step before it: sam_apply with `replace`.)
+      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label");
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
       return st;
@@ -639,9 +734,10 @@
     return L.token === S.token && !L.busy;
   }
 
-  // ---------- select tool: pick, drag and delete a region ----------
+  // ---------- the selected object: drag, delete, outline ----------
 
-  /** Pixels of the 4-connected region of one label containing (x, y) on the shown slice. */
+  /** The 4-connected region of one label containing (x, y) on the shown
+   *  slice: its pixels, their set, bounding box and outline segments. */
   function regionAt(x, y) {
     const w = S.info.width, h = S.info.height, s = L.slice;
     if (!s || x < 0 || y < 0 || x >= w || y >= h) return null;
@@ -649,15 +745,28 @@
     if (!k) return null;
     const seen = new Uint8Array(w * h), out = [], stack = [y * w + x];
     seen[y * w + x] = 1;
+    const box = [x, y, x, y], segs = [];
     while (stack.length) {
       const i = stack.pop();
       out.push(i);
-      const px = i % w;
-      for (const j of [px > 0 ? i - 1 : -1, px + 1 < w ? i + 1 : -1, i - w, i + w]) {
-        if (j >= 0 && j < w * h && !seen[j] && s[j] === k) { seen[j] = 1; stack.push(j); }
+      const px = i % w, py = (i / w) | 0;
+      if (px < box[0]) box[0] = px;
+      if (py < box[1]) box[1] = py;
+      if (px > box[2]) box[2] = px;
+      if (py > box[3]) box[3] = py;
+      // Left, right, up, down: a neighbour of the region or a side of its outline.
+      const near = [px > 0 ? i - 1 : -1, px + 1 < w ? i + 1 : -1, py > 0 ? i - w : -1, py + 1 < h ? i + w : -1];
+      for (let n = 0; n < 4; n++) {
+        const j = near[n];
+        if (j >= 0 && s[j] === k) {
+          if (!seen[j]) { seen[j] = 1; stack.push(j); }
+        } else if (n === 0) segs.push(px, py, px, py + 1);
+        else if (n === 1) segs.push(px + 1, py, px + 1, py + 1);
+        else if (n === 2) segs.push(px, py, px + 1, py);
+        else segs.push(px, py + 1, px + 1, py + 1);
       }
     }
-    return { k, pix: out };
+    return { k, pix: out, set: new Set(out), box, segs };
   }
   let selCache = { key: "", r: null };
   function selRegion() {
@@ -665,20 +774,6 @@
     const key = `${L.sel.x},${L.sel.y},${L.sel.z}`;
     if (selCache.key !== key || selCache.slice !== L.slice) selCache = { key, slice: L.slice, r: regionAt(L.sel.x, L.sel.y) };
     return selCache.r;
-  }
-
-  function selectDown(p) {
-    const x = Math.floor(p[0]), y = Math.floor(p[1]);
-    const r = regionAt(x, y);
-    if (!r || locked(r.k)) {
-      L.sel = null;
-      if (r) toast("这个标签锁定了");
-    } else {
-      L.sel = { z: S.z, x, y };
-      L.selDrag = { a: p, dx: 0, dy: 0 };
-    }
-    syncPanel();
-    draw();
   }
 
   async function selectUp() {
@@ -699,38 +794,29 @@
     syncPanel();
   }
 
-  /** Dashed outline of the picked region, moved with the drag. */
+  /** Dashed outline of the selected object, moved with the drag. */
   function drawSelection(g) {
-    if (S.tool !== "label" || L.sub !== "select") return;
+    if (S.tool !== "label" || L.sub !== "smart" || L.cand) return;
     const r = selRegion();
     if (!r) return;
     const w = S.info.width, dx = L.selDrag ? L.selDrag.dx : 0, dy = L.selDrag ? L.selDrag.dy : 0;
-    const inside = new Set(r.pix);
-    const sc = S.view.scale;
+    const sc = S.view.scale, [ox, oy] = toScreen(dx, dy), q = r.segs;
     g.save();
     g.beginPath();
-    for (const i of r.pix) {
-      const x = i % w, y = (i / w) | 0;
-      const [sx, sy] = toScreen(x + dx, y + dy);
-      if (!inside.has(i - w) || y === 0) { g.moveTo(sx, sy); g.lineTo(sx + sc, sy); }
-      if (!inside.has(i + w)) { g.moveTo(sx, sy + sc); g.lineTo(sx + sc, sy + sc); }
-      if (x === 0 || !inside.has(i - 1)) { g.moveTo(sx, sy); g.lineTo(sx, sy + sc); }
-      if (x === w - 1 || !inside.has(i + 1)) { g.moveTo(sx + sc, sy); g.lineTo(sx + sc, sy + sc); }
+    for (let i = 0; i < q.length; i += 4) {
+      g.moveTo(ox + q[i] * sc, oy + q[i + 1] * sc);
+      g.lineTo(ox + q[i + 2] * sc, oy + q[i + 3] * sc);
     }
-    g.lineWidth = 2;
+    g.lineWidth = 2.5;
     g.strokeStyle = "rgba(0, 0, 0, 0.7)";
     g.stroke();
-    g.setLineDash([4, 3]);
-    g.lineWidth = 1.2;
+    g.lineWidth = 1.3;
     g.strokeStyle = "#fff";
     g.stroke();
     if (dx || dy) {
       g.globalAlpha = L.opacity;
       g.fillStyle = `rgb(${colorOf(r.k).join(",")})`;
-      for (const i of r.pix) {
-        const [sx, sy] = toScreen((i % w) + dx, ((i / w) | 0) + dy);
-        g.fillRect(sx, sy, sc, sc);
-      }
+      for (const i of r.pix) g.fillRect(ox + (i % w) * sc, oy + ((i / w) | 0) * sc, sc, sc);
     }
     g.restore();
   }
@@ -751,10 +837,9 @@
         draw();
         return;
       }
-      if (L.sub === "sam") return samDown(e, p);
       if (L.sub === "classify") return clsDown(e, p);
       if (!L.slice || L.z !== S.z) return;
-      if (L.sub === "select") return selectDown(p);
+      if (L.sub === "smart") return smartDown(e, p);
       L.stroke = { z: S.z, pts: [p] };
       stampLocal(p[0], p[1]);
       draw();
@@ -767,8 +852,9 @@
       }
       if (L.stroke) strokeTo(p);
       if (L.cls.stroke) clsStrokeTo(p);
-      if (L.sam.drag) {
-        L.sam.drag.b = p;
+      if (L.pick.path) {
+        const a = L.pick.path.pts[L.pick.path.pts.length - 1];
+        if (Math.hypot(p[0] - a[0], p[1] - a[1]) * S.view.scale >= 2) L.pick.path.pts.push(p);
       }
       if (L.lasso) {
         const a = L.lasso.pts[L.lasso.pts.length - 1];
@@ -777,9 +863,9 @@
       draw();
     },
     up() {
-      if (L.sam.drag) return samUp();
       if (L.cls.stroke) return clsUp();
       if (L.selDrag) return selectUp();
+      if (L.pick.path) return smartUp();
       const la = L.lasso;
       L.lasso = null;
       if (la) {
@@ -799,33 +885,33 @@
     },
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
     undo() {
-      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return false;
+      if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       edit({ kind: "undo" });
     },
     redo() {
-      if (L.busy || L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return false;
+      if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       edit({ kind: "redo" });
-    },
-    // SAM clicks not written yet come off one at a time before the label steps.
-    undoLocal() {
-      if (L.sub !== "sam" || L.sam.busy || !(L.sam.points.length || L.sam.box)) return false;
-      if (L.sam.points.length) L.sam.points.pop();
-      else L.sam.box = null;
-      if (L.sam.points.length || L.sam.box) samRun();
-      else samClear();
-      return true;
     },
     // Right-click undoes, as the label tool has no other use for it.
     context() {
-      if (L.stroke || L.lasso || L.sam.drag || L.selDrag || L.cls.stroke) return;
+      if (L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke || L.cand) return;
       undo();
     },
     active(on) {
       btn.classList.toggle("on", on);
       if (!on) {
         L.hover = null;
+        hoverDrop();
+        candCancel();
+        syncLayersBox();
+        placeChips();
         return;
       }
+      // The labels are listed in the Layers panel.
+      samStatus();
+      renderList();
+      const P = window.TifMrcViewPro, merge = P.documents && P.documents.current() && P.documents.current().type === "merge";
+      if (P.layers && S.info && !merge && (document.body.dataset.sidebarPane !== "layers" || $("sidebar").classList.contains("collapsed"))) P.layers.setPanel("layers");
       if ($("tools").hidden || $("tools").classList.contains("only-contrast") || $("tools").classList.contains("only-info")) showPanel("all");
       sec.scrollIntoView({ block: "nearest" });
       draw();
@@ -840,31 +926,15 @@
       S.view.cx + (e.clientX - r.left - r.width / 2) / S.view.scale,
       S.view.cy + (e.clientY - r.top - r.height / 2) / S.view.scale,
     ];
+    hoverSoon();
     draw();
   });
   $("view").addEventListener("pointerleave", () => {
     if (!L.hover) return;
     L.hover = null;
+    hoverDrop();
     draw();
   });
-
-  // Enter applies the SAM preview, Esc drops it.
-  window.addEventListener("keydown", (e) => {
-    if (S.tool !== "label" || L.sub !== "sam" || e.target.tagName === "INPUT" && e.target.type === "text") return;
-    if (e.key === "Enter" && L.sam.mask) { samApply(false); e.preventDefault(); }
-    if (e.key === "Escape" && L.sam.along) { invoke("sam_cancel"); e.preventDefault(); e.stopPropagation(); return; }
-    if (e.key === "Escape" && (L.sam.points.length || L.sam.box)) { samClear(); e.preventDefault(); e.stopPropagation(); }
-  }, true);
-
-  // Delete / Backspace remove the region picked with the select tool.
-  window.addEventListener("keydown", (e) => {
-    if (S.tool !== "label" || L.sub !== "select" || !L.sel) return;
-    if (e.target.tagName === "INPUT" && e.target.type === "text" || e.target.tagName === "TEXTAREA") return;
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
-    selectDelete();
-    e.preventDefault();
-    e.stopPropagation();
-  }, true);
 
   // [ and ] change the brush size.
   window.addEventListener("keydown", (e) => {
@@ -878,194 +948,43 @@
     e.preventDefault();
   });
 
-  // ---------- SAM click segmentation (labels.rs + sam.rs) ----------
+  // ---------- smart selection (sam_pick.rs, segpick.rs) ----------
+  //
+  // One tool for "this object": a click, a loop drawn around it or a line
+  // drawn along it. Rust answers with the blob under the pointer or SAM's
+  // mask, whichever is surer, and the result goes straight into the active
+  // label; it stays selected, with its actions on a small bar beside it.
 
-  const samCanvas = document.createElement("canvas");
-  const samCtx = samCanvas.getContext("2d");
+  const samDenoise = () => (L.sam.denoise ? { slab: 2, sigma: 1.5 } : { slab: 0, sigma: 0 });
 
   async function samStatus() {
     try {
       L.sam.status = await invoke("sam_status");
-    } catch (e) {
+    } catch (_) {
       L.sam.status = { available: false };
     }
     syncSam();
+    // Load the model before the first click needs it.
+    const st = L.sam.status;
+    if (st.available && st.downloaded && !L.sam.warmed && S.tool === "label") {
+      L.sam.warmed = true;
+      invoke("sam_warm").catch(() => {}).finally(samStatus);
+    }
   }
 
   function syncSam() {
     const box = $("lab-sam");
-    box.hidden = L.sub !== "sam";
-    if (box.hidden) return;
     const st = L.sam.status;
-    if (!st) { samStatus(); return; }
-    const ready = st.downloaded;
-    $("lab-sam-get").hidden = ready || !st.available;
-    $("lab-sam-get").disabled = !!L.sam.progress;
-    $("lab-sam-apply").hidden = !ready;
-    $("lab-sam-trim").hidden = !ready;
-    $("lab-sam-trim").disabled = !L.sam.mask || L.sam.busy;
-    $("lab-sam-clear").hidden = !ready;
-    $("lab-sam-dn-row").hidden = !ready;
-    $("lab-sam-apply").disabled = !L.sam.mask || L.sam.busy;
-    $("lab-sam-z").hidden = !ready || !(S.info.sizeZ > 1);
-    $("lab-sam-z").disabled = !L.sam.mask || L.sam.busy;
-    let text;
-    if (!st.available) text = "SAM 分割只在 TifMrcView Pro 里有";
-    else if (L.sam.progress) text = `正在下载模型 ${Math.round((L.sam.progress.done / L.sam.progress.total) * 100)}%`;
-    else if (!ready) text = `第一次使用要先下载 SAM 2.1 模型（约 ${Math.round(st.size / 1e6)} MB，只下载一次）`;
+    if (!st) { box.hidden = true; samStatus(); return; }
+    // SAM 3.1 alone takes seconds per click; the small model is what the tool wants.
+    const need = !!st.available && !st.fast;
+    box.hidden = L.sub !== "smart" || !(need || L.sam.progress || L.sam.along);
+    $("lab-sam-get").hidden = !need || !!L.sam.progress;
+    let text = "";
+    if (L.sam.progress) text = `正在下载模型 ${Math.round((L.sam.progress.done / L.sam.progress.total) * 100)}%`;
     else if (L.sam.along) text = L.sam.along.total ? `正在沿 Z 传播 ${L.sam.along.done}/${L.sam.along.total} 层（Esc 停止）` : "正在沿 Z 传播…（Esc 停止）";
-    else if (L.sam.busy) text = st.loaded ? "SAM 计算中…" : "正在加载模型和计算图像特征…";
-    else if (L.sam.mask) text = `预测质量 ${Math.round(L.sam.iou * 100)}%：回车写进当前标签，Alt+点击去掉多余部分`;
-    else text = "点一下要分割的物体；Alt+点击标背景，Shift+拖动拉框";
+    else if (need) text = "斑点和颗粒现在就能点选。下载 SAM 模型后，形状复杂的物体也能一点就选出来。";
     $("lab-sam-text").textContent = text;
-    $("lab-sam-backend").textContent = st.backend && ready ? `后端：${st.backend}` : "";
-  }
-
-  function samClear() {
-    Object.assign(L.sam, { points: [], box: null, drag: null, mask: null, iou: 0 });
-    syncSam();
-    draw();
-  }
-
-  function samDown(e, p) {
-    const st = L.sam.status;
-    if (!st || !st.downloaded) return toast("请先在标签面板里下载 SAM 模型");
-    if (L.sam.busy) return;
-    if (L.sam.z !== S.z) { samClear(); L.sam.z = S.z; }
-    if (e.shiftKey) {
-      L.sam.drag = { a: p, b: p };
-      return;
-    }
-    L.sam.points.push({ x: p[0], y: p[1], positive: !e.altKey });
-    samRun();
-  }
-
-  function samUp() {
-    const d = L.sam.drag;
-    L.sam.drag = null;
-    if (Math.abs(d.b[0] - d.a[0]) < 2 || Math.abs(d.b[1] - d.a[1]) < 2) return draw();
-    L.sam.box = [Math.min(d.a[0], d.b[0]), Math.min(d.a[1], d.b[1]), Math.max(d.a[0], d.b[0]), Math.max(d.a[1], d.b[1])];
-    samRun();
-  }
-
-  async function samRun() {
-    const c = S.chans[channel()];
-    const req = {
-      token: S.token, z: S.z, c: channel(), t: S.t,
-      lo: c.min ?? 0, hi: c.max ?? 1,
-      points: L.sam.points, bbox: L.sam.box, denoise: samDenoise(),
-    };
-    L.sam.busy = true;
-    syncSam();
-    draw();
-    try {
-      const buf = await invoke("sam_predict", { req });
-      if (req.token !== S.token || req.z !== S.z) return;
-      const dv = new DataView(buf);
-      const w = dv.getUint32(0, true), h = dv.getUint32(4, true);
-      L.sam.iou = dv.getFloat32(8, true);
-      L.sam.mask = new Uint8Array(buf, 12, w * h);
-      samPaint(w, h);
-    } catch (e) {
-      toast(String(e), 6000);
-      L.sam.points.pop();
-    } finally {
-      L.sam.busy = false;
-      if (!L.sam.status.loaded) samStatus();
-      syncSam();
-      draw();
-    }
-  }
-
-  function samPaint(w, h) {
-    samCanvas.width = w;
-    samCanvas.height = h;
-    const img = samCtx.createImageData(w, h);
-    const [r, g, b] = colorOf(L.active);
-    const m = L.sam.mask;
-    for (let i = 0; i < m.length; i++) {
-      if (!m[i]) continue;
-      const x = i % w, y = (i / w) | 0;
-      // Edge pixels opaque, inside translucent.
-      const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1 || !m[i - 1] || !m[i + 1] || !m[i - w] || !m[i + w];
-      const o = i * 4;
-      img.data[o] = edge ? 255 : r; img.data[o + 1] = edge ? 255 : g; img.data[o + 2] = edge ? 255 : b;
-      img.data[o + 3] = edge ? 255 : 150;
-    }
-    samCtx.putImageData(img, 0, 0);
-  }
-
-  function drawSam(g) {
-    if (S.tool !== "label" || L.sub !== "sam" || L.sam.z !== S.z && !L.sam.drag) return;
-    const [sx, sy] = toScreen(0, 0);
-    if (L.sam.mask && samCanvas.width === S.info.width) {
-      g.save();
-      g.imageSmoothingEnabled = false;
-      g.drawImage(samCanvas, sx, sy, S.info.width * S.view.scale, S.info.height * S.view.scale);
-      g.restore();
-    }
-    const box = L.sam.drag ? [L.sam.drag.a[0], L.sam.drag.a[1], L.sam.drag.b[0], L.sam.drag.b[1]] : L.sam.box;
-    if (box) {
-      const [ax, ay] = toScreen(box[0], box[1]), [bx, by] = toScreen(box[2], box[3]);
-      g.save();
-      g.setLineDash([5, 4]);
-      g.strokeStyle = "#fff";
-      g.lineWidth = 1.5;
-      g.strokeRect(ax, ay, bx - ax, by - ay);
-      g.restore();
-    }
-    for (const pt of L.sam.points) {
-      const [cx, cy] = toScreen(pt.x, pt.y);
-      g.save();
-      g.beginPath();
-      g.arc(cx, cy, 5, 0, Math.PI * 2);
-      g.fillStyle = pt.positive ? "#2da44e" : "#cf222e";
-      g.fill();
-      g.lineWidth = 1.5;
-      g.strokeStyle = "#fff";
-      g.stroke();
-      g.restore();
-    }
-  }
-
-  async function samApply(trim = false) {
-    if (!L.sam.mask || L.sam.busy) return;
-    // A mask over most of the slice is nearly always background picked up
-    // by a stray point; it is written only on a second Enter.
-    let n = 0;
-    for (const v of L.sam.mask) n += v ? 1 : 0;
-    if (n > 0.6 * L.sam.mask.length && L.sam.bigOk !== L.sam.mask) {
-      L.sam.bigOk = L.sam.mask;
-      toast("这个分割几乎盖满了整层，多半选到了背景；确定要写入就再按一次回车", 6000);
-      return;
-    }
-    const z = L.sam.z;
-    const st = await editWith("sam_apply", { token: L.token, z, label: L.active, guard: L.guard ? L.active : 0, trim });
-    if (st) samClear();
-  }
-
-  const samDenoise = () => (L.sam.denoise ? { slab: 2, sigma: 1.5 } : { slab: 0, sigma: 0 });
-
-  async function samAlong() {
-    if (!L.sam.mask || L.sam.busy) return;
-    const c = S.chans[channel()];
-    const req = { token: S.token, z: L.sam.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, up: true, down: true, max: 100000, denoise: samDenoise() };
-    L.sam.busy = true;
-    L.sam.along = { done: 0, total: 0 };
-    syncSam();
-    const un = await T.event.listen("sam-propagate", (ev) => { L.sam.along = ev.payload; syncSam(); });
-    try {
-      const st = await editWith("sam_propagate", { req, label: L.active, guard: L.guard ? L.active : 0 });
-      if (st) {
-        samClear();
-        toast(`沿 Z 分割了 ${st.zs.filter((z) => z !== req.z).length} 层`, 3000);
-      }
-    } finally {
-      un();
-      L.sam.busy = false;
-      L.sam.along = null;
-      syncSam();
-    }
   }
 
   async function samDownload() {
@@ -1075,25 +994,470 @@
     try {
       await invoke("sam_download");
     } catch (e) {
-      toast(String(e), 8000);
+      toast(String(e), 6000);
     } finally {
       un();
       L.sam.progress = null;
       await samStatus();
     }
   }
-
   $("lab-sam-get").addEventListener("click", samDownload);
-  $("lab-sam-apply").addEventListener("click", () => samApply(false));
-  $("lab-sam-trim").addEventListener("click", () => samApply(true));
-  $("lab-sel-del").addEventListener("click", selectDelete);
-  $("lab-sam-z").addEventListener("click", samAlong);
-  $("lab-sam-dn").addEventListener("change", (e) => {
-    L.sam.denoise = e.target.checked;
-    // Redo the current prompt on the new image.
-    if (L.sam.z === S.z && (L.sam.points.length || L.sam.box) && !L.sam.busy) samRun();
+
+  /** The part of the image on screen: x0, y0, x1, y1 in image pixels. */
+  function viewRect() {
+    const r = $("view").getBoundingClientRect(), sc = S.view.scale;
+    return [S.view.cx - r.width / 2 / sc, S.view.cy - r.height / 2 / sc, S.view.cx + r.width / 2 / sc, S.view.cy + r.height / 2 / sc];
+  }
+
+  function pickReq(path, preview, choice = null, view = viewRect()) {
+    const c = S.chans[channel()];
+    // A long stroke says no more with every point.
+    const step = Math.ceil(path.length / 400);
+    const pts = path.filter((_, i) => i % step === 0 || i === path.length - 1).map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
+    return { token: S.token, z: S.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, denoise: samDenoise(), path: pts, view, choice, preview };
+  }
+
+  function parsePick(buf) {
+    const dv = new DataView(buf);
+    const u = (i) => dv.getUint32(i * 4, true);
+    return { x: u(0), y: u(1), w: u(2), h: u(3), choices: u(4), choice: u(5), quality: dv.getFloat32(24, true), seed: [u(7), u(8)], waiting: !!u(9), mask: new Uint8Array(buf, 40, u(2) * u(3)) };
+  }
+
+  /** A mask as a small canvas: a solid outline and a faint fill. */
+  function maskCanvas(w, h, m, rgb, fill) {
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const cx = cv.getContext("2d"), img = cx.createImageData(w, h), d = img.data;
+    for (let i = 0; i < w * h; i++) {
+      if (!m[i]) continue;
+      const x = i % w, y = (i / w) | 0, o = i * 4;
+      const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1 || !m[i - 1] || !m[i + 1] || !m[i - w] || !m[i + w];
+      d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = edge ? 255 : fill;
+    }
+    cx.putImageData(img, 0, 0);
+    return cv;
+  }
+  const inMask = (m, x, y) => x >= m.x && y >= m.y && x < m.x + m.w && y < m.y + m.h && !!m.mask[(y - m.y) * m.w + x - m.x];
+
+  // ----- preview under the pointer -----
+
+  function hoverDrop() {
+    clearTimeout(L.pick.timer);
+    if (!L.pick.hover) return;
+    L.pick.hover = null;
+    draw();
+  }
+
+  /** Asks for the object under the pointer once it has rested a moment. */
+  function hoverSoon() {
+    clearTimeout(L.pick.timer);
+    const idle = S.tool === "label" && L.sub === "smart" && S.axis === "xy" && L.token === S.token && !L.error
+      && !L.cand && !L.pick.path && !L.selDrag && !L.busy && !L.sam.busy && L.hover && L.slice && L.z === S.z;
+    if (!idle) return hoverDrop();
+    const x = Math.floor(L.hover[0]), y = Math.floor(L.hover[1]), w = S.info.width;
+    if (x < 0 || y < 0 || x >= w || y >= S.info.height) return hoverDrop();
+    // Over a labelled object a click selects it; nothing to preview.
+    const k = L.slice[y * w + x];
+    if (k && !hidden(k)) return hoverDrop();
+    const hv = L.pick.hover;
+    if (hv && hv.z === S.z && inMask(hv, x, y)) return;
+    L.pick.timer = setTimeout(hoverRun, 60);
+  }
+
+  async function hoverRun() {
+    if (L.pick.running) { L.pick.again = true; return; }
+    if (!L.hover || S.tool !== "label" || L.sub !== "smart") return;
+    L.pick.running = true;
+    const z = S.z, token = S.token;
+    let waiting = false;
+    try {
+      const p = parsePick(await invoke("sam_pick", { req: pickReq([L.hover], true) }));
+      waiting = p.waiting;
+      if (token === S.token && z === S.z && S.tool === "label" && L.sub === "smart" && !L.sam.busy && !L.cand) {
+        L.pick.hover = { ...p, z, canvas: maskCanvas(p.w, p.h, p.mask, colorOf(L.active), 70) };
+      }
+    } catch (_) {
+      // Nothing recognisable here.
+      L.pick.hover = null;
+    } finally {
+      L.pick.running = false;
+    }
+    draw();
+    if (L.pick.again) { L.pick.again = false; hoverSoon(); }
+    // The model was still loading: look again when it may be ready.
+    else if (waiting) L.pick.timer = setTimeout(() => { if (L.pick.hover) L.pick.hover.x = -1e9; hoverSoon(); }, 1500);
+  }
+
+  // ----- click and draw -----
+
+  function smartDown(e, p) {
+    hoverDrop();
+    if (L.cand) return candClick(p);
+    if (L.sam.busy) return;
+    chipsMenu(false);
+    const x = Math.floor(p[0]), y = Math.floor(p[1]);
+    const r = selRegion();
+    // Pressing on the selected object moves it; anything else draws.
+    if (r && !e.altKey && r.set.has(y * S.info.width + x)) {
+      L.selDrag = { a: p, dx: 0, dy: 0 };
+      return;
+    }
+    L.pick.path = { pts: [p], minus: e.altKey, z: S.z };
+  }
+
+  function smartUp() {
+    const pa = L.pick.path;
+    L.pick.path = null;
+    if (!pa || pa.z !== S.z) return draw();
+    let len = 0;
+    for (let i = 1; i < pa.pts.length; i++) len += Math.hypot(pa.pts[i][0] - pa.pts[i - 1][0], pa.pts[i][1] - pa.pts[i - 1][1]);
+    if (len * S.view.scale >= 6) return smartPick(pa.pts, pa.minus);
+    // A click: on a labelled object it selects that, elsewhere it segments.
+    const x = Math.floor(pa.pts[0][0]), y = Math.floor(pa.pts[0][1]), w = S.info.width;
+    if (x < 0 || y < 0 || x >= w || y >= S.info.height) { L.sel = null; return draw(); }
+    const k = L.slice[y * w + x];
+    if (k && !hidden(k) && !pa.minus) {
+      if (locked(k)) {
+        L.sel = null;
+        toast("这个标签锁定了");
+      } else {
+        L.sel = { z: S.z, x, y };
+        L.active = k;
+        renderList();
+      }
+      return draw();
+    }
+    smartPick([pa.pts[0]], pa.minus);
+  }
+
+  /** Segments what `path` means and writes it into the active label
+   *  (`minus`: takes it away from it). With `choice`, the last result is
+   *  replaced by another reading of the same stroke. */
+  async function smartPick(path, minus, choice = null, view = viewRect()) {
+    if (L.busy || L.sam.busy || !L.token) return;
+    const req = pickReq(path, false, choice, view);
+    if (locked(L.active)) return toast("这个标签锁定了");
+    L.sam.busy = true;
+    L.sel = minus ? L.sel : null;
+    $("view").classList.add("lab-wait");
+    try {
+      const p = parsePick(await invoke("sam_pick", { req }));
+      const args = { token: L.token, z: req.z, label: minus ? 0 : L.active, guard: minus || L.guard ? L.active : 0, trim: false, replace: choice !== null };
+      const st = await editWith("sam_apply", args, choice !== null);
+      if (!st) return;
+      if (!minus) L.sel = { z: req.z, x: p.seed[0], y: p.seed[1] };
+      L.pick.last = { path, minus, view, choices: p.choices, choice: p.choice, sel: L.sel };
+    } catch (e) {
+      toast(String(e), 5000);
+    } finally {
+      L.sam.busy = false;
+      $("view").classList.remove("lab-wait");
+      if (L.sam.status && !L.sam.status.loaded) samStatus();
+      syncPanel();
+      draw();
+    }
+  }
+
+  function smartStep(d) {
+    const last = L.pick.last;
+    if (!last || L.busy || L.sam.busy) return;
+    const choice = Math.max(0, Math.min(last.choices - 1, last.choice + d));
+    if (choice !== last.choice) smartPick(last.path, last.minus, choice, last.view);
+  }
+
+  // ----- the bar beside the selected object -----
+
+  const chips = document.createElement("div");
+  chips.id = "lab-chips";
+  chips.hidden = true;
+  chips.innerHTML = `
+    <button data-act="less" title="分小一点：换成更小的那种分法">－</button>
+    <button data-act="more" title="分大一点：换成更大的那种分法">＋</button>
+    <button data-act="similar" class="primary" title="在这一层找出所有和它一样的物体，挑好后一起加入这个标签">找同类</button>
+    <button data-act="z" title="从这一层开始，逐层向上和向下自动分割同一个物体，直到找不到它为止（Esc 停止）">沿 Z</button>
+    <button data-act="move" title="把这个对象换到另一个标签">移到…</button>
+    <button data-act="del" title="删除这个对象（Delete）">删除</button>
+    <div id="lab-chips-menu" hidden></div>`;
+  $("stage").append(chips);
+  for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "wheel"]) chips.addEventListener(type, (e) => e.stopPropagation());
+
+  function chipsMenu(open) {
+    const menu = $("lab-chips-menu");
+    const r = open && selRegion();
+    menu.hidden = !r;
+    if (!r) return;
+    menu.textContent = "";
+    const add = (text, color, to) => {
+      const b = document.createElement("button");
+      b.innerHTML = '<i></i><span></span>';
+      b.querySelector("i").style.background = color;
+      b.querySelector("span").textContent = text;
+      b.addEventListener("click", () => moveTo(to));
+      menu.append(b);
+    };
+    for (const k of listed()) if (k !== r.k && !locked(k)) add(nameOf(k), `rgb(${colorOf(k).join(",")})`, k);
+    add("＋ 新标签", "transparent", 0);
+  }
+
+  async function moveTo(to) {
+    chipsMenu(false);
+    if (!L.sel || L.busy) return;
+    const { x, y, z } = L.sel;
+    if (!to) to = Math.max(maxUsed(), L.active, ...Object.keys(L.materials).map(Number)) + 1;
+    const st = await edit({ kind: "relabelRegion", x, y, z, to, threeD: L.threeD });
+    if (st) {
+      L.active = to;
+      renderList();
+    }
+  }
+
+  chips.addEventListener("click", (e) => {
+    const act = e.target.closest("button[data-act]")?.dataset.act;
+    if (!act) return;
+    if (act !== "move") chipsMenu(false);
+    if (act === "less") smartStep(-1);
+    if (act === "more") smartStep(1);
+    if (act === "similar") findSimilar();
+    if (act === "z") alongZ();
+    if (act === "move") chipsMenu($("lab-chips-menu").hidden);
+    if (act === "del") selectDelete();
   });
-  $("lab-sam-clear").addEventListener("click", samClear);
+
+  /** Shows the bar above the selected object (below it at the top edge). */
+  function placeChips() {
+    const on = S.tool === "label" && L.sub === "smart" && S.axis === "xy" && L.sel && L.sel.z === S.z && !L.cand && !L.selDrag && !L.sam.along && !L.pick.path;
+    // While the slice is fetched again after an edit the bar stays put.
+    if (on && L.z !== S.z) return;
+    const r = on && selRegion();
+    if (!r) {
+      if (!chips.hidden) { chips.hidden = true; chipsMenu(false); }
+      return;
+    }
+    const last = L.pick.last && L.pick.last.sel === L.sel && L.pick.last.choices > 1 ? L.pick.last : null;
+    const st = L.sam.status || {};
+    const q = (a) => chips.querySelector(`[data-act="${a}"]`);
+    q("less").hidden = q("more").hidden = !last;
+    if (last) {
+      q("less").disabled = last.choice <= 0 || L.sam.busy;
+      q("more").disabled = last.choice >= last.choices - 1 || L.sam.busy;
+    }
+    q("z").hidden = !(S.info.sizeZ > 1 && st.downloaded && st.tracking !== false);
+    for (const b of chips.querySelectorAll("button[data-act]")) if (b.dataset.act !== "less" && b.dataset.act !== "more") b.disabled = L.busy || L.sam.busy;
+    chips.hidden = false;
+    const [x0, y0] = toScreen(r.box[0], r.box[1]), [x1, y1] = toScreen(r.box[2] + 1, r.box[3] + 1);
+    const stage = $("stage").getBoundingClientRect(), w = chips.offsetWidth, h = chips.offsetHeight;
+    let top = y0 - h - 8;
+    if (top < 4) top = Math.min(y1 + 8, stage.height - h - 4);
+    chips.style.left = `${Math.max(4, Math.min(stage.width - w - 4, (x0 + x1) / 2 - w / 2))}px`;
+    chips.style.top = `${Math.max(4, top)}px`;
+  }
+
+  async function alongZ() {
+    const r = selRegion();
+    if (!r || L.busy || L.sam.busy) return;
+    const { x, y, z } = L.sel, c = S.chans[channel()];
+    const req = { token: S.token, z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, up: true, down: true, max: 100000, denoise: samDenoise() };
+    L.sam.busy = true;
+    L.sam.along = { done: 0, total: 0 };
+    syncSam();
+    draw();
+    const un = await T.event.listen("sam-propagate", (ev) => { L.sam.along = ev.payload; syncSam(); });
+    try {
+      await invoke("sam_use_region", { token: L.token, x, y, z });
+      const st = await editWith("sam_propagate", { req, label: r.k, guard: L.guard ? r.k : 0 });
+      if (st) toast(`沿 Z 分割了 ${st.zs.filter((s) => s !== z).length} 层`, 3000);
+    } catch (e) {
+      toast(String(e), 6000);
+    } finally {
+      un();
+      L.sam.busy = false;
+      L.sam.along = null;
+      syncPanel();
+      draw();
+    }
+  }
+
+  // ----- find similar: proposals to accept together -----
+
+  const candBar = document.createElement("div");
+  candBar.id = "lab-cand";
+  candBar.hidden = true;
+  candBar.innerHTML = `
+    <span id="lab-cand-text"></span>
+    <label title="往右放宽，找出更多；往左收紧，只留最像的">少 <input type="range" id="lab-cand-thr" min="0" max="1" step="0.01" /> 多</label>
+    <button class="small" id="lab-cand-again" title="先把不对的点掉，再找一轮：留下的当作例子，点掉的当作反例，越纠正越准">再找一轮</button>
+    <button class="small" id="lab-cand-cancel" title="一个也不加入（Esc）">取消</button>
+    <button class="small primary" id="lab-cand-ok" title="把圈出来的都加入这个标签（回车）；不想要的先点一下去掉">全部加入</button>`;
+  $("stage").append(candBar);
+  for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "wheel"]) candBar.addEventListener(type, (e) => e.stopPropagation());
+
+  // The slider runs from only the most alike (score 0.8) to nearly all (0.02).
+  const thrOf = (v) => Math.exp(Math.log(0.8) + (Math.log(0.02) - Math.log(0.8)) * v);
+  const CAND_START = 0.32;
+  const candOn = (c) => c.items.filter((it) => it.score >= c.thr && !it.off);
+
+  function syncCand() {
+    const c = L.cand;
+    candBar.hidden = !c;
+    if (!c) return;
+    const n = candOn(c).length;
+    $("lab-cand-text").textContent = c.busy ? (c.total > 1 ? `正在找同类 ${c.done}/${c.total}…` : "正在找同类…") : `找到 ${n} 个`;
+    $("lab-cand-thr").disabled = c.busy;
+    $("lab-cand-ok").disabled = c.busy || !n;
+    $("lab-cand-again").disabled = c.busy || !c.items.some((it) => it.off);
+  }
+
+  /** `again`: another round, learning from what was kept and taken out. */
+  async function findSimilar(again = false) {
+    const r = selRegion(), was = L.cand;
+    if (!r || L.busy || L.sam.busy || (again ? !was || was.busy : was)) return;
+    const c = S.chans[channel()];
+    const req = { token: S.token, z: S.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, denoise: samDenoise() };
+    if (again) req.again = { keep: candOn(was).map((it) => it.i), drop: was.items.filter((it) => it.off).map((it) => it.i) };
+    const cand = { z: S.z, label: r.k, items: [], thr: again ? was.thr : thrOf(CAND_START), busy: true, done: 0, total: 0 };
+    L.cand = cand;
+    L.sam.busy = true;
+    if (!again) $("lab-cand-thr").value = CAND_START;
+    syncCand();
+    draw();
+    const un = await T.event.listen("sam-similar", (ev) => { if (L.cand === cand && cand.busy) { Object.assign(cand, ev.payload); syncCand(); } });
+    try {
+      const buf = await invoke("sam_similar", { req, label: r.k, seed: [L.sel.x, L.sel.y] });
+      const dv = new DataView(buf), n = dv.getUint32(0, true), rgb = colorOf(r.k);
+      let o = 4;
+      for (let i = 0; i < n; i++) {
+        const [x, y, w, h] = [0, 4, 8, 12].map((d) => dv.getUint32(o + d, true));
+        const it = { i, x, y, w, h, score: dv.getFloat32(o + 16, true), mask: new Uint8Array(buf, o + 20, w * h), off: false, cv: null };
+        it.canvas = () => (it.cv ||= maskCanvas(w, h, it.mask, rgb, 90));
+        cand.items.push(it);
+        o += 20 + w * h;
+      }
+      cand.busy = false;
+      // Nothing alike enough at the usual setting: show the best there are.
+      if (n && !again && !candOn(cand).length) {
+        const best = Math.max(...cand.items.map((it) => it.score));
+        const v = Math.min(1, Math.log(0.8 / (best * 0.6)) / Math.log(0.8 / 0.02));
+        $("lab-cand-thr").value = v;
+        cand.thr = Math.min(thrOf(v), best);
+      }
+      if (L.cand === cand && !n) {
+        L.cand = null;
+        toast("这一层没有找到和它相似的物体", 4000);
+      }
+    } catch (e) {
+      if (L.cand === cand) {
+        L.cand = null;
+        toast(String(e), 6000);
+      }
+    } finally {
+      un();
+      L.sam.busy = false;
+      syncCand();
+      syncPanel();
+      draw();
+    }
+  }
+
+  function candCancel() {
+    if (!L.cand) return;
+    if (L.cand.busy) invoke("sam_cancel");
+    L.cand = null;
+    syncCand();
+    draw();
+  }
+
+  async function candAccept() {
+    const c = L.cand;
+    if (!c || c.busy) return;
+    const keep = candOn(c).map((it) => it.i);
+    L.cand = null;
+    syncCand();
+    if (!keep.length) return draw();
+    const st = await editWith("sam_similar_apply", { token: L.token, z: c.z, label: c.label, guard: L.guard ? c.label : 0, keep });
+    if (st) toast(`加入了 ${keep.length} 个`, 3000);
+  }
+
+  /** A click on a proposal takes it out, another puts it back. */
+  function candClick(p) {
+    const c = L.cand, x = Math.floor(p[0]), y = Math.floor(p[1]);
+    if (!c || c.busy) return;
+    for (let i = c.items.length - 1; i >= 0; i--) {
+      const it = c.items[i];
+      if (it.score >= c.thr && inMask(it, x, y)) {
+        it.off = !it.off;
+        break;
+      }
+    }
+    syncCand();
+    draw();
+  }
+
+  $("lab-cand-thr").addEventListener("input", (e) => {
+    if (!L.cand) return;
+    L.cand.thr = thrOf(+e.target.value);
+    syncCand();
+    draw();
+  });
+  $("lab-cand-again").addEventListener("click", () => findSimilar(true));
+  $("lab-cand-cancel").addEventListener("click", candCancel);
+  $("lab-cand-ok").addEventListener("click", candAccept);
+
+  function drawPick(g) {
+    if (S.tool !== "label" || L.sub !== "smart" || S.axis !== "xy") return;
+    if (L.cand && L.cand.z !== S.z) candCancel();
+    const sc = S.view.scale;
+    const blit = (cv, x, y, alpha) => {
+      const [sx, sy] = toScreen(x, y);
+      g.globalAlpha = alpha;
+      g.drawImage(cv, sx, sy, cv.width * sc, cv.height * sc);
+    };
+    g.save();
+    g.imageSmoothingEnabled = false;
+    const c = L.cand;
+    if (c) {
+      for (const it of c.items) if (it.score >= c.thr) blit(it.canvas(), it.x, it.y, it.off ? 0.22 : 1);
+    }
+    const hv = L.pick.hover;
+    if (!c && hv && hv.z === S.z && !L.pick.path && !L.selDrag && !L.sam.busy) blit(hv.canvas, hv.x, hv.y, 1);
+    g.globalAlpha = 1;
+    const pa = L.pick.path;
+    if (pa && pa.z === S.z && pa.pts.length > 1) {
+      g.beginPath();
+      pa.pts.forEach(([x, y], i) => {
+        const [sx, sy] = toScreen(x, y);
+        if (i) g.lineTo(sx, sy);
+        else g.moveTo(sx, sy);
+      });
+      g.lineJoin = "round";
+      g.lineWidth = 3.5;
+      g.strokeStyle = "rgba(0, 0, 0, 0.55)";
+      g.stroke();
+      g.lineWidth = 2;
+      g.strokeStyle = pa.minus ? "#fff" : `rgb(${colorOf(L.active).join(",")})`;
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  // Esc backs out one step, Enter accepts the proposals, Delete removes
+  // the selected object.
+  window.addEventListener("keydown", (e) => {
+    if (S.tool !== "label" || L.sub !== "smart") return;
+    const t = e.target;
+    if (t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "INPUT" && t.type !== "range" && t.type !== "checkbox") return;
+    const stop = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === "Escape") {
+      if (L.sam.along) { invoke("sam_cancel"); return stop(); }
+      if (L.cand) { candCancel(); return stop(); }
+      if (L.pick.path) { L.pick.path = null; draw(); return stop(); }
+      if (!$("lab-chips-menu").hidden) { chipsMenu(false); return stop(); }
+      if (L.sel) { L.sel = null; draw(); return stop(); }
+      return;
+    }
+    if (e.key === "Enter" && L.cand && !L.cand.busy) { candAccept(); return stop(); }
+    if ((e.key === "Delete" || e.key === "Backspace") && L.sel && !L.cand) { selectDelete(); return stop(); }
+  }, true);
 
 
   // ---------- pixel classifier (classify.rs) ----------
@@ -1679,6 +2043,7 @@
   for (const b of sec.querySelectorAll("#lab-tools button")) {
     b.addEventListener("click", () => {
       L.sub = b.dataset.sub;
+      if (L.sub !== "smart") { candCancel(); hoverDrop(); }
       syncPanel();
       if (S.tool !== "label") setTool("label");
       draw();
@@ -1686,10 +2051,10 @@
   }
   $("lab-size").addEventListener("input", (e) => { L.radius = +e.target.value; syncPanel(); draw(); });
   $("lab-tol").addEventListener("input", (e) => { L.tol = +e.target.value; syncPanel(); });
-  $("lab-op").addEventListener("input", (e) => { L.opacity = +e.target.value; syncPanel(); draw(); });
+  $("lab-op").addEventListener("input", (e) => { L.opacity = +e.target.value; draw(); });
   $("lab-3d").addEventListener("change", (e) => { L.threeD = e.target.checked; });
   $("lab-guard").addEventListener("change", (e) => { L.guard = e.target.checked; });
-  $("lab-show").addEventListener("change", (e) => { L.show = e.target.checked; draw(); });
+  $("lab-show").addEventListener("click", () => { L.show = !L.show; syncPanel(); draw(); });
   $("lab-interp").addEventListener("click", async () => {
     if (!ready()) return;
     if (!(L.counts[L.active] > 0)) return toast("先用画笔或套索隔几层画出当前标签的轮廓");
@@ -1697,7 +2062,7 @@
     if (st) toast(st.zs.length ? `补齐了 ${st.zs.length} 层` : "没有要补的层：当前标签画过的层之间没有空层");
   });
   $("lab-new").addEventListener("click", () => {
-    L.active = Math.max(maxUsed(), L.active) + 1;
+    L.active = Math.max(maxUsed(), L.active, ...Object.keys(L.materials).map(Number)) + 1;
     renderList();
     if (S.tool !== "label") setTool("label");
   });

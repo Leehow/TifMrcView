@@ -29,7 +29,7 @@ function preview(kind) {
   const start = source.indexOf('  // ---- Preview ----');
   const end = source.indexOf(wedge ? '  /** The preview as an image' : '  /** 0.5 and 99.5', start);
   vm.runInContext(source.slice(start, end), context);
-  vm.runInContext(source.slice(source.indexOf('  function overlay('), source.indexOf('  ext.overlays.push(overlay)')), context);
+  vm.runInContext(source.slice(source.indexOf(wedge ? '  function overlay(' : '  function comparisonGeometry('), source.indexOf('  ext.overlays.push(overlay)')), context);
   const graphics = new Proxy({}, { get: (_, key) => key === 'drawImage' ? (value) => drawn.push(value) : () => {}, set: () => true });
   function complete(value = 7) {
     const b = new ArrayBuffer((wedge ? 44 : 40) + 16);
