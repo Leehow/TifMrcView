@@ -25,6 +25,8 @@ use serde_json::{json, Value};
 
 use super::auto::{auto_points, default_out, live_png, note_json, raw_inputs, result_value, resolve_tomogram, write_used, Device, Emit, Note, Outcome, DRAWN, MARKED};
 use super::project::{self as sp, to_raw, Drawn, Source};
+use crate::tomo::dataset::Look;
+use super::paint::{self, Stroke};
 use super::shape;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +36,8 @@ pub enum Kind {
     Line,
     Surface,
     Sphere,
+    /// Painted over a membrane: `strokes`, not `points`; see `paint`.
+    Membrane,
 }
 
 /// One thing marked: the clicks, in voxels of the file `tomogram`.
@@ -48,6 +52,9 @@ pub struct Mark {
     /// first one (`shape::surface`); true: every axis is reversed.
     #[serde(default)]
     pub flip: bool,
+    /// Membranes: the freehand strokes (and cuts), in voxels of `tomogram`.
+    #[serde(default)]
+    pub strokes: Vec<Stroke>,
 }
 
 /// How large the particles on a line or surface are.
@@ -109,15 +116,25 @@ pub fn save(out: &Path, saved: &Saved) -> Result<()> {
 /// The source a mark was made on and the mark's points in voxels of that
 /// source's own tomogram.
 fn to_source(mark: &Mark, inputs: &[String], sources: &[Source]) -> Option<(usize, Vec<[f64; 3]>)> {
+    let (i, look) = frame_of(mark, inputs, sources)?;
+    Some((i, match look {
+        Some(look) => mark.points.iter().map(|p| to_raw(*p, 1, 1, look)).collect(),
+        None => mark.points.clone(),
+    }))
+}
+
+/// The source a mark was made on, and the look file's frame when the mark's
+/// voxels are the look file's (`to_raw` carries them over).
+fn frame_of<'a>(mark: &Mark, inputs: &[String], sources: &'a [Source]) -> Option<(usize, Option<&'a Look>)> {
     let same = |a: &str, b: &str| a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(x, y)| x == y);
     for (i, s) in sources.iter().enumerate() {
         if same(&mark.tomogram, &s.path) || inputs.get(i).is_some_and(|p| same(&mark.tomogram, p) && s.look.as_ref().is_none_or(|l| l.path != *p)) {
-            return Some((i, mark.points.clone()));
+            return Some((i, None));
         }
     }
     for (i, s) in sources.iter().enumerate() {
         if let Some(look) = s.look.as_ref().filter(|l| same(&mark.tomogram, &l.path)) {
-            return Some((i, mark.points.iter().map(|p| to_raw(*p, 1, 1, look)).collect()));
+            return Some((i, Some(look)));
         }
     }
     None
@@ -155,7 +172,8 @@ fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, Vec<S
 /// lines, surfaces and spheres were complete enough to be used, and the size (Å).
 pub fn shapes_used(marks: &[Mark], size_a: f64) -> Value {
     let n = |k: Kind| marks.iter().filter(|m| m.kind == k && m.points.len() >= 2).count();
-    json!({ "kind": "shapes", "lines": n(Kind::Line), "surfaces": n(Kind::Surface), "spheres": n(Kind::Sphere), "sizeA": size_a.round() })
+    let membranes = marks.iter().filter(|m| m.kind == Kind::Membrane && paint::has_stroke(m)).count();
+    json!({ "kind": "shapes", "lines": n(Kind::Line), "surfaces": n(Kind::Surface), "spheres": n(Kind::Sphere), "membranes": membranes, "sizeA": size_a.round() })
 }
 
 /// What a set of marks is averaged by.
@@ -208,7 +226,7 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
-        Kind::Point => vec![],
+        Kind::Point | Kind::Membrane => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
         for s in &mut seeds {
@@ -216,6 +234,20 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
         }
     }
     Ok((seeds, line))
+}
+
+/// The seeds of a membrane mark in voxels of its source's tomogram (carried
+/// from the look file's voxels when the strokes were drawn on that), with
+/// the mark's `flip` applied, and how many voxels the strokes took. The
+/// normals only turn: a uniform scale and an offset leave them alone.
+fn membrane_seeds(m: &Mark, look: Option<&Look>, size_a: f64) -> Result<(usize, Vec<shape::Seed>)> {
+    let (voxels, seeds) = paint::seeds_of(m, size_a)?;
+    let sign = if m.flip { -1.0 } else { 1.0 };
+    let seeds = seeds
+        .iter()
+        .map(|s| shape::Seed { pos: look.map_or(s.pos, |l| to_raw(s.pos, 1, 1, l)), axis: s.axis.map(|a| sign * a) })
+        .collect();
+    Ok((voxels, seeds))
 }
 
 /// What the marks give `run_drawn`: the seeds, whether the sense of the axes
@@ -235,7 +267,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
     for (m, i, p) in &placed {
         match m.kind {
             Kind::Sphere if p.len() >= 2 => radii.push(dist(p[0], p[1]) * pixels[*i]),
-            Kind::Line | Kind::Surface => with_size = true,
+            Kind::Line | Kind::Surface | Kind::Membrane => with_size = true,
             Kind::Point => points_only += 1,
             _ => {}
         }
@@ -245,12 +277,13 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Line => p.len() >= 2,
         Kind::Surface => p.len() >= 2,
         Kind::Sphere => p.len() >= 2,
+        Kind::Membrane => paint::has_stroke(m),
     });
     if usable.clone().next().is_none() {
         if points_only > 0 {
             bail!("只标了“点”还不能平均，请再标一条线、一片面或一个球");
         }
-        bail!("还没有标够：线和面至少要点 2 个点，球要点中心和球面上的一点");
+        bail!("还没有标够：线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔");
     }
     let size_a = if with_size || radii.is_empty() {
         size.angstrom()
@@ -259,7 +292,16 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
     };
     for (m, i, p) in usable {
         let spacing = 0.5 * size_a / pixels[*i];
-        let (seeds, line) = seeds_of(m, p, spacing)?;
+        let (seeds, line) = if m.kind == Kind::Membrane {
+            let look = frame_of(m, inputs, sources).and_then(|f| f.1);
+            let (_, seeds) = membrane_seeds(m, look, size_a)?;
+            if seeds.is_empty() {
+                return Err(paint::nothing_touched());
+            }
+            (seeds, false)
+        } else {
+            seeds_of(m, p, spacing)?
+        };
         both |= line;
         drawn.extend(seeds.into_iter().map(|s| Drawn { source: *i, pos: s.pos, axis: s.axis }));
     }
@@ -279,6 +321,10 @@ pub struct Preview {
     /// Index of the mark in the list given.
     pub mark: usize,
     pub kind: Kind,
+    /// Membranes: how many voxels of the segmentation the strokes take (0:
+    /// none, or no segmentation yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voxels: Option<usize>,
     pub seeds: Vec<PreviewSeed>,
 }
 
@@ -296,13 +342,23 @@ pub struct PreviewSeed {
 pub fn preview_of(marks: &[Mark], open: &str, size: Size, inputs: &[String], sources: &[Source], pixel: &dyn Fn(&str) -> Option<f64>) -> Vec<Preview> {
     let mut out = vec![];
     for (k, m) in marks.iter().enumerate() {
-        if m.kind == Kind::Point || m.points.len() < 2 {
+        if m.kind == Kind::Membrane && !paint::has_stroke(m) {
+            continue;
+        }
+        if m.kind == Kind::Point || (m.kind != Kind::Membrane && m.points.len() < 2) {
             continue;
         }
         let Some((i, p)) = to_source(m, inputs, sources) else { continue };
+        let look = frame_of(m, inputs, sources).and_then(|f| f.1);
         let Some(px) = pixel(&sources[i].path).filter(|px| *px > 0.0) else { continue };
         let size_a = if m.kind == Kind::Sphere { (SPHERE_SHARE * dist(p[0], p[1]) * px).clamp(SIZE_RANGE.0, SIZE_RANGE.1) } else { size.angstrom() };
-        let Ok((seeds, _)) = seeds_of(m, &p, 0.5 * size_a / px) else { continue };
+        let (voxels, seeds) = if m.kind == Kind::Membrane {
+            let Ok((v, s)) = membrane_seeds(m, look, size_a) else { continue };
+            (Some(v), s)
+        } else {
+            let Ok((seeds, _)) = seeds_of(m, &p, 0.5 * size_a / px) else { continue };
+            (None, seeds)
+        };
         // Raw voxels to the open file's: its own, or the look file's (raw = scale × look + offset).
         let to_open = |v: [f64; 3]| -> Option<[f64; 3]> {
             if sources[i].path == open || inputs.get(i).is_some_and(|x| x == open) {
@@ -314,8 +370,8 @@ pub fn preview_of(marks: &[Mark], open: &str, size: Size, inputs: &[String], sou
         let n = seeds.len();
         let take = n.min(MOST_PREVIEW);
         let seeds: Vec<PreviewSeed> = (0..take).filter_map(|j| seeds.get(j * n / take)).filter_map(|s| Some(PreviewSeed { pos: to_open(s.pos)?, axis: s.axis })).collect();
-        if !seeds.is_empty() {
-            out.push(Preview { mark: k, kind: m.kind, seeds });
+        if !seeds.is_empty() || voxels.is_some() {
+            out.push(Preview { mark: k, kind: m.kind, voxels, seeds });
         }
     }
     out
@@ -411,7 +467,7 @@ mod tests {
         Source { path: path.into(), tilts: [-60.0, 60.0], look, series: None }
     }
     fn mark(kind: Kind, tomogram: &str, points: &[[f64; 3]]) -> Mark {
-        Mark { kind, tomogram: tomogram.into(), points: points.to_vec(), flip: false }
+        Mark { kind, tomogram: tomogram.into(), points: points.to_vec(), flip: false, strokes: vec![] }
     }
     fn close(a: [f64; 3], b: [f64; 3]) -> bool {
         (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9)
@@ -648,5 +704,163 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("marks.json")).unwrap();
         assert!(text.contains("\"sphere\"") && text.contains("\"point\""));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tomogram file (zeros) of `n` voxels of `px` Å with a label map beside
+    /// it holding a spherical shell of membrane, radius `r` voxels, centred.
+    fn shell_file(dir: &Path, name: &str, n: usize, px: f64, r: f64) -> String {
+        let path = dir.join(name).to_string_lossy().into_owned();
+        crate::tomo::output::write_mrc(&path, &vec![0.0; n * n * n], [n; 3], px, false).unwrap();
+        let c = (n as f64 - 1.0) / 2.0;
+        let mask: Vec<bool> = (0..n * n * n)
+            .map(|i| {
+                let (x, y, z) = ((i % n) as f64, (i / n % n) as f64, (i / (n * n)) as f64);
+                (((x - c).powi(2) + (y - c).powi(2) + (z - c).powi(2)).sqrt() - r).abs() < 1.5
+            })
+            .collect();
+        crate::membrane::write_labels(&path, [n; 3], &mask, None, px as f32).unwrap();
+        path
+    }
+    fn stroke(points: &[[f64; 3]], cut: bool) -> Stroke {
+        Stroke { points: points.to_vec(), cut }
+    }
+    fn membrane(tomogram: &str, strokes: Vec<Stroke>) -> Mark {
+        Mark { strokes, ..mark(Kind::Membrane, tomogram, &[]) }
+    }
+    /// A scribble over the top of the shell (centre 19.5, radius 12).
+    fn top() -> Stroke {
+        stroke(&[[14.0, 19.0, 31.0], [19.0, 19.0, 31.5], [25.0, 19.0, 31.0]], false)
+    }
+
+    #[test]
+    fn a_scribble_gives_seeds_on_the_shell_facing_outward_and_flip_reverses_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = shell_file(dir.path(), "a.mrc", 40, 10.0, 12.0);
+        let sources = vec![source(&t, None)];
+        let inputs = vec![t.clone()];
+        let m = membrane(&t, vec![top()]);
+        let (d, both, size) = drawn_of(&[m.clone()], &inputs, &sources, &[10.0], Size::Small).unwrap();
+        assert!(!both && size == 130.0);
+        assert!(d.len() > 15, "{}", d.len());
+        let c = [19.5; 3];
+        for s in &d {
+            assert!((dist(s.pos, c) - 12.0).abs() < 1.5, "{:?}", s.pos);
+            let out: f64 = (0..3).map(|k| (s.pos[k] - c[k]) * s.axis[k]).sum::<f64>() / dist(s.pos, c);
+            assert!(out > 0.9, "{out}");
+        }
+        let (f, _, _) = drawn_of(&[Mark { flip: true, ..m.clone() }], &inputs, &sources, &[10.0], Size::Small).unwrap();
+        assert!(f.len() == d.len() && d.iter().zip(&f).all(|(a, b)| a.pos == b.pos && a.axis.map(|v| -v) == b.axis));
+        assert!(shapes_used(&[m.clone()], 130.0)["membranes"] == 1);
+        assert_eq!(route(&[m.clone()]), Route::Shapes);
+        assert_eq!(route(&[m, mark(Kind::Point, &t, &[[1.0; 3]])]), Route::Mixed);
+    }
+
+    #[test]
+    fn a_cut_stroke_ends_the_sheet_and_a_second_scribble_adds_a_membrane() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = shell_file(dir.path(), "a.mrc", 40, 10.0, 12.0);
+        let sources = vec![source(&t, None)];
+        let inputs = vec![t.clone()];
+        let whole = membrane(&t, vec![top()]);
+        let ring: Vec<[f64; 3]> = (0..=48).map(|k| (k as f64 / 48.0 * std::f64::consts::TAU)).map(|a| [19.5 + 12.0 * a.cos(), 19.5 + 12.0 * a.sin(), 19.5]).collect();
+        let cut = membrane(&t, vec![top(), stroke(&ring, true)]);
+        let seeds = |m: &Mark| drawn_of(&[m.clone()], &inputs, &sources, &[10.0], Size::Small).unwrap().0;
+        let (a, b) = (seeds(&whole), seeds(&cut));
+        assert!(a.iter().any(|s| s.pos[2] < 17.0), "the whole shell is taken");
+        assert!(!b.is_empty() && b.iter().all(|s| s.pos[2] > 19.0), "the cut keeps the top");
+        // A cut alone takes nothing.
+        let err = drawn_of(&[membrane(&t, vec![stroke(&ring, true)])], &inputs, &sources, &[10.0], Size::Small).unwrap_err().to_string();
+        assert!(err.contains("还没有标够") && err.contains("膜"), "{err}");
+    }
+
+    #[test]
+    fn a_scribble_beside_the_membrane_or_without_segmentation_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = shell_file(dir.path(), "a.mrc", 40, 10.0, 12.0);
+        let bare = dir.path().join("b.mrc").to_string_lossy().into_owned();
+        crate::tomo::output::write_mrc(&bare, &vec![0.0; 64000], [40; 3], 10.0, false).unwrap();
+        for (file, at) in [(&t, [19.5, 19.5, 19.5]), (&bare, [14.0, 19.0, 31.0])] {
+            let sources = vec![source(file, None)];
+            let inputs = vec![file.clone()];
+            let m = membrane(file, vec![stroke(&[at, at], false)]);
+            let e = drawn_of(&[m.clone()], &inputs, &sources, &[10.0], Size::Small).unwrap_err().to_string();
+            assert!(e.contains("这一笔没有碰到分割出的膜"), "{e}");
+            let px = |_: &str| Some(10.0);
+            let p = preview_of(&[m], file, Size::Small, &inputs, &sources, &px);
+            assert!(p.len() == 1 && p[0].seeds.is_empty() && p[0].voxels == Some(0));
+        }
+        assert_eq!(paint::status(&t).unwrap()["ready"], true);
+        assert_eq!(paint::status(&bare).unwrap()["ready"], false);
+        // No strokes yet: nothing to show.
+        let px = |_: &str| Some(10.0);
+        assert!(preview_of(&[membrane(&t, vec![])], &t, Size::Small, &[t.clone()], &[source(&t, None)], &px).is_empty());
+    }
+
+    #[test]
+    fn the_preview_of_a_membrane_has_seeds_and_the_voxel_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = shell_file(dir.path(), "a.mrc", 40, 10.0, 12.0);
+        let m = membrane(&t, vec![top()]);
+        let px = |_: &str| Some(10.0);
+        let p = preview_of(&[m], &t, Size::Small, &[t.clone()], &[source(&t, None)], &px);
+        assert!(p.len() == 1 && p[0].kind == Kind::Membrane && p[0].voxels.unwrap() > 1000 && (1..=MOST_PREVIEW).contains(&p[0].seeds.len()));
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json[0]["kind"] == "membrane" && json[0]["voxels"].as_u64().unwrap() > 1000);
+    }
+
+    #[test]
+    fn strokes_on_the_look_file_are_carried_to_the_tomogram() {
+        let dir = tempfile::tempdir().unwrap();
+        // The look file has voxels twice as large; the raw file need not exist for a run's seeds.
+        let look_file = shell_file(dir.path(), "a_look.mrc", 40, 20.0, 12.0);
+        let raw = dir.path().join("a_raw.mrc").to_string_lossy().into_owned();
+        let look = Look { path: look_file.clone(), scale: 2.0, offset: [0.0; 3] };
+        let sources = vec![source(&raw, Some(look))];
+        let inputs = vec![raw.clone()];
+        let m = membrane(&look_file, vec![top()]);
+        let (d, _, _) = drawn_of(&[m.clone()], &inputs, &sources, &[10.0], Size::Small).unwrap();
+        // Spacing is half a particle (65 Å) in look voxels of 20 Å: more than the shell's 6.5-voxel grid at 10 Å would give 2x apart.
+        assert!(d.len() > 15, "{}", d.len());
+        for s in &d {
+            assert!((dist(s.pos, [39.0; 3]) - 24.0).abs() < 3.0, "{:?}", s.pos);
+            assert!((0..3).map(|k| (s.pos[k] - 39.0) * s.axis[k]).sum::<f64>() > 0.0);
+        }
+        // The preview on the look file stays in its voxels, on the raw file in raw voxels.
+        let px = |_: &str| Some(10.0);
+        let on_look = preview_of(&[m.clone()], &look_file, Size::Small, &inputs, &sources, &px);
+        let on_raw = preview_of(&[m], &raw, Size::Small, &inputs, &sources, &px);
+        assert!(dist(on_look[0].seeds[0].pos, [19.5; 3]) < 14.0 && dist(on_raw[0].seeds[0].pos, [39.0; 3]) > 20.0);
+    }
+
+    #[test]
+    fn highlight_runs_cover_the_shell_on_a_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = shell_file(dir.path(), "a.mrc", 40, 10.0, 12.0);
+        let m = membrane(&t, vec![top()]);
+        let runs = paint::section_runs(&m, &t, 20).unwrap();
+        assert!(!runs.is_empty() && runs.iter().all(|r| r[1] < r[2] && r[0] < 40 && r[2] <= 40));
+        // The equator ring: left and right edges of the shell are runs.
+        let at_y = runs.iter().filter(|r| r[0] == 20).collect::<Vec<_>>();
+        assert!(at_y.iter().any(|r| r[1] <= 8 && r[2] > 7) && at_y.iter().any(|r| r[1] <= 31 && r[2] > 31));
+        assert!(paint::section_runs(&m, &t, 3).unwrap().is_empty() && paint::section_runs(&m, &t, 99).unwrap().is_empty());
+        assert!(paint::section_runs(&m, "/other.mrc", 20).unwrap().is_empty());
+        assert!(paint::section_runs(&Mark { kind: Kind::Surface, ..m }, &t, 20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn old_marks_load_and_membranes_round_trip() {
+        let old = r#"{"marks":[{"kind":"surface","tomogram":"/t/a.mrc","points":[[1,2,3],[4,5,6]]}],"size":"small"}"#;
+        let s: Saved = serde_json::from_str(old).unwrap();
+        assert!(s.marks[0].strokes.is_empty() && !s.marks[0].flip);
+        let m = Mark { flip: true, ..membrane("/t/a.mrc", vec![top(), stroke(&[[1.0, 2.0, 3.0]], true)]) };
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &Saved { marks: vec![m.clone()], size: None }).unwrap();
+        let back = load(dir.path());
+        assert_eq!(back.marks, vec![m]);
+        let text = std::fs::read_to_string(dir.path().join("marks.json")).unwrap();
+        assert!(text.contains("\"membrane\"") && text.contains("\"cut\": true"));
+        // A stroke without `cut` is an ordinary one.
+        let m: Mark = serde_json::from_str(r#"{"kind":"membrane","tomogram":"/t","points":[],"strokes":[{"points":[[1,2,3]]}]}"#).unwrap();
+        assert!(!m.strokes[0].cut);
     }
 }

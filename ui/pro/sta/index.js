@@ -1,11 +1,13 @@
 "use strict";
 // The subtomogram-averaging workspace (sta::auto): the tomograms of a cryo-ET
-// dataset go in, one click runs the whole pipeline, and the intermediate
-// results show as they come: class-average "cards" (the program tries each as
-// a template and takes the one that averages best), then the average with its
-// FSC. The user may click another card and average again from it; nothing is
-// asked otherwise. Results live in <first tomogram>_sta/ beside the tomogram,
-// so reopening the workspace shows them without a rerun.
+// dataset go in, "find candidates" makes the class-average "cards" and then
+// STOPS: the program never chooses what to average. The user chooses on the
+// clear "look" tomogram, which is opened for that: click a card, or mark
+// particles / lines / surfaces / spheres / membranes on the image (draw.js).
+// Only after that choice everything runs by itself (mapping to the raw
+// tomogram, search, alignment, average, FSC). Card tags are hints only.
+// Results live in <first tomogram>_sta/ beside the tomogram, so reopening the
+// workspace shows the cards (and the average, if there is one) without a rerun.
 // The tomograms listed are the raw ones of the open file's dataset/folder
 // (sta_siblings; the open file may be the clear "look" companion, which is
 // only for looking: averages are always of the raw tomogram). Everything shown
@@ -42,21 +44,23 @@
   panel.hidden = true;
   panel.innerHTML = `
     <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><span class="sta-head-btns"><button id="sta-fold" class="small" title="收起面板，让出图像" aria-expanded="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button><button id="sta-close" class="small" title="关闭">✕</button></span></div>
-    <p class="dim">选好断层图，按下面的按钮：程序自己找出颗粒、做出候选的“卡片”、挑最合适的一张，再把所有同样的颗粒对齐平均。</p>
+    <p class="dim">选好断层图，按“找候选”：程序做出候选的“卡片”，然后停下来，由你在清晰的断层图上决定平均什么；你选定之后，其余的（找到所有同样的颗粒、对齐、平均）都由程序完成。</p>
     <div id="sta-data" class="sta-data"></div>
     <div class="al-row"><button id="sta-add" class="small" title="再加入别的文件夹里的断层图一起平均">添加断层图…</button></div>
     <div class="al-row">
-      <button id="sta-run" class="primary">一键平均</button>
+      <button id="sta-run" class="primary" title="自动做出候选卡片；不会替你选，也不会平均">找候选</button>
     </div>
-    <div id="sta-draw-slot"></div>
     <p id="sta-line" class="dim"></p>
+    <p id="sta-lookhint" class="dim" hidden>这张断层图没有清晰版，可在原图上选择</p>
     <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <div id="sta-cards-box" hidden>
-      <h4>候选卡片</h4>
+      <h4>① 点一张卡片</h4>
       <p id="sta-cards-hint" class="dim"></p>
       <div id="sta-cards" class="sta-cards"></div>
-      <div class="al-row"><button id="sta-again" class="small" hidden>用这个重新平均</button></div>
+      <div class="al-row"><button id="sta-again" class="primary" disabled>平均这一类</button></div>
     </div>
+    <h4 id="sta-mark-head">② 或者自己标</h4>
+    <div id="sta-draw-slot"></div>
     <div id="sta-result" hidden>
       <h4>结果</h4>
       <div id="sta-which" class="al-row sta-which" hidden></div>
@@ -70,7 +74,7 @@
   $("stage").append(panel);
   W.panel = panel;
   // Status of the folder `out` (shown only while it is the current one).
-  const setStatus = (out, t) => { st(out).status = t; if (out === W.out) $("sta-status").textContent = t; };
+  const setStatus = (out, t) => { st(out).status = t; if (out === W.out) $("sta-status").textContent = statusText(st(out)); };
   const status = (t) => setStatus(W.out, t);
 
   // The tomograms to average: those of the open file's dataset/folder (the
@@ -126,12 +130,9 @@
     olderVersion: () => "这张断层图是旧版本做的，平均只用断层图本身",
     cardsStale: () => "断层图变了，重新做卡片",
     cardsReused: () => "沿用上次的卡片",
-    cardsMade: (n) => `做出了 ${n.count} 张卡片，正在逐张试跑`,
-    trialsReused: () => "沿用上次的试跑结果",
-    trialsMade: () => "试跑完成，正在选择",
-    compareFailed: () => "卡片无法互相比较，各算一种",
+    cardsMade: (n) => `做出了 ${n.count} 张卡片`,
     marked: (n) => `用你点的 ${n.points} 个颗粒做了模板，大小 ${n.sizeA} Å`,
-    using: (n) => `使用第 ${n.card + 1} 张卡片${n.other?.length ? `；还有 ${n.other.length} 种也不错` : ""}`,
+    using: (n) => `平均第 ${n.card + 1} 张卡片`,
   };
   // The line under the result: what the average was made from.
   function usedText(u) {
@@ -139,7 +140,7 @@
     const size = u.sizeA != null ? fmt(u.sizeA, 0) : null;
     if (u.kind === "points") return `用你点的 ${u.points} 个颗粒做了模板，大小 ${size ?? "—"} Å`;
     if (u.kind === "shapes") {
-      const parts = [[u.lines, "条线"], [u.surfaces, "片面"], [u.spheres, "个球"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
+      const parts = [[u.lines, "条线"], [u.surfaces, "片面"], [u.spheres, "个球"], [u.membranes, "片膜"]].filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
       return `用了你画的标注（${parts.join(" / ") || "—"}）${size ? `，颗粒约 ${size} Å` : ""}`;
     }
     if (u.card == null) return "";
@@ -160,10 +161,12 @@
     else if (t) bits.push(t.noGroup ? "没有成群的颗粒" : "试跑失败");
     cap.textContent = bits.join(" · ");
     fig.append(img, cap);
+    // Hints only: they say what the card looks like, never what to average.
     const badges = [];
-    if (c.chosen) badges.push(["选中", "pick"]);
+    if (c.likely) badges.push(["像颗粒", "good"]);
     if (c.runsOn) badges.push(["线状/层状", "runs"]);
-    else if (c.good && !c.chosen) badges.push(["也不错", "good"]);
+    else if (c.good) badges.push(["试平均较好", "good"]);
+    if (c.chosen) badges.push(["上次平均了这张", "pick"]);
     if (badges.length) {
       const row = document.createElement("div");
       for (const [text, kind] of badges) {
@@ -186,11 +189,15 @@
     const cards = s.cards.map((c) => ({ ...c, trial: c.trial || s.trials[c.id] || null }));
     $("sta-cards-box").hidden = !cards.length;
     $("sta-cards").replaceChildren(...cards.map(cardEl));
-    const chosen = s.cards.find((c) => c.chosen)?.id;
-    const other = s.selected != null && s.selected !== chosen;
-    $("sta-again").hidden = !other || W.busy;
-    $("sta-cards-hint").textContent = chosen == null ? "程序会逐张试跑，挑出平均得最好的一张。" : "程序已经选了标“选中”的一张。想换一张，点它，再点“用这个重新平均”。标“线状/层状”的会延伸到框外，一般不是颗粒。";
+    const again = $("sta-again");
+    again.disabled = s.selected == null || W.busy;
+    again.title = s.selected == null ? "先点一张卡片" : "";
+    $("sta-cards-hint").textContent = "点你要平均的那一类，再按“平均这一类”。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。";
   }
+  // The line the run ends with while it waits for the user's choice.
+  const PROMPT = "请选择要平均什么：点一张卡片，或用标注工具在图上点、涂、画出来";
+  const waiting = (s) => !s.cards.length ? "" : !s.result ? PROMPT : "";
+  const statusText = (s) => s.status || waiting(s);
 
   function fscSvg(r) {
     const f = r.fsc || [], q = r.freq || [];
@@ -201,7 +208,7 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  const WHICH = { auto: "自动", points: "点", drawn: "画的" };
+  const WHICH = { auto: "卡片", points: "点", drawn: "画的" };
   function renderResult() {
     const r = cur().result;
     W.result = r;
@@ -220,7 +227,7 @@
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
       b.textContent = WHICH[w] || w;
-      b.title = { auto: "程序自己找颗粒的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果" }[w] || "";
+      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果" }[w] || "";
       b.onclick = async () => {
         if (w === r.which) return;
         const out = W.out;
@@ -236,8 +243,12 @@
   // Everything of the current output folder onto the screen.
   function paint() {
     const s = cur();
-    $("sta-status").textContent = s.status;
+    $("sta-status").textContent = statusText(s);
     $("sta-line").textContent = s.line;
+    $("sta-lookhint").hidden = !s.noLook;
+    const run = $("sta-run");
+    run.textContent = s.cards.length ? "重新找候选" : "找候选";
+    run.classList.toggle("primary", !s.cards.length);
     const live = $("sta-live");
     live.hidden = !(here() && s.live);
     if (s.live) live.querySelector("img").src = s.live;
@@ -278,7 +289,7 @@
       s.cards = cards.cards || [];
       if (s.selected != null && !s.cards.some((c) => c.id === s.selected)) s.selected = null;
       s.result = result;
-      if (out === W.out) { renderCards(); renderResult(); }
+      if (out === W.out) { paint(); }
     } catch (_) {
       // Nothing there yet: the panel stays as it is.
     }
@@ -352,7 +363,9 @@
       let res = r.result;
       try { res = (await invoke("sta_result", { out })) || res; } catch (_) { /* demo */ }
       s.result = res;
-      setStatus(out, r.needsChoice ? "没有一张卡片能平均出结果：这批断层图里可能没有成群的颗粒" : `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+      // The run found the cards and stopped: the user chooses what to average.
+      if (r.waiting) setStatus(out, s.cards.length ? PROMPT : "没有找到候选卡片：这批断层图里可能没有成群的颗粒，可以用下面的标注工具自己标");
+      else setStatus(out, `完成 · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
     } catch (e) {
       setStatus(out, `${e}`.includes("已取消") ? "已取消" : `失败：${e}`);
     } finally {
@@ -364,12 +377,24 @@
       document.dispatchEvent(new CustomEvent("sta-busy", { detail: false }));
     }
   }
-  const run = (pick) => go((inputs, out) => invoke("sta_run", { inputs, pick: pick ?? null, out }), pick == null);
+  // Where the user chooses: the clear "look" companion of the open raw tomogram
+  // (opened once per run start, not when it is already shown).
+  async function showLook() {
+    const it = W.items.find((i) => i.open);
+    if (!it) return;
+    st(W.out).noLook = !it.look;
+    if (it.look && S.info?.path !== it.look) { try { await openPath(it.look); } catch (_) { /* stays on the raw one */ } }
+  }
+  const run = async (pick) => {
+    if (W.busy) return;
+    if (pick == null) await showLook();
+    return go((inputs, out) => invoke("sta_run", { inputs, pick: pick ?? null, out }), pick == null);
+  };
   W.go = go;
   W.status = status;
   W.renderData = renderData;
   $("sta-run").onclick = () => run(null);
-  $("sta-again").onclick = () => run(cur().selected);
+  $("sta-again").onclick = () => { const n = cur().selected; if (n != null) run(n); };
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
   $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
 

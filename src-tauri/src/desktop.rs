@@ -1998,11 +1998,52 @@ fn sta_marks_load(out: String) -> crate::sta::marks::Saved {
 
 /// Where the seeds of the line, surface and sphere marks are and which way
 /// they face, in voxels of the open file `tomogram` (at most 60 per mark):
-/// [{mark, kind, seeds: [{pos: [x, y, z], axis: [x, y, z]}]}].
+/// [{mark, kind, voxels?, seeds: [{pos: [x, y, z], axis: [x, y, z]}]}]; `voxels`
+/// (membranes only) is how many voxels of the segmentation the strokes take.
 #[cfg(feature = "pro")]
 #[tauri::command]
 fn sta_mark_preview(marks: Vec<crate::sta::marks::Mark>, tomogram: String, size: Option<String>) -> CmdResult<serde_json::Value> {
     crate::sta::marks::preview_marks(&marks, &tomogram, size.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Whether membranes can be painted on `tomogram`: {ready, model}. `ready`:
+/// the label map beside it has the membrane material (it was segmented);
+/// `model`: the segmentation model is set up.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_membrane_status(tomogram: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::paint::status(&tomogram)).await
+}
+
+/// Segments the membranes of `tomogram` into the label map beside it (once;
+/// the model must be set up). Reports `sta-progress` {label, done, total};
+/// returns {ready, voxels, components, vesicles, seconds}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_membrane_segment(app: AppHandle, tomogram: String) -> CmdResult<serde_json::Value> {
+    if crate::membrane::model_path().is_none() {
+        return Err("还没有膜分割模型：请先在标签面板的「自动分割膜」里载入一次权重".into());
+    }
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let progress = |label: &str, done: usize, total: usize| {
+            let _ = app.emit("sta-progress", serde_json::json!({ "label": label, "done": done, "total": total }));
+        };
+        crate::sta::paint::segment(&tomogram, &progress)
+    }).await
+}
+
+/// The voxels membrane mark number `mark` of `marks` takes on section `z`
+/// of `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight.
+/// Empty for other kinds of marks and for marks of another file.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_mark_section(marks: Vec<crate::sta::marks::Mark>, mark: usize, tomogram: String, z: usize) -> CmdResult<Vec<[usize; 3]>> {
+    blocking(move || match marks.get(mark) {
+        Some(m) => crate::sta::paint::section_runs(m, &tomogram, z),
+        None => Ok(vec![]),
+    }).await
 }
 
 #[cfg(feature = "pro")]
@@ -2015,6 +2056,7 @@ fn sta_marks_save(out: String, marks: Vec<crate::sta::marks::Mark>, size: Option
 #[tauri::command]
 fn sta_cancel() {
     crate::sta::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::membrane::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[cfg(feature = "pro")]
@@ -2992,6 +3034,9 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,
+            #[cfg(feature = "pro")] sta_membrane_status,
+            #[cfg(feature = "pro")] sta_membrane_segment,
+            #[cfg(feature = "pro")] sta_mark_section,
             diffraction_find,
             diffraction_zones,
             eds_quant,

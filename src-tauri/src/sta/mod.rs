@@ -25,6 +25,7 @@ pub mod average;
 pub mod cc;
 pub mod cc_gpu;
 pub mod marks;
+pub mod paint;
 pub mod pick;
 pub mod project;
 pub mod refine;

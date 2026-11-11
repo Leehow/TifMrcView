@@ -335,6 +335,11 @@
 #sta-workspace p { line-height:1.6; }
 #sta-workspace h4 { margin:12px 0 2px; font-size:12px; }
 #sta-run { font-size:13px; padding:6px 18px; }
+#sta-again { font-size:13px; padding:6px 18px; }
+#sta-again:disabled { opacity:.5; cursor:not-allowed; }
+#sta-workspace #sta-mark-head { margin-top:14px; }
+#sta-draw > h4:first-child { display:none; }
+#sta-lookhint { margin:2px 0; }
 #quickbar #btn-sta { width:auto; padding:0 8px; gap:5px; }
 #sta-workspace .sta-data { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
 #sta-workspace .sta-data label { display:flex; align-items:center; gap:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -355,4 +360,6 @@
 #sta-draw-hint:empty { display:none; }
 #sta-draw .sta-marks { display:flex; flex-direction:column; gap:2px; margin-top:6px; }
 #sta-draw .sta-mark { padding:4px 8px; border:1px solid var(--line); border-left:3px solid var(--mark); border-radius:6px; cursor:pointer; }
+#sta-draw .sta-mark .warn { color:#cf222e; font-size:12px; }
+#sta-draw-membrane:empty { display:none; }
 #sta-draw .sta-mark.on { background:var(--muted); border-color:var(--accent); border-left-color:var(--mark); }
