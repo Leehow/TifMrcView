@@ -1219,7 +1219,7 @@ pub fn trials(
         let dir = Path::new(out_dir).join(format!("card_{}", card.id)).to_string_lossy().into_owned();
         let inner = |_: &str, a: usize, b: usize| progress(&label, a, b);
         progress(&label, 0, 1);
-        let r = run_template(dev, sources, &cube, voxel, template_diameter(card), Pass::Trial, &dir, &inner, live);
+        let r = run_template(dev, &sources[..sources.len().min(TRIAL_SOURCES)], &cube, voxel, template_diameter(card), Pass::Trial, &dir, &inner, live);
         let seconds = started.elapsed().as_secs_f64();
         let trial = match r {
             Ok(r) => {
@@ -1560,6 +1560,10 @@ pub enum Pass {
     /// And the fine pass after it.
     Fine,
 }
+
+/// The cards are tried on the first tomograms only: which card to take
+/// shows in two as well as in twenty.
+const TRIAL_SOURCES: usize = 2;
 
 /// Voxels across the particle in the search of a trial.
 const TRIAL_ACROSS: f64 = 6.5;
