@@ -1286,6 +1286,7 @@
   candBar.innerHTML = `
     <span id="lab-cand-text"></span>
     <label title="往右放宽，找出更多；往左收紧，只留最像的">少 <input type="range" id="lab-cand-thr" min="0" max="1" step="0.01" /> 多</label>
+    <button class="small" id="lab-cand-again" title="先把不对的点掉，再找一轮：留下的当作例子，点掉的当作反例，越纠正越准">再找一轮</button>
     <button class="small" id="lab-cand-cancel" title="一个也不加入（Esc）">取消</button>
     <button class="small primary" id="lab-cand-ok" title="把圈出来的都加入这个标签（回车）；不想要的先点一下去掉">全部加入</button>`;
   $("stage").append(candBar);
@@ -1304,17 +1305,20 @@
     $("lab-cand-text").textContent = c.busy ? (c.total > 1 ? `正在找同类 ${c.done}/${c.total}…` : "正在找同类…") : `找到 ${n} 个`;
     $("lab-cand-thr").disabled = c.busy;
     $("lab-cand-ok").disabled = c.busy || !n;
+    $("lab-cand-again").disabled = c.busy || !c.items.some((it) => it.off);
   }
 
-  async function findSimilar() {
-    const r = selRegion();
-    if (!r || L.busy || L.sam.busy || L.cand) return;
+  /** `again`: another round, learning from what was kept and taken out. */
+  async function findSimilar(again = false) {
+    const r = selRegion(), was = L.cand;
+    if (!r || L.busy || L.sam.busy || (again ? !was || was.busy : was)) return;
     const c = S.chans[channel()];
     const req = { token: S.token, z: S.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, denoise: samDenoise() };
-    const cand = { z: S.z, label: r.k, items: [], thr: thrOf(CAND_START), busy: true, done: 0, total: 0 };
+    if (again) req.again = { keep: candOn(was).map((it) => it.i), drop: was.items.filter((it) => it.off).map((it) => it.i) };
+    const cand = { z: S.z, label: r.k, items: [], thr: again ? was.thr : thrOf(CAND_START), busy: true, done: 0, total: 0 };
     L.cand = cand;
     L.sam.busy = true;
-    $("lab-cand-thr").value = CAND_START;
+    if (!again) $("lab-cand-thr").value = CAND_START;
     syncCand();
     draw();
     const un = await T.event.listen("sam-similar", (ev) => { if (L.cand === cand && cand.busy) { Object.assign(cand, ev.payload); syncCand(); } });
@@ -1388,6 +1392,7 @@
     syncCand();
     draw();
   });
+  $("lab-cand-again").addEventListener("click", () => findSimilar(true));
   $("lab-cand-cancel").addEventListener("click", candCancel);
   $("lab-cand-ok").addEventListener("click", candAccept);
 

@@ -258,6 +258,22 @@ fn blob_quality(r: &segpick::Region) -> f32 {
     (1.0 - (-r.edge / 6.0).exp()) * if r.alone { 1.0 } else { 0.8 }
 }
 
+/// The mean of SAM's embedding (`c` channels on an `n` by `n` grid over
+/// `rect`) under the pixels `pix`, at unit length.
+fn mean_embedding(emb: &[f32], c: usize, n: usize, pix: &[usize], w: usize, r: [usize; 4]) -> Vec<f32> {
+    let mut out = vec![0f32; c];
+    for &i in pix {
+        let (x, y) = ((i % w).clamp(r[0], r[2] - 1), (i / w).clamp(r[1], r[3] - 1));
+        let g = (((y - r[1]) * n / (r[3] - r[1])).min(n - 1)) * n + ((x - r[0]) * n / (r[2] - r[0])).min(n - 1);
+        for (ch, o) in out.iter_mut().enumerate() {
+            *o += emb[ch * n * n + g];
+        }
+    }
+    let norm = out.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+    out.iter_mut().for_each(|x| *x /= norm);
+    out
+}
+
 /// A region that is a large part of the slice, or a large part of the
 /// view at the level most of the slice has.
 fn background_like(pix: &[usize], smooth: &[f32], med: f32, sd: f32, view_area: usize) -> bool {
@@ -605,10 +621,40 @@ impl Sam {
         progress: impl Fn(usize, usize),
     ) -> Result<Vec<Found>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let examples: Vec<&Vec<usize>> = examples.iter().filter(|e| e.len() >= 4).collect();
-        if examples.is_empty() {
+        if examples.iter().all(|e| e.len() < 4) {
             bail!("先选出一个要找的物体：在它上面点一下，或者绕着它画一圈");
         }
+        // Another round: the candidates that were kept are examples too,
+        // those taken out are what the examples are not.
+        let (right, wrong) = {
+            let mut last = self.found.lock().unwrap();
+            match (&req.again, last.take().filter(|f| f.token == req.token && f.z == req.z)) {
+                (Some(a), Some(mut f)) => {
+                    let (keep, out): (HashSet<usize>, HashSet<usize>) = (a.keep.iter().copied().collect(), a.drop.iter().copied().collect());
+                    for (i, o) in std::mem::take(&mut f.found).into_iter().enumerate() {
+                        if keep.contains(&i) {
+                            f.right.push(Found { score: 1.0, ..o });
+                        } else if out.contains(&i) {
+                            f.wrong.push(o);
+                        }
+                    }
+                    (f.right, f.wrong)
+                }
+                _ => (vec![], vec![]),
+            }
+        };
+        let mut taken = taken.to_vec();
+        for f in right.iter().chain(&wrong) {
+            for i in f.pixels(w) {
+                taken[i] = true;
+            }
+        }
+        let taken = &taken[..];
+        let more: Vec<Vec<usize>> = right.iter().map(|f| f.pixels(w)).collect();
+        let wrong_pix: Vec<Vec<usize>> = wrong.iter().map(|f| f.pixels(w)).collect();
+        // Only what the user selected says which way to search.
+        let own = examples.iter().filter(|e| e.len() >= 4).count();
+        let examples: Vec<&Vec<usize>> = examples.iter().chain(&more).filter(|e| e.len() >= 4).collect();
         self.cancel.store(false, SeqCst);
         let dn = req.denoise;
         let key = (req.token, req.z, req.c, req.t, req.lo.to_bits(), req.hi.to_bits(), dn.slab, dn.sigma.to_bits());
@@ -635,6 +681,8 @@ impl Sam {
             set
         };
         let ex_small: Vec<Vec<usize>> = examples.iter().map(|e| reduce(e)).collect();
+        let wrong_small: Vec<Vec<usize>> = wrong_pix.iter().map(|e| reduce(e)).collect();
+        let (own_small, kept_small) = ex_small.split_at(own);
         let taken_small: Vec<bool> = if f == 1 {
             taken.to_vec()
         } else {
@@ -642,7 +690,7 @@ impl Sam {
         };
         let noise = if f > 1 { segpick::noise_sigma(v, sw, sh) } else { sd.noise };
         // An example is a blob when the flood from its middle outlines it.
-        let blobby = ex_small.iter().all(|e| {
+        let blobby = own_small.iter().all(|e| {
             let (cx, cy) = (e.iter().map(|i| i % sw).sum::<usize>() / e.len(), e.iter().map(|i| i / sw).sum::<usize>() / e.len());
             let half = ((e.len() as f32).sqrt() * 3.0).ceil().max(12.0) as usize;
             let (x0, y0, x1, y1) = (cx.saturating_sub(half), cy.saturating_sub(half), (cx + half + 1).min(sw), (cy + half + 1).min(sh));
@@ -657,7 +705,7 @@ impl Sam {
         let model = if blobby { None } else { self.model()? };
         let mut found: Vec<Found> = vec![];
         if blobby || model.is_none() {
-            for b in segpick::find_blobs(v, sw, sh, &ex_small, f as f32, &taken_small, 0.002) {
+            for b in segpick::find_blobs(v, sw, sh, own_small, kept_small, &wrong_small, f as f32, &taken_small, 0.002) {
                 if f == 1 {
                     found.push(b);
                     continue;
@@ -674,6 +722,7 @@ impl Sam {
         }
         if let Some(p) = &model {
             let looks: Vec<segpick::Look> = examples.iter().map(|e| segpick::look(&sd.smooth, w, h, e, 1.0, stats)).collect();
+            let wrong_looks: Vec<segpick::Look> = wrong_pix.iter().map(|e| segpick::look(&sd.smooth, w, h, e, 1.0, stats)).collect();
             // Parts of the slice in which an example is about 43 of SAM's
             // 1024 pixels wide, sixteen at most, overlapping by three
             // examples so each object is whole in one of them.
@@ -693,25 +742,22 @@ impl Sam {
             };
             // What the examples look like to SAM: their mean embedding, from
             // the first part that holds each one whole.
-            let mut protos: Vec<Vec<f32>> = vec![];
             let mut embeds: Vec<Option<(Vec<f32>, usize, usize)>> = vec![None; rects.len()];
-            let cell = |x: usize, y: usize, r: [usize; 4], n: usize| (((y - r[1]) * n / (r[3] - r[1])).min(n - 1)) * n + ((x - r[0]) * n / (r[2] - r[0])).min(n - 1);
-            for e in &examples {
-                let Some(k) = rects.iter().position(|r| e.iter().all(|&i| i % w >= r[0] && i % w < r[2] && i / w >= r[1] && i / w < r[3])) else { continue };
+            let mut proto_of = |e: &[usize]| -> Result<Option<Vec<f32>>> {
+                let Some(k) = rects.iter().position(|r| e.iter().all(|&i| i % w >= r[0] && i % w < r[2] && i / w >= r[1] && i / w < r[3])) else { return Ok(None) };
                 if embeds[k].is_none() {
                     embeds[k] = Some(self.tile(p, &sd, rects[k], w)?.embedding());
                 }
                 let (emb, c, n) = embeds[k].as_ref().unwrap();
-                let mut proto = vec![0f32; *c];
-                for &i in e.iter() {
-                    let g = cell(i % w, i / w, rects[k], *n);
-                    for (ch, o) in proto.iter_mut().enumerate() {
-                        *o += emb[ch * n * n + g];
-                    }
-                }
-                let norm = proto.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
-                proto.iter_mut().for_each(|x| *x /= norm);
-                protos.push(proto);
+                Ok(Some(mean_embedding(emb, *c, *n, e, w, rects[k])))
+            };
+            let mut protos: Vec<Vec<f32>> = vec![];
+            for e in &examples {
+                protos.extend(proto_of(e)?);
+            }
+            let mut wrong_protos: Vec<Vec<f32>> = vec![];
+            for e in &wrong_pix {
+                wrong_protos.extend(proto_of(e)?);
             }
             if protos.is_empty() {
                 bail!("示例太大了，这一层放不下完整的一个");
@@ -730,7 +776,12 @@ impl Sam {
                 let mut sim = vec![0f32; n * n];
                 for (g, s) in sim.iter_mut().enumerate() {
                     let norm = (0..c).map(|ch| emb[ch * n * n + g].powi(2)).sum::<f32>().sqrt().max(1e-6);
-                    *s = protos.iter().map(|pr| (0..c).map(|ch| emb[ch * n * n + g] * pr[ch]).sum::<f32>() / norm).fold(f32::MIN, f32::max);
+                    let like = |ps: &[Vec<f32>]| ps.iter().map(|pr| (0..c).map(|ch| emb[ch * n * n + g] * pr[ch]).sum::<f32>() / norm).fold(f32::MIN, f32::max);
+                    *s = like(&protos);
+                    // Nearer something wrong than any example: not a place to click.
+                    if like(&wrong_protos) > *s {
+                        *s = 0.0;
+                    }
                 }
                 // The local maxima are clicked, most alike first.
                 let mut seeds: Vec<(usize, f32)> = vec![];
@@ -763,7 +814,14 @@ impl Sam {
                         continue;
                     }
                     let look = segpick::look(&sd.smooth, w, h, &pix, 1.0, stats);
-                    let score = segpick::alike(&look, &looks) * ((s - 0.3) / 0.4).clamp(0.3, 1.0) * (q / 0.7).clamp(0.0, 1.0);
+                    let mut score = segpick::taught(&look, &looks[..own], &looks[own..], &wrong_looks) * ((s - 0.3) / 0.4).clamp(0.3, 1.0) * (q / 0.7).clamp(0.0, 1.0);
+                    if !wrong_protos.is_empty() {
+                        let me = mean_embedding(&emb, c, n, &pix, w, rect);
+                        let like = |ps: &[Vec<f32>]| ps.iter().map(|pr| pr.iter().zip(&me).map(|(a, b)| a * b).sum::<f32>()).fold(f32::MIN, f32::max);
+                        if like(&wrong_protos) > like(&protos) {
+                            score *= 0.2;
+                        }
+                    }
                     if score >= 0.002 {
                         found.push(Found::from_pixels(&pix, w, (0, 0), score, look));
                     }
@@ -771,8 +829,11 @@ impl Sam {
             }
         }
         progress(1, 1);
-        let found = segpick::dedupe(found);
-        *self.found.lock().unwrap() = Some(LastFound { token: req.token, z: req.z, found: found.clone() });
+        // What was kept before stays, in front.
+        let mut all = right.clone();
+        all.extend(segpick::dedupe(found));
+        let found = all;
+        *self.found.lock().unwrap() = Some(LastFound { token: req.token, z: req.z, found: found.clone(), right, wrong });
         Ok(found)
     }
 }

@@ -231,13 +231,28 @@ pub struct SimilarReq {
     pub hi: f32,
     #[serde(default)]
     pub denoise: Denoise,
+    /// Search again, learning from the last search's candidates.
+    #[serde(default)]
+    pub again: Option<Again>,
 }
 
-/// The candidates of the last search, kept for `sam_similar_apply`.
+/// What the user made of the last search: the numbers of the candidates
+/// that were right and of those that were not.
+#[derive(Deserialize, Default, Clone)]
+pub struct Again {
+    pub keep: Vec<usize>,
+    pub drop: Vec<usize>,
+}
+
+/// The candidates of the last search, kept for `sam_similar_apply`, and
+/// what earlier rounds of it taught: `right` are further examples, `wrong`
+/// what the examples are not.
 pub struct LastFound {
     pub token: u64,
     pub z: usize,
     pub found: Vec<crate::segpick::Found>,
+    pub right: Vec<crate::segpick::Found>,
+    pub wrong: Vec<crate::segpick::Found>,
 }
 
 /// The mask of the last prediction, kept for `sam_apply`.

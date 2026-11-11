@@ -293,6 +293,34 @@ pub fn alike(c: &Look, examples: &[Look]) -> f32 {
     (-d2 / 2.0).exp()
 }
 
+/// How close two looks are, 1 for the same.
+fn near(a: &Look, b: &Look) -> f32 {
+    if (a.contrast > 0.0) != (b.contrast > 0.0) {
+        return 0.0;
+    }
+    let terms: [(fn(&Look) -> f32, f32); 5] =
+        [(|l| l.area.max(1.0).ln(), 0.35), (|l| l.contrast.abs().max(0.1).ln(), 0.4), (|l| l.level * l.contrast.signum(), 1.0), (|l| l.elongation.ln(), 0.3), (|l| l.fill, 0.15)];
+    let d2: f32 = terms.iter().map(|(f, tol)| ((f(a) - f(b)) / tol).powi(2)).sum();
+    (-d2 / 2.0).exp()
+}
+
+/// What being told "not these" leaves of a score: all of it when the
+/// candidate is nearer an example (`p`) than anything wrong (`n`), towards
+/// nothing the more it is one of the wrong ones.
+fn not_wrong_by(n: f32, p: f32) -> f32 {
+    if n > p { (1.0 - n).max(0.02) } else { 1.0 }
+}
+
+/// A candidate's score after rounds of correction: like the user's own
+/// examples as `alike` has it, or close to one that was kept (which does
+/// not widen what counts as alike), and not one of the `wrong` ones.
+pub fn taught(c: &Look, own: &[Look], kept: &[Look], wrong: &[Look]) -> f32 {
+    let s = kept.iter().map(|e| near(c, e)).fold(alike(c, own), f32::max);
+    let n = wrong.iter().map(|e| near(c, e)).fold(0f32, f32::max);
+    let p = own.iter().chain(kept).map(|e| near(c, e)).fold(0f32, f32::max);
+    s * not_wrong_by(n, p)
+}
+
 /// Centres of blobs of about `diameter` pixels, bright or dark, strongest
 /// first: local maxima of a difference of Gaussians, with their response.
 pub fn blob_seeds(v: &[f32], w: usize, h: usize, diameter: f32, bright: bool) -> Vec<(usize, f32)> {
@@ -354,6 +382,12 @@ impl Found {
         Found { rect: [ox + x0, oy + y0, bw, bh], mask, score, look }
     }
 
+    /// Its pixels in an image `w` wide.
+    pub fn pixels(&self, w: usize) -> Vec<usize> {
+        let [x0, y0, bw, _] = self.rect;
+        self.mask.iter().enumerate().filter(|(_, m)| **m).map(|(i, _)| (y0 + i / bw) * w + x0 + i % bw).collect()
+    }
+
     fn overlap(&self, o: &Found) -> usize {
         let (ax0, ay0, ax1, ay1) = (self.rect[0], self.rect[1], self.rect[0] + self.rect[2], self.rect[1] + self.rect[3]);
         let (bx0, by0, bx1, by1) = (o.rect[0], o.rect[1], o.rect[0] + o.rect[2], o.rect[1] + o.rect[3]);
@@ -391,14 +425,16 @@ pub fn dedupe(mut found: Vec<Found>) -> Vec<Found> {
 /// window `v` (lightly smoothed): seeds at the examples' size, each grown
 /// to the extremal region nearest that size, scored against the examples.
 /// `scale`: image pixels per window pixel. Candidates scoring under `min`
-/// or covering `taken` pixels are dropped.
-pub fn find_blobs(v: &[f32], w: usize, h: usize, examples: &[Vec<usize>], scale: f32, taken: &[bool], min: f32) -> Vec<Found> {
+/// or covering `taken` pixels are dropped. `kept` are candidates of an
+/// earlier round that were right and `wrong` those that were not.
+pub fn find_blobs(v: &[f32], w: usize, h: usize, examples: &[Vec<usize>], kept: &[Vec<usize>], wrong: &[Vec<usize>], scale: f32, taken: &[bool], min: f32) -> Vec<Found> {
     if examples.is_empty() {
         return vec![];
     }
     let (med, sd) = median_sd(v);
     let stats = (med, sd, noise_sigma(v, w, h));
     let looks: Vec<Look> = examples.iter().map(|p| look(v, w, h, p, scale, stats)).collect();
+    let [kept, wrong] = [kept, wrong].map(|l| l.iter().filter(|p| !p.is_empty()).map(|p| look(v, w, h, p, scale, stats)).collect::<Vec<Look>>());
     let mean_area = looks.iter().map(|l| l.area / (scale * scale)).sum::<f32>() / looks.len() as f32;
     let diameter = 2.0 * (mean_area / std::f32::consts::PI).sqrt();
     let bright = looks.iter().filter(|l| l.contrast > 0.0).count() * 2 >= looks.len();
@@ -422,7 +458,7 @@ pub fn find_blobs(v: &[f32], w: usize, h: usize, examples: &[Vec<usize>], scale:
             }
             let pix: Vec<usize> = r.pix.iter().map(|&i| (y0 + i / ww) * w + x0 + i % ww).collect();
             let l = look(v, w, h, &pix, scale, stats);
-            let s = alike(&l, &looks);
+            let s = taught(&l, &looks, &kept, &wrong);
             if best.as_ref().is_none_or(|b| s > b.0) {
                 best = Some((s, pix, l));
             }
@@ -457,6 +493,20 @@ mod tests {
                 v
             })
             .collect()
+    }
+
+    #[test]
+    fn corrections_teach_without_widening() {
+        let l = |area: f32, contrast: f32| Look { area, contrast, level: contrast / 2.0, elongation: 1.2, fill: 0.7, cx: 0.0, cy: 0.0 };
+        let (own, kept, wrong) = ([l(100.0, 10.0)], [l(300.0, 10.0)], [l(160.0, 5.0)]);
+        // One like a wrong one loses nearly all its score; without wrong
+        // ones nothing changes.
+        assert!(taught(&l(155.0, 5.2), &own, &[], &wrong) < 0.2 * taught(&l(155.0, 5.2), &own, &[], &[]));
+        assert_eq!(taught(&l(105.0, 9.5), &own, &[], &wrong), alike(&l(105.0, 9.5), &own));
+        // One like a kept one is found, one far beyond it is not.
+        assert!(taught(&l(310.0, 10.0), &own, &kept, &[]) > 0.9);
+        assert!(taught(&l(310.0, 10.0), &own, &[], &[]) < 0.3);
+        assert!(taught(&l(900.0, 10.0), &own, &kept, &[]) < 0.05);
     }
 
     #[test]
@@ -497,7 +547,7 @@ mod tests {
         for &i in &ex.pix {
             taken[i] = true;
         }
-        let found = find_blobs(&v, w, h, &[ex.pix], 1.0, &taken, 0.5);
+        let found = find_blobs(&v, w, h, &[ex.pix], &[], &[], 1.0, &taken, 0.5);
         let at = |x: f32, y: f32| found.iter().any(|f| (f.rect[0] as f32 + f.rect[2] as f32 / 2.0 - x).hypot(f.rect[1] as f32 + f.rect[3] as f32 / 2.0 - y) < 4.0);
         for b in &blobs[1..5] {
             assert!(at(b.0, b.1), "missed the blob at {}, {}: {found:?}", b.0, b.1);

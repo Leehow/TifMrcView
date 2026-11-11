@@ -63,8 +63,20 @@ fn main() -> anyhow::Result<()> {
     if a[3] != "-" {
         let min: f32 = a[3].parse()?;
         let t = std::time::Instant::now();
-        let found = s.similar(&sam::SimilarReq { token: 1, z: 0, c: 0, t: 0, lo, hi, denoise: dn }, (w, h, 1), |z| vals.slice(z), &examples, &taken, |k, n| eprintln!("  part {k}/{n}"))?;
+        let found = s.similar(&sam::SimilarReq { token: 1, z: 0, c: 0, t: 0, lo, hi, denoise: dn, again: None }, (w, h, 1), |z| vals.slice(z), &examples, &taken, |k, n| eprintln!("  part {k}/{n}"))?;
         println!("{} candidates in {:.1?}; {} at or over {min}", found.len(), t.elapsed(), found.iter().filter(|f| f.score >= min).count());
+        // A second round: the weaker half of what passed is called wrong.
+        let found = if std::env::var_os("TMV_AGAIN").is_some() {
+            let on: Vec<usize> = (0..found.len()).filter(|&i| found[i].score >= min).collect();
+            let (keep, drop) = on.split_at(on.len() / 2);
+            let t = std::time::Instant::now();
+            let again = sam::Again { keep: keep.to_vec(), drop: drop.to_vec() };
+            let next = s.similar(&sam::SimilarReq { token: 1, z: 0, c: 0, t: 0, lo, hi, denoise: dn, again: Some(again) }, (w, h, 1), |z| vals.slice(z), &examples, &taken, |_, _| {})?;
+            println!("again, {} kept and {} called wrong: {} candidates in {:.1?}; {} at or over {min}", keep.len(), drop.len(), next.len(), t.elapsed(), next.iter().filter(|f| f.score >= min).count());
+            next
+        } else {
+            found
+        };
         for f in &found {
             if f.score >= min { outline(f.rect, &f.mask, [60, 230, 90]); } else if f.score >= 0.05 { outline(f.rect, &f.mask, [220, 180, 0]); }
         }
