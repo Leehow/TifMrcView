@@ -29,6 +29,7 @@ pub mod filaments;
 pub mod gallery;
 pub mod marks;
 pub mod membranes;
+pub mod near;
 pub mod own_map;
 pub mod paint;
 pub mod pick;
