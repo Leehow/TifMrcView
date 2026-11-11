@@ -691,7 +691,7 @@ pub struct Card {
     #[serde(default)]
     pub offset: f64,
     /// A single compact, not stretched particle: worth offering as the
-    /// particle (see `is_likely`).
+    /// particle (see `is_likely`). Information only: `choose` goes by `Trial`s.
     pub likely: bool,
 }
 
@@ -1031,7 +1031,7 @@ fn rank(c: &Card) -> f64 {
     c.compact * c.members as f64 + if c.likely { 1e12 } else { 0.0 }
 }
 
-/// Two likely cards show the same particle when their best masked normalised
+/// Two cards show the same particle when their best masked normalised
 /// cross-correlation (see `same_kind`) is at least this. Measured on made-up
 /// cards (`sta::tests::cards_of_the_same_particle_correlate`): the same
 /// object turned, smoothed, noisy and at another voxel size 0.93 to 0.96; a
@@ -1114,17 +1114,16 @@ pub fn same_kind(a: CardCube, b: CardCube) -> f64 {
     (best as f64).clamp(-1.0, 1.0)
 }
 
-/// `same_kind` between the likely cards, as a matrix indexed like `cards`
-/// (1 on the diagonal; the pairs that involve a card that is not likely are
-/// not computed and are 0). Reads each likely card's file; the cards are
-/// usually two, a pair takes about a second.
-pub fn likeness(cards: &[Card]) -> Result<Vec<Vec<f64>>> {
-    let likely: Vec<usize> = (0..cards.len()).filter(|i| cards[*i].likely).collect();
-    let cubes: Vec<Vec<f32>> = likely.iter().map(|i| read_card(&cards[*i].path).map(|c| c.0)).collect::<Result<_>>()?;
+/// `same_kind` between the cards `which` (indices into `cards`), as a matrix
+/// indexed like `cards` (1 on the diagonal; the pairs that involve another
+/// card are not computed and are 0). Reads each of those cards' file; they are
+/// usually two or three, a pair takes about a second.
+pub fn likeness(cards: &[Card], which: &[usize]) -> Result<Vec<Vec<f64>>> {
+    let cubes: Vec<Vec<f32>> = which.iter().map(|i| read_card(&cards[*i].path).map(|c| c.0)).collect::<Result<_>>()?;
     let mut m = vec![vec![0.0; cards.len()]; cards.len()];
-    for (k, &i) in likely.iter().enumerate() {
+    for (k, &i) in which.iter().enumerate() {
         m[i][i] = 1.0;
-        for (l, &j) in likely.iter().enumerate().skip(k + 1) {
+        for (l, &j) in which.iter().enumerate().skip(k + 1) {
             m[i][j] = same_kind(CardCube::of(&cards[i], &cubes[k]), CardCube::of(&cards[j], &cubes[l]));
             m[j][i] = m[i][j];
         }
@@ -1240,62 +1239,52 @@ pub fn good(trials: &[Trial]) -> Vec<usize> {
 pub struct Chosen {
     /// The card to use.
     pub id: usize,
-    /// The likely cards of its kind (it among them), ascending.
+    /// The good cards of its kind (it among them), ascending.
     pub same: Vec<usize>,
-    /// The likely cards of other kinds, ascending (empty when there is one kind).
+    /// The good cards of other kinds, ascending (always empty: with several
+    /// kinds `choose` leaves the choice to the user).
     pub other: Vec<usize>,
 }
 
-/// The card to take without asking. The likely cards are grouped into kinds
+/// The card to take without asking: of the `good` ones (see `trials`) the
+/// one with the highest strength, when they all show one kind of particle
 /// (connected groups of cards whose pairwise `similar[i][j]`, see `likeness`,
-/// is `SAME` or more). One kind: its best card, the one with the most members
-/// (ties: the larger `compact`, then the first). Several kinds: the same for the
-/// heaviest kind (weight: the sum of `compact × members` of its cards) when it
-/// weighs at least `DOMINANT` times the second heaviest, and `other` says which
-/// cards show the rest; otherwise None, and the user chooses.
-pub fn choose(cards: &[Card], similar: &[Vec<f64>]) -> Option<Chosen> {
-    let likely: Vec<usize> = (0..cards.len()).filter(|i| cards[*i].likely).collect();
-    if likely.is_empty() {
+/// is `SAME` or more; only the good cards need entries). Several kinds, or no
+/// trial that worked: None, and the user chooses. Ties: the lower id.
+pub fn choose(cards: &[Card], trials: &[Trial], similar: &[Vec<f64>]) -> Option<Chosen> {
+    let strong: std::collections::HashMap<usize, f64> = trials.iter().filter(|t| t.ok).map(|t| (t.card, t.strength)).collect();
+    let good: Vec<usize> = good(trials).into_iter().filter(|i| *i < cards.len()).collect();
+    if good.is_empty() {
         return None;
     }
     let alike = |i: usize, j: usize| similar.get(i).and_then(|r| r.get(j)).is_some_and(|s| *s >= SAME);
-    // Kinds: the first likely card of each group claims the cards linked to it.
-    let mut kinds: Vec<Vec<usize>> = vec![];
+    // Kinds: the first good card of each group claims the cards linked to it.
+    let mut kinds = 0;
     let mut seen = vec![false; cards.len()];
-    for &s in &likely {
+    for &s in &good {
         if seen[s] {
             continue;
         }
+        kinds += 1;
         seen[s] = true;
         let mut group = vec![s];
         let mut at = 0;
         while at < group.len() {
             let i = group[at];
             at += 1;
-            for &j in &likely {
+            for &j in &good {
                 if !seen[j] && (alike(i, j) || alike(j, i)) {
                     seen[j] = true;
                     group.push(j);
                 }
             }
         }
-        group.sort_unstable();
-        kinds.push(group);
     }
-    let weight = |k: &Vec<usize>| k.iter().map(|i| cards[*i].compact * cards[*i].members as f64).sum::<f64>();
-    let mut order: Vec<usize> = (0..kinds.len()).collect();
-    order.sort_by(|a, b| weight(&kinds[*b]).total_cmp(&weight(&kinds[*a])).then(a.cmp(b)));
-    if order.len() > 1 && weight(&kinds[order[0]]) < DOMINANT * weight(&kinds[order[1]]) {
+    if kinds > 1 {
         return None;
     }
-    let same = kinds[order[0]].clone();
-    let id = same
-        .iter()
-        .copied()
-        .max_by(|&i, &j| cards[i].members.cmp(&cards[j].members).then(cards[i].compact.total_cmp(&cards[j].compact)).then(j.cmp(&i)))?;
-    let mut other: Vec<usize> = order[1..].iter().flat_map(|k| kinds[*k].iter().copied()).collect();
-    other.sort_unstable();
-    Some(Chosen { id, same, other })
+    let id = good.iter().copied().max_by(|&i, &j| strong[&i].total_cmp(&strong[&j]).then(j.cmp(&i)))?;
+    Some(Chosen { id, same: good, other: vec![] })
 }
 
 /// A place on a drawn shape (see `shape`).
@@ -1875,49 +1864,94 @@ mod card_tests {
         Card { id, diameter_a: 160.0, measured_a: 150.0, voxel_a: 12.0, members, share: 0.3, path: String::new(), compact, elongation: 1.1, blobs: 1, offset: 0.0, likely }
     }
 
+    // FSC curves (shells 0 to 16, box 32) of the coarse averages that real cards gave as templates.
+    const FSC0: [f64; 17] = [1.0, 0.986, 0.995, 0.983, 0.981, 0.948, 0.879, 0.882, 0.806, 0.740, 0.634, 0.569, 0.498, 0.510, 0.444, 0.336, 0.242];
+    const FSC1: [f64; 17] = [1.0, 0.997, 0.996, 0.992, 0.981, 0.966, 0.930, 0.872, 0.865, 0.832, 0.754, 0.668, 0.632, 0.406, 0.228, 0.034, 0.000];
+    const FSC3: [f64; 17] = [1.0, 0.979, 0.936, 0.758, 0.578, 0.428, 0.270, 0.234, 0.199, 0.140, 0.152, 0.057, 0.065, 0.051, 0.083, 0.035, 0.005];
+    const FSC4: [f64; 17] = [1.0, 0.988, 0.995, 0.966, 0.941, 0.915, 0.448, 0.647, 0.433, 0.137, 0.032, 0.119, 0.017, -0.001, -0.017, 0.034, 0.016];
+    const FSC7: [f64; 17] = [1.0, 0.998, 0.995, 0.964, 0.934, 0.840, 0.606, 0.310, 0.238, 0.074, -0.019, 0.012, 0.009, 0.038, 0.030, -0.022, -0.009];
+
+    fn worked(card: usize, fsc: &[f64], voxel_a: f64) -> Trial {
+        Trial { card, ok: true, reason: None, particles: 100, candidates: 300, fsc: fsc.to_vec(), voxel_a, strength: strength(fsc, voxel_a), seconds: 1.0 }
+    }
+
+    fn failed(card: usize) -> Trial {
+        Trial { card, ok: false, reason: Some("没有找到明显像模板的颗粒".into()), particles: 0, candidates: 0, fsc: vec![], voxel_a: 10.0, strength: 0.0, seconds: 1.0 }
+    }
+
     #[test]
-    fn a_dominant_kind_among_the_likely_cards_is_chosen() {
+    fn strength_is_the_area_under_the_fsc() {
+        // The areas of the real curves (the task quoted them to two digits, a few percent off for cards 3 and 4).
+        let near = |a: f64, b: f64| assert!((a / b - 1.0).abs() < 0.01, "{a} vs {b}");
+        near(strength(&FSC1, 13.02), 0.02677);
+        near(strength(&FSC0, 17.36), 0.02058);
+        near(strength(&FSC3, 9.77), 0.01590);
+        near(strength(&FSC7, 13.02), 0.01452);
+        near(strength(&FSC4, 17.36), 0.01204);
+        // Shell 0 and negative values do not count; nothing to measure gives 0.
+        assert_eq!(strength(&[1.0, -0.5, -0.1], 10.0), 0.0);
+        assert!((strength(&[1.0, 1.0, 1.0], 10.0) - 2.0 / 40.0).abs() < 1e-12);
+        assert_eq!(strength(&[], 10.0), 0.0);
+        assert_eq!(strength(&[1.0], 10.0), 0.0);
+    }
+
+    #[test]
+    fn the_card_that_makes_the_best_average_is_chosen() {
         let sim = |v: &[&[f64]]| -> Vec<Vec<f64>> { v.iter().map(|r| r.to_vec()).collect() };
-        let id = |c: Option<Chosen>| c.map(|c| c.id);
-        // Two cards of one kind: the one with more members wins whatever the order.
-        let two = [likely_card(0, true, 7.72, 79), likely_card(1, true, 10.14, 52)];
-        assert_eq!(id(choose(&two, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(0));
-        let swapped = [likely_card(0, true, 10.14, 52), likely_card(1, true, 7.72, 79)];
-        assert_eq!(id(choose(&swapped, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
-        let reversed = [likely_card(0, true, 5.0, 40), likely_card(1, true, 10.14, 52)];
-        assert_eq!(id(choose(&reversed, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
-        // Equal members: the larger compact.
-        let tie = [likely_card(0, true, 5.0, 50), likely_card(1, true, 6.0, 50)];
-        assert_eq!(id(choose(&tie, &sim(&[&[1.0, 0.8], &[0.8, 1.0]]))), Some(1));
-        // Two kinds of similar weight (or alike by SAME - 0.01): the user decides.
-        assert_eq!(choose(&two, &sim(&[&[1.0, 0.3], &[0.3, 1.0]])), None);
-        assert_eq!(choose(&two, &sim(&[&[1.0, SAME - 0.01], &[SAME - 0.01, 1.0]])), None);
-        assert_eq!(id(choose(&two, &sim(&[&[1.0, SAME], &[SAME, 1.0]]))), Some(0));
-        // Two kinds, one at least DOMINANT times the other (weights 600 and 200, then 600 and 201).
-        let heavy = [likely_card(0, true, 10.0, 60), likely_card(1, true, 5.0, 40)];
-        let apart = sim(&[&[1.0, 0.0], &[0.0, 1.0]]);
-        assert_eq!(choose(&heavy, &apart), Some(Chosen { id: 0, same: vec![0], other: vec![1] }));
-        let nearly = [likely_card(0, true, 10.0, 60), likely_card(1, true, 5.025, 40)];
-        assert_eq!(choose(&nearly, &apart), None);
-        // The real case: two ribosome cards (14.07 × 47, 8.52 × 75; alike 0.88) and a
-        // small blob (7.81 × 34; 0.3 and 0.5 to them): 1300 against 266, so the
-        // ribosome, and of its cards the one with 75 members (not the 47, which
-        // has the larger compact × members).
-        let real = [likely_card(0, true, 14.07, 47), likely_card(1, true, 8.52, 75), likely_card(2, true, 7.81, 34)];
-        let m = sim(&[&[1.0, 0.88, 0.3], &[0.88, 1.0, 0.5], &[0.3, 0.5, 1.0]]);
-        assert_eq!(choose(&real, &m), Some(Chosen { id: 1, same: vec![0, 1], other: vec![2] }));
-        // The odd card first or last makes no difference.
-        let odd_first = [likely_card(0, true, 7.81, 34), likely_card(1, true, 14.07, 47), likely_card(2, true, 8.52, 75)];
-        let m = sim(&[&[1.0, 0.3, 0.5], &[0.3, 1.0, 0.88], &[0.5, 0.88, 1.0]]);
-        assert_eq!(choose(&odd_first, &m), Some(Chosen { id: 2, same: vec![1, 2], other: vec![0] }));
-        // A chain is one kind: 0-2 and 2-3 alike, 0-3 not. Cards that are not likely do not count.
-        let three = [likely_card(0, true, 8.0, 60), likely_card(1, false, 12.0, 90), likely_card(2, true, 9.0, 50), likely_card(3, true, 7.6, 40)];
-        let m = sim(&[&[1.0, 0.0, 0.9, 0.5], &[0.0; 4], &[0.9, 0.0, 1.0, 0.75], &[0.5, 0.0, 0.75, 1.0]]);
-        assert_eq!(choose(&three, &m), Some(Chosen { id: 0, same: vec![0, 2, 3], other: vec![] }));
-        // One likely card (the others may be anything); none; empty; no matrix needed for one.
-        assert_eq!(choose(&[likely_card(0, false, 12.0, 90), likely_card(1, true, 8.0, 50)], &[]), Some(Chosen { id: 1, same: vec![1], other: vec![] }));
-        assert_eq!(choose(&[likely_card(0, false, 12.0, 90)], &[]), None);
-        assert_eq!(choose(&[], &[]), None);
+        let cards: Vec<Card> = (0..9).map(|i| likely_card(i, i % 2 == 0, 8.0, 50)).collect();
+        // The measured case: cards 2, 5, 6 and 8 find nothing; 0 and 1 are the same particle (0.88).
+        let trials = [
+            worked(0, &FSC0, 17.36),
+            worked(1, &FSC1, 13.02),
+            failed(2),
+            worked(3, &FSC3, 9.77),
+            worked(4, &FSC4, 17.36),
+            failed(5),
+            failed(6),
+            worked(7, &FSC7, 13.02),
+            failed(8),
+        ];
+        assert_eq!(good(&trials), vec![0, 1]);
+        let mut m = vec![vec![0.0; 9]; 9];
+        for i in 0..9 {
+            m[i][i] = 1.0;
+        }
+        m[0][1] = 0.88;
+        m[1][0] = 0.88;
+        assert_eq!(choose(&cards, &trials, &m), Some(Chosen { id: 1, same: vec![0, 1], other: vec![] }));
+        // Another order of the cards makes no difference.
+        let swapped = [worked(0, &FSC1, 13.02), worked(1, &FSC0, 17.36)];
+        assert_eq!(choose(&cards, &swapped, &sim(&[&[1.0, 0.88], &[0.88, 1.0]])).map(|c| c.id), Some(0));
+        // The same two cards are two kinds when they do not look alike (0.53 at most): the user decides.
+        m[0][1] = 0.53;
+        m[1][0] = 0.53;
+        assert_eq!(choose(&cards, &trials, &m), None);
+        // The best alone: the others are too weak (card 3 at 0.0159 is 0.59 of card 1).
+        assert_eq!(choose(&cards, &[worked(1, &FSC1, 13.02), worked(3, &FSC3, 9.77), failed(2)], &[]), Some(Chosen { id: 1, same: vec![1], other: vec![] }));
+        // Only cards 4 and 7 worked: within CLOSE of each other (0.0120 and 0.0145), so both are good;
+        // one kind picks the stronger (7), two kinds leave the choice.
+        let weak = [worked(4, &FSC4, 17.36), worked(7, &FSC7, 13.02)];
+        assert_eq!(good(&weak), vec![4, 7]);
+        let mut m = vec![vec![0.0; 9]; 9];
+        m[4][7] = 0.8;
+        m[7][4] = 0.8;
+        assert_eq!(choose(&cards, &weak, &m), Some(Chosen { id: 7, same: vec![4, 7], other: vec![] }));
+        m[4][7] = 0.3;
+        m[7][4] = 0.3;
+        assert_eq!(choose(&cards, &weak, &m), None);
+        // The alikeness is read either way round, and a chain is one kind (SAME is enough).
+        let mut m = vec![vec![0.0; 9]; 9];
+        m[7][4] = SAME;
+        assert_eq!(choose(&cards, &weak, &m).map(|c| c.id), Some(7));
+        // Nothing worked; nothing tried.
+        assert_eq!(choose(&cards, &[failed(0), failed(1)], &[]), None);
+        assert_eq!(choose(&cards, &[], &[]), None);
+        assert_eq!(choose(&[], &[], &[]), None);
+        // Equal strength: the lower id.
+        let tie = [worked(2, &FSC1, 13.02), worked(5, &FSC1, 13.02)];
+        let mut m = vec![vec![0.0; 9]; 9];
+        m[2][5] = 0.9;
+        assert_eq!(choose(&cards, &tie, &m).map(|c| c.id), Some(2));
     }
 
     const N: usize = 32;

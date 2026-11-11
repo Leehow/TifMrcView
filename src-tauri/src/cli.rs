@@ -53,14 +53,21 @@ USAGE
   full detail + RELION 5 folder), survey (quick look).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
-  does) or tomograms that tmv tomo --for sta wrote. It runs in two steps:
+  does) or tomograms that tmv tomo --for sta wrote. It runs in three steps:
   class-average "cards" of the blobs found go to <out>/cards/ (--out defaults
-  to <first input>_sta beside it); then, with --pick N (or by itself when one
-  card is likely, or several are and one kind of particle weighs 3 times the
-  next: it takes that kind's card with most members, naming the others), the average of
-  everything that looks like card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+  to <first input>_sta beside it); then every card (at most 12) is tried as the
+  template of a coarse run (<out>/trials/card_N/, kept in cards/trials.json)
+  and judged by what it gives: a card that is a layer, a line or a small blob
+  finds no group of particles that stands out, a particle gives an average
+  whose two halves agree far out (the "agreement": the area under their FSC,
+  1/Å). With --pick N (which skips the trials), or by itself when the cards
+  within 0.75 of the best agreement show one kind of particle (it takes the
+  best of them, naming the others), the average of everything that looks like
+  card N goes to <out>/ (average.mrc, half1.mrc, half2.mrc, particles.csv, sta.json).
+  With several kinds among the good cards it stops with exit status 2 and the
+  trials in the JSON: look at the cards, then rerun with --pick N.
   Progress counts the steps of the whole run ("第 k/N 步"). The JSON has
-  resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
+  trials (per card: ok, reason, particles, agreement, fsc), resolutionA, particles, fsc, diameterA (1.33 × the card's size, as
   diameterFrom "card" says), searched ("look" or "raw": the tomogram the template
   was searched on) with searchVoxelA, ctfLimited (true when the FSC has a dip
   that rises again, a local minimum below 0.5 followed by a value 0.15 higher:
@@ -84,10 +91,6 @@ OUTPUT
 
 /// Exit status when the user must choose before the command can go on.
 const NEEDS_CHOICE: i32 = 2;
-
-/// `tmv sta` asks `run_template` for this times the card's size: the blobs
-/// the cards are made from read small (a 210 Å card goes with a 280 Å particle).
-const DIAMETER_FACTOR: f64 = 1.33;
 
 /// Runs the tool with `args` (without the program name); returns the exit status.
 pub fn main(args: Vec<String>) -> i32 {
@@ -581,26 +584,33 @@ fn sta_out(o: &Opts, first: &str) -> Result<PathBuf> {
     Ok(p.with_file_name(format!("{stem}_sta")))
 }
 
-/// How many steps `tmv sta` counts: finding the blobs and making the cards
-/// (two, when the cards are made now), then the search, the first alignment
-/// and the fine one.
-fn sta_steps(with_cards: bool) -> usize {
-    if with_cards {
-        5
-    } else {
-        3
+/// What a run of `tmv sta` does, to count its steps: making the cards (two
+/// steps), trying them as templates (one), then the search, the first
+/// alignment and the fine one.
+#[derive(Clone, Copy)]
+struct Plan {
+    cards: bool,
+    trials: bool,
+}
+
+impl Plan {
+    fn steps(self) -> usize {
+        3 + if self.cards { 2 } else { 0 } + usize::from(self.trials)
     }
 }
 
 /// A progress label of the library, prefixed with the step of the whole run
 /// ("第 k/N 步 · …", as `tmv tomo` does). The steps follow the sequence of
-/// labels `sta::project::cards` and `run_template` report; others pass unchanged.
-fn sta_label(label: &str, with_cards: bool) -> String {
-    let after = if with_cards { 2 } else { 0 };
+/// labels `sta::project::cards`, `trials` and `run_template` report; others pass unchanged.
+fn sta_label(label: &str, plan: Plan) -> String {
+    let cards = if plan.cards { 2 } else { 0 };
+    let after = cards + usize::from(plan.trials);
     let step = if label.starts_with("找颗粒") {
         1
     } else if label.starts_with("裁出颗粒") || label.starts_with("分类") {
         2
+    } else if label.starts_with("试跑卡片") {
+        cards + 1
     } else if label.starts_with("搜索") {
         after + 1
     } else if label.starts_with("粗对齐") {
@@ -610,7 +620,7 @@ fn sta_label(label: &str, with_cards: bool) -> String {
     } else {
         return label.to_string();
     };
-    format!("第 {step}/{} 步 · {label}", sta_steps(with_cards))
+    format!("第 {step}/{} 步 · {label}", plan.steps())
 }
 
 /// The closing line of `tmv sta` on stderr.
@@ -626,14 +636,16 @@ fn sta_summary(r: &crate::sta::project::Report) -> String {
     }
 }
 
-/// The card to take without asking (see `sta::project::choose`): the only
-/// likely one, or the best card of the dominant kind among several likely
-/// ones (compared now, about three seconds for a pair; a card that cannot be
-/// read leaves the choice to the user). Else None.
-fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<crate::sta::project::Chosen> {
+/// The card to take without asking (see `sta::project::choose`): the one
+/// that gave the best average of the trials, when the cards close to it show
+/// one kind of particle (compared now when there are several, about a second
+/// for a pair; a card that cannot be read leaves the choice to the user).
+/// Else None.
+fn auto_pick(cards: &[crate::sta::project::Card], trials: &[crate::sta::project::Trial]) -> Option<crate::sta::project::Chosen> {
     use crate::sta::project as sp;
-    let similar = if cards.iter().filter(|c| c.likely).count() > 1 {
-        match sp::likeness(cards) {
+    let good = sp::good(trials);
+    let similar = if good.len() > 1 {
+        match sp::likeness(cards, &good) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("tmv sta: could not compare the cards ({e:#}): choose one yourself");
@@ -643,7 +655,7 @@ fn auto_pick(cards: &[crate::sta::project::Card]) -> Option<crate::sta::project:
     } else {
         vec![]
     };
-    sp::choose(cards, &similar)
+    sp::choose(cards, trials, &similar)
 }
 
 /// "0 and 1", "0, 1 and 3".
@@ -652,6 +664,24 @@ fn id_list(ids: &[usize]) -> String {
         [] => String::new(),
         [one] => one.to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+fn trial_json(t: &crate::sta::project::Trial) -> Value {
+    json!({
+        "card": t.card, "ok": t.ok, "reason": t.reason, "particles": t.particles, "candidates": t.candidates,
+        "agreement": (t.strength * 1e5).round() / 1e5, "voxelA": t.voxel_a, "fsc": t.fsc, "seconds": (t.seconds * 10.0).round() / 10.0,
+    })
+}
+
+/// The stderr line of one trial.
+fn trial_line(t: &crate::sta::project::Trial) -> String {
+    if t.ok {
+        format!("tmv sta: card {} as a template: {} particles, agreement {:.4}", t.card, t.particles, t.strength)
+    } else if t.reason.as_deref().is_some_and(|r| r.contains("分不出两群")) {
+        format!("tmv sta: card {} as a template: no group of particles stands out", t.card)
+    } else {
+        format!("tmv sta: card {} as a template: failed ({})", t.card, t.reason.as_deref().unwrap_or("unknown"))
     }
 }
 
@@ -775,8 +805,21 @@ fn sta(o: &Opts) -> Result<Value> {
     // The steps of the whole run are counted from here on (a tilt series
     // was made into a tomogram above, with its own count).
     let making = cards.is_empty();
-    let report = |s: &str, i: usize, n: usize| progress.report(&sta_label(s, making), i, n);
+    // The trials belong to these cards: reused with them, and only when they
+    // are all there (as many as the cards, at most `TRIALS`).
+    let trials_json = cards_dir.join("trials.json");
+    let mut trials: Vec<sp::Trial> = vec![];
+    if !making && pick.is_none() {
+        trials = std::fs::read(&trials_json).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        if trials.len() != cards.len().min(sp::TRIALS) || trials.iter().zip(0..).any(|(t, i)| t.card != i) {
+            trials.clear();
+        }
+    }
+    let plan = Plan { cards: making, trials: pick.is_none() && trials.is_empty() };
+    let report = |s: &str, i: usize, n: usize| progress.report(&sta_label(s, plan), i, n);
     if making {
+        // Trials of older cards say nothing about these.
+        let _ = std::fs::remove_file(&trials_json);
         cards = sp::cards(&sources, &cards_dir.to_string_lossy(), &report, &|_| {})?;
         std::fs::write(&inputs_json, serde_json::to_string_pretty(&stamps)?)?;
         progress.done();
@@ -793,19 +836,37 @@ fn sta(o: &Opts) -> Result<Value> {
         bail!("no card: no kind of blob with enough members was found in these tomograms (is it a tomogram made with --for sta, and does it hold particles?)");
     }
 
-    // Choosing.
+    // Choosing: each card is tried as the template of a coarse run, and the one that gives the best average wins.
+    let (dev, backend) = device();
+    let out_s = out.to_string_lossy().into_owned();
+    if pick.is_none() {
+        if plan.trials {
+            let dir = out.join("trials").to_string_lossy().into_owned();
+            let each = |t: &sp::Trial| {
+                progress.done();
+                eprintln!("{}", trial_line(t));
+            };
+            trials = crate::ctf_gpu::guarded(|| sp::trials(dev, &sources, &cards, &dir, &report, &|_| {}, &each))??;
+            progress.done();
+            std::fs::write(&trials_json, serde_json::to_string_pretty(&trials)?)?;
+        } else {
+            eprintln!("tmv sta: reusing the trials in {} (delete trials.json to try the cards again)", cards_dir.display());
+            for t in &trials {
+                eprintln!("{}", trial_line(t));
+            }
+        }
+    }
+    let trials_value: Vec<Value> = trials.iter().map(trial_json).collect();
     let n = match pick {
         Some(n) => n,
-        None => match auto_pick(&cards) {
+        None => match auto_pick(&cards, &trials) {
             Some(chosen) => {
                 let n = chosen.id;
                 let c = &cards[n];
                 let why = if chosen.same.len() > 1 {
                     format!("cards {} show the same particle", id_list(&chosen.same))
-                } else if chosen.other.is_empty() {
-                    "the only one that looks like a single particle".to_string()
                 } else {
-                    "the kind of particle with the most weight".to_string()
+                    "the card that gives the best average".to_string()
                 };
                 eprintln!(
                     "tmv sta: using card {n} (about {} Å across, {} members; {why}); the other cards are in {}/, choose another with --pick N",
@@ -813,25 +874,27 @@ fn sta(o: &Opts) -> Result<Value> {
                     c.members,
                     cards_dir.display()
                 );
-                if !chosen.other.is_empty() {
-                    let (verb, first) = if chosen.other.len() == 1 { ("shows", chosen.other[0].to_string()) } else { ("show", id_list(&chosen.other)) };
-                    let noun = if chosen.other.len() == 1 { "card" } else { "cards" };
-                    eprintln!(
-                        "tmv sta: another kind of particle was found: {noun} {first} {verb} something else; choose {} with --pick {}",
-                        if chosen.other.len() == 1 { "it" } else { "one of them" },
-                        chosen.other.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" or ")
-                    );
-                }
                 n
             }
             None => {
                 let tomos: Vec<&str> = found.iter().map(|f| f.tomogram.as_str()).collect();
                 let rerun = format!("tmv sta --pick N{} {}", if o.get("out").is_some() { format!(" --out {}", out.display()) } else { String::new() }, tomos.join(" "));
-                eprintln!("tmv sta: choose a card: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
+                let good = sp::good(&trials);
+                if good.is_empty() {
+                    eprintln!("tmv sta: no card gave an average as a template: look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}", cards_dir.display());
+                } else {
+                    let list: Vec<String> = trials.iter().filter(|t| good.contains(&t.card)).map(|t| format!("card {} (agreement {:.4})", t.card, t.strength)).collect();
+                    eprintln!(
+                        "tmv sta: several kinds of particle give a good average: {}; look at {}/card_N.mrc (32³ class averages; open in TifMrcView Pro), then rerun with --pick N: {rerun}",
+                        list.join(", "),
+                        cards_dir.display()
+                    );
+                }
                 return Ok(json!({
                     "needsChoice": true,
                     "cardsDir": cards_dir,
                     "cards": cards.iter().map(card_json).collect::<Vec<_>>(),
+                    "trials": trials_value,
                     "tomograms": tomograms,
                     "next": rerun,
                 }));
@@ -842,9 +905,7 @@ fn sta(o: &Opts) -> Result<Value> {
 
     // Step 2: the average.
     let (cube, voxel) = sp::read_card(&card.path)?;
-    let (dev, backend) = device();
-    let out_s = out.to_string_lossy().into_owned();
-    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, DIAMETER_FACTOR * card.diameter_a, true, &out_s, &report, &|_| {}))??;
+    let r = crate::ctf_gpu::guarded(|| sp::run_template(dev, &sources, &cube, voxel, sp::template_diameter(card), true, &out_s, &report, &|_| {}))??;
     progress.done();
     eprintln!("{}", sta_summary(&r));
     let mut v = serde_json::to_value(&r)?;
@@ -856,6 +917,7 @@ fn sta(o: &Opts) -> Result<Value> {
     v["card"] = card_json(card);
     v["out"] = json!(out);
     v["cardsDir"] = json!(cards_dir);
+    v["trials"] = json!(trials_value);
     v["tomograms"] = json!(tomograms);
     v["backend"] = json!(backend);
     v["open"] = json!(r.map);
@@ -1284,19 +1346,34 @@ mod tests {
 
     #[test]
     fn sta_steps_are_counted_over_the_whole_run() {
-        // With cards: find, cut and classify (both under step 2), search, coarse and fine alignment.
-        let labels = ["找颗粒", "裁出颗粒 210 Å", "分类 第 3/10 轮 210 Å", "搜索 1/2", "粗对齐 第 1/3 轮", "裁出更细的颗粒", "精细对齐 第 2/3 轮"];
-        let with: Vec<String> = labels.iter().map(|l| sta_label(l, true)).collect();
+        let plan = |cards, trials| Plan { cards, trials };
+        // With cards and trials: find, cut and classify (both under step 2), the trials, search, coarse and fine alignment.
+        let labels = ["找颗粒", "裁出颗粒 210 Å", "分类 第 3/10 轮 210 Å", "试跑卡片 2/9", "搜索 1/2", "粗对齐 第 1/3 轮", "裁出更细的颗粒", "精细对齐 第 2/3 轮"];
+        let all: Vec<String> = labels.iter().map(|l| sta_label(l, plan(true, true))).collect();
         assert_eq!(
-            with,
-            ["第 1/5 步 · 找颗粒", "第 2/5 步 · 裁出颗粒 210 Å", "第 2/5 步 · 分类 第 3/10 轮 210 Å", "第 3/5 步 · 搜索 1/2", "第 4/5 步 · 粗对齐 第 1/3 轮", "第 5/5 步 · 裁出更细的颗粒", "第 5/5 步 · 精细对齐 第 2/3 轮"]
+            all,
+            [
+                "第 1/6 步 · 找颗粒",
+                "第 2/6 步 · 裁出颗粒 210 Å",
+                "第 2/6 步 · 分类 第 3/10 轮 210 Å",
+                "第 3/6 步 · 试跑卡片 2/9",
+                "第 4/6 步 · 搜索 1/2",
+                "第 5/6 步 · 粗对齐 第 1/3 轮",
+                "第 6/6 步 · 裁出更细的颗粒",
+                "第 6/6 步 · 精细对齐 第 2/3 轮"
+            ]
         );
-        // Reusing the cards: only the last three.
-        assert_eq!(sta_label("搜索 1/1", false), "第 1/3 步 · 搜索 1/1");
-        assert_eq!(sta_label("粗对齐 第 3/3 轮", false), "第 2/3 步 · 粗对齐 第 3/3 轮");
-        assert_eq!(sta_label("精细对齐 第 1/3 轮", false), "第 3/3 步 · 精细对齐 第 1/3 轮");
+        // Cards made, one picked: no trials step.
+        assert_eq!(sta_label("搜索 1/2", plan(true, false)), "第 3/5 步 · 搜索 1/2");
+        // Cards reused, trials run.
+        assert_eq!(sta_label("试跑卡片 1/9", plan(false, true)), "第 1/4 步 · 试跑卡片 1/9");
+        assert_eq!(sta_label("搜索 1/2", plan(false, true)), "第 2/4 步 · 搜索 1/2");
+        // Everything reused: only the last three.
+        assert_eq!(sta_label("搜索 1/1", plan(false, false)), "第 1/3 步 · 搜索 1/1");
+        assert_eq!(sta_label("粗对齐 第 3/3 轮", plan(false, false)), "第 2/3 步 · 粗对齐 第 3/3 轮");
+        assert_eq!(sta_label("精细对齐 第 1/3 轮", plan(false, false)), "第 3/3 步 · 精细对齐 第 1/3 轮");
         // Not a step of this command: unchanged.
-        assert_eq!(sta_label("起始模型 第 1/6 轮", true), "起始模型 第 1/6 轮");
+        assert_eq!(sta_label("起始模型 第 1/6 轮", plan(true, true)), "起始模型 第 1/6 轮");
     }
 
     use super::*;
@@ -1323,20 +1400,47 @@ mod tests {
         assert_eq!(main(vec!["sta".into()]), 1);
     }
 
-    fn card(id: usize, likely: bool) -> crate::sta::project::Card {
-        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, offset: 0.0, share: 0.3, path: String::new(), compact: 12.0, likely }
+    fn card(id: usize) -> crate::sta::project::Card {
+        crate::sta::project::Card { id, diameter_a: 210.0, measured_a: 200.0, voxel_a: 16.0, members: 50, elongation: 1.1, blobs: 1, offset: 0.0, share: 0.3, path: String::new(), compact: 12.0, likely: false }
+    }
+
+    fn trial(card: usize, strength: Option<f64>) -> crate::sta::project::Trial {
+        crate::sta::project::Trial {
+            card,
+            ok: strength.is_some(),
+            reason: strength.is_none().then(|| "没有找到明显像模板的颗粒（40 个候选的分数分不出两群）".to_string()),
+            particles: 100,
+            candidates: 200,
+            fsc: vec![],
+            voxel_a: 13.0,
+            strength: strength.unwrap_or(0.0),
+            seconds: 1.0,
+        }
     }
 
     #[test]
     fn the_card_is_picked_only_when_clear() {
         let id = |c: Option<crate::sta::project::Chosen>| c.map(|c| c.id);
-        assert_eq!(id(auto_pick(&[card(0, true), card(1, false), card(2, false)])), Some(0));
-        assert_eq!(id(auto_pick(&[card(0, true)])), Some(0));
-        assert_eq!(id(auto_pick(&[card(0, false), card(1, true)])), Some(1));
-        // Two likely cards are compared from their files: unreadable, so the user chooses.
-        assert_eq!(auto_pick(&[card(0, true), card(1, true)]), None);
-        assert_eq!(auto_pick(&[card(0, false), card(1, false)]), None);
-        assert_eq!(auto_pick(&[]), None);
+        let cards = [card(0), card(1), card(2)];
+        // One card works: it is taken, however the others look.
+        assert_eq!(id(auto_pick(&cards, &[trial(0, None), trial(1, Some(0.0274)), trial(2, None)])), Some(1));
+        // One works well, the other is too weak to count (0.018 / 0.0274 < 0.75).
+        assert_eq!(id(auto_pick(&cards, &[trial(0, Some(0.018)), trial(1, Some(0.0274)), trial(2, None)])), Some(1));
+        // Two close ones are compared from their files: unreadable here, so the user chooses.
+        assert_eq!(auto_pick(&cards, &[trial(0, Some(0.0211)), trial(1, Some(0.0274)), trial(2, None)]), None);
+        // None works; nothing tried.
+        assert_eq!(auto_pick(&cards, &[trial(0, None), trial(1, None)]), None);
+        assert_eq!(auto_pick(&cards, &[]), None);
+        assert_eq!(auto_pick(&[], &[]), None);
+    }
+
+    #[test]
+    fn trials_are_told_in_a_line() {
+        assert_eq!(trial_line(&trial(3, Some(0.02736))), "tmv sta: card 3 as a template: 100 particles, agreement 0.0274");
+        assert_eq!(trial_line(&trial(2, None)), "tmv sta: card 2 as a template: no group of particles stands out");
+        let mut other = trial(2, None);
+        other.reason = Some("只找到 3 个颗粒，太少了".into());
+        assert_eq!(trial_line(&other), "tmv sta: card 2 as a template: failed (只找到 3 个颗粒，太少了)");
     }
 
     #[test]
