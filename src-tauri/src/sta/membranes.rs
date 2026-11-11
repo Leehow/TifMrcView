@@ -59,7 +59,7 @@ fn centre(seeds: &[Seed]) -> [f64; 3] {
 
 /// The density of a file, scaled to unit robust spread so that leans of
 /// different tomograms compare.
-fn density(path: &str) -> Result<(Vec<f32>, [usize; 3])> {
+pub(super) fn density(path: &str) -> Result<(Vec<f32>, [usize; 3])> {
     let (mut v, n, _) = crate::tomo::pipeline::load(path)?;
     let (median, sd) = super::pick::robust(&v);
     let sd = if sd > 0.0 { sd } else { 1.0 };

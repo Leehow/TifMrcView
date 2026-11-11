@@ -25,6 +25,7 @@ pub mod auto;
 pub mod average;
 pub mod cc;
 pub mod cc_gpu;
+pub mod filaments;
 pub mod gallery;
 pub mod marks;
 pub mod membranes;
