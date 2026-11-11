@@ -26,7 +26,7 @@ type P = [f64; 3];
 pub const REACH: f64 = 3.0;
 /// A point whose surroundings are thicker than this share of their width is
 /// not a sheet (a junction, a clump) and gives no seed.
-const FLAT: f64 = 0.45;
+const FLAT: f64 = 0.6;
 
 fn dot(a: P, b: P) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
