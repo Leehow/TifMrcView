@@ -335,6 +335,15 @@ pub struct Encoded {
     pub height: usize,
 }
 
+impl Encoded {
+    /// The image embedding as plain numbers: (values, channels, side),
+    /// channel by channel, each a `side`² grid over the image.
+    pub fn embedding(&self) -> (Vec<f32>, usize, usize) {
+        let [_, c, h, _] = self.features.embed.dims();
+        (self.features.embed.clone().into_data().convert::<f32>().try_into_vec::<f32>().unwrap(), c, h)
+    }
+}
+
 /// One predicted mask at the image's own size.
 pub struct Prediction {
     /// Mask logits, row-major `height * width`; > 0 is inside.
@@ -456,6 +465,49 @@ impl Predictor {
         let chosen = m.logits.narrow(1, pick, 1);
         let full = interpolate(chosen.clone(), InterpolateOptions::new(InterpolateMode::Bilinear).with_output_size([enc.height, enc.width]));
         Prediction { logits: full.into_data().convert::<f32>().try_into_vec::<f32>().unwrap(), iou: iou[pick], low_res: chosen.clamp(-32.0, 32.0) }
+    }
+
+    /// The three multimask outputs for a prompt (part, object, whole), as
+    /// 256² logits over the encoded image with the model's quality estimate
+    /// of each: the caller picks the scale that fits.
+    pub fn predict_multi(&self, enc: &Encoded, points: &[Point], bbox: Option<[f32; 4]>) -> Vec<(Vec<f32>, f32)> {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let mut prompts: Vec<([f32; 2], i32)> = vec![];
+        if let Some(b) = bbox {
+            prompts.push(([b[0] * sx, b[1] * sy], 2));
+            prompts.push(([b[2] * sx, b[3] * sy], 3));
+        }
+        prompts.extend(points.iter().map(|p| ([p.x * sx, p.y * sy], p.positive as i32)));
+        let pe = &self.model.sam_prompt_encoder;
+        let sparse = pe.sparse(&prompts, &self.device);
+        let dense = pe.dense(None, &self.device);
+        let f = &enc.features;
+        let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+        let iou: Vec<f32> = m.iou.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        let [_, _, h, w] = m.logits.dims();
+        let logits: Vec<f32> = m.logits.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+        (0..4).map(|k| (logits[k * h * w..(k + 1) * h * w].to_vec(), iou[k])).collect()
+    }
+
+    /// `predict_multi` for many single clicks on one image, decoded
+    /// sixteen at a time: for each click the four outputs.
+    pub fn predict_multi_many(&self, enc: &Encoded, points: &[Point]) -> Vec<Vec<(Vec<f32>, f32)>> {
+        let (sx, sy) = (IMAGE_SIZE as f32 / enc.width as f32, IMAGE_SIZE as f32 / enc.height as f32);
+        let pe = &self.model.sam_prompt_encoder;
+        let f = &enc.features;
+        let mut out = Vec::with_capacity(points.len());
+        for block in points.chunks(16) {
+            let sparse = Tensor::cat(block.iter().map(|p| pe.sparse(&[([p.x * sx, p.y * sy], p.positive as i32)], &self.device)).collect(), 0);
+            let dense = pe.dense(None, &self.device);
+            let m = self.model.sam_mask_decoder.forward(f.embed.clone(), self.dense_pe.clone(), sparse, dense, f.s0.clone(), f.s1.clone());
+            let iou: Vec<f32> = m.iou.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            let [_, _, h, w] = m.logits.dims();
+            let logits: Vec<f32> = m.logits.into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
+            for i in 0..block.len() {
+                out.push((0..4).map(|k| (logits[(i * 4 + k) * h * w..(i * 4 + k + 1) * h * w].to_vec(), iou[i * 4 + k])).collect());
+            }
+        }
+        out
     }
 
     /// Mask logits at 1024² for the memory encoder: sigmoid, scaled to ±10.

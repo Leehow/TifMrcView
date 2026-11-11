@@ -94,6 +94,9 @@ pub struct Material {
     pub color: Option<[u8; 3]>,
     pub hidden: bool,
     pub locked: bool,
+    /// Place in the layer list (smaller is higher); labels without one
+    /// follow in label order.
+    pub order: Option<i32>,
 }
 
 /// Euclidean distance from every pixel to the nearest `true` one
@@ -146,6 +149,34 @@ pub(crate) fn edt(mask: &[bool], w: usize, h: usize) -> Vec<f32> {
         g[y * w..(y + 1) * w].copy_from_slice(&d[..w]);
     }
     g.iter().map(|&x| if x >= INF / 2.0 { (w + h) as f32 } else { x.sqrt() }).collect()
+}
+
+/// The 4-connected parts of the pixels `inside` accepts on a `w`×`h`
+/// grid, each as its pixel indices.
+pub fn components_where(w: usize, h: usize, inside: impl Fn(usize) -> bool) -> Vec<Vec<usize>> {
+    let mut seen = vec![false; w * h];
+    let mut out = vec![];
+    let mut stack = vec![];
+    for start in 0..w * h {
+        if seen[start] || !inside(start) {
+            continue;
+        }
+        seen[start] = true;
+        stack.push(start);
+        let mut pix = vec![];
+        while let Some(i) = stack.pop() {
+            pix.push(i);
+            let (x, y) = (i % w, i / w);
+            for j in [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)].into_iter().flatten() {
+                if !seen[j] && inside(j) {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        out.push(pix);
+    }
+    out
 }
 
 /// Key of the materials line in the label file's ImageJ description.
@@ -812,6 +843,37 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// Gives the region at (x, y, z) (see `region`) label `to`, unless its
+    /// label is locked: an object moved to another label layer.
+    pub fn relabel_region(&mut self, x: usize, y: usize, z: usize, to: u16, three_d: bool) -> Vec<usize> {
+        let (k, region) = self.region(x, y, z, three_d);
+        if k == 0 || k == to || to == 0 || self.locked().contains(&k) {
+            return vec![];
+        }
+        let n = self.w * self.h;
+        let mut edit = vec![];
+        for (cz, pix) in region {
+            let s = Self::touch(&mut self.slices, &mut edit, cz, n);
+            for i in pix {
+                s[i] = to;
+            }
+        }
+        self.commit(edit)
+    }
+
+    /// Every pixel of label `from` becomes `to` (two label layers merged),
+    /// unless `from` is locked.
+    pub fn merge_label(&mut self, from: u16, to: u16) -> Vec<usize> {
+        self.relabel_where(0..self.d, from, to, |_, _, _| true)
+    }
+
+    /// The 4-connected parts of `label` on slice `z`: each one's pixel
+    /// indices, in the order they are met.
+    pub fn components(&self, z: usize, label: u16) -> Vec<Vec<usize>> {
+        let Some(s) = self.slice(z) else { return vec![] };
+        components_where(self.w, self.h, |i| s[i] == label)
+    }
+
     /// Gives the pixels of label `from` in slices `zs` that `keep(x, y, z)`
     /// accepts label `to` (0 clears them), unless `from` is locked. Used for
     /// an object picked in the 3D view.
@@ -1221,7 +1283,7 @@ mod tests {
         let path = dir.path().join("a.mrc.labels.tif");
         let mut l = Labels::new(9, 7, 5);
         l.stroke(3, &[[4.0, 3.0]], 2.0, 1234, 0);
-        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false }]);
+        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false, order: None }]);
         assert!(l.save(&path).unwrap());
         assert!(!l.dirty);
         let back = Labels::load(&path, 9, 7, 5).unwrap();
