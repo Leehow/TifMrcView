@@ -363,6 +363,9 @@
 #sta-workspace .sta-tile .note { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim); min-height:15px; }
 #sta-workspace .sta-tile.off .pic, #sta-workspace .sta-tile.off .nm { opacity:.5; }
 #sta-workspace .sta-tile.off .pic img { filter:grayscale(1); }
+#sta-workspace .sta-pixel { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 0; padding:6px 8px; border-radius:8px; border:1px solid var(--line); background:var(--muted); font-size:12px; }
+#sta-workspace .sta-pixel[hidden] { display:none; }
+#sta-workspace .sta-pixel input { width:80px; }
 #sta-workspace .sta-tile.off .tick { opacity:.5; }
 #sta-workspace .sta-tile:not(.ticked):not(.off) .pic img { opacity:.72; }
 #sta-workspace .sta-tile.plus { align-self:start; width:100%; box-sizing:border-box; padding:0; aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; border:1.5px dashed var(--line); border-radius:8px; background:transparent; color:var(--dim); cursor:pointer; font:inherit; }

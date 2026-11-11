@@ -26,7 +26,7 @@
 // panel only says so. Shares app.js globals: S, T, F, invoke, $, setFft, openPath.
 (() => {
   // `reviewed`: what the review shown found per tomogram ([{path, n}]), for the badges of the wall.
-  const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false, reviewed: { found: [], shapes: [] } };
+  const W = window.TifMrcViewPro.sta = { busy: false, runOut: "", items: [], out: "", gen: 0, folded: false, pixelNeed: [], pixelLine: "这些图的文件头里没有写像素大小，请先在断层图下面填像素大小", reviewed: { found: [], shapes: [] } };
   const fmt = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
   const name = (p) => p?.split(/[\\/]/).pop() || "";
 
@@ -260,8 +260,8 @@
     $("sta-cards-box").hidden = !W.out;
     $("sta-cards").replaceChildren(...cards.map(cardEl), ownEl());
     const again = $("sta-again");
-    again.disabled = s.selected == null || W.busy;
-    again.title = s.selected == null ? "先点一张卡片，或选一张现成的密度图" : "";
+    again.disabled = s.selected == null || W.busy || W.pixelNeed.length > 0;
+    again.title = W.pixelNeed.length ? W.pixelLine : s.selected == null ? "先点一张卡片，或选一张现成的密度图" : "";
     $("sta-cards-hint").textContent = cards.length
       ? "点你要平均的那一类作例子，再按“找出全部”：程序会把同类的都找出来给你看，你确认后才平均。卡片上的小标签只是提示（标“线状/层状”的会延伸到框外，一般不是颗粒），选哪一张由你定。也可以用你已有的密度图作例子。"
       : "还没有候选卡片。可以先按“找候选”，也可以直接用你已有的密度图作例子，再按“找出全部”。";
@@ -337,7 +337,7 @@
     const s = cur(), r = s.result;
     const k = r && !r.kept ? s.kinds.get(r.which) : null;
     $("sta-kinds-go").hidden = !r || !!r.kept;
-    $("sta-kinds-go").disabled = W.busy;
+    $("sta-kinds-go").disabled = W.busy || W.pixelNeed.length > 0;
     $("sta-kinds-box").hidden = !k;
     if (!k) return;
     const list = k.data.kinds || [];
@@ -371,8 +371,8 @@
     const n = ticked.reduce((a, x) => a + x.count, 0);
     keep.hidden = false;
     keep.textContent = `只平均选中的 ${n} 个`;
-    keep.disabled = W.busy || ticked.length === 0 || ticked.length === list.length;
-    keep.title = ticked.length === list.length ? "先点掉不要的种类" : ticked.length === 0 ? "至少留一种" : "";
+    keep.disabled = W.busy || W.pixelNeed.length > 0 || ticked.length === 0 || ticked.length === list.length;
+    keep.title = W.pixelNeed.length ? W.pixelLine : ticked.length === list.length ? "先点掉不要的种类" : ticked.length === 0 ? "至少留一种" : "";
   }
   async function findKinds() {
     const r = cur().result;
@@ -420,8 +420,8 @@
     live.hidden = !(here() && s.live);
     if (s.live) live.querySelector("img").src = s.live;
     $("sta-cancel").hidden = !here();
-    $("sta-run").disabled = W.busy;
-    $("sta-run").title = W.busy && !here() ? "另一个断层图的平均正在运行" : "";
+    $("sta-run").disabled = W.busy || W.pixelNeed.length > 0;
+    $("sta-run").title = W.pixelNeed.length ? W.pixelLine : W.busy && !here() ? "另一个断层图的平均正在运行" : "";
     renderData();
     renderCards();
     renderResult();
@@ -614,6 +614,7 @@
     refresh();
   };
   $("sta-close").onclick = close;
+  document.addEventListener("sta-pixel", () => { if (!panel.hidden) paint(); });
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
   $("btn-fft").addEventListener("click", () => { if (F.on) close(); });

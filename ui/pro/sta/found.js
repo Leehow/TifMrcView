@@ -130,7 +130,7 @@
     // Find again: once something was dropped by hand.
     const ag = d.again || {};
     const dropped = d.removed > 0;
-    $("sta-found-again").disabled = W.busy || !dropped;
+    $("sta-found-again").disabled = W.busy || !dropped || W.pixelNeed.length > 0;
     $("sta-found-again").title = dropped ? "" : "先在图上点掉几个不要的";
     $("sta-found-again-text").textContent = ag.ran ? (ag.out || ag.in ? `又去掉 ${ag.out} 个像你去掉的，补回 ${ag.in} 个` : "重新判断过了，没有要改的") : "按你去掉和补上的，把其余的重新判断一遍";
     $("sta-found-undo").hidden = !ag.ran;
@@ -138,8 +138,8 @@
     const small = d.kept < MIN_KEPT;
     const go = $("sta-found-go");
     go.textContent = `平均这 ${d.kept} 个 · ${minutes(d.etaSeconds)}`;
-    go.disabled = small || W.busy;
-    go.title = small ? `保留的只有 ${d.kept} 个，至少要 ${MIN_KEPT} 个` : `将平均 ${d.kept} 个，${minutes(d.etaSeconds)}`;
+    go.disabled = small || W.busy || W.pixelNeed.length > 0;
+    go.title = W.pixelNeed.length ? W.pixelLine : small ? `保留的只有 ${d.kept} 个，至少要 ${MIN_KEPT} 个` : `将平均 ${d.kept} 个，${minutes(d.etaSeconds)}`;
     $("sta-found-msg").textContent = small ? `保留的只有 ${d.kept} 个，至少要 ${MIN_KEPT} 个：把滑块往“宽松”拖，或点图上灰色的圈加几个` : d.open ? "" : "这张断层图不在找出的断层图里，看不到圈";
     sparkline();
     draw();
@@ -502,6 +502,7 @@
 
   document.addEventListener("tmv-opened", () => { if (!W.panel.hidden) load(); });
   document.addEventListener("sta-out", () => load());
+  document.addEventListener("sta-pixel", () => render());
   document.addEventListener("sta-busy", (e) => { if (e.detail) render(); else load(); });
   new MutationObserver(() => {
     if (W.panel.hidden) { if (S.tool === "found") setTool("select"); render(); } else load();

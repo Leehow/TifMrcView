@@ -99,7 +99,10 @@ where `average.mrc` is.
 
 Everything is chosen automatically, as in the app. `--pixel Å` and
 `--kv kV` are needed only when neither the files nor the config files beside
-them carry the pixel size and voltage.
+them carry the pixel size and voltage. A header pixel size of 0 or exactly 1
+(never set by the writer) counts as missing: `tmv tomo` and `tmv sta` stop
+with an error asking for `--pixel`, which then applies to such files only (a
+pixel size a file states itself is used, with a note if `--pixel` disagrees).
 
 Results are written in the project folder, the folder of the raw tilt series
 or frames, which is never changed: each step gets a subfolder, `1_motion/`

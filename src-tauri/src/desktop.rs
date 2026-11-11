@@ -1928,6 +1928,7 @@ async fn sta_run(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, out: 
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(out.as_deref(), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         let device = || match crate::ctf_gpu::device() {
             Some((dev, name)) => Ok((dev, *name)),
@@ -1961,6 +1962,33 @@ async fn sta_result(out: String, which: Option<String>) -> CmdResult<Option<serd
 #[tauri::command]
 fn sta_out(first: String) -> String {
     crate::sta::auto::out_of(&first).to_string_lossy().into_owned()
+}
+
+/// Gives the pixel size the user filled in for the project (`sta::pixel`) to
+/// its tomograms: `out` is the output folder (default: beside the first input).
+#[cfg(feature = "pro")]
+fn sta_apply_pixel(out: Option<&str>, inputs: &[String]) {
+    let out = out.map(std::path::PathBuf::from).or_else(|| inputs.first().map(|f| crate::sta::auto::out_of(f)));
+    if let Some(out) = out {
+        crate::sta::pixel::apply(&out, inputs);
+    }
+}
+
+/// The tomograms among `files` whose pixel size is not known (the header has 0
+/// or 1, no mdoc), after the one saved for the project `out` was given to them
+/// (`sta::pixel`): the paths still to ask for.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_pixel_needed(out: String, files: Vec<String>) -> Vec<String> {
+    blocking(move || Ok(crate::sta::pixel::needed(std::path::Path::new(&out), &files))).await.unwrap_or_default()
+}
+
+/// Remembers the pixel size (Å) the user gave for `files` in the project
+/// folder `out` (`<out>/pixel.json`) and uses it at once.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_pixel_set(out: String, files: Vec<String>, pixel_a: f64) -> CmdResult<()> {
+    crate::sta::pixel::set(std::path::Path::new(&out), &files, pixel_a).map_err(|e| e.to_string())
 }
 
 /// The tomograms to average together with the open file (a tomogram or its
@@ -2001,6 +2029,7 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(out.as_deref(), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         let device = || match crate::ctf_gpu::device() {
             Some((dev, name)) => Ok((dev, *name)),
@@ -2024,6 +2053,7 @@ async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, mark
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         let device = || match crate::ctf_gpu::device() {
             Some((dev, name)) => Ok((dev, *name)),
@@ -2084,6 +2114,7 @@ async fn sta_review_again(app: AppHandle, out: String, which: String, tomogram: 
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         let dir = crate::sta::review::dir_of(&out, &which)?;
         let open = tomogram.or_else(|| crate::sta::review::load(&dir).and_then(|s| s.inputs.first().cloned())).unwrap_or_default();
@@ -2128,6 +2159,7 @@ async fn sta_average_found(app: AppHandle, out: String, which: String) -> CmdRes
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         let device = || match crate::ctf_gpu::device() {
             Some((dev, name)) => Ok((dev, *name)),
@@ -2151,6 +2183,7 @@ async fn sta_shapes_find(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         crate::sta::shapes::find_shapes(&inputs, &marks, size.as_deref(), &out, &emit, &base64)
     }).await
@@ -2217,6 +2250,7 @@ async fn sta_shapes_average(app: AppHandle, out: String) -> CmdResult<serde_json
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         crate::sta::shapes::average_shapes(&out, &emit, &base64)
     }).await
@@ -2234,6 +2268,7 @@ async fn sta_kinds(app: AppHandle, inputs: Vec<String>, out: String, which: Opti
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         crate::sta::placed::run_kinds(&inputs, &out, which.as_deref(), &emit, &base64)
     }).await
@@ -2257,6 +2292,7 @@ async fn sta_kinds_keep(app: AppHandle, inputs: Vec<String>, out: String, which:
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
         let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
         crate::sta::placed::run_keep(&inputs, &out, which.as_deref(), &keep, &emit, &base64)
     }).await
@@ -2270,7 +2306,10 @@ async fn sta_kinds_keep(app: AppHandle, inputs: Vec<String>, out: String, which:
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn sta_placed(inputs: Vec<String>, out: String, which: Option<String>, tomogram: String) -> CmdResult<serde_json::Value> {
-    blocking(move || crate::sta::placed::placed(&out, which.as_deref(), &inputs, &tomogram)).await
+    blocking(move || {
+        sta_apply_pixel(Some(&out), &inputs);
+        crate::sta::placed::placed(&out, which.as_deref(), &inputs, &tomogram)
+    }).await
 }
 
 /// The marks saved in an output folder: {marks, size}.
@@ -3312,6 +3351,8 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_cards,
             #[cfg(feature = "pro")] sta_result,
             #[cfg(feature = "pro")] sta_out,
+            #[cfg(feature = "pro")] sta_pixel_needed,
+            #[cfg(feature = "pro")] sta_pixel_set,
             #[cfg(feature = "pro")] sta_siblings,
             #[cfg(feature = "pro")] sta_gallery,
             #[cfg(feature = "pro")] sta_thumbnail,

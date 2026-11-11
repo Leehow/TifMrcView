@@ -309,8 +309,8 @@
     // Points alone find everything like them first; shapes are averaged directly.
     const finds = (pointsOnly && !shapes) || examples > 0;
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
-    $("sta-draw-run").disabled = !ok || W.busy || !!M.seg;
-    $("sta-draw-run").title = ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，凹陷要点在凹陷的中间" : "先在图上标一个东西";
+    $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
+    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，凹陷要点在凹陷的中间" : "先在图上标一个东西";
     draw();
     W.wall?.render();
   }
@@ -588,6 +588,7 @@
 
   document.addEventListener("sta-out", (e) => { load(e.detail); draw(); });
   document.addEventListener("sta-busy", () => render());
+  document.addEventListener("sta-pixel", () => render());
   // Closing the workspace puts the tool away.
   new MutationObserver(() => { if (W.panel.hidden && D.kind) setKind(null); }).observe(W.panel, { attributes: true, attributeFilter: ["hidden"] });
   render();

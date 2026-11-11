@@ -35,10 +35,12 @@
 
   const box = document.createElement("div");
   box.id = "sta-wall-box";
-  box.innerHTML = '<button id="sta-wall-fold" type="button" class="sta-wall-fold" hidden aria-expanded="false"></button><div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>';
+  box.innerHTML = '<button id="sta-wall-fold" type="button" class="sta-wall-fold" hidden aria-expanded="false"></button><div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>' +
+    '<p id="sta-pixel" class="sta-pixel" hidden><span id="sta-pixel-text"></span><input id="sta-pixel-val" type="number" min="0" step="any" inputmode="decimal" aria-label="像素大小，单位 Å/像素"> Å/像素 <button id="sta-pixel-ok" type="button" class="small">确定</button></p>';
   $("sta-data").replaceWith(box);
   const wall = $("sta-wall");
   const foldBtn = $("sta-wall-fold");
+  const pixLine = $("sta-pixel");
   // The wall is folded while a review shows, until the user unfolds it (once per review).
   let reviewing = false, unfolded = false;
   foldBtn.onclick = () => { unfolded = !unfolded; render(); };
@@ -70,8 +72,41 @@
     G.loaded = gen;
     render();
     defaults(list, gen);
+    pixels(gen);
   }
   G.load = load;
+
+  // The tomograms whose files do not say their pixel size (sta_pixel_needed): one line asks for it, once for all of them.
+  async function pixels(gen) {
+    let out = W.out;
+    if (!out) { try { out = W.items[0] ? await invoke("sta_out", { first: W.items[0].path }) : ""; } catch (_) { return; } }
+    const files = [...new Set(tiles().filter(usable).map((t) => t.raw))];
+    let need = [];
+    if (out && files.length) { try { need = (await invoke("sta_pixel_needed", { out, files })) || []; } catch (_) { need = []; } }
+    if (gen !== G.gen) return;
+    G.pixOut = out;
+    setNeed(need);
+  }
+  function setNeed(need) {
+    const was = W.pixelNeed.join("\n");
+    W.pixelNeed = need;
+    const n = need.length;
+    $("sta-pixel-text").textContent = `这 ${n} 张图的文件头里没有写像素大小，请填一下：`;
+    W.pixelLine = `这 ${n} 张图的文件头里没有写像素大小，请先在断层图下面填像素大小`;
+    pixLine.hidden = !n;
+    if (was !== need.join("\n")) document.dispatchEvent(new CustomEvent("sta-pixel"));
+  }
+  $("sta-pixel-ok").onclick = async () => {
+    const v = parseFloat($("sta-pixel-val").value);
+    if (!(v > 0 && v <= 1000)) { W.status("像素大小要填一个大于 0 的数，单位是 Å"); $("sta-pixel-val").focus(); return; }
+    const files = [...new Set(G.tiles.concat(tiles()).flatMap((t) => [t.raw, t.look]).filter(Boolean))];
+    try {
+      await invoke("sta_pixel_set", { out: G.pixOut || W.out, files, pixelA: v });
+      setNeed([]);
+      W.status(`像素大小记下了：${v} Å/像素`);
+    } catch (e) { W.status(`${e}`); }
+  };
+  $("sta-pixel-val").onkeydown = (e) => { if (e.key === "Enter") $("sta-pixel-ok").click(); };
 
   // The ticks a tomogram starts with (see the head of this file).
   const decided = new Set();
@@ -99,7 +134,7 @@
   }
 
   // The folder is known a moment after the tiles may be (index.js asks for it after the list): try again then.
-  document.addEventListener("sta-out", () => { if (G.loaded === G.gen) defaults(G.tiles, G.gen); });
+  document.addEventListener("sta-out", () => { if (G.loaded === G.gen) { defaults(G.tiles, G.gen); pixels(G.gen); } });
 
   // ---- thumbnails: one after another, the ticked and visible ones first ----
   // file -> {s: "busy" | "ok" | "fail", url, section, stale}

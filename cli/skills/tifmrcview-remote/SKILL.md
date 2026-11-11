@@ -83,7 +83,9 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | Denoise an image or stack | `tmv denoise FILE` |
 
 Options that exist (use only when needed): `--pixel Å` and `--kv kV` when
-the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
+the files do not carry them (the error JSON says so; a header pixel size of
+0 or exactly 1 counts as not carried, and for tomograms and tilt series
+`--pixel` fills in only such files, a pixel size the file states wins), `--symmetry D7` for SPA
 when the user knows the point group, `--kind N` for SPA and `--pick N` for
 STA (step 5; the user's choice: see the `needsChoice` entry below; `--auto`
 lets the program choose, only for unattended batch runs the user asked for),

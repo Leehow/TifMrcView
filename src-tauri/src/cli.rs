@@ -34,6 +34,7 @@ USAGE
   tmv run <path>                 Detect what <path> is and run the right command
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
         [--for display|sta|survey] [--pixel Å]
+                                 (--pixel is needed when the file does not say its pixel size)
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
         [--pick N | --points marks.json | --marks marks.json [--size small|medium|large]
@@ -424,6 +425,27 @@ fn ext(path: &str) -> String {
     Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// Makes sure the pixel size of the tomogram or tilt series `path` is known
+/// for `cmd`: the file's own (header or mdoc) always wins; for a file that
+/// does not say it, `--pixel` is remembered for it (`tomo::output::set_pixel`),
+/// and without `--pixel` this is an error. Returns the pixel size in Å.
+fn require_pixel(cmd: &str, path: &str, img: &std::sync::Arc<OpenImage>, pixel: Option<f64>) -> Result<f64> {
+    use crate::tomo::output::{pixel_known, set_pixel};
+    match (pixel_known(img), pixel) {
+        (Some(known), given) => {
+            if let Some(g) = given.filter(|g| (g - known).abs() > 0.01 * known) {
+                eprintln!("tmv {cmd}: {path} says its pixel size is {known:.4} Å, not the {g} Å of --pixel: the file's value is used");
+            }
+            Ok(known)
+        }
+        (None, Some(g)) => {
+            set_pixel(path, Some(g));
+            Ok(g)
+        }
+        (None, None) => bail!("tmv {cmd}: {path} does not say its pixel size (the header has 0 or 1): pass it with --pixel <Å>"),
+    }
+}
+
 /// The tilt angles found beside a stack (mdoc, .tlt, .rawtlt) when there
 /// is one per section.
 fn has_tilts(path: &str, nz: usize) -> bool {
@@ -494,8 +516,8 @@ fn tomo(o: &Opts) -> Result<Value> {
     };
     let img = crate::tomo::pipeline::open(&stack)?;
     let info = img.info();
-    let px = pixel.or_else(|| info.pixel_size.is_some().then(|| crate::align::pixel_a(info)));
-    let mut d = Dataset::open(&info.path, info.size_z, px)?;
+    let px = require_pixel("tomo", &stack, &img, pixel)?;
+    let mut d = Dataset::open(&info.path, info.size_z, Some(px))?;
     drop(img);
     let membranes = purpose == auto::Purpose::Display && crate::membrane::model_path().is_some();
     if purpose == auto::Purpose::Display && !membranes {
@@ -830,6 +852,9 @@ fn sta_kinds(keep: Option<&[usize]>, found: &[auto_sta::Resolved], out: &Path, p
             m.remove("result");
         }
         v["open"] = r["map"].clone();
+        v["resolutionA"] = r["resolutionA"].clone();
+        v["particles"] = r["particles"].clone();
+        v["map"] = r["map"].clone();
         v["kept"] = kept;
     }
     Ok(v)
@@ -881,7 +906,11 @@ fn sta(o: &Opts) -> Result<Value> {
             let d = v["dataset"].as_str().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).or_else(|| auto_sta::dataset_of(&path));
             (path, d)
         } else {
-            (input.clone(), auto_sta::dataset_of(input))
+            let dataset = auto_sta::dataset_of(input);
+            if dataset.is_none() {
+                require_pixel("sta", input, &open_image(input)?, o.number("pixel")?)?;
+            }
+            (input.clone(), dataset)
         };
         found.push(auto_sta::resolve(input, tomogram, dataset, &note));
     }
@@ -1584,6 +1613,30 @@ mod tests {
         assert!(stale(Some(&[now[0].clone(), stamp("/b.mrc", 20, 7)]), &now).unwrap().contains("/b.mrc"));
         let swapped = vec![now[1].clone(), now[0].clone()];
         assert!(stale(Some(&swapped), &now).is_some());
+    }
+
+    #[test]
+    fn pixel_is_required_only_for_files_that_do_not_say_it() {
+        let dir = std::env::temp_dir().join(format!("tmv_reqpix_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |name: &str, px: f64| {
+            let f = dir.join(name).to_string_lossy().into_owned();
+            crate::tomo::output::write_mrc(&f, &vec![0.5; 4 * 4 * 2], [4, 4, 2], px, false).unwrap();
+            f
+        };
+        let (unset, set) = (mk("unset.mrc", 0.0), mk("set.mrc", 2.7));
+        let o = Opts::parse(&[unset.clone(), "--pixel".into(), "3.5".into()]).unwrap();
+        assert_eq!(o.number("pixel").unwrap(), Some(3.5));
+        let err = require_pixel("sta", &unset, &open_image(&unset).unwrap(), None).unwrap_err().to_string();
+        assert!(err.contains("does not say its pixel size") && err.contains("--pixel <Å>"), "{err}");
+        assert_eq!(require_pixel("sta", &unset, &open_image(&unset).unwrap(), Some(3.5)).unwrap(), 3.5);
+        assert_eq!(crate::tomo::output::pixel_a(&open_image(&unset).unwrap()), 3.5);
+        // A file that states its pixel size keeps it, whatever --pixel says.
+        let got = require_pixel("sta", &set, &open_image(&set).unwrap(), Some(9.0)).unwrap();
+        assert!((got - 2.7).abs() < 1e-4);
+        assert!((crate::tomo::output::pixel_a(&open_image(&set).unwrap()) - 2.7).abs() < 1e-4);
+        crate::tomo::output::set_pixel(&unset, None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

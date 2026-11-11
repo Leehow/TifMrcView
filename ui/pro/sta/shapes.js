@@ -168,8 +168,8 @@
     const small = tooFew(d);
     const go = $("sta-shapes-go");
     go.textContent = pits ? `平均这 ${d.pits} 个凹陷` : `平均这些 · ${minutes(d.etaSeconds)}`;
-    go.disabled = small || W.busy;
-    go.title = small ? (pits ? `至少要 ${d.fewestPits || 4} 个` : `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个`) : `将平均 ${plural(d)}，${minutes(d.etaSeconds)}`;
+    go.disabled = small || W.busy || W.pixelNeed.length > 0;
+    go.title = W.pixelNeed.length ? W.pixelLine : small ? (pits ? `至少要 ${d.fewestPits || 4} 个` : `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个`) : `将平均 ${plural(d)}，${minutes(d.etaSeconds)}`;
     renderPits(d);
     const msg = $("sta-shapes-msg");
     if (!msg.dataset.err) msg.textContent = small && pits ? `至少要 ${d.fewestPits || 4} 个：点灰色的小图把它拿回来，或放宽「只取这一段」` : small ? `采样点只有 ${d.seeds} 个，至少要 ${MIN_SEEDS} 个：点灰色或虚线的把它要回来，或多标几个例子` : d.open ? "" : "这张断层图不在找出的断层图里，看不到标记";
@@ -585,6 +585,7 @@
 
   document.addEventListener("tmv-opened", () => { if (!W.panel.hidden) load(); });
   document.addEventListener("sta-out", () => load());
+  document.addEventListener("sta-pixel", () => render());
   document.addEventListener("sta-busy", (e) => { if (e.detail) render(); else load(); });
   new MutationObserver(() => {
     if (W.panel.hidden) { if (S.tool === "shapes") setTool("select"); render(); } else load();
