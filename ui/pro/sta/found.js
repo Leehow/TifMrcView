@@ -342,16 +342,18 @@
     if (!c) { stripSig = ""; return; }
     // The examples.
     const info = $("sta-circled-info");
-    // The program checks itself: the examples have to find each other. One that is found by no other is the
-    // odd one out; when half of them or more are not, the program cannot tell this thing from what surrounds
-    // it and says so instead of offering what it found as if it were right.
-    const weak = c.examples >= 2 ? (c.byOthers || []).map((v) => v == null || (c.noise != null && v <= c.noise)) : [];
-    const lost = weak.length >= 2 && weak.filter(Boolean).length * 2 >= weak.length;
-    info.classList.toggle("warn", lost);
-    info.textContent = lost ? "程序认不出你圈的这几个是同一种东西：它们彼此不比碰巧遇到的更像，下面找到的多半不对。可以把整个物体圈进去（圈大一些）再找，或者自己一个个点出来。"
-      : c.alike != null ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。` : "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。";
+    // What the line may say is only what is so. The examples' likeness to each other sets the limit only when
+    // it is above what chance scores (circled::limit); otherwise the limit is where the scores fall off, and
+    // the small pictures below are the check. Measured on real data the likeness of good examples (ribosomes)
+    // is often below the best chance score, so it is no ground for calling an example a bad one; an example
+    // at which no other example's picture has a peak at all is.
+    const told = c.alike != null && (c.noise == null || c.alike > c.noise);
+    info.classList.remove("warn");
+    info.textContent = c.examples < 2 ? "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。"
+      : told ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
+      : "找到的按相似程度排了队，在分数明显掉下去的地方截断。请扫一眼下面的小图：不对的点掉，可以再找一轮。";
     const warns = [];
-    if (!lost) weak.forEach((w, k) => { if (w) warns.push(`第 ${k + 1} 个例子和其他几个不太像，可以把它删掉换一个再找。`); });
+    if (c.examples >= 2) (c.byOthers || []).forEach((v, k) => { if (v == null) warns.push(`第 ${k + 1} 个例子用其他几个的样子找不到，可以把它删掉换一个再找。`); });
     $("sta-circled-warns").replaceChildren(...warns.map((t) => { const p = document.createElement("p"); p.className = "warn"; p.textContent = t; return p; }));
     // The groups: only worth a row each when there are several.
     const gs = c.groups || [];
