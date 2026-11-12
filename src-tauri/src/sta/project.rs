@@ -3145,10 +3145,10 @@ impl SearchGrid {
 const CONTROL_SHARE: usize = 4;
 const CONTROL_FEWEST: usize = 8;
 
-/// What chance scores in a search: the peaks of the same search with the
-/// template's phases scrambled (`search::scrambled`), over some of the
-/// tomogram's tiles spread through it, each peak with the number of peaks
-/// of the whole tomogram it stands for. For `search::beyond_chance`.
+/// What chance scores in a search: the peaks of the same search in the
+/// tomogram with its phases scrambled (`search::scrambled`), over some of
+/// the tomogram's tiles spread through it, each peak with the number of
+/// peaks of the whole tomogram it stands for. For `search::beyond_chance`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn chance(
     dev: &burn::tensor::Device,
@@ -3187,7 +3187,7 @@ pub(super) fn chance(
     let all: usize = held.iter().sum();
     let here: usize = order[..take].iter().map(|k| held[*k]).sum();
     let each = all as f64 / here as f64;
-    let found = super::search_gpu::search(dev, v, dims, &scrambled(template, n), n, radius, tilts, turns, Some(&part), tick)?;
+    let found = super::search_gpu::search(dev, &scrambled(v, dims, t), dims, template, n, radius, tilts, turns, Some(&part), tick)?;
     Ok(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (p.score, each)).collect())
 }
 
@@ -3231,7 +3231,7 @@ pub fn run_template(
     let Some(limit) = found.limit else {
         let best = found.places.first().map_or(0.0, |p| p.score);
         match found.noise {
-            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也不比一个打乱的模板碰巧得到的分数高：最高 {best:.3}，碰巧的最高 {noise:.3}）", found.places.len()),
+            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也不比在打乱的图里碰巧得到的分数高：最高 {best:.3}，碰巧的最高 {noise:.3}）", found.places.len()),
             None => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len()),
         }
     };
