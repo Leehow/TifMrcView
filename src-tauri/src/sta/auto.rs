@@ -166,26 +166,40 @@ pub(super) fn datasets_in(dir: &Path) -> Vec<Dataset> {
     let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
     let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".tomo.json"))).collect();
     files.sort();
-    files.into_iter().filter_map(|f| serde_json::from_slice(&std::fs::read(f).ok()?).ok()).map(with_display_look).collect()
+    files.into_iter().filter_map(|f| serde_json::from_slice(&std::fs::read(f).ok()?).ok()).map(|d| with_display_look(d, dir)).collect()
 }
 
-/// A dataset whose series was reconstructed to be looked at (the three-
-/// dimensional reconstruction of the Cryo-ET workspace, "display") and not
-/// yet for averaging: the tomogram made to look at is the clear companion of
+/// Width, height and sections of an image file, when it opens.
+fn size_of(path: &str) -> Option<[usize; 3]> {
+    let img = crate::tomo::pipeline::open(path).ok()?;
+    let i = img.info();
+    Some([i.width, i.height, i.size_z])
+}
+
+/// A dataset whose series was reconstructed to be looked at (the Cryo-ET
+/// workspace's three-dimensional reconstruction, "display", or only its
+/// quick look, "survey") and not yet for averaging: the tomogram made to look at is the clear companion of
 /// the reconstruction it was made from, voxel for voxel (the denoising and
 /// what follows keep the grid), so the user marks on the clear one and the
 /// averaging reads the reconstruction itself, with no second reconstruction
 /// to wait for. Nothing changes where a tomogram has a companion already
-/// (one made for averaging), or the two are not on one grid.
-fn with_display_look(mut d: Dataset) -> Dataset {
+/// (one made for averaging), or the two are not on one grid: the same
+/// binning and thickness on record and the same size as files (`dir`: the
+/// folder of the dataset, for a project that was moved).
+fn with_display_look(mut d: Dataset, dir: &Path) -> Dataset {
     if d.tomograms.iter().any(|t| t.look.is_some()) {
         return d;
     }
-    let Some(shown) = d.made.get("display").cloned() else { return d };
+    // The one made to be shown, else the quick one: both are their reconstruction processed in place.
+    let Some(shown) = ["display", "survey"].iter().find_map(|k| d.made.get(*k)).cloned() else { return d };
     let name = Path::new(&shown).file_name().map(|n| n.to_owned());
     let Some((bin, thickness)) = d.tomograms.iter().find(|t| t.kind != "full" && Path::new(&t.path).file_name().map(|n| n.to_owned()) == name).map(|t| (t.bin, t.thickness)) else { return d };
+    let size = |recorded: &str| beside(dir, recorded).and_then(|f| size_of(&f));
+    let Some(grid) = size(&shown) else { return d };
     if let Some(t) = d.tomograms.iter_mut().rev().find(|t| t.kind == "full" && t.bin == bin && t.thickness == thickness) {
-        t.look = Some(Look { path: shown, scale: 1.0, offset: [0.0; 3] });
+        if size(&t.path) == Some(grid) {
+            t.look = Some(Look { path: shown, scale: 1.0, offset: [0.0; 3] });
+        }
     }
     d
 }
@@ -1270,9 +1284,10 @@ mod tests {
         std::fs::create_dir_all(&tomograms).unwrap();
         std::fs::create_dir_all(&clean).unwrap();
         std::fs::write(dir.join("ts.mrc"), b"x").unwrap();
-        for f in [tomograms.join("ts_sart3_b8.mrc"), tomograms.join("ts_sart3_b4.mrc"), clean.join("ts_sart3_b4_n2n_deconv_wedge.mrc")] {
-            std::fs::write(f, b"x").unwrap();
-        }
+        let image = |f: PathBuf, dims: [usize; 3]| crate::tomo::output::write_mrc(&f.to_string_lossy(), &vec![0f32; dims[0] * dims[1] * dims[2]], dims, 10.0, false).unwrap();
+        image(tomograms.join("ts_sart3_b8.mrc"), [4, 4, 3]);
+        image(tomograms.join("ts_sart3_b4.mrc"), [8, 8, 6]);
+        image(clean.join("ts_sart3_b4_n2n_deconv_wedge.mrc"), [8, 8, 6]);
         let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
         let entry = |path: &str, kind: &str, bin: usize, thickness: usize| json!({ "path": p(path), "kind": kind, "bin": bin, "thickness": thickness, "method": "sart" });
         let write = |made: Value, tomograms_json: Vec<Value>| {
@@ -1287,9 +1302,17 @@ mod tests {
         assert_eq!(raw_of_look(&p("3_clean/ts_sart3_b4_n2n_deconv_wedge.mrc")).unwrap(), Some(p("2_tomograms/ts_sart3_b4.mrc")));
         let look = resolve_tomogram(&p("2_tomograms/ts_sart3_b4.mrc"), &|_| {}).look.unwrap();
         assert_eq!((look.path, look.scale, look.offset), (p("3_clean/ts_sart3_b4_n2n_deconv_wedge.mrc"), 1.0, [0.0; 3]));
-        // Only a quick survey made: the newest reconstruction as it is, nothing clear to look at.
+        // The two not the same size as files: not taken for one grid.
+        image(clean.join("ts_sart3_b4_n2n_deconv_wedge.mrc"), [8, 8, 5]);
+        assert!(resolve_tomogram(&p("2_tomograms/ts_sart3_b4.mrc"), &|_| {}).look.is_none());
+        // Only the quick look made, the reconstruction itself: nothing clear to look at.
         write(json!({ "survey": p("2_tomograms/ts_sart3_b8.mrc") }), all[..1].to_vec());
         assert!(resolve_tomogram(&p("2_tomograms/ts_sart3_b8.mrc"), &|_| {}).look.is_none());
+        // The quick look processed (deconvolved): that is the clear companion.
+        image(clean.join("ts_sart3_b8_deconv.mrc"), [4, 4, 3]);
+        write(json!({ "survey": p("3_clean/ts_sart3_b8_deconv.mrc") }), vec![all[0].clone(), entry("3_clean/ts_sart3_b8_deconv.mrc", "deconvolved", 8, 100)]);
+        assert_eq!(raw_of_look(&p("3_clean/ts_sart3_b8_deconv.mrc")).unwrap(), Some(p("2_tomograms/ts_sart3_b8.mrc")));
+        assert_eq!(resolve_tomogram(&p("2_tomograms/ts_sart3_b8.mrc"), &|_| {}).look.map(|l| l.path), Some(p("3_clean/ts_sart3_b8_deconv.mrc")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
