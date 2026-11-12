@@ -19,13 +19,16 @@
 //!   scores of all places fall into two groups by themselves, the gap
 //!   between the groups counts as well (`search::cutoff`), and neither goes
 //!   below what chance scores (the control of `project::chance`).
-//! - One frame. The turn that carries the first example's picture onto each
-//!   other example comes out of the same searches, so places found by
-//!   different examples are averaged together (`Found::frames`).
+//! - One frame. Every picture was searched for everywhere, so at each
+//!   place found the orientation of the first example's picture is known
+//!   as well, whichever example found the place: all places are averaged
+//!   in the frame of that one picture.
 //!
-//! The search is made on the image the user drew on (the clear "look"
-//! tomogram when there is one); what is cut out and averaged afterwards
-//! comes from the tomogram itself, as on every other route.
+//! The search is made on the tomogram itself with its spectrum flattened
+//! (`search::flattened`): as it is, a tomogram's power lies in its slow
+//! variations and its membranes, a picture with a piece of membrane in it
+//! fits every membrane, and chance scores almost what a true match does.
+//! What is cut out and averaged afterwards comes from the tomogram as it is.
 
 use anyhow::{bail, Context, Result};
 
@@ -369,6 +372,8 @@ struct Seen {
     turn: usize,
     like: usize,
     size: usize,
+    /// Which row of the turns every example's picture has here (find_at).
+    key: usize,
 }
 
 /// Of `all`, best first, those not within touching distance of a better
@@ -482,10 +487,13 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // (score, turn, size) of picture a at example b.
     let mut cross: Vec<Vec<Option<(f32, usize, usize)>>> = vec![vec![None; k]; k];
     let mut searched: Vec<(bool, f64)> = vec![];
+    // Per place seen, the turn at which each example's picture fits there.
+    let mut fits: Vec<Vec<u32>> = vec![];
     for (i, s) in sources.iter().enumerate() {
         for (z, size) in sizes_a.iter().enumerate() {
             check_cancel()?;
             let g = Grid::of(s, *size)?;
+            let mut founds = vec![];
             searched.push((g.look.is_some(), g.voxel_a));
             let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
             let to_raw = (g.to_raw([1.0, 0.0, 0.0])[0] - g.to_raw([0.0; 3])[0]).abs();
@@ -495,9 +503,6 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
                 let picture = scaled(e, *size, g.voxel_a);
                 let found = super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
                 done += 1;
-                for p in peaks(&found, 1.8 * radius, MOST) {
-                    seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw, score: p.score, turn: p.turn, like: e, size: z });
-                }
                 // What this picture scores at each example of this tomogram:
                 // the best within half a radius of the circle's centre.
                 for (b, x) in examples.iter().enumerate().filter(|(_, x)| x.source == i) {
@@ -525,7 +530,36 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
                         }
                     }
                 }
+                founds.push(found);
             }
+            // The places each picture found, and how every picture stands
+            // there: its turn where it fits best within a quarter radius.
+            let reach = (0.25 * radius).ceil() as isize;
+            let stands = |f: &super::search::Found, c: [usize; 3]| -> u32 {
+                let mut best = (f32::MIN, 0);
+                for dz in -reach..=reach {
+                    for dy in -reach..=reach {
+                        for dx in -reach..=reach {
+                            let q = [c[0] as isize + dx, c[1] as isize + dy, c[2] as isize + dz];
+                            if (0..3).any(|a| q[a] < 0 || q[a] >= g.dims[a] as isize) {
+                                continue;
+                            }
+                            let at = (q[2] as usize * g.dims[1] + q[1] as usize) * g.dims[0] + q[0] as usize;
+                            if f.score[at] > best.0 {
+                                best = (f.score[at], f.turn[at]);
+                            }
+                        }
+                    }
+                }
+                best.1
+            };
+            for (e, found) in founds.iter().enumerate() {
+                for p in peaks(found, 1.8 * radius, MOST) {
+                    seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw, score: p.score, turn: p.turn, like: e, size: z, key: fits.len() });
+                    fits.push(founds.iter().map(|f| stands(f, p.pos)).collect());
+                }
+            }
+            drop(founds);
             // What chance scores on this grid, with a picture of this size.
             let stage = format!("找像例子的 {}/{}（对照）", done + 1, total);
             let e = size_of.iter().position(|x| *x == z).unwrap_or(0);
@@ -539,7 +573,9 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // How alike the examples are to each other.
     let by_others: Vec<Option<f32>> = (0..k).map(|b| (0..k).filter(|a| *a != b).filter_map(|a| cross[a][b].map(|c| c.0)).reduce(f32::max)).collect();
     let alike = by_others.iter().copied().collect::<Option<Vec<f32>>>().and_then(|v| v.into_iter().reduce(f32::min));
-    // The first example: the one whose picture finds the others best.
+    // The first example: the one whose picture finds the others best. Every
+    // place is given the turn at which that picture fits it, so all stand
+    // in one frame whichever example found them.
     let first = (0..k)
         .max_by(|a, b| {
             let sum = |e: usize| (0..k).filter(|x| *x != e).map(|x| cross[e][x].map_or(0.0, |c| c.0)).sum::<f32>();
@@ -548,13 +584,14 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         .unwrap_or(0);
     let nearest = |r: &Mat| (0..turns.len()).min_by(|a, b| distance(&turns[*a], r).total_cmp(&distance(&turns[*b], r))).unwrap_or(0);
     let upright = nearest(&super::IDENTITY);
-    let frames: Vec<Mat> = (0..k).map(|e| if e == first { super::IDENTITY } else { cross[first][e].map_or(super::IDENTITY, |c| turns[c.1]) }).collect();
+    let frames: Vec<Mat> = vec![super::IDENTITY; k];
+    seen.iter_mut().for_each(|s| s.turn = fits[s.key][first] as usize);
 
     // The examples themselves stay whatever they score; the rest best first.
     let own: Vec<Seen> = examples
         .iter()
         .enumerate()
-        .map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: f32::MAX, turn: cross[e][e].map_or(upright, |c| c.1), like: e, size: size_of[e] })
+        .map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: f32::MAX, turn: cross[first][e].map_or(upright, |c| c.1), like: e, size: size_of[e], key: usize::MAX })
         .collect();
     let mut all = apart(own, seen);
     let rest: Vec<Peak> = all[k..].iter().map(|s| Peak { pos: [0; 3], score: s.score, turn: s.turn }).collect();
@@ -650,7 +687,7 @@ mod tests {
 
     #[test]
     fn a_place_within_touch_of_a_better_one_goes() {
-        let seen = |x: f64, radius: f64, score: f32| Seen { source: 0, at: [x, 50.0, 50.0], radius, score, turn: 0, like: 0, size: 0 };
+        let seen = |x: f64, radius: f64, score: f32| Seen { source: 0, at: [x, 50.0, 50.0], radius, score, turn: 0, like: 0, size: 0, key: 0 };
         // The example stays though it scores less than what overlaps it.
         let own = vec![seen(100.0, 10.0, 0.1)];
         let all = vec![seen(105.0, 10.0, 0.9), seen(130.0, 10.0, 0.5), seen(140.0, 10.0, 0.6), seen(170.0, 20.0, 0.4), seen(100.0, 10.0, 0.3)];
