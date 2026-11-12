@@ -122,6 +122,10 @@ pub struct Route {
     pub card: Option<usize>,
     #[serde(default)]
     pub points: Option<usize>,
+    /// "circled": the circles are all there is to average, nothing was
+    /// searched for (`given_circled`).
+    #[serde(default)]
+    pub only: bool,
 }
 
 /// What `found.json` holds.
@@ -654,7 +658,7 @@ fn circled_value(s: &State, lists: &Lists) -> Value {
         .collect();
     json!({
         "examples": s.route.points, "alike": s.found.alike, "byOthers": s.by_others, "noise": s.found.noise,
-        "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "groups": groups,
+        "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "drawnA": s.found.drawn_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "only": s.route.only, "groups": groups,
         "list": list, "tiles": MOST_TILES,
         // How many circle diameters a picture shows, and how many times as wide as circled the search looked.
         "span": circled::TILE_SPAN * s.found.wide, "wide": s.found.wide,
@@ -820,7 +824,7 @@ pub fn find_card(inputs: &[String], pick: usize, out: &str, device: Device, emit
         let sources: Vec<sp::Source> = inputs.iter().map(|i| resolve_tomogram(i, note).source()).collect();
         let cards = auto::find(&sources, &out, device, progress, live, note)?;
         let card = cards.iter().find(|c| c.id == pick).with_context(|| format!("没有第 {pick} 张卡片（共 {} 张）", cards.len()))?.clone();
-        let route = Route { kind: "card".into(), card: Some(card.id), points: None };
+        let route = Route { kind: "card".into(), card: Some(card.id), points: None, only: false };
         let state = search_and_save(&out, &out, card, inputs.clone(), &sources, route, device, progress)?;
         Ok(review_value(&state, &out, &inputs[0]))
     })
@@ -837,7 +841,7 @@ pub fn find_own(inputs: &[String], out: &str, device: Device, emit: Emit, b64: &
     card.path = dir.join("card.mrc").to_string_lossy().into_owned();
     events(emit, b64, |progress, _live, note| {
         let sources: Vec<sp::Source> = inputs.iter().map(|i| resolve_tomogram(i, note).source()).collect();
-        let route = Route { kind: "own".into(), card: None, points: None };
+        let route = Route { kind: "own".into(), card: None, points: None, only: false };
         let state = search_and_save(&out, &dir, card.clone(), inputs.clone(), &sources, route, device, progress)?;
         Ok(review_value(&state, &dir, &inputs[0]))
     })
@@ -858,7 +862,7 @@ pub fn find_points(inputs: &[String], marks: &[Mark], out: &str, device: Device,
         }
         let card = sp::card_from_points(&sources, &points, &dir.to_string_lossy(), progress, live)?;
         note(Note::Marked { clicked: points.len(), members: card.members, size_a: card.measured_a });
-        let route = Route { kind: "points".into(), card: None, points: Some(points.len()) };
+        let route = Route { kind: "points".into(), card: None, points: Some(points.len()), only: false };
         let state = search_and_save(&out, &dir, card, inputs.clone(), &sources, route, device, progress)?;
         Ok(review_value(&state, &dir, &inputs[0]))
     })
@@ -893,6 +897,7 @@ fn circled_review(inputs: &[String], marks: &[Mark], out: &str, device: Option<D
         if examples.is_empty() {
             bail!("请先圈出 2 到 3 个要找的东西作例子");
         }
+        let device_given = device.is_none();
         let c = match device {
             Some(device) => {
                 let (dev, _) = device()?;
@@ -922,7 +927,7 @@ fn circled_review(inputs: &[String], marks: &[Mark], out: &str, device: Option<D
         std::fs::write(dir.join("card.json"), serde_json::to_string_pretty(&card)?)?;
         let looks = sources.iter().map(|s| s.look.clone()).collect();
         let pixels = sources.iter().map(|s| sp::pixel_of(&s.path).unwrap_or(0.0)).collect();
-        let route = Route { kind: "circled".into(), card: None, points: Some(examples.len()) };
+        let route = Route { kind: "circled".into(), card: None, points: Some(examples.len()), only: device_given };
         let mut state = State::new(c.found, path, c.diameter_a, card, inputs.clone(), looks, pixels, route);
         state.mine = c.mine;
         state.by_others = c.by_others;
@@ -1005,7 +1010,7 @@ pub fn average_found(dir: &Path, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]
         let counts = json!({ "found": s.total(), "kept": places.len(), "removed": removed, "added": added, "onShapes": s.filter.is_some() && s.edits.on_shapes, "againOut": again_out, "againIn": again_in });
         let mut used = match s.route.kind.as_str() {
             "points" => json!({ "kind": "points", "clicked": s.route.points, "members": s.card.members, "sizeA": s.card.measured_a.round() }),
-            "circled" => json!({ "kind": "circled", "examples": s.route.points, "sizeA": s.card.measured_a.round(), "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "alike": s.found.alike }),
+            "circled" => json!({ "kind": "circled", "examples": s.route.points, "sizeA": s.card.measured_a.round(), "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "alike": s.found.alike, "only": s.route.only }),
             "own" => json!({ "kind": "own", "name": own_file(dir).map(|o| o.name), "sizeA": s.card.measured_a.round() }),
             _ => json!({ "kind": "auto", "card": s.card.id, "auto": false, "sizeA": s.card.measured_a.round() }),
         };
@@ -1355,7 +1360,7 @@ mod tests {
         let places: Vec<Place> = (0..60).map(|i| place(i % 2, 10 + 5 * i, 1.0 - i as f32 * 0.01)).collect();
         let found = Found::plain(places, limit, None, 16.0, "look", Some(32.0));
         let look = Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [4.0, 6.0, 8.0] };
-        State::new(found, "/nowhere/card_3.mrc".into(), 266.0, card(), vec!["/t/a.mrc".into(), "/t/b.mrc".into()], vec![Some(look), None], vec![10.0, 10.0], Route { kind: "card".into(), card: Some(3), points: None })
+        State::new(found, "/nowhere/card_3.mrc".into(), 266.0, card(), vec!["/t/a.mrc".into(), "/t/b.mrc".into()], vec![Some(look), None], vec![10.0, 10.0], Route { kind: "card".into(), card: Some(3), points: None, only: false })
     }
 
     #[test]
@@ -1378,7 +1383,7 @@ mod tests {
     #[test]
     fn circled_examples_come_in_groups_and_stay() {
         let mut s = state(Some(0.705));
-        s.route = Route { kind: "circled".into(), card: None, points: Some(2) };
+        s.route = Route { kind: "circled".into(), card: None, points: Some(2), only: false };
         s.found.sizes_a = vec![300.0, 600.0];
         for (i, p) in s.found.places.iter_mut().enumerate() {
             p.like = (i % 3 == 0) as u8;
@@ -1570,7 +1575,7 @@ mod tests {
     fn only_the_best_keep_plus_a_margin_are_shown_per_tomogram() {
         let places: Vec<Place> = (0..2000).map(|i| place(0, i, 2.0 - i as f32 * 0.001)).collect();
         let found = Found::plain(places, Some(1.8995), None, 16.0, "raw", None);
-        let s = State::new(found, "x".into(), 266.0, card(), vec!["/t/a.mrc".into()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None });
+        let s = State::new(found, "x".into(), 266.0, card(), vec!["/t/a.mrc".into()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None, only: false });
         assert_eq!(s.edits.keep, 101);
         assert_eq!(s.shown(0).len(), 101 + MARGIN);
         let r = review_value(&s, &std::env::temp_dir(), "/t/a.mrc");
@@ -1704,7 +1709,7 @@ mod tests {
             places.push(Place { source: 0, c, bin: 1, turn: 0, score: 1.0 - i as f32 * 0.01, like: 0, size: 0 });
         }
         let found = Found::plain(places, Some(0.0), None, 10.0, "raw", None);
-        State::new(found, "x".into(), 266.0, card(), vec![a.to_string()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None })
+        State::new(found, "x".into(), 266.0, card(), vec![a.to_string()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None, only: false })
     }
 
     #[test]

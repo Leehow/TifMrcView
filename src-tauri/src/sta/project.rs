@@ -472,10 +472,22 @@ pub(super) fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32
 
 /// As `cube`, of side `n`.
 fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f32>> {
-    let h = (n / 2) as isize;
     // Across the beam the cube has to be whole: the borders of a tomogram
     // hold reconstruction artefacts, not particles.
     if c[2] >= dims[2] || (0..2).any(|i| c[i] < n / 2 || c[i] + n / 2 > dims[i]) {
+        return None;
+    }
+    cube_around(v, dims, c, n, 2)
+}
+
+/// The cube of side `n` around voxel `c` (inside the tomogram), zero mean
+/// and unit variance, filled with the mean wherever it reaches past the
+/// tomogram; at least one `least`-th of it has to be inside. For the
+/// surroundings of a thing (`by_surroundings`): the thing itself is whole
+/// in its own cube, and what is around it may end at a border.
+fn cube_around(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize, least: usize) -> Option<Vec<f32>> {
+    let h = (n / 2) as isize;
+    if (0..3).any(|i| c[i] >= dims[i]) {
         return None;
     }
     let c = c.map(|x| x as isize);
@@ -504,7 +516,7 @@ fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f3
             }
         }
     }
-    if count * 2 < out.len() {
+    if count * least < out.len() {
         return None;
     }
     let mean = sum / count as f64;
@@ -2935,6 +2947,11 @@ pub struct Found {
     /// around them).
     #[serde(default = "one")]
     pub wide: f64,
+    /// `circled`: the sizes as the user circled them, per entry of
+    /// `sizes_a`, where the program drew a circle in (`circled::tightened`);
+    /// empty when the sizes are as drawn.
+    #[serde(default)]
+    pub drawn_a: Vec<f64>,
 }
 
 fn one() -> f64 {
@@ -2944,7 +2961,7 @@ fn one() -> f64 {
 impl Found {
     /// The search of one template: nothing of what `circled` adds.
     pub fn plain(places: Vec<Place>, limit: Option<f32>, noise: Option<f32>, voxel_a: f64, searched: &str, search_voxel_a: Option<f64>) -> Found {
-        Found { places, limit, noise, voxel_a, searched: searched.to_string(), search_voxel_a, frames: vec![], sizes_a: vec![], alike: None, wide: 1.0 }
+        Found { places, limit, noise, voxel_a, searched: searched.to_string(), search_voxel_a, frames: vec![], sizes_a: vec![], alike: None, wide: 1.0, drawn_a: vec![] }
     }
 
     /// The orientation of the thing at `p` in the frame of the template
@@ -3254,6 +3271,118 @@ pub(super) fn probed(dev: &burn::tensor::Device, sources: &[Source], found: &Fou
     Ok(body(&average, BOX, radius).map(|across| (across, blobs, elongation)))
 }
 
+/// How many times as wide as circled `by_surroundings` looks when the
+/// search did not say (`Found::wide`).
+const AROUND: f64 = 2.0;
+/// Most circled particles `run_places` also aligns by their surroundings
+/// without the search having asked for it: at this many the second
+/// alignment takes seconds.
+const AROUND_MOST: usize = 100;
+
+/// The particles of `cuts` aligned by what is around them: a thing that sits
+/// on something larger (a small structure on a membrane) is turned the right
+/// way by the larger thing, which a cube as wide as its circle hardly holds
+/// (measured: 20 circled crowns of 283 Å average to pieces of membrane in
+/// their own cubes, and to the ring on its neck at twice the width). Cubes
+/// `by` times as wide, at `by` times the voxel, are aligned to their own
+/// average over every orientation (`settled_on`, from `poses`). The centre of
+/// each circle then lies somewhere in that average, and where most of them
+/// lie is where the thing is: each particle is cut again at `voxel_a` about
+/// that point of the average as its own pose places it, so a circle drawn
+/// off the thing is put right by the others. Returns those cuts with the
+/// orientations found (no shift left), and the wide average; None when too
+/// few have surroundings to cut.
+#[allow(clippy::too_many_arguments)]
+fn by_surroundings(dev: &burn::tensor::Device, sources: &[Source], cuts: &[Cut], poses: &[Pose], voxel_a: f64, diameter_a: f64, by: f64, progress: Progress, live: Live) -> Result<Option<(Vec<Cut>, Vec<Pose>, Vec<f32>, f64)>> {
+    let label = |s: &str, a: usize, b: usize| progress(&format!("连周围一起 · {s}"), a, b);
+    // The wide cubes: per cut, the cube and its centre in source voxels.
+    let mut wide: Vec<Option<(Vec<f32>, [f64; 3])>> = cuts.iter().map(|_| None).collect();
+    let mut wide_bin = vec![1usize; sources.len()];
+    let mut wide_voxel = voxel_a * by;
+    for (i, s) in sources.iter().enumerate() {
+        if !cuts.iter().any(|c| c.source == i) {
+            continue;
+        }
+        check_cancel()?;
+        label("裁出周围", i, sources.len());
+        let (v, dims, got, bin) = binned(&s.path, voxel_a * by)?;
+        wide_voxel = got;
+        wide_bin[i] = bin;
+        for (k, c) in cuts.iter().enumerate().filter(|(_, c)| c.source == i) {
+            let (at, _) = on_grid(c.at, bin);
+            if let Some(cube) = cube_around(&v, dims, at, BOX, 4) {
+                wide[k] = Some((cube, at.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0)));
+            }
+        }
+    }
+    let with: Vec<usize> = (0..cuts.len()).filter(|k| wide[*k].is_some()).collect();
+    if with.len() < FEWEST_CIRCLED {
+        return Ok(None);
+    }
+    let particles: Vec<Vec<f32>> = with.iter().map(|k| wide[*k].as_ref().unwrap().0.clone()).collect();
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let wedge_of: Vec<usize> = with.iter().map(|k| cuts[*k].source).collect();
+    let radius = (0.5 * by * diameter_a / wide_voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let start: Vec<Pose> = with.iter().map(|k| Pose { t: [0.0; 3], ..poses[*k] }).collect();
+    let own_average = set.average(&start, |_| true).finish();
+    let (model, settled) = super::refine::settled_on(Some(dev), &set, &own_average, 1, &label, live)?;
+    // Then a few degrees at a time: the orientations tried are 30° apart,
+    // and the cubes cut next are turned no further than 12°.
+    let (model, settled) = {
+        let a = align_on(Some(dev), &set, &model, &settled, &label, live)?;
+        (a.map, a.poses)
+    };
+    // Where each circle's centre lies in the average (a point m of the
+    // average stands at t + R·m in the particle; the circle's centre is the
+    // cube's), and the middle of them.
+    let centres: Vec<[f64; 3]> = settled.iter().map(|p| std::array::from_fn(|i| -(0..3).map(|j| p.r[j][i] * p.t[j]).sum::<f64>())).collect();
+    let middle: [f64; 3] = std::array::from_fn(|i| {
+        let mut v: Vec<f64> = centres.iter().map(|c| c[i]).collect();
+        v.sort_by(f64::total_cmp);
+        0.5 * (v[(v.len() - 1) / 2] + v[v.len() / 2])
+    });
+    let mut off: Vec<f64> = centres.iter().map(|c| (0..3).map(|i| (c[i] - middle[i]).powi(2)).sum::<f64>().sqrt() * wide_voxel).collect();
+    off.sort_by(f64::total_cmp);
+    eprintln!(
+        "sta: by the surroundings ({by}× as wide, {wide_voxel:.2} Å voxels, {} of {} particles): the circles' centres lie {:.0} Å from their middle (median; the farthest {:.0} Å)",
+        with.len(),
+        cuts.len(),
+        off[off.len() / 2],
+        off[off.len() - 1]
+    );
+    // Each particle about that point, at the voxel of the average.
+    let mut out: Vec<(usize, Cut, Pose)> = vec![];
+    for (i, s) in sources.iter().enumerate() {
+        if !with.iter().any(|k| cuts[*k].source == i) {
+            continue;
+        }
+        check_cancel()?;
+        label("按周围重新裁出", i, sources.len());
+        let (v, dims, _, bin) = binned(&s.path, voxel_a)?;
+        for (n, k) in with.iter().enumerate().filter(|(_, k)| cuts[**k].source == i) {
+            let p = &settled[n];
+            let centre = wide[*k].as_ref().unwrap().1;
+            let at: [f64; 3] = std::array::from_fn(|a| centre[a] + (p.t[a] + (0..3).map(|j| p.r[a][j] * middle[j]).sum::<f64>()) * wide_bin[i] as f64);
+            if at.iter().any(|x| *x < 0.0) {
+                continue;
+            }
+            let (c, _) = on_grid(at, bin);
+            if let Some(cube) = cube(&v, dims, c) {
+                let old = &cuts[*k];
+                out.push((*k, Cut { source: i, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: old.score, strength: old.strength, darkest: old.darkest, cube }, Pose { r: p.r, t: [0.0; 3], score: p.score }));
+            }
+        }
+    }
+    // In the order of `cuts`, which the halves follow.
+    out.sort_by_key(|c| c.0);
+    if out.len() < FEWEST_CIRCLED {
+        return Ok(None);
+    }
+    let (cuts, poses) = out.into_iter().map(|(_, c, p)| (c, p)).unzip();
+    Ok(Some((cuts, poses, model, wide_voxel)))
+}
+
 /// The average of the particles at `places` (those of `found` the caller
 /// keeps: the program's own choice in `run_template`, the user's in the
 /// workspace): aligned to `template`, then as `pass` says.
@@ -3294,7 +3423,8 @@ pub fn run_places(
     // across), so every particle is first searched over all of them
     // against that average (`settled_on`).
     let settled;
-    let (template, poses, diameter_a) = if found.frames.is_empty() {
+    let (circled_a, searched) = (diameter_a, poses.clone());
+    let (template, poses, mut diameter_a) = if found.frames.is_empty() {
         (template, poses, diameter_a)
     } else {
         let own_average = set.average(&poses, |_| true).finish();
@@ -3309,6 +3439,40 @@ pub fn run_places(
     let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let mut out = align_on(Some(dev), &set, template, &poses, &first_pass, live)?;
+    // What was circled is also aligned by its surroundings first, where the
+    // search was told by them (`Found::wide`) or the particles are few; the
+    // one of the two averages whose halves agree over more is kept (both
+    // within the circle as drawn).
+    if !found.frames.is_empty() && (found.wide > 1.0 || cuts.len() <= AROUND_MOST) {
+        let by = if found.wide > 1.0 { found.wide } else { AROUND };
+        if let Some((cuts2, start2, around, around_voxel)) = by_surroundings(dev, sources, &cuts, &searched, voxel, circled_a, by, progress, live)? {
+            let particles2: Vec<Vec<f32>> = cuts2.iter().map(|c| c.cube.clone()).collect();
+            let wedge_of2: Vec<usize> = cuts2.iter().map(|c| c.source).collect();
+            let whole = (0.5 * circled_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+            let set2 = Set { n: BOX, particles: &particles2, wedges: &wedges, wedge_of: &wedge_of2, radius: whole };
+            let own = set2.average(&start2, |_| true).finish();
+            let measured = body(&own, BOX, whole).map_or(circled_a, |d| (d * voxel).clamp(0.5 * circled_a, circled_a));
+            let set2 = Set { radius: (0.5 * measured / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0), ..set2 };
+            let out2 = align_on(Some(dev), &set2, &own, &start2, &|s: &str, a: usize, b: usize| first_pass(&format!("连周围一起 · {s}"), a, b), live)?;
+            let agree = |a: &super::refine::Aligned| strength(&crate::spa::post::fsc(&a.halves[0], &a.halves[1], BOX, whole + 2.0), voxel);
+            let (direct, wide) = (agree(&out), agree(&out2));
+            let better = wide > direct;
+            eprintln!(
+                "sta: aligned by the surroundings first: strength {wide:.5} ({} particles) against {direct:.5} as circled ({}), keeping the {}",
+                cuts2.len(),
+                cuts.len(),
+                if better { "one by the surroundings" } else { "one as circled" }
+            );
+            std::fs::create_dir_all(out_dir).with_context(|| format!("无法创建 {out_dir}"))?;
+            output::write_mrc(&Path::new(out_dir).join("around.mrc").to_string_lossy(), &around, [BOX, BOX, BOX], around_voxel, false)?;
+            if better {
+                cuts = cuts2;
+                out = out2;
+                diameter_a = measured;
+            }
+            live(&out.map);
+        }
+    }
     if fine {
         // The same particles at twice the sampling, from where they now
         // are: at the coarse sampling the resolution ends at its Nyquist
@@ -4206,5 +4370,87 @@ mod halves_tests {
         let at = vec![[0.0; 3], [0.0; 3]];
         let order = halves_by_groups(&at, &[0, 1], 5.0);
         assert_eq!(order.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod around_tests {
+    use super::*;
+    use crate::spa::geom::{distance, transpose};
+
+    /// Heavy: `CARGO_PROFILE_TEST_OPT_LEVEL=2 cargo test --no-default-features --features cli --lib sta::project::around_tests -- --ignored --nocapture`.
+    ///
+    /// A ball that looks the same from every side, with three other blobs
+    /// around it beyond its circle, nine times and every which way up. The
+    /// circles are drawn six voxels off the ball. In cubes as wide as the
+    /// circle there is nothing to turn the ball by; by the surroundings each
+    /// stands as it was planted, and the cubes are cut again about the ball.
+    #[test]
+    #[ignore]
+    fn what_is_around_a_thing_turns_it_the_right_way() {
+        let dims = [448usize, 448, 128];
+        let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+        let mut rng = Rng(0xa40d);
+        // (centre, radius, weight) in the thing's own frame.
+        let blobs: [([f64; 3], f64, f32); 4] = [([0.0, 0.0, 0.0], 12.0, 1.0), ([34.0, 0.0, -6.0], 11.0, 1.0), ([0.0, 22.0, -10.0], 6.0, 1.2), ([-20.0, -12.0, 18.0], 8.0, 0.9)];
+        let mut things: Vec<([f64; 3], Mat)> = vec![];
+        for j in 0..3 {
+            for i in 0..3 {
+                let axis = [rng.gauss(), rng.gauss(), rng.gauss()];
+                things.push(([96.0 + 128.0 * i as f64, 96.0 + 128.0 * j as f64, 64.0], axis_angle(axis, 360.0 * rng.unit())));
+            }
+        }
+        for (at, r) in &things {
+            for (q, radius, weight) in &blobs {
+                let c: [f64; 3] = std::array::from_fn(|a| at[a] + (0..3).map(|b| r[a][b] * q[b]).sum::<f64>());
+                let h = radius.ceil() as isize;
+                for dz in -h..=h {
+                    for dy in -h..=h {
+                        for dx in -h..=h {
+                            let p = [c[0].round() as isize + dx, c[1].round() as isize + dy, c[2].round() as isize + dz];
+                            if (0..3).all(|k| p[k] >= 0 && p[k] < dims[k] as isize) && ((dx * dx + dy * dy + dz * dz) as f64) <= radius * radius {
+                                v[(p[2] as usize * dims[1] + p[1] as usize) * dims[0] + p[0] as usize] += weight;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        v.iter_mut().for_each(|x| *x += (0.6 * rng.gauss()) as f32);
+        let dir = std::env::temp_dir().join(format!("tmv-sta-around-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tomo.mrc").to_string_lossy().into_owned();
+        output::write_mrc(&path, &v, dims, 10.0, false).unwrap();
+        let sources = vec![Source { path: path.clone(), tilts: [-90.0, 90.0], look: None, series: None }];
+        // Circles of radius 18 (360 Å, cubes of 20 Å voxels), six voxels off.
+        let (voxel_a, diameter_a) = (20.0, 360.0);
+        let (binned, bdims, _, bin) = binned(&path, voxel_a).unwrap();
+        let mut cuts = vec![];
+        for (at, _) in &things {
+            let off = [rng.gauss(), rng.gauss(), rng.gauss()];
+            let norm = off.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let (c, _) = on_grid(std::array::from_fn(|a| at[a] + 6.0 * off[a] / norm), bin);
+            cuts.push(Cut { source: 0, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: 1.0, strength: 0.0, darkest: 0.0, cube: cube(&binned, bdims, c).unwrap() });
+        }
+        let poses = vec![Pose { r: super::super::IDENTITY, t: [0.0; 3], score: 1.0 }; cuts.len()];
+        let far = |c: &Cut, k: usize| (0..3).map(|a| (c.at[a] - things[k].0[a]).powi(2)).sum::<f64>().sqrt();
+        let before: Vec<f64> = cuts.iter().enumerate().map(|(k, c)| far(c, k)).collect();
+        let started = Instant::now();
+        let (again, found, around, wide_voxel) = by_surroundings(&burn::tensor::Device::flex(), &sources, &cuts, &poses, voxel_a, diameter_a, AROUND, &|_, _, _| {}, &|_| {}).unwrap().expect("surroundings");
+        assert_eq!((again.len(), around.len(), wide_voxel), (things.len(), BOX * BOX * BOX, 40.0));
+        // As planted, up to the one turn all share: a point m of the average
+        // stands at R·m in the particle, a point of the thing at T·m, so
+        // Tᵀ·R is the same for all. Each against the one most others agree with.
+        let shared: Vec<Mat> = (0..things.len()).map(|k| mul(&transpose(&things[k].1), &found[k].r)).collect();
+        let agree = |k: usize| shared.iter().filter(|s| distance(s, &shared[k]) < 30.0).count();
+        let most = (0..shared.len()).max_by_key(|k| agree(*k)).unwrap();
+        let turned: Vec<f64> = shared.iter().map(|s| distance(s, &shared[most])).collect();
+        let after: Vec<f64> = again.iter().enumerate().map(|(k, c)| far(c, k)).collect();
+        eprintln!("{:?}: turned {turned:.0?}°, off the ball before {before:.1?}, after {after:.1?}", started.elapsed());
+        assert!(turned.iter().all(|d| *d < 15.0), "{turned:.0?}");
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        assert!(mean(&after) < 0.7 * mean(&before), "{after:.1?} against {before:.1?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

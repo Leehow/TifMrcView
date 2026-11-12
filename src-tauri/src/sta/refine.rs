@@ -162,6 +162,13 @@ pub fn first_model_on(dev: Option<&Device>, set: &Set, seed: u64, progress: Prog
 
 /// Rounds of `settled_on`.
 const SETTLE_ROUNDS: usize = 4;
+/// Up to this many particles `settled_on` tries orientations half as far
+/// apart (15°): eight times the work, which few particles can afford and
+/// need, each one being a good part of the average (measured on nine made-up
+/// particles that start with no orientation: at 30° two to four end up the
+/// wrong way round, with twice the rounds as well; at 15° all nine stand
+/// within 7° of where they were planted).
+const SETTLE_FINE_MOST: usize = 100;
 
 /// A model and poses for particles whose orientations are only roughly
 /// known, from a `model` made of them as they stand (places found with the
@@ -179,7 +186,7 @@ pub fn settled_on(dev: Option<&Device>, set: &Set, model: &[f32], seed: u64, pro
     let mut poses = vec![Pose { r: IDENTITY, t: [0.0; 3], score: 0.0 }; m];
     let n = set.n as f64;
     let (lo, hi) = (n / (2.0 * set.radius) * 1.5, (n / (2.0 * set.radius) * 5.0).min(n / 2.0 - 3.0));
-    let rotations = grid(STEP);
+    let rotations = grid(if m <= SETTLE_FINE_MOST { STEP / 2.0 } else { STEP });
     for round in 0..SETTLE_ROUNDS {
         check_cancel()?;
         let low_pass = (lo + (hi - lo) * round as f64 / (SETTLE_ROUNDS - 1) as f64).max(2.0);

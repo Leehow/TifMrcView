@@ -578,10 +578,13 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let k = examples.len();
     let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
     // A circle drawn wide around a compact thing is drawn in to the thing.
+    let as_drawn = sizes(&examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect::<Vec<_>>()).0;
     let (examples, probes) = tightened(dev, sources, examples, &raw_px, turns, progress)?;
     let examples = &examples[..];
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, _) = sizes(&diameters);
+    // What the user circled, where a circle was drawn in (said beside the size found).
+    let drawn_a = if as_drawn.len() == sizes_a.len() && as_drawn != sizes_a { as_drawn } else { vec![] };
     let diameter_a = *sizes_a.last().unwrap();
 
     // With what is around it, when that is what tells it: a thing is often
@@ -647,6 +650,7 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         sizes_a,
         alike,
         wide,
+        drawn_a,
     };
     Ok(Circled { found, template, diameter_a, mine, first, by_others, told, wide })
 }
@@ -716,7 +720,7 @@ pub fn given(sources: &[Source], examples: &[Example]) -> Result<Circled> {
     if places.len() < FEWEST_CIRCLED {
         bail!("圈的东西里只有 {} 个离断层图的边够远，太少了（至少要 {FEWEST_CIRCLED} 个）", places.len());
     }
-    let found = Found { places, limit: Some(1.0), noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a, alike: None, wide: 1.0 };
+    let found = Found { places, limit: Some(1.0), noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a, alike: None, wide: 1.0, drawn_a: vec![] };
     Ok(Circled { found, template, diameter_a, mine, first: 0, by_others: vec![None; k], told: None, wide: 1.0 })
 }
 
@@ -782,7 +786,7 @@ fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example
         // Measured in their average once they are aligned: as they lie, the
         // average is as wide as the thing at its widest, and blurred.
         let count = places.len();
-        let probe = Found { places, limit: None, noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a: vec![*size], alike: None, wide: 1.0 };
+        let probe = Found { places, limit: None, noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a: vec![*size], alike: None, wide: 1.0, drawn_a: vec![] };
         let Some((across, blobs, elongation)) = super::project::probed(dev, sources, &probe, *size, &|_, a, b| progress(&stage, a, b))? else { continue };
         let measured = across * voxel_a;
         eprintln!("sta: circled at {size:.0} Å; the body in the aligned average of the best {count} is {measured:.0} Å across (pieces {blobs}, elongation {elongation:.2})");

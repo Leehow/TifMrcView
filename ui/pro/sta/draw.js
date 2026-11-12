@@ -53,7 +53,7 @@
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
-    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。程序会在所有勾选的断层图里找出长得像的。" },
+    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。东西不多时也可以把它们全圈出来（至少 4 个），直接只平均圈的这些。程序会在所有勾选的断层图里找出长得像的。" },
   };
   const ICONS = {
     point: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/>',
@@ -287,7 +287,7 @@
     const examples = D.marks.filter(isExample).length;
     const fewShapes = circN === 0 && examples === 1;
     const fewCircles = circN === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).join("。");
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;

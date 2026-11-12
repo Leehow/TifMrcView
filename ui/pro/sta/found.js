@@ -254,7 +254,7 @@
     R.add = false;
     render();
     if (S.tool === "found") setTool("select");
-    if (cir) { W.draw?.setKind("example"); W.status("请在图上圈 2–3 个你要找的东西，再按“找出全部同类”"); return; }
+    if (cir) { W.draw?.setKind("example"); W.status("请在图上圈 2–3 个你要找的东西（东西不多时可全圈出来，至少 4 个，直接只平均），再按“找出全部同类”"); return; }
     W.status("请选择要平均什么：点一张卡片，或在图上点几个颗粒作例子");
   };
   $("sta-found-go").onclick = async () => {
@@ -355,7 +355,7 @@
       : told ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
       : "找到的按相似程度排了队，在分数明显掉下去的地方截断。请扫一眼下面的小图：不对的点掉，可以再找一轮。";
     // The search looked wider than the circles (circled::WIDER): said, since the pictures show it.
-    if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按圈的 ${c.wide} 倍范围去比的；小图里的虚线圈是你圈的大小。`;
+    if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按圈的 ${c.wide} 倍范围去比的；小图里的虚线圈是你圈的大小。如果你要找的是一个个独立的颗粒，这多半说明例子没圈准：把圈画在东西正中、刚好圈住它，再找一次。`;
     const warns = [];
     if (c.examples >= 2) (c.byOthers || []).forEach((v, k) => { if (v == null) warns.push(`第 ${k + 1} 个例子用其他几个的样子找不到，可以把它删掉换一个再找。`); });
     $("sta-circled-warns").replaceChildren(...warns.map((t) => { const p = document.createElement("p"); p.className = "warn"; p.textContent = t; return p; }));
@@ -371,7 +371,11 @@
       cb.disabled = W.busy;
       cb.onchange = () => { activate(); edit({ group: { like: g.like, size: g.size, on: cb.checked } }); };
       l.className = g.on ? "" : "off";
-      l.append(cb, `像例 ${g.like + 1} · 约 ${Math.round(g.sizeA / 10)} nm：${g.found} 个`);
+      // When the program measured a size unlike the circle drawn, say both (drawnA is empty when nothing was drawn in).
+      const drawn = c.drawnA?.[g.size];
+      const differs = drawn > 0 && Math.abs(drawn - g.sizeA) > 0.05 * drawn;
+      const nm = Math.round(g.sizeA / 10);
+      l.append(cb, differs ? `像例 ${g.like + 1} · 程序量出约 ${nm} nm（你圈的约 ${Math.round(drawn / 10)} nm）：${g.found} 个` : `像例 ${g.like + 1} · 约 ${nm} nm：${g.found} 个`);
       return l;
     })));
     $("sta-circled-sizes").hidden = gs.length < 2 || new Set(gs.map((g) => g.size)).size < 2;
