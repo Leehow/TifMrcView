@@ -502,7 +502,9 @@ fn has_tilts(path: &str, nz: usize) -> bool {
 /// `tmv run`: picks the command for what the input is.
 fn run(o: &Opts) -> Result<Value> {
     let input = o.input()?;
-    let (cmd, why) = if Path::new(input).is_dir() {
+    let (cmd, why) = if Path::new(input).is_dir() && crate::tomo::session::scan(input).is_ok_and(|s| !s.series.is_empty()) {
+        ("tomo", "a folder of tilt series")
+    } else if Path::new(input).is_dir() {
         ("spa", "a folder of micrographs or movies")
     } else if ext(input) == "mdoc" {
         ("tomo", "a SerialEM .mdoc of a tilt series")
@@ -543,13 +545,29 @@ fn tomo(o: &Opts) -> Result<Value> {
     let pixel = o.number("pixel")?;
     let progress = Progress::new();
     let report = |s: &str, i: usize, n: usize| progress.report(s, i, n);
+    // A folder: every tilt series in it, first the quick pass (movies,
+    // a look at the views, alignment, a quick tomogram), then the
+    // tomograms asked for of the series worth it.
+    if Path::new(input).is_dir() {
+        use crate::tomo::session;
+        let (dev, backend) = device();
+        let mut s = session::prepare(dev, input, &[], &report, &|| {})?;
+        progress.done();
+        if purpose != auto::Purpose::Survey {
+            s = session::finish(dev, input, purpose, &[], &report, &|| {})?;
+            progress.done();
+        }
+        let mut v = serde_json::to_value(&s)?;
+        v["backend"] = json!(backend);
+        return Ok(v);
+    }
     let mut motion = Value::Null;
     let stack = if ext(input) == "mdoc" {
         let stem = input.strip_suffix(".mdoc").unwrap_or(input);
         let stem = stem.strip_suffix(".mrc").unwrap_or(stem);
         let output = format!("{stem}.mrc");
         crate::motion::begin();
-        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true };
+        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false };
         let r = crate::motion::series::run(&req, &report)?;
         progress.done();
         let Some(path) = r.path.clone() else { bail!("no movies found beside the mdoc") };

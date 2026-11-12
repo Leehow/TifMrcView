@@ -191,7 +191,7 @@ pub struct RunReq {
     pub t: usize,
     pub params: Params,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionResult {
     pub path: String,
@@ -275,6 +275,13 @@ pub fn run(
         progress,
     )
 }
+/// One movie corrected, still in memory: its sums and what was measured
+/// (`result` names no files yet).
+pub struct Corrected {
+    pub sums: sum::Sums,
+    pub result: MotionResult,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_movie(
     path: &str,
@@ -284,12 +291,11 @@ fn run_movie(
     z: usize,
     t: usize,
     p: &Params,
-    mut warnings: Vec<String>,
+    warnings: Vec<String>,
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<MotionResult> {
     p.validate()?;
     check_cancel()?;
-    let start = std::time::Instant::now();
     for out in [
         target.to_string(),
         output::sibling(target, "unweighted"),
@@ -301,6 +307,64 @@ fn run_movie(
             output::protect(g, &out)?;
         }
     }
+    let parent = Path::new(target)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let Corrected { sums, mut result } = correct(path, img, parent, p.diagnostics.then_some(target), c, z, t, p, warnings, progress)?;
+    let (w, h, pixel) = (result.width, result.height, result.pixel_a);
+    let weighted = sums.weighted.is_some();
+    output::single(
+        target,
+        sums.weighted.as_deref().unwrap_or(&sums.unweighted),
+        w,
+        h,
+        pixel,
+    )?;
+    result.unweighted = if p.unweighted && weighted {
+        let path = output::sibling(target, "unweighted");
+        output::single(&path, &sums.unweighted, w, h, pixel)?;
+        Some(path)
+    } else if !weighted {
+        Some(target.into())
+    } else {
+        None
+    };
+    if p.even_odd {
+        let a = output::sibling(target, "even");
+        let b = output::sibling(target, "odd");
+        output::single(&a, &sums.even, w, h, pixel)?;
+        output::single(&b, &sums.odd, w, h, pixel)?;
+        result.even = Some(a);
+        result.odd = Some(b);
+    }
+    result.path = target.into();
+    output::text(
+        Path::new(&format!("{target}.motion.json")),
+        &serde_json::to_string_pretty(&result)?,
+    )?;
+    Ok(result)
+}
+
+/// Corrects one movie in memory. `scratch` is where frames beyond the
+/// memory budget are spooled; `diagnostics` the output the before/after
+/// pictures are named after.
+#[allow(clippy::too_many_arguments)]
+pub fn correct(
+    path: &str,
+    img: Option<Arc<OpenImage>>,
+    scratch: &Path,
+    diagnostics: Option<&str>,
+    c: usize,
+    z: usize,
+    t: usize,
+    p: &Params,
+    mut warnings: Vec<String>,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<Corrected> {
+    p.validate()?;
+    check_cancel()?;
+    let start = std::time::Instant::now();
     let movie = input::Movie::open(path, img, p, c, z, t)?;
     if p.dose_weighted
         && (p.total_dose.is_some() || p.dose_per_frame.is_some())
@@ -326,11 +390,7 @@ fn run_movie(
             warnings.push("像素标定未知，输出暂以 1 Å/px 标记".into());
             1.0
         });
-    let parent = Path::new(target)
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let sp = input::Spool::prepare(&movie, p, parent, progress)?;
+    let sp = input::Spool::prepare(&movie, p, scratch, progress)?;
     let raw = sp.counts.iter().sum::<usize>();
     let alignment_start = std::time::Instant::now();
     let g = crate::align::movie_planes(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
@@ -513,35 +573,10 @@ fn run_movie(
         }
     };
     let sum_ms = timer.elapsed().as_secs_f64() * 1000.0;
-    if p.diagnostics {
+    if let Some(target) = diagnostics {
         output::diagnostics(target, &sp.original, &sums.unweighted, sp.w, sp.h)?;
     }
     let weighted = sums.weighted.is_some();
-    output::single(
-        target,
-        sums.weighted.as_deref().unwrap_or(&sums.unweighted),
-        sp.w,
-        sp.h,
-        pixel,
-    )?;
-    let unweighted = if p.unweighted && weighted {
-        let path = output::sibling(target, "unweighted");
-        output::single(&path, &sums.unweighted, sp.w, sp.h, pixel)?;
-        Some(path)
-    } else if !weighted {
-        Some(target.into())
-    } else {
-        None
-    };
-    let (even, odd) = if p.even_odd {
-        let a = output::sibling(target, "even");
-        let b = output::sibling(target, "odd");
-        output::single(&a, &sums.even, sp.w, sp.h, pixel)?;
-        output::single(&b, &sums.odd, sp.w, sp.h, pixel)?;
-        (Some(a), Some(b))
-    } else {
-        (None, None)
-    };
     let total_drift = global
         .windows(2)
         .map(|v| (v[1][0] - v[0][0]).hypot(v[1][1] - v[0][1]))
@@ -549,10 +584,10 @@ fn run_movie(
     let mean_local_motion =
         local.patches.iter().map(|p| p.magnitude).sum::<f64>() / local.patches.len().max(1) as f64;
     let result = MotionResult {
-        path: target.into(),
-        unweighted,
-        even,
-        odd,
+        path: String::new(),
+        unweighted: None,
+        even: None,
+        odd: None,
         width: sp.w,
         height: sp.h,
         frames: sp.len(),
@@ -575,9 +610,5 @@ fn run_movie(
         dose_weighted: weighted,
         warnings,
     };
-    output::text(
-        Path::new(&format!("{target}.motion.json")),
-        &serde_json::to_string_pretty(&result)?,
-    )?;
-    Ok(result)
+    Ok(Corrected { sums, result })
 }

@@ -117,6 +117,27 @@ pub struct Dataset {
     pub ctf: Option<Ctf>,
     #[serde(default)]
     pub tomograms: Vec<Tomogram>,
+    /// What each view shows on its own and whether the program would use
+    /// it (`triage`); empty until the views were looked at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<super::triage::ViewCheck>,
+    /// The user's own choice per section: true keeps a view the program
+    /// would leave out, false drops one. Never changed by the program.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub picks: std::collections::BTreeMap<usize, bool>,
+    /// What the program makes of the series as a whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<super::triage::Verdict>,
+    /// The user's choice for the whole series (None: the program's verdict).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub take: Option<bool>,
+    /// The aligned views at a small size, to look at how well they align.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aligned: Option<String>,
+    /// The tomogram to look at that the one-click reconstruction made last
+    /// for each purpose ("survey", "display", "sta").
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub made: std::collections::BTreeMap<String, String>,
 }
 
 /// Where the dataset of a stack is kept: `2_tomograms/<stem>.tomo.json` of
@@ -156,6 +177,12 @@ impl Dataset {
             alignment: None,
             ctf: None,
             tomograms: Vec::new(),
+            checks: Vec::new(),
+            picks: Default::default(),
+            verdict: None,
+            take: None,
+            aligned: None,
+            made: Default::default(),
         })
     }
 

@@ -54,6 +54,13 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    pub fn name(self) -> &'static str {
+        match self {
+            Purpose::Survey => "survey",
+            Purpose::Display => "display",
+            Purpose::Sta => "sta",
+        }
+    }
     /// Output voxel size aimed at, Å.
     fn voxel(self) -> f64 {
         match self {
@@ -186,7 +193,33 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         phase: false,
         backend: None,
     };
-    let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None };
+    // What each view shows on its own (`triage`): a stack that did not come
+    // from this program's motion correction is looked at here.
+    if d.checks.len() != d.angles.len() {
+        super::triage::survey(&img, d)?;
+        d.save()?;
+    }
+    // The views left out before anything is measured on them: the ones
+    // that show nothing usable, and the user's own choice.
+    let out = super::triage::excluded(d);
+    if d.angles.len() - out.len() < 3 {
+        bail!("能用的图不到三张，无法重构");
+    }
+    // An alignment made with other views than these: fewer views now go
+    // on from its tracks, a view taken back in is tracked again.
+    if let Some(a) = d.alignment.clone() {
+        let mut have: Vec<usize> = a.views.iter().filter(|v| v.excluded).map(|v| v.file_index).collect();
+        have.sort_unstable();
+        if have != out {
+            let grown = have.iter().all(|z| out.contains(z));
+            let again = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: Some(a.axis), bin: a.bin, sweep: false, patch: Some(a.patch), excluded: out.clone(), groups: None, previous: grown.then_some(a) };
+            d.alignment = Some(super::align(&img, &again, &|i, n| stage(1)("倾转对齐", i, n))?);
+            d.aligned = None;
+            d.save()?;
+        }
+    }
+    let fresh_alignment = d.alignment.is_none();
+    let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: out, groups: None, previous: None };
     match (d.alignment.is_none(), d.ctf.is_none()) {
         // With the acquisition's axis known, the CTF does not wait for the
         // alignment: both run at once (the CTF on a copy of the dataset).
@@ -229,6 +262,35 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             d.save()?;
         }
         selection.extend(batches);
+        // Views this left out are the program's choice like the others:
+        // shown to the user, who may take them back.
+        let mut noted = false;
+        for v in d.alignment.as_ref().unwrap().views.iter().filter(|v| v.excluded) {
+            if let Some(c) = d.checks.iter_mut().find(|c| c.z == v.file_index).filter(|c| c.bad.is_none()) {
+                if !d.picks.contains_key(&v.file_index) {
+                    c.bad = Some("和其他图对不齐，去掉后断层图更清楚".into());
+                    noted = true;
+                }
+            }
+        }
+        if noted {
+            let dropped: Vec<usize> = d.picks.iter().filter(|(_, keep)| !**keep).map(|(z, _)| *z).collect();
+            d.verdict = Some(super::triage::verdict(&d.checks, &dropped));
+            d.aligned = None;
+            d.save()?;
+        }
+    }
+    check_cancel()?;
+    // The aligned views at a small size, for the user to see how well the
+    // series aligned (played as a film, the specimen turns about a still axis).
+    if fresh_alignment || d.aligned.as_ref().is_none_or(|p| !std::path::Path::new(p).exists()) {
+        let small = [4usize, 8, 16].into_iter().find(|b| w.max(h) / b <= 1024).unwrap_or(16);
+        let (views, sw, sh, _) = output::aligned(&img, d.alignment.as_ref().unwrap(), small, 0, 0, &|i, n| stage(3)("对齐预览", i, n))?;
+        let name = format!("{}_aligned.mrc", std::path::Path::new(&d.stack).file_stem().and_then(|s| s.to_str()).unwrap_or("stack"));
+        let file = crate::project_dirs::output_file(&d.stack, crate::project_dirs::TOMOGRAMS, &name).to_string_lossy().into_owned();
+        output::write_mrc(&file, &views, [sw, sh, views.len() / (sw * sh)], px * small as f64, false)?;
+        d.aligned = Some(file);
+        d.save()?;
     }
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
@@ -299,6 +361,9 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(k)("导出 RELION 5", i, n))?;
         relion = Some(parent.join(format!("{name}_relion5")).to_string_lossy().into_owned());
     }
+    let shown = look.as_ref().map_or(path.clone(), |l: &Look| l.path.clone());
+    d.made.insert(req.purpose.name().into(), shown);
+    d.save()?;
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);

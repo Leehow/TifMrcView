@@ -42,7 +42,7 @@ impl Model {
         })
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Patch {
     pub centre: [f64; 2],
@@ -51,7 +51,7 @@ pub struct Patch {
     pub magnitude: f64,
     pub vector: [f64; 2],
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Local {
     pub model: Model,

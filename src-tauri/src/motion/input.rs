@@ -210,7 +210,7 @@ impl Spool {
         }
         let group = if p.group == 0 {
             if matches!(movie, Movie::Eer(_)) {
-                n.div_ceil(40)
+                n.div_ceil(eer_frames(p.total_dose))
             } else {
                 1
             }
@@ -253,7 +253,7 @@ impl Spool {
         // Auto grouping balances the remainder: a one-fraction last frame
         // otherwise has much lower SNR than the rest of a 600–1000-frame EER.
         let groups: Vec<_> = if p.group == 0 && matches!(movie, Movie::Eer(_)) {
-            let frames = n.min(40);
+            let frames = n.min(eer_frames(p.total_dose));
             (0..frames)
                 .map(|i| (i * n / frames, (i + 1) * n / frames - i * n / frames))
                 .collect()
@@ -313,6 +313,21 @@ impl Spool {
         }
         spool.prepare_ms = now.elapsed().as_secs_f64() * 1000.0;
         Ok(spool)
+    }
+}
+
+/// Dose a frame needs for its shift to be measured, e⁻/Å².
+const FRAME_DOSE: f64 = 0.4;
+
+/// How many frames an EER movie's fractions are grouped into: about
+/// `FRAME_DOSE` each when the movie's dose is known (a tilt image of
+/// 3 e⁻/Å² gives 8; in 40 frames each would hold a thirteenth of an electron
+/// per Å², and its measured shift would be noise), at least 4 and at most 40;
+/// 40 when it is not known.
+pub fn eer_frames(total_dose: Option<f64>) -> usize {
+    match total_dose {
+        Some(d) if d > 0.0 => ((d / FRAME_DOSE).round() as usize).clamp(4, 40),
+        _ => 40,
     }
 }
 

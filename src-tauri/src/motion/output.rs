@@ -78,6 +78,101 @@ pub fn write(
     drop(temp);
     Ok(())
 }
+/// A float32 MRC stack written a section at a time, in any order: a tilt
+/// series fills in as its movies are corrected (in the order they were
+/// recorded, not of the tilt), and a run that was stopped goes on where it
+/// was. Sections not yet written read as zeros.
+pub struct Sections {
+    file: fs::File,
+    pub w: usize,
+    pub h: usize,
+    pub n: usize,
+    px: f64,
+}
+
+impl Sections {
+    fn bytes(w: usize, h: usize, n: usize) -> u64 {
+        1024 + (w * h * n) as u64 * 4
+    }
+
+    /// Whether `path` is such a stack of exactly this size (to go on with).
+    pub fn fits(path: &str, w: usize, h: usize, n: usize) -> bool {
+        fs::metadata(path).is_ok_and(|m| m.len() == Self::bytes(w, h, n))
+    }
+
+    /// Opens the stack to go on with (`keep`, when it `fits`), else starts it.
+    pub fn open(path: &str, w: usize, h: usize, n: usize, px: f64, keep: bool) -> Result<Self> {
+        if w == 0 || h == 0 || n == 0 {
+            bail!("空电影输出");
+        }
+        let keep = keep && Self::fits(path, w, h, n);
+        let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(!keep).open(path)?;
+        if !keep {
+            file.write_all(&crate::align::mrc_header(w, h, n, px, [0.0; 4], "TifMrcView Pro: native motion correction"))?;
+            file.set_len(Self::bytes(w, h, n))?;
+        }
+        Ok(Sections { file, w, h, n, px })
+    }
+
+    /// Writes section `i`; returns its least, greatest, sum and sum of squares.
+    pub fn write(&mut self, i: usize, v: &[f32]) -> Result<[f64; 4]> {
+        if i >= self.n || v.len() != self.w * self.h || v.iter().any(|x| !x.is_finite()) {
+            bail!("电影输出尺寸或值无效");
+        }
+        let (mut lo, mut hi, mut sum, mut sum2) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0);
+        for x in v {
+            let x = *x as f64;
+            lo = lo.min(x);
+            hi = hi.max(x);
+            sum += x;
+            sum2 += x * x;
+        }
+        let bytes: Vec<u8> = v.iter().flat_map(|v| v.to_le_bytes()).collect();
+        self.file.seek(SeekFrom::Start(1024 + (i * self.w * self.h) as u64 * 4))?;
+        self.file.write_all(&bytes)?;
+        Ok([lo, hi, sum, sum2])
+    }
+
+    pub fn read(&mut self, i: usize) -> Result<Vec<f32>> {
+        use std::io::Read;
+        if i >= self.n {
+            bail!("电影输出层号无效");
+        }
+        let mut bytes = vec![0u8; self.w * self.h * 4];
+        self.file.seek(SeekFrom::Start(1024 + (i * self.w * self.h) as u64 * 4))?;
+        self.file.read_exact(&mut bytes)?;
+        Ok(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect())
+    }
+
+    /// Keeps only the sections `keep` (rising), moved up into their places.
+    pub fn compact(&mut self, keep: &[usize]) -> Result<()> {
+        for (to, &from) in keep.iter().enumerate() {
+            if from != to {
+                let v = self.read(from)?;
+                self.write(to, &v)?;
+            }
+        }
+        self.n = keep.len();
+        self.file.set_len(Self::bytes(self.w, self.h, self.n))?;
+        Ok(())
+    }
+
+    /// Writes the header for what the sections hold (`stats` as `write`
+    /// returned them, one per section) and flushes the file.
+    pub fn finish(&mut self, stats: &[[f64; 4]]) -> Result<()> {
+        let count = (self.w * self.h * stats.len().max(1)) as f64;
+        let lo = stats.iter().map(|s| s[0]).fold(f64::INFINITY, f64::min);
+        let hi = stats.iter().map(|s| s[1]).fold(f64::NEG_INFINITY, f64::max);
+        let mean = stats.iter().map(|s| s[2]).sum::<f64>() / count;
+        let sd = (stats.iter().map(|s| s[3]).sum::<f64>() / count - mean * mean).max(0.0).sqrt();
+        let stats = if stats.is_empty() { [0.0; 4] } else { [lo as f32, hi as f32, mean as f32, sd as f32] };
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(&crate::align::mrc_header(self.w, self.h, self.n, self.px, stats, "TifMrcView Pro: native motion correction"))?;
+        self.file.sync_all()?;
+        Ok(())
+    }
+}
+
 pub fn single(path: &str, v: &[f32], w: usize, h: usize, px: f64) -> Result<()> {
     write(path, w, h, 1, px, |_| Ok(v.to_vec()))
 }

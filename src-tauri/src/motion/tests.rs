@@ -339,6 +339,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
                 ..Default::default()
             },
             drop_tilts: false,
+            fresh: false,
         },
         &|_, _, _| {},
     )
@@ -378,6 +379,79 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
         .file_name()
         .to_string_lossy()
         .starts_with(".motion-work")));
+}
+
+#[test]
+fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
+    begin();
+    let dir = tempfile::tempdir().unwrap();
+    let frames = vec![texture(128, 128); 4];
+    for (name, scale) in [("a.mrc", 1.0), ("b.mrc", 2.0), ("c.mrc", 3.0), ("d.mrc", 4.0)] {
+        let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
+        stack(&dir.path().join(name), &data, 128, 128);
+    }
+    // Recorded 0°, +3°, −3°, +6°; the movie of +6° is not a movie.
+    std::fs::write(dir.path().join("d.mrc"), b"broken").unwrap();
+    let text = "PixelSpacing = 2\nVoltage = 300\n[ZValue = 0]\nTiltAngle = 0\nSubFramePath = a.mrc\nExposureDose = 2\n[ZValue = 1]\nTiltAngle = 3\nSubFramePath = b.mrc\nExposureDose = 2\n[ZValue = 2]\nTiltAngle = -3\nSubFramePath = c.mrc\nExposureDose = 2\n[ZValue = 3]\nTiltAngle = 6\nSubFramePath = d.mrc\nExposureDose = 2\n";
+    let mdoc = dir.path().join("ts.mdoc");
+    std::fs::write(&mdoc, text).unwrap();
+    let req = series::SeriesReq {
+        mdoc: mdoc.to_string_lossy().into(),
+        folder: None,
+        output: dir.path().join("ts.mrc").to_string_lossy().into(),
+        params: Params { backend: "cpu".into(), local: false, dose_weighted: false, working_size: 128, ..Default::default() },
+        drop_tilts: true,
+        fresh: false,
+    };
+    let seen = std::sync::Mutex::new(Vec::<String>::new());
+    let note = |s: &str, _: usize, _: usize| seen.lock().unwrap().push(s.to_string());
+    let first = series::run(&req, &note).unwrap();
+    assert!(first.complete && first.angles == [-3.0, 0.0, 3.0], "{:?}", first.angles);
+    assert!(first.records[3].skipped.is_some() && first.records[3].section.is_none());
+    assert_eq!(first.records.iter().map(|r| r.section).collect::<Vec<_>>(), [Some(1), Some(2), Some(0), None]);
+    let read = |path: &str| {
+        let i = OpenImage::new(0, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
+        (0..i.info().size_z).map(|z| (0..128 * 128).map(|j| i.page(z).unwrap()[0].data.get_f64(j)).sum::<f64>()).collect::<Vec<f64>>()
+    };
+    let stack_path = first.path.clone().unwrap();
+    let sums = read(&stack_path);
+    assert_eq!(sums.len(), 3);
+    assert!(sums[0] > 2.9 * sums[1] && sums[2] > 1.9 * sums[1], "sections follow the tilt: {sums:?}");
+    assert_eq!(read(first.small.as_ref().unwrap()).len(), 3);
+    // What each view shows went to the dataset, the views judged.
+    let d = crate::tomo::dataset::Dataset::open(&stack_path, 3, None).unwrap();
+    assert_eq!(d.checks.iter().map(|c| c.angle).collect::<Vec<_>>(), [-3.0, 0.0, 3.0]);
+    assert!(d.checks.iter().all(|c| c.mean > 0.0 && c.drift_a.is_some()) && d.verdict.is_some());
+    // Done: asked again, nothing is corrected.
+    seen.lock().unwrap().clear();
+    let again = series::run(&req, &note).unwrap();
+    assert!(again.complete && again.angles == first.angles && seen.lock().unwrap().iter().all(|s| s.split(" · ").count() < 3));
+    // Stopped after two movies (the stacks laid out for all four, the
+    // third's place still empty): only the rest is corrected.
+    let state = format!("{stack_path}.motion-series.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    v["complete"] = false.into();
+    v["shape"] = serde_json::json!([128, 128, 4]);
+    v["records"].as_array_mut().unwrap().truncate(2);
+    std::fs::write(&state, v.to_string()).unwrap();
+    for f in [stack_path.clone(), first.even.clone().unwrap(), first.odd.clone().unwrap()] {
+        let mut s = output::Sections::open(&f, 128, 128, 3, 2.0, true).unwrap();
+        let planes: Vec<Vec<f32>> = (0..3).map(|i| s.read(i).unwrap()).collect();
+        drop(s);
+        let mut s = output::Sections::open(&f, 128, 128, 4, 2.0, false).unwrap();
+        // a (0°) and b (+3°) at the places they had among four: 1 and 2.
+        s.write(1, &planes[1]).unwrap();
+        s.write(2, &planes[2]).unwrap();
+    }
+    seen.lock().unwrap().clear();
+    let resumed = series::run(&req, &note).unwrap();
+    let corrected: Vec<String> = seen.lock().unwrap().iter().filter(|s| s.split(" · ").count() >= 3 && s.contains("运动校正")).map(|s| s.split(" · ").nth(1).unwrap_or("").to_string()).collect();
+    assert!(!corrected.is_empty() && corrected.iter().all(|s| s.starts_with("-3") || s.starts_with("+6")), "{corrected:?}");
+    assert!(resumed.complete && resumed.angles == first.angles);
+    let after = read(&stack_path);
+    for (a, b) in sums.iter().zip(&after) {
+        assert!((a - b).abs() < 1e-3 * a.abs(), "{sums:?} {after:?}");
+    }
 }
 
 #[test]
