@@ -2005,7 +2005,11 @@ impl TomoJob {
     fn begin() -> CmdResult<Self> {
         use std::sync::atomic::Ordering;
         TOMO_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "断层任务正在运行".to_string())?;
+        // Everything `tomo_cancel` raises: a stop of the last job must not stop this one.
         crate::tomo::CANCEL.store(false, Ordering::SeqCst);
+        crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
+        crate::wedge::CANCEL.store(false, Ordering::SeqCst);
+        crate::ctf::CANCEL.store(false, Ordering::SeqCst);
         Ok(Self)
     }
 }
