@@ -141,7 +141,7 @@
 
   q(".cs-pick").onclick = async () => {
     let dir = null;
-    try { dir = await invoke("pick_folder", { dir: folder || (S.info ? saveDir() : null) }); } catch (e) { return W.status(`无法选择文件夹：${e}`); }
+    try { dir = await invoke("pick_folder", { dir: folder || (S.info ? saveDir() : "") }); } catch (e) { return W.status(`无法选择文件夹：${e}`); }
     if (!dir) return;
     folder = dir;
     chose = true;
