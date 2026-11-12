@@ -1922,6 +1922,16 @@ async fn tomo_session_run(app: AppHandle, req: TomoSessionRun) -> CmdResult<crat
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         let emit = tomo_emit(&app);
         let changed = || { let _ = app.emit("tomo-session", serde_json::json!({ "folder": req.folder })); };
+        // The wall follows a long step too, not only its end.
+        let told = std::sync::Mutex::new(std::time::Instant::now());
+        let emit = |stage: &str, done: usize, total: usize| {
+            emit(stage, done, total);
+            let mut t = told.lock().unwrap_or_else(|e| e.into_inner());
+            if t.elapsed().as_secs() >= 2 {
+                *t = std::time::Instant::now();
+                changed();
+            }
+        };
         match req.purpose {
             None => crate::tomo::session::prepare(dev, &req.folder, &req.only, &emit, &changed),
             Some(p) => crate::tomo::session::finish(dev, &req.folder, p, &req.only, &emit, &changed),

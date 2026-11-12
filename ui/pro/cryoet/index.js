@@ -31,7 +31,7 @@
   panel.innerHTML = `
     <div class="al-head"><b>Cryo-ET · 冷冻电子断层</b><button id="cryo-close" class="small" title="关闭">✕</button></div>
     <div id="cryo-dataset">
-      <span id="cryo-dataset-name" class="dim">还没有倾转序列</span>
+      <span id="cryo-dataset-name" class="dim"></span>
       <button id="cryo-use" class="small" title="把当前打开的倾转序列作为工作区的数据集">使用当前叠层</button>
       <button id="cryo-export" class="small" title="把对齐、CTF 等结果导出给其他软件" disabled>导出…</button>
     </div>
@@ -97,7 +97,7 @@
   // Makes `d` the workspace's dataset and lets every step show it.
   W.setDataset = (d) => {
     W.dataset = d;
-    $("cryo-dataset-name").textContent = d ? `数据集：${W.name(d.stack)} · ${d.angles.length} 个倾角` : "还没有倾转序列";
+    $("cryo-dataset-name").textContent = d?.angles.length ? `数据集：${W.name(d.stack)} · ${d.angles.length} 个倾角` : "";
     $("cryo-export").disabled = !d?.alignment;
     marks();
     for (const h of W.hooks.values()) h.dataset?.(d);
