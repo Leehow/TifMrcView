@@ -46,6 +46,7 @@ uniform int pickPass;
 uniform vec3 pickColor;
 uniform int ortho;       // eye is a direction, not a point
 uniform float ao;        // 0 = off .. 1
+uniform int quick;       // while the view is dragged: no occlusion rays, an even dimming instead
 uniform float gloss;     // highlight strength
 uniform usampler3D labels;
 uniform sampler2D lut;
@@ -92,7 +93,7 @@ void main() {
   float diff = max(dot(nn, l), 0.0);
   float fill = max(dot(nn, v), 0.0);
   float spec = pow(max(dot(nn, normalize(l + v)), 0.0), 48.0);
-  float a = ao > 0.0 ? 1.0 - ao * occlusion() : 1.0;
+  float a = ao > 0.0 ? 1.0 - ao * (quick == 1 ? 0.2 : occlusion()) : 1.0;
   // Figures get more ambient light, so shaded and occluded parts keep their colour.
   vec3 c = ao > 0.0
     ? color * (0.34 * a + (0.48 * diff + 0.26 * fill) * mix(1.0, a, 0.45)) + vec3(gloss * spec * a)
@@ -170,7 +171,7 @@ void main() {
       this.mesh = link(MESH_VERT, MESH_FRAG);
       this.slice = link(SLICE_VERT, SLICE_FRAG);
       this.um = {};
-      for (const k of ["viewProj", "dims", "extent", "color", "eye", "glow", "pickPass", "pickColor", "ortho", "ao", "gloss", "labels", "lut", "labDims"]) this.um[k] = gl.getUniformLocation(this.mesh, k);
+      for (const k of ["viewProj", "dims", "extent", "color", "eye", "glow", "pickPass", "pickColor", "ortho", "ao", "quick", "gloss", "labels", "lut", "labDims"]) this.um[k] = gl.getUniformLocation(this.mesh, k);
       this.us = {};
       for (const k of ["viewProj", "extent", "z", "vol", "remap", "window", "pickPass"]) this.us[k] = gl.getUniformLocation(this.slice, k);
       this.vao = gl.createVertexArray();
@@ -243,6 +244,7 @@ void main() {
         // Occlusion needs the label volume (o.labels: {tex, unit, lut, lutUnit, dims}).
         const lab = !pick && o.ao > 0 && o.labels;
         gl.uniform1f(this.um.ao, lab ? o.ao : 0);
+        gl.uniform1i(this.um.quick, o.quick ? 1 : 0);
         if (lab) {
           gl.activeTexture(gl.TEXTURE0 + lab.unit);
           gl.bindTexture(gl.TEXTURE_3D, lab.tex);

@@ -591,6 +591,8 @@ void main() { outColor = vec4(1.0); }`;
       if (s.mode === 3) {
         this.last = { vp, eye, viewport: [x0, 0, vw, h], w, h };
         if (!this.scene) return;
+        // Dragging stays smooth on any GPU: the occlusion rays wait for the still frame.
+        this.quick = fast;
         if (s.fig) this.drawFigure(null, w, h, this.last.viewport, 1);
         else this.scene.draw(this.sceneOptions());
         return;
@@ -763,7 +765,7 @@ void main() { outColor = vec4(1.0); }`;
       return {
         vp: this.last.vp, eye: this.last.eye, extent: ext, slice: f && f.slice === false ? null : slice,
         colorOf: this.objectColor, selected: this.exporting ? -1 : this.selected,
-        ortho: s.ortho, ao: f ? f.ao : 0, gloss: f ? f.gloss : 0.35, labels,
+        ortho: s.ortho, ao: f ? f.ao : 0, quick: !!this.quick && !this.exporting, gloss: f ? f.gloss : 0.35, labels,
       };
     }
 
