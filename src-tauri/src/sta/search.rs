@@ -366,6 +366,173 @@ pub(super) fn flat_variance(v: &[f32], mean: f32) -> f64 {
     (FLAT * FLAT * var).max(1e-12)
 }
 
+/// Side of the cubes the spectrum of a tomogram is measured on.
+const SPECTRUM: usize = 32;
+/// Half the side of the kernel that flattens a tomogram.
+const FLATTEN: usize = 6;
+/// The flattened tomogram keeps frequencies up to this share of the
+/// sampling limit in full and fades out towards the limit: the last part
+/// holds little but what binning and interpolation left there.
+const FLAT_TO: f64 = 0.6;
+
+/// The kernel (side `2 · FLATTEN + 1`, the same in every direction) that
+/// gives `v` the same power at every spatial frequency: the inverse root
+/// of its spectrum, measured over cubes taken through it. None for a
+/// tomogram that holds nothing.
+pub fn flattener(v: &[f32], dims: [usize; 3]) -> Option<Vec<f32>> {
+    use crate::spa::fourier::{freq, ft3, ift3};
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    let n = SPECTRUM;
+    // Mirrored back into the volume, so a thin tomogram gives cubes too.
+    let within = |i: usize, len: usize| -> usize {
+        let k = i % (2 * len);
+        if k < len { k } else { 2 * len - 1 - k }
+    };
+    let window: Vec<f32> = (0..n).map(|i| (0.5 - 0.5 * (std::f64::consts::TAU * (i as f64 + 0.5) / n as f64).cos()) as f32).collect();
+    let shells = n / 2 + 1;
+    let mut rng = crate::spa::Rng(0xf1a7);
+    let starts: Vec<[usize; 3]> = (0..200).map(|_| [rng.below(nx), rng.below(ny), rng.below(nz)]).collect();
+    let (power, count) = starts
+        .par_iter()
+        .map(|o| {
+            let mut cube = vec![0f32; n * n * n];
+            for z in 0..n {
+                let sz = within(o[2] + z, nz);
+                for y in 0..n {
+                    let sy = within(o[1] + y, ny);
+                    for x in 0..n {
+                        cube[(z * n + y) * n + x] = v[(sz * ny + sy) * nx + within(o[0] + x, nx)];
+                    }
+                }
+            }
+            let mean = cube.iter().map(|x| *x as f64).sum::<f64>() / cube.len() as f64;
+            for z in 0..n {
+                for y in 0..n {
+                    for x in 0..n {
+                        let c = &mut cube[(z * n + y) * n + x];
+                        *c = (*c - mean as f32) * window[x] * window[y] * window[z];
+                    }
+                }
+            }
+            let (re, im) = ft3(n, &cube);
+            let (mut power, mut count) = (vec![0f64; shells], vec![0f64; shells]);
+            for i in 0..re.len() {
+                let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+                let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt().round() as usize;
+                if r < shells {
+                    power[r] += (re[i] as f64).powi(2) + (im[i] as f64).powi(2);
+                    count[r] += 1.0;
+                }
+            }
+            (power, count)
+        })
+        .reduce(
+            || (vec![0f64; shells], vec![0f64; shells]),
+            |mut a, b| {
+                for s in 0..shells {
+                    a.0[s] += b.0[s];
+                    a.1[s] += b.1[s];
+                }
+                a
+            },
+        );
+    let power: Vec<f64> = power.iter().zip(&count).map(|(p, c)| p / c.max(1.0)).collect();
+    let most = power.iter().skip(1).copied().fold(0.0, f64::max);
+    if most <= 0.0 {
+        return None;
+    }
+    // The gain at each shell: the inverse root of the power there (not
+    // below a millionth of the most: a shell binning emptied stays empty),
+    // nothing at zero frequency, fading out towards the sampling limit.
+    let limit = (n / 2) as f64;
+    let gain: Vec<f64> = (0..shells)
+        .map(|s| {
+            if s == 0 {
+                return 0.0;
+            }
+            let f = s as f64 / limit;
+            let fade = if f <= FLAT_TO { 1.0 } else { (0.5 * std::f64::consts::PI * (f - FLAT_TO) / (1.0 - FLAT_TO)).cos().powi(2) };
+            fade / power[s].max(1e-6 * most).sqrt()
+        })
+        .collect();
+    let mut re = vec![0f32; n * n * n];
+    for i in 0..re.len() {
+        let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+        let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt();
+        let (lo, part) = (r.floor() as usize, r.fract());
+        if lo + 1 < shells {
+            re[i] = (gain[lo] * (1.0 - part) + gain[lo + 1] * part) as f32;
+        } else if lo < shells {
+            re[i] = (gain[lo] * (1.0 - part)) as f32;
+        }
+    }
+    let full = ift3(n, &re, &vec![0f32; n * n * n]);
+    // Its middle, faded to nothing at the edge, summing to zero.
+    let c = FLATTEN as isize;
+    let k = 2 * FLATTEN + 1;
+    let mut kernel = vec![0f64; k * k * k];
+    let mut fade = vec![0f64; k * k * k];
+    for z in -c..=c {
+        for y in -c..=c {
+            for x in -c..=c {
+                let r = ((x * x + y * y + z * z) as f64).sqrt() / (c + 1) as f64;
+                let w = if r < 1.0 { (0.5 * std::f64::consts::PI * r).cos().powi(2) } else { 0.0 };
+                let at = (((z + c) * k as isize + y + c) * k as isize + x + c) as usize;
+                let from = (((z + (n / 2) as isize) * n as isize + y + (n / 2) as isize) * n as isize + x + (n / 2) as isize) as usize;
+                kernel[at] = full[from] as f64 * w;
+                fade[at] = w;
+            }
+        }
+    }
+    let off = kernel.iter().sum::<f64>() / fade.iter().sum::<f64>();
+    let kernel: Vec<f64> = kernel.iter().zip(&fade).map(|(k, w)| k - off * w).collect();
+    let norm = kernel.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-30);
+    Some(kernel.iter().map(|x| (x / norm) as f32).collect())
+}
+
+/// `v` with the same power at every spatial frequency (`flattener`). A
+/// tomogram's power lies mostly in its slow variations, and in a cell in
+/// its membranes: two pieces of it then correlate whatever they hold, and
+/// a picture that holds a piece of membrane fits every membrane. With the
+/// spectrum flat, each frequency counts the same, so what is particular
+/// to a picture counts as much as what it shares with everything
+/// (whitening before matched filtering; as used in template matching,
+/// e.g. Rickgauer, Grigorieff and Denk, eLife 6, 2017).
+pub fn flattened(v: &[f32], dims: [usize; 3]) -> Vec<f32> {
+    let Some(kernel) = flattener(v, dims) else { return v.to_vec() };
+    let [nx, ny, nz] = dims;
+    let c = FLATTEN;
+    let k = 2 * c + 1;
+    let within = |i: isize, len: usize| -> usize {
+        let period = 2 * len as isize;
+        let j = i.rem_euclid(period);
+        (if j < len as isize { j } else { period - 1 - j }) as usize
+    };
+    let mut out = vec![0f32; v.len()];
+    out.par_chunks_mut(nx).enumerate().for_each(|(row, o)| {
+        let (y, z) = (row % ny, row / ny);
+        let mut padded = vec![0f32; nx + 2 * c];
+        for dz in 0..k {
+            let sz = within(z as isize + dz as isize - c as isize, nz);
+            for dy in 0..k {
+                let sy = within(y as isize + dy as isize - c as isize, ny);
+                let src = &v[(sz * ny + sy) * nx..(sz * ny + sy + 1) * nx];
+                for (i, p) in padded.iter_mut().enumerate() {
+                    *p = src[within(i as isize - c as isize, nx)];
+                }
+                let taps = &kernel[(dz * k + dy) * k..(dz * k + dy + 1) * k];
+                for (dx, t) in taps.iter().enumerate() {
+                    for (a, b) in o.iter_mut().zip(&padded[dx..dx + nx]) {
+                        *a += t * b;
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
 /// The tomogram with its phases scrambled, block by block (`block`³, a
 /// power of two; blocks at the far faces are filled out by mirroring):
 /// everywhere the power it has there at every frequency, in the shape of
@@ -591,5 +758,71 @@ fn squared_distance(f: &[f64], out: &mut [f64]) {
         }
         let d = q as f64 - at[k] as f64;
         *o = d * d + f[at[k]];
+    }
+}
+
+#[cfg(test)]
+mod flat_tests {
+    use super::*;
+    use crate::spa::fourier::{freq, ft3};
+
+    /// Power per shell of a 32³ cube from the corner of `v`.
+    fn shells(v: &[f32], dims: [usize; 3]) -> Vec<f64> {
+        let n = 32;
+        let mut cube = vec![0f32; n * n * n];
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    cube[(z * n + y) * n + x] = v[((z + 8) * dims[1] + y + 8) * dims[0] + x + 8];
+                }
+            }
+        }
+        let (re, im) = ft3(n, &cube);
+        let (mut power, mut count) = (vec![0f64; 17], vec![0f64; 17]);
+        for i in 0..re.len() {
+            let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+            let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt().round() as usize;
+            if r < 17 {
+                power[r] += (re[i] as f64).powi(2) + (im[i] as f64).powi(2);
+                count[r] += 1.0;
+            }
+        }
+        power.iter().zip(&count).map(|(p, c)| p / c).collect()
+    }
+
+    /// Noise with most of its power in slow variations has, flattened,
+    /// about the same power at every frequency a picture can tell apart,
+    /// up to `FLAT_TO` of the limit, and its level is gone.
+    #[test]
+    fn a_flattened_tomogram_has_a_flat_spectrum() {
+        let dims = [72usize, 64, 56];
+        let mut rng = crate::spa::Rng(21);
+        let mut v: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| rng.gauss() as f32).collect();
+        // Smoothed along each axis a few times: a red spectrum.
+        for step in [1, dims[0], dims[0] * dims[1]] {
+            for _ in 0..3 {
+                let a = v.clone();
+                for i in step..v.len() - step {
+                    v[i] = 0.25 * a[i - step] + 0.5 * a[i] + 0.25 * a[i + step];
+                }
+            }
+        }
+        v.iter_mut().for_each(|x| *x += 7.0);
+        let before = shells(&v, dims);
+        assert!(before[2] > 30.0 * before[9], "{before:.3?}");
+        let flat = flattened(&v, dims);
+        let after = shells(&flat, dims);
+        // Of the slowest variations (longer than a picture is wide) less is
+        // left: the short kernel and the window of the measurement both
+        // take from them, which does no harm.
+        assert!(after[1] < after[6] && after[2] < after[6], "{after:.3?}");
+        let part: Vec<f64> = after[4..=9].to_vec();
+        let (lo, hi) = (part.iter().copied().fold(f64::MAX, f64::min), part.iter().copied().fold(0.0, f64::max));
+        eprintln!("before {before:.3?}\nafter {after:.3?}");
+        assert!(hi < 2.5 * lo, "{part:.3?}");
+        assert!(after[16] < 0.2 * lo, "{after:.3?}");
+        let mean = flat.iter().map(|x| *x as f64).sum::<f64>() / flat.len() as f64;
+        let sd = (flat.iter().map(|x| (*x as f64 - mean).powi(2)).sum::<f64>() / flat.len() as f64).sqrt();
+        assert!(mean.abs() < 0.05 * sd, "{mean} {sd}");
     }
 }

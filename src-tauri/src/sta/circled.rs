@@ -50,6 +50,14 @@ pub struct Example {
 /// orientation can afford, and enough to tell shapes apart (the template
 /// search of the cards works at the same sampling).
 const ACROSS: f64 = 9.0;
+/// Trials: TMV_STA_ACROSS sets the voxels across the circle.
+fn across() -> f64 {
+    std::env::var("TMV_STA_ACROSS").ok().and_then(|v| v.parse().ok()).unwrap_or(ACROSS)
+}
+/// Trials: TMV_STA_FLAT=0 searches the images as they are.
+fn flat() -> bool {
+    std::env::var("TMV_STA_FLAT").map_or(true, |v| v != "0")
+}
 /// Side of the picture searched for.
 const N: usize = 16;
 /// Side of the picture kept of each example, at twice the sampling of the
@@ -184,8 +192,17 @@ impl Grid {
     /// when there is one and it shows them large enough, else the
     /// tomogram itself; binned so the size is about `ACROSS` voxels.
     fn of(s: &Source, size_a: f64) -> Result<Grid> {
-        let want = size_a / ACROSS;
+        let want = size_a / across();
         let raw_px = pixel_of(&s.path)?;
+        if flat() {
+            // The tomogram itself, its spectrum flattened: the clear image
+            // is made to be looked at, and has lost the detail that tells
+            // one thing from another once the slow variations are gone.
+            let bin = nearest_bin(raw_px, want);
+            let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
+            let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
+            return Ok(Grid { v: super::search::flattened(&v, dims), dims, voxel_a, bin, look: None, mask });
+        }
         let look = s.look.as_ref().and_then(|l| {
             let px = pixel_of(&l.path).ok()?;
             let bin = nearest_bin(px, want);
@@ -398,6 +415,8 @@ fn apart(first: Vec<Seen>, mut all: Vec<Seen>) -> Vec<Seen> {
 pub fn limit(gap: Option<f32>, alike: Option<f32>, noise: Option<f32>, chance: Option<f32>) -> Option<f32> {
     // Examples that are no more alike than chance say nothing.
     let alike = alike.filter(|a| noise.is_none_or(|n| *a > n));
+    // Nor does a gap that lies where chance still scores.
+    let gap = gap.filter(|g| noise.is_none_or(|n| *g > n));
     match (gap, alike) {
         (Some(g), Some(a)) => Some(g.min(a)),
         (Some(x), None) | (None, Some(x)) => Some(x),
@@ -434,12 +453,24 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // The examples' pictures, one tomogram in memory at a time.
     progress("取出例子", 0, k);
     let mut pictures: Vec<Vec<f32>> = vec![];
+    let mut home: Option<((usize, usize), Grid)> = None;
     for (i, e) in examples.iter().enumerate() {
         check_cancel()?;
-        let p = picture(&sources[e.source], e, raw_px[e.source])?.with_context(|| format!("第 {} 个圈大半在断层图外面，请圈在图里面", i + 1))?;
-        pictures.push(p);
+        let p = if flat() {
+            // From the flattened tomogram the example is searched in.
+            let key = (e.source, size_of[i]);
+            if home.as_ref().is_none_or(|h| h.0 != key) {
+                home = Some((key, Grid::of(&sources[e.source], sizes_a[key.1])?));
+            }
+            let g = &home.as_ref().unwrap().1;
+            sampled(&g.v, g.dims, g.from_raw(e.at), KEPT, diameters[i] / SPAN / g.voxel_a)
+        } else {
+            picture(&sources[e.source], e, raw_px[e.source])?
+        };
+        pictures.push(p.with_context(|| format!("第 {} 个圈大半在断层图外面，请圈在图里面", i + 1))?);
         progress("取出例子", i + 1, k);
     }
+    drop(home);
     // The picture of example `e` on a grid of `voxel` Å for things `size` Å
     // across: scaled so that its own circle is that size.
     let scaled = |e: usize, size: f64, voxel: f64| rescale_cube(&pictures[e], KEPT, diameters[e] / SPAN, N, voxel * diameters[e] / size);
@@ -612,6 +643,9 @@ mod tests {
         assert_eq!(limit(Some(0.5), Some(0.15), Some(0.2), None), Some(0.5));
         assert_eq!(limit(None, None, Some(0.2), None), None);
         assert_eq!(limit(None, Some(0.4), None, None), Some(0.4));
+        // Never where chance still scores.
+        assert_eq!(limit(Some(0.1), Some(0.15), Some(0.2), Some(0.25)), Some(0.25));
+        assert_eq!(limit(Some(0.1), Some(0.4), Some(0.2), None), Some(0.4));
     }
 
     #[test]
