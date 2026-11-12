@@ -503,13 +503,16 @@
   // on the tomogram show on its look companion and the other way round
   // (raw = scale × look + offset, as the backend carries them over); null when
   // the mark belongs to a file that is neither.
+  // One file under two spellings of its path (separators, a doubled or trailing slash) is one file.
+  const spelled = (p) => (p || "").replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/$/, "");
+  const sameFile = (a, b) => !!a && !!b && (a === b || spelled(a) === spelled(b));
   function onOpen(m) {
     const open = S.info?.path;
-    if (m.tomogram === open) return m.points;
+    if (sameFile(m.tomogram, open)) return m.points;
     for (const it of W.items) {
       if (!it.look || it.scale == null || !it.offset) continue;
-      if (it.look === m.tomogram && it.path === open) return m.points.map((p) => p.map((v, k) => it.scale * v + it.offset[k]));
-      if (it.path === m.tomogram && it.look === open) return m.points.map((p) => p.map((v, k) => (v - it.offset[k]) / it.scale));
+      if (sameFile(it.look, m.tomogram) && sameFile(it.path, open)) return m.points.map((p) => p.map((v, k) => it.scale * v + it.offset[k]));
+      if (sameFile(it.path, m.tomogram) && sameFile(it.look, open)) return m.points.map((p) => p.map((v, k) => (v - it.offset[k]) / it.scale));
     }
     return null;
   }
