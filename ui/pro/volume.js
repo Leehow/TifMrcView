@@ -225,6 +225,10 @@ void main() { outColor = vec4(1.0); }`;
     }
     return o;
   };
+  const orthographic = (halfH, aspect, near, far) => {
+    const nf = 1 / (near - far);
+    return new Float32Array([1 / (halfH * aspect), 0, 0, 0, 0, 1 / halfH, 0, 0, 0, 0, 2 * nf, 0, 0, 0, (far + near) * nf, 1]);
+  };
   const perspective = (fovy, aspect, near, far) => {
     const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
     return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
@@ -338,7 +342,9 @@ void main() { outColor = vec4(1.0); }`;
       this.setLabels(null);
       // levels[mode] = [start, full] in 0..1 of the volume's value range (surface uses start only).
       // levels[3] is unused (segmentation surfaces); slice = depth of their XY slice in 0..1.
-      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1], [0, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7, invert: false, smooth: 0, showSlice: true, slice: 0.5 };
+      this.settings = { mode: 0, levels: [[0, 1], [0.25, 1], [0.25, 1], [0, 1]], opacity: 0.2, brightness: 1.2, zScale: 1, showLabels: true, labelOpacity: 0.7, invert: false, smooth: 0, showSlice: true, slice: 0.5, ortho: false, fig: null };
+      // fig (figure.js): null, or {bg: [r, g, b, a], ao, gloss, outline, width, line, slice} for
+      // the segmentation surfaces drawn as a figure; ortho: parallel projection (true scale bars).
       this.scene = null; // surfaces.js SurfaceScene, made when surfaces arrive
       this.selected = -1; // picked object of the surfaces
       this.objectColor = () => null; // object index -> [r, g, b] in 0..1, or null when hidden
@@ -539,6 +545,7 @@ void main() { outColor = vec4(1.0); }`;
       gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
       this.hasLabels = !!ok;
+      this.labDims = ok ? [lab.w, lab.h, lab.d] : null;
       this.draw();
     }
 
@@ -574,21 +581,20 @@ void main() { outColor = vec4(1.0); }`;
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (!this.vol) return;
       // Centre the volume in the part not covered by the tools panel (app.js freeRect).
+      // (and, in figure mode, not by the figure panel on the right).
       const x0 = Math.min(w - 1, Math.round(freeRect().x0 * dpr * scale));
-      gl.viewport(x0, 0, w - x0, h);
-      this.lastViewport = [x0, 0, w - x0, h];
+      const vw = Math.max(1, w - x0 - Math.round(this.rightInset() * dpr * scale));
+      gl.viewport(x0, 0, vw, h);
+      this.lastViewport = [x0, 0, vw, h];
       const s = this.settings;
-      const eye = [
-        this.dist * Math.cos(this.pitch) * Math.sin(this.yaw),
-        this.dist * Math.sin(this.pitch),
-        this.dist * Math.cos(this.pitch) * Math.cos(this.yaw),
-      ];
-      const t = this.target;
-      const pan = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0], -t[1], -t[2], 1]);
-      const vp = mul(perspective(FOVY, (w - x0) / h, 0.05, 20), mul(lookAt(eye), pan));
+      const { vp, eye } = this.camera(vw / h);
       if (s.mode === 3) {
-        this.last = { vp, eye: eye.map((v, i) => v + t[i]), viewport: [x0, 0, w - x0, h], w, h };
-        if (this.scene) this.scene.draw(this.sceneOptions());
+        this.last = { vp, eye, viewport: [x0, 0, vw, h], w, h };
+        if (!this.scene) return;
+        // Dragging stays smooth on any GPU: the occlusion rays wait for the still frame.
+        this.quick = fast;
+        if (s.fig) this.drawFigure(null, w, h, this.last.viewport, 1);
+        else this.scene.draw(this.sceneOptions());
         return;
       }
       gl.useProgram(this.prog);
@@ -625,6 +631,124 @@ void main() { outColor = vec4(1.0); }`;
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
+    /// CSS pixels on the right covered by the figure panel.
+    rightInset() {
+      const f = window.TifMrcViewPro.figure;
+      const r = this.settings.fig && f ? f.inset() : 0;
+      return this.canvas.clientWidth - freeRect().x0 - r >= 200 ? r : 0;
+    }
+
+    /// Width / height of the part of the canvas the scene is drawn in.
+    aspect() {
+      const c = this.canvas;
+      return Math.max(1, c.clientWidth - freeRect().x0 - this.rightInset()) / Math.max(1, c.clientHeight);
+    }
+
+    /// Looks from (yaw, pitch) with the whole box just filling the view.
+    lookFrom(yaw, pitch) {
+      this.yaw = yaw;
+      this.pitch = pitch;
+      this.target = [0, 0, 0];
+      const z = [Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)];
+      const xl = Math.hypot(z[2], z[0]) || 1;
+      const x = [z[2] / xl, 0, -z[0] / xl];
+      const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+      const e = this.extent();
+      let mx = 0, my = 0;
+      for (let i = 0; i < 8; i++) {
+        const c = [i & 1 ? e[0] : -e[0], i & 2 ? e[1] : -e[1], i & 4 ? e[2] : -e[2]];
+        mx = Math.max(mx, Math.abs(c[0] * x[0] + c[1] * x[1] + c[2] * x[2]));
+        my = Math.max(my, Math.abs(c[0] * y[0] + c[1] * y[1] + c[2] * y[2]));
+      }
+      const halfH = Math.max(my, mx / this.aspect()) * 1.08;
+      this.dist = Math.max(0.3, Math.min(8, halfH / Math.tan(FOVY / 2)));
+      this.draw();
+    }
+
+    /// View-projection for a viewport of this aspect, and the eye (a point,
+    /// or with the parallel projection the direction towards the viewer).
+    camera(aspect) {
+      const s = this.settings;
+      const eye = [
+        this.dist * Math.cos(this.pitch) * Math.sin(this.yaw),
+        this.dist * Math.sin(this.pitch),
+        this.dist * Math.cos(this.pitch) * Math.cos(this.yaw),
+      ];
+      const t = this.target;
+      const pan = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0], -t[1], -t[2], 1]);
+      // The parallel projection frames what the perspective one shows at the target.
+      const proj = s.ortho
+        ? orthographic(this.dist * Math.tan(FOVY / 2), aspect, this.dist - 4, this.dist + 4)
+        : perspective(FOVY, aspect, 0.05, 20);
+      const vp = mul(proj, mul(lookAt(eye), pan));
+      return { vp, eye: s.ortho ? eye : eye.map((v, i) => v + t[i]) };
+    }
+
+    /// The surfaces as a figure (settings.fig) into framebuffer `dst` (null =
+    /// canvas) of w x h, the scene in `viewport`; outlines scaled by `scale`.
+    drawFigure(dst, w, h, viewport, scale) {
+      const gl = this.gl, s = this.settings;
+      if (!this.figure) this.figure = new window.TifMrcViewPro.surfaces.FigureTarget(gl);
+      this.figure.begin(w, h);
+      gl.viewport(...viewport);
+      this.scene.draw(this.sceneOptions());
+      // With the parallel projection depth runs evenly from dist - 4 to dist + 4;
+      // the box lies within its half diagonal of the target.
+      const r = Math.hypot(...this.extent()) / 8;
+      this.figure.compose(dst, w, h, { ...s.fig, width: (s.fig.width || 1.5) * scale * (window.devicePixelRatio || 1), cue: s.ortho ? s.fig.cue || 0 : 0, cueRange: [0.5 - r, 0.5 + r] });
+    }
+
+    /// The figure as it is on screen, rendered at w x h pixels (same view,
+    /// same aspect as the screen's free part): RGBA rows from the top.
+    snapshot(w, h) {
+      const gl = this.gl, s = this.settings;
+      if (!this.scene || !this.vol) return null;
+      const fig = s.fig || { bg: [1, 1, 1, 1], ao: 0, outline: 0 };
+      const keep = s.fig;
+      s.fig = fig;
+      this.exporting = true;
+      const { vp, eye } = this.camera(w / h);
+      const prev = this.last;
+      this.last = { vp, eye, viewport: [0, 0, w, h], w, h };
+      const fbo = gl.createFramebuffer(), rb = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, w, h);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rb);
+      // Outlines keep their width relative to the picture.
+      const scale = h / Math.max(1, prev ? prev.h : h);
+      this.drawFigure(fbo, w, h, [0, 0, w, h], scale);
+      const px = new Uint8Array(w * h * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(fbo);
+      gl.deleteRenderbuffer(rb);
+      this.figure.free(); // do not keep a poster-sized target around
+      s.fig = keep;
+      this.exporting = false;
+      this.last = prev;
+      // GL rows run from the bottom.
+      const out = new Uint8Array(px.length), row = w * 4;
+      for (let y = 0; y < h; y++) out.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+      return out;
+    }
+
+    /// Length in the image's units of one pixel of a picture `hPx` high with
+    /// the parallel projection, or 0 (perspective, or no pixel size).
+    unitsPerPixel(hPx) {
+      if (!this.settings.ortho || !this.vol || !S.px || !S.info) return 0;
+      const ext = this.extent();
+      const perWorld = (S.px.x * S.info.width) / (2 * ext[0]);
+      return (2 * this.dist * Math.tan(FOVY / 2) * perWorld) / Math.max(1, hPx);
+    }
+
+    /// Largest picture this GPU can render.
+    maxSize() {
+      const gl = this.gl;
+      return Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), ...gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+    }
+
     /// Surfaces plus the XY slice of the first channel, its grey levels at
     /// mean ± 3 standard deviations; the camera of the last frame.
     sceneOptions() {
@@ -635,7 +759,14 @@ void main() { outColor = vec4(1.0); }`;
         window: st && st.sd > 1e-3 ? [st.m - 3 * st.sd, st.m + 3 * st.sd] : [0, 1],
         z: (s.slice - 0.5) * 2 * ext[2],
       } : null;
-      return { vp: this.last.vp, eye: this.last.eye, extent: ext, slice, colorOf: this.objectColor, selected: this.selected };
+      const f = s.fig;
+      const labels = f && f.ao > 0 && this.hasLabels && this.labDims
+        ? { tex: this.labelTex, unit: MAX_CHANNELS, lut: this.lut, lutUnit: MAX_CHANNELS + 3, dims: this.labDims } : null;
+      return {
+        vp: this.last.vp, eye: this.last.eye, extent: ext, slice: f && f.slice === false ? null : slice,
+        colorOf: this.objectColor, selected: this.exporting ? -1 : this.selected,
+        ortho: s.ortho, ao: f ? f.ao : 0, quick: !!this.quick && !this.exporting, gloss: f ? f.gloss : 0.35, labels,
+      };
     }
 
     /// Mesh parsed by surfaces.js, or null.
@@ -1028,6 +1159,7 @@ void main() { outColor = vec4(1.0); }`;
   let surfToken = 0;
   let surfStale = true; // the labels changed since the surfaces were made
   const hiddenObjects = new Set();
+  let dust = 0; // objects of fewer pixels are not drawn (figure.js)
 
   function setMode(m) {
     view.settings.mode = m;
@@ -1061,7 +1193,7 @@ void main() { outColor = vec4(1.0); }`;
   function objectColor(i) {
     const labels = window.TifMrcViewPro.labels;
     const o = surfaces && surfaces.objects[i];
-    if (!o || !labels || hiddenObjects.has(i) || labels.hidden(o.label)) return null;
+    if (!o || !labels || hiddenObjects.has(i) || o.pixels < dust || labels.hidden(o.label)) return null;
     return labels.colorOf(o.label).map((x) => x / 255);
   }
 
@@ -1153,13 +1285,15 @@ void main() { outColor = vec4(1.0); }`;
     await labels.relabelObject(i, label);
   }
 
-  async function exportMesh() {
+  /// Saves the shown surfaces as OBJ; the dialog starts in `dir` when given
+  /// (the figure flow's 5_figures). Returns the path saved, or null.
+  async function exportMesh(dir) {
     const labels = window.TifMrcViewPro.labels;
-    if (!surfaces || !labels || surfToken !== S.token) return;
+    if (!surfaces || !labels || surfToken !== S.token) return null;
     const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_surfaces.obj`, filter: "OBJ", exts: ["obj"] }).catch(() => null);
-    if (!path) return;
-    setSaveDir(dirname(path));
+    const path = await invoke("pick_save_path", { dir: dir || saveDir(), name: `${stem}_surfaces.obj`, filter: "OBJ", exts: ["obj"] }).catch(() => null);
+    if (!path) return null;
+    if (!dir) setSaveDir(dirname(path));
     const shown = [...new Set(surfaces.objects.map((o) => o.label))].filter((k) => !labels.hidden(k));
     const materials = shown.map((k) => ({ label: k, name: labels.nameOf(k), color: labels.colorOf(k) }));
     const pz = S.info.pixelSize && S.info.pixelSize[2];
@@ -1167,12 +1301,15 @@ void main() { outColor = vec4(1.0); }`;
     status("正在导出网格…");
     try {
       await invoke("labels_surfaces_export", {
-        token: S.token, path, materials, skip: [...hiddenObjects],
+        token: S.token, path, materials,
+        skip: [...new Set([...hiddenObjects, ...surfaces.objects.map((o, i) => (o.pixels < dust ? i : -1)).filter((i) => i >= 0)])],
         scale: known ? [S.px.x, S.px.y, pz] : [1, 1, 1], unit: known ? S.px.unit : "pixel",
       });
       status(`已导出 ${path}`);
+      return path;
     } catch (e) {
       status(String(e));
+      return null;
     }
   }
 
@@ -1225,6 +1362,10 @@ void main() { outColor = vec4(1.0); }`;
   }
 
   function close() {
+    panel.classList.remove("vp-figure");
+    if (view) { view.settings.fig = null; view.settings.ortho = false; }
+    dust = 0;
+    if (window.TifMrcViewPro.figure) window.TifMrcViewPro.figure.closed3d();
     surfaces = null;
     hiddenObjects.clear();
     $("vp-obj").hidden = true;
@@ -1320,7 +1461,7 @@ void main() { outColor = vec4(1.0); }`;
     hiddenObjects.clear();
     showObject(-1);
   });
-  $("vp-export-obj").addEventListener("click", exportMesh);
+  $("vp-export-obj").addEventListener("click", () => exportMesh());
   $("vp-export-png").addEventListener("click", exportPicture);
   bind("vp-op", "opacity", parseFloat);
   bind("vp-br", "brightness", parseFloat);
@@ -1370,5 +1511,30 @@ void main() { outColor = vec4(1.0); }`;
     if (surfaces) showObject(view.selected);
   }
 
-  window.TifMrcViewPro.volume = { open, close, openSurfaces, parseVolume, labelsChanged, materialsChanged };
+  /// Figure mode (figure.js): the surfaces drawn with `fig` settings and the
+  /// parallel projection, the expert 3D panel put away; null leaves it.
+  function setFigure(fig) {
+    if (!view) return;
+    view.settings.fig = fig;
+    view.settings.ortho = !!fig;
+    panel.classList.toggle("vp-figure", !!fig);
+    view.draw();
+  }
+
+  window.TifMrcViewPro.volume = {
+    open, close, openSurfaces, parseVolume, labelsChanged, materialsChanged,
+    setFigure, exportMesh,
+    view: () => view,
+    isOpen: () => !canvas3d.hidden,
+    canvas: canvas3d,
+    /** Surfaces of the shown image are loaded and up to date. */
+    surfacesReady: () => !!(view && surfaces && surfToken === S.token && !surfStale && view.settings.mode === 3),
+    /** Objects hidden in 3D only. */
+    hiddenObjects: () => hiddenObjects.size,
+    showAll: () => { hiddenObjects.clear(); showObject(-1); },
+    mesh: () => surfaces,
+    /** Hides objects of fewer than `n` pixels (0 = none). */
+    setDust: (n) => { dust = n; if (view) { showObject(-1); } },
+    status: (t) => status(t),
+  };
 })();
