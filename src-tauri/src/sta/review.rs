@@ -33,7 +33,7 @@ use super::project::{self as sp, Found, Place, BOX};
 use super::refine::{Live, Progress};
 use super::shape::Seed;
 use super::{cc, circled, near, own_map, shapes, taught};
-use crate::spa::geom::{apply as turn_by, grid, transpose};
+use crate::spa::geom::{apply as turn_by, distance, grid, transpose};
 use crate::tomo::dataset::Look;
 
 /// The file in the output folder of a route that holds the search and the edits.
@@ -349,8 +349,8 @@ impl State {
             }
             out.push(i);
         }
-        // The examples show wherever they stand in the list.
-        out.extend(self.mine.iter().copied().filter(|i| self.found.places.get(*i).is_some_and(|p| p.source == s)));
+        // The examples and what the user brought in show wherever they stand in the list.
+        out.extend(self.mine.iter().chain(&self.edits.added).copied().filter(|i| self.found.places.get(*i).is_some_and(|p| p.source == s)));
         out.sort_unstable();
         out.dedup();
         out
@@ -451,24 +451,46 @@ impl State {
         Ok(())
     }
 
-    /// A click where no circle is: the nearest place of that tomogram (shown,
-    /// not kept) within one radius is brought in. `pos` is in the open file's voxels.
+    /// A click where no circle is: the nearest place of that tomogram that is
+    /// not kept, within one radius, is brought in. Where the search found
+    /// nothing at all, the click itself becomes a place on the route of
+    /// circled examples (the user sees one the program missed): upright,
+    /// since every orientation is tried again before the average (`run_places`).
+    /// `pos` is in the open file's voxels.
     pub fn add_at(&mut self, open: &str, pos: [f64; 3]) -> Result<usize> {
         const NONE: &str = "这里没有找到像例子的东西";
         let frame = self.frame(open).context("这张断层图不在找出的断层图里")?;
-        let r = self.radius_raw(frame.source).context(NONE)?;
+        let source = frame.source;
+        let r = self.radius_raw(source).context(NONE)?;
         let at = Self::to_raw(&frame, pos);
-        let best = self
-            .shown(frame.source)
-            .into_iter()
-            .filter(|i| matches!(self.state_of(*i), Shown::Below | Shown::Removed | Shown::TaughtOut))
+        let l = self.lists();
+        let near: Vec<(usize, Shown, f64)> = (0..self.total())
+            .filter(|i| self.found.places[*i].source == source)
             .map(|i| {
                 let c = self.found.places[i].at();
-                (i, (0..3).map(|k| (c[k] - at[k]).powi(2)).sum::<f64>().sqrt())
+                (i, self.state_with(&l, i, true, self.edits.on_shapes), (0..3).map(|k| (c[k] - at[k]).powi(2)).sum::<f64>().sqrt())
             })
-            .filter(|(_, d)| *d <= r)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        let Some((i, _)) = best else { bail!(NONE) };
+            .filter(|(_, _, d)| *d <= r)
+            .collect();
+        let best = near.iter().filter(|(_, s, _)| matches!(s, Shown::Below | Shown::Removed | Shown::TaughtOut)).min_by(|a, b| a.2.total_cmp(&b.2));
+        let i = match best {
+            Some((i, _, _)) => *i,
+            None if self.found.frames.is_empty() => bail!(NONE),
+            None if near.iter().any(|(_, s, _)| Self::counts(*s)) => bail!("这里已经有一个了"),
+            None => {
+                let px = self.pixels.get(source).copied().filter(|p| *p > 0.0).context(NONE)?;
+                let places = &self.found.places;
+                let bin = places.iter().find(|p| p.source == source).map_or(((self.found.voxel_a / px).round() as usize).max(1), |p| p.bin);
+                let c = at.map(|x| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize);
+                let turns = grid(30.0);
+                let turn = (0..turns.len()).min_by(|a, b| distance(&turns[*a], &super::IDENTITY).total_cmp(&distance(&turns[*b], &super::IDENTITY))).unwrap_or(0);
+                // Of the first example's kind; last in the list, which is best first.
+                let (like, size) = self.mine.first().and_then(|i| places.get(*i)).map_or((0, 0), |p| (p.like, p.size));
+                let score = places.last().map_or(0.0, |p| p.score);
+                self.found.places.push(Place { source, c, bin, turn, score, like, size });
+                self.total() - 1
+            }
+        };
         self.toggle(i)?;
         Ok(i)
     }
@@ -624,7 +646,7 @@ fn circled_value(s: &State, lists: &Lists) -> Value {
     // The places with a picture, best first, whatever tomogram they are in:
     // what the strip of pictures shows.
     let list: Vec<Value> = (0..s.total().min(MOST_TILES))
-        .chain(s.mine.iter().copied().filter(|i| *i >= MOST_TILES))
+        .chain(s.mine.iter().chain(&s.edits.added).copied().filter(|i| *i >= MOST_TILES && *i < s.total()))
         .map(|i| {
             let p = &s.found.places[i];
             json!({ "i": i, "source": p.source, "score": (p.score * 1e4).round() / 1e4, "like": p.like, "size": p.size, "example": s.mine.contains(&i), "state": s.state_with(lists, i, true, s.edits.on_shapes).name() })
@@ -912,11 +934,17 @@ pub fn tile_path(dir: &Path, i: usize) -> PathBuf {
 fn write_tiles(dir: &Path, s: &State, sources: &[sp::Source]) -> Result<()> {
     let folder = dir.join("tiles");
     let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).with_context(|| format!("无法创建 {}", folder.display()))?;
     let mut ids: Vec<usize> = (0..s.total().min(MOST_TILES)).chain(s.mine.iter().copied()).collect();
     ids.sort_unstable();
     ids.dedup();
-    let places: Vec<(usize, [f64; 3], f64)> = ids.iter().filter_map(|i| Some((s.found.places[*i].source, s.found.places[*i].at(), s.radius_of(*i)?))).collect();
+    write_tiles_of(dir, s, sources, &ids)
+}
+
+/// Writes the pictures of the places `ids` of `s`.
+fn write_tiles_of(dir: &Path, s: &State, sources: &[sp::Source], ids: &[usize]) -> Result<()> {
+    let folder = dir.join("tiles");
+    std::fs::create_dir_all(&folder).with_context(|| format!("无法创建 {}", folder.display()))?;
+    let places: Vec<(usize, [f64; 3], f64)> = ids.iter().filter_map(|i| Some((s.found.places.get(*i)?.source, s.found.places[*i].at(), s.radius_of(*i)?))).collect();
     if places.len() != ids.len() {
         bail!("没有像素大小");
     }
@@ -927,6 +955,21 @@ fn write_tiles(dir: &Path, s: &State, sources: &[sp::Source]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The picture (PNG) of place `i` of the review in `dir`. A place the user
+/// brought in by a click where the search had found nothing has none yet:
+/// it is made now.
+pub fn tile(dir: &Path, i: usize) -> Result<Vec<u8>> {
+    let png = tile_path(dir, i);
+    if !png.is_file() {
+        let s = load(dir).context("这里还没有找出的结果")?;
+        if i < s.total() && s.edits.added.contains(&i) {
+            let sources: Vec<sp::Source> = s.inputs.iter().map(|i| resolve_tomogram(i, &|_| {}).source()).collect();
+            write_tiles_of(dir, &s, &sources, &[i])?;
+        }
+    }
+    std::fs::read(&png).with_context(|| format!("{}", png.display()))
 }
 
 /// Averages the kept places of `dir`'s `found.json` (the first `keep` without
@@ -1414,6 +1457,33 @@ mod tests {
         s.set_keep(10);
         s.reset();
         assert_eq!((s.edits.keep, s.edits.removed.len(), s.edits.added.len()), (30, 0, 0));
+    }
+
+    #[test]
+    fn a_click_where_nothing_was_found_makes_a_place_of_circled_examples() {
+        let mut s = state(Some(0.705));
+        s.found.frames = vec![crate::sta::IDENTITY];
+        let total = s.total();
+        // Tomogram b (source 1): bin 2, so the click lands on the grid of the cubes.
+        let i = s.add_at("/t/b.mrc", [401.0, 301.0, 201.0]).unwrap();
+        assert_eq!((i, s.total()), (total, total + 1));
+        let p = s.found.places[i];
+        assert_eq!((p.source, p.c, p.bin), (1, [200, 150, 100], 2));
+        assert_eq!(s.state_of(i), Shown::Added);
+        assert!(s.kept().contains(&i) && s.shown(1).contains(&i));
+        // Its orientation is the one nearest to upright.
+        let turns = grid(30.0);
+        let off = |t: &crate::spa::geom::Mat| distance(t, &crate::sta::IDENTITY);
+        assert!(turns.iter().all(|t| off(t) >= off(&turns[p.turn])));
+        // Another click there: one is there already.
+        assert_eq!(s.add_at("/t/b.mrc", [403.0, 301.0, 201.0]).unwrap_err().to_string(), "这里已经有一个了");
+        // Clicked on (`toggle`), it is not kept any more, and a click there brings it back, no second one.
+        s.toggle(i).unwrap();
+        assert!(!s.kept().contains(&i));
+        assert_eq!((s.add_at("/t/b.mrc", [403.0, 301.0, 201.0]).unwrap(), s.total()), (i, total + 1));
+        // The other routes find the orientation near where the search left it: no place is made.
+        let mut s = state(Some(0.705));
+        assert!(s.add_at("/t/b.mrc", [401.0, 301.0, 201.0]).is_err());
     }
 
     #[test]

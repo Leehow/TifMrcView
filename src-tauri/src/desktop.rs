@@ -2333,8 +2333,7 @@ async fn sta_review_set(out: String, which: String, tomogram: String, keep: Opti
 #[tauri::command]
 async fn sta_review_tile(out: String, which: String, i: usize) -> CmdResult<String> {
     blocking(move || {
-        let png = crate::sta::review::tile_path(&crate::sta::review::dir_of(&out, &which)?, i);
-        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
+        let bytes = crate::sta::review::tile(&crate::sta::review::dir_of(&out, &which)?, i)?;
         Ok(format!("data:image/png;base64,{}", base64(&bytes)))
     }).await
 }
