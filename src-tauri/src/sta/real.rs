@@ -397,3 +397,73 @@ fn axes_from_the_surroundings() {
         );
     }
 }
+
+/// The average of things whose positions and axes are given, as a user
+/// would give them with two clicks each (the middle of what a thing sits
+/// on, then the thing): only the turn about each axis is searched
+/// (`refine::first_model_known`), then a few degrees every way. Here the
+/// axes come from a known answer (`TMV_ANSWERS`, as for
+/// `axes_from_the_surroundings`), so this says how good the average of such
+/// clicks can be. `TMV_CONVENTION` = a or b (which way round Dynamo's
+/// angles are read, see there); `TMV_BY` = how many times the circle the
+/// cube is (1); `TMV_TILTS` = "lo hi" (-60 60); `TMV_OUT` = where the
+/// average goes (average.mrc, half1.mrc, half2.mrc).
+#[test]
+#[ignore]
+fn average_with_given_axes() {
+    use super::project::{binned, cube_around, on_grid, BOX};
+    use super::refine::{align_on, first_model_known, Set};
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"));
+    let number = |k: &str| env(k).parse::<f64>().unwrap_or_else(|_| panic!("{k} is not a number"));
+    let rows: Vec<[f64; 6]> = std::fs::read_to_string(env("TMV_ANSWERS"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let v: Vec<f64> = l.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            (v.len() >= 6).then(|| [v[0], v[1], v[2], v[3], v[4], v[5]])
+        })
+        .collect();
+    let (radius_a, voxel_a) = (number("TMV_RADIUS_A"), number("TMV_VOXEL_A"));
+    let by = std::env::var("TMV_BY").ok().and_then(|x| x.parse::<f64>().ok()).unwrap_or(1.0);
+    let b = std::env::var("TMV_CONVENTION").map(|c| c == "b").unwrap_or(true);
+    let tilts: Vec<f64> = std::env::var("TMV_TILTS").unwrap_or_else(|_| "-60 60".into()).split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    let out = std::path::PathBuf::from(env("TMV_OUT"));
+    std::fs::create_dir_all(&out).unwrap();
+    let (v, dims, voxel, bin) = binned(&env("TMV_TOMO"), voxel_a * by).unwrap();
+    let axis = |t: &[f64; 6]| {
+        let (st, ct) = t[4].to_radians().sin_cos();
+        if b {
+            let (sn, cn) = t[5].to_radians().sin_cos();
+            [st * sn, st * cn, ct]
+        } else {
+            let (sa, ca) = t[3].to_radians().sin_cos();
+            [st * sa, -st * ca, ct]
+        }
+    };
+    let (mut particles, mut axes) = (vec![], vec![]);
+    for t in &rows {
+        let (at, _) = on_grid([t[0], t[1], t[2]], bin);
+        if let Some(c) = cube_around(&v, dims, at, BOX, 2) {
+            particles.push(c);
+            axes.push(axis(t));
+        }
+    }
+    let wedges = vec![super::cc::wedge(BOX, tilts[0], tilts[1])];
+    let wedge_of = vec![0usize; particles.len()];
+    let radius = (by * radius_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let started = std::time::Instant::now();
+    let (model, poses) = first_model_known(&set, &axes, false, 1, &|_, _, _| {}, &|_| {}).unwrap();
+    let a = align_on(None, &set, &model, &poses, &|_, _, _| {}, &|_| {}).unwrap();
+    let res = if a.shell > 0.0 { BOX as f64 * voxel / a.shell } else { f64::NAN };
+    let moved: Vec<f64> = a.poses.iter().zip(&axes).map(|(p, ax)| super::axial::apart([p.r[0][2], p.r[1][2], p.r[2][2]], *ax)).collect();
+    eprintln!(
+        "{} things, convention {}, cubes of {BOX} at {voxel:.2} Å (circle radius {radius:.1} voxels): {res:.1} Å in {:.1?}; the axes moved by {moved:.0?}°",
+        particles.len(),
+        if b { "b" } else { "a" },
+        started.elapsed()
+    );
+    for (name, map) in [("average.mrc", &a.map), ("half1.mrc", &a.halves[0]), ("half2.mrc", &a.halves[1])] {
+        crate::tomo::output::write_mrc(&out.join(name).to_string_lossy(), map, [BOX, BOX, BOX], voxel, false).unwrap();
+    }
+}
