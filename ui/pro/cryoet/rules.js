@@ -82,7 +82,7 @@
   /** Largest residual among the views (at least a small floor, for the bar scale). */
   R.residualScale = (views) => Math.max(0.5, ...views.map((v) => v.residual || 0));
 
-  /** Series names the 精做 button works on: the ticked ones. */
+  /** Series names the 开始重构 button works on: the ticked ones. */
   R.chosenNames = (series) => series.filter((s) => s.chosen).map((s) => s.name);
 
   /** Path and label of the tomogram the third tab shows. */

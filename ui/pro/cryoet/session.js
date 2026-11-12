@@ -2,7 +2,7 @@
 // The folder flow of the Cryo-ET workspace: a project folder with many tilt
 // series. 「开始」 (first pass) corrects, judges, aligns and makes a quick
 // tomogram of every series; the wall shows one tile per series, a click opens
-// its review (图像 / 对齐 / 断层图); 「精做」 makes the final tomograms of the
+// its review (图像 / 对齐 / 断层图); 「开始重构」 makes the final tomograms of the
 // ticked series. The program only suggests; the user's ticks are kept.
 // Pure wording and rules are in rules.js. Shares app.js globals: S, T, invoke,
 // $, dirname, openHere, saveDir.
@@ -22,13 +22,14 @@
     <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
       <button class="primary cs-act cs-start" title="对文件夹里的每个序列：校正电影、自动判断每张倾转图、对齐、做一个快速断层图。某个序列出问题不会挡住其他序列">开始</button>
-      <label>用途<select class="cs-purpose">
+      <label class="cs-purpose-box">用途<select class="cs-purpose">
         <option value="display" selected>展示：尽可能清晰，去噪并补缺失楔（约 9 Å 体素，较慢）</option>
         <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
       </select></label>
-      <button class="cs-act cs-finish" title="只对勾选的序列做最终断层图">精做</button>
+      <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">开始重构</button>
     </div>
-    <p class="dim cs-help">先按「开始」，程序处理好每个序列并给出建议；在下面检查、取消不想要的序列或倾转图，再选用途按「精做」。程序只给建议，你勾选的不会被改动。</p>
+    <p class="dim cs-help cs-only-quick">按「开始」，程序把每个序列的电影校正成倾转序列，判断每张图能不能用，对齐并做一个快速断层图。点一个序列检查，取消不想要的序列或倾转图。程序只给建议，你勾选的不会被改动。</p>
+    <p class="dim cs-help cs-only-recon">选好用途按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
     <div class="cs-wall"></div>
     <div class="cs-review" hidden></div>`;
   const q = (s) => host.querySelector(s);
@@ -211,7 +212,7 @@
     if (src) lazyPic(box, src[0], src[1], 192, "无图");
     else box.append(el("span", "cs-none dim", s.stage === "movies" ? "还没处理" : "无图"));
     const take = el("label", "cs-take");
-    take.title = s.take === null ? "精做时包含这个序列（现在按程序的建议）" : "精做时包含这个序列（你改过）";
+    take.title = s.take === null ? "重构时包含这个序列（现在按程序的建议）" : "重构时包含这个序列（你改过）";
     const cb = el("input");
     cb.type = "checkbox";
     cb.checked = s.chosen;
@@ -286,9 +287,9 @@
   q(".cs-finish").onclick = async () => {
     if (!folder) return W.status("先选项目文件夹");
     const only = R.chosenNames(session.series);
-    if (!only.length) return W.status("先勾选要精做的序列");
+    if (!only.length) return W.status("先勾选要重构的序列");
     const purpose = q(".cs-purpose").value;
-    return runPass("精做", purpose, only);
+    return runPass("重构", purpose, only);
   };
 
   // ---------- the review of one series ----------
