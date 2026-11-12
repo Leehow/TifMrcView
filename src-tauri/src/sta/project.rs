@@ -485,7 +485,7 @@ fn cube_n(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize) -> Option<Vec<f3
 /// tomogram; at least one `least`-th of it has to be inside. For the
 /// surroundings of a thing (`by_surroundings`): the thing itself is whole
 /// in its own cube, and what is around it may end at a border.
-fn cube_around(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize, least: usize) -> Option<Vec<f32>> {
+pub(super) fn cube_around(v: &[f32], dims: [usize; 3], c: [usize; 3], n: usize, least: usize) -> Option<Vec<f32>> {
     let h = (n / 2) as isize;
     if (0..3).any(|i| c[i] >= dims[i]) {
         return None;
@@ -2048,7 +2048,7 @@ fn saved(sources: &[Source], dir: &str) -> Result<Saved> {
 
 /// Where a row lies on a tomogram's grid of `bin`: the voxel its cube is
 /// cut about and what is left to that voxel's centre.
-fn on_grid(at: [f64; 3], bin: usize) -> ([usize; 3], [f64; 3]) {
+pub(super) fn on_grid(at: [f64; 3], bin: usize) -> ([usize; 3], [f64; 3]) {
     let half = (bin as f64 - 1.0) / 2.0;
     let q = at.map(|x| (x - half) / bin as f64);
     let c = q.map(|x| x.round().max(0.0) as usize);

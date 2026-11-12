@@ -23,6 +23,7 @@
 pub mod alike;
 pub mod auto;
 pub mod average;
+pub mod axial;
 pub mod cc;
 pub mod cc_gpu;
 pub mod circled;

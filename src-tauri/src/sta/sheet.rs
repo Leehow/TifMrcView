@@ -122,7 +122,7 @@ pub fn touched(mask: &[bool], n: [usize; 3], take: &[Vec<P>], cut: &[Vec<P>]) ->
 
 /// Eigenvalues (ascending) and unit eigenvectors of a symmetric 3×3 matrix,
 /// by Jacobi rotations.
-fn axes(mut a: [[f64; 3]; 3]) -> ([f64; 3], [P; 3]) {
+pub(super) fn axes(mut a: [[f64; 3]; 3]) -> ([f64; 3], [P; 3]) {
     let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     for _ in 0..32 {
         let (mut p, mut q, mut big) = (0, 1, 0.0f64);

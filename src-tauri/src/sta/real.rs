@@ -322,3 +322,78 @@ fn the_axis_of_an_average() {
     crate::tomo::output::write_mrc(&format!("{stem}_axis.mrc"), &along, [n, n, n], voxel, false).unwrap();
     crate::tomo::output::write_mrc(&format!("{stem}_turned.mrc"), &turned, [n, n, n], voxel, false).unwrap();
 }
+
+/// How well the axis of a thing is read off its surroundings with no
+/// reference (`axial::sheet`, `axial::lean`), against the axes of a known
+/// answer (scoring only). `TMV_TOMO` = the tomogram; `TMV_ANSWERS` = a text
+/// file, "x y z tdrot tilt narot" per line (voxels of `TMV_TOMO`, Dynamo's
+/// angles in degrees); `TMV_RADIUS_A` = the radius of a circle drawn round
+/// one thing, Å; `TMV_VOXEL_A` = the voxel the circled search worked at, Å;
+/// `TMV_BY` = how many times as wide the surroundings are cut (2).
+/// Dynamo turns its reference by Rz(tdrot)·Rx(tilt)·Rz(narot); which way
+/// round its tables mean that is not checked here, so both are scored (one
+/// of them is the axis, the other is not). Random axes score about 57°.
+///
+/// `TMV_TOMO=… TMV_ANSWERS=… TMV_RADIUS_A=… TMV_VOXEL_A=… cargo test … sta::real::axes_from_the_surroundings -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn axes_from_the_surroundings() {
+    use super::axial::{apart, lean, sheet};
+    use super::project::{binned, cube_around, on_grid, BOX};
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"));
+    let number = |k: &str| env(k).parse::<f64>().unwrap_or_else(|_| panic!("{k} is not a number"));
+    let tomo = env("TMV_TOMO");
+    let rows: Vec<[f64; 6]> = std::fs::read_to_string(env("TMV_ANSWERS"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let v: Vec<f64> = l.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            (v.len() >= 6).then(|| [v[0], v[1], v[2], v[3], v[4], v[5]])
+        })
+        .collect();
+    let (radius_a, voxel_a) = (number("TMV_RADIUS_A"), number("TMV_VOXEL_A"));
+    let by = std::env::var("TMV_BY").ok().and_then(|x| x.parse::<f64>().ok()).unwrap_or(2.0);
+    let (v, dims, wide_voxel, bin) = binned(&tomo, voxel_a * by).unwrap();
+    let r = radius_a / wide_voxel;
+    eprintln!("{tomo}: {} things, cubes of {BOX} at {wide_voxel:.2} Å (bin {bin}), the circle {r:.1} voxels across its radius", rows.len());
+    // Dynamo's reference Z axis carried into the tomogram, either way round.
+    let axis_a = |t: &[f64; 6]| {
+        let ((st, ct), (sa, ca)) = (t[4].to_radians().sin_cos(), t[3].to_radians().sin_cos());
+        [st * sa, -st * ca, ct]
+    };
+    let axis_b = |t: &[f64; 6]| {
+        let ((st, ct), (sn, cn)) = (t[4].to_radians().sin_cos(), t[5].to_radians().sin_cos());
+        [st * sn, st * cn, ct]
+    };
+    let median = |mut x: Vec<f64>| {
+        x.sort_by(f64::total_cmp);
+        if x.is_empty() { f64::NAN } else { x[x.len() / 2] }
+    };
+    for scale in [0.5, 1.0, 1.5] {
+        let sigma = scale * r;
+        let (mut sa, mut sb, mut la, mut lb, mut flats) = (vec![], vec![], vec![], vec![], vec![]);
+        for t in &rows {
+            let (at, _) = on_grid([t[0], t[1], t[2]], bin);
+            let Some(cube) = cube_around(&v, dims, at, BOX, 4) else { continue };
+            let (normal, flat) = sheet(&cube, BOX, sigma);
+            let (towards, far) = lean(&cube, BOX, sigma.max(2.0) * 1.5);
+            sa.push(apart(normal, axis_a(t)));
+            sb.push(apart(normal, axis_b(t)));
+            la.push(apart(towards, axis_a(t)));
+            lb.push(apart(towards, axis_b(t)));
+            flats.push(flat);
+            if scale == 1.0 {
+                eprintln!("  {:>6.0} {:>6.0} {:>5.0}: sheet {:>4.0}° / {:>4.0}° (flat {flat:.2}), lean {:>4.0}° / {:>4.0}° ({far:.2})", t[0], t[1], t[2], sa.last().unwrap(), sb.last().unwrap(), la.last().unwrap(), lb.last().unwrap());
+            }
+        }
+        eprintln!(
+            "window {scale}× the circle: median off, sheet {:.0}° / {:.0}°, lean {:.0}° / {:.0}° (either way round); sheet flatness {:.2}; {} cut",
+            median(sa.clone()),
+            median(sb),
+            median(la),
+            median(lb),
+            median(flats),
+            sa.len()
+        );
+    }
+}
