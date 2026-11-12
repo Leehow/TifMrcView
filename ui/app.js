@@ -3827,12 +3827,13 @@ function fileGroup(path) {
 // Inside a cryo-ET project (Pro) the side panel groups by processing step.
 const STEP_GROUPS = Object.fromEntries(
   [
-    ["raw", "原始数据", false],
+    // What was made comes first; the many raw movies stay at the end.
     ["motion", "① 倾转序列", true],
     ["aligned", "② 对齐后", true],
     ["tomograms", "③ 断层图", true],
     ["clean", "④ 清晰版", true],
     ["sta", "⑤ 子断层平均", true],
+    ["raw", "原始数据", false],
   ].map(([id, name, em], order) => [id, { id: `step:${id}`, name, em, order }]),
 );
 
