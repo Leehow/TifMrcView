@@ -21,7 +21,7 @@ window.TifMrcViewPro = {
   document.head.appendChild(documentsCss);
   // Tabs must exist before pending OS files are consumed. Classic scripts
   // execute in insertion order, so the merge model precedes its UI users.
-  window.TifMrcViewPro.ready = Promise.all(["pro/merge-model.js", "pro/documents.js", "pro/layers.js"].map((src) => new Promise((resolve, reject) => {
+  window.TifMrcViewPro.ready = Promise.all(["pro/merge-model.js", "pro/tab-rules.js", "pro/documents.js", "pro/layers.js"].map((src) => new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src;
     s.async = false;

@@ -490,32 +490,42 @@ function folderIndex(path) {
   return i >= 0 ? i : files.indexOf(S.info.folder);
 }
 
-async function refreshFolder(path) {
+/** Whether `path` lies inside folder `dir` (any depth). */
+function under(path, dir) {
+  return !!dir && path.startsWith(dir) && /[\\/]/.test(path[dir.length] || "");
+}
+
+async function refreshFolder(path, keepScroll = false) {
   const token = S.token;
   // A stack made of a folder's slices lists that folder; the stack itself
   // is in the list when a project file describes it.
   const stackDir = S.info && S.info.folder;
-  const dir = stackDir || dirname(path);
+  // In a project the list covers the whole project folder, so moving
+  // between its step folders keeps the list.
+  const inProject = !stackDir && S.folder.steps && under(path, S.folder.dir);
+  const dir = stackDir || (inProject ? S.folder.dir : dirname(path));
   if (dir !== S.folder.dir) {
     const f = await invoke("list_folder", { path: stackDir || path });
     if (token !== S.token) return;
     const stacks = f.stacks || [];
+    const steps = !stackDir && f.steps && f.root ? f.steps : null;
     // List the files group by group, in the order the side panel shows them.
     const all = [
       ...stacks.map((s) => ({ path: s.path, size: 0, group: STACK_GROUP })),
-      ...f.files.map((p, i) => ({ path: p, size: f.sizes[i], group: fileGroup(p) })),
+      ...f.files.map((p, i) => ({ path: p, size: f.sizes[i], group: steps ? STEP_GROUPS[steps[i]] || STEP_GROUPS.raw : fileGroup(p) })),
     ];
     all.sort((a, b) => a.group.order - b.group.order);
     S.folder = {
-      dir,
+      dir: steps ? f.root : dir,
+      steps: !!steps,
       files: all.map((e) => e.path),
       sizes: all.map((e) => e.size),
       groups: all.map((e) => e.group),
       stacks: Object.fromEntries(stacks.map((s) => [s.path, s])),
       index: -1,
     };
-    $("folder-name").textContent = basename(dir) || dir;
-    $("folder-name").title = dir;
+    $("folder-name").textContent = basename(S.folder.dir) || S.folder.dir;
+    $("folder-name").title = S.folder.dir;
     $("btn-reveal").hidden = false;
     S.folder.index = folderIndex(path);
     updateSaveDir();
@@ -524,10 +534,10 @@ async function refreshFolder(path) {
     S.folder.index = folderIndex(path);
     if (S.folder.index < 0 && !stackDir) {
       S.folder.dir = null;
-      return refreshFolder(path);
+      return refreshFolder(path, keepScroll);
     }
   }
-  markStrip();
+  markStrip(keepScroll);
 }
 
 function step(delta) {
@@ -535,8 +545,30 @@ function step(delta) {
   // Skip the groups folded away in the side panel.
   let next = index + delta;
   while (next >= 0 && next < files.length && groups && stripFolded(groups[next])) next += delta;
-  if (next >= 0 && next < files.length) openPath(files[next]);
+  if (next >= 0 && next < files.length) openHere(files[next]);
 }
+
+/** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
+async function openHere(path, force = false, series = 0) {
+  if (typeof editionReady !== "undefined") await editionReady;
+  const docs = window.TifMrcViewPro?.documents;
+  if (docs) return docs.open(path, force, series, { replace: true });
+  return openPath(path, force, series);
+}
+
+// Other code that makes new files while the image is open (processing)
+// dispatches `tmv-folder-changed` on document to have the list read again.
+let folderTimer = 0;
+document.addEventListener("tmv-folder-changed", () => {
+  clearTimeout(folderTimer);
+  folderTimer = setTimeout(async () => {
+    if (!S.info || !S.folder.dir) return;
+    const top = $("sidebar").scrollTop;
+    S.folder.dir = null;
+    await refreshFolder(S.info.path, true);
+    $("sidebar").scrollTop = top;
+  }, 500);
+});
 
 async function pickFile() {
   const p = await invoke("pick_file");
@@ -2247,7 +2279,7 @@ async function doSave(region, path) {
   try {
     await writeFile(path, await exportPng(region));
     toast(`已保存 ${path}`);
-    if (dirname(path) === S.folder.dir) {
+    if (dirname(path) === S.folder.dir || (S.folder.steps && under(path, S.folder.dir))) {
       S.folder.dir = null; // refresh the list so the new file shows up
       refreshFolder(S.info.path);
     }
@@ -3792,6 +3824,18 @@ function fileGroup(path) {
   return (otherGroups[ext] ||= { id: `ext:${ext}`, name: ext.toUpperCase() || "其他", em: true, order: FILE_GROUPS.length });
 }
 
+// Inside a cryo-ET project (Pro) the side panel groups by processing step.
+const STEP_GROUPS = Object.fromEntries(
+  [
+    ["raw", "原始数据", false],
+    ["motion", "① 倾转序列", true],
+    ["aligned", "② 对齐后", true],
+    ["tomograms", "③ 断层图", true],
+    ["clean", "④ 清晰版", true],
+    ["sta", "⑤ 子断层平均", true],
+  ].map(([id, name, em], order) => [id, { id: `step:${id}`, name, em, order }]),
+);
+
 // Folds the user chose (kept), and groups opened because the image shown is
 // in them (this session only).
 const stripFold = pref.get("strip-fold", {});
@@ -3865,7 +3909,21 @@ function buildStrip() {
       const ext = (f.match(/\.([^.\\/]+)$/) || [, ""])[1].toUpperCase();
       el.querySelector(".meta").textContent = `${ext} · ${fmtBytes(S.folder.sizes[i] || 0)}`;
     }
-    el.addEventListener("click", () => openPath(f));
+    el.addEventListener("click", (e) => (e.metaKey || e.ctrlKey ? openPath(f) : openHere(f)));
+    // Tabs (Pro) only: middle click and the context menu open a new tab.
+    el.addEventListener("auxclick", (e) => {
+      if (e.button !== 1 || !window.TifMrcViewPro?.documents) return;
+      e.preventDefault();
+      openPath(f);
+    });
+    el.addEventListener("contextmenu", (e) => {
+      if (!window.TifMrcViewPro?.documents) return;
+      e.preventDefault();
+      openMenu(el, [{ value: "tab", label: "在新标签页打开" }], () => openPath(f));
+      const m = $("dropmenu");
+      m.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8))}px`;
+      m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
+    });
     body.append(el);
     thumbObserver.observe(el);
   });
@@ -3902,7 +3960,7 @@ function pumpThumbs() {
   }
 }
 
-function markStrip() {
+function markStrip(keepScroll = false) {
   updateInfo();
   const thumbs = [...$("strip").querySelectorAll(".thumb")];
   thumbs.forEach((el, i) => el.classList.toggle("cur", i === S.folder.index));
@@ -3913,7 +3971,7 @@ function markStrip() {
     stripOpened.add(sec.dataset.group);
     sec.classList.remove("folded");
   }
-  if (cur && !$("sidebar").classList.contains("collapsed")) {
+  if (cur && !keepScroll && !$("sidebar").classList.contains("collapsed")) {
     cur.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }
 }

@@ -1454,6 +1454,13 @@ struct Folder {
     index: Option<usize>,
     /// Z stacks an acquisition project file makes of this folder's slices.
     stacks: Vec<StackEntry>,
+    /// Pro, inside a cryo-ET project: the step group of each file
+    /// (`raw|motion|aligned|tomograms|clean|sta`), parallel to `files`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<String>>,
+    /// The project folder `files` come from (set with `steps`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1489,6 +1496,22 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
     blocking(move || {
         let p = PathBuf::from(&path);
         let dir = if p.is_dir() { p.clone() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
+        #[cfg(feature = "pro")]
+        if !p.is_dir() {
+            if let Some(root) = crate::project_dirs::listing_root(&dir) {
+                let listed = crate::project_dirs::list_project(
+                    &root,
+                    |f| formats::is_supported(f) && !crate::labels::is_labels_file(f),
+                    natural_cmp,
+                );
+                let index = listed.iter().position(|(f, _)| Path::new(f) == p);
+                let sizes = listed.iter().map(|(f, _)| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
+                let steps = listed.iter().map(|(_, g)| g.to_string()).collect();
+                let files = listed.into_iter().map(|(f, _)| f).collect();
+                let root: PathBuf = root.components().collect();
+                return Ok(Folder { files, sizes, index, stacks: vec![], steps: Some(steps), root: Some(root.to_string_lossy().into_owned()) });
+            }
+        }
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -1500,7 +1523,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let index = files.iter().position(|f| Path::new(f) == p);
         let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
         let dir: PathBuf = dir.components().collect();
-        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir) })
+        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir), steps: None, root: None })
     })
     .await
 }
