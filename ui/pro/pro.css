@@ -76,6 +76,8 @@
 /* The bar beside the selected object and the bar of "find similar". */
 #lab-chips, #lab-cand { position: absolute; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); font-size: 12px; white-space: nowrap; }
 #lab-chips[hidden], #lab-cand[hidden] { display: none; }
+/* The bars belong to the 2D slice: none over the 3D view. */
+#stage:has(#vol3d:not([hidden])) :is(#lab-chips, #lab-cand) { display: none; }
 #lab-chips > button { height: 24px; padding: 0 8px; font-size: 12px; border: 0; box-shadow: none; background: none; border-radius: 5px; }
 #lab-chips > button:hover:not(:disabled) { background: var(--muted); }
 #lab-chips > button.primary { background: var(--accent); color: #fff; }

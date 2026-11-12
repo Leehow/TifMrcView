@@ -615,7 +615,16 @@
   $("fig-clear").addEventListener("change", (e) => { F.clear = e.target.checked; });
   $("fig-png").addEventListener("click", savePng);
   $("fig-mp4").addEventListener("click", saveMovie);
-  $("fig-obj-export").addEventListener("click", () => volume().exportMesh());
+  // The mesh goes to 5_figures too, like the picture and the movie.
+  $("fig-obj-export").addEventListener("click", async () => {
+    if (!F.three || F.busy) return;
+    const own = await invoke("figure_dir", { path: S.info.path }).catch(() => null);
+    const path = await volume().exportMesh(own);
+    if (path) {
+      status(`已导出 ${path}`);
+      saved();
+    }
+  });
   $("fig-cancel").addEventListener("click", () => { F.stop = true; });
 
   // A view dragged by hand is no longer one of the three.
@@ -637,7 +646,13 @@
     const lm = S.info && /\.labels\.tif$/i.test(S.info.path) ? S.info.path : "";
     if (lm && lm !== redirected) {
       redirected = lm;
-      openPath(lm.replace(/(\.series\d+)?\.labels\.tif$/i, "")).then(() => { if (usable()) open(); }).catch(() => {});
+      // The label map's own tab is not wanted once its image is shown.
+      const D = P.documents;
+      const lmTab = D && D.current();
+      openPath(lm.replace(/(\.series\d+)?\.labels\.tif$/i, "")).then(() => {
+        if (lmTab && lmTab.path === lm && D.tabs.includes(lmTab) && D.current() !== lmTab) D.close(lmTab);
+        if (usable()) open();
+      }).catch(() => {});
       return;
     }
     if (!lm) redirected = "";

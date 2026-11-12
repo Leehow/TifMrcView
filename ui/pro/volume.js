@@ -1283,13 +1283,15 @@ void main() { outColor = vec4(1.0); }`;
     await labels.relabelObject(i, label);
   }
 
-  async function exportMesh() {
+  /// Saves the shown surfaces as OBJ; the dialog starts in `dir` when given
+  /// (the figure flow's 5_figures). Returns the path saved, or null.
+  async function exportMesh(dir) {
     const labels = window.TifMrcViewPro.labels;
-    if (!surfaces || !labels || surfToken !== S.token) return;
+    if (!surfaces || !labels || surfToken !== S.token) return null;
     const stem = S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem}_surfaces.obj`, filter: "OBJ", exts: ["obj"] }).catch(() => null);
-    if (!path) return;
-    setSaveDir(dirname(path));
+    const path = await invoke("pick_save_path", { dir: dir || saveDir(), name: `${stem}_surfaces.obj`, filter: "OBJ", exts: ["obj"] }).catch(() => null);
+    if (!path) return null;
+    if (!dir) setSaveDir(dirname(path));
     const shown = [...new Set(surfaces.objects.map((o) => o.label))].filter((k) => !labels.hidden(k));
     const materials = shown.map((k) => ({ label: k, name: labels.nameOf(k), color: labels.colorOf(k) }));
     const pz = S.info.pixelSize && S.info.pixelSize[2];
@@ -1302,8 +1304,10 @@ void main() { outColor = vec4(1.0); }`;
         scale: known ? [S.px.x, S.px.y, pz] : [1, 1, 1], unit: known ? S.px.unit : "pixel",
       });
       status(`已导出 ${path}`);
+      return path;
     } catch (e) {
       status(String(e));
+      return null;
     }
   }
 
@@ -1455,7 +1459,7 @@ void main() { outColor = vec4(1.0); }`;
     hiddenObjects.clear();
     showObject(-1);
   });
-  $("vp-export-obj").addEventListener("click", exportMesh);
+  $("vp-export-obj").addEventListener("click", () => exportMesh());
   $("vp-export-png").addEventListener("click", exportPicture);
   bind("vp-op", "opacity", parseFloat);
   bind("vp-br", "brightness", parseFloat);
