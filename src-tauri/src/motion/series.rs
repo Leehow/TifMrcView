@@ -412,6 +412,7 @@ pub fn run(
     planned.sort_by(|&a, &b| doc.views[a].angle.total_cmp(&doc.views[b].angle));
     let section_of = |i: usize| planned.iter().position(|&p| p == i);
     let state = PathBuf::from(format!("{}.motion-series.json", req.output));
+    let prior_preview = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice::<SeriesResult>(&b).ok()).is_some_and(|p| p.preview);
     let prior = if req.fresh { None } else { earlier(&state, req, planned.len()) };
     if let Some(p) = prior.as_ref().filter(|p| p.complete) {
         progress("批次完成", doc.views.len(), doc.views.len());
@@ -649,6 +650,16 @@ pub fn run(
     d.odd = result.odd.clone();
     d.alignment = None;
     d.ctf = None;
+    // Previews corrected again in full: the tomograms reconstructed from
+    // them would take the names of the ones to come (same binning, another
+    // pixel). What was made from them to look at (`3_clean`) stays.
+    if prior_preview && !req.preview {
+        let made = crate::project_dirs::dir_for(&req.output, crate::project_dirs::TOMOGRAMS);
+        let stale = d.tomograms.iter().map(|t| t.path.clone()).chain(d.aligned.clone());
+        for f in stale.filter(|f| Path::new(f).parent() == Some(made.as_path()) && !crate::project_dirs::is_legacy(&req.output)) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
     d.aligned = None;
     d.tomograms.clear();
     d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?).ok().and_then(|m| m.axis);

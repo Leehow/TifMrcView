@@ -58,6 +58,8 @@ pub struct Series {
     pub result: Option<String>,
     /// Why the last run on it stopped.
     pub error: Option<String>,
+    /// Something the user should know about what was made (a step left out).
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,6 +73,8 @@ pub struct Session {
 #[derive(Default, Serialize, Deserialize)]
 struct Notes {
     errors: BTreeMap<String, String>,
+    #[serde(default)]
+    notes: BTreeMap<String, String>,
 }
 
 fn notes_path(root: &Path) -> PathBuf {
@@ -82,13 +86,19 @@ fn notes(root: &Path) -> Notes {
 }
 
 fn note(root: &Path, name: &str, error: Option<String>) {
+    remark(root, name, error, true)
+}
+
+/// Keeps (or with None forgets) what went wrong with a series, or a note on it.
+fn remark(root: &Path, name: &str, text: Option<String>, error: bool) {
     let mut n = notes(root);
-    match error {
-        Some(e) => n.errors.insert(name.into(), e),
-        None => n.errors.remove(name),
+    let map = if error { &mut n.errors } else { &mut n.notes };
+    match text {
+        Some(e) => map.insert(name.into(), e),
+        None => map.remove(name),
     };
     let file = notes_path(root);
-    if n.errors.is_empty() && !file.exists() {
+    if n.errors.is_empty() && n.notes.is_empty() && !file.exists() {
         return;
     }
     let _ = file.parent().map(std::fs::create_dir_all);
@@ -164,13 +174,14 @@ pub fn scan(folder: &str) -> Result<Session> {
     series.sort_by(|a, b| crate::formats::sequence::natural_cmp(&a.name, &b.name));
     for s in &mut series {
         s.error = known.errors.get(&s.name).cloned();
+        s.note = known.notes.get(&s.name).cloned();
         s.chosen = s.take.unwrap_or(s.verdict.as_ref().is_none_or(|v| v.usable));
     }
     Ok(Session { root: text(&root), series })
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, error: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, error: None, note: None }
 }
 
 /// What the dataset of an existing stack says about it.
@@ -261,7 +272,7 @@ fn each(
     wanted: &dyn Fn(&Series) -> bool,
     progress: pipeline::Progress,
     changed: &(dyn Fn() + Sync),
-    work: &dyn Fn(&Series, pipeline::Progress) -> Result<()>,
+    work: &dyn Fn(&Series, pipeline::Progress) -> Result<Option<String>>,
 ) -> Result<Session> {
     let session = scan(folder)?;
     let root = PathBuf::from(&session.root);
@@ -271,7 +282,7 @@ fn each(
         let label = format!("{}（{}/{}）", s.name, i + 1, todo.len());
         note(&root, &s.name, None);
         match work(s, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)) {
-            Ok(()) => {}
+            Ok(said) => remark(&root, &s.name, said, false),
             Err(e) if cancelled(&e) => return Err(e),
             Err(e) => note(&root, &s.name, Some(format!("{e:#}"))),
         }
@@ -309,11 +320,10 @@ pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progre
             d.save()?;
         }
         if !d.take.unwrap_or(d.verdict.as_ref().is_none_or(|v| v.usable)) {
-            return Ok(());
+            return Ok(None);
         }
         let req = auto::AutoReq { pixel_a: None, purpose: auto::Purpose::Survey, fresh: false };
-        crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??;
-        Ok(())
+        Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
     })
 }
 
@@ -326,8 +336,7 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
         let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
         let mut d = dataset(&stack)?;
         let req = auto::AutoReq { pixel_a: None, purpose, fresh: false };
-        crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??;
-        Ok(())
+        Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
     })
 }
 

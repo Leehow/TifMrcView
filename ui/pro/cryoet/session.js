@@ -234,6 +234,11 @@
       e.title = s.error;
       tile.append(e);
     }
+    if (s.note) {
+      const n = el("div", "dim", s.note);
+      n.title = s.note;
+      tile.append(n);
+    }
     if (s.take !== null && s.take !== undefined) {
       const b = el("button", "small cs-reset", "按程序的");
       b.title = "你改过这个序列的勾选；点这里回到程序的建议";
@@ -365,6 +370,7 @@
     if (v) info.append(el("span", `cs-verdict ${v.tone}`, v.text));
     for (const t of [R.leftOutText(s), R.residualText(s)]) if (t) info.append(el("span", "dim", t));
     if (s.error) info.append(el("span", "cs-err", s.error));
+    if (s.note) info.append(el("span", "dim", s.note));
   }
 
   // After a rescan: keep the review open, redraw the tab only when the series got further.
