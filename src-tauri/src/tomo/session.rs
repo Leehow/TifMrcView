@@ -141,7 +141,7 @@ pub fn scan(folder: &str) -> Result<Session> {
         let Ok(doc) = std::fs::read_to_string(f).map_err(anyhow::Error::from).and_then(|t| crate::motion::series::parse(&t)) else { continue };
         let movies = doc.views.iter().filter(|v| crate::motion::series::resolve(f, &v.movie, None).is_some()).count();
         let stack = crate::project_dirs::motion_output(&text(&root.join(format!("{name}.mrc"))));
-        let state = std::fs::read(format!("{stack}.motion-series.json")).ok().and_then(|b| serde_json::from_slice::<crate::motion::series::SeriesResult>(&b).ok()).filter(|r| r.mdoc == text(f));
+        let state = std::fs::read(format!("{stack}.motion-series.json")).ok().and_then(|b| serde_json::from_slice::<crate::motion::series::SeriesResult>(&b).ok()).filter(|r| Path::new(&r.mdoc).file_name() == f.file_name());
         let corrected = state.as_ref().map_or(0, |r| r.records.iter().filter(|r| r.section.is_some()).count());
         let complete = state.as_ref().is_some_and(|r| r.complete) && Path::new(&stack).exists();
         if movies == 0 && !complete {
@@ -204,7 +204,10 @@ fn fill(s: &mut Series) {
 /// The dataset of a series' stack as saved.
 fn dataset(stack: &str) -> Result<Dataset> {
     let img = pipeline::open(stack)?;
-    Dataset::open(&img.info().path, img.info().size_z, None)
+    // The stack's own pixel size, not the mdoc's (that of the camera's
+    // binned images, not of what was made from the frames).
+    let px = img.info().pixel_size.is_some().then(|| crate::align::pixel_a(img.info()));
+    Dataset::open(&img.info().path, img.info().size_z, px)
 }
 
 /// The user's choice for view `z` of a series: keep it, drop it, or (None)
@@ -277,13 +280,14 @@ fn each(
     scan(folder)
 }
 
-/// The tilt series of `s`, its movies corrected first when it has any.
-fn stack_of(s: &Series, progress: pipeline::Progress) -> Result<String> {
+/// The tilt series of `s`, its movies corrected first when it has any (as
+/// previews, or in full: a series of previews is then corrected again).
+fn stack_of(s: &Series, preview: bool, progress: pipeline::Progress) -> Result<String> {
     let Some(mdoc) = &s.mdoc else { return Ok(s.stack.clone()) };
     crate::motion::begin();
     let name = Path::new(&s.stack).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let output = text(&crate::project_dirs::root_of(Path::new(&s.stack)).join(name));
-    let req = crate::motion::series::SeriesReq { mdoc: mdoc.clone(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false };
+    let req = crate::motion::series::SeriesReq { mdoc: mdoc.clone(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false, preview };
     let r = crate::motion::series::run(&req, progress)?;
     match r.path {
         Some(p) if r.angles.len() >= 3 => Ok(p),
@@ -295,7 +299,7 @@ fn stack_of(s: &Series, progress: pipeline::Progress) -> Result<String> {
 /// only those named in `only`).
 pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progress: pipeline::Progress, changed: &(dyn Fn() + Sync)) -> Result<Session> {
     each(folder, &|s| if only.is_empty() { s.stage != Stage::Quick && s.stage != Stage::Done } else { only.contains(&s.name) }, progress, changed, &|s, progress| {
-        let stack = stack_of(s, progress)?;
+        let stack = stack_of(s, true, progress)?;
         changed();
         let mut d = dataset(&stack)?;
         // A series the program would not use is not aligned for nothing;
@@ -316,7 +320,10 @@ pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progre
 /// The tomograms for `purpose` of every series the user (else the program) chose.
 pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, only: &[String], progress: pipeline::Progress, changed: &(dyn Fn() + Sync)) -> Result<Session> {
     each(folder, &|s| s.chosen && (only.is_empty() || only.contains(&s.name)), progress, changed, &|s, progress| {
-        let stack = stack_of(s, progress)?;
+        // Averaging needs the views in full (every movie corrected at its
+        // own pixel, local motion and dose weighting); what was made for
+        // looking is enough for a tomogram to show.
+        let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
         let mut d = dataset(&stack)?;
         let req = auto::AutoReq { pixel_a: None, purpose, fresh: false };
         crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??;

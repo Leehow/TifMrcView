@@ -340,6 +340,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
             },
             drop_tilts: false,
             fresh: false,
+            preview: false,
         },
         &|_, _, _| {},
     )
@@ -402,6 +403,7 @@ fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
         params: Params { backend: "cpu".into(), local: false, dose_weighted: false, working_size: 128, ..Default::default() },
         drop_tilts: true,
         fresh: false,
+        preview: false,
     };
     let seen = std::sync::Mutex::new(Vec::<String>::new());
     let note = |s: &str, _: usize, _: usize| seen.lock().unwrap().push(s.to_string());
@@ -452,6 +454,53 @@ fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
     for (a, b) in sums.iter().zip(&after) {
         assert!((a - b).abs() < 1e-3 * a.abs(), "{sums:?} {after:?}");
     }
+}
+
+#[test]
+fn a_preview_series_is_small_and_is_corrected_again_in_full() {
+    begin();
+    let dir = tempfile::tempdir().unwrap();
+    let frames = vec![texture(512, 512); 4];
+    for (name, scale) in [("a.mrc", 1.0f32), ("b.mrc", 2.0), ("c.mrc", 3.0)] {
+        let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
+        output::write(dir.path().join(name).to_str().unwrap(), 512, 512, 4, 1.0, |i| Ok(data[i].clone())).unwrap();
+    }
+    let text = "PixelSpacing = 1\nVoltage = 300\n[ZValue = 0]\nTiltAngle = 0\nSubFramePath = a.mrc\nExposureDose = 2\n[ZValue = 1]\nTiltAngle = 3\nSubFramePath = b.mrc\nExposureDose = 2\n[ZValue = 2]\nTiltAngle = -3\nSubFramePath = c.mrc\nExposureDose = 2\n";
+    let mdoc = dir.path().join("ts.mdoc");
+    std::fs::write(&mdoc, text).unwrap();
+    let mut req = series::SeriesReq {
+        mdoc: mdoc.to_string_lossy().into(),
+        folder: None,
+        output: dir.path().join("ts.mrc").to_string_lossy().into(),
+        params: Params { backend: "cpu".into(), working_size: 256, ..Default::default() },
+        drop_tilts: true,
+        fresh: false,
+        preview: true,
+    };
+    let quick = series::run(&req, &|_, _, _| {}).unwrap();
+    // 1 Å pixels: binned by 2 (4 would leave fewer than 256 pixels a side).
+    assert!(quick.complete && quick.preview && quick.shape == [256, 256, 3] && (quick.pixel_a - 2.0).abs() < 1e-6, "{:?} {}", quick.shape, quick.pixel_a);
+    let total = |path: &str| {
+        let i = OpenImage::new(0, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
+        (i.info().width, (0..i.info().size_z).map(|z| { let p = i.page(z).unwrap(); (0..p[0].w * p[0].h).map(|j| p[0].data.get_f64(j)).sum::<f64>() }).collect::<Vec<f64>>())
+    };
+    let whole: f64 = frames[0].iter().map(|&x| x as f64).sum::<f64>() * 4.0;
+    let (w, sums) = total(quick.path.as_ref().unwrap());
+    assert_eq!(w, 256);
+    // Counts are kept: sections −3° (×3), 0° (×1), +3° (×2).
+    for (s, k) in sums.iter().zip([3.0, 1.0, 2.0]) {
+        assert!((s / (whole * k) - 1.0).abs() < 0.02, "{s} {}", whole * k);
+    }
+    let (_, even) = total(quick.even.as_ref().unwrap());
+    assert!((even[1] / (whole / 2.0) - 1.0).abs() < 0.02);
+    // The full correction does not take the previews for its own.
+    req.preview = false;
+    let full = series::run(&req, &|_, _, _| {}).unwrap();
+    assert!(full.complete && !full.preview && full.shape == [512, 512, 3] && (full.pixel_a - 1.0).abs() < 1e-6);
+    assert_eq!(total(full.path.as_ref().unwrap()).0, 512);
+    // And previews asked for again are served by it.
+    req.preview = true;
+    assert_eq!(series::run(&req, &|_, _, _| {}).unwrap().shape, [512, 512, 3]);
 }
 
 #[test]

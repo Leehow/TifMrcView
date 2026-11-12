@@ -261,6 +261,11 @@ pub struct SeriesReq {
     /// Start over even when part of the series was corrected before.
     #[serde(default)]
     pub fresh: bool,
+    /// Small, quick sums (`Params::preview`) to choose the views and series
+    /// with and to make a tomogram to look at; a series corrected in full
+    /// before is kept as it is.
+    #[serde(default)]
+    pub preview: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,6 +318,9 @@ pub struct SeriesResult {
     pub shape: [usize; 3],
     #[serde(default)]
     pub pixel_a: f64,
+    /// Made of preview sums.
+    #[serde(default)]
+    pub preview: bool,
 }
 
 /// Longer side of the small copies of the views, pixels.
@@ -342,7 +350,10 @@ pub fn shrink(v: &[f32], w: usize, h: usize) -> (Vec<f32>, usize, usize) {
 fn earlier(state: &Path, req: &SeriesReq, sections: usize) -> Option<SeriesResult> {
     let prior: SeriesResult = serde_json::from_slice(&std::fs::read(state).ok()?).ok()?;
     let [w, h, n] = prior.shape;
-    let same = prior.mdoc == req.mdoc && (prior.complete || n == sections) && w > 0 && h > 0;
+    // The same acquisition also after the folder was moved or copied; a
+    // preview does not stand for the full correction.
+    let name = |p: &str| Path::new(p).file_name().map(|n| n.to_os_string());
+    let same = name(&prior.mdoc) == name(&req.mdoc) && (req.preview || !prior.preview) && (prior.complete || (n == sections && prior.preview == req.preview)) && w > 0 && h > 0;
     let files = [Some(req.output.clone()), req.params.even_odd.then(|| output::sibling(&req.output, "even")), req.params.even_odd.then(|| output::sibling(&req.output, "odd"))];
     let kept = prior.records.iter().filter(|r| r.section.is_some()).count();
     let n = if prior.complete { kept } else { n };
@@ -404,10 +415,10 @@ pub fn run(
     let prior = if req.fresh { None } else { earlier(&state, req, planned.len()) };
     if let Some(p) = prior.as_ref().filter(|p| p.complete) {
         progress("批次完成", doc.views.len(), doc.views.len());
-        return Ok(SeriesResult { records: p.records.clone(), warnings: p.warnings.clone(), angles: p.angles.clone(), path: p.path.clone(), even: p.even.clone(), odd: p.odd.clone(), small: p.small.clone(), mdoc: p.mdoc.clone(), complete: true, shape: p.shape, pixel_a: p.pixel_a });
+        return Ok(SeriesResult { records: p.records.clone(), warnings: p.warnings.clone(), angles: p.angles.clone(), path: p.path.clone(), even: p.even.clone(), odd: p.odd.clone(), small: p.small.clone(), mdoc: p.mdoc.clone(), complete: true, shape: p.shape, pixel_a: p.pixel_a, preview: p.preview });
     }
     let done = |v: &View| prior.as_ref().and_then(|p| p.records.iter().find(|r| r.z == v.z && r.movie == v.movie && r.result.is_some() && r.section.is_some()).cloned());
-    let mut result = SeriesResult { warnings, mdoc: req.mdoc.clone(), ..Default::default() };
+    let mut result = SeriesResult { warnings, mdoc: req.mdoc.clone(), preview: req.preview, ..Default::default() };
     if let Some(p) = &prior {
         result.shape = p.shape;
         result.pixel_a = p.pixel_a;
@@ -460,6 +471,7 @@ pub fn run(
             p.voltage_kv = doc.kv.unwrap_or(p.voltage_kv);
         }
         p.pre_exposure = r.pre_exposure;
+        p.preview = req.preview;
         if unknown {
             p.dose_weighted = false;
         }
@@ -471,15 +483,29 @@ pub fn run(
         }
         plan.push((r, Some(p)));
     }
-    // Two movies are under way at a time: the next one is read and decoded
-    // (processor and disk) while the one before is measured and summed (GPU).
+    // Movies are read and decoded ahead (processor and disk) while the one
+    // before is measured and summed (GPU): one ahead, or three at a time
+    // for previews, whose sums take no time.
     let mut records: Vec<Record> = vec![];
     let (plan, movies, dir) = (&plan, &movies, &dir);
+    let readers = if req.preview { 3 } else { 1 };
+    let (next, taken) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
+    let (next, taken) = (&next, &taken);
     std::thread::scope(|scope| -> Result<()> {
+        use std::sync::atomic::Ordering::SeqCst;
         let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<super::Prepared>)>(0);
-        scope.spawn(move || {
-            for (i, (_, p)) in plan.iter().enumerate() {
-                let (Some(p), Some(path)) = (p, &movies[i]) else { continue };
+        for _ in 0..readers {
+            let send = send.clone();
+            scope.spawn(move || loop {
+                let i = next.fetch_add(1, SeqCst);
+                if i >= plan.len() {
+                    break;
+                }
+                let (Some(p), Some(path)) = (&plan[i].1, &movies[i]) else { continue };
+                // Not further ahead than the readers can hold.
+                while i > taken.load(SeqCst) + 2 * readers && check_cancel().is_ok() {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
                 if check_cancel().is_err() {
                     break;
                 }
@@ -487,8 +513,10 @@ pub fn run(
                 if send.send((i, prepared)).is_err() {
                     break;
                 }
-            }
-        });
+            });
+        }
+        drop(send);
+        let mut ready = std::collections::BTreeMap::new();
         for (i, (r, p)) in plan.iter().enumerate() {
             check_cancel()?;
             let v = &doc.views[i];
@@ -499,15 +527,21 @@ pub fn run(
                 records.push(r);
                 continue;
             };
-            let (at, prepared) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
-            debug_assert_eq!(at, i);
+            taken.store(i, SeqCst);
+            let prepared = loop {
+                if let Some(p) = ready.remove(&i) {
+                    break p;
+                }
+                let (at, p) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
+                ready.insert(at, p);
+            };
             let corrected = prepared.and_then(|m| super::finish(m, None, p, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)));
             match corrected {
                 Ok(super::Corrected { mut sums, result: m }) => {
                     let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
                     // Super-resolution frames carry little beyond the
                     // detector's own pixel: the views are kept at that.
-                    if super_resolution(w, h) {
+                    if !req.preview && super_resolution(w, h) {
                         for v in [Some(&mut sums.unweighted), sums.weighted.as_mut(), Some(&mut sums.even), Some(&mut sums.odd)].into_iter().flatten() {
                             if !v.is_empty() {
                                 *v = halve(v, w, h);

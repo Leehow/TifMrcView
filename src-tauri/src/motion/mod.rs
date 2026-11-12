@@ -122,7 +122,18 @@ pub struct Params {
     /// size get it rescaled).
     #[serde(skip)]
     pub mdoc_size: Option<[usize; 2]>,
+    /// A quick, small sum to look at and to align a tilt series with
+    /// (`PREVIEW_PIXEL`): frames binned as they are read, only the whole
+    /// frame's shift measured, no dose weighting.
+    pub preview: bool,
+    /// The binning `preview` works at (set from the pixel size).
+    #[serde(skip)]
+    pub preview_bin: usize,
 }
+
+/// Largest pixel of a preview sum, Å: fine enough for the Thon rings of a
+/// tilt image to be fitted and for a tomogram to look at (about 10 Å voxels).
+pub const PREVIEW_PIXEL: f64 = 5.5;
 impl Default for Params {
     fn default() -> Self {
         Self {
@@ -149,6 +160,8 @@ impl Default for Params {
             benchmark: false,
             diagnostics: false,
             mdoc_size: None,
+            preview: false,
+            preview_bin: 0,
         }
     }
 }
@@ -348,6 +361,7 @@ fn run_movie(
 
 /// A movie read and ready for its motion to be measured (`prepare`).
 pub struct Prepared {
+    preview: bool,
     sp: input::Spool,
     pixel: f64,
     warnings: Vec<String>,
@@ -416,8 +430,72 @@ pub fn prepare(
             warnings.push("像素标定未知，输出暂以 1 Å/px 标记".into());
             1.0
         });
-    let sp = input::Spool::prepare(&movie, p, scratch, progress)?;
-    Ok(Prepared { sp, pixel, warnings, took: start.elapsed() })
+    let mut p = p.clone();
+    if p.preview {
+        let (w, h, _) = movie.shape();
+        let up = if matches!(movie, input::Movie::Eer(_)) { p.upsample } else { 1 };
+        p.preview_bin = [8usize, 4, 2].into_iter().find(|&b| pixel * b as f64 <= PREVIEW_PIXEL && w.min(h) * up / b >= 256).unwrap_or(1);
+    }
+    let sp = input::Spool::prepare(&movie, &p, scratch, progress)?;
+    Ok(Prepared { preview: p.preview, sp, pixel, warnings, took: start.elapsed() })
+}
+
+/// `finish` for a preview: the binned frames moved by their whole-frame
+/// shifts and summed, at the binned size.
+fn preview(prepared: Prepared) -> Result<Corrected> {
+    use rayon::prelude::*;
+    let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
+    let start = std::time::Instant::now();
+    let (w, h) = (sp.w / sp.bin, sp.h / sp.bin);
+    let (global, cc) = match crate::align::movie_planes(&sp.frames, w, h, &|_, _| {}) {
+        Ok(g) => (smooth(&g.shifts, &g.cc, SMOOTHING), g.cc),
+        Err(e) if e.downcast_ref::<crate::align::NoSignal>().is_some() => {
+            warnings.push(format!("{e}；按未校正直接求和"));
+            (vec![[0.0; 2]; sp.len()], vec![0.0; sp.len()])
+        }
+        Err(e) => return Err(e),
+    };
+    let alignment_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let timer = std::time::Instant::now();
+    // Frames hold means of the binned pixels; the sums hold counts.
+    let scale = (sp.bin * sp.bin) as f32;
+    let moved: Vec<Vec<f32>> = sp.frames.par_iter().zip(&global).map(|(v, &d)| crate::align::movie_shift(v, w, h, d)).collect();
+    let mut sums = sum::Sums { unweighted: vec![0.0; w * h], even: vec![0.0; w * h], odd: vec![0.0; w * h], weighted: None };
+    for (i, v) in moved.iter().enumerate() {
+        let half = if i % 2 == 0 { &mut sums.even } else { &mut sums.odd };
+        half.par_iter_mut().zip(v).for_each(|(o, x)| *o += x * scale);
+    }
+    sums.unweighted.par_iter_mut().zip(sums.even.par_iter().zip(&sums.odd)).for_each(|(o, (a, b))| *o = a + b);
+    let total_drift = global.windows(2).map(|v| (v[1][0] - v[0][0]).hypot(v[1][1] - v[0][1])).sum();
+    let local = local::Local { model: local::Model::zero(&sp.times), patches: Vec::new(), global_residual: 0.0, local_residual: 0.0, rejected: 0, backend: String::new(), cpu_pair_ms: 0.0, gpu_pair_ms: None };
+    let result = MotionResult {
+        path: String::new(),
+        unweighted: None,
+        even: None,
+        odd: None,
+        width: w,
+        height: h,
+        frames: sp.len(),
+        raw_fractions: sp.counts.iter().sum(),
+        pixel_a: pixel * sp.bin as f64,
+        global,
+        cc,
+        local,
+        total_drift,
+        mean_local_motion: 0.0,
+        decode_ms: sp.decode_ms,
+        prepare_ms: sp.prepare_ms,
+        group_counts: sp.counts.clone(),
+        alignment_ms,
+        sum_ms: timer.elapsed().as_secs_f64() * 1000.0,
+        total_ms: (took + start.elapsed()).as_secs_f64() * 1000.0,
+        backend: "预览".into(),
+        cpu_ms: None,
+        gpu_ms: None,
+        dose_weighted: false,
+        warnings,
+    };
+    Ok(Corrected { sums, result })
 }
 
 /// The second half of `correct`: the motion measured, the frames summed.
@@ -427,7 +505,10 @@ pub fn finish(
     p: &Params,
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<Corrected> {
-    let Prepared { sp, pixel, mut warnings, took } = prepared;
+    if prepared.preview {
+        return preview(prepared);
+    }
+    let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
     let start = std::time::Instant::now();
     let raw = sp.counts.iter().sum::<usize>();
     let alignment_start = std::time::Instant::now();

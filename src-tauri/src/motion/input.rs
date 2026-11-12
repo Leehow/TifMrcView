@@ -224,7 +224,8 @@ impl Spool {
         if w.saturating_mul(h) > 1 << 27 {
             bail!("电影渲染尺寸过大");
         }
-        let bin = w.min(h).div_ceil(p.working_size).max(1);
+        let preview = p.preview_bin > 0;
+        let bin = if preview { p.preview_bin } else { w.min(h).div_ceil(p.working_size).max(1) };
         let (ww, hh) = (w / bin, h / bin);
         if ww.min(hh) < 80 {
             bail!("电影太小（至少 80 px）");
@@ -245,7 +246,7 @@ impl Spool {
             frames: vec![],
             counts: vec![],
             times: vec![],
-            original: vec![0.0; w * h],
+            original: if preview { vec![] } else { vec![0.0; w * h] },
             decode_ms: 0.0,
             prepare_ms: 0.0,
         };
@@ -275,20 +276,23 @@ impl Spool {
             if frame.par_iter().any(|x| !x.is_finite()) {
                 bail!("电影或 gain 含 NaN/Inf");
             }
-            spool
-                .original
-                .par_iter_mut()
-                .zip(&frame)
-                .for_each(|(o, v)| *o += v);
-            let stored = Stored::new(&frame, &mut spool.used);
-            if matches!(stored, Stored::Disk) {
-                if !spool.dir.exists() {
-                    fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+            // A preview keeps only the binned frames.
+            if !preview {
+                spool
+                    .original
+                    .par_iter_mut()
+                    .zip(&frame)
+                    .for_each(|(o, v)| *o += v);
+                let stored = Stored::new(&frame, &mut spool.used);
+                if matches!(stored, Stored::Disk) {
+                    if !spool.dir.exists() {
+                        fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+                    }
+                    let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
+                    fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
                 }
-                let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
-                fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
+                spool.stored.push(stored);
             }
-            spool.stored.push(stored);
             let mut work = vec![0.0; ww * hh];
             work.par_chunks_mut(ww).enumerate().for_each(|(y, row)| {
                 for (x, o) in row.iter_mut().enumerate() {

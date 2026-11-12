@@ -567,7 +567,7 @@ fn tomo(o: &Opts) -> Result<Value> {
         let stem = stem.strip_suffix(".mrc").unwrap_or(stem);
         let output = format!("{stem}.mrc");
         crate::motion::begin();
-        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false };
+        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false, preview: purpose != auto::Purpose::Sta };
         let r = crate::motion::series::run(&req, &report)?;
         progress.done();
         let Some(path) = r.path.clone() else { bail!("no movies found beside the mdoc") };
