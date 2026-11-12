@@ -292,6 +292,8 @@
     findPoints: (marks) => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks, out })),
     // Circled examples (draw.js) are the examples: the marks of kind "example".
     findCircled: (marks) => find((inputs, out) => invoke("sta_find", { inputs, marks, out, which: "circled" })),
+    // Every one is circled already: just these are averaged, nothing is searched for (sta_run_drawn, only).
+    averageCircled: async (marks) => { await W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks, out, only: true }), false); R.dismissed.clear(); await load(); },
     // For shapes.js: the time of the review shown (0: none), showing it again after the other one changed, putting it away.
     pendingMs: () => R.d?.foundMs || 0,
     recheck: () => apply(R.raw, true),

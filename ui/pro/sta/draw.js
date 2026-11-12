@@ -65,6 +65,8 @@
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
+  // Fewest circles that can be averaged by themselves (project::FEWEST_CIRCLED).
+  const ONLY_FEWEST = 4;
   const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
 
   const box = document.createElement("div");
@@ -84,7 +86,7 @@
       <button id="sta-draw-del" class="small" title="先在列表里点一下要删的标注">删除所选</button>
       <button id="sta-draw-flip" class="small" title="把朝外的一侧换到另一边" hidden>翻面</button>
     </div>
-    <div class="al-row"><button id="sta-draw-run" class="primary">平均我标的</button></div>`;
+    <div class="al-row"><button id="sta-draw-run" class="primary">平均我标的</button><button id="sta-draw-only" class="small" hidden></button></div>`;
   $("sta-draw-slot").append(box);
   const tools = $("sta-draw-tools");
   const btn = {};
@@ -327,6 +329,12 @@
     const finds = (pointsOnly && !shapes) || examples > 0 || circN > 0;
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
+    // Every one circled already (a few dozen things seen by eye): just these are averaged, nothing is searched for.
+    const all = circN >= ONLY_FEWEST && D.marks.every(isCircle);
+    $("sta-draw-only").hidden = !all;
+    $("sta-draw-only").textContent = `只平均圈的这 ${circN} 个`;
+    $("sta-draw-only").title = "不再去找别的：只把你圈的这些对齐、平均。适合数量不多、你已经全部圈出来的东西";
+    $("sta-draw-only").disabled = W.busy || !!M.seg || W.pixelNeed.length > 0;
     $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
     draw();
     W.wall?.render();
@@ -386,6 +394,13 @@
     save();
     refresh(0);
     render();
+  };
+  $("sta-draw-only").onclick = () => {
+    const circles = plain().filter((m) => m.kind === "example" && m.points.length >= 2);
+    if (circles.length < ONLY_FEWEST || !W.found) return;
+    D.open = null;
+    setKind(null);
+    W.found.averageCircled(circles);
   };
   $("sta-draw-run").onclick = () => {
     const marks = plain();

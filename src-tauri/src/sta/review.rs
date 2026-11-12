@@ -872,6 +872,17 @@ pub const CIRCLED: &str = "circled";
 /// marks; two or three are asked for, one is taken) and saves it in
 /// `out/circled/found.json`. Nothing is asked of what the examples are.
 pub fn find_circled(inputs: &[String], marks: &[Mark], out: &str, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+    circled_review(inputs, marks, out, Some(device), emit, b64)
+}
+
+/// What was circled and nothing else, saved as `find_circled` saves what it
+/// finds (`circled::given`): every circle a place to average, all kept.
+pub fn given_circled(inputs: &[String], marks: &[Mark], out: &str, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+    circled_review(inputs, marks, out, None, emit, b64)
+}
+
+/// `find_circled` (with a device) or `given_circled` (without: nothing is searched for).
+fn circled_review(inputs: &[String], marks: &[Mark], out: &str, device: Option<Device>, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     let inputs = raw_inputs(inputs)?;
     let out = out_of(&inputs, out)?;
     let dir = out.join(CIRCLED);
@@ -882,8 +893,13 @@ pub fn find_circled(inputs: &[String], marks: &[Mark], out: &str, device: Device
         if examples.is_empty() {
             bail!("请先圈出 2 到 3 个要找的东西作例子");
         }
-        let (dev, _) = device()?;
-        let c = crate::ctf_gpu::guarded(|| circled::find(dev, &sources, &examples, progress))??;
+        let c = match device {
+            Some(device) => {
+                let (dev, _) = device()?;
+                crate::ctf_gpu::guarded(|| circled::find(dev, &sources, &examples, progress))??
+            }
+            None => circled::given(&sources, &examples)?,
+        };
         std::fs::create_dir_all(&dir).with_context(|| format!("无法创建 {}", dir.display()))?;
         let path = dir.join("card.mrc").to_string_lossy().into_owned();
         crate::tomo::output::write_mrc(&path, &c.template, [BOX; 3], c.found.voxel_a, false)?;

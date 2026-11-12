@@ -33,7 +33,7 @@
 use anyhow::{bail, Context, Result};
 
 use super::check_cancel;
-use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, Place, Source, BOX, ELONGATION, MOST};
+use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, FEWEST_CIRCLED, Place, Source, BOX, ELONGATION, MOST};
 use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
 use crate::spa::geom::{distance, grid, transpose, Mat};
@@ -635,7 +635,28 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         all[e].score = by_others[e].filter(|_| told.is_none()).unwrap_or(top).min(1.0);
     }
 
-    // Onto the grids the cubes are cut on (as `project::cut_places` bins).
+    let (places, mine, voxel_a, template) = on_grids(sources, examples, &raw_px, &all, first, diameter_a)?;
+    let found = Found {
+        places,
+        limit,
+        noise,
+        voxel_a,
+        searched: "raw".to_string(),
+        search_voxel_a: searched.first().copied(),
+        frames,
+        sizes_a,
+        alike,
+        wide,
+    };
+    Ok(Circled { found, template, diameter_a, mine, first, by_others, told, wide })
+}
+
+/// The places `all` (the first ones the examples themselves) on the grids
+/// the cubes are cut on (as `project::cut_places` bins), best first: the
+/// places, which of them are the examples, the voxel of the cubes (Å) and
+/// the first example's cube.
+fn on_grids(sources: &[Source], examples: &[Example], raw_px: &[f64], all: &[Seen], first: usize, diameter_a: f64) -> Result<(Vec<Place>, Vec<usize>, f64, Vec<f32>)> {
+    let k = examples.len();
     let px = raw_px[examples[first].source];
     let voxel_a = px * ((diameter_a / SPAN / px).round()).max(1.0);
     let mut places: Vec<(Place, bool)> = vec![];
@@ -661,19 +682,42 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let template = template.context("圈的例子太靠近断层图的边了，请圈一个离边远一些的")?;
     places.sort_by(|a, b| b.0.score.total_cmp(&a.0.score));
     let mine: Vec<usize> = (0..places.len()).filter(|i| places[*i].1).collect();
-    let found = Found {
-        places: places.into_iter().map(|p| p.0).collect(),
-        limit,
-        noise,
-        voxel_a,
-        searched: "raw".to_string(),
-        search_voxel_a: searched.first().copied(),
-        frames,
-        sizes_a,
-        alike,
-        wide,
-    };
-    Ok(Circled { found, template, diameter_a, mine, first, by_others, told, wide })
+    Ok((places.into_iter().map(|p| p.0).collect(), mine, voxel_a, template))
+}
+
+/// What was circled and nothing else, as places to average: for the user
+/// who has gone through the tomograms and circled every one (a few dozen
+/// things seen by eye are sooner circled than found). Nothing is searched
+/// for; every place stands upright, and the average finds the orientations
+/// (`project::run_places`). The circles are taken as drawn.
+pub fn given(sources: &[Source], examples: &[Example]) -> Result<Circled> {
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    if let Some(e) = examples.iter().find(|e| e.source >= sources.len()) {
+        bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
+    }
+    if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
+        bail!("有一个圈太小了，请把要找的东西整个圈进去");
+    }
+    if examples.len() < FEWEST_CIRCLED {
+        bail!("只圈了 {} 个，太少了：只平均圈的这些，至少要圈 {FEWEST_CIRCLED} 个", examples.len());
+    }
+    let k = examples.len();
+    let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
+    let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
+    let (sizes_a, size_of) = sizes(&diameters);
+    let diameter_a = *sizes_a.last().unwrap();
+    let turns = grid(30.0);
+    let upright = (0..turns.len()).min_by(|a, b| distance(&turns[*a], &super::IDENTITY).total_cmp(&distance(&turns[*b], &super::IDENTITY))).unwrap_or(0);
+    // All of one kind, each its own example.
+    let all: Vec<Seen> = examples.iter().enumerate().map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: 1.0, turn: upright, like: 0, size: size_of[e], key: usize::MAX }).collect();
+    let (places, mine, voxel_a, template) = on_grids(sources, examples, &raw_px, &all, 0, diameter_a)?;
+    if places.len() < FEWEST_CIRCLED {
+        bail!("圈的东西里只有 {} 个离断层图的边够远，太少了（至少要 {FEWEST_CIRCLED} 个）", places.len());
+    }
+    let found = Found { places, limit: Some(1.0), noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a, alike: None, wide: 1.0 };
+    Ok(Circled { found, template, diameter_a, mine, first: 0, by_others: vec![None; k], told: None, wide: 1.0 })
 }
 
 /// Places the probe of `tightened` averages.
@@ -909,6 +953,37 @@ mod tests {
         }
         // Mostly outside: nothing.
         assert!(sampled(&v, dims, [-10.0, 15.0, 10.0], 8, 1.5).is_none());
+    }
+
+    /// What was circled, and nothing else, becomes the places to average.
+    #[test]
+    fn what_was_circled_is_given_as_places_without_a_search() {
+        // A tomogram of 10 Å voxels with nothing but grain in it: circles of radius 9 (180 Å), so cubes of 10 Å voxels.
+        let dims = [96usize, 96, 64];
+        let dir = std::env::temp_dir().join(format!("tmv-sta-given-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tomo.mrc").to_string_lossy().into_owned();
+        let grain: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|i| ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40) as f32 / (1u64 << 24) as f32).collect();
+        crate::tomo::output::write_mrc(&path, &grain, dims, 10.0, false).unwrap();
+        let sources = vec![Source { path, tilts: [-60.0, 60.0], look: None, series: None }];
+        let at = |x: f64, y: f64| Example { source: 0, at: [x, y, 32.0], radius: 9.0 };
+        // Five circled, one of them too near the edge for its cube.
+        let examples = [at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(60.0, 60.0), at(4.0, 48.0)];
+        let c = given(&sources, &examples).unwrap();
+        assert_eq!((c.found.places.len(), c.mine.clone(), c.found.sure()), (4, vec![0, 1, 2, 3], 4));
+        assert_eq!((c.found.voxel_a, c.found.frames.len(), c.found.wide, c.diameter_a), (10.0, 1, 1.0, 180.0));
+        let mut got: Vec<[usize; 3]> = c.found.places.iter().map(|p| p.c).collect();
+        got.sort();
+        assert_eq!(got, vec![[30, 30, 32], [30, 60, 32], [60, 30, 32], [60, 60, 32]]);
+        // Every place stands as it was circled: no orientation is made up.
+        let turns = grid(30.0);
+        assert!(c.found.places.iter().all(|p| c.found.turn_of(p, &turns).is_some_and(|r| turns.iter().all(|t| distance(t, &crate::sta::IDENTITY) >= distance(&r, &crate::sta::IDENTITY)))));
+        // Too few to average.
+        let err = given(&sources, &examples[..3]).err().unwrap().to_string();
+        assert!(err.contains("至少要圈 4 个"), "{err}");
+        assert!(given(&sources, &[at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(4.0, 48.0)]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

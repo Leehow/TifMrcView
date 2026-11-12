@@ -2238,10 +2238,11 @@ async fn sta_thumbnail(file: String) -> CmdResult<serde_json::Value> {
 
 /// "Mark it yourself" (Pro): the marks made on the tomogram are completed to
 /// shapes and averaged (`sta::marks`). Same events and result as `sta_run`;
-/// the average goes to `<out>/drawn`.
+/// the average goes to `<out>/drawn`. `only` with circled examples: nothing
+/// is searched for, just what was circled is averaged (into `<out>/circled`).
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, out: Option<String>, size: Option<String>) -> CmdResult<serde_json::Value> {
+async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, out: Option<String>, size: Option<String>, only: Option<bool>) -> CmdResult<serde_json::Value> {
     let job = StaJob::begin()?;
     blocking(move || {
         let _job = job;
@@ -2251,7 +2252,7 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
             Some((dev, name)) => Ok((dev, *name)),
             None => Err(anyhow::anyhow!("没有可用 GPU")),
         };
-        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), out.as_deref(), &device, &emit, &base64)
+        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), only.unwrap_or(false), out.as_deref(), &device, &emit, &base64)
     }).await
 }
 
