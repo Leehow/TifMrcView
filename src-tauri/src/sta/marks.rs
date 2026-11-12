@@ -788,7 +788,7 @@ mod tests {
         let sources = vec![source(&t, None)];
         let inputs = vec![t.clone()];
         let whole = membrane(&t, vec![top()]);
-        let ring: Vec<[f64; 3]> = (0..=48).map(|k| (k as f64 / 48.0 * std::f64::consts::TAU)).map(|a| [19.5 + 12.0 * a.cos(), 19.5 + 12.0 * a.sin(), 19.5]).collect();
+        let ring: Vec<[f64; 3]> = (0..=48).map(|k| k as f64 / 48.0 * std::f64::consts::TAU).map(|a| [19.5 + 12.0 * a.cos(), 19.5 + 12.0 * a.sin(), 19.5]).collect();
         let cut = membrane(&t, vec![top(), stroke(&ring, true)]);
         let seeds = |m: &Mark| drawn_of(&[m.clone()], &inputs, &sources, &[10.0], Size::Small).unwrap().0;
         let (a, b) = (seeds(&whole), seeds(&cut));

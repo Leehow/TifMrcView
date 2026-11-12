@@ -173,7 +173,6 @@ pub fn main(args: Vec<String>) -> i32 {
         "spa" => spa(&opts),
         "ctf" => ctf(&opts),
         "denoise" => denoise(&opts),
-        "similar" => similar(&opts),
         "info" => info(),
         "setup" => setup(&opts),
         other => Err(anyhow!("unknown command `{other}` (see tmv --help)")),
@@ -934,96 +933,6 @@ fn card_line(c: &crate::sta::project::Card) -> String {
 /// class-average cards of the blobs in them, then (when the user has chosen:
 /// `--pick`, `--points`; or `--auto`) the average of everything that looks
 /// like the chosen card (`sta::auto::auto`). Without a choice it stops at the cards.
-/// Trial (not in the help): what "find similar" of the smart selection
-/// tool finds on one section of a volume, with discs as the examples.
-/// `tmv similar VOLUME --z N --circles "x,y,r;x,y,r" [--slab N] [--sigma S]
-/// [--right "x,y;…"] [--wrong "x,y;…"]`: with `--right`/`--wrong` a second
-/// round is run in which the first round's candidates at those places
-/// count as kept and as dropped.
-fn similar(o: &Opts) -> Result<Value> {
-    use crate::labels::Values;
-    let input = o.input.clone().context("tmv similar VOLUME --z N --circles \"x,y,r;x,y,r\"")?;
-    let img = open_image(&input)?;
-    let info = img.info();
-    let (w, h, d) = (info.width, info.height, info.size_z);
-    let z = o.number("z")?.context("--z N")? as usize;
-    let triples = |key: &str, n: usize| -> Result<Vec<Vec<f64>>> {
-        o.get(key)
-            .unwrap_or("")
-            .split(';')
-            .filter(|p| !p.trim().is_empty())
-            .map(|p| {
-                let v: Vec<f64> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                if v.len() != n {
-                    bail!("--{key}: `{p}` is not {n} numbers");
-                }
-                Ok(v)
-            })
-            .collect()
-    };
-    let circles = triples("circles", 3)?;
-    if circles.is_empty() {
-        bail!("--circles \"x,y,r;x,y,r\"");
-    }
-    let disc = |c: &[f64]| -> Vec<usize> {
-        let r = c[2].ceil() as isize;
-        let mut pix = vec![];
-        for dy in -r..=r {
-            for dx in -r..=r {
-                let (x, y) = (c[0].round() as isize + dx, c[1].round() as isize + dy);
-                if ((dx * dx + dy * dy) as f64) <= c[2] * c[2] && x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
-                    pix.push(y as usize * w + x as usize);
-                }
-            }
-        }
-        pix
-    };
-    let examples: Vec<Vec<usize>> = circles.iter().map(|c| disc(c)).collect();
-    let vals = crate::labels::ChannelValues { img: img.clone(), c: 0, t: 0 };
-    // The display range: what holds all but a hundredth of the section.
-    let mut sorted = vals.slice(z)?;
-    sorted.sort_by(f32::total_cmp);
-    let (lo, hi) = (sorted[sorted.len() / 200], sorted[sorted.len() - 1 - sorted.len() / 200]);
-    let denoise = crate::sam::Denoise { slab: o.number("slab")?.map_or(0, |v| v as usize), sigma: o.number("sigma")?.map_or(0.0, |v| v as f32) };
-    let sam = crate::sam::Sam::default();
-    let mut req = crate::sam::SimilarReq { token: 1, z, c: 0, t: 0, lo, hi, denoise, again: None };
-    let taken = vec![false; w * h];
-    let started = Instant::now();
-    let mut found = sam.similar(&req, (w, h, d), |z| vals.slice(z), &examples, &taken, |_, _| {})?;
-    let centre = |f: &crate::segpick::Found| {
-        let [x0, y0, bw, _] = f.rect;
-        let (mut sx, mut sy, mut n) = (0f64, 0f64, 0f64);
-        for (i, _) in f.mask.iter().enumerate().filter(|(_, m)| **m) {
-            sx += (x0 + i % bw) as f64;
-            sy += (y0 + i / bw) as f64;
-            n += 1.0;
-        }
-        [sx / n.max(1.0), sy / n.max(1.0)]
-    };
-    let first = found.len();
-    let (right, wrong) = (triples("right", 2)?, triples("wrong", 2)?);
-    if !right.is_empty() || !wrong.is_empty() {
-        let reach = circles.iter().map(|c| c[2]).sum::<f64>() / circles.len() as f64;
-        let near = |f: &crate::segpick::Found, at: &[Vec<f64>]| {
-            let c = centre(f);
-            at.iter().any(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt() <= reach)
-        };
-        let keep: Vec<usize> = (0..found.len()).filter(|i| near(&found[*i], &right)).collect();
-        let drop: Vec<usize> = (0..found.len()).filter(|i| !keep.contains(i) && near(&found[*i], &wrong)).collect();
-        eprintln!("tmv similar: second round, {} kept and {} dropped of {first}", keep.len(), drop.len());
-        req.again = Some(crate::sam::Again { keep, drop });
-        found = sam.similar(&req, (w, h, d), |z| vals.slice(z), &examples, &taken, |_, _| {})?;
-    }
-    let list: Vec<Value> = found
-        .iter()
-        .map(|f| {
-            let c = centre(f);
-            json!({ "x": (c[0] * 10.0).round() / 10.0, "y": (c[1] * 10.0).round() / 10.0, "score": f.score, "area": f.area(), "rect": f.rect })
-        })
-        .collect();
-    Ok(json!({ "z": z, "width": w, "height": h, "range": [lo, hi], "firstRound": first, "found": list, "searchSeconds": started.elapsed().as_secs_f64() }))
-}
-
 fn sta(o: &Opts) -> Result<Value> {
     use crate::sta::project as sp;
     let inputs: Vec<String> = o.input.iter().chain(&o.more).cloned().collect();

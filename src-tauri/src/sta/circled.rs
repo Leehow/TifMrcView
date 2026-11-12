@@ -33,7 +33,7 @@
 use anyhow::{bail, Context, Result};
 
 use super::check_cancel;
-use super::project::{allowed_on_look, binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, LookSource, Place, Source, BOX, MOST};
+use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, Place, Source, BOX, MOST};
 use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
 use crate::spa::geom::{distance, grid, Mat};
@@ -53,14 +53,6 @@ pub struct Example {
 /// orientation can afford, and enough to tell shapes apart (the template
 /// search of the cards works at the same sampling).
 const ACROSS: f64 = 9.0;
-/// Trials: TMV_STA_ACROSS sets the voxels across the circle.
-fn across() -> f64 {
-    std::env::var("TMV_STA_ACROSS").ok().and_then(|v| v.parse().ok()).unwrap_or(ACROSS)
-}
-/// Trials: TMV_STA_FLAT=0 searches the images as they are.
-fn flat() -> bool {
-    std::env::var("TMV_STA_FLAT").map_or(true, |v| v != "0")
-}
 /// Side of the picture searched for.
 const N: usize = 16;
 /// Side of the picture kept of each example, at twice the sampling of the
@@ -72,8 +64,6 @@ pub const SPAN: f64 = 18.0;
 const SAME_SIZE: f64 = 1.15;
 /// A circle has to be at least this many voxels of its tomogram across.
 const SMALLEST: f64 = 6.0;
-/// Fewest voxels the radius may have on the grid searched.
-const COARSEST: f64 = 3.0;
 
 /// What the search of the examples gave.
 pub struct Circled {
@@ -184,99 +174,35 @@ struct Grid {
     voxel_a: f64,
     /// Voxels of the file read per voxel here.
     bin: usize,
-    /// The file is the look tomogram of the source.
-    look: Option<LookSource>,
     /// Where a centre may lie.
     mask: Vec<bool>,
 }
 
 impl Grid {
-    /// The image searched for things `size_a` across: the look tomogram
-    /// when there is one and it shows them large enough, else the
-    /// tomogram itself; binned so the size is about `ACROSS` voxels.
+    /// The image searched for things `size_a` across: the tomogram itself,
+    /// binned so the size is about `ACROSS` voxels, its spectrum flattened.
+    /// (The clear "look" image is made to be looked at: it has lost the
+    /// detail that tells one thing from another once the slow variations
+    /// are gone.)
     fn of(s: &Source, size_a: f64) -> Result<Grid> {
-        let want = size_a / across();
         let raw_px = pixel_of(&s.path)?;
-        if flat() {
-            // The tomogram itself, its spectrum flattened: the clear image
-            // is made to be looked at, and has lost the detail that tells
-            // one thing from another once the slow variations are gone.
-            let bin = nearest_bin(raw_px, want);
-            let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
-            let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
-            return Ok(Grid { v: super::search::flattened(&v, dims), dims, voxel_a, bin, look: None, mask });
-        }
-        let look = s.look.as_ref().and_then(|l| {
-            let px = pixel_of(&l.path).ok()?;
-            let bin = nearest_bin(px, want);
-            (0.5 * size_a / (bin as f64 * px) >= COARSEST).then_some((l.clone(), px, bin))
-        });
-        match look {
-            Some((l, px, bin)) => {
-                let (v, dims, voxel_a, bin) = binned(&l.path, bin as f64 * px)?;
-                // Gold and borders are told on the tomogram itself
-                // (`allowed_on_look`), at about the same sampling.
-                let raw_bin = nearest_bin(raw_px, voxel_a);
-                let (raw, raw_dims, raw_voxel, raw_bin) = binned(&s.path, raw_bin as f64 * raw_px)?;
-                let raw_ok = allowed(&raw, raw_dims, 0.5 * size_a / raw_voxel);
-                let mask = allowed_on_look(&raw_ok, raw_dims, 1, raw_bin, dims, 1, bin, &l, 0.5 * size_a / voxel_a);
-                Ok(Grid { v, dims, voxel_a, bin, look: Some(l), mask })
-            }
-            None => {
-                let bin = nearest_bin(raw_px, want);
-                let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
-                let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
-                Ok(Grid { v, dims, voxel_a, bin, look: None, mask })
-            }
-        }
+        let bin = nearest_bin(raw_px, size_a / ACROSS);
+        let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
+        let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
+        Ok(Grid { v: super::search::flattened(&v, dims), dims, voxel_a, bin, mask })
     }
 
     /// A position of the source's tomogram (unbinned voxels) on this grid.
     fn from_raw(&self, p: [f64; 3]) -> [f64; 3] {
         let b = self.bin as f64;
-        std::array::from_fn(|k| {
-            let file = match &self.look {
-                Some(l) => (p[k] - l.offset[k]) / l.scale,
-                None => p[k],
-            };
-            (file - (b - 1.0) / 2.0) / b
-        })
+        p.map(|x| (x - (b - 1.0) / 2.0) / b)
     }
 
     /// A voxel of this grid as a position of the source's tomogram.
     fn to_raw(&self, p: [f64; 3]) -> [f64; 3] {
         let b = self.bin as f64;
-        std::array::from_fn(|k| {
-            let file = p[k] * b + (b - 1.0) / 2.0;
-            match &self.look {
-                Some(l) => l.scale * file + l.offset[k],
-                None => file,
-            }
-        })
+        p.map(|x| x * b + (b - 1.0) / 2.0)
     }
-}
-
-/// The picture of an example: `KEPT`³ with the circle `SPAN` voxels across,
-/// from the image the user drew on.
-fn picture(s: &Source, e: &Example, raw_px: f64) -> Result<Option<Vec<f32>>> {
-    let diameter_a = 2.0 * e.radius * raw_px;
-    let voxel = diameter_a / SPAN;
-    let (path, px, look) = match &s.look {
-        Some(l) => (l.path.as_str(), pixel_of(&l.path)?, Some(l)),
-        None => (s.path.as_str(), raw_px, None),
-    };
-    // Read no coarser than the picture's own voxels.
-    let bin = ((voxel / px).floor() as usize).max(1);
-    let (v, dims, got, bin) = binned(path, bin as f64 * px)?;
-    let b = bin as f64;
-    let centre: [f64; 3] = std::array::from_fn(|k| {
-        let file = match look {
-            Some(l) => (e.at[k] - l.offset[k]) / l.scale,
-            None => e.at[k],
-        };
-        (file - (b - 1.0) / 2.0) / b
-    });
-    Ok(sampled(&v, dims, centre, KEPT, voxel / got))
 }
 
 /// Side of the picture of a place, pixels.
@@ -456,20 +382,17 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // The examples' pictures, one tomogram in memory at a time.
     progress("取出例子", 0, k);
     let mut pictures: Vec<Vec<f32>> = vec![];
+    // Each from the flattened tomogram it is searched in: `KEPT`³ with the
+    // circle `SPAN` voxels across.
     let mut home: Option<((usize, usize), Grid)> = None;
     for (i, e) in examples.iter().enumerate() {
         check_cancel()?;
-        let p = if flat() {
-            // From the flattened tomogram the example is searched in.
-            let key = (e.source, size_of[i]);
-            if home.as_ref().is_none_or(|h| h.0 != key) {
-                home = Some((key, Grid::of(&sources[e.source], sizes_a[key.1])?));
-            }
-            let g = &home.as_ref().unwrap().1;
-            sampled(&g.v, g.dims, g.from_raw(e.at), KEPT, diameters[i] / SPAN / g.voxel_a)
-        } else {
-            picture(&sources[e.source], e, raw_px[e.source])?
-        };
+        let key = (e.source, size_of[i]);
+        if home.as_ref().is_none_or(|h| h.0 != key) {
+            home = Some((key, Grid::of(&sources[e.source], sizes_a[key.1])?));
+        }
+        let g = &home.as_ref().unwrap().1;
+        let p = sampled(&g.v, g.dims, g.from_raw(e.at), KEPT, diameters[i] / SPAN / g.voxel_a);
         pictures.push(p.with_context(|| format!("第 {} 个圈大半在断层图外面，请圈在图里面", i + 1))?);
         progress("取出例子", i + 1, k);
     }
@@ -484,7 +407,7 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let mut by_chance: Vec<(f32, f64)> = vec![];
     // (score, turn, size) of picture a at example b.
     let mut cross: Vec<Vec<Option<(f32, usize, usize)>>> = vec![vec![None; k]; k];
-    let mut searched: Vec<(bool, f64)> = vec![];
+    let mut searched: Vec<f64> = vec![];
     // Per place seen, the turn at which each example's picture fits there.
     let mut fits: Vec<Vec<u32>> = vec![];
     for (i, s) in sources.iter().enumerate() {
@@ -492,7 +415,7 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
             check_cancel()?;
             let g = Grid::of(s, *size)?;
             let mut founds = vec![];
-            searched.push((g.look.is_some(), g.voxel_a));
+            searched.push(g.voxel_a);
             let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
             let to_raw = (g.to_raw([1.0, 0.0, 0.0])[0] - g.to_raw([0.0; 3])[0]).abs();
             for e in 0..k {
@@ -628,20 +551,13 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let template = template.context("圈的例子太靠近断层图的边了，请圈一个离边远一些的")?;
     places.sort_by(|a, b| b.0.score.total_cmp(&a.0.score));
     let mine: Vec<usize> = (0..places.len()).filter(|i| places[*i].1).collect();
-    let kind = if searched.iter().all(|s| s.0) {
-        "look"
-    } else if searched.iter().all(|s| !s.0) {
-        "raw"
-    } else {
-        "mixed"
-    };
     let found = Found {
         places: places.into_iter().map(|p| p.0).collect(),
         limit,
         noise,
         voxel_a,
-        searched: kind.to_string(),
-        search_voxel_a: searched.first().map(|s| s.1),
+        searched: "raw".to_string(),
+        search_voxel_a: searched.first().copied(),
         frames,
         sizes_a,
         alike,
