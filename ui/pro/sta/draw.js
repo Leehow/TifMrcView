@@ -53,7 +53,7 @@
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
-    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。程序会在所有勾选的断层图里找出长得像的。" },
+    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。东西不多时也可以把它们全圈出来（至少 4 个），直接只平均圈的这些。程序会在所有勾选的断层图里找出长得像的。" },
   };
   const ICONS = {
     point: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/>',
@@ -65,6 +65,8 @@
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
+  // Fewest circles that can be averaged by themselves (project::FEWEST_CIRCLED).
+  const ONLY_FEWEST = 4;
   const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
 
   const box = document.createElement("div");
@@ -84,7 +86,7 @@
       <button id="sta-draw-del" class="small" title="先在列表里点一下要删的标注">删除所选</button>
       <button id="sta-draw-flip" class="small" title="把朝外的一侧换到另一边" hidden>翻面</button>
     </div>
-    <div class="al-row"><button id="sta-draw-run" class="primary">平均我标的</button></div>`;
+    <div class="al-row"><button id="sta-draw-run" class="primary">平均我标的</button><button id="sta-draw-only" class="small" hidden></button></div>`;
   $("sta-draw-slot").append(box);
   const tools = $("sta-draw-tools");
   const btn = {};
@@ -285,7 +287,7 @@
     const examples = D.marks.filter(isExample).length;
     const fewShapes = circN === 0 && examples === 1;
     const fewCircles = circN === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).join("。");
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;
@@ -327,6 +329,12 @@
     const finds = (pointsOnly && !shapes) || examples > 0 || circN > 0;
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
+    // Every one circled already (a few dozen things seen by eye): just these are averaged, nothing is searched for.
+    const all = circN >= ONLY_FEWEST && D.marks.every(isCircle);
+    $("sta-draw-only").hidden = !all;
+    $("sta-draw-only").textContent = `只平均圈的这 ${circN} 个`;
+    $("sta-draw-only").title = "不再去找别的：只把你圈的这些对齐、平均。适合数量不多、你已经全部圈出来的东西";
+    $("sta-draw-only").disabled = W.busy || !!M.seg || W.pixelNeed.length > 0;
     $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
     draw();
     W.wall?.render();
@@ -386,6 +394,13 @@
     save();
     refresh(0);
     render();
+  };
+  $("sta-draw-only").onclick = () => {
+    const circles = plain().filter((m) => m.kind === "example" && m.points.length >= 2);
+    if (circles.length < ONLY_FEWEST || !W.found) return;
+    D.open = null;
+    setKind(null);
+    W.found.averageCircled(circles);
   };
   $("sta-draw-run").onclick = () => {
     const marks = plain();

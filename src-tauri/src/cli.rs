@@ -75,7 +75,9 @@ USAGE
   from its radius; circles around two or three examples of whatever is to be
   found, kind "example" given as centre + a point on the circle, are taken as
   they look: everything like them in all the inputs is found, at each of the
-  sizes circled, and what stands out is averaged into <out>/circled/), or --template map.mrc|.em (a density map the user already
+  sizes circled, and what stands out is averaged into <out>/circled/; with
+  --only nothing is searched for and just what was circled, four or more, is
+  averaged), or --template map.mrc|.em (a density map the user already
   has is the template: everything like it is found and averaged without
   stopping, into <out>/own/). --kinds (on a folder that already holds an
   average; give the same tomograms and --out) sorts its particles into kinds
@@ -270,7 +272,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 5] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes"];
+        const FLAGS: [&str; 6] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes", "--only"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -793,7 +795,7 @@ fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, pro
         _ => {}
     };
     let dev = || Ok(device());
-    let mut v = run_marks(&inputs, &marks, size.as_deref(), Some(&out.to_string_lossy()), &dev, &emit, &|_| String::new())?;
+    let mut v = run_marks(&inputs, &marks, size.as_deref(), o.flag("only"), Some(&out.to_string_lossy()), &dev, &emit, &|_| String::new())?;
     progress.done();
     let r = &v["report"];
     let map = r["map"].as_str().unwrap_or("average.mrc");

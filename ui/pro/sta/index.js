@@ -167,7 +167,7 @@
     let t = "";
     if (u.kind === "own") t = `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.kind === "points") t = markedText(u.clicked, u.members, u.sizeA);
-    else if (u.kind === "circled") t = `用你圈的 ${u.examples} 个例子找出同类，平均了 ${u.averaged} 个`;
+    else if (u.kind === "circled") t = u.only ? `只平均了你圈的 ${u.averaged} 个，没有再去找同类` : `用你圈的 ${u.examples} 个例子找出同类，平均了 ${u.averaged} 个`;
     else if (u.kind === "shapes") t = `${shapesText(u)}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.card != null) t = `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
     // The review kept more places than the average could use: the ones whose cube reaches past the tomogram.
@@ -334,7 +334,7 @@
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
       b.textContent = WHICH[w] || w;
-      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果", circled: "用你圈的例子找出同类做的结果" }[w] || "";
+      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果", circled: "用你圈的例子做的结果" }[w] || "";
       b.onclick = async () => {
         if (w === r.which) return;
         const out = W.out;
@@ -559,8 +559,15 @@
         setStatus(out, `${p.label}${p.total > 1 ? ` ${p.done}/${p.total}` : ""} · ${sec < 120 ? sec.toFixed(0) + " s" : (sec / 60).toFixed(1) + " min"}`);
       });
       await on("sta-live", (p) => {
+        const first = !s.live;
         s.live = `data:image/png;base64,${p.png}`;
-        if (out === W.out) { $("sta-live").hidden = false; $("sta-live").querySelector("img").src = s.live; }
+        if (out === W.out) {
+          const fig = $("sta-live"), img = fig.querySelector("img");
+          fig.hidden = false;
+          img.src = s.live;
+          // Once per run, when the picture has its size: bring it into view.
+          if (first) img.addEventListener("load", () => { try { fig.scrollIntoView({ block: "nearest" }); } catch (_) { /* old webview */ } }, { once: true });
+        }
       });
       await on("sta-note", async (n) => {
         if (n.kind === "trial") {

@@ -33,10 +33,10 @@
 use anyhow::{bail, Context, Result};
 
 use super::check_cancel;
-use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, Place, Source, BOX, MOST};
-use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
+use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, FEWEST_CIRCLED, Place, Source, BOX, ELONGATION, MOST};
+use super::search::{allowed_but, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
-use crate::spa::geom::{distance, grid, Mat};
+use crate::spa::geom::{distance, grid, transpose, Mat};
 
 /// One thing the user circled.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -80,6 +80,13 @@ pub struct Circled {
     /// Per example, the best score the other examples' pictures have on it
     /// (None: a single example, or the others could not be searched there).
     pub by_others: Vec<Option<f32>>,
+    /// When the places were found with the template that tells the examples
+    /// from what a first search found (`contrast`): per example, where it
+    /// ranked among those when left out (told, plain; shares, 0 the top).
+    pub told: Option<Vec<(f64, f64)>>,
+    /// How many times as wide as circled the pictures searched for were (1,
+    /// or one of `WIDER` when the examples are told by what is around them).
+    pub wide: f64,
 }
 
 /// The sizes circled: diameters (Å) that differ by more than `SAME_SIZE`,
@@ -188,7 +195,11 @@ impl Grid {
         let raw_px = pixel_of(&s.path)?;
         let bin = nearest_bin(raw_px, size_a / ACROSS);
         let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
-        let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
+        // Gold is looked for where a bead stands out: in voxels much larger
+        // than a bead it is averaged away, and this grid is the coarser the
+        // wider the search looks.
+        let gold: Vec<[usize; 3]> = gold_of(&s.path, raw_px, bin)?.iter().map(|p| p.map(|x| x / bin)).collect();
+        let mask = allowed_but(&v, dims, 0.5 * size_a / voxel_a, &gold);
         Ok(Grid { v: super::search::flattened(&v, dims), dims, voxel_a, bin, mask })
     }
 
@@ -205,18 +216,52 @@ impl Grid {
     }
 }
 
+/// Voxel at which gold is looked for, Å (the search of `project` is at this
+/// size, where the rule for gold was measured).
+const GOLD_VOXEL: f64 = 16.0;
+
+/// The gold voxels of a tomogram found at about `GOLD_VOXEL`, as positions
+/// in voxels of the file; empty when a grid of `bin` is no coarser than
+/// that (its own voxels show the gold). Kept per file as it now is: a
+/// search opens the same tomogram at several sizes.
+fn gold_of(path: &str, raw_px: f64, bin: usize) -> Result<std::sync::Arc<Vec<[usize; 3]>>> {
+    type Key = (String, u64, Option<std::time::SystemTime>);
+    static KEPT: std::sync::Mutex<Vec<(Key, std::sync::Arc<Vec<[usize; 3]>>)>> = std::sync::Mutex::new(Vec::new());
+    let fine = nearest_bin(raw_px, GOLD_VOXEL);
+    if fine >= bin {
+        return Ok(Default::default());
+    }
+    let meta = std::fs::metadata(path).ok();
+    let key: Key = (path.to_string(), meta.as_ref().map_or(0, |m| m.len()), meta.and_then(|m| m.modified().ok()));
+    if let Some(found) = KEPT.lock().unwrap().iter().find(|k| k.0 == key) {
+        return Ok(found.1.clone());
+    }
+    let (v, dims, _, fine) = binned(path, fine as f64 * raw_px)?;
+    let gold: Vec<[usize; 3]> = super::search::gold(&v, dims).into_iter().map(|p| p.map(|x| x * fine + fine / 2)).collect();
+    eprintln!("sta: {} voxels of gold at {:.1} Å voxels in {path}", gold.len(), fine as f64 * raw_px);
+    let gold = std::sync::Arc::new(gold);
+    let mut kept = KEPT.lock().unwrap();
+    if kept.len() >= 8 {
+        kept.remove(0);
+    }
+    kept.push((key, gold.clone()));
+    Ok(gold)
+}
+
 /// Side of the picture of a place, pixels.
-pub const TILE: usize = 64;
-/// How many circle diameters a picture shows.
-const TILE_SPAN: f64 = 1.5;
+pub const TILE: usize = 96;
+/// How many circle diameters a picture shows, when the circle alone was
+/// searched for; as many times more as the pictures searched for were wider
+/// (`Found::wide`): the user judges a place by what the program told it by.
+pub const TILE_SPAN: f64 = 2.0;
 
 /// Pictures of places for the user to look through: at each of `places`
 /// (source, centre and radius in voxels of the source's tomogram) the
 /// section the user drew on (X across, Y down, at the place's own height,
 /// a few sections thick), from the look tomogram when there is one,
-/// `TILE` pixels square, grey, its own contrast. None where the place is
-/// off the image.
-pub fn tiles(sources: &[Source], places: &[(usize, [f64; 3], f64)]) -> Result<Vec<Option<Vec<u8>>>> {
+/// `TILE` pixels square and `span` circle diameters wide, grey, its own
+/// contrast. None where the place is off the image.
+pub fn tiles(sources: &[Source], places: &[(usize, [f64; 3], f64)], span: f64) -> Result<Vec<Option<Vec<u8>>>> {
     let mut out: Vec<Option<Vec<u8>>> = vec![None; places.len()];
     for (i, s) in sources.iter().enumerate() {
         let here: Vec<usize> = (0..places.len()).filter(|k| places[*k].0 == i).collect();
@@ -238,7 +283,7 @@ pub fn tiles(sources: &[Source], places: &[(usize, [f64; 3], f64)]) -> Result<Ve
         let scale = look.map_or(1.0, |l| l.scale);
         // Read no finer than the smallest picture's pixels.
         let smallest = here.iter().map(|k| places[*k].2 / scale).fold(f64::MAX, f64::min);
-        let bin = ((2.0 * TILE_SPAN * smallest / TILE as f64).floor() as usize).max(1);
+        let bin = ((2.0 * span * smallest / TILE as f64).floor() as usize).max(1);
         let (v, dims, _, bin) = binned(path, bin as f64 * px)?;
         let b = bin as f64;
         let at = |x: usize, y: usize, z: usize| v[(z * dims[1] + y) * dims[0] + x] as f64;
@@ -246,7 +291,7 @@ pub fn tiles(sources: &[Source], places: &[(usize, [f64; 3], f64)]) -> Result<Ve
             let (_, centre, radius) = places[k];
             let c = in_file(centre).map(|x| (x - (b - 1.0) / 2.0) / b);
             let r = radius / scale / b;
-            let step = 2.0 * TILE_SPAN * r / TILE as f64;
+            let step = 2.0 * span * r / TILE as f64;
             let thick = ((0.15 * r).round() as isize).max(0);
             let z0 = c[2].round() as isize;
             let mut grey: Vec<Option<f64>> = Vec::with_capacity(TILE * TILE);
@@ -353,31 +398,62 @@ pub fn limit(gap: Option<f32>, alike: Option<f32>, noise: Option<f32>, chance: O
     }
 }
 
-/// Everything in `sources` that looks like one of `examples`.
-pub fn find(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], progress: Progress) -> Result<Circled> {
-    find_at(dev, sources, examples, &grid(30.0), progress)
+/// The circles are also searched for this many times as wide.
+const WIDER: [f64; 2] = [2.0, 3.0];
+/// A wider circle is used when the worst example, left out, ranks within
+/// this share of all places found with it,
+const SURE: f64 = 0.1;
+/// and this many times better than with the circle as drawn.
+const CLEARLY: f64 = 3.0;
+/// The wider circles are tried only when, as drawn, the worst example left
+/// out ranks beyond this share: the examples do not find each other by what
+/// is in their circles. Where they do, a wider circle that ranks them still
+/// better finds far fewer of the rest (measured: three ribosomes rank 0.126
+/// as circled and 0.026 at three times the circle, which then keeps 34
+/// places where the circles as drawn keep 540, 88% of them ribosomes; three
+/// crowns on a membrane rank 0.392 as circled and 0.037 at twice).
+const LOST: f64 = 0.25;
+
+/// What a search with the examples' pictures gave.
+struct Pass {
+    /// The examples' pictures (`KEPT`³) and their circles' diameters, Å.
+    pictures: Vec<Vec<f32>>,
+    diameters: Vec<f64>,
+    sizes_a: Vec<f64>,
+    /// (score, turn, size) of picture a at example b.
+    cross: Vec<Vec<Option<(f32, usize, usize)>>>,
+    first: usize,
+    by_others: Vec<Option<f32>>,
+    alike: Option<f32>,
+    by_chance: Vec<(f32, f64)>,
+    /// The voxels searched at, Å.
+    searched: Vec<f64>,
+    /// The examples as places, and everything found, the examples first.
+    own: Vec<Seen>,
+    all: Vec<Seen>,
 }
 
-/// `find` with the orientations searched given (`find`: `grid(30.0)`, which
-/// `Place::turn` indexes everywhere else).
-fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], turns: &[Mat], progress: Progress) -> Result<Circled> {
-    if sources.is_empty() {
-        bail!("没有断层图");
+impl Pass {
+    /// Where the worst example ranks among all the places found, by what
+    /// the other examples' pictures score at it (a share, 0 the top; 1 with
+    /// a single example or one the others have no score at).
+    fn worst(&self) -> f64 {
+        let k = self.own.len();
+        let rest = &self.all[k..];
+        if k < 2 || rest.is_empty() {
+            return 1.0;
+        }
+        self.by_others.iter().map(|s| s.map_or(1.0, |s| rest.iter().filter(|p| p.score >= s).count() as f64 / rest.len() as f64)).fold(0.0, f64::max)
     }
-    if examples.is_empty() {
-        bail!("请先圈出 2 到 3 个要找的东西作例子");
-    }
-    if let Some(e) = examples.iter().find(|e| e.source >= sources.len()) {
-        bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
-    }
-    if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
-        bail!("有一个圈太小了，请把要找的东西整个圈进去");
-    }
+}
+
+/// The search of every source with every example's picture (`probes`: those
+/// made already).
+#[allow(clippy::too_many_arguments)]
+fn first_pass(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], by: f64, mut probes: Vec<Probe>, progress: Progress) -> Result<Pass> {
     let k = examples.len();
-    let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, size_of) = sizes(&diameters);
-    let diameter_a = *sizes_a.last().unwrap();
 
     // The examples' pictures, one tomogram in memory at a time.
     progress("取出例子", 0, k);
@@ -422,7 +498,11 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
                 check_cancel()?;
                 let stage = format!("找像例子的 {}/{}", done + 1, total);
                 let picture = scaled(e, *size, g.voxel_a);
-                let found = super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+                // Searched for already when the size was measured (`tightened`)?
+                let found = match probes.iter().position(|p| (p.source, p.size, p.example) == (i, z, e) && p.found.dims == g.dims) {
+                    Some(at) => probes.swap_remove(at).found,
+                    None => super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?,
+                };
                 done += 1;
                 // What this picture scores at each example of this tomogram:
                 // the best within half a radius of the circle's centre.
@@ -475,8 +555,10 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
                 best.1
             };
             for (e, found) in founds.iter().enumerate() {
-                for p in peaks(found, 1.8 * radius, MOST) {
-                    seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw, score: p.score, turn: p.turn, like: e, size: z, key: fits.len() });
+                // Things stand as close to each other as their circles allow,
+                // however wide the picture searched for is.
+                for p in peaks(found, 1.8 * radius / by, MOST) {
+                    seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw / by, score: p.score, turn: p.turn, like: e, size: z, key: fits.len() });
                     fits.push(founds.iter().map(|f| stands(f, p.pos)).collect());
                 }
             }
@@ -505,27 +587,128 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         .unwrap_or(0);
     let nearest = |r: &Mat| (0..turns.len()).min_by(|a, b| distance(&turns[*a], r).total_cmp(&distance(&turns[*b], r))).unwrap_or(0);
     let upright = nearest(&super::IDENTITY);
-    let frames: Vec<Mat> = vec![super::IDENTITY; k];
     seen.iter_mut().for_each(|s| s.turn = fits[s.key][first] as usize);
 
     // The examples themselves stay whatever they score; the rest best first.
     let own: Vec<Seen> = examples
         .iter()
         .enumerate()
-        .map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: f32::MAX, turn: cross[first][e].map_or(upright, |c| c.1), like: e, size: size_of[e], key: usize::MAX })
+        .map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius / by, score: f32::MAX, turn: cross[first][e].map_or(upright, |c| c.1), like: e, size: size_of[e], key: usize::MAX })
         .collect();
-    let mut all = apart(own, seen);
+    let all = apart(own.clone(), seen);
+    Ok(Pass { pictures, diameters, sizes_a, cross, first, by_others, alike, by_chance, searched, own, all })
+}
+
+/// Everything in `sources` that looks like one of `examples`.
+pub fn find(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], progress: Progress) -> Result<Circled> {
+    find_at(dev, sources, examples, &grid(30.0), progress)
+}
+
+/// `find` with the orientations searched given (`find`: `grid(30.0)`, which
+/// `Place::turn` indexes everywhere else).
+fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], turns: &[Mat], progress: Progress) -> Result<Circled> {
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    if examples.is_empty() {
+        bail!("请先圈出 2 到 3 个要找的东西作例子");
+    }
+    if let Some(e) = examples.iter().find(|e| e.source >= sources.len()) {
+        bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
+    }
+    if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
+        bail!("有一个圈太小了，请把要找的东西整个圈进去");
+    }
+    let k = examples.len();
+    let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
+    // A circle drawn wide around a compact thing is drawn in to the thing.
+    let as_drawn = sizes(&examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect::<Vec<_>>()).0;
+    let (examples, probes) = tightened(dev, sources, examples, &raw_px, turns, progress)?;
+    let examples = &examples[..];
+    let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
+    let (sizes_a, _) = sizes(&diameters);
+    // What the user circled, where a circle was drawn in (said beside the size found).
+    let drawn_a = if as_drawn.len() == sizes_a.len() && as_drawn != sizes_a { as_drawn } else { vec![] };
+    let diameter_a = *sizes_a.last().unwrap();
+
+    // With what is around it, when that is what tells it: a thing is often
+    // known by where it sits (the mouth of a pocket in a membrane) more than
+    // by itself. The circles made `WIDER` are searched for as well (a small
+    // share of the work: the voxels are as much larger), and a width at
+    // which the examples find each other clearly better is the one used.
+    let mut pass = first_pass(dev, sources, examples, &raw_px, turns, 1.0, probes, progress)?;
+    let mut wide = 1.0;
+    let plain = pass.worst();
+    if k >= 2 && plain <= LOST {
+        eprintln!("sta: left out, the worst example ranks {plain:.3} as circled: found by what is in the circles");
+    }
+    if k >= 2 && plain > LOST {
+        for by in WIDER {
+            check_cancel()?;
+            let wider: Vec<Example> = examples.iter().map(|e| Example { radius: e.radius * by, ..*e }).collect();
+            // Said first, so the count that follows reads as the count of this second search.
+            let label = |s: &str, a: usize, b: usize| progress(&format!("按圈认不出来，连周围 {by} 倍再找一遍：{s}"), a, b);
+            match first_pass(dev, sources, &wider, &raw_px, turns, by, vec![], &label) {
+                Ok(p) => {
+                    eprintln!("sta: left out, the worst example ranks {:.3} as circled and {:.3} with {by} times the circle", plain, p.worst());
+                    if p.worst() <= SURE && p.worst() * CLEARLY <= plain && p.worst() < pass.worst() {
+                        pass = p;
+                        wide = by;
+                    }
+                }
+                Err(e) => {
+                    check_cancel()?;
+                    eprintln!("sta: not searched with {by} times the circle ({e:#})");
+                }
+            }
+        }
+    }
+    let Pass { pictures, diameters, sizes_a: sizes_searched, cross, first, by_others, alike, mut by_chance, searched, own, mut all } = pass;
+    let frames: Vec<Mat> = vec![super::IDENTITY; k];
+    // What the examples have that the best of the rest have not, when they
+    // have it (`contrast`): searched for once more, in place of the above.
+    let again = told(dev, sources, k, &pictures, &diameters, &sizes_searched, &cross, first, &all[k..], turns, progress)?;
+    let (alike, told) = match again {
+        Some((seen, control, ranks)) => {
+            all = apart(own, seen);
+            by_chance = control;
+            (None, Some(ranks))
+        }
+        None => (alike, None),
+    };
     let rest: Vec<Peak> = all[k..].iter().map(|s| Peak { pos: [0; 3], score: s.score, turn: s.turn }).collect();
     let noise = by_chance.iter().map(|c| c.0).reduce(f32::max);
     let limit = limit(cutoff(&rest), alike, noise, beyond_chance(&rest, &by_chance));
     // An example scores what the others' pictures give it; a single one
-    // (or one the others cannot reach) leads the list.
+    // (or one the others cannot reach, or after `told`) leads the list.
     let top = rest.first().map_or(1.0, |p| p.score);
     for e in 0..k {
-        all[e].score = by_others[e].unwrap_or(top).min(1.0);
+        all[e].score = by_others[e].filter(|_| told.is_none()).unwrap_or(top).min(1.0);
     }
 
-    // Onto the grids the cubes are cut on (as `project::cut_places` bins).
+    let (places, mine, voxel_a, template) = on_grids(sources, examples, &raw_px, &all, first, diameter_a)?;
+    let found = Found {
+        places,
+        limit,
+        noise,
+        voxel_a,
+        searched: "raw".to_string(),
+        search_voxel_a: searched.first().copied(),
+        frames,
+        sizes_a,
+        alike,
+        wide,
+        drawn_a,
+    };
+    Ok(Circled { found, template, diameter_a, mine, first, by_others, told, wide })
+}
+
+/// The places `all` (the first ones the examples themselves) on the grids
+/// the cubes are cut on (as `project::cut_places` bins), best first: the
+/// places, which of them are the examples, the voxel of the cubes (Å) and
+/// the first example's cube.
+fn on_grids(sources: &[Source], examples: &[Example], raw_px: &[f64], all: &[Seen], first: usize, diameter_a: f64) -> Result<(Vec<Place>, Vec<usize>, f64, Vec<f32>)> {
+    let k = examples.len();
     let px = raw_px[examples[first].source];
     let voxel_a = px * ((diameter_a / SPAN / px).round()).max(1.0);
     let mut places: Vec<(Place, bool)> = vec![];
@@ -551,18 +734,210 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let template = template.context("圈的例子太靠近断层图的边了，请圈一个离边远一些的")?;
     places.sort_by(|a, b| b.0.score.total_cmp(&a.0.score));
     let mine: Vec<usize> = (0..places.len()).filter(|i| places[*i].1).collect();
-    let found = Found {
-        places: places.into_iter().map(|p| p.0).collect(),
-        limit,
-        noise,
-        voxel_a,
-        searched: "raw".to_string(),
-        search_voxel_a: searched.first().copied(),
-        frames,
-        sizes_a,
-        alike,
-    };
-    Ok(Circled { found, template, diameter_a, mine, first, by_others })
+    Ok((places.into_iter().map(|p| p.0).collect(), mine, voxel_a, template))
+}
+
+/// What was circled and nothing else, as places to average: for the user
+/// who has gone through the tomograms and circled every one (a few dozen
+/// things seen by eye are sooner circled than found). Nothing is searched
+/// for; every place stands upright, and the average finds the orientations
+/// (`project::run_places`). The circles are taken as drawn.
+pub fn given(sources: &[Source], examples: &[Example]) -> Result<Circled> {
+    if sources.is_empty() {
+        bail!("没有断层图");
+    }
+    if let Some(e) = examples.iter().find(|e| e.source >= sources.len()) {
+        bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
+    }
+    if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
+        bail!("有一个圈太小了，请把要找的东西整个圈进去");
+    }
+    if examples.len() < FEWEST_CIRCLED {
+        bail!("只圈了 {} 个，太少了：只平均圈的这些，至少要圈 {FEWEST_CIRCLED} 个", examples.len());
+    }
+    let k = examples.len();
+    let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
+    let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
+    let (sizes_a, size_of) = sizes(&diameters);
+    let diameter_a = *sizes_a.last().unwrap();
+    let turns = grid(30.0);
+    let upright = (0..turns.len()).min_by(|a, b| distance(&turns[*a], &super::IDENTITY).total_cmp(&distance(&turns[*b], &super::IDENTITY))).unwrap_or(0);
+    // All of one kind, each its own example.
+    let all: Vec<Seen> = examples.iter().enumerate().map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: 1.0, turn: upright, like: 0, size: size_of[e], key: usize::MAX }).collect();
+    let (places, mine, voxel_a, template) = on_grids(sources, examples, &raw_px, &all, 0, diameter_a)?;
+    if places.len() < FEWEST_CIRCLED {
+        bail!("圈的东西里只有 {} 个离断层图的边够远，太少了（至少要 {FEWEST_CIRCLED} 个）", places.len());
+    }
+    let found = Found { places, limit: Some(1.0), noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a, alike: None, wide: 1.0, drawn_a: vec![] };
+    Ok(Circled { found, template, diameter_a, mine, first: 0, by_others: vec![None; k], told: None, wide: 1.0 })
+}
+
+/// Places the probe of `tightened` averages.
+const PROBE: usize = 60;
+
+/// A search `tightened` made that `first_pass` would make again: the
+/// picture of example `example` in tomogram `source` at size `size`.
+struct Probe {
+    source: usize,
+    size: usize,
+    example: usize,
+    found: super::search::Found,
+}
+
+/// The examples with their circles drawn in to the thing itself, where the
+/// thing is a compact body smaller than its circle. A circle is as wide as
+/// the hand drew it, and everything follows from its size: the sampling of
+/// the search, how much of the surroundings the picture holds, the masks of
+/// the average (measured: three ribosomes circled at 347 Å give 372 places
+/// and 29.5 Å, at 260 Å 549 places and 26.8 Å). Per size circled, the first
+/// example's picture is searched for in its own tomogram, the best `PROBE`
+/// places are aligned and averaged, and the dark body in that average is
+/// measured (`project::probed`). What is no single compact body (a layer, a
+/// line, several pieces) keeps its circle. With the examples come the
+/// searches made, when no circle changed: `first_pass` need not repeat them.
+fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], progress: Progress) -> Result<(Vec<Example>, Vec<Probe>)> {
+    let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
+    let (sizes_a, size_of) = sizes(&diameters);
+    let mut out = examples.to_vec();
+    let mut probes: Vec<Probe> = vec![];
+    let mut drawn_in = false;
+    for (z, size) in sizes_a.iter().enumerate() {
+        check_cancel()?;
+        let Some(e) = size_of.iter().position(|x| *x == z) else { continue };
+        let x = examples[e];
+        let s = &sources[x.source];
+        let stage = format!("量大小 {}/{}", z + 1, sizes_a.len());
+        // The best places of the first example's picture in its own tomogram,
+        // on the grid the cubes are cut on.
+        let px = raw_px[x.source];
+        let voxel_a = px * (size / SPAN / px).round().max(1.0);
+        let bin = ((voxel_a / px).round() as usize).max(1);
+        let places: Vec<Place> = {
+            let g = Grid::of(s, *size)?;
+            let Some(picture) = sampled(&g.v, g.dims, g.from_raw(x.at), KEPT, diameters[e] / SPAN / g.voxel_a) else { continue };
+            let picture = rescale_cube(&picture, KEPT, diameters[e] / SPAN, N, g.voxel_a * diameters[e] / size);
+            let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
+            let found = super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+            let img = crate::tomo::pipeline::open(&s.path)?;
+            let info = img.info();
+            let dims = [info.width / bin, info.height / bin, info.size_z / bin];
+            let places = peaks(&found, 1.8 * radius, PROBE)
+                .iter()
+                .filter_map(|p| {
+                    let c = g.to_raw(p.pos.map(|x| x as f64)).map(|x| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize);
+                    cube_fits(dims, c, BOX).then_some(Place { source: x.source, c, bin, turn: p.turn, score: p.score, like: 0, size: 0 })
+                })
+                .collect();
+            probes.push(Probe { source: x.source, size: z, example: e, found });
+            places
+        };
+        // Measured in their average once they are aligned: as they lie, the
+        // average is as wide as the thing at its widest, and blurred.
+        let count = places.len();
+        let probe = Found { places, limit: None, noise: None, voxel_a, searched: "raw".to_string(), search_voxel_a: None, frames: vec![super::IDENTITY], sizes_a: vec![*size], alike: None, wide: 1.0, drawn_a: vec![] };
+        let Some((across, blobs, elongation)) = super::project::probed(dev, sources, &probe, *size, &|_, a, b| progress(&stage, a, b))? else { continue };
+        let measured = across * voxel_a;
+        eprintln!("sta: circled at {size:.0} Å; the body in the aligned average of the best {count} is {measured:.0} Å across (pieces {blobs}, elongation {elongation:.2})");
+        if blobs == 1 && elongation < ELONGATION && measured * SAME_SIZE < *size {
+            let by = (measured / size).max(0.5);
+            for i in (0..examples.len()).filter(|i| size_of[*i] == z) {
+                out[i].radius = (examples[i].radius * by).max(SMALLEST / 2.0);
+            }
+            drawn_in = true;
+        }
+    }
+    // With a circle drawn in the sizes are other ones: nothing searched here is searched for again.
+    if drawn_in {
+        probes.clear();
+    }
+    Ok((out, probes))
+}
+
+/// The most places of a first search taken as look-alikes.
+const ALIKE_MOST: usize = 3000;
+
+/// The search made again with the template that tells the examples from
+/// `rest`, the places a first search found (best first, each with the turn
+/// at which the first example's picture fits it): the places it finds, what
+/// chance scores with it, and how the examples ranked when left out. None
+/// when there is nothing to tell (`contrast::tell`).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn told(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    k: usize,
+    pictures: &[Vec<f32>],
+    diameters: &[f64],
+    sizes_a: &[f64],
+    cross: &[Vec<Option<(f32, usize, usize)>>],
+    first: usize,
+    rest: &[Seen],
+    turns: &[Mat],
+    progress: Progress,
+) -> Result<Option<(Vec<Seen>, Vec<(f32, f64)>, Vec<(f64, f64)>)>> {
+    use super::cc::rotate;
+    let rest = &rest[..rest.len().min(ALIKE_MOST)];
+    if k < 2 || rest.len() < super::contrast::FEWEST {
+        return Ok(None);
+    }
+    // All pictures in the first example's frame, the circle `ACROSS` voxels
+    // across. Picture a fits at example b turned by `cross[a][b]`.
+    let ours: Vec<Vec<f32>> = (0..k)
+        .filter_map(|e| {
+            let turn = if e == first { super::IDENTITY } else { turns[cross[first][e]?.1] };
+            let picture = rescale_cube(&pictures[e], KEPT, diameters[e] / SPAN, N, diameters[e] / ACROSS);
+            Some(rotate(&picture, N, &transpose(&turn)))
+        })
+        .collect();
+    let mut others: Vec<(usize, Vec<f32>)> = vec![];
+    for (i, s) in sources.iter().enumerate() {
+        for (z, size) in sizes_a.iter().enumerate() {
+            let here: Vec<usize> = (0..rest.len()).filter(|j| rest[*j].source == i && rest[*j].size == z).collect();
+            if here.is_empty() {
+                continue;
+            }
+            check_cancel()?;
+            progress("看找到的和例子差在哪", i, sources.len());
+            let g = Grid::of(s, *size)?;
+            let step = size / ACROSS / g.voxel_a;
+            for j in here {
+                if let Some(p) = sampled(&g.v, g.dims, g.from_raw(rest[j].at), N, step) {
+                    others.push((j, rotate(&p, N, &transpose(&turns[rest[j].turn]))));
+                }
+            }
+        }
+    }
+    others.sort_by_key(|o| o.0);
+    let others: Vec<Vec<f32>> = others.into_iter().map(|o| o.1).collect();
+    let Some(t) = super::contrast::tell(&ours, &others, N, ACROSS / 2.0) else { return Ok(None) };
+    eprintln!("sta: left out, the examples rank {:?} among {} places found (with what tells them, with the plain mean); holds: {}", t.ranks, others.len(), t.holds);
+    if !t.holds {
+        return Ok(None);
+    }
+    let mut seen: Vec<Seen> = vec![];
+    let mut by_chance: Vec<(f32, f64)> = vec![];
+    let total = sources.len() * sizes_a.len() * 2;
+    let mut done = 0;
+    for (i, s) in sources.iter().enumerate() {
+        for (z, size) in sizes_a.iter().enumerate() {
+            check_cancel()?;
+            let g = Grid::of(s, *size)?;
+            let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
+            let to_raw = (g.to_raw([1.0, 0.0, 0.0])[0] - g.to_raw([0.0; 3])[0]).abs();
+            let template = rescale_cube(&t.template, N, size / ACROSS, N, g.voxel_a);
+            let stage = format!("按例子独有的再找 {}/{}", done + 1, total);
+            let found = super::search_gpu::search(dev, &g.v, g.dims, &template, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+            done += 1;
+            for p in peaks(&found, 1.8 * radius, MOST) {
+                seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw, score: p.score, turn: p.turn, like: first, size: z, key: usize::MAX });
+            }
+            drop(found);
+            let stage = format!("按例子独有的再找 {}/{}（对照）", done + 1, total);
+            by_chance.extend(chance(dev, &g.v, g.dims, &g.mask, &template, N, radius, s.tilts, turns, &|a, b| progress(&stage, a, b))?);
+            done += 1;
+        }
+    }
+    Ok(Some((seen, by_chance, t.ranks)))
 }
 
 #[cfg(test)]
@@ -632,6 +1007,37 @@ mod tests {
         assert!(sampled(&v, dims, [-10.0, 15.0, 10.0], 8, 1.5).is_none());
     }
 
+    /// What was circled, and nothing else, becomes the places to average.
+    #[test]
+    fn what_was_circled_is_given_as_places_without_a_search() {
+        // A tomogram of 10 Å voxels with nothing but grain in it: circles of radius 9 (180 Å), so cubes of 10 Å voxels.
+        let dims = [96usize, 96, 64];
+        let dir = std::env::temp_dir().join(format!("tmv-sta-given-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tomo.mrc").to_string_lossy().into_owned();
+        let grain: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|i| ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40) as f32 / (1u64 << 24) as f32).collect();
+        crate::tomo::output::write_mrc(&path, &grain, dims, 10.0, false).unwrap();
+        let sources = vec![Source { path, tilts: [-60.0, 60.0], look: None, series: None }];
+        let at = |x: f64, y: f64| Example { source: 0, at: [x, y, 32.0], radius: 9.0 };
+        // Five circled, one of them too near the edge for its cube.
+        let examples = [at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(60.0, 60.0), at(4.0, 48.0)];
+        let c = given(&sources, &examples).unwrap();
+        assert_eq!((c.found.places.len(), c.mine.clone(), c.found.sure()), (4, vec![0, 1, 2, 3], 4));
+        assert_eq!((c.found.voxel_a, c.found.frames.len(), c.found.wide, c.diameter_a), (10.0, 1, 1.0, 180.0));
+        let mut got: Vec<[usize; 3]> = c.found.places.iter().map(|p| p.c).collect();
+        got.sort();
+        assert_eq!(got, vec![[30, 30, 32], [30, 60, 32], [60, 30, 32], [60, 60, 32]]);
+        // Every place stands as it was circled: no orientation is made up.
+        let turns = grid(30.0);
+        assert!(c.found.places.iter().all(|p| c.found.turn_of(p, &turns).is_some_and(|r| turns.iter().all(|t| distance(t, &crate::sta::IDENTITY) >= distance(&r, &crate::sta::IDENTITY)))));
+        // Too few to average.
+        let err = given(&sources, &examples[..3]).err().unwrap().to_string();
+        assert!(err.contains("至少要圈 4 个"), "{err}");
+        assert!(given(&sources, &[at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(4.0, 48.0)]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_picture_of_a_place_shows_what_is_there() {
         // A bright ball of radius 6 at (30, 24, 10) in an empty tomogram of 10 Å voxels.
@@ -650,7 +1056,7 @@ mod tests {
         crate::tomo::output::write_mrc(&path, &v, dims, 10.0, false).unwrap();
         let sources = vec![Source { path, tilts: [-60.0, 60.0], look: None, series: None }];
         // Circled a little wider than the ball; one place far off the image.
-        let got = tiles(&sources, &[(0, [30.0, 24.0, 10.0], 8.0), (0, [-80.0, 24.0, 10.0], 8.0)]).unwrap();
+        let got = tiles(&sources, &[(0, [30.0, 24.0, 10.0], 8.0), (0, [-80.0, 24.0, 10.0], 8.0)], 1.5).unwrap();
         assert!(got[1].is_none());
         let t = got[0].as_ref().unwrap();
         assert_eq!(t.len(), TILE * TILE);
