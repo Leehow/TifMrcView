@@ -420,8 +420,6 @@ fn apart(first: Vec<Seen>, mut all: Vec<Seen>) -> Vec<Seen> {
 pub fn limit(gap: Option<f32>, alike: Option<f32>, noise: Option<f32>, chance: Option<f32>) -> Option<f32> {
     // Examples that are no more alike than chance say nothing.
     let alike = alike.filter(|a| noise.is_none_or(|n| *a > n));
-    // Nor does a gap that lies where chance still scores.
-    let gap = gap.filter(|g| noise.is_none_or(|n| *g > n));
     match (gap, alike) {
         (Some(g), Some(a)) => Some(g.min(a)),
         (Some(x), None) | (None, Some(x)) => Some(x),
@@ -680,9 +678,6 @@ mod tests {
         assert_eq!(limit(Some(0.5), Some(0.15), Some(0.2), None), Some(0.5));
         assert_eq!(limit(None, None, Some(0.2), None), None);
         assert_eq!(limit(None, Some(0.4), None, None), Some(0.4));
-        // Never where chance still scores.
-        assert_eq!(limit(Some(0.1), Some(0.15), Some(0.2), Some(0.25)), Some(0.25));
-        assert_eq!(limit(Some(0.1), Some(0.4), Some(0.2), None), Some(0.4));
     }
 
     #[test]
