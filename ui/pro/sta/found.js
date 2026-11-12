@@ -353,6 +353,7 @@
     info.classList.remove("warn");
     info.textContent = c.examples < 2 ? "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。"
       : told ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
+      : d.unsure ? "找到的按相似程度排了队，但分数没有一处明显掉下去，程序定不了截在哪里。请拖动滑块自己定，再扫一眼下面的小图：不对的点掉。"
       : "找到的按相似程度排了队，在分数明显掉下去的地方截断。请扫一眼下面的小图：不对的点掉，可以再找一轮。";
     // The search looked wider than the circles (circled::WIDER): said, since the pictures show it.
     if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按圈的 ${c.wide} 倍范围去比的；小图里的虚线圈是你圈的大小。如果你要找的是一个个独立的颗粒，这多半说明例子没圈准：把圈画在东西正中、刚好圈住它，再找一次。`;
