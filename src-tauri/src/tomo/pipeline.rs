@@ -527,6 +527,11 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
 /// Segments the membranes of `source` (else the latest tomogram that is not
 /// a half) into its label map. The user must have picked the model.
 pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
+    membranes_pass(dev, d, source, crate::membrane::Pass::Official, progress)
+}
+
+/// `membranes` going over the tomogram as `pass` says.
+pub fn membranes_pass(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, pass: crate::membrane::Pass, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
     let src = match source {
         Some(p) => d.tomograms.iter().find(|t| t.path == p),
@@ -534,7 +539,7 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     };
     let Some(src) = src.cloned() else { bail!("先完成重构") };
     let model = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
-    let r = crate::membrane::segment_file(dev, &model, &src.path, progress)?;
+    let r = crate::membrane::segment_file_pass(dev, &model, &src.path, pass, progress)?;
     Ok(Made { paths: vec![r.labels], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 

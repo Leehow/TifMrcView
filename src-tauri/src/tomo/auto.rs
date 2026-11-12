@@ -347,7 +347,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut labels = None;
     if membranes {
         check_cancel()?;
-        labels = Some(pipeline::membranes(dev, d, Some(&path), &stage(8))?.paths.remove(0));
+        // Two of the eight mirrored copies: a quarter of the time (the whole
+        // pass took 36 min for a 930 × 960 × 240 tomogram on an M1 Max, of
+        // 41 in all), the membranes of a tomogram to show are found as well;
+        // the membrane tool itself goes over it with all eight.
+        labels = Some(pipeline::membranes_pass(dev, d, Some(&path), crate::membrane::Pass::Copies(2), &stage(8))?.paths.remove(0));
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
