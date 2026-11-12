@@ -278,7 +278,7 @@
       render();
       syncReview();
       const attn = r.series.filter(R.needsAttention).length;
-      W.status(purpose ? `${label}完成` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
+      W.status(purpose === "sta" ? `${label}完成，下一步在上面点「子断层平均」` : purpose === "display" ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图` : purpose ? `${label}完成，断层图在右侧栏「③ 断层图」里` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
     }
   }
   // What the tomograms are for (kept): the three reasons people reconstruct.
