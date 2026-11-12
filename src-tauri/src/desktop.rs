@@ -2326,6 +2326,19 @@ async fn sta_review_set(out: String, which: String, tomogram: String, keep: Opti
     }).await
 }
 
+/// The picture of place `i` of a review (circled examples: the section the
+/// user drew on, around the place; written when the places were found):
+/// "data:image/png;base64,…".
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_tile(out: String, which: String, i: usize) -> CmdResult<String> {
+    blocking(move || {
+        let png = crate::sta::review::tile_path(&crate::sta::review::dir_of(&out, &which)?, i);
+        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
+        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
+    }).await
+}
+
 /// "Find again" (Pro): the places the user did not click are judged again by
 /// what the user kept and dropped (`sta::review::find_again`); needs two kept
 /// and one dropped by hand, else the error 「先去掉几个不要的，再按这个」.
@@ -3605,6 +3618,7 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_kinds_saved,
             #[cfg(feature = "pro")] sta_kinds_keep,
             #[cfg(feature = "pro")] sta_placed,
+            #[cfg(feature = "pro")] sta_review_tile,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,

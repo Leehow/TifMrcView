@@ -593,7 +593,10 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
 /// the others' pictures score on it), `noise` (the best chance scored),
 /// `sizesA`, and `groups`: per (like, size) `{like, size, sizeA, on, found,
 /// kept}`, where `found` are its places the slider and the user's clicks
-/// keep and `kept` those of them that count now.
+/// keep and `kept` those of them that count now; and `list`: the best
+/// `tiles` places of all tomograms (and the examples), best first, as
+/// `{i, source, score, like, size, example, state}`: each has a picture
+/// (`tile_path`).
 fn circled_value(s: &State, lists: &Lists) -> Value {
     if s.route.kind != "circled" {
         return Value::Null;
@@ -611,9 +614,19 @@ fn circled_value(s: &State, lists: &Lists) -> Value {
             json!({ "like": g[0], "size": g[1], "sizeA": s.found.sizes_a.get(g[1] as usize).map(|a| a.round()), "on": on, "found": counted(&ticked), "kept": counted(s) })
         })
         .collect();
+    // The places with a picture, best first, whatever tomogram they are in:
+    // what the strip of pictures shows.
+    let list: Vec<Value> = (0..s.total().min(MOST_TILES))
+        .chain(s.mine.iter().copied().filter(|i| *i >= MOST_TILES))
+        .map(|i| {
+            let p = &s.found.places[i];
+            json!({ "i": i, "source": p.source, "score": (p.score * 1e4).round() / 1e4, "like": p.like, "size": p.size, "example": s.mine.contains(&i), "state": s.state_with(lists, i, true, s.edits.on_shapes).name() })
+        })
+        .collect();
     json!({
         "examples": s.route.points, "alike": s.found.alike, "byOthers": s.by_others, "noise": s.found.noise,
         "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "groups": groups,
+        "list": list, "tiles": MOST_TILES,
     })
 }
 
@@ -868,8 +881,43 @@ pub fn find_circled(inputs: &[String], marks: &[Mark], out: &str, device: Device
         state.by_others = c.by_others;
         state.filter = shapes_filter(&out, &state);
         save(&dir, &state)?;
+        progress("画出找到的", 0, 1);
+        if let Err(e) = write_tiles(&dir, &state, &sources) {
+            eprintln!("sta: the pictures of the places could not be written: {e:#}");
+        }
+        progress("画出找到的", 1, 1);
         Ok(review_value(&state, &dir, &inputs[0]))
     })
+}
+
+/// How many of the best places get a picture (`tile_path`); the examples
+/// get one wherever they stand.
+pub const MOST_TILES: usize = 600;
+
+/// The picture of place `i` of the review in `dir` (`circled::tiles`).
+pub fn tile_path(dir: &Path, i: usize) -> PathBuf {
+    dir.join("tiles").join(format!("{i}.png"))
+}
+
+/// Writes the pictures of the best places of `s`, new for this search.
+fn write_tiles(dir: &Path, s: &State, sources: &[sp::Source]) -> Result<()> {
+    let folder = dir.join("tiles");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).with_context(|| format!("无法创建 {}", folder.display()))?;
+    let mut ids: Vec<usize> = (0..s.total().min(MOST_TILES)).chain(s.mine.iter().copied()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let places: Vec<(usize, [f64; 3], f64)> = ids.iter().filter_map(|i| Some((s.found.places[*i].source, s.found.places[*i].at(), s.radius_of(*i)?))).collect();
+    if places.len() != ids.len() {
+        bail!("没有像素大小");
+    }
+    let side = circled::TILE as u32;
+    for (i, grey) in ids.iter().zip(circled::tiles(sources, &places)?) {
+        if let Some(grey) = grey {
+            ::image::GrayImage::from_raw(side, side, grey).context("tile")?.save(tile_path(dir, *i)).with_context(|| format!("无法写入 {}", tile_path(dir, *i).display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Averages the kept places of `dir`'s `found.json` (the first `keep` without

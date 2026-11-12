@@ -259,6 +259,87 @@ fn picture(s: &Source, e: &Example, raw_px: f64) -> Result<Option<Vec<f32>>> {
     Ok(sampled(&v, dims, centre, KEPT, voxel / got))
 }
 
+/// Side of the picture of a place, pixels.
+pub const TILE: usize = 64;
+/// How many circle diameters a picture shows.
+const TILE_SPAN: f64 = 1.5;
+
+/// Pictures of places for the user to look through: at each of `places`
+/// (source, centre and radius in voxels of the source's tomogram) the
+/// section the user drew on (X across, Y down, at the place's own height,
+/// a few sections thick), from the look tomogram when there is one,
+/// `TILE` pixels square, grey, its own contrast. None where the place is
+/// off the image.
+pub fn tiles(sources: &[Source], places: &[(usize, [f64; 3], f64)]) -> Result<Vec<Option<Vec<u8>>>> {
+    let mut out: Vec<Option<Vec<u8>>> = vec![None; places.len()];
+    for (i, s) in sources.iter().enumerate() {
+        let here: Vec<usize> = (0..places.len()).filter(|k| places[*k].0 == i).collect();
+        if here.is_empty() {
+            continue;
+        }
+        check_cancel()?;
+        let (path, look) = match &s.look {
+            Some(l) => (l.path.as_str(), Some(l)),
+            None => (s.path.as_str(), None),
+        };
+        let px = pixel_of(path)?;
+        let in_file = |p: [f64; 3]| -> [f64; 3] {
+            match look {
+                Some(l) => std::array::from_fn(|k| (p[k] - l.offset[k]) / l.scale),
+                None => p,
+            }
+        };
+        let scale = look.map_or(1.0, |l| l.scale);
+        // Read no finer than the smallest picture's pixels.
+        let smallest = here.iter().map(|k| places[*k].2 / scale).fold(f64::MAX, f64::min);
+        let bin = ((2.0 * TILE_SPAN * smallest / TILE as f64).floor() as usize).max(1);
+        let (v, dims, _, bin) = binned(path, bin as f64 * px)?;
+        let b = bin as f64;
+        let at = |x: usize, y: usize, z: usize| v[(z * dims[1] + y) * dims[0] + x] as f64;
+        for k in here {
+            let (_, centre, radius) = places[k];
+            let c = in_file(centre).map(|x| (x - (b - 1.0) / 2.0) / b);
+            let r = radius / scale / b;
+            let step = 2.0 * TILE_SPAN * r / TILE as f64;
+            let thick = ((0.15 * r).round() as isize).max(0);
+            let z0 = c[2].round() as isize;
+            let mut grey: Vec<Option<f64>> = Vec::with_capacity(TILE * TILE);
+            for j in 0..TILE {
+                for i in 0..TILE {
+                    let (x, y) = (c[0] + (i as f64 - TILE as f64 / 2.0 + 0.5) * step, c[1] + (j as f64 - TILE as f64 / 2.0 + 0.5) * step);
+                    if x < 0.0 || y < 0.0 || x > dims[0] as f64 - 1.0 || y > dims[1] as f64 - 1.0 {
+                        grey.push(None);
+                        continue;
+                    }
+                    let (x0, y0) = ((x.floor() as usize).min(dims[0] - 2), (y.floor() as usize).min(dims[1] - 2));
+                    let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+                    let (mut sum, mut count) = (0.0, 0);
+                    for dz in -thick..=thick {
+                        let z = z0 + dz;
+                        if z < 0 || z >= dims[2] as isize {
+                            continue;
+                        }
+                        let z = z as usize;
+                        sum += (1.0 - fx) * (1.0 - fy) * at(x0, y0, z) + fx * (1.0 - fy) * at(x0 + 1, y0, z) + (1.0 - fx) * fy * at(x0, y0 + 1, z) + fx * fy * at(x0 + 1, y0 + 1, z);
+                        count += 1;
+                    }
+                    grey.push((count > 0).then(|| sum / count as f64));
+                }
+            }
+            let mut known: Vec<f64> = grey.iter().flatten().copied().collect();
+            if known.len() * 2 < grey.len() {
+                continue;
+            }
+            known.sort_by(f64::total_cmp);
+            let (lo, hi) = (known[known.len() / 100], known[known.len() - 1 - known.len() / 100]);
+            let mid = known[known.len() / 2];
+            let span = (hi - lo).max(1e-9);
+            out[k] = Some(grey.iter().map(|x| (255.0 * (x.unwrap_or(mid) - lo) / span).clamp(0.0, 255.0) as u8).collect());
+        }
+    }
+    Ok(out)
+}
+
 /// A place before it is put on the grid of the cubes.
 #[derive(Clone, Copy, Debug)]
 struct Seen {
@@ -567,6 +648,36 @@ mod tests {
         }
         // Mostly outside: nothing.
         assert!(sampled(&v, dims, [-10.0, 15.0, 10.0], 8, 1.5).is_none());
+    }
+
+    #[test]
+    fn a_picture_of_a_place_shows_what_is_there() {
+        // A bright ball of radius 6 at (30, 24, 10) in an empty tomogram of 10 Å voxels.
+        let dims = [64usize, 48, 20];
+        let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+        for i in 0..v.len() {
+            let p = [(i % dims[0]) as f64 - 30.0, (i / dims[0] % dims[1]) as f64 - 24.0, (i / dims[0] / dims[1]) as f64 - 10.0];
+            if p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= 36.0 {
+                v[i] = 1.0;
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("tmv-sta-tiles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tomo.mrc").to_string_lossy().into_owned();
+        crate::tomo::output::write_mrc(&path, &v, dims, 10.0, false).unwrap();
+        let sources = vec![Source { path, tilts: [-60.0, 60.0], look: None, series: None }];
+        // Circled a little wider than the ball; one place far off the image.
+        let got = tiles(&sources, &[(0, [30.0, 24.0, 10.0], 8.0), (0, [-80.0, 24.0, 10.0], 8.0)]).unwrap();
+        assert!(got[1].is_none());
+        let t = got[0].as_ref().unwrap();
+        assert_eq!(t.len(), TILE * TILE);
+        // The picture is 24 voxels across: the ball fills its middle half and is bright, the corners are dark.
+        assert!(t[(TILE / 2) * TILE + TILE / 2] > 200 && t[0] < 50 && t[TILE * TILE - 1] < 50, "{} {}", t[(TILE / 2) * TILE + TILE / 2], t[0]);
+        let bright = t.iter().filter(|x| **x > 128).count() as f64 / t.len() as f64;
+        // A disc of radius 6 in a square of 24: π·36 / 576 = 0.196.
+        assert!((bright - 0.196).abs() < 0.04, "{bright}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The thing looked for, of radius 1 about the origin: a bowl (the
