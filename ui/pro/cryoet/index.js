@@ -189,7 +189,8 @@
     panel.hidden = false;
     button.classList.add("on");
     // Start with the open tilt series when there is no dataset yet.
-    if (!W.dataset && S.info?.sizeZ >= 3 && !W.busy) $("cryo-use").click();
+    // Quietly: a movie of the folder is no tilt series, and says nothing.
+    if (!W.dataset && S.info?.sizeZ >= 3 && !W.busy) invoke("tomo_dataset", { stack: S.info.path }).then((d) => { if (d.angles.length && !W.dataset) W.setDataset(d); }).catch(() => {});
     W.select(W.current);
     document.dispatchEvent(new CustomEvent("cryoet-open"));
   };
