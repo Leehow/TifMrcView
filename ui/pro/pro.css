@@ -273,7 +273,8 @@
 #cryo-steps button.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
 #cryo-body { flex:1; min-height:0; overflow:auto; padding-top:10px; }
 #cryo-body p { line-height:1.6; }
-#cryo-foot { display:flex; align-items:center; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
+/* The progress line and its cancel button stay in sight however long the panel is. */
+#cryo-foot { position:sticky; bottom:-12px; z-index:2; display:flex; align-items:center; gap:8px; margin-top:auto; padding:8px 0 12px; border-top:1px solid var(--line); background:var(--surface); }
 #cryo-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
 #quickbar #btn-cryoet { width:auto; padding:0 8px; gap:5px; }
 #ta-summary, #ct-summary { margin:6px 0; line-height:1.5; font-variant-numeric:tabular-nums; }
