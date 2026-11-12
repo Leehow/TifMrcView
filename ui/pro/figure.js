@@ -433,6 +433,17 @@
 
   const stem = () => S.info.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
 
+  /// Asks where to save `name`: in a cryo-ET project the dialog starts in
+  /// its 5_figures folder, so the picture shows up in the side panel's
+  /// 出图 group; elsewhere in the usual save folder.
+  async function askPath(name, filter) {
+    const own = await invoke("figure_dir", { path: S.info.path }).catch(() => null);
+    const path = await invoke("pick_save_path", { dir: own || saveDir(), name, ...filter }).catch(() => null);
+    if (path && !own) setSaveDir(dirname(path));
+    return path;
+  }
+  const saved = () => document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+
   /// The figure at w x h as a canvas, rendered at twice the size when the
   /// GPU allows and scaled down (smooth edges), with the scale bar drawn in.
   function picture(w, h, opts = {}) {
@@ -480,9 +491,8 @@
 
   async function savePng() {
     if (!F.three || F.busy) return;
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem()}_figure.png` }).catch(() => null);
+    const path = await askPath(`${stem()}_figure.png`);
     if (!path) return;
-    setSaveDir(dirname(path));
     F.busy = "png";
     status("正在渲染高分辨率图片…");
     sync();
@@ -494,6 +504,7 @@
       const blob = await new Promise((res) => c.toBlob(res, "image/png"));
       await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
       status(`已保存 ${w} × ${h} 像素：${path}`);
+      saved();
     } catch (e) {
       status(`没有保存：${e.message || e}`);
     } finally {
@@ -509,9 +520,8 @@
 
   async function saveMovie() {
     if (!F.three || F.busy) return;
-    const path = await invoke("pick_save_path", { dir: saveDir(), name: `${stem()}_figure.mp4`, filter: "MP4", exts: ["mp4"] }).catch(() => null);
+    const path = await askPath(`${stem()}_figure.mp4`, { filter: "MP4", exts: ["mp4"] });
     if (!path) return;
-    setSaveDir(dirname(path));
     const v = volume().view();
     const FPS = 30, N = 240;
     // H.264 here takes at most 3840 x 2160.
@@ -537,6 +547,7 @@
       await movieCall("finish");
       begun = false;
       status(`已保存 ${path}`);
+      saved();
     } catch (e) {
       if (begun) await movieCall("cancel").catch(() => {});
       status(F.stop ? "已取消" : `没有保存：${e.message || e}`);
@@ -618,9 +629,18 @@
   });
 
   // Follow the image, the labels and the 3D view.
-  let seenToken = 0, seenKey = "";
+  let seenToken = 0, seenKey = "", redirected = "";
   setInterval(() => {
     button.disabled = !usable();
+    // A label map picked in the side panel (分割标签): show the image it
+    // belongs to, with this panel, so marking can go on.
+    const lm = S.info && /\.labels\.tif$/i.test(S.info.path) ? S.info.path : "";
+    if (lm && lm !== redirected) {
+      redirected = lm;
+      openPath(lm.replace(/(\.series\d+)?\.labels\.tif$/i, "")).then(() => { if (usable()) open(); }).catch(() => {});
+      return;
+    }
+    if (!lm) redirected = "";
     if (!F.open) return;
     if (S.token !== seenToken) {
       seenToken = S.token;

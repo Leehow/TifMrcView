@@ -413,6 +413,19 @@ async fn labels_surfaces_export(
     .await
 }
 
+/// Where the figure flow saves by default: `5_figures` of the project the
+/// image is in (made when missing), or nothing outside a project.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn figure_dir(path: String) -> CmdResult<Option<String>> {
+    blocking(move || {
+        let Some(dir) = crate::project_dirs::figures_dir(Path::new(&path)) else { return Ok(None) };
+        std::fs::create_dir_all(&dir)?;
+        Ok(Some(dir.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
 /// Turntable movies of the Pro figure view (ui/pro/figure.js): RGBA frames
 /// in, H.264 MP4 out, with the recorder plugin's encoder built in. Headers
 /// `x-method` (begin / frame / finish / cancel) and `x-args` as for
@@ -1533,7 +1546,8 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
             if let Some(root) = crate::project_dirs::listing_root(&dir) {
                 let listed = crate::project_dirs::list_project(
                     &root,
-                    |f| formats::is_supported(f) && !crate::labels::is_labels_file(f),
+                    // Label maps are listed too, in a group of their own.
+                    formats::is_supported,
                     natural_cmp,
                 );
                 let index = listed.iter().position(|(f, _)| Path::new(f) == p);
@@ -3642,6 +3656,7 @@ pub fn run() {
             labels_object_relabel,
             labels_surfaces_export,
             #[cfg(feature = "recorder")] figure_movie,
+            #[cfg(feature = "pro")] figure_dir,
             sam_status,
             sam_download,
             sam_predict,
