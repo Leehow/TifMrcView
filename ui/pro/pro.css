@@ -359,6 +359,9 @@
 /* Subtomogram-averaging workspace (same frame as the single-particle one). */
 #sta-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #sta-workspace[hidden], #sta-workspace [hidden] { display:none; }
+/* Inside the Cryo-ET panel: the host gives the place and the size. */
+#sta-workspace.hosted, #sta-workspace.hosted.marking, #sta-workspace.hosted.reviewing, #sta-workspace.hosted.reviewing-shapes { position:static; width:auto; flex:1 1 auto; min-height:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
+#sta-workspace.hosted > .al-head { display:none; }
 #sta-workspace .ws-img { display:block; width:100%; max-width:480px; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
 #sta-workspace.marking, #sta-workspace.reviewing, #sta-workspace.reviewing-shapes { width:min(360px, calc(100% - 20px)); }
 @media (max-width:700px) { #sta-workspace.marking { top:auto; height:48%; } }

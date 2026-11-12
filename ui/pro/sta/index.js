@@ -650,8 +650,27 @@
     refresh();
   };
   $("sta-close").onclick = close;
+  // Inside another panel (the Cryo-ET panel's "子断层平均" part): `host(el)` moves the workspace into
+  // `el` once, after which it has no button, head, fold or close of its own and takes the size it is
+  // given; the host calls `show()` when the part comes into view and `hide()` when it leaves.
+  W.hosted = false;
+  W.host = (el) => {
+    W.hosted = true;
+    button.remove();
+    panel.classList.remove("folded");
+    panel.classList.add("hosted");
+    el.append(panel);
+  };
+  W.show = () => {
+    if (!W.hosted) return button.onclick();
+    if (!panel.hidden) return;
+    panel.hidden = false;
+    W.wall?.reset();
+    refresh();
+  };
+  W.hide = () => { panel.hidden = true; button.classList.remove("on"); };
   document.addEventListener("sta-pixel", () => { if (!panel.hidden) paint(); });
-  document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
+  document.addEventListener("pro-panel", (e) => { if (!W.hosted && e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
-  $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
+  $("btn-fft").addEventListener("click", () => { if (F.on && !W.hosted) close(); });
 })();
