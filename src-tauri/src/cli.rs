@@ -55,7 +55,7 @@ USAGE
 
   Every choice is made automatically, as in the app. --for picks what the
   tomogram is for: display (default: clearest picture, denoised, missing
-  wedge filled, membranes when a model is set), sta (subtomogram averaging:
+  wedge filled; --membranes also segments membranes), sta (subtomogram averaging:
   full detail + RELION 5 folder), survey (quick look).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
@@ -269,7 +269,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 4] = ["--sam", "--fresh", "--auto", "--kinds"];
+        const FLAGS: [&str; 5] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -584,12 +584,12 @@ fn tomo(o: &Opts) -> Result<Value> {
     let px = require_pixel("tomo", &stack, &img, pixel)?;
     let mut d = Dataset::open(&info.path, info.size_z, Some(px))?;
     drop(img);
-    let membranes = purpose == auto::Purpose::Display && crate::membrane::model_path().is_some();
-    if purpose == auto::Purpose::Display && !membranes {
+    // Membranes only when asked for (--membranes): they take longer than everything else together.
+    if o.flag("membranes") && crate::membrane::model_path().is_none() {
         eprintln!("note: no MemBrain-seg model set, membranes are skipped (tmv setup --membrane <file.ckpt>)");
     }
     let (dev, backend) = device();
-    let req = auto::AutoReq { pixel_a: pixel, purpose, fresh: o.flag("fresh") };
+    let req = auto::AutoReq { pixel_a: pixel, purpose, fresh: o.flag("fresh"), membranes: o.flag("membranes") };
     let r = crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, &report))??;
     progress.done();
     let mut v = serde_json::to_value(&r)?;

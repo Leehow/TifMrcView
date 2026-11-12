@@ -282,16 +282,6 @@
     const only = R.chosenNames(session.series);
     if (!only.length) return W.status("先勾选要精做的序列");
     const purpose = q(".cs-purpose").value;
-    // Display tomograms end with membrane segmentation once the user has
-    // picked the MemBrain-seg model; asked once (closing the box skips it,
-    // the labels panel can still ask).
-    if (purpose === "display" && !localStorage.getItem("tmv-mem-skip")) {
-      try {
-        if (!(await window.TifMrcViewPro.membrane.ensure())) localStorage.setItem("tmv-mem-skip", "1");
-      } catch (e) {
-        W.status(`膜分割模型不可用（重构照常进行）：${e}`);
-      }
-    }
     return runPass("精做", purpose, only);
   };
 

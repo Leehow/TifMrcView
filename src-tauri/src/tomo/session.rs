@@ -322,7 +322,7 @@ pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progre
         if !d.take.unwrap_or(d.verdict.as_ref().is_none_or(|v| v.usable)) {
             return Ok(None);
         }
-        let req = auto::AutoReq { pixel_a: None, purpose: auto::Purpose::Survey, fresh: false };
+        let req = auto::AutoReq { pixel_a: None, purpose: auto::Purpose::Survey, fresh: false, membranes: false };
         Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
     })
 }
@@ -335,7 +335,7 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
         // looking is enough for a tomogram to show.
         let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
         let mut d = dataset(&stack)?;
-        let req = auto::AutoReq { pixel_a: None, purpose, fresh: false };
+        let req = auto::AutoReq { pixel_a: None, purpose, fresh: false, membranes: false };
         Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
     })
 }

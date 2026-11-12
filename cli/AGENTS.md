@@ -102,7 +102,8 @@ Membrane segmentation needs the MemBrain-seg model, which users download
 themselves from the official page (https://github.com/teamtomo/membrain-seg,
 a `.ckpt` file); do not fetch it from anywhere else. Copy it to the server
 once and run `tmv setup --membrane ~/models/membrain.ckpt`. After that
-`tmv tomo` (display) also segments membranes automatically. SPA gets better
+`tmv tomo --for display --membranes` also segments membranes (not by
+default: it takes longer than the reconstruction itself). SPA gets better
 picks with SAM 2.1: `tmv setup --sam` downloads it once (156 MB).
 
 On a server with several GPUs, look at `nvidia-smi` first and run on an idle

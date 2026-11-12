@@ -79,6 +79,10 @@ pub struct AutoReq {
     pub purpose: Purpose,
     /// Start over even when the dataset has an alignment and CTF.
     pub fresh: bool,
+    /// End a display tomogram with membrane segmentation (when the user has
+    /// picked the model). Not by default: it takes several times as long as
+    /// everything before it, and has its own button.
+    pub membranes: bool,
 }
 
 #[derive(Serialize)]
@@ -151,7 +155,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     // Membranes are segmented at the end of a display tomogram when the
     // user has picked the MemBrain-seg model (the app asks beforehand).
-    let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
+    let membranes = req.membranes && req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
     let bin = output_bin(w, h, px, req.purpose.voxel());
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
