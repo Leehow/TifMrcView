@@ -42,7 +42,6 @@ use serde_json::{json, Value};
 use super::auto::{self, input_stamps, note_json, raw_inputs, resolve_tomogram, result_value, write_used, Emit, InputStamp, DRAWN};
 use super::marks::{self, Kind, Mark, Size, MOST_SEEDS, SIZE_RANGE, SPHERE_SHARE};
 use super::filaments;
-use super::funnels;
 use super::membranes;
 use super::paint;
 use super::project::{self as sp, to_raw, Drawn, Source};
@@ -73,12 +72,6 @@ pub enum ItemKind {
     Ball,
     /// A filament: its sampling points lie along its middle line.
     Line,
-    /// A pit of a membrane (`funnels`): one sampling point, the middle of
-    /// its mouth, with the axis into the pit. `centre` is that point,
-    /// `radius` half its width (the mouth or the widest part behind it),
-    /// `length` its depth, `score` its stage (`pits::Pit::stage`), all in
-    /// voxels of its file (`px` Å each). It has no side to flip.
-    Pit,
 }
 
 /// One membrane, vesicle or filament found (or given as an example).
@@ -233,24 +226,18 @@ pub fn size_of(marks: &[Mark], size: Size, pixel: &dyn Fn(&str) -> Option<f64>) 
 /// segmented nothing is searched and the list of them comes back (lines need
 /// no segmentation).
 pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size, size_a: f64, pixel: &dyn Fn(&str) -> Option<f64>, progress: &dyn Fn(&str, usize, usize)) -> Result<Found> {
-    // Pits are searched for alone: whatever else is marked waits.
-    let pits_marked = funnels::marked(marks);
-    let membranes_marked = !pits_marked && marks.iter().any(|m| m.kind == Kind::Membrane && paint::has_stroke(m));
-    let spheres_marked = !pits_marked && marks.iter().any(|m| m.kind == Kind::Sphere && m.points.len() >= 2);
-    let lines_marked = !pits_marked && marks.iter().any(|m| m.kind == Kind::Line && m.points.len() >= 2);
-    if !membranes_marked && !spheres_marked && !lines_marked && !pits_marked {
-        bail!("请先在膜上涂一笔，或标一个球、画一条线、点一个凹陷作例子");
+    let membranes_marked = marks.iter().any(|m| m.kind == Kind::Membrane && paint::has_stroke(m));
+    let spheres_marked = marks.iter().any(|m| m.kind == Kind::Sphere && m.points.len() >= 2);
+    let lines_marked = marks.iter().any(|m| m.kind == Kind::Line && m.points.len() >= 2);
+    if !membranes_marked && !spheres_marked && !lines_marked {
+        bail!("请先在膜上涂一笔，或标一个球、画一条线作例子");
     }
     // Every mark must lie on a tomogram that is ticked.
     let mut on_look = 0;
     let mut on_raw = 0;
     for m in marks.iter().filter(|m| m.kind != Kind::Point) {
         let Some((_, look)) = where_is(&m.tomogram, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
-        let example = if pits_marked {
-            m.kind == Kind::Pit && !m.points.is_empty()
-        } else {
-            (m.kind == Kind::Membrane && paint::has_stroke(m)) || (m.kind == Kind::Sphere && m.points.len() >= 2) || (m.kind == Kind::Line && m.points.len() >= 2)
-        };
+        let example = (m.kind == Kind::Membrane && paint::has_stroke(m)) || (m.kind == Kind::Sphere && m.points.len() >= 2) || (m.kind == Kind::Line && m.points.len() >= 2);
         if example {
             if look { on_look += 1 } else { on_raw += 1 }
         }
@@ -265,14 +252,14 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         .collect();
     // The files to read: those searched and those the examples are on.
     let mut all = files.clone();
-    for m in marks.iter().filter(|m| if pits_marked { m.kind == Kind::Pit } else { matches!(m.kind, Kind::Membrane | Kind::Sphere) }) {
+    for m in marks.iter().filter(|m| matches!(m.kind, Kind::Membrane | Kind::Sphere)) {
         if !all.contains(&m.tomogram) {
             all.push(m.tomogram.clone());
         }
     }
     let mut need: Vec<String> = vec![];
     // Only membranes and vesicles are read off the segmentation.
-    for f in all.iter().filter(|_| membranes_marked || spheres_marked || pits_marked) {
+    for f in all.iter().filter(|_| membranes_marked || spheres_marked) {
         if paint::mask_of(f)?.is_none() && !need.contains(f) {
             need.push(f.clone());
         }
@@ -283,22 +270,6 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
     let mut items: Vec<Item> = vec![];
     let mut sides: Vec<Side> = vec![];
     let place = |file: &str| where_is(file, inputs, sources).context("有标注所在的断层图没有被勾选");
-    if pits_marked {
-        progress("找膜上的凹陷", 0, 3);
-        let found = funnels::find(marks, &files)?;
-        if !found.unsegmented.is_empty() {
-            return Ok(Found::NeedSegment(found.unsegmented));
-        }
-        for f in found.funnels {
-            let (source, on_look) = place(&f.tomogram)?;
-            let p = &f.pit;
-            items.push(Item {
-                id: items.len(), kind: ItemKind::Pit, source, on_look, example: f.example, side_sure: f.side_sure, centre: p.mouth_at,
-                radius: 0.5 * p.mouth.max(p.bulb), voxels: 0, n: [0; 3], seeds: 1, score: p.stage() as f32, length: p.depth, px: f.px, weak: false,
-            });
-            sides.push(Side { seeds: vec![Seed { pos: p.mouth_at, axis: p.axis }], mask: vec![] });
-        }
-    }
     if membranes_marked {
         progress("找同类的膜", 0, 3);
         let found = membranes::find(marks, &files, size_a)?;
@@ -349,7 +320,7 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         bail!("没有找到像例子的东西");
     }
     // Hand-drawn surfaces are used as drawn.
-    let others: Vec<Mark> = marks.iter().filter(|m| !pits_marked && m.kind == Kind::Surface && m.points.len() >= 2).cloned().collect();
+    let others: Vec<Mark> = marks.iter().filter(|m| m.kind == Kind::Surface && m.points.len() >= 2).cloned().collect();
     let (mut drawn, mut both) = (vec![], false);
     if !others.is_empty() {
         let pixels: Vec<f64> = sources.iter().map(|s| pixel(&s.path).context("读不出体素大小")).collect::<Result<_>>()?;
@@ -358,7 +329,7 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         both = b;
     }
     progress("找同类", 3, 3);
-    let mut state = State {
+    let state = State {
         items,
         edits: Edits::default(),
         inputs: inputs.to_vec(),
@@ -369,9 +340,6 @@ pub fn find_in(sources: &[Source], inputs: &[String], marks: &[Mark], size: Size
         surfaces: others.len(),
         drawn,
     };
-    if pits_marked {
-        state.size_a = state.pit_size_a();
-    }
     Ok(Found::Done(Box::new(state), sides))
 }
 
@@ -429,35 +397,7 @@ pub fn save_new(dir: &Path, s: &State, sides: &[Side]) -> Result<()> {
     for (i, side) in sides.iter().enumerate() {
         write_side(dir, i, side)?;
     }
-    write_tiles(dir, s, sides)?;
     save(dir, s)
-}
-
-/// The picture of pit `id` (`funnels::tile`), written when it was found.
-pub fn tile_path(dir: &Path, id: usize) -> PathBuf {
-    dir.join(SIDE).join(format!("{id}.png"))
-}
-
-/// Writes the pictures of the pits, file by file (each is read once).
-fn write_tiles(dir: &Path, s: &State, sides: &[Side]) -> Result<()> {
-    let file_of = |i: &Item| if i.on_look { s.looks[i.source].as_ref().map(|l| l.path.clone()) } else { s.inputs.get(i.source).cloned() };
-    let mut files: Vec<String> = vec![];
-    for i in s.items.iter().filter(|i| i.kind == ItemKind::Pit) {
-        if let Some(f) = file_of(i).filter(|f| !files.contains(f)) {
-            files.push(f);
-        }
-    }
-    for f in &files {
-        let (vol, n) = membranes::density(f)?;
-        for i in s.items.iter().filter(|i| i.kind == ItemKind::Pit && file_of(i).as_ref() == Some(f)) {
-            let Some(seed) = sides.get(i.id).and_then(|x| x.seeds.first()) else { continue };
-            let pit = super::pits::Pit { mouth_at: seed.pos, axis: seed.axis, side: 1, depth: i.length, mouth: 2.0 * i.radius, neck: 2.0 * i.radius, bulb: 2.0 * i.radius, seeds: vec![] };
-            let grey = funnels::tile(&vol, n, &pit);
-            let side = funnels::TILE as u32;
-            ::image::GrayImage::from_raw(side, side, grey).context("tile")?.save(tile_path(dir, i.id)).with_context(|| format!("无法写入 {}", tile_path(dir, i.id).display()))?;
-        }
-    }
-    Ok(())
 }
 
 pub fn save(dir: &Path, s: &State) -> Result<()> {
@@ -522,25 +462,8 @@ impl State {
     }
 
     /// Kept items the program could not tell the side of and the user did not look at (flip).
-    /// A pit has no side to flip: one on a membrane of unknown side is shown as such instead.
     pub fn unsure(&self) -> usize {
-        self.kept().filter(|i| i.kind != ItemKind::Pit && !i.example && !i.side_sure && !self.flipped(i.id)).count()
-    }
-
-    /// Whether this is a search for pits (then all items are pits).
-    pub fn pits(&self) -> bool {
-        self.items.iter().any(|i| i.kind == ItemKind::Pit)
-    }
-
-    /// What holds nearly every kept pit whole, Å: its width or its depth,
-    /// whichever is more, of the pit nine tenths up the order of sizes.
-    pub fn pit_size_a(&self) -> f64 {
-        let mut sizes: Vec<f64> = self.kept().filter(|i| i.kind == ItemKind::Pit).map(|i| (2.0 * i.radius).max(i.length) * i.px).collect();
-        if sizes.is_empty() {
-            return self.size_a;
-        }
-        sizes.sort_by(f64::total_cmp);
-        sizes[(sizes.len() * 9 / 10).min(sizes.len() - 1)]
+        self.kept().filter(|i| !i.example && !i.side_sure && !self.flipped(i.id)).count()
     }
 
     /// Sampling points that will be averaged (before thinning to `MOST_SEEDS`).
@@ -586,10 +509,10 @@ impl State {
         Ok(())
     }
 
-    /// Turns an item to the other side (a filament and a pit have none: nothing happens).
+    /// Turns an item to the other side (a filament has none: nothing happens).
     pub fn toggle_flip(&mut self, id: usize) -> Result<()> {
         self.check(id)?;
-        if !matches!(self.items[id].kind, ItemKind::Line | ItemKind::Pit) {
+        if !matches!(self.items[id].kind, ItemKind::Line) {
             Self::toggle(&mut self.edits.flipped, id);
         }
         Ok(())
@@ -597,7 +520,7 @@ impl State {
 
     /// Turns every item to the other side (filaments have none).
     pub fn flip_all(&mut self) {
-        let all: Vec<usize> = (0..self.items.len()).filter(|i| !matches!(self.items[*i].kind, ItemKind::Line | ItemKind::Pit)).collect();
+        let all: Vec<usize> = (0..self.items.len()).filter(|i| !matches!(self.items[*i].kind, ItemKind::Line)).collect();
         self.edits.flipped = all.into_iter().filter(|i| !self.flipped(*i)).collect();
     }
 
@@ -643,7 +566,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         .enumerate()
         .map(|(i, p)| {
             let name = Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
-            json!({ "name": name, "path": p, "membranes": count(ItemKind::Membrane, Some(i)), "balls": count(ItemKind::Ball, Some(i)), "lines": count(ItemKind::Line, Some(i)), "pits": count(ItemKind::Pit, Some(i)) })
+            json!({ "name": name, "path": p, "membranes": count(ItemKind::Membrane, Some(i)), "balls": count(ItemKind::Ball, Some(i)), "lines": count(ItemKind::Line, Some(i)) })
         })
         .collect();
     let frame = s.frame(open);
@@ -678,10 +601,6 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
                 match i.kind {
                     ItemKind::Ball => v["radius"] = json!(r1(i.radius * s.zoom(src, i.on_look, to_look))),
                     ItemKind::Membrane => v["voxels"] = json!(i.voxels),
-                    ItemKind::Pit => {
-                        v["radius"] = json!(r1(i.radius * s.zoom(src, i.on_look, to_look)));
-                        v["stage"] = json!(r3(i.score as f64));
-                    }
                     ItemKind::Line => {
                         // Dropped ones are drawn too (grey, dashed), so the line is always there.
                         let pts: Vec<Value> = match read_side(dir, i.id) {
@@ -715,20 +634,8 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         None => vec![],
     };
     let seeds = s.seeds();
-    // Pits of every tomogram, in the order of their stage (the order they were found in).
-    let pits: Vec<Value> = s
-        .items
-        .iter()
-        .filter(|i| i.kind == ItemKind::Pit)
-        .map(|i| {
-            json!({
-                "id": i.id, "source": i.source, "example": i.example, "sideSure": i.side_sure, "state": if s.dropped(i.id) { "dropped" } else { "kept" },
-                "stage": r3(i.score as f64), "widthA": (2.0 * i.radius * i.px).round(), "depthA": (i.length * i.px).round(),
-            })
-        })
-        .collect();
     json!({
-        "pits": count(ItemKind::Pit, None), "pitList": pits, "fewestPits": sp::MIN_PITS, "sizeA": if s.pits() { s.pit_size_a().round() } else { s.size_a.round() },
+        "sizeA": s.size_a.round(),
         "total": s.items.len(), "kept": s.kept().count(), "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(),
         "membranes": count(ItemKind::Membrane, None), "balls": count(ItemKind::Ball, None), "lines": count(ItemKind::Line, None), "surfaces": s.surfaces, "weak": s.left_weak(),
         "unsure": s.unsure(), "seeds": seeds.min(MOST_SEEDS), "perTomogram": per, "items": items,
@@ -757,7 +664,7 @@ pub struct Edit {
     #[serde(default)]
     pub reset: bool,
     /// Exactly these items are kept, every other one is dropped (a part of
-    /// the pits' order of stages taken at once).
+    /// a list taken at once).
     pub only: Option<Vec<usize>>,
 }
 
@@ -884,33 +791,15 @@ pub fn kept_drawn(s: &State, dir: &Path) -> Result<(Vec<Drawn>, bool)> {
     Ok((out, s.both()))
 }
 
-/// The kept pits as `project::run_pits` takes them (raw voxels, the axis
-/// into the pit) and the size that holds them, Å.
-pub fn kept_pits(s: &State, dir: &Path) -> Result<(Vec<Drawn>, f64)> {
-    if let Some(why) = s.stale() {
-        bail!(why);
-    }
-    let mut out: Vec<Drawn> = vec![];
-    for item in s.kept().filter(|i| i.kind == ItemKind::Pit) {
-        let side = read_side(dir, item.id)?;
-        let look = if item.on_look { Some(s.looks[item.source].as_ref().context("清晰版断层图不见了，请重新找")?) } else { None };
-        out.extend(side.seeds.first().map(|k| Drawn { source: item.source, pos: look.map_or(k.pos, |l| to_raw(k.pos, 1, 1, l)), axis: k.axis }));
-    }
-    if out.len() < sp::MIN_PITS {
-        bail!("留下的凹陷只有 {} 个，至少要 {} 个：请多留几个", out.len(), sp::MIN_PITS);
-    }
-    Ok((out, s.pit_size_a()))
-}
-
 /// What the average's `chosen.json` says it was made of.
 pub fn used_of(s: &State) -> Value {
     let n = |k: ItemKind| s.kept().filter(|i| i.kind == k).count();
     // How many of the kept ones the user drew or marked (the rest the program found).
     let own = |k: ItemKind| s.kept().filter(|i| i.kind == k && i.example).count();
     let used = json!({
-        "kind": "shapes", "membranes": n(ItemKind::Membrane), "balls": n(ItemKind::Ball), "spheres": n(ItemKind::Ball), "lines": n(ItemKind::Line), "pits": n(ItemKind::Pit), "surfaces": s.surfaces,
-        "membranesDrawn": own(ItemKind::Membrane), "spheresDrawn": own(ItemKind::Ball), "linesDrawn": own(ItemKind::Line), "pitsDrawn": own(ItemKind::Pit),
-        "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(), "sizeA": if s.pits() { s.pit_size_a().round() } else { s.size_a.round() },
+        "kind": "shapes", "membranes": n(ItemKind::Membrane), "balls": n(ItemKind::Ball), "spheres": n(ItemKind::Ball), "lines": n(ItemKind::Line), "surfaces": s.surfaces,
+        "membranesDrawn": own(ItemKind::Membrane), "spheresDrawn": own(ItemKind::Ball), "linesDrawn": own(ItemKind::Line),
+        "dropped": s.edits.dropped.len(), "flipped": s.edits.flipped.len(), "sizeA": s.size_a.round(),
     });
     auto::with_tilt(used, s.inputs.iter().map(String::as_str))
 }
@@ -949,18 +838,13 @@ pub fn find_shapes(inputs: &[String], marks: &[Mark], size: Option<&str>, out: &
 pub fn average_shapes(out: &str, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     let dir = dir_of(out);
     let s = load(&dir).context("这里还没有找出的结果")?;
-    let (drawn, both, size_a) = if s.pits() {
-        let (pits, size_a) = kept_pits(&s, &dir)?;
-        (pits, false, size_a)
-    } else {
-        let (drawn, both) = kept_drawn(&s, &dir)?;
-        (drawn, both, s.size_a)
-    };
+    let (drawn, both) = kept_drawn(&s, &dir)?;
+    let size_a = s.size_a;
     events(emit, b64, |progress, live, _note| {
         let note = |n: auto::Note| emit("sta-note", note_json(&n));
         let sources: Vec<Source> = s.inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
         let out = dir.to_string_lossy();
-        let report = if s.pits() { sp::run_pits(&sources, &drawn, size_a, &out, progress, live)? } else { sp::run_drawn(&sources, &drawn, both, size_a, &out, progress, live)? };
+        let report = sp::run_drawn(&sources, &drawn, both, size_a, &out, progress, live)?;
         write_used(&dir, &used_of(&s));
         Ok(json!({
             "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
@@ -1412,111 +1296,5 @@ mod tests {
         assert!(read_side(dir.path(), 1).is_err());
         std::fs::write(side_path(dir.path(), 0), b"junk").unwrap();
         assert!(read_side(dir.path(), 0).is_err());
-    }
-
-    /// A solid above the plane z = 36 with nine pits in it (a 3 × 3 grid,
-    /// depths 12 to 24), dark in noise, and its border as the membrane of
-    /// the label file. Voxel 20 Å.
-    fn pitted(dir: &Path) -> (String, [usize; 3]) {
-        let n = [200usize, 200, 56];
-        let path = dir.join("pits.mrc").to_string_lossy().into_owned();
-        let solid = |p: [f64; 3]| {
-            let mut floor = 36.0;
-            // Only the pits near enough to matter.
-            for k in 0..9 {
-                let (cx, cy) = (50.0 + 50.0 * (k % 3) as f64, 50.0 + 50.0 * (k / 3) as f64);
-                let r2 = (p[0] - cx).powi(2) + (p[1] - cy).powi(2);
-                if r2 < 900.0 {
-                    floor -= (12.0 + 1.5 * k as f64) * (-r2 / 72.0).exp();
-                }
-            }
-            p[2] > floor
-        };
-        let mut state = 3u32;
-        let mut noise = || {
-            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-            (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5
-        };
-        let at = |i: usize| [(i % n[0]) as f64, (i / n[0] % n[1]) as f64, (i / (n[0] * n[1])) as f64];
-        let total = n[0] * n[1] * n[2];
-        let inside: Vec<bool> = (0..total).map(|i| solid(at(i))).collect();
-        let mask: Vec<bool> = (0..total)
-            .map(|i| {
-                let p = at(i);
-                // Far from the border of the solid nothing is membrane.
-                if p[2] < 8.0 || p[2] > 40.0 {
-                    return false;
-                }
-                (-1..=1).any(|dz| (-1..=1).any(|dy| (-1..=1).any(|dx| solid([p[0] + dx as f64 * 1.4, p[1] + dy as f64 * 1.4, p[2] + dz as f64 * 1.4]) != inside[i])))
-            })
-            .collect();
-        let vol: Vec<f32> = (0..total).map(|i| -(if mask[i] { 1.0 } else { 0.0 }) - (if inside[i] { 0.5 } else { 0.0 }) + 0.4 * noise()).collect();
-        crate::tomo::output::write_mrc(&path, &vol, n, 20.0, false).unwrap();
-        crate::membrane::write_labels(&path, n, &mask, None, 20.0).unwrap();
-        (path, n)
-    }
-
-    #[test]
-    fn a_click_into_a_pit_finds_them_all_in_the_order_of_their_stage_and_the_kept_are_averaged() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (a, _) = pitted(tmp.path());
-        let sources = vec![source(&a, None)];
-        let inputs = vec![a.clone()];
-        let click = Mark { kind: Kind::Pit, tomogram: a.clone(), points: vec![[100.0, 100.0, 28.0]], flip: false, strokes: vec![] };
-        // A membrane painted as well waits: pits are searched for alone.
-        let (mut s, sides) = done(find_in(&sources, &inputs, &[click, painted(&a, [10.0, 10.0, 36.0])], Size::Small, 80.0, &|_| Some(20.0), &quiet).unwrap());
-        assert!(s.pits() && s.items.len() == 9 && s.items.iter().all(|i| i.kind == ItemKind::Pit), "{:#?}", s.items);
-        // In the order of the stage: depths rise.
-        assert!(s.items.windows(2).all(|w| w[0].score <= w[1].score && w[0].length < w[1].length + 2.0), "{:#?}", s.items);
-        let example: Vec<&Item> = s.items.iter().filter(|i| i.example).collect();
-        assert!(example.len() == 1 && dist(example[0].centre, [100.0, 100.0, 36.0]) < 5.0, "{:#?}", s.items);
-        // The size holds a pit: about 20 voxels across and up to 24 deep, at 20 Å.
-        assert!((350.0..=650.0).contains(&s.size_a), "{}", s.size_a);
-        let dir = tmp.path().join("out").join(DRAWN);
-        save_new(&dir, &s, &sides).unwrap();
-        // Each pit has its picture.
-        assert!(s.items.iter().all(|i| ::image::open(tile_path(&dir, i.id)).is_ok_and(|p| p.width() as usize == funnels::TILE)));
-        let v = review_value(&s, &dir, &a);
-        assert_eq!(v["pits"], 9);
-        assert_eq!(v["pitList"].as_array().unwrap().len(), 9);
-        assert!(v["items"].as_array().unwrap().iter().all(|i| i["kind"] == "pit" && i["arrows"].as_array().unwrap().len() == 1 && i["arrows"][0]["axis"][2].as_f64().unwrap() < -0.9), "{v:#}");
-        // A part of the order is taken at once; a pit has no side to flip.
-        let only: Vec<usize> = (2..9).collect();
-        apply(&mut s, &Edit { only: Some(only.clone()), ..Edit::default() }).unwrap();
-        assert_eq!(s.kept().map(|i| i.id).collect::<Vec<_>>(), only);
-        s.flip_all();
-        assert!(s.edits.flipped.is_empty());
-        let (pits, size_a) = kept_pits(&s, &dir).unwrap();
-        assert_eq!(pits.len(), 7);
-        assert!(pits.iter().all(|p| p.axis[2] < -0.9));
-        let report = sp::run_pits(&sources, &pits, size_a, &dir.to_string_lossy(), &quiet, &|_| {}).unwrap();
-        assert_eq!(report.particles, 7, "{report:?}");
-        // The average has the pit along +Z from its middle: dark (solid) on
-        // the axis below the mouth, open beside it at the same depth.
-        let (map, n, voxel) = crate::tomo::pipeline::load(report.map.as_ref().unwrap()).unwrap();
-        let c = n[0] / 2;
-        let at = |x: usize, y: usize, z: usize| map[x + n[0] * (y + n[1] * z)];
-        let deep = (160.0 / voxel).round() as usize;
-        let aside = (360.0 / voxel).round() as usize;
-        let ring = [at(c + aside, c, c + deep), at(c - aside, c, c + deep), at(c, c + aside, c + deep), at(c, c - aside, c + deep)];
-        let beside = ring.iter().sum::<f32>() / 4.0;
-        assert!(at(c, c, c + deep) < beside, "on the axis {} beside {beside} voxel {voxel}", at(c, c, c + deep));
-        // Too few left: say so.
-        apply(&mut s, &Edit { only: Some(vec![0, 1]), ..Edit::default() }).unwrap();
-        assert!(kept_pits(&s, &dir).err().unwrap().to_string().contains("至少要"));
-    }
-
-    #[test]
-    fn marks_with_a_pit_clicked_average_every_pit_found_without_a_review() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (a, _) = pitted(tmp.path());
-        let out = tmp.path().join("out").to_string_lossy().into_owned();
-        let click = Mark { kind: Kind::Pit, tomogram: a.clone(), points: vec![[100.0, 100.0, 28.0]], flip: false, strokes: vec![] };
-        let dev = || -> Result<(&'static burn::tensor::Device, &'static str)> { bail!("no device is needed for pits") };
-        let v = marks::run_marks(&[a.clone()], &[click], None, Some(&out), &dev, &|_, _| {}, &|_| String::new()).unwrap();
-        assert_eq!(v["pits"], 9, "{v:#}");
-        assert_eq!(v["report"]["particles"], 9, "{v:#}");
-        let dir = Path::new(&out).join(DRAWN);
-        assert!(dir.join("average.mrc").is_file() && load(&dir).is_some_and(|s| s.pits()));
     }
 }

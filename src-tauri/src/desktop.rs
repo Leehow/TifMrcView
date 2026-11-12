@@ -2466,18 +2466,6 @@ async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip
     }).await
 }
 
-/// The picture of pit `id` of the shapes review of `out` (the section along
-/// its axis, the pit pointing down): "data:image/png;base64,…".
-#[cfg(feature = "pro")]
-#[tauri::command]
-async fn sta_shapes_tile(out: String, id: usize) -> CmdResult<String> {
-    blocking(move || {
-        let png = crate::sta::shapes::tile_path(&crate::sta::shapes::dir_of(&out), id);
-        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
-        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
-    }).await
-}
-
 /// Averages what the shapes review of `out` keeps (second half). Same events
 /// and result as `sta_run_drawn`.
 #[cfg(feature = "pro")]
@@ -3612,7 +3600,6 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_shapes_review,
             #[cfg(feature = "pro")] sta_shapes_section,
             #[cfg(feature = "pro")] sta_shapes_set,
-            #[cfg(feature = "pro")] sta_shapes_tile,
             #[cfg(feature = "pro")] sta_shapes_average,
             #[cfg(feature = "pro")] sta_kinds,
             #[cfg(feature = "pro")] sta_kinds_saved,

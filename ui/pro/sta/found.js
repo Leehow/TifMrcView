@@ -10,7 +10,12 @@
 // so closing the app loses nothing; the review shows again when the folder is
 // reopened and there is no newer average.
 // Membranes and vesicles (膜 球) have their own review in shapes.js; lines and surfaces keep their direct run.
-// Three routes (`which`): "card" (a card), "marked" (clicked particles) and "own" (a map the user brought, index.js).
+// Four routes (`which`): "card" (a card), "marked" (clicked particles), "own" (a map the user brought, index.js)
+// and "circled" (圈例子: 2–3 circles round anything the user wants found, draw.js). The circled route also shows
+// where the program's idea of "alike" came from: how alike the examples are (d.circled.alike), the groups of
+// places by the example they resemble and their size (a tick box each: sta_review_set {group: {like, size, on}}),
+// and a strip of small pictures of the best places of ALL tomograms (sta_review_tile {out, which, i} → data URL),
+// a click on one toggles it like a click on its circle. At least d.fewest (20; 4 for circled) to average.
 // When the user has marked shapes (shapes.js) the review says so (`onShapes`): a tick box 「只要在你标的…上的」
 // keeps only the places on them; unticking brings the others back (their state is "off" while ticked and not drawn).
 // 「再找一次」 judges the places the user did not touch again by what the user dropped and kept
@@ -25,7 +30,9 @@
 (() => {
   const W = window.TifMrcViewPro.sta;
   if (!W) return;
-  const MIN_KEPT = 20; // as sta::review::MIN_KEPT
+  const MIN_KEPT = 20; // as sta::review::MIN_KEPT; the review says its own in d.fewest
+  const fewest = (d) => d?.fewest || MIN_KEPT;
+  const circled = (d) => d?.circled != null;
   // `d` is the last review the backend gave (null: none to show), for the folder `out`.
   const R = { d: null, out: "", which: "", gen: 0, add: false, queue: Promise.resolve(), pending: 0, shown: "", dismissed: new Map(), raw: null };
 
@@ -36,10 +43,17 @@
   box.innerHTML = `
     <h4 id="sta-found-head"></h4>
     <ul id="sta-found-per" class="sta-found-per"></ul>
+    <div id="sta-circled" hidden>
+      <p id="sta-circled-info" class="dim"></p>
+      <div id="sta-circled-warns"></div>
+      <div id="sta-circled-groups"></div>
+      <p id="sta-circled-sizes" class="dim" hidden>大小不同的平均在一起会糊，可以只勾一种大小。</p>
+      <div id="sta-circled-strip" role="group" aria-label="找到的地方，从最像的开始"></div>
+    </div>
     <p id="sta-found-unsure" class="warn" hidden>程序分不清哪些是，请拖动滑块自己定</p>
     <div class="sta-found-slider"><span class="dim">严格</span><input id="sta-found-keep" type="range" min="1" max="1" step="1" aria-label="保留多少个，从最像的开始"><span class="dim">宽松</span></div>
     <canvas id="sta-found-curve" height="44" aria-label="每个候选和例子的相似度，从高到低"></canvas>
-    <p class="dim sta-found-legend">图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的。点一个圈去掉或加上它。</p>
+    <p id="sta-found-legend" class="dim sta-found-legend"></p>
     <label id="sta-found-shapes-row" class="sta-found-shapes" hidden><input id="sta-found-shapes" type="checkbox"><span id="sta-found-shapes-text"></span></label>
     <div class="al-row"><button id="sta-found-add" class="small" aria-pressed="false" title="图上有漏掉的？打开后，点在它的中心，程序把最近的一个候选加进来">补一个</button><button id="sta-found-reset" class="small">恢复程序的建议</button></div>
     <div class="al-row sta-found-again"><button id="sta-found-again" class="small">再找一次</button><span id="sta-found-again-text" class="dim"></span><button id="sta-found-undo" class="link" data-no-i18n hidden>撤销</button></div>
@@ -59,7 +73,7 @@
   // The review to show for the output folder `out`: of the two routes the newer one that no average followed.
   async function fetchBoth(out, tomogram) {
     const got = [];
-    for (const which of ["card", "marked", "own"]) {
+    for (const which of ["card", "marked", "own", "circled"]) {
       try {
         const d = await invoke("sta_review", { out, which, tomogram });
         if (pendingOf(d)) got.push({ which, d });
@@ -108,7 +122,10 @@
     document.dispatchEvent(new CustomEvent("sta-review"));
     W.panel.classList.toggle("reviewing", show);
     if (!show) { R.add = false; draw(); return; }
-    $("sta-found-head").textContent = `找到 ${d.total} 个`;
+    const cir = circled(d);
+    $("sta-found-head").textContent = cir ? `找到 ${d.kept} 个和你圈的像的` : `找到 ${d.total} 个`;
+    $("sta-found-legend").textContent = cir ? "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的，标“例”的是你圈的。点一个圈或下面的小图去掉或加上它。" : "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的。点一个圈去掉或加上它。";
+    renderCircled(d);
     const per = $("sta-found-per");
     per.hidden = d.perTomogram.length < 2;
     per.replaceChildren(...d.perTomogram.map((t) => { const li = document.createElement("li"); li.textContent = `${t.name}：${t.kept} 个`; li.title = t.path; return li; }));
@@ -135,12 +152,12 @@
     $("sta-found-again-text").textContent = ag.ran ? (ag.out || ag.in ? `又去掉 ${ag.out} 个像你去掉的，补回 ${ag.in} 个` : "重新判断过了，没有要改的") : "按你去掉和补上的，把其余的重新判断一遍";
     $("sta-found-undo").hidden = !ag.ran;
     $("sta-found-undo").disabled = W.busy;
-    const small = d.kept < MIN_KEPT;
+    const small = d.kept < fewest(d);
     const go = $("sta-found-go");
     go.textContent = `平均这 ${d.kept} 个 · ${minutes(d.etaSeconds)}`;
     go.disabled = small || W.busy || W.pixelNeed.length > 0;
-    go.title = W.pixelNeed.length ? W.pixelLine : small ? `保留的只有 ${d.kept} 个，至少要 ${MIN_KEPT} 个` : `将平均 ${d.kept} 个，${minutes(d.etaSeconds)}`;
-    $("sta-found-msg").textContent = small ? `保留的只有 ${d.kept} 个，至少要 ${MIN_KEPT} 个：把滑块往“宽松”拖，或点图上灰色的圈加几个` : d.open ? "" : "这张断层图不在找出的断层图里，看不到圈";
+    go.title = W.pixelNeed.length ? W.pixelLine : small ? `保留的只有 ${d.kept} 个，至少要 ${fewest(d)} 个` : `将平均 ${d.kept} 个，${minutes(d.etaSeconds)}`;
+    $("sta-found-msg").textContent = small ? `保留的只有 ${d.kept} 个，至少要 ${fewest(d)} 个：把滑块往“宽松”拖，或点图上灰色的圈加几个` : d.open ? "" : "这张断层图不在找出的断层图里，看不到圈";
     sparkline();
     draw();
   }
@@ -231,16 +248,18 @@
   };
   $("sta-found-add").onclick = () => { R.add = !R.add; if (R.add) activate(); render(); };
   $("sta-found-other").onclick = () => {
+    const cir = circled(R.d);
     if (R.d) R.dismissed.set(key(), R.d.foundMs);
     R.d = null;
     R.add = false;
     render();
     if (S.tool === "found") setTool("select");
+    if (cir) { W.draw?.setKind("example"); W.status("请在图上圈 2–3 个你要找的东西，再按“找出全部同类”"); return; }
     W.status("请选择要平均什么：点一张卡片，或在图上点几个颗粒作例子");
   };
   $("sta-found-go").onclick = async () => {
     const d = R.d;
-    if (!d || W.busy || d.kept < MIN_KEPT) return;
+    if (!d || W.busy || d.kept < fewest(d)) return;
     const { out, which } = R;
     clearTimeout(keepTimer);
     await R.queue;
@@ -262,7 +281,7 @@
     R.dismissed.clear();
     await load();
     if (R.d && R.d.foundMs !== before) W.shapes?.dismiss?.();
-    if (R.d && R.d.foundMs !== before) W.status(`找到 ${R.d.total} 个：看看图上的圈对不对，调好后按“平均这 ${R.d.kept} 个”`);
+    if (R.d && R.d.foundMs !== before) W.status(`找到 ${circled(R.d) ? R.d.kept : R.d.total} 个：看看图上的圈对不对，调好后按“平均这 ${R.d.kept} 个”`);
   }
   W.found = {
     // A card of the folder is the example.
@@ -271,6 +290,8 @@
     findOwn: () => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks: null, out, which: "own" })),
     // Clicked particles (point marks) are the examples.
     findPoints: (marks) => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks, out })),
+    // Circled examples (draw.js) are the examples: the marks of kind "example".
+    findCircled: (marks) => find((inputs, out) => invoke("sta_find", { inputs, marks, out, which: "circled" })),
     // For shapes.js: the time of the review shown (0: none), showing it again after the other one changed, putting it away.
     pendingMs: () => R.d?.foundMs || 0,
     recheck: () => apply(R.raw, true),
@@ -283,6 +304,124 @@
     },
   };
 
+  // What a click on a place (a circle or a small picture) does to its state; the answer confirms it.
+  const FLIP = { kept: "removed", removed: "kept", below: "added", added: "below", taughtOut: "added", taughtIn: "below" };
+
+  // ---- circled: the examples, the groups and the strip of pictures ----
+  const shownFrom = { sig: "", n: 200 };
+  const tiles = new Map(); // `${sig}|${i}` -> data URL, "" while asked
+  const tileWait = [];
+  let tileBusy = 0, tileSeen = null, stripSig = "";
+  const tileKey = (i) => `${shownFrom.sig}|${i}`;
+  // At most four pictures are asked at a time; an answer to an older search is ignored.
+  function tileAsk(i) {
+    const k = tileKey(i);
+    if (tiles.has(k)) return;
+    tiles.set(k, "");
+    tileWait.push({ i, k, out: R.out });
+    tilePump();
+  }
+  function tilePump() {
+    while (tileBusy < 4 && tileWait.length) {
+      const t = tileWait.shift();
+      if (t.k !== tileKey(t.i)) { tiles.delete(t.k); continue; }
+      tileBusy++;
+      invoke("sta_review_tile", { out: t.out, which: "circled", i: t.i }).then((url) => {
+        if (typeof url !== "string" || !url) { tiles.delete(t.k); return; }
+        if (t.k !== tileKey(t.i)) return;
+        tiles.set(t.k, url);
+        for (const img of $("sta-circled-strip").querySelectorAll(`[data-i="${t.i}"] img`)) img.src = url;
+      }).catch(() => { tiles.delete(t.k); /* no picture, or no backend (demo) */ }).finally(() => { tileBusy--; tilePump(); });
+    }
+  }
+  const OFF = new Set(["below", "removed", "taughtOut"]);
+  const HIDDEN = new Set(["off", "groupOff"]);
+  function renderCircled(d) {
+    const c = d.circled;
+    $("sta-circled").hidden = !c;
+    if (!c) { stripSig = ""; return; }
+    // The examples.
+    const info = $("sta-circled-info");
+    info.textContent = c.alike != null ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。` : "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。";
+    const warns = [];
+    if (c.examples >= 2) {
+      (c.byOthers || []).forEach((v, k) => {
+        if (v == null || (c.noise != null && v <= c.noise)) warns.push(`第 ${k + 1} 个例子和其他几个不太像，可以把它删掉换一个再找。`);
+      });
+    }
+    $("sta-circled-warns").replaceChildren(...warns.map((t) => { const p = document.createElement("p"); p.className = "warn"; p.textContent = t; return p; }));
+    // The groups: only worth a row each when there are several.
+    const gs = c.groups || [];
+    const box2 = $("sta-circled-groups");
+    box2.hidden = gs.length < 2;
+    box2.replaceChildren(...(gs.length < 2 ? [] : gs.map((g) => {
+      const l = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!g.on;
+      cb.disabled = W.busy;
+      cb.onchange = () => { activate(); edit({ group: { like: g.like, size: g.size, on: cb.checked } }); };
+      l.className = g.on ? "" : "off";
+      l.append(cb, `像例 ${g.like + 1} · 约 ${Math.round(g.sizeA / 10)} nm：${g.found} 个`);
+      return l;
+    })));
+    $("sta-circled-sizes").hidden = gs.length < 2 || new Set(gs.map((g) => g.size)).size < 2;
+    // The strip.
+    // found.json is rewritten by every edit (foundMs moves): the pictures are told by the search's own stamp.
+    const sig = `${R.out}|${d.circled?.sig ?? d.total}`;
+    if (sig !== shownFrom.sig) { shownFrom.sig = sig; shownFrom.n = 200; tiles.clear(); tileWait.length = 0; stripSig = ""; }
+    const list = (c.list || []).filter((e) => !HIDDEN.has(e.state));
+    const shown = list.slice(0, shownFrom.n);
+    const now = `${shownFrom.n}|${W.busy}|${shown.map((e) => `${e.i}:${e.state}`).join()}`;
+    if (now === stripSig) return;
+    stripSig = now;
+    const strip = $("sta-circled-strip");
+    const left = strip.scrollLeft;
+    tileSeen?.disconnect();
+    tileSeen = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => {
+      for (const e of es) if (e.isIntersecting) { tileAsk(+e.target.dataset.i); tileSeen.unobserve(e.target); }
+    }, { root: strip, rootMargin: "120px" }) : null;
+    const names = d.perTomogram.map((t) => t.name);
+    const els = shown.map((e) => {
+      const b = document.createElement("button");
+      const off = OFF.has(e.state);
+      b.type = "button";
+      b.className = `sta-tile${off ? " off" : ""}${e.example ? " ex" : ""}`;
+      b.dataset.i = e.i;
+      b.title = `相似度 ${e.score.toFixed(2)} · ${names[e.source] ?? ""}`;
+      b.setAttribute("aria-pressed", off ? "false" : "true");
+      b.disabled = W.busy;
+      const img = document.createElement("img");
+      img.alt = "";
+      img.draggable = false;
+      const url = tiles.get(tileKey(e.i));
+      if (url) img.src = url;
+      b.append(img);
+      if (e.example) { const m = document.createElement("i"); m.className = "ex"; m.textContent = "例"; b.append(m); }
+      b.onclick = () => {
+        if (W.busy) return;
+        e.state = FLIP[e.state] || e.state;
+        const pl = d.places.find((p) => p.i === e.i);
+        if (pl) pl.state = e.state;
+        activate();
+        render();
+        edit({ toggle: e.i });
+      };
+      if (!url) { if (tileSeen) tileSeen.observe(b); else tileAsk(e.i); }
+      return b;
+    });
+    if (list.length > shown.length) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "small sta-more";
+      more.textContent = "显示更多";
+      more.onclick = () => { shownFrom.n += 200; stripSig = ""; render(); };
+      els.push(more);
+    }
+    strip.replaceChildren(...els);
+    strip.scrollLeft = left;
+  }
+
   // ---- on the image ----
   const css = () => getComputedStyle(document.documentElement);
   // The places drawn on the slice shown: a particle is a ball, so its circle
@@ -290,12 +429,14 @@
   // near the centre it is solid, further off faint (as the marks in draw.js fade with distance).
   function seen() {
     const d = R.d;
-    if (!d || !d.open || !d.radius || !S.info || S.axis !== "xy") return [];
+    if (!d || !d.open || !(d.radius || circled(d)) || !S.info || S.axis !== "xy") return [];
     const out = [];
     for (const p of d.places) {
+      // A circled place has a radius of its own (the size of the example it resembles).
+      const R0 = p.r || d.radius;
       const dz = Math.abs(p.pos[2] - S.z);
-      if (dz >= d.radius || p.state === "off") continue;
-      out.push({ p, r: Math.sqrt(d.radius * d.radius - dz * dz), a: dz <= 0.25 * d.radius ? 1 : 0.4 });
+      if (!R0 || dz >= R0 || p.state === "off" || p.state === "groupOff") continue;
+      out.push({ p, r: Math.sqrt(R0 * R0 - dz * dz), a: dz <= 0.25 * R0 ? 1 : 0.4 });
     }
     return out;
   }
@@ -306,12 +447,14 @@
     ctx.save();
     ctx.lineCap = "round";
     for (const { p, r, a } of seen()) {
-      if (p.state === "off") continue;
       const [x, y] = toScreen(p.pos[0] + 0.5, p.pos[1] + 0.5);
       const rr = Math.max(3, r * sc);
       ctx.globalAlpha = a;
       ctx.setLineDash([]);
-      if (p.state === "kept") {
+      if (p.example && (p.state === "kept" || p.state === "added" || p.state === "taughtIn")) {
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 3;
+      } else if (p.state === "kept") {
         ctx.strokeStyle = accent;
         ctx.lineWidth = 2;
       } else if (p.state === "added" || p.state === "taughtIn") {
@@ -328,6 +471,16 @@
       ctx.beginPath();
       ctx.arc(x, y, rr, 0, 2 * Math.PI);
       ctx.stroke();
+      if (p.example) {
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#fff";
+        ctx.strokeText("例", x, y - rr - 2);
+        ctx.fillStyle = accent;
+        ctx.fillText("例", x, y - rr - 2);
+      }
       if (p.state === "removed" || p.state === "taughtOut") {
         const k = rr * 0.6;
         ctx.setLineDash([]);
@@ -367,7 +520,9 @@
       }
       if (hit) {
         // Shown at once, confirmed by the answer.
-        hit.state = { kept: "removed", removed: "kept", below: "added", added: "below", taughtOut: "added", taughtIn: "below" }[hit.state];
+        hit.state = FLIP[hit.state] || hit.state;
+        const row = R.d.circled?.list?.find((e) => e.i === hit.i);
+        if (row) row.state = hit.state;
         render();
         edit({ toggle: hit.i });
       } else if (R.add) {

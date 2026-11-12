@@ -574,6 +574,12 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         }
         None => (vec![], Value::Null, Value::Null),
     };
+    let mut circled_v = circled_value(s, &lists);
+    if !circled_v.is_null() {
+        // Told apart from another search by when its first example's cube
+        // was written: `found.json` is rewritten by every edit.
+        circled_v["sig"] = json!(millis(&dir.join("card.mrc")));
+    }
     json!({
         "total": s.total(), "keep": s.edits.keep, "kept": kept.len(), "sure": s.suggest(), "unsure": s.unsure,
         "limit": s.found.limit, "removed": removed, "added": added, "perTomogram": per,
@@ -583,7 +589,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         "foundMs": millis(&path_of(dir)), "averageMs": millis(&dir.join("average.mrc")),
         "onShapes": on_shapes_value(s),
         "again": { "out": again_out, "in": again_in, "ran": s.edits.again },
-        "circled": circled_value(s, &lists), "fewest": s.found.fewest(),
+        "circled": circled_v, "fewest": s.found.fewest(),
     })
 }
 
@@ -596,7 +602,8 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
 /// keep and `kept` those of them that count now; and `list`: the best
 /// `tiles` places of all tomograms (and the examples), best first, as
 /// `{i, source, score, like, size, example, state}`: each has a picture
-/// (`tile_path`).
+/// (`tile_path`). `review_value` adds `sig`, which changes only with a new
+/// search (the pictures are that search's).
 fn circled_value(s: &State, lists: &Lists) -> Value {
     if s.route.kind != "circled" {
         return Value::Null;

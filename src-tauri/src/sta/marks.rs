@@ -42,10 +42,6 @@ pub enum Kind {
     /// centre and a point of the circle; see `circled`. Examples are only
     /// searched from (`review::find_circled`).
     Example,
-    /// Clicks into pits of a membrane (places where it takes something in
-    /// or buds off), each point one example; see `funnels`. They are only
-    /// searched from (`shapes::find_in`), never averaged as drawn.
-    Pit,
 }
 
 /// One thing marked: the clicks, in voxels of the file `tomogram`.
@@ -244,7 +240,7 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
-        Kind::Point | Kind::Membrane | Kind::Pit | Kind::Example => vec![],
+        Kind::Point | Kind::Membrane | Kind::Example => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
         for s in &mut seeds {
@@ -296,7 +292,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Surface => p.len() >= 2,
         Kind::Sphere => p.len() >= 2,
         Kind::Membrane => paint::has_stroke(m),
-        Kind::Pit | Kind::Example => false,
+        Kind::Example => false,
     });
     if usable.clone().next().is_none() {
         if points_only > 0 {
@@ -465,33 +461,6 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
             }
         }
     };
-    if super::funnels::marked(marks) {
-        // Clicks into pits are examples (`funnels`). Here nobody looks at
-        // what is found first (the command line; the workspace goes through
-        // the review of `shapes`): every pit found is averaged, and a
-        // tomogram that has no membrane segmentation yet gets one.
-        use super::shapes::{self, Found};
-        let pixel = |p: &str| sp::pixel_of(p).ok();
-        let find = || shapes::find_in(&sources, &inputs, marks, Size::parse(size), 0.0, &pixel, &progress);
-        let mut found = find()?;
-        if let Found::NeedSegment(files) = &found {
-            for f in files {
-                paint::segment(f, &progress)?;
-            }
-            found = find()?;
-        }
-        let Found::Done(state, sides) = found else { bail!("膜没有分割出来，找不了凹陷") };
-        let dir = out.join(DRAWN);
-        shapes::save_new(&dir, &state, &sides)?;
-        let (pits, size_a) = shapes::kept_pits(&state, &dir)?;
-        let report = sp::run_pits(&sources, &pits, size_a, &dir.to_string_lossy(), &progress, &live)?;
-        write_used(&dir, &shapes::used_of(&state));
-        return Ok(json!({
-            "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
-            "cards": [], "chosen": Value::Null, "auto": false, "out": dir, "trials": [], "drawn": true, "sizeA": size_a,
-            "pits": pits.len(), "pointsLeftOut": false,
-        }));
-    }
     if route == Route::Points {
         let points = points_of(marks, &inputs, &sources)?;
         let outcome = auto_points(&sources, &points, &out, device, &progress, &live, &note)?;
