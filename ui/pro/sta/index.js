@@ -559,8 +559,15 @@
         setStatus(out, `${p.label}${p.total > 1 ? ` ${p.done}/${p.total}` : ""} · ${sec < 120 ? sec.toFixed(0) + " s" : (sec / 60).toFixed(1) + " min"}`);
       });
       await on("sta-live", (p) => {
+        const first = !s.live;
         s.live = `data:image/png;base64,${p.png}`;
-        if (out === W.out) { $("sta-live").hidden = false; $("sta-live").querySelector("img").src = s.live; }
+        if (out === W.out) {
+          const fig = $("sta-live"), img = fig.querySelector("img");
+          fig.hidden = false;
+          img.src = s.live;
+          // Once per run, when the picture has its size: bring it into view.
+          if (first) img.addEventListener("load", () => { try { fig.scrollIntoView({ block: "nearest" }); } catch (_) { /* old webview */ } }, { once: true });
+        }
       });
       await on("sta-note", async (n) => {
         if (n.kind === "trial") {

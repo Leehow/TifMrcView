@@ -149,7 +149,7 @@
     const dropped = d.removed > 0;
     $("sta-found-again").disabled = W.busy || !dropped || W.pixelNeed.length > 0;
     $("sta-found-again").title = dropped ? "" : "先在图上点掉几个不要的";
-    $("sta-found-again-text").textContent = ag.ran ? (ag.out || ag.in ? `又去掉 ${ag.out} 个像你去掉的，补回 ${ag.in} 个` : "重新判断过了，没有要改的") : "按你去掉和补上的，把其余的重新判断一遍";
+    $("sta-found-again-text").textContent = ag.ran ? (ag.out || ag.in ? [ag.out ? `又去掉 ${ag.out} 个像你去掉的` : "", ag.in ? `补回 ${ag.in} 个像你留下的` : ""].filter(Boolean).join("，") : "重新判断过了，没有要改的。去掉的还太少，程序分不出这一类；再多去掉几个同类的可以再试") : "按你去掉和补上的，把其余的重新判断一遍";
     $("sta-found-undo").hidden = !ag.ran;
     $("sta-found-undo").disabled = W.busy;
     const small = d.kept < fewest(d);
@@ -375,6 +375,9 @@
     // found.json is rewritten by every edit (foundMs moves): the pictures are told by the search's own stamp.
     const sig = `${R.out}|${d.circled?.sig ?? d.total}`;
     if (sig !== shownFrom.sig) { shownFrom.sig = sig; shownFrom.n = 200; tiles.clear(); tileWait.length = 0; stripSig = ""; }
+    // The ring marks the size the user circled when the pictures show the surroundings (span circle diameters across).
+    const ring = c.wide > 1 && c.span > 0 ? `${100 / c.span}%` : "";
+    if (ring) $("sta-circled-strip").style.setProperty("--ring", ring); else $("sta-circled-strip").style.removeProperty("--ring");
     const list = (c.list || []).filter((e) => !HIDDEN.has(e.state));
     const shown = list.slice(0, shownFrom.n);
     const now = `${shownFrom.n}|${W.busy}|${shown.map((e) => `${e.i}:${e.state}`).join()}`;

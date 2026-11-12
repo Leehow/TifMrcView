@@ -2930,12 +2930,21 @@ pub struct Found {
     /// score one of them has in the search with the others' pictures.
     #[serde(default)]
     pub alike: Option<f32>,
+    /// `circled`: how many times as wide as circled the pictures searched
+    /// for were (1: as circled; more when the examples are told by what is
+    /// around them).
+    #[serde(default = "one")]
+    pub wide: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 impl Found {
     /// The search of one template: nothing of what `circled` adds.
     pub fn plain(places: Vec<Place>, limit: Option<f32>, noise: Option<f32>, voxel_a: f64, searched: &str, search_voxel_a: Option<f64>) -> Found {
-        Found { places, limit, noise, voxel_a, searched: searched.to_string(), search_voxel_a, frames: vec![], sizes_a: vec![], alike: None }
+        Found { places, limit, noise, voxel_a, searched: searched.to_string(), search_voxel_a, frames: vec![], sizes_a: vec![], alike: None, wide: 1.0 }
     }
 
     /// The orientation of the thing at `p` in the frame of the template
@@ -3216,6 +3225,33 @@ pub fn run_template(
     };
     let keep: Vec<Place> = found.places.iter().filter(|p| p.score >= limit).take(MOST).copied().collect();
     run_places(dev, sources, template, diameter_a, &found, &keep, pass, out_dir, progress, live)
+}
+
+/// Fewest places `probed` measures a body in.
+const PROBED_FEWEST: usize = 16;
+
+/// The dark body in the average of all the places of `found` (a search from
+/// circled examples), aligned as `run_places` first aligns such places (their
+/// own average, then every orientation against it): how far across it is
+/// (`body`, voxels of `found`), in how many pieces and how long for its width
+/// (`shape`). Unaligned, the average is as wide as the thing at its widest
+/// and blurred by where the search put each place (measured: ribosomes of
+/// 270 Å come out 371 Å across). None when too few places can be cut out or
+/// nothing dark stands there.
+pub(super) fn probed(dev: &burn::tensor::Device, sources: &[Source], found: &Found, diameter_a: f64, progress: Progress) -> Result<Option<(f64, usize, f64)>> {
+    let (cuts, poses) = cut_places(sources, found, &found.places)?;
+    if cuts.len() < PROBED_FEWEST {
+        return Ok(None);
+    }
+    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
+    let radius = (0.5 * diameter_a / found.voxel_a + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+    let own_average = set.average(&poses, |_| true).finish();
+    let (average, _) = super::refine::settled_on(Some(dev), &set, &own_average, 1, progress, &|_| {})?;
+    let (_, elongation, blobs, _) = shape(&average, BOX, radius);
+    Ok(body(&average, BOX, radius).map(|across| (across, blobs, elongation)))
 }
 
 /// The average of the particles at `places` (those of `found` the caller

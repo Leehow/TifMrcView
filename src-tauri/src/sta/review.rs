@@ -634,6 +634,8 @@ fn circled_value(s: &State, lists: &Lists) -> Value {
         "examples": s.route.points, "alike": s.found.alike, "byOthers": s.by_others, "noise": s.found.noise,
         "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "groups": groups,
         "list": list, "tiles": MOST_TILES,
+        // How many circle diameters a picture shows, and how many times as wide as circled the search looked.
+        "span": circled::TILE_SPAN * s.found.wide, "wide": s.found.wide,
     })
 }
 
@@ -919,7 +921,7 @@ fn write_tiles(dir: &Path, s: &State, sources: &[sp::Source]) -> Result<()> {
         bail!("没有像素大小");
     }
     let side = circled::TILE as u32;
-    for (i, grey) in ids.iter().zip(circled::tiles(sources, &places)?) {
+    for (i, grey) in ids.iter().zip(circled::tiles(sources, &places, circled::TILE_SPAN * s.found.wide)?) {
         if let Some(grey) = grey {
             ::image::GrayImage::from_raw(side, side, grey).context("tile")?.save(tile_path(dir, *i)).with_context(|| format!("无法写入 {}", tile_path(dir, *i).display()))?;
         }
@@ -1179,34 +1181,17 @@ impl State {
         t.kept.len() >= 2 && !t.dropped.is_empty()
     }
 
-    /// Takes the judgement: `likes[i]` is how much more place i looks like the
-    /// kept than the dropped (None: not asked). A kept place the user did not
-    /// click goes when it is not more like the kept; one that was not kept
-    /// comes in when it is more like the kept than the middle kept one is.
-    /// What the user clicked is never changed. Returns (out, in).
-    pub fn judge(&mut self, likes: &[Option<f32>]) -> (usize, usize) {
+    /// Takes the judgement: `belongs[i]` says whether place i is like what
+    /// is kept (None: not asked; `taught::Bar`). A kept place the user did
+    /// not click goes when it does not belong; one that was not kept comes
+    /// in when it does. What the user clicked is never changed. Returns
+    /// (out, in).
+    pub fn judge(&mut self, belongs: &[Option<bool>]) -> (usize, usize) {
         let l = self.lists();
         let t = self.teaching();
-        let mut kept_likes: Vec<f32> = t.kept.iter().filter_map(|i| likes.get(*i).copied().flatten()).collect();
-        kept_likes.sort_by(f32::total_cmp);
-        let median = kept_likes.get(kept_likes.len() / 2).copied().unwrap_or(f32::INFINITY);
-        let (mut out, mut inn) = (vec![], vec![]);
-        for &i in &t.kept {
-            if l.added.contains(&i) {
-                continue;
-            }
-            if likes.get(i).copied().flatten().is_some_and(|x| x <= 0.0) {
-                out.push(i);
-            }
-        }
-        for &i in &t.below {
-            if l.removed.contains(&i) || l.added.contains(&i) {
-                continue;
-            }
-            if likes.get(i).copied().flatten().is_some_and(|x| x > median) {
-                inn.push(i);
-            }
-        }
+        let says = |i: usize| belongs.get(i).copied().flatten();
+        let out: Vec<usize> = t.kept.iter().copied().filter(|i| !l.added.contains(i) && says(*i) == Some(false)).collect();
+        let inn: Vec<usize> = t.below.iter().copied().filter(|i| !l.removed.contains(i) && !l.added.contains(i) && says(*i) == Some(true)).collect();
         self.edits.taught_out = out;
         self.edits.taught_in = inn;
         self.edits.again = true;
@@ -1268,19 +1253,30 @@ pub fn find_again(dir: &Path, open: &str, emit: Emit, b64: &(dyn Fn(&[u8]) -> St
         if !t.ready() {
             bail!(NEED);
         }
-        let mut likes: Vec<Option<f32>> = vec![None; s.total()];
+        let mut likes: Vec<Option<taught::Likes>> = vec![None; s.total()];
         for src in 0..n {
             progress("重新判断：逐个比较", n + src, 2 * n);
             for (i, cube) in cubes_of(&sources, &s.found, src, &[plan.kept.as_slice(), plan.below.as_slice()].concat())? {
                 let member = plan.kept.binary_search(&i).is_ok().then_some(true);
-                likes[i] = Some(t.like(&cube, member));
+                likes[i] = Some(t.likes(&cube, member));
             }
         }
+        // Only what is clear of the kept places' own scatter is changed.
+        let bar = taught::Bar::of(&plan.kept.iter().filter_map(|i| likes[*i]).collect::<Vec<_>>());
+        let belongs: Vec<Option<bool>> = (0..s.total()).map(|i| likes[i].map(|l| if plan.kept.binary_search(&i).is_ok() { !bar.goes(l) } else { bar.comes(l) })).collect();
+        eprintln!(
+            "sta: judged again by {} kept and {} dropped: {} of the kept go, {} of {} below come in",
+            plan.kept.len(),
+            plan.dropped.len(),
+            plan.kept.iter().filter(|i| belongs[**i] == Some(false)).count(),
+            plan.below.iter().filter(|i| belongs[**i] == Some(true)).count(),
+            plan.below.len()
+        );
         progress("重新判断：逐个比较", 2 * n, 2 * n);
         // Edits made meanwhile are kept: read again, change only the lists.
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let mut now = load(dir).context("这里还没有找出的结果")?;
-        now.judge(&likes);
+        now.judge(&belongs);
         save(dir, &now)
     })?;
     let s = load(dir).context("这里还没有找出的结果")?;
@@ -1705,17 +1701,17 @@ mod tests {
         assert_eq!((t.kept.len(), t.dropped.clone()), (30, vec![3]));
         // Below places are asked about only when close to the kept ones' scores (0.71 down to 0.57).
         assert!(t.below.contains(&31) && t.below.contains(&42) && !t.below.contains(&46));
-        let mut likes: Vec<Option<f32>> = vec![None; 60];
+        let mut likes: Vec<Option<bool>> = vec![None; 60];
         for &i in &t.kept {
-            likes[i] = Some(1.0);
+            likes[i] = Some(true);
         }
-        likes[10] = Some(-1.0);
-        likes[11] = Some(0.0);
-        likes[5] = Some(-2.0);
-        likes[40] = Some(-3.0);
-        likes[31] = Some(5.0);
-        likes[32] = Some(0.5);
-        likes[33] = Some(9.0);
+        likes[10] = Some(false);
+        likes[11] = Some(false);
+        likes[5] = Some(false);
+        likes[40] = Some(false);
+        likes[31] = Some(true);
+        likes[32] = Some(false);
+        likes[33] = Some(true);
         s.toggle(33).unwrap(); // the user added it by hand: not judged
         s.toggle(5).unwrap();
         s.toggle(5).unwrap();
@@ -1783,9 +1779,9 @@ mod tests {
         s.toggle(3).unwrap();
         s.judge(&{
             let mut v = vec![None; 60];
-            v[7] = Some(-1.0);
-            v[8] = Some(1.0);
-            v[31] = Some(2.0);
+            v[7] = Some(false);
+            v[8] = Some(true);
+            v[31] = Some(true);
             v
         });
         save(&dir, &s).unwrap();
