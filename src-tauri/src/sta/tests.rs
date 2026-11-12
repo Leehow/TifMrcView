@@ -257,6 +257,50 @@ fn first_model_and_alignment_from_particles_alone() {
     assert!(out.shell > 5.0, "{}", out.shell);
 }
 
+/// Places whose orientations are only roughly right (what a search with one
+/// example's picture gives): the local rounds alone cannot mend them, the
+/// search over all orientations against their own average first does.
+/// Heavy: `… sta::tests::rough_orientations -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn rough_orientations_are_settled_before_the_local_rounds() {
+    use super::refine::{align, settled_on, Set};
+    let truth = phantom();
+    let wedges = vec![wedge(N, -60.0, 60.0), wedge(N, -54.0, 57.0)];
+    let mut rng = Rng(23);
+    let sd = (truth.iter().map(|v| (v * v) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    let count = 64;
+    let wedge_of: Vec<usize> = (0..count).map(|i| i % 2).collect();
+    let mut rough: Vec<Pose> = vec![];
+    let parts: Vec<Vec<f32>> = (0..count)
+        .map(|i| {
+            let r = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit());
+            let t = [3.0 * rng.unit() - 1.5, 3.0 * rng.unit() - 1.5, 3.0 * rng.unit() - 1.5];
+            // Known to 20–50 degrees, the place to a voxel or two.
+            let off = axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 20.0 + 30.0 * rng.unit());
+            rough.push(Pose { r: mul(&off, &r), t: [0.0; 3], score: 0.0 });
+            particle(&truth, &r, t, &wedges[wedge_of[i]], 1.5 * sd, &mut rng)
+        })
+        .collect();
+    let set = Set { n: N, particles: &parts, wedges: &wedges, wedge_of: &wedge_of, radius: 12.0 };
+    let own = set.average(&rough, |_| true).finish();
+    let direct = align(&set, &own, &rough, &|_, _, _| {}, &|_| {}).unwrap();
+    let (model, poses) = settled_on(None, &set, &own, 1, &|_, _, _| {}, &|_| {}).unwrap();
+    let out = align(&set, &model, &poses, &|_, _, _| {}, &|_| {}).unwrap();
+    let onto = |map: &[f32]| {
+        let e = Engine::new(N, 8.0, 1.0, 14.0);
+        let all = vec![1f32; N * N * N];
+        let x = e.prepare(map, &all);
+        let g = e.global(&[x], &truth, &grid(20.0), 5, &|_, _| {}).unwrap()[0];
+        let x = e.prepare(map, &all);
+        e.local(&x, &e.reference(&truth), &g, &local(8.0, 2), 5).score
+    };
+    let (start, plain, settled) = (onto(&own), onto(&direct.map), onto(&out.map));
+    eprintln!("own average {start:.3}, local rounds alone {plain:.3} (shell {:.1}), settled first {settled:.3} (shell {:.1})", direct.shell, out.shell);
+    assert!(settled > 0.75 && settled >= plain, "settled {settled}, local rounds alone {plain}");
+    assert!(out.shell >= direct.shell, "{} {}", out.shell, direct.shell);
+}
+
 /// A made-up tomogram with `per_side`² × 2 dark copies of the phantom (each
 /// with a soft body) in noise of `noise` times the phantom's spread, written
 /// to a new temporary directory: the directory and the sources.
