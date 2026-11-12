@@ -69,9 +69,11 @@ USAGE
   then rerun with --pick N (average the card they chose) or --points marks.json
   (average what they marked: the point marks of the workspace's marks file), or
   --marks marks.json (every kind of mark: points, lines, surfaces, spheres given
-  as centre + a point on the surface, painted membranes; shapes are averaged on
+  as centre + a point on the surface, painted membranes, things that stand on
+  something larger, kind "stand" given as where it stands + the thing, each one
+  a particle with that axis, four or more and only those; shapes are averaged on
   seeds along them with their directions, into <out>/drawn/; --size small|medium|
-  large is the particle size of lines, surfaces and membranes; a sphere takes it
+  large is the particle size of lines, surfaces, membranes and standing things; a sphere takes it
   from its radius; circles around two or three examples of whatever is to be
   found, kind "example" given as centre + a point on the circle, are taken as
   they look: everything like them in all the inputs is found, at each of the

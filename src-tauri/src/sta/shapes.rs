@@ -844,7 +844,7 @@ pub fn average_shapes(out: &str, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sy
         let note = |n: auto::Note| emit("sta-note", note_json(&n));
         let sources: Vec<Source> = s.inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
         let out = dir.to_string_lossy();
-        let report = sp::run_drawn(&sources, &drawn, both, size_a, &out, progress, live)?;
+        let report = sp::run_drawn(&sources, &drawn, both, false, size_a, &out, progress, live)?;
         write_used(&dir, &used_of(&s));
         Ok(json!({
             "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,

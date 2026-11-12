@@ -142,7 +142,8 @@ one stack's results do not overwrite each other; `tmv sta` saves
   `"cardsDir"`) and **stopped on purpose**: what to average is the user's
   choice, never yours, and nothing has been averaged. Copy the cards here,
   **show them to the user** (in TifMrcView Pro, best on the clear `look`
-  tomogram, where they can also mark particles, lines, surfaces or spheres and
+  tomogram, where they can also mark particles, lines, surfaces, spheres or
+  things standing on something (a crown on a small ball: two clicks each) and
   save `marks.json`) and **ask which one**; do not guess, and do not pick the
   card that "looks best" for them. `likely` and `compact` and the hints on
   stderr (likely a particle, line-like or layer-like) only describe the card's

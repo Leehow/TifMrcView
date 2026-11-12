@@ -7,7 +7,10 @@
 // segmentation, see src-tauri/src/sta/paint.rs), 面 (a membrane drawn by
 // hand: points on it, the fallback), 球 (a vesicle: the centre, then a point
 // on its surface), 圈例子 (anything at all: drag a circle round a thing to find; 2–3
-// circles are the examples and everything alike is found in all ticked tomograms; sta::circled).
+// circles are the examples and everything alike is found in all ticked tomograms; sta::circled),
+// 立着的 (a thing standing on something larger, a crown on a small ball, a spike on a virus:
+// two clicks each, first where it stands, then the thing; every one is marked, the clicks give
+// its place and axis and only those are averaged: marks::Kind::Stand, at least 4).
 // The software completes the shape and the size (see
 // src-tauri/src/sta/marks.rs); nothing is typed.
 // 点 alone: click 2–3 particles (one is allowed, more is fine) and the program
@@ -18,7 +21,7 @@
 // one mark {kind: "example", points: [centre, a point on the circle at the same z]} per circle. Examples
 // are examples like clicked points: 找出全部同类 runs the circled search (found.js, which = "circled")
 // and, when there are examples, the other marks wait.
-// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"example", tomogram,
+// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"example"|"stand", tomogram,
 // points: [[x, y, z]…], flip, strokes: [{points, cut}…]} (strokes: membranes
 // only, each on one section; a cut stroke ends a sheet where two membranes
 // are joined: Alt-drag on a selected membrane) in voxels of the file that was open when it was clicked (the tomogram or
@@ -53,6 +56,7 @@
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
+    stand: { name: "立着的", color: "#0a7ea4", title: "立着的：长在小球或膜上、有朝向的东西（冠、刺突、膜蛋白），每个点两下给出朝向", hint: "每个东西点两下：先点它脚下（所在小球的中心，或膜的里侧），再点它本身（可以在另一层）。把要平均的都点上，至少 4 个，10 个以上更好" },
     example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。东西不多时也可以把它们全圈出来（至少 4 个），直接只平均圈的这些。程序会在所有勾选的断层图里找出长得像的。" },
   };
   const ICONS = {
@@ -61,11 +65,13 @@
     membrane: '<path d="M3 13c3-5 6-5 9-1s6 3 9-3"/><path d="M5 19c4-2 9-2 14 0" stroke-dasharray="2 3"/>',
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
+    stand: '<path d="M4 21a8 8 0 0 1 16 0"/><path d="M12 17V5"/><path d="M8.5 8.5 12 5l3.5 3.5"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/>',
     example: '<circle cx="12" cy="12" r="8.5" stroke-dasharray="3.2 3"/><circle cx="12" cy="12" r="2" fill="currentColor"/>',
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
-  // Fewest circles that can be averaged by themselves (project::FEWEST_CIRCLED).
+  // Fewest circles that can be averaged by themselves (project::FEWEST_CIRCLED);
+  // the same for things that stand.
   const ONLY_FEWEST = 4;
   const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
 
@@ -129,6 +135,8 @@
     return `直径约 ${Math.round(d)} 像素`;
   }
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
+  // A thing that stands: where it stands, then the thing.
+  const isStand = (m) => m.kind === "stand" && count(m) >= 2;
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
     if (m.kind === "example") return count(m) >= 2 ? `例子 · ${diameter(m)}` : "例子 · 还差圈上的一点";
@@ -138,6 +146,7 @@
       return `${name} · ${taking(m)} 笔${cuts ? `，切 ${cuts} 处` : ""}`;
     }
     if (m.kind === "sphere") return `${name} · ${count(m) >= 2 ? "已画好" : "还差球面上的一点"}`;
+    if (m.kind === "stand") return `${name} · ${count(m) >= 2 ? "已点好" : "还差点它本身"}`;
     if (m.kind !== "point" && count(m) < 2) return `${name} · ${count(m)} 个点（至少 2 个）`;
     return `${name} · ${count(m)} 个点`;
   };
@@ -287,11 +296,15 @@
     const examples = D.marks.filter(isExample).length;
     const fewShapes = circN === 0 && examples === 1;
     const fewCircles = circN === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
+    // Things that stand are averaged by themselves: just the ones marked, at least ONLY_FEWEST.
+    const standN = circN === 0 ? D.marks.filter(isStand).length : 0;
+    const standOthers = standN > 0 && D.marks.some((m) => m.kind !== "stand" && m.kind !== "point");
+    const fewStands = standN > 0 && standN < ONLY_FEWEST;
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : "", fewStands ? `立着的东西至少要点 ${ONLY_FEWEST} 个，现在 ${standN} 个` : "", standOthers ? "立着的东西单独平均：这次只平均立着的，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;
-    const needSize = circN === 0 && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
+    const needSize = circN === 0 && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane" || m.kind === "stand");
     $("sta-draw-sizes").hidden = !needSize;
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
     const open = D.open != null ? D.marks[D.open] : null;
@@ -324,9 +337,9 @@
     const last = D.marks[D.open != null ? D.open : D.marks.length - 1];
     $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : last?.kind === "example" ? "去掉最后圈的一个例子" : "去掉最后点的一个点";
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
-    const ok = shapes || pointsOnly || circN > 0;
+    const ok = (standN > 0 ? standN >= ONLY_FEWEST : shapes || pointsOnly) || circN > 0;
     // Points alone find everything like them first; shapes are averaged directly.
-    const finds = (pointsOnly && !shapes) || examples > 0 || circN > 0;
+    const finds = standN === 0 && ((pointsOnly && !shapes) || examples > 0 || circN > 0);
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
     // Every one circled already (a few dozen things seen by eye): just these are averaged, nothing is searched for.
@@ -335,7 +348,7 @@
     $("sta-draw-only").textContent = `只平均圈的这 ${circN} 个`;
     $("sta-draw-only").title = "不再去找别的：只把你圈的这些对齐、平均。适合数量不多、你已经全部圈出来的东西";
     $("sta-draw-only").disabled = W.busy || !!M.seg || W.pixelNeed.length > 0;
-    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
+    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : fewStands ? `立着的东西至少要点 ${ONLY_FEWEST} 个` : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
     draw();
     W.wall?.render();
   }
@@ -356,7 +369,7 @@
     // The point on a circle is on the centre's section.
     if (m.kind === "example" && m.points.length) v[2] = m.points[0][2];
     m.points.push(v);
-    if ((m.kind === "sphere" || m.kind === "example") && m.points.length >= 2) D.open = null;
+    if ((m.kind === "sphere" || m.kind === "example" || m.kind === "stand") && m.points.length >= 2) D.open = null;
     D.sel = null;
     save();
     render();
@@ -410,6 +423,9 @@
     setKind(null);
     // Circled examples: everything that looks like them, in all ticked tomograms.
     if (circles.length && W.found) return W.found.findCircled(circles);
+    // Things that stand: just the ones marked, each with the axis its two clicks give.
+    const stands = marks.filter((m) => m.kind === "stand" && m.points.length >= 2);
+    if (stands.length) return W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks: stands, out, size: D.size }), false);
     if (onlyPoints && W.found) return W.found.findPoints(marks);
     // Membranes and vesicles: find all of that kind, show them, average after the user confirms.
     if (W.shapes && marks.some(isExample)) return W.shapes.find(marks, D.size);
@@ -643,6 +659,24 @@
           ctx.arc(x, y, Math.sqrt(r * r - dz * dz) * sc, 0, 2 * Math.PI);
           ctx.stroke();
         }
+        return;
+      }
+      if (m.kind === "stand") {
+        const [b, t] = m.points;
+        dot(b, alpha(Math.abs(b[2] - S.z)) * 0.6);
+        if (!t) return;
+        const a = alpha(Math.min(Math.abs(b[2] - S.z), Math.abs(t[2] - S.z)));
+        if (a) {
+          const [x0, y0] = at(b), [x1, y1] = at(t);
+          ctx.globalAlpha = a;
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        dot(t, alpha(Math.abs(t[2] - S.z)));
         return;
       }
       if (m.kind !== "point") {

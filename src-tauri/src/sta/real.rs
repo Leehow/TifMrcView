@@ -79,7 +79,7 @@ fn v17_spheres_coarse() {
         .collect();
     let sources = vec![Source { path: file, tilts: [-60.0, 60.0], look: None, series: None }];
     let started = std::time::Instant::now();
-    let r = run_drawn(&sources, &drawn, false, size_a, &out, &|label, done, total| {
+    let r = run_drawn(&sources, &drawn, false, false, size_a, &out, &|label, done, total| {
         if done == total {
             eprintln!("{:6.1} s  {label}", started.elapsed().as_secs_f64());
         }

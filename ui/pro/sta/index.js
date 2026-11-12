@@ -148,7 +148,7 @@
     return `用你点的 ${clicked} 个颗粒做了模板${size}`;
   }
   // Shapes: what the user drew and what the program found, kind by kind.
-  const SHAPES = [["lines", "linesDrawn", "条纤维"], ["surfaces", null, "片面"], ["spheres", "spheresDrawn", "个球"], ["membranes", "membranesDrawn", "片膜"]];
+  const SHAPES = [["lines", "linesDrawn", "条纤维"], ["surfaces", null, "片面"], ["spheres", "spheresDrawn", "个球"], ["stands", null, "个立着的东西"], ["membranes", "membranesDrawn", "片膜"]];
   function shapesText(u) {
     const parts = [];
     for (const [k, dk, word] of SHAPES) {

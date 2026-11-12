@@ -304,6 +304,17 @@ fn known_step(radius: f64) -> f64 {
 /// particle with its axis upright and a random turn about it; each round
 /// then searches the turn about the axis and the shift only.
 pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    known_axes(set, axes, both, true, seed, progress, live)
+}
+
+/// `first_model_known` for things the user marked one by one, each with its
+/// place and the sense of its axis (`marks::Kind::Stand`): the places are
+/// not moved onto the model's centre of mass.
+pub fn first_model_given(set: &Set, axes: &[[f64; 3]], seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    known_axes(set, axes, false, false, seed, progress, live)
+}
+
+fn known_axes(set: &Set, axes: &[[f64; 3]], both: bool, recentre: bool, seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
     set.check()?;
     let m = set.particles.len();
     assert_eq!(axes.len(), m);
@@ -345,7 +356,10 @@ pub fn first_model_known(set: &Set, axes: &[[f64; 3]], both: bool, seed: u64, pr
             .collect();
         check_cancel()?;
         let average = set.average(&poses, |_| true).finish();
-        model = centre(set, &mut poses, average);
+        // A place the user clicked is the thing's: it stays where it is (what
+        // it stands on is often denser, and centring on the mass would carry
+        // the thing off to the edge of the mask).
+        model = if recentre { centre(set, &mut poses, average) } else { average };
         live(&model);
     }
     Ok((model, poses))

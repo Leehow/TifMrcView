@@ -431,7 +431,7 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     let drawn: Vec<Drawn> =
         ellipsoid([73.0, 71.0, 72.5], [45.0; 3], 0.5 * size_a / 17.5).into_iter().map(|s| Drawn { source: 0, pos: s.pos, axis: s.axis }).collect();
     let out = dir.join("out").to_string_lossy().into_owned();
-    let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    let done = run_drawn(&sources, &drawn, false, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
     eprintln!("{} copies, {} seeds, {} particles (distinct {:.2}), {:?} Å, fsc {:?}", copies.len(), done.candidates, done.particles, done.distinct.unwrap_or(0.0), done.resolution_a, done.fsc);
     let table = std::fs::read_to_string(done.table.unwrap()).unwrap();
     let at: Vec<[f64; 3]> = table
@@ -454,6 +454,101 @@ fn drawn_sphere_gives_one_particle_per_copy() {
     assert!(done.particles as f64 <= 1.5 * copies.len() as f64, "{}", done.particles);
     // Few particles: the resolution only has to be a sensible one.
     assert!(done.resolution_a.unwrap() < 6.0 * done.voxel_a, "{:?}", done.resolution_a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Heavy: copies of the phantom standing on a ball (their Z axes along its
+/// radius, each turned at random about it), too few to align every way; the
+/// user clicks the ball's centre and then each copy, a voxel or two off.
+/// `run_drawn` with `given` keeps every one, finds the turns about the
+/// clicked axes and its average matches the phantom (same command as above
+/// with `sta::tests::standing`). The ball's shell is as dense as the
+/// phantom: centring the model on its mass carried the phantom off to the
+/// mask's edge (best 0.33 against 0.28 the wrong way round), hence
+/// `refine::first_model_given`.
+#[test]
+#[ignore]
+fn standing_things_clicked_with_their_ball_are_averaged() {
+    use super::project::{run_drawn, Drawn, Source};
+    use super::shape::{ellipsoid, frame};
+    let truth = phantom();
+    let dims = [144usize, 144, 144];
+    let centre = [72.0, 72.0, 72.0];
+    let mut rng = Rng(9);
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    // A thin shell for the ball: what the things stand on.
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let r = ((x as f64 - 72.0).powi(2) + (y as f64 - 72.0).powi(2) + (z as f64 - 72.0).powi(2)).sqrt();
+                if (r - 34.0).abs() < 1.5 {
+                    v[(z * dims[1] + y) * dims[0] + x] -= 0.6;
+                }
+            }
+        }
+    }
+    let copies: Vec<_> = ellipsoid(centre, [44.0; 3], 34.0).into_iter().take(14).collect();
+    let mut places = vec![];
+    for s in &copies {
+        let r = mul(&frame(s.axis), &axis_angle([0.0, 0.0, 1.0], 360.0 * rng.unit()));
+        let p = rotate(&truth, N, &r);
+        let o = s.pos.map(|x| x.round() as usize);
+        places.push(o);
+        for z in 0..N {
+            for y in 0..N {
+                for x in 0..N {
+                    v[((o[2] + z - N / 2) * dims[1] + o[1] + y - N / 2) * dims[0] + o[0] + x - N / 2] -= p[(z * N + y) * N + x];
+                }
+            }
+        }
+    }
+    let sd = (truth.iter().map(|x| (x * x) as f64).sum::<f64>() / truth.len() as f64).sqrt();
+    v.iter_mut().for_each(|x| *x += (0.7 * sd * rng.gauss()) as f32);
+    let dir = std::env::temp_dir().join(format!("tmv-sta-standing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tomo = dir.join("tomo.mrc").to_string_lossy().into_owned();
+    crate::tomo::output::write_mrc(&tomo, &v, dims, 17.5, false).unwrap();
+    let sources = vec![Source { path: tomo, tilts: [-60.0, 60.0], look: None, series: None }];
+    // Two clicks each, a little off: the ball's centre, then the thing.
+    let mut off = || [rng.gauss(), rng.gauss(), rng.gauss()];
+    let drawn: Vec<Drawn> = copies
+        .iter()
+        .map(|s| {
+            let (c, t) = (off(), off());
+            let base: [f64; 3] = std::array::from_fn(|k| centre[k] + 1.5 * c[k]);
+            let pos: [f64; 3] = std::array::from_fn(|k| s.pos[k] + t[k]);
+            let d: [f64; 3] = std::array::from_fn(|k| pos[k] - base[k]);
+            let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            Drawn { source: 0, pos, axis: d.map(|x| x / n) }
+        })
+        .collect();
+    let size_a = 227.5;
+    let out = dir.join("out").to_string_lossy().into_owned();
+    let done = run_drawn(&sources, &drawn, false, true, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    eprintln!("{} copies, {} particles, {:?} Å at {:.1} Å voxels", copies.len(), done.particles, done.resolution_a, done.voxel_a);
+    assert_eq!(done.particles, copies.len());
+    assert!(done.resolution_a.unwrap() < 6.0 * done.voxel_a, "{:?}", done.resolution_a);
+    // The average is the phantom (standing along Z): the best turn of it
+    // about Z matches the phantom closely.
+    let (map, n, _) = crate::spa::data::read_volume(done.map.as_deref().unwrap()).unwrap();
+    assert_eq!(n, [N; 3]);
+    // Within the phantom's reach only: the ball's shell lies 10 voxels under it.
+    let c = (N / 2) as f64;
+    let near = |v: Vec<f32>| -> Vec<f32> {
+        v.iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let (a, b, z) = ((i % N) as f64 - c, (i / N % N) as f64 - c, (i / N / N) as f64 - c);
+                if a * a + b * b + z * z <= 81.0 { *x } else { 0.0 }
+            })
+            .collect()
+    };
+    let truth_near = near(truth.clone());
+    let turns: Vec<f64> = (0..72).map(|k| corr(&near(rotate(&map, N, &axis_angle([0.0, 0.0, 1.0], 5.0 * k as f64))), &truth_near).abs()).collect();
+    let best = turns.iter().cloned().fold(0.0, f64::max);
+    let worst = turns.iter().cloned().fold(1.0, f64::min);
+    eprintln!("match with the phantom turned about the axis: best {best:.2}, worst {worst:.2}");
+    assert!(best > 0.6 && best > worst + 0.2, "{best:.2} / {worst:.2}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -524,7 +619,7 @@ fn pattern_on_a_membrane(size_a: f64, from: usize, step: usize, fine: usize, nam
         }
     }
     let out = dir.join("out").to_string_lossy().into_owned();
-    let done = run_drawn(&sources, &drawn, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
+    let done = run_drawn(&sources, &drawn, false, false, size_a, &out, &|_, _, _| {}, &|_| {}).unwrap();
     assert!((done.voxel_a - 16.0 / f).abs() < 1e-6, "voxel {}", done.voxel_a);
     let pattern = done.pattern.expect("a pattern");
     assert!((pattern.rows_a - 64.0).abs() < 6.0, "{pattern:?}");
@@ -1503,3 +1598,4 @@ fn find_again_cuts_the_places_cubes_and_turns_them_back() {
     assert!(super::review::cubes_of(&sources, &found, 1, &[1]).unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+

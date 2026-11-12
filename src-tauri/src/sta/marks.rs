@@ -16,6 +16,9 @@
 //! instead (`project::card_from_points`) and the ordinary template run
 //! follows (`auto::auto_points`). Points beside shapes are left out of the
 //! run of the shapes (`route`): the two are averaged separately.
+//! A thing standing on something larger (`Kind::Stand`) is marked with two
+//! clicks that give its place and axis; when every mark is one, just those
+//! are averaged (`project::run_drawn` with `given`).
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +45,13 @@ pub enum Kind {
     /// centre and a point of the circle; see `circled`. Examples are only
     /// searched from (`review::find_circled`).
     Example,
+    /// One thing that stands on something (a crown on a small ball, a spike
+    /// on a virus, a protein in a membrane): two clicks, first where it
+    /// stands (the ball's centre, the inner side of the membrane), then the
+    /// thing itself. The thing is the particle, the way from the first click
+    /// to it its axis (Dynamo's dipole). Every one is marked; nothing is
+    /// searched for, and only the turn about the axis is left to align.
+    Stand,
 }
 
 /// One thing marked: the clicks, in voxels of the file `tomogram`.
@@ -177,7 +187,14 @@ pub fn without_looks(inputs: &[String], sources: Vec<Source>) -> (Vec<String>, V
 pub fn shapes_used(marks: &[Mark], size_a: f64) -> Value {
     let n = |k: Kind| marks.iter().filter(|m| m.kind == k && m.points.len() >= 2).count();
     let membranes = marks.iter().filter(|m| m.kind == Kind::Membrane && paint::has_stroke(m)).count();
-    json!({ "kind": "shapes", "lines": n(Kind::Line), "surfaces": n(Kind::Surface), "spheres": n(Kind::Sphere), "membranes": membranes, "sizeA": size_a.round() })
+    json!({ "kind": "shapes", "lines": n(Kind::Line), "surfaces": n(Kind::Surface), "spheres": n(Kind::Sphere), "stands": n(Kind::Stand), "membranes": membranes, "sizeA": size_a.round() })
+}
+
+/// Whether the shapes are all things that stand (`Kind::Stand`): each mark
+/// is then one particle with its axis, and just those are averaged.
+pub fn given(marks: &[Mark]) -> bool {
+    let mut shapes = marks.iter().filter(|m| m.kind != Kind::Point).peekable();
+    shapes.peek().is_some() && shapes.all(|m| m.kind == Kind::Stand)
 }
 
 /// What a set of marks is averaged by.
@@ -240,6 +257,14 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
+        Kind::Stand => {
+            let d = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+            let r = dist(p[0], p[1]);
+            if r < 1.0 {
+                bail!("立着的东西：两下点得太近了，先点它脚下（如小球的中心），再点它本身");
+            }
+            vec![shape::Seed { pos: p[1], axis: d.map(|x| x / r) }]
+        }
         Kind::Point | Kind::Membrane | Kind::Example => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
@@ -281,7 +306,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
     for (m, i, p) in &placed {
         match m.kind {
             Kind::Sphere if p.len() >= 2 => radii.push(dist(p[0], p[1]) * pixels[*i]),
-            Kind::Line | Kind::Surface | Kind::Membrane => with_size = true,
+            Kind::Line | Kind::Surface | Kind::Membrane | Kind::Stand => with_size = true,
             Kind::Point => points_only += 1,
             _ => {}
         }
@@ -290,7 +315,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Point => false,
         Kind::Line => p.len() >= 2,
         Kind::Surface => p.len() >= 2,
-        Kind::Sphere => p.len() >= 2,
+        Kind::Sphere | Kind::Stand => p.len() >= 2,
         Kind::Membrane => paint::has_stroke(m),
         Kind::Example => false,
     });
@@ -298,7 +323,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         if points_only > 0 {
             bail!("只标了“点”还不能平均，请再标一条线、一片面或一个球");
         }
-        bail!("还没有标够：线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔");
+        bail!("还没有标够：线和面至少要点 2 个点，球要点中心和球面上的一点，立着的东西要点两下，膜要在膜上涂一笔");
     }
     let size_a = if with_size || radii.is_empty() {
         size.angstrom()
@@ -476,7 +501,7 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, only: bo
     let pixels: Vec<f64> = sources.iter().map(|s| sp::pixel_of(&s.path)).collect::<Result<_>>()?;
     let (drawn, both, size_a) = drawn_of(marks, &inputs, &sources, &pixels, Size::parse(size))?;
     let dir = out.join(DRAWN);
-    let report = sp::run_drawn(&sources, &drawn, both, size_a, &dir.to_string_lossy(), &progress, &live)?;
+    let report = sp::run_drawn(&sources, &drawn, both, given(marks), size_a, &dir.to_string_lossy(), &progress, &live)?;
     write_used(&dir, &super::auto::with_tilt(shapes_used(marks, size_a), sources.iter().map(|s| s.path.as_str())));
     Ok(json!({
         "needsChoice": false, "report": serde_json::to_value(&report)?, "result": result_value(&dir, b64)?,
@@ -622,6 +647,37 @@ mod tests {
         let (i, pts) = to_source(&mark(Kind::Line, &p("a_look.mrc"), &[[3.0; 3]]), &[p("a_raw.mrc")], &sources).unwrap();
         assert!(i == 0 && close(pts[0], [6.0; 3]));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_standing_thing_is_one_seed_at_the_second_click_facing_away_from_the_first() {
+        let sources = vec![source("/t/a.mrc", Some(Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [1.0, 0.0, 0.0] }))];
+        let inputs = vec!["/t/a.mrc".to_string()];
+        // Made on the look file: carried to the tomogram, the axis keeps its way.
+        let stands = [mark(Kind::Stand, "/t/a_look.mrc", &[[10.0, 10.0, 10.0], [10.0, 10.0, 30.0]]), mark(Kind::Stand, "/t/a.mrc", &[[50.0, 50.0, 50.0], [50.0, 20.0, 50.0]])];
+        let (d, both, size_a) = drawn_of(&stands, &inputs, &sources, &[10.0], Size::Large).unwrap();
+        assert!(!both && size_a == Size::Large.angstrom());
+        assert_eq!(d.len(), 2);
+        assert!(close(d[0].pos, [21.0, 20.0, 60.0]) && close(d[0].axis, [0.0, 0.0, 1.0]), "{:?}", d[0]);
+        assert!(close(d[1].pos, [50.0, 20.0, 50.0]) && close(d[1].axis, [0.0, -1.0, 0.0]), "{:?}", d[1]);
+        // Flip has nothing to turn: the clicks give the way.
+        let mut flipped = stands[1].clone();
+        flipped.flip = true;
+        let (f, _, _) = drawn_of(&[flipped], &inputs, &sources, &[10.0], Size::Large).unwrap();
+        assert!(close(f[0].axis, [0.0, -1.0, 0.0]));
+        // One click is not a mark yet; two on one place say why.
+        assert!(drawn_of(&[mark(Kind::Stand, "/t/a.mrc", &[[1.0; 3]])], &inputs, &sources, &[10.0], Size::Large).is_err());
+        assert!(drawn_of(&[mark(Kind::Stand, "/t/a.mrc", &[[1.0; 3], [1.2; 3]])], &inputs, &sources, &[10.0], Size::Large).is_err());
+        // Only things that stand (points beside them are averaged apart) are given one by one.
+        let point = mark(Kind::Point, "/t/a.mrc", &[[0.0; 3]]);
+        let ball = mark(Kind::Sphere, "/t/a.mrc", &[[0.0; 3], [9.0; 3]]);
+        assert!(given(&stands) && given(&[stands[0].clone(), point.clone()]));
+        assert!(!given(&[stands[0].clone(), ball]) && !given(&[point]) && !given(&[]));
+        assert_eq!(shapes_used(&stands, 360.0)["stands"].as_u64(), Some(2));
+        // The overlay shows the one seed of each.
+        let px = |_: &str| Some(10.0);
+        let pv = preview_of(&stands, "/t/a.mrc", Size::Large, &inputs, &sources, &px);
+        assert_eq!(pv.iter().map(|p| p.seeds.len()).collect::<Vec<_>>(), [1, 1]);
     }
 
     #[test]

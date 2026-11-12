@@ -1835,7 +1835,10 @@ pub struct Drawn {
 /// more densely than the particles sit (about `size_a` / 2 apart; `size_a`
 /// is the size of one particle, Å); `both` when the sense of the axes is
 /// not known. Seeds that end on the same particle are merged.
-pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
+/// `given`: each of `drawn` is one particle the user marked with its axis
+/// (`marks::Kind::Stand`): there is no layer to find and none is left out
+/// for matching worse than the rest, and a few are enough.
+pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, given: bool, size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
     let started = Instant::now();
     let mut size_a = size_a;
     let mut cuts: Vec<Cut> = vec![];
@@ -1845,7 +1848,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     // there, and a pattern that repeats in it is aligned for itself.
     let mut on_layer: Vec<Drawn> = vec![];
     let mut lattice = None;
-    if !both {
+    if !both && !given {
         match on_surfaces(sources, drawn, size_a, true, progress, live)? {
             Surfaces::Lattice(l) => lattice = Some(l),
             Surfaces::Plain(d) => on_layer = d,
@@ -1855,7 +1858,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let mut apart = None;
     let mut detail = None;
     let mut pattern: Option<Pattern> = None;
-    let drawn: &[Drawn] = if both || lattice.is_some() { drawn } else { &on_layer };
+    let drawn: &[Drawn] = if both || given || lattice.is_some() { drawn } else { &on_layer };
     if let Some(l) = lattice {
         cuts = l.cuts;
         size_a = l.size_a;
@@ -1886,7 +1889,10 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         }
     }
     progress("裁出颗粒", sources.len(), sources.len());
-    if cuts.len() < 20 {
+    if given && cuts.len() < FEWEST_CIRCLED {
+        bail!("只取到 {} 个立着的东西（太靠近图边缘的切不出完整的方块），至少要 {FEWEST_CIRCLED} 个", cuts.len());
+    }
+    if !given && cuts.len() < 20 {
         bail!("画出的范围里只取到 {} 个位置，太少了", cuts.len());
     }
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
@@ -1896,6 +1902,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let (model, poses) = match start {
         Some(start) => start,
+        None if given => super::refine::first_model_given(&set, &axes, 1, progress, live)?,
         None => super::refine::first_model_known(&set, &axes, both, 1, progress, live)?,
     };
     // Places closer than this are one particle.
@@ -1912,7 +1919,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     // Stretches of the shape that carry no particle match clearly worse.
     let scores: Vec<f32> = keep.iter().map(|i| poses[*i].score).collect();
     let (threshold, distinct) = split(&scores);
-    if distinct >= DISTINCT && scores.iter().filter(|s| **s >= threshold).count() >= 4 {
+    if !given && distinct >= DISTINCT && scores.iter().filter(|s| **s >= threshold).count() >= 4 {
         keep.retain(|i| poses[*i].score >= threshold);
     }
     keep.sort_unstable();
