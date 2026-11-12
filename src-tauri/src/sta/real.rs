@@ -275,3 +275,50 @@ fn ticks_put_the_rest_in_order() {
         }
     }
 }
+
+/// Whether an average has an axis it can be turned about and stay the same
+/// (a thing on a membrane often has: the membrane's normal), and what it
+/// looks like averaged about it. `TMV_MAP` = a cubic map (an average of
+/// `tmv sta`); `TMV_FOLD` = the turn tried is 360°/fold (12 when not given).
+/// Writes `<map>_axis.mrc` (the axis along z) and `<map>_turned.mrc` (that,
+/// averaged over the fold turns) beside the map.
+/// `TMV_MAP=/path/average_raw.mrc cargo test … sta::real::the_axis_of_an_average -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn the_axis_of_an_average() {
+    use crate::spa::discover::{align_axis, axis_corr, best_axis, centred3};
+    let path = std::env::var("TMV_MAP").expect("TMV_MAP = a cubic map");
+    let fold: usize = std::env::var("TMV_FOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let img = crate::tomo::pipeline::open(&path).unwrap();
+    let info = img.info();
+    let n = info.width;
+    assert!(info.height == n && info.size_z == n, "{}x{}x{}", info.width, info.height, info.size_z);
+    let voxel = crate::tomo::output::pixel_a(&img);
+    let mut v = vec![0f32; n * n * n];
+    for z in 0..n {
+        let (page, s) = info.locate(0, z, 0);
+        let p = img.page(page).unwrap();
+        let p = &p[s.min(p.len() - 1)];
+        for (i, o) in v[z * n * n..(z + 1) * n * n].iter_mut().enumerate() {
+            *o = p.data.get_f64(i) as f32;
+        }
+    }
+    // Dark on light, as tomograms are: the mass is what is below the mean.
+    let mean = v.iter().sum::<f32>() / v.len() as f32;
+    let dark: Vec<f32> = v.iter().map(|x| mean - x).collect();
+    let centred = centred3(&dark, n);
+    let (axis, at, half) = best_axis(&centred, n, fold);
+    let along = align_axis(&centred, n, axis);
+    let mut turned = vec![0f32; along.len()];
+    for k in 0..fold {
+        let r = crate::spa::geom::axis_angle([0.0, 0.0, 1.0], 360.0 * k as f64 / fold as f64);
+        for (o, x) in turned.iter_mut().zip(super::cc::rotate(&along, n, &r)) {
+            *o += x / fold as f32;
+        }
+    }
+    let same = super::tests::corr(&along, &turned);
+    eprintln!("{path}: {n}³ at {voxel:.2} Å; axis {axis:.2?}, the map turned by {:.0}° matches itself at {at:.3} (by half that {half:.3}); about z after aligning: 90° {:.3}, 180° {:.3}; with its average over the turns {same:.3}", 360.0 / fold as f64, axis_corr(&along, n, 2, 90.0), axis_corr(&along, n, 2, 180.0));
+    let stem = path.trim_end_matches(".mrc");
+    crate::tomo::output::write_mrc(&format!("{stem}_axis.mrc"), &along, [n, n, n], voxel, false).unwrap();
+    crate::tomo::output::write_mrc(&format!("{stem}_turned.mrc"), &turned, [n, n, n], voxel, false).unwrap();
+}
