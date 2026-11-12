@@ -646,7 +646,8 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         for by in WIDER {
             check_cancel()?;
             let wider: Vec<Example> = examples.iter().map(|e| Example { radius: e.radius * by, ..*e }).collect();
-            let label = |s: &str, a: usize, b: usize| progress(&format!("{s}（连周围一起，{by} 倍）"), a, b);
+            // Said first, so the count that follows reads as the count of this second search.
+            let label = |s: &str, a: usize, b: usize| progress(&format!("按圈认不出来，连周围 {by} 倍再找一遍：{s}"), a, b);
             match first_pass(dev, sources, &wider, &raw_px, turns, by, vec![], &label) {
                 Ok(p) => {
                     eprintln!("sta: left out, the worst example ranks {:.3} as circled and {:.3} with {by} times the circle", plain, p.worst());
