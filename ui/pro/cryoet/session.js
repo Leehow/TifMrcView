@@ -24,8 +24,7 @@
       <button class="primary cs-act cs-start" title="对文件夹里的每个序列：校正电影、自动判断每张倾转图、对齐、做一个快速断层图。某个序列出问题不会挡住其他序列">开始</button>
       <div class="cs-purpose-box" role="radiogroup" aria-label="重构用来做什么">
         <button class="cs-use" data-purpose="survey" role="radio"><b>先看看</b><span>最快，粗一点的断层图，看看样品什么样</span></button>
-        <button class="cs-use" data-purpose="display" role="radio"><b>展示、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢），之后可以标结构出三维图</span></button>
-        <button class="cs-use" data-purpose="sta" role="radio"><b>为子断层平均做准备</b><span>保留高频细节，不做去噪滤波（约 4.5 Å 体素），做完去「子断层平均」</span></button>
+        <button class="cs-use" data-purpose="display" role="radio"><b>看清楚、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢）。用来展示、标结构出三维图，也是子断层平均里挑颗粒时看的图</span></button>
       </div>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">开始重构</button>
     </div>
@@ -278,12 +277,13 @@
       render();
       syncReview();
       const attn = r.series.filter(R.needsAttention).length;
-      W.status(purpose === "sta" ? `${label}完成，下一步在上面点「子断层平均」` : purpose === "display" ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图` : purpose ? `${label}完成，断层图在右侧栏「③ 断层图」里` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
+      W.status(purpose === "display" ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图` : purpose ? `${label}完成，断层图在右侧栏「③ 断层图」里` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
     }
   }
-  // What the tomograms are for (kept): the three reasons people reconstruct.
+  // What the tomograms are for (kept). Subtomogram averaging is not asked here:
+  // its part of the panel makes what it needs itself.
   let usePurpose = pref.get("cryo-purpose", "display");
-  if (!["survey", "display", "sta"].includes(usePurpose)) usePurpose = "display";
+  if (!["survey", "display"].includes(usePurpose)) usePurpose = "display";
   const showPurpose = () => host.querySelectorAll(".cs-use").forEach((b) => {
     b.classList.toggle("on", b.dataset.purpose === usePurpose);
     b.setAttribute("aria-checked", b.dataset.purpose === usePurpose);
