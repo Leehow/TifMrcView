@@ -6,8 +6,8 @@
 // The first two are the folder flow (session.js) with what the other job
 // needs hidden (pro.css, by the panel's data-job); the third is the STA
 // workspace moved in here (sta.host). The job last used is kept.
-// The panel is resized by its left and bottom edges (kept too; a double
-// click gives the usual size back); the other workspace panels follow.
+// The panel floats over the stage: it is moved by its title and resized by
+// any of its four corners (both kept; a double click on the title puts it back).
 // Shares app.js globals: $, pref.
 (() => {
   const W = window.TifMrcViewPro.cryoet;
@@ -74,43 +74,89 @@
   document.addEventListener("cryoet-open", () => { if (job === "sta" && hosted) sta.show(); });
   document.addEventListener("cryoet-close", () => { if (job === "sta" && hosted) sta.hide(); });
 
-  // ---------- size ----------
+  // ---------- a floating panel: moved by its title, resized by its corners ----------
 
   const stage = $("stage");
-  const size = pref.get("ws-size", {});
-  const apply = () => {
-    if (size.w) stage.style.setProperty("--ws-w", `${size.w}px`);
-    else stage.style.removeProperty("--ws-w");
-    if (size.h) stage.style.setProperty("--ws-h", `${size.h}px`);
-    else stage.style.removeProperty("--ws-h");
+  const head = panel.querySelector(".al-head");
+  // Left, top, width, height inside the stage; none until the user moves or resizes it.
+  let box = pref.get("cryo-box", null);
+  const MIN_W = 340, MIN_H = 240;
+  const corners = ["nw", "ne", "sw", "se"].map((c) => {
+    const g = document.createElement("div");
+    g.className = `ws-corner ws-${c}`;
+    g.dataset.corner = c;
+    g.title = "拖动改变大小";
+    stage.append(g);
+    return g;
+  });
+
+  const rect = () => {
+    const s = stage.getBoundingClientRect(), r = panel.getBoundingClientRect();
+    return { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
   };
-  apply();
-  for (const side of ["w", "h"]) {
-    const grip = document.createElement("div");
-    grip.className = `ws-grip ws-grip-${side}`;
-    grip.title = side === "w" ? "拖动改变工作区宽度（双击恢复）" : "拖动改变工作区高度（双击恢复）";
-    stage.append(grip);
-    grip.onpointerdown = (e) => {
-      e.preventDefault();
-      grip.setPointerCapture(e.pointerId);
-      const box = stage.getBoundingClientRect();
-      grip.onpointermove = (m) => {
-        if (side === "w") size.w = Math.round(Math.min(box.width - 20, Math.max(320, box.right - 10 - m.clientX)));
-        else size.h = Math.round(Math.min(box.height - 20, Math.max(220, m.clientY - box.top - 10)));
-        apply();
-      };
-      grip.onpointerup = () => {
-        grip.onpointermove = grip.onpointerup = null;
-        // Pulled to the bottom again: as tall as the stage, whatever its size becomes.
-        if (side === "h" && size.h >= box.height - 24) delete size.h;
-        apply();
-        pref.set("ws-size", size);
-      };
+  // Keeps the panel inside the stage, whatever the window has become.
+  function fit(b) {
+    const s = stage.getBoundingClientRect();
+    b.w = Math.max(MIN_W, Math.min(b.w, s.width));
+    b.h = Math.max(MIN_H, Math.min(b.h, s.height));
+    b.x = Math.max(0, Math.min(b.x, s.width - b.w));
+    b.y = Math.max(0, Math.min(b.y, s.height - b.h));
+    return b;
+  }
+  function place() {
+    if (box && !panel.hidden) {
+      fit(box);
+      Object.assign(panel.style, { left: `${box.x}px`, top: `${box.y}px`, right: "auto", bottom: "auto", width: `${box.w}px`, height: `${box.h}px` });
+    } else if (!box) {
+      for (const k of ["left", "top", "right", "bottom", "width", "height"]) panel.style[k] = "";
+    }
+    const show = !panel.hidden && !panel.classList.contains("narrow");
+    const r = show ? rect() : null;
+    for (const g of corners) {
+      g.hidden = !show;
+      if (!show) continue;
+      const c = g.dataset.corner;
+      g.style.left = `${(c[1] === "w" ? r.x : r.x + r.w) - 8}px`;
+      g.style.top = `${(c[0] === "n" ? r.y : r.y + r.h) - 8}px`;
+    }
+  }
+
+  function drag(e, move) {
+    e.preventDefault();
+    const from = { ...(box = box || rect()) }, x0 = e.clientX, y0 = e.clientY;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    target.onpointermove = (m) => {
+      move(from, m.clientX - x0, m.clientY - y0);
+      place();
     };
-    grip.ondblclick = () => {
-      delete size[side];
-      apply();
-      pref.set("ws-size", size);
+    target.onpointerup = target.onpointercancel = () => {
+      target.onpointermove = target.onpointerup = target.onpointercancel = null;
+      pref.set("cryo-box", box);
     };
   }
+  head.addEventListener("pointerdown", (e) => {
+    if (e.button || e.target.closest("button")) return;
+    drag(e, (f, dx, dy) => { box.x = f.x + dx; box.y = f.y + dy; });
+  });
+  // A double click on the title: where and as large as it first was.
+  head.addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    box = null;
+    pref.set("cryo-box", null);
+    place();
+  });
+  for (const g of corners) {
+    g.onpointerdown = (e) => drag(e, (f, dx, dy) => {
+      const c = g.dataset.corner, s = stage.getBoundingClientRect();
+      // The opposite corner stays where it is.
+      if (c[1] === "w") { box.x = Math.max(0, Math.min(f.x + dx, f.x + f.w - MIN_W)); box.w = f.x + f.w - box.x; }
+      else box.w = Math.max(MIN_W, Math.min(f.w + dx, s.width - f.x));
+      if (c[0] === "n") { box.y = Math.max(0, Math.min(f.y + dy, f.y + f.h - MIN_H)); box.h = f.y + f.h - box.y; }
+      else box.h = Math.max(MIN_H, Math.min(f.h + dy, s.height - f.y));
+    });
+  }
+  new MutationObserver(place).observe(panel, { attributes: true, attributeFilter: ["hidden", "class"] });
+  new ResizeObserver(place).observe(stage);
+  place();
 })();
