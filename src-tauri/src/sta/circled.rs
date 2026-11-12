@@ -33,7 +33,7 @@
 use anyhow::{bail, Context, Result};
 
 use super::check_cancel;
-use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, Place, Source, BOX, MOST};
+use super::project::{binned, body, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, shape, Found, Place, Source, BOX, ELONGATION, MOST};
 use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
 use crate::spa::geom::{distance, grid, transpose, Mat};
@@ -379,6 +379,8 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     }
     let k = examples.len();
     let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
+    // A circle drawn wide around a compact thing is drawn in to the thing.
+    let examples = &tightened(dev, sources, examples, &raw_px, turns, progress)?[..];
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, size_of) = sizes(&diameters);
     let diameter_a = *sizes_a.last().unwrap();
@@ -578,6 +580,69 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         alike,
     };
     Ok(Circled { found, template, diameter_a, mine, first, by_others, told })
+}
+
+/// Places the probe of `tightened` averages.
+const PROBE: usize = 60;
+
+/// The examples with their circles drawn in to the thing itself, where the
+/// thing is a compact body smaller than its circle. A circle is as wide as
+/// the hand drew it, and everything follows from its size: the sampling of
+/// the search, how much of the surroundings the picture holds, the masks of
+/// the average (measured: three ribosomes circled at 347 Å give 372 places
+/// and 29.5 Å, at 260 Å 549 places and 26.8 Å). Per size circled, the first
+/// example's picture is searched for in its own tomogram, the best `PROBE`
+/// places are averaged as they lie, and the dark body in that average is
+/// measured (`project::body`). What is no single compact body (a layer, a
+/// line, several pieces) keeps its circle.
+fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], progress: Progress) -> Result<Vec<Example>> {
+    let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
+    let (sizes_a, size_of) = sizes(&diameters);
+    let mut out = examples.to_vec();
+    for (z, size) in sizes_a.iter().enumerate() {
+        check_cancel()?;
+        let Some(e) = size_of.iter().position(|x| *x == z) else { continue };
+        let x = examples[e];
+        let s = &sources[x.source];
+        let stage = format!("量大小 {}/{}", z + 1, sizes_a.len());
+        let best: Vec<[f64; 3]> = {
+            let g = Grid::of(s, *size)?;
+            let Some(picture) = sampled(&g.v, g.dims, g.from_raw(x.at), KEPT, diameters[e] / SPAN / g.voxel_a) else { continue };
+            let picture = rescale_cube(&picture, KEPT, diameters[e] / SPAN, N, g.voxel_a * diameters[e] / size);
+            let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
+            let found = super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+            peaks(&found, 1.8 * radius, PROBE).iter().map(|p| g.to_raw(p.pos.map(|x| x as f64))).collect()
+        };
+        // Averaged as they lie on the grid the cubes are cut on: turned
+        // every way, the average is as wide as the thing is at its widest.
+        let px = raw_px[x.source];
+        let (v, dims, voxel_a, bin) = binned(&s.path, px * (size / SPAN / px).round().max(1.0))?;
+        let mut sum = vec![0f64; BOX * BOX * BOX];
+        let mut count = 0;
+        for at in best {
+            let c = at.map(|x| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize);
+            if let Some(one) = cube(&v, dims, c) {
+                sum.iter_mut().zip(&one).for_each(|(a, b)| *a += *b as f64);
+                count += 1;
+            }
+        }
+        if count < PROBE / 4 {
+            continue;
+        }
+        let average: Vec<f32> = sum.iter().map(|x| (x / count as f64) as f32).collect();
+        let radius = (0.5 * size / voxel_a + 2.0).min(BOX as f64 / 2.0 - 3.0);
+        let (_, elongation, blobs, _) = shape(&average, BOX, radius);
+        let Some(across) = body(&average, BOX, radius) else { continue };
+        let measured = across * voxel_a;
+        eprintln!("sta: circled at {size:.0} Å; the body in the average of the best {count} is {measured:.0} Å across (pieces {blobs}, elongation {elongation:.2})");
+        if blobs == 1 && elongation < ELONGATION && measured * SAME_SIZE < *size {
+            let by = (measured / size).max(0.5);
+            for i in (0..examples.len()).filter(|i| size_of[*i] == z) {
+                out[i].radius = (examples[i].radius * by).max(SMALLEST / 2.0);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The most places of a first search taken as look-alikes.
