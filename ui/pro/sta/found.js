@@ -352,6 +352,8 @@
     info.textContent = c.examples < 2 ? "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。"
       : told ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
       : "找到的按相似程度排了队，在分数明显掉下去的地方截断。请扫一眼下面的小图：不对的点掉，可以再找一轮。";
+    // The search looked wider than the circles (circled::WIDER): said, since the pictures show it.
+    if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按圈的 ${c.wide} 倍范围去比的；小图里的虚线圈是你圈的大小。`;
     const warns = [];
     if (c.examples >= 2) (c.byOthers || []).forEach((v, k) => { if (v == null) warns.push(`第 ${k + 1} 个例子用其他几个的样子找不到，可以把它删掉换一个再找。`); });
     $("sta-circled-warns").replaceChildren(...warns.map((t) => { const p = document.createElement("p"); p.className = "warn"; p.textContent = t; return p; }));

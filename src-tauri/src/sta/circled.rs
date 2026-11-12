@@ -403,8 +403,10 @@ impl Pass {
     }
 }
 
-/// The search of every source with every example's picture.
-fn first_pass(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], by: f64, progress: Progress) -> Result<Pass> {
+/// The search of every source with every example's picture (`probes`: those
+/// made already).
+#[allow(clippy::too_many_arguments)]
+fn first_pass(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], by: f64, mut probes: Vec<Probe>, progress: Progress) -> Result<Pass> {
     let k = examples.len();
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, size_of) = sizes(&diameters);
@@ -452,7 +454,11 @@ fn first_pass(dev: &burn::tensor::Device, sources: &[Source], examples: &[Exampl
                 check_cancel()?;
                 let stage = format!("找像例子的 {}/{}", done + 1, total);
                 let picture = scaled(e, *size, g.voxel_a);
-                let found = super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+                // Searched for already when the size was measured (`tightened`)?
+                let found = match probes.iter().position(|p| (p.source, p.size, p.example) == (i, z, e) && p.found.dims == g.dims) {
+                    Some(at) => probes.swap_remove(at).found,
+                    None => super::search_gpu::search(dev, &g.v, g.dims, &picture, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?,
+                };
                 done += 1;
                 // What this picture scores at each example of this tomogram:
                 // the best within half a radius of the circle's centre.
@@ -572,7 +578,8 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     let k = examples.len();
     let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
     // A circle drawn wide around a compact thing is drawn in to the thing.
-    let examples = &tightened(dev, sources, examples, &raw_px, turns, progress)?[..];
+    let (examples, probes) = tightened(dev, sources, examples, &raw_px, turns, progress)?;
+    let examples = &examples[..];
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, _) = sizes(&diameters);
     let diameter_a = *sizes_a.last().unwrap();
@@ -582,7 +589,7 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // by itself. The circles made `WIDER` are searched for as well (a small
     // share of the work: the voxels are as much larger), and a width at
     // which the examples find each other clearly better is the one used.
-    let mut pass = first_pass(dev, sources, examples, &raw_px, turns, 1.0, progress)?;
+    let mut pass = first_pass(dev, sources, examples, &raw_px, turns, 1.0, probes, progress)?;
     let mut wide = 1.0;
     if k >= 2 {
         let plain = pass.worst();
@@ -590,7 +597,7 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
             check_cancel()?;
             let wider: Vec<Example> = examples.iter().map(|e| Example { radius: e.radius * by, ..*e }).collect();
             let label = |s: &str, a: usize, b: usize| progress(&format!("{s}（连周围一起，{by} 倍）"), a, b);
-            match first_pass(dev, sources, &wider, &raw_px, turns, by, &label) {
+            match first_pass(dev, sources, &wider, &raw_px, turns, by, vec![], &label) {
                 Ok(p) => {
                     eprintln!("sta: left out, the worst example ranks {:.3} as circled and {:.3} with {by} times the circle", plain, p.worst());
                     if p.worst() <= SURE && p.worst() * CLEARLY <= plain && p.worst() < pass.worst() {
@@ -672,6 +679,15 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
 /// Places the probe of `tightened` averages.
 const PROBE: usize = 60;
 
+/// A search `tightened` made that `first_pass` would make again: the
+/// picture of example `example` in tomogram `source` at size `size`.
+struct Probe {
+    source: usize,
+    size: usize,
+    example: usize,
+    found: super::search::Found,
+}
+
 /// The examples with their circles drawn in to the thing itself, where the
 /// thing is a compact body smaller than its circle. A circle is as wide as
 /// the hand drew it, and everything follows from its size: the sampling of
@@ -681,11 +697,14 @@ const PROBE: usize = 60;
 /// example's picture is searched for in its own tomogram, the best `PROBE`
 /// places are aligned and averaged, and the dark body in that average is
 /// measured (`project::probed`). What is no single compact body (a layer, a
-/// line, several pieces) keeps its circle.
-fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], progress: Progress) -> Result<Vec<Example>> {
+/// line, several pieces) keeps its circle. With the examples come the
+/// searches made, when no circle changed: `first_pass` need not repeat them.
+fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example], raw_px: &[f64], turns: &[Mat], progress: Progress) -> Result<(Vec<Example>, Vec<Probe>)> {
     let diameters: Vec<f64> = examples.iter().map(|e| 2.0 * e.radius * raw_px[e.source]).collect();
     let (sizes_a, size_of) = sizes(&diameters);
     let mut out = examples.to_vec();
+    let mut probes: Vec<Probe> = vec![];
+    let mut drawn_in = false;
     for (z, size) in sizes_a.iter().enumerate() {
         check_cancel()?;
         let Some(e) = size_of.iter().position(|x| *x == z) else { continue };
@@ -706,13 +725,15 @@ fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example
             let img = crate::tomo::pipeline::open(&s.path)?;
             let info = img.info();
             let dims = [info.width / bin, info.height / bin, info.size_z / bin];
-            peaks(&found, 1.8 * radius, PROBE)
+            let places = peaks(&found, 1.8 * radius, PROBE)
                 .iter()
                 .filter_map(|p| {
                     let c = g.to_raw(p.pos.map(|x| x as f64)).map(|x| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize);
                     cube_fits(dims, c, BOX).then_some(Place { source: x.source, c, bin, turn: p.turn, score: p.score, like: 0, size: 0 })
                 })
-                .collect()
+                .collect();
+            probes.push(Probe { source: x.source, size: z, example: e, found });
+            places
         };
         // Measured in their average once they are aligned: as they lie, the
         // average is as wide as the thing at its widest, and blurred.
@@ -726,9 +747,14 @@ fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example
             for i in (0..examples.len()).filter(|i| size_of[*i] == z) {
                 out[i].radius = (examples[i].radius * by).max(SMALLEST / 2.0);
             }
+            drawn_in = true;
         }
     }
-    Ok(out)
+    // With a circle drawn in the sizes are other ones: nothing searched here is searched for again.
+    if drawn_in {
+        probes.clear();
+    }
+    Ok((out, probes))
 }
 
 /// The most places of a first search taken as look-alikes.
