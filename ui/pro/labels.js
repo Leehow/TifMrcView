@@ -2129,6 +2129,21 @@
       setMaterial(k, { name, color });
       return k;
     },
+    /** Makes `label` the active label with the smart tool, for marking examples (figure.js). */
+    mark: (label) => {
+      L.active = label;
+      L.sub = "smart";
+      candCancel();
+      hoverDrop();
+      syncPanel();
+      renderList();
+      if (S.tool !== "label") setTool("label");
+      draw();
+    },
+    /** Pixels carrying `label`. */
+    count: (k) => L.counts[k] || 0,
+    /** Name/colour/visibility of a label (patch of {name, color, hidden, locked}). */
+    setMaterial: (k, patch) => setMaterial(k, patch),
     /** Labels in use, ascending. */
     used: () => L.counts.map((n, k) => (k > 0 && n > 0 ? k : 0)).filter((k) => k),
   };

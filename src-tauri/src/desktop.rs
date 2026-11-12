@@ -413,6 +413,38 @@ async fn labels_surfaces_export(
     .await
 }
 
+/// Turntable movies of the Pro figure view (ui/pro/figure.js): RGBA frames
+/// in, H.264 MP4 out, with the recorder plugin's encoder built in. Headers
+/// `x-method` (begin / frame / finish / cancel) and `x-args` as for
+/// `plugin_call`; the body of `frame` is the RGBA frame.
+#[cfg(feature = "recorder")]
+#[tauri::command]
+async fn figure_movie(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> CmdResult<serde_json::Value> {
+    use crate::plugins::NativePlugin;
+    static MOVIE: std::sync::OnceLock<Arc<crate::plugins::recorder::Recorder>> = std::sync::OnceLock::new();
+    let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(crate::percent_decode);
+    let method = header("x-method").ok_or("missing method")?;
+    let args: serde_json::Value = match header("x-args") {
+        Some(a) => serde_json::from_str(&a).map_err(|e| e.to_string())?,
+        None => serde_json::Value::Null,
+    };
+    if method == "begin" {
+        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or_default();
+        if !state.save_paths.allowed(path) {
+            return Err(format!("不允许写入：{path}"));
+        }
+    }
+    let body = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b.clone(),
+        tauri::ipc::InvokeBody::Json(_) => vec![],
+    };
+    let rec = MOVIE.get_or_init(Default::default).clone();
+    tauri::async_runtime::spawn_blocking(move || rec.call(&method, args, &body))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))
+}
+
 // ---------- Pro SAM segmentation ----------
 
 #[tauri::command]
@@ -3017,6 +3049,7 @@ pub fn run() {
             labels_surfaces,
             labels_object_relabel,
             labels_surfaces_export,
+            #[cfg(feature = "recorder")] figure_movie,
             sam_status,
             sam_download,
             sam_predict,
