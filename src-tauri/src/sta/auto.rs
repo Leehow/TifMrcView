@@ -47,6 +47,9 @@ pub enum Note {
     LookMissing { look: String, tomogram: String },
     /// Made by an older version: no average from the tilt images.
     OlderVersion { tomogram: String },
+    /// Reconstructed to be looked at (its place in the tilt images is not
+    /// on record): no average from the tilt images.
+    ForLooking { tomogram: String },
     /// Saved cards cannot be used for these inputs.
     CardsStale { why: String },
     CardsReused { dir: String },
@@ -324,8 +327,10 @@ pub fn resolve(input: &str, tomogram: String, dataset: Option<Dataset>, note: &(
         let file = crate::project_dirs::relatives(Path::new(&tomogram).parent().unwrap_or(Path::new("."))).into_iter().map(|d| d.join(&name)).find(|f| f.is_file());
         placed.then(|| file.map(|f| f.to_string_lossy().into_owned())).flatten()
     });
-    if series.is_none() && dataset.is_some() {
-        note(Note::OlderVersion { tomogram: tomogram.clone() });
+    if let (None, Some(d)) = (&series, &dataset) {
+        // The companion is the tomogram made to look at (`with_display_look`), not one made for averaging.
+        let shown = look.as_ref().is_some_and(|l| ["display", "survey"].iter().any(|k| d.made.get(*k).is_some_and(|m| Path::new(m).file_name() == Path::new(&l.path).file_name())));
+        note(if shown { Note::ForLooking { tomogram: tomogram.clone() } } else { Note::OlderVersion { tomogram: tomogram.clone() } });
     }
     Resolved { input: input.to_string(), tomogram, tilts, tilts_from, look, series }
 }
@@ -778,6 +783,7 @@ pub fn note_json(n: &Note) -> Value {
         Note::NoDataset { tomogram } => json!({ "kind": "noDataset", "tomogram": tomogram }),
         Note::LookMissing { look, tomogram } => json!({ "kind": "lookMissing", "look": look, "tomogram": tomogram }),
         Note::OlderVersion { tomogram } => json!({ "kind": "olderVersion", "tomogram": tomogram }),
+        Note::ForLooking { tomogram } => json!({ "kind": "forLooking", "tomogram": tomogram }),
         Note::CardsStale { why } => json!({ "kind": "cardsStale", "why": why }),
         Note::CardsReused { .. } => json!({ "kind": "cardsReused" }),
         Note::CardsMade { count } => json!({ "kind": "cardsMade", "count": count }),
@@ -1313,6 +1319,10 @@ mod tests {
         write(json!({ "survey": p("3_clean/ts_sart3_b8_deconv.mrc") }), vec![all[0].clone(), entry("3_clean/ts_sart3_b8_deconv.mrc", "deconvolved", 8, 100)]);
         assert_eq!(raw_of_look(&p("3_clean/ts_sart3_b8_deconv.mrc")).unwrap(), Some(p("2_tomograms/ts_sart3_b8.mrc")));
         assert_eq!(resolve_tomogram(&p("2_tomograms/ts_sart3_b8.mrc"), &|_| {}).look.map(|l| l.path), Some(p("3_clean/ts_sart3_b8_deconv.mrc")));
+        // The note says what the tomogram is (made to look at), not that an older version made it.
+        let said = std::sync::Mutex::new(vec![]);
+        resolve_tomogram(&p("2_tomograms/ts_sart3_b8.mrc"), &|n| said.lock().unwrap().push(note_json(&n)["kind"].as_str().unwrap().to_string()));
+        assert_eq!(*said.lock().unwrap(), ["forLooking"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
