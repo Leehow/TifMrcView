@@ -167,6 +167,8 @@
       buttons.forEach((b, i) => { b.disabled = was[i]; });
       marks();
       document.dispatchEvent(new CustomEvent("cryoet-idle"));
+      // What the step made shows up in the image list.
+      document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
     }
   };
 

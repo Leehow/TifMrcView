@@ -262,7 +262,13 @@
   // ---------- running ----------
 
   async function runPass(label, purpose, only) {
-    const un = await T.event.listen("tomo-session", () => scan());
+    const un = await T.event.listen("tomo-session", async () => {
+      // The image list reads the folder again when a series has new files.
+      const files = () => session.series.map(bodySig).join("\n");
+      const before = files();
+      await scan();
+      if (files() !== before) document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+    });
     const r = await W.run(label, () => invoke("tomo_session_run", { req: { folder, purpose, only } }));
     un();
     if (r) {
