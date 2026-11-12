@@ -3833,6 +3833,8 @@ const STEP_GROUPS = Object.fromEntries(
     ["tomograms", "③ 断层图", true],
     ["clean", "④ 清晰版", true],
     ["sta", "⑤ 子断层平均", true],
+    ["figures", "⑥ 出图", true],
+    ["labels", "分割标签", true],
     ["raw", "原始数据", false],
   ].map(([id, name, em], order) => [id, { id: `step:${id}`, name, em, order }]),
 );

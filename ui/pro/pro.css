@@ -16,6 +16,8 @@
   width: 210px; padding: 10px 12px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
 }
+/* Figure mode (figure.js) keeps only the picked object's box, moved into its own panel. */
+#vol-panel.vp-figure { display: none; }
 #vol-panel .vp-title { font-weight: 700; color: var(--accent); }
 #vol-panel label { display: flex; flex-direction: column; gap: 3px; color: var(--dim); font-size: 12px; }
 #vol-panel select, #vol-panel input[type="range"] { width: 100%; }
@@ -74,6 +76,8 @@
 /* The bar beside the selected object and the bar of "find similar". */
 #lab-chips, #lab-cand { position: absolute; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); font-size: 12px; white-space: nowrap; }
 #lab-chips[hidden], #lab-cand[hidden] { display: none; }
+/* The bars belong to the 2D slice: none over the 3D view. */
+#stage:has(#vol3d:not([hidden])) :is(#lab-chips, #lab-cand) { display: none; }
 #lab-chips > button { height: 24px; padding: 0 8px; font-size: 12px; border: 0; box-shadow: none; background: none; border-radius: 5px; }
 #lab-chips > button:hover:not(:disabled) { background: var(--muted); }
 #lab-chips > button.primary { background: var(--accent); color: #fff; }
@@ -603,3 +607,59 @@
 #cryo-session .cs-use.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 #cryo-session .cs-use.on b { color:var(--accent); }
 #live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }
+/* Figure flow (figure.js): one panel on the right, over the 2D and the 3D view. */
+#quickbar #btn-figure { width: auto; padding: 0 8px; gap: 5px; }
+#fig-panel {
+  position: absolute; top: 10px; bottom: 10px; right: 10px; z-index: 8; width: 300px;
+  display: flex; flex-direction: column; gap: 10px; overflow: auto; padding: 12px; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); font-size: 12px;
+}
+#fig-panel[hidden], #fig-panel [hidden] { display: none; }
+#fig-panel .fig-head { display: flex; align-items: center; justify-content: space-between; color: var(--accent); font-size: 13px; }
+#fig-panel .fig-step { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; border-top: 1px solid var(--line); }
+#fig-panel .fig-step.off { opacity: 0.45; pointer-events: none; }
+#fig-panel .fig-title { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+#fig-panel .fig-n { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; flex: none; }
+#fig-panel p { margin: 0; line-height: 1.6; }
+#fig-panel .fig-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#fig-panel .fig-row > button { flex: 1; justify-content: center; border: 1px solid var(--line-strong); white-space: nowrap; }
+#fig-panel .fig-row > button.primary { border-color: var(--accent); }
+#fig-panel .fig-row input[type="text"] { flex: 1; min-width: 0; }
+#fig-list { display: flex; flex-direction: column; gap: 3px; }
+#fig-list:empty { display: none; }
+#fig-panel .fig-struct { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 7px; }
+#fig-panel .fig-struct.on { border-color: var(--accent); background: var(--muted); }
+#fig-panel .fig-sw { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+#fig-panel .fig-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#fig-panel .fig-count { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#fig-panel .fig-eye.off { color: var(--faint); }
+#fig-panel .fig-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+#fig-panel .fig-chip { padding: 2px 7px 2px 5px; font-size: 11px; border: 1px solid var(--line-strong); border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
+#fig-panel .fig-chip::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--c); }
+#fig-panel .fig-chip-other::before { display: none; }
+#fig-panel .fig-thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+#fig-panel .fig-thumbs:empty::before { content: "生成三维图以后，这里会画出三张小图给你挑"; grid-column: 1 / -1; color: var(--faint); }
+#fig-panel .fig-thumb { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 3px; height: auto; border: 2px solid var(--line); border-radius: 7px; font-size: 11px; }
+#fig-panel .fig-thumb canvas { width: 100%; height: auto; border-radius: 4px; display: block; }
+#fig-panel .fig-thumb span { text-align: center; }
+#fig-panel .fig-thumb.on { border-color: var(--accent); color: var(--accent); }
+#fig-panel .fig-check { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+#fig-panel .fig-slider { display: flex; align-items: center; gap: 6px; color: var(--dim); white-space: nowrap; }
+#fig-panel .fig-slider input { flex: 1; min-width: 0; }
+#fig-panel input[type="range"] { width: 100%; }
+#fig-obj .vp-obj { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 6px; }
+#fig-obj .vp-obj[hidden] { display: none; }
+#fig-obj .vp-obj-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+#fig-obj .vp-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+#fig-obj .vp-class { padding: 2px 6px 2px 4px; font-size: 11px; border: 1px solid var(--line-strong); border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
+#fig-obj .vp-class::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--c); }
+#fig-obj .vp-class.on { border-color: var(--accent); color: var(--accent); }
+#fig-obj .vp-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+#fig-obj .vp-row { display: flex; gap: 6px; }
+#fig-obj .vp-row button { flex: 1; justify-content: center; border: 1px solid var(--line-strong); }
+#fig-panel .fig-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+#fig-status { flex: 1; min-height: 1.5em; word-break: break-all; }
+#fig-scalebar { position: absolute; bottom: 24px; z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 3px; color: #000; font-size: 13px; font-weight: 600; pointer-events: none; }
+#fig-scalebar[hidden] { display: none; }
+#fig-scalebar i { display: block; height: 4px; background: currentColor; }
+#fig-scalebar.dark { color: #fff; }

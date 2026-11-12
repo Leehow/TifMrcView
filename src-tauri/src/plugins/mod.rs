@@ -23,7 +23,7 @@ pub mod market;
 pub mod package;
 pub mod recipe;
 #[cfg(feature = "recorder")]
-mod recorder;
+pub(crate) mod recorder;
 pub mod registry;
 pub mod wasm;
 

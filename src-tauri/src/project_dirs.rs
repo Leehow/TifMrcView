@@ -9,6 +9,7 @@
 //!   3_clean/            what is made from a tomogram to look at: the look
 //!                       companion, denoised, deconvolved, wedge-corrected
 //!   4_sta/              subtomogram averaging
+//!   5_figures/          pictures and movies made for papers and talks
 //! ```
 //!
 //! A project made before this layout has everything flat beside the tilt
@@ -23,8 +24,9 @@ pub const MOTION: &str = "1_motion";
 pub const TOMOGRAMS: &str = "2_tomograms";
 pub const CLEAN: &str = "3_clean";
 pub const STA: &str = "4_sta";
+pub const FIGURES: &str = "5_figures";
 /// Every step folder, in the order of the steps.
-pub const STEPS: [&str; 4] = [MOTION, TOMOGRAMS, CLEAN, STA];
+pub const STEPS: [&str; 5] = [MOTION, TOMOGRAMS, CLEAN, STA, FIGURES];
 
 /// Whether a folder name is one of the step folders.
 pub fn is_step_folder(name: &str) -> bool {
@@ -188,6 +190,12 @@ pub fn listing_root(dir: &Path) -> Option<PathBuf> {
     STEPS.iter().any(|s| dir.join(s).is_dir()).then(|| dir.to_path_buf())
 }
 
+/// The folder figures of the project of `image` go to (`5_figures` of the
+/// project folder), or `None` when the image is not in a project.
+pub fn figures_dir(image: &Path) -> Option<PathBuf> {
+    listing_root(folder_of(image)).map(|root| root.join(FIGURES))
+}
+
 /// Helper files made beside an image (halves, previews, single tilts) that
 /// the sidebar does not list.
 pub fn is_helper(path: &Path) -> bool {
@@ -196,14 +204,19 @@ pub fn is_helper(path: &Path) -> bool {
 }
 
 /// The sidebar group of a file lying in the step folder `dir_name` (None for
-/// the project folder itself): `raw|motion|aligned|tomograms|clean|sta`.
+/// the project folder itself): `raw|motion|aligned|tomograms|clean|sta|figures`,
+/// or `labels` for a label map (`<image>.labels.tif`) wherever it lies.
 fn group_of(dir_name: Option<&str>, stem: &str) -> &'static str {
+    if stem.to_ascii_lowercase().ends_with(".labels") {
+        return "labels";
+    }
     match dir_name {
         Some(MOTION) => "motion",
         Some(TOMOGRAMS) if stem.ends_with("_aligned") => "aligned",
         Some(TOMOGRAMS) => "tomograms",
         Some(CLEAN) => "clean",
         Some(STA) => "sta",
+        Some(FIGURES) => "figures",
         _ => "raw",
     }
 }
@@ -245,7 +258,7 @@ pub fn list_project(
         }
         add(files, Some(step));
     }
-    let rank = |g: &str| ["raw", "motion", "aligned", "tomograms", "clean", "sta"].iter().position(|x| *x == g).unwrap_or(9);
+    let rank = |g: &str| ["raw", "motion", "aligned", "tomograms", "clean", "sta", "labels", "figures"].iter().position(|x| *x == g).unwrap_or(9);
     out.sort_by(|a, b| rank(a.1).cmp(&rank(b.1)).then_with(|| cmp(&a.0, &b.0)));
     out
 }
@@ -337,6 +350,29 @@ mod tests {
         assert_eq!(find_near(&tomograms, "/elsewhere/none.mrc"), None);
         // A flat folder only looks in itself.
         assert_eq!(find_near(dir.path(), "/elsewhere/t_look.mrc"), None);
+    }
+
+    #[test]
+    fn label_maps_and_figures_get_groups_of_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        for d in ["3_clean", "5_figures"] {
+            std::fs::create_dir_all(r.join(d)).unwrap();
+        }
+        for f in ["3_clean/ts_look.mrc", "3_clean/ts_look.mrc.labels.tif", "5_figures/ts_look_figure.png", "5_figures/ts_look_figure.mp4"] {
+            std::fs::write(r.join(f), b"x").unwrap();
+        }
+        let prefix = format!("{}/", r.to_str().unwrap());
+        let got: Vec<(String, &str)> = list_project(r, |p| p.extension().is_some_and(|e| e != "mp4"), |a, b| a.cmp(b))
+            .into_iter()
+            .map(|(p, g)| (p.strip_prefix(&prefix).unwrap().to_string(), g))
+            .collect();
+        let want = [("3_clean/ts_look.mrc", "clean"), ("3_clean/ts_look.mrc.labels.tif", "labels"), ("5_figures/ts_look_figure.png", "figures")];
+        assert_eq!(got, want.map(|(a, b)| (a.to_string(), b)));
+        assert_eq!(figures_dir(&r.join("3_clean/ts_look.mrc")), Some(r.join("5_figures")));
+        assert_eq!(figures_dir(&r.join("5_figures/ts_look_figure.png")), Some(r.join("5_figures")));
+        let lone = tempfile::tempdir().unwrap();
+        assert_eq!(figures_dir(&lone.path().join("cell.mrc")), None);
     }
 
     #[test]
