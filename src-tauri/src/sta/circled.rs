@@ -36,7 +36,7 @@ use super::check_cancel;
 use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, Place, Source, BOX, MOST};
 use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
-use crate::spa::geom::{distance, grid, Mat};
+use crate::spa::geom::{distance, grid, transpose, Mat};
 
 /// One thing the user circled.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -80,6 +80,10 @@ pub struct Circled {
     /// Per example, the best score the other examples' pictures have on it
     /// (None: a single example, or the others could not be searched there).
     pub by_others: Vec<Option<f32>>,
+    /// When the places were found with the template that tells the examples
+    /// from what a first search found (`contrast`): per example, where it
+    /// ranked among those when left out (told, plain; shares, 0 the top).
+    pub told: Option<Vec<(f64, f64)>>,
 }
 
 /// The sizes circled: diameters (Å) that differ by more than `SAME_SIZE`,
@@ -514,15 +518,26 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         .enumerate()
         .map(|(e, x)| Seen { source: x.source, at: x.at, radius: x.radius, score: f32::MAX, turn: cross[first][e].map_or(upright, |c| c.1), like: e, size: size_of[e], key: usize::MAX })
         .collect();
-    let mut all = apart(own, seen);
+    let mut all = apart(own.clone(), seen);
+    // What the examples have that the best of the rest have not, when they
+    // have it (`contrast`): searched for once more, in place of the above.
+    let again = told(dev, sources, examples, &pictures, &diameters, &sizes_a, &cross, first, &all[k..], turns, progress)?;
+    let (alike, told) = match again {
+        Some((seen, control, ranks)) => {
+            all = apart(own, seen);
+            by_chance = control;
+            (None, Some(ranks))
+        }
+        None => (alike, None),
+    };
     let rest: Vec<Peak> = all[k..].iter().map(|s| Peak { pos: [0; 3], score: s.score, turn: s.turn }).collect();
     let noise = by_chance.iter().map(|c| c.0).reduce(f32::max);
     let limit = limit(cutoff(&rest), alike, noise, beyond_chance(&rest, &by_chance));
     // An example scores what the others' pictures give it; a single one
-    // (or one the others cannot reach) leads the list.
+    // (or one the others cannot reach, or after `told`) leads the list.
     let top = rest.first().map_or(1.0, |p| p.score);
     for e in 0..k {
-        all[e].score = by_others[e].unwrap_or(top).min(1.0);
+        all[e].score = by_others[e].filter(|_| told.is_none()).unwrap_or(top).min(1.0);
     }
 
     // Onto the grids the cubes are cut on (as `project::cut_places` bins).
@@ -562,7 +577,95 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         sizes_a,
         alike,
     };
-    Ok(Circled { found, template, diameter_a, mine, first, by_others })
+    Ok(Circled { found, template, diameter_a, mine, first, by_others, told })
+}
+
+/// The most places of a first search taken as look-alikes.
+const ALIKE_MOST: usize = 3000;
+
+/// The search made again with the template that tells the examples from
+/// `rest`, the places a first search found (best first, each with the turn
+/// at which the first example's picture fits it): the places it finds, what
+/// chance scores with it, and how the examples ranked when left out. None
+/// when there is nothing to tell (`contrast::tell`).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn told(
+    dev: &burn::tensor::Device,
+    sources: &[Source],
+    examples: &[Example],
+    pictures: &[Vec<f32>],
+    diameters: &[f64],
+    sizes_a: &[f64],
+    cross: &[Vec<Option<(f32, usize, usize)>>],
+    first: usize,
+    rest: &[Seen],
+    turns: &[Mat],
+    progress: Progress,
+) -> Result<Option<(Vec<Seen>, Vec<(f32, f64)>, Vec<(f64, f64)>)>> {
+    use super::cc::rotate;
+    let k = examples.len();
+    let rest = &rest[..rest.len().min(ALIKE_MOST)];
+    if k < 2 || rest.len() < super::contrast::FEWEST {
+        return Ok(None);
+    }
+    // All pictures in the first example's frame, the circle `ACROSS` voxels
+    // across. Picture a fits at example b turned by `cross[a][b]`.
+    let ours: Vec<Vec<f32>> = (0..k)
+        .filter_map(|e| {
+            let turn = if e == first { super::IDENTITY } else { turns[cross[first][e]?.1] };
+            let picture = rescale_cube(&pictures[e], KEPT, diameters[e] / SPAN, N, diameters[e] / ACROSS);
+            Some(rotate(&picture, N, &transpose(&turn)))
+        })
+        .collect();
+    let mut others: Vec<(usize, Vec<f32>)> = vec![];
+    for (i, s) in sources.iter().enumerate() {
+        for (z, size) in sizes_a.iter().enumerate() {
+            let here: Vec<usize> = (0..rest.len()).filter(|j| rest[*j].source == i && rest[*j].size == z).collect();
+            if here.is_empty() {
+                continue;
+            }
+            check_cancel()?;
+            progress("看找到的和例子差在哪", i, sources.len());
+            let g = Grid::of(s, *size)?;
+            let step = size / ACROSS / g.voxel_a;
+            for j in here {
+                if let Some(p) = sampled(&g.v, g.dims, g.from_raw(rest[j].at), N, step) {
+                    others.push((j, rotate(&p, N, &transpose(&turns[rest[j].turn]))));
+                }
+            }
+        }
+    }
+    others.sort_by_key(|o| o.0);
+    let others: Vec<Vec<f32>> = others.into_iter().map(|o| o.1).collect();
+    let Some(t) = super::contrast::tell(&ours, &others, N, ACROSS / 2.0) else { return Ok(None) };
+    eprintln!("sta: left out, the examples rank {:?} among {} places found (with what tells them, with the plain mean); holds: {}", t.ranks, others.len(), t.holds);
+    if !t.holds {
+        return Ok(None);
+    }
+    let mut seen: Vec<Seen> = vec![];
+    let mut by_chance: Vec<(f32, f64)> = vec![];
+    let total = sources.len() * sizes_a.len() * 2;
+    let mut done = 0;
+    for (i, s) in sources.iter().enumerate() {
+        for (z, size) in sizes_a.iter().enumerate() {
+            check_cancel()?;
+            let g = Grid::of(s, *size)?;
+            let radius = (0.5 * size / g.voxel_a).min(N as f64 / 2.0 - 2.0);
+            let to_raw = (g.to_raw([1.0, 0.0, 0.0])[0] - g.to_raw([0.0; 3])[0]).abs();
+            let template = rescale_cube(&t.template, N, size / ACROSS, N, g.voxel_a);
+            let stage = format!("按例子独有的再找 {}/{}", done + 1, total);
+            let found = super::search_gpu::search(dev, &g.v, g.dims, &template, N, radius, s.tilts, turns, Some(&g.mask), &|a, b| progress(&stage, a, b))?;
+            done += 1;
+            for p in peaks(&found, 1.8 * radius, MOST) {
+                seen.push(Seen { source: i, at: g.to_raw(p.pos.map(|x| x as f64)), radius: radius * to_raw, score: p.score, turn: p.turn, like: first, size: z, key: usize::MAX });
+            }
+            drop(found);
+            let stage = format!("按例子独有的再找 {}/{}（对照）", done + 1, total);
+            by_chance.extend(chance(dev, &g.v, g.dims, &g.mask, &template, N, radius, s.tilts, turns, &|a, b| progress(&stage, a, b))?);
+            done += 1;
+        }
+    }
+    Ok(Some((seen, by_chance, t.ranks)))
 }
 
 #[cfg(test)]
