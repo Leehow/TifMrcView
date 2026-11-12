@@ -3324,14 +3324,25 @@ fn by_surroundings(dev: &burn::tensor::Device, sources: &[Source], cuts: &[Cut],
     let wedge_of: Vec<usize> = with.iter().map(|k| cuts[*k].source).collect();
     let radius = (0.5 * by * diameter_a / wide_voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let start: Vec<Pose> = with.iter().map(|k| Pose { t: [0.0; 3], ..poses[*k] }).collect();
-    let own_average = set.average(&start, |_| true).finish();
-    let (model, settled) = super::refine::settled_on(Some(dev), &set, &own_average, 1, &label, live)?;
-    // Then a few degrees at a time: the orientations tried are 30° apart,
-    // and the cubes cut next are turned no further than 12°.
-    let (model, settled) = {
-        let a = align_on(Some(dev), &set, &model, &settled, &label, live)?;
-        (a.map, a.poses)
+    // A thing on a sheet (a membrane, the wall of a vesicle) stands on it:
+    // each one's axis is read off the sheet around it (`axial`), and only
+    // the turn about it is searched, then a few degrees every way. The
+    // agreement of the halves cannot choose between this and turning every
+    // way: with as few particles as are circled the two come out alike also
+    // where only the axes are right (measured on made-up things on balls:
+    // axes read within 3°, turned every way 10–67° off, strengths 0.0099
+    // and 0.0100).
+    let (model, settled) = match by_axes(dev, &set, 0.5 * diameter_a / wide_voxel, &label, live)? {
+        Some(axial) => (axial.map, axial.poses),
+        None => {
+            let start: Vec<Pose> = with.iter().map(|k| Pose { t: [0.0; 3], ..poses[*k] }).collect();
+            let own_average = set.average(&start, |_| true).finish();
+            let (model, settled) = super::refine::settled_on(Some(dev), &set, &own_average, 1, &label, live)?;
+            // Then a few degrees at a time: the orientations tried are 30°
+            // apart, and the cubes cut next are turned no further than 12°.
+            let a = align_on(Some(dev), &set, &model, &settled, &label, live)?;
+            (a.map, a.poses)
+        }
     };
     // Where each circle's centre lies in the average (a point m of the
     // average stands at t + R·m in the particle; the circle's centre is the
@@ -3381,6 +3392,29 @@ fn by_surroundings(dev: &burn::tensor::Device, sources: &[Source], cuts: &[Cut],
     }
     let (cuts, poses) = out.into_iter().map(|(_, c, p)| (c, p)).unzip();
     Ok(Some((cuts, poses, model, wide_voxel)))
+}
+
+/// Least median flatness (`axial::sheet`) of the surroundings for their
+/// normals to be taken as axes: noise alone reads about 0.1.
+const SHEET_FLAT: f64 = 0.3;
+
+/// The wide cubes of `set` (a thing in each, `radius` voxels across its
+/// circle) aligned with each one's axis read off the sheet it sits on
+/// (`axial::sheet`, either sense) and only the turn about it searched, then
+/// a few degrees every way (`align_on`). None when what is around them is
+/// not sheet-like.
+fn by_axes(dev: &burn::tensor::Device, set: &Set, radius: f64, progress: Progress, live: Live) -> Result<Option<super::refine::Aligned>> {
+    let read: Vec<([f64; 3], f64)> = set.particles.par_iter().map(|c| super::axial::sheet(c, set.n, radius.max(2.0))).collect();
+    let mut flat: Vec<f64> = read.iter().map(|r| r.1).collect();
+    flat.sort_by(f64::total_cmp);
+    let middle = flat[flat.len() / 2];
+    eprintln!("sta: what the things sit on is this sheet-like (median of {}): {middle:.2}{}", flat.len(), if middle < SHEET_FLAT { "; turned every way" } else { "; each stood on it, turned about its axis" });
+    if middle < SHEET_FLAT {
+        return Ok(None);
+    }
+    let axes: Vec<[f64; 3]> = read.iter().map(|r| r.0).collect();
+    let (model, poses) = super::refine::first_model_known(set, &axes, true, 1, progress, live)?;
+    Ok(Some(align_on(Some(dev), set, &model, &poses, progress, live)?))
 }
 
 /// The average of the particles at `places` (those of `found` the caller
@@ -4451,6 +4485,82 @@ mod around_tests {
         assert!(turned.iter().all(|d| *d < 15.0), "{turned:.0?}");
         let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
         assert!(mean(&after) < 0.7 * mean(&before), "{after:.1?} against {before:.1?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Heavy, as above.
+    ///
+    /// A small ring of blobs on the shell of a large ball, twelve times and
+    /// every which way up, with the turn about the ring's axis random: what
+    /// can be known of each is its axis, and the ball's shell gives it.
+    #[test]
+    #[ignore]
+    fn a_thing_on_a_ball_is_stood_up_by_the_ball() {
+        let dims = [512usize, 384, 160];
+        let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+        let mut rng = Rng(0xba11);
+        let mut things: Vec<([f64; 3], [f64; 3])> = vec![];
+        for j in 0..3 {
+            for i in 0..4 {
+                let a = [rng.gauss(), rng.gauss(), rng.gauss()];
+                let d = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+                things.push(([64.0 + 128.0 * i as f64, 64.0 + 128.0 * j as f64, 80.0], a.map(|x| x / d)));
+            }
+        }
+        let mut put = |c: [f64; 3], radius: f64, shell: Option<f64>, weight: f32| {
+            let h = radius.ceil() as isize + 1;
+            for dz in -h..=h {
+                for dy in -h..=h {
+                    for dx in -h..=h {
+                        let p = [c[0].round() as isize + dx, c[1].round() as isize + dy, c[2].round() as isize + dz];
+                        let r = ((dx * dx + dy * dy + dz * dz) as f64).sqrt();
+                        let inside = match shell { Some(t) => (r - radius).abs() <= t, None => r <= radius };
+                        if inside && (0..3).all(|k| p[k] >= 0 && p[k] < dims[k] as isize) {
+                            v[(p[2] as usize * dims[1] + p[1] as usize) * dims[0] + p[0] as usize] += weight;
+                        }
+                    }
+                }
+            }
+        };
+        for (at, a) in &things {
+            // The ball (radius 40) under the thing, its shell through it.
+            put(std::array::from_fn(|k| at[k] - 40.0 * a[k]), 40.0, Some(1.5), 1.0);
+            // A ring of six blobs about the axis, a turn of its own, and a knob on top.
+            let f = super::super::shape::frame(*a);
+            let turn = 360.0 * rng.unit();
+            for b in 0..6 {
+                let t = (turn + 60.0 * b as f64).to_radians();
+                let q = [7.0 * t.cos(), 7.0 * t.sin(), 3.0];
+                put(std::array::from_fn(|k| at[k] + (0..3).map(|m| f[k][m] * q[m]).sum::<f64>()), 2.5, None, 1.2);
+            }
+            put(std::array::from_fn(|k| at[k] + 8.0 * a[k]), 3.0, None, 1.0);
+        }
+        v.iter_mut().for_each(|x| *x = -*x + (0.8 * rng.gauss()) as f32);
+        let dir = std::env::temp_dir().join(format!("tmv-sta-onball-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tomo.mrc").to_string_lossy().into_owned();
+        output::write_mrc(&path, &v, dims, 10.0, false).unwrap();
+        let sources = vec![Source { path: path.clone(), tilts: [-90.0, 90.0], look: None, series: None }];
+        let (voxel_a, diameter_a) = (20.0, 360.0);
+        let (binned, bdims, _, bin) = binned(&path, voxel_a).unwrap();
+        let cuts: Vec<Cut> = things
+            .iter()
+            .map(|(at, _)| {
+                let (c, _) = on_grid(*at, bin);
+                Cut { source: 0, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: 1.0, strength: 0.0, darkest: 0.0, cube: cube(&binned, bdims, c).unwrap() }
+            })
+            .collect();
+        let poses = vec![Pose { r: super::super::IDENTITY, t: [0.0; 3], score: 1.0 }; cuts.len()];
+        let (_, found, _, _) = by_surroundings(&burn::tensor::Device::flex(), &sources, &cuts, &poses, voxel_a, diameter_a, AROUND, &|_, _, _| {}, &|_| {}).unwrap().expect("surroundings");
+        // The axis of the average is one direction m for all: each particle's
+        // R carries it onto its planted axis, so Rᵀ·a is the same for all (up to sense).
+        let back: Vec<[f64; 3]> = found.iter().zip(&things).map(|(p, (_, a))| std::array::from_fn(|i| (0..3).map(|j| p.r[j][i] * a[j]).sum::<f64>())).collect();
+        let near = |k: usize| back.iter().filter(|b| super::super::axial::apart(**b, back[k]) < 20.0).count();
+        let most = (0..back.len()).max_by_key(|k| near(*k)).unwrap();
+        let off: Vec<f64> = back.iter().map(|b| super::super::axial::apart(*b, back[most])).collect();
+        eprintln!("axes off the shared one: {off:.0?}°");
+        assert!(off.iter().filter(|d| **d < 20.0).count() >= 10, "{off:.0?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
