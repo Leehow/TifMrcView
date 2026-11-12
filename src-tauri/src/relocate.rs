@@ -49,7 +49,12 @@ pub fn rebase(v: &mut serde_json::Value, old: &str, new: &str) {
 /// `value` with the paths under the folder of `was` moved to the folder of
 /// `now` (two files at the same place in their folders), when the folders differ.
 pub fn relocate<T: serde::Serialize + serde::de::DeserializeOwned>(value: T, was: &str, now: &str) -> T {
-    let (old, new) = (parent(was), parent(now));
+    relocate_dirs(value, parent(was), parent(now))
+}
+
+/// `value` with the paths under the folder `old` moved to the same place
+/// under `new` (a project folder, for the step folders inside it), when they differ.
+pub fn relocate_dirs<T: serde::Serialize + serde::de::DeserializeOwned>(value: T, old: &str, new: &str) -> T {
     if old.is_empty() || new.is_empty() || old == new {
         return value;
     }

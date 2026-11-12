@@ -251,6 +251,11 @@ pub struct Progress {
 pub struct Stats {
     /// Mirrored copies averaged.
     pub copies: usize,
+    /// Why fewer copies were averaged than set out for, when the GPU
+    /// failed after at least one whole copy: what the finished copies gave
+    /// is the result (each is a whole segmentation; more only steady it),
+    /// not hours of work thrown away.
+    pub cut_short: Option<String>,
     pub windows: usize,
     /// Grid the network saw.
     pub grid: [usize; 3],
@@ -271,6 +276,10 @@ pub enum Pass {
     /// 1e-4 of MemBrain-seg 0.0.10 in single precision, no voxel decided
     /// differently.
     Official,
+    /// As `Official`, with this many of the eight mirrored copies (1 to
+    /// 8): the same windows on the same grid, an eighth of the time per
+    /// copy left out.
+    Copies(usize),
 }
 
 /// Starts of windows of `side` covering `n`, overlapping by about a third;
@@ -315,7 +324,7 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
     if !WINDOW.is_multiple_of(net.align()) {
         bail!("模型的窗口对齐不符");
     }
-    let official = matches!(pass, Pass::Official);
+    let official = matches!(pass, Pass::Official | Pass::Copies(_));
     let side = [patch; 3];
     let resize = (patch != WINDOW).then(|| rescale::FourierResize::new(patch, WINDOW));
     let st: [Vec<isize>; 3] = std::array::from_fn(|a| if official { starts_official(n[a], side[a]) } else { starts(n[a], side[a]) });
@@ -398,10 +407,11 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
     // MemBrain-seg): mirrored windows sit elsewhere, so their weights
     // differ from copy to copy.
     let mut total = vec![0f32; len];
-    let mut copies = 8;
+    let mut copies = if let Pass::Copies(k) = pass { k.clamp(1, 8) } else { 8 };
     let mut done = 0;
     let mut c = 0;
-    while c < copies {
+    let mut cut_short = None;
+    'copies: while c < copies {
         // MemBrain-seg mirrors the whole volume and then places its
         // windows, so along a mirrored axis they sit mirrored too (the same
         // places only when they are spread symmetrically).
@@ -428,8 +438,18 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
                         };
                         let x = Tensor::<5>::from_data(TensorData::new(input, dims), dev);
                         net.forward(x).try_into_data().map_err(|e| anyhow!("{e}"))
-                    })
-                    .with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies))?;
+                    });
+                    #[cfg(test)]
+                    let r = if tests::FAIL_AT.with(|f| f.get()) == Some(done) { Err(anyhow!("the GPU went away")) } else { r };
+                    let r = match r {
+                        Ok(r) => r,
+                        // The copies already finished are a result.
+                        Err(e) if c >= 1 => {
+                            cut_short = Some(format!("膜分割在第 {}/{copies} 遍中途计算失败（窗口 {}/{}），用的是前 {c} 遍的结果：{e:#}", c + 1, done + 1, windows * copies));
+                            break 'copies;
+                        }
+                        Err(e) => return Err(e).with_context(|| format!("膜分割计算失败（窗口 {}/{}），结果未保存", done + 1, windows * copies)),
+                    };
                     let r = if patch < WINDOW { resample_linear(&r, [WINDOW; 3], side, false) } else { r };
                     let value = |x: usize, y: usize, z: usize| {
                         if patch <= WINDOW { return r[at(m, x, y, z)]; }
@@ -502,8 +522,11 @@ fn score_patches(dev: &Device, net: &Model, v: &[f32], n: [usize; 3], pass: Pass
         }
         c += 1;
     }
+    if cut_short.is_some() {
+        copies = c;
+    }
     total.par_iter_mut().for_each(|t| *t /= copies as f32);
-    Ok((total, Stats { copies, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
+    Ok((total, Stats { copies, cut_short, windows, grid: n, ms: t0.elapsed().as_secs_f64() * 1e3 }))
 }
 
 /// A failed readback must remain an error, before blending or label writes.
@@ -617,7 +640,7 @@ pub fn segment(dev: &Device, net: &Model, values: &[f32], n: [usize; 3], pixel_a
     // original tomogram once, FFT-resize each physical patch to 160³, and
     // resize its logits back before Gaussian blending. Whole-volume spatial
     // interpolation changes both the input spectrum and window positions.
-    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official) && pixel_a != PIXEL_A {
+    if matches!(net, Model::MemBrain(_)) && matches!(pass, Pass::Official | Pass::Copies(_)) && pixel_a != PIXEL_A {
         let patch = physical_patch(pixel_a);
         let (mean, std) = exact_stats(values);
         let norm: Vec<f32> = values.par_iter().map(|&x| if x.is_finite() { (x-mean)/std } else { 0.0 }).collect();
@@ -734,6 +757,12 @@ pub struct FileResult {
     /// Lengths of the microtubules found, nm.
     pub microtubules: Vec<f32>,
     pub seconds: f64,
+    /// Mirrored copies the segmentation averaged (8 when all went well).
+    pub copies: usize,
+    /// Set when the GPU failed part of the way and the result is from the
+    /// copies finished before (`Stats::cut_short`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Segments the membranes of the tomogram file `image` with the model
@@ -741,6 +770,11 @@ pub struct FileResult {
 /// beside it with a summary (`<image>.membranes.json`) and a vesicle table
 /// (`<image>.vesicles.csv`). `progress` gets (stage, done, total).
 pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
+    segment_file_pass(dev, model, image, Pass::Official, progress)
+}
+
+/// `segment_file` going over the volume as `pass` says.
+pub fn segment_file_pass(dev: &Device, model: &Path, image: &str, pass: Pass, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
     let now = Instant::now();
     CANCEL.store(false, Ordering::SeqCst);
     progress("膜分割：读取", 0, 1);
@@ -753,7 +787,7 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
     }
     let net = load(model, dev)?;
     crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &[]);
-    let seg = segment(dev, &net, &v, shape, px as f32, Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    let seg = segment(dev, &net, &v, shape, px as f32, pass, &mut |p| progress("膜分割", p.done, p.total))?;
     crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &seg.mask);
     progress("膜分割：微管", 0, 1);
     let fils = crate::filaments::find(&v, shape, px as f32);
@@ -780,6 +814,8 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
         vesicles,
         microtubules: fils.iter().map(|f| f.length).collect(),
         seconds: now.elapsed().as_secs_f64(),
+        copies: seg.stats.copies,
+        note: seg.stats.cut_short.clone(),
     };
     std::fs::write(&summary, serde_json::to_vec_pretty(&r)?)?;
     Ok(r)
@@ -908,6 +944,37 @@ mod tests {
         let v = vec![3.0f32; 20 * 20 * 20];
         let r = resample(&v, [20; 3], [7, 9, 11]);
         assert!(r.iter().all(|&x| (x - 3.0).abs() < 1e-4));
+    }
+
+    thread_local! {
+        /// The window (counted from 0 over all copies) at which `score`
+        /// is made to fail on this thread.
+        pub(super) static FAIL_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// A GPU failure after a whole mirrored copy leaves that copy's
+    /// segmentation as the result; one in the first copy is an error.
+    #[test]
+    fn a_failure_after_the_first_copy_keeps_what_is_finished() {
+        let _one = crate::live::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dev = Device::flex();
+        let cfg = NetConfig { widths: vec![2, 4, 4], blocks: vec![1, 1, 1], heads: 1 };
+        let net = Model::Own(MemNet::new(&cfg, &dev));
+        let n = [WINDOW, WINDOW, 8];
+        let v: Vec<f32> = (0..n[0] * n[1] * n[2]).map(|i| ((i % 7) as f32 - 3.0) / 3.0 + ((i / n[0]) % 5) as f32 * 0.2).collect();
+        let (whole, stats) = score(&dev, &net, &v, n, Pass::Budget(0.0), &mut |_| {}).unwrap();
+        assert_eq!((stats.windows, stats.copies, stats.cut_short.is_some()), (1, 1, false));
+        // All eight copies set out for; the second one's window fails.
+        FAIL_AT.with(|f| f.set(Some(1)));
+        let (part, stats) = score(&dev, &net, &v, n, Pass::Official, &mut |_| {}).unwrap();
+        assert_eq!(stats.copies, 1);
+        let why = stats.cut_short.expect("said");
+        assert!(why.contains("第 2/8 遍") && why.contains("前 1 遍"), "{why}");
+        assert_eq!(part, whole);
+        FAIL_AT.with(|f| f.set(Some(0)));
+        let failed = score(&dev, &net, &v, n, Pass::Official, &mut |_| {});
+        FAIL_AT.with(|f| f.set(None));
+        assert!(format!("{:#}", failed.err().expect("an error")).contains("结果未保存"));
     }
 
     /// `score` draws what each window found into the live map (`live`) and

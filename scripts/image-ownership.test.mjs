@@ -107,7 +107,7 @@ test('an old folder listing cannot replace the newer images folder', async () =>
     updateSaveDir: () => {}, buildStrip: () => {}, markStrip: () => {}, folderIndex: () => 0,
   };
   vm.createContext(context);
-  vm.runInContext(app.slice(app.indexOf('async function refreshFolder('), app.indexOf('function step(delta)')), context);
+  vm.runInContext(app.slice(app.indexOf('function under('), app.indexOf('function step(delta)')), context);
   const done = context.refreshFolder('A/image.mrc');
   context.S.token = 2;
   listed.resolve({ files: [], sizes: [] }); await done;

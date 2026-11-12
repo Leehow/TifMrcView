@@ -28,13 +28,16 @@ pub fn open(path: &str) -> Result<Arc<OpenImage>> {
     Ok(OpenImage::new(0, crate::formats::open(Path::new(path))?, 256 << 20))
 }
 
-/// `<stem>_<suffix>.mrc` beside the stack; an unlisted existing file is kept.
-fn output_path(d: &Dataset, suffix: &str) -> String {
+/// `<stem>_<suffix>.mrc` in the step folder `step` of the project
+/// (`project_dirs`: `2_tomograms` for what is reconstructed, `3_clean` for
+/// what is made from a tomogram to look at); beside the stack for an old flat
+/// project. An unlisted existing file is kept: the name gets `_2`, `_3`, ….
+fn output_path(d: &Dataset, step: &str, suffix: &str) -> String {
     let p = Path::new(&d.stack);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
     for k in 1.. {
         let name = if k == 1 { format!("{stem}_{suffix}.mrc") } else { format!("{stem}_{suffix}_{k}.mrc") };
-        let f = p.with_file_name(name).to_string_lossy().into_owned();
+        let f = crate::project_dirs::output_file(&d.stack, step, &name).to_string_lossy().into_owned();
         if !Path::new(&f).exists() || d.tomograms.iter().any(|t| t.path == f) {
             return f;
         }
@@ -58,6 +61,12 @@ pub struct ReconStep {
     /// depth, each from views phase flipped for that depth.
     #[serde(default)]
     pub ctf_3d: bool,
+    /// Added to the file names (`…_flip_look`), so that a tomogram built for
+    /// another purpose at the same binning (the look companion of
+    /// `auto::reconstruct_look`) does not take the plain name of one the user
+    /// has. Everything made from it (`_n2n`, `_deconv`) keeps the tag.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Largest defocus change across one 3D-CTF slab, Å.
@@ -100,7 +109,7 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
     if req.ctf_3d && flip.is_none() {
         bail!("3D CTF 校正需要先完成 CTF 估计并勾选相位翻转");
     }
-    let tag = format!("{method}_b{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" });
+    let tag = format!("{method}_b{}{}{}", req.bin, if three_d { "_ctf3d" } else if flip.is_some() { "_flip" } else { "" }, req.label.as_ref().map_or(String::new(), |l| format!("_{l}")));
     let mut made: Vec<Tomogram> = Vec::new();
     let mut backend = String::new();
     for (kind, src) in sources {
@@ -109,7 +118,9 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         let px = pixel_a(d, &img);
         output::validate(&img, &a, req.bin)?;
         let stage = format!("重构 {}", match kind { "even" => "偶数帧半", "odd" => "奇数帧半", _ => "全部" });
-        let path = output_path(d, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
+        // The look companion (and its halves) is made to look at: `3_clean`.
+        let step = if req.label.as_deref() == Some(super::auto::LOOK_LABEL) { crate::project_dirs::CLEAN } else { crate::project_dirs::TOMOGRAMS };
+        let path = output_path(d, step, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
         let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
         let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
         let how = Build { alignment: &a, bin: req.bin, params: &req.params, ctf: flip.as_ref().map(|c| (c, &d.optics, px)), ctf_3d: three_d };
@@ -132,6 +143,8 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
             method: format!("{:?}{}", req.params.method, if three_d { "+ctf3d" } else { "" }).to_lowercase(),
             phase_flipped: flip.is_some(),
             halves: None,
+            look: None,
+            z_offset: (req.params.y_slope == 0.0).then_some(req.params.z_offset),
         });
     }
     if made.len() == 3 {
@@ -287,7 +300,7 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
     super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics);
     crate::live::show_section("反卷积：中间层", &v, shape, shape[2] / 2, &[]);
-    let path = output_path(d, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
+    let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &v, shape, px, false)?;
     progress("反卷积", 1, 1);
     d.add_tomogram(Tomogram { path: path.clone(), kind: "deconvolved".into(), method: "wiener".into(), halves: None, ..src });
@@ -386,7 +399,7 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
         let part: Vec<f32> = out[nz / 2 * plane..(nz / 2 + 1) * plane].iter().map(|v| v * inputs.len() as f32 / (k + 1) as f32).collect();
         crate::live::show("去噪：中间层", w, h, &part, &[]);
     }
-    let path = output_path(d, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
+    let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "denoised".into(), method: if mode == Mode::Frames { "n2n-halves" } else { "n2n-neighbours" }.into(), halves: None, ..full });
     d.save()?;
@@ -504,7 +517,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
         bail!("已取消");
     }
     crate::live::show_section("缺失楔补偿：中间层", &out, shape, shape[2] / 2, &[]);
-    let path = output_path(d, &format!("{}_wedge", stem_suffix(&src.path, &d.stack)));
+    let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_wedge", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
@@ -514,6 +527,11 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
 /// Segments the membranes of `source` (else the latest tomogram that is not
 /// a half) into its label map. The user must have picked the model.
 pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, progress: Progress) -> Result<Made> {
+    membranes_pass(dev, d, source, crate::membrane::Pass::Official, progress)
+}
+
+/// `membranes` going over the tomogram as `pass` says.
+pub fn membranes_pass(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&str>, pass: crate::membrane::Pass, progress: Progress) -> Result<Made> {
     let now = std::time::Instant::now();
     let src = match source {
         Some(p) => d.tomograms.iter().find(|t| t.path == p),
@@ -521,8 +539,53 @@ pub fn membranes(dev: &burn::tensor::Device, d: &mut Dataset, source: Option<&st
     };
     let Some(src) = src.cloned() else { bail!("先完成重构") };
     let model = crate::membrane::model_path().ok_or_else(|| anyhow::anyhow!("先选择 MemBrain-seg 模型文件"))?;
-    let r = crate::membrane::segment_file(dev, &model, &src.path, progress)?;
+    let r = crate::membrane::segment_file_pass(dev, &model, &src.path, pass, progress)?;
     Ok(Made { paths: vec![r.labels], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+#[cfg(test)]
+mod layout {
+    use super::*;
+    use crate::project_dirs::{CLEAN, TOMOGRAMS};
+
+    fn dataset(stack: &std::path::Path) -> Dataset {
+        serde_json::from_value(serde_json::json!({ "version": 1, "stack": stack, "angles": [-30.0, 0.0, 30.0] })).unwrap()
+    }
+
+    #[test]
+    fn outputs_go_to_the_step_folders_of_a_new_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = dataset(&dir.path().join("ts.mrc"));
+        let full = output_path(&d, TOMOGRAMS, "wbp_b4");
+        let clean = output_path(&d, CLEAN, "wbp_b4_look_n2n");
+        assert_eq!(full, dir.path().join("2_tomograms/ts_wbp_b4.mrc").to_string_lossy());
+        assert_eq!(clean, dir.path().join("3_clean/ts_wbp_b4_look_n2n.mrc").to_string_lossy());
+        assert!(dir.path().join("2_tomograms").is_dir() && dir.path().join("3_clean").is_dir());
+        assert!(!dir.path().join("1_motion").exists() && !dir.path().join("4_sta").exists());
+        // An unlisted existing file is kept: the next gets _2; a listed one is replaced.
+        std::fs::write(&full, b"x").unwrap();
+        assert_eq!(output_path(&d, TOMOGRAMS, "wbp_b4"), dir.path().join("2_tomograms/ts_wbp_b4_2.mrc").to_string_lossy());
+        d.tomograms.push(Tomogram { path: full.clone(), kind: "full".into(), bin: 4, thickness: 1, method: "wbp".into(), phase_flipped: false, halves: None, look: None, z_offset: None });
+        assert_eq!(output_path(&d, TOMOGRAMS, "wbp_b4"), full);
+    }
+
+    #[test]
+    fn a_stack_in_the_motion_folder_puts_them_beside_it_not_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("1_motion")).unwrap();
+        let d = dataset(&dir.path().join("1_motion/ts.mrc"));
+        assert_eq!(output_path(&d, TOMOGRAMS, "wbp_b4"), dir.path().join("2_tomograms/ts_wbp_b4.mrc").to_string_lossy());
+    }
+
+    #[test]
+    fn an_old_flat_project_gets_its_outputs_beside_the_stack_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ts.tomo.json"), b"{}").unwrap();
+        let d = dataset(&dir.path().join("ts.mrc"));
+        assert_eq!(output_path(&d, TOMOGRAMS, "wbp_b4"), dir.path().join("ts_wbp_b4.mrc").to_string_lossy());
+        assert_eq!(output_path(&d, CLEAN, "wbp_b4_n2n"), dir.path().join("ts_wbp_b4_n2n.mrc").to_string_lossy());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
 
 #[cfg(test)]

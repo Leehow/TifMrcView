@@ -16,7 +16,9 @@
 //!   - STA: the high resolution kept for subtomogram averaging, about
 //!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
 //!     would change the high frequencies), and a RELION 5 folder beside
-//!     the stack to go on with.
+//!     the stack to go on with. Beside it a second, clear tomogram (twice
+//!     the voxel size, denoised and deconvolved) to look at and find
+//!     particles on, with the exact map between the two (`Look`).
 //! - Levelling and thickness (`level`): a quick bin-8 reconstruction twice
 //!   as thick as likely shows where the specimen is (detail varies there,
 //!   empty ice and vacuum do not); a lamella milled at an angle is laid
@@ -37,6 +39,7 @@
 //!   original independent reconstructions and its output is deconvolved.
 
 use super::{check_cancel, dataset::Dataset, output, pipeline, recon};
+pub use super::dataset::Look;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +54,13 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    pub fn name(self) -> &'static str {
+        match self {
+            Purpose::Survey => "survey",
+            Purpose::Display => "display",
+            Purpose::Sta => "sta",
+        }
+    }
     /// Output voxel size aimed at, Å.
     fn voxel(self) -> f64 {
         match self {
@@ -69,6 +79,10 @@ pub struct AutoReq {
     pub purpose: Purpose,
     /// Start over even when the dataset has an alignment and CTF.
     pub fresh: bool,
+    /// End a display tomogram with membrane segmentation (when the user has
+    /// picked the model). Not by default: it takes several times as long as
+    /// everything before it, and has its own button.
+    pub membranes: bool,
 }
 
 #[derive(Serialize)]
@@ -77,6 +91,9 @@ pub struct AutoResult {
     /// The tomogram to look at.
     pub path: String,
     pub raw: String,
+    /// STA: the clear companion of `raw` to look at and pick on (`path` is
+    /// then the raw tomogram too), and how its voxels map onto `raw`'s.
+    pub look: Option<Look>,
     /// The RELION 5 folder (for STA).
     pub relion: Option<String>,
     /// The label map with the membranes (material "膜"), beside `path`.
@@ -87,8 +104,9 @@ pub struct AutoResult {
     pub timings: Vec<(String, f64)>,
     /// The batches that chose which views to leave out.
     pub selection: Vec<super::select::Batch>,
-    /// How far the specimen was turned to lie flat (°): about Y (the tilt
-    /// offset) and about X (the depth slope along Y).
+    /// How far the specimen was turned to lie flat (°): about Y (the
+    /// alignment's whole tilt offset, also when an earlier run did the
+    /// turning) and about X (the depth slope along Y, found afresh each run).
     pub levelled: [f64; 2],
     pub bin: usize,
     pub thickness: usize,
@@ -137,11 +155,13 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     // Membranes are segmented at the end of a display tomogram when the
     // user has picked the MemBrain-seg model (the app asks beforehand).
-    let membranes = req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
+    let membranes = req.membranes && req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
+    let bin = output_bin(w, h, px, req.purpose.voxel());
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Survey => 5,
         Purpose::Display => 7 + membranes as usize,
+        Purpose::Sta if 2 * bin <= 16 => 8,
         Purpose::Sta => 5,
     };
     // When each step was first and last heard from, for `timings` (steps
@@ -177,7 +197,33 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         phase: false,
         backend: None,
     };
-    let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: vec![], groups: None, previous: None };
+    // What each view shows on its own (`triage`): a stack that did not come
+    // from this program's motion correction is looked at here.
+    if d.checks.len() != d.angles.len() {
+        super::triage::survey(&img, d)?;
+        d.save()?;
+    }
+    // The views left out before anything is measured on them: the ones
+    // that show nothing usable, and the user's own choice.
+    let out = super::triage::excluded(d);
+    if d.angles.len() - out.len() < 3 {
+        bail!("能用的图不到三张，无法重构");
+    }
+    // An alignment made with other views than these: fewer views now go
+    // on from its tracks, a view taken back in is tracked again.
+    if let Some(a) = d.alignment.clone() {
+        let mut have: Vec<usize> = a.views.iter().filter(|v| v.excluded).map(|v| v.file_index).collect();
+        have.sort_unstable();
+        if have != out {
+            let grown = have.iter().all(|z| out.contains(z));
+            let again = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: Some(a.axis), bin: a.bin, sweep: false, patch: Some(a.patch), excluded: out.clone(), groups: None, previous: grown.then_some(a) };
+            d.alignment = Some(super::align(&img, &again, &|i, n| stage(1)("倾转对齐", i, n))?);
+            d.aligned = None;
+            d.save()?;
+        }
+    }
+    let fresh_alignment = d.alignment.is_none();
+    let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: out, groups: None, previous: None };
     match (d.alignment.is_none(), d.ctf.is_none()) {
         // With the acquisition's axis known, the CTF does not wait for the
         // alignment: both run at once (the CTF on a copy of the dataset).
@@ -220,21 +266,59 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             d.save()?;
         }
         selection.extend(batches);
+        // Views this left out are the program's choice like the others:
+        // shown to the user, who may take them back.
+        let mut noted = false;
+        for v in d.alignment.as_ref().unwrap().views.iter().filter(|v| v.excluded) {
+            if let Some(c) = d.checks.iter_mut().find(|c| c.z == v.file_index).filter(|c| c.bad.is_none()) {
+                if !d.picks.contains_key(&v.file_index) {
+                    c.bad = Some("和其他图对不齐，去掉后断层图更清楚".into());
+                    noted = true;
+                }
+            }
+        }
+        if noted {
+            let dropped: Vec<usize> = d.picks.iter().filter(|(_, keep)| !**keep).map(|(z, _)| *z).collect();
+            d.verdict = Some(super::triage::verdict(&d.checks, &dropped));
+            d.aligned = None;
+            d.save()?;
+        }
+    }
+    check_cancel()?;
+    // The aligned views at a small size, for the user to see how well the
+    // series aligned (played as a film, the specimen turns about a still axis).
+    if fresh_alignment || d.aligned.as_ref().is_none_or(|p| !std::path::Path::new(p).exists()) {
+        let small = [4usize, 8, 16].into_iter().find(|b| w.max(h) / b <= 1024).unwrap_or(16);
+        let (views, sw, sh, _) = output::aligned(&img, d.alignment.as_ref().unwrap(), small, 0, 0, &|i, n| stage(3)("对齐预览", i, n))?;
+        let name = format!("{}_aligned.mrc", std::path::Path::new(&d.stack).file_stem().and_then(|s| s.to_str()).unwrap_or("stack"));
+        let file = crate::project_dirs::output_file(&d.stack, crate::project_dirs::TOMOGRAMS, &name).to_string_lossy().into_owned();
+        output::write_mrc(&file, &views, [sw, sh, views.len() / (sw * sh)], px * small as f64, false)?;
+        d.aligned = Some(file);
+        d.save()?;
     }
     check_cancel()?;
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
-    let bin = output_bin(w, h, px, req.purpose.voxel());
     let mut leveled = a.clone();
     let place = level(&img, &mut leveled, px, bin, req.purpose != Purpose::Sta, &stage(3))?;
+    // The alignment's own offset, so a rerun on an alignment levelled before
+    // still reports how far the specimen was turned (this run adds none).
+    let tilt_offset = leveled.tilt_offset;
     if place.tilt_offset != 0.0 {
         d.alignment = Some(leveled);
         d.save()?;
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let made = pipeline::reconstruct(d, &pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false }, &stage(4))?;
+    let step = pipeline::ReconStep { bin, params, halves: req.purpose != Purpose::Survey && d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false, label: None };
+    let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
+    let mut look = None;
+    if req.purpose == Purpose::Sta {
+        check_cancel()?;
+        let (s5, s6, s7) = (stage(5), stage(6), stage(7));
+        look = clear_companion(dev, d, &step, &raw, [&s5, &s6, &s7])?;
+    }
     let mut path = raw.clone();
     let mut relion = None;
     let mut note = None;
@@ -267,24 +351,132 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut labels = None;
     if membranes {
         check_cancel()?;
-        labels = Some(pipeline::membranes(dev, d, Some(&path), &stage(8))?.paths.remove(0));
+        // Two of the eight mirrored copies: a quarter of the time (the whole
+        // pass took 36 min for a 930 × 960 × 240 tomogram on an M1 Max, of
+        // 41 in all), the membranes of a tomogram to show are found as well;
+        // the membrane tool itself goes over it with all eight.
+        labels = Some(pipeline::membranes_pass(dev, d, Some(&path), crate::membrane::Pass::Copies(2), &stage(8))?.paths.remove(0));
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
-        // The export makes `<name>_relion5` inside the folder it is given.
+        // The export makes `<name>_relion5` inside the folder it is given:
+        // `4_sta` of the project (beside the stack for an old flat project).
         let stack = std::path::Path::new(&d.stack);
-        let parent = stack.parent().unwrap_or(std::path::Path::new("."));
+        let parent = &crate::project_dirs::dir_for(&d.stack, crate::project_dirs::STA);
+        std::fs::create_dir_all(parent)?;
         let name = stack.file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
-        super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(5)("导出 RELION 5", i, n))?;
+        let k = if look.is_some() { 8 } else { 5 };
+        super::export::run(d, "relion5", &parent.to_string_lossy(), 1, &|i, n| stage(k)("导出 RELION 5", i, n))?;
         relion = Some(parent.join(format!("{name}_relion5")).to_string_lossy().into_owned());
     }
+    let shown = look.as_ref().map_or(path.clone(), |l: &Look| l.path.clone());
+    d.made.insert(req.purpose.name().into(), shown);
+    d.save()?;
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
     sorted.sort_by(f64::total_cmp);
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, relion, labels, note, timings, selection, levelled: [place.tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, look, relion, labels, note, timings, selection, levelled: [tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+/// The tag in the file names of the look tomogram and what is made from it
+/// (`<stem>_sart3_b4_flip_look_n2n_deconv.mrc`): the display tomogram at that
+/// binning has the same name without it.
+pub const LOOK_LABEL: &str = "look";
+
+/// One reconstruction grid along each axis, for `look_map`: voxels of `bin`
+/// pixels, `n` of them, and (along Z) the depth offset of the placement.
+#[derive(Clone, Copy, Debug)]
+pub struct Grid {
+    pub bin: usize,
+    pub n: [usize; 3],
+    pub z_offset: f64,
+}
+
+impl Grid {
+    /// The grid `reconstruct` makes of a stack `w`×`h` pixels at `bin`.
+    pub fn of(w: usize, h: usize, bin: usize, thickness: usize, z_offset: f64) -> Grid {
+        Grid { bin, n: [w / bin, h / bin, thickness], z_offset }
+    }
+}
+
+/// Where the voxels of `look` lie on the grid of `raw`: raw index = scale ×
+/// look index + offset, per axis. Derived from the code, not assumed:
+/// - `output::aligned` bins by box-averaging `bin`×`bin` stack pixels and
+///   crops the odd remainder equally on both sides, so output pixel x of `w`
+///   lies at `bin·(x − (w−1)/2)` stack pixels from the image centre; the
+///   same along Y.
+/// - `recon` sets the volume's X centre `(w−1)/2` and Y row centre on the
+///   view's centre, and a section z at depth `z − (Z−1)/2 + z_offset` output
+///   pixels, i.e. `bin·(z − (Z−1)/2 + z_offset)` stack pixels.
+/// Putting the same physical point on both grids, with k = look.bin/raw.bin:
+/// `i_raw = k·(i_look − (n_look−1)/2 + s_look) + (n_raw−1)/2 − s_raw`, where
+/// s is `z_offset` along Z and 0 along X and Y. (With the look grid exactly
+/// half as large, `n_raw = 2·n_look` and `z_offset` half the raw one, the
+/// offset is 0.5 on every axis: look voxel i spans raw voxels 2i and 2i+1.)
+pub fn look_map(raw: Grid, look: Grid) -> (f64, [f64; 3]) {
+    let k = look.bin as f64 / raw.bin as f64;
+    let offset = std::array::from_fn(|a| {
+        let (s_raw, s_look) = if a == 2 { (raw.z_offset, look.z_offset) } else { (0.0, 0.0) };
+        -k * ((look.n[a] as f64 - 1.0) / 2.0 - s_look) + (raw.n[a] as f64 - 1.0) / 2.0 - s_raw
+    });
+    (k, offset)
+}
+
+/// STA: the clear tomogram to look at and find particles on. The same
+/// levelled alignment and placement as the raw one `raw_step` made, at twice
+/// the binning (half the thickness and depth offset; `y_slope` unchanged),
+/// then Noise2Noise and the deconvolution as the display tomogram gets them;
+/// no missing-wedge step, no membranes. `progress` reports the three steps.
+/// None when there is no coarser binning (above 16) or the placement
+/// has a depth slope (whole-section shifts differ between binnings, so the
+/// map would not be exact). The `Look` is saved with the raw tomogram.
+fn clear_companion(
+    dev: &burn::tensor::Device,
+    d: &mut Dataset,
+    raw_step: &pipeline::ReconStep,
+    raw: &str,
+    progress: [pipeline::Progress; 3],
+) -> Result<Option<Look>> {
+    let Some((made, mut look)) = reconstruct_look(d, raw_step, progress[0])? else { return Ok(None) };
+    check_cancel()?;
+    let path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(made), steps: 1000 }, progress[1])?.paths.remove(0);
+    check_cancel()?;
+    look.path = pipeline::deconvolve(d, Some(&path), progress[2])?.paths.remove(0);
+    attach_look(d, raw, &look)?;
+    Ok(Some(look))
+}
+
+/// Saves `look` with the raw tomogram's entry in the dataset.
+pub fn attach_look(d: &mut Dataset, raw: &str, look: &Look) -> Result<()> {
+    if let Some(t) = d.tomograms.iter_mut().find(|t| t.path == raw) {
+        t.look = Some(look.clone());
+    }
+    d.save()
+}
+
+/// The reconstruction half of `clear_companion`: the tomogram at twice
+/// `raw_step`'s binning with the placement scaled to it, and the `Look`
+/// (whose path is that unprocessed tomogram) mapping it onto the raw one.
+pub fn reconstruct_look(d: &mut Dataset, raw_step: &pipeline::ReconStep, progress: pipeline::Progress) -> Result<Option<(String, Look)>> {
+    let p = &raw_step.params;
+    let bin = 2 * raw_step.bin;
+    if bin > 16 || p.y_slope != 0.0 {
+        return Ok(None);
+    }
+    let (w, h) = {
+        let img = pipeline::open(&d.stack)?;
+        (img.info().width, img.info().height)
+    };
+    let params = recon::Params { thickness: p.thickness.div_ceil(2), z_offset: p.z_offset / 2.0, ..p.clone() };
+    let (raw_grid, look_grid) = (Grid::of(w, h, raw_step.bin, p.thickness, p.z_offset), Grid::of(w, h, bin, params.thickness, params.z_offset));
+    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false, label: Some(LOOK_LABEL.into()) };
+    let made = pipeline::reconstruct(d, &step, progress)?;
+    let (scale, offset) = look_map(raw_grid, look_grid);
+    let path = made.paths[0].clone();
+    Ok(Some((path.clone(), Look { path, scale, offset })))
 }
 
 /// How the tomogram is placed: thickness and depth offset (output pixels
@@ -505,8 +697,11 @@ fn least_squares(p: &[&(f64, f64, f64, f64)]) -> Option<[f64; 3]> {
 
 /// The range of sections with structure: per section, the variance of a
 /// band-passed copy (`band_pass`), smoothed along the depth; the specimen
-/// is the run of sections around the peak that stay clearly above the
-/// quiet sections' level (median + 3 × their spread).
+/// reaches from the first to the last run of sections that stay clearly
+/// above the quiet sections' level (median + 3 × their spread). All the
+/// runs, not the one with the most detail only: hollow things (virus-like
+/// particles, vesicles) show detail at their surfaces and little inside,
+/// and a layer of gold beside them shows more than they do.
 pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usize) {
     use rayon::prelude::*;
     let plane = w * h;
@@ -532,22 +727,75 @@ pub fn specimen_extent(vol: &[f32], w: usize, h: usize, z: usize) -> (usize, usi
     if peak < median + 4.0 * spread {
         return (z / 4, 3 * z / 4);
     }
-    // From the peak out to where the level is back near the quiet one.
     let cut = median + 3.0 * spread;
-    let top = (0..z).max_by(|&a, &b| detail[a].total_cmp(&detail[b])).unwrap();
-    let mut lo = top;
-    while lo > 0 && detail[lo - 1] >= cut {
-        lo -= 1;
+    // Runs above the cut, as (first, one past the last); one or two
+    // sections alone are not a structure (the level is smoothed over five).
+    let mut runs: Vec<(usize, usize)> = vec![];
+    let mut k = 0;
+    while k < z {
+        if detail[k] >= cut {
+            let first = k;
+            while k < z && detail[k] >= cut {
+                k += 1;
+            }
+            if k - first >= 3 {
+                runs.push((first, k));
+            }
+        } else {
+            k += 1;
+        }
     }
-    let mut hi = top;
-    while hi + 1 < z && detail[hi + 1] >= cut {
-        hi += 1;
+    match (runs.first(), runs.last()) {
+        (Some(a), Some(b)) => (a.0, b.1),
+        _ => {
+            // Only the peak itself stands out: out from it to the quiet level.
+            let top = (0..z).max_by(|&a, &b| detail[a].total_cmp(&detail[b])).unwrap();
+            let mut lo = top;
+            while lo > 0 && detail[lo - 1] >= cut {
+                lo -= 1;
+            }
+            let mut hi = top;
+            while hi + 1 < z && detail[hi + 1] >= cut {
+                hi += 1;
+            }
+            (lo, hi + 1)
+        }
     }
-    (lo, hi + 1)
 }
 
 #[cfg(test)]
 mod tests {
+    /// Hollow particles over a layer of gold: the gold has the most detail,
+    /// the particles' two surfaces less and their inside next to none. The
+    /// specimen is all of it.
+    #[test]
+    fn the_specimen_reaches_over_all_its_layers_of_detail() {
+        let (w, h, z) = (64usize, 64usize, 96usize);
+        let mut seed = 11u64;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1000) as f32 / 1000.0 - 0.5
+        };
+        let mut vol = vec![0f32; w * h * z];
+        for k in 0..z {
+            let amount = match k {
+                30..=37 => 0.5,
+                38..=52 => 0.06,
+                53..=60 => 0.5,
+                64..=69 => 1.0,
+                _ => 0.05,
+            };
+            for i in 0..w * h {
+                vol[k * w * h + i] = noise() * amount;
+            }
+        }
+        let (lo, hi) = super::specimen_extent(&vol, w, h, z);
+        assert!((27..=31).contains(&lo), "lo {lo}");
+        assert!((69..=73).contains(&hi), "hi {hi}");
+    }
+
     #[test]
     fn plane_follows_a_tilted_band() {
         let (w, h, z) = (96usize, 64usize, 48usize);

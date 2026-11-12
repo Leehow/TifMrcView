@@ -74,16 +74,24 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | --- | --- |
 | Not sure / "process this" | `tmv run INPUT` (detects the data type) |
 | Tomogram from a tilt series or from movies + mdoc | `tmv tomo ts.mrc` or `tmv tomo ts.mdoc` |
-| … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder) |
+| … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder and a clear `"look"` tomogram) |
 | … just a quick look | `tmv tomo ts.mrc --for survey` |
+| Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` makes the cards and stops; the user chooses, then `--pick N` (step 5) |
 | Membranes, vesicles, microtubules of a tomogram | `tmv membranes tomo.mrc` |
 | Single-particle reconstruction | `tmv spa FOLDER` (see step 5) |
 | Defocus / CTF of micrographs | `tmv ctf FOLDER` |
 | Denoise an image or stack | `tmv denoise FILE` |
 
 Options that exist (use only when needed): `--pixel Å` and `--kv kV` when
-the files do not carry them (the error JSON says so), `--symmetry D7` for SPA
-when the user knows the point group, `--kind N` for SPA (step 5), `--fresh`
+the files do not carry them (the error JSON says so; a header pixel size of
+0 or exactly 1 counts as not carried, and for tomograms and tilt series
+`--pixel` fills in only such files, a pixel size the file states wins), `--symmetry D7` for SPA
+when the user knows the point group, `--kind N` for SPA and `--pick N` for
+STA (step 5; the user's choice: see the `needsChoice` entry below; `--auto`
+lets the program choose, only for unattended batch runs the user asked for),
+`--out DIR` for STA (default: `4_sta/` in the project folder; for a
+tomogram of an older flat project or from elsewhere, a folder
+`<first input's name>_sta` beside it), `--fresh`
 to redo instead of reusing finished steps. For SPA movies: a gain reference
 beside them (name with gain, CountRef or `norm-`) is found and applied by
 itself; otherwise `--gain FILE`. `--dose e/Å²` (total per movie) turns on
@@ -94,7 +102,8 @@ Membrane segmentation needs the MemBrain-seg model, which users download
 themselves from the official page (https://github.com/teamtomo/membrain-seg,
 a `.ckpt` file); do not fetch it from anywhere else. Copy it to the server
 once and run `tmv setup --membrane ~/models/membrain.ckpt`. After that
-`tmv tomo` (display) also segments membranes automatically. SPA gets better
+`tmv tomo --for display --membranes` also segments membranes (not by
+default: it takes longer than the reconstruction itself). SPA gets better
 picks with SAM 2.1: `tmv setup --sam` downloads it once (156 MB).
 
 On a server with several GPUs, look at `nvidia-smi` first and run on an idle
@@ -103,12 +112,16 @@ that card). Never take a card another job is using fully.
 
 Follow progress: `ssh HOST 'tail -n 5 ~/tmv-jobs/NAME/tmv.log'`. Check every
 few minutes, more rarely for long jobs; `pgrep -f "tmv "` tells whether it is
-still running. Do not start several GPU jobs at once on the same GPU.
+still running. A second tmv job on the same GPU waits for the first to finish
+by itself (two at once run out of GPU memory); it says so in its log.
 
 ## 5. Read the result
 
 When the job ends, the log ends with one JSON object, also saved beside the
-input as `INPUT.tmv.json` (`tmv.json` inside a folder):
+input as `INPUT.tmv.json` (`tmv.json` inside a folder; `tmv tomo --for sta`
+and `--for survey` save `INPUT.sta.tmv.json` and `INPUT.survey.tmv.json`, so
+one stack's results do not overwrite each other; `tmv sta` saves
+`OUT/sta.tmv.json`, so the `.tmv.json` of a tilt series from `tmv tomo` stays):
 - `"ok": true` — `"open"` is the file to look at; other fields hold the
   numbers to report (resolution, defocus, vesicle count…); `"note"`, when
   present, is something the user should know (translate it if needed).
@@ -123,6 +136,74 @@ input as `INPUT.tmv.json` (`tmv.json` inside a folder):
   decide): pick the protein, never ice, carbon edges or clumps; different
   views of the same particle can be picked together. Then run
   `tmv spa FOLDER --kind N` (or `--kind 1,3`).
+- `"needsChoice": true` (exit status 2, STA) — plain `tmv sta` made class-average
+  "cards" of the blobs in the tomograms (`"cards"`: `id`, `diameterA`,
+  `members`, `compact`, `likely`, `path`; the files are `card_N.mrc` in
+  `"cardsDir"`) and **stopped on purpose**: what to average is the user's
+  choice, never yours, and nothing has been averaged. Copy the cards here,
+  **show them to the user** (in TifMrcView Pro, best on the clear `look`
+  tomogram, where they can also mark particles, lines, surfaces or spheres and
+  save `marks.json`) and **ask which one**; do not guess, and do not pick the
+  card that "looks best" for them. `likely` and `compact` and the hints on
+  stderr (likely a particle, line-like or layer-like) only describe the card's
+  shape. Then run the command in `"next"` (`tmv sta --pick N TOMOGRAM…`) with
+  the card the user chose, or `tmv sta --points marks.json …` for what they
+  marked. It names the tomograms, so a tilt series is not reconstructed again.
+  The cards are kept in `OUT/cards/` (delete it to make them again). Only when
+  the user explicitly asked for an unattended batch run, add `--auto`: then
+  `tmv sta` tries each card as a template (`"trials"`: per card `ok`, `reason`,
+  `particles`, `agreement`, `fsc`) and takes the strongest itself (it names the
+  others on stderr); it stops with this status only when no card gave an average,
+  and then the same rule holds: show the cards (`"ok": true` and a high
+  `"agreement"` in `"trials"` are hints) and ask which one.
+
+`tmv tomo --for sta` also makes a clear companion of the tomogram (twice the
+voxel size, denoised and deconvolved) to look at and pick particles on, and
+prints it as `"look"`: its `path`, and `scale` and `offset` with which a voxel
+of the full-detail tomogram is `scale` × the voxel of the look tomogram +
+`offset` (per axis x, y, z). Anything that becomes a card or an average comes from the full-detail tomogram.
+`tmv sta` makes the cards from the full-detail tomogram only (the look one
+loses the internal structure that classes and averages need), searches the
+look tomogram for particles with the card as template, and cuts, aligns and
+averages the full-detail one (`"look"` per tomogram in its output;
+`particles.csv` stays in full-detail voxels); it finds the look record in the
+`*.tomo.json` (in `2_tomograms/`, or beside the tomogram of an older flat
+project), and goes on without it, with a line on
+stderr, if the file is missing.
+
+`tmv sta` takes tilt series (their tomogram is made first, exactly as
+`tmv tomo --for sta` does) or tomograms that `tmv tomo --for sta` wrote, one
+or several of the same specimen. Without `--pick`, `--points`, `--template` or `--auto` it
+only writes the cards to `OUT/cards/` and stops (exit status 2): the user
+chooses what to average, then you rerun with `--pick N` or `--points
+marks.json`, and everything after the choice is automatic. When what the user wants is not a small particle (anything at all: a large complex, a bud, a junction), ask them for two or three examples and pass them as circles: `--marks marks.json` with marks of kind `"example"` (`{"marks":[{"kind":"example","tomogram":"/abs/tomogram.mrc","points":[[cx,cy,z],[rx,ry,z]]}]}`: the centre and any point on the circle, voxels of that file); everything that looks like them is found in all the inputs, at each of the sizes circled, and averaged into `OUT/circled/` (the places found are in `OUT/circled/found.json`). `--template map.mrc` (or `.em`) uses a density map the user already has as the template and runs to the end without stopping (result in `OUT/own/`). `--kinds` (with the same tomograms and `--out`, on a finished average) sorts its particles into kinds and lists them (JSON `kinds`: `id`, `count`, `share`, `map`; an empty list means one kind, say so plainly); `--kinds --keep 1,3` then averages only those kinds at their poses into `OUT/…/kinds/kept/` and prints the usual summary (`kept` in the JSON); the user chooses which kinds to keep. With `--auto` it
+tries every card (at most 12) as the template of a coarse run (`OUT/trials/`, the
+results kept in `OUT/cards/trials.json`; a card that is a layer, a line or a
+small blob finds no group of particles that stands out, a particle gives an
+average whose two halves agree far out: its `"agreement"` is the area under
+their FSC, 1/Å), then, by itself when the cards within 0.75 of the best agreement show one kind of particle
+(it takes the best of them and says on stderr which cards show the same
+particle; with `--pick N` it skips the trials), the average of everything that looks like card N: `average.mrc`, `average_raw.mrc`, `half1.mrc`,
+`half2.mrc`, `particles.csv` and `sta.json` in `OUT/` (`"open"` is
+`average.mrc`, weighted by the half agreement, sharpened (`"sharpenB"`, Å², negative; absent when no fit was possible) and cut at the resolution; `average_raw.mrc` is the plain average; `"particles"` how many were averaged). Where the tilt series is known the average is made from the tilt images themselves when that makes the halves agree better than the tomograms do, and the image shift of each view, shared by all the particles of its tomogram, is refined from them and kept only if the halves then agree better by more than 1% (`"viewsRefined"` in `sta.json`, `true` when kept). The JSON also has
+`"trials"` (when the cards were tried), `"resolutionA"` (FSC 0.143 between the halves) with the curve `"fsc"`,
+`"diameterA"` with `"diameterFrom": "card"` (1.33 × the card's size),
+`"candidates"`, `"seconds"` (the whole run, a tomogram made first included),
+`"searched"` (`"look"` or `"raw"`: which tomogram the template was searched
+on) with `"searchVoxelA"`, and `"viewsRefined"` (present when the views were refined; `true` when that was kept), and `"ctfLimited": true` when the FSC has a dip
+that rises again (a local minimum below 0.5 followed by a value 0.15 higher):
+the halves disagree at a zero of the contrast transfer and agree again behind
+it. `"resolutionA"` is then the dip and `"signalA"` is where they last agree
+(finer; the data holds that much); both are steady from run to run. (`"kinds"` and `"distinct"`
+are left out; they belong to the blob search.) Progress on stderr counts the
+steps of the whole run ("第 k/N 步 · …"); a line per trial says what each card gave,
+and one says which card was taken and where the others are when `--auto` picks a card itself, and the last
+line gives the resolution, the particle count and where `average.mrc` is.
+The tilt range comes
+from the `*.tomo.json` of each tomogram (`2_tomograms/`, or beside it in an
+older flat project); without one it assumes -60 to 60
+and warns on stderr. Do not quote a resolution unless the user asks: report
+the particle count and let them judge the average and the two halves.
 
 ## 6. Copy the results back and open them
 
@@ -139,9 +220,26 @@ Then tell the user what to open in **TifMrcView Pro**:
 - tomogram: the `"open"` file; its label map (`*.labels.tif`, materials
   膜 membrane / 囊泡 vesicle / 微管 microtubule) opens with it, and the 3D view
   shows them; vesicle sizes are in `*.vesicles.csv`;
+- STA: `average.mrc` (weighted by the half agreement, sharpened, cut at the resolution; `average_raw.mrc` is the plain one; and the half maps `half1.mrc`, `half2.mrc`); the
+  picked particles are listed in `particles.csv`;
 - SPA: the sharpened map (`"map"`) in the 3D view; opening the folder in the
   SPA workspace shows every step (project files move with the folder);
-- the cryo-ET workspace likewise reopens the dataset (`*.tomo.json`).
+- the cryo-ET workspace likewise reopens the dataset (`*.tomo.json`, in
+  `2_tomograms/` of the project folder).
+
+Where a cryo-ET job's files go: the folder that holds the raw tilt series
+(or the movie frames and the `.mdoc`) is the project folder, and each step
+gets a subfolder in it; the raw files are never moved or changed. `1_motion/`
+motion-corrected tilt series made from movie frames (and their even/odd halves);
+`2_tomograms/` the dataset `<stem>.tomo.json` and the reconstructed tomograms
+(and halves); `3_clean/` what is made from a tomogram to look at (the `look`
+tomogram, denoised, deconvolved, missing-wedge-corrected files); `4_sta/`
+subtomogram averaging (`cards/`, `average.mrc`, …, and the RELION 5 folder).
+A label map stays beside the image it labels (`*.labels.tif`), so the
+membranes of a clean tomogram lie in `3_clean/`. A project made by an older
+version has everything flat beside the tilt series (its `<stem>.tomo.json`
+lies beside the stack); it stays flat and keeps working.
+
 
 Report briefly: what ran, how long, the key numbers from the JSON, and the
 paths. Remove large intermediate files on the server only if the user agrees.

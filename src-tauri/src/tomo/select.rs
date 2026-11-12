@@ -85,7 +85,8 @@ pub fn exclude_views(img: &std::sync::Arc<crate::image::OpenImage>, d: &Dataset,
     let mut residuals: Vec<f64> = a.views.iter().filter(|v| !v.excluded).map(|v| v.residual).collect();
     residuals.sort_by(f64::total_cmp);
     let median = residuals[residuals.len() / 2];
-    let mut worst: Vec<&super::View> = a.views.iter().filter(|v| !v.excluded && v.residual > 1.5 * median).collect();
+    // Not the views the user asked to keep.
+    let mut worst: Vec<&super::View> = a.views.iter().filter(|v| !v.excluded && v.residual > 1.5 * median && d.picks.get(&v.file_index) != Some(&true)).collect();
     worst.sort_by(|x, y| y.residual.total_cmp(&x.residual));
     let mut candidates: Vec<usize> = worst.iter().take(CANDIDATES).map(|v| v.file_index).collect();
     let mut current = a.clone();

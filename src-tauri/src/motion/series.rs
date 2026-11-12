@@ -255,12 +255,19 @@ pub struct SeriesReq {
     pub folder: Option<String>,
     pub output: String,
     pub params: Params,
-    /// Delete each tilt's own files once the stacks are written (the
-    /// one-button reconstruction needs only the stacks).
+    /// Kept for older callers; a tilt's own files are no longer written.
     #[serde(default)]
     pub drop_tilts: bool,
+    /// Start over even when part of the series was corrected before.
+    #[serde(default)]
+    pub fresh: bool,
+    /// Small, quick sums (`Params::preview`) to choose the views and series
+    /// with and to make a tomogram to look at; a series corrected in full
+    /// before is kept as it is.
+    #[serde(default)]
+    pub preview: bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
     pub z: usize,
@@ -270,17 +277,95 @@ pub struct Record {
     pub dose: Option<f64>,
     pub skipped: Option<String>,
     pub result: Option<MotionResult>,
+    /// Where the view lies in the stacks (None: not in them).
+    #[serde(default)]
+    pub section: Option<usize>,
+    /// Mean and opaque part of the view (`tomo::triage::measure`), and the
+    /// quick CTF fit of the whole view: defocus (µm), ring resolution (Å).
+    #[serde(default)]
+    pub mean: f64,
+    #[serde(default)]
+    pub dark: f64,
+    #[serde(default)]
+    pub defocus_um: Option<f64>,
+    #[serde(default)]
+    pub fit_res_a: Option<f64>,
+    /// Least, greatest, sum and sum of squares of the view in the full,
+    /// even and odd stacks (for their headers).
+    #[serde(default)]
+    stats: Vec<[f64; 4]>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesResult {
     pub path: Option<String>,
     pub even: Option<String>,
     pub odd: Option<String>,
+    /// The views at a small size (`SMALL` pixels), same sections.
+    #[serde(default)]
+    pub small: Option<String>,
     pub angles: Vec<f64>,
     pub records: Vec<Record>,
     pub warnings: Vec<String>,
+    /// The mdoc this was made from, and whether every movie is done: a run
+    /// that was stopped goes on from the records of the views it finished.
+    #[serde(default)]
+    pub mdoc: String,
+    #[serde(default)]
+    pub complete: bool,
+    /// Size of the views and how many the stacks were laid out for.
+    #[serde(default)]
+    pub shape: [usize; 3],
+    #[serde(default)]
+    pub pixel_a: f64,
+    /// Made of preview sums.
+    #[serde(default)]
+    pub preview: bool,
 }
+
+/// Longer side of the small copies of the views, pixels.
+pub const SMALL: usize = 512;
+
+/// A view box-averaged to at most `SMALL` pixels along its longer side.
+pub fn shrink(v: &[f32], w: usize, h: usize) -> (Vec<f32>, usize, usize) {
+    let bin = w.max(h).div_ceil(SMALL).max(1);
+    let (sw, sh) = ((w / bin).max(1), (h / bin).max(1));
+    let mut out = vec![0f32; sw * sh];
+    use rayon::prelude::*;
+    out.par_chunks_mut(sw).enumerate().for_each(|(y, row)| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let mut sum = 0.0;
+            for dy in 0..bin {
+                let at = (y * bin + dy) * w + x * bin;
+                sum += v[at..at + bin].iter().sum::<f32>();
+            }
+            *o = sum / (bin * bin) as f32;
+        }
+    });
+    (out, sw, sh)
+}
+
+/// The records of an earlier, unfinished run of the same mdoc into the same
+/// stacks, when its files are still as it left them.
+fn earlier(state: &Path, req: &SeriesReq, sections: usize) -> Option<SeriesResult> {
+    let prior: SeriesResult = serde_json::from_slice(&std::fs::read(state).ok()?).ok()?;
+    let [w, h, n] = prior.shape;
+    // The same acquisition also after the folder was moved or copied; a
+    // preview does not stand for the full correction.
+    let name = |p: &str| Path::new(p).file_name().map(|n| n.to_os_string());
+    let same = name(&prior.mdoc) == name(&req.mdoc) && (req.preview || !prior.preview) && (prior.complete || (n == sections && prior.preview == req.preview)) && w > 0 && h > 0;
+    let files = [Some(req.output.clone()), req.params.even_odd.then(|| output::sibling(&req.output, "even")), req.params.even_odd.then(|| output::sibling(&req.output, "odd"))];
+    let kept = prior.records.iter().filter(|r| r.section.is_some()).count();
+    let n = if prior.complete { kept } else { n };
+    (same && n > 0 && files.iter().flatten().all(|f| output::Sections::fits(f, w, h, n))).then_some(prior)
+}
+
+/// Motion correction of every movie of an mdoc into a tilt series, a view
+/// at a time in the order they were recorded (the untilted view of a
+/// dose-symmetric series comes first), each written straight to its place
+/// in the stacks (sorted by tilt) and shown (`crate::live`). What was
+/// measured of each view is kept as it is done, so a run that was stopped
+/// goes on where it was.
 pub fn run(
     req: &SeriesReq,
     progress: &(dyn Fn(&str, usize, usize) + Sync),
@@ -296,21 +381,19 @@ pub fn run(
             found_gain = Some(g);
         }
     }
+    // A tilt series made from frames goes to `1_motion/` of the project (the
+    // frames' folder), its halves and the run's records with it; an old flat
+    // project (its dataset beside the stack) stays flat.
+    req.output = crate::project_dirs::motion_output(&req.output);
+    let dir = Path::new(&req.output).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
+    std::fs::create_dir_all(&dir)?;
     let req = &req;
     output::protect(&req.mdoc, &req.output)?;
-    for v in &doc.views {
-        if let Some(path) = resolve(
-            Path::new(&req.mdoc),
-            &v.movie,
-            req.folder.as_deref().map(Path::new),
-        ) {
-            for out in [
-                req.output.clone(),
-                output::sibling(&req.output, "even"),
-                output::sibling(&req.output, "odd"),
-            ] {
-                output::protect(path.to_str().context("路径编码无效")?, &out)?;
-            }
+    let movies: Vec<Option<PathBuf>> = doc.views.iter().map(|v| resolve(Path::new(&req.mdoc), &v.movie, req.folder.as_deref().map(Path::new))).collect();
+    let (even_path, odd_path, small_path) = (output::sibling(&req.output, "even"), output::sibling(&req.output, "odd"), output::sibling(&req.output, "small"));
+    for path in movies.iter().flatten() {
+        for out in [&req.output, &even_path, &odd_path, &small_path] {
+            output::protect(path.to_str().context("路径编码无效")?, out)?;
         }
     }
     let unknown =
@@ -324,152 +407,317 @@ pub fn run(
             "mdoc 含未知/零剂量，累计前曝光不可信；此批不应用剂量加权，请指定每倾角总剂量".into(),
         );
     }
+    // Where each view with a movie lies in the stacks: sorted by tilt.
+    let mut planned: Vec<usize> = (0..doc.views.len()).filter(|&i| movies[i].is_some()).collect();
+    planned.sort_by(|&a, &b| doc.views[a].angle.total_cmp(&doc.views[b].angle));
+    let section_of = |i: usize| planned.iter().position(|&p| p == i);
+    let state = PathBuf::from(format!("{}.motion-series.json", req.output));
+    let prior_preview = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice::<SeriesResult>(&b).ok()).is_some_and(|p| p.preview);
+    let prior = if req.fresh { None } else { earlier(&state, req, planned.len()) };
+    if let Some(p) = prior.as_ref().filter(|p| p.complete) {
+        progress("批次完成", doc.views.len(), doc.views.len());
+        return Ok(SeriesResult { records: p.records.clone(), warnings: p.warnings.clone(), angles: p.angles.clone(), path: p.path.clone(), even: p.even.clone(), odd: p.odd.clone(), small: p.small.clone(), mdoc: p.mdoc.clone(), complete: true, shape: p.shape, pixel_a: p.pixel_a, preview: p.preview });
+    }
+    let done = |v: &View| prior.as_ref().and_then(|p| p.records.iter().find(|r| r.z == v.z && r.movie == v.movie && r.result.is_some() && r.section.is_some()).cloned());
+    let mut result = SeriesResult { warnings, mdoc: req.mdoc.clone(), preview: req.preview, ..Default::default() };
+    if let Some(p) = &prior {
+        result.shape = p.shape;
+        result.pixel_a = p.pixel_a;
+    }
+    struct Stacks {
+        full: output::Sections,
+        halves: Option<[output::Sections; 2]>,
+        small: output::Sections,
+    }
+    let mut stacks: Option<Stacks> = None;
+    let open = |w: usize, h: usize, px: f64, keep: bool| -> Result<Stacks> {
+        let n = planned.len();
+        let (_, sw, sh) = shrink(&vec![0.0; w * h], w, h);
+        Ok(Stacks {
+            full: output::Sections::open(&req.output, w, h, n, px, keep)?,
+            halves: if req.params.even_odd { Some([output::Sections::open(&even_path, w, h, n, px, keep)?, output::Sections::open(&odd_path, w, h, n, px, keep)?]) } else { None },
+            small: output::Sections::open(&small_path, sw, sh, n, px * (w as f64 / sw as f64), keep && output::Sections::fits(&small_path, sw, sh, n))?,
+        })
+    };
+    let save = |r: &SeriesResult, records: &[Record]| -> Result<()> {
+        let mut v = serde_json::to_value(r)?;
+        v["records"] = serde_json::to_value(records)?;
+        output::text(&state, &serde_json::to_string(&v)?)
+    };
+    // What each view is corrected with, and its record so far.
     let mut pre = req.params.pre_exposure;
-    let mut records = vec![];
-    let mut shape: Option<(usize, usize, f64)> = None;
+    let mut plan: Vec<(Record, Option<Params>)> = vec![];
     for (i, v) in doc.views.iter().enumerate() {
-        check_cancel()?;
-        progress("批次电影", i, doc.views.len());
         let dose = req.params.total_dose.or(v.dose);
-        let mut r = Record {
-            z: v.z,
-            angle: v.angle,
-            movie: v.movie.clone(),
-            pre_exposure: pre,
-            dose,
-            skipped: None,
-            result: None,
-        };
-        if let Some(path) = resolve(
-            Path::new(&req.mdoc),
-            &v.movie,
-            req.folder.as_deref().map(Path::new),
-        ) {
-            let mut p = req.params.clone();
-            if p.total_dose.is_none() && p.dose_per_frame.is_none() {
-                p.total_dose = dose.filter(|v| *v > 0.0);
-            }
-            if p.pixel_a.is_none() {
-                p.pixel_a = v.pixel_a.or(doc.pixel_a);
-                p.mdoc_size = doc.image_size;
-            }
-            if p.voltage_auto {
-                p.voltage_kv = doc.kv.unwrap_or(p.voltage_kv);
-            }
-            p.pre_exposure = pre;
-            if unknown {
-                p.dose_weighted = false;
-            }
-            let target = output::sibling(&req.output, &format!("tilt-{}", v.z));
-            match super::run_movie(
-                path.to_str().context("电影路径编码无效")?,
-                None,
-                &target,
-                0,
-                0,
-                0,
-                &p,
-                vec![],
-                progress,
-            ) {
-                Ok(result) => {
-                    let s = (result.width, result.height, result.pixel_a);
-                    if let Some((w, h, px)) = shape {
-                        if w != s.0 || h != s.1 || (px - s.2).abs() > 1e-5 {
-                            bail!("批次电影尺寸或像素标定不一致");
+        let mut r = Record { z: v.z, angle: v.angle, movie: v.movie.clone(), pre_exposure: pre, dose, skipped: None, result: None, section: None, mean: 0.0, dark: 0.0, defocus_um: None, fit_res_a: None, stats: vec![] };
+        pre += dose.unwrap_or(0.0).max(0.0);
+        if let Some(earlier) = done(v) {
+            plan.push((earlier, None));
+            continue;
+        }
+        if movies[i].is_none() {
+            r.skipped = Some("电影文件不存在".into());
+            plan.push((r, None));
+            continue;
+        }
+        let mut p = req.params.clone();
+        if p.total_dose.is_none() && p.dose_per_frame.is_none() {
+            p.total_dose = dose.filter(|v| *v > 0.0);
+        }
+        if p.pixel_a.is_none() {
+            p.pixel_a = v.pixel_a.or(doc.pixel_a);
+            p.mdoc_size = doc.image_size;
+        }
+        if p.voltage_auto {
+            p.voltage_kv = doc.kv.unwrap_or(p.voltage_kv);
+        }
+        p.pre_exposure = r.pre_exposure;
+        p.preview = req.preview;
+        if unknown {
+            p.dose_weighted = false;
+        }
+        // A tilt image holds a few electrons per Å²: its patches cannot
+        // carry the local model's 18 terms a component, only the whole
+        // frame's shift can be measured.
+        if p.total_dose.is_some_and(|d| d < LOCAL_DOSE) {
+            p.local = false;
+        }
+        plan.push((r, Some(p)));
+    }
+    // Movies are read and decoded ahead (processor and disk) while the one
+    // before is measured and summed (GPU): one ahead, or three at a time
+    // for previews, whose sums take no time.
+    let mut records: Vec<Record> = vec![];
+    let (plan, movies, dir) = (&plan, &movies, &dir);
+    let readers = if req.preview { 3 } else { 1 };
+    let (next, taken) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
+    let (next, taken) = (&next, &taken);
+    std::thread::scope(|scope| -> Result<()> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<super::Prepared>)>(0);
+        for _ in 0..readers {
+            let send = send.clone();
+            scope.spawn(move || loop {
+                let i = next.fetch_add(1, SeqCst);
+                if i >= plan.len() {
+                    break;
+                }
+                let (Some(p), Some(path)) = (&plan[i].1, &movies[i]) else { continue };
+                // Not further ahead than the readers can hold.
+                while i > taken.load(SeqCst) + 2 * readers && check_cancel().is_ok() {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                if check_cancel().is_err() {
+                    break;
+                }
+                let prepared = path.to_str().context("电影路径编码无效").and_then(|path| super::prepare(path, None, dir, 0, 0, 0, p, vec![], &|_, _, _| {}));
+                if send.send((i, prepared)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(send);
+        let mut ready = std::collections::BTreeMap::new();
+        for (i, (r, p)) in plan.iter().enumerate() {
+            check_cancel()?;
+            let v = &doc.views[i];
+            let label = format!("运动校正 {}/{} · {:+.0}°", i + 1, doc.views.len(), v.angle);
+            progress(&label, i, doc.views.len());
+            let mut r = r.clone();
+            let Some(p) = p else {
+                records.push(r);
+                continue;
+            };
+            taken.store(i, SeqCst);
+            let prepared = loop {
+                if let Some(p) = ready.remove(&i) {
+                    break p;
+                }
+                let (at, p) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
+                ready.insert(at, p);
+            };
+            let corrected = prepared.and_then(|m| super::finish(m, None, p, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)));
+            match corrected {
+                Ok(super::Corrected { mut sums, result: m }) => {
+                    let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
+                    // Super-resolution frames carry little beyond the
+                    // detector's own pixel: the views are kept at that.
+                    if !req.preview && super_resolution(w, h) {
+                        for v in [Some(&mut sums.unweighted), sums.weighted.as_mut(), Some(&mut sums.even), Some(&mut sums.odd)].into_iter().flatten() {
+                            if !v.is_empty() {
+                                *v = halve(v, w, h);
+                            }
                         }
-                    } else {
-                        shape = Some(s);
+                        (w, h, px) = (w / 2, h / 2, px * 2.0);
                     }
-                    r.result = Some(result);
+                    if stacks.is_none() {
+                        if prior.is_some() && (result.shape[0] != w || result.shape[1] != h) {
+                            bail!("批次电影尺寸与之前校正的不一致，请重新开始");
+                        }
+                        stacks = Some(open(w, h, px, prior.is_some())?);
+                        result.shape = [w, h, planned.len()];
+                        result.pixel_a = px;
+                    }
+                    if result.shape[0] != w || result.shape[1] != h || (px - result.pixel_a).abs() > 1e-5 {
+                        bail!("批次电影尺寸或像素标定不一致");
+                    }
+                    let st = stacks.as_mut().unwrap();
+                    let section = section_of(i).unwrap();
+                    let view = sums.weighted.as_deref().unwrap_or(&sums.unweighted);
+                    r.stats.push(st.full.write(section, view)?);
+                    if let Some([even, odd]) = &mut st.halves {
+                        r.stats.push(even.write(section, &sums.even)?);
+                        r.stats.push(odd.write(section, &sums.odd)?);
+                    }
+                    let (small, sw, sh) = shrink(view, w, h);
+                    st.small.write(section, &small)?;
+                    (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
+                    if let Some(f) = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv) {
+                        r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
+                        r.fit_res_a = Some(f.fit_res);
+                    }
+                    crate::live::show(&format!("{} · {:+.0}° · 漂移 {:.1} Å{}", name_of(&req.output), v.angle, m.total_drift * m.pixel_a, r.defocus_um.map_or(String::new(), |d| format!(" · 离焦 {d:.1} µm"))), sw, sh, &small, &[]);
+                    r.section = Some(section);
+                    r.result = Some(m);
                 }
                 Err(e) => {
                     check_cancel()?;
                     r.skipped = Some(format!("处理失败：{e:#}"));
                 }
             }
-        } else {
-            r.skipped = Some("电影文件不存在".into());
+            records.push(r);
+            save(&result, &records)?;
         }
-        pre += dose.unwrap_or(0.0).max(0.0);
-        records.push(r);
+        Ok(())
+    })?;
+    // The stacks hold a place for every movie found; the ones that could
+    // not be corrected are closed up.
+    let mut good: Vec<usize> = (0..records.len()).filter(|&k| records[k].section.is_some()).collect();
+    good.sort_by_key(|&k| records[k].section);
+    if good.is_empty() {
+        result.warnings.push("没有找到可处理的电影，未写空叠层".into());
+        result.records = records;
+        save(&result, &result.records)?;
+        progress("批次完成", doc.views.len(), doc.views.len());
+        return Ok(result);
     }
-    let mut good: Vec<_> = records.iter().filter(|r| r.result.is_some()).collect();
-    good.sort_by(|a, b| a.angle.total_cmp(&b.angle));
-    let mut result = SeriesResult {
-        path: None,
-        even: None,
-        odd: None,
-        angles: good.iter().map(|r| r.angle).collect(),
-        records: vec![],
-        warnings,
+    let [w, h, _] = result.shape;
+    let px = result.pixel_a;
+    let mut st = match stacks {
+        Some(s) => s,
+        // Every view came from the earlier run.
+        None => open(w, h, px, true)?,
     };
-    if let Some((w, h, px)) = shape {
-        let stack = |target: &str, part: &str| -> Result<()> {
-            output::write(target, w, h, good.len(), px, |i| {
-                let r = good[i].result.as_ref().unwrap();
-                let path = match part {
-                    "even" => r.even.as_deref(),
-                    "odd" => r.odd.as_deref(),
-                    _ => Some(r.path.as_str()),
-                }
-                .context("缺少半叠层")?;
-                output::read_plane(path)
-            })?;
-            output::text(
-                &Path::new(target).with_extension("tlt"),
-                &good
-                    .iter()
-                    .map(|r| format!("{:.6}\n", r.angle))
-                    .collect::<String>(),
-            )
-        };
-        stack(&req.output, "")?;
-        result.path = Some(req.output.clone());
-        if req.params.even_odd {
-            let a = output::sibling(&req.output, "even");
-            let b = output::sibling(&req.output, "odd");
-            stack(&a, "even")?;
-            stack(&b, "odd")?;
-            result.even = Some(a);
-            result.odd = Some(b);
-        }
-        if req.drop_tilts {
-            for r in &good {
-                let m = r.result.as_ref().unwrap();
-                for f in [Some(&m.path), m.unweighted.as_ref(), m.even.as_ref(), m.odd.as_ref()].into_iter().flatten() {
-                    let _ = std::fs::remove_file(f);
-                }
-                for side in ["before.png", "after.png", "before-ps.png", "after-ps.png", "radial.tsv", "motion.json"] {
-                    let _ = std::fs::remove_file(format!("{}.{side}", m.path));
-                }
+    let keep: Vec<usize> = good.iter().map(|&k| records[k].section.unwrap()).collect();
+    if keep.len() < st.full.n {
+        st.full.compact(&keep)?;
+        st.small.compact(&keep)?;
+        if let Some(halves) = &mut st.halves {
+            for s in halves {
+                s.compact(&keep)?;
             }
         }
-        // Hand the tilt series on to the Cryo-ET steps: its dataset, with the
-        // acquisition's axis and optics (the stack has no mdoc beside it).
-        let mut d = crate::tomo::dataset::Dataset::open(&req.output, good.len(), Some(px))?;
-        d.angles = result.angles.clone();
-        d.even = result.even.clone();
-        d.odd = result.odd.clone();
-        d.alignment = None;
-        d.ctf = None;
-        d.tomograms.clear();
-        d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?).ok().and_then(|m| m.axis);
-        if let Some(kv) = doc.kv {
-            d.optics.kv = kv;
+        for (section, &k) in good.iter().enumerate() {
+            records[k].section = Some(section);
         }
-        d.optics.pixel_a = Some(px);
-        d.save()?;
-    } else {
-        result
-            .warnings
-            .push("没有找到可处理的电影，未写空叠层".into());
     }
+    let stats = |which: usize| -> Vec<[f64; 4]> { good.iter().filter_map(|&k| records[k].stats.get(which).copied()).collect() };
+    st.full.finish(&stats(0))?;
+    st.small.finish(&[])?;
+    let (sw, sh) = (st.small.w, st.small.h);
+    let small: Vec<Vec<f32>> = (0..st.small.n).map(|i| st.small.read(i)).collect::<Result<_>>()?;
+    if let Some([even, odd]) = &mut st.halves {
+        even.finish(&stats(1))?;
+        odd.finish(&stats(2))?;
+        result.even = Some(even_path.clone());
+        result.odd = Some(odd_path.clone());
+    }
+    drop(st);
+    result.angles = good.iter().map(|&k| records[k].angle).collect();
+    let tlt: String = result.angles.iter().map(|a| format!("{a:.6}\n")).collect();
+    for target in [Some(&req.output), result.even.as_ref(), result.odd.as_ref()].into_iter().flatten() {
+        output::text(&Path::new(target).with_extension("tlt"), &tlt)?;
+    }
+    result.path = Some(req.output.clone());
+    result.small = Some(small_path.clone());
+    result.shape = [w, h, good.len()];
+    // Hand the tilt series on to the Cryo-ET steps: its dataset, with the
+    // acquisition's axis and optics (the stack has no mdoc beside it), and
+    // what each view shows on its own.
+    let mut d = crate::tomo::dataset::Dataset::open(&req.output, good.len(), Some(px))?;
+    d.angles = result.angles.clone();
+    d.even = result.even.clone();
+    d.odd = result.odd.clone();
+    d.alignment = None;
+    d.ctf = None;
+    // Previews corrected again in full: the tomograms reconstructed from
+    // them would take the names of the ones to come (same binning, another
+    // pixel). What was made from them to look at (`3_clean`) stays.
+    if prior_preview && !req.preview {
+        let made = crate::project_dirs::dir_for(&req.output, crate::project_dirs::TOMOGRAMS);
+        let stale = d.tomograms.iter().map(|t| t.path.clone()).chain(d.aligned.clone());
+        for f in stale.filter(|f| Path::new(f).parent() == Some(made.as_path()) && !crate::project_dirs::is_legacy(&req.output)) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+    d.aligned = None;
+    d.tomograms.clear();
+    d.axis_hint = crate::tomo::geometry::parse_mdoc(&std::fs::read_to_string(&req.mdoc)?).ok().and_then(|m| m.axis);
+    if let Some(kv) = doc.kv {
+        d.optics.kv = kv;
+    }
+    d.optics.pixel_a = Some(px);
+    let same_dose = good.iter().any(|&k| records[k].dose.is_none_or(|d| d <= 0.0));
+    d.checks = good
+        .iter()
+        .enumerate()
+        .map(|(z, &k)| {
+            let r = &records[k];
+            crate::tomo::triage::ViewCheck { z, angle: r.angle, mean: r.mean, dark: r.dark, dose: if same_dose { None } else { r.dose }, drift_a: r.result.as_ref().map(|m| m.total_drift * px), defocus_um: r.defocus_um, fit_res_a: r.fit_res_a, ..Default::default() }
+        })
+        .collect();
+    crate::tomo::triage::look(&mut d, &small, sw, sh);
+    d.save()?;
+    result.complete = true;
     result.records = records;
-    output::text(
-        Path::new(&format!("{}.motion-series.json", req.output)),
-        &serde_json::to_string_pretty(&result)?,
-    )?;
+    save(&result, &result.records)?;
     progress("批次完成", doc.views.len(), doc.views.len());
     Ok(result)
+}
+
+/// Whether frames of this size are super-resolution ones of a counting
+/// camera (K2: 7676 × 7420, K3: 11520 × 8184), twice its pixels a side.
+fn super_resolution(w: usize, h: usize) -> bool {
+    matches!((w.max(h), w.min(h)), (7676, 7420) | (11520, 8184))
+}
+
+/// A view at half its size: the sum of each 2 × 2 pixels.
+fn halve(v: &[f32], w: usize, h: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let (hw, hh) = (w / 2, h / 2);
+    let mut out = vec![0f32; hw * hh];
+    out.par_chunks_mut(hw).enumerate().for_each(|(y, row)| {
+        let (a, b) = (&v[2 * y * w..], &v[(2 * y + 1) * w..]);
+        for (x, o) in row.iter_mut().enumerate() {
+            *o = a[2 * x] + a[2 * x + 1] + b[2 * x] + b[2 * x + 1];
+        }
+    });
+    out
+}
+
+/// Dose of a movie (e⁻/Å²) below which only its whole-frame motion is fitted.
+const LOCAL_DOSE: f64 = 15.0;
+
+fn name_of(path: &str) -> String {
+    Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string()
+}
+
+/// A CTF fit of the whole view as recorded (not yet knowing its tilt axis:
+/// the series' own fit, `tomo::ctf`, comes later), to show while the movies
+/// are corrected and to tell a blurred view from a sharp one.
+fn quick_ctf(v: &[f32], w: usize, h: usize, pixel_a: f64, kv: f64) -> Option<crate::ctf::Fit> {
+    let (lo, hi) = crate::ctf::clip_range(|i| v[i], v.len());
+    let spectrum = crate::fft::spectrum(|x, y| crate::ctf::clip(v[y * w + x], lo, hi), [0, 0, w, h], 512).ok()?;
+    let params = crate::ctf::Params { voltage_kv: kv, cs_mm: 2.7, amp_contrast: 0.07, pixel_a, res_low_a: 30.0, res_high_a: (2.5 * pixel_a).max(5.0), df_min_a: 5000.0, df_max_a: 80000.0, max_astig_a: 2000.0, phase: false, backend: Some("cpu".into()) };
+    crate::ctf::fit_spectrum(&spectrum.log, spectrum.n, &params).ok()
 }

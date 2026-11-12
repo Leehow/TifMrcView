@@ -81,6 +81,9 @@ include!("desktop.rs");
 include!("desktop_documents.rs");
 
 #[cfg(feature = "pro")]
+pub mod project_dirs;
+
+#[cfg(feature = "pro")]
 pub mod tomo;
 
 #[cfg(feature = "pro")]
@@ -88,6 +91,10 @@ pub mod motion;
 
 #[cfg(feature = "pro")]
 pub mod spa;
+
+/// Subtomogram averaging (Pro).
+#[cfg(feature = "pro")]
+pub mod sta;
 
 /// The headless command-line tool `tmv` (Pro processing on servers).
 #[cfg(feature = "pro")]

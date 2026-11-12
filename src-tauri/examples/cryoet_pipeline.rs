@@ -93,7 +93,7 @@ fn main() -> Result<()> {
                 continue;
             }
             let t = Instant::now();
-            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip, ctf_3d };
+            let step = pipeline::ReconStep { bin, params: recon::Params { thickness, ..Default::default() }, halves: d.even.is_some() && d.odd.is_some(), phase_flip: flip, ctf_3d, label: None };
             let m = pipeline::reconstruct(&mut d, &step, &progress)?;
             eprintln!();
             println!("rec (flip {flip}, 3D {ctf_3d}): {} on {}, {:.1} s", m.paths.join(", "), m.backend, t.elapsed().as_secs_f64());
