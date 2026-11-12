@@ -355,6 +355,9 @@
 /* Subtomogram-averaging workspace (same frame as the single-particle one). */
 #sta-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #sta-workspace[hidden], #sta-workspace [hidden] { display:none; }
+/* Inside the Cryo-ET panel: the host gives the place and the size. */
+#sta-workspace.hosted, #sta-workspace.hosted.marking, #sta-workspace.hosted.reviewing, #sta-workspace.hosted.reviewing-shapes { position:static; width:auto; flex:1 1 auto; min-height:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
+#sta-workspace.hosted > .al-head { display:none; }
 #sta-workspace .ws-img { display:block; width:100%; max-width:480px; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
 #sta-workspace.marking, #sta-workspace.reviewing, #sta-workspace.reviewing-shapes { width:min(360px, calc(100% - 20px)); }
 @media (max-width:700px) { #sta-workspace.marking { top:auto; height:48%; } }
@@ -446,25 +449,21 @@
 #sta-shapes .warn { color:#9a6700; margin:2px 0; }
 #sta-shapes .sta-found-legend { margin:4px 0; }
 #sta-shapes .sta-shapes-sel { align-items:center; padding:4px 6px; border-radius:6px; background:var(--muted); }
-/* Pits: the strip of pictures in the order of their stage, and the part of it to take */
-#sta-pits .sta-pits-strip { display:flex; flex-wrap:wrap; gap:4px; max-height:218px; overflow-y:auto; padding:2px; margin:4px 0 2px; }
-#sta-pits .sta-pit { position:relative; flex:none; width:64px; height:64px; padding:0; border:1px solid var(--line); border-radius:6px; background:#222; overflow:hidden; cursor:pointer; }
-#sta-pits .sta-pit img { display:block; width:100%; height:100%; object-fit:contain; }
-#sta-pits .sta-pit img:not([src]) { visibility:hidden; }
-#sta-pits .sta-pit.ex { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-#sta-pits .sta-pit.off img { filter:grayscale(1); opacity:.28; }
-#sta-pits .sta-pit.off::after { content:"\00d7"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:34px; line-height:1; color:#fff; text-shadow:0 0 3px #000; }
-#sta-pits .sta-pit:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-#sta-pits .sta-pit i { position:absolute; font-style:normal; font-size:10px; line-height:14px; padding:0 4px; border-radius:7px; color:#fff; }
-#sta-pits .sta-pit i.ex { left:2px; bottom:2px; background:var(--accent); }
-#sta-pits .sta-pit i.unsure { right:2px; top:2px; background:#9a6700; }
-#sta-pits .sta-pits-axis { display:flex; justify-content:space-between; font-size:11px; }
-#sta-pits .sta-pits-range { display:grid; grid-template-columns:auto 1fr; gap:3px 8px; align-items:center; margin:6px 0; }
-#sta-pits .sta-pits-range label { grid-column:1 / -1; display:flex; align-items:center; gap:6px; }
-#sta-pits .sta-pits-range label span { min-width:2em; }
-#sta-pits .sta-pits-range input { flex:1; min-width:0; }
-#sta-pits-text { font-variant-numeric:tabular-nums; }
-#sta-pits-all { justify-self:start; }
+/* 圈例子: the strip of pictures of the places found, best first, scrolling sideways */
+#sta-circled-groups { margin:4px 0; }
+#sta-circled-groups label { display:flex; align-items:center; gap:6px; padding:1px 0; cursor:pointer; }
+#sta-circled-groups label.off { color:var(--dim); }
+#sta-circled-strip { display:flex; gap:4px; overflow-x:auto; padding:4px 2px 6px; margin:4px 0 2px; }
+#sta-circled-strip .sta-tile { position:relative; flex:none; width:64px; height:64px; padding:0; border:1px solid var(--line); border-radius:6px; background:#222; overflow:hidden; cursor:pointer; }
+#sta-circled-strip .sta-tile img { display:block; width:100%; height:100%; object-fit:contain; }
+#sta-circled-strip .sta-tile img:not([src]) { visibility:hidden; }
+#sta-circled-strip .sta-tile.ex { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+#sta-circled-strip .sta-tile.off img { filter:grayscale(1); opacity:.28; }
+#sta-circled-strip .sta-tile.off::after { content:"\00d7"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:34px; line-height:1; color:#fff; text-shadow:0 0 3px #000; }
+#sta-circled-strip .sta-tile:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+#sta-circled-strip .sta-tile i { position:absolute; font-style:normal; font-size:10px; line-height:14px; padding:0 4px; border-radius:7px; color:#fff; }
+#sta-circled-strip .sta-tile i.ex { left:2px; bottom:2px; background:var(--accent); }
+#sta-circled-strip .sta-more { flex:none; align-self:center; }
 #sta-shapes-flip.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 #sta-shapes-msg:empty { display:none; }
 #sta-shapes-go { font-size:13px; padding:6px 18px; }

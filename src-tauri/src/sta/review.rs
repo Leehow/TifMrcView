@@ -32,7 +32,7 @@ use super::marks::{self, Mark};
 use super::project::{self as sp, Found, Place, BOX};
 use super::refine::{Live, Progress};
 use super::shape::Seed;
-use super::{cc, near, own_map, shapes, taught};
+use super::{cc, circled, near, own_map, shapes, taught};
 use crate::spa::geom::{apply as turn_by, grid, transpose};
 use crate::tomo::dataset::Look;
 
@@ -44,8 +44,8 @@ pub const FILE: &str = "found.json";
 pub const ETA_BASE_S: f64 = 60.0;
 pub const ETA_PER_PARTICLE_S: f64 = 0.15;
 
-/// Fewest particles that are averaged.
-pub const MIN_KEPT: usize = 20;
+/// Fewest particles that are averaged (circled examples: `Found::fewest`).
+pub const MIN_KEPT: usize = sp::FEWEST;
 /// How many places beyond the kept ones are shown on a tomogram, to add from.
 pub const MARGIN: usize = 300;
 /// Most scores handed to the score curve.
@@ -85,11 +85,15 @@ pub struct Edits {
     /// "Find again" has been run (it may have changed nothing).
     #[serde(default)]
     pub again: bool,
+    /// Circled examples: the groups (which example a place is like, which
+    /// size it has) the user unticked; their places do not count.
+    #[serde(default)]
+    pub groups_off: Vec<[u8; 2]>,
 }
 
 impl Edits {
     fn new(keep: usize) -> Edits {
-        Edits { keep, removed: vec![], added: vec![], on_shapes: true, taught_out: vec![], taught_in: vec![], again: false }
+        Edits { keep, removed: vec![], added: vec![], on_shapes: true, taught_out: vec![], taught_in: vec![], again: false, groups_off: vec![] }
     }
 }
 
@@ -110,8 +114,9 @@ pub struct Filter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Route {
-    /// "card" (with `card`, its id), "points" (with `points`, the clicks) or
-    /// "own" (a map the user brought).
+    /// "card" (with `card`, its id), "points" (with `points`, the clicks),
+    /// "circled" (with `points`, the examples circled) or "own" (a map the
+    /// user brought).
     pub kind: String,
     #[serde(default)]
     pub card: Option<usize>,
@@ -144,6 +149,14 @@ pub struct State {
     /// The places against the shapes the user marked (None: there were none).
     #[serde(default)]
     pub filter: Option<Filter>,
+    /// Circled examples: their own places in `found.places`. They are kept
+    /// whatever they score, until the user drops one.
+    #[serde(default)]
+    pub mine: Vec<usize>,
+    /// Circled examples: per example, the best score the other examples'
+    /// pictures have on it (`circled::Circled::by_others`).
+    #[serde(default)]
+    pub by_others: Vec<Option<f32>>,
 }
 
 /// What a place is, for the user.
@@ -159,6 +172,8 @@ pub enum Shown {
     TaughtOut,
     /// Brought in by "find again" (it looked like what the user kept).
     TaughtIn,
+    /// Of a group of the circled examples the user unticked.
+    GroupOff,
 }
 
 impl Shown {
@@ -171,6 +186,7 @@ impl Shown {
             Shown::Off => "off",
             Shown::TaughtOut => "taughtOut",
             Shown::TaughtIn => "taughtIn",
+            Shown::GroupOff => "groupOff",
         }
     }
 }
@@ -201,7 +217,7 @@ impl State {
     pub fn new(found: Found, template: String, diameter_a: f64, card: sp::Card, inputs: Vec<String>, looks: Vec<Option<Look>>, pixels: Vec<f64>, route: Route) -> State {
         let stamps = input_stamps(inputs.iter().map(String::as_str));
         let unsure = found.limit.is_none();
-        let mut s = State { found, template, diameter_a, card, inputs, stamps, looks, pixels, edits: Edits::new(0), route, unsure, filter: None };
+        let mut s = State { found, template, diameter_a, card, inputs, stamps, looks, pixels, edits: Edits::new(0), route, unsure, filter: None, mine: vec![], by_others: vec![] };
         s.edits.keep = s.suggest();
         s
     }
@@ -225,6 +241,13 @@ impl State {
     /// the places off the marked shapes are "off". The user's own clicks
     /// (`removed`, `added`) win over both.
     fn state_with(&self, l: &Lists, i: usize, taught: bool, filtered: bool) -> Shown {
+        // What the user circled is what the user wants.
+        if self.mine.contains(&i) {
+            return if l.removed.contains(&i) { Shown::Removed } else { Shown::Kept };
+        }
+        if !self.edits.groups_off.is_empty() && self.found.places.get(i).is_some_and(|p| self.edits.groups_off.contains(&[p.like, p.size])) {
+            return Shown::GroupOff;
+        }
         if filtered && self.filter.as_ref().is_some_and(|f| f.on.get(i) == Some(&false)) {
             return Shown::Off;
         }
@@ -317,7 +340,7 @@ impl State {
         let mut out = vec![];
         let mut on = 0;
         for i in (0..self.total()).filter(|i| self.found.places[*i].source == s) {
-            let off = self.state_with(&l, i, true, self.edits.on_shapes) == Shown::Off;
+            let off = matches!(self.state_with(&l, i, true, self.edits.on_shapes), Shown::Off | Shown::GroupOff);
             if !off {
                 on += 1;
                 if on > most {
@@ -326,6 +349,10 @@ impl State {
             }
             out.push(i);
         }
+        // The examples show wherever they stand in the list.
+        out.extend(self.mine.iter().copied().filter(|i| self.found.places.get(*i).is_some_and(|p| p.source == s)));
+        out.sort_unstable();
+        out.dedup();
         out
     }
 
@@ -349,6 +376,34 @@ impl State {
     fn radius_raw(&self, source: usize) -> Option<f64> {
         let px = self.pixels.get(source).copied().filter(|p| *p > 0.0)?;
         Some(0.5 * self.diameter_a / px)
+    }
+
+    /// The groups the places of circled examples fall into, as (like, size),
+    /// in order; empty on the other routes.
+    pub fn groups(&self) -> Vec<[u8; 2]> {
+        if self.route.kind != "circled" {
+            return vec![];
+        }
+        let mut out: Vec<[u8; 2]> = self.found.places.iter().map(|p| [p.like, p.size]).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Ticks or unticks a group.
+    pub fn set_group(&mut self, group: [u8; 2], on: bool) {
+        self.edits.groups_off.retain(|g| *g != group);
+        if !on {
+            self.edits.groups_off.push(group);
+        }
+    }
+
+    /// The radius of place `i` in raw voxels: of its own size when the
+    /// search had several (circled examples).
+    fn radius_of(&self, i: usize) -> Option<f64> {
+        let p = self.found.places.get(i)?;
+        let px = self.pixels.get(p.source).copied().filter(|p| *p > 0.0)?;
+        Some(0.5 * self.found.sizes_a.get(p.size as usize).copied().unwrap_or(self.diameter_a) / px)
     }
 
     /// The radius of a particle in the open file's voxels.
@@ -383,6 +438,7 @@ impl State {
         // an "added"), one it brought in goes by a click (a "removed").
         let list = match self.state_of(i) {
             Shown::Off => bail!("这个不在你标的形状上"),
+            Shown::GroupOff => bail!("这一组没有勾选"),
             Shown::Kept | Shown::Removed | Shown::TaughtIn => &mut self.edits.removed,
             Shown::Below | Shown::Added | Shown::TaughtOut => &mut self.edits.added,
         };
@@ -495,6 +551,7 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
     let (again_out, again_in) = s.again_counts();
     let lists = s.lists();
     let frame = s.frame(open);
+    let circled = s.route.kind == "circled";
     let (places, radius, opened): (Vec<Value>, Value, Value) = match &frame {
         Some(f) => {
             let list = s
@@ -502,13 +559,27 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
                 .into_iter()
                 .map(|i| {
                     let p = State::to_open(f, s.found.places[i].at());
-                    json!({ "i": i, "pos": [r1(p[0]), r1(p[1]), r1(p[2])], "score": (s.found.places[i].score * 1e4).round() / 1e4, "state": s.state_with(&lists, i, true, s.edits.on_shapes).name() })
+                    let place = &s.found.places[i];
+                    let mut v = json!({ "i": i, "pos": [r1(p[0]), r1(p[1]), r1(p[2])], "score": (place.score * 1e4).round() / 1e4, "state": s.state_with(&lists, i, true, s.edits.on_shapes).name() });
+                    if circled {
+                        v["like"] = json!(place.like);
+                        v["size"] = json!(place.size);
+                        v["example"] = json!(s.mine.contains(&i));
+                        v["r"] = s.radius_of(i).map_or(Value::Null, |r| json!(r1(r / f.look.map_or(1.0, |l| l.scale))));
+                    }
+                    v
                 })
                 .collect();
             (list, s.radius(f).map_or(Value::Null, |r| json!(r1(r))), json!({ "source": f.source, "look": f.look.is_some() }))
         }
         None => (vec![], Value::Null, Value::Null),
     };
+    let mut circled_v = circled_value(s, &lists);
+    if !circled_v.is_null() {
+        // Told apart from another search by when its first example's cube
+        // was written: `found.json` is rewritten by every edit.
+        circled_v["sig"] = json!(millis(&dir.join("card.mrc")));
+    }
     json!({
         "total": s.total(), "keep": s.edits.keep, "kept": kept.len(), "sure": s.suggest(), "unsure": s.unsure,
         "limit": s.found.limit, "removed": removed, "added": added, "perTomogram": per,
@@ -518,6 +589,51 @@ pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
         "foundMs": millis(&path_of(dir)), "averageMs": millis(&dir.join("average.mrc")),
         "onShapes": on_shapes_value(s),
         "again": { "out": again_out, "in": again_in, "ran": s.edits.again },
+        "circled": circled_v, "fewest": s.found.fewest(),
+    })
+}
+
+/// `circled` of the review, for the route of circled examples (null on the
+/// others): `examples` (how many were circled), `alike` (what they score
+/// with each other; null with one example), `byOthers` (per example, what
+/// the others' pictures score on it), `noise` (the best chance scored),
+/// `sizesA`, and `groups`: per (like, size) `{like, size, sizeA, on, found,
+/// kept}`, where `found` are its places the slider and the user's clicks
+/// keep and `kept` those of them that count now; and `list`: the best
+/// `tiles` places of all tomograms (and the examples), best first, as
+/// `{i, source, score, like, size, example, state}`: each has a picture
+/// (`tile_path`). `review_value` adds `sig`, which changes only with a new
+/// search (the pictures are that search's).
+fn circled_value(s: &State, lists: &Lists) -> Value {
+    if s.route.kind != "circled" {
+        return Value::Null;
+    }
+    // What each group would give when ticked.
+    let mut ticked = s.clone();
+    ticked.edits.groups_off.clear();
+    let groups: Vec<Value> = s
+        .groups()
+        .into_iter()
+        .map(|g| {
+            let on = !s.edits.groups_off.contains(&g);
+            let of_group = |i: &usize| s.found.places[*i].like == g[0] && s.found.places[*i].size == g[1];
+            let counted = |s: &State| (0..s.total()).filter(of_group).filter(|i| State::counts(s.state_with(lists, *i, true, s.edits.on_shapes))).count();
+            json!({ "like": g[0], "size": g[1], "sizeA": s.found.sizes_a.get(g[1] as usize).map(|a| a.round()), "on": on, "found": counted(&ticked), "kept": counted(s) })
+        })
+        .collect();
+    // The places with a picture, best first, whatever tomogram they are in:
+    // what the strip of pictures shows.
+    let list: Vec<Value> = (0..s.total().min(MOST_TILES))
+        .chain(s.mine.iter().copied().filter(|i| *i >= MOST_TILES))
+        .map(|i| {
+            let p = &s.found.places[i];
+            json!({ "i": i, "source": p.source, "score": (p.score * 1e4).round() / 1e4, "like": p.like, "size": p.size, "example": s.mine.contains(&i), "state": s.state_with(lists, i, true, s.edits.on_shapes).name() })
+        })
+        .collect();
+    json!({
+        "examples": s.route.points, "alike": s.found.alike, "byOthers": s.by_others, "noise": s.found.noise,
+        "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "groups": groups,
+        "list": list, "tiles": MOST_TILES,
     })
 }
 
@@ -556,6 +672,16 @@ pub struct Edit {
     /// Takes back what "find again" did.
     #[serde(default)]
     pub undo_again: bool,
+    /// Circled examples: ticks or unticks the group of the places that
+    /// are like example `like` at size `size`.
+    pub group: Option<GroupEdit>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct GroupEdit {
+    pub like: u8,
+    pub size: u8,
+    pub on: bool,
 }
 
 /// Applies `edit` to the saved state of `dir`, saves it and returns the review of `open`.
@@ -578,6 +704,9 @@ pub fn apply(s: &mut State, open: &str, edit: &Edit) -> Result<()> {
     if let Some(on) = edit.on_shapes {
         s.edits.on_shapes = on;
     }
+    if let Some(g) = edit.group {
+        s.set_group([g.like, g.size], g.on);
+    }
     if let Some(k) = edit.keep {
         s.set_keep(k);
     }
@@ -596,8 +725,8 @@ pub fn kept_places(s: &State) -> Result<Vec<Place>> {
         bail!(why);
     }
     let kept = s.kept();
-    if kept.len() < MIN_KEPT {
-        bail!("保留的只有 {} 个，至少要 {MIN_KEPT} 个", kept.len());
+    if kept.len() < s.found.fewest() {
+        bail!("保留的只有 {} 个，至少要 {} 个", kept.len(), s.found.fewest());
     }
     Ok(kept.into_iter().map(|i| s.found.places[i]).collect())
 }
@@ -711,6 +840,93 @@ pub fn find_points(inputs: &[String], marks: &[Mark], out: &str, device: Device,
     })
 }
 
+/// Where the route of circled examples keeps its search and its average,
+/// under the output folder.
+pub const CIRCLED: &str = "circled";
+
+/// Finds everything that looks like the examples circled (`marks`, example
+/// marks; two or three are asked for, one is taken) and saves it in
+/// `out/circled/found.json`. Nothing is asked of what the examples are.
+pub fn find_circled(inputs: &[String], marks: &[Mark], out: &str, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+    let inputs = raw_inputs(inputs)?;
+    let out = out_of(&inputs, out)?;
+    let dir = out.join(CIRCLED);
+    events(emit, b64, |progress, _live, note| {
+        let sources: Vec<sp::Source> = inputs.iter().map(|i| resolve_tomogram(i, note).source()).collect();
+        let (inputs, sources) = marks::without_looks(&inputs, sources);
+        let examples = marks::examples_of(marks, &inputs, &sources)?;
+        if examples.is_empty() {
+            bail!("请先圈出 2 到 3 个要找的东西作例子");
+        }
+        let (dev, _) = device()?;
+        let c = crate::ctf_gpu::guarded(|| circled::find(dev, &sources, &examples, progress))??;
+        std::fs::create_dir_all(&dir).with_context(|| format!("无法创建 {}", dir.display()))?;
+        let path = dir.join("card.mrc").to_string_lossy().into_owned();
+        crate::tomo::output::write_mrc(&path, &c.template, [BOX; 3], c.found.voxel_a, false)?;
+        let (compact, elongation, blobs, offset) = sp::shape(&c.template, BOX, 0.5 * c.diameter_a / c.found.voxel_a);
+        // The card of this route is the first example as it is: one cube, not an average.
+        let card = sp::Card {
+            id: 0,
+            diameter_a: c.diameter_a / sp::DIAMETER_FACTOR,
+            measured_a: c.diameter_a,
+            voxel_a: c.found.voxel_a,
+            members: examples.len(),
+            share: 0.0,
+            path: path.clone(),
+            compact,
+            elongation,
+            blobs,
+            offset,
+            likely: false,
+        };
+        std::fs::write(dir.join("card.json"), serde_json::to_string_pretty(&card)?)?;
+        let looks = sources.iter().map(|s| s.look.clone()).collect();
+        let pixels = sources.iter().map(|s| sp::pixel_of(&s.path).unwrap_or(0.0)).collect();
+        let route = Route { kind: "circled".into(), card: None, points: Some(examples.len()) };
+        let mut state = State::new(c.found, path, c.diameter_a, card, inputs.clone(), looks, pixels, route);
+        state.mine = c.mine;
+        state.by_others = c.by_others;
+        state.filter = shapes_filter(&out, &state);
+        save(&dir, &state)?;
+        progress("画出找到的", 0, 1);
+        if let Err(e) = write_tiles(&dir, &state, &sources) {
+            eprintln!("sta: the pictures of the places could not be written: {e:#}");
+        }
+        progress("画出找到的", 1, 1);
+        Ok(review_value(&state, &dir, &inputs[0]))
+    })
+}
+
+/// How many of the best places get a picture (`tile_path`); the examples
+/// get one wherever they stand.
+pub const MOST_TILES: usize = 600;
+
+/// The picture of place `i` of the review in `dir` (`circled::tiles`).
+pub fn tile_path(dir: &Path, i: usize) -> PathBuf {
+    dir.join("tiles").join(format!("{i}.png"))
+}
+
+/// Writes the pictures of the best places of `s`, new for this search.
+fn write_tiles(dir: &Path, s: &State, sources: &[sp::Source]) -> Result<()> {
+    let folder = dir.join("tiles");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).with_context(|| format!("无法创建 {}", folder.display()))?;
+    let mut ids: Vec<usize> = (0..s.total().min(MOST_TILES)).chain(s.mine.iter().copied()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let places: Vec<(usize, [f64; 3], f64)> = ids.iter().filter_map(|i| Some((s.found.places[*i].source, s.found.places[*i].at(), s.radius_of(*i)?))).collect();
+    if places.len() != ids.len() {
+        bail!("没有像素大小");
+    }
+    let side = circled::TILE as u32;
+    for (i, grey) in ids.iter().zip(circled::tiles(sources, &places)?) {
+        if let Some(grey) = grey {
+            ::image::GrayImage::from_raw(side, side, grey).context("tile")?.save(tile_path(dir, *i)).with_context(|| format!("无法写入 {}", tile_path(dir, *i).display()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Averages the kept places of `dir`'s `found.json` (the first `keep` without
 /// the removed, and the added), aligned and refined (`run_places`, fine pass),
 /// into `dir`. Returns what the ordinary run of that route returns, so the
@@ -728,6 +944,7 @@ pub fn average_found(dir: &Path, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]
         let counts = json!({ "found": s.total(), "kept": places.len(), "removed": removed, "added": added, "onShapes": s.filter.is_some() && s.edits.on_shapes, "againOut": again_out, "againIn": again_in });
         let mut used = match s.route.kind.as_str() {
             "points" => json!({ "kind": "points", "clicked": s.route.points, "members": s.card.members, "sizeA": s.card.measured_a.round() }),
+            "circled" => json!({ "kind": "circled", "examples": s.route.points, "sizeA": s.card.measured_a.round(), "sizesA": s.found.sizes_a.iter().map(|a| a.round()).collect::<Vec<_>>(), "alike": s.found.alike }),
             "own" => json!({ "kind": "own", "name": own_file(dir).map(|o| o.name), "sizeA": s.card.measured_a.round() }),
             _ => json!({ "kind": "auto", "card": s.card.id, "auto": false, "sizeA": s.card.measured_a.round() }),
         };
@@ -756,13 +973,14 @@ pub fn average_found(dir: &Path, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]
     })
 }
 
-/// Which folder `which` ("card", "marked", "own") names under the output folder `out`.
+/// Which folder `which` ("card", "marked", "circled", "own") names under the output folder `out`.
 pub fn dir_of(out: &str, which: &str) -> Result<PathBuf> {
     match which {
         "card" => Ok(PathBuf::from(out)),
         "marked" => Ok(Path::new(out).join(MARKED)),
+        CIRCLED => Ok(Path::new(out).join(CIRCLED)),
         OWN => Ok(own_dir(Path::new(out))),
-        _ => bail!("which 应为 card、marked 或 own"),
+        _ => bail!("which 应为 card、marked、circled 或 own"),
     }
 }
 
@@ -893,14 +1111,15 @@ pub fn shapes_filter(out: &Path, s: &State) -> Option<Filter> {
             axis[idx[k]] = at.map(|j| seeds[j].axis);
         }
     }
-    let pairs: Vec<(crate::spa::geom::Mat, [f64; 3])> = (0..places.len()).filter_map(|i| Some((*turns.get(places[i].turn)?, axis[i]?))).collect();
+    let turn_of = |i: usize| s.found.turn_of(&places[i], &turns);
+    let pairs: Vec<(crate::spa::geom::Mat, [f64; 3])> = (0..places.len()).filter_map(|i| Some((turn_of(i)?, axis[i]?))).collect();
     let stand = near::stand(&pairs, both);
     let cone = near::CONE.to_radians().cos();
     let on: Vec<bool> = (0..places.len())
         .map(|i| {
-            let (Some(a), Some(r)) = (axis[i], turns.get(places[i].turn)) else { return false };
+            let (Some(a), Some(r)) = (axis[i], turn_of(i)) else { return false };
             let Some(st) = stand else { return true };
-            let d = dot(unit(turn_by(&transpose(r), a)), st);
+            let d = dot(unit(turn_by(&transpose(&r), a)), st);
             (if both { d.abs() } else { d }) >= cone
         })
         .collect();
@@ -1005,19 +1224,18 @@ pub(super) fn cubes_of(sources: &[sp::Source], found: &Found, src: usize, idx: &
     }
     let places: Vec<Place> = ids.iter().map(|i| found.places[*i]).collect();
     // One source at a time (the call reads only the sources the places are in).
-    let (cuts, _) = sp::cut_places(sources, &places, found.voxel_a)?;
-    let turns = grid(30.0);
+    let (cuts, poses) = sp::cut_places(sources, found, &places)?;
     let mut out = Vec::with_capacity(cuts.len());
     let mut k = 0;
     // The cuts are the places in order, some left out.
-    for cut in cuts {
+    for (cut, pose) in cuts.into_iter().zip(poses) {
         while k < places.len() && places[k].at() != cut.at {
             k += 1;
         }
         if k == places.len() {
             break;
         }
-        out.push((ids[k], cc::rotate(&cut.cube, BOX, &transpose(&turns[places[k].turn]))));
+        out.push((ids[k], cc::rotate(&cut.cube, BOX, &transpose(&pose.r))));
         k += 1;
     }
     Ok(out)
@@ -1074,7 +1292,7 @@ mod tests {
     use super::*;
 
     fn place(source: usize, x: usize, score: f32) -> Place {
-        Place { source, c: [x, 10, 10], bin: 2, turn: 0, score }
+        Place { source, c: [x, 10, 10], bin: 2, turn: 0, score, like: 0, size: 0 }
     }
 
     fn card() -> sp::Card {
@@ -1084,7 +1302,7 @@ mod tests {
     /// 60 places over two tomograms, scores falling, `limit` between the 30th and 31st.
     fn state(limit: Option<f32>) -> State {
         let places: Vec<Place> = (0..60).map(|i| place(i % 2, 10 + 5 * i, 1.0 - i as f32 * 0.01)).collect();
-        let found = Found { places, limit, noise: None, voxel_a: 16.0, searched: "look".into(), search_voxel_a: Some(32.0) };
+        let found = Found::plain(places, limit, None, 16.0, "look", Some(32.0));
         let look = Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [4.0, 6.0, 8.0] };
         State::new(found, "/nowhere/card_3.mrc".into(), 266.0, card(), vec!["/t/a.mrc".into(), "/t/b.mrc".into()], vec![Some(look), None], vec![10.0, 10.0], Route { kind: "card".into(), card: Some(3), points: None })
     }
@@ -1100,6 +1318,52 @@ mod tests {
         assert!(u.unsure);
         // Fewer places than UNSURE_KEEP: all of them.
         assert_eq!(u.edits.keep, 60);
+    }
+
+    /// Circled examples: the places come in groups (which example they are
+    /// like, which size); a group unticked does not count, the examples
+    /// themselves always do until the user drops one, and the average may
+    /// be of a few things.
+    #[test]
+    fn circled_examples_come_in_groups_and_stay() {
+        let mut s = state(Some(0.705));
+        s.route = Route { kind: "circled".into(), card: None, points: Some(2) };
+        s.found.sizes_a = vec![300.0, 600.0];
+        for (i, p) in s.found.places.iter_mut().enumerate() {
+            p.like = (i % 3 == 0) as u8;
+            p.size = (i % 4 == 0) as u8;
+        }
+        // One example stands far below the limit.
+        s.mine = vec![2, 50];
+        assert_eq!(s.groups(), vec![[0, 0], [0, 1], [1, 0], [1, 1]]);
+        assert_eq!(s.state_of(50), Shown::Kept);
+        assert_eq!(s.kept().len(), 31);
+        assert!(s.shown(0).contains(&50));
+        // Places like example 1 at the small size: 3, 6, 9, 15, 18, 21, 27 of the first 30.
+        s.set_group([1, 0], false);
+        assert_eq!(s.state_of(3), Shown::GroupOff);
+        assert_eq!(s.kept().len(), 24);
+        assert!(s.toggle(3).is_err());
+        let v = review_value(&s, Path::new("/nowhere"), "/t/a.mrc");
+        let g = &v["circled"]["groups"][2];
+        assert_eq!((g["like"].as_u64(), g["size"].as_u64(), g["on"].as_bool(), g["found"].as_u64(), g["kept"].as_u64()), (Some(1), Some(0), Some(false), Some(7), Some(0)), "{g}");
+        assert_eq!(v["circled"]["groups"][3]["sizeA"], 600.0);
+        assert_eq!(v["fewest"], sp::FEWEST_CIRCLED);
+        // The radius of a place is that of its own size (raw voxels of 10 Å; the open file is a.mrc itself).
+        let big = v["places"].as_array().unwrap().iter().find(|p| p["size"] == 1).unwrap();
+        assert_eq!(big["r"], 30.0);
+        // An example of an unticked group stays; the user can still drop it.
+        s.mine.push(9);
+        assert_eq!(s.state_of(9), Shown::Kept);
+        s.toggle(9).unwrap();
+        assert_eq!(s.state_of(9), Shown::Removed);
+        s.set_group([1, 0], true);
+        assert_eq!(s.state_of(3), Shown::Kept);
+        apply(&mut s, "/t/a.mrc", &Edit { group: Some(GroupEdit { like: 0, size: 1, on: false }), ..Edit::default() }).unwrap();
+        assert_eq!(s.edits.groups_off, vec![[0, 1]]);
+        // Other routes have no groups.
+        assert!(state(Some(0.705)).groups().is_empty());
+        assert_eq!(review_value(&state(None), Path::new("/nowhere"), "/t/a.mrc")["circled"], Value::Null);
     }
 
     #[test]
@@ -1227,7 +1491,7 @@ mod tests {
     #[test]
     fn only_the_best_keep_plus_a_margin_are_shown_per_tomogram() {
         let places: Vec<Place> = (0..2000).map(|i| place(0, i, 2.0 - i as f32 * 0.001)).collect();
-        let found = Found { places, limit: Some(1.8995), noise: None, voxel_a: 16.0, searched: "raw".into(), search_voxel_a: None };
+        let found = Found::plain(places, Some(1.8995), None, 16.0, "raw", None);
         let s = State::new(found, "x".into(), 266.0, card(), vec!["/t/a.mrc".into()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None });
         assert_eq!(s.edits.keep, 101);
         assert_eq!(s.shown(0).len(), 101 + MARGIN);
@@ -1359,9 +1623,9 @@ mod tests {
                 let p = seeds[(i * seeds.len()) / 60].pos;
                 [p[0].round() as usize, p[1].round() as usize, p[2].round() as usize]
             };
-            places.push(Place { source: 0, c, bin: 1, turn: 0, score: 1.0 - i as f32 * 0.01 });
+            places.push(Place { source: 0, c, bin: 1, turn: 0, score: 1.0 - i as f32 * 0.01, like: 0, size: 0 });
         }
-        let found = Found { places, limit: Some(0.0), noise: None, voxel_a: 10.0, searched: "raw".into(), search_voxel_a: None };
+        let found = Found::plain(places, Some(0.0), None, 10.0, "raw", None);
         State::new(found, "x".into(), 266.0, card(), vec![a.to_string()], vec![None], vec![10.0], Route { kind: "card".into(), card: Some(3), points: None })
     }
 

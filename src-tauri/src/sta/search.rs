@@ -15,8 +15,8 @@
 //! ones (everything else), where the groups are most distinct (Otsu), and
 //! gives up when they are not. A tomogram packed with the particle has one
 //! group only; there the peaks are held against those of the same search
-//! made with the template's phases scrambled (`scrambled`), which finds
-//! what chance alone scores in that tomogram (`beyond_chance`). (A Gumbel
+//! made in the tomogram with its phases scrambled (`scrambled`), which
+//! finds what chance alone scores in noise of that kind (`beyond_chance`). (A Gumbel
 //! curve fitted to the scores, to their peaks or to their quartiles, was
 //! tried twice and failed on real data: its threshold lay above the best
 //! score a correlation can have.) The search itself is kept off the tomogram's X/Y borders and off gold
@@ -131,6 +131,7 @@ pub fn search(
     }
     let (mask_re, mask_im) = ft3(t, &big);
     let mean = (v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64) as f32;
+    let flat = flat_variance(v, mean);
 
     // Each tile answers for the centres in its middle half.
     let step = t / 2;
@@ -226,7 +227,7 @@ pub fn search(
                     for y in y0..y1 {
                         for x in x0..x1 {
                             let j = at(x, y, z);
-                            let var = (m2[j] as f64 / count - (m1[j] as f64 / count).powi(2)).max(1e-12);
+                            let var = (m2[j] as f64 / count - (m1[j] as f64 / count).powi(2)).max(flat);
                             let s = (cc[j] as f64 / (count * var * power).sqrt()) as f32;
                             if s > best_score[i] {
                                 best_score[i] = s;
@@ -350,30 +351,258 @@ const FEWEST_ABOVE: usize = 20;
 /// Of the peaks taken as beyond chance, at most this share may be chance.
 const CHANCE: f64 = 0.01;
 
-/// The template with its phases scrambled: the same power at every
-/// frequency (so it answers to the tomogram's noise and shading as the
-/// template does), in the shape of nothing. What a search with it scores
-/// is what the template scores by chance (the phase-randomised control of
-/// template matching). `n`³, like the template.
-pub fn scrambled(template: &[f32], n: usize) -> Vec<f32> {
-    use crate::spa::fourier::{ft3, ift3};
-    let mut rng = crate::spa::Rng(0x5c7a);
-    let noise: Vec<f32> = (0..template.len()).map(|_| rng.gauss() as f32).collect();
-    let (mut re, mut im) = ft3(n, template);
-    // The phases of real noise: those of a real map again.
-    let (nr, ni) = ft3(n, &noise);
-    for i in 0..re.len() {
-        let amplitude = (re[i] * re[i] + im[i] * im[i]).sqrt();
-        let length = (nr[i] * nr[i] + ni[i] * ni[i]).sqrt().max(1e-20);
-        re[i] = amplitude * nr[i] / length;
-        im[i] = amplitude * ni[i] / length;
+/// Where the tomogram varies less than this share of what it does as a
+/// whole, there is nothing to compare a template with: the local spread a
+/// score is divided by is not taken below it. Without it a flat place (a
+/// blank border, a masked-out region, the inside of something a denoiser
+/// smoothed away) divides rounding noise by nearly nothing and outscores
+/// every particle a thousandfold.
+const FLAT: f64 = 0.05;
+
+/// The least variance under the mask a score is divided by (`FLAT`), for
+/// a tomogram `v` of mean `mean`.
+pub(super) fn flat_variance(v: &[f32], mean: f32) -> f64 {
+    let var = v.par_iter().map(|x| (*x as f64 - mean as f64).powi(2)).sum::<f64>() / v.len().max(1) as f64;
+    (FLAT * FLAT * var).max(1e-12)
+}
+
+/// Side of the cubes the spectrum of a tomogram is measured on.
+const SPECTRUM: usize = 32;
+/// Half the side of the kernel that flattens a tomogram.
+const FLATTEN: usize = 6;
+/// The flattened tomogram keeps frequencies up to this share of the
+/// sampling limit in full and fades out towards the limit: the last part
+/// holds little but what binning and interpolation left there.
+const FLAT_TO: f64 = 0.6;
+
+/// The kernel (side `2 · FLATTEN + 1`, the same in every direction) that
+/// gives `v` the same power at every spatial frequency: the inverse root
+/// of its spectrum, measured over cubes taken through it. None for a
+/// tomogram that holds nothing.
+pub fn flattener(v: &[f32], dims: [usize; 3]) -> Option<Vec<f32>> {
+    use crate::spa::fourier::{freq, ft3, ift3};
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    let n = SPECTRUM;
+    // Mirrored back into the volume, so a thin tomogram gives cubes too.
+    let within = |i: usize, len: usize| -> usize {
+        let k = i % (2 * len);
+        if k < len { k } else { 2 * len - 1 - k }
+    };
+    let window: Vec<f32> = (0..n).map(|i| (0.5 - 0.5 * (std::f64::consts::TAU * (i as f64 + 0.5) / n as f64).cos()) as f32).collect();
+    let shells = n / 2 + 1;
+    let mut rng = crate::spa::Rng(0xf1a7);
+    let starts: Vec<[usize; 3]> = (0..200).map(|_| [rng.below(nx), rng.below(ny), rng.below(nz)]).collect();
+    let (power, count) = starts
+        .par_iter()
+        .map(|o| {
+            let mut cube = vec![0f32; n * n * n];
+            for z in 0..n {
+                let sz = within(o[2] + z, nz);
+                for y in 0..n {
+                    let sy = within(o[1] + y, ny);
+                    for x in 0..n {
+                        cube[(z * n + y) * n + x] = v[(sz * ny + sy) * nx + within(o[0] + x, nx)];
+                    }
+                }
+            }
+            let mean = cube.iter().map(|x| *x as f64).sum::<f64>() / cube.len() as f64;
+            for z in 0..n {
+                for y in 0..n {
+                    for x in 0..n {
+                        let c = &mut cube[(z * n + y) * n + x];
+                        *c = (*c - mean as f32) * window[x] * window[y] * window[z];
+                    }
+                }
+            }
+            let (re, im) = ft3(n, &cube);
+            let (mut power, mut count) = (vec![0f64; shells], vec![0f64; shells]);
+            for i in 0..re.len() {
+                let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+                let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt().round() as usize;
+                if r < shells {
+                    power[r] += (re[i] as f64).powi(2) + (im[i] as f64).powi(2);
+                    count[r] += 1.0;
+                }
+            }
+            (power, count)
+        })
+        .reduce(
+            || (vec![0f64; shells], vec![0f64; shells]),
+            |mut a, b| {
+                for s in 0..shells {
+                    a.0[s] += b.0[s];
+                    a.1[s] += b.1[s];
+                }
+                a
+            },
+        );
+    let power: Vec<f64> = power.iter().zip(&count).map(|(p, c)| p / c.max(1.0)).collect();
+    let most = power.iter().skip(1).copied().fold(0.0, f64::max);
+    if most <= 0.0 {
+        return None;
     }
-    ift3(n, &re, &im)
+    // The gain at each shell: the inverse root of the power there (not
+    // below a millionth of the most: a shell binning emptied stays empty),
+    // nothing at zero frequency, fading out towards the sampling limit.
+    let limit = (n / 2) as f64;
+    let gain: Vec<f64> = (0..shells)
+        .map(|s| {
+            if s == 0 {
+                return 0.0;
+            }
+            let f = s as f64 / limit;
+            let fade = if f <= FLAT_TO { 1.0 } else { (0.5 * std::f64::consts::PI * (f - FLAT_TO) / (1.0 - FLAT_TO)).cos().powi(2) };
+            fade / power[s].max(1e-6 * most).sqrt()
+        })
+        .collect();
+    let mut re = vec![0f32; n * n * n];
+    for i in 0..re.len() {
+        let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+        let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt();
+        let (lo, part) = (r.floor() as usize, r.fract());
+        if lo + 1 < shells {
+            re[i] = (gain[lo] * (1.0 - part) + gain[lo + 1] * part) as f32;
+        } else if lo < shells {
+            re[i] = (gain[lo] * (1.0 - part)) as f32;
+        }
+    }
+    let full = ift3(n, &re, &vec![0f32; n * n * n]);
+    // Its middle, faded to nothing at the edge, summing to zero.
+    let c = FLATTEN as isize;
+    let k = 2 * FLATTEN + 1;
+    let mut kernel = vec![0f64; k * k * k];
+    let mut fade = vec![0f64; k * k * k];
+    for z in -c..=c {
+        for y in -c..=c {
+            for x in -c..=c {
+                let r = ((x * x + y * y + z * z) as f64).sqrt() / (c + 1) as f64;
+                let w = if r < 1.0 { (0.5 * std::f64::consts::PI * r).cos().powi(2) } else { 0.0 };
+                let at = (((z + c) * k as isize + y + c) * k as isize + x + c) as usize;
+                let from = (((z + (n / 2) as isize) * n as isize + y + (n / 2) as isize) * n as isize + x + (n / 2) as isize) as usize;
+                kernel[at] = full[from] as f64 * w;
+                fade[at] = w;
+            }
+        }
+    }
+    let off = kernel.iter().sum::<f64>() / fade.iter().sum::<f64>();
+    let kernel: Vec<f64> = kernel.iter().zip(&fade).map(|(k, w)| k - off * w).collect();
+    let norm = kernel.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-30);
+    Some(kernel.iter().map(|x| (x / norm) as f32).collect())
+}
+
+/// `v` with the same power at every spatial frequency (`flattener`). A
+/// tomogram's power lies mostly in its slow variations, and in a cell in
+/// its membranes: two pieces of it then correlate whatever they hold, and
+/// a picture that holds a piece of membrane fits every membrane. With the
+/// spectrum flat, each frequency counts the same, so what is particular
+/// to a picture counts as much as what it shares with everything
+/// (whitening before matched filtering; as used in template matching,
+/// e.g. Rickgauer, Grigorieff and Denk, eLife 6, 2017).
+pub fn flattened(v: &[f32], dims: [usize; 3]) -> Vec<f32> {
+    let Some(kernel) = flattener(v, dims) else { return v.to_vec() };
+    let [nx, ny, nz] = dims;
+    let c = FLATTEN;
+    let k = 2 * c + 1;
+    let within = |i: isize, len: usize| -> usize {
+        let period = 2 * len as isize;
+        let j = i.rem_euclid(period);
+        (if j < len as isize { j } else { period - 1 - j }) as usize
+    };
+    let mut out = vec![0f32; v.len()];
+    out.par_chunks_mut(nx).enumerate().for_each(|(row, o)| {
+        let (y, z) = (row % ny, row / ny);
+        let mut padded = vec![0f32; nx + 2 * c];
+        for dz in 0..k {
+            let sz = within(z as isize + dz as isize - c as isize, nz);
+            for dy in 0..k {
+                let sy = within(y as isize + dy as isize - c as isize, ny);
+                let src = &v[(sz * ny + sy) * nx..(sz * ny + sy + 1) * nx];
+                for (i, p) in padded.iter_mut().enumerate() {
+                    *p = src[within(i as isize - c as isize, nx)];
+                }
+                let taps = &kernel[(dz * k + dy) * k..(dz * k + dy + 1) * k];
+                for (dx, t) in taps.iter().enumerate() {
+                    for (a, b) in o.iter_mut().zip(&padded[dx..dx + nx]) {
+                        *a += t * b;
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
+/// The tomogram with its phases scrambled, block by block (`block`³, a
+/// power of two; blocks at the far faces are filled out by mirroring):
+/// everywhere the power it has there at every frequency, in the shape of
+/// nothing. What a search of it scores is what the template, with all its
+/// orientations as alike as they are, scores by chance in noise of this
+/// tomogram's kind (the phase-randomised control: Chen et al.,
+/// Ultramicroscopy 135, 2013). Scrambling the template instead was tried:
+/// a scrambled template is a different thing at every orientation, so it
+/// has thousands of chances where a rounded particle has a few, and its
+/// search costs a hundred times the real one.
+pub fn scrambled(v: &[f32], dims: [usize; 3], block: usize) -> Vec<f32> {
+    use crate::spa::fourier::{ft3, ift3};
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    let b = block;
+    let blocks: Vec<[usize; 3]> = (0..nz.div_ceil(b)).flat_map(|z| (0..ny.div_ceil(b)).flat_map(move |y| (0..nx.div_ceil(b)).map(move |x| [x * b, y * b, z * b]))).collect();
+    // Index i of a block starting at o, mirrored back into 0..n.
+    let within = |o: usize, i: usize, n: usize| -> usize {
+        let period = 2 * n;
+        let k = (o + i) % period;
+        if k < n { k } else { period - 1 - k }
+    };
+    let made: Vec<Vec<f32>> = blocks
+        .par_iter()
+        .enumerate()
+        .map(|(k, o)| {
+            let mut cube = vec![0f32; b * b * b];
+            for z in 0..b {
+                let sz = within(o[2], z, nz);
+                for y in 0..b {
+                    let sy = within(o[1], y, ny);
+                    for x in 0..b {
+                        cube[(z * b + y) * b + x] = v[(sz * ny + sy) * nx + within(o[0], x, nx)];
+                    }
+                }
+            }
+            let mean = cube.iter().map(|x| *x as f64).sum::<f64>() / cube.len() as f64;
+            cube.iter_mut().for_each(|x| *x -= mean as f32);
+            let mut rng = crate::spa::Rng(0x5c7a + k as u64);
+            let noise: Vec<f32> = (0..cube.len()).map(|_| rng.gauss() as f32).collect();
+            let (mut re, mut im) = ft3(b, &cube);
+            // The phases of real noise: those of a real map again.
+            let (nr, ni) = ft3(b, &noise);
+            for i in 0..re.len() {
+                let amplitude = (re[i] * re[i] + im[i] * im[i]).sqrt();
+                let length = (nr[i] * nr[i] + ni[i] * ni[i]).sqrt().max(1e-20);
+                re[i] = amplitude * nr[i] / length;
+                im[i] = amplitude * ni[i] / length;
+            }
+            let mut out = ift3(b, &re, &im);
+            out.iter_mut().for_each(|x| *x += mean as f32);
+            out
+        })
+        .collect();
+    let mut out = vec![0f32; v.len()];
+    for (o, cube) in blocks.iter().zip(&made) {
+        for z in 0..b.min(nz - o[2]) {
+            for y in 0..b.min(ny - o[1]) {
+                let row = ((o[2] + z) * ny + o[1] + y) * nx + o[0];
+                let len = b.min(nx - o[0]);
+                out[row..row + len].copy_from_slice(&cube[(z * b + y) * b..(z * b + y) * b + len]);
+            }
+        }
+    }
+    out
 }
 
 /// The score above which the peaks of a search are particles, when they
 /// are one group with nothing to part them from: held against `chance`,
-/// the peaks of the same search made with a scrambled template, each with
+/// the peaks of the same search made in the scrambled tomogram, each with
 /// the number of such peaks it stands for (the control searches a part of
 /// the tomogram only). The lowest score at which no more than `CHANCE` of
 /// the peaks above it are expected to be chance (the step-up rule of
@@ -529,5 +758,71 @@ fn squared_distance(f: &[f64], out: &mut [f64]) {
         }
         let d = q as f64 - at[k] as f64;
         *o = d * d + f[at[k]];
+    }
+}
+
+#[cfg(test)]
+mod flat_tests {
+    use super::*;
+    use crate::spa::fourier::{freq, ft3};
+
+    /// Power per shell of a 32³ cube from the corner of `v`.
+    fn shells(v: &[f32], dims: [usize; 3]) -> Vec<f64> {
+        let n = 32;
+        let mut cube = vec![0f32; n * n * n];
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    cube[(z * n + y) * n + x] = v[((z + 8) * dims[1] + y + 8) * dims[0] + x + 8];
+                }
+            }
+        }
+        let (re, im) = ft3(n, &cube);
+        let (mut power, mut count) = (vec![0f64; 17], vec![0f64; 17]);
+        for i in 0..re.len() {
+            let k = [freq(i % n, n), freq(i / n % n, n), freq(i / n / n, n)];
+            let r = ((k[0] * k[0] + k[1] * k[1] + k[2] * k[2]) as f64).sqrt().round() as usize;
+            if r < 17 {
+                power[r] += (re[i] as f64).powi(2) + (im[i] as f64).powi(2);
+                count[r] += 1.0;
+            }
+        }
+        power.iter().zip(&count).map(|(p, c)| p / c).collect()
+    }
+
+    /// Noise with most of its power in slow variations has, flattened,
+    /// about the same power at every frequency a picture can tell apart,
+    /// up to `FLAT_TO` of the limit, and its level is gone.
+    #[test]
+    fn a_flattened_tomogram_has_a_flat_spectrum() {
+        let dims = [72usize, 64, 56];
+        let mut rng = crate::spa::Rng(21);
+        let mut v: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|_| rng.gauss() as f32).collect();
+        // Smoothed along each axis a few times: a red spectrum.
+        for step in [1, dims[0], dims[0] * dims[1]] {
+            for _ in 0..3 {
+                let a = v.clone();
+                for i in step..v.len() - step {
+                    v[i] = 0.25 * a[i - step] + 0.5 * a[i] + 0.25 * a[i + step];
+                }
+            }
+        }
+        v.iter_mut().for_each(|x| *x += 7.0);
+        let before = shells(&v, dims);
+        assert!(before[2] > 30.0 * before[9], "{before:.3?}");
+        let flat = flattened(&v, dims);
+        let after = shells(&flat, dims);
+        // Of the slowest variations (longer than a picture is wide) less is
+        // left: the short kernel and the window of the measurement both
+        // take from them, which does no harm.
+        assert!(after[1] < after[6] && after[2] < after[6], "{after:.3?}");
+        let part: Vec<f64> = after[4..=9].to_vec();
+        let (lo, hi) = (part.iter().copied().fold(f64::MAX, f64::min), part.iter().copied().fold(0.0, f64::max));
+        eprintln!("before {before:.3?}\nafter {after:.3?}");
+        assert!(hi < 2.5 * lo, "{part:.3?}");
+        assert!(after[16] < 0.2 * lo, "{after:.3?}");
+        let mean = flat.iter().map(|x| *x as f64).sum::<f64>() / flat.len() as f64;
+        let sd = (flat.iter().map(|x| (*x as f64 - mean).powi(2)).sum::<f64>() / flat.len() as f64).sqrt();
+        assert!(mean.abs() < 0.05 * sd, "{mean} {sd}");
     }
 }

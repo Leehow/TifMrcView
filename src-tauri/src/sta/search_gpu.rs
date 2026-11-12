@@ -169,6 +169,9 @@ pub fn search(
     let mask_k = cut(&mask);
     let count: f32 = mask_k.iter().sum();
     let mean = (v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64) as f32;
+    // Not below what a flat place has (`search::flat_variance`), summed
+    // under the mask.
+    let flat = (count as f64 * super::search::flat_variance(v, mean)) as f32;
     let options = ConvOptions::new([1; 3], [0; 3], [1; 3], 1);
     let mask_t = Tensor::<5>::from_data(TensorData::new(mask_k, [1, 1, k, k, k]), dev);
 
@@ -237,7 +240,7 @@ pub fn search(
         // √(Σ under the mask of (v − local mean)²).
         let m1 = conv3d(x.clone(), mask_t.clone(), None, options.clone());
         let m2 = conv3d(x.clone() * x.clone(), mask_t.clone(), None, options.clone());
-        let spread = pull((m2 - m1.clone() * m1 / count).clamp_min(1e-12).sqrt().reshape([len]))?;
+        let spread = pull((m2 - m1.clone() * m1 / count).clamp_min(flat).sqrt().reshape([len]))?;
         // The tile seen through each basis kernel: r × voxels.
         let seen: Vec<Tensor<2>> = rows_t.iter().map(|w| conv3d(x.clone(), w.clone(), None, options.clone()).reshape([w.dims()[0], len])).collect();
         let seen = Tensor::cat(seen, 0);

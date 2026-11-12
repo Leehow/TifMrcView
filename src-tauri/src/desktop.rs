@@ -2359,7 +2359,9 @@ async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::st
 /// to check (`sta::review`). `pick` (a card of `out`) or else `marks` (the
 /// clicked particles, 1 to 3 are examples) names the example, or `which`
 /// "own" says the map brought with `sta_own_map` is (`pick` and `marks` are
-/// then not read); `out` is the output folder. When shapes were marked for
+/// then not read), or `which` "circled" that the examples circled in `marks`
+/// (kind "example": the centre and a point of the circle) are, whatever they
+/// show (`sta::circled`); `out` is the output folder. When shapes were marked for
 /// `out` (`sta_shapes_review`) the places are also checked against them. Same events as `sta_run`; returns the review of the first
 /// tomogram (see `sta_review`).
 #[cfg(feature = "pro")]
@@ -2377,6 +2379,9 @@ async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, mark
         if which.as_deref() == Some(crate::sta::review::OWN) {
             return crate::sta::review::find_own(&inputs, &out, &device, &emit, &base64);
         }
+        if which.as_deref() == Some(crate::sta::review::CIRCLED) {
+            return crate::sta::review::find_circled(&inputs, &marks.unwrap_or_default(), &out, &device, &emit, &base64);
+        }
         match (pick, marks) {
             (Some(n), _) => crate::sta::review::find_card(&inputs, n, &out, &device, &emit, &base64),
             (None, Some(m)) => crate::sta::review::find_points(&inputs, &m, &out, &device, &emit, &base64),
@@ -2386,7 +2391,7 @@ async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, mark
 }
 
 /// What was found in `out` (`which`: "card" for the cards' route, "marked" for
-/// clicked particles, "own" for a map the user brought) as the review of the open file `tomogram` (a searched
+/// clicked particles, "circled" for circled examples, "own" for a map the user brought) as the review of the open file `tomogram` (a searched
 /// tomogram or its look companion), or null when nothing was found there:
 /// {total, keep, kept, sure, unsure, limit, removed, added, perTomogram:
 /// [{name, path, kept}], scores, etaSeconds, places: [{i, pos, score, state}],
@@ -2407,14 +2412,29 @@ async fn sta_review(out: String, which: String, tomogram: String) -> CmdResult<O
 /// no circle is: the nearest place within a radius is added, else an error),
 /// `reset` (back to the program's suggestion), `onShapes` (only the places on
 /// the shapes the user marked count, or all again), `undoAgain` (takes back
-/// what `sta_review_again` did, nothing else).
+/// what `sta_review_again` did, nothing else), `group` ({like, size, on}: for
+/// circled examples, ticks or unticks the places that are like example `like`
+/// at size `size`; the review's `circled.groups` lists them).
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>, on_shapes: Option<bool>, undo_again: Option<bool>) -> CmdResult<serde_json::Value> {
+async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>, on_shapes: Option<bool>, undo_again: Option<bool>, group: Option<crate::sta::review::GroupEdit>) -> CmdResult<serde_json::Value> {
     blocking(move || {
         let dir = crate::sta::review::dir_of(&out, &which)?;
-        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false), on_shapes, undo_again: undo_again.unwrap_or(false) };
+        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false), on_shapes, undo_again: undo_again.unwrap_or(false), group };
         crate::sta::review::set_review(&dir, &tomogram, &edit)
+    }).await
+}
+
+/// The picture of place `i` of a review (circled examples: the section the
+/// user drew on, around the place; written when the places were found):
+/// "data:image/png;base64,…".
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_tile(out: String, which: String, i: usize) -> CmdResult<String> {
+    blocking(move || {
+        let png = crate::sta::review::tile_path(&crate::sta::review::dir_of(&out, &which)?, i);
+        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
+        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
     }).await
 }
 
@@ -2542,18 +2562,6 @@ async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip
     blocking(move || {
         let edit = crate::sta::shapes::Edit { drop, flip, flip_all: flip_all.unwrap_or(false), reset: reset.unwrap_or(false), only };
         crate::sta::shapes::set_review(&crate::sta::shapes::dir_of(&out), &tomogram, &edit)
-    }).await
-}
-
-/// The picture of pit `id` of the shapes review of `out` (the section along
-/// its axis, the pit pointing down): "data:image/png;base64,…".
-#[cfg(feature = "pro")]
-#[tauri::command]
-async fn sta_shapes_tile(out: String, id: usize) -> CmdResult<String> {
-    blocking(move || {
-        let png = crate::sta::shapes::tile_path(&crate::sta::shapes::dir_of(&out), id);
-        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
-        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
     }).await
 }
 
@@ -3696,12 +3704,12 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_shapes_review,
             #[cfg(feature = "pro")] sta_shapes_section,
             #[cfg(feature = "pro")] sta_shapes_set,
-            #[cfg(feature = "pro")] sta_shapes_tile,
             #[cfg(feature = "pro")] sta_shapes_average,
             #[cfg(feature = "pro")] sta_kinds,
             #[cfg(feature = "pro")] sta_kinds_saved,
             #[cfg(feature = "pro")] sta_kinds_keep,
             #[cfg(feature = "pro")] sta_placed,
+            #[cfg(feature = "pro")] sta_review_tile,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
             #[cfg(feature = "pro")] sta_mark_preview,

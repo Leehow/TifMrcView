@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use super::pick::{blobs, Blob};
 use super::refine::{align, align_on, classes_on, first_model, Class, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
-use crate::spa::geom::{angles, axis_angle, grid, mul};
+use crate::spa::geom::{angles, axis_angle, grid, mul, Mat};
 use crate::spa::fourier::resample3;
 use crate::spa::Rng;
 use crate::tomo::{output, pipeline};
@@ -49,7 +49,7 @@ pub(super) const BOX: usize = 32;
 pub(super) const SPAN: f64 = 13.0;
 /// Particles in the first model, and most particles averaged here.
 const FIRST: usize = 200;
-const MOST: usize = 3000;
+pub(super) const MOST: usize = 3000;
 
 /// The clear companion of a source's tomogram (`tomo::auto`, `--for sta`):
 /// raw voxel index = `scale` × look voxel index + `offset`, per axis (x, y, z).
@@ -466,7 +466,7 @@ fn darkest(v: &[f32], dims: [usize; 3], c: [usize; 3], radius: f64, median: f32,
 /// past the tomogram (thin tomograms are hardly thicker than the cube) it
 /// along the beam it is filled with the mean, so particles near a face are
 /// kept; the centre itself and at least half the cube have to be inside.
-fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32>> {
+pub(super) fn cube(v: &[f32], dims: [usize; 3], c: [usize; 3]) -> Option<Vec<f32>> {
     cube_n(v, dims, c, BOX)
 }
 
@@ -1977,76 +1977,6 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     Ok(report)
 }
 
-/// The average of pits of a membrane (`funnels`): one particle each, cut
-/// about the middle of its mouth (`pits`: position and the axis into the
-/// pit), which stands along the model's Z. `size_a` is what holds a whole
-/// pit, Å. Pits differ in depth and width, so the average shows what they
-/// share: the rim, and the wall as far as it is alike.
-pub fn run_pits(sources: &[Source], pits: &[Drawn], size_a: f64, out_dir: &str, progress: Progress, live: Live) -> Result<Report> {
-    let started = Instant::now();
-    let mut cuts: Vec<Cut> = vec![];
-    let mut axes: Vec<[f64; 3]> = vec![];
-    let mut voxel_a = size_a / SPAN;
-    for (i, s) in sources.iter().enumerate() {
-        progress("裁出凹陷", i, sources.len());
-        if !pits.iter().any(|d| d.source == i) {
-            continue;
-        }
-        check_cancel()?;
-        let (v, dims, voxel, bin) = binned(&s.path, size_a / SPAN)?;
-        voxel_a = voxel;
-        let (median, sd) = super::pick::robust(&v);
-        for d in pits.iter().filter(|d| d.source == i) {
-            let c = d.pos.map(|p| (p / bin as f64).floor().max(0.0) as usize);
-            if let Some(cube) = cube(&v, dims, c) {
-                let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
-                let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
-                cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
-                axes.push(d.axis);
-            }
-        }
-    }
-    progress("裁出凹陷", sources.len(), sources.len());
-    if cuts.len() < MIN_PITS {
-        bail!("能完整裁出的凹陷只有 {} 个，至少要 {MIN_PITS} 个（太靠近断层图边缘的裁不出）", cuts.len());
-    }
-    let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
-    let radius = (0.8 * size_a / voxel_a).min(BOX as f64 / 2.0 - 3.0);
-    let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
-    let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
-    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let (model, poses) = super::refine::first_model_known(&set, &axes, false, 1, progress, live)?;
-    let out = align(&set, &model, &poses, progress, live)?;
-    let mut report = Report {
-        kinds: vec![],
-        diameter_a: None,
-        particles: 0,
-        candidates: pits.len(),
-        distinct: None,
-        voxel_a: 0.0,
-        searched: None,
-        search_voxel_a: None,
-        resolution_a: None,
-        signal_a: None,
-        sharpen_b: None,
-        ctf_limited: false,
-        fsc: vec![],
-        averaged_from: None,
-        fsc_other: None,
-        views_refined: None,
-        pattern: None,
-        map: None,
-        halves: None,
-        table: None,
-        ms: 0,
-    };
-    save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
-    Ok(report)
-}
-
-/// Fewest pits that are averaged.
-pub const MIN_PITS: usize = 4;
-
 /// One row of a saved `particles.csv`.
 struct Row {
     source: usize,
@@ -2949,6 +2879,13 @@ pub struct Place {
     /// Index into `grid(30.0)`: the orientation the template matched at.
     pub turn: usize,
     pub score: f32,
+    /// Which of the user's examples it looks like (`circled`): the one
+    /// whose picture found it. 0 on every other route.
+    #[serde(default)]
+    pub like: u8,
+    /// Which of `Found::sizes_a` it was found at (`circled`).
+    #[serde(default)]
+    pub size: u8,
 }
 
 impl Place {
@@ -2980,9 +2917,45 @@ pub struct Found {
     /// "look", "raw" or "mixed": which tomograms were searched.
     pub searched: String,
     pub search_voxel_a: Option<f64>,
+    /// `circled`: per example, the turn that carries the first example's
+    /// picture onto it, so that places found by different examples are
+    /// averaged in one frame (`turn_of`). Empty on every other route.
+    #[serde(default)]
+    pub frames: Vec<Mat>,
+    /// `circled`: the sizes searched at (diameters, Å), `Place::size`
+    /// indexes them.
+    #[serde(default)]
+    pub sizes_a: Vec<f64>,
+    /// `circled`: how alike the examples are to each other: the lowest
+    /// score one of them has in the search with the others' pictures.
+    #[serde(default)]
+    pub alike: Option<f32>,
 }
 
 impl Found {
+    /// The search of one template: nothing of what `circled` adds.
+    pub fn plain(places: Vec<Place>, limit: Option<f32>, noise: Option<f32>, voxel_a: f64, searched: &str, search_voxel_a: Option<f64>) -> Found {
+        Found { places, limit, noise, voxel_a, searched: searched.to_string(), search_voxel_a, frames: vec![], sizes_a: vec![], alike: None }
+    }
+
+    /// The orientation of the thing at `p` in the frame of the template
+    /// (`turns`: `grid(30.0)`): what turned the picture that found it, after
+    /// what turns the template onto that picture.
+    pub fn turn_of(&self, p: &Place, turns: &[Mat]) -> Option<Mat> {
+        let r = turns.get(p.turn)?;
+        Some(match self.frames.get(p.like as usize) {
+            Some(f) => mul(r, f),
+            None => *r,
+        })
+    }
+
+    /// Fewest places that are averaged: a kind of particle fills a tomogram
+    /// by the hundred, and fewer than `FEWEST` found say the search failed;
+    /// what the user circled may be large and rare.
+    pub fn fewest(&self) -> usize {
+        if self.sizes_a.is_empty() { FEWEST } else { FEWEST_CIRCLED }
+    }
+
     /// How many places the program would keep by itself.
     pub fn sure(&self) -> usize {
         match self.limit {
@@ -2992,8 +2965,13 @@ impl Found {
     }
 }
 
+/// Fewest particles `run_places` averages.
+pub const FEWEST: usize = 20;
+/// The same for circled examples (the alignment wants four cubes at least).
+pub const FEWEST_CIRCLED: usize = 4;
+
 /// Whether `cube_n` gives a cube of side `n` around voxel `c`.
-fn cube_fits(dims: [usize; 3], c: [usize; 3], n: usize) -> bool {
+pub(super) fn cube_fits(dims: [usize; 3], c: [usize; 3], n: usize) -> bool {
     c[2] < dims[2] && (0..2).all(|i| c[i] >= n / 2 && c[i] + n / 2 <= dims[i])
 }
 
@@ -3034,7 +3012,7 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
                 }
             };
             if cube_fits(g.dims, c, BOX) {
-                places.push(Place { source: i, c, bin: g.bin, turn: p.turn, score: p.score });
+                places.push(Place { source: i, c, bin: g.bin, turn: p.turn, score: p.score, like: 0, size: 0 });
             }
         }
     }
@@ -3062,7 +3040,7 @@ pub fn find_template(dev: &burn::tensor::Device, sources: &[Source], template: &
     } else {
         "mixed"
     };
-    Ok(Found { places, limit, noise, voxel_a: voxel, searched: kind.to_string(), search_voxel_a: searched.first().map(|s| s.1) })
+    Ok(Found::plain(places, limit, noise, voxel, kind, searched.first().map(|s| s.1)))
 }
 
 /// What one tomogram is searched as: the grid, where a particle may lie on
@@ -3145,10 +3123,10 @@ impl SearchGrid {
 const CONTROL_SHARE: usize = 4;
 const CONTROL_FEWEST: usize = 8;
 
-/// What chance scores in a search: the peaks of the same search with the
-/// template's phases scrambled (`search::scrambled`), over some of the
-/// tomogram's tiles spread through it, each peak with the number of peaks
-/// of the whole tomogram it stands for. For `search::beyond_chance`.
+/// What chance scores in a search: the peaks of the same search in the
+/// tomogram with its phases scrambled (`search::scrambled`), over some of
+/// the tomogram's tiles spread through it, each peak with the number of
+/// peaks of the whole tomogram it stands for. For `search::beyond_chance`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn chance(
     dev: &burn::tensor::Device,
@@ -3187,13 +3165,14 @@ pub(super) fn chance(
     let all: usize = held.iter().sum();
     let here: usize = order[..take].iter().map(|k| held[*k]).sum();
     let each = all as f64 / here as f64;
-    let found = super::search_gpu::search(dev, v, dims, &scrambled(template, n), n, radius, tilts, turns, Some(&part), tick)?;
+    let found = super::search_gpu::search(dev, &scrambled(v, dims, t), dims, template, n, radius, tilts, turns, Some(&part), tick)?;
     Ok(peaks(&found, 1.8 * radius, MOST).into_iter().map(|p| (p.score, each)).collect())
 }
 
 /// The cubes at `places` (and the poses the search found them at), one
 /// tomogram in memory at a time. Places whose cube cannot be cut are left out.
-pub(super) fn cut_places(sources: &[Source], places: &[Place], voxel_a: f64) -> Result<(Vec<Cut>, Vec<Pose>)> {
+pub(super) fn cut_places(sources: &[Source], found: &Found, places: &[Place]) -> Result<(Vec<Cut>, Vec<Pose>)> {
+    let voxel_a = found.voxel_a;
     let turns = grid(30.0);
     let mut cuts: Vec<(usize, Cut, Pose)> = vec![];
     for (i, s) in sources.iter().enumerate() {
@@ -3203,8 +3182,8 @@ pub(super) fn cut_places(sources: &[Source], places: &[Place], voxel_a: f64) -> 
         check_cancel()?;
         let (v, dims, _, bin) = binned(&s.path, voxel_a)?;
         for (k, p) in places.iter().enumerate().filter(|(_, p)| p.source == i && p.bin == bin) {
-            if let (Some(cube), Some(r)) = (cube(&v, dims, p.c), turns.get(p.turn)) {
-                cuts.push((k, Cut { source: i, at: p.at(), bin, score: p.score, strength: 0.0, darkest: 0.0, cube }, Pose { r: *r, t: [0.0; 3], score: p.score }));
+            if let (Some(cube), Some(r)) = (cube(&v, dims, p.c), found.turn_of(p, &turns)) {
+                cuts.push((k, Cut { source: i, at: p.at(), bin, score: p.score, strength: 0.0, darkest: 0.0, cube }, Pose { r, t: [0.0; 3], score: p.score }));
             }
         }
     }
@@ -3231,7 +3210,7 @@ pub fn run_template(
     let Some(limit) = found.limit else {
         let best = found.places.first().map_or(0.0, |p| p.score);
         match found.noise {
-            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也不比一个打乱的模板碰巧得到的分数高：最高 {best:.3}，碰巧的最高 {noise:.3}）", found.places.len()),
+            Some(noise) => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群，也不比在打乱的图里碰巧得到的分数高：最高 {best:.3}，碰巧的最高 {noise:.3}）", found.places.len()),
             None => bail!("没有找到明显像模板的颗粒（{} 个候选的分数分不出两群）", found.places.len()),
         }
     };
@@ -3260,9 +3239,9 @@ pub fn run_places(
     assert_eq!(template.len(), BOX * BOX * BOX);
     let candidates = found.places.len();
     let mut voxel = found.voxel_a;
-    let (mut cuts, poses) = cut_places(sources, places, found.voxel_a)?;
-    if cuts.len() < 20 {
-        bail!("只找到 {} 个颗粒，太少了", cuts.len());
+    let (mut cuts, poses) = cut_places(sources, found, places)?;
+    if cuts.len() < found.fewest() {
+        bail!("只找到 {} 个，太少了（至少要 {} 个）", cuts.len(), found.fewest());
     }
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
     let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);

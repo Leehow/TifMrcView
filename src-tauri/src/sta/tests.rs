@@ -648,25 +648,82 @@ fn one_group_of_peaks_is_held_against_what_chance_scores() {
     assert!(beyond_chance(&as_peaks(&particles), &[]).is_none());
 }
 
-/// A template with its phases scrambled has the template's power at every
-/// frequency and none of its shape.
+/// A tomogram with its phases scrambled has, block by block, the power it
+/// had at every frequency and none of its shapes.
 #[test]
-fn a_scrambled_template_keeps_the_power_and_loses_the_shape() {
+fn a_scrambled_tomogram_keeps_the_power_and_loses_the_shapes() {
     use super::search::scrambled;
     use crate::spa::fourier::ft3;
-    let template = phantom();
-    let other = scrambled(&template, N);
-    let (a, b) = (ft3(N, &template), ft3(N, &other));
+    // One block is the phantom; the volume is a block and a half wide.
+    let truth = phantom();
+    let dims = [N + N / 2, N, N];
+    let mut v = vec![0f32; dims[0] * dims[1] * dims[2]];
+    for z in 0..N {
+        for y in 0..N {
+            for x in 0..dims[0] {
+                v[(z * N + y) * dims[0] + x] = truth[(z * N + y) * N + x % N] + 2.0;
+            }
+        }
+    }
+    let other = scrambled(&v, dims, N);
+    assert_eq!(other.len(), v.len());
+    let block = |v: &[f32]| -> Vec<f32> { (0..N * N * N).map(|i| v[(i / (N * N) * N + i / N % N) * dims[0] + i % N]).collect() };
+    let (first, made) = (block(&v), block(&other));
+    let (a, b) = (ft3(N, &first), ft3(N, &made));
+    let top = a.0.iter().zip(&a.1).map(|(r, i)| (r * r + i * i).sqrt()).fold(0f32, f32::max);
     for i in (0..a.0.len()).step_by(37) {
         let (p, q) = ((a.0[i] * a.0[i] + a.1[i] * a.1[i]).sqrt(), (b.0[i] * b.0[i] + b.1[i] * b.1[i]).sqrt());
-        assert!((p - q).abs() <= 1e-3 * p.max(1.0), "{i}: {p} {q}");
+        assert!((p - q).abs() <= 1e-3 * top, "{i}: {p} {q}");
     }
     let mean = |v: &[f32]| v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64;
-    let (ma, mb) = (mean(&template), mean(&other));
-    let dot: f64 = template.iter().zip(&other).map(|(x, y)| (*x as f64 - ma) * (*y as f64 - mb)).sum();
+    let (ma, mb) = (mean(&first), mean(&made));
+    assert!((ma - mb).abs() < 1e-3, "the level stays: {ma} {mb}");
+    let dot: f64 = first.iter().zip(&made).map(|(x, y)| (*x as f64 - ma) * (*y as f64 - mb)).sum();
     let power = |v: &[f32], m: f64| v.iter().map(|x| (*x as f64 - m).powi(2)).sum::<f64>();
-    let cc = dot / (power(&template, ma) * power(&other, mb)).sqrt();
+    let cc = dot / (power(&first, ma) * power(&made, mb)).sqrt();
     assert!(cc.abs() < 0.1, "{cc}");
+}
+
+/// A flat place in a tomogram (a blank border, a masked-out region) does
+/// not outscore the particles: its rounding noise is not divided by
+/// nearly nothing.
+#[test]
+fn a_flat_place_scores_nothing() {
+    use crate::spa::geom::grid;
+    let n = 16;
+    let c = (n / 2) as f64;
+    let template: Vec<f32> = (0..n * n * n)
+        .map(|i| {
+            let p = [(i % n) as f64 - c, (i / n % n) as f64 - c, (i / n / n) as f64 - c];
+            let ball = |q: [f64; 3], s: f64| (-(0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>() / (2.0 * s * s)).exp();
+            (ball([2.0, 0.0, 0.0], 1.5) + 0.8 * ball([-1.0, 2.5, 0.0], 1.2) + 0.6 * ball([0.0, -1.0, -2.5], 1.2)) as f32
+        })
+        .collect();
+    let dims = [48usize, 32, 28];
+    let mut rng = Rng(5);
+    // Noise on the left, with a copy of the template; on the right the
+    // same level with the faintest ripple (what a smoothed-away region is
+    // like).
+    let mut v: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|i| if i % dims[0] < 28 { 7.0 + 0.3 * rng.gauss() as f32 } else { 7.0 + 1e-5 * rng.gauss() as f32 }).collect();
+    let at = [14usize, 16, 14];
+    for z in 0..n {
+        for y in 0..n {
+            for x in 0..n {
+                v[((at[2] + z - n / 2) * dims[1] + at[1] + y - n / 2) * dims[0] + at[0] + x - n / 2] += template[(z * n + y) * n + x];
+            }
+        }
+    }
+    let turns = grid(90.0);
+    let dev = burn::tensor::Device::flex();
+    let gpu = super::search_gpu::search(&dev, &v, dims, &template, n, 5.0, [-90.0, 90.0], &turns, None, &|_, _| {}).unwrap();
+    let cpu = super::search::search(&v, dims, &template, n, 5.0, [-90.0, 90.0], &turns, None, &|_, _| {}).unwrap();
+    for found in [&gpu, &cpu] {
+        let best = (0..found.score.len()).max_by(|a, b| found.score[*a].total_cmp(&found.score[*b])).unwrap();
+        let p = [best % dims[0], best / dims[0] % dims[1], best / dims[0] / dims[1]];
+        assert!((0..3).all(|a| p[a].abs_diff(at[a]) <= 1), "the particle is the best place, not {p:?}");
+        let flat = (0..found.score.len()).filter(|i| i % dims[0] >= 40).map(|i| found.score[i]).fold(f32::MIN, f32::max);
+        assert!(found.score[best] <= 1.01 && flat < 0.2 * found.score[best], "particle {}, flat place {flat}", found.score[best]);
+    }
 }
 
 /// A tomogram packed with the particle: every peak of the search is one,
@@ -1370,16 +1427,16 @@ fn find_again_cuts_the_places_cubes_and_turns_them_back() {
     use super::project::{cut_places, Found, Place};
     let (dir, sources, centres, _) = marked_tomogram("again", 3, 0.2);
     let turns = grid(30.0);
-    let mut places: Vec<Place> = centres.iter().enumerate().map(|(k, c)| Place { source: 0, c: *c, bin: 1, turn: if k % 2 == 0 { 0 } else { 5 }, score: 1.0 - k as f32 * 0.01 }).collect();
+    let mut places: Vec<Place> = centres.iter().enumerate().map(|(k, c)| Place { source: 0, c: *c, bin: 1, turn: if k % 2 == 0 { 0 } else { 5 }, score: 1.0 - k as f32 * 0.01, like: 0, size: 0 }).collect();
     // A place in the corner: no whole cube there.
-    places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1 });
+    places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1, like: 0, size: 0 });
     let n = places.len();
-    let found = Found { places: places.clone(), limit: None, noise: None, voxel_a: 17.5, searched: "raw".into(), search_voxel_a: None };
+    let found = Found::plain(places.clone(), None, None, 17.5, "raw", None);
     let got = super::review::cubes_of(&sources, &found, 0, &(0..n).collect::<Vec<_>>()).unwrap();
     assert_eq!(got.len(), n - 1);
     assert!(got.iter().all(|(i, c)| *i < n - 1 && c.len() == N * N * N));
     // Each is the cut cube turned back.
-    let (cuts, _) = cut_places(&sources, &places, 17.5).unwrap();
+    let (cuts, _) = cut_places(&sources, &found, &places).unwrap();
     assert_eq!(cuts.len(), n - 1);
     for ((i, cube), cut) in got.iter().zip(&cuts) {
         let want = rotate(&cut.cube, N, &transpose(&turns[places[*i].turn]));

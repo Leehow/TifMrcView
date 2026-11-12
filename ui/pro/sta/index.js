@@ -147,7 +147,7 @@
     return `用你点的 ${clicked} 个颗粒做了模板${size}`;
   }
   // Shapes: what the user drew and what the program found, kind by kind.
-  const SHAPES = [["lines", "linesDrawn", "条纤维"], ["surfaces", null, "片面"], ["spheres", "spheresDrawn", "个球"], ["membranes", "membranesDrawn", "片膜"], ["pits", "pitsDrawn", "个凹陷"]];
+  const SHAPES = [["lines", "linesDrawn", "条纤维"], ["surfaces", null, "片面"], ["spheres", "spheresDrawn", "个球"], ["membranes", "membranesDrawn", "片膜"]];
   function shapesText(u) {
     const parts = [];
     for (const [k, dk, word] of SHAPES) {
@@ -167,6 +167,7 @@
     let t = "";
     if (u.kind === "own") t = `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.kind === "points") t = markedText(u.clicked, u.members, u.sizeA);
+    else if (u.kind === "circled") t = `用你圈的 ${u.examples} 个例子找出同类，平均了 ${u.averaged} 个`;
     else if (u.kind === "shapes") t = `${shapesText(u)}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.card != null) t = `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
     // The review kept more places than the average could use: the ones whose cube reaches past the tomogram.
@@ -309,7 +310,7 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板" };
+  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板", circled: "圈例子" };
   function renderResult() {
     const r = cur().result;
     W.result = r;
@@ -333,7 +334,7 @@
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
       b.textContent = WHICH[w] || w;
-      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果" }[w] || "";
+      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果", circled: "用你圈的例子找出同类做的结果" }[w] || "";
       b.onclick = async () => {
         if (w === r.which) return;
         const out = W.out;
@@ -649,8 +650,27 @@
     refresh();
   };
   $("sta-close").onclick = close;
+  // Inside another panel (the Cryo-ET panel's "子断层平均" part): `host(el)` moves the workspace into
+  // `el` once, after which it has no button, head, fold or close of its own and takes the size it is
+  // given; the host calls `show()` when the part comes into view and `hide()` when it leaves.
+  W.hosted = false;
+  W.host = (el) => {
+    W.hosted = true;
+    button.remove();
+    panel.classList.remove("folded");
+    panel.classList.add("hosted");
+    el.append(panel);
+  };
+  W.show = () => {
+    if (!W.hosted) return button.onclick();
+    if (!panel.hidden) return;
+    panel.hidden = false;
+    W.wall?.reset();
+    refresh();
+  };
+  W.hide = () => { panel.hidden = true; button.classList.remove("on"); };
   document.addEventListener("sta-pixel", () => { if (!panel.hidden) paint(); });
-  document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
+  document.addEventListener("pro-panel", (e) => { if (!W.hosted && e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
-  $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
+  $("btn-fft").addEventListener("click", () => { if (F.on && !W.hosted) close(); });
 })();

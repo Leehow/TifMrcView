@@ -6,14 +6,19 @@
 // program takes the whole membrane under it from the automatic membrane
 // segmentation, see src-tauri/src/sta/paint.rs), 面 (a membrane drawn by
 // hand: points on it, the fallback), 球 (a vesicle: the centre, then a point
-// on its surface), 凹陷 (a pit of a membrane: a click into the middle of it,
-// every click is an example; sta::funnels). The software completes the shape and the size (see
+// on its surface), 圈例子 (anything at all: drag a circle round a thing to find; 2–3
+// circles are the examples and everything alike is found in all ticked tomograms; sta::circled).
+// The software completes the shape and the size (see
 // src-tauri/src/sta/marks.rs); nothing is typed.
 // 点 alone: click 2–3 particles (one is allowed, more is fine) and the program
 // finds all the others like them (their directions are unknown, so no shape is
 // drawn) and SHOWS them before averaging (found.js: 找出全部同类); points and
 // shapes are averaged separately.
-// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"pit", tomogram,
+// 圈例子: press at the centre, drag outwards, release (or click the centre, then a point of the circle):
+// one mark {kind: "example", points: [centre, a point on the circle at the same z]} per circle. Examples
+// are examples like clicked points: 找出全部同类 runs the circled search (found.js, which = "circled")
+// and, when there are examples, the other marks wait.
+// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"example", tomogram,
 // points: [[x, y, z]…], flip, strokes: [{points, cut}…]} (strokes: membranes
 // only, each on one section; a cut stroke ends a sheet where two membranes
 // are joined: Alt-drag on a selected membrane) in voxels of the file that was open when it was clicked (the tomogram or
@@ -26,7 +31,7 @@
 // the normal, as in Dynamo): the 翻面 button flips it, and arrows on the image
 // (sta_mark_preview: sampled points and axes in the open file's voxels) show
 // where particles will be taken and which way they face.
-// Membranes and pits need the automatic segmentation of the open file: choosing 膜 or 凹陷
+// Membranes need the automatic segmentation of the open file: choosing 膜
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
 // (sta_mark_section: runs [y, x0, x1) of the voxels on that section).
@@ -48,7 +53,7 @@
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
-    pit: { name: "凹陷", color: "#c2570c", title: "膜向内凹进去或向外鼓出去的地方", hint: "点在凹陷的中间；点 2–3 个不一样的就够，其余的程序会找出来" },
+    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。程序会在所有勾选的断层图里找出长得像的。" },
   };
   const ICONS = {
     point: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/>',
@@ -56,7 +61,7 @@
     membrane: '<path d="M3 13c3-5 6-5 9-1s6 3 9-3"/><path d="M5 19c4-2 9-2 14 0" stroke-dasharray="2 3"/>',
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
-    pit: '<path d="M2 7h6v5a4 4 0 0 0 8 0V7h6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>',
+    example: '<circle cx="12" cy="12" r="8.5" stroke-dasharray="3.2 3"/><circle cx="12" cy="12" r="2" fill="currentColor"/>',
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
@@ -106,15 +111,25 @@
 
   const count = (m) => m.points.length;
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
-  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && m.kind !== "pit" && count(m) >= 2);
+  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && m.kind !== "example" && count(m) >= 2);
   // A painted membrane or a complete sphere is an example of what to find (shapes.js).
   // A complete line (a filament) is one too: all filaments like it are found.
-  // Every click of a pit mark is an example of its own.
-  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || (m.kind === "pit" && count(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
+  const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
+  // A circled example: the centre and a point on the circle.
+  const isCircle = (m) => m.kind === "example" && count(m) >= 2;
+  const radius = (m) => Math.hypot(m.points[1][0] - m.points[0][0], m.points[1][1] - m.points[0][1]);
+  // "直径约 N nm" when the pixel size of the file the circle was drawn on is known, else in voxels.
+  function diameter(m) {
+    const d = 2 * radius(m);
+    const px = S.px && S.info?.path === m.tomogram && typeof UNIT_M !== "undefined" ? S.px : null;
+    const m1 = px && UNIT_M[px.unit] ? (d * px.x * UNIT_M[px.unit]) / 1e-9 : null;
+    if (m1 != null && isFinite(m1)) return `直径约 ${m1 < 10 ? m1.toFixed(1) : Math.round(m1)} nm`;
+    return `直径约 ${Math.round(d)} 像素`;
+  }
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
-    if (m.kind === "pit") return `凹陷 · ${count(m)} 个例子`;
+    if (m.kind === "example") return count(m) >= 2 ? `例子 · ${diameter(m)}` : "例子 · 还差圈上的一点";
     const name = `${KINDS[m.kind].name} ${n}`;
     if (m.kind === "membrane") {
       const cuts = (m.strokes || []).length - taking(m);
@@ -141,6 +156,7 @@
     }, wait);
   }
   D.refresh = refresh;
+  D.setKind = (k) => setKind(k);
   async function save() {
     sections(true);
     if (!W.out) return;
@@ -164,8 +180,8 @@
     } catch (_) { /* no backend (demo) */ }
   }
 
-  // Membrane marks and pits both need the segmentation of the open file.
-  const needsSeg = (k) => k === "membrane" || k === "pit";
+  // Membrane marks need the segmentation of the open file.
+  const needsSeg = (k) => k === "membrane";
   // The membrane each membrane mark takes, on the section shown: runs
   // [y, x0, x1) from sta_mark_section, kept per (file, mark, section) until
   // the marks change. Asked ~120 ms after the section stops changing; an
@@ -261,18 +277,19 @@
     W.panel.classList.toggle("marking", !!D.kind || D.marks.length > 0);
     const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
     const shapes = D.marks.some(usable);
-    const mixed = pointsN > 0 && D.marks.some((m) => m.kind !== "point");
+    // Circled examples find everything alike first (found.js, which = "circled"); the other marks wait.
+    const circN = D.marks.filter(isCircle).length;
+    const mixed = circN === 0 && pointsN > 0 && D.marks.some((m) => m.kind !== "point");
     const few = pointsN > 0 && pointsN < GOOD_POINTS && !D.marks.some((m) => m.kind !== "point");
     // Membranes and vesicles are examples: all of that kind are found and shown first (shapes.js).
-    const pitN = D.marks.filter((m) => m.kind === "pit").reduce((n, m) => n + count(m), 0);
-    const examples = D.marks.filter((m) => m.kind !== "pit" && isExample(m)).length + pitN;
-    const hasPits = pitN > 0;
-    const fewShapes = examples === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", hasPits && D.marks.some((m) => m.kind !== "pit") ? "标了凹陷时只找凹陷，其余的标注先放着" : ""].filter(Boolean).join("。");
+    const examples = D.marks.filter(isExample).length;
+    const fewShapes = circN === 0 && examples === 1;
+    const fewCircles = circN === 1;
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;
-    const needSize = !hasPits && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
+    const needSize = circN === 0 && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
     $("sta-draw-sizes").hidden = !needSize;
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
     const open = D.open != null ? D.marks[D.open] : null;
@@ -303,14 +320,14 @@
     $("sta-draw-side").hidden = !side;
     $("sta-draw-undo").disabled = !D.marks.length || W.busy;
     const last = D.marks[D.open != null ? D.open : D.marks.length - 1];
-    $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : "去掉最后点的一个点";
+    $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : last?.kind === "example" ? "去掉最后圈的一个例子" : "去掉最后点的一个点";
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
-    const ok = shapes || pointsOnly || pitN > 0;
+    const ok = shapes || pointsOnly || circN > 0;
     // Points alone find everything like them first; shapes are averaged directly.
-    const finds = (pointsOnly && !shapes) || examples > 0;
+    const finds = (pointsOnly && !shapes) || examples > 0 || circN > 0;
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
-    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，凹陷要点在凹陷的中间" : "先在图上标一个东西";
+    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
     draw();
     W.wall?.render();
   }
@@ -323,16 +340,15 @@
     if (v[0] < -0.5 || v[1] < -0.5 || v[0] > S.info.width - 0.5 || v[1] > S.info.height - 0.5) return;
     let m = D.open != null ? D.marks[D.open] : null;
     if (m && (m.kind !== D.kind || m.tomogram !== S.info.path)) m = null;
-    // One pit mark per tomogram: every click is one more example.
-    if (D.kind === "pit") m = D.marks.find((x) => x.kind === "pit" && x.tomogram === S.info.path) || null;
     if (!m) {
       m = { kind: D.kind, tomogram: S.info.path, points: [] };
       D.marks.push(m);
       D.open = D.marks.length - 1;
     }
+    // The point on a circle is on the centre's section.
+    if (m.kind === "example" && m.points.length) v[2] = m.points[0][2];
     m.points.push(v);
-    if (m.kind === "sphere" && m.points.length >= 2) D.open = null;
-    if (m.kind === "pit") D.open = D.marks.indexOf(m);
+    if ((m.kind === "sphere" || m.kind === "example") && m.points.length >= 2) D.open = null;
     D.sel = null;
     save();
     render();
@@ -343,7 +359,8 @@
     const i = D.open != null ? D.open : D.marks.length - 1;
     const m = D.marks[i];
     if (!m) return;
-    if (m.kind === "membrane") m.strokes.pop(); else m.points.pop();
+    // A circled example goes whole.
+    if (m.kind === "membrane") m.strokes.pop(); else if (m.kind === "example") m.points.length = 0; else m.points.pop();
     if (m.kind === "membrane" ? !m.strokes.length : !m.points.length) {
       D.marks.splice(i, 1);
       D.preview = [];
@@ -373,8 +390,11 @@
   $("sta-draw-run").onclick = () => {
     const marks = plain();
     const onlyPoints = marks.length > 0 && marks.every((m) => m.kind === "point");
+    const circles = marks.filter((m) => m.kind === "example" && m.points.length >= 2);
     D.open = null;
     setKind(null);
+    // Circled examples: everything that looks like them, in all ticked tomograms.
+    if (circles.length && W.found) return W.found.findCircled(circles);
     if (onlyPoints && W.found) return W.found.findPoints(marks);
     // Membranes and vesicles: find all of that kind, show them, average after the user confirms.
     if (W.shapes && marks.some(isExample)) return W.shapes.find(marks, D.size);
@@ -406,6 +426,21 @@
     save();
     render();
   }
+  // A circle dragged out: its centre where the press was, a point on it where the pointer was released.
+  function commitCircle(t) {
+    if (!S.info || t.d < 3 || W.busy) return;
+    if (S.axis !== "xy" || S.info.sizeZ < 3) return W.status("请在断层图的 XY 截面上标注");
+    const c = voxel(t.p), r = voxel(t.cur);
+    r[2] = c[2];
+    if (Math.hypot(r[0] - c[0], r[1] - c[1]) < 0.5) return;
+    // A centre clicked earlier without its second point is replaced by this circle.
+    D.marks = D.marks.filter((m) => !(m.kind === "example" && count(m) < 2));
+    D.marks.push({ kind: "example", tomogram: S.info.path, points: [c, r], flip: false, strokes: [] });
+    D.open = null;
+    D.sel = null;
+    save();
+    render();
+  }
   ext.tools.mark = {
     down(e, p) {
       if (D.kind === "membrane") {
@@ -415,7 +450,7 @@
         draw();
         return;
       }
-      press = { x: e.clientX, y: e.clientY, p, moved: false };
+      press = { x: e.clientX, y: e.clientY, p, moved: false, cur: p, d: 0 };
     },
     move(e, p) {
       if (live) {
@@ -427,7 +462,14 @@
         }
         return;
       }
-      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) press.moved = true;
+      if (!press) return;
+      press.d = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+      if (D.kind === "example") {
+        // A circle is dragged out from its centre; shorter than ~3 screen pixels is a click.
+        press.cur = p;
+        if (press.d >= 3) press.moved = true;
+        if (press.moved) draw();
+      } else if (press.d > 4) press.moved = true;
     },
     up() {
       const l = live;
@@ -435,9 +477,11 @@
       if (l) { commitStroke(l); draw(); return; }
       const t = press;
       press = null;
+      if (t && D.kind === "example" && t.moved) { commitCircle(t); draw(); return; }
       if (t && !t.moved) add(t.p);
+      draw();
     },
-    active(on) { if (!on && D.kind) { live = null; D.kind = null; D.open = null; render(); } },
+    active(on) { if (!on && D.kind) { live = null; press = null; D.kind = null; D.open = null; render(); } },
   };
 
   // The points of a mark in voxels of the file open in the viewer: marks made
@@ -504,6 +548,19 @@
       ctx.stroke();
       ctx.setLineDash([]);
     }
+    // The circle being dragged out.
+    if (press?.moved && D.kind === "example") {
+      const c = voxel(press.p), q = voxel(press.cur);
+      const [x, y] = at(c);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = KINDS.example.color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.arc(x, y, Math.hypot(q[0] - c[0], q[1] - c[1]) * sc, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     D.marks.forEach((mark, i) => {
       if (mark.kind === "membrane") return;
       const pts = onOpen(mark);
@@ -525,6 +582,35 @@
       };
       ctx.lineWidth = on ? 3 : 1.8;
       ctx.strokeStyle = col;
+      if (m.kind === "example") {
+        const [c, s] = m.points;
+        dot(c, alpha(Math.abs(c[2] - S.z)));
+        if (!s) return;
+        // Like a sphere: the full circle on its own section, the cut of the ball on the ones near it.
+        const r = Math.hypot(s[0] - c[0], s[1] - c[1]);
+        const dz = S.z - c[2];
+        if (Math.abs(dz) < r) {
+          const [x, y] = at(c);
+          const rr = Math.sqrt(r * r - dz * dz) * sc;
+          ctx.globalAlpha = Math.abs(dz) <= 1 ? 1 : 0.5;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.arc(x, y, rr, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const n = D.marks.slice(0, i + 1).filter((x2) => x2.kind === "example").length;
+          ctx.globalAlpha = 1;
+          ctx.font = "bold 12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "#fff";
+          ctx.strokeText(`例 ${n}`, x, y - rr - 3);
+          ctx.fillStyle = col;
+          ctx.fillText(`例 ${n}`, x, y - rr - 3);
+        }
+        return;
+      }
       if (m.kind === "sphere") {
         const [c, s] = m.points;
         dot(c, alpha(Math.abs(c[2] - S.z)));
@@ -541,7 +627,7 @@
         }
         return;
       }
-      if (m.kind !== "point" && m.kind !== "pit") {
+      if (m.kind !== "point") {
         for (let k = 1; k < m.points.length; k++) {
           const a = alpha(Math.max(Math.abs(m.points[k][2] - S.z), Math.abs(m.points[k - 1][2] - S.z)));
           if (!a) continue;
