@@ -38,6 +38,10 @@ pub enum Kind {
     Sphere,
     /// Painted over a membrane: `strokes`, not `points`; see `paint`.
     Membrane,
+    /// A circle around one example of what to find, whatever it is: the
+    /// centre and a point of the circle; see `circled`. Examples are only
+    /// searched from (`review::find_circled`).
+    Example,
     /// Clicks into pits of a membrane (places where it takes something in
     /// or buds off), each point one example; see `funnels`. They are only
     /// searched from (`shapes::find_in`), never averaged as drawn.
@@ -211,6 +215,16 @@ pub fn points_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Resul
     Ok(out)
 }
 
+/// The examples circled, in voxels of their source's tomogram.
+pub fn examples_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Result<Vec<super::circled::Example>> {
+    let mut out = vec![];
+    for m in marks.iter().filter(|m| m.kind == Kind::Example && m.points.len() >= 2) {
+        let Some((source, p)) = to_source(m, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
+        out.push(super::circled::Example { source, at: p[0], radius: dist(p[0], p[1]) });
+    }
+    Ok(out)
+}
+
 /// The seeds of one mark (its points `p` in the voxels of one frame, particles
 /// `spacing` voxels apart) and whether it is a line, with the mark's `flip`
 /// applied: a flipped surface or sphere gives exactly the reversed axes at
@@ -230,7 +244,7 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
-        Kind::Point | Kind::Membrane | Kind::Pit => vec![],
+        Kind::Point | Kind::Membrane | Kind::Pit | Kind::Example => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
         for s in &mut seeds {
@@ -282,7 +296,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Surface => p.len() >= 2,
         Kind::Sphere => p.len() >= 2,
         Kind::Membrane => paint::has_stroke(m),
-        Kind::Pit => false,
+        Kind::Pit | Kind::Example => false,
     });
     if usable.clone().next().is_none() {
         if points_only > 0 {
@@ -413,6 +427,17 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
         Some(o) => PathBuf::from(o),
         None => default_out(first),
     };
+    if marks.iter().any(|m| m.kind == Kind::Example) {
+        // Circled examples: everything that looks like them is found
+        // (`circled`). Here nobody looks at what is found first (the
+        // command line; the workspace shows it for review, `sta_find`):
+        // what the program would keep by itself is averaged.
+        let found = super::review::find_circled(&inputs, marks, &out.to_string_lossy(), device, emit, b64)?;
+        let dir = PathBuf::from(found["out"].as_str().context("没有找出的结果")?);
+        let mut v = super::review::average_found(&dir, device, emit, b64)?;
+        v["found"] = json!({ "total": found["total"], "kept": found["kept"], "limit": found["limit"], "circled": found["circled"] });
+        return Ok(v);
+    }
     let note = |n: Note| emit("sta-note", note_json(&n));
     let sources: Vec<Source> = inputs.iter().map(|i| resolve_tomogram(i, &note).source()).collect();
     let (inputs, sources) = without_looks(&inputs, sources);

@@ -1427,16 +1427,16 @@ fn find_again_cuts_the_places_cubes_and_turns_them_back() {
     use super::project::{cut_places, Found, Place};
     let (dir, sources, centres, _) = marked_tomogram("again", 3, 0.2);
     let turns = grid(30.0);
-    let mut places: Vec<Place> = centres.iter().enumerate().map(|(k, c)| Place { source: 0, c: *c, bin: 1, turn: if k % 2 == 0 { 0 } else { 5 }, score: 1.0 - k as f32 * 0.01 }).collect();
+    let mut places: Vec<Place> = centres.iter().enumerate().map(|(k, c)| Place { source: 0, c: *c, bin: 1, turn: if k % 2 == 0 { 0 } else { 5 }, score: 1.0 - k as f32 * 0.01, like: 0, size: 0 }).collect();
     // A place in the corner: no whole cube there.
-    places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1 });
+    places.push(Place { source: 0, c: [2, 2, 2], bin: 1, turn: 0, score: 0.1, like: 0, size: 0 });
     let n = places.len();
-    let found = Found { places: places.clone(), limit: None, noise: None, voxel_a: 17.5, searched: "raw".into(), search_voxel_a: None };
+    let found = Found::plain(places.clone(), None, None, 17.5, "raw", None);
     let got = super::review::cubes_of(&sources, &found, 0, &(0..n).collect::<Vec<_>>()).unwrap();
     assert_eq!(got.len(), n - 1);
     assert!(got.iter().all(|(i, c)| *i < n - 1 && c.len() == N * N * N));
     // Each is the cut cube turned back.
-    let (cuts, _) = cut_places(&sources, &places, 17.5).unwrap();
+    let (cuts, _) = cut_places(&sources, &found, &places).unwrap();
     assert_eq!(cuts.len(), n - 1);
     for ((i, cube), cut) in got.iter().zip(&cuts) {
         let want = rotate(&cut.cube, N, &transpose(&turns[places[*i].turn]));

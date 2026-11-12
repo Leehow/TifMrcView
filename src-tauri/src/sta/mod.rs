@@ -25,6 +25,7 @@ pub mod auto;
 pub mod average;
 pub mod cc;
 pub mod cc_gpu;
+pub mod circled;
 pub mod filaments;
 pub mod flat;
 pub mod funnels;
