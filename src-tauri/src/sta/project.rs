@@ -3250,6 +3250,21 @@ pub fn run_places(
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     // Told apart in the labels when there are two passes.
     let first_pass = |s: &str, a: usize, b: usize| progress(&if fine { s.replacen("对齐", "粗对齐", 1) } else { s.to_string() }, a, b);
+    // Places found from circled examples start from their own average at
+    // the orientations the search gave: the template there is one cube cut
+    // around one example, as noisy as any particle, and aligning hundreds
+    // of particles to it leaves them where its noise puts them. Those
+    // orientations are rough (the search sees the particle nine voxels
+    // across), so every particle is first searched over all of them
+    // against that average (`settled_on`).
+    let settled;
+    let (template, poses) = if found.frames.is_empty() {
+        (template, poses)
+    } else {
+        let own_average = set.average(&poses, |_| true).finish();
+        settled = super::refine::settled_on(Some(dev), &set, &own_average, 1, progress, live)?;
+        (&settled.0[..], settled.1.clone())
+    };
     let mut out = align_on(Some(dev), &set, template, &poses, &first_pass, live)?;
     if fine {
         // The same particles at twice the sampling, from where they now

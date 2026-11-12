@@ -160,6 +160,42 @@ pub fn first_model_on(dev: Option<&Device>, set: &Set, seed: u64, progress: Prog
     Ok((model, poses))
 }
 
+/// Rounds of `settled_on`.
+const SETTLE_ROUNDS: usize = 4;
+
+/// A model and poses for particles whose orientations are only roughly
+/// known, from a `model` made of them as they stand (places found with the
+/// picture of one example: that search sees a particle nine voxels across
+/// and tells its place well and its orientation poorly, and the local
+/// rounds of `align` cannot leave a wrong orientation). Every particle is
+/// searched over all orientations against the model and the model made
+/// again, with the resolution limit rising as in `first_model`; what the
+/// start already shows of the particle keeps the rounds on it.
+pub fn settled_on(dev: Option<&Device>, set: &Set, model: &[f32], seed: u64, progress: Progress, live: Live) -> Result<(Vec<f32>, Vec<Pose>)> {
+    set.check()?;
+    let m = set.particles.len();
+    let mut rng = Rng(seed);
+    let mut model = model.to_vec();
+    let mut poses = vec![Pose { r: IDENTITY, t: [0.0; 3], score: 0.0 }; m];
+    let n = set.n as f64;
+    let (lo, hi) = (n / (2.0 * set.radius) * 1.5, (n / (2.0 * set.radius) * 5.0).min(n / 2.0 - 3.0));
+    let rotations = grid(STEP);
+    for round in 0..SETTLE_ROUNDS {
+        check_cancel()?;
+        let low_pass = (lo + (hi - lo) * round as f64 / (SETTLE_ROUNDS - 1) as f64).max(2.0);
+        let engine = set.engine(low_pass);
+        let prepared: Vec<_> = (0..m).into_par_iter().map(|i| engine.prepare(&set.particles[i], set.wedge(i))).collect();
+        let turn = random_rotation(&mut rng);
+        let turned: Vec<Mat> = rotations.iter().map(|r| mul(r, &turn)).collect();
+        let stage = format!("定朝向 第 {}/{} 轮", round + 1, SETTLE_ROUNDS);
+        poses = global_on(dev, &engine, &prepared, &model, &turned, set.shift(), &|a, b| progress(&stage, a, b))?;
+        let average = set.average(&poses, |_| true).finish();
+        model = centre(set, &mut poses, average);
+        live(&model);
+    }
+    Ok((model, poses))
+}
+
 pub struct Class {
     pub model: Vec<f32>,
     /// Indices of its particles in the set, and their poses on `model`.
