@@ -34,7 +34,7 @@ use anyhow::{bail, Context, Result};
 
 use super::check_cancel;
 use super::project::{binned, chance, cube, cube_fits, nearest_bin, pixel_of, rescale_cube, Found, FEWEST_CIRCLED, Place, Source, BOX, ELONGATION, MOST};
-use super::search::{allowed, beyond_chance, cutoff, peaks, Peak};
+use super::search::{allowed_but, beyond_chance, cutoff, peaks, Peak};
 use super::refine::Progress;
 use crate::spa::geom::{distance, grid, transpose, Mat};
 
@@ -195,7 +195,11 @@ impl Grid {
         let raw_px = pixel_of(&s.path)?;
         let bin = nearest_bin(raw_px, size_a / ACROSS);
         let (v, dims, voxel_a, bin) = binned(&s.path, bin as f64 * raw_px)?;
-        let mask = allowed(&v, dims, 0.5 * size_a / voxel_a);
+        // Gold is looked for where a bead stands out: in voxels much larger
+        // than a bead it is averaged away, and this grid is the coarser the
+        // wider the search looks.
+        let gold: Vec<[usize; 3]> = gold_of(&s.path, raw_px, bin)?.iter().map(|p| p.map(|x| x / bin)).collect();
+        let mask = allowed_but(&v, dims, 0.5 * size_a / voxel_a, &gold);
         Ok(Grid { v: super::search::flattened(&v, dims), dims, voxel_a, bin, mask })
     }
 
@@ -210,6 +214,38 @@ impl Grid {
         let b = self.bin as f64;
         p.map(|x| x * b + (b - 1.0) / 2.0)
     }
+}
+
+/// Voxel at which gold is looked for, Å (the search of `project` is at this
+/// size, where the rule for gold was measured).
+const GOLD_VOXEL: f64 = 16.0;
+
+/// The gold voxels of a tomogram found at about `GOLD_VOXEL`, as positions
+/// in voxels of the file; empty when a grid of `bin` is no coarser than
+/// that (its own voxels show the gold). Kept per file as it now is: a
+/// search opens the same tomogram at several sizes.
+fn gold_of(path: &str, raw_px: f64, bin: usize) -> Result<std::sync::Arc<Vec<[usize; 3]>>> {
+    type Key = (String, u64, Option<std::time::SystemTime>);
+    static KEPT: std::sync::Mutex<Vec<(Key, std::sync::Arc<Vec<[usize; 3]>>)>> = std::sync::Mutex::new(Vec::new());
+    let fine = nearest_bin(raw_px, GOLD_VOXEL);
+    if fine >= bin {
+        return Ok(Default::default());
+    }
+    let meta = std::fs::metadata(path).ok();
+    let key: Key = (path.to_string(), meta.as_ref().map_or(0, |m| m.len()), meta.and_then(|m| m.modified().ok()));
+    if let Some(found) = KEPT.lock().unwrap().iter().find(|k| k.0 == key) {
+        return Ok(found.1.clone());
+    }
+    let (v, dims, _, fine) = binned(path, fine as f64 * raw_px)?;
+    let gold: Vec<[usize; 3]> = super::search::gold(&v, dims).into_iter().map(|p| p.map(|x| x * fine + fine / 2)).collect();
+    eprintln!("sta: {} voxels of gold at {:.1} Å voxels in {path}", gold.len(), fine as f64 * raw_px);
+    let gold = std::sync::Arc::new(gold);
+    let mut kept = KEPT.lock().unwrap();
+    if kept.len() >= 8 {
+        kept.remove(0);
+    }
+    kept.push((key, gold.clone()));
+    Ok(gold)
 }
 
 /// Side of the picture of a place, pixels.
@@ -369,6 +405,14 @@ const WIDER: [f64; 2] = [2.0, 3.0];
 const SURE: f64 = 0.1;
 /// and this many times better than with the circle as drawn.
 const CLEARLY: f64 = 3.0;
+/// The wider circles are tried only when, as drawn, the worst example left
+/// out ranks beyond this share: the examples do not find each other by what
+/// is in their circles. Where they do, a wider circle that ranks them still
+/// better finds far fewer of the rest (measured: three ribosomes rank 0.126
+/// as circled and 0.026 at three times the circle, which then keeps 34
+/// places where the circles as drawn keep 540, 88% of them ribosomes; three
+/// crowns on a membrane rank 0.392 as circled and 0.037 at twice).
+const LOST: f64 = 0.25;
 
 /// What a search with the examples' pictures gave.
 struct Pass {
@@ -594,8 +638,11 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
     // which the examples find each other clearly better is the one used.
     let mut pass = first_pass(dev, sources, examples, &raw_px, turns, 1.0, probes, progress)?;
     let mut wide = 1.0;
-    if k >= 2 {
-        let plain = pass.worst();
+    let plain = pass.worst();
+    if k >= 2 && plain <= LOST {
+        eprintln!("sta: left out, the worst example ranks {plain:.3} as circled: found by what is in the circles");
+    }
+    if k >= 2 && plain > LOST {
         for by in WIDER {
             check_cancel()?;
             let wider: Vec<Example> = examples.iter().map(|e| Example { radius: e.radius * by, ..*e }).collect();
