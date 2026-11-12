@@ -161,3 +161,117 @@ fn membrane_copies() {
         seg.stats.cut_short
     );
 }
+
+/// What the user's ticks are worth: a review of circled examples
+/// (`TMV_REVIEW`, the folder with its `found.json`) is gone through as a user
+/// would, fifty pictures at a time, best first. A place is right when it lies
+/// within `TMV_NEAR` voxels (default 45) of one of the positions in
+/// `TMV_ANSWERS` (a text file, "x y z" per line, voxels of the first
+/// tomogram); the answers stand for the user's eye and for nothing else.
+/// After every fifty the places not yet seen are put in a new order by what
+/// was ticked and what was not, in several ways, at several widths of the
+/// cubes compared; printed is how many of the answers were reached after
+/// 50, 100, … pictures. "search" is the order the search gave.
+///
+/// `TMV_REVIEW=… TMV_ANSWERS=… cargo test … sta::real::ticks_put_the_rest_in_order -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn ticks_put_the_rest_in_order() {
+    use super::project::BOX;
+    use super::review;
+    let dir = std::env::var("TMV_REVIEW").expect("TMV_REVIEW = the folder of a circled review (found.json)");
+    let answers: Vec<[f64; 3]> = std::fs::read_to_string(std::env::var("TMV_ANSWERS").expect("TMV_ANSWERS = a text file of x y z"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let v: Vec<f64> = l.split(|c: char| c.is_whitespace() || c == ',').filter_map(|x| x.parse().ok()).collect();
+            (v.len() >= 3).then(|| [v[0], v[1], v[2]])
+        })
+        .collect();
+    let near: f64 = std::env::var("TMV_NEAR").ok().and_then(|x| x.parse().ok()).unwrap_or(45.0);
+    let s = review::load(std::path::Path::new(&dir)).expect("no found.json there");
+    let sources: Vec<super::project::Source> = s.inputs.iter().map(|i| super::auto::resolve_tomogram(i, &|_| {}).source()).collect();
+    let total = s.found.places.len();
+    // Which answer a place stands on (of the first tomogram).
+    let answer_of: Vec<Option<usize>> = s
+        .found
+        .places
+        .iter()
+        .map(|p| {
+            let at = p.at();
+            (p.source == 0)
+                .then(|| answers.iter().enumerate().map(|(k, a)| (k, (0..3).map(|d| (a[d] - at[d]).powi(2)).sum::<f64>().sqrt())).filter(|(_, d)| *d <= near).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(k, _)| k))
+                .flatten()
+        })
+        .collect();
+    eprintln!("{} places, {} of them on one of {} answers ({} answers reached at all); the search looked {} times as wide as circled", total, answer_of.iter().flatten().count(), answers.len(), {
+        let mut k: Vec<usize> = answer_of.iter().flatten().copied().collect();
+        k.sort_unstable();
+        k.dedup();
+        k.len()
+    }, s.found.wide);
+    let ways = ["search", "like the ticked", "ticked less unticked", "nearest ticked", "nearest ticked less nearest unticked"];
+    for wide in [1.0, 2.0, 3.0] {
+        for smooth in [0.0, 1.0] {
+            let mut found = s.found.clone();
+            found.wide = wide;
+            // Every cube inside the ball, zero mean, unit length.
+            let c = (BOX / 2) as f64;
+            let radius = 0.6 * s.card.diameter_a / s.found.voxel_a;
+            let inside: Vec<usize> = (0..BOX * BOX * BOX).filter(|i| (((i % BOX) as f64 - c).powi(2) + ((i / BOX % BOX) as f64 - c).powi(2) + ((i / (BOX * BOX)) as f64 - c).powi(2)).sqrt() <= radius).collect();
+            let mut cubes: Vec<Option<Vec<f32>>> = vec![None; total];
+            for src in 0..sources.len() {
+                for (i, cube) in review::cubes_of(&sources, &found, src, &(0..total).collect::<Vec<_>>()).unwrap() {
+                    let cube = if smooth > 0.0 { super::pick::gauss(&cube, [BOX; 3], smooth) } else { cube };
+                    let mut v: Vec<f32> = inside.iter().map(|k| cube[*k]).collect();
+                    let mean = v.iter().sum::<f32>() / v.len() as f32;
+                    v.iter_mut().for_each(|x| *x -= mean);
+                    let len = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    v.iter_mut().for_each(|x| *x /= len);
+                    cubes[i] = Some(v);
+                }
+            }
+            let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+            for (w, way) in ways.iter().enumerate() {
+                // The examples are ticked from the start.
+                let mut ticked: Vec<usize> = s.mine.clone();
+                let mut unticked: Vec<usize> = vec![];
+                let mut seen = vec![false; total];
+                ticked.iter().for_each(|i| seen[*i] = true);
+                let mut reached: Vec<usize> = vec![];
+                for round in 0..6 {
+                    let score = |i: usize| -> f32 {
+                        let Some(x) = &cubes[i] else { return f32::MIN };
+                        let like = |set: &[usize], best: bool| {
+                            let all = set.iter().filter_map(|k| cubes[*k].as_ref()).map(|k| dot(x, k));
+                            if best { all.fold(f32::MIN, f32::max) } else { all.sum::<f32>() / set.len().max(1) as f32 }
+                        };
+                        match (w, round, unticked.is_empty()) {
+                            (0, _, _) => -(i as f32),
+                            (1, _, _) | (2, _, true) => like(&ticked, false),
+                            (2, _, false) => like(&ticked, false) - like(&unticked, false),
+                            (3, _, _) | (4, _, true) => like(&ticked, true),
+                            _ => like(&ticked, true) - like(&unticked, true),
+                        }
+                    };
+                    let mut rest: Vec<(usize, f32)> = (0..total).filter(|i| !seen[*i]).map(|i| (i, score(i))).collect();
+                    rest.sort_by(|a, b| b.1.total_cmp(&a.1));
+                    for (i, _) in rest.into_iter().take(50) {
+                        seen[i] = true;
+                        match answer_of[i] {
+                            Some(k) => {
+                                ticked.push(i);
+                                if !reached.contains(&k) {
+                                    reached.push(k);
+                                }
+                            }
+                            None => unticked.push(i),
+                        }
+                    }
+                    eprint!("{}{}", if round == 0 { format!("cubes {wide}x, smoothed {smooth}: {way:38}") } else { String::new() }, format_args!(" {:2}", reached.len()));
+                }
+                eprintln!("  of {} (ticked {}, unticked {})", answers.len(), ticked.len(), unticked.len());
+            }
+        }
+    }
+}

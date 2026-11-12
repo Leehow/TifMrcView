@@ -1242,31 +1242,27 @@ impl State {
     }
 }
 
-/// The cubes at the places `idx` of source `src` (as `run_places` cuts them),
-/// each turned back by the orientation the search found, so that they are in
-/// the template's frame: (index, cube). Places whose cube cannot be cut are left out.
+/// The cubes at the places `idx` of source `src`, each turned back by the
+/// orientation the search found, so that they are in the template's frame:
+/// (index, cube). Cut as `run_places` cuts them, and as many times wider as
+/// the search looked (`Found::wide`): what told the places apart is what
+/// they are compared by. Places whose cube cannot be cut are left out.
 pub(super) fn cubes_of(sources: &[sp::Source], found: &Found, src: usize, idx: &[usize]) -> Result<Vec<(usize, Vec<f32>)>> {
     let ids: Vec<usize> = idx.iter().copied().filter(|i| found.places[*i].source == src).collect();
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let places: Vec<Place> = ids.iter().map(|i| found.places[*i]).collect();
-    // One source at a time (the call reads only the sources the places are in).
-    let (cuts, poses) = sp::cut_places(sources, found, &places)?;
-    let mut out = Vec::with_capacity(cuts.len());
-    let mut k = 0;
-    // The cuts are the places in order, some left out.
-    for (cut, pose) in cuts.into_iter().zip(poses) {
-        while k < places.len() && places[k].at() != cut.at {
-            k += 1;
-        }
-        if k == places.len() {
-            break;
-        }
-        out.push((ids[k], cc::rotate(&cut.cube, BOX, &transpose(&pose.r))));
-        k += 1;
-    }
-    Ok(out)
+    let turns = grid(30.0);
+    let (v, dims, _, bin) = sp::binned(&sources[src].path, found.voxel_a * found.wide.max(1.0))?;
+    let on_grid = |x: f64| ((x - (bin as f64 - 1.0) / 2.0) / bin as f64).round().max(0.0) as usize;
+    Ok(ids
+        .into_iter()
+        .filter_map(|i| {
+            let p = &found.places[i];
+            let cube = sp::cube(&v, dims, p.at().map(on_grid))?;
+            Some((i, cc::rotate(&cube, BOX, &transpose(&found.turn_of(p, &turns)?))))
+        })
+        .collect())
 }
 
 /// Judges the places of `dir`'s `found.json` again by what the user kept and
