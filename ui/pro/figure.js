@@ -27,7 +27,7 @@
   const STYLES = [
     { key: "white", name: "白底", tip: "白色背景，带一张断层切片，最常见的论文图样式", fig: { bg: [1, 1, 1, 1], ao: 0.85, gloss: 0.2, outline: 0, cue: 0.25, slice: true } },
     { key: "black", name: "黑底", tip: "黑色背景，表面更亮，适合幻灯片和海报", fig: { bg: [0, 0, 0, 1], ao: 0.85, gloss: 0.45, outline: 0, cue: 0.45, slice: true } },
-    { key: "line", name: "描边", tip: "只有结构，带黑色轮廓线，适合拼进组图或做示意图", fig: { bg: [1, 1, 1, 1], ao: 0.55, gloss: 0.1, outline: 0.9, width: 1.2, line: [0.1, 0.1, 0.12], slice: false } },
+    { key: "line", name: "描边", tip: "只有结构，带黑色轮廓线，适合拼进组图或做示意图", fig: { bg: [1, 1, 1, 1], ao: 0.55, gloss: 0.1, outline: 1, width: 1.3, line: [0.1, 0.1, 0.12], slice: false } },
   ];
   // Views: [yaw, pitch]. Yaw 0, pitch 0 looks along the beam, like the 2D view.
   const VIEWS = [
@@ -72,6 +72,7 @@
         <button class="small primary" id="fig-other-ok">加上</button>
       </div>
       <p class="dim" id="fig-hint"></p>
+      <div class="fig-row" id="fig-fill-row" hidden><button class="small" id="fig-fill" title="隔几层标一次就够了：按这里，程序按形状把中间没标的层补上，三维里才是完整的一个物体，而不是几片叠起来">补齐中间的层</button></div>
     </div>
     <div class="fig-step" id="fig-s2">
       <div class="fig-title"><span class="fig-n">2</span>做成三维图</div>
@@ -201,7 +202,7 @@
     $("fig-hint").textContent = !labelsHere()
       ? "这张图还不能标记（标签要在 XY 视图里做）。"
       : F.marking
-        ? `正在标记「${labels().nameOf(F.marking)}」：在图上点一下这种结构，或者拖一个圈把它圈出来。标好两三个，按旁边出现的「找同类」，程序会列出相似的候选，由你勾选要哪些。翻到别的层接着标，标得越全，图越完整。`
+        ? `正在标记「${labels().nameOf(F.marking)}」：在图上点一下这种结构，或者拖一个圈把它圈出来。标好两三个，按旁边出现的「找同类」，程序会列出相似的候选，由你勾选要哪些。同一个物体隔几层标一次，再按下面的「补齐中间的层」，三维里就是完整的形状。`
         : ks.length
           ? "点「标记」在切片上圈出这种结构。标完所有结构，再做第 2 步。"
           : "先选图里要画出来的结构，比如膜、囊泡、微管。每种结构由你自己在切片上标记，程序只帮你找相似的。";
@@ -466,16 +467,57 @@
       g.drawImage(c, 0, 0, w, h);
       c = d;
     }
-    const b = F.bar ? scaleBar(w, h) : null;
+    const bgCss = opts.clear ? null : `rgb(${fig.bg.slice(0, 3).map((x) => Math.round(x * 255)).join(",")})`;
+    // A still picture is cut to what is drawn (plus a margin), whatever the
+    // shape of the 3D view; movie frames keep the whole frame.
+    if (opts.crop) {
+      const d = c.getContext("2d").getImageData(0, 0, w, h).data;
+      const bg = fig.bg.slice(0, 3).map((x) => Math.round(x * 255));
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+          const empty = opts.clear ? d[i + 3] === 0 : Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) < 6;
+          if (empty) continue;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+        }
+      }
+      if (x1 >= x0) {
+        const m = Math.round(Math.max(x1 - x0, y1 - y0) * 0.05);
+        const cw = x1 - x0 + 1 + 2 * m, ch = y1 - y0 + 1 + 2 * m;
+        const out = document.createElement("canvas");
+        out.width = cw;
+        out.height = ch;
+        const g = out.getContext("2d");
+        if (bgCss) { g.fillStyle = bgCss; g.fillRect(0, 0, cw, ch); }
+        g.drawImage(c, x0 - m, y0 - m, cw, ch, 0, 0, cw, ch);
+        c = out;
+      }
+    }
+    // The bar's length follows the scale of the rendering (h), its place the final picture.
+    const b = F.bar ? scaleBar(c.width, h) : null;
     if (b) {
+      const k = Math.max(c.width, c.height);
+      const m = Math.round(k * 0.03), t = Math.max(3, Math.round(k * 0.006)), font = Math.max(12, Math.round(k * 0.026));
+      if (opts.crop) {
+        // Room below the picture, so the bar never lies on a structure.
+        const out = document.createElement("canvas");
+        out.width = c.width;
+        out.height = c.height + t + Math.round(font * 1.5) + m;
+        const g = out.getContext("2d");
+        if (bgCss) { g.fillStyle = bgCss; g.fillRect(0, 0, out.width, out.height); }
+        g.drawImage(c, 0, 0);
+        c = out;
+      }
       const g = c.getContext("2d");
-      const m = Math.round(h * 0.04), t = Math.max(3, Math.round(h * 0.008)), font = Math.max(12, Math.round(h * 0.032));
       g.fillStyle = F.style === "black" && !opts.clear ? "#fff" : "#000";
-      g.fillRect(m, h - m - t, b.px, t);
+      g.fillRect(m, c.height - m - t, b.px, t);
       g.font = `600 ${font}px -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
       g.textAlign = "center";
       g.textBaseline = "bottom";
-      g.fillText(b.text, m + b.px / 2, h - m - t - Math.round(font * 0.25));
+      g.fillText(b.text, m + b.px / 2, c.height - m - t - Math.round(font * 0.25));
     }
     return c;
   }
@@ -499,11 +541,11 @@
     await wait(30); // let the status show
     try {
       const [w, h] = sizeFor(3600);
-      const c = picture(w, h, { clear: F.clear });
+      const c = picture(w, h, { clear: F.clear, crop: true });
       if (!c) throw new Error("三维图还没有准备好");
       const blob = await new Promise((res) => c.toBlob(res, "image/png"));
       await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
-      status(`已保存 ${w} × ${h} 像素：${path}`);
+      status(`已保存 ${c.width} × ${c.height} 像素：${path}`);
       saved();
     } catch (e) {
       status(`没有保存：${e.message || e}`);
@@ -568,6 +610,7 @@
     $("fig-make").hidden = F.three;
     $("fig-back").hidden = !F.three;
     $("fig-check").hidden = !F.three;
+    $("fig-fill-row").hidden = !(F.marking && labelsHere() && labels().count(F.marking) > 0);
     $("fig-dust-row").hidden = !F.three;
     $("fig-show-all").hidden = !(F.three && volume().hiddenObjects() > 0);
     for (const id of ["fig-s3", "fig-s4", "fig-s5"]) $(id).classList.toggle("off", !F.three);
@@ -604,6 +647,11 @@
   $("fig-back").addEventListener("click", () => {
     const ks = structures();
     if (ks.length) startMarking(ks.includes(F.marking) ? F.marking : ks[0]);
+  });
+  $("fig-fill").addEventListener("click", async () => {
+    if (!F.marking || !labelsHere()) return;
+    const n = await labels().interpolate(F.marking);
+    status(n ? `补齐了 ${n} 层` : "没有要补的层：标过的层之间没有空层");
   });
   $("fig-show-all").addEventListener("click", () => { volume().showAll(); sync(); thumbsSoon(); });
   $("fig-slice-on").addEventListener("change", () => { applyFigure(); sync(); thumbsSoon(); });

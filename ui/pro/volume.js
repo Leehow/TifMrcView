@@ -693,7 +693,7 @@ void main() { outColor = vec4(1.0); }`;
       // With the parallel projection depth runs evenly from dist - 4 to dist + 4;
       // the box lies within its half diagonal of the target.
       const r = Math.hypot(...this.extent()) / 8;
-      this.figure.compose(dst, w, h, { ...s.fig, width: (s.fig.width || 1.5) * scale, cue: s.ortho ? s.fig.cue || 0 : 0, cueRange: [0.5 - r, 0.5 + r] });
+      this.figure.compose(dst, w, h, { ...s.fig, width: (s.fig.width || 1.5) * scale * (window.devicePixelRatio || 1), cue: s.ortho ? s.fig.cue || 0 : 0, cueRange: [0.5 - r, 0.5 + r] });
     }
 
     /// The figure as it is on screen, rendered at w x h pixels (same view,

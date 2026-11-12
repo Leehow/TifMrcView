@@ -93,7 +93,10 @@ void main() {
   float fill = max(dot(nn, v), 0.0);
   float spec = pow(max(dot(nn, normalize(l + v)), 0.0), 48.0);
   float a = ao > 0.0 ? 1.0 - ao * occlusion() : 1.0;
-  vec3 c = color * (0.18 * a + (0.62 * diff + 0.25 * fill) * mix(1.0, a, 0.6)) + vec3(gloss * spec * a);
+  // Figures get more ambient light, so shaded and occluded parts keep their colour.
+  vec3 c = ao > 0.0
+    ? color * (0.34 * a + (0.48 * diff + 0.26 * fill) * mix(1.0, a, 0.45)) + vec3(gloss * spec * a)
+    : color * (0.18 + 0.62 * diff + 0.25 * fill) + vec3(gloss * spec);
   outColor = vec4(mix(c, vec3(1.0), glow), 1.0);
 }`;
 

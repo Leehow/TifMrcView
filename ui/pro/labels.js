@@ -2140,6 +2140,12 @@
       if (S.tool !== "label") setTool("label");
       draw();
     },
+    /** Fills the slices between the marked ones of `label` by shape; resolves to how many were filled. */
+    interpolate: async (label) => {
+      if (!ready()) return 0;
+      const st = await edit({ kind: "interpolate", label, guard: 0 });
+      return st ? st.zs.length : 0;
+    },
     /** Pixels carrying `label`. */
     count: (k) => L.counts[k] || 0,
     /** Name/colour/visibility of a label (patch of {name, color, hidden, locked}). */
