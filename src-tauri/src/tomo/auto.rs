@@ -306,7 +306,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let step = pipeline::ReconStep { bin, params, halves: d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false, label: None };
+    let step = pipeline::ReconStep { bin, params, halves: req.purpose != Purpose::Survey && d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false, label: None };
     let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
     let mut look = None;
