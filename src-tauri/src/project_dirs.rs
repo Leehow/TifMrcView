@@ -178,6 +178,78 @@ pub fn scan_folders(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The project folder a sidebar listing of `dir` covers: the parent of a
+/// step folder, or `dir` itself when it holds at least one step folder.
+/// `None` for any other folder (listed flat).
+pub fn listing_root(dir: &Path) -> Option<PathBuf> {
+    if is_step_dir(dir) {
+        return dir.parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
+    }
+    STEPS.iter().any(|s| dir.join(s).is_dir()).then(|| dir.to_path_buf())
+}
+
+/// Helper files made beside an image (halves, previews, single tilts) that
+/// the sidebar does not list.
+pub fn is_helper(path: &Path) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    ["_even", "_odd", "_small"].iter().any(|s| stem.ends_with(s)) || stem.contains("_tilt-")
+}
+
+/// The sidebar group of a file lying in the step folder `dir_name` (None for
+/// the project folder itself): `raw|motion|aligned|tomograms|clean|sta`.
+fn group_of(dir_name: Option<&str>, stem: &str) -> &'static str {
+    match dir_name {
+        Some(MOTION) => "motion",
+        Some(TOMOGRAMS) if stem.ends_with("_aligned") => "aligned",
+        Some(TOMOGRAMS) => "tomograms",
+        Some(CLEAN) => "clean",
+        Some(STA) => "sta",
+        _ => "raw",
+    }
+}
+
+/// Every file the sidebar lists for the project `root`, with its group id, in
+/// the order of the groups; `keep` tells the supported image files and `cmp`
+/// the natural name order. `4_sta` is read one level down as well.
+pub fn list_project(
+    root: &Path,
+    keep: impl Fn(&Path) -> bool,
+    cmp: impl Fn(&str, &str) -> std::cmp::Ordering,
+) -> Vec<(String, &'static str)> {
+    let files_in = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && !is_helper(p) && keep(p))
+            .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("._")))
+            .collect()
+    };
+    let mut out: Vec<(String, &'static str)> = vec![];
+    let mut add = |files: Vec<PathBuf>, dir_name: Option<&str>| {
+        for f in files {
+            let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            out.push((f.to_string_lossy().into_owned(), group_of(dir_name, stem)));
+        }
+    };
+    add(files_in(root), None);
+    for step in STEPS {
+        let dir = root.join(step);
+        let mut files = files_in(&dir);
+        if step == STA {
+            let subs = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir());
+            for sub in subs {
+                files.extend(files_in(&sub));
+            }
+        }
+        add(files, Some(step));
+    }
+    let rank = |g: &str| ["raw", "motion", "aligned", "tomograms", "clean", "sta"].iter().position(|x| *x == g).unwrap_or(9);
+    out.sort_by(|a, b| rank(a.1).cmp(&rank(b.1)).then_with(|| cmp(&a.0, &b.0)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +337,42 @@ mod tests {
         assert_eq!(find_near(&tomograms, "/elsewhere/none.mrc"), None);
         // A flat folder only looks in itself.
         assert_eq!(find_near(dir.path(), "/elsewhere/t_look.mrc"), None);
+    }
+
+    #[test]
+    fn a_project_is_listed_by_step_without_helper_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        assert_eq!(listing_root(r), None);
+        for d in ["1_motion", "2_tomograms", "3_clean", "4_sta/avg1", "other"] {
+            std::fs::create_dir_all(r.join(d)).unwrap();
+        }
+        for f in [
+            "ts.mrc", "ts.txt", "1_motion/ts_m.mrc", "1_motion/ts_tilt-01.mrc", "2_tomograms/ts_aligned.mrc",
+            "2_tomograms/ts_sart3.mrc", "2_tomograms/ts_sart3_even.mrc", "2_tomograms/ts_sart3_odd.mrc",
+            "3_clean/ts_look.mrc", "3_clean/ts_small.mrc", "4_sta/avg.mrc", "4_sta/avg1/half.mrc", "other/x.mrc",
+        ] {
+            std::fs::write(r.join(f), b"x").unwrap();
+        }
+        let prefix = format!("{}/", r.to_str().unwrap());
+        let got: Vec<(String, &str)> = list_project(r, |p| p.extension().is_some_and(|e| e == "mrc"), |a, b| a.cmp(b))
+            .into_iter()
+            .map(|(p, g)| (p.strip_prefix(&prefix).unwrap().to_string(), g))
+            .collect();
+        let want = [
+            ("ts.mrc", "raw"),
+            ("1_motion/ts_m.mrc", "motion"),
+            ("2_tomograms/ts_aligned.mrc", "aligned"),
+            ("2_tomograms/ts_sart3.mrc", "tomograms"),
+            ("3_clean/ts_look.mrc", "clean"),
+            ("4_sta/avg.mrc", "sta"),
+            ("4_sta/avg1/half.mrc", "sta"),
+        ];
+        assert_eq!(got, want.map(|(a, b)| (a.to_string(), b)));
+        // The root is the same from any of its step folders.
+        assert_eq!(listing_root(&r.join("3_clean")), Some(r.to_path_buf()));
+        assert_eq!(listing_root(r), Some(r.to_path_buf()));
+        assert_eq!(listing_root(&r.join("other")), None);
     }
 
     #[test]

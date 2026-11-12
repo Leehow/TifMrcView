@@ -265,8 +265,6 @@
 #cryoet-workspace[hidden], #cryoet-workspace [hidden] { display:none; }
 #cryo-dataset { display:flex; align-items:center; gap:8px; padding-bottom:8px; }
 #cryo-export-box { padding-bottom:8px; }
-#cryo-auto { padding:4px 0 10px; border-bottom:1px solid var(--line); }
-#cryo-auto-run { font-size:13px; padding:6px 18px; }
 #cryo-advanced { margin-top:8px; display:flex; flex-direction:column; min-height:0; }
 #cryo-advanced > summary { cursor:pointer; color:var(--dim); padding:4px 0 8px; }
 #cryo-dataset-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -275,10 +273,8 @@
 #cryo-steps button.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
 #cryo-body { flex:1; min-height:0; overflow:auto; padding-top:10px; }
 #cryo-body p { line-height:1.6; }
-#cryo-live { margin:8px 0 0; }
-#cryo-live canvas { display:block; width:100%; height:auto; max-height:320px; object-fit:contain; background:#000; border-radius:4px; image-rendering:pixelated; }
-#cryo-live figcaption { font-size:12px; margin-top:2px; }
-#cryo-foot { display:flex; align-items:center; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
+/* The progress line and its cancel button stay in sight however long the panel is. */
+#cryo-foot { position:sticky; bottom:-12px; z-index:2; display:flex; align-items:center; gap:8px; margin-top:auto; padding:8px 0 12px; border-top:1px solid var(--line); background:var(--surface); }
 #cryo-status { flex:1; min-height:1.5em; font-variant-numeric:tabular-nums; }
 #quickbar #btn-cryoet { width:auto; padding:0 8px; gap:5px; }
 #ta-summary, #ct-summary { margin:6px 0; line-height:1.5; font-variant-numeric:tabular-nums; }
@@ -506,3 +502,104 @@
 #sta-found .link:disabled { opacity:.5; cursor:not-allowed; }
 #sta-found .link[hidden] { display:none; }
 #sta-workspace .sta-wall[hidden], #sta-workspace #sta-wall-count[hidden], #sta-workspace .sta-wall-fold[hidden] { display:none; }
+
+/* Cryo-ET folder flow: the wall of series and the review of one. */
+#cryo-session { padding:4px 0 10px; border-bottom:1px solid var(--line); }
+#cryo-session .cs-folder .cs-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#cryo-session .cs-controls { flex-wrap:wrap; }
+#cryo-session .cs-controls label { display:flex; align-items:center; gap:4px; color:var(--dim); font-size:11px; flex:1; min-width:0; }
+#cryo-session .cs-controls select { flex:1; min-width:0; }
+#cryo-session .cs-start { font-size:13px; padding:0 18px; height:30px; }
+#cryo-session .cs-help { margin:8px 0; line-height:1.5; }
+.cs-wall { display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr)); gap:8px; margin-top:6px; }
+.cs-wall > p { grid-column:1 / -1; line-height:1.6; }
+.cs-tile { position:relative; display:flex; flex-direction:column; gap:3px; padding:6px; border:1px solid var(--line); border-radius:8px; background:var(--surface); cursor:pointer; min-width:0; font-size:11px; }
+.cs-tile:hover { border-color:var(--line-strong); box-shadow:var(--shadow-sm); }
+.cs-tile:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.cs-tile.attn { border-color:#d4a72c; box-shadow:inset 3px 0 0 #d4a72c; }
+.cs-tile.off .cs-pic { opacity:.5; }
+.cs-pic { position:relative; aspect-ratio:1; border-radius:5px; background:#2a2d31; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+.cs-pic canvas { width:100%; height:100%; object-fit:contain; display:block; }
+.cs-none { font-size:11px; }
+.cs-pic .cs-none { color:#aab1b8; }
+.cs-take { position:absolute; left:4px; top:4px; display:flex; padding:2px; background:rgba(255,255,255,.9); border-radius:4px; cursor:pointer; }
+.cs-take input { margin:0; cursor:pointer; }
+.cs-nm { font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-meta { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.cs-chip { padding:0 6px; border-radius:9px; background:var(--muted); color:var(--dim); line-height:16px; font-size:10.5px; white-space:nowrap; }
+.cs-chip.run { background:#ddf4ff; color:#0550ae; }
+.cs-chip.ok { background:#dafbe1; color:#1a7f37; }
+.cs-verdict.ok { color:#1a7f37; } .cs-verdict.warn { color:#9a6700; } .cs-verdict.bad { color:#cf222e; }
+.cs-err { color:#cf222e; overflow-wrap:anywhere; max-height:4.2em; overflow:hidden; }
+.cs-tile .cs-reset { align-self:flex-start; margin-top:2px; }
+.cs-rv-info { display:flex; flex-wrap:wrap; gap:4px 12px; margin:-2px 0 8px; }
+.cs-tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+.cs-tab { border-radius:6px 6px 0 0; border-color:transparent; }
+.cs-tab.on { color:var(--accent); border-color:var(--line); border-bottom-color:var(--surface); background:var(--surface); margin-bottom:-1px; font-weight:600; }
+.cs-tabbody p { line-height:1.6; margin:6px 0; }
+.cs-summary { font-weight:600; font-variant-numeric:tabular-nums; }
+.cs-views { display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:8px; }
+.cs-view { display:flex; flex-direction:column; gap:2px; min-width:0; font-size:11px; padding:3px; border-radius:6px; border:1.5px solid transparent; }
+.cs-vpic { position:relative; aspect-ratio:1; border-radius:4px; background:#2a2d31; overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.cs-vpic canvas { width:100%; height:100%; object-fit:contain; display:block; }
+.cs-vpic .cs-none { color:#aab1b8; }
+.cs-zoom { position:absolute; right:3px; top:3px; height:20px; padding:0 5px; }
+.cs-vlab { display:flex; justify-content:space-between; gap:4px; font-variant-numeric:tabular-nums; }
+.cs-vwhy { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-height:1.4em; }
+.cs-vgive { align-self:flex-start; height:20px; font-size:11px; }
+.cs-view.suggested { border-color:#cf222e; } .cs-view.suggested .cs-vpic { opacity:.45; } .cs-view.suggested .cs-vst, .cs-view.suggested .cs-vwhy { color:#cf222e; }
+.cs-view.dropped { border-color:var(--line-strong); } .cs-view.dropped .cs-vpic { opacity:.3; } .cs-view.dropped .cs-vst { color:var(--dim); }
+.cs-view.kept { border-color:#d4a72c; } .cs-view.kept .cs-vst, .cs-view.kept .cs-vwhy { color:#9a6700; }
+.cs-view.used .cs-vst { color:#1a7f37; }
+.cs-film { display:block; width:auto; max-width:100%; max-height:38vh; margin-left:auto; margin-right:auto; object-fit:contain; background:#000; border-radius:4px; margin-top:6px; }
+.cs-filmctl { margin-top:6px; }
+.cs-slider { flex:1; min-width:0; }
+.cs-framelab { min-width:9em; text-align:right; font-variant-numeric:tabular-nums; }
+.cs-aligntext { flex:1; font-variant-numeric:tabular-nums; }
+.cs-bars { margin-top:10px; }
+.cs-bars svg { display:block; width:100%; height:90px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
+.cs-bars rect { fill:#0969da; }
+.cs-bars rect.ex { fill:#c4c9cf; }
+.cs-bars rect.cur { fill:#cf222e; }
+.cs-axis { display:flex; justify-content:space-between; gap:8px; font-size:11px; margin-top:2px; }
+.cs-lightbox { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; background:rgba(31,35,40,.55); }
+.cs-lb-card { background:var(--surface); border-radius:10px; padding:10px; box-shadow:var(--shadow); max-width:min(820px, 94vw); max-height:94vh; display:flex; flex-direction:column; gap:6px; }
+.cs-lb-card canvas { display:block; max-width:100%; max-height:74vh; object-fit:contain; background:#000; margin:0 auto; }
+
+/* The docked 「正在处理」 pane: what is being processed, beside the image being looked at. */
+#live-dock { position:absolute; left:10px; top:10px; z-index:8; width:300px; max-height:calc(100% - 20px); display:flex; flex-direction:column; gap:6px; padding:8px; box-sizing:border-box; border:1px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; overflow:hidden; }
+#stage:has(#tools:not([hidden])) #live-dock { left:calc(var(--tools-w, 288px) + 22px); }
+#live-dock .ld-head { display:flex; align-items:center; gap:8px; }
+#live-dock .ld-head b { white-space:nowrap; }
+#live-dock .ld-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+#live-dock .ld-pic { margin:0; min-height:0; }
+#live-dock canvas { display:block; width:100%; height:auto; max-height:46vh; object-fit:contain; background:#000; border-radius:4px; image-rendering:pixelated; }
+#live-dock figcaption { margin-top:2px; font-size:11px; overflow-wrap:anywhere; }
+#live-dock.folded .ld-pic { display:none; }
+#live-dock.folded .ld-text { max-width:200px; }
+
+/* The three jobs of the Cryo-ET panel (cryoet/jobs.js): tabs under its title. */
+.ws-jobs { display:flex; gap:2px; margin:2px 0 10px; border-bottom:1px solid var(--line); }
+.ws-jobs button { height:30px; padding:0 14px; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:none; font-size:13px; color:var(--dim); }
+.ws-jobs button:hover { background:var(--muted); }
+.ws-jobs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+#cryoet-workspace[data-job="quick"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-sta, .cs-purpose-box, .cs-finish, .cs-only-recon),
+#cryoet-workspace[data-job="recon"] :is(#cryo-sta, .cs-start, .cs-only-quick),
+#cryoet-workspace[data-job="sta"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-session, #cryo-foot) { display:none; }
+#cryo-sta { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+/* It floats: moved by its title, resized by its corners. */
+#cryoet-workspace > .al-head { position:sticky; top:-12px; z-index:3; margin:-12px -12px 0; padding:12px 12px 6px; background:var(--surface); cursor:move; user-select:none; touch-action:none; }
+#cryoet-workspace.narrow { width:min(360px, calc(100% - 20px)) !important; }
+.ws-corner { position:absolute; z-index:10; width:16px; height:16px; touch-action:none; }
+.ws-corner[hidden] { display:none; }
+.ws-nw, .ws-se { cursor:nwse-resize; }
+.ws-ne, .ws-sw { cursor:nesw-resize; }
+.ws-corner::after { content:""; position:absolute; inset:4px; border:2px solid transparent; border-radius:3px; }
+.ws-corner:hover::after, .ws-corner:active::after { border-color:var(--accent); }
+/* What the reconstruction is for: three choices side by side. */
+#cryo-session .cs-purpose-box { flex:1 1 100%; display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
+#cryo-session .cs-use { border:1px solid var(--line); border-radius:8px; background:var(--surface); display:flex; flex-direction:column; align-items:flex-start; gap:3px; height:auto; padding:8px 10px; text-align:left; white-space:normal; line-height:1.4; }
+#cryo-session .cs-use span { color:var(--dim); font-size:11px; font-weight:normal; }
+#cryo-session .cs-use.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+#cryo-session .cs-use.on b { color:var(--accent); }
+#live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }

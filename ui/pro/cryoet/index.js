@@ -4,6 +4,7 @@
 // stack in an old flat project) carried through motion correction, CTF, tilt
 // alignment, reconstruction and post-processing. The dataset is held by the
 // stack's path, so the workspace keeps it while its tomograms are open.
+// The folder flow (the wall of series, session.js) sits above the steps.
 // The step modules (motion.js, ctf.js, align.js, recon.js, post.js) fill
 // `sections` and call `register` with their hooks.
 // Shares app.js globals: S, T, F, invoke, $, setFft, openPath, saveDir.
@@ -30,7 +31,7 @@
   panel.innerHTML = `
     <div class="al-head"><b>Cryo-ET · 冷冻电子断层</b><button id="cryo-close" class="small" title="关闭">✕</button></div>
     <div id="cryo-dataset">
-      <span id="cryo-dataset-name" class="dim">还没有倾转序列</span>
+      <span id="cryo-dataset-name" class="dim"></span>
       <button id="cryo-use" class="small" title="把当前打开的倾转序列作为工作区的数据集">使用当前叠层</button>
       <button id="cryo-export" class="small" title="把对齐、CTF 等结果导出给其他软件" disabled>导出…</button>
     </div>
@@ -44,25 +45,12 @@
       <label>对齐叠层 binning<select id="cryo-export-bin"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
       <div class="al-row"><button id="cryo-export-go" class="small primary">选择文件夹并导出…</button></div>
     </div>
-    <div id="cryo-auto">
-      <p class="dim">打开倾转序列，或直接选 mdoc（EER / TIFF 电影在它旁边），选好结果的用途，按下面的按钮：运动校正、对齐、CTF、重构和后处理都自动完成，结果直接打开。</p>
-      <div class="al-row">
-        <label id="cryo-auto-pixel-row" hidden>像素大小 Å <input id="cryo-auto-pixel" type="number" min="0" step="0.001"></label>
-        <label>用途<select id="cryo-auto-purpose">
-          <option value="survey">快速预览：看三维形貌，最快（约 18 Å 体素）</option>
-          <option value="display" selected>展示：尽可能清晰，去噪并补缺失楔（约 9 Å 体素，较慢）</option>
-          <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
-        </select></label>
-      </div>
-      <div class="al-row"><button id="cryo-auto-run" class="primary">一键重构</button><button id="cryo-auto-mdoc" class="small">从 mdoc 开始…</button><button id="cryo-auto-open" class="small" hidden>打开结果</button></div>
-      <p id="cryo-auto-result" class="dim"></p>
-    </div>
+    <div id="cryo-session"></div>
     <details id="cryo-advanced">
       <summary>高级设置（分步操作）</summary>
       <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
       <div id="cryo-body"></div>
     </details>
-    <figure id="cryo-live" hidden><canvas></canvas><figcaption class="dim"></figcaption></figure>
     <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden>取消</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
@@ -109,7 +97,7 @@
   // Makes `d` the workspace's dataset and lets every step show it.
   W.setDataset = (d) => {
     W.dataset = d;
-    $("cryo-dataset-name").textContent = d ? `数据集：${W.name(d.stack)} · ${d.angles.length} 个倾角` : "还没有倾转序列";
+    $("cryo-dataset-name").textContent = d?.angles.length ? `数据集：${W.name(d.stack)} · ${d.angles.length} 个倾角` : "";
     $("cryo-export").disabled = !d?.alignment;
     marks();
     for (const h of W.hooks.values()) h.dataset?.(d);
@@ -125,56 +113,6 @@
     const files = await W.step("导出", "tomo_export", { format: $("cryo-export-format").value, dir, bin: +$("cryo-export-bin").value });
     if (files) W.status(`已导出 ${files.length} 个文件到 ${dir}`);
   };
-
-  // One button: tomo::auto does every step with the choices made.
-  let autoResult = null;
-  $("cryo-auto-run").onclick = () => auto();
-  // From the movies: motion correction of the mdoc batch with its defaults
-  // (the gain reference beside the movies is found), then the same button.
-  $("cryo-auto-mdoc").onclick = async () => {
-    const mdoc = await invoke("motion_pick", { dir: saveDir(), kind: "mdoc" });
-    if (!mdoc) return;
-    const output = await invoke("pick_save_path", { dir: saveDir(), name: `${W.name(mdoc).replace(/\.[^.]+$/, "").replace(/\.mrc$/, "")}.mrc`, filter: "MRC", exts: ["mrc"] });
-    if (!output) return;
-    const un = await T.event.listen("motion-progress", (e) => W.status(`运动校正 · ${e.payload.stage} ${e.payload.done} / ${e.payload.total}`));
-    const r = await W.run("运动校正", () => invoke("motion_series", { req: { mdoc, folder: null, output, params: {}, dropTilts: true } }), "motion_cancel");
-    un();
-    if (!r) return;
-    if (!r.path || r.angles.length < 3) return W.status(r.path ? "找到的倾角不到 3 个，无法重构" : "mdoc 旁边没有找到电影");
-    await W.load(r.path);
-    await auto();
-  };
-  async function auto() {
-    if (!W.dataset) {
-      if (!S.info || S.info.sizeZ < 3) return W.status("请先打开一个倾转序列，或从 mdoc 开始");
-      try { await W.load(S.info.path); } catch (e) { return W.status(`无法载入：${e}`); }
-    }
-    const pixel = +$("cryo-auto-pixel").value || null;
-    // Display tomograms end with membrane segmentation once the user has
-    // picked the MemBrain-seg model; asked once (closing the box skips it,
-    // the labels panel can still ask).
-    if ($("cryo-auto-purpose").value === "display" && !localStorage.getItem("tmv-mem-skip")) {
-      try {
-        if (!(await window.TifMrcViewPro.membrane.ensure())) localStorage.setItem("tmv-mem-skip", "1");
-      } catch (e) {
-        W.status(`膜分割模型不可用（重构照常进行）：${e}`);
-      }
-    }
-    const r = await W.step("一键重构", "tomo_auto", { pixelA: pixel, purpose: $("cryo-auto-purpose").value, fresh: false });
-    if (!r) {
-      // The backend asks for the pixel size only when no file or mdoc gives it.
-      if ($("cryo-status").textContent.includes("像素大小")) $("cryo-auto-pixel-row").hidden = false;
-      return;
-    }
-    autoResult = r;
-    $("cryo-auto-open").hidden = false;
-    $("cryo-auto-result").textContent = `完成：${(r.ms / 60000).toFixed(1)} 分钟 · 对齐残差 ${r.residual.toFixed(2)} px · 离焦 ${r.defocusUm.toFixed(2)} µm · bin ${r.bin} · 厚度 ${r.thickness} 层${Math.hypot(...r.levelled) >= 0.5 ? ` · 样品倾斜已拉平（${r.levelled.map((v) => v.toFixed(1)).join("° / ")}°）` : ""} · ${W.name(r.path)}${r.relion ? ` · RELION 5 文件夹：${r.relion}` : ""}${r.labels ? " · 膜已写进标签「膜」" : ""}${r.note ? `。${r.note}` : ""}`;
-    W.status("一键重构完成，已打开结果");
-    await openPath(r.path);
-    // Show the membranes over the tomogram.
-    if (r.labels) setTool("label");
-  }
-  $("cryo-auto-open").onclick = () => autoResult && openPath(autoResult.path);
 
   // Loads the dataset of a tilt series by its path.
   W.load = async (stack) => {
@@ -192,70 +130,45 @@
     } catch (e) { W.status(`无法载入：${e}`); }
   };
 
-  // What the running step has made so far (live.rs): the middle section of
-  // the tomogram as it is reconstructed, denoised, corrected, segmented.
-  const live = { on: false, busy: false, last: 0, timer: 0 };
-  async function livePicture() {
-    if (!live.on || live.busy || live.timer) return;
-    const wait = 400 - (performance.now() - live.last);
-    if (wait > 0) {
-      live.timer = setTimeout(() => { live.timer = 0; livePicture(); }, wait);
-      return;
-    }
-    live.busy = true;
-    live.last = performance.now();
-    try {
-      const buf = await invoke("live_picture");
-      if (!live.on || !buf || buf.byteLength < 12) return;
-      const dv = new DataView(buf);
-      const w = dv.getUint32(0, true), h = dv.getUint32(4, true), n = dv.getUint32(8, true);
-      const title = new TextDecoder().decode(new Uint8Array(buf, 12, n));
-      const at = 12 + Math.ceil(n / 4) * 4;
-      if (!w || !h || buf.byteLength < at + w * h * 4) return;
-      const fig = $("cryo-live"), cv = fig.querySelector("canvas");
-      cv.width = w;
-      cv.height = h;
-      cv.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(buf, at, w * h * 4), w, h), 0, 0);
-      fig.querySelector("figcaption").textContent = title;
-      fig.hidden = false;
-    } catch (_) {
-      // Nothing to show yet.
-    } finally {
-      live.busy = false;
-    }
-  }
-
-  // Runs a long backend call with progress in the status line and a cancel
-  // button; the workspace's buttons are disabled meanwhile.
+  // Runs a long backend call with progress in the status line, the docked
+  // 「正在处理」 pane (live.js) and a cancel button; the workspace's buttons are
+  // disabled meanwhile.
   W.run = async (label, call, cancel = "tomo_cancel") => {
     if (W.busy) return null;
     W.busy = true;
+    const dock = window.TifMrcViewPro.liveDock;
     $("cryo-cancel").hidden = false;
     $("cryo-cancel").onclick = () => invoke(cancel);
-    const buttons = [...panel.querySelectorAll("#cryo-body button, #cryo-dataset button, #cryo-auto button")];
+    const buttons = [...panel.querySelectorAll("#cryo-body button, #cryo-dataset button, #cryo-session .cs-act")];
     const was = buttons.map((b) => b.disabled);
     buttons.forEach((b) => { b.disabled = true; });
-    await invoke("live_clear").catch(() => {});
-    live.on = true;
+    await dock.start();
     const un = await T.event.listen("tomo-progress", (e) => {
       const p = e.payload;
-      W.status(`${p.stage || label} ${p.done} / ${p.total}`);
-      livePicture();
+      const text = `${p.stage || label} ${p.done} / ${p.total}`;
+      W.status(text);
+      dock.progress(text);
+      dock.refresh();
     });
+    const un2 = await T.event.listen("motion-progress", () => dock.refresh());
     W.status(`${label}…`);
+    dock.progress(`${label}…`);
     try {
       return await call();
     } catch (e) {
-      W.status(`${label}失败：${e}`);
+      W.status(String(e).includes("已取消") ? `${label}已取消` : `${label}失败：${e}`);
       return null;
     } finally {
       un();
-      live.on = false;
-      $("cryo-live").hidden = true;
+      un2();
+      dock.stop();
       W.busy = false;
       $("cryo-cancel").hidden = true;
       buttons.forEach((b, i) => { b.disabled = was[i]; });
       marks();
+      document.dispatchEvent(new CustomEvent("cryoet-idle"));
+      // What the step made shows up in the image list.
+      document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
     }
   };
 
@@ -268,6 +181,7 @@
 
   function close() {
     panel.hidden = true;
+    document.dispatchEvent(new CustomEvent("cryoet-close"));
     button.classList.remove("on");
   }
   button.onclick = () => {
@@ -277,8 +191,10 @@
     panel.hidden = false;
     button.classList.add("on");
     // Start with the open tilt series when there is no dataset yet.
-    if (!W.dataset && S.info?.sizeZ >= 3 && !W.busy) $("cryo-use").click();
+    // Quietly: a movie of the folder is no tilt series, and says nothing.
+    if (!W.dataset && S.info?.sizeZ >= 3 && !W.busy) invoke("tomo_dataset", { stack: S.info.path }).then((d) => { if (d.angles.length && !W.dataset) W.setDataset(d); }).catch(() => {});
     W.select(W.current);
+    document.dispatchEvent(new CustomEvent("cryoet-open"));
   };
   $("cryo-close").onclick = close;
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });

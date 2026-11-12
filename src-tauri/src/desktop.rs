@@ -1454,6 +1454,13 @@ struct Folder {
     index: Option<usize>,
     /// Z stacks an acquisition project file makes of this folder's slices.
     stacks: Vec<StackEntry>,
+    /// Pro, inside a cryo-ET project: the step group of each file
+    /// (`raw|motion|aligned|tomograms|clean|sta`), parallel to `files`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<String>>,
+    /// The project folder `files` come from (set with `steps`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1489,6 +1496,22 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
     blocking(move || {
         let p = PathBuf::from(&path);
         let dir = if p.is_dir() { p.clone() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
+        #[cfg(feature = "pro")]
+        if !p.is_dir() {
+            if let Some(root) = crate::project_dirs::listing_root(&dir) {
+                let listed = crate::project_dirs::list_project(
+                    &root,
+                    |f| formats::is_supported(f) && !crate::labels::is_labels_file(f),
+                    natural_cmp,
+                );
+                let index = listed.iter().position(|(f, _)| Path::new(f) == p);
+                let sizes = listed.iter().map(|(f, _)| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
+                let steps = listed.iter().map(|(_, g)| g.to_string()).collect();
+                let files = listed.into_iter().map(|(f, _)| f).collect();
+                let root: PathBuf = root.components().collect();
+                return Ok(Folder { files, sizes, index, stacks: vec![], steps: Some(steps), root: Some(root.to_string_lossy().into_owned()) });
+            }
+        }
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -1500,7 +1523,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let index = files.iter().position(|f| Path::new(f) == p);
         let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
         let dir: PathBuf = dir.components().collect();
-        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir) })
+        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir), steps: None, root: None })
     })
     .await
 }
@@ -1867,6 +1890,76 @@ async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>)
     }).await
 }
 
+/// The tilt series of a folder and how far each has come (`tomo::session`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_session(folder: String) -> CmdResult<crate::tomo::session::Session> {
+    blocking(move || crate::tomo::session::scan(&folder)).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoSessionRun {
+    folder: String,
+    /// None: the first pass (movies, a look at the views, alignment, a
+    /// quick tomogram); else the tomograms for this purpose.
+    purpose: Option<crate::tomo::auto::Purpose>,
+    /// Only these series (by name); empty: all that are due.
+    #[serde(default)]
+    only: Vec<String>,
+}
+
+/// Runs a pass over the folder's series; `tomo-session` is emitted whenever
+/// a series has come further, `tomo-progress` as for the single steps.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_session_run(app: AppHandle, req: TomoSessionRun) -> CmdResult<crate::tomo::session::Session> {
+    let _job = TomoJob::begin()?;
+    let motion = MotionJob::begin(true)?;
+    blocking(move || {
+        let (_job, _motion) = (_job, motion);
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        let emit = tomo_emit(&app);
+        let changed = || { let _ = app.emit("tomo-session", serde_json::json!({ "folder": req.folder })); };
+        // The wall follows a long step too, not only its end.
+        let told = std::sync::Mutex::new(std::time::Instant::now());
+        let emit = |stage: &str, done: usize, total: usize| {
+            emit(stage, done, total);
+            let mut t = told.lock().unwrap_or_else(|e| e.into_inner());
+            if t.elapsed().as_secs() >= 2 {
+                *t = std::time::Instant::now();
+                changed();
+            }
+        };
+        match req.purpose {
+            None => crate::tomo::session::prepare(dev, &req.folder, &req.only, &emit, &changed),
+            Some(p) => crate::tomo::session::finish(dev, &req.folder, p, &req.only, &emit, &changed),
+        }
+    }).await
+}
+
+/// A section of an image of the project as a small picture (`session::view`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_view(path: String, z: Option<usize>, max: usize) -> Result<Response, String> {
+    blocking(move || crate::tomo::session::view(&path, z, max)).await.map(Response::new)
+}
+
+/// The user's choice for one view of a series (`keep` null: the program's again).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_pick(stack: String, z: usize, keep: Option<bool>) -> CmdResult<crate::tomo::dataset::Dataset> {
+    blocking(move || crate::tomo::session::pick(&stack, z, keep)).await
+}
+
+/// The user's choice for a whole series (`take` null: the program's again).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_take(stack: String, take: Option<bool>) -> CmdResult<crate::tomo::dataset::Dataset> {
+    blocking(move || crate::tomo::session::take(&stack, take)).await
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>) -> CmdResult<serde_json::Value> {
@@ -1899,6 +1992,8 @@ fn tomo_cancel() {
     crate::denoise_learn::CANCEL.store(true, Ordering::SeqCst);
     crate::wedge::CANCEL.store(true, Ordering::SeqCst);
     crate::ctf::CANCEL.store(true, Ordering::SeqCst);
+    // A pass over a folder also corrects movies.
+    if MOTION_RUNNING.load(Ordering::SeqCst) { crate::motion::cancel(); }
 }
 
 #[cfg(feature = "pro")]
@@ -1910,7 +2005,11 @@ impl TomoJob {
     fn begin() -> CmdResult<Self> {
         use std::sync::atomic::Ordering;
         TOMO_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "断层任务正在运行".to_string())?;
+        // Everything `tomo_cancel` raises: a stop of the last job must not stop this one.
         crate::tomo::CANCEL.store(false, Ordering::SeqCst);
+        crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
+        crate::wedge::CANCEL.store(false, Ordering::SeqCst);
+        crate::ctf::CANCEL.store(false, Ordering::SeqCst);
         Ok(Self)
     }
 }
@@ -3565,6 +3664,11 @@ pub fn run() {
             #[cfg(feature = "pro")] gpu_info,
             #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_auto,
+            #[cfg(feature = "pro")] tomo_session,
+            #[cfg(feature = "pro")] tomo_session_run,
+            #[cfg(feature = "pro")] tomo_pick,
+            #[cfg(feature = "pro")] tomo_take,
+            #[cfg(feature = "pro")] tomo_view,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,

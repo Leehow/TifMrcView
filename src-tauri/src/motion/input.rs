@@ -210,7 +210,7 @@ impl Spool {
         }
         let group = if p.group == 0 {
             if matches!(movie, Movie::Eer(_)) {
-                n.div_ceil(40)
+                n.div_ceil(eer_frames(p.total_dose))
             } else {
                 1
             }
@@ -224,7 +224,8 @@ impl Spool {
         if w.saturating_mul(h) > 1 << 27 {
             bail!("电影渲染尺寸过大");
         }
-        let bin = w.min(h).div_ceil(p.working_size).max(1);
+        let preview = p.preview_bin > 0;
+        let bin = if preview { p.preview_bin } else { w.min(h).div_ceil(p.working_size).max(1) };
         let (ww, hh) = (w / bin, h / bin);
         if ww.min(hh) < 80 {
             bail!("电影太小（至少 80 px）");
@@ -245,7 +246,7 @@ impl Spool {
             frames: vec![],
             counts: vec![],
             times: vec![],
-            original: vec![0.0; w * h],
+            original: if preview { vec![] } else { vec![0.0; w * h] },
             decode_ms: 0.0,
             prepare_ms: 0.0,
         };
@@ -253,7 +254,7 @@ impl Spool {
         // Auto grouping balances the remainder: a one-fraction last frame
         // otherwise has much lower SNR than the rest of a 600–1000-frame EER.
         let groups: Vec<_> = if p.group == 0 && matches!(movie, Movie::Eer(_)) {
-            let frames = n.min(40);
+            let frames = n.min(eer_frames(p.total_dose));
             (0..frames)
                 .map(|i| (i * n / frames, (i + 1) * n / frames - i * n / frames))
                 .collect()
@@ -275,20 +276,23 @@ impl Spool {
             if frame.par_iter().any(|x| !x.is_finite()) {
                 bail!("电影或 gain 含 NaN/Inf");
             }
-            spool
-                .original
-                .par_iter_mut()
-                .zip(&frame)
-                .for_each(|(o, v)| *o += v);
-            let stored = Stored::new(&frame, &mut spool.used);
-            if matches!(stored, Stored::Disk) {
-                if !spool.dir.exists() {
-                    fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+            // A preview keeps only the binned frames.
+            if !preview {
+                spool
+                    .original
+                    .par_iter_mut()
+                    .zip(&frame)
+                    .for_each(|(o, v)| *o += v);
+                let stored = Stored::new(&frame, &mut spool.used);
+                if matches!(stored, Stored::Disk) {
+                    if !spool.dir.exists() {
+                        fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+                    }
+                    let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
+                    fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
                 }
-                let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
-                fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
+                spool.stored.push(stored);
             }
-            spool.stored.push(stored);
             let mut work = vec![0.0; ww * hh];
             work.par_chunks_mut(ww).enumerate().for_each(|(y, row)| {
                 for (x, o) in row.iter_mut().enumerate() {
@@ -313,6 +317,21 @@ impl Spool {
         }
         spool.prepare_ms = now.elapsed().as_secs_f64() * 1000.0;
         Ok(spool)
+    }
+}
+
+/// Dose a frame needs for its shift to be measured, e⁻/Å².
+const FRAME_DOSE: f64 = 0.4;
+
+/// How many frames an EER movie's fractions are grouped into: about
+/// `FRAME_DOSE` each when the movie's dose is known (a tilt image of
+/// 3 e⁻/Å² gives 8; in 40 frames each would hold a thirteenth of an electron
+/// per Å², and its measured shift would be noise), at least 4 and at most 40;
+/// 40 when it is not known.
+pub fn eer_frames(total_dose: Option<f64>) -> usize {
+    match total_dose {
+        Some(d) if d > 0.0 => ((d / FRAME_DOSE).round() as usize).clamp(4, 40),
+        _ => 40,
     }
 }
 

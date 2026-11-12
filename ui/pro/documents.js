@@ -175,6 +175,7 @@
   async function activate(doc) {
     if (doc === active) return doc;
     if (!await capture()) return active;
+    doc.used = Date.now();
     if (doc.type === "image") await invoke("activate_document", { token: doc.token });
     active = doc;
     changed();
@@ -188,17 +189,30 @@
     return doc;
   }
 
-  async function open(path, force = false, series = 0) {
+  // `opts.replace` shows the image in the active image tab instead of a new one.
+  async function open(path, force = false, series = 0, opts = null) {
     return enqueue(async () => {
       if (/\.tmvmerge$/i.test(path)) return openProject(path);
       const existing = tabs.find((d) => d.type === "image" && d.path === path && d.series === series);
-      if (existing && !force) return activate(existing);
+      const here = TmvTabRules.replacesActive(active, opts) && (!existing || existing === active);
+      if (existing && !here && !force) return activate(existing);
+      if (existing && here && !force) return existing;
+      if (!here && !existing && !await makeRoom()) return null;
       if (!await capture()) return null;
       const previous = active;
       const result = await openPath(path, force || previous?.type !== "image", series, true);
       if (!result) return null;
+      if (here) {
+        // Same tab, new image: the old backend document goes when nothing else uses it.
+        Object.assign(previous, { path, series, token: result.token, name: result.info.name, used: Date.now() });
+        sources.set(result.token, result);
+        await capture();
+        await releaseUnused();
+        changed();
+        return previous;
+      }
       const doc = { id: `document-${++nextId}`, type: "image", path, series, token: result.token,
-        name: result.info.name, state: null, dirty: false };
+        name: result.info.name, state: null, dirty: false, used: Date.now() };
       sources.set(result.token, result);
       tabs.push(doc);
       active = doc;
@@ -215,6 +229,20 @@
       }
       return doc;
     });
+  }
+
+  // At most MAX_TABS tabs: close the stalest idle image tab for a new one.
+  async function makeRoom() {
+    if (tabs.length < TmvTabRules.MAX_TABS) return true;
+    const victim = TmvTabRules.evictionCandidate(tabs, active);
+    if (!victim) {
+      toast(`最多同时打开 ${TmvTabRules.MAX_TABS} 个标签页，请先关掉几个`, 5000);
+      return false;
+    }
+    tabs.splice(tabs.indexOf(victim), 1);
+    await releaseUnused();
+    changed();
+    return true;
   }
 
   async function source(path, series = 0) {

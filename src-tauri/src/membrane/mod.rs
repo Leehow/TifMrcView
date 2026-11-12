@@ -770,6 +770,11 @@ pub struct FileResult {
 /// beside it with a summary (`<image>.membranes.json`) and a vesicle table
 /// (`<image>.vesicles.csv`). `progress` gets (stage, done, total).
 pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
+    segment_file_pass(dev, model, image, Pass::Official, progress)
+}
+
+/// `segment_file` going over the volume as `pass` says.
+pub fn segment_file_pass(dev: &Device, model: &Path, image: &str, pass: Pass, progress: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<FileResult> {
     let now = Instant::now();
     CANCEL.store(false, Ordering::SeqCst);
     progress("膜分割：读取", 0, 1);
@@ -782,7 +787,7 @@ pub fn segment_file(dev: &Device, model: &Path, image: &str, progress: &(dyn Fn(
     }
     let net = load(model, dev)?;
     crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &[]);
-    let seg = segment(dev, &net, &v, shape, px as f32, Pass::Official, &mut |p| progress("膜分割", p.done, p.total))?;
+    let seg = segment(dev, &net, &v, shape, px as f32, pass, &mut |p| progress("膜分割", p.done, p.total))?;
     crate::live::show_section("膜分割：中间层", &v, shape, shape[2] / 2, &seg.mask);
     progress("膜分割：微管", 0, 1);
     let fils = crate::filaments::find(&v, shape, px as f32);

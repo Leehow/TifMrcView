@@ -55,7 +55,7 @@ USAGE
 
   Every choice is made automatically, as in the app. --for picks what the
   tomogram is for: display (default: clearest picture, denoised, missing
-  wedge filled, membranes when a model is set), sta (subtomogram averaging:
+  wedge filled; --membranes also segments membranes), sta (subtomogram averaging:
   full detail + RELION 5 folder), survey (quick look).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
@@ -272,7 +272,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 5] = ["--sam", "--fresh", "--auto", "--kinds", "--only"];
+        const FLAGS: [&str; 6] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes", "--only"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -505,7 +505,9 @@ fn has_tilts(path: &str, nz: usize) -> bool {
 /// `tmv run`: picks the command for what the input is.
 fn run(o: &Opts) -> Result<Value> {
     let input = o.input()?;
-    let (cmd, why) = if Path::new(input).is_dir() {
+    let (cmd, why) = if Path::new(input).is_dir() && crate::tomo::session::scan(input).is_ok_and(|s| !s.series.is_empty()) {
+        ("tomo", "a folder of tilt series")
+    } else if Path::new(input).is_dir() {
         ("spa", "a folder of micrographs or movies")
     } else if ext(input) == "mdoc" {
         ("tomo", "a SerialEM .mdoc of a tilt series")
@@ -546,13 +548,29 @@ fn tomo(o: &Opts) -> Result<Value> {
     let pixel = o.number("pixel")?;
     let progress = Progress::new();
     let report = |s: &str, i: usize, n: usize| progress.report(s, i, n);
+    // A folder: every tilt series in it, first the quick pass (movies,
+    // a look at the views, alignment, a quick tomogram), then the
+    // tomograms asked for of the series worth it.
+    if Path::new(input).is_dir() {
+        use crate::tomo::session;
+        let (dev, backend) = device();
+        let mut s = session::prepare(dev, input, &[], &report, &|| {})?;
+        progress.done();
+        if purpose != auto::Purpose::Survey {
+            s = session::finish(dev, input, purpose, &[], &report, &|| {})?;
+            progress.done();
+        }
+        let mut v = serde_json::to_value(&s)?;
+        v["backend"] = json!(backend);
+        return Ok(v);
+    }
     let mut motion = Value::Null;
     let stack = if ext(input) == "mdoc" {
         let stem = input.strip_suffix(".mdoc").unwrap_or(input);
         let stem = stem.strip_suffix(".mrc").unwrap_or(stem);
         let output = format!("{stem}.mrc");
         crate::motion::begin();
-        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true };
+        let req = crate::motion::series::SeriesReq { mdoc: input.into(), folder: None, output, params: Default::default(), drop_tilts: true, fresh: false, preview: purpose != auto::Purpose::Sta };
         let r = crate::motion::series::run(&req, &report)?;
         progress.done();
         let Some(path) = r.path.clone() else { bail!("no movies found beside the mdoc") };
@@ -569,12 +587,12 @@ fn tomo(o: &Opts) -> Result<Value> {
     let px = require_pixel("tomo", &stack, &img, pixel)?;
     let mut d = Dataset::open(&info.path, info.size_z, Some(px))?;
     drop(img);
-    let membranes = purpose == auto::Purpose::Display && crate::membrane::model_path().is_some();
-    if purpose == auto::Purpose::Display && !membranes {
+    // Membranes only when asked for (--membranes): they take longer than everything else together.
+    if o.flag("membranes") && crate::membrane::model_path().is_none() {
         eprintln!("note: no MemBrain-seg model set, membranes are skipped (tmv setup --membrane <file.ckpt>)");
     }
     let (dev, backend) = device();
-    let req = auto::AutoReq { pixel_a: pixel, purpose, fresh: o.flag("fresh") };
+    let req = auto::AutoReq { pixel_a: pixel, purpose, fresh: o.flag("fresh"), membranes: o.flag("membranes") };
     let r = crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, &report))??;
     progress.done();
     let mut v = serde_json::to_value(&r)?;
