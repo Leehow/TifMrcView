@@ -272,15 +272,47 @@ pub fn export(a: &Alignment, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Prefer the calibrated image header, then the mdoc calibration.
-pub fn pixel_a(img: &Arc<OpenImage>) -> f64 {
+/// The pixel size (Å) the file itself tells: the calibrated image header,
+/// else the mdoc calibration. A header value of 0 or of exactly 1.0 counts as
+/// not told (1.0 is what writers leave when they never set it).
+pub fn pixel_known(img: &Arc<OpenImage>) -> Option<f64> {
     if img.info().pixel_size.is_some() {
-        return crate::align::pixel_a(img.info());
+        let p = crate::align::pixel_a(img.info());
+        if p.is_finite() && p > 0.0 && p != 1.0 {
+            return Some(p);
+        }
     }
-    geometry::metadata(&img.info().path, img.info().size_z)
-        .ok()
-        .and_then(|m| m.pixel_a)
-        .unwrap_or(1.0)
+    geometry::metadata(&img.info().path, img.info().size_z).ok().and_then(|m| m.pixel_a).filter(|p| p.is_finite() && *p > 0.0)
+}
+
+fn overrides() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, f64>> {
+    static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, f64>>> = std::sync::OnceLock::new();
+    MAP.get_or_init(Default::default)
+}
+
+fn override_key(path: &str) -> PathBuf {
+    Path::new(path).canonicalize().unwrap_or_else(|_| PathBuf::from(path))
+}
+
+/// Sets (or, with `None` or a value that is not positive, clears) the pixel
+/// size the user gave for the file at `path`. `pixel_a` uses it before anything else.
+pub fn set_pixel(path: &str, pixel_a: Option<f64>) {
+    let mut map = overrides().lock().unwrap_or_else(|e| e.into_inner());
+    match pixel_a.filter(|p| p.is_finite() && *p > 0.0) {
+        Some(p) => map.insert(override_key(path), p),
+        None => map.remove(&override_key(path)),
+    };
+}
+
+/// The pixel size the user gave for the file at `path` with `set_pixel`.
+pub fn pixel_override(path: &str) -> Option<f64> {
+    overrides().lock().unwrap_or_else(|e| e.into_inner()).get(&override_key(path)).copied()
+}
+
+/// The pixel size (Å) to use: what the user gave for the file, else what the
+/// file tells, else 1.
+pub fn pixel_a(img: &Arc<OpenImage>) -> f64 {
+    pixel_override(&img.info().path).or_else(|| pixel_known(img)).unwrap_or(1.0)
 }
 
 fn protect_source(img: &Arc<OpenImage>, path: &str) -> Result<()> {
@@ -400,5 +432,51 @@ impl Drop for VolumeFile {
         if !self.done {
             let _ = std::fs::remove_file(&self.part);
         }
+    }
+}
+
+#[cfg(test)]
+mod pixel_tests {
+    use super::*;
+
+    fn written(name: &str, pixel: f64) -> String {
+        let path = std::env::temp_dir().join(format!("tmv_pixel_{}_{name}.mrc", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        let data: Vec<f32> = (0..4 * 4 * 2).map(|i| i as f32).collect();
+        write_mrc(&path, &data, [4, 4, 2], pixel, false).unwrap();
+        path
+    }
+
+    fn open(path: &str) -> Arc<OpenImage> {
+        OpenImage::new(1, crate::formats::open(Path::new(path)).unwrap(), 1 << 20)
+    }
+
+    #[test]
+    fn header_zero_and_one_are_not_known() {
+        for (name, px) in [("zero", 0.0), ("one", 1.0)] {
+            let path = written(name, px);
+            let img = open(&path);
+            assert_eq!(pixel_known(&img), None, "{name}");
+            assert_eq!(pixel_a(&img), 1.0);
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
+    #[test]
+    fn header_value_is_known_and_override_wins() {
+        let known = written("known", 2.7);
+        let img = open(&known);
+        assert!((pixel_known(&img).unwrap() - 2.7).abs() < 1e-4);
+        assert!((pixel_a(&img) - 2.7).abs() < 1e-4);
+        std::fs::remove_file(&known).ok();
+
+        let path = written("override", 0.0);
+        let img = open(&path);
+        set_pixel(&path, Some(3.4));
+        assert_eq!(pixel_a(&img), 3.4);
+        assert_eq!(pixel_known(&img), None);
+        set_pixel(&path, None);
+        assert_eq!(pixel_a(&img), 1.0);
+        std::fs::remove_file(&path).ok();
     }
 }

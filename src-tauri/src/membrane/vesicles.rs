@@ -35,7 +35,7 @@ const MIN_COVER: f64 = 0.6;
 const RINGS: usize = 10;
 const SECTORS: usize = 24;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct Vesicle {
     /// Centre in voxels (x, y, z) of the tomogram.
     pub center: [f32; 3],

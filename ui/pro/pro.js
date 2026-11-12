@@ -21,7 +21,7 @@ window.TifMrcViewPro = {
   document.head.appendChild(documentsCss);
   // Tabs must exist before pending OS files are consumed. Classic scripts
   // execute in insertion order, so the merge model precedes its UI users.
-  window.TifMrcViewPro.ready = Promise.all(["pro/merge-model.js", "pro/documents.js", "pro/layers.js"].map((src) => new Promise((resolve, reject) => {
+  window.TifMrcViewPro.ready = Promise.all(["pro/merge-model.js", "pro/tab-rules.js", "pro/documents.js", "pro/layers.js"].map((src) => new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src;
     s.async = false;
@@ -29,8 +29,8 @@ window.TifMrcViewPro = {
     s.onerror = () => reject(new Error(`无法加载 ${src}`));
     document.body.appendChild(s);
   })));
-  // The MemBrain-seg model picker, segmentation labels, the 3D view of Z stacks and its segmentation surfaces, CTF fitting in the FFT panel, drift correction, the Cryo-ET workspace, the single-particle workspace, diffraction indexing, denoising, missing-wedge correction, spectrum quantification, 4D-STEM and particle statistics (in this order).
-  for (const src of ["pro/model-store.js", "pro/membrane.js", "pro/labels.js", "pro/volume.js", "pro/surfaces.js", "pro/ctf.js", "pro/align.js", "pro/cryoet/index.js", "pro/cryoet/motion.js", "pro/cryoet/ctf.js", "pro/cryoet/align.js", "pro/cryoet/recon.js", "pro/cryoet/post.js", "pro/spa/index.js", "pro/spa/mics.js", "pro/spa/ctf.js", "pro/spa/pick.js", "pro/spa/class2d.js", "pro/spa/initial.js", "pro/spa/refine.js", "pro/spa/auto.js", "pro/diffraction.js", "pro/denoise.js", "pro/wedge.js", "pro/spectro.js", "pro/stem4d.js", "pro/particles.js"]) {
+  // The MemBrain-seg model picker, segmentation labels, the 3D view of Z stacks and its segmentation surfaces, CTF fitting in the FFT panel, drift correction, the Cryo-ET workspace (its rules, the docked live picture, the folder flow), the single-particle workspace, diffraction indexing, denoising, missing-wedge correction, spectrum quantification, 4D-STEM and particle statistics (in this order).
+  for (const src of ["pro/model-store.js", "pro/membrane.js", "pro/labels.js", "pro/volume.js", "pro/surfaces.js", "pro/ctf.js", "pro/align.js", "pro/cryoet/rules.js", "pro/cryoet/live.js", "pro/cryoet/index.js", "pro/cryoet/session.js", "pro/cryoet/motion.js", "pro/cryoet/ctf.js", "pro/cryoet/align.js", "pro/cryoet/recon.js", "pro/cryoet/post.js", "pro/spa/index.js", "pro/spa/mics.js", "pro/spa/ctf.js", "pro/spa/pick.js", "pro/spa/class2d.js", "pro/spa/initial.js", "pro/spa/refine.js", "pro/spa/auto.js", "pro/sta/index.js", "pro/sta/wall.js", "pro/sta/draw.js", "pro/sta/found.js", "pro/sta/shapes.js", "pro/cryoet/jobs.js", "pro/diffraction.js", "pro/denoise.js", "pro/wedge.js", "pro/spectro.js", "pro/stem4d.js", "pro/particles.js"]) {
     const s = document.createElement("script");
     s.src = src;
     s.async = false;

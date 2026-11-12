@@ -400,10 +400,15 @@ fn sorted_input_and_shared_even_odd_geometry() {
         halves: true,
         phase_flip: false,
         ctf_3d: false,
+        label: None,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
     assert!(out.paths[0].ends_with("ts_wbp_b2.mrc") && out.paths[1].ends_with("ts_wbp_b2_even.mrc"));
+    // A new project: the tomograms and their dataset go to `2_tomograms/`.
+    let root = Path::new(&imgs[0].info().path).parent().unwrap().to_path_buf();
+    assert!(out.paths.iter().all(|p| Path::new(p).parent() == Some(root.join("2_tomograms").as_path())), "{:?}", out.paths);
+    assert!(root.join("2_tomograms/ts.tomo.json").is_file() && !root.join("ts.tomo.json").exists());
     let open = |path: &str| OpenImage::new(9, crate::formats::open(Path::new(path)).unwrap(), 1 << 20);
     use std::path::Path;
     let e = open(&out.paths[1]);
@@ -420,6 +425,17 @@ fn sorted_input_and_shared_even_odd_geometry() {
     let again = dataset::Dataset::open(&imgs[0].info().path, 5, None).unwrap();
     assert_eq!(again.tomograms.len(), 3);
     assert_eq!(again.tomograms[0].halves.as_ref().unwrap()[1], out.paths[2]);
+    // A labelled step (the look tomogram) names the halves too, and leaves the unlabelled ones as they are.
+    let mut labelled = d.clone();
+    let tagged = pipeline::reconstruct(&mut labelled, &pipeline::ReconStep { label: Some("look".into()), ..step.clone() }, &|_, _, _| {}).unwrap();
+    assert!(tagged.paths[0].ends_with("ts_wbp_b2_look.mrc") && tagged.paths[1].ends_with("ts_wbp_b2_look_even.mrc") && tagged.paths[2].ends_with("ts_wbp_b2_look_odd.mrc"), "{:?}", tagged.paths);
+    // The look companion (and its halves) is made to look at: `3_clean/`.
+    assert!(tagged.paths.iter().all(|p| Path::new(p).parent() == Some(root.join("3_clean").as_path())), "{:?}", tagged.paths);
+    assert_eq!(labelled.tomograms.len(), 6);
+    assert!(out.paths.iter().all(|p| labelled.tomograms.iter().any(|t| &t.path == p)));
+    for p in &tagged.paths {
+        std::fs::remove_file(p).unwrap();
+    }
     d.optics.pixel_a = Some(2.276);
     let files = export::run(&d, "relion5", dir.path().to_str().unwrap(), 1, &|_, _| {}).unwrap();
     let series = std::fs::read_to_string(&files[1]).unwrap();
@@ -587,5 +603,152 @@ fn depth_and_strip_defocus_make_the_beam_height() {
         let strip = g as f64 * 2.0 * f64::to_radians(theta).tan() * d;
         let total = strip + ctf::depth_defocus(v, theta, g, 2.0);
         assert!((total + g as f64 * 2.0 * h).abs() < 1e-9, "{total} vs {}", -(g as f64) * 2.0 * h);
+    }
+}
+
+/// Beads at known places in a synthetic series (axis 90°, so the aligned
+/// views are the stack itself), reconstructed at bin 2 and bin 4 with
+/// `auto::reconstruct_look` (the code `auto::run` uses for the STA look
+/// tomogram): the centroid of each bead in the raw volume must equal
+/// `scale × look + offset`, and the raw one must sit where the bead was put.
+/// Odd output sizes (cropped remainder) and a fractional depth offset are
+/// part of it.
+fn look_mapping(w: usize, h: usize, thickness: usize, z_offset: f64) {
+    let dir = tempfile::tempdir().unwrap();
+    let px = 3.0;
+    // Beads: physical offsets from the volume's centre in stack pixels, and
+    // the depth in the specimen frame (z_offset moves the volume, not them).
+    let beads = [[-30.0, -26.0, 4.0], [28.0, -22.0, -9.0], [-26.0, 24.0, 11.0], [30.0, 26.0, -3.0], [0.0, 0.0, 14.0]];
+    let sigma = 4.5;
+    let angles: Vec<f64> = (-20..=20).map(|i| i as f64 * 3.0).collect();
+    let mut data = Vec::new();
+    for &a in &angles {
+        let (s, c) = a.to_radians().sin_cos();
+        let mut v = vec![0f32; w * h];
+        for b in &beads {
+            let q = [c * b[0] + s * b[2] + (w - 1) as f64 / 2.0, b[1] + (h - 1) as f64 / 2.0];
+            for y in 0..h {
+                for x in 0..w {
+                    let r2 = (x as f64 - q[0]).powi(2) + (y as f64 - q[1]).powi(2);
+                    v[y * w + x] += (-r2 / (2.0 * sigma * sigma)).exp() as f32;
+                }
+            }
+        }
+        data.extend(v);
+    }
+    let stack = dir.path().join("beads.mrc").to_string_lossy().into_owned();
+    output::write_mrc(&stack, &data, [w, h, angles.len()], px, false).unwrap();
+    let mut d = dataset::Dataset::open(&stack, angles.len(), Some(px)).unwrap();
+    d.angles = angles.clone();
+    d.alignment = Some(Alignment {
+        width: w,
+        height: h,
+        bin: 1,
+        axis: 90.0,
+        patch: track::PatchConfig { nx: 2, ny: 2, size: 8 },
+        residual: 0.0,
+        quality: quality(0.0).into(),
+        views: angles
+            .iter()
+            .enumerate()
+            .map(|(i, &angle)| View { file_index: i, angle, residual: 0.0, shift: [0.0; 2], mag: 1.0, rotation: 0.0, tilt: angle, cc: 1.0, contours: 10, flagged: false, excluded: false })
+            .collect(),
+        tracks: track::Tracks { observations: vec![], points: 0, cc: vec![], counts: vec![], ms: 0.0, cpu_pair_ms: 0.0, gpu_pair_ms: None, backend: String::new() },
+        ms: 0.0,
+        tilt_offset: 0.0,
+    });
+    let raw_step = pipeline::ReconStep {
+        bin: 2,
+        params: Params { thickness, z_offset, backend: "cpu".into(), ..Default::default() },
+        halves: false,
+        phase_flip: false,
+        ctf_3d: false,
+        label: None,
+    };
+    let raw = pipeline::reconstruct(&mut d, &raw_step, &|_, _, _| {}).unwrap().paths.remove(0);
+    // A display tomogram the user already has, at the look's binning (the name
+    // the look tomogram used to take).
+    let display = pipeline::reconstruct(&mut d, &pipeline::ReconStep { bin: 4, ..raw_step.clone() }, &|_, _, _| {}).unwrap().paths.remove(0);
+    let display_bytes = std::fs::read(&display).unwrap();
+    let (path, look) = auto::reconstruct_look(&mut d, &raw_step, &|_, _, _| {}).unwrap().unwrap();
+    assert_eq!(path, look.path);
+    // The look has a name of its own, and the display tomogram and its entry survive untouched.
+    assert!(look.path.ends_with("beads_wbp_b4_look.mrc") && display.ends_with("beads_wbp_b4.mrc"), "{} {display}", look.path);
+    assert_ne!(look.path, display);
+    assert!(d.tomograms.iter().any(|t| t.path == display && t.kind == "full"));
+    assert!(d.tomograms.iter().any(|t| t.path == look.path));
+    assert_eq!(std::fs::read(&display).unwrap(), display_bytes);
+    assert_eq!(look.scale, 2.0);
+    let (rv, rs, _) = pipeline::load(&raw).unwrap();
+    let (lv, ls, _) = pipeline::load(&look.path).unwrap();
+    assert_eq!(rs, [w / 2, h / 2, thickness]);
+    assert_eq!(ls, [w / 4, h / 4, thickness.div_ceil(2)]);
+    // Centroid of the bead near `at` (voxel index, may be fractional).
+    let find = |v: &[f32], s: [usize; 3], at: [f64; 3], reach: isize| -> [f64; 3] {
+        let at_i = at.map(|x| x.round() as isize);
+        let get = |p: [isize; 3]| v[(p[2] as usize * s[1] + p[1] as usize) * s[0] + p[0] as usize];
+        let inside = |p: [isize; 3]| (0..3).all(|k| p[k] >= 0 && p[k] < s[k] as isize);
+        let mut peak = f32::MIN;
+        for z in -reach..=reach {
+            for y in -reach..=reach {
+                for x in -reach..=reach {
+                    let p = [at_i[0] + x, at_i[1] + y, at_i[2] + z];
+                    if inside(p) {
+                        peak = peak.max(get(p));
+                    }
+                }
+            }
+        }
+        let (mut sum, mut c) = (0.0, [0.0; 3]);
+        for z in -reach - 2..=reach + 2 {
+            for y in -reach - 2..=reach + 2 {
+                for x in -reach - 2..=reach + 2 {
+                    let p = [at_i[0] + x, at_i[1] + y, at_i[2] + z];
+                    if inside(p) {
+                        let wt = (get(p) - 0.5 * peak).max(0.0) as f64;
+                        sum += wt;
+                        for k in 0..3 {
+                            c[k] += wt * p[k] as f64;
+                        }
+                    }
+                }
+            }
+        }
+        c.map(|x| x / sum)
+    };
+    let (mut worst_map, mut worst_abs) = (0f64, 0f64);
+    for b in &beads {
+        // Where the bead should be in the raw volume (bin 2: depth b[2]/2).
+        let expect = [b[0] / 2.0 + (rs[0] - 1) as f64 / 2.0, b[1] / 2.0 + (rs[1] - 1) as f64 / 2.0, b[2] / 2.0 + (thickness - 1) as f64 / 2.0 - z_offset];
+        let r = find(&rv, rs, expect, 4);
+        let l = find(&lv, ls, std::array::from_fn(|k| (expect[k] - look.offset[k]) / look.scale), 3);
+        let mapped: [f64; 3] = std::array::from_fn(|k| look.scale * l[k] + look.offset[k]);
+        let dm = (0..3).map(|k| (mapped[k] - r[k]).abs()).fold(0.0, f64::max);
+        let da = (0..3).map(|k| (r[k] - expect[k]).abs()).fold(0.0, f64::max);
+        eprintln!("bead {b:?}: raw {r:.2?} expected {expect:.2?} look {l:.2?} → {mapped:.2?} (map off by {dm:.2}, raw off by {da:.2})");
+        worst_map = worst_map.max(dm);
+        worst_abs = worst_abs.max(da);
+    }
+    eprintln!("{w}x{h}x{thickness} z_offset {z_offset}: offset {:?}, worst mapping error {worst_map:.3} raw voxels, raw centroid vs placed {worst_abs:.3}", look.offset);
+    assert!(worst_map < 0.3, "mapping off by {worst_map}");
+    assert!(worst_abs < 0.5, "raw volume off by {worst_abs}");
+}
+
+#[test]
+fn look_tomogram_maps_onto_the_raw_one() {
+    // Odd sizes after binning (65×63 raw, 32×31 look: the remainder is
+    // cropped), thickness 48 and a fractional depth offset.
+    look_mapping(130, 126, 48, 3.7);
+    // An odd thickness (look rounds up) and the offset the other way.
+    look_mapping(128, 128, 49, -2.2);
+}
+
+#[test]
+fn look_map_of_even_grids_is_half_a_voxel() {
+    let g = |bin, n: [usize; 3], z_offset| auto::Grid { bin, n, z_offset };
+    let (scale, off) = auto::look_map(g(2, [64, 64, 48], 3.7), g(4, [32, 32, 24], 1.85));
+    assert_eq!(scale, 2.0);
+    for o in off {
+        assert!((o - 0.5).abs() < 1e-12, "{off:?}");
     }
 }

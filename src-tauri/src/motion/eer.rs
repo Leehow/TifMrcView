@@ -1,5 +1,5 @@
 //! Native EER grouping. TIFF parses directories only; shared event decoding
-//! reads mapped strips in parallel, at most four fractions at once. Raw
+//! counts mapped fractions in parallel, each worker into its own frame. Raw
 //! fractions are never materialised as full-resolution images.
 use anyhow::{bail, Context, Result};
 use memmap2::Mmap;
@@ -85,61 +85,67 @@ impl Eer {
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
+    /// Adds the events of one fraction to `acc` (the rendered frame, `up`
+    /// times the detector's size).
+    fn count(&self, f: &Fraction, up: usize, acc: &mut [u16]) -> Result<()> {
+        let rw = self.w * up;
+        for (j, &(off, len)) in f.strips.iter().enumerate() {
+            let y0 = j * f.rows;
+            if y0 >= self.h {
+                bail!("EER strip 行数超限");
+            }
+            let rows = f.rows.min(self.h - y0);
+            let src = &self.map[off..off + len];
+            if f.compression == 1 {
+                if src.len() < rows * self.w {
+                    bail!("EER 原始 strip 截断");
+                }
+                for (i, &n) in src[..rows * self.w].iter().enumerate() {
+                    let at = ((y0 + i / self.w) * up) * rw + (i % self.w) * up;
+                    acc[at] = acc[at].saturating_add(n as u16);
+                }
+            } else {
+                events::events(src, rows * self.w, f.bits, |p, sx, sy| {
+                    let (dx, dy) = if up == 2 {
+                        (events::subpixel_2x(sx, f.bits.1), events::subpixel_2x(sy, f.bits.2))
+                    } else {
+                        (0, 0)
+                    };
+                    let at = ((y0 + p / self.w) * up + dy) * rw + (p % self.w) * up + dx;
+                    acc[at] = acc[at].saturating_add(1);
+                })
+                .map_err(anyhow::Error::msg)?;
+            }
+        }
+        Ok(())
+    }
     pub fn group(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
         if ![1, 2].contains(&up) || start >= self.len() || count == 0 {
             bail!("EER 分组或超分辨率参数无效");
         }
         let end = (start + count).min(self.len());
         let rw = self.w * up;
-        let mut out = vec![0.0; rw * self.h * up];
-        for chunk in self.frames[start..end].chunks(4) {
-            super::check_cancel()?;
-            let decoded: Vec<Vec<usize>> = chunk
-                .par_iter()
-                .map(|f| -> Result<Vec<usize>> {
-                    let mut hits = vec![];
-                    for (j, &(off, len)) in f.strips.iter().enumerate() {
-                        let y0 = j * f.rows;
-                        if y0 >= self.h {
-                            bail!("EER strip 行数超限");
-                        }
-                        let rows = f.rows.min(self.h - y0);
-                        let src = &self.map[off..off + len];
-                        if f.compression == 1 {
-                            if src.len() < rows * self.w {
-                                bail!("EER 原始 strip 截断");
-                            }
-                            for (i, &n) in src[..rows * self.w].iter().enumerate() {
-                                for _ in 0..n {
-                                    hits.push(((y0 + i / self.w) * up) * rw + (i % self.w) * up);
-                                }
-                            }
-                        } else {
-                            events::events(src, rows * self.w, f.bits, |p, sx, sy| {
-                                let (dx, dy) = if up == 2 {
-                                    (
-                                        events::subpixel_2x(sx, f.bits.1),
-                                        events::subpixel_2x(sy, f.bits.2),
-                                    )
-                                } else {
-                                    (0, 0)
-                                };
-                                hits.push(
-                                    ((y0 + p / self.w) * up + dy) * rw + (p % self.w) * up + dx,
-                                );
-                            })
-                            .map_err(anyhow::Error::msg)?;
-                        }
-                    }
-                    Ok(hits)
-                })
-                .collect::<Result<_>>()?;
-            for hits in decoded {
-                for i in hits {
-                    out[i] += 1.0;
+        let len = rw * self.h * up;
+        // Every worker counts the events of its share of the fractions into
+        // a frame of its own (two bytes a pixel), and the frames are added
+        // up: no list of events is kept and no worker waits for another.
+        // At most about 1 GB of such frames at once.
+        let workers = rayon::current_num_threads().clamp(1, ((1usize << 30) / (2 * len)).max(1));
+        let fractions = &self.frames[start..end];
+        let share = fractions.len().div_ceil(workers).max(1);
+        let parts: Vec<Vec<u16>> = fractions
+            .par_chunks(share)
+            .map(|chunk| -> Result<Vec<u16>> {
+                let mut acc = vec![0u16; len];
+                for f in chunk {
+                    super::check_cancel()?;
+                    self.count(f, up, &mut acc)?;
                 }
-            }
-        }
+                Ok(acc)
+            })
+            .collect::<Result<_>>()?;
+        let mut out = vec![0.0f32; len];
+        out.par_iter_mut().enumerate().for_each(|(i, o)| *o = parts.iter().map(|p| p[i] as u32).sum::<u32>() as f32);
         Ok(out)
     }
 }

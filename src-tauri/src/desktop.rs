@@ -1350,6 +1350,9 @@ async fn membrane_segment(app: AppHandle, token: u64, c: usize, t: usize, guard:
             let (zs, label, vesicles) = crate::membrane::apply(&mut e.labels, &seg.mask, Some(&tubes), n, pixel_a as f32, guard);
             let voxels = seg.mask.iter().filter(|&&b| b).count();
             eprintln!("membrane: {} components, {voxels} voxels, {} copies, {backend}, {:.1} s", seg.components, seg.stats.copies, started.elapsed().as_secs_f32());
+            if let Some(note) = &seg.stats.cut_short {
+                eprintln!("membrane: {note}");
+            }
             Ok(MembraneResult {
                 labels: labels_state(&e, zs),
                 label,
@@ -1451,6 +1454,13 @@ struct Folder {
     index: Option<usize>,
     /// Z stacks an acquisition project file makes of this folder's slices.
     stacks: Vec<StackEntry>,
+    /// Pro, inside a cryo-ET project: the step group of each file
+    /// (`raw|motion|aligned|tomograms|clean|sta`), parallel to `files`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<String>>,
+    /// The project folder `files` come from (set with `steps`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1486,6 +1496,22 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
     blocking(move || {
         let p = PathBuf::from(&path);
         let dir = if p.is_dir() { p.clone() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
+        #[cfg(feature = "pro")]
+        if !p.is_dir() {
+            if let Some(root) = crate::project_dirs::listing_root(&dir) {
+                let listed = crate::project_dirs::list_project(
+                    &root,
+                    |f| formats::is_supported(f) && !crate::labels::is_labels_file(f),
+                    natural_cmp,
+                );
+                let index = listed.iter().position(|(f, _)| Path::new(f) == p);
+                let sizes = listed.iter().map(|(f, _)| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
+                let steps = listed.iter().map(|(_, g)| g.to_string()).collect();
+                let files = listed.into_iter().map(|(f, _)| f).collect();
+                let root: PathBuf = root.components().collect();
+                return Ok(Folder { files, sizes, index, stacks: vec![], steps: Some(steps), root: Some(root.to_string_lossy().into_owned()) });
+            }
+        }
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -1497,7 +1523,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let index = files.iter().position(|f| Path::new(f) == p);
         let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
         let dir: PathBuf = dir.components().collect();
-        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir) })
+        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir), steps: None, root: None })
     })
     .await
 }
@@ -1864,6 +1890,76 @@ async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>)
     }).await
 }
 
+/// The tilt series of a folder and how far each has come (`tomo::session`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_session(folder: String) -> CmdResult<crate::tomo::session::Session> {
+    blocking(move || crate::tomo::session::scan(&folder)).await
+}
+
+#[cfg(feature = "pro")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TomoSessionRun {
+    folder: String,
+    /// None: the first pass (movies, a look at the views, alignment, a
+    /// quick tomogram); else the tomograms for this purpose.
+    purpose: Option<crate::tomo::auto::Purpose>,
+    /// Only these series (by name); empty: all that are due.
+    #[serde(default)]
+    only: Vec<String>,
+}
+
+/// Runs a pass over the folder's series; `tomo-session` is emitted whenever
+/// a series has come further, `tomo-progress` as for the single steps.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_session_run(app: AppHandle, req: TomoSessionRun) -> CmdResult<crate::tomo::session::Session> {
+    let _job = TomoJob::begin()?;
+    let motion = MotionJob::begin(true)?;
+    blocking(move || {
+        let (_job, _motion) = (_job, motion);
+        let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
+        let emit = tomo_emit(&app);
+        let changed = || { let _ = app.emit("tomo-session", serde_json::json!({ "folder": req.folder })); };
+        // The wall follows a long step too, not only its end.
+        let told = std::sync::Mutex::new(std::time::Instant::now());
+        let emit = |stage: &str, done: usize, total: usize| {
+            emit(stage, done, total);
+            let mut t = told.lock().unwrap_or_else(|e| e.into_inner());
+            if t.elapsed().as_secs() >= 2 {
+                *t = std::time::Instant::now();
+                changed();
+            }
+        };
+        match req.purpose {
+            None => crate::tomo::session::prepare(dev, &req.folder, &req.only, &emit, &changed),
+            Some(p) => crate::tomo::session::finish(dev, &req.folder, p, &req.only, &emit, &changed),
+        }
+    }).await
+}
+
+/// A section of an image of the project as a small picture (`session::view`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_view(path: String, z: Option<usize>, max: usize) -> Result<Response, String> {
+    blocking(move || crate::tomo::session::view(&path, z, max)).await.map(Response::new)
+}
+
+/// The user's choice for one view of a series (`keep` null: the program's again).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_pick(stack: String, z: usize, keep: Option<bool>) -> CmdResult<crate::tomo::dataset::Dataset> {
+    blocking(move || crate::tomo::session::pick(&stack, z, keep)).await
+}
+
+/// The user's choice for a whole series (`take` null: the program's again).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_take(stack: String, take: Option<bool>) -> CmdResult<crate::tomo::dataset::Dataset> {
+    blocking(move || crate::tomo::session::take(&stack, take)).await
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>) -> CmdResult<serde_json::Value> {
@@ -1896,6 +1992,8 @@ fn tomo_cancel() {
     crate::denoise_learn::CANCEL.store(true, Ordering::SeqCst);
     crate::wedge::CANCEL.store(true, Ordering::SeqCst);
     crate::ctf::CANCEL.store(true, Ordering::SeqCst);
+    // A pass over a folder also corrects movies.
+    if MOTION_RUNNING.load(Ordering::SeqCst) { crate::motion::cancel(); }
 }
 
 #[cfg(feature = "pro")]
@@ -1907,7 +2005,11 @@ impl TomoJob {
     fn begin() -> CmdResult<Self> {
         use std::sync::atomic::Ordering;
         TOMO_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "断层任务正在运行".to_string())?;
+        // Everything `tomo_cancel` raises: a stop of the last job must not stop this one.
         crate::tomo::CANCEL.store(false, Ordering::SeqCst);
+        crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
+        crate::wedge::CANCEL.store(false, Ordering::SeqCst);
+        crate::ctf::CANCEL.store(false, Ordering::SeqCst);
         Ok(Self)
     }
 }
@@ -2129,6 +2231,496 @@ impl SpaJob {
 #[cfg(feature = "pro")]
 impl Drop for SpaJob {
     fn drop(&mut self) { SPA_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
+/// Subtomogram averaging (Pro): the whole of `sta::auto` for tomograms of a
+/// cryo-ET dataset. Reports `sta-progress` {label, done, total}, `sta-live`
+/// {png} (intermediate averages) and `sta-note` {kind, …}; returns
+/// `sta::auto::outcome_value` ({needsChoice, report, result, cards, chosen, auto, out, trials}).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_run(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, out: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(out.as_deref(), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        crate::sta::auto::run_inputs(&inputs, pick, out.as_deref(), &device, &emit, &base64)
+    }).await
+}
+
+/// The cards saved in an output folder, each with its slices as base64 PNG,
+/// size, members, trial and the `good` / `chosen` marks.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_cards(out: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::auto::cards_value(std::path::Path::new(&out), &base64)).await
+}
+
+/// The average saved in an output folder (slices PNG, FSC, resolution, particles,
+/// `used`: what it was made from), or null. With several (the automatic one
+/// in `out`, `out/marked`, `out/drawn`) the newest, or the one `which` names
+/// ("auto", "points", "drawn", "own"); `which` and `available` say which and what there is.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_result(out: String, which: Option<String>) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || crate::sta::review::result_pick(std::path::Path::new(&out), which.as_deref(), &base64)).await
+}
+
+/// The default output folder for these tomograms: beside the first one
+/// (beside its tomogram when that is a look companion).
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_out(first: String) -> String {
+    crate::sta::auto::out_of(&first).to_string_lossy().into_owned()
+}
+
+/// Gives the pixel size the user filled in for the project (`sta::pixel`) to
+/// its tomograms: `out` is the output folder (default: beside the first input).
+#[cfg(feature = "pro")]
+fn sta_apply_pixel(out: Option<&str>, inputs: &[String]) {
+    let out = out.map(std::path::PathBuf::from).or_else(|| inputs.first().map(|f| crate::sta::auto::out_of(f)));
+    if let Some(out) = out {
+        crate::sta::pixel::apply(&out, inputs);
+    }
+}
+
+/// The tomograms among `files` whose pixel size is not known (the header has 0
+/// or 1, no mdoc), after the one saved for the project `out` was given to them
+/// (`sta::pixel`): the paths still to ask for.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_pixel_needed(out: String, files: Vec<String>) -> Vec<String> {
+    blocking(move || Ok(crate::sta::pixel::needed(std::path::Path::new(&out), &files))).await.unwrap_or_default()
+}
+
+/// Remembers the pixel size (Å) the user gave for `files` in the project
+/// folder `out` (`<out>/pixel.json`) and uses it at once.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_pixel_set(out: String, files: Vec<String>, pixel_a: f64) -> CmdResult<()> {
+    crate::sta::pixel::set(std::path::Path::new(&out), &files, pixel_a).map_err(|e| e.to_string())
+}
+
+/// The tomograms to average together with the open file (a tomogram or its
+/// look companion): `sta::auto::siblings`, [{raw, look, lookScale, lookOffset, name, open}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_siblings(path: String) -> Vec<crate::sta::auto::Sibling> {
+    crate::sta::auto::siblings(&path)
+}
+
+/// The tomograms of the project of `path` (the open file, or a folder), as
+/// tiles without thumbnails (`sta::gallery::tiles`): [{name, raw, look, stack,
+/// status: "ready" | "noLook" | "notBuilt" | "unusable", reason, open}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_gallery(path: String) -> CmdResult<Vec<crate::sta::gallery::Tile>> {
+    blocking(move || Ok(crate::sta::gallery::tiles(&path))).await
+}
+
+/// The thumbnail of a tomogram file (made once, then kept on disk by
+/// `sta::gallery::thumbnail`): {dataUrl: "data:image/png;base64,…", section}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_thumbnail(file: String) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let (png, section) = crate::sta::gallery::thumbnail(&file)?;
+        let bytes = std::fs::read(&png)?;
+        Ok(serde_json::json!({"dataUrl": format!("data:image/png;base64,{}", base64(&bytes)), "section": section}))
+    }).await
+}
+
+/// "Mark it yourself" (Pro): the marks made on the tomogram are completed to
+/// shapes and averaged (`sta::marks`). Same events and result as `sta_run`;
+/// the average goes to `<out>/drawn`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_run_drawn(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, out: Option<String>, size: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(out.as_deref(), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        crate::sta::marks::run_marks(&inputs, &marks, size.as_deref(), out.as_deref(), &device, &emit, &base64)
+    }).await
+}
+
+/// "Find them all" (Pro), the first half of the particle routes: the template
+/// search runs alone and what it found is saved in `found.json` for the user
+/// to check (`sta::review`). `pick` (a card of `out`) or else `marks` (the
+/// clicked particles, 1 to 3 are examples) names the example, or `which`
+/// "own" says the map brought with `sta_own_map` is (`pick` and `marks` are
+/// then not read), or `which` "circled" that the examples circled in `marks`
+/// (kind "example": the centre and a point of the circle) are, whatever they
+/// show (`sta::circled`); `out` is the output folder. When shapes were marked for
+/// `out` (`sta_shapes_review`) the places are also checked against them. Same events as `sta_run`; returns the review of the first
+/// tomogram (see `sta_review`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_find(app: AppHandle, inputs: Vec<String>, pick: Option<usize>, marks: Option<Vec<crate::sta::marks::Mark>>, out: String, which: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        if which.as_deref() == Some(crate::sta::review::OWN) {
+            return crate::sta::review::find_own(&inputs, &out, &device, &emit, &base64);
+        }
+        if which.as_deref() == Some(crate::sta::review::CIRCLED) {
+            return crate::sta::review::find_circled(&inputs, &marks.unwrap_or_default(), &out, &device, &emit, &base64);
+        }
+        match (pick, marks) {
+            (Some(n), _) => crate::sta::review::find_card(&inputs, n, &out, &device, &emit, &base64),
+            (None, Some(m)) => crate::sta::review::find_points(&inputs, &m, &out, &device, &emit, &base64),
+            (None, None) => Err(anyhow::anyhow!("请先选一张卡片，或在颗粒上点几下")),
+        }
+    }).await
+}
+
+/// What was found in `out` (`which`: "card" for the cards' route, "marked" for
+/// clicked particles, "circled" for circled examples, "own" for a map the user brought) as the review of the open file `tomogram` (a searched
+/// tomogram or its look companion), or null when nothing was found there:
+/// {total, keep, kept, sure, unsure, limit, removed, added, perTomogram:
+/// [{name, path, kept}], scores, etaSeconds, places: [{i, pos, score, state}],
+/// radius, open, route, card, stale, foundMs, averageMs, onShapes: {available,
+/// on, near, standing, kinds}, again: {out, in, ran}}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review(out: String, which: String, tomogram: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || {
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        crate::sta::review::review(&dir, &tomogram)
+    }).await
+}
+
+/// Changes the user's edits of a review and returns it (`sta_review`): `keep`
+/// (the slider), `toggle` (a place's index: kept to removed and back, below to
+/// added and back), `addAt` (a click, [x, y, z] in voxels of `tomogram`, where
+/// no circle is: the nearest place within a radius is added, else an error),
+/// `reset` (back to the program's suggestion), `onShapes` (only the places on
+/// the shapes the user marked count, or all again), `undoAgain` (takes back
+/// what `sta_review_again` did, nothing else), `group` ({like, size, on}: for
+/// circled examples, ticks or unticks the places that are like example `like`
+/// at size `size`; the review's `circled.groups` lists them).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_set(out: String, which: String, tomogram: String, keep: Option<usize>, toggle: Option<usize>, add_at: Option<[f64; 3]>, reset: Option<bool>, on_shapes: Option<bool>, undo_again: Option<bool>, group: Option<crate::sta::review::GroupEdit>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        let edit = crate::sta::review::Edit { keep, toggle, add_at, reset: reset.unwrap_or(false), on_shapes, undo_again: undo_again.unwrap_or(false), group };
+        crate::sta::review::set_review(&dir, &tomogram, &edit)
+    }).await
+}
+
+/// The picture of place `i` of a review (circled examples: the section the
+/// user drew on, around the place; written when the places were found):
+/// "data:image/png;base64,…".
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_tile(out: String, which: String, i: usize) -> CmdResult<String> {
+    blocking(move || {
+        let png = crate::sta::review::tile_path(&crate::sta::review::dir_of(&out, &which)?, i);
+        let bytes = std::fs::read(&png).map_err(|e| anyhow::anyhow!("{}: {e}", png.display()))?;
+        Ok(format!("data:image/png;base64,{}", base64(&bytes)))
+    }).await
+}
+
+/// "Find again" (Pro): the places the user did not click are judged again by
+/// what the user kept and dropped (`sta::review::find_again`); needs two kept
+/// and one dropped by hand, else the error 「先去掉几个不要的，再按这个」.
+/// Same events as `sta_find`; returns the review of `tomogram` (default: the
+/// first of the search), with `again: {out, in, ran}`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_review_again(app: AppHandle, out: String, which: String, tomogram: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        let open = tomogram.or_else(|| crate::sta::review::load(&dir).and_then(|s| s.inputs.first().cloned())).unwrap_or_default();
+        crate::sta::review::find_again(&dir, &open, &emit, &base64)
+    }).await
+}
+
+/// "Use a map I already have" (Pro): the MRC or EM file `map` becomes a card
+/// for the tomograms of `inputs` and is kept under `out` (a second map
+/// replaces the first); `which: "own"` then goes through `sta_find`,
+/// `sta_review`, `sta_review_set` and `sta_average_found` like the other
+/// routes. Returns {card, png (the card's slices, as the cards have), name,
+/// assumed (the map did not say its voxel size: the tomogram's was taken),
+/// changed (the file is gone or changed since)}. Errors are Chinese sentences.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_own_map(map: String, inputs: Vec<String>, out: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::review::own_map(&inputs, &map, &out, &base64)).await
+}
+
+/// The map kept by `sta_own_map` for `out` (same answer), or null.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_own_saved(out: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || Ok(crate::sta::review::own_saved(&out, &base64))).await
+}
+
+/// The file dialog of 「用现成的密度图」: an MRC or EM map; its path, or null when the user cancels.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_pick_map(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog().file().set_title("选一张现成的密度图").add_filter("密度图（MRC 或 EM 格式）", &["mrc", "map", "rec", "em", "MRC", "MAP", "REC", "EM"]).blocking_pick_file().and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Averages what the review of `out`/`which` keeps (second half of the
+/// particle routes). Same events and result as `sta_run` with a card (or as
+/// `sta_run_drawn` for clicked particles).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_average_found(app: AppHandle, out: String, which: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        let device = || match crate::ctf_gpu::device() {
+            Some((dev, name)) => Ok((dev, *name)),
+            None => Err(anyhow::anyhow!("没有可用 GPU")),
+        };
+        let dir = crate::sta::review::dir_of(&out, &which)?;
+        crate::sta::review::average_found(&dir, &device, &emit, &base64)
+    }).await
+}
+
+/// "Find them all" for membranes and vesicles (Pro): the painted membranes or
+/// marked spheres of `marks` are the examples; every membrane and vesicle like
+/// them is found in the files of `inputs` (`sta::shapes`) and saved in
+/// `<out>/drawn/shapes.json` for the user to check. Returns `{needSegment:
+/// [files]}` when some file has no membrane segmentation (nothing was done:
+/// run `sta_membrane_segment` on each and call again), else the review of the
+/// first tomogram (see `sta_shapes_review`). Same events as `sta_run`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_find(app: AppHandle, inputs: Vec<String>, marks: Vec<crate::sta::marks::Mark>, size: Option<String>, out: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::shapes::find_shapes(&inputs, &marks, size.as_deref(), &out, &emit, &base64)
+    }).await
+}
+
+/// What `sta_shapes_find` found in `out` as the review of the open file
+/// `tomogram` (a searched tomogram or its look companion), or null when
+/// nothing was found: {total, kept, dropped, flipped, membranes, balls,
+/// lines, unsure, seeds, perTomogram: [{name, path, membranes, balls}],
+/// items: [{id, kind: "membrane"|"ball", example, state: "kept"|"dropped",
+/// sideSure, flipped, centre, radius?, voxels?, arrows: [{pos, axis}]}],
+/// open, etaSeconds, stale, needSegment: [], out, foundMs, averageMs}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_review(out: String, tomogram: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || Ok(crate::sta::shapes::review(&crate::sta::shapes::dir_of(&out), &tomogram))).await
+}
+
+/// The voxels membrane item `id` takes on section `z` of the open file
+/// `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight. Empty
+/// for vesicles.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_section(out: String, id: usize, tomogram: String, z: usize) -> CmdResult<Vec<[usize; 3]>> {
+    blocking(move || {
+        let dir = crate::sta::shapes::dir_of(&out);
+        match crate::sta::shapes::load(&dir) {
+            Some(s) => crate::sta::shapes::section_runs(&s, &dir, id, &tomogram, z),
+            None => Ok(vec![]),
+        }
+    }).await
+}
+
+/// Changes the user's edits of the shapes review and returns it (`sta_shapes_review`):
+/// `drop` (an item's id: dropped, or taken back), `flip` (an item's id: turned
+/// to the other side), `flipAll`, `reset` (the program's suggestion), `only`
+/// (ids: exactly these are kept).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_set(out: String, tomogram: String, drop: Option<usize>, flip: Option<usize>, flip_all: Option<bool>, reset: Option<bool>, only: Option<Vec<usize>>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let edit = crate::sta::shapes::Edit { drop, flip, flip_all: flip_all.unwrap_or(false), reset: reset.unwrap_or(false), only };
+        crate::sta::shapes::set_review(&crate::sta::shapes::dir_of(&out), &tomogram, &edit)
+    }).await
+}
+
+/// Averages what the shapes review of `out` keeps (second half). Same events
+/// and result as `sta_run_drawn`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_shapes_average(app: AppHandle, out: String) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &[]);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::shapes::average_shapes(&out, &emit, &base64)
+    }).await
+}
+
+/// "Are there different kinds?" (Pro): the particles of the average `which`
+/// ("auto", "points", "drawn", "own"; none: the newest) of `out` are sorted into
+/// kinds (`sta::placed::run_kinds`). Events as `sta_run`. Returns {kinds: [{id
+/// (from 1), count, share (0–1), map, png (base64, three sections)}], apart,
+/// particles, voxelA, dir, fromTiltImages}; `kinds` is empty when the
+/// particles are of one kind as far as can be told.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds(app: AppHandle, inputs: Vec<String>, out: String, which: Option<String>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::placed::run_kinds(&inputs, &out, which.as_deref(), &emit, &base64)
+    }).await
+}
+
+/// The kinds saved for the average `which` of `out` (same answer as `sta_kinds`),
+/// or null when there are none (or the average was made again since).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds_saved(out: String, which: Option<String>) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || crate::sta::placed::kinds_saved(&out, which.as_deref(), &base64)).await
+}
+
+/// Averages only the kinds `keep` (ids of `sta_kinds`) at the poses they have;
+/// the result is saved in `<dir>/kinds/kept`. Same events as `sta_run` and
+/// `sta-live` pictures. Returns {report, result (as `sta_result`, of the kept
+/// average), ids, fromTiltImages, dir}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_kinds_keep(app: AppHandle, inputs: Vec<String>, out: String, which: Option<String>, keep: Vec<usize>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        sta_apply_pixel(Some(&out), &inputs);
+        let emit = |name: &str, v: serde_json::Value| { let _ = app.emit(name, v); };
+        crate::sta::placed::run_keep(&inputs, &out, which.as_deref(), &keep, &emit, &base64)
+    }).await
+}
+
+/// Where the particles of the average `which` of `out` lie on the open file
+/// `tomogram` (one of the average's tomograms or its clear companion), in that
+/// file's voxels: {places: [{i, pos: [x, y, z], axis: [x, y, z] (where the
+/// particle's Z axis points), kind (id or null), score}], radius, open, look,
+/// perTomogram: [{name, path, look, n}], kinds: [{id, count}], particles}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_placed(inputs: Vec<String>, out: String, which: Option<String>, tomogram: String) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        sta_apply_pixel(Some(&out), &inputs);
+        crate::sta::placed::placed(&out, which.as_deref(), &inputs, &tomogram)
+    }).await
+}
+
+/// The marks saved in an output folder: {marks, size}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_marks_load(out: String) -> crate::sta::marks::Saved {
+    crate::sta::marks::load(std::path::Path::new(&out))
+}
+
+/// Where the seeds of the line, surface and sphere marks are and which way
+/// they face, in voxels of the open file `tomogram` (at most 60 per mark):
+/// [{mark, kind, voxels?, seeds: [{pos: [x, y, z], axis: [x, y, z]}]}]; `voxels`
+/// (membranes only) is how many voxels of the segmentation the strokes take.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_mark_preview(marks: Vec<crate::sta::marks::Mark>, tomogram: String, size: Option<String>) -> CmdResult<serde_json::Value> {
+    crate::sta::marks::preview_marks(&marks, &tomogram, size.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Whether membranes can be painted on `tomogram`: {ready, model}. `ready`:
+/// the label map beside it has the membrane material (it was segmented);
+/// `model`: the segmentation model is set up.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_membrane_status(tomogram: String) -> CmdResult<serde_json::Value> {
+    blocking(move || crate::sta::paint::status(&tomogram)).await
+}
+
+/// Segments the membranes of `tomogram` into the label map beside it (once;
+/// the model must be set up). Reports `sta-progress` {label, done, total};
+/// returns {ready, voxels, components, vesicles, seconds}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_membrane_segment(app: AppHandle, tomogram: String) -> CmdResult<serde_json::Value> {
+    if crate::membrane::model_path().is_none() {
+        return Err("还没有膜分割模型：请先在标签面板的「自动分割膜」里载入一次权重".into());
+    }
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        let progress = |label: &str, done: usize, total: usize| {
+            let _ = app.emit("sta-progress", serde_json::json!({ "label": label, "done": done, "total": total }));
+        };
+        crate::sta::paint::segment(&tomogram, &progress)
+    }).await
+}
+
+/// The voxels membrane mark number `mark` of `marks` takes on section `z`
+/// of `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight.
+/// Empty for other kinds of marks and for marks of another file.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_mark_section(marks: Vec<crate::sta::marks::Mark>, mark: usize, tomogram: String, z: usize) -> CmdResult<Vec<[usize; 3]>> {
+    blocking(move || match marks.get(mark) {
+        Some(m) => crate::sta::paint::section_runs(m, &tomogram, z),
+        None => Ok(vec![]),
+    }).await
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_marks_save(out: String, marks: Vec<crate::sta::marks::Mark>, size: Option<String>) -> CmdResult<()> {
+    crate::sta::marks::save(std::path::Path::new(&out), &crate::sta::marks::Saved { marks, size }).map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_cancel() {
+    crate::sta::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::membrane::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(feature = "pro")]
+static STA_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "pro")]
+struct StaJob;
+#[cfg(feature = "pro")]
+impl StaJob {
+    fn begin() -> CmdResult<Self> {
+        use std::sync::atomic::Ordering;
+        STA_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "子断层平均正在运行".to_string())?;
+        crate::sta::CANCEL.store(false, Ordering::SeqCst);
+        Ok(Self)
+    }
+}
+#[cfg(feature = "pro")]
+impl Drop for StaJob {
+    fn drop(&mut self) { STA_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
 }
 
 /// 4D-STEM (Pro): virtual detectors, centre of mass, iDPC; see `stem4d::analyze`.
@@ -3072,6 +3664,11 @@ pub fn run() {
             #[cfg(feature = "pro")] gpu_info,
             #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_auto,
+            #[cfg(feature = "pro")] tomo_session,
+            #[cfg(feature = "pro")] tomo_session_run,
+            #[cfg(feature = "pro")] tomo_pick,
+            #[cfg(feature = "pro")] tomo_take,
+            #[cfg(feature = "pro")] tomo_view,
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,
@@ -3084,6 +3681,41 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_export,
             #[cfg(feature = "pro")] spa_kinds,
             #[cfg(feature = "pro")] spa_cancel,
+            #[cfg(feature = "pro")] sta_run,
+            #[cfg(feature = "pro")] sta_cards,
+            #[cfg(feature = "pro")] sta_result,
+            #[cfg(feature = "pro")] sta_out,
+            #[cfg(feature = "pro")] sta_pixel_needed,
+            #[cfg(feature = "pro")] sta_pixel_set,
+            #[cfg(feature = "pro")] sta_siblings,
+            #[cfg(feature = "pro")] sta_gallery,
+            #[cfg(feature = "pro")] sta_thumbnail,
+            #[cfg(feature = "pro")] sta_cancel,
+            #[cfg(feature = "pro")] sta_run_drawn,
+            #[cfg(feature = "pro")] sta_find,
+            #[cfg(feature = "pro")] sta_review,
+            #[cfg(feature = "pro")] sta_review_set,
+            #[cfg(feature = "pro")] sta_average_found,
+            #[cfg(feature = "pro")] sta_review_again,
+            #[cfg(feature = "pro")] sta_own_map,
+            #[cfg(feature = "pro")] sta_own_saved,
+            #[cfg(feature = "pro")] sta_pick_map,
+            #[cfg(feature = "pro")] sta_shapes_find,
+            #[cfg(feature = "pro")] sta_shapes_review,
+            #[cfg(feature = "pro")] sta_shapes_section,
+            #[cfg(feature = "pro")] sta_shapes_set,
+            #[cfg(feature = "pro")] sta_shapes_average,
+            #[cfg(feature = "pro")] sta_kinds,
+            #[cfg(feature = "pro")] sta_kinds_saved,
+            #[cfg(feature = "pro")] sta_kinds_keep,
+            #[cfg(feature = "pro")] sta_placed,
+            #[cfg(feature = "pro")] sta_review_tile,
+            #[cfg(feature = "pro")] sta_marks_load,
+            #[cfg(feature = "pro")] sta_marks_save,
+            #[cfg(feature = "pro")] sta_mark_preview,
+            #[cfg(feature = "pro")] sta_membrane_status,
+            #[cfg(feature = "pro")] sta_membrane_segment,
+            #[cfg(feature = "pro")] sta_mark_section,
             diffraction_find,
             diffraction_zones,
             eds_quant,

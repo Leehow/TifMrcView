@@ -161,10 +161,13 @@ pub fn show_section(title: &str, v: &[f32], n: [usize; 3], z: usize, mask: &[boo
 /// length, the UTF-8 title padded to 4 bytes, then w × h RGBA (alpha 0
 /// where not made yet). Grey levels span the 1st to 99th percentile.
 pub fn picture() -> Option<Vec<u8>> {
-    const MAX: usize = 512;
     let guard = PICTURE.lock().unwrap();
-    let p = guard.as_ref()?;
-    let k = p.w.max(p.h).div_ceil(MAX).max(1);
+    Some(encode(guard.as_ref()?, 512))
+}
+
+/// `p` at most `max` pixels a side, as `picture` gives it.
+pub fn encode(p: &Picture, max: usize) -> Vec<u8> {
+    let k = p.w.max(p.h).div_ceil(max.max(1)).max(1);
     let (w, h) = (p.w.div_ceil(k), p.h.div_ceil(k));
     // Box means of k × k blocks (finite values only).
     let mut grey = vec![f32::NAN; w * h];
@@ -218,7 +221,7 @@ pub fn picture() -> Option<Vec<u8>> {
             out.extend_from_slice(&[v, v, v, 255]);
         }
     }
-    Some(out)
+    out
 }
 
 #[cfg(test)]

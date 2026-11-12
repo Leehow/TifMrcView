@@ -20,9 +20,11 @@ pub mod recon;
 pub mod recon_gpu;
 pub mod refine;
 pub mod select;
+pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod track;
+pub mod triage;
 
 use crate::image::OpenImage;
 use anyhow::{bail, Result};
