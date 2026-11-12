@@ -22,14 +22,15 @@
     <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
       <button class="primary cs-act cs-start" title="对文件夹里的每个序列：校正电影、自动判断每张倾转图、对齐、做一个快速断层图。某个序列出问题不会挡住其他序列">开始</button>
-      <label class="cs-purpose-box">用途<select class="cs-purpose">
-        <option value="display" selected>展示：尽可能清晰，去噪并补缺失楔（约 9 Å 体素，较慢）</option>
-        <option value="sta">子断层平均：保留高频细节，不做去噪滤波，并导出 RELION 5（约 4.5 Å 体素）</option>
-      </select></label>
+      <div class="cs-purpose-box" role="radiogroup" aria-label="重构用来做什么">
+        <button class="cs-use" data-purpose="survey" role="radio"><b>先看看</b><span>最快，粗一点的断层图，看看样品什么样</span></button>
+        <button class="cs-use" data-purpose="display" role="radio"><b>展示、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢），之后可以标结构出三维图</span></button>
+        <button class="cs-use" data-purpose="sta" role="radio"><b>为子断层平均做准备</b><span>保留高频细节，不做去噪滤波（约 4.5 Å 体素），做完去「子断层平均」</span></button>
+      </div>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">开始重构</button>
     </div>
     <p class="dim cs-help cs-only-quick">按「开始」，程序把每个序列的电影校正成倾转序列，判断每张图能不能用，对齐并做一个快速断层图。点一个序列检查，取消不想要的序列或倾转图。程序只给建议，你勾选的不会被改动。</p>
-    <p class="dim cs-help cs-only-recon">选好用途按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
+    <p class="dim cs-help cs-only-recon">选这次重构用来做什么，按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
     <div class="cs-wall"></div>
     <div class="cs-review" hidden></div>`;
   const q = (s) => host.querySelector(s);
@@ -280,6 +281,15 @@
       W.status(purpose ? `${label}完成` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
     }
   }
+  // What the tomograms are for (kept): the three reasons people reconstruct.
+  let usePurpose = pref.get("cryo-purpose", "display");
+  if (!["survey", "display", "sta"].includes(usePurpose)) usePurpose = "display";
+  const showPurpose = () => host.querySelectorAll(".cs-use").forEach((b) => {
+    b.classList.toggle("on", b.dataset.purpose === usePurpose);
+    b.setAttribute("aria-checked", b.dataset.purpose === usePurpose);
+  });
+  host.querySelectorAll(".cs-use").forEach((b) => { b.onclick = () => { usePurpose = b.dataset.purpose; pref.set("cryo-purpose", usePurpose); showPurpose(); }; });
+  showPurpose();
   q(".cs-start").onclick = () => {
     if (!folder) return W.status("先选项目文件夹");
     return runPass("处理", null, []);
@@ -288,7 +298,7 @@
     if (!folder) return W.status("先选项目文件夹");
     const only = R.chosenNames(session.series);
     if (!only.length) return W.status("先勾选要重构的序列");
-    const purpose = q(".cs-purpose").value;
+    const purpose = usePurpose;
     return runPass("重构", purpose, only);
   };
 
