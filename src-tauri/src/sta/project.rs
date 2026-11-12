@@ -3258,13 +3258,20 @@ pub fn run_places(
     // across), so every particle is first searched over all of them
     // against that average (`settled_on`).
     let settled;
-    let (template, poses) = if found.frames.is_empty() {
-        (template, poses)
+    let (template, poses, diameter_a) = if found.frames.is_empty() {
+        (template, poses, diameter_a)
     } else {
         let own_average = set.average(&poses, |_| true).finish();
         settled = super::refine::settled_on(Some(dev), &set, &own_average, 1, progress, live)?;
-        (&settled.0[..], settled.1.clone())
+        // The circle is as wide as it was drawn; the masks from here on
+        // follow the body that stands in the average (never wider than the
+        // circle, and not less than half of it: a poor average says little).
+        let measured = body(&settled.0, BOX, radius).map_or(diameter_a, |d| (d * voxel).clamp(0.5 * diameter_a, diameter_a));
+        eprintln!("sta: circled at {diameter_a:.0} Å, the body in the average is {measured:.0} Å across");
+        (&settled.0[..], settled.1.clone(), measured)
     };
+    let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+    let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let mut out = align_on(Some(dev), &set, template, &poses, &first_pass, live)?;
     if fine {
         // The same particles at twice the sampling, from where they now
@@ -3430,6 +3437,47 @@ pub fn run_places(
     Ok(report)
 }
 
+/// The share of the darkest value from which a voxel counts as the body.
+const BODY_FROM: f32 = 0.3;
+/// The share of the body's darkness the diameter holds.
+const BODY_SHARE: f64 = 0.95;
+
+/// The diameter (voxels) of the dark body at the middle of an average made
+/// inside a sphere of `radius` voxels, or None when nothing stands out. A
+/// circle drawn around an example is as wide as the hand drew it (a
+/// ribosome circled at 347 Å where the body is some 250 Å); the masks of
+/// the alignment and of the measured resolution then hold more of the
+/// surroundings than of the particle. Darkness is counted below the level
+/// of the sphere's rim, from `BODY_FROM` of the darkest value on (what
+/// neighbours leave around the average is fainter), about its own centre.
+pub(super) fn body(avg: &[f32], n: usize, radius: f64) -> Option<f64> {
+    let c = (n / 2) as f64;
+    let at = |i: usize| [(i % n) as f64 - c, ((i / n) % n) as f64 - c, (i / (n * n)) as f64 - c];
+    let far = |i: usize| at(i).iter().map(|x| x * x).sum::<f64>().sqrt();
+    let mut rim: Vec<f32> = (0..avg.len()).filter(|i| (far(*i) - radius).abs() <= 1.5).map(|i| avg[i]).collect();
+    if rim.is_empty() {
+        return None;
+    }
+    rim.sort_by(f32::total_cmp);
+    let level = rim[rim.len() / 2];
+    let dark: Vec<f32> = (0..avg.len()).map(|i| if far(i) <= radius { (level - avg[i]).max(0.0) } else { 0.0 }).collect();
+    let top = dark.iter().copied().fold(0.0, f32::max);
+    if top <= 0.0 {
+        return None;
+    }
+    let body: Vec<(usize, f64)> = dark.iter().enumerate().filter(|(_, d)| **d >= BODY_FROM * top).map(|(i, d)| (i, *d as f64)).collect();
+    let all: f64 = body.iter().map(|b| b.1).sum();
+    let centre: [f64; 3] = std::array::from_fn(|k| body.iter().map(|(i, d)| at(*i)[k] * d).sum::<f64>() / all);
+    let mut out: Vec<(f64, f64)> = body.iter().map(|(i, d)| ((0..3).map(|k| (at(*i)[k] - centre[k]).powi(2)).sum::<f64>().sqrt(), *d)).collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut sum = 0.0;
+    let reach = out.iter().find(|(_, d)| {
+        sum += d;
+        sum >= BODY_SHARE * all
+    })?;
+    Some(2.0 * (reach.0 + 1.0))
+}
+
 /// Weights of the shells for comparing views with a model whose halves
 /// agree as `fsc`: the amplitude of the whole map's FSC, √(2·FSC / (1 +
 /// FSC)), from shell 2 to where the halves fall below 0.143, 0 beyond.
@@ -3535,6 +3583,32 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel:
 #[cfg(test)]
 mod card_tests {
     use super::*;
+
+    /// A circle drawn wide around a particle: the masks follow the body in
+    /// the average, and what neighbours leave around it does not count.
+    #[test]
+    fn the_body_in_an_average_is_measured_inside_a_wide_circle() {
+        let n = 32;
+        let c = (n / 2) as f64;
+        let made = |r_body: f64, ring: f64| -> Vec<f32> {
+            (0..n * n * n)
+                .map(|i| {
+                    let p = [(i % n) as f64 - c, ((i / n) % n) as f64 - c, (i / (n * n)) as f64 - c];
+                    let r = p.iter().map(|x| x * x).sum::<f64>().sqrt();
+                    // A soft dark ball, and a faint ring of neighbours two radii out.
+                    let ball = -1.0 / (1.0 + ((r - r_body) / 0.8).exp());
+                    let ring = -ring * (-(r - 2.0 * r_body).powi(2) / 4.0).exp();
+                    (ball + ring) as f32
+                })
+                .collect()
+        };
+        for r in [5.0, 7.0] {
+            let d = body(&made(r, 0.15), n, 12.0).unwrap();
+            assert!(d >= 2.0 * r - 1.0 && d <= 2.0 * r + 3.5, "radius {r}: {d}");
+        }
+        // Nothing darker than the rim: nothing to measure.
+        assert!(body(&vec![0.0; n * n * n], n, 12.0).is_none());
+    }
 
     fn likely_card(id: usize, likely: bool, compact: f64, members: usize) -> Card {
         Card { id, diameter_a: 160.0, measured_a: 150.0, voxel_a: 12.0, members, share: 0.3, path: String::new(), compact, elongation: 1.1, blobs: 1, offset: 0.0, likely }
