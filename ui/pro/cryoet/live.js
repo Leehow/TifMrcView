@@ -22,11 +22,26 @@
 
   let on = false, busy = false, last = 0, timer = 0, shown = false;
 
+  // The Cryo-ET panel floats where the user put it: the pane takes the side
+  // of the stage the panel leaves free.
+  const side = () => {
+    const panel = $("cryoet-workspace");
+    if (!panel || panel.hidden || pane.hidden) return pane.classList.remove("right");
+    const s = $("stage").getBoundingClientRect(), r = panel.getBoundingClientRect();
+    pane.classList.toggle("right", r.left + r.width / 2 < s.left + s.width / 2);
+  };
+  let watching = false;
+
   dock.start = async () => {
     on = true;
     shown = false;
     pane.hidden = false;
     pane.querySelector(".ld-pic").hidden = true;
+    if (!watching && $("cryoet-workspace")) {
+      watching = true;
+      new MutationObserver(side).observe($("cryoet-workspace"), { attributes: true, attributeFilter: ["hidden", "style", "class"] });
+    }
+    side();
     text.textContent = "";
     await invoke("live_clear").catch(() => {});
   };

@@ -599,3 +599,4 @@
 #cryo-session .cs-use span { color:var(--dim); font-size:11px; font-weight:normal; }
 #cryo-session .cs-use.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 #cryo-session .cs-use.on b { color:var(--accent); }
+#live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }
