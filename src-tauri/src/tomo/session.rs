@@ -245,7 +245,7 @@ pub fn view(path: &str, z: Option<usize>, max: usize) -> Result<Vec<u8>> {
     let p = img.page(page)?;
     let p = &p[sample.min(p.len() - 1)];
     let values: Vec<f32> = (0..p.w * p.h).map(|i| p.data.get_f64(i) as f32).collect();
-    Ok(crate::live::encode(&crate::live::Picture { title: String::new(), w: p.w, h: p.h, values, mask: vec![] }, max.clamp(32, 2048)))
+    Ok(crate::live::encode(&crate::live::Picture { title: format!("z {} / {}", z + 1, info.size_z), w: p.w, h: p.h, values, mask: vec![] }, max.clamp(32, 2048)))
 }
 
 fn cancelled(e: &anyhow::Error) -> bool {

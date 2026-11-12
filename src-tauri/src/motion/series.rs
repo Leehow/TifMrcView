@@ -432,24 +432,22 @@ pub fn run(
         v["records"] = serde_json::to_value(records)?;
         output::text(&state, &serde_json::to_string(&v)?)
     };
+    // What each view is corrected with, and its record so far.
     let mut pre = req.params.pre_exposure;
-    let mut records: Vec<Record> = vec![];
+    let mut plan: Vec<(Record, Option<Params>)> = vec![];
     for (i, v) in doc.views.iter().enumerate() {
-        check_cancel()?;
-        let label = format!("运动校正 {}/{} · {:+.0}°", i + 1, doc.views.len(), v.angle);
-        progress(&label, i, doc.views.len());
         let dose = req.params.total_dose.or(v.dose);
         let mut r = Record { z: v.z, angle: v.angle, movie: v.movie.clone(), pre_exposure: pre, dose, skipped: None, result: None, section: None, mean: 0.0, dark: 0.0, defocus_um: None, fit_res_a: None, stats: vec![] };
         pre += dose.unwrap_or(0.0).max(0.0);
         if let Some(earlier) = done(v) {
-            records.push(earlier);
+            plan.push((earlier, None));
             continue;
         }
-        let Some(path) = &movies[i] else {
+        if movies[i].is_none() {
             r.skipped = Some("电影文件不存在".into());
-            records.push(r);
+            plan.push((r, None));
             continue;
-        };
+        }
         let mut p = req.params.clone();
         if p.total_dose.is_none() && p.dose_per_frame.is_none() {
             p.total_dose = dose.filter(|v| *v > 0.0);
@@ -471,48 +469,92 @@ pub fn run(
         if p.total_dose.is_some_and(|d| d < LOCAL_DOSE) {
             p.local = false;
         }
-        let corrected = super::correct(path.to_str().context("电影路径编码无效")?, None, &dir, None, 0, 0, 0, &p, vec![], &|stage, a, b| progress(&format!("{label} · {stage}"), a, b));
-        match corrected {
-            Ok(super::Corrected { sums, result: m }) => {
-                let (w, h, px) = (m.width, m.height, m.pixel_a);
-                if stacks.is_none() {
-                    if prior.is_some() && (result.shape[0] != w || result.shape[1] != h) {
-                        bail!("批次电影尺寸与之前校正的不一致，请重新开始");
-                    }
-                    stacks = Some(open(w, h, px, prior.is_some())?);
-                    result.shape = [w, h, planned.len()];
-                    result.pixel_a = px;
-                }
-                if result.shape[0] != w || result.shape[1] != h || (px - result.pixel_a).abs() > 1e-5 {
-                    bail!("批次电影尺寸或像素标定不一致");
-                }
-                let st = stacks.as_mut().unwrap();
-                let section = section_of(i).unwrap();
-                let view = sums.weighted.as_deref().unwrap_or(&sums.unweighted);
-                r.stats.push(st.full.write(section, view)?);
-                if let Some([even, odd]) = &mut st.halves {
-                    r.stats.push(even.write(section, &sums.even)?);
-                    r.stats.push(odd.write(section, &sums.odd)?);
-                }
-                let (small, sw, sh) = shrink(view, w, h);
-                st.small.write(section, &small)?;
-                (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
-                if let Some(f) = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv) {
-                    r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
-                    r.fit_res_a = Some(f.fit_res);
-                }
-                crate::live::show(&format!("{} · {:+.0}° · 漂移 {:.1} Å{}", name_of(&req.output), v.angle, m.total_drift * px, r.defocus_um.map_or(String::new(), |d| format!(" · 离焦 {d:.1} µm"))), sw, sh, &small, &[]);
-                r.section = Some(section);
-                r.result = Some(m);
-            }
-            Err(e) => {
-                check_cancel()?;
-                r.skipped = Some(format!("处理失败：{e:#}"));
-            }
-        }
-        records.push(r);
-        save(&result, &records)?;
+        plan.push((r, Some(p)));
     }
+    // Two movies are under way at a time: the next one is read and decoded
+    // (processor and disk) while the one before is measured and summed (GPU).
+    let mut records: Vec<Record> = vec![];
+    let (plan, movies, dir) = (&plan, &movies, &dir);
+    std::thread::scope(|scope| -> Result<()> {
+        let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<super::Prepared>)>(0);
+        scope.spawn(move || {
+            for (i, (_, p)) in plan.iter().enumerate() {
+                let (Some(p), Some(path)) = (p, &movies[i]) else { continue };
+                if check_cancel().is_err() {
+                    break;
+                }
+                let prepared = path.to_str().context("电影路径编码无效").and_then(|path| super::prepare(path, None, dir, 0, 0, 0, p, vec![], &|_, _, _| {}));
+                if send.send((i, prepared)).is_err() {
+                    break;
+                }
+            }
+        });
+        for (i, (r, p)) in plan.iter().enumerate() {
+            check_cancel()?;
+            let v = &doc.views[i];
+            let label = format!("运动校正 {}/{} · {:+.0}°", i + 1, doc.views.len(), v.angle);
+            progress(&label, i, doc.views.len());
+            let mut r = r.clone();
+            let Some(p) = p else {
+                records.push(r);
+                continue;
+            };
+            let (at, prepared) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
+            debug_assert_eq!(at, i);
+            let corrected = prepared.and_then(|m| super::finish(m, None, p, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)));
+            match corrected {
+                Ok(super::Corrected { mut sums, result: m }) => {
+                    let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
+                    // Super-resolution frames carry little beyond the
+                    // detector's own pixel: the views are kept at that.
+                    if super_resolution(w, h) {
+                        for v in [Some(&mut sums.unweighted), sums.weighted.as_mut(), Some(&mut sums.even), Some(&mut sums.odd)].into_iter().flatten() {
+                            if !v.is_empty() {
+                                *v = halve(v, w, h);
+                            }
+                        }
+                        (w, h, px) = (w / 2, h / 2, px * 2.0);
+                    }
+                    if stacks.is_none() {
+                        if prior.is_some() && (result.shape[0] != w || result.shape[1] != h) {
+                            bail!("批次电影尺寸与之前校正的不一致，请重新开始");
+                        }
+                        stacks = Some(open(w, h, px, prior.is_some())?);
+                        result.shape = [w, h, planned.len()];
+                        result.pixel_a = px;
+                    }
+                    if result.shape[0] != w || result.shape[1] != h || (px - result.pixel_a).abs() > 1e-5 {
+                        bail!("批次电影尺寸或像素标定不一致");
+                    }
+                    let st = stacks.as_mut().unwrap();
+                    let section = section_of(i).unwrap();
+                    let view = sums.weighted.as_deref().unwrap_or(&sums.unweighted);
+                    r.stats.push(st.full.write(section, view)?);
+                    if let Some([even, odd]) = &mut st.halves {
+                        r.stats.push(even.write(section, &sums.even)?);
+                        r.stats.push(odd.write(section, &sums.odd)?);
+                    }
+                    let (small, sw, sh) = shrink(view, w, h);
+                    st.small.write(section, &small)?;
+                    (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
+                    if let Some(f) = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv) {
+                        r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
+                        r.fit_res_a = Some(f.fit_res);
+                    }
+                    crate::live::show(&format!("{} · {:+.0}° · 漂移 {:.1} Å{}", name_of(&req.output), v.angle, m.total_drift * m.pixel_a, r.defocus_um.map_or(String::new(), |d| format!(" · 离焦 {d:.1} µm"))), sw, sh, &small, &[]);
+                    r.section = Some(section);
+                    r.result = Some(m);
+                }
+                Err(e) => {
+                    check_cancel()?;
+                    r.skipped = Some(format!("处理失败：{e:#}"));
+                }
+            }
+            records.push(r);
+            save(&result, &records)?;
+        }
+        Ok(())
+    })?;
     // The stacks hold a place for every movie found; the ones that could
     // not be corrected are closed up.
     let mut good: Vec<usize> = (0..records.len()).filter(|&k| records[k].section.is_some()).collect();
@@ -596,6 +638,26 @@ pub fn run(
     save(&result, &result.records)?;
     progress("批次完成", doc.views.len(), doc.views.len());
     Ok(result)
+}
+
+/// Whether frames of this size are super-resolution ones of a counting
+/// camera (K2: 7676 × 7420, K3: 11520 × 8184), twice its pixels a side.
+fn super_resolution(w: usize, h: usize) -> bool {
+    matches!((w.max(h), w.min(h)), (7676, 7420) | (11520, 8184))
+}
+
+/// A view at half its size: the sum of each 2 × 2 pixels.
+fn halve(v: &[f32], w: usize, h: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let (hw, hh) = (w / 2, h / 2);
+    let mut out = vec![0f32; hw * hh];
+    out.par_chunks_mut(hw).enumerate().for_each(|(y, row)| {
+        let (a, b) = (&v[2 * y * w..], &v[(2 * y + 1) * w..]);
+        for (x, o) in row.iter_mut().enumerate() {
+            *o = a[2 * x] + a[2 * x + 1] + b[2 * x] + b[2 * x + 1];
+        }
+    });
+    out
 }
 
 /// Dose of a movie (e⁻/Å²) below which only its whole-frame motion is fitted.

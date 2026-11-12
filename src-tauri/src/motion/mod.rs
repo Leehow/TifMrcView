@@ -346,6 +346,14 @@ fn run_movie(
     Ok(result)
 }
 
+/// A movie read and ready for its motion to be measured (`prepare`).
+pub struct Prepared {
+    sp: input::Spool,
+    pixel: f64,
+    warnings: Vec<String>,
+    took: std::time::Duration,
+}
+
 /// Corrects one movie in memory. `scratch` is where frames beyond the
 /// memory budget are spooled; `diagnostics` the output the before/after
 /// pictures are named after.
@@ -359,9 +367,27 @@ pub fn correct(
     z: usize,
     t: usize,
     p: &Params,
-    mut warnings: Vec<String>,
+    warnings: Vec<String>,
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<Corrected> {
+    finish(prepare(path, img, scratch, c, z, t, p, warnings, progress)?, diagnostics, p, progress)
+}
+
+/// The first half of `correct`: the movie decoded, gain corrected and
+/// grouped into frames. It needs no GPU, so a batch reads its next movie
+/// while the one before is measured and summed (`finish`).
+#[allow(clippy::too_many_arguments)]
+pub fn prepare(
+    path: &str,
+    img: Option<Arc<OpenImage>>,
+    scratch: &Path,
+    c: usize,
+    z: usize,
+    t: usize,
+    p: &Params,
+    mut warnings: Vec<String>,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<Prepared> {
     p.validate()?;
     check_cancel()?;
     let start = std::time::Instant::now();
@@ -391,6 +417,18 @@ pub fn correct(
             1.0
         });
     let sp = input::Spool::prepare(&movie, p, scratch, progress)?;
+    Ok(Prepared { sp, pixel, warnings, took: start.elapsed() })
+}
+
+/// The second half of `correct`: the motion measured, the frames summed.
+pub fn finish(
+    prepared: Prepared,
+    diagnostics: Option<&str>,
+    p: &Params,
+    progress: &(dyn Fn(&str, usize, usize) + Sync),
+) -> Result<Corrected> {
+    let Prepared { sp, pixel, mut warnings, took } = prepared;
+    let start = std::time::Instant::now();
     let raw = sp.counts.iter().sum::<usize>();
     let alignment_start = std::time::Instant::now();
     let g = crate::align::movie_planes(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
@@ -603,7 +641,7 @@ pub fn correct(
         group_counts: sp.counts.clone(),
         alignment_ms,
         sum_ms,
-        total_ms: start.elapsed().as_secs_f64() * 1000.0,
+        total_ms: (took + start.elapsed()).as_secs_f64() * 1000.0,
         backend,
         cpu_ms,
         gpu_ms,
