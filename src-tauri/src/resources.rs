@@ -1,7 +1,8 @@
 //! Read-only host resources. Device visibility and running jobs remain constraints.
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+#[cfg(not(target_os = "macos"))]
 use std::{
-    path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -24,6 +25,108 @@ pub struct Resources {
     pub output_free_mb: Option<u64>,
     pub warnings: Vec<String>,
 }
+/// The device's recommended working set is a performance limit, not free RAM.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetalMemory {
+    pub name: String,
+    pub unified: bool,
+    pub recommended_bytes: u64,
+    pub allocated_bytes: u64,
+    pub max_buffer_bytes: u64,
+    pub available_bytes: u64,
+}
+#[cfg(target_os = "macos")]
+pub fn metal_memory() -> Option<MetalMemory> {
+    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+    #[link(name = "Metal", kind = "framework")]
+    unsafe extern "C" {
+        fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
+    }
+    let device = unsafe { Retained::<AnyObject>::from_raw(MTLCreateSystemDefaultDevice()) }?;
+    let name: Retained<objc2_foundation::NSString> = unsafe { msg_send![&*device, name] };
+    let recommended: usize = unsafe { msg_send![&*device, recommendedMaxWorkingSetSize] };
+    let allocated: usize = unsafe { msg_send![&*device, currentAllocatedSize] };
+    let max_buffer: usize = unsafe { msg_send![&*device, maxBufferLength] };
+    let unified: bool = unsafe { msg_send![&*device, hasUnifiedMemory] };
+    let available = if unified {
+        (recommended as u64)
+            .saturating_sub(allocated as u64)
+            .min(memory_available_bytes().saturating_sub(2 * 1024 * 1024 * 1024))
+    } else {
+        (recommended as u64).saturating_sub(allocated as u64)
+    };
+    Some(MetalMemory {
+        name: name.to_string(),
+        unified,
+        recommended_bytes: recommended as u64,
+        allocated_bytes: allocated as u64,
+        max_buffer_bytes: max_buffer as u64,
+        available_bytes: available.min(max_buffer as u64),
+    })
+}
+#[allow(deprecated)]
+pub fn memory_available_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let host = libc::mach_host_self();
+        let mut stats: libc::vm_statistics64 = std::mem::zeroed();
+        let mut count = libc::HOST_VM_INFO64_COUNT;
+        let result = libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            &mut stats as *mut _ as *mut _,
+            &mut count,
+        );
+        unsafe extern "C" {
+            fn mach_port_deallocate(task: u32, name: u32) -> i32;
+        }
+        mach_port_deallocate(libc::mach_task_self(), host);
+        if result == 0 {
+            // Inactive pages are reclaimable; purgeable pages overlap them.
+            return (u64::from(stats.free_count) + u64::from(stats.inactive_count))
+                .saturating_mul(libc::sysconf(libc::_SC_PAGESIZE).max(1) as u64);
+        }
+        return 0;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("MemAvailable:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+            .unwrap_or(0)
+            .saturating_mul(1024)
+    }
+}
+/// Remaining budget for new resident tensors; no tensor backend is initialized.
+pub fn gpu_available_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        return metal_memory().map(|m| m.available_bytes).unwrap_or(0);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let devices = discover();
+        let mask = std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
+        let selected = devices
+            .iter()
+            .find(|g| {
+                mask.split(',').next() == Some(g.uuid.as_str())
+                    || mask.split(',').next() == Some(g.index.to_string().as_str())
+            })
+            .or_else(|| devices.first());
+        selected
+            .map(|g| g.free_mb * 1024 * 1024)
+            .unwrap_or(512 * 1024 * 1024)
+    }
+}
+#[cfg(not(target_os = "macos"))]
 fn query() -> Option<String> {
     let mut c = Command::new("nvidia-smi")
         .args([
@@ -57,62 +160,69 @@ fn query() -> Option<String> {
     Some(s)
 }
 pub fn discover() -> Vec<Gpu> {
-    let snapshot = std::env::var("TMV_ALLOWED_GPU_SNAPSHOT")
-        .ok()
-        .and_then(|s| serde_json::from_str::<Vec<Gpu>>(&s).ok());
-    let gpus: Vec<Gpu> = query()
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let p: Vec<_> = l.split(',').map(str::trim).collect();
-            if p.len() != 6 || !p[1].starts_with("GPU-") {
-                return None;
-            }
-            Some(Gpu {
-                index: p[0].parse().ok()?,
-                uuid: p[1].into(),
-                name: p[2].into(),
-                total_mb: p[3].parse().ok()?,
-                free_mb: p[4].parse().ok()?,
-                utilization: p[5].parse().ok()?,
-            })
+    #[cfg(target_os = "macos")]
+    return metal_memory()
+        .map(|m| {
+            vec![Gpu {
+                index: 0,
+                uuid: "Metal-default".into(),
+                name: m.name,
+                total_mb: m.recommended_bytes / 1024 / 1024,
+                free_mb: m.available_bytes / 1024 / 1024,
+                utilization: 0,
+            }]
         })
-        .collect();
-    let mask = if let Some(v) = snapshot {
-        v.into_iter().map(|g| g.uuid).collect::<Vec<_>>().join(",")
-    } else {
-        match std::env::var("CUDA_VISIBLE_DEVICES") {
-            Ok(v) => v,
-            Err(_) => return gpus,
-        }
-    };
-    // Preserve mask order: logical device zero need not be physical GPU zero.
-    mask.split(',')
-        .filter_map(|s| {
-            let s = s.trim();
-            let matches: Vec<_> = gpus
-                .iter()
-                .filter(|g| {
-                    s == g.index.to_string() || g.uuid.starts_with(s) && s.starts_with("GPU-")
+        .unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let snapshot = std::env::var("TMV_ALLOWED_GPU_SNAPSHOT")
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<Gpu>>(&s).ok());
+        let gpus: Vec<Gpu> = query()
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let p: Vec<_> = l.split(',').map(str::trim).collect();
+                if p.len() != 6 || !p[1].starts_with("GPU-") {
+                    return None;
+                }
+                Some(Gpu {
+                    index: p[0].parse().ok()?,
+                    uuid: p[1].into(),
+                    name: p[2].into(),
+                    total_mb: p[3].parse().ok()?,
+                    free_mb: p[4].parse().ok()?,
+                    utilization: p[5].parse().ok()?,
                 })
-                .collect();
-            (matches.len() == 1).then(|| matches[0].clone())
-        })
-        .collect()
+            })
+            .collect();
+        let mask = if let Some(v) = snapshot {
+            v.into_iter().map(|g| g.uuid).collect::<Vec<_>>().join(",")
+        } else {
+            match std::env::var("CUDA_VISIBLE_DEVICES") {
+                Ok(v) => v,
+                Err(_) => return gpus,
+            }
+        };
+        // Preserve mask order: logical device zero need not be physical GPU zero.
+        mask.split(',')
+            .filter_map(|s| {
+                let s = s.trim();
+                let matches: Vec<_> = gpus
+                    .iter()
+                    .filter(|g| {
+                        s == g.index.to_string() || g.uuid.starts_with(s) && s.starts_with("GPU-")
+                    })
+                    .collect();
+                (matches.len() == 1).then(|| matches[0].clone())
+            })
+            .collect()
+    }
 }
 pub fn inspect(output: Option<&Path>) -> Resources {
     let mut warnings = vec![];
     let gpus = discover();
-    let memory_available_mb = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("MemAvailable:"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|n| n.parse::<u64>().ok())
-        })
-        .unwrap_or(0)
-        / 1024;
+    let memory_available_mb = memory_available_bytes() / 1024 / 1024;
     let mut output_free_mb = None;
     #[cfg(unix)]
     if let Some(p) = output {
@@ -137,7 +247,9 @@ pub fn inspect(output: Option<&Path>) -> Resources {
     let ready = gpus.iter().filter(|g| g.free_mb >= 2048).count();
     let capacity = (memory_available_mb / 16384).max(1) as usize;
     if memory_available_mb > 0 && ready > capacity {
-        warnings.push(format!("当前可用内存限制同时运行 {capacity} 个 GPU worker（每个预留 16 GB）"));
+        warnings.push(format!(
+            "当前可用内存限制同时运行 {capacity} 个 GPU worker（每个预留 16 GB）"
+        ));
     }
     if gpus.is_empty() {
         warnings.push("未探测到可见 NVIDIA GPU，将检查本机其他计算后端".into());

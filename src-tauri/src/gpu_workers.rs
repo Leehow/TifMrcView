@@ -68,7 +68,10 @@ pub fn map(
             let dir = &temp.0;
             let next = &next;
             let errors = &errors;
+            let compute_context = crate::compute::context();
             scope.spawn(move || {
+                let _context = compute_context;
+                crate::compute::with_context(_context, || {
                 let attempt = (|| -> Result<()> {
                     let mut p = Process(
                         Command::new(std::env::current_exe()?)
@@ -170,6 +173,7 @@ pub fn map(
                         .unwrap()
                         .push(format!("GPU {}：{e:#}", g.index));
                 }
+                });
             });
         }
     });

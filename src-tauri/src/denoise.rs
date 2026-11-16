@@ -306,14 +306,16 @@ pub fn filter(v: Vec<f32>, w: usize, h: usize, p: &Params, sigma: f32) -> Result
         // "gpu" forces it.
         if let Some((dev, name)) = crate::ctf_gpu::device().filter(|(_, n)| p.device == "gpu" || *n != "Metal") {
             match crate::ctf_gpu::guarded(|| nlm_gpu_tiled(dev, &v, w, h, p, sigma)) {
-                Ok(out) => return Ok((out, name)),
-                Err(e) => eprintln!("denoise: GPU failed, using the CPU: {e:#}"),
+                Ok(out) => { crate::compute::report("二维 NLM 去噪", name, None); return Ok((out, name)); },
+                Err(e) => { eprintln!("denoise: GPU failed, using the CPU: {e:#}"); crate::compute::report("二维 NLM 去噪", "CPU", Some(format!("GPU 执行失败：{e:#}"))); },
             }
         }
     }
     if p.method == Method::Learned {
         return learned(v, w, h, p);
     }
+    #[cfg(feature="pro")]
+    crate::compute::cpu_stage("二维滤波", if p.device == "cpu" { "用户选择 CPU" } else if p.method == Method::Nlm { "自动模式在 Metal 使用 CPU NLM，避免张量调度与传输开销" } else { "轻量二维滤波由 CPU 并行执行，避免 GPU 调度开销" });
     let out = match p.method {
         Method::Learned => unreachable!(),
         Method::Gaussian => gaussian(&v, w, h, p.strength),
@@ -348,6 +350,7 @@ fn learned(v: Vec<f32>, w: usize, h: usize, p: &Params) -> Result<(Vec<f32>, &'s
         if k < 1.0 {
             out.par_iter_mut().zip(&v).for_each(|(o, &x)| *o = k * *o + (1.0 - k) * x);
         }
+        crate::compute::report("自监督图像去噪", backend, None);
         Ok((out, backend))
     }
     #[cfg(not(feature = "pro"))]

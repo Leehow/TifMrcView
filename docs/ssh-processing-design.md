@@ -161,3 +161,18 @@ leehow-pc 验证进展：Vulkan 7项及 CUDA 7项数值/共享摘要测试通过
 本轮最终CLI实测：相同Nav110 ROI的54张倾转图，倾转对齐49.52s→23.17s；整自动流程67.69s→41.94s。注意实际后端数值路线使拟合轴从5.2°变为5.0°，自动厚度从184层变为168层，因此整任务数字不能当作固定尺寸重构的加速比，也不能用残差降低证明科学准确性。三组ROI及五个单颗粒运动结果均检查文件长度、有限像素及有效强度范围。GPU批量相关、电影位移、运动校正、并行候选几何/进度定向测试通过。CTF、重构、反卷积在实际日志中使用GPU；候选几何拟合显示CPU及并行度。
 单颗粒冷启动两次：基线运动17.94/20.64s，新版22.92/17.34s；波动较大，不能宣称稳定的整任务提速。保留全部初版/改进版/重复测试，避免只选最快一次。只在一张RTX5080上完成硬件验证，双GPU完整流程仍未验证。
 最后交付采用0.7.217，桌面与引擎固定源码摘要；安装、Computer Use、main集成及工作区关闭的最终状态由证据目录acceptance.json及安装收据记录。源码记录本身不替代这几个完成门槛。原始数据、服务、SSH/网络配置不修改；不下载模型，不发布GitHub更新。
+
+
+## 2026-11-16 本地 Metal 完整验收
+
+用户批准范围：Mac统一内存预算、每步实际CPU/GPU及原因、NAD Metal数值、本机M1 Max真实Cryo-ET/单颗粒流程；通过后合并main、打包更新规范App路径并Computer Use。此机32GiB统一内存、10CPU核、M1 Max 32GPU核。基线4ae45bc；当前独立工作区codex/local-metal-20261116，保留主目录所有未提交修改。
+执行：先运行能暴露NVIDIA-only 512MiB预算的实际Metal反卷积测试，以及既有NAD硬件参考测试；再形成假设/最小修复；实际设备事件须覆盖本地任务且不混入SSH工作区。真实数据复用已缓存的Nav110 ROI.st、EER及gain；补齐真实rawtlt关联，原始数据只读，不下载模型、不修改服务器服务。执行和安装证据保存在/Volumes/samsung/tifview-build.noindex/local-metal-20261116；未通过门槛不称完成。
+
+
+本地 Metal 当前验证：修复前 256³ 实际反卷积因错误 512 MiB 预算失败；修复后通过（768 MiB 估计工作区）。使用 MTLDevice 推荐工作集减当前分配、Mach free+inactive 可回收内存减 2 GiB 系统预留及单缓冲限制的较小值；NAD 统一内存同时计入 CPU 张量工作区。macOS 的 os_proc_available_memory 不可用，未采用该 iOS API。
+参考：Apple MTLDevice recommendedMaxWorkingSetSize/currentAllocatedSize 文档；llama.cpp ggml-metal-device.m 的实际设备查询。前者确认建议工作集为性能上限，后者确认成熟实现直接查询设备而非套用离散显卡探测；本实现另加当前系统内存约束，不复制代码。
+NAD 现有 Metal 18 组原始参考体迭代均 maxdelta=0；未放松任何数值资格阈值。CPU f64 张量/特征分解保留，GPU 负责三维扩散。真实 EMPIAR-10164 的 41 个电影与原始 mdoc 完成 motion→CTF→alignment→SART full/even/odd→Noise2Noise→deconv，312 s 结束、ok=true。缺失楔试跑 20 步后预计需 1.2 h，按原有自动预算跳过并返回说明；mdoc 缺少有效剂量，保留未加剂量权重警告。该计时与低并发编译有重叠，不作性能基准。T20S 48 张微图仍待完整重跑。所有输入只读链接，输出在证据目录；不是生物学质量或分辨率验证。
+本地任务通过独立 computeId + scoped context 发实际后端，传播 shared Rayon 与 GPU worker 线程，独立去重；前端只包装路由后的 native 调用。UI fixture 已确认并发任务隔离、回退原因/toast/历史、details 展开状态、新任务清空和 SSH 隔离；既有 remote routing 12 项与资源 UI fixture、denoise UI/Metal completion 18 项通过。剩余：最新源码硬件复验、真实 SPA、桌面 Pro/Basic 编译、main 集成、签名安装与 CUA。
+
+冻结前复核：补上 NAD 资格检查的瞬态失败重试，只缓存数值检查成功；新增失败→恢复→成功缓存回归测试通过。没有修改 NAD 扩散数值或放松检查。UI 常显当前实际设备，全部步骤历史默认收起，保留用户展开状态，避免挤掉小面板中的操作控件；更新后的 fixture 通过。Pro 和基础版最终 cargo check 均通过。当前真实 SPA 已通过二维分类、初始模型并进入三维精修，最终 Cryo-ET 冷重跑按 GPU 租约排队。真实流程 runner 的编译快照保留在 cli-validated-source-files.json；后加变化仅为未在这两个默认流程中调用的 NAD 资格缓存和前端展示，NAD 独立真实体及参考体会用最终源码重验。
+本轮唯一执行计划的动态验收状态及最终安装/CUA/源码证明继续写入 `/Volumes/samsung/tifview-build.noindex/local-metal-20261116/acceptance.json`，与本节共同构成本轮计划；冻结后不修改构建源码来记进度。main 集成、安装和 CUA 必须等真实流程及最终 NAD 复验通过。SSH Linux 引擎保持 0.7.217 的既有独立包，记录其来源提交与哈希，不声称本次重编译 Linux 引擎。

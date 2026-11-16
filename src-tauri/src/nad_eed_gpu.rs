@@ -177,14 +177,29 @@ pub(crate) struct Evolution {
     pub repaired_voxels: usize,
 }
 
+// A temporary memory/driver failure must not permanently disable NAD GPU
+// for this App session. Cache successful numerical qualification only.
+fn qualify(cache: &std::sync::OnceLock<()>, check: impl FnOnce() -> Result<()>) -> Result<()> {
+    if cache.get().is_none() { check()?; let _ = cache.set(()); }
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn qualification_retries_after_transient_failure() {
+    let cache=std::sync::OnceLock::new();
+    assert!(qualify(&cache, || anyhow::bail!("temporary memory budget exhausted")).is_err());
+    assert!(cache.get().is_none());
+    qualify(&cache, || Ok(())).unwrap();
+    qualify(&cache, || panic!("successful qualification must be cached")).unwrap();
+}
+
 impl Evolution {
     pub(crate) fn new(device: &Device, dims: [usize; 3]) -> Result<Self> {
         // The application selects one shared GPU. Qualify its actual compiler
         // and driver once; other backends fall back before processing user data.
-        static QUALIFIED: std::sync::OnceLock<std::result::Result<(), String>> =
-            std::sync::OnceLock::new();
-        let qualification = QUALIFIED.get_or_init(|| {
-            (|| -> Result<()> {
+        static QUALIFIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        qualify(&QUALIFIED, || {
                 let dims = [11, 9, 7];
                 let input: Vec<f32> = (0..11 * 9 * 7)
                     .map(|i| ((i * 37 % 101) as f32 - 50.0) * 0.02)
@@ -203,12 +218,7 @@ impl Evolution {
                     bail!("NAD GPU 数值自检未通过");
                 }
                 Ok(())
-            })()
-            .map_err(|error| format!("{error:#}"))
-        });
-        if let Err(error) = qualification {
-            bail!("{error}");
-        }
+        })?;
         Self::allocate(device, dims)
     }
 
@@ -217,9 +227,11 @@ impl Evolution {
             .iter()
             .try_fold(1usize, |n, &v| n.checked_mul(v))
             .ok_or_else(|| anyhow::anyhow!("NAD GPU 体尺寸过大"))?;
-        // At most 512 MiB of device working storage; larger inputs retain the
+        // Bound new device storage using the actual remaining working set; larger inputs retain the
         // CPU implementation instead of risking the shared training device.
-        if dims.contains(&0) || len > (512 << 20) / 36 {
+        #[cfg(target_os="macos")] let budget = crate::resources::gpu_available_bytes().saturating_mul(80) / 100;
+        #[cfg(not(target_os="macos"))] let budget = 512 << 20;
+        if dims.contains(&0) || len as u64 > budget / if cfg!(target_os="macos") { 64 } else { 36 } {
             bail!("NAD GPU 工作区超过内存预算");
         }
         let primitive = BurnTensor::<1>::zeros([1], device)

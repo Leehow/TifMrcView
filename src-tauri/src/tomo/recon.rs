@@ -454,7 +454,8 @@ pub fn reconstruct(
     }
     let mut reason=None;
     let mut plan = gpu.and_then(|(dev,name)|match crate::ctf_gpu::guarded(||super::recon_gpu::Plan::new(dev,g,p)).and_then(|r|r){Ok(plan)=>Some((plan,*name)),Err(e)=>{reason=Some(format!("GPU 重构初始化失败：{e:#}"));None}});
-    if plan.is_none(){crate::compute::report("三维重构","CPU",Some(reason.unwrap_or_else(||if p.backend=="cpu"{"指定 CPU 后端".into()}else{crate::compute::no_gpu()})));}
+    if p.backend=="cpu" {crate::compute::cpu_stage("三维重构","用户选择 CPU 后端");}
+    else if plan.is_none(){crate::compute::report("三维重构","CPU",Some(reason.unwrap_or_else(crate::compute::no_gpu)));}
     let mut backend = plan.as_ref().map_or("CPU", |p| p.1).to_string();
     let means = view_means(src, g.views(), rows)?;
     for y0 in (0..h).step_by(rows) {

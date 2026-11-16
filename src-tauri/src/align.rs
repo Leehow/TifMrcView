@@ -1101,10 +1101,11 @@ pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn
     let start=std::time::Instant::now();
     if frames.len()<2||frames.iter().any(|v|v.len()!=w*h){bail!("电影尺寸不一致");}
     let g=Geom::new([0,0,w,h],1024,w,h)?;let f=Fft::new(g.n);let filter=make_filter(g.m);
-    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{
+    let compute_context=crate::compute::context();
+    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{crate::compute::with_context(compute_context.clone(), || {
         if CANCEL.load(Ordering::SeqCst){bail!("已取消");}
         Ok(spectrum_on(&g,&f,&filter,off,|x,y|frames[i][y*w+x],gpu))
-    };
+    })};
     let done=std::sync::atomic::AtomicUsize::new(0);let total=2*frames.len()+24;
     let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
     let median=|v:&[f64]| {let mut a=v.to_vec();a.sort_by(f64::total_cmp);a[a.len()/2]};
@@ -1114,7 +1115,7 @@ pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn
         let wide=Geom{x0:(w-n*bin)/2,y0:(h-n*bin)/2,bin,n,m:n/2,w,h};
         let fft=Fft::new(n);let mut low=make_filter(n/2);
         for (i,v) in low.iter_mut().enumerate(){let x=(i%(n/2)) as f64-(n/4) as f64;let y=(i/(n/2)) as f64-(n/4) as f64;*v*=(-0.5*(x*x+y*y)/(n as f64*0.04).powi(2)).exp() as f32;}
-        let specs:Vec<_>=frames.par_iter().map(|v|spectrum_on(&wide,&fft,&low,[0,0],|x,y|v[y*w+x],gpu)).collect();
+        let specs:Vec<_>=frames.par_iter().map(|v|crate::compute::with_context(compute_context.clone(), || spectrum_on(&wide,&fft,&low,[0,0],|x,y|v[y*w+x],gpu))).collect();
         let (mut d,c,it)=align_movie(&specs,&wide,&Fft::new(n/2),n as f64/16.0,&|i|progress(i,MAX_ITER))?;
         if median(&c)>median(&cc){
             let mean:[f64;2]=std::array::from_fn(|k|d.iter().map(|v|v[k]).sum::<f64>()/d.len() as f64);

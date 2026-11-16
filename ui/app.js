@@ -6,7 +6,7 @@ const T = window.__TAURI__;
 const TOUCH = matchMedia("(pointer: coarse)").matches;
 const HIT = TOUCH ? 14 : 6;
 const GRIP = TOUCH ? 9 : 5;
-const invoke = (command,args,...options) => window.TmvRemote ? window.TmvRemote.invoke(command,args,(c,a)=>T.core.invoke(c,a,...options)) : T.core.invoke(command,args,...options);
+const invoke = (command,args,...options) => { const native=(c,a)=>window.TmvLocal ? TmvLocal.invoke(c,a,(n,v)=>T.core.invoke(n,v,...options)) : T.core.invoke(c,a,...options); return window.TmvRemote ? TmvRemote.invoke(command,args,native) : native(command,args); };
 const $ = (id) => document.getElementById(id);
 
 // Standard or Pro build (same code; the Pro build has its own product name).

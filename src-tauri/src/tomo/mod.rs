@@ -449,14 +449,15 @@ fn axis_trials(
     let width=rayon::current_num_threads().clamp(1,4);
     crate::compute::cpu_stage("倾转轴角搜索与几何拟合", &format!("{} 个独立候选，共享线程池并行度 {}；patch 相关单独记录 CPU/GPU", starts.len(), width));
     let mut results=Vec::with_capacity(starts.len());
+    let compute_context = crate::compute::context();
     for batch in starts.chunks(width) {
-        let batch:Vec<_>=batch.par_iter().map(|&axis| {
+        let batch:Vec<_>=batch.par_iter().map(|&axis| crate::compute::with_context(compute_context.clone(), || {
             let result=check_cancel().and_then(|_|track_and_solve(st,axis,patch,excluded,automatic,&|_,_|{}));
             let mut done=completed.lock().unwrap();
             *done+=1;
             progress(*done,starts.len());
             result
-        }).collect();
+        })).collect();
         results.extend(batch);
         if CANCEL.load(Ordering::Relaxed) {break;}
     }

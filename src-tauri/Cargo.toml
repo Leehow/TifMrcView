@@ -222,3 +222,7 @@ required-features = ["pro"]
 [[example]]
 name = "sta_cards"
 required-features = ["pro"]
+
+[[example]]
+name = "local_acceptance"
+required-features = ["cli"]

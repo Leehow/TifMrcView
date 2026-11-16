@@ -63,6 +63,7 @@
   }
   function updateBar(message) {
     for(const id of ['cryoet-workspace','spa-workspace']) {const panel=$(id);if(!panel)continue;let bar=panel.querySelector('.remote-processing-location');if(!bar){bar=document.createElement('div');bar.className='remote-processing-location';panel.querySelector('.al-head')?.after(bar);}
+      if(!current()&&window.TmvLocal){TmvLocal.render(bar,id==='spa-workspace'?'spa':'tomo');continue;}
       const expanded=new Map([...bar.querySelectorAll('details')].map(d=>[d.className,d.open]));
       bar.replaceChildren();const text=document.createElement('span');text.textContent=message||label();bar.append(text);
       const task=[...active.values()].find(j=>j.ctx.identity===current()?.identity);

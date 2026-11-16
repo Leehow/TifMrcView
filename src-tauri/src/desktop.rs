@@ -61,6 +61,36 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Sen
     tauri::async_runtime::spawn_blocking(f).await.map_err(err)?.map_err(err)
 }
 
+async fn local_compute<T: Send + 'static>(app: AppHandle, id: Option<String>, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> CmdResult<T> {
+    blocking(move || {
+        #[cfg(feature = "pro")]
+        {
+            let sink = std::sync::Arc::new(move |mut placement: crate::compute::Placement| {
+                if placement.backend != "CPU" && placement.worker.is_none() {
+                    if let Some((dev, backend)) = crate::ctf_gpu::device() {
+                        placement.backend = format!("{} · {backend}", if placement.backend.contains("CPU") { "GPU + CPU" } else { "GPU" });
+                        placement.device = crate::ctf_gpu::guarded(|| dev.identity().map(|i| i.name)).ok().flatten();
+                    }
+                }
+                let _ = app.emit("local-compute", serde_json::json!({ "id": id, "placement": placement }));
+            });
+            crate::compute::scoped(sink, f)
+        }
+        #[cfg(not(feature = "pro"))]
+        { let _ = (app, id); f() }
+    }).await
+}
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn local_compute_resources() -> CmdResult<serde_json::Value> {
+    blocking(|| {
+        let mut value = serde_json::to_value(crate::resources::inspect(None))?;
+        #[cfg(target_os = "macos")]
+        { value["metal"] = serde_json::to_value(crate::resources::metal_memory())?; }
+        Ok(value)
+    }).await
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Opened {
@@ -1682,17 +1712,17 @@ async fn power_spectrum(
 
 /// CTF fit (Pro) on the power spectrum of a region; see `ctf::fit_region`.
 #[tauri::command]
-async fn ctf_fit(state: State<'_, AppState>, req: crate::ctf::FitReq) -> CmdResult<crate::ctf::Fit> {
+async fn ctf_fit(app: AppHandle, state: State<'_, AppState>, req: crate::ctf::FitReq, compute_id: Option<String>) -> CmdResult<crate::ctf::Fit> {
     let img = current(&state, req.token)?;
-    blocking(move || crate::ctf::fit_region(&img, &req)).await
+    local_compute(app.clone(), compute_id, move || crate::ctf::fit_region(&img, &req)).await
 }
 
 /// CTF fit (Pro) on the same region of every slice (tilt series, stack);
 /// reports `ctf-stack` {done, total}.
 #[tauri::command]
-async fn ctf_fit_stack(app: AppHandle, req: crate::ctf::StackReq) -> CmdResult<crate::ctf::StackFit> {
+async fn ctf_fit_stack(app: AppHandle, req: crate::ctf::StackReq, compute_id: Option<String>) -> CmdResult<crate::ctf::StackFit> {
     let img = current(&app.state::<AppState>(), req.token)?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let progress = |done, total| {
             let _ = app.emit("ctf-stack", serde_json::json!({ "done": done, "total": total }));
         };
@@ -1709,10 +1739,10 @@ fn ctf_cancel() {
 /// Drift / motion correction (Pro): shifts of every slice; reports
 /// `align-progress` {done, total}.
 #[tauri::command]
-async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResult<crate::align::Aligned> {
+async fn align_estimate(app: AppHandle, req: crate::align::AlignReq, compute_id: Option<String>) -> CmdResult<crate::align::Aligned> {
     #[cfg(feature = "pro")] let job=MotionJob::begin(false)?;
     let img = current(&app.state::<AppState>(), req.token)?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let progress = |done, total| {
             let _ = app.emit("align-progress", serde_json::json!({ "done": done, "total": total }));
         };
@@ -1725,22 +1755,22 @@ async fn align_estimate(app: AppHandle, req: crate::align::AlignReq) -> CmdResul
 /// Beam-induced movie correction, sharing the global movie solver.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn motion_run(app: AppHandle, req: crate::motion::RunReq) -> CmdResult<crate::motion::MotionResult> {
+async fn motion_run(app: AppHandle, req: crate::motion::RunReq, compute_id: Option<String>) -> CmdResult<crate::motion::MotionResult> {
     let img = {
         let state=app.state::<AppState>();
         if !state.save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
         req.token.map(|token|current(&state,token)).transpose()?
     };
     let job=MotionJob::begin(true)?;
-    blocking(move || {let _job=job;crate::motion::run(&req,img,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+    local_compute(app.clone(), compute_id, move || {let _job=job;crate::motion::run(&req,img,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
 }
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn motion_series(app: AppHandle, req: crate::motion::series::SeriesReq) -> CmdResult<crate::motion::series::SeriesResult> {
+async fn motion_series(app: AppHandle, req: crate::motion::series::SeriesReq, compute_id: Option<String>) -> CmdResult<crate::motion::series::SeriesResult> {
     if !app.state::<AppState>().save_paths.allowed(&req.output) {return Err("输出路径必须由保存对话框选择".into());}
     let job=MotionJob::begin(true)?;
-    blocking(move || {let _job=job;crate::motion::series::run(&req,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
+    local_compute(app.clone(), compute_id, move || {let _job=job;crate::motion::series::run(&req,&|stage,done,total|{let _=app.emit("motion-progress",serde_json::json!({"stage":stage,"done":done,"total":total}));})}).await
 }
 
 #[cfg(feature = "pro")]
@@ -1815,9 +1845,9 @@ fn tomo_emit(app: &AppHandle) -> impl Fn(&str, usize, usize) + Sync + '_ {
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_align(app: AppHandle, stack: String, req: crate::tomo::AlignReq) -> CmdResult<crate::tomo::dataset::Dataset> {
+async fn tomo_align(app: AppHandle, stack: String, req: crate::tomo::AlignReq, compute_id: Option<String>) -> CmdResult<crate::tomo::dataset::Dataset> {
     let _job = TomoJob::begin()?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let _job = _job;
         let (img, mut d) = tomo_open(&stack)?;
         let emit = tomo_emit(&app);
@@ -1856,10 +1886,11 @@ struct TomoStepReq<T> { stack: String, #[serde(flatten)] step: T }
 async fn tomo_step<T: Send + 'static, R: Serialize + Send + 'static>(
     app: AppHandle,
     req: TomoStepReq<T>,
+    compute_id: Option<String>,
     run: impl FnOnce(&mut crate::tomo::dataset::Dataset, &T, &(dyn Fn(&str, usize, usize) + Sync)) -> anyhow::Result<R> + Send + 'static,
 ) -> CmdResult<serde_json::Value> {
     let _job = TomoJob::begin()?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let _job = _job;
         let (_, mut d) = tomo_open(&req.stack)?;
         let emit = tomo_emit(&app);
@@ -1875,8 +1906,8 @@ struct TomoCtfStep { n: usize, params: crate::ctf::Params }
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_ctf(app: AppHandle, req: TomoStepReq<TomoCtfStep>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| crate::tomo::pipeline::ctf(d, &s.params, s.n, p)).await
+async fn tomo_ctf(app: AppHandle, req: TomoStepReq<TomoCtfStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| crate::tomo::pipeline::ctf(d, &s.params, s.n, p)).await
 }
 
 #[cfg(feature = "pro")]
@@ -1890,8 +1921,8 @@ fn one() -> usize { 1 }
 /// Writes the dataset for other software (`tomo::export`) into a folder the user picked.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
+async fn tomo_export(app: AppHandle, req: TomoStepReq<TomoExportStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| crate::tomo::export::run(d, &s.format, &s.dir, s.bin, &|i, n| p("导出", i, n))).await
 }
 
 /// The GPU Pro computes on: backend name (Vulkan, CUDA, DX12, Metal or
@@ -1912,14 +1943,14 @@ async fn gpu_info() -> serde_json::Value {
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| crate::tomo::pipeline::reconstruct(d, s, p)).await
+async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::ReconStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| crate::tomo::pipeline::reconstruct(d, s, p)).await
 }
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::DenoiseStep>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| {
+async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::DenoiseStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| {
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         crate::ctf_gpu::guarded(|| crate::tomo::pipeline::denoise(dev, d, s, p))?
     }).await
@@ -1929,8 +1960,8 @@ async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::De
 /// and denoising with the choices made, the result opened by the UI.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| {
+async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| {
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         crate::ctf_gpu::guarded(|| crate::tomo::auto::run(dev, d, s, p))?
     }).await
@@ -1960,10 +1991,10 @@ struct TomoSessionRun {
 /// a series has come further, `tomo-progress` as for the single steps.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_session_run(app: AppHandle, req: TomoSessionRun) -> CmdResult<crate::tomo::session::Session> {
+async fn tomo_session_run(app: AppHandle, req: TomoSessionRun, compute_id: Option<String>) -> CmdResult<crate::tomo::session::Session> {
     let _job = TomoJob::begin()?;
     let motion = MotionJob::begin(true)?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let (_job, _motion) = (_job, motion);
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         let emit = tomo_emit(&app);
@@ -2008,8 +2039,8 @@ async fn tomo_take(stack: String, take: Option<bool>) -> CmdResult<crate::tomo::
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>) -> CmdResult<serde_json::Value> {
-    tomo_step(app, req, |d, s, p| {
+async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::WedgeStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| {
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         crate::ctf_gpu::guarded(|| crate::tomo::pipeline::wedge(dev, d, s, p))?
     }).await
@@ -2017,14 +2048,14 @@ async fn tomo_wedge(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::Wedg
 
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn tomo_save_aligned(app: AppHandle, req: crate::tomo::output::SaveReq) -> CmdResult<()> {
+async fn tomo_save_aligned(app: AppHandle, req: crate::tomo::output::SaveReq, compute_id: Option<String>) -> CmdResult<()> {
     let img = {
         let state = app.state::<AppState>();
         if !state.save_paths.allowed(&req.path) { return Err("输出路径必须由保存对话框选择".into()); }
         current(&state, req.token)?
     };
     let _job = TomoJob::begin()?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let _job = _job;
         crate::tomo::output::save(&img, &req, &|done, total| { let _ = app.emit("tomo-progress", serde_json::json!({"done":done,"total":total})); })
     }).await
@@ -2125,10 +2156,10 @@ struct SpaStep {
 /// {project, result}.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn spa_run(app: AppHandle, req: SpaStep) -> CmdResult<serde_json::Value> {
+async fn spa_run(app: AppHandle, req: SpaStep, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
     use crate::spa::project as sp;
     let job = SpaJob::begin()?;
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let _job = job;
         let emit = |stage: &str, done: usize, total: usize| { let _ = app.emit("spa-progress", serde_json::json!({"stage":stage,"done":done,"total":total})); };
         let mut p = sp::Project::load(&req.dir)?;
@@ -2838,16 +2869,16 @@ fn align_cancel() {
 /// Denoising (Pro): the middle of the visible region of one slice, as
 /// `denoise::Denoised::to_bytes`.
 #[tauri::command]
-async fn denoise_preview(state: State<'_, AppState>, req: crate::denoise::PreviewReq) -> CmdResult<Response> {
+async fn denoise_preview(app: AppHandle, state: State<'_, AppState>, req: crate::denoise::PreviewReq, compute_id: Option<String>) -> CmdResult<Response> {
     let img = current(&state, req.token)?;
-    let d = blocking(move || crate::denoise::preview(&img, &req)).await?;
+    let d = local_compute(app.clone(), compute_id, move || crate::denoise::preview(&img, &req)).await?;
     Ok(Response::new(d.to_bytes()))
 }
 
 /// Writes the denoised slices to a path from `pick_save_path`; reports
 /// `denoise-progress` {done, total} and returns the backend used.
 #[tauri::command]
-async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq) -> CmdResult<String> {
+async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq, compute_id: Option<String>) -> CmdResult<String> {
     let img = {
         let state = app.state::<AppState>();
         if !state.save_paths.allowed(&req.path) {
@@ -2855,7 +2886,7 @@ async fn denoise_save(app: AppHandle, req: crate::denoise::SaveReq) -> CmdResult
         }
         current(&state, req.token)?
     };
-    blocking(move || {
+    local_compute(app.clone(), compute_id, move || {
         let progress = |done, total| {
             let _ = app.emit("denoise-progress", serde_json::json!({ "done": done, "total": total }));
         };
@@ -2908,10 +2939,10 @@ struct DenoiseTrained {
 /// `denoise-train` {step, steps, loss}. The model then serves the
 /// "learned" method of `denoise_preview` and `denoise_save`.
 #[tauri::command]
-async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<DenoiseTrained> {
+async fn denoise_train(app: AppHandle, req: DenoiseTrainReq, compute_id: Option<String>) -> CmdResult<DenoiseTrained> {
     #[cfg(not(feature = "pro"))]
     {
-        let _ = (app, req);
+        let _ = (app, req, compute_id);
         pro_only()
     }
     #[cfg(feature = "pro")]
@@ -2919,7 +2950,7 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
         use crate::denoise_learn::{Mode, CANCEL, MODEL};
         let img = current(&app.state::<AppState>(), req.token)?;
         CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
-        blocking(move || {
+        local_compute(app.clone(), compute_id, move || {
             let started = std::time::Instant::now();
             let info = img.info();
             let (w, h, nz) = (info.width, info.height, info.size_z);
@@ -3002,6 +3033,7 @@ async fn denoise_train(app: AppHandle, req: DenoiseTrainReq) -> CmdResult<Denois
             let warning = (corr.abs() > 0.15).then(|| format!("这份数据的噪声在相邻像素间相关（{corr:+.2}），可能已经滤过波或插值过；自监督降噪对这种数据效果有限"));
             let out = DenoiseTrained { mode: req.mode, images: pairs.len(), loss, backend: backend.to_string(), seconds: started.elapsed().as_secs_f32(), warning, persistence };
             eprintln!("denoise_train: {} on {} images, loss {:.4}, {} in {:.1} s", out.mode, out.images, out.loss, out.backend, out.seconds);
+            crate::compute::report("自监督训练", backend, None);
             Ok(out)
         })
         .await
@@ -3710,6 +3742,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_denoise,
             #[cfg(feature = "pro")] tomo_wedge,
             #[cfg(feature = "pro")] gpu_info,
+            #[cfg(feature = "pro")] local_compute_resources,
             #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_session,

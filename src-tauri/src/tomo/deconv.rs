@@ -71,10 +71,7 @@ fn gpu(vol: &[f32], [w,h,z]: [usize;3], pixel: f64, df: f64, o: &Optics, dev: &b
  let count=nx.checked_mul(ny).and_then(|v|v.checked_mul(nz)).ok_or_else(||anyhow::anyhow!("volume too large"))?;
  // Keep the complete FFT chain resident. Budget includes FFT workspace and
  // filter temporaries; insufficient VRAM uses CPU rather than six PCIe trips.
- let devices=crate::resources::discover();
- let mask=std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
- let selected=devices.iter().find(|g|mask.split(',').next()==Some(g.uuid.as_str())||mask.split(',').next()==Some(g.index.to_string().as_str())).or_else(||devices.first());
- let available=selected.map(|g|g.free_mb*1024*1024).unwrap_or(512*1024*1024);
+ let available=crate::resources::gpu_available_bytes();
  anyhow::ensure!((count as u64).saturating_mul(48) < available*85/100,"完整 GPU FFT 与滤波预计需 {:.1} GB，可用显存 {:.1} GB；选择 CPU，避免分轴反复传输",count as f64*48./1e9,available as f64/1e9);
  let mean=(vol.par_iter().map(|&v|v as f64).sum::<f64>()/vol.len() as f64) as f32;
  let mut padded=vec![0.;count];
@@ -134,6 +131,18 @@ fn fft3(re: &mut [f32], im: &mut [f32], [nx, ny, nz]: [usize; 3], inverse: bool)
 #[cfg(test)]
 mod gpu_tests{
  use super::*;
+ #[cfg(target_os="macos")]
+ #[test]
+ #[ignore = "requires Metal and at least 1 GiB free unified-memory budget"]
+ fn metal_deconvolution_uses_unified_memory() {
+  let (dev,name)=crate::ctf_gpu::device().expect("Metal required"); assert_eq!(*name,"Metal");
+  // 768 MiB FFT workspace is modest on this 32 GiB M1 Max, but the
+  // NVIDIA-only probe incorrectly caps Metal at 512 MiB before dispatch.
+  let shape=[256,256,256]; let input=vec![1.0;256*256*256];
+  let output=gpu(&input,shape,3.2,25000.,&Optics::of(300.,2.7,0.07),dev)
+    .expect("Metal must use its actual unified-memory working-set budget");
+  assert!(output.iter().all(|v|v.is_finite() && v.abs()<0.00001));
+ }
  #[test]
  fn gpu_deconvolution_matches_cpu_reference(){
   let Some((dev,_))=crate::ctf_gpu::device()else{assert!(std::env::var_os("TMV_REQUIRE_GPU").is_none(),"GPU required");return;};

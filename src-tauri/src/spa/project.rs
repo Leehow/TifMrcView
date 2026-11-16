@@ -602,6 +602,7 @@ pub fn pick_one(p: &Project, i: usize, params: &PickParams) -> Result<Vec<[f32; 
 }
 
 pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Result<usize> {
+    #[cfg(feature="pro")] crate::compute::cpu_stage("单颗粒拾取", "CPU 多尺度筛选与去重");
     let n = p.mics.len();
     let mut all = vec![];
     for i in 0..n {
@@ -675,6 +676,7 @@ pub fn extract_all(
     invert: bool,
     progress: Progress,
 ) -> Result<StackInfo> {
+    #[cfg(feature="pro")] crate::compute::cpu_stage("单颗粒提取与归一化", "CPU 读取局部粒子并写入粒子堆栈");
     let picks = p.picks()?;
     if picks.iter().all(Vec::is_empty) {
         bail!("还没有挑选颗粒");

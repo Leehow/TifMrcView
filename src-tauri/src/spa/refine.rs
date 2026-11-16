@@ -122,6 +122,7 @@ fn local_gpu(_: &Projector, _: &Half) -> Option<Gpu> {
 fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, half: &Half, deltas: &[Mat], ratio: f32, parts: &mut [Particle], chunk: &[usize]) {
     let k = c.k;
     let s = offs.len();
+    #[cfg(feature="pro")] let mut fallback = "GPU 局部搜索工作区初始化失败或无可用 GPU".to_string();
     #[cfg(feature = "pro")]
     if let Some(g) = gpu {
         let d = deltas.len();
@@ -133,7 +134,9 @@ fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, hal
                 deltas.iter().map(move |dl| geom::mul(dl, &r0))
             })
             .collect();
-        if let Ok(Ok(found)) = crate::ctf_gpu::guarded(|| g.search(c, s, &rots, d)) {
+        let searched = crate::ctf_gpu::guarded(|| g.search(c, s, &rots, d));
+        if let Ok(Ok(ref found)) = searched {
+            crate::compute::report("单颗粒局部姿态搜索", "GPU", None);
             for (j, &i) in chunk.iter().enumerate() {
                 let (di, si, sc) = found[j];
                 let a = geom::angles(&rots[j * d + di]);
@@ -145,7 +148,9 @@ fn local(c: &Coeffs, offs: &[[f32; 2]], proj: &Projector, gpu: Option<&Gpu>, hal
             }
             return;
         }
+        fallback = format!("GPU 局部搜索失败：{searched:?}");
     }
+    #[cfg(feature="pro")] crate::compute::report("单颗粒局部姿态搜索", "CPU", Some(fallback));
     #[cfg(not(feature = "pro"))]
     let _ = gpu;
     let found: Vec<(Mat, usize, f32)> = chunk
@@ -596,13 +601,21 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
                 check_cancel()?;
                 let fts = next.take().unwrap_or_default();
                 let c = coeffs_from(stack, &fts, parts, chunk, optics, &half, &noise, &offs);
+                #[cfg(feature="pro")] let compute_context = crate::compute::context();
                 let (found, ahead) = rayon::join(
                     || -> Result<()> {
+                        #[cfg(feature="pro")]
+                        return crate::compute::with_context(compute_context.clone(), || {
                         match &refs {
                             Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?,
                             None => local(&c, &offs, &proj, gpu.as_ref(), &half, &deltas, ratio, parts, chunk),
                         }
                         Ok(())
+                        });
+                        #[cfg(not(feature="pro"))] {
+                            match &refs { Some(refs) => global(&c, &offs, refs, &grid, ratio, parts, chunk)?, None => local(&c, &offs, &proj, gpu.as_ref(), &half, &deltas, ratio, parts, chunk) }
+                            Ok(())
+                        }
                     },
                     || chunks.get(ci + 1).map(|c| data::transforms(stack, c)),
                 );
@@ -610,6 +623,7 @@ pub fn refine(stack: &Stack, parts: &mut [Particle], ids: &[usize], optics: &Opt
                 next = ahead;
                 clamp_shifts(parts, chunk, max_shift);
                 let c = coeffs_from(stack, &fts, parts, chunk, optics, &full, &noise, &[]);
+                #[cfg(feature="pro")] crate::compute::cpu_stage("单颗粒三维傅里叶累积", "CPU 合并粒子贡献与半图，GPU 负责批量姿态搜索");
                 insert(&mut acc, &c, &full, parts, chunk);
                 progress("三维精修", it * 2000 + hi * 1000 + (ci + 1) * 512 * 1000 / total.max(1), iters * 2000 + 1000);
             }

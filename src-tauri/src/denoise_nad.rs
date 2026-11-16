@@ -179,6 +179,7 @@ fn filter_volume(
             check()?;
             match crate::ctf_gpu::guarded(|| crate::nad_eed_gpu::Evolution::new(device, dims)) {
                 Ok(Ok(mut gpu)) => {
+                    crate::compute::cpu_stage("NAD 张量与特征分解", "CPU 双精度 f64 保留近简并特征值的数值精度；GPU 负责扩散");
                     let mut active = true;
                     let output = crate::nad_eed::diffuse_with_step(
                         volume,
@@ -193,10 +194,11 @@ fn filter_volume(
                                     crate::ctf_gpu::guarded(|| gpu.step(image, tensor, next));
                                 match result {
                                     Ok(Ok(())) if next.iter().all(|v| v.is_finite()) => {
+                                        crate::compute::report("NAD 三维扩散", name, None);
                                         return check()
                                     }
                                     failure => {
-                                        eprintln!("NAD GPU failed; continuing on CPU: {failure:?}")
+                                        { eprintln!("NAD GPU failed; continuing on CPU: {failure:?}"); crate::compute::report("NAD 三维扩散", "CPU", Some(format!("GPU 执行或有限值检查失败：{failure:?}"))); }
                                     }
                                 }
                                 active = false;
@@ -219,11 +221,11 @@ fn filter_volume(
                     return Ok((output, backend));
                 }
                 Ok(Err(error)) | Err(error) => {
-                    eprintln!("NAD GPU unavailable; using CPU: {error:#}")
+                    { eprintln!("NAD GPU unavailable; using CPU: {error:#}"); crate::compute::report("NAD 三维扩散", "CPU", Some(format!("GPU 数值资格检查或内存预算不满足：{error:#}"))); }
                 }
             }
-        }
-    }
+        } else { crate::compute::report("NAD 三维扩散", "CPU", Some(crate::compute::no_gpu())); }
+    } else { crate::compute::cpu_stage("NAD 三维扩散", if p.device == "cpu" { "用户选择 CPU" } else { "小体数据使用 CPU，避免 GPU 调度和传输开销" }); }
     Ok((
         crate::nad_eed::diffuse(volume, dims, k, p.iterations, check)?,
         "NAD 3D (CPU)",
@@ -234,6 +236,30 @@ fn filter_volume(
 mod tests {
     use super::*;
     use crate::denoise::{self, Method, PreviewReq, SaveReq};
+
+    #[cfg(all(feature="pro",target_os="macos"))]
+    #[test]
+    #[ignore = "requires an actual real-data MRC and Metal"]
+    fn real_volume_metal_matches_cpu() {
+        let path=std::env::var("TMV_NAD_REAL_VOLUME").expect("real-data path required");
+        let img=OpenImage::new(1,crate::formats::open(std::path::Path::new(&path)).unwrap(),128<<20);
+        let info=img.info();
+        let dims=[info.width.min(96),info.height.min(80),info.size_z.min(32)];
+        let mut v=Vec::new();
+        for z in 0..dims[2] {
+            let plane=crate::denoise::input(&img,0,z,0,0).unwrap();
+            for y in 0..dims[1] { let x=(info.width-dims[0])/2; let y=y+(info.height-dims[1])/2;
+                v.extend_from_slice(&plane[y*info.width+x..][..dims[0]]); }
+        }
+        let mut p=params();p.iterations=3;
+        let cpu=filter_volume(v.clone(),dims,0.8,&p,&||Ok(())).unwrap().0;
+        p.device="gpu".into();
+        let (gpu,backend)=filter_volume(v,dims,0.8,&p,&||Ok(())).unwrap();
+        assert_eq!(backend,"NAD 3D Metal");
+        let max=cpu.iter().zip(&gpu).map(|(a,b)|(a-b).abs()).fold(0f32,f32::max);
+        eprintln!("real NAD {path}, dims={dims:?}, iterations=3, backend={backend}, max_abs={max}");
+        assert_eq!(cpu,gpu,"real Metal NAD must preserve reference numerical results");
+    }
 
     fn params() -> Params {
         Params {
