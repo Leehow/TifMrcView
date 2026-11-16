@@ -13,7 +13,11 @@ pub const MAX_SIZE: u32 = 2048;
 static PLUGINS: Once = Once::new();
 
 pub fn configure_plugins(dir: Option<std::path::PathBuf>) {
-    PLUGINS.call_once(|| plugins::registry::Registry::global().configure(dir, env!("CARGO_PKG_VERSION")));
+    configure_plugins_version(dir, env!("CARGO_PKG_VERSION"));
+}
+
+pub fn configure_plugins_version(dir: Option<std::path::PathBuf>, version: &str) {
+    PLUGINS.call_once(|| plugins::registry::Registry::global().configure(dir, version));
 }
 
 /// Middle Z, first T, all channels. No stack prefetch or metadata plugins.
@@ -104,6 +108,19 @@ pub fn cli(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<i32> {
 mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};
+
+    #[test]
+    fn falcon_gain_is_a_float_tiff_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reference.gain");
+        let mut enc = tiff::encoder::TiffEncoder::new(std::fs::File::create(&path).unwrap()).unwrap();
+        enc.write_image::<tiff::encoder::colortype::Gray32Float>(2, 2, &[1.0, 0.9, 1.1, 0.0]).unwrap();
+        drop(enc);
+        assert!(crate::formats::is_supported(&path));
+        let source = crate::formats::open(&path).unwrap();
+        assert_eq!((source.info().width, source.info().height), (2,2));
+        assert_eq!(&thumbnail_png(&path, 32).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
+    }
 
     #[test]
     fn low_signal_tiff_has_visible_contrast_and_plain_rgba() {

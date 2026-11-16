@@ -4,6 +4,24 @@
 .ssh-dialog { width: min(1020px, calc(100vw - 48px)); height: min(680px, calc(100vh - 64px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px #0003; overflow: hidden; }
 .ssh-dialog[open] { display: flex; flex-direction: column; }
 .ssh-dialog::backdrop { background: #10182866; backdrop-filter: blur(4px); }
+.remote-navigation { display: flex; gap: 6px; padding: 8px; }
+.remote-navigation > :first-child { flex: 1; }
+.remote-search { width: calc(100% - 16px); margin: 0 8px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface); }
+.remote-directory-count { padding: 8px; color: var(--dim); font-size: 11px; }
+.remote-file { display: flex; width: calc(100% - 12px); margin: 4px 6px; padding: 10px 8px; gap: 7px; text-align: left; align-items: center; }
+.remote-file > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.remote-file small { color: var(--dim); white-space: nowrap; }
+.remote-file-icon { color: var(--accent); font-size: 18px; }
+.remote-more { width: calc(100% - 16px); margin: 8px; }
+.ssh-document { width: min(900px, calc(100vw - 48px)); max-height: 85vh; padding: 20px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--surface); }
+.ssh-document::backdrop { background: #10182866; }
+.ssh-document header { display: flex; align-items: center; gap: 10px; }
+.ssh-document h2 { flex: 1; margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.ssh-document header button { font-size: 24px; }
+.ssh-document-info { color: var(--dim); overflow-wrap: anywhere; }
+.ssh-document pre { max-height: 50vh; overflow: auto; white-space: pre-wrap; user-select: text; font-size: 12px; }
+.ssh-document-links { max-height: 110px; overflow: auto; display: flex; flex-wrap: wrap; gap: 5px; }
+.ssh-document-links p { width: 100%; margin: 5px 0; }
 .ssh-entry.image .ssh-entry-name > :first-child { width: 48px; height: 40px; object-fit: contain; flex-shrink: 0; }
 .ssh-heading { display: flex; align-items: center; gap: 13px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .ssh-symbol { width: 40px; height: 40px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); flex-shrink: 0; }

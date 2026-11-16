@@ -14,7 +14,7 @@ use crate::plugins::registry::Registry;
 /// Formats built into the app. Others (Zeiss CZI…) come from WebAssembly
 /// plugins, see `plugins::registry`.
 pub const CORE_EXTENSIONS: &[&str] =
-    &["tif", "tiff", "mrc", "mrcs", "rec", "st", "map", "ali", "preali", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
+    &["tif", "tiff", "gain", "mrc", "mrcs", "rec", "st", "map", "ali", "preali", "png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
 fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
@@ -80,6 +80,13 @@ pub(crate) fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Re
     }
     let core: Box<dyn Source> = match ext.as_str() {
         "tif" | "tiff" => Box::new(tiff::TiffSource::open(path)?),
+        "gain" => {
+            let mut header = [0;4];
+            std::io::Read::read_exact(&mut std::fs::File::open(path)?, &mut header)?;
+            if matches!(&header, b"II\x2a\0" | b"MM\0\x2a" | b"II\x2b\0" | b"MM\0\x2b") {
+                Box::new(tiff::TiffSource::open(path)?)
+            } else { Box::new(mrc::MrcSource::open(path)?) }
+        },
         _ if montage => montage::open(path, series)?,
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" | "preali" => Box::new(mrc::MrcSource::open(path)?),
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" => Box::new(raster::RasterSource::open(path)?),

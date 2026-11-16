@@ -3887,6 +3887,7 @@ function buildStrip() {
     },
     { root: $("sidebar"), rootMargin: "600px 0px" },
   );
+  if (S.folder.remote && S.folder.entries) { buildRemoteDirectory(strip); return; }
   let body = null;
   let group = null;
   S.folder.files.forEach((f, i) => {
@@ -3988,8 +3989,9 @@ function pumpThumbs() {
 function markStrip(keepScroll = false) {
   updateInfo();
   const thumbs = [...$("strip").querySelectorAll(".thumb")];
-  thumbs.forEach((el, i) => el.classList.toggle("cur", i === S.folder.index));
-  const cur = thumbs[S.folder.index];
+  const current = S.folder.files[S.folder.index];
+  thumbs.forEach((el) => el.classList.toggle("cur", el.dataset.path === current));
+  const cur = thumbs.find(el => el.dataset.path === current);
   // Open the folded group the image shown is in.
   const sec = cur && cur.closest(".strip-group.folded");
   if (sec) {

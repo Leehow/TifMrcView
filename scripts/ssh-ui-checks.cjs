@@ -23,6 +23,12 @@ module.exports = async function checkSsh(page) {
       }
       if (method === "list") {
         if (window.sshFailList) throw new Error("无法访问路径：权限不足");
+        if (args.path === '/dataset') return {path:args.path,entries:[
+          {name:'eer',path:'/dataset/eer',directory:true,size:0},
+          {name:'mdocfolder',path:'/dataset/mdocfolder',directory:true,size:0},
+          {name:'reference.gain',path:'/dataset/reference.gain',directory:false,supported:false,size:1024},
+        ]};
+        if (args.path === '/dataset/mdocfolder') return {path:args.path,entries:[{name:'series.mdoc',path:'/dataset/mdocfolder/series.mdoc',directory:false,supported:false,size:512,modified:1700000000}]};
         return { path: args.path, entries: [
           { name: "中文 folder", path: `${args.path}/中文 folder`, directory: true, size: 0, modified: 1700000000 },
           { ...image, path: `${args.path}/sample 01.mrc` },
@@ -36,6 +42,8 @@ module.exports = async function checkSsh(page) {
         return { path: image.local };
       }
       if (method === "thumbnail") return { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j9S8AAAAASUVORK5CYII=" };
+      if (method === 'readText') return {text:'[ZValue = 0]\nTiltAngle = 10\nSubFramePath = Z:\\old\\sample 01.mrc\n',truncated:false};
+      if (method === 'resolveMovie') return {folder:'/data',path:'/data/sample 01.mrc'};
       return null;
     };
     window.mockSshOpen = async ({ path }) => {
@@ -97,7 +105,7 @@ module.exports = async function checkSsh(page) {
   await q("up").click();
   await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="path"]').value === "/data");
   await page.getByRole("listitem", { name: "notes.txt", exact: true }).click();
-  assert.equal(await q("load").isDisabled(), true);
+  assert.equal(await q("load").isDisabled(), false, 'non-image files have a viewer, not a disabled action');
   await q("search").fill(""); // clear selection
   await page.evaluate(() => { window.sshFailList = true; });
   await q("path").fill("/denied"); await q("path").press("Enter");
@@ -118,6 +126,26 @@ module.exports = async function checkSsh(page) {
   assert(loadBounds.x >= modalBounds.x && loadBounds.x + loadBounds.width <= modalBounds.x + modalBounds.width, "load action remains within the narrow dialog");
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => { delete document.documentElement.dataset.edition; });
+  await q('path').fill('/dataset'); await q('path').press('Enter');
+  await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="path"]').value === '/dataset');
+  assert.equal(await q('load').isEnabled(), true, 'a directory with only subfolders/data must still load');
+  await q('load').click();
+  await page.locator('#strip .remote-entry').first().waitFor({state:'visible'});
+  assert.equal(await page.evaluate(() => sshDownloads.length), 0, 'mounting a directory never downloads its first image');
+  assert.equal(await page.locator('#strip').getByRole('button', {name:'eer，文件夹',exact:true}).count(), 1);
+  await page.locator('#strip').getByRole('button', {name:'eer，文件夹',exact:true}).click();
+  await page.waitForFunction(() => S.folder.remotePath.endsWith('/dataset/eer'));
+  await page.getByRole('button',{name:'↑ 上级目录',exact:true}).click();
+  await page.locator('#strip').getByRole('button',{name:'mdocfolder，文件夹',exact:true}).click();
+  await page.locator('#strip').getByRole('button',{name:'series.mdoc',exact:true}).click();
+  await page.locator('.ssh-document pre').waitFor({state:'visible'});
+  assert.match(await page.locator('.ssh-document pre').textContent(), /SubFramePath/);
+  await page.getByRole('button',{name:'查找 sample 01.mrc',exact:true}).click();
+  await page.waitForFunction(() => S.folder.remotePath === '/data' && S.folder.view.query === 'sample 01.mrc');
+  assert.equal(await page.evaluate(() => sshDownloads.length),0,'MDOC lookup does not eagerly fetch movies');
+  await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
+  await q('path').fill('/data'); await q('path').press('Enter');
+  await page.getByRole('listitem',{name:'sample 01.mrc',exact:true}).click();
   await q("load").click();
   await page.waitForFunction(() => sshOpened.length === 1);
   await page.locator('#strip .thumb .box img').waitFor({ state: 'visible' });

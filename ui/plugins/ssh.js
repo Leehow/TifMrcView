@@ -1,7 +1,7 @@
 "use strict";
 
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.2.0",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.3.0",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) return;
@@ -85,7 +85,7 @@ TifMrcView.register({
       if (!previews.has(key)) {
         const pending = connection;
         if (previews.size >= 128) previews.delete(previews.keys().next().value);
-        previews.set(key, new Promise((resolve, reject) => { previewQueue.push({ pending, entry, resolve, reject }); }));
+        previews.set(key, new Promise((resolve, reject) => { previewQueue.push({ key, pending, entry, resolve, reject }); }));
       }
       pumpPreviews();
       return previews.get(key);
@@ -141,9 +141,9 @@ TifMrcView.register({
       const images = entries.filter((e) => e.supported);
       el("selection").textContent = target || "尚未选择文件夹";
       el("selection").title = target;
-      el("hint").textContent = !home ? "连接后选择目录，图像会在打开时按需缓存" : selected && !selected.directory ? selected.supported ? `所选图像 · ${bytes(selected.size)}` : "此文件不是当前可打开的图像格式" : selected?.directory ? "将加载所选文件夹中的图像" : `${images.length} 个可读图像 · 打开时按需缓存，不下载整个文件夹`;
-      el("load").textContent = selected && !selected.directory ? "打开所选图像 →" : "加载此文件夹 →";
-      el("load").disabled = busy || !home || (selected && !selected.directory ? !selected.supported : !selected?.directory && !images.length);
+      el("hint").textContent = !home ? "连接后选择目录，图像会在打开时按需缓存" : selected && !selected.directory ? `${selected.supported ? "所选图像" : "所选文件"} · ${bytes(selected.size)}` : "在右侧栏浏览全部文件夹和文件，点击图像时按需读取";
+      el("load").textContent = selected && !selected.directory ? selected.supported ? "打开所选图像 →" : "查看所选文件 →" : "加载此文件夹 →";
+      el("load").disabled = busy || !home;
     }
     function renderList() {
       previewObserver.disconnect();
@@ -168,9 +168,9 @@ TifMrcView.register({
           for (const other of el("list").children) other.classList.toggle("selected", other === row);
           updateSelection();
         };
-        row.ondblclick = () => { if (!busy) entry.directory ? browse(entry.path) : entry.supported && load(entry); };
+        row.ondblclick = () => { if (!busy) entry.directory ? browse(entry.path) : load(entry); };
         row.onkeydown = (event) => {
-          if (event.key === "Enter") { event.preventDefault(); if (!busy) entry.directory ? browse(entry.path) : entry.supported && load(entry); }
+          if (event.key === "Enter") { event.preventDefault(); if (!busy) entry.directory ? browse(entry.path) : load(entry); }
         };
         el("list").append(row);
         if (entry.supported) { row._preview = { row, entry }; previewObserver.observe(row); }
@@ -194,6 +194,7 @@ TifMrcView.register({
       }
     }
     async function browse(path) {
+      for (const job of previewQueue.splice(0)) { previews.delete(job.key); job.reject(new Error('目录已变化')); }
       const request = ++browsing;
       error(); setBusy(true);
       try {
@@ -204,6 +205,7 @@ TifMrcView.register({
         el("navigation").hidden = false; el("empty").hidden = true; el("list-wrap").hidden = false;
         el("list").scrollTop = 0;
         breadcrumbs(); renderList();
+        return true;
       } catch (e) { if (!disposed && request === browsing) { error(e); el("path").value = current; } }
       finally { if (!disposed && request === browsing) setBusy(false); }
     }
@@ -301,15 +303,52 @@ TifMrcView.register({
       if (busy) return;
       error();
       if (!file && selected?.directory) { await browse(selected.path); if (!current || !el("error").hidden) return; }
-      const images = entries.filter((e) => e.supported);
-      if (!images.length) { error("此文件夹中没有可打开的图像，请选择其他目录。"); return; }
-      const target = file || (selected && !selected.directory ? selected : images[0]);
+      const target = file || (selected && !selected.directory ? selected : null);
       setBusy(true);
       try {
-        app.folders.mount({ name: current.split("/").filter(Boolean).pop() || "/", path: `${el("address").textContent}${current}`, entries: images, resolve: download, thumbnail: preview });
+        mountFolder();
         dialog.close();
-        await app.open(target.local);
+        if (target) { if (target.supported) await app.open(target.local); else await inspect(target); }
       } catch (e) { if (!disposed) { if (!dialog.open) dialog.showModal(); error(e); } }
+      finally { if (!disposed) setBusy(false); }
+    }
+    function mountFolder() {
+      app.folders.mount({ name: current.split('/').filter(Boolean).pop() || '/', path: current, address: el('address').textContent,
+        entries, resolve: download, thumbnail: preview, navigate, inspect });
+    }
+    async function navigate(path) {
+      if (disposed || !connection) throw new Error('连接已断开，请重新连接');
+      if (!await browse(path)) throw new Error(el('error').textContent || '无法打开远程目录');
+      mountFolder();
+    }
+    const documentView = document.createElement('dialog'); documentView.className = 'ssh-document';
+    documentView.innerHTML = '<header><h2></h2><button aria-label="关闭文件查看">×</button></header><p class="ssh-document-info"></p><div class="ssh-document-links"></div><pre></pre>';
+    document.body.append(documentView);
+    documentView.querySelector('button').onclick = () => documentView.close();
+    documentView.addEventListener('keydown', e => e.stopPropagation());
+    documentView.addEventListener('click', e => { const r = documentView.getBoundingClientRect(); if (e.target === documentView && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) documentView.close(); });
+    async function inspect(entry) {
+      setBusy(true);
+      documentView.querySelector('h2').textContent = entry.name;
+      documentView.querySelector('.ssh-document-info').textContent = `${entry.path} · ${bytes(entry.size || 0)}`;
+      documentView.querySelector('.ssh-document-links').replaceChildren();
+      const text = documentView.querySelector('pre'); text.textContent = '正在读取文件内容…';
+      if (!documentView.open) documentView.showModal();
+      try {
+        const result = await native('readText', {path:entry.path,size:entry.size,modified:entry.modified});
+        if (disposed || !documentView.open) return;
+        text.textContent = result.text;
+        if (result.truncated) documentView.querySelector('.ssh-document-info').textContent += ' · 仅显示前 256 KB';
+        if (/\.mdoc$/i.test(entry.name)) {
+          const movies = [...new Set([...result.text.matchAll(/^SubFramePath\s*=\s*(.+)$/gm)].map(m => m[1].trim().split(/[\\/]/).pop()))];
+          const links = documentView.querySelector('.ssh-document-links');
+          const summary = document.createElement('p'); summary.textContent = `${(result.text.match(/^\[ZValue\s*=/gm)||[]).length} 条倾转记录 · ${movies.length} 个关联电影`; links.append(summary);
+          for (const name of movies) { const b = document.createElement('button'); b.textContent = `查找 ${name}`; b.onclick = async () => {
+            documentView.close();
+            try { const target = await native('resolveMovie',{path:entry.path,movie:name}); await navigate(target.folder); S.folder.view.query = name; buildStrip(); } catch (e) { app.ui.toast(String(e)); }
+          }; links.append(b); }
+        }
+      } catch (e) { if (!disposed) text.textContent = String(e); }
       finally { if (!disposed) setBusy(false); }
     }
     transfer.querySelector("button").onclick = () => {
@@ -367,7 +406,7 @@ TifMrcView.register({
       for (const job of previewQueue.splice(0)) job.reject(new Error("插件已关闭"));
       previews.clear();
       if (connection) native("disconnect").catch(() => {});
-      app.folders.unmount(); dialog.remove(); transfer.remove();
+      app.folders.unmount(); dialog.remove(); transfer.remove(); documentView.remove();
     };
   },
 });

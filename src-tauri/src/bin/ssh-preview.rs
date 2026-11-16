@@ -12,6 +12,15 @@ struct Request {
     size: u32,
     modified: u64,
     bytes: u64,
+    #[serde(default)]
+    plugin: Option<Plugin>,
+}
+
+#[derive(Deserialize)]
+struct Plugin {
+    root: String,
+    version: String,
+    files: Vec<(String, String)>,
 }
 
 fn run() -> Result<()> {
@@ -33,8 +42,33 @@ fn run() -> Result<()> {
         Ok(())
     };
     check()?;
-    // Do not load code/plugins from the server user's environment.
-    tifmrcview_lib::thumb::configure_plugins(None);
+    // Only files provisioned by the client for this request, never server plugins.
+    if let Some(plugin) = &r.plugin {
+        use sha2::{Digest, Sha256};
+        ensure!(
+            Path::new(&plugin.root).is_absolute() && plugin.files.len() == 3,
+            "invalid plugin request"
+        );
+        for (name, expected) in &plugin.files {
+            let relative =
+                tifmrcview_lib::plugins::package::safe_rel(name).context("invalid plugin path")?;
+            let file = Path::new(&plugin.root).join(relative);
+            ensure!(
+                file.metadata()?.len() <= 16 * 1024 * 1024,
+                "plugin too large"
+            );
+            ensure!(
+                format!("{:x}", Sha256::digest(std::fs::read(file)?)) == *expected,
+                "preview plugin checksum mismatch"
+            );
+        }
+        tifmrcview_lib::thumb::configure_plugins_version(
+            Some(plugin.root.clone().into()),
+            &plugin.version,
+        );
+    } else {
+        tifmrcview_lib::thumb::configure_plugins(None);
+    }
     let png = tifmrcview_lib::thumb::thumbnail_png(path, r.size)?;
     ensure!(png.len() <= 512 * 1024, "preview too large");
     check()?;

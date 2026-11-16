@@ -250,7 +250,9 @@ impl Ssh {
                 &args,
             );
         }
-        if conn.cancelled.load(Ordering::Relaxed) && method != "list" && method != "download" {
+        if conn.cancelled.load(Ordering::Relaxed)
+            && !["list", "download", "readText", "resolveMovie"].contains(&method)
+        {
             bail!("操作已取消");
         }
         let sftp = session.sftp().context("无法打开 SFTP，请重新连接")?;
@@ -258,6 +260,91 @@ impl Ssh {
             .realpath(Path::new(text(&args, "path")?))
             .context("无法访问路径，请检查路径及读取权限")?;
         match method {
+            "resolveMovie" => {
+                let name = text(&args, "movie")?
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .context("缺少电影文件名")?;
+                if name.is_empty() || name == "." || name == ".." {
+                    bail!("无效电影文件名");
+                }
+                let parent = remote.parent().context("缺少 MDOC 目录")?;
+                let mut dirs = vec![parent.to_path_buf()];
+                if let Some(root) = parent.parent() {
+                    dirs.push(root.to_path_buf());
+                }
+                for root in dirs.clone() {
+                    let mut count = 0;
+                    for (path, stat) in sftp.readdir(&root)? {
+                        if stat.is_dir()
+                            && !path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .starts_with('.')
+                        {
+                            count += 1;
+                            if count > 128 {
+                                break;
+                            }
+                            dirs.push(path);
+                        }
+                    }
+                }
+                let mut found = std::collections::HashSet::new();
+                for dir in dirs {
+                    let path = dir.join(name);
+                    if sftp.stat(&path).is_ok_and(|s| s.is_file()) {
+                        found.insert(sftp.realpath(&path)?);
+                    }
+                }
+                if found.len() > 1 {
+                    bail!("找到多个同名电影，请在侧栏选择正确的电影目录");
+                }
+                if let Some(path) = found.into_iter().next() {
+                    return Ok(
+                        json!({"path":path.to_string_lossy(),"folder":path.parent().unwrap().to_string_lossy()}),
+                    );
+                }
+                bail!("未在 MDOC 目录、上级目录及其子目录中找到 {name}，请在侧栏中选择电影所在目录")
+            }
+            "readText" => {
+                let mut input = sftp.open(&remote)?;
+                let before = input.stat()?;
+                if !before.is_file()
+                    || before.size != args["size"].as_u64()
+                    || before.mtime != args["modified"].as_u64()
+                {
+                    bail!("文件已变化，请刷新远程目录");
+                }
+                let extension = remote
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if ![
+                    "mdoc", "txt", "log", "json", "star", "xml", "yaml", "yml", "py", "sh", "csv",
+                    "tlt", "rawtlt", "md", "ini", "cfg", "pid",
+                ]
+                .contains(&extension.as_str())
+                {
+                    return Ok(
+                        json!({"text":"此文件可在目录中查看。它不是图像或支持的文本格式。", "truncated":false}),
+                    );
+                }
+                let mut bytes = Vec::new();
+                (&mut input).take(256 * 1024 + 1).read_to_end(&mut bytes)?;
+                let truncated = bytes.len() > 256 * 1024;
+                bytes.truncate(256 * 1024);
+                if bytes.contains(&0) {
+                    bail!("此文件包含二进制内容，无法作为文本查看");
+                }
+                let after = input.stat()?;
+                if before.size != after.size || before.mtime != after.mtime {
+                    bail!("文件读取时发生变化，请刷新目录");
+                }
+                Ok(json!({"text":String::from_utf8_lossy(&bytes),"truncated":truncated}))
+            }
             "list" => {
                 let mut entries = vec![];
                 let mut dir = sftp.opendir(&remote).context("无法读取目录")?;
@@ -531,6 +618,9 @@ mod tests {
     #[test]
     #[ignore = "requires an explicitly configured read-only SSH acceptance target"]
     fn configured_key_read_only_acceptance() {
+        if let Some(path) = std::env::var_os("TMV_SSH_ACCEPT_PLUGIN_DIR") {
+            crate::thumb::configure_plugins_version(Some(path.into()), "0.7.212");
+        }
         let dir = tempfile::tempdir().unwrap();
         let ssh = Ssh {
             storage: Some(dir.path().into()),
@@ -595,6 +685,10 @@ mod tests {
                 decoded.width(),
                 decoded.height()
             );
+            if std::env::var_os("TMV_SSH_ACCEPT_PREVIEW_ONLY").is_some() {
+                ssh.call("disconnect", json!({"connection":id})).unwrap();
+                return;
+            }
         }
         let cached = ssh.call("download", json!({"connection": id, "path": file["path"], "size": file["size"], "modified": file["modified"]})).unwrap();
         let path = Path::new(cached["path"].as_str().unwrap());
@@ -650,6 +744,24 @@ mod tests {
             .call("list", json!({"connection": id, "path": "/"}))
             .unwrap();
         let entries = listing["entries"].as_array().unwrap();
+        let mdoc_listing = ssh
+            .call("list", json!({"connection":id,"path":"/metadata"}))
+            .unwrap();
+        let mdoc = mdoc_listing["entries"].as_array().unwrap().iter().find(|f|f["name"]=="series.mdoc").unwrap();
+        let text = ssh.call("readText", json!({"connection":id,"path":mdoc["path"],"size":mdoc["size"],"modified":mdoc["modified"]})).unwrap();
+        assert!(text["text"].as_str().unwrap().contains("SubFramePath"));
+        let linked = ssh
+            .call(
+                "resolveMovie",
+                json!({"connection":id,"path":mdoc["path"],"movie":"Z:\\old\\fraction.eer"}),
+            )
+            .unwrap();
+        assert_eq!(linked["path"], "/movies-renamed/fraction.eer");
+        assert!(ssh.call("resolveMovie",json!({"connection":id,"path":mdoc["path"],"movie":"ambiguous.eer"})).unwrap_err().to_string().contains("多个"));
+        let long = mdoc_listing["entries"].as_array().unwrap().iter().find(|f|f["name"]=="long.txt").unwrap();
+        let text = ssh.call("readText",json!({"connection":id,"path":long["path"],"size":long["size"],"modified":long["modified"]})).unwrap();
+        assert_eq!(text["text"].as_str().unwrap().len(),256 * 1024);
+        assert_eq!(text["truncated"],true);
         assert!(entries
             .iter()
             .any(|e| e["name"] == "中文 folder" && e["directory"] == true));

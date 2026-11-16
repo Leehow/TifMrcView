@@ -106,6 +106,13 @@ def main():
         header[212:216] = b"DA\0\0"
         (root / "valid.mrc").write_bytes(header + struct.pack("<4f", 1.0, 2.0, 3.0, 4.0))
         (root / "notes.txt").write_text("not an image")
+        (root / "metadata").mkdir()
+        (root / "movies-renamed").mkdir()
+        (root / "metadata" / "series.mdoc").write_text("[ZValue = 0]\nTiltAngle = 10\nSubFramePath = Z:\\old\\fraction.eer\n")
+        (root / "movies-renamed" / "fraction.eer").write_bytes(b"movie fixture")
+        (root / "metadata" / "ambiguous.eer").write_bytes(b"first")
+        (root / "movies-renamed" / "ambiguous.eer").write_bytes(b"second")
+        (root / "metadata" / "long.txt").write_text("x" * (300 * 1024))
         (root / "slow.mrc").write_bytes(b"x" * (8 * 1024 * 1024))
         (root / "folder link").symlink_to(root / "中文 folder", target_is_directory=True)
         (root / "file link.mrc").symlink_to(root / "image space.mrc")

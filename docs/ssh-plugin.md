@@ -33,8 +33,20 @@ operation can be denied before permission processing completes.
    fingerprint and explicitly choose **信任并连接**. A changed known key is rejected.
 3. Navigate using double-click, Enter, breadcrumbs, parent/home buttons or the
    editable path. Filter the current directory or show hidden entries as needed.
-4. Choose **加载此文件夹** to put its image files in the normal sidebar and open
-   the first image. Alternatively select/double-click an individual image.
+4. Choose **加载此文件夹** to show all immediate directories and files in the
+   sidebar, even when there are no images at this level. Loading a directory
+   does not download or open a first image. Enter child directories, go up,
+   refresh, filter, or show another 100 entries at a time. Click an image to
+   fetch and open that individual file; Ctrl/Command-click keeps Pro tab routing.
+5. MDOC and other recognized text files open in a read-only viewer (up to
+   256 KiB). MDOC shows tilt-record/movie counts and lets the user locate
+   a referenced movie by basename, handling Windows source paths and looking
+   in the MDOC directory, its parent and immediate child directories. Multiple
+   matches require the user to choose a directory. Resolving a reference does
+   not download its movie. Unknown binary files remain visible with properties.
+   Falcon `.gain` files are opened as TIFF or MRC according to their header.
+   Merely opening a movie/reference does not apply gain correction or run a
+   Cryo-ET processing pipeline.
 
 Directory navigation reads metadata, then visible image rows request 256-pixel
 previews. The normal sidebar requests the same previews for unopened files.
@@ -55,7 +67,7 @@ Linux x86_64 musl binary (about 5 MB), built from the same `thumb` and format
 readers without desktop, GTK or GPU features. It requires no Python, package
 installation, shared C runtime or background service. On first use it is uploaded
 with mode 0700 into `~/.cache/tifmrcview/ssh-preview/`; its SHA-256 is checked
-before every invocation. This is the only remote write. Image paths travel as
+before every invocation. Remote writes remain limited to this private cache. Image paths travel as
 JSON over stdin, not interpolated shell commands; credentials never enter
 process arguments. The helper generates one PNG and exits, with a 12-second
 watchdog, 768 MiB address-space cap, the existing 128 MiB plane decode limit
@@ -63,10 +75,15 @@ and a 512 KiB output limit. The app serializes preview requests, prioritizes
 explicit transfers over queued previews, and caches by helper version, path,
 file size and mtime. It rejects changed files.
 
-The initial helper covers built-in TIFF, MRC/REC/ST/MAP/ALI and
-PNG/JPEG/GIF/BMP/WebP readers. It does not load executable format plugins from
-the server environment; formats needing additional plugins and non-x86_64 Linux
-servers keep placeholders. An `noexec` home/cache or SFTP-only account also
+The helper covers built-in TIFF/gain, MRC/REC/ST/MAP/ALI and
+PNG/JPEG/GIF/BMP/WebP readers. For another format, the client provisions only
+the already enabled, validated local format package that handles that extension
+into a content-addressed cache. The helper verifies the manifest/WASM hashes
+and the original minimum-app-version requirement before using the existing
+WASM sandbox. JavaScript is not executed. It does not discover or load plugins
+from the server environment. Formats without a matching enabled local plugin
+and non-x86_64 Linux servers keep placeholders. Preview cache identity also
+includes the exact format-package content. An `noexec` home/cache or SFTP-only account also
 keeps placeholders. The full-image open path is unaffected.
 
 Build the helper using `cargo build --release --no-default-features --target
