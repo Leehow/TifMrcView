@@ -16,7 +16,9 @@ module.exports = async function checkSsh(page) {
       sshCalls.push({ method, args });
       if (method === "probe") return { connection: "test-connection", fingerprint: "SHA256:testFingerprintForOfflineUI", needsTrust: true };
       if (method === "authenticate") {
-        if (args.password !== "fixture") throw new Error("身份验证失败");
+        if (args.authMethod === "keyFile") {
+          if (args.keyPath !== "/fixtures/private_key" || args.passphrase !== "fixture-key-passphrase" || "password" in args) throw new Error("密钥登录参数错误");
+        } else if (args.password !== "fixture") throw new Error("身份验证失败");
         return { path: "/data", fingerprint: "SHA256:testFingerprintForOfflineUI" };
       }
       if (method === "list") {
@@ -109,6 +111,17 @@ module.exports = async function checkSsh(page) {
   assert.equal(await page.evaluate(() => S.folder.remote), true);
   assert.equal(await page.evaluate(() => ext.remoteFiles.get("/cache/sample 01.mrc").ready), true);
   await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
+  await q("disconnect").click();
+  await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="connected"]').hidden);
+  await q("auth-method").selectOption("keyFile");
+  assert.equal(await q("password").isVisible(), false);
+  await q("pick-key").click();
+  assert.equal(await q("key-path").inputValue(), "/fixtures/private_key");
+  await q("passphrase").fill("fixture-key-passphrase");
+  await q("connect").click(); await q("trust-yes").click();
+  await q("list-wrap").waitFor({ state: "visible" });
+  assert.equal(await q("passphrase").inputValue(), "");
+  assert.equal(await page.evaluate(() => localStorage.getItem("plugin.ssh.recent").includes("fixture-key-passphrase")), false);
   await q("disconnect").click();
   await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="connected"]').hidden);
   await page.evaluate(() => deactivatePlugin(pluginHost.plugins.get("ssh")));

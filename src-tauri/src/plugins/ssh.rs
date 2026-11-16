@@ -1,4 +1,4 @@
-//! Read-only SFTP. No shell commands, remote writes, or persisted passwords.
+//! Read-only SFTP. No shell commands, remote writes, or persisted passwords/keys.
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -146,9 +146,55 @@ impl Ssh {
             if conn.needs_trust && args["trust"] != true {
                 bail!("请先确认服务器指纹");
             }
-            session
-                .userauth_password(text(&args, "username")?, text(&args, "password")?)
-                .context("身份验证失败，请检查用户名、密码以及服务器是否允许密码登录")?;
+            let username = text(&args, "username")?;
+            match args["authMethod"].as_str().unwrap_or("password") {
+                "password" => session
+                    .userauth_password(username, text(&args, "password")?)
+                    .context("身份验证失败，请检查用户名、密码以及服务器是否允许密码登录")?,
+                "keyFile" => {
+                    let value = text(&args, "keyPath")?;
+                    let path = if let Some(relative) = value.strip_prefix("~/") {
+                        dirs::home_dir().context("无法定位主目录")?.join(relative)
+                    } else {
+                        PathBuf::from(value)
+                    };
+                    let metadata = path
+                        .metadata()
+                        .context("无法读取私钥，请重新选择本地私钥文件")?;
+                    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+                        bail!("请选择有效的 SSH 私钥文件（小于 1 MB）");
+                    }
+                    let passphrase = args["passphrase"].as_str().filter(|s| !s.is_empty());
+                    if let Err(error) =
+                        session.userauth_pubkey_file(username, None, &path, passphrase)
+                    {
+                        // Use only the unlocked agent identity matching the selected key.
+                        let from_agent = (|| -> Result<()> {
+                            if passphrase.is_some() {
+                                return Err(error.into());
+                            }
+                            let mut public_path = path.as_os_str().to_os_string();
+                            public_path.push(".pub");
+                            let public = std::fs::read_to_string(PathBuf::from(public_path))?;
+                            let encoded =
+                                public.split_whitespace().nth(1).context("公钥格式无效")?;
+                            let blob = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+                            let mut agent = session.agent()?;
+                            agent.connect()?;
+                            agent.list_identities()?;
+                            let identity = agent
+                                .identities()?
+                                .into_iter()
+                                .find(|key| key.blob() == blob)
+                                .context("选中的密钥尚未在本机解锁")?;
+                            agent.userauth(username, &identity)?;
+                            Ok(())
+                        })();
+                        from_agent.context("密钥登录失败：请检查私钥和用户名；加密私钥请填写口令，或先在本机解锁对应密钥")?;
+                    }
+                }
+                _ => bail!("不支持的 SSH 登录方式"),
+            }
             if !session.authenticated() {
                 bail!("服务器未接受身份验证");
             }
@@ -467,6 +513,60 @@ mod tests {
 
     // Started by scripts/test-ssh-native.py: an isolated loopback SFTP server.
     #[test]
+    #[ignore = "requires an explicitly configured read-only SSH acceptance target"]
+    fn configured_key_read_only_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Ssh {
+            storage: Some(dir.path().into()),
+            ..Ssh::default()
+        };
+        let host = std::env::var("TMV_SSH_ACCEPT_HOST").unwrap();
+        let probe = ssh
+            .call("probe", json!({"host": host, "port": 22}))
+            .unwrap();
+        assert_eq!(
+            probe["fingerprint"],
+            std::env::var("TMV_SSH_ACCEPT_FINGERPRINT").unwrap()
+        );
+        let id = &probe["connection"];
+        ssh.call(
+            "authenticate",
+            json!({"connection": id, "trust": true, "authMethod": "keyFile",
+            "username": std::env::var("TMV_SSH_ACCEPT_USER").unwrap(),
+            "keyPath": std::env::var("TMV_SSH_ACCEPT_KEY").unwrap(), "passphrase": ""}),
+        )
+        .unwrap();
+        let listing = ssh
+            .call(
+                "list",
+                json!({"connection": id, "path": std::env::var("TMV_SSH_ACCEPT_FOLDER").unwrap()}),
+            )
+            .unwrap();
+        let name = std::env::var("TMV_SSH_ACCEPT_FILE").unwrap();
+        let file = listing["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name)
+            .unwrap();
+        let cached = ssh.call("download", json!({"connection": id, "path": file["path"], "size": file["size"], "modified": file["modified"]})).unwrap();
+        let path = Path::new(cached["path"].as_str().unwrap());
+        assert_eq!(
+            digest(&std::fs::read(path).unwrap()),
+            std::env::var("TMV_SSH_ACCEPT_SHA256").unwrap()
+        );
+        let source = crate::formats::open(path).unwrap();
+        assert!(!source.read_page(0).unwrap().is_empty());
+        println!(
+            "Verified SSH key login, SFTP listing, SHA-256 and native image decoding: {}x{}",
+            source.info().width,
+            source.info().height
+        );
+        ssh.call("disconnect", json!({"connection": id})).unwrap();
+    }
+
+    // Started by scripts/test-ssh-native.py: an isolated loopback SFTP server.
+    #[test]
     #[ignore = "requires the local fixture server"]
     fn live_sftp_roundtrip() {
         let port: u16 = std::env::var("TMV_SSH_TEST_PORT").unwrap().parse().unwrap();
@@ -584,6 +684,27 @@ mod tests {
         assert_eq!(known["needsTrust"], false);
         ssh.call("disconnect", json!({"connection": known["connection"]}))
             .unwrap();
+        for (variable, encrypted) in [
+            ("TMV_SSH_TEST_KEY", false),
+            ("TMV_SSH_TEST_ENCRYPTED_KEY", true),
+        ] {
+            let key = probe();
+            let request = json!({"connection": key["connection"], "username": "test", "authMethod": "keyFile",
+                "keyPath": std::env::var(variable).unwrap(), "passphrase": if encrypted { "fixture-key-passphrase" } else { "" }, "trust": true});
+            if encrypted {
+                let mut wrong = request.clone();
+                wrong["passphrase"] = json!("wrong");
+                assert!(ssh.call("authenticate", wrong).is_err());
+            }
+            ssh.call("authenticate", request).unwrap();
+            ssh.call(
+                "list",
+                json!({"connection": key["connection"], "path": "/中文 folder"}),
+            )
+            .unwrap();
+            ssh.call("disconnect", json!({"connection": key["connection"]}))
+                .unwrap();
+        }
         // Substitute an unrelated valid host key: mismatch must fail closed.
         let trust = ssh.trust_path().unwrap();
         let stored = std::fs::read_to_string(&trust).unwrap();

@@ -26,6 +26,10 @@
 .ssh-password { position: relative; }
 .ssh-password input { padding-right: 47px !important; }
 .ssh-password button { position: absolute; right: 3px; top: 4px; height: 28px; font-size: 11px; color: var(--dim); padding: 0 6px; }
+.ssh-form select { height: 34px; width: 100%; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--text); padding: 0 8px; font: inherit; }
+.ssh-key-group { display: grid; gap: 14px; }
+.ssh-key-picker { display: flex; align-items: center; gap: 5px; }
+.ssh-key-picker button { flex-shrink: 0; border-color: var(--line-strong); background: var(--surface); height: 34px; padding: 0 7px; font-size: 11px; }
 .ssh-dialog .ssh-connect { width: 100%; justify-content: center; height: 36px; margin-top: 3px; }
 .ssh-private { font-size: 11px; line-height: 1.85; color: var(--dim); border-top: 1px solid var(--line); margin-top: 25px; padding-top: 17px; }
 .ssh-connected { margin-top: 25px; overflow-wrap: anywhere; }

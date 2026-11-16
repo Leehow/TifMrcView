@@ -3792,6 +3792,7 @@ pub fn run() {
             write_annotations,
             plugins::plugin_scan,
             plugins::plugin_call,
+            plugins::ssh_pick_key,
             plugins::open_plugin_dir,
             plugins::pick_plugin_package,
             plugins::plugin_install,

@@ -84,6 +84,7 @@ const server = http.createServer((req, res) => {
           return window.mockSshCall(decodeURIComponent(options.headers["x-method"]), JSON.parse(decodeURIComponent(options.headers["x-args"])));
         }
         if (command === "open_image" && window.mockSshOpen) return window.mockSshOpen(args);
+        if (command === "ssh_pick_key" && window.mockSshCall) return "/fixtures/private_key";
         switch (command) {
           case "plugin_scan":
             S.info = { path: "/test/image.tif", name: "image.tif", width: 8, height: 8, sizeZ: 3, sizeT: 2, sizeC: 1, dtype: "u8", format: "TIFF", metadata: [] };

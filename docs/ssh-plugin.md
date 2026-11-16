@@ -7,7 +7,10 @@ market package. Sandboxed third-party plugins receive no new permissions.
 The SSH UI inherits the edition's accent: standard blue and Pro red, including
 toolbar/folder/image icons, buttons, focus, selection and transfer progress.
 
-1. Click SSH and enter the host/IP, port (22 by default), username and password.
+1. Click SSH and enter the host/IP, port (22 by default) and username. Choose
+   password login or local-key login. For a key, use **选择…** to load a private
+   key (not its `.pub` file), or enter its local path; `~/` is supported.
+   Enter the key's passphrase if it is encrypted and not already unlocked.
 2. For an unknown server, compare its SHA-256 fingerprint with the administrator's
    fingerprint and explicitly choose **信任并连接**. A changed known key is rejected.
 3. Navigate using double-click, Enter, breadcrumbs, parent/home buttons or the
@@ -21,8 +24,12 @@ items display an SSH placeholder rather than downloading files for thumbnails.
 Downloaded images use local cache paths, so existing native readers, annotations
 and Pro image tabs operate on the local copy. Remote data is never written.
 
-Only host, port and username are remembered (up to four recent connections).
-Passwords are cleared after authentication and never written to settings.
+Only connection details, authentication mode and the selected key's path are
+remembered (up to four recent connections). Passwords and key passphrases are
+cleared after authentication and never written to settings. Private key
+contents are read locally; only SSH authentication proofs are sent. If an
+encrypted key is already unlocked in the local SSH agent, the plugin can use
+that identity only when it exactly matches the selected key's `.pub` sibling.
 SSH and SFTP run in libssh2 through the `ssh2` crate, without shell commands,
 sshpass, a remote Python installation, or credentials in process arguments.
 The backend checks OpenSSH known_hosts and its own trusted-host file before
@@ -40,8 +47,9 @@ opening its new snapshot. Partial/cancelled transfers are removed.
 This initial implementation opens individual self-contained images in a folder.
 It does not mount a network drive, recursively download a directory, assemble
 a remote folder into a Z stack, fetch multi-file format dependencies, or sync
-local edits back to the server. Servers must support SFTP and password login;
-SSH-agent/key authentication and interactive multi-factor prompts are not exposed.
+local edits back to the server. Servers must support SFTP and either password
+or public-key login. Unrestricted agent login, agent forwarding and interactive
+multi-factor prompts are not exposed.
 
 ## Validation
 
@@ -51,7 +59,8 @@ SSH-agent/key authentication and interactive multi-factor prompts are not expose
   --no-default-features --features ssh plugins::ssh::tests` runs transport unit tests.
 - `python3 scripts/test-ssh-native.py` uses an existing Paramiko installation
   to start an isolated read-only loopback fixture. It verifies real password
-  login, trust confirmation, mismatching keys, UTF-8 names, directory/file links,
+  login, unencrypted/encrypted private-key login, rejection of a wrong key
+  passphrase, trust confirmation, mismatching keys, UTF-8 names, directory/file links,
   byte-exact transfer, cached MRC decoding and pixel values, cache reuse,
   stale metadata rejection, cancellation and
   disconnect. It never touches the user's servers or trusted-host records.

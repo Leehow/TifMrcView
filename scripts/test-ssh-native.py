@@ -15,11 +15,16 @@ import paramiko
 
 
 class Auth(paramiko.ServerInterface):
+    key = None
+
     def check_auth_password(self, username, password):
         return paramiko.AUTH_SUCCESSFUL if (username, password) == ("test", "fixture") else paramiko.AUTH_FAILED
 
     def get_allowed_auths(self, username):
-        return "password"
+        return "password,publickey"
+
+    def check_auth_publickey(self, username, key):
+        return paramiko.AUTH_SUCCESSFUL if username == "test" and key == self.key else paramiko.AUTH_FAILED
 
     def check_channel_request(self, kind, chanid):
         return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
@@ -83,11 +88,15 @@ class Files(paramiko.SFTPServerInterface):
 def main():
     key = paramiko.RSAKey.generate(2048)
     wrong_key = paramiko.RSAKey.generate(2048)
+    client_key = paramiko.RSAKey.generate(2048)
+    Auth.key = client_key
     transports = []
     stop = threading.Event()
     with tempfile.TemporaryDirectory(prefix="tmv-sftp-") as temporary:
         root = Path(temporary).resolve()
         Files.root = root
+        client_key.write_private_key_file(str(root / "client-key"))
+        client_key.write_private_key_file(str(root / "client-key-encrypted"), password="fixture-key-passphrase")
         (root / "中文 folder").mkdir()
         (root / "image space.mrc").write_bytes(b"SFTP binary fixture\0\xff")
         header = bytearray(1024)
@@ -124,7 +133,8 @@ def main():
 
         worker = threading.Thread(target=accept, daemon=True)
         worker.start()
-        env = dict(os.environ, TMV_SSH_TEST_PORT=str(listener.getsockname()[1]), TMV_SSH_WRONG_HOST_KEY=wrong_key.get_base64())
+        env = dict(os.environ, TMV_SSH_TEST_PORT=str(listener.getsockname()[1]), TMV_SSH_WRONG_HOST_KEY=wrong_key.get_base64(),
+                   TMV_SSH_TEST_KEY=str(root / "client-key"), TMV_SSH_TEST_ENCRYPTED_KEY=str(root / "client-key-encrypted"))
         try:
             result = subprocess.run(["cargo", "test", "--offline", "--manifest-path", "src-tauri/Cargo.toml", "--lib", "--no-default-features", "--features", "ssh", "plugins::ssh::tests::live_sftp_roundtrip", "--", "--ignored", "--nocapture"], env=env)
         finally:

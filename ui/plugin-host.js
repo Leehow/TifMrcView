@@ -182,6 +182,8 @@ function makeApi(rec) {
     },
 
     dialog: {
+      /** Selects a local SSH private key; never available to sandbox plugins. */
+      pickKey: () => invoke("ssh_pick_key"),
       /** Asks for a save path. Returns `null` when cancelled. */
       save({ name, dir, filter, exts }) {
         return invoke("pick_save_path", {

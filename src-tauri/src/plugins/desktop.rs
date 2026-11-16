@@ -125,6 +125,15 @@ pub async fn plugin_call(plugins: State<'_, Plugins>, request: tauri::ipc::Reque
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Selects a local private key for the trusted SSH browser.
+#[tauri::command]
+pub async fn ssh_pick_key(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut picker = app.dialog().file().set_title("选择 SSH 私钥（不是 .pub 公钥）");
+    if let Some(home) = dirs::home_dir() { picker = picker.set_directory(home.join(".ssh")); }
+    picker.blocking_pick_file().and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Asks for a plugin package (.zip).
 #[tauri::command]
 pub async fn pick_plugin_package(app: AppHandle) -> Option<String> {
