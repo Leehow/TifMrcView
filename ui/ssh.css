@@ -13,6 +13,7 @@
 .remote-file > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .remote-file small { color: var(--dim); white-space: nowrap; }
 .remote-file-icon { color: var(--accent); font-size: 18px; }
+.remote-file-icon svg { width: 23px; height: 23px; fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
 .remote-more { width: calc(100% - 16px); margin: 8px; }
 .ssh-document { width: min(900px, calc(100vw - 48px)); max-height: 85vh; padding: 20px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--surface); }
 .ssh-document::backdrop { background: #10182866; }

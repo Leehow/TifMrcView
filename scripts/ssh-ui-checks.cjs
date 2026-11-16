@@ -37,6 +37,8 @@ module.exports = async function checkSsh(page) {
           { ...image, name: "sample 02.mrc", path: `${args.path}/sample 02.mrc`, local: "/cache/sample 02.mrc" },
           { name: ".hidden", path: `${args.path}/.hidden`, directory: true, size: 0 },
           { name: "notes.txt", path: `${args.path}/notes.txt`, directory: false, supported: false, size: 32 },
+          { name: 'process.py',path:`${args.path}/process.py`,directory:false,supported:false,size:32 },
+          { name: 'run.sh',path:`${args.path}/run.sh`,directory:false,supported:false,size:32 },
         ] };
       }
       if (method === "download") {
@@ -96,8 +98,10 @@ module.exports = async function checkSsh(page) {
   assert.equal(await page.evaluate(() => sshDownloads.length), 0, 'preview does not download the original');
   assert.equal(await q("password").inputValue(), "");
   assert.equal(await page.evaluate(() => localStorage.getItem("plugin.ssh.recent").includes("fixture")), false);
-  assert.equal(await page.locator(".ssh-entry").count(), 4);
-  await q("hidden").check(); assert.equal(await page.locator(".ssh-entry").count(), 5);
+  assert.equal(await page.locator(".ssh-entry").count(), 3);
+  assert.equal(await page.getByRole('listitem',{name:'process.py',exact:true}).count(),0);
+  assert.equal(await page.getByRole('listitem',{name:'run.sh',exact:true}).count(),0);
+  await q("hidden").check(); assert.equal(await page.locator(".ssh-entry").count(), 4);
   await q("hidden").uncheck();
   await q("search").fill("中文"); assert.equal(await page.locator(".ssh-entry").count(), 1);
   await q("search").fill("");
@@ -106,8 +110,7 @@ module.exports = async function checkSsh(page) {
   assert.equal(await page.evaluate(() => sshDownloads.length), 0, "directory browsing never downloads images");
   await q("up").click();
   await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="path"]').value === "/data");
-  await page.getByRole("listitem", { name: "notes.txt", exact: true }).click();
-  assert.equal(await q("load").isDisabled(), false, 'non-image files have a viewer, not a disabled action');
+  assert.equal(await page.getByRole("listitem", { name: "notes.txt", exact: true }).count(),0);
   await q("search").fill(""); // clear selection
   await page.evaluate(() => { window.sshFailList = true; });
   await q("path").fill("/denied"); await q("path").press("Enter");
@@ -133,6 +136,7 @@ module.exports = async function checkSsh(page) {
   assert.equal(await q('load').isEnabled(), true, 'a directory with only subfolders/data must still load');
   await q('load').click();
   await page.locator('#strip .remote-entry').first().waitFor({state:'visible'});
+  assert.equal(await page.locator('#strip .remote-folder svg').count(),2,'folder icons are SVGs');
   assert.equal(await page.locator('#merge-projects').isVisible(),false,'Pro project history must not obscure the active remote directory');
   assert.equal(await page.evaluate(() => sshDownloads.length), 0, 'mounting a directory never downloads its first image');
   assert.equal(await page.locator('#strip').getByRole('button', {name:'eer，文件夹',exact:true}).count(), 1);

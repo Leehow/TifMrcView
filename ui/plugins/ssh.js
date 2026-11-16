@@ -148,7 +148,7 @@ TifMrcView.register({
     function renderList() {
       previewObserver.disconnect();
       const query = el("search").value.toLocaleLowerCase();
-      const visible = entries.filter((e) => (el("hidden").checked || !e.name.startsWith(".")) && e.name.toLocaleLowerCase().includes(query));
+      const visible = entries.filter((e) => remoteEntryRelevant(e) && (el("hidden").checked || !e.name.startsWith(".")) && e.name.toLocaleLowerCase().includes(query));
       el("list").replaceChildren();
       el("count").textContent = `${entries.filter((e) => e.directory).length} 个文件夹 · ${entries.filter((e) => e.supported).length} 个图像`;
       for (const entry of visible) {

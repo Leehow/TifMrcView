@@ -1,5 +1,15 @@
 "use strict";
 
+// Imaging inputs and acquisition companions; unrelated scripts/logs stay hidden.
+function remoteEntryRelevant(entry) {
+  if (entry.directory || entry.supported) return true;
+  const ext = entry.name.split('.').pop().toLowerCase();
+  return ['gain', 'mdoc', 'star', 'tlt', 'rawtlt'].includes(ext) || FILE_GROUPS.some(group => group.ext?.includes(ext));
+}
+
+// Lucide folder (ISC), https://lucide.dev/icons/folder; license in licenses/lucide.txt.
+const REMOTE_FOLDER_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
+
 // Local cache paths keep all native image readers and Pro tabs unchanged.
 // Only an explicit image open resolves the full file. Previews transfer small PNGs.
 function mountRemoteFolder(owner, { name, path, address = "", entries, resolve, thumbnail, navigate, inspect }) {
@@ -37,7 +47,7 @@ function buildRemoteDirectory(strip) {
   function render() {
     rows.querySelectorAll('.thumb').forEach(el => thumbObserver.unobserve(el));
     rows.replaceChildren();
-    const all = folder.entries.filter(e => !e.name.startsWith('.') && e.name.toLocaleLowerCase().includes(folder.view.query.toLocaleLowerCase()));
+    const all = folder.entries.filter(e => remoteEntryRelevant(e) && !e.name.startsWith('.') && e.name.toLocaleLowerCase().includes(folder.view.query.toLocaleLowerCase()));
     count.textContent = `${all.filter(e => e.directory).length} 个文件夹 · ${all.filter(e => !e.directory).length} 个文件`;
     for (const entry of all.slice(0, folder.view.limit)) {
       if (entry.supported && !entry.directory) {
@@ -52,7 +62,9 @@ function buildRemoteDirectory(strip) {
       } else {
         const item = document.createElement('button'); item.className = `remote-entry remote-file${entry.directory ? ' remote-folder' : ''}`;
         item.setAttribute('aria-label', `${entry.name}${entry.directory ? '，文件夹' : ''}`);
-        const symbol = document.createElement('span'); symbol.className = 'remote-file-icon'; symbol.textContent = entry.directory ? '📁' : /\.mdoc$/i.test(entry.name) ? '▤' : '▧';
+        const symbol = document.createElement('span'); symbol.className = 'remote-file-icon';
+        if (entry.directory) symbol.innerHTML = REMOTE_FOLDER_SVG;
+        else symbol.textContent = '▤';
         const label = document.createElement('span'); label.textContent = entry.name;
         const detail = document.createElement('small'); detail.textContent = entry.directory ? '文件夹 ›' : fmtBytes(entry.size || 0);
         item.append(symbol, label, detail); item.title = entry.path;
