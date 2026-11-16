@@ -11,6 +11,8 @@ module.exports = async function checkSsh(page) {
     window.sshDownloads = [];
     window.sshOpened = [];
     window.sshFailList = false;
+    const shelf = document.createElement('details'); shelf.id = 'merge-projects'; shelf.open = true;
+    shelf.textContent = '历史合成图'; document.getElementById('strip').before(shelf);
     const image = { name: "sample 01.mrc", path: "/data/sample 01.mrc", local: "/cache/sample 01.mrc", directory: false, supported: true, size: 2048, modified: 1700000000 };
     window.mockSshCall = async (method, args) => {
       sshCalls.push({ method, args });
@@ -131,6 +133,7 @@ module.exports = async function checkSsh(page) {
   assert.equal(await q('load').isEnabled(), true, 'a directory with only subfolders/data must still load');
   await q('load').click();
   await page.locator('#strip .remote-entry').first().waitFor({state:'visible'});
+  assert.equal(await page.locator('#merge-projects').isVisible(),false,'Pro project history must not obscure the active remote directory');
   assert.equal(await page.evaluate(() => sshDownloads.length), 0, 'mounting a directory never downloads its first image');
   assert.equal(await page.locator('#strip').getByRole('button', {name:'eer，文件夹',exact:true}).count(), 1);
   await page.locator('#strip').getByRole('button', {name:'eer，文件夹',exact:true}).click();

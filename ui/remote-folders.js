@@ -70,6 +70,7 @@ function buildRemoteDirectory(strip) {
 }
 
 function showRemoteFolder(folder, path) {
+  $("sidebar").scrollTop = 0;
   S.folder = { ...folder, index: folder.files.indexOf(path) };
   $("folder-name").textContent = `SSH · ${folder.name}`;
   $("folder-name").title = folder.remotePath;

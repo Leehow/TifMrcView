@@ -5,6 +5,7 @@
 .ssh-dialog[open] { display: flex; flex-direction: column; }
 .ssh-dialog::backdrop { background: #10182866; backdrop-filter: blur(4px); }
 .remote-navigation { display: flex; gap: 6px; padding: 8px; }
+.remote-browsing #merge-projects { display: none; }
 .remote-navigation > :first-child { flex: 1; }
 .remote-search { width: calc(100% - 16px); margin: 0 8px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface); }
 .remote-directory-count { padding: 8px; color: var(--dim); font-size: 11px; }

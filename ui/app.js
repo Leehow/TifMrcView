@@ -3871,6 +3871,7 @@ function setStripFold(g, folded) {
 }
 
 function buildStrip() {
+  document.body.classList.toggle("remote-browsing", !!(S.folder.remote && S.folder.entries));
   const strip = $("strip");
   strip.innerHTML = "";
   thumbQueue.length = 0;
