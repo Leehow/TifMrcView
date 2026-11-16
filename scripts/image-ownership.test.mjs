@@ -17,6 +17,7 @@ function opening(storage = new Map()) {
   const pending = new Map(), elements = new Map(), errors = [], events = [];
   const context = {
     S: { token: 0, info: null, sel: 0, axis: 'xy' },
+    ext: {},
     sessionStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     $: (id) => { if (!elements.has(id)) elements.set(id, { hidden: true, dataset: {} }); return elements.get(id); },
     invoke: (_command, { path, request }) => { const d = deferred(); d.request = request; pending.set(path, d); return d.promise; },
@@ -43,6 +44,26 @@ test('a normal open still commits the image and emits its open event', async () 
   assert.equal(h.context.S.info.path, 'A');
   assert.deepEqual(h.events, ['A']);
   assert.equal(h.elements.get('loading').hidden, true);
+});
+
+test('a remote image is cached before decoding and a superseded transfer cannot open it', async () => {
+  const h = opening(), transfer = deferred();
+  h.context.ext.remoteFiles = new Map([['remote', { ready: false, resolve: () => transfer.promise }]]);
+  const remote = h.open('remote'); await tick();
+  assert.equal(h.pending.has('remote'), false);
+  const local = h.open('local'); await tick();
+  h.pending.get('local').resolve(image('local', 2)); await local;
+  transfer.resolve(); await remote;
+  assert.equal(h.pending.has('remote'), false);
+  assert.equal(h.context.S.info.path, 'local');
+});
+
+test('a remote read error never reaches the decoder', async () => {
+  const h = opening();
+  h.context.ext.remoteFiles = new Map([['remote', { ready: false, resolve: async () => { throw new Error('transfer cancelled'); } }]]);
+  await h.open('remote');
+  assert.equal(h.pending.size, 0);
+  assert.match(h.errors[0], /transfer cancelled/);
 });
 
 test('the backend receives request order that survives a WebView reload', async () => {
@@ -102,6 +123,7 @@ test('an old folder listing cannot replace the newer images folder', async () =>
   const listed = deferred();
   const context = {
     S: { token: 1, info: {}, folder: { dir: 'B', files: ['B/image.mrc'] } },
+    ext: {},
     dirname: (p) => p.split('/')[0], basename: (p) => p,
     invoke: () => listed.promise, $: () => ({}),
     updateSaveDir: () => {}, buildStrip: () => {}, markStrip: () => {}, folderIndex: () => 0,

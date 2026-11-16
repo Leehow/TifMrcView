@@ -29,6 +29,8 @@ impl Plugins {
     pub fn new(dir: Option<PathBuf>) -> Self {
         #[allow(unused_mut)]
         let mut list: Vec<Arc<dyn NativePlugin>> = vec![];
+        #[cfg(not(target_os = "android"))]
+        list.push(Arc::new(ssh::Ssh::default()));
         #[cfg(feature = "recorder")]
         list.push(Arc::new(recorder::Recorder::default()));
         Plugins { native: list.into_iter().map(|p| (p.id(), p)).collect(), dir }
@@ -113,8 +115,8 @@ pub async fn plugin_call(plugins: State<'_, Plugins>, request: tauri::ipc::Reque
         tauri::ipc::InvokeBody::Json(_) => vec![],
     };
     let plugin = plugins.native.get(id.as_str()).cloned().ok_or_else(|| format!("no native plugin {id}"))?;
-    // Native code only runs for plugins the user installed.
-    if !plugins.dir.as_deref().is_some_and(|d| package::is_installed(d, &id)) {
+    // SSH is bundled with the host. Other native plugins require installation.
+    if id != "ssh" && !plugins.dir.as_deref().is_some_and(|d| package::is_installed(d, &id)) {
         return Err(format!("插件 {id} 没有安装，请先在插件市场下载安装"));
     }
     tauri::async_runtime::spawn_blocking(move || plugin.call(&method, args, &body))

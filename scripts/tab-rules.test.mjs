@@ -39,3 +39,26 @@ test('inside a project the sidebar is grouped by step and re-listed on request',
   assert.match(app, /"tmv-folder-changed"/);
   assert.match(app, /\["raw", "原始数据", false\]/, 'only the raw data starts folded');
 });
+
+test('restoring Pro tabs retains remote folder identity and recovers local navigation after disconnect', () => {
+  const elements = new Map(), calls = [];
+  const h = { S: {}, ext: { remoteFiles: new Map([['/cache/image.mrc', {}]]) }, clearTimeout() {},
+    $: (id) => { if (!elements.has(id)) elements.set(id, { dataset: {}, hidden: true }); return elements.get(id); },
+    basename: (p) => p.split('/').pop(),
+    T: { window: { getCurrentWindow: () => ({ setTitle: async () => {} }) } },
+    EDITION: { name: 'Pro' }, document: { dispatchEvent() {} }, CustomEvent: class {},
+    showRemoteFolder: () => calls.push('remote'), refreshFolder: async () => calls.push('local'),
+    toast: () => {},
+  };
+  for (const name of ['buildChannels', 'buildSeries', 'setupSliders', 'syncScaleUi', 'updateInfo',
+    'updateSaveButtons', 'setTool', 'toggleAnn', 'renderMeta', 'specOpened', 'buildStrip', 'markStrip',
+    'setModel', 'clampView', 'draw', 'requestRender', 'watchLoad', 'pluginEmit']) h[name] = () => {};
+  vm.createContext(h);
+  vm.runInContext(documents.slice(documents.indexOf('function restore(doc)'), documents.indexOf('async function activate(doc)')), h);
+  const doc = () => ({ name: 'image', state: { gamma: 1, info: { path: '/cache/image.mrc' }, folder: { remote: true, dir: 'ssh:server/data' } } });
+  h.restore(doc()); assert.deepEqual(calls, ['remote']);
+  h.ext.remoteFiles.clear(); h.restore(doc()); assert.deepEqual(calls, ['remote', 'local']);
+  const local = doc(); local.state.folder = { dir: '/local/data' }; h.restore(local);
+  assert.equal(elements.get('folder-name').textContent, 'data');
+  assert.equal(elements.get('btn-reveal').hidden, false);
+});

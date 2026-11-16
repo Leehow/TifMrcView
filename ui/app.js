@@ -239,6 +239,13 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     $("loading").textContent = "加载中…";
     // Only the latest request may change the image or its loading indicator.
     slow = setTimeout(() => { if (request === openRequest) $("loading").hidden = false; }, 300);
+    const remoteFile = ext.remoteFiles?.get(path);
+    if (remoteFile && !remoteFile.ready) {
+      $("loading").textContent = "正在读取远程图像…";
+      await remoteFile.resolve();
+      if (request !== openRequest) return;
+      remoteFile.ready = true;
+    }
     const res = await invoke("open_image", { path, series, request });
     if (request !== openRequest) return;
     stopPlay();
@@ -496,6 +503,11 @@ function under(path, dir) {
 }
 
 async function refreshFolder(path, keepScroll = false) {
+  const remote = ext.remoteFiles?.get(path);
+  if (remote) {
+    showRemoteFolder(remote.folder, path);
+    return;
+  }
   const token = S.token;
   // A stack made of a folder's slices lists that folder; the stack itself
   // is in the list when a project file describes it.
@@ -3928,7 +3940,9 @@ function buildStrip() {
       m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
     });
     body.append(el);
-    thumbObserver.observe(el);
+    if (ext.remoteFiles?.get(f) && !ext.remoteFiles.get(f).ready) {
+      el.querySelector(".box").textContent = "SSH · 点按加载";
+    } else thumbObserver.observe(el);
   });
 }
 

@@ -80,6 +80,10 @@ const server = http.createServer((req, res) => {
     window.__TAURI__ = {
       core: { invoke: async (command, args, options) => {
         window.mockCalls.push(command);
+        if (command === "plugin_call" && decodeURIComponent(options?.headers?.["x-plugin"] || "") === "ssh" && window.mockSshCall) {
+          return window.mockSshCall(decodeURIComponent(options.headers["x-method"]), JSON.parse(decodeURIComponent(options.headers["x-args"])));
+        }
+        if (command === "open_image" && window.mockSshOpen) return window.mockSshOpen(args);
         switch (command) {
           case "plugin_scan":
             S.info = { path: "/test/image.tif", name: "image.tif", width: 8, height: 8, sizeZ: 3, sizeT: 2, sizeC: 1, dtype: "u8", format: "TIFF", metadata: [] };
@@ -106,7 +110,7 @@ const server = http.createServer((req, res) => {
           default: return null;
         }
       } },
-      app: { getVersion: async () => "0.5.0" },
+      app: { getVersion: async () => "0.5.0", getName: async () => "TifMrcView" },
       event: { listen },
       window: { getCurrentWindow: () => ({ setTitle: async () => {} }) },
       webview: { getCurrentWebview: () => ({ onDragDropEvent: listen }) },
@@ -124,8 +128,14 @@ const server = http.createServer((req, res) => {
     plugins: [...pluginHost.plugins.values()].map((r) => ({ id: r.def.id, active: r.active, error: r.error })),
     meta: S.pluginMeta, writes: window.mockWrites,
   }));
-  assert.equal(state.plugins.length, packages.length + 1); // includes built-in i18n
+  assert.equal(state.plugins.length, packages.length + 2); // built-in i18n + SSH
   assert(state.plugins.every((p) => p.active && !p.error), JSON.stringify(state.plugins));
+  if (process.env.TMV_TEST_SSH_ONLY === "1") {
+    await require("./ssh-ui-checks.cjs")(page);
+    assert.deepEqual(external, [], "SSH browser tests must stay offline");
+    assert.deepEqual(errors, [], "Unexpected uncaught errors");
+    return;
+  }
   const probes = state.meta.filter((g) => g.name.startsWith("probe:"));
   assert.equal(probes.length, 10);
   assert(probes.every((g) => g.items[0][1] === "true"), JSON.stringify(probes));
@@ -366,6 +376,7 @@ const server = http.createServer((req, res) => {
   }
   await page.locator("#mc-cancel").click();
   console.log("PASS: market/deep-link/zip permission confirmation, cancel/install boundaries, API 1 warning, empty permissions, seven languages");
+  await require("./ssh-ui-checks.cjs")(page);
   assert.deepEqual(external, [], "All browser tests must stay offline");
   assert.deepEqual(errors, [], "Unexpected uncaught errors");
   assert(requests.includes("/tmvplugin/__sandbox/runtime.js"));
