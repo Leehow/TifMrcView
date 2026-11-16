@@ -143,3 +143,67 @@ No artifacts from the failed revision are published. Cross-platform CI and
 public feed checks remain required before release completion.
 Local offline `cargo check --tests --no-default-features --features pro`
 passed after the fixture repair, including compilation of ignored test bodies.
+
+## Final release evidence retained from the source branch (2026-11-10)
+
+
+User authorized commit, rebuild, packaging and upload. Source commit 8eb9eb7
+contains only this task's SAM changes. Other pre-existing dirty files remain
+untouched. A canonical task-owned clean worktree was created at
+`/Users/haoli/leehow/tifview-sam31-release`, branch `codex/sam31-native-release`,
+from published main 4b3d347 (0.7.192). Native change f7760a1 and packaging
+license change b0ae046 were integrated through PR #136 into main
+4c1f16c7198dd04b13137456e6ba6c8889abb24e (candidate version 0.7.195).
+
+Candidate packaging/build run: https://github.com/Leehow/TifMrcView/actions/runs/42851571001
+It was superseded by the final-main run below after the SAM fixture repair.
+The two redundant same-tree PR runs were canceled by this task; unrelated
+PR/workflow runs remain untouched.
+
+Pro installers and CLI archives now include SAM 3 license notices. Model
+weights and microscopy images are excluded from the public packages. Local
+package/release tests passed 10/10; the native source hash is unchanged from
+the retained eight-case parity verification.
+
+The candidate CI found a stale ignored SAM 2 sphere test fixture assigning
+`Predictor` directly instead of the new `NativePredictor::Sam21` wrapper.
+One fixture line was corrected; production inference code is unchanged.
+Offline `cargo check --tests --no-default-features --features pro` passed,
+including the ignored test body. Fix commit 6b17e8f was merged through PR #137
+into main 97e7721c643c296274be0d7bc7fbefedbc20540c (version 0.7.197).
+The failed 0.7.195 candidate is not published.
+
+Final-main CI: https://github.com/Leehow/TifMrcView/actions/runs/42857292837
+Final main CI completed with a green workflow status and all release artifacts.
+Linux and macOS full jobs passed; SAM crate tests passed 9/9 on all three OSes.
+Raw Windows logs revealed one pre-existing fixture failure hidden by the
+PowerShell multi-command step: `model_store::tests::corrupt_or_different_source_is_rejected_and_first_checkpoint_is_recoverable`
+tries to truncate a memory-mapped MRC, raising Windows error 1224 at line 433.
+The published 0.7.192 baseline run 42745883500 has the identical failure, and
+`model_store.rs` is unchanged between that baseline and this release. The
+remaining Windows Pro tests passed (414). This is retained as an explicit
+legacy test exception; the unrelated model-store fixture/CI shell are outside
+the SAM upgrade and were not changed. No claim of a fully clean Windows Pro
+test suite is made. Raw final/baseline logs are retained in the evidence folder.
+
+Publication job succeeded in run 42872320870:
+https://github.com/Leehow/TifMrcView/actions/runs/42872320870
+Its reuse log confirms artifacts came from final-main run 42857292837, exactly
+commit 97e7721c643c296274be0d7bc7fbefedbc20540c. The publish job is complete;
+the dispatch workflow also starts redundant tests of that already-built SHA,
+which were still running at the time of website verification.
+
+Website verification passed: eight ordinary/direct download and updater feeds
+report 0.7.197; 26 artifact URLs return HTTP 200 with nonzero content lengths,
+matching declared download sizes where present. Twenty signature sidecars
+match updater manifest values, and the CLI SHA256 sidecar matches its download
+manifest. These are metadata checks; full installers were not downloaded to
+the Mac for checksum or GUI validation. Evidence: `release-verification.json`
+and retained public feed snapshots in the evidence directory above.
+
+Task-owned worktree closeout is `closed`; the final lifecycle audit reported
+`audit_ok`, zero pending entries, no registered worktree and no local task
+branch. The pre-existing checkout and unrelated dirty files remain intact.
+The local SAM fixture and Pro license-resource mapping are synchronized with
+the published implementation. CI rebuilt release installers; the existing
+installed App was not replaced, and live local GUI acceptance is not claimed.
