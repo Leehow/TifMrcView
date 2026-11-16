@@ -31,6 +31,7 @@
 .ssh-key-picker { display: flex; align-items: center; gap: 5px; }
 .ssh-key-picker button { flex-shrink: 0; border-color: var(--line-strong); background: var(--surface); height: 34px; padding: 0 7px; font-size: 11px; }
 .ssh-dialog .ssh-connect { width: 100%; justify-content: center; height: 36px; margin-top: 3px; }
+.ssh-connect-status { color: var(--dim); font-size: 11px; line-height: 1.7; margin: 12px 0 0; }
 .ssh-private { font-size: 11px; line-height: 1.85; color: var(--dim); border-top: 1px solid var(--line); margin-top: 25px; padding-top: 17px; }
 .ssh-connected { margin-top: 25px; overflow-wrap: anywhere; }
 .ssh-connected strong { font-size: 15px; }

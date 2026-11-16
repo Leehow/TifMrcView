@@ -48,6 +48,7 @@ def generate(kind):
     if kind == "App":
         # Tauri merges top-level keys, so include the existing document types.
         # Its existing exported UTI declarations remain intact.
+        app["NSLocalNetworkUsageDescription"] = "Connect to the SSH server you choose to browse remote folders and read images on your local network."
         return app
     types = {uti for doc in app["CFBundleDocumentTypes"] for uti in doc["LSItemContentTypes"]}
     attrs = {"QLSupportedContentTypes": sorted(types)}

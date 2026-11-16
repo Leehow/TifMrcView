@@ -1,7 +1,7 @@
 "use strict";
 
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.1.0",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.1.1",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) return;
@@ -34,6 +34,7 @@ TifMrcView.register({
               <label>密钥口令 <span class="ssh-muted">可选 · 未加密或已在本机解锁时留空</span><input data-k="passphrase" type="password" placeholder="仅用于解锁本次私钥" autocomplete="off" /></label></div>
             <button class="primary ssh-connect" data-k="connect" type="submit">连接服务器 →</button>
           </form>
+          <p data-k="connection-status" class="ssh-connect-status" role="status" hidden>首次访问局域网时，请在系统提示中允许 macOS 的本地网络访问。</p>
           <div data-k="connected" class="ssh-connected" hidden><span class="ssh-connected-dot"></span><strong data-k="identity"></strong><p data-k="address"></p><button data-k="disconnect">断开连接</button></div>
           <div class="ssh-private">密码与密钥口令不保存，私钥仅在本机读取。<br>仅访问和读取远程文件。</div>
           <div data-k="recent-box" class="ssh-recent" hidden><div class="ssh-eyebrow">最近连接</div><div data-k="recent"></div></div>
@@ -96,6 +97,7 @@ TifMrcView.register({
     function error(message = "") { el("error").textContent = String(message); el("error").hidden = !message; }
     function setBusy(on, label = "") {
       busy = on;
+      el("connection-status").hidden = !on || !!home || !navigator.userAgent.includes("Mac");
       el("connect").textContent = on && !home ? label || "正在连接…" : "连接服务器 →";
       for (const key of ["host", "username", "password", "port", "auth-method", "key-path", "passphrase", "pick-key", "connect", "up", "home", "refresh", "path", "disconnect"]) el(key).disabled = on;
       el("connect-form").querySelector("button[type=submit]").disabled = on;

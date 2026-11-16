@@ -7,6 +7,24 @@ market package. Sandboxed third-party plugins receive no new permissions.
 The SSH UI inherits the edition's accent: standard blue and Pro red, including
 toolbar/folder/image icons, buttons, focus, selection and transfer progress.
 
+On macOS, the first local-network TCP operation can fail immediately while
+NECP resolves the app's local-network identity/permission. The retained native
+failure had errno 65 (`EHOSTUNREACH`), zero connection duration and an explicit
+`reason: NECP` kernel drop, before any SSH handshake. It was previously
+misreported as a timeout. The TCP connector now preserves the actual error and
+waits up to 15 seconds for this specific error on private/link-local addresses,
+checking other resolved addresses first. Password/key authentication and host
+trust failures are never retried. Other platforms, public addresses, localhost
+and refused connections retain their immediate error behavior.
+
+The generated macOS app plist includes `NSLocalNetworkUsageDescription` for
+both editions. When connecting, the UI explains the initial permission request;
+if access remains blocked, the error points to Local Network settings. The
+application does not change system network policies or privacy settings.
+This follows [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy),
+which recommends appropriate retry logic for BSD sockets because the initial
+operation can be denied before permission processing completes.
+
 1. Click SSH and enter the host/IP, port (22 by default) and username. Choose
    password login or local-key login. For a key, use **选择…** to load a private
    key (not its `.pub` file), or enter its local path; `~/` is supported.
@@ -57,6 +75,10 @@ multi-factor prompts are not exposed.
   checks the desktop integration.
 - `cargo test --offline --manifest-path src-tauri/Cargo.toml --lib
   --no-default-features --features ssh plugins::ssh::tests` runs transport unit tests.
+- `cargo test --offline --manifest-path src-tauri/Cargo.toml --lib
+  --no-default-features --features ssh plugins::ssh::tcp::tests` deterministically
+  replays the observed errno 65, delayed permission resolution, a persistent
+  denial deadline, address fallback, and non-retryable failures without sleeps.
 - `python3 scripts/test-ssh-native.py` uses an existing Paramiko installation
   to start an isolated read-only loopback fixture. It verifies real password
   login, unencrypted/encrypted private-key login, rejection of a wrong key

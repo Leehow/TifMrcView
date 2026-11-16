@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "ssh_tcp.rs"]
+mod tcp;
+
 #[derive(Default)]
 pub struct Ssh {
     connections: Mutex<HashMap<String, Arc<Connection>>>,
@@ -394,14 +397,14 @@ impl Ssh {
             .context("无法解析主机地址")?
             .take(4)
             .collect();
-        let mut socket = None;
-        for address in addresses {
-            if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
-                socket = Some(stream);
-                break;
-            }
-        }
-        let socket = socket.context("无法连接服务器，请检查地址、端口及网络（连接超时）")?;
+        let started = Instant::now();
+        let socket = tcp::connect(
+            &addresses,
+            cfg!(target_os = "macos"),
+            |address, timeout| TcpStream::connect_timeout(&address, timeout),
+            || started.elapsed(),
+            std::thread::sleep,
+        )?;
         socket.set_read_timeout(Some(Duration::from_secs(20)))?;
         socket.set_write_timeout(Some(Duration::from_secs(20)))?;
         let mut session = Session::new()?;
