@@ -113,3 +113,113 @@ pub fn run(
         weighted,
     })
 }
+
+/// Same separable Catmull–Rom warp as CPU. Batch frames under a 4M-pixel
+/// budget; intermediates and half accumulators stay on the GPU until the end.
+pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Result<Sums> {
+    use burn::tensor::Int;
+    let n = w * h;
+    let mut even = Tensor::<2>::zeros([1, n], dev);
+    let mut odd = even.clone();
+    let ids = Tensor::<1, Int>::arange(0..n as i64, dev).reshape([1, n]);
+    let x = ids.clone().remainder_scalar(w as i32);
+    let y = ids.div_scalar(w as i32);
+    let cubic = |t: f32| {
+        let (t2, t3) = (t * t, t * t * t);
+        [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1., -1.5 * t3 + 2. * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
+    };
+    let per = ((1usize << 22) / n).max(1);
+    for first in (0..frames.len()).step_by(per) {
+        check_cancel()?;
+        let count = per.min(frames.len() - first);
+        let mut src = Tensor::<2>::from_data(TensorData::new(frames[first..first + count].iter().flatten().copied().collect::<Vec<_>>(), [count, n]), dev);
+        for axis in 0..2 {
+            let len = if axis == 0 { w } else { h };
+            let ds = &shifts[first..first + count];
+            let offsets = Tensor::<2, Int>::from_data(TensorData::new(ds.iter().map(|d| d[axis].floor() as i32).collect::<Vec<_>>(), [count, 1]), dev);
+            let fractions: Vec<_> = ds.iter().map(|d| (d[axis] - d[axis].floor()) as f32).collect();
+            let upper = Tensor::<2, Int>::from_data(TensorData::new(fractions.iter().map(|f| len as i32 - if *f > 0. { 1 } else { 0 }).collect::<Vec<_>>(), [count, 1]), dev);
+            let position = (if axis == 0 { x.clone() } else { y.clone() }) + offsets;
+            let valid = position.clone().greater_equal_elem(0).bool_and(position.clone().lower(upper)).float();
+            let mut out = Tensor::<2>::zeros([count, n], dev);
+            for j in 0..4 {
+                let c = position.clone().add_scalar(j as i32 - 1).clamp(0, len as i32 - 1);
+                let index = if axis == 0 { y.clone().mul_scalar(w as i32) + c } else { c.mul_scalar(w as i32) + x.clone() };
+                let weights = Tensor::<2>::from_data(TensorData::new(fractions.iter().map(|f| cubic(*f)[j]).collect::<Vec<_>>(), [count, 1]), dev);
+                out = out + src.clone().gather(1, index) * weights;
+            }
+            src = out * valid;
+        }
+        let mask = |parity| Tensor::<2>::from_data(TensorData::new((first..first + count).map(|i| if i % 2 == parity { scale } else { 0. }).collect::<Vec<_>>(), [count, 1]), dev);
+        even = even + (src.clone() * mask(0)).sum_dim(0);
+        odd = odd + (src * mask(1)).sum_dim(0);
+    }
+    let unweighted = download(even.clone() + odd.clone());
+    anyhow::ensure!(unweighted.iter().all(|v| v.is_finite()), "GPU preview returned non-finite values");
+    Ok(Sums { unweighted, even: download(even), odd: download(odd), weighted: None })
+}
+
+pub(super) fn cpu_preview(frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Sums {
+    use rayon::prelude::*;
+    let moved: Vec<_> = frames.par_iter().zip(shifts).map(|(v, &d)| crate::align::movie_shift(v, w, h, d)).collect();
+    let mut even = vec![0.; w * h];
+    let mut odd = even.clone();
+    for (i, v) in moved.iter().enumerate() {
+        let half = if i % 2 == 0 { &mut even } else { &mut odd };
+        half.par_iter_mut().zip(v).for_each(|(o, x)| *o += x * scale);
+    }
+    let unweighted = even.par_iter().zip(&odd).map(|(a, b)| a + b).collect();
+    Sums { unweighted, even, odd, weighted: None }
+}
+
+/// End-to-end timing includes transfers, synchronization and kernel launches.
+/// Calibrate once per process and input shape; never time only the kernel.
+pub(super) fn preview_auto(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32, force: bool) -> Result<(Sums, bool, Option<String>)> {
+    use std::sync::{LazyLock, Mutex};
+    static CHOICE: LazyLock<Mutex<std::collections::HashMap<(usize, usize, usize), (bool, String)>>> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+    let key = (w, h, frames.len());
+    let cached = CHOICE.lock().unwrap().get(&key).cloned();
+    if force { return Ok((preview(dev, frames, w, h, shifts, scale)?, true, None)); }
+    if let Some((gpu, reason)) = cached {
+        return Ok((if gpu { preview(dev, frames, w, h, shifts, scale)? } else { cpu_preview(frames, w, h, shifts, scale) }, gpu, Some(reason)));
+    }
+    // Warm the actual batch geometry, then compare the complete workload.
+    // A tiny sample can miss CPU parallelism or GPU batching effects.
+    let warm = frames.len().min(((1usize << 22) / (w*h)).max(1));
+    let _ = preview(dev, &frames[..warm], w, h, &shifts[..warm], scale)?;
+    let start = std::time::Instant::now();
+    let gpu_out = preview(dev, frames, w, h, shifts, scale)?;
+    let gpu_ms = start.elapsed().as_secs_f64() * 1000.;
+    let start = std::time::Instant::now();
+    let cpu_out = cpu_preview(frames, w, h, shifts, scale);
+    let cpu_ms = start.elapsed().as_secs_f64() * 1000.;
+    let gpu = gpu_ms < cpu_ms;
+    let reason = format!("自动选择{}：{}帧全量校准含传输与同步，CPU {cpu_ms:.1} ms，GPU {gpu_ms:.1} ms", if gpu { "GPU" } else { "CPU" }, frames.len());
+    CHOICE.lock().unwrap().insert(key, (gpu, reason.clone()));
+    Ok((if gpu { gpu_out } else { cpu_out }, gpu, Some(reason)))
+}
+
+#[cfg(test)]mod preview_tests{use super::*;
+ #[test] fn gpu_preview_batches_preserve_halves_and_auto_choice() {
+  let Some((dev,_))=crate::ctf_gpu::device() else {assert!(std::env::var_os("TMV_REQUIRE_GPU").is_none());return;};
+  let (w,h)=(1024,1024);let frames:Vec<Vec<f32>>=(0..5).map(|k|(0..w*h).map(|i|((i*13+k*47)%239) as f32/100.).collect()).collect();let shifts=[[0.,0.],[-2.25,1.7],[3.4,-1.2],[-0.5,-0.5],[1.2,2.5]];
+  let reference=cpu_preview(&frames,w,h,&shifts,4.);let got=preview(dev,&frames,w,h,&shifts,4.).unwrap();
+  for(a,b)in [(&got.unweighted,&reference.unweighted),(&got.even,&reference.even),(&got.odd,&reference.odd)] {let max=a.iter().zip(b).map(|(a,b)|(a-b).abs()).fold(0.,f32::max);assert!(max<0.0001,"{max}");}
+  let (out,_,reason)=preview_auto(dev,&frames,w,h,&shifts,4.,false).unwrap();assert!(reason.is_some());assert!(out.unweighted.iter().zip(&reference.unweighted).all(|(a,b)|(a-b).abs()<0.0001));
+ }
+
+ #[test]fn gpu_preview_matches_cpu_cubic_and_borders(){
+  let Some((dev,_))=crate::ctf_gpu::device()else{assert!(std::env::var_os("TMV_REQUIRE_GPU").is_none(),"GPU required");return;};
+  let(w,h)=(96,80);let frames:Vec<Vec<f32>>=(0..4).map(|k|(0..w*h).map(|i|((i*13+k*47)%239) as f32/100.+((i%w) as f32*0.15).sin()).collect()).collect();let shifts=[[0.,0.],[-2.25,1.7],[3.4,-1.2],[-0.5,-0.5]];let scale=4.;let got=preview(dev,&frames,w,h,&shifts,scale).unwrap();let mut expected=vec![0.;w*h];for(f,d)in frames.iter().zip(shifts){for(a,b)in expected.iter_mut().zip(crate::align::movie_shift(f,w,h,d)){*a+=b*scale;}}
+  let max=expected.iter().zip(&got.unweighted).map(|(a,b)|(a-b).abs()).fold(0.,f32::max);eprintln!("GPU cubic preview max error {max}");assert!(max<0.0001,"{max}");
+ }
+}
+
+#[cfg(test)]mod preview_bench{
+ use super::*;use rayon::prelude::*;
+ #[test]#[ignore]fn gpu_preview_4k_throughput(){
+  let(dev,_)=crate::ctf_gpu::device().expect("GPU required");let(w,h)=(4096,4096);let frames:Vec<Vec<f32>>=(0..4).map(|k|(0..w*h).map(|i|((i*13+k*47)%239)as f32/100.).collect()).collect();let shifts=[[0.,0.],[-2.25,1.7],[3.4,-1.2],[-0.5,-0.5]];
+  let _=preview(dev,&frames,w,h,&shifts,4.).unwrap();let start=std::time::Instant::now();let gpu=preview(dev,&frames,w,h,&shifts,4.).unwrap();let gpu_ms=start.elapsed().as_secs_f64()*1000.;
+  let start=std::time::Instant::now();let moved:Vec<_>=frames.par_iter().zip(shifts).map(|(v,d)|crate::align::movie_shift(v,w,h,d)).collect();let mut even=vec![0.;w*h];let mut odd=vec![0.;w*h];for(i,v)in moved.iter().enumerate(){let out=if i%2==0{&mut even}else{&mut odd};out.par_iter_mut().zip(v).for_each(|(a,b)|*a+=b*4.);};let cpu:Vec<f32>=even.par_iter().zip(odd).map(|(a,b)|a+b).collect();let cpu_ms=start.elapsed().as_secs_f64()*1000.;let max=cpu.iter().zip(&gpu.unweighted).map(|(a,b)|(a-b).abs()).fold(0.,f32::max);assert!(max<0.0001,"{max}");eprintln!("PREVIEW_BENCH 4096x4096 frames=4 cpuMs={cpu_ms:.3} gpuMs={gpu_ms:.3} maxError={max}");
+ }
+}

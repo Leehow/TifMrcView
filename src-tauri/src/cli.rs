@@ -127,6 +127,7 @@ const NEEDS_CHOICE: i32 = 2;
 
 /// Runs the tool with `args` (without the program name); returns the exit status.
 pub fn main(args: Vec<String>) -> i32 {
+    crate::resources::configure_threads();
     use_bundled_cuda();
     // Whoever picks a card with CUDA_VISIBLE_DEVICES (the usual way on shared
     // servers) gets that card: only CUDA honours it, Vulkan would not.
@@ -409,16 +410,24 @@ fn gpu() -> Option<&'static (burn::tensor::Device, &'static str)> {
 /// CUDA_VISIBLE_DEVICES, released when the job ends however it ends).
 /// None when there is no GPU, when TMV_GPU_SHARE is set, or when the lock
 /// cannot be had at all (the job then runs as before).
-pub(crate) fn gpu_turn() -> Option<std::fs::File> {
+pub(crate) struct GpuTurn { _files: Vec<std::fs::File> }
+pub(crate) fn gpu_turn() -> Option<GpuTurn> {
     gpu()?;
-    if std::env::var_os("TMV_GPU_SHARE").is_some() {
-        return None;
+    if std::env::var_os("TMV_GPU_SHARE").is_some(){return None;}
+    let mask=std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();let first=mask.split(',').next().unwrap_or("");
+    let devices=crate::resources::discover();
+    let selected=devices.iter().find(|g|first==g.uuid||first==g.index.to_string()).or_else(||devices.first());
+    let mut names=vec![];
+    if let Some(g)=selected{
+      names.push(format!("tifmrcview-gpu-{}.lock",g.uuid.chars().filter(char::is_ascii_alphanumeric).collect::<String>()));
+      names.push(format!("tifmrcview-gpu-{}.lock",g.index));
+      if g.index==0{names.push("tifmrcview-gpu.lock".into());}
+    }else{
+      let which:String=mask.chars().filter(char::is_ascii_alphanumeric).collect();names.push(if which.is_empty(){"tifmrcview-gpu.lock".into()}else{format!("tifmrcview-gpu-{which}.lock")});
     }
-    let which: String = std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
-    let name = if which.is_empty() { "tifmrcview-gpu.lock".to_string() } else { format!("tifmrcview-gpu-{which}.lock") };
-    take_turn(&std::env::temp_dir().join(name), &|| {
-        eprintln!("tmv: another tmv job is using the GPU: waiting for it to finish (two at once run out of GPU memory). TMV_GPU_SHARE=1 runs alongside it instead.")
-    })
+    names.sort();names.dedup();let mut files=vec![];
+    for name in names{files.push(take_turn(&std::env::temp_dir().join(name),&||eprintln!("等待该 GPU 的已有任务释放资源"))?);}
+    Some(GpuTurn{_files:files})
 }
 
 /// The lock on `path`, waiting for whoever holds it (`waiting` is called

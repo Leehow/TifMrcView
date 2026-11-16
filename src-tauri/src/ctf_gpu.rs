@@ -15,15 +15,17 @@ use crate::fft;
 /// Largest tensor the code builds, in elements (f32), to bound GPU memory.
 const MAX_ELEMS: usize = 1 << 24;
 
-/// The GPU and its name, or None when only the CPU is available.
-pub fn device() -> Option<&'static (Device, &'static str)> {
-    static GPU: OnceLock<Option<(Device, &'static str)>> = OnceLock::new();
-    GPU.get_or_init(|| {
-        let (d, name) = tmv_sam::pick_device();
-        (name != "CPU").then_some((d, name))
-    })
-    .as_ref()
+static INIT_FAILURE:OnceLock<String>=OnceLock::new();
+/// The GPU and its name, only after a real kernel succeeds.
+pub fn device()->Option<&'static(Device,&'static str)>{
+ static GPU:OnceLock<Option<(Device,&'static str)>>=OnceLock::new();
+ GPU.get_or_init(||{let mut failures=vec![];for b in tmv_sam::backends(){if b.name=="CPU"{continue;}
+  let tried=guarded(||->Result<Device>{let d=b.device()?;let x=Tensor::<2>::ones([8,8],&d);let got:f32=x.clone().matmul(x).sum().into_scalar();anyhow::ensure!(got==512.,"初始化校验返回 {got}，预期 512");Ok(d)}).and_then(|r|r);
+  match tried{Ok(d)=>{eprintln!("GPU: using {}",b.name);return Some((d,b.name));},Err(e)=>failures.push(format!("{} 初始化失败：{e:#}",b.name))}
+ }
+ let reason=if failures.is_empty(){if std::env::var("TMV_GPU").as_deref()==Ok("cpu"){"已指定 CPU 后端，未尝试 GPU".into()}else{"没有可供当前程序使用的 GPU 后端".into()}}else{failures.join("；")};let _=INIT_FAILURE.set(reason);None}).as_ref()
 }
+pub fn unavailable_reason()->Option<&'static str>{INIT_FAILURE.get().map(String::as_str)}
 
 /// Runs `f`, turning a panic (how Burn reports a failed kernel) into an error.
 pub fn guarded<T>(f: impl FnOnce() -> T) -> Result<T> {
@@ -46,17 +48,6 @@ pub fn spectrum(dev: &Device, values: impl Fn(usize, usize) -> f32 + Sync, regio
     use rayon::prelude::*;
     let (n, xs, ys) = fft::tiling(region, want_n)?;
     let origins: Vec<(usize, usize)> = ys.iter().flat_map(|&y| xs.iter().map(move |&x| (x, y))).collect();
-    // DFT matrix W[j][k] = exp(−2πi jk / n), with jk reduced mod n for accuracy.
-    let (mut wr, mut wi) = (vec![0f32; n * n], vec![0f32; n * n]);
-    for j in 0..n {
-        for k in 0..n {
-            let a = -2.0 * PI * ((j * k) % n) as f64 / n as f64;
-            wr[j * n + k] = a.cos() as f32;
-            wi[j * n + k] = a.sin() as f32;
-        }
-    }
-    let wr = upload(wr, [n, n], dev);
-    let wi = upload(wi, [n, n], dev);
     let win = fft::hann(n);
     let window = upload((0..n * n).map(|i| win[i / n] * win[i % n]).collect(), [1, n, n], dev);
     let per = (MAX_ELEMS / (n * n)).clamp(1, origins.len());
@@ -74,21 +65,16 @@ pub fn spectrum(dev: &Device, values: impl Fn(usize, usize) -> f32 + Sync, regio
             }
         });
         let x = upload(tiles, [t, n, n], dev) * window.clone();
-        // Rows: A = X W.
-        let x2 = x.reshape([t * n, n]);
-        let ar = x2.clone().matmul(wr.clone());
-        let ai = x2.matmul(wi.clone());
-        // Columns on the transposed tiles: Aᵀ W = (W A)ᵀ, so the result is Fᵀ.
-        let tr = |a: Tensor<2>| a.reshape([t, n, n]).swap_dims(1, 2).reshape([t * n, n]);
-        let (ar, ai) = (tr(ar), tr(ai));
-        let fr = ar.clone().matmul(wr.clone()) - ai.clone().matmul(wi.clone());
-        let fi = ar.matmul(wi.clone()) + ai.matmul(wr.clone());
-        let power = (fr.clone() * fr + fi.clone() * fi).reshape([t, n, n]).sum_dim(0);
-        let p = download(power);
+        let (fr,fi)=burn::signal::rfft(x,2,None);
+        let (fr,fi)=burn::signal::cfft(fr,fi,1,None);
+        let half=download((fr.clone()*fr+fi.clone()*fi).sum_dim(0));
+        // Reconstruct the redundant half using conjugate symmetry.
+        let hw=n/2+1;let mut p=vec![0.0;n*n];
+        for y in 0..n {for x in 0..n {p[y*n+x]=if x<hw {half[y*hw+x]}else{half[((n-y)%n)*hw+n-x]};}}
         // p[u][v] is frequency (row v, column u).
         for u in 0..n {
             for v in 0..n {
-                sum[v * n + u] += p[u * n + v] as f64;
+                sum[v * n + u] += p[v * n + u] as f64;
             }
         }
     }
@@ -295,4 +281,10 @@ mod bench {
             }
         }
     }
+}
+
+#[cfg(test)]mod fft_tests{use super::*;
+ #[test]fn native_fft_spectrum_matches_cpu(){
+  let Some((dev,_))=device()else{assert!(std::env::var_os("TMV_REQUIRE_GPU").is_none(),"GPU required");return;};let value=|x:usize,y:usize|((x*37+y*113)%251) as f32/125.+(x as f32*0.17).sin();let region=[0,0,256,256];let cpu=fft::spectrum(value,region,128).unwrap();let gpu=spectrum(dev,value,region,128).unwrap();let rms=(gpu.log.iter().zip(&cpu.log).map(|(a,b)|(*a as f64-*b as f64).powi(2)).sum::<f64>()/gpu.log.len() as f64).sqrt();eprintln!("GPU CTF log spectrum RMS {rms}");assert!(rms<0.002,"{rms}");
+ }
 }

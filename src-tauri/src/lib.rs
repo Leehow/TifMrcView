@@ -105,3 +105,12 @@ pub mod remote_agent;
 
 #[cfg(feature = "pro")]
 pub mod acquisition;
+
+#[cfg(feature = "pro")]
+pub mod compute;
+
+#[cfg(feature="pro")]
+pub mod resources;
+
+#[cfg(feature="pro")]
+pub mod gpu_workers;

@@ -146,7 +146,8 @@ pub(super) fn call(session: &Session, args: &Value) -> Result<Value> {
     }
     let checksum = dir.join("SHA256SUMS");
     // Recheck the engine itself each invocation; shared CUDA resources were checked on install.
-    let cmd=format!("umask 077; cd {} && sha256sum -c --status {} && exec env RAYON_NUM_THREADS=8 TMV_THREADS=8 {} agent",q(&dir),q(&checksum),q(&binary));
+    let libraries=q(&dir.join("cuda/lib64"));
+    let cmd=format!("umask 077; cd {} && sha256sum -c --status {} && exec env LD_LIBRARY_PATH={libraries}\"${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\" {} agent",q(&dir),q(&checksum),q(&binary));
     let result: Value = serde_json::from_slice(&exec(session, &cmd, &serde_json::to_vec(&req)?)?)?;
     if let Some(error) = result["error"].as_str() {
         anyhow::bail!("{error}")

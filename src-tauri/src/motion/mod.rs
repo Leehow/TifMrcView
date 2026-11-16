@@ -405,6 +405,7 @@ pub fn prepare(
     p.validate()?;
     check_cancel()?;
     let start = std::time::Instant::now();
+    crate::compute::cpu_stage("读取、电影解码与增益校正","输入格式解码和帧准备在 CPU；运动求解与求和单独记录后端");
     let movie = input::Movie::open(path, img, p, c, z, t)?;
     if p.dose_weighted
         && (p.total_dose.is_some() || p.dose_per_frame.is_some())
@@ -442,12 +443,11 @@ pub fn prepare(
 
 /// `finish` for a preview: the binned frames moved by their whole-frame
 /// shifts and summed, at the binned size.
-fn preview(prepared: Prepared) -> Result<Corrected> {
-    use rayon::prelude::*;
+fn preview(prepared: Prepared,p:&Params) -> Result<Corrected> {
     let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
     let start = std::time::Instant::now();
     let (w, h) = (sp.w / sp.bin, sp.h / sp.bin);
-    let (global, cc) = match crate::align::movie_planes(&sp.frames, w, h, &|_, _| {}) {
+    let (global, cc) = match crate::align::movie_planes_on(&sp.frames, w, h, &|_, _| {},p.backend!="cpu") {
         Ok(g) => (smooth(&g.shifts, &g.cc, SMOOTHING), g.cc),
         Err(e) if e.downcast_ref::<crate::align::NoSignal>().is_some() => {
             warnings.push(format!("{e}；按未校正直接求和"));
@@ -459,13 +459,16 @@ fn preview(prepared: Prepared) -> Result<Corrected> {
     let timer = std::time::Instant::now();
     // Frames hold means of the binned pixels; the sums hold counts.
     let scale = (sp.bin * sp.bin) as f32;
-    let moved: Vec<Vec<f32>> = sp.frames.par_iter().zip(&global).map(|(v, &d)| crate::align::movie_shift(v, w, h, d)).collect();
-    let mut sums = sum::Sums { unweighted: vec![0.0; w * h], even: vec![0.0; w * h], odd: vec![0.0; w * h], weighted: None };
-    for (i, v) in moved.iter().enumerate() {
-        let half = if i % 2 == 0 { &mut sums.even } else { &mut sums.odd };
-        half.par_iter_mut().zip(v).for_each(|(o, x)| *o += x * scale);
-    }
-    sums.unweighted.par_iter_mut().zip(sums.even.par_iter().zip(&sums.odd)).for_each(|(o, (a, b))| *o = a + b);
+    let mut accelerated=false;
+    let sums = if let Some((dev,_))=crate::ctf_gpu::device().filter(|_|p.backend!="cpu") {
+        match crate::ctf_gpu::guarded(||sum_gpu::preview_auto(dev,&sp.frames,w,h,&global,scale,p.backend=="gpu")).and_then(|r|r) {
+            Ok((out,gpu,reason)) => { accelerated=gpu; if gpu {crate::compute::report("运动校正预览移位与求和","GPU",reason);} else {crate::compute::cpu_stage("运动校正预览移位与求和",reason.as_deref().unwrap_or("自动选择 CPU"));} out }
+            Err(e) => { crate::compute::report("运动校正预览移位与求和","CPU",Some(format!("GPU 执行失败：{e:#}"))); sum_gpu::cpu_preview(&sp.frames,w,h,&global,scale) }
+        }
+    } else {
+        if p.backend=="cpu" {crate::compute::cpu_stage("运动校正预览移位与求和","指定 CPU 后端");} else {crate::compute::report("运动校正预览移位与求和","CPU",Some(crate::compute::no_gpu()));}
+        sum_gpu::cpu_preview(&sp.frames,w,h,&global,scale)
+    };
     let total_drift = global.windows(2).map(|v| (v[1][0] - v[0][0]).hypot(v[1][1] - v[0][1])).sum();
     let local = local::Local { model: local::Model::zero(&sp.times), patches: Vec::new(), global_residual: 0.0, local_residual: 0.0, rejected: 0, backend: String::new(), cpu_pair_ms: 0.0, gpu_pair_ms: None };
     let result = MotionResult {
@@ -489,7 +492,7 @@ fn preview(prepared: Prepared) -> Result<Corrected> {
         alignment_ms,
         sum_ms: timer.elapsed().as_secs_f64() * 1000.0,
         total_ms: (took + start.elapsed()).as_secs_f64() * 1000.0,
-        backend: "预览".into(),
+        backend: if accelerated {"GPU 预览"} else {"CPU 预览"}.into(),
         cpu_ms: None,
         gpu_ms: None,
         dose_weighted: false,
@@ -506,15 +509,15 @@ pub fn finish(
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<Corrected> {
     if prepared.preview {
-        return preview(prepared);
+        return preview(prepared,p);
     }
     let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
     let start = std::time::Instant::now();
     let raw = sp.counts.iter().sum::<usize>();
     let alignment_start = std::time::Instant::now();
-    let g = crate::align::movie_planes(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
+    let g = crate::align::movie_planes_on(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
         progress("全局对齐", done, total)
-    });
+    },p.backend!="cpu");
     let (global, local, cc) = match g {
         Ok(g) => {
             let measured: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
@@ -649,7 +652,7 @@ pub fn finish(
                         progress,
                     )
                 }) {
-                    Ok(Ok(s)) => (s, (*name).into()),
+                    Ok(Ok(s)) => {crate::compute::report("运动校正全分辨率求和","GPU",None);(s, (*name).into())},
                     r => {
                         check_cancel()?;
                         if p.backend == "gpu" {
@@ -658,7 +661,8 @@ pub fn finish(
                                 _ => unreachable!(),
                             };
                         }
-                        warnings.push("GPU 求和失败，回退 CPU".into());
+                        let why=match &r{Ok(Err(e))|Err(e)=>format!("GPU 求和失败：{e:#}"),_=>"GPU 求和失败".into()};
+                        crate::compute::report("运动校正全分辨率求和","CPU",Some(why.clone()));warnings.push(why);
                         (
                             sum::cpu(
                                 &sp,

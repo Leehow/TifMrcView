@@ -452,9 +452,9 @@ pub fn reconstruct(
     if p.backend == "gpu" && gpu.is_none() {
         bail!("没有可用 GPU");
     }
-    let mut plan = gpu.and_then(|(dev, name)| {
-        crate::ctf_gpu::guarded(|| super::recon_gpu::Plan::new(dev, g, p)).ok().and_then(Result::ok).map(|plan| (plan, *name))
-    });
+    let mut reason=None;
+    let mut plan = gpu.and_then(|(dev,name)|match crate::ctf_gpu::guarded(||super::recon_gpu::Plan::new(dev,g,p)).and_then(|r|r){Ok(plan)=>Some((plan,*name)),Err(e)=>{reason=Some(format!("GPU 重构初始化失败：{e:#}"));None}});
+    if plan.is_none(){crate::compute::report("三维重构","CPU",Some(reason.unwrap_or_else(||if p.backend=="cpu"{"指定 CPU 后端".into()}else{crate::compute::no_gpu()})));}
     let mut backend = plan.as_ref().map_or("CPU", |p| p.1).to_string();
     let means = view_means(src, g.views(), rows)?;
     for y0 in (0..h).step_by(rows) {
@@ -466,7 +466,7 @@ pub fn reconstruct(
         }
         let gpu_slab = plan.as_ref().map(|(gp, _)| crate::ctf_gpu::guarded(|| gp.slab(&sino, n)));
         let slab = match gpu_slab {
-            Some(Ok(Ok(v))) => v,
+            Some(Ok(Ok(v))) => {crate::compute::report("三维重构","GPU",None);v},
             Some(r) => {
                 check_cancel()?;
                 let e = match r {
@@ -479,6 +479,7 @@ pub fn reconstruct(
                 eprintln!("tomo: GPU reconstruction failed ({e}); CPU from row {y0}");
                 plan = None;
                 backend = "CPU".into();
+                crate::compute::report("三维重构","CPU",Some(format!("GPU 执行失败：{e:#}")));
                 cpu_slab(g, &sino, p)?
             }
             None => cpu_slab(g, &sino, p)?,

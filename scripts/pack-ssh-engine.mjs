@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 const [bin,cuda,out]=process.argv.slice(2);
 if(!bin||!cuda||!out)throw Error('usage: pack-ssh-engine.mjs <Linux tmv> <cuda dir> <out.tar.gz>');
 const elf=fs.readFileSync(bin);if(!elf.subarray(0,6).equals(Buffer.from([127,69,76,70,2,1]))||elf.readUInt16LE(18)!==62)throw Error('Linux x86_64 engine required');
+for(const f of ['lib64/libnvrtc.so.12','lib64/libnvrtc-builtins.so.12.8','LICENSE_NVRTC'])if(!fs.statSync(path.join(cuda,f)).isFile())throw Error('Missing portable CUDA runtime: '+f);
 fs.mkdirSync(path.dirname(out),{recursive:true});const stage=fs.mkdtempSync(path.join(path.dirname(out),'.ssh-engine-stage-'));
 const cleanup=()=>fs.rmSync(stage,{recursive:true,force:true});for(const sig of ['SIGINT','SIGTERM','SIGHUP'])process.once(sig,()=>{cleanup();process.exit(1)});
 try{

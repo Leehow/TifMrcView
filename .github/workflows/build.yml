@@ -355,6 +355,23 @@ jobs:
       - name: Pack
         run: node scripts/pack-cli.mjs src-tauri/target/release/tmv dist "${{ needs.version.outputs.version }}"
 
+      - name: Stage portable NVRTC runtime for SSH engine
+        shell: bash
+        run: |
+          python3 -m pip download --no-deps --dest /tmp/tmv-nvrtc nvidia-cuda-nvrtc-cu12==12.8.93
+          python3 - <<'PYRUNTIME'
+          from pathlib import Path
+          from zipfile import ZipFile
+          dest = Path('src-tauri/target/pro/cuda')
+          with ZipFile(next(Path('/tmp/tmv-nvrtc').glob('*.whl'))) as z:
+              for name in ('libnvrtc.so.12', 'libnvrtc-builtins.so.12.8'):
+                  target = dest / 'lib64' / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(z.read('nvidia/cuda_nvrtc/lib/' + name))
+              license_file = next(n for n in z.namelist() if n.endswith('.dist-info/License.txt'))
+              (dest / 'LICENSE_NVRTC').write_bytes(z.read(license_file))
+          PYRUNTIME
+
       - name: Pack SSH processing engine
         run: node scripts/pack-ssh-engine.mjs src-tauri/target/release/tmv src-tauri/target/pro/cuda dist/ssh-engine.tar.gz
       - uses: actions/upload-artifact@v4

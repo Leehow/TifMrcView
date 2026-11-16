@@ -93,18 +93,19 @@ fn note(root: &Path, name: &str, error: Option<String>) {
 
 /// Keeps (or with None forgets) what went wrong with a series, or a note on it.
 fn remark(root: &Path, name: &str, text: Option<String>, error: bool) {
-    let mut n = notes(root);
-    let map = if error { &mut n.errors } else { &mut n.notes };
-    match text {
-        Some(e) => map.insert(name.into(), e),
-        None => map.remove(name),
-    };
-    let file = notes_path(root);
-    if n.errors.is_empty() && n.notes.is_empty() && !file.exists() {
-        return;
-    }
-    let _ = file.parent().map(std::fs::create_dir_all);
-    let _ = std::fs::write(file, serde_json::to_vec_pretty(&n).unwrap_or_default());
+    merge_notes(&notes_path(root),name,text,error);
+}
+fn merge_notes(file:&Path,name:&str,text:Option<String>,error:bool){
+    if let Some(parent)=file.parent(){if std::fs::create_dir_all(parent).is_err(){return;}}
+    // Different GPU processes update this shared summary. Lock the whole
+    // read/modify/rename, not only the final write.
+    let Ok(lock)=std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(file.with_extension("lock"))else{return;};
+    if lock.lock().is_err(){return;}
+    let mut n:Notes=std::fs::read(file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let map=if error{&mut n.errors}else{&mut n.notes};
+    match text{Some(e)=>map.insert(name.into(),e),None=>map.remove(name)};
+    if n.errors.is_empty()&&n.notes.is_empty()&&!file.exists(){return;}
+    if let Ok(text)=serde_json::to_string_pretty(&n){let _=crate::motion::output::text(file,&text);}
 }
 
 fn text(p: &Path) -> String {
@@ -318,6 +319,7 @@ pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progre
     each(folder, &|s| if only.is_empty() { s.stage != Stage::Quick && s.stage != Stage::Done } else { only.contains(&s.name) }, progress, changed, &|s, progress| {
         let stack = stack_of(s, true, progress)?;
         changed();
+        let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
         let mut d = dataset(&stack)?;
         // A series the program would not use is not aligned for nothing;
         // the user who takes it gets it with the next run.
@@ -341,6 +343,7 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
         // own pixel, local motion and dose weighting); what was made for
         // looking is enough for a tomogram to show.
         let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
+        let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
         let mut d = dataset(&stack)?;
         let req = auto::AutoReq { pixel_a: None, purpose, fresh: false, membranes: false };
         Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
@@ -379,3 +382,5 @@ mod tests {
         assert!(scan(&text(dir.path())).unwrap().series[0].error.is_none());
     }
 }
+
+#[cfg(test)]mod parallel_notes_tests{use super::*;#[test]fn multi_gpu_notes_merge_without_lost_updates(){let dir=tempfile::tempdir().unwrap();let path=dir.path().join("session.json");std::thread::scope(|scope|{for i in 0..16{let path=&path;scope.spawn(move||merge_notes(path,&format!("TS_{i}"),Some(format!("warning_{i}")),true));}});let n:Notes=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();assert_eq!(n.errors.len(),16);}}

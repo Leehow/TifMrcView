@@ -17,7 +17,7 @@ pub const FALLOFF: f64 = 1.0;
 const HIGHPASS: f64 = 0.02;
 
 /// Deconvolves a volume [z][y][x] in place.
-pub(crate) fn deconvolve(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics) {
+fn cpu(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics) {
     let (nx, ny, nz) = (w.next_power_of_two(), h.next_power_of_two(), z.next_power_of_two().max(2));
     let mean = (vol.par_iter().map(|&v| v as f64).sum::<f64>() / vol.len() as f64) as f32;
     let mut re = vec![0f32; nx * ny * nz];
@@ -55,6 +55,49 @@ pub(crate) fn deconvolve(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, d
     }
 }
 
+/// Keep the FFT chain on the GPU when its complete memory budget fits.
+pub(crate) fn deconvolve(vol:&mut [f32],shape:[usize;3],pixel:f64,df:f64,optics:&Optics){
+ if let Some((dev,_))=crate::ctf_gpu::device(){
+  match crate::ctf_gpu::guarded(|| gpu(vol,shape,pixel,df,optics,dev)).and_then(|r|r){
+   Ok(v)=>{vol.copy_from_slice(&v);crate::compute::report("反卷积 FFT 与滤波","GPU",None);return;}
+   Err(e)=>{if super::check_cancel().is_err(){return;}crate::compute::report("反卷积","CPU",Some(format!("GPU 执行失败：{e:#}")));}
+  }
+ }else{crate::compute::report("反卷积","CPU",Some(crate::compute::no_gpu()));}
+ cpu(vol,shape,pixel,df,optics);
+}
+fn gpu(vol: &[f32], [w,h,z]: [usize;3], pixel: f64, df: f64, o: &Optics, dev: &burn::tensor::Device) -> anyhow::Result<Vec<f32>> {
+ use burn::tensor::{Tensor,TensorData};
+ let [nx,ny,nz]=[w.next_power_of_two(),h.next_power_of_two(),z.next_power_of_two().max(2)];
+ let count=nx.checked_mul(ny).and_then(|v|v.checked_mul(nz)).ok_or_else(||anyhow::anyhow!("volume too large"))?;
+ // Keep the complete FFT chain resident. Budget includes FFT workspace and
+ // filter temporaries; insufficient VRAM uses CPU rather than six PCIe trips.
+ let devices=crate::resources::discover();
+ let mask=std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
+ let selected=devices.iter().find(|g|mask.split(',').next()==Some(g.uuid.as_str())||mask.split(',').next()==Some(g.index.to_string().as_str())).or_else(||devices.first());
+ let available=selected.map(|g|g.free_mb*1024*1024).unwrap_or(512*1024*1024);
+ anyhow::ensure!((count as u64).saturating_mul(48) < available*85/100,"完整 GPU FFT 与滤波预计需 {:.1} GB，可用显存 {:.1} GB；选择 CPU，避免分轴反复传输",count as f64*48./1e9,available as f64/1e9);
+ let mean=(vol.par_iter().map(|&v|v as f64).sum::<f64>()/vol.len() as f64) as f32;
+ let mut padded=vec![0.;count];
+ for k in 0..z { for y in 0..h { for x in 0..w {padded[(k*ny+y)*nx+x]=vol[(k*h+y)*w+x]-mean;} } }
+ let mut re=Tensor::<3>::from_data(TensorData::new(padded,[nz,ny,nx]),dev);
+ let mut im=Tensor::<3>::zeros([nz,ny,nx],dev);
+ for axis in [2,1,0] { super::check_cancel()?;(re,im)=burn::signal::cfft(re,im,axis,None); }
+ let f=|i:usize,n:usize|(crate::motion::sum::freq(i,n)/n as f64) as f32;
+ let axis=|n:usize,shape|Tensor::<3>::from_data(TensorData::new((0..n).map(|i|f(i,n).powi(2)).collect::<Vec<_>>(),shape),dev);
+ let kp=(axis(nx,[1,1,nx])+axis(ny,[1,ny,1])+axis(nz,[nz,1,1])).sqrt();
+ let k2=kp.clone().powf_scalar(2.).div_scalar((pixel*pixel) as f32);
+ let ctf=(k2.clone().mul_scalar((o.a*df) as f32)-k2.powf_scalar(2.).mul_scalar(o.b as f32)+o.w as f32).sin().abs();
+ let ramp=kp.clone().div_scalar((HIGHPASS*0.5) as f32).clamp(0.,1.).mul_scalar(std::f32::consts::PI);
+ let snr=kp.mul_scalar((-100.*FALLOFF/pixel) as f32).exp().mul_scalar(10f32.powf((3.*STRENGTH) as f32))*(ramp.cos().neg()+1.);
+ let gain=ctf.clone()/(ctf.powf_scalar(2.)+snr.clamp_min(1e-30).recip());
+ re=re*gain.clone();im=im*gain;
+ for (axis,n) in [(2,nx),(1,ny),(0,nz)] { super::check_cancel()?;let(r,m)=burn::signal::cfft(re,im.neg(),axis,None);re=r.div_scalar(n as f32);im=m.div_scalar(-(n as f32)); }
+ let re=crate::motion::sum_gpu::download(re);
+ anyhow::ensure!(re.iter().all(|v|v.is_finite()),"GPU FFT 返回非有限值");
+ let mut out=vec![0.;vol.len()];for k in 0..z{for y in 0..h{out[(k*h+y)*w..][..w].copy_from_slice(&re[(k*ny+y)*nx..][..w]);}}
+ Ok(out)
+}
+
 /// In-place complex 3D FFT (power-of-two sides); the inverse is scaled.
 fn fft3(re: &mut [f32], im: &mut [f32], [nx, ny, nz]: [usize; 3], inverse: bool) {
     if inverse {
@@ -86,4 +129,15 @@ fn fft3(re: &mut [f32], im: &mut [f32], [nx, ny, nz]: [usize; 3], inverse: bool)
         re.par_iter_mut().for_each(|v| *v /= n);
         im.par_iter_mut().for_each(|v| *v = -*v / n);
     }
+}
+
+#[cfg(test)]
+mod gpu_tests{
+ use super::*;
+ #[test]
+ fn gpu_deconvolution_matches_cpu_reference(){
+  let Some((dev,_))=crate::ctf_gpu::device()else{assert!(std::env::var_os("TMV_REQUIRE_GPU").is_none(),"GPU required");return;};
+  let shape=[17,13,9];let input:Vec<f32>=(0..17*13*9).map(|i|((i*37%251) as f32/125.-1.)+((i%17) as f32*0.3).sin()).collect();let o=Optics::of(300.,2.7,0.07);let mut reference=input.clone();cpu(&mut reference,shape,3.2,25000.,&o);let actual=gpu(&input,shape,3.2,25000.,&o,dev).unwrap();
+  let error=actual.iter().zip(&reference).map(|(a,b)|(*a as f64-*b as f64).powi(2)).sum::<f64>();let norm=reference.iter().map(|v|(*v as f64).powi(2)).sum::<f64>();let relative=(error/norm).sqrt();eprintln!("GPU deconvolution relative RMS {relative}");assert!(relative<0.002,"{relative}");
+ }
 }

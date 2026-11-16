@@ -272,19 +272,21 @@ pub fn track_backend(
                                 && (a.1 - b.1).abs() < 0.01
                         });
                         chosen_gpu = agree && (backend == "gpu" || ms < cpu_pair_ms);
+                        if !agree {crate::compute::report("倾转对齐相关","CPU",Some("GPU 与 CPU 校准结果偏差超过容差".into()));} else if !chosen_gpu {crate::compute::cpu_stage("倾转对齐相关", &format!("自动选择 CPU：含传输的实测耗时 CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms"));}
                         gpu = Some(batch);
-                    }
-                }
+                    }else{let why=match result{Ok(Err(e))|Err(e)=>format!("GPU 相关失败：{e:#}"),_=>unreachable!()};crate::compute::report("倾转对齐相关","CPU",Some(why));}
+                }else{crate::compute::report("倾转对齐相关","CPU",Some(if backend=="cpu"{"指定 CPU 后端".into()}else{crate::compute::no_gpu()}));}
                 calibrated = true;
                 if chosen_gpu {
-                    gpu.as_ref().unwrap().correlate(&pairs, max)?
+                    {let peaks=gpu.as_ref().unwrap().correlate(&pairs,max)?;crate::compute::report("倾转对齐相关","GPU + CPU",Some("GPU 频域相关；CPU 峰值与几何拟合".into()));peaks}
                 } else {
                     reference
                 }
             } else if chosen_gpu {
                 match crate::ctf_gpu::guarded(|| gpu.as_ref().unwrap().correlate(&pairs, max)) {
                     Ok(Ok(peaks)) => peaks,
-                    _ => {
+                    err => {
+                        crate::compute::report("倾转对齐相关","CPU",Some(format!("GPU 执行失败：{err:?}")));
                         chosen_gpu = false;
                         cpu()
                     }

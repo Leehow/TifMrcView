@@ -60,6 +60,7 @@ pub fn main(args: &[String]) -> i32 {
     unsafe {
         libc::umask(0o077);
     }
+    if args.first().is_some_and(|s|s=="agent-worker"){crate::resources::pin_primary();crate::resources::configure_threads();}
     crate::cli::use_bundled_cuda();
     // Explicit backend avoids falling back to a second GPU through Vulkan.
     #[cfg(target_os = "linux")]
@@ -77,7 +78,7 @@ pub fn main(args: &[String]) -> i32 {
         ensure!(v["protocol"] == 1, "unsupported protocol");
         match string(&v, "action")? {
             "inspect" => Ok(
-                json!({"protocol":1,"version":crate::cli::VERSION,"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"root":root()?,"gpu":crate::ctf_gpu::device().map(|(_,n)|n)}),
+                json!({"protocol":1,"version":crate::cli::VERSION,"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"root":root()?,"gpu":null,"gpuProbe":"deferredToTask","resources":crate::resources::inspect(v["outputRoot"].as_str().map(Path::new).or(Some(root()?.as_path())))}),
             ),
             "submit" => submit(&v),
             "status" | "cancel" => {
@@ -316,6 +317,7 @@ fn worker(id: &str) -> Result<Value> {
                 "plugin hash mismatch"
             );
         }
+        std::env::set_var("TMV_WORKER_PLUGIN_ROOT",&plugin_root);std::env::set_var("TMV_WORKER_PLUGIN_VERSION",string(plugin,"version")?);
         crate::thumb::configure_plugins_version(Some(plugin_root), string(plugin, "version")?);
     }
     if command == "tomo_session_run" {
@@ -382,7 +384,9 @@ fn worker(id: &str) -> Result<Value> {
         None
     };
     std::env::set_var("TMV_CANCEL_FILE", dir.join("cancel"));
-    let _gpu = if long(command) {
+    let deferred=(command=="tomo_session_run"||command=="spa_run"&&matches!(args["req"]["step"].as_str(),Some("motion"|"ctf"))) && crate::gpu_workers::enabled();
+    if deferred{std::env::set_var("TMV_PARENT_GPU_LOCK_DEFERRED","1");}
+    let _gpu = if long(command) && !deferred {
         crate::cli::gpu_turn()
     } else {
         None
@@ -399,13 +403,14 @@ fn worker(id: &str) -> Result<Value> {
         &json!({"state":"running","pid":pid,"outputRoot":project_root}),
     )?;
     let throttle = Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
-    let seq = AtomicU64::new(0);
-    let output = Mutex::new(
+    let seq = std::sync::Arc::new(AtomicU64::new(0));
+    let output = std::sync::Arc::new(Mutex::new(
         fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(dir.join("events.jsonl"))?,
-    );
+    ));
+    {let output=output.clone();let seq=seq.clone();let history=dir.join("backends.jsonl");crate::compute::sink(std::sync::Arc::new(move|p|{let mut out=output.lock().unwrap();let n=seq.fetch_add(1,Ordering::SeqCst)+1;let event=json!({"seq":n,"type":"backend","placement":p});let _=writeln!(out,"{event}");drop(out);if let Ok(mut f)=fs::OpenOptions::new().create(true).append(true).open(&history){let _=writeln!(f,"{event}");}}));}
     let emit = |stage: &str, done: usize, total: usize| {
         let mut last = throttle.lock().unwrap();
         if done != total && last.elapsed() < std::time::Duration::from_millis(200) {
@@ -417,7 +422,7 @@ fn worker(id: &str) -> Result<Value> {
         let _ = writeln!(
             f,
             "{}",
-            json!({"seq":n,"stage":stage,"done":done,"total":total})
+            json!({"seq":n,"stage":stage,"done":done,"total":total,"worker":if stage.starts_with("GPU "){stage.split(" · ").next().map(str::to_owned)}else{std::env::var("TMV_GPU_LABEL").ok().map(|s|s.split(" · ").next().unwrap_or(&s).to_owned())}})
         );
     };
     emit("正在服务器上运行", 0, 1);
@@ -457,7 +462,7 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
     let req = &a["req"];
     let val = match cmd {
         "gpu_info" => {
-            json!({"backend":crate::ctf_gpu::device().map(|(_,n)|*n).unwrap_or("CPU"),"card":crate::ctf_gpu::device().and_then(|(d,_)|d.identity().map(|i|i.name))})
+            json!({"backend":crate::ctf_gpu::device().map(|(_,n)|*n).unwrap_or("CPU"),"card":crate::ctf_gpu::device().and_then(|(d,_)|d.identity().map(|i|i.name)),"resources":crate::resources::inspect(None)})
         }
         "tomo_dataset" => serde_json::to_value(dataset(string(a, "stack")?)?)?,
         "tomo_dataset_save" => {
@@ -476,9 +481,19 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
         }
         "tomo_session" => serde_json::to_value(crate::tomo::session::scan(string(a, "folder")?)?)?,
         "tomo_session_run" => {
-            let (dev, _) = crate::ctf_gpu::device().context("服务器没有可用 GPU")?;
+            let cpu=burn::tensor::Device::default();
+            let dev=crate::ctf_gpu::device().map(|(d,_)|d).unwrap_or(&cpu);
             let folder = string(req, "folder")?;
             let only: Vec<String> = serde_json::from_value(req["only"].clone()).unwrap_or_default();
+            if crate::gpu_workers::enabled(){
+             let snapshot=crate::tomo::session::scan(folder)?;
+             let names:Vec<_>=snapshot.series.iter().filter(|s|if only.is_empty(){if req["purpose"].is_null(){s.stage!=crate::tomo::session::Stage::Quick&&s.stage!=crate::tomo::session::Stage::Done}else{s.chosen}}else{only.contains(&s.name)}).map(|s|s.name.clone()).collect();
+             if names.len()>1{
+              let tasks:Vec<_>=names.iter().map(|name|json!({"kind":"series","folder":folder,"name":name,"purpose":req["purpose"]})).collect();
+              let failures=Mutex::new(vec![]);crate::gpu_workers::map(&tasks,emit,&|_|crate::tomo::check_cancel(),&|i,r|{if let Err(e)=r{failures.lock().unwrap().push(format!("{}：{e:#}",names[i]));}})?;
+              let errors=failures.into_inner().unwrap();ensure!(errors.is_empty(),"{}",errors.join("；"));return Ok(serde_json::to_value(crate::tomo::session::scan(folder)?)?);
+             }
+            }
             // The initial pass uses the user's selected sequence list.
             let s = if req["purpose"].is_null() {
                 crate::tomo::session::prepare(dev, folder, &only, emit, &|| {})?

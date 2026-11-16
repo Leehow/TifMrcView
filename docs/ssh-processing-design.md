@@ -118,3 +118,25 @@ Runner 的公共操作是 `inspect / submit / events / status / cancel / artifac
 Linux 引擎封装完成；首轮正式签名 Pro App 已通过 SSH 连接、97 组检索、对齐/断层预览和主窗口打开。用户验收补充：小窗预览改为首帧立即可用、按需缓冲、明确加载/失败/重试；任务状态优先于预览请求，显示阶段和实际计数，修复浅色文字与增益路径显示。8 项路由测试和真实预览组件的延迟/失败夹具通过。剩余：最终 UI 补丁的正式签名双版本 App 更新与 computer use 复核。验收记录保存在 /Volumes/samsung/tifview-build.noindex/ssh-processing-20261116/。
 范围：先接 Cryo-ET 文件夹流程和 SPA 工作区；STA/独立去噪等其他工作区尚未接远端。远端 SPA 使用内置挑选，不上传可选 SAM 模型，不下载模型。
 保留限制：非检查点中断须重跑当前步骤，协作取消不能保证立即打断驱动调用。随包引擎目前支持 Linux x86_64。递归最多 64 层、一百万项，超限明确报错，不静默漏扫；不可读目录列出警告。
+
+## GPU 与多卡续作（2026-11-16）
+用户明确授权：可加速步骤接 GPU；逐步骤展示实际 CPU/GPU/设备，CPU 回退展示原因；多 GPU 服务器使用全部允许设备；amax 实测后更新本地 App。
+基线 main 12ae043；独立工作区 codex/ssh-gpu-20261116。原有 denoise 和 linux-control 脏工作区保留，只读参考，不吸收其未提交代码。
+验收：运动校正（含快速预览）、CTF、倾转对齐、重构、反卷积有实际后端证据；与 CPU 数值参考比较；双 3090 的实际进程/显存/任务分配可验证；单卡/无 GPU/内核失败有明确原因与安全回退；重连、取消和预览不回归；正式签名本地 App CUA。
+方案：现有 Burn 原生 FFT 与 GPU 内核优先；分批 3D FFT 控制显存。隔离子进程按 UUID 调度不同序列，单序列的电影可分批至各卡；单个非并行阶段不强求同时占满全部卡。设备掩码和其他用户进程保持不变。
+参考 NVIDIA CUDA_VISIBLE_DEVICES、Dask-CUDA worker_count、RELION MotionCorrection：进程绑定设备/独立输入分工得到支持；与 cuFFT 单体多卡 FFT 不同，本项目复用现有 Burn 内核，不引入额外 CUDA 库或网络依赖。
+步骤：1 后端事件与 GPU 核心补齐；2 隔离 worker/多卡队列；3 amax 数值、真实数据与回退测试；4 界面逐卡阶段与原因；5 打包、CUA、验收记录与工作区收尾。
+状态：完成只读梳理；amax LAN 连通，GPU0 现有约6 GB占用、GPU1空闲，未改变其他进程。尚未实施。
+阶段记录：初版实现 GPU 原生 CTF FFT、运动预览三次插值、分批 GPU 反卷积、实际后端事件、CPU回退原因与资源面板。amax 5项GPU数值测试通过（含反卷积、预览、求和、重构），CTF 3项通过；浏览器资源/回退夹具通过。
+初版双序列真实任务 0481e239... 已在两张 3090 上记录运动FFT、预览求和、快速CTF；进一步发现 CPU 迭代相关仍耗时，故协作取消本任务（已确认 cancelled，非用户 Nav9），补充 GPU 批量参考叠加/相关/亚像素搜索。该新求解器增加每电影两帧 CPU 搜索校准，超差回退；movie 位移比较必须去掉任意公共平移规范，既有校准容差 0.05px。最终数值与真实数据验收仍待完成，不能把初版物理GPU占用视作全流程通过。
+实现中的资源约束：读取 CPU 可用线程、MemAvailable、各卡 UUID/可见性/可用显存/利用率、输出路径所在文件系统空间；GPU worker 至少2GB可用显存，内存按16GB/worker的保守预算限制并发。保留数字卡号与旧默认锁兼容；父调度器延迟锁定，避免父子互等。
+本次证据目录 /Volumes/samsung/tifview-build.noindex/ssh-gpu-20261116；amax 源 /mnt/sdd/code/tmv-ssh-gpu-20261116/src-tauri，构建 source /mnt/sdd/code/tmv-linux-20261113/build-env.sh（离线缓存、CARGO_TARGET_DIR=/mnt/sdd/code/tmv-test/target）。不可变试验引擎 draft-engine-v1 已停止任务；新构建日志 solver-gpu-tests2.log/build3.log。尚未提交、打包或更新 App。
+用户环境变更：局域网测试机现为 leehow-pc Linux，amax-lan 已不可达；保留 amax 试验任务 e088877f...，最后确认在两卡运动阶段（约7/61），不可声称完整双卡验收通过。后续改在 192.168.31.113 / leehow-pc.local（用户 leehow）单 RTX5080 16GB、64GB RAM 实测；不改 MinerU/SSH/网络服务。源与私有 Cargo 缓存经 LAN 放在 /home/leehow/leehow/code/tmv-ssh-gpu-20261116，离线 Rust1.99.1 借用只读 /home/leehow/w10-scratch/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu。CARGO_BUILD_JOBS=4，自己的 target/cargo；无 Internet 下载。
+新增实际耗时诊断：4K 预览移位的 CPU 索引生成耗时约68秒/电影，已改为 GPU arange/整数索引生成，保持同样三次插值，待 5080 数值与耗时复核。NVRTC12.8.93 运行库在 leehow-pc MinerU虚拟环境的 nvidia/cuda_nvrtc/lib，可只读复用随引擎携带；确保不依赖服务器Python环境，保留 NVIDIA 原始许可。不更改现有虚拟环境。
+
+更正下载记录：首次离线构建的 LLVM bundler 仍尝试下载约13MB，已停止自己的构建进程；核对官方大小后补齐45.4MB LLVM归档并校验SHA256。后续使用已验证缓存并关闭构建脚本的校验和网络查询，无模型下载。
+leehow-pc 验证进展：Vulkan 7项及 CUDA 7项数值/共享摘要测试通过；CUDA预览最大误差3.8e-6、反卷积相对RMS2.24e-7，WBP/SIRT/SART相对L2均小于4e-7。电影迭代位移去公共平移后最大差0.0436px（容差0.05px）。最新4K基准、CTF、真实数据和App尚待验收。资源/逐卡状态/回退提示/持久历史浏览器夹具通过，路由及发布说明11项通过。新机器已有Nav110 raw54.st及54个真实角度，只读符号链接到本任务输入目录；真实EER从Mac缓存通过LAN复制，没有重复模拟为多张倾转电影。
+
+用户追加性能原则：合批并让中间结果驻留GPU，含传输的实际耗时不占优时使用CPU。4K四帧初版测试CPU149ms、GPU486ms，因此预览增加4M像素批次、GPU驻留中间值、每输入形状一次CPU/GPU端到端校准；局部相关和倾转追踪保留含传输的耗时选择。反卷积改为完整3D FFT/滤波驻留GPU，显存预算不足则明确回退CPU，避免六次分轴往返。预览跨批次偶奇半集及自动选择测试通过，最新驻留反卷积待数值验证。
+真实Nav110 54张图已完成候选引擎的对齐、CTF、SART重构、反卷积，残差1.57px，输出1024级断层图，计算设备事件均保留。真实Falcon4i_01963.eer及实际gain完成40组运动预览，解码5.57秒、对齐1.38秒、求和0.143秒；后续性能策略修改须重新验证，不能沿用此前验收。Nav110输入首次符号链接被扫描器归一化后找不到旁边角度文件，未进行处理；后改为本任务独立副本（原始数据未改），再完成真实任务。
+兼容构建：leehow-pc为Ubuntu26.04/glibc2.43，直接编译不满足引擎原有glibc2.34基线。仅提取官方小型glibc2.34链接SDK及兼容C++/GCC库到任务目录，不安装或替换系统库；重链接及旧加载器检查尚待通过。

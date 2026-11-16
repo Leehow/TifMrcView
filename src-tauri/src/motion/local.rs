@@ -271,6 +271,7 @@ pub fn estimate(
                             .zip(reference)
                             .all(|(a, b)| (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]) < 0.05)
                             && (p.backend == "gpu" || ms < cpu_pair_ms);
+                        if !use_gpu { crate::compute::cpu_stage("电影局部运动相关", &format!("自动选择 CPU：校准或含传输耗时不占优，CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms")); }
                         gpu = Some(b);
                     }
                 }
@@ -278,8 +279,9 @@ pub fn estimate(
         }
         let peaks = if use_gpu {
             match crate::ctf_gpu::guarded(|| gpu.as_ref().unwrap().correlate(&pairs, max)) {
-                Ok(Ok(v)) => v,
-                _ => {
+                Ok(Ok(v)) => {crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 频域相关；CPU 局部模型拟合".into()));v},
+                e => {
+                    crate::compute::report("电影局部运动相关","CPU",Some(format!("GPU 执行失败：{e:?}")));
                     use_gpu = false;
                     cpu(&pairs)
                 }

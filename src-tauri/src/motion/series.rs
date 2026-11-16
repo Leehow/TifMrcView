@@ -508,9 +508,25 @@ pub fn run(
     let readers = if req.preview { 3 } else { 1 };
     let (next, taken) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
     let (next, taken) = (&next, &taken);
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+    let stopped = &stopped;
     std::thread::scope(|scope| -> Result<()> {
         use std::sync::atomic::Ordering::SeqCst;
-        let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<super::Prepared>)>(0);
+        // Release readers waiting on the bounded window when the consumer
+        // exits early (disk error, dimension mismatch or cancellation).
+        struct Stop<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for Stop<'_> { fn drop(&mut self) { self.0.store(true, SeqCst); } }
+        enum Ready{Prepared(super::Prepared),Corrected(super::Corrected)}
+        let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<Ready>)>(0);
+        let _stop = Stop(stopped);
+        if crate::gpu_workers::enabled(){
+         let send=send.clone();scope.spawn(move||{
+          let indexes:Vec<usize>=(0..plan.len()).filter(|&i|plan[i].1.is_some()&&movies[i].is_some()).collect();
+          let tasks:Vec<_>=indexes.iter().map(|&i|serde_json::json!({"kind":"movie","path":movies[i],"params":plan[i].1})).collect();
+          let r=crate::gpu_workers::map(&tasks,progress,&|j|{let i=indexes[j];while i>taken.load(SeqCst)+4{anyhow::ensure!(!stopped.load(SeqCst),"电影接收已结束");check_cancel()?;std::thread::sleep(std::time::Duration::from_millis(50));}check_cancel()},&|j,v|{let _=send.send((indexes[j],v.and_then(crate::gpu_workers::movie).map(Ready::Corrected)));});
+          if let Err(e)=r{eprintln!("multi-GPU movies: {e:#}");}
+         });
+        }else{
         for _ in 0..readers {
             let send = send.clone();
             scope.spawn(move || loop {
@@ -520,17 +536,18 @@ pub fn run(
                 }
                 let (Some(p), Some(path)) = (&plan[i].1, &movies[i]) else { continue };
                 // Not further ahead than the readers can hold.
-                while i > taken.load(SeqCst) + 2 * readers && check_cancel().is_ok() {
+                while i > taken.load(SeqCst) + 2 * readers && check_cancel().is_ok() && !stopped.load(SeqCst) {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                if check_cancel().is_err() {
+                if check_cancel().is_err() || stopped.load(SeqCst) {
                     break;
                 }
                 let prepared = path.to_str().context("电影路径编码无效").and_then(|path| super::prepare(path, None, dir, 0, 0, 0, p, vec![], &|_, _, _| {}));
-                if send.send((i, prepared)).is_err() {
+                if send.send((i, prepared.map(Ready::Prepared))).is_err() {
                     break;
                 }
             });
+        }
         }
         drop(send);
         let mut ready = std::collections::BTreeMap::new();
@@ -552,7 +569,7 @@ pub fn run(
                 let (at, p) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
                 ready.insert(at, p);
             };
-            let corrected = prepared.and_then(|m| super::finish(m, None, p, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)));
+            let corrected = prepared.and_then(|m|match m{Ready::Corrected(c)=>Ok(c),Ready::Prepared(m)=>super::finish(m,None,p,&|stage,a,b|progress(&format!("{label} · {stage}"),a,b))});
             match corrected {
                 Ok(super::Corrected { mut sums, result: m }) => {
                     let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
@@ -732,10 +749,15 @@ fn name_of(path: &str) -> String {
 /// the series' own fit, `tomo::ctf`, comes later), to show while the movies
 /// are corrected and to tell a blurred view from a sharp one.
 fn quick_ctf(v: &[f32], w: usize, h: usize, pixel_a: f64, kv: f64) -> Option<crate::ctf::Fit> {
-    let (lo, hi) = crate::ctf::clip_range(|i| v[i], v.len());
-    let spectrum = crate::fft::spectrum(|x, y| crate::ctf::clip(v[y * w + x], lo, hi), [0, 0, w, h], 512).ok()?;
-    let params = crate::ctf::Params { voltage_kv: kv, cs_mm: 2.7, amp_contrast: 0.07, pixel_a, res_low_a: 30.0, res_high_a: (2.5 * pixel_a).max(5.0), df_min_a: 5000.0, df_max_a: 80000.0, max_astig_a: 2000.0, phase: false, backend: Some("cpu".into()) };
-    crate::ctf::fit_spectrum(&spectrum.log, spectrum.n, &params).ok()
+    let (lo,hi)=crate::ctf::clip_range(|i|v[i],v.len());
+    let params=crate::ctf::Params{voltage_kv:kv,cs_mm:2.7,amp_contrast:0.07,pixel_a,res_low_a:30.,res_high_a:(2.5*pixel_a).max(5.),df_min_a:5000.,df_max_a:80000.,max_astig_a:2000.,phase:false,backend:None};
+    if let Some((dev,_))=crate::ctf_gpu::device(){
+      let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
+      let result=crate::ctf_gpu::guarded(||->Result<crate::ctf::Fit>{let spectrum=crate::ctf_gpu::spectrum(dev,|x,y|crate::ctf::clip(v[y*w+x],lo,hi),[0,0,w,h],512)?;crate::ctf::fit_many(&[&spectrum.log],spectrum.n,&params,&crate::ctf_gpu::GpuGrid(dev))?.pop().context("empty CTF fit")}).and_then(|r|r);
+      match result{Ok(f)=>{crate::compute::report("电影快速 CTF","GPU + CPU",Some("GPU 频谱和网格；CPU 精细拟合".into()));return Some(f);},Err(e)=>crate::compute::report("电影快速 CTF","CPU",Some(format!("GPU 执行失败：{e:#}")))}
+    }else{crate::compute::report("电影快速 CTF","CPU",Some(crate::compute::no_gpu()));}
+    let spectrum=crate::fft::spectrum(|x,y|crate::ctf::clip(v[y*w+x],lo,hi),[0,0,w,h],512).ok()?;
+    crate::ctf::fit_spectrum(&spectrum.log,spectrum.n,&params).ok()
 }
 
 #[cfg(test)]
