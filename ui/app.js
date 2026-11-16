@@ -3940,7 +3940,7 @@ function buildStrip() {
       m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
     });
     body.append(el);
-    if (ext.remoteFiles?.get(f) && !ext.remoteFiles.get(f).ready) {
+    if (ext.remoteFiles?.get(f) && !ext.remoteFiles.get(f).ready && !ext.remoteFiles.get(f).thumbnail) {
       el.querySelector(".box").textContent = "SSH · 点按加载";
     } else thumbObserver.observe(el);
   });
@@ -3958,8 +3958,16 @@ function pumpThumbs() {
     const el = thumbQueue.splice(best, 1)[0];
     if (!el.isConnected) continue;
     thumbActive++;
-    invoke("thumbnail", { path: el.dataset.path, size: 256 })
+    const remote = ext.remoteFiles?.get(el.dataset.path);
+    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: el.dataset.path, size: 256 }))
       .then((buf) => {
+        if (!el.isConnected) return;
+        if (typeof buf === "string") {
+          const img = document.createElement("img"); img.src = buf; img.alt = "";
+          img.style.cssText = "max-width:100%;max-height:100%;object-fit:contain";
+          el.querySelector(".box").replaceChildren(img);
+          return;
+        }
         const f = parseFrame(buf);
         const c = document.createElement("canvas");
         c.width = f.w;

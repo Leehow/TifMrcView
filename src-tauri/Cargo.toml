@@ -30,6 +30,11 @@ name = "tmv"
 path = "src/bin/tmv.rs"
 required-features = ["cli"]
 
+# Small server helper: the same image readers, without desktop/GTK or Pro GPU.
+[[bin]]
+name = "tmv-ssh-preview"
+path = "src/bin/ssh-preview.rs"
+
 [lib]
 name = "tifmrcview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

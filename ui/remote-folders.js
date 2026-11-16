@@ -1,8 +1,8 @@
 "use strict";
 
 // Local cache paths keep all native image readers and Pro tabs unchanged.
-// Only an explicit image open resolves a remote file; thumbnails never fetch it.
-function mountRemoteFolder(owner, { name, path, entries, resolve }) {
+// Only an explicit image open resolves the full file. Previews transfer small PNGs.
+function mountRemoteFolder(owner, { name, path, entries, resolve, thumbnail }) {
   ext.remoteFiles ||= new Map();
   const folder = { owner, name, remotePath: path, dir: `ssh:${owner}:${path}`,
     files: entries.map((e) => e.local), sizes: entries.map((e) => e.size),
@@ -10,7 +10,7 @@ function mountRemoteFolder(owner, { name, path, entries, resolve }) {
   for (const entry of entries) {
     const old = ext.remoteFiles.get(entry.local);
     ext.remoteFiles.set(entry.local, { folder, ready: old?.ready || false,
-      resolve: () => resolve(entry) });
+      resolve: () => resolve(entry), thumbnail: thumbnail ? () => thumbnail(entry) : null });
   }
   showRemoteFolder(folder, null);
 }

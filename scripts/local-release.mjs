@@ -31,6 +31,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readReleaseNotes } from "./release-notes.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const UPDATE_BASE_URL = process.env.UPDATE_BASE_URL || "https://tifmrcview.com/tifmrcview";
@@ -111,6 +112,9 @@ function clean() {
 }
 
 function build(which, out) {
+  if (!process.env.TMV_SSH_PREVIEW_HELPER || !fs.existsSync(process.env.TMV_SSH_PREVIEW_HELPER)) {
+    throw new Error('Set TMV_SSH_PREVIEW_HELPER to the Linux x86_64 musl tmv-ssh-preview artifact before packaging');
+  }
   if (!platform) throw new Error(`no desktop bundle for ${process.platform}`);
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY) console.warn("warning: TAURI_SIGNING_PRIVATE_KEY not set; no updater packages, so installed apps won't see this release");
   clean();
@@ -165,7 +169,7 @@ function android(out) {
 
 function publish(artifacts, dryRun) {
   const v = version();
-  const notes = git("log", "-1", "--pretty=%s").slice(0, 300);
+  readReleaseNotes(v);
   const release = path.join(artifacts, "release");
   fs.rmSync(release, { recursive: true, force: true });
   // Every platform must be there, or its users would lose the update.
@@ -181,8 +185,8 @@ function publish(artifacts, dryRun) {
     const m = path.basename(f).match(/_(\d+\.\d+\.\d+)_/);
     if (m && m[1] !== v) throw new Error(`${f} is version ${m[1]}, this checkout is ${v}`);
   }
-  run("node", ["scripts/make-release.mjs", path.join(artifacts, "standard"), release, v, UPDATE_BASE_URL, notes, DIRECT_BASE_URL]);
-  run("node", ["scripts/make-release.mjs", path.join(artifacts, "pro"), release, v, UPDATE_BASE_URL, notes, DIRECT_BASE_URL], {
+  run("node", ["scripts/make-release.mjs", path.join(artifacts, "standard"), release, v, UPDATE_BASE_URL, DIRECT_BASE_URL]);
+  run("node", ["scripts/make-release.mjs", path.join(artifacts, "pro"), release, v, UPDATE_BASE_URL, DIRECT_BASE_URL], {
     env: { ...process.env, TMV_EDITION: "pro" },
   });
   run("node", ["scripts/pack-plugins.mjs", release]);

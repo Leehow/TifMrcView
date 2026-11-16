@@ -4,6 +4,7 @@
 .ssh-dialog { width: min(1020px, calc(100vw - 48px)); height: min(680px, calc(100vh - 64px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px #0003; overflow: hidden; }
 .ssh-dialog[open] { display: flex; flex-direction: column; }
 .ssh-dialog::backdrop { background: #10182866; backdrop-filter: blur(4px); }
+.ssh-entry.image .ssh-entry-name > :first-child { width: 48px; height: 40px; object-fit: contain; flex-shrink: 0; }
 .ssh-heading { display: flex; align-items: center; gap: 13px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .ssh-symbol { width: 40px; height: 40px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); flex-shrink: 0; }
 .ssh-symbol svg { width: 23px; height: 23px; }

@@ -36,11 +36,13 @@ operation can be denied before permission processing completes.
 4. Choose **加载此文件夹** to put its image files in the normal sidebar and open
    the first image. Alternatively select/double-click an individual image.
 
-Browsing directories only reads directory metadata. Image contents transfer
-when explicitly opened, with byte progress and cancellation. Unopened sidebar
-items display an SSH placeholder rather than downloading files for thumbnails.
+Directory navigation reads metadata, then visible image rows request 256-pixel
+previews. The normal sidebar requests the same previews for unopened files.
+Only PNG previews cross the connection; full image contents transfer when
+explicitly opened, with byte progress and cancellation. Preview failures keep
+a placeholder and do not prevent opening the image.
 Downloaded images use local cache paths, so existing native readers, annotations
-and Pro image tabs operate on the local copy. Remote data is never written.
+and Pro image tabs operate on the local copy. Original remote images are never written.
 
 Only connection details, authentication mode and the selected key's path are
 remembered (up to four recent connections). Passwords and key passphrases are
@@ -48,8 +50,36 @@ cleared after authentication and never written to settings. Private key
 contents are read locally; only SSH authentication proofs are sent. If an
 encrypted key is already unlocked in the local SSH agent, the plugin can use
 that identity only when it exactly matches the selected key's `.pub` sibling.
-SSH and SFTP run in libssh2 through the `ssh2` crate, without shell commands,
-sshpass, a remote Python installation, or credentials in process arguments.
+SSH and SFTP run in libssh2 through the `ssh2` crate. Previews use a bundled
+Linux x86_64 musl binary (about 5 MB), built from the same `thumb` and format
+readers without desktop, GTK or GPU features. It requires no Python, package
+installation, shared C runtime or background service. On first use it is uploaded
+with mode 0700 into `~/.cache/tifmrcview/ssh-preview/`; its SHA-256 is checked
+before every invocation. This is the only remote write. Image paths travel as
+JSON over stdin, not interpolated shell commands; credentials never enter
+process arguments. The helper generates one PNG and exits, with a 12-second
+watchdog, 768 MiB address-space cap, the existing 128 MiB plane decode limit
+and a 512 KiB output limit. The app serializes preview requests, prioritizes
+explicit transfers over queued previews, and caches by helper version, path,
+file size and mtime. It rejects changed files.
+
+The initial helper covers built-in TIFF, MRC/REC/ST/MAP/ALI and
+PNG/JPEG/GIF/BMP/WebP readers. It does not load executable format plugins from
+the server environment; formats needing additional plugins and non-x86_64 Linux
+servers keep placeholders. An `noexec` home/cache or SFTP-only account also
+keeps placeholders. The full-image open path is unaffected.
+
+Build the helper using `cargo build --release --no-default-features --target
+x86_64-unknown-linux-musl --bin tmv-ssh-preview`. Set `TMV_SSH_PREVIEW_HELPER`
+to that ELF file while building the desktop app; build.rs embeds it in the
+executable, so updates include the matching helper. CI builds the helper before
+all desktop bundles. Local release packaging requires the helper path.
+
+Click outside the dialog (both press and release) or press Escape to close it
+without disconnecting. Dragging from inside onto the backdrop does not close it.
+Closing while a host-trust prompt is pending rejects that prompt; it never
+implicitly trusts a server.
+
 The backend checks OpenSSH known_hosts and its own trusted-host file before
 sending the password. Trust confirmation and authentication use the same SSH
 session. Host key mismatches cannot be overridden in the connection dialog.

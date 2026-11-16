@@ -25,7 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      notes: ${{ steps.v.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +40,6 @@ jobs:
             v="$base.$(git rev-list --count HEAD)"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "notes=$(git log -1 --pretty=%s | tr -d '\r' | head -c 300)" >> "$GITHUB_OUTPUT"
           echo "Version $v"
 
   # A manual publish of a commit that main's push run already bundled (or is
@@ -163,7 +161,7 @@ jobs:
       - name: Release script tests
         if: runner.os == 'Linux'
         run: |
-          node --test scripts/make-release.test.mjs scripts/pack-cli.test.mjs
+          node --test scripts/make-release.test.mjs scripts/release-notes.test.mjs scripts/pack-cli.test.mjs
           node --test scripts/cli-skill.test.mjs
 
       - name: Image ownership regressions
@@ -174,8 +172,34 @@ jobs:
         if: runner.os == 'Linux'
         run: node --test scripts/metal-completion.test.mjs
 
-  bundle:
+  ssh-preview:
     needs: [version, reuse]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.reuse.outputs.run_id == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ssh-preview-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build portable preview helper
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: |
+          cargo build --locked --release --manifest-path src-tauri/Cargo.toml --no-default-features --target x86_64-unknown-linux-musl --bin tmv-ssh-preview
+          file src-tauri/target/x86_64-unknown-linux-musl/release/tmv-ssh-preview | grep -E 'static.*linked'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssh-preview-linux-x64
+          path: src-tauri/target/x86_64-unknown-linux-musl/release/tmv-ssh-preview
+          if-no-files-found: error
+
+  bundle:
+    needs: [version, reuse, ssh-preview]
     # Installers take most of the CI time (Pro, macOS universal), so pull
     # requests only run the tests; main, tags and manual runs still bundle.
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.version.result == 'success' && needs.reuse.outputs.run_id == '' }}
@@ -199,8 +223,14 @@ jobs:
     env:
       TMV_APP_VERSION: ${{ needs.version.outputs.version }}
       TMV_BUILD_REVISION: ${{ github.sha }}
+      TMV_SSH_PREVIEW_HELPER: ${{ github.workspace }}/ssh-preview/tmv-ssh-preview
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-preview-linux-x64
+          path: ssh-preview
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'
@@ -511,11 +541,9 @@ jobs:
           done
 
       - name: Assemble release
-        env:
-          NOTES: ${{ needs.version.outputs.notes }}
         run: |
-          node scripts/make-release.mjs artifacts/standard release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
-          TMV_EDITION=pro node scripts/make-release.mjs artifacts/pro release "$VERSION" "$UPDATE_BASE_URL" "$NOTES" "$DIRECT_BASE_URL"
+          node scripts/make-release.mjs artifacts/standard release "$VERSION" "$UPDATE_BASE_URL" "$DIRECT_BASE_URL"
+          TMV_EDITION=pro node scripts/make-release.mjs artifacts/pro release "$VERSION" "$UPDATE_BASE_URL" "$DIRECT_BASE_URL"
           ls -lR release
           node scripts/pack-plugins.mjs release
 

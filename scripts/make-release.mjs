@@ -1,6 +1,6 @@
 // Collects CI bundle artifacts into a release folder for the download site.
 //
-//   node scripts/make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes] [direct-base-url]
+//   node scripts/make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [direct-base-url]
 //
 // Produces <out-dir>/<version>/ with the installers and updater packages,
 // plus <out-dir>/latest.json (Tauri updater feed) and
@@ -12,12 +12,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { zip } from "./plugin-zip.mjs";
+import { readReleaseNotes } from "./release-notes.mjs";
 
-const [src, out, version, baseUrl, notes = "", directBaseUrl = process.env.DIRECT_BASE_URL] = process.argv.slice(2);
+const [src, out, version, baseUrl, directBaseUrl = process.env.DIRECT_BASE_URL] = process.argv.slice(2);
 if (!src || !out || !version || !baseUrl) {
-  console.error("usage: make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [notes] [direct-base-url]");
+  console.error("usage: make-release.mjs <artifacts-dir> <out-dir> <version> <base-url> [direct-base-url]");
   process.exit(1);
 }
+// Validate before copying artifacts or writing feeds. Never fall back to Git subjects.
+const notes = readReleaseNotes(version);
 const base = baseUrl.replace(/\/+$/, "");
 const directBase = directBaseUrl?.replace(/\/+$/, "");
 const pro = process.env.TMV_EDITION === "pro";

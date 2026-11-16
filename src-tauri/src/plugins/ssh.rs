@@ -1,4 +1,5 @@
-//! Read-only SFTP. No shell commands, remote writes, or persisted passwords/keys.
+//! Read-only image access over SFTP. Remote writes are limited to the bundled
+//! preview helper in the user's cache; passwords and key contents never persist.
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -12,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "ssh_preview.rs"]
+mod preview;
 #[path = "ssh_tcp.rs"]
 mod tcp;
 
@@ -24,6 +27,7 @@ pub struct Ssh {
 }
 
 struct Connection {
+    preview_helper: Mutex<Option<PathBuf>>,
     session: Mutex<Session>,
     host: String,
     port: u16,
@@ -237,6 +241,14 @@ impl Ssh {
         }
         if !conn.authenticated.load(Ordering::Relaxed) {
             bail!("请先登录");
+        }
+        if method == "thumbnail" {
+            return preview::render(
+                &session,
+                &mut conn.preview_helper.lock().unwrap(),
+                &conn.cache,
+                &args,
+            );
         }
         if conn.cancelled.load(Ordering::Relaxed) && method != "list" && method != "download" {
             bail!("操作已取消");
@@ -459,6 +471,7 @@ impl Ssh {
         self.connections.lock().unwrap().insert(
             id.clone(),
             Arc::new(Connection {
+                preview_helper: Mutex::new(None),
                 session: Mutex::new(session),
                 host: host.into(),
                 port,
@@ -552,6 +565,37 @@ mod tests {
             .iter()
             .find(|e| e["name"] == name)
             .unwrap();
+        if std::env::var_os("TMV_SSH_ACCEPT_PREVIEW").is_some() {
+            assert!(!Path::new(file["local"].as_str().unwrap()).exists());
+            let args = json!({"connection":id,"path":file["path"],"size":file["size"],"modified":file["modified"]});
+            let preview = ssh.call("thumbnail", args.clone()).unwrap();
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(
+                    preview["url"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("data:image/png;base64,")
+                        .unwrap(),
+                )
+                .unwrap();
+            let decoded = ::image::load_from_memory(&png).unwrap();
+            assert!(decoded.width() <= 256 && decoded.height() <= 256);
+            assert!(
+                !Path::new(file["local"].as_str().unwrap()).exists(),
+                "preview must not fetch original"
+            );
+            assert_eq!(
+                preview,
+                ssh.call("thumbnail", args).unwrap(),
+                "preview cache reuse"
+            );
+            println!(
+                "Verified remote binary preview: {} bytes, {}x{}; original not downloaded",
+                png.len(),
+                decoded.width(),
+                decoded.height()
+            );
+        }
         let cached = ssh.call("download", json!({"connection": id, "path": file["path"], "size": file["size"], "modified": file["modified"]})).unwrap();
         let path = Path::new(cached["path"].as_str().unwrap());
         assert_eq!(

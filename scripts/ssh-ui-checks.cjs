@@ -26,6 +26,7 @@ module.exports = async function checkSsh(page) {
         return { path: args.path, entries: [
           { name: "中文 folder", path: `${args.path}/中文 folder`, directory: true, size: 0, modified: 1700000000 },
           { ...image, path: `${args.path}/sample 01.mrc` },
+          { ...image, name: "sample 02.mrc", path: `${args.path}/sample 02.mrc`, local: "/cache/sample 02.mrc" },
           { name: ".hidden", path: `${args.path}/.hidden`, directory: true, size: 0 },
           { name: "notes.txt", path: `${args.path}/notes.txt`, directory: false, supported: false, size: 32 },
         ] };
@@ -34,6 +35,7 @@ module.exports = async function checkSsh(page) {
         sshDownloads.push(args.path);
         return { path: image.local };
       }
+      if (method === "thumbnail") return { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j9S8AAAAASUVORK5CYII=" };
       return null;
     };
     window.mockSshOpen = async ({ path }) => {
@@ -56,6 +58,16 @@ module.exports = async function checkSsh(page) {
     for (const [part, color] of Object.entries(colors)) if (color) assert.equal(color, expected, `${part} must inherit the edition theme`);
   };
   await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
+  // Dismiss only a genuine outside click; an inside-to-outside drag must stay open.
+  const bounds = await page.locator('.ssh-dialog').boundingBox();
+  await page.mouse.click(bounds.x + 12, bounds.y + 12);
+  assert.equal(await page.locator('.ssh-dialog').evaluate(d => d.open), true);
+  await page.mouse.move(bounds.x + 12, bounds.y + 12); await page.mouse.down();
+  await page.mouse.move(2, 2); await page.mouse.up();
+  assert.equal(await page.locator('.ssh-dialog').evaluate(d => d.open), true);
+  await page.mouse.click(2, 2);
+  assert.equal(await page.locator('.ssh-dialog').evaluate(d => d.open), false, 'outside click closes SSH dialog');
+  await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
   await q("host").fill("127.0.0.1"); await q("username").fill("test"); await q("password").fill("fixture");
   await checkTheme("rgb(9, 105, 218)");
   if (process.env.TMV_SSH_SCREENSHOT_DIR) {
@@ -70,10 +82,12 @@ module.exports = async function checkSsh(page) {
   await page.waitForFunction(() => !document.querySelector('.ssh-dialog [data-k="connect"]').disabled);
   await q("password").fill("fixture"); await q("connect").click(); await q("trust-yes").click();
   await q("list-wrap").waitFor({ state: "visible" });
+  await page.locator('.ssh-entry.image img').first().waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => sshDownloads.length), 0, 'preview does not download the original');
   assert.equal(await q("password").inputValue(), "");
   assert.equal(await page.evaluate(() => localStorage.getItem("plugin.ssh.recent").includes("fixture")), false);
-  assert.equal(await page.locator(".ssh-entry").count(), 3);
-  await q("hidden").check(); assert.equal(await page.locator(".ssh-entry").count(), 4);
+  assert.equal(await page.locator(".ssh-entry").count(), 4);
+  await q("hidden").check(); assert.equal(await page.locator(".ssh-entry").count(), 5);
   await q("hidden").uncheck();
   await q("search").fill("中文"); assert.equal(await page.locator(".ssh-entry").count(), 1);
   await q("search").fill("");
@@ -106,6 +120,7 @@ module.exports = async function checkSsh(page) {
   await page.evaluate(() => { delete document.documentElement.dataset.edition; });
   await q("load").click();
   await page.waitForFunction(() => sshOpened.length === 1);
+  await page.locator('#strip .thumb .box img').waitFor({ state: 'visible' });
   assert.deepEqual(await page.evaluate(() => sshDownloads), ["/data/sample 01.mrc"]);
   assert.deepEqual(await page.evaluate(() => sshOpened), ["/cache/sample 01.mrc"]);
   assert.equal(await page.evaluate(() => S.folder.remote), true);

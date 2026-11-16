@@ -1,7 +1,7 @@
 "use strict";
 
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.1.1",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.2.0",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) return;
@@ -36,7 +36,7 @@ TifMrcView.register({
           </form>
           <p data-k="connection-status" class="ssh-connect-status" role="status" hidden>首次访问局域网时，请在系统提示中允许 macOS 的本地网络访问。</p>
           <div data-k="connected" class="ssh-connected" hidden><span class="ssh-connected-dot"></span><strong data-k="identity"></strong><p data-k="address"></p><button data-k="disconnect">断开连接</button></div>
-          <div class="ssh-private">密码与密钥口令不保存，私钥仅在本机读取。<br>仅访问和读取远程文件。</div>
+          <div class="ssh-private">密码与密钥口令不保存，私钥仅在本机读取。<br>原始图像只读访问，缩略图按需生成。</div>
           <div data-k="recent-box" class="ssh-recent" hidden><div class="ssh-eyebrow">最近连接</div><div data-k="recent"></div></div>
         </aside>
         <section class="ssh-browser" aria-label="远程文件浏览器">
@@ -67,6 +67,38 @@ TifMrcView.register({
     let connection = null, home = "", current = "", entries = [], selected = null;
     let busy = false, disposed = false, browsing = 0, trustAnswer = null, timer = null;
     let transferring = false, activeTransfer = null;
+    const previews = new Map(), previewQueue = [];
+    let previewActive = false;
+    const previewObserver = new IntersectionObserver((items) => {
+      for (const item of items) if (item.isIntersecting) {
+        previewObserver.unobserve(item.target);
+        const { row, entry } = item.target._preview;
+        preview(entry).then((url) => {
+          if (!row.isConnected || disposed) return;
+          const image = document.createElement("img"); image.src = url; image.alt = "";
+          row.querySelector("svg")?.replaceWith(image);
+        }).catch(() => { if (row.isConnected) row.title = `${entry.path}\n缩略图暂不可用，仍可打开原图`; });
+      }
+    }, { root: el("list"), rootMargin: "80px" });
+    function preview(entry) {
+      const key = `${connection}:${entry.path}:${entry.size}:${entry.modified}`;
+      if (!previews.has(key)) {
+        const pending = connection;
+        if (previews.size >= 128) previews.delete(previews.keys().next().value);
+        previews.set(key, new Promise((resolve, reject) => { previewQueue.push({ pending, entry, resolve, reject }); }));
+      }
+      pumpPreviews();
+      return previews.get(key);
+    }
+    async function pumpPreviews() {
+      if (previewActive || transferring || busy || disposed || !previewQueue.length) return;
+      const job = previewQueue.shift();
+      if (!job.pending || job.pending !== connection) { job.reject(new Error("连接已变化")); pumpPreviews(); return; }
+      previewActive = true;
+      try { job.resolve((await app.native("thumbnail", { connection: job.pending, path: job.entry.path, size: job.entry.size, modified: job.entry.modified })).url); }
+      catch (e) { job.reject(e); }
+      finally { previewActive = false; pumpPreviews(); }
+    }
     const recent = app.settings.get("recent", []);
     if (recent[0]) fill(recent[0]);
 
@@ -102,6 +134,7 @@ TifMrcView.register({
       for (const key of ["host", "username", "password", "port", "auth-method", "key-path", "passphrase", "pick-key", "connect", "up", "home", "refresh", "path", "disconnect"]) el(key).disabled = on;
       el("connect-form").querySelector("button[type=submit]").disabled = on;
       updateSelection();
+      if (!on) pumpPreviews();
     }
     function updateSelection() {
       const target = selected?.directory ? selected.path : current;
@@ -113,6 +146,7 @@ TifMrcView.register({
       el("load").disabled = busy || !home || (selected && !selected.directory ? !selected.supported : !selected?.directory && !images.length);
     }
     function renderList() {
+      previewObserver.disconnect();
       const query = el("search").value.toLocaleLowerCase();
       const visible = entries.filter((e) => (el("hidden").checked || !e.name.startsWith(".")) && e.name.toLocaleLowerCase().includes(query));
       el("list").replaceChildren();
@@ -139,6 +173,7 @@ TifMrcView.register({
           if (event.key === "Enter") { event.preventDefault(); if (!busy) entry.directory ? browse(entry.path) : entry.supported && load(entry); }
         };
         el("list").append(row);
+        if (entry.supported) { row._preview = { row, entry }; previewObserver.observe(row); }
       }
       if (!visible.length) {
         const empty = document.createElement("p"); empty.className = "ssh-no-files";
@@ -255,6 +290,7 @@ TifMrcView.register({
           return result.path;
         } finally {
           transferring = false; activeTransfer = null; clearTimeout(timer); transfer.hidden = true;
+          pumpPreviews();
         }
       };
       const promise = run();
@@ -270,7 +306,7 @@ TifMrcView.register({
       const target = file || (selected && !selected.directory ? selected : images[0]);
       setBusy(true);
       try {
-        app.folders.mount({ name: current.split("/").filter(Boolean).pop() || "/", path: `${el("address").textContent}${current}`, entries: images, resolve: download });
+        app.folders.mount({ name: current.split("/").filter(Boolean).pop() || "/", path: `${el("address").textContent}${current}`, entries: images, resolve: download, thumbnail: preview });
         dialog.close();
         await app.open(target.local);
       } catch (e) { if (!disposed) { if (!dialog.open) dialog.showModal(); error(e); } }
@@ -284,7 +320,16 @@ TifMrcView.register({
     };
     el("connect-form").onsubmit = connect;
     el("path-form").onsubmit = (event) => { event.preventDefault(); if (!busy) browse(el("path").value.trim() || home); };
-    el("close").onclick = () => { if (trustAnswer) trustAnswer(false); dialog.close(); };
+    const closeDialog = () => { if (trustAnswer) trustAnswer(false); dialog.close(); };
+    el("close").onclick = closeDialog;
+    // WebKit versions without closedby="any" need explicit light dismissal.
+    const outside = (e) => {
+      const r = dialog.getBoundingClientRect();
+      return e.target === dialog && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
+    };
+    let pressedOutside = false;
+    dialog.addEventListener("pointerdown", (e) => { pressedOutside = e.button === 0 && outside(e); });
+    dialog.addEventListener("click", (e) => { if (pressedOutside && outside(e)) closeDialog(); pressedOutside = false; });
     dialog.oncancel = () => { if (trustAnswer) trustAnswer(false); };
     // Keep viewer shortcuts (slice stepping, save, tools) inside the modal.
     dialog.addEventListener("keydown", (event) => event.stopPropagation());
@@ -318,6 +363,9 @@ TifMrcView.register({
     renderRecent(); updateSelection();
     this.deactivate = () => {
       disposed = true; browsing++; trustAnswer?.(false); clearTimeout(timer);
+      previewObserver.disconnect();
+      for (const job of previewQueue.splice(0)) job.reject(new Error("插件已关闭"));
+      previews.clear();
       if (connection) native("disconnect").catch(() => {});
       app.folders.unmount(); dialog.remove(); transfer.remove();
     };
