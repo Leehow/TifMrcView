@@ -257,6 +257,7 @@ pub fn track_backend(
                 let t = std::time::Instant::now();
                 let reference = cpu();
                 cpu_pair_ms = t.elapsed().as_secs_f64() * 1000.0;
+                calibrated = true;
                 if let Some((dev, _)) = crate::ctf_gpu::device().filter(|_| backend != "cpu") {
                     let result = crate::ctf_gpu::guarded(|| {
                         let batch = super::correlation_gpu::Batch::new(dev, n_patch);
@@ -265,21 +266,30 @@ pub fn track_backend(
                         let peaks = batch.correlate(&pairs, max)?;
                         Ok::<_, anyhow::Error>((batch, peaks, t.elapsed().as_secs_f64() * 1000.0))
                     });
-                    if let Ok(Ok((batch, peaks, ms))) = result {
-                        gpu_pair_ms = Some(ms);
-                        let agree = peaks.iter().zip(&reference).all(|(a, b)| {
-                            (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]) < 0.05
-                                && (a.1 - b.1).abs() < 0.01
-                        });
-                        chosen_gpu = agree && (backend == "gpu" || ms < cpu_pair_ms);
-                        if !agree {crate::compute::report("倾转对齐相关","CPU",Some("GPU 与 CPU 校准结果偏差超过容差".into()));} else if !chosen_gpu {crate::compute::cpu_stage("倾转对齐相关", &format!("自动选择 CPU：含传输的实测耗时 CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms"));}
-                        gpu = Some(batch);
-                    }else{let why=match result{Ok(Err(e))|Err(e)=>format!("GPU 相关失败：{e:#}"),_=>unreachable!()};crate::compute::report("倾转对齐相关","CPU",Some(why));}
-                }else{crate::compute::report("倾转对齐相关","CPU",Some(if backend=="cpu"{"指定 CPU 后端".into()}else{crate::compute::no_gpu()}));}
-                calibrated = true;
-                if chosen_gpu {
-                    {let peaks=gpu.as_ref().unwrap().correlate(&pairs,max)?;crate::compute::report("倾转对齐相关","GPU + CPU",Some("GPU 频域相关；CPU 峰值与几何拟合".into()));peaks}
+                    match result.and_then(|v|v) {
+                        Ok((batch, peaks, ms)) => {
+                            gpu_pair_ms = Some(ms);
+                            let agree = peaks.iter().zip(&reference).all(|(a, b)| {
+                                (a.0[0]-b.0[0]).hypot(a.0[1]-b.0[1]) < 0.05 && (a.1-b.1).abs() < 0.01
+                            });
+                            chosen_gpu = agree && (backend == "gpu" || ms < cpu_pair_ms);
+                            if chosen_gpu {
+                                gpu = Some(batch);
+                                crate::compute::report("倾转对齐相关", "GPU + CPU", Some("GPU 批量 FFT 与峰值搜索；CPU 几何拟合".into()));
+                                peaks // reuse the timed result; no third execution
+                            } else {
+                                if !agree { crate::compute::report("倾转对齐相关","CPU",Some("GPU 与 CPU 校准结果偏差超过容差".into())); }
+                                else { crate::compute::cpu_stage("倾转对齐相关", &format!("自动选择 CPU：含传输的实测耗时 CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms")); }
+                                reference
+                            }
+                        }
+                        Err(e) => {
+                            crate::compute::report("倾转对齐相关","CPU",Some(format!("GPU 相关失败：{e:#}")));
+                            reference
+                        }
+                    }
                 } else {
+                    crate::compute::report("倾转对齐相关","CPU",Some(if backend=="cpu"{"指定 CPU 后端".into()}else{crate::compute::no_gpu()}));
                     reference
                 }
             } else if chosen_gpu {

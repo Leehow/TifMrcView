@@ -343,9 +343,9 @@ pub fn align(
         // tomogram's hand), so a later start must fit clearly better to win:
         // the earlier, unmirrored readings keep the hand.
         let mut best: Option<(Tracks, model::Solution)> = None;
-        for start in starts {
+        for result in axis_trials(&st, &starts, chosen, &req.excluded, req.sweep, progress) {
             check_cancel()?;
-            match track_and_solve(&st, start, chosen, &req.excluded, req.sweep, progress) {
+            match result {
                 Ok(r) if best.as_ref().is_none_or(|b| r.1.residual < 0.9 * b.1.residual) => best = Some(r),
                 Ok(_) => {}
                 Err(e) if CANCEL.load(Ordering::Relaxed) => return Err(e),
@@ -430,6 +430,37 @@ pub fn align(
         ms: now.elapsed().as_secs_f64() * 1e3,
         tilt_offset: 0.0,
     })
+}
+
+/// Independent axis hypotheses share the existing bounded Rayon pool.
+/// Indexed collection preserves start order: handedness/tie decisions below
+/// must not depend on which hypothesis finishes first. At most four live
+/// tracks bound patch tensors/scratch; the image stack is borrowed once.
+fn axis_trials(
+    st: &Stack, starts: &[f64], patch: PatchConfig, excluded: &[usize],
+    automatic: bool, progress: &(dyn Fn(usize,usize)+Sync),
+) -> Vec<Result<(Tracks,model::Solution)>> {
+    if starts.len() <= 1 {
+        return starts.iter().map(|&axis|track_and_solve(st,axis,patch,excluded,automatic,progress)).collect();
+    }
+    use rayon::prelude::*;
+    let completed=std::sync::Mutex::new(0usize);
+    progress(0,starts.len());
+    let width=rayon::current_num_threads().clamp(1,4);
+    crate::compute::cpu_stage("倾转轴角搜索与几何拟合", &format!("{} 个独立候选，共享线程池并行度 {}；patch 相关单独记录 CPU/GPU", starts.len(), width));
+    let mut results=Vec::with_capacity(starts.len());
+    for batch in starts.chunks(width) {
+        let batch:Vec<_>=batch.par_iter().map(|&axis| {
+            let result=check_cancel().and_then(|_|track_and_solve(st,axis,patch,excluded,automatic,&|_,_|{}));
+            let mut done=completed.lock().unwrap();
+            *done+=1;
+            progress(*done,starts.len());
+            result
+        }).collect();
+        results.extend(batch);
+        if CANCEL.load(Ordering::Relaxed) {break;}
+    }
+    results
 }
 
 /// Re-measure at the updated axis: compression depends on that axis, so

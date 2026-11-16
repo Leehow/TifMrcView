@@ -9,6 +9,36 @@ fn upload<const D: usize>(v: Vec<f32>, s: [usize; D], d: &Device) -> Tensor<D> {
 fn down<const D: usize>(t: Tensor<D>) -> Vec<f32> {
     crate::motion::sum_gpu::download(t)
 }
+/// Coarse inverse FFT and masked maximum stay on the GPU. Read back one
+/// index per patch, rather than every pixel of every correlation surface.
+fn coarse(pr: &Tensor<3>, pi: &Tensor<3>, g: &Geom, max: f64, dev: &Device) -> Vec<[f64;2]> {
+    let (k,m)=(pr.dims()[0],g.m);
+    let keep=Tensor::<1,Int>::from_data(TensorData::new((0..m).map(|i|((i+m/2)%m) as i32).collect(),[m]),dev);
+    let r=pr.clone().select(1,keep.clone()).select(2,keep.clone());
+    let im=pi.clone().neg().select(1,keep.clone()).select(2,keep);
+    let (r,im)=burn::signal::cfft(r,im,2,None);
+    let (r,_)=burn::signal::cfft(r,im,1,None);
+    let ids=Tensor::<1,Int>::arange(0..(m*m) as i64,dev);
+    let signed=|v: Tensor<1,Int>| { let f=v.clone().float(); f.clone().mask_where(v.greater_equal_elem((m/2) as i32),f-m as f32) };
+    let step=(g.n/m) as f32;
+    let x=signed(ids.clone().remainder_scalar(m as i32))*step;
+    let y=signed(ids.div_scalar(m as i32))*step;
+    let outside=(x.clone()*x+y.clone()*y).greater_elem((max*max) as f32).unsqueeze_dim::<2>(0).expand([k,m*m]);
+    let peaks=r.reshape([k,m*m]).mask_fill(outside,f32::MIN).argmax(1)
+        .into_data().convert::<i64>().try_into_vec::<i64>().unwrap();
+    let coord=|i:usize| (if i>=m/2 {i as f64-m as f64}else{i as f64})*(g.n/m) as f64;
+    peaks.into_iter().map(|i|[coord(i as usize %m),coord(i as usize /m)]).collect()
+}
+
+pub(super) fn patch_peak(pr:Tensor<3>,pi:Tensor<3>,energies:Tensor<2>,g:&Geom,max:f64,dev:&Device)->Result<Vec<([f64;2],f64)>> {
+    let starts=coarse(&pr,&pi,g,max,dev);
+    let peaks=refine(&pr,&pi,g,&starts,dev);
+    let e=down(energies);
+    let out:Vec<_>=peaks.into_iter().enumerate().map(|(i,(d,v))|(d,norm_cc(v,e[2*i] as f64,e[2*i+1] as f64))).collect();
+    anyhow::ensure!(out.iter().all(|(d,c)|d.iter().all(|x|x.is_finite())&&c.is_finite()),"GPU patch returned non-finite peaks");
+    Ok(out)
+}
+
 fn refine(
     pr: &Tensor<3>,
     pi: &Tensor<3>,
@@ -23,25 +53,15 @@ fn refine(
     let mut out = vec![None; k];
     for round in 0..5 {
         let phase = |axis: usize, transpose: bool, sine: bool| -> Tensor<3> {
-            let mut v = Vec::with_capacity(k * m * 5);
-            for c in &centres {
-                if transpose {
-                    for j in -2..=2 {
-                        for f in 0..m {
-                            let a = (f as f64 - (m / 2) as f64) * (c[axis] + j as f64) * w;
-                            v.push(if sine { a.sin() } else { a.cos() } as f32);
-                        }
-                    }
-                } else {
-                    for f in 0..m {
-                        for j in -2..=2 {
-                            let a = (f as f64 - (m / 2) as f64) * (c[axis] + j as f64) * w;
-                            v.push(if sine { a.sin() } else { a.cos() } as f32);
-                        }
-                    }
-                }
-            }
-            upload(v, if transpose { [k, 5, m] } else { [k, m, 5] }, dev)
+            let c=upload(centres.iter().map(|v|v[axis] as f32).collect(),[k,1,1],dev);
+            let offsets=Tensor::<1,Int>::arange(-2..3,dev).float();
+            let frequencies=Tensor::<1,Int>::arange(0..m as i64,dev).float().sub_scalar((m/2) as f32).mul_scalar(w as f32);
+            let angle=if transpose {
+                (c+offsets.reshape([1,5,1]))*frequencies.reshape([1,1,m])
+            } else {
+                (c+offsets.reshape([1,1,5]))*frequencies.reshape([1,m,1])
+            };
+            if sine {angle.sin()} else {angle.cos()}
         };
         let (cx, sx, cy, sy) = (
             phase(0, false, false),
@@ -114,24 +134,17 @@ pub(super) fn movie(
     let mut d = vec![[0.; 2]; k];
     let mut cc = vec![0.; k];
     let mut iterations = 0;
+    let frequency=Tensor::<1,Int>::arange(0..m as i64,dev).float().sub_scalar((m/2) as f32);
     for it in 0..MAX_ITER {
         crate::motion::check_cancel()?;
         iterations = it + 1;
-        let mut cs = Vec::with_capacity(k * m * m);
-        let mut sn = Vec::with_capacity(k * m * m);
-        for pos in &d {
-            for y in 0..m {
-                for x in 0..m {
-                    let phase = 2. * PI / g.n as f64
-                        * ((x as f64 - (m / 2) as f64) * pos[0]
-                            + (y as f64 - (m / 2) as f64) * pos[1]);
-                    cs.push(phase.cos() as f32);
-                    sn.push(phase.sin() as f32);
-                }
-            }
-        }
-        let cs = upload(cs, [k, m, m], dev);
-        let sn = upload(sn, [k, m, m], dev);
+        // Upload only two shifts per frame. Frequency grids and phase ramps
+        // stay on-device instead of sending two k*m*m arrays each iteration.
+        let dx=upload(d.iter().map(|v|v[0] as f32).collect(),[k,1,1],dev);
+        let dy=upload(d.iter().map(|v|v[1] as f32).collect(),[k,1,1],dev);
+        let phase=(frequency.clone().reshape([1,1,m])*dx+frequency.clone().reshape([1,m,1])*dy).mul_scalar((2.*PI/g.n as f64) as f32);
+        let cs=phase.clone().cos();
+        let sn=phase.sin();
         let shifted_r = fr.clone() * cs.clone() - fi.clone() * sn.clone();
         let shifted_i = fr.clone() * sn + fi.clone() * cs;
         let rr = shifted_r.clone().sum_dim(0) - shifted_r;
@@ -143,44 +156,7 @@ pub(super) fn movie(
         );
         let pr = fr.clone() * rr.clone() + fi.clone() * ri.clone();
         let pi = fi.clone() * rr - fr.clone() * ri;
-        let starts = if it == 0 {
-            let keep = Tensor::<1, Int>::from_data(
-                TensorData::new((0..m).map(|i| ((i + m / 2) % m) as i32).collect(), [m]),
-                dev,
-            );
-            let r = pr.clone().select(1, keep.clone()).select(2, keep.clone());
-            let im = pi.clone().neg().select(1, keep.clone()).select(2, keep);
-            let (r, im) = burn::signal::cfft(r, im, 2, None);
-            let (r, _) = burn::signal::cfft(r, im, 1, None);
-            let grid = down(r);
-            let step = (g.n / m) as f64;
-            (0..k)
-                .map(|i| {
-                    let mut best = (f32::MIN, [0.; 2]);
-                    for y in 0..m {
-                        let dy = if y >= m / 2 {
-                            y as f64 - m as f64
-                        } else {
-                            y as f64
-                        } * step;
-                        for x in 0..m {
-                            let dx = if x >= m / 2 {
-                                x as f64 - m as f64
-                            } else {
-                                x as f64
-                            } * step;
-                            let v = grid[(i * m + y) * m + x];
-                            if dx.hypot(dy) <= max && v > best.0 {
-                                best = (v, [dx, dy]);
-                            }
-                        }
-                    }
-                    best.1
-                })
-                .collect()
-        } else {
-            d.clone()
-        };
+        let starts = if it == 0 { coarse(&pr,&pi,g,max,dev) } else { d.clone() };
         let next = refine(&pr, &pi, g, &starts, dev);
         if it == 0 {
             // Validate two subpixel searches against the f64 CPU reference before

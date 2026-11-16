@@ -752,3 +752,21 @@ fn look_map_of_even_grids_is_half_a_voxel() {
         assert!((o - 0.5).abs() < 1e-12, "{off:?}");
     }
 }
+
+#[test]
+fn parallel_axis_hypotheses_preserve_geometry_and_progress() {
+    let (st,_) = bead_series();
+    let patch=track::PatchConfig {nx:4,ny:4,size:30};
+    let starts=[88.6,70.0,100.0];
+    let serial:Vec<_>=starts.iter().map(|&a|track_and_solve(&st,a,patch,&[],true,&|_,_|{}).unwrap()).collect();
+    let progress=std::sync::Mutex::new(vec![]);
+    let pool=rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let parallel=pool.install(||axis_trials(&st,&starts,patch,&[],true,&|n,total|progress.lock().unwrap().push((n,total))));
+    assert_eq!(*progress.lock().unwrap(),vec![(0,3),(1,3),(2,3),(3,3)]);
+    assert_eq!(parallel.len(),serial.len());
+    for (parallel,serial) in parallel.into_iter().zip(serial) {
+        let (_,a)=parallel.unwrap();let (_,b)=serial;
+        assert!((a.axis-b.axis).abs()<0.01,"axis {} vs {}",a.axis,b.axis);
+        assert!((a.residual-b.residual).abs()<0.005,"residual {} vs {}",a.residual,b.residual);
+    }
+}

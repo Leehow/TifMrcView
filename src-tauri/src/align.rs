@@ -1057,12 +1057,15 @@ pub(crate) fn patch_shift(a: &[f32], b: &[f32], n: usize, max: f64) -> ([f64; 2]
     pair_shift(&sa,&sb,&plan.g,&plan.small,max)
 }
 
+/// Device-resident batch peak search; shares the reference geometry and CC.
 #[cfg(feature = "pro")]
-pub(crate) fn patch_cross_peak(pr: &[f32], pi: &[f32], n: usize, energies: [f64;2], max: f64) -> ([f64;2],f64) {
-    let p=patch_plan(n);
-    let start=coarse_peak(pr,pi,&p.g,&p.small,max);
-    let (d,v)=refine_peak(pr,pi,&p.g,start);
-    (d,norm_cc(v,energies[0],energies[1]))
+pub(crate) fn patch_gpu_peak(
+    pr: burn::tensor::Tensor<3>, pi: burn::tensor::Tensor<3>,
+    energies: burn::tensor::Tensor<2>, n: usize, max: f64,
+    dev: &burn::tensor::Device,
+) -> Result<Vec<([f64;2],f64)>> {
+    let g=Geom { x0:0, y0:0, bin:1, n, m:n/2, w:n, h:n };
+    gpu::patch_peak(pr,pi,energies,&g,max,dev)
 }
 
 #[cfg(feature = "pro")]
