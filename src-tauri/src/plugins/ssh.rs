@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 
 #[path = "ssh_preview.rs"]
 mod preview;
+#[path = "ssh_processing.rs"]
+mod processing;
 #[path = "ssh_tcp.rs"]
 mod tcp;
 
@@ -242,6 +244,7 @@ impl Ssh {
         if !conn.authenticated.load(Ordering::Relaxed) {
             bail!("请先登录");
         }
+        if method == "processing" { return processing::call(&session, &args); }
         if method == "thumbnail" {
             return preview::render(
                 &session,

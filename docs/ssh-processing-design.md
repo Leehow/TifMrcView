@@ -1,4 +1,4 @@
-# SSH 远程处理设计（待实施）
+# SSH 远程处理设计与实施记录
 
 ## 默认行为
 
@@ -98,3 +98,23 @@ Runner 的公共操作是 `inspect / submit / events / status / cancel / artifac
 - [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)：客户端自动准备并维护远端引擎；可由本地下载后转传，不要求远端具备同样的桌面环境。本方案复用这个部署方式，增加科学计算任务的持久化与资源约束。
 - [CryoSPARC 任务状态](https://guide.cryosparc.com/application-guide/managing-jobs)和[交互式任务](https://guide.cryosparc.com/application-guide/inspecting-job-data)：计算任务与连接分离，等待用户选择是一等状态。本方案借鉴状态语义，不引入其服务栈或 Python 依赖。
 - [SerialEM MDOC](https://bio3d.colorado.edu/SerialEM/stableHlp/html/about_formats.htm)、[IMOD alignframes](https://bio3d.colorado.edu/imod/doc/man/alignframes.html)：采集记录与电影路径可以独立搬迁，不能把目录名固定成协议。
+
+## 本次实施记录（2026-11-16）
+
+授权：先 Cryo-ET，再单颗粒，在 amax 实测并更新本地 App。
+工作分支 codex/ssh-processing-20261116，基于 main 1e457ac；原始脏工作区不动。
+验收：远程目录自动路由、本地不变；引擎上传校验；真实采集目录发现；单序列 survey/重构及 SPA 实际计算；进度、取消、幂等与断线恢复；结果按需打开；正式签名 App computer use。
+原始数据只读，计算输出保存在服务器独立项目缓存，用户选择决定处理范围。不得自动跑全部 97 个序列，不下载模型。
+当前：独立工作区已建立，amax LAN 连通，GPU 有其他进程，复用 GPU 资源锁。
+
+用户补充：递归检索所选目录内所有 MDOC，按记录的文件名匹配电影，不依赖记录中的旧地址或固定文件夹名；电影不限 EER。
+已实施：共享递归采集索引（循环链接去重、缺失/重名/权限问题报告）、EER/TIFF/MRC 等通过现有读取器处理；传递本机启用的格式模块；增益变化使运动校正缓存失效。
+已实施：版本化 agent、持久化 worker、幂等提交、结构化进度、项目独占与 GPU 锁、协作取消、独立输出位置与空间预估、工作区自动路由及按需打开结果；发布打包携带 Linux 引擎。
+已验证：原始目录发现 97 组；104 组可匹配 60/61 电影，缺失 Falcon4i_02110.eer。第一轮真实 EER survey 完成，缺失/未知剂量记录保留；此轮未找到根目录 gain，不能作为最终校正验收。新增递归增益发现后的复核正在准备。
+已验证：每次查询断开 SSH 后 worker 持续；重复提交复用同一 ID，参数重绑被拒绝；排队任务取消不影响另一个任务。7 项路由测试、SSH 浏览器夹具通过；多层目录的 MRC/TIFF 实际运动校正及 gain 变化重新计算测试通过。
+后续实测：104 组以递归找到的 gain 完成再次运动校正、对齐和快速重构，结果为 1024×1024×296 的浮点 MRC；缺失电影与未知剂量提示保留。3 个真实 EMPIAR-10025 TIFF 电影完成运动校正、CTF 与颗粒发现，回传 3 类卡片并停在等待用户选择，未擅自选择生物学类别。
+后续实测：amax 上将 60 个真实 EER 分散到多层目录、MDOC 放入另一棵深目录并保留旧地址、gain 放到校准目录，全部正确检索；循环目录链接不会重复计数。
+补充任务恢复：请求已保存但控制进程尚未启动 worker 时可重试恢复；并发重试及延迟启动的重复 worker 受任务锁和状态检查保护，不会重跑已完成任务。实测脚本为 scripts/test-ssh-processing.py。
+Linux 引擎封装完成；首轮正式签名 Pro App 已通过 SSH 连接、97 组检索、对齐/断层预览和主窗口打开。用户验收补充：小窗预览改为首帧立即可用、按需缓冲、明确加载/失败/重试；任务状态优先于预览请求，显示阶段和实际计数，修复浅色文字与增益路径显示。8 项路由测试和真实预览组件的延迟/失败夹具通过。剩余：最终 UI 补丁的正式签名双版本 App 更新与 computer use 复核。验收记录保存在 /Volumes/samsung/tifview-build.noindex/ssh-processing-20261116/。
+范围：先接 Cryo-ET 文件夹流程和 SPA 工作区；STA/独立去噪等其他工作区尚未接远端。远端 SPA 使用内置挑选，不上传可选 SAM 模型，不下载模型。
+保留限制：非检查点中断须重跑当前步骤，协作取消不能保证立即打断驱动调用。随包引擎目前支持 Linux x86_64。递归最多 64 层、一百万项，超限明确报错，不静默漏扫；不可读目录列出警告。

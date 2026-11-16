@@ -24,7 +24,7 @@
 
   W.register(0, {
     show(p) {
-      $("spa-mics").textContent = `${p.mics.length} 张${p.movies ? "电影" : "显微图"}（${p.mics[0]?.width}×${p.mics[0]?.height}）· 工程：${p.dir}`;
+      $("spa-mics").textContent = `${p.mics.length} 张${p.movies ? "电影" : "显微图"}（${p.mics[0]?.width}×${p.mics[0]?.height}）· 工程：${window.TmvRemote?.displayPath(p.dir)||p.dir}`;
       $("spa-diam").value = p.diameterA;
       $("spa-pixel").value = p.opticsFound?.pixel ? p.optics.pixelA : "";
       $("spa-motion").hidden = !p.movies;
@@ -36,7 +36,7 @@
   $("spa-run-motion").onclick = () => {
     const dose = +$("spa-dose").value;
     const total = !(dose > 0) && W.project?.doseTotal > 0 ? W.project.doseTotal : null;
-    W.run("运动校正", "motion", {
+    return W.run("运动校正", "motion", {
       group: +$("spa-group").value, upsample: 1, frameAxis: "auto", workingSize: 1024, local: $("spa-local").checked, patches: 5,
       doseWeighted: dose > 0 || total > 0, unweighted: false, evenOdd: false, pixelA: +$("spa-pixel").value || null, voltageKv: +$("spa-kv").value || 300,
       voltageAuto: !W.project?.opticsFound?.kv && !W.pendingOptics?.kvFromUser, dosePerFrame: dose > 0 ? dose : null, totalDose: total, preExposure: 0, gainPath: null, gainRotate: 0,

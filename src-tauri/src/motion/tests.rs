@@ -588,3 +588,23 @@ fn mdoc_batch_finds_the_one_gain_reference() {
     std::fs::write(run.join("Gains/TS_1_gain.mrc"), "").unwrap();
     assert_eq!(find_gain(&mdoc, Some(&movie), None), Some(run.join("Gains/TS_1_gain.mrc")));
 }
+
+#[test]
+fn recursive_mrc_and_tiff_movies_and_changed_gain_are_processed() {
+    begin();
+    let dir=tempfile::tempdir().unwrap();let root=dir.path();
+    let metadata=root.join("arbitrary/records/day1");let frames=root.join("camera/session1/raw");std::fs::create_dir_all(&metadata).unwrap();std::fs::create_dir_all(&frames).unwrap();
+    let pixels=texture(256,256);let planes=vec![pixels.clone();4];
+    stack(&frames.join("a.mrc"),&planes,256,256);stack(&frames.join("c.mrcs"),&planes,256,256);
+    let mut tiff=tiff::encoder::TiffEncoder::new(std::fs::File::create(frames.join("b.tiff")).unwrap()).unwrap();
+    for p in &planes{tiff.write_image::<tiff::encoder::colortype::Gray32Float>(256,256,p).unwrap();}drop(tiff);
+    let gain=root.join("gain_reference.mrc");stack(&gain,&[vec![1.;256*256]],256,256);
+    let mdoc=metadata.join("ts.mdoc");std::fs::write(&mdoc,"PixelSpacing = 2\nVoltage = 300\n[ZValue = 0]\nTiltAngle = 0\nSubFramePath = Z:\\obsolete\\a.mrc\nExposureDose = 2\n[ZValue = 1]\nTiltAngle = 3\nSubFramePath = /missing/server/b.tiff\nExposureDose = 2\n[ZValue = 2]\nTiltAngle = -3\nSubFramePath = c.mrcs\nExposureDose = 2\n").unwrap();
+    let req=series::SeriesReq{mdoc:mdoc.to_string_lossy().into(),folder:Some(root.to_string_lossy().into()),output:root.join("ts.mrc").to_string_lossy().into(),params:Params{backend:"cpu".into(),working_size:256,..Default::default()},drop_tilts:true,fresh:false,preview:true};
+    let first=series::run(&req,&|_,_,_|{}).unwrap();assert_eq!(first.angles.len(),3);assert!(first.complete);assert!(first.warnings.iter().any(|w|w.contains("gain_reference")));
+    let work=std::sync::atomic::AtomicUsize::new(0);
+    let report=|s:&str,_:usize,_:usize|{if s.contains("运动校正"){work.fetch_add(1,Ordering::SeqCst);}};
+    series::run(&req,&report).unwrap();assert_eq!(work.load(Ordering::SeqCst),0,"unchanged inputs reuse results");
+    stack(&gain,&[vec![1.1;256*256]],256,256);
+    let next=series::run(&req,&report).unwrap();assert!(work.load(Ordering::SeqCst)>0,"changed gain must recompute instead of returning stale sums");assert_ne!(first.input_signature,next.input_signature);
+}

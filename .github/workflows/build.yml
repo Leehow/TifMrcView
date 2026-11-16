@@ -78,6 +78,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-engine-linux-x64
+          path: ssh-engine
+
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -199,7 +204,7 @@ jobs:
           if-no-files-found: error
 
   bundle:
-    needs: [version, reuse, ssh-preview]
+    needs: [version, reuse, ssh-preview, cli]
     # Installers take most of the CI time (Pro, macOS universal), so pull
     # requests only run the tests; main, tags and manual runs still bundle.
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.version.result == 'success' && needs.reuse.outputs.run_id == '' }}
@@ -224,6 +229,7 @@ jobs:
       TMV_APP_VERSION: ${{ needs.version.outputs.version }}
       TMV_BUILD_REVISION: ${{ github.sha }}
       TMV_SSH_PREVIEW_HELPER: ${{ github.workspace }}/ssh-preview/tmv-ssh-preview
+      TMV_SSH_ENGINE_PACKAGE: ${{ github.workspace }}/ssh-engine/ssh-engine.tar.gz
     steps:
       - uses: actions/checkout@v4
 
@@ -348,6 +354,14 @@ jobs:
 
       - name: Pack
         run: node scripts/pack-cli.mjs src-tauri/target/release/tmv dist "${{ needs.version.outputs.version }}"
+
+      - name: Pack SSH processing engine
+        run: node scripts/pack-ssh-engine.mjs src-tauri/target/release/tmv src-tauri/target/pro/cuda dist/ssh-engine.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssh-engine-linux-x64
+          path: dist/ssh-engine.tar.gz
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:

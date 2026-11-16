@@ -147,6 +147,7 @@ impl Doc {
     }
 }
 pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBuf> {
+    if let Some(index)=crate::acquisition::active(){let paths=index.candidates(movie);return(paths.len()==1).then(||paths[0].clone());}
     let parent = mdoc.parent()?;
     let name = basename(movie);
     if name.is_empty() {
@@ -159,14 +160,19 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
     if let Some(p) = folder {
         dirs.insert(0, p.to_path_buf());
     }
+    let mut found = std::collections::BTreeSet::new();
     for d in dirs {
-        for sub in ["", "eer", "frames", "Frames", "EER"] {
-            let p = d.join(sub).join(name);
-            if p.is_file() {
-                return Some(p);
-            }
+        let mut candidates = vec![d.clone()];
+        if let Ok(entries) = std::fs::read_dir(&d) {
+            candidates.extend(entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).take(128).map(|e| e.path()));
+        }
+        for dir in candidates {
+            let p = dir.join(name);
+            if p.is_file() { if let Ok(p) = p.canonicalize() { found.insert(p); } }
         }
     }
+    if found.len() == 1 { return found.into_iter().next(); }
+
     None
 }
 
@@ -175,6 +181,7 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
 /// CountRef, in the folder of the first movie, the mdoc's folder, `folder`,
 /// or a folder named for gain beside them (CryoET Data Portal: `Gains/`).
 pub fn find_gain(mdoc: &Path, movie: Option<&Path>, folder: Option<&Path>) -> Option<PathBuf> {
+    if let Some(index)=crate::acquisition::active(){let mut paths=index.gains();return(paths.len()==1).then(||paths.remove(0));}
     let mut dirs: Vec<PathBuf> = [movie.and_then(Path::parent), mdoc.parent(), folder].into_iter().flatten().map(Path::to_path_buf).collect();
     let near: Vec<PathBuf> = dirs.iter().flat_map(|d| [Some(d.clone()), d.parent().map(Path::to_path_buf)]).flatten().collect();
     for d in near {
@@ -298,6 +305,8 @@ pub struct Record {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesResult {
+    #[serde(default)]
+    pub input_signature: Option<String>,
     pub path: Option<String>,
     pub even: Option<String>,
     pub odd: Option<String>,
@@ -347,13 +356,13 @@ pub fn shrink(v: &[f32], w: usize, h: usize) -> (Vec<f32>, usize, usize) {
 
 /// The records of an earlier, unfinished run of the same mdoc into the same
 /// stacks, when its files are still as it left them.
-fn earlier(state: &Path, req: &SeriesReq, sections: usize) -> Option<SeriesResult> {
+fn earlier(state: &Path, req: &SeriesReq, sections: usize, signature: &str) -> Option<SeriesResult> {
     let prior: SeriesResult = serde_json::from_slice(&std::fs::read(state).ok()?).ok()?;
     let [w, h, n] = prior.shape;
     // The same acquisition also after the folder was moved or copied; a
     // preview does not stand for the full correction.
     let name = |p: &str| Path::new(p).file_name().map(|n| n.to_os_string());
-    let same = name(&prior.mdoc) == name(&req.mdoc) && (req.preview || !prior.preview) && (prior.complete || (n == sections && prior.preview == req.preview)) && w > 0 && h > 0;
+    let same = prior.input_signature.as_deref()==Some(signature) && name(&prior.mdoc) == name(&req.mdoc) && (req.preview || !prior.preview) && (prior.complete || (n == sections && prior.preview == req.preview)) && w > 0 && h > 0;
     let files = [Some(req.output.clone()), req.params.even_odd.then(|| output::sibling(&req.output, "even")), req.params.even_odd.then(|| output::sibling(&req.output, "odd"))];
     let kept = prior.records.iter().filter(|r| r.section.is_some()).count();
     let n = if prior.complete { kept } else { n };
@@ -371,7 +380,9 @@ pub fn run(
     progress: &(dyn Fn(&str, usize, usize) + Sync),
 ) -> Result<SeriesResult> {
     req.params.validate()?;
+    let _index=if crate::acquisition::active().is_none(){req.folder.as_deref().map(|root|crate::acquisition::scope(Path::new(root))).transpose()?}else{None};
     let doc = parse(&std::fs::read_to_string(&req.mdoc)?)?;
+    if req.params.gain_path.is_none() && crate::acquisition::active().is_some_and(|i|i.gains().len()>1){bail!("检索到多个增益参考，请缩小采集范围或明确指定 gain，不能自动选取第一个");}
     let mut req = req.clone();
     let mut found_gain = None;
     if req.params.gain_path.is_none() {
@@ -413,13 +424,18 @@ pub fn run(
     let section_of = |i: usize| planned.iter().position(|&p| p == i);
     let state = PathBuf::from(format!("{}.motion-series.json", req.output));
     let prior_preview = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice::<SeriesResult>(&b).ok()).is_some_and(|p| p.preview);
-    let prior = if req.fresh { None } else { earlier(&state, req, planned.len()) };
+    use sha2::{Digest,Sha256};
+    let mut hasher=Sha256::new();hasher.update(serde_json::to_vec(&req.params)?);hasher.update(std::fs::read(&req.mdoc)?);
+    for p in movies.iter().flatten(){let m=std::fs::metadata(p)?;hasher.update(p.to_string_lossy().as_bytes());hasher.update(m.len().to_le_bytes());hasher.update(format!("{:?}",m.modified()?));}
+    if let Some(gain)=&req.params.gain_path{hasher.update(std::fs::read(gain)?);}
+    let signature=format!("{:x}",hasher.finalize());
+    let prior = if req.fresh { None } else { earlier(&state, req, planned.len(), &signature) };
     if let Some(p) = prior.as_ref().filter(|p| p.complete) {
         progress("批次完成", doc.views.len(), doc.views.len());
-        return Ok(SeriesResult { records: p.records.clone(), warnings: p.warnings.clone(), angles: p.angles.clone(), path: p.path.clone(), even: p.even.clone(), odd: p.odd.clone(), small: p.small.clone(), mdoc: p.mdoc.clone(), complete: true, shape: p.shape, pixel_a: p.pixel_a, preview: p.preview });
+        return Ok(SeriesResult { records: p.records.clone(), warnings: p.warnings.clone(), angles: p.angles.clone(), path: p.path.clone(), even: p.even.clone(), odd: p.odd.clone(), small: p.small.clone(), mdoc: p.mdoc.clone(), complete: true, shape: p.shape, pixel_a: p.pixel_a, preview: p.preview, input_signature:p.input_signature.clone() });
     }
     let done = |v: &View| prior.as_ref().and_then(|p| p.records.iter().find(|r| r.z == v.z && r.movie == v.movie && r.result.is_some() && r.section.is_some()).cloned());
-    let mut result = SeriesResult { warnings, mdoc: req.mdoc.clone(), preview: req.preview, ..Default::default() };
+    let mut result = SeriesResult { input_signature:Some(signature), warnings, mdoc: req.mdoc.clone(), preview: req.preview, ..Default::default() };
     if let Some(p) = &prior {
         result.shape = p.shape;
         result.pixel_a = p.pixel_a;
@@ -720,4 +736,19 @@ fn quick_ctf(v: &[f32], w: usize, h: usize, pixel_a: f64, kv: f64) -> Option<cra
     let spectrum = crate::fft::spectrum(|x, y| crate::ctf::clip(v[y * w + x], lo, hi), [0, 0, w, h], 512).ok()?;
     let params = crate::ctf::Params { voltage_kv: kv, cs_mm: 2.7, amp_contrast: 0.07, pixel_a, res_low_a: 30.0, res_high_a: (2.5 * pixel_a).max(5.0), df_min_a: 5000.0, df_max_a: 80000.0, max_astig_a: 2000.0, phase: false, backend: Some("cpu".into()) };
     crate::ctf::fit_spectrum(&spectrum.log, spectrum.n, &params).ok()
+}
+
+#[cfg(test)]
+mod remote_resolution_tests {
+    use super::*;
+    #[test]
+    fn relocated_movies_use_unique_named_siblings() {
+        let d=tempfile::tempdir().unwrap();let metadata=d.path().join("renamed-records");let frames=d.path().join("renamed-movies");
+        std::fs::create_dir_all(&metadata).unwrap();std::fs::create_dir_all(&frames).unwrap();
+        let mdoc=metadata.join("series.mdoc");std::fs::write(&mdoc,"").unwrap();let movie=frames.join("frame.eer");std::fs::write(&movie,"x").unwrap();
+        assert_eq!(resolve(&mdoc,r"Z:\old\frame.eer",None),Some(movie.canonicalize().unwrap()));
+        std::fs::write(metadata.join("frame.eer"),"other").unwrap();
+        assert_eq!(resolve(&mdoc,"frame.eer",None),None,"ambiguous inputs must not silently pick the first");
+    }
+
 }

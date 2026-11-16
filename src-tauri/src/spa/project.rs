@@ -248,7 +248,7 @@ impl Project {
         } else {
             folder
         };
-        let dir = folder.join(DIR);
+        let dir = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(||folder.clone()).join(DIR);
         let dir_s: String = dir.to_string_lossy().into();
         if Project::file(&dir_s).exists() {
             let mut p = Project::load(&dir_s)?;

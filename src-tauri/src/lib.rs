@@ -99,3 +99,9 @@ pub mod sta;
 /// The headless command-line tool `tmv` (Pro processing on servers).
 #[cfg(feature = "pro")]
 pub mod cli;
+
+#[cfg(feature = "pro")]
+pub mod remote_agent;
+
+#[cfg(feature = "pro")]
+pub mod acquisition;

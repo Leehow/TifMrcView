@@ -6,7 +6,7 @@ const T = window.__TAURI__;
 const TOUCH = matchMedia("(pointer: coarse)").matches;
 const HIT = TOUCH ? 14 : 6;
 const GRIP = TOUCH ? 9 : 5;
-const invoke = T.core.invoke;
+const invoke = (command,args,...options) => window.TmvRemote ? window.TmvRemote.invoke(command,args,(c,a)=>T.core.invoke(c,a,...options)) : T.core.invoke(command,args,...options);
 const $ = (id) => document.getElementById(id);
 
 // Standard or Pro build (same code; the Pro build has its own product name).
@@ -224,6 +224,7 @@ try {
  */
 async function openPath(path, force = false, series = 0, inTab = false) {
   if (!path) return;
+  try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (!inTab && typeof editionReady !== "undefined") await editionReady;
   if (!inTab && window.TifMrcViewPro?.documents) return window.TifMrcViewPro.documents.open(path, force, series);
   // Clicking the image already shown changes nothing.
@@ -562,6 +563,7 @@ function step(delta) {
 
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
 async function openHere(path, force = false, series = 0) {
+  try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (typeof editionReady !== "undefined") await editionReady;
   const docs = window.TifMrcViewPro?.documents;
   if (docs) return docs.open(path, force, series, { replace: true });
@@ -574,7 +576,7 @@ let folderTimer = 0;
 document.addEventListener("tmv-folder-changed", () => {
   clearTimeout(folderTimer);
   folderTimer = setTimeout(async () => {
-    if (!S.info || !S.folder.dir) return;
+    if (!S.info || !S.folder.dir || S.folder.remote) return;
     const top = $("sidebar").scrollTop;
     S.folder.dir = null;
     await refreshFolder(S.info.path, true);

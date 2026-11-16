@@ -19,6 +19,14 @@ fn main() {
     } else {
         std::fs::write(out, []).unwrap();
     }
+    println!("cargo:rerun-if-env-changed=TMV_SSH_ENGINE_PACKAGE");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("ssh-engine.tar.gz");
+    if let Some(path) = std::env::var_os("TMV_SSH_ENGINE_PACKAGE") {
+        println!("cargo:rerun-if-changed={}",std::path::Path::new(&path).display());
+        let b=std::fs::read(&path).expect("read SSH engine");
+        assert!(b.starts_with(&[31,139]) && b.len()<256*1024*1024,"invalid engine archive");
+        std::fs::write(out,b).unwrap();
+    } else { std::fs::write(out,[]).unwrap(); }
     #[cfg(feature = "desktop")]
     tauri_build::build()
 }

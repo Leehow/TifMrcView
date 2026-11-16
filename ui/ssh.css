@@ -116,3 +116,11 @@
 .ssh-transfer progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
 @media (max-width: 720px) { .ssh-dialog { width: calc(100vw - 20px); height: calc(100vh - 24px); } .ssh-connection { width: 220px; padding: 18px 14px; } .ssh-browser { padding: 18px 14px 0; } .ssh-list-heading, .ssh-entry { grid-template-columns: minmax(0, 1fr) 65px; } .ssh-list-heading > :last-child, .ssh-entry > :last-child { display: none; } .ssh-heading { padding: 16px; } .ssh-footer { padding: 14px; } .ssh-footer span { max-width: 260px; } }
 @media (max-width: 520px) { .ssh-layout { flex-direction: column; overflow-y: auto; } .ssh-connection { width: 100%; border-right: 0; border-bottom: 1px solid var(--line); flex-shrink: 0; } .ssh-form { margin-top: 14px; gap: 12px; } .ssh-private, .ssh-recent { display: none; } .ssh-browser { min-height: 300px; flex-shrink: 0; } .ssh-list { max-height: 300px; } .ssh-footer span { display: none; } .ssh-heading p { display: none; } }
+
+.remote-processing-location{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;color:var(--dim);font-size:13px;border-bottom:1px solid var(--line);margin-bottom:12px}.remote-processing-location button{white-space:nowrap}
+
+.remote-processing-location{flex-wrap:wrap;overflow-wrap:anywhere}.remote-processing-location .remote-output{width:100%;font-size:12px;padding:7px 10px}
+
+.remote-task-status{display:grid;grid-template-columns:1fr auto;gap:6px 12px;width:100%;padding:12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;color:var(--text)}.remote-task-status strong{font-size:13px;overflow-wrap:anywhere}.remote-task-status progress{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
+
+.remote-output-details{width:100%;font-size:12px}.remote-output-details code{display:block;padding:8px;overflow-wrap:anywhere;user-select:text}

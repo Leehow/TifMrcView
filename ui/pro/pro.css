@@ -660,3 +660,5 @@
 #fig-scalebar[hidden] { display: none; }
 #fig-scalebar i { display: block; height: 4px; background: currentColor; }
 #fig-scalebar.dark { color: #fff; }
+
+.cs-preview-box{position:relative;display:flex;justify-content:center;align-items:center;min-height:160px;border:1px solid var(--line);background:var(--subtle);border-radius:6px;margin-top:8px;overflow:hidden}.cs-preview-box .cs-film{margin:0}.cs-preview-state{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--subtle);color:var(--dim);text-align:center;overflow-wrap:anywhere}.cs-filmctl{flex-wrap:wrap;position:relative;padding:6px 0}.cs-framelab{white-space:normal;overflow-wrap:anywhere}.cs-discovery{overflow-wrap:anywhere;max-width:100%}

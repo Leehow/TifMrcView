@@ -117,6 +117,12 @@ function makeApi(rec) {
     folders: {
       mount: (folder) => mountRemoteFolder(id, folder),
       unmount: () => unmountRemoteFolder(id),
+      openEntry: async (entry, resolve, thumbnail) => {
+        if (!S.folder.remote || S.folder.owner !== id) throw new Error('请先打开对应 SSH 工作区');
+        ext.remoteFiles ||= new Map();
+        ext.remoteFiles.set(entry.local, {folder:S.folder,ready:false,remotePath:entry.path,resolve:()=>resolve(entry),thumbnail:thumbnail?()=>thumbnail(entry):null});
+        return openPath(entry.local);
+      },
     },
 
     /**

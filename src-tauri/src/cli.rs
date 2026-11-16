@@ -372,7 +372,7 @@ impl Progress {
 
 /// Points CUDA at the libdevice.10.bc shipped beside the binary (the
 /// tarball's `cuda/`), unless CUDA_PATH is set.
-fn use_bundled_cuda() {
+pub(crate) fn use_bundled_cuda() {
     if std::env::var_os("CUDA_PATH").is_some() {
         return;
     }
@@ -409,7 +409,7 @@ fn gpu() -> Option<&'static (burn::tensor::Device, &'static str)> {
 /// CUDA_VISIBLE_DEVICES, released when the job ends however it ends).
 /// None when there is no GPU, when TMV_GPU_SHARE is set, or when the lock
 /// cannot be had at all (the job then runs as before).
-fn gpu_turn() -> Option<std::fs::File> {
+pub(crate) fn gpu_turn() -> Option<std::fs::File> {
     gpu()?;
     if std::env::var_os("TMV_GPU_SHARE").is_some() {
         return None;
@@ -430,7 +430,9 @@ fn take_turn(path: &Path, waiting: &dyn Fn()) -> Option<std::fs::File> {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
             waiting();
-            file.lock().ok()?;
+            if let Some(cancel)=std::env::var_os("TMV_CANCEL_FILE") {
+                loop { if Path::new(&cancel).exists(){return None} if file.try_lock().is_ok(){break} std::thread::sleep(Duration::from_millis(200)); }
+            } else { file.lock().ok()?; }
         }
         Err(_) => return None,
     }

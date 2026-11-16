@@ -12,17 +12,17 @@ const REMOTE_FOLDER_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="
 
 // Local cache paths keep all native image readers and Pro tabs unchanged.
 // Only an explicit image open resolves the full file. Previews transfer small PNGs.
-function mountRemoteFolder(owner, { name, path, address = "", entries, resolve, thumbnail, navigate, inspect }) {
+function mountRemoteFolder(owner, { name, path, address = "", entries, resolve, thumbnail, navigate, inspect, processing }) {
   ext.remoteFiles ||= new Map();
   const images = entries.filter(e => !e.directory && (e.supported || (!navigate && e.supported !== false)));
   const folder = { owner, name, remotePath: path, address, dir: `ssh:${owner}:${address}:${path}`,
     files: images.map((e) => e.local), sizes: images.map((e) => e.size),
     groups: images.map((e) => fileGroup(e.name)), stacks: {}, remote: true, index: -1,
-    entries: navigate ? entries : null, navigate, inspect, view: { query: "", limit: 100 } };
+    entries: navigate ? entries : null, navigate, inspect, processing, view: { query: "", limit: 100 } };
   for (const entry of images) {
     const old = ext.remoteFiles.get(entry.local);
     ext.remoteFiles.set(entry.local, { folder, ready: old?.ready || false,
-      resolve: () => resolve(entry), thumbnail: thumbnail ? () => thumbnail(entry) : null });
+      remotePath: entry.path, resolve: () => resolve(entry), thumbnail: thumbnail ? () => thumbnail(entry) : null });
   }
   showRemoteFolder(folder, null);
 }
@@ -84,6 +84,7 @@ function buildRemoteDirectory(strip) {
 function showRemoteFolder(folder, path) {
   $("sidebar").scrollTop = 0;
   S.folder = { ...folder, index: folder.files.indexOf(path) };
+  window.TmvRemote?.mount(S.folder);
   $("folder-name").textContent = `SSH · ${folder.name}`;
   $("folder-name").title = folder.remotePath;
   $("btn-reveal").hidden = true;

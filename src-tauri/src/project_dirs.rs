@@ -45,6 +45,7 @@ fn folder_of(path: &Path) -> &Path {
 /// The project folder of any file of a project: the file's folder, or that
 /// folder's parent when the folder is one of the step folders.
 pub fn root_of(path: &Path) -> PathBuf {
+    if let Some(out) = std::env::var_os("TMV_OUTPUT_ROOT") { return PathBuf::from(out); }
     let dir = folder_of(path);
     if is_step_dir(dir) {
         if let Some(up) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -82,6 +83,7 @@ fn stem_of(p: &Path) -> String {
 /// step folder of the project, or, for an old flat project, the folder of
 /// the stack. (Not created here.)
 pub fn dir_for(stack: &str, step: &str) -> PathBuf {
+    if let Some(out) = std::env::var_os("TMV_OUTPUT_ROOT") { return PathBuf::from(out).join(step); }
     let p = Path::new(stack);
     if is_legacy(stack) {
         folder_of(p).to_path_buf()
@@ -112,6 +114,7 @@ pub fn output_file(stack: &str, step: &str, name: &str) -> PathBuf {
 /// flat project, which stays flat).
 pub fn motion_output(output: &str) -> String {
     let p = Path::new(output);
+    if let Some(out) = std::env::var_os("TMV_OUTPUT_ROOT") { return PathBuf::from(out).join(MOTION).join(p.file_name().unwrap_or_default()).to_string_lossy().into_owned(); }
     if is_legacy(output) || is_step_dir(folder_of(p)) {
         return output.to_string();
     }

@@ -60,7 +60,7 @@
 
   W.register = (i, hooks) => W.hooks.set(i, hooks);
   W.status = (t) => { $("spa-status").textContent = t; };
-  W.name = (p) => p?.split(/[\\/]/).pop() || "";
+  W.name = (p) => (window.TmvRemote?.displayPath(p)||p)?.split(/[\\/]/).pop() || "";
   W.fmt = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
 
   W.select = (i) => {
@@ -129,6 +129,11 @@
   // The open file's folder. No folder picker: indexing happens here.
   W.useCurrent = async () => {
     if (W.busy || panel.hidden) return;
+    if (S.folder?.remote) {
+      const source = window.TmvRemote.pack(S.folder.processing.identity, S.folder.remotePath);
+      if (W.project?.source === source || W.loading===source) return;
+      W.loading=source;try { await W.load(source); } finally { W.loading=''; }return;
+    }
     if (!S.info?.path) {
       if (!W.project) $("spa-name").textContent = "请先打开一张显微图或电影";
       return;
@@ -225,6 +230,7 @@
   };
   $("spa-close").onclick = close;
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
+  document.addEventListener("tmv-remote-mounted", () => { if (!panel.hidden) W.useCurrent(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) W.useCurrent(); });
   $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
   W.select(0);

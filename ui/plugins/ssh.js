@@ -1,7 +1,7 @@
 "use strict";
 
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.3.0",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.4.0",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) return;
@@ -64,6 +64,7 @@ TifMrcView.register({
     const el = (key) => dialog.querySelector(`[data-k="${key}"]`);
     const native = (method, args = {}) => app.native(method, { ...args, connection });
     const bytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+    let processingIdentity = "";
     let connection = null, home = "", current = "", entries = [], selected = null;
     let busy = false, disposed = false, browsing = 0, trustAnswer = null, timer = null;
     let transferring = false, activeTransfer = null;
@@ -231,6 +232,7 @@ TifMrcView.register({
         const auth = await native("authenticate", { ...profile, ...credentials, trust: true });
         el("password").value = ""; el("passphrase").value = "";
         if (disposed) { await native("disconnect"); return; }
+        processingIdentity = `${profile.username}@${profile.host}:${profile.port}:${auth.fingerprint}`;
         home = auth.path;
         recent.splice(0, recent.length, profile, ...recent.filter((p) => p.host !== profile.host || p.port !== profile.port || p.username !== profile.username).slice(0, 3));
         app.settings.set("recent", recent);
@@ -314,7 +316,12 @@ TifMrcView.register({
     }
     function mountFolder() {
       app.folders.mount({ name: current.split('/').filter(Boolean).pop() || '/', path: current, address: el('address').textContent,
-        entries, resolve: download, thumbnail: preview, navigate, inspect });
+        entries, resolve: download, thumbnail: preview, navigate, inspect,
+        processing: (()=>{const identity=processingIdentity;const check=()=>{if(disposed||!connection||identity!==processingIdentity)throw new Error('请重新连接原 SSH 服务器');};return {identity,
+          choose: async()=>{check();if(!dialog.open)dialog.showModal();return null;},
+          call: request=>{check();return native('processing',{request});},
+          open: async path=>{check();const listing=await native('list',{path:path.replace(/\/[^/]+$/, '')||'/'});const entry=listing.entries.find(e=>e.path===path);if(!entry?.supported)throw new Error('结果文件不可读或缺少格式插件');await app.folders.openEntry(entry,download,preview);}
+        };})() });
     }
     async function navigate(path) {
       if (disposed || !connection) throw new Error('连接已断开，请重新连接');

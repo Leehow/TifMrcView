@@ -47,7 +47,7 @@
     const px = +$("spa-pixel").value;
     if (!(px > 0)) return W.status("请先填写像素大小");
     if (!(+$("spa-kv").value > 0)) return W.status("请先填写电压");
-    W.run("CTF 拟合", "ctf", {
+    return W.run("CTF 拟合", "ctf", {
       n: +$("spa-n").value,
       params: {
         voltageKv: +$("spa-kv").value, csMm: +$("spa-cs").value, ampContrast: +$("spa-amp").value, pixelA: px,

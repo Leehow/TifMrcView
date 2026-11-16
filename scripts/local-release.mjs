@@ -115,6 +115,9 @@ function build(which, out) {
   if (!process.env.TMV_SSH_PREVIEW_HELPER || !fs.existsSync(process.env.TMV_SSH_PREVIEW_HELPER)) {
     throw new Error('Set TMV_SSH_PREVIEW_HELPER to the Linux x86_64 musl tmv-ssh-preview artifact before packaging');
   }
+  if (!process.env.TMV_SSH_ENGINE_PACKAGE || !fs.existsSync(process.env.TMV_SSH_ENGINE_PACKAGE)) {
+    throw new Error('Set TMV_SSH_ENGINE_PACKAGE to the matching Linux SSH engine archive before packaging');
+  }
   if (!platform) throw new Error(`no desktop bundle for ${process.platform}`);
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY) console.warn("warning: TAURI_SIGNING_PRIVATE_KEY not set; no updater packages, so installed apps won't see this release");
   clean();

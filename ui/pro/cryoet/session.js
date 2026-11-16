@@ -26,10 +26,12 @@
         <button class="cs-use" data-purpose="survey" role="radio"><b>先看看</b><span>最快，粗一点的断层图，看看样品什么样</span></button>
         <button class="cs-use" data-purpose="display" role="radio"><b>看清楚、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢）。用来展示、标结构出三维图，也是子断层平均里挑颗粒时看的图</span></button>
       </div>
+      <label class="cs-remote-scope" hidden>本次处理范围<select class="cs-scope" aria-label="本次处理范围"></select></label>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">开始重构</button>
     </div>
     <p class="dim cs-help cs-only-quick">按「开始」，程序把每个序列的电影校正成倾转序列，判断每张图能不能用，对齐并做一个快速断层图。点一个序列检查，取消不想要的序列或倾转图。程序只给建议，你勾选的不会被改动。</p>
     <p class="dim cs-help cs-only-recon">选这次重构用来做什么，按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
+    <p class="dim cs-discovery" role="status"></p>
     <div class="cs-wall"></div>
     <div class="cs-review" hidden></div>`;
   const q = (s) => host.querySelector(s);
@@ -42,27 +44,26 @@
   let active = 0;
   const LIMIT = 4;
   function pump() {
-    while (active < LIMIT && queue.length) {
-      const job = queue.shift();
-      active++;
-      job().finally(() => { active--; pump(); });
+    while (active < (S.folder?.remote ? 1 : LIMIT) && queue.length) {
+      const job = queue.shift(); active++;
+      job.run().finally(() => { active--; pump(); });
     }
   }
-  /** A decoded section {w,h,title,rgba}; cached per (path, z, max), a few requests at a time. */
-  function pic(path, z, max) {
+  /** Interactive frames precede background thumbnails; only small pictures travel. */
+  function pic(path, z, max, group = null, priority = max >= 512) {
     const key = `${path}|${z}|${max}|${rev.get(path) || 0}`;
     if (!cache.has(key)) {
+      let rejectJob;
       const p = new Promise((resolve, reject) => {
-        queue.push(() => invoke("tomo_view", { path, z, max })
-          .then((buf) => {
-            const d = R.decodePicture(buf);
-            d ? resolve(d) : reject(new Error("空图像"));
-          })
-          .catch(reject));
+        rejectJob = reject;
+        const job = { group, key, run: () => invoke("tomo_view", { path, z, max })
+          .then(buf => { const d = R.decodePicture(buf); d ? resolve(d) : reject(new Error("空图像")); }).catch(reject) };
+        if (priority) queue.unshift(job); else queue.push(job);
         pump();
       });
-      p.catch(() => cache.delete(key));
+      p.catch(() => { if (cache.get(key) === p) cache.delete(key); });
       cache.set(key, p);
+      p.cancelQueued = () => { if (cache.get(key) === p) cache.delete(key); rejectJob(new Error('预览已切换')); };
       if (cache.size > 400) cache.delete(cache.keys().next().value);
     }
     return cache.get(key);
@@ -153,7 +154,7 @@
   };
 
   function follow() {
-    if (!chose) {
+    if (!chose || S.folder?.remote) {
       const f = defaultFolder();
       if (f !== folder) { folder = f; closeReview(); }
     }
@@ -163,6 +164,7 @@
   document.addEventListener("cryoet-close", () => stopMedia());
   document.addEventListener("cryoet-idle", () => { showFolder(); scan(); });
   let folderTimer = 0;
+  document.addEventListener("tmv-remote-mounted", () => { if (visible() && !W.busy) { follow(); scan(); } });
   document.addEventListener("tmv-folder-changed", () => {
     clearTimeout(folderTimer);
     folderTimer = setTimeout(() => { if (visible() && !W.busy) { follow(); scan(); } }, 700);
@@ -173,7 +175,13 @@
   const tiles = new Map();
   function render() {
     showFolder();
+    q('.cs-discovery').textContent=[...(session.warnings||[]),(session.gains||[]).length===1?`增益参考：${W.name(session.gains[0])}`:(session.gains||[]).length>1?'发现多个增益参考，开始前需明确选择或缩小范围':''].filter(Boolean).join('；');
     const list = R.sortSeries(session.series);
+    const scope=q('.cs-scope');const old=scope.dataset.folder===folder?scope.value:"";
+    q('.cs-remote-scope').hidden=!S.folder?.remote;
+    scope.replaceChildren(new Option('全部序列','*'),...list.map(s=>new Option(s.name,s.name)));
+    scope.value=list.some(s=>s.name===old)?old:old==='*'?'*':list[0]?.name||'*';
+    if(list.length)scope.dataset.folder=folder;
     if (!list.length) {
       tiles.clear();
       const msg = loadError ? `无法读取这个文件夹：${loadError}`
@@ -292,11 +300,11 @@
   showPurpose();
   q(".cs-start").onclick = () => {
     if (!folder) return W.status("先选项目文件夹");
-    return runPass("处理", null, []);
+    return runPass("处理", null, S.folder?.remote && q(".cs-scope").value!=="*" ? [q(".cs-scope").value] : []);
   };
   q(".cs-finish").onclick = async () => {
     if (!folder) return W.status("先选项目文件夹");
-    const only = R.chosenNames(session.series);
+    const only = R.chosenNames(session.series).filter(name=>!S.folder?.remote || q(".cs-scope").value==="*" || name===q(".cs-scope").value);
     if (!only.length) return W.status("先勾选要重构的序列");
     const purpose = usePurpose;
     return runPass("重构", purpose, only);
@@ -311,7 +319,9 @@
   function stopMedia() {
     clearInterval(rv.timer);
     rv.timer = 0;
-    rv.gen++;
+    const old=rv.gen++;
+    for (let k=queue.length-1;k>=0;k--) if(queue[k].group===old){const job=queue.splice(k,1)[0];cache.get(job.key)?.cancelQueued?.();}
+
   }
   function closeReview() {
     stopMedia();
@@ -523,48 +533,42 @@
     open.onclick = () => openHere(s.aligned);
     head.append(text, open);
     const cv = el("canvas", "cs-film");
-    const ctl = el("div", "al-row cs-filmctl");
-    const play = el("button", "small", "暂停");
-    const slider = el("input");
-    slider.type = "range";
-    slider.min = 0;
-    slider.max = n - 1;
-    slider.value = 0;
-    slider.className = "cs-slider";
-    const lab = el("span", "dim cs-framelab", "载入中…");
-    ctl.append(play, slider, lab);
-    body.append(head, cv, ctl);
-    const bars = barChart(al);
-    if (bars) body.append(bars.node);
-
-    const frames = new Array(n).fill(null);
-    let i = 0, playing = true, loaded = 0;
-    const gen = rv.gen;
-    const show = (k) => {
-      i = k;
-      slider.value = k;
-      if (frames[k]) draw(cv, frames[k]);
-      const m = framesMeta[k];
-      lab.textContent = `${k + 1} / ${n}${m ? ` · ${m.angle.toFixed(1)}°` : ""}${loaded < n ? ` · 载入 ${loaded}/${n}` : ""}`;
-      bars?.mark(m);
-    };
-    for (let k = 0; k < n; k++) {
-      pic(s.aligned, k, 512).then((d) => {
-        if (gen !== rv.gen) return;
-        frames[k] = d;
-        loaded++;
-        show(i);
-      }).catch(() => { if (gen === rv.gen) { loaded++; lab.textContent = "有些帧无法载入"; } });
+    const box = el('div','cs-preview-box'), state = el('div','cs-preview-state','正在读取对齐预览…');
+    state.setAttribute('role','status'); box.append(cv,state);
+    const ctl=el('div','al-row cs-filmctl'),play=el('button','small','播放'),retry=el('button','small','重试');
+    const slider=el('input');slider.type='range';slider.min=0;slider.max=n-1;slider.value=0;slider.className='cs-slider';slider.setAttribute('aria-label','对齐预览帧');
+    const lab=el('span','dim cs-framelab');lab.setAttribute('role','status');retry.hidden=true;play.disabled=true;
+    ctl.append(play,slider,retry,lab);body.append(head,ctl,box);
+    const bars=barChart(al);if(bars)body.append(bars.node);
+    const frames=new Array(n).fill(null),pending=new Set(),failed=new Map();
+    let i=0,playing=!S.folder?.remote,loaded=0,buffering=null;const gen=rv.gen;
+    function update(){
+      if(gen!==rv.gen)return;
+      play.textContent=playing?'暂停':'播放';play.disabled=!frames[i];slider.value=i;
+      const m=framesMeta[i];lab.textContent=`第 ${i+1}/${n} 帧${m?` · ${m.angle.toFixed(1)}°`:''} · 已载入 ${loaded}/${n}${buffering!=null?` · 正在缓冲第 ${buffering+1} 帧`:''}${failed.size?` · ${failed.size} 帧失败，可重试`:''}`;
+      retry.hidden=!failed.size;
+      state.hidden=!!frames[i];box.setAttribute('aria-busy',String(!frames[i]));
+      if(!frames[i])state.textContent=failed.has(i)?`第 ${i+1} 帧加载失败：${failed.get(i)}；请点“重试”`:`正在${S.folder?.remote?'从服务器':''}读取第 ${i+1} 帧…`;
+      if(frames[i])draw(cv,frames[i]);bars?.mark(m);
     }
-    rv.timer = setInterval(() => {
-      if (!playing || loaded < n) return;
-      show((i + 1) % n);
-    }, 125);
-    play.onclick = () => {
-      playing = !playing;
-      play.textContent = playing ? "暂停" : "播放";
-    };
-    slider.oninput = () => { playing = false; play.textContent = "播放"; show(+slider.value); };
+    function get(k,priority=false){
+      if(k<0||k>=n||frames[k]||pending.has(k)||failed.has(k))return;
+      pending.add(k);
+      pic(s.aligned,k,512,gen,priority).then(d=>{
+        if(gen!==rv.gen)return;frames[k]=d;loaded++;update();
+      }).catch(e=>{if(gen!==rv.gen)return;failed.set(k,String(e));if(k===i||k===buffering){playing=false;buffering=null;}update();})
+        .finally(()=>pending.delete(k));
+    }
+    function show(k){i=k;buffering=null;get(k,true);get((k+1)%n);get((k+2)%n);update();}
+    play.onclick=()=>{playing=!playing;buffering=null;update();};
+    retry.onclick=()=>{const keys=[...failed.keys()];failed.clear();for(const k of keys)get(k,k===i);update();};
+    slider.oninput=()=>{playing=false;show(+slider.value);};
+    rv.timer=setInterval(()=>{
+      if(!playing||gen!==rv.gen)return;const next=(i+1)%n;
+      if(!frames[next]){buffering=next;get(next,true);if(failed.has(next)){playing=false;buffering=null;}update();return;}
+      show(next);
+    },125);
+    show(0);
   }
 
   // Per-view residual by angle; views left out of the alignment are grey.
@@ -621,6 +625,8 @@
     open.onclick = () => openHere(t.path);
     head.append(text, open);
     const cv = el("canvas", "cs-film");
+    const box=el('div','cs-preview-box'),state=el('div','cs-preview-state','正在读取断层切片预览…');state.setAttribute('role','status');box.append(cv,state);
+    const retry=el('button','small','重试');retry.hidden=true;
     const ctl = el("div", "al-row cs-filmctl");
     const slider = el("input");
     slider.type = "range";
@@ -628,17 +634,19 @@
     slider.disabled = true;
     const lab = el("span", "dim cs-framelab", "载入中…");
     ctl.append(el("span", "dim", "层"), slider, lab);
-    body.append(head, cv, ctl);
+    ctl.append(retry);body.append(head, ctl, box);
     // The depth comes from the picture's title, else from the dataset's record of this tomogram.
     let depth = 0, want = 0;
     const gen = rv.gen;
     const fromDataset = () => rv.dataset?.tomograms?.find((x) => x.path === t.path)?.thickness || 0;
     async function load(z) {
-      const mine = ++want;
+      const mine = ++want;retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
+      state.textContent=`正在${S.folder?.remote?'从服务器':''}读取${z==null?'中间':`第 ${z+1}`}层预览…`;
+      lab.textContent=depth?`${(z??Math.floor(depth/2))+1} / ${depth} · 正在载入`:'正在载入切片…';
       try {
-        const d = await pic(t.path, z, 512);
+        const d = await pic(t.path, z, 512, gen, true);
         if (mine !== want || gen !== rv.gen) return;
-        draw(cv, d);
+        draw(cv, d);state.hidden=true;box.setAttribute('aria-busy','false');
         depth = depth || R.depthFromTitle(d.title) || fromDataset();
         if (depth && slider.disabled) {
           slider.max = depth - 1;
@@ -647,9 +655,10 @@
         }
         lab.textContent = depth ? `${(z ?? Math.floor(depth / 2)) + 1} / ${depth}` : "中间一层";
       } catch (e) {
-        if (mine === want) lab.textContent = "无法载入";
+        if (mine === want && gen===rv.gen) {state.hidden=false;state.textContent=`预览加载失败：${e}；请点“重试”`;retry.hidden=false;box.setAttribute('aria-busy','false');lab.textContent='预览未载入';}
       }
     }
+    retry.onclick=()=>load(slider.disabled?null:+slider.value);
     slider.oninput = () => load(+slider.value);
     load(null);
   }
