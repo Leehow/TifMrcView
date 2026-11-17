@@ -279,11 +279,14 @@ fn movie_planes_in(
         "GPU 驻留工作区约需 {} MiB，当前预算不足",
         estimated / (1 << 20)
     );
+    let client = crate::motion::sum_gpu::client_of(dev)?;
     let input: Vec<Tensor<2>> = frames
         .chunks(per)
         .map(|c| {
+            let parts: Vec<&[f32]> = c.iter().map(|f| f.as_slice()).collect();
+            let bytes = crate::motion::sum_gpu::pinned(&client, &parts);
             Tensor::<2>::from_data(
-                TensorData::new(c.iter().flatten().copied().collect::<Vec<_>>(), [c.len(), w * h]),
+                TensorData::from_bytes(bytes, [c.len(), w * h], burn::tensor::DType::F32),
                 dev,
             )
         })

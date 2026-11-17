@@ -172,15 +172,12 @@ mod kernel {
 /// (The earlier version built the warp from Burn gathers, eight 16-million
 /// index gathers a 4096² frame, and was slower than the CPU.)
 pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Result<Sums> {
-    use burn_cubecl::{cubecl, CubeBackend};
+    use burn_cubecl::cubecl;
     use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
     let n = w * h;
     anyhow::ensure!(!frames.is_empty() && frames.len() == shifts.len() && frames.iter().all(|f| f.len() == n), "预览帧尺寸不一致");
     anyhow::ensure!(w < i32::MAX as usize / 2 && h < i32::MAX as usize / 2, "预览帧过大");
-    let client = Tensor::<1>::zeros([1], dev)
-        .try_into_primitive::<CubeBackend>()
-        .map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?
-        .client;
+    let client = client_of(dev)?;
     let profile = std::env::var_os("TMV_GPU_PROFILE").is_some();
     let clock = std::time::Instant::now();
     let (mut upload_ms, mut launch_ms) = (0.0, 0.0);
@@ -191,7 +188,7 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
         let t = std::time::Instant::now();
         let split = |s: f64| (s.floor() as i32, crate::align::catmull_rom((s - s.floor()) as f32), s > s.floor());
         let ((ix, kx, fx), (iy, ky, fy)) = (split(d[0]), split(d[1]));
-        let src = client.create_from_slice(f32::as_bytes(frame));
+        let src = upload(&client, frame);
         let shift = client.create_from_slice(i32::as_bytes(&[ix, iy, fx as i32, fy as i32]));
         let k: Vec<f32> = kx.into_iter().chain(ky).collect();
         let k = client.create_from_slice(f32::as_bytes(&k));
@@ -231,6 +228,43 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
     };
     anyhow::ensure!(unweighted.iter().all(|v| v.is_finite()), "GPU preview returned non-finite values");
     Ok(Sums { unweighted, even, odd, weighted: None })
+}
+
+/// Frames laid end to end in host memory from the pinned staging pool, to
+/// be uploaded. A plain upload (`create_from_slice`, or `TensorData` of a
+/// fresh `Vec`) copies into new pageable memory and measured 0.4 GB/s on a
+/// PCIe 3 ×16 card that takes 12 GB/s from pinned memory. Falls back to
+/// ordinary memory when the pool has no room.
+pub(crate) fn pinned(client: &burn_cubecl::cubecl::client::Client, parts: &[&[f32]]) -> burn_cubecl::cubecl::bytes::Bytes {
+    use burn_cubecl::cubecl::bytes::Bytes;
+    use rayon::prelude::*;
+    let len: usize = parts.iter().map(|p| p.len()).sum();
+    // Untouched zero pages: the staging copy of them costs no page writes.
+    let mut b = Bytes::from_bytes_vec(vec![0u8; len * 4]);
+    client.staging(std::iter::once(&mut b), false);
+    let mut dst: &mut [u8] = &mut b;
+    for p in parts {
+        let (head, rest) = dst.split_at_mut(p.len() * 4);
+        head.par_chunks_mut(1 << 20).zip(p.par_chunks(1 << 18)).for_each(|(d, s)| {
+            for (d, s) in d.chunks_exact_mut(4).zip(s) {
+                d.copy_from_slice(&s.to_ne_bytes());
+            }
+        });
+        dst = rest;
+    }
+    b
+}
+
+pub(crate) fn upload(client: &burn_cubecl::cubecl::client::Client, v: &[f32]) -> burn_cubecl::cubecl::server::Handle {
+    client.create(pinned(client, &[v]))
+}
+
+/// The CubeCL client behind a Burn device.
+pub(crate) fn client_of(dev: &Device) -> Result<burn_cubecl::cubecl::client::Client> {
+    Ok(Tensor::<1>::zeros([1], dev)
+        .try_into_primitive::<burn_cubecl::CubeBackend>()
+        .map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?
+        .client)
 }
 
 pub(super) fn cpu_preview(frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Sums {
