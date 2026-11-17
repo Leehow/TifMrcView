@@ -597,6 +597,12 @@ pub struct SaveReq {
 }
 
 /// Catmull–Rom weights for a fraction t of a pixel.
+/// The Catmull–Rom weights of `shift_plane`, for the GPU preview sums.
+#[cfg(feature = "pro")]
+pub(crate) fn catmull_rom(t: f32) -> [f32; 4] {
+    cubic(t)
+}
+
 fn cubic(t: f32) -> [f32; 4] {
     let (t2, t3) = (t * t, t * t * t);
     [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]

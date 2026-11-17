@@ -114,49 +114,109 @@ pub fn run(
     })
 }
 
-/// Same separable Catmull–Rom warp as CPU. Batch frames under a 4M-pixel
-/// budget; intermediates and half accumulators stay on the GPU until the end.
-pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Result<Sums> {
-    use burn::tensor::Int;
-    let n = w * h;
-    let mut even = Tensor::<2>::zeros([1, n], dev);
-    let mut odd = even.clone();
-    let ids = Tensor::<1, Int>::arange(0..n as i64, dev).reshape([1, n]);
-    let x = ids.clone().remainder_scalar(w as i32);
-    let y = ids.div_scalar(w as i32);
-    let cubic = |t: f32| {
-        let (t2, t3) = (t * t, t * t * t);
-        [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1., -1.5 * t3 + 2. * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
-    };
-    let per = ((1usize << 22) / n).max(1);
-    for first in (0..frames.len()).step_by(per) {
-        check_cancel()?;
-        let count = per.min(frames.len() - first);
-        let mut src = Tensor::<2>::from_data(TensorData::new(frames[first..first + count].iter().flatten().copied().collect::<Vec<_>>(), [count, n]), dev);
-        for axis in 0..2 {
-            let len = if axis == 0 { w } else { h };
-            let ds = &shifts[first..first + count];
-            let offsets = Tensor::<2, Int>::from_data(TensorData::new(ds.iter().map(|d| d[axis].floor() as i32).collect::<Vec<_>>(), [count, 1]), dev);
-            let fractions: Vec<_> = ds.iter().map(|d| (d[axis] - d[axis].floor()) as f32).collect();
-            let upper = Tensor::<2, Int>::from_data(TensorData::new(fractions.iter().map(|f| len as i32 - if *f > 0. { 1 } else { 0 }).collect::<Vec<_>>(), [count, 1]), dev);
-            let position = (if axis == 0 { x.clone() } else { y.clone() }) + offsets;
-            let valid = position.clone().greater_equal_elem(0).bool_and(position.clone().lower(upper)).float();
-            let mut out = Tensor::<2>::zeros([count, n], dev);
-            for j in 0..4 {
-                let c = position.clone().add_scalar(j as i32 - 1).clamp(0, len as i32 - 1);
-                let index = if axis == 0 { y.clone().mul_scalar(w as i32) + c } else { c.mul_scalar(w as i32) + x.clone() };
-                let weights = Tensor::<2>::from_data(TensorData::new(fractions.iter().map(|f| cubic(*f)[j]).collect::<Vec<_>>(), [count, 1]), dev);
-                out = out + src.clone().gather(1, index) * weights;
+mod kernel {
+    use burn_cubecl::cubecl;
+    use cubecl::prelude::*;
+    /// One frame moved by a whole-plane shift (Catmull–Rom, the rules of
+    /// `align::shift_plane` with fill 0) and added, times `scale`, into `out`.
+    /// One thread an output pixel; frames are launched in order, so each pixel
+    /// adds them up in the same order as the CPU.
+    #[cube(launch)]
+    pub fn tmv_preview_shift_add(src: &[f32], out: &mut [f32], shift: &[i32], k: &[f32], w: usize, h: usize, scale: f32, first: u32) {
+        let i = ABSOLUTE_POS;
+        if i < out.len() {
+            let wi = i32::cast_from(w);
+            let hi = i32::cast_from(h);
+            let cx = i32::cast_from(i % w) + shift[0];
+            let cy = i32::cast_from(i / w) + shift[1];
+            let inside_x = cx >= 0 && cx < wi && !(shift[2] != 0 && cx == wi - 1);
+            let inside_y = cy >= 0 && cy < hi && !(shift[3] != 0 && cy == hi - 1);
+            let mut v = 0.0f32;
+            if inside_x && inside_y {
+                #[unroll]
+                for j in 0..4usize {
+                    let mut r = cy + i32::cast_from(j) - 1;
+                    if r < 0 {
+                        r = 0;
+                    }
+                    if r > hi - 1 {
+                        r = hi - 1;
+                    }
+                    let row = usize::cast_from(r) * w;
+                    let mut a = 0.0f32;
+                    #[unroll]
+                    for q in 0..4usize {
+                        let mut c = cx + i32::cast_from(q) - 1;
+                        if c < 0 {
+                            c = 0;
+                        }
+                        if c > wi - 1 {
+                            c = wi - 1;
+                        }
+                        a += k[q] * src[row + usize::cast_from(c)];
+                    }
+                    v += k[4 + j] * a;
+                }
             }
-            src = out * valid;
+            if first != 0 {
+                out[i] = v * scale;
+            } else {
+                out[i] += v * scale;
+            }
         }
-        let mask = |parity| Tensor::<2>::from_data(TensorData::new((first..first + count).map(|i| if i % 2 == parity { scale } else { 0. }).collect::<Vec<_>>(), [count, 1]), dev);
-        even = even + (src.clone() * mask(0)).sum_dim(0);
-        odd = odd + (src * mask(1)).sum_dim(0);
     }
-    let unweighted = download(even.clone() + odd.clone());
+}
+
+/// The preview sums on the GPU: each frame uploaded once and moved and
+/// added by one kernel into device even/odd sums, which come back once.
+/// (The earlier version built the warp from Burn gathers, eight 16-million
+/// index gathers a 4096² frame, and was slower than the CPU.)
+pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Result<Sums> {
+    use burn_cubecl::{cubecl, CubeBackend};
+    use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
+    let n = w * h;
+    anyhow::ensure!(frames.len() >= 2 && frames.len() == shifts.len() && frames.iter().all(|f| f.len() == n), "预览帧尺寸不一致");
+    anyhow::ensure!(w < i32::MAX as usize / 2 && h < i32::MAX as usize / 2, "预览帧过大");
+    let client = Tensor::<1>::zeros([1], dev)
+        .try_into_primitive::<CubeBackend>()
+        .map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?
+        .client;
+    let halves = [client.empty(n * 4), client.empty(n * 4)];
+    let groups = n.div_ceil(256) as u32;
+    for (i, (frame, d)) in frames.iter().zip(shifts).enumerate() {
+        check_cancel()?;
+        let split = |s: f64| (s.floor() as i32, crate::align::catmull_rom((s - s.floor()) as f32), s > s.floor());
+        let ((ix, kx, fx), (iy, ky, fy)) = (split(d[0]), split(d[1]));
+        let src = client.create_from_slice(f32::as_bytes(frame));
+        let shift = client.create_from_slice(i32::as_bytes(&[ix, iy, fx as i32, fy as i32]));
+        let k: Vec<f32> = kx.into_iter().chain(ky).collect();
+        let k = client.create_from_slice(f32::as_bytes(&k));
+        kernel::tmv_preview_shift_add::launch(
+            &client,
+            CubeCount::Static(groups.min(1024), groups.div_ceil(1024), 1),
+            CubeDim::new_1d(256),
+            // Each handle holds exactly the f32/i32 count given here; the
+            // kernel checks its index against the output length.
+            unsafe { BufferArg::from_raw_parts(src, n) },
+            unsafe { BufferArg::from_raw_parts(halves[i % 2].clone(), n) },
+            unsafe { BufferArg::from_raw_parts(shift, 4) },
+            unsafe { BufferArg::from_raw_parts(k, 8) },
+            w,
+            h,
+            scale,
+            (i < 2) as u32,
+        );
+    }
+    let read = client.read(vec![halves[0].clone(), halves[1].clone()])?;
+    anyhow::ensure!(read.len() == 2 && read.iter().all(|b| b.len() == n * 4), "GPU 预览读取尺寸不一致");
+    let floats = |b: &[u8]| -> Vec<f32> { b.chunks_exact(4).map(|v| f32::from_ne_bytes(v.try_into().unwrap())).collect() };
+    let (even, odd) = (floats(&read[0]), floats(&read[1]));
+    let unweighted: Vec<f32> = {
+        use rayon::prelude::*;
+        even.par_iter().zip(&odd).map(|(a, b)| a + b).collect()
+    };
     anyhow::ensure!(unweighted.iter().all(|v| v.is_finite()), "GPU preview returned non-finite values");
-    Ok(Sums { unweighted, even: download(even), odd: download(odd), weighted: None })
+    Ok(Sums { unweighted, even, odd, weighted: None })
 }
 
 pub(super) fn cpu_preview(frames: &[Vec<f32>], w: usize, h: usize, shifts: &[[f64; 2]], scale: f32) -> Sums {

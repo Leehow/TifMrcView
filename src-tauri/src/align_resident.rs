@@ -85,7 +85,11 @@ pub(super) fn select(
         Ok(v) => v,
         Err(e) if cancelled() => return Err(e),
         Err(e) => {
-            report(false, format!("GPU 驻留校准未通过，使用 CPU：{e:#}"));
+            // Remembered like a slower GPU: otherwise every later movie
+            // would pay the CPU solve and the failed GPU attempt again.
+            let reason = format!("GPU 驻留校准未通过，使用 CPU：{e:#}");
+            CHOICE.lock().unwrap().insert(key, (false, reason.clone()));
+            report(false, reason);
             return Ok(cpu);
         }
     };
@@ -222,6 +226,19 @@ pub(super) fn movie_planes(
     progress: &(dyn Fn(usize, usize) + Sync),
     dev: &Device,
 ) -> Result<Aligned> {
+    movie_planes_in(frames, w, h, progress, dev, 1 << 27)
+}
+
+/// `movie_planes` with the frames kept in device chunks of at most `cap`
+/// values each.
+fn movie_planes_in(
+    frames: &[Vec<f32>],
+    w: usize,
+    h: usize,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    dev: &Device,
+    cap: usize,
+) -> Result<Aligned> {
     let start = std::time::Instant::now();
     anyhow::ensure!(
         frames.len() >= 2 && frames.iter().all(|f| f.len() == w * h),
@@ -234,8 +251,13 @@ pub(super) fn movie_planes(
         .checked_mul(w)
         .and_then(|n| n.checked_mul(h))
         .ok_or_else(|| anyhow::anyhow!("电影批次溢出"))?;
+    // Frames stay on the device in chunks of at most 1<<27 values (eight
+    // 4096² frames): one buffer per chunk, so no single allocation or gather
+    // outgrows what every backend accepts. A whole movie used to have to fit
+    // one such buffer, and larger movies always fell back to the CPU.
+    let per = (cap / (w * h)).max(1);
     anyhow::ensure!(
-        input_len <= 1 << 27 && k * g.m * g.m <= 1 << 25,
+        w * h <= 1 << 27 && k * g.m * g.m <= 1 << 25,
         "电影超过 GPU 驻留批次预算"
     );
     // The low-signal retry can double the working side. Budget for it too.
@@ -253,13 +275,15 @@ pub(super) fn movie_planes(
         "GPU 驻留工作区约需 {} MiB，当前预算不足",
         estimated / (1 << 20)
     );
-    let input = Tensor::<2>::from_data(
-        TensorData::new(
-            frames.iter().flatten().copied().collect::<Vec<_>>(),
-            [k, w * h],
-        ),
-        dev,
-    );
+    let input: Vec<Tensor<2>> = frames
+        .chunks(per)
+        .map(|c| {
+            Tensor::<2>::from_data(
+                TensorData::new(c.iter().flatten().copied().collect::<Vec<_>>(), [c.len(), w * h]),
+                dev,
+            )
+        })
+        .collect();
     let filter = make_filter(g.m);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let total = 2 * k + 2 * MAX_ITER;
@@ -269,7 +293,20 @@ pub(super) fn movie_planes(
         if CANCEL.load(Ordering::SeqCst) {
             bail!("已取消");
         }
-        let s = spectra(&input, g, offsets, filter, dev)?;
+        let mut parts = input
+            .iter()
+            .zip(offsets.chunks(per))
+            .map(|(c, o)| spectra(c, g, o, filter, dev))
+            .collect::<Result<Vec<_>>>()?;
+        let s = if parts.len() == 1 {
+            parts.pop().unwrap()
+        } else {
+            Spectra {
+                energy: parts.iter().flat_map(|p| p.energy.iter().copied()).collect(),
+                re: Tensor::cat(parts.iter().map(|p| p.re.clone()).collect(), 0),
+                im: Tensor::cat(parts.into_iter().map(|p| p.im).collect(), 0),
+            }
+        };
         for _ in 0..k {
             tick();
         }
@@ -460,6 +497,11 @@ mod tests {
             eprintln!("resident two-pass frame {i}: shift error={err:0.6} px");
             assert!(err < 0.05, "frame {i}: shift error {err}");
             assert!((got.cc[i] - cpu.cc[i]).abs() < 0.01, "correlation mismatch");
+        }
+        // One frame a device chunk, as a 4096² movie has eight.
+        let chunked = movie_planes_in(&frames, w, h, &|_, _| {}, dev, w * h).unwrap();
+        for (a, b) in chunked.shifts.iter().zip(&got.shifts) {
+            assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 1e-3, "chunked shifts differ");
         }
         let blank = vec![vec![7.; w * h]; 4];
         let err = movie_planes(&blank, w, h, &|_, _| {}, dev).unwrap_err();
