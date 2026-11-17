@@ -213,15 +213,15 @@ pub fn estimate(
     let mut shifts = vec![[0.0; 2]; patches * nf];
     let mut ccs = vec![1.0; shifts.len()];
     let max = n as f64 / 8.0;
-    let mut gpu = None;
     let mut use_gpu = false;
     let mut cpu_pair_ms = 0.0;
     let mut gpu_pair_ms = None;
-    for it in 0..4 {
-        check_cancel()?;
+    // Host route: move the patches, build each leave-one-out reference and
+    // correlate pair by pair.
+    let pairs_for = |shifts: &[[f64; 2]]| -> Vec<(Vec<f32>, Vec<f32>)> {
         let aligned: Vec<_> = base
             .par_iter()
-            .zip(&shifts)
+            .zip(shifts)
             .map(|(v, &d)| crate::align::movie_shift(v, n, n, d))
             .collect();
         let sums: Vec<Vec<f32>> = aligned
@@ -236,8 +236,7 @@ pub fn estimate(
                 sum
             })
             .collect();
-        let pairs: Vec<_> = base
-            .par_iter()
+        base.par_iter()
             .enumerate()
             .map(|(i, v)| {
                 let reference = sums[i / nf]
@@ -247,44 +246,57 @@ pub fn estimate(
                     .collect();
                 (reference, v.clone())
             })
-            .collect();
-        let cpu = |q: &[(Vec<f32>, Vec<f32>)]| {
-            q.par_iter()
-                .map(|(a, b)| crate::align::patch_shift(a, b, n, max))
-                .collect::<Vec<_>>()
-        };
-        let mut calibrated_peaks = None;
-        // Measured once per process and patch geometry, then kept: measured
-        // again for every movie, a busy processor flipped some movies to the
-        // other side and the same series came out different in the last
-        // digits (and each movie paid for both).
-        let key = (n, pairs.len());
-        let known = (it == 0).then(|| CHOICE.lock().unwrap().get(&key).copied()).flatten();
-        if let Some(gpu_won) = known {
+            .collect()
+    };
+    let cpu = |q: &[(Vec<f32>, Vec<f32>)]| {
+        q.par_iter()
+            .map(|(a, b)| crate::align::patch_shift(a, b, n, max))
+            .collect::<Vec<_>>()
+    };
+    // Device route: the patches go up once a movie and every pass runs there.
+    let on_device = |dev: &burn::tensor::Device| -> Result<(Batch, crate::tomo::correlation_gpu::Movie)> {
+        let b = Batch::new(dev, n);
+        let mv = b.movie(&base, nf)?;
+        Ok((b, mv))
+    };
+    let mut gpu: Option<(Batch, crate::tomo::correlation_gpu::Movie)> = None;
+    let mut first = None;
+    // Measured once per process and patch geometry, then kept: measured
+    // again for every movie, a busy processor flipped some movies to the
+    // other side and the same series came out different in the last digits
+    // (and each movie paid for both).
+    let key = (n, base.len());
+    let known = CHOICE.lock().unwrap().get(&key).copied();
+    match known {
+        Some(gpu_won) => {
             if gpu_won && p.backend != "cpu" {
                 if let Some((dev, _)) = crate::ctf_gpu::device() {
-                    gpu = crate::ctf_gpu::guarded(|| Batch::new(dev, n)).ok();
+                    gpu = crate::ctf_gpu::guarded(|| on_device(dev)).ok().and_then(Result::ok);
                     use_gpu = gpu.is_some();
                 }
             }
-        } else if it == 0 {
-            // Measure the real batch: a tiny sample can reject the GPU even
-            // though thousands of patches amortize transfer/dispatch costs.
-            let q = &pairs[..];
+        }
+        None => {
+            // The real batch, a whole movie: a tiny sample can reject the
+            // GPU even though its upload is paid once for all passes.
+            let q = pairs_for(&shifts);
             let _ = cpu(&q[..q.len().min(32)]);
             let t = std::time::Instant::now();
-            let reference = cpu(q);
+            let reference = cpu(&q);
             cpu_pair_ms = t.elapsed().as_secs_f64() * 1000.0;
+            drop(q);
             if p.backend != "cpu" {
                 if let Some((dev, _)) = crate::ctf_gpu::device() {
-                    if let Ok(Ok((b, peaks, ms))) = crate::ctf_gpu::guarded(|| -> Result<_> {
-                        let b = Batch::new(dev, n);
-                        // Warm the same chunk geometry, including the final
-                        // remainder, so JIT cost cannot reject a useful GPU.
-                        let _ = b.correlate(q, max)?;
+                    if let Ok(Ok((on, peaks, ms))) = crate::ctf_gpu::guarded(|| -> Result<_> {
+                        // Warm the kernels first, so JIT cost cannot reject a
+                        // useful GPU; then time upload plus one pass.
+                        let (b, mv) = on_device(dev)?;
+                        let _ = b.correlate_movie(&mv, &shifts, max)?;
+                        drop((b, mv));
                         let t = std::time::Instant::now();
-                        let r = b.correlate(q, max)?;
-                        Ok((b, r, t.elapsed().as_secs_f64() * 1000.0))
+                        let (b, mv) = on_device(dev)?;
+                        let r = b.correlate_movie(&mv, &shifts, max)?;
+                        Ok(((b, mv), r, t.elapsed().as_secs_f64() * 1000.0))
                     }) {
                         gpu_pair_ms = Some(ms);
                         use_gpu = peaks
@@ -293,28 +305,33 @@ pub fn estimate(
                             .all(|(a, b)| (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]) < 0.05)
                             && (p.backend == "gpu" || ms < cpu_pair_ms);
                         if !use_gpu { crate::compute::cpu_stage("电影局部运动相关", &format!("自动选择 CPU：校准或含传输耗时不占优，CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms")); }
-                        if use_gpu { calibrated_peaks = Some(peaks); }
-                        gpu = Some(b);
+                        if use_gpu {
+                            first = Some(peaks);
+                            gpu = Some(on);
+                        }
                     }
                 }
             }
-            if calibrated_peaks.is_none() { calibrated_peaks = Some(reference); }
+            if first.is_none() { first = Some(reference); }
             CHOICE.lock().unwrap().insert(key, use_gpu);
         }
-        let peaks = if let Some(peaks) = calibrated_peaks {
-            if use_gpu { crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 批量 FFT 与峰值搜索；CPU 几何拟合".into())); }
+    }
+    if use_gpu { crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 常驻 patch：平移、参考、批量 FFT 与峰值搜索；CPU 局部模型拟合".into())); }
+    for it in 0..4 {
+        check_cancel()?;
+        let peaks = if let Some(peaks) = first.take() {
             peaks
-        } else if use_gpu {
-            match crate::ctf_gpu::guarded(|| gpu.as_ref().unwrap().correlate(&pairs, max)) {
-                Ok(Ok(v)) => {crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 批量 FFT 与峰值搜索；CPU 局部模型拟合".into()));v},
+        } else if let (true, Some((b, mv))) = (use_gpu, gpu.as_ref()) {
+            match crate::ctf_gpu::guarded(|| b.correlate_movie(mv, &shifts, max)) {
+                Ok(Ok(v)) => v,
                 e => {
                     crate::compute::report("电影局部运动相关","CPU",Some(format!("GPU 执行失败：{e:?}")));
                     use_gpu = false;
-                    cpu(&pairs)
+                    cpu(&pairs_for(&shifts))
                 }
             }
         } else {
-            cpu(&pairs)
+            cpu(&pairs_for(&shifts))
         };
         let mut change = 0.0f64;
         for (j, (d, cc)) in peaks.into_iter().enumerate() {

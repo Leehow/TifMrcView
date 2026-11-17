@@ -363,8 +363,6 @@ fn norm_cc(peak: f64, ea: f64, eb: f64) -> f64 {
 #[cfg(feature="pro")]
 #[path="align_gpu.rs"]mod gpu;
 #[cfg(feature="pro")]
-pub(crate) use gpu::{band_dft, dft_tables, fft_path};
-#[cfg(feature="pro")]
 #[path="align_resident.rs"]mod resident;
 #[cfg(feature="pro")]
 thread_local!{static MOVIE_GPU:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
