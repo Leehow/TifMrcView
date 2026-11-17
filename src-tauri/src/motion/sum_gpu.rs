@@ -240,8 +240,12 @@ pub(crate) fn pinned(client: &burn_cubecl::cubecl::client::Client, parts: &[&[f3
     use rayon::prelude::*;
     let len: usize = parts.iter().map(|p| p.len()).sum();
     // Untouched zero pages: the staging copy of them costs no page writes.
+    let t = std::time::Instant::now();
     let mut b = Bytes::from_bytes_vec(vec![0u8; len * 4]);
     client.staging(std::iter::once(&mut b), false);
+    let staged = t.elapsed().as_secs_f64() * 1e3;
+    let pinned = matches!(b.property(), burn_cubecl::cubecl::bytes::AllocationProperty::Pinned);
+    let t = std::time::Instant::now();
     let mut dst: &mut [u8] = &mut b;
     for p in parts {
         let (head, rest) = dst.split_at_mut(p.len() * 4);
@@ -251,6 +255,9 @@ pub(crate) fn pinned(client: &burn_cubecl::cubecl::client::Client, parts: &[&[f3
             }
         });
         dst = rest;
+    }
+    if std::env::var_os("TMV_GPU_PROFILE").is_some() {
+        eprintln!("GPU_PINNED_PROFILE {} MB pinned={pinned} staging={staged:.1}ms fill={:.1}ms", len * 4 >> 20, t.elapsed().as_secs_f64() * 1e3);
     }
     b
 }
