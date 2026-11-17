@@ -21,7 +21,6 @@
   host.innerHTML = `
     <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
-      <button class="primary cs-act cs-start" title="只处理下面勾选的序列">开始</button>
       <div class="cs-purpose-box" role="group" aria-label="重构时要做的处理">
         <label class="cs-use"><input type="checkbox" data-step="fineAlign"><span><b>精对齐</b><span>多试几种对齐方式，自动去掉对不齐的倾角（会标出来，可以改回）</span></span></label>
         <label class="cs-use"><input type="checkbox" data-step="denoise"><span><b>N2N 降噪</b><span>去掉噪点，结构更干净（有电影数据时效果最好）</span></span></label>
@@ -32,8 +31,7 @@
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
       <span class="dim cs-selection-count" role="status"></span>
     </div>
-    <p class="dim cs-help cs-only-quick">点击卡片勾选要处理的序列，再点「开始」。已处理的序列可点「打开」检查结果。</p>
-    <p class="dim cs-help cs-only-recon">勾选想要的处理（可以都不勾），再点「重构勾选序列」。想先看看每个序列、挑图，去「快速查看」。</p>
+    <p class="dim cs-help cs-only-recon">在下面勾选序列，再选想要的处理（都不勾就是快速重构，几分钟一个，适合先看看样品），点「重构勾选序列」。没处理过的电影会先自动校正。点卡片上的「打开」检查倾转图、对齐和断层图，挑掉不好的图后可以再重构。</p>
     <p class="dim cs-discovery" role="status"></p>
     <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button></div>
     <div class="cs-wall"></div>
@@ -126,6 +124,7 @@
     p.textContent = folder ? (folder.split(/[\\/]/).filter(Boolean).pop() || folder) : "还没有选";
     p.title = folder || "";
     host.querySelectorAll(".cs-act").forEach((b) => { b.disabled = W.busy || !folder || !selected.size; });
+    host.querySelectorAll(".cs-purpose-box input").forEach((b) => { b.disabled = W.busy; });
   }
 
   // Takes a session; pictures of a series that got further are loaded again.
@@ -240,7 +239,7 @@
     tile.title = `点击勾选 ${s.name}`;
     tile.replaceChildren();
     const box = el("div", "cs-pic");
-    const src = s.quick ? [s.quick, null] : s.small ? [s.small, null] : null;
+    const src = s.result ? [s.result, null] : s.quick ? [s.quick, null] : s.small ? [s.small, null] : null;
     if (src) lazyPic(box, src[0], src[1], 192, "无图");
     else box.append(el("span", "cs-none dim", s.stage === "movies" ? "还没处理" : "无图"));
     const take = el("label", "cs-take");
@@ -321,9 +320,6 @@
     const notes = [...new Set(r.series.filter((s) => only.includes(s.name) && s.note).map((s) => s.note))];
     return notes.length ? `。${notes.join("；")}` : "";
   };
-  q(".cs-start").onclick = () => {
-    return runSelected(null);
-  };
   q(".cs-finish").onclick = async () => {
     return runSelected({ custom: { ...steps } });
   };
@@ -348,7 +344,7 @@
     const req = record.args?.req || {};
     // Open the panel first: opening follows the open folder, which the job may not be.
     if ($("cryoet-workspace")?.hidden) $("btn-cryoet")?.click();
-    if (W.job?.() === "sta" || (W.job?.() === "recon") !== !!req.purpose) W.go?.(req.purpose ? "recon" : "quick");
+    if (W.job?.() !== "recon") W.go?.("recon");
     const f = window.TmvRemote.localPath(record, req.folder);
     if (f && f !== folder) { folder = f; changedFolder(); }
     chose = true;

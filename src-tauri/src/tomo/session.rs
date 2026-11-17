@@ -350,6 +350,17 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
         let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
         let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
         let mut d = dataset(&stack)?;
+        // A series not looked at before (its movies came in with this run) is
+        // judged first, as the first pass does: one the program would not use
+        // is not reconstructed for nothing unless the user chose it. Ticking
+        // its card again and reconstructing takes it (`tomo_take`).
+        if d.checks.len() != d.angles.len() {
+            super::triage::survey(&pipeline::open(&stack)?, &mut d)?;
+            d.save()?;
+            if !d.take.unwrap_or(d.verdict.as_ref().is_none_or(|v| v.usable)) {
+                return Ok(Some("程序判断这个序列不能用，已跳过；仍要重构就再点一次「重构勾选序列」".into()));
+            }
+        }
         let req = auto::AutoReq { pixel_a: None, purpose, fresh: false, membranes: false };
         Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
     })
