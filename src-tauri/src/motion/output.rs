@@ -116,18 +116,23 @@ impl Sections {
 
     /// Writes section `i`; returns its least, greatest, sum and sum of squares.
     pub fn write(&mut self, i: usize, v: &[f32]) -> Result<[f64; 4]> {
-        if i >= self.n || v.len() != self.w * self.h || v.iter().any(|x| !x.is_finite()) {
+        use rayon::prelude::*;
+        if i >= self.n || v.len() != self.w * self.h || v.par_iter().any(|x| !x.is_finite()) {
             bail!("电影输出尺寸或值无效");
         }
-        let (mut lo, mut hi, mut sum, mut sum2) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0);
-        for x in v {
-            let x = *x as f64;
-            lo = lo.min(x);
-            hi = hi.max(x);
-            sum += x;
-            sum2 += x * x;
-        }
-        let bytes: Vec<u8> = v.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (lo, hi, sum, sum2) = v
+            .par_chunks(1 << 16)
+            .map(|c| c.iter().fold((f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0), |(lo, hi, s, s2), &x| {
+                let x = x as f64;
+                (lo.min(x), hi.max(x), s + x, s2 + x * x)
+            }))
+            .reduce(|| (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0), |a, b| (a.0.min(b.0), a.1.max(b.1), a.2 + b.2, a.3 + b.3));
+        let mut bytes = vec![0u8; v.len() * 4];
+        bytes.par_chunks_mut(1 << 18).zip(v.par_chunks(1 << 16)).for_each(|(d, s)| {
+            for (d, s) in d.chunks_exact_mut(4).zip(s) {
+                d.copy_from_slice(&s.to_le_bytes());
+            }
+        });
         let at = 1024 + (i * self.w * self.h) as u64 * 4;
         self.file.seek(SeekFrom::Start(at))?;
         self.file.write_all(&bytes)?;

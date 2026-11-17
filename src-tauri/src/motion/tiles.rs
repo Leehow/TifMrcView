@@ -68,31 +68,38 @@ impl Plan {
 
     /// Blends tiles (each t × t, in tile order) into the w × h output.
     pub fn blend(&self, tiles: &[Vec<f32>]) -> Vec<f32> {
+        use rayon::prelude::*;
         let (t, w, h) = (self.t, self.w, self.h);
         let ramp = t - self.stride;
         // Weight along one axis: rising over the first `ramp` pixels, falling over the last.
         let edge: Vec<f64> = (0..t).map(|i| (((i.min(t - 1 - i)) as f64 + 0.5) / ramp as f64).min(1.0)).collect();
-        let mut sum = vec![0.0f64; w * h];
-        let mut weight = vec![0.0f64; w * h];
-        for (k, tile) in tiles.iter().enumerate() {
-            let [x0, y0] = self.corners[k];
-            for j in 0..t {
-                let y = y0 + j as isize;
-                if y < 0 || y >= h as isize {
+        // Row by row in parallel; each pixel adds its tiles in tile order.
+        let mut out = vec![0.0f32; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let mut sum = vec![0.0f64; w];
+            let mut weight = vec![0.0f64; w];
+            for (k, tile) in tiles.iter().enumerate() {
+                let [x0, y0] = self.corners[k];
+                let j = y as isize - y0;
+                if j < 0 || j >= t as isize {
                     continue;
                 }
+                let j = j as usize;
                 for i in 0..t {
                     let x = x0 + i as isize;
                     if x < 0 || x >= w as isize {
                         continue;
                     }
                     let a = edge[i] * edge[j];
-                    let p = y as usize * w + x as usize;
-                    sum[p] += a * tile[j * t + i] as f64;
-                    weight[p] += a;
+                    sum[x as usize] += a * tile[j * t + i] as f64;
+                    weight[x as usize] += a;
                 }
             }
-        }
-        sum.iter().zip(&weight).map(|(s, a)| (s / a.max(1e-12)) as f32).collect()
+            for (o, (s, a)) in row.iter_mut().zip(sum.iter().zip(&weight)) {
+                *o = (s / a.max(1e-12)) as f32;
+            }
+        });
+        out
     }
+
 }
