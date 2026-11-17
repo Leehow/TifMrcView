@@ -77,6 +77,8 @@ pub struct Aligned {
     pub n: usize,
     pub iterations: usize,
     pub ms: f64,
+    /// Measured on the GPU (the quick-view resident solver).
+    pub gpu: bool,
 }
 
 /// Kept frequencies of one binned slice: m × m, row = ky + m/2, column = kx + m/2.
@@ -579,7 +581,7 @@ pub fn estimate(img: &Arc<OpenImage>, req: &AlignReq, progress: &(dyn Fn(usize, 
     let tick = || progress((done.fetch_add(1, Ordering::Relaxed) + 1).min(total - 1), total);
     let (shifts, cc, iterations) = measure(&g, zs.len(), series, max, &spec_of, &tick)?;
     progress(total, total);
-    Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3 })
+    Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3, gpu: false })
 }
 
 /// Writes the aligned slices (or their mean) as an MRC file of 32-bit floats.
@@ -1138,7 +1140,7 @@ pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn
         }
         if median(&cc)<0.12{return Err(NoSignal(median(&cc)).into());}
     }
-    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0})
+    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0,gpu:false})
 }
 
 /// Untapered image warping shared with native motion correction.

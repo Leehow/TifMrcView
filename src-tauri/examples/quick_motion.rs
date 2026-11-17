@@ -24,6 +24,8 @@ fn main() -> Result<()> {
         let p = motion::Params {
             preview: true,
             backend: backend.into(),
+            // TMV_PIXEL_A: the movie's pixel (Å), as an mdoc would give it.
+            pixel_a: std::env::var("TMV_PIXEL_A").ok().and_then(|v| v.parse().ok()),
             ..Default::default()
         };
         let out = motion::correct(

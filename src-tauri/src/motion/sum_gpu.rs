@@ -181,16 +181,22 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
         .try_into_primitive::<CubeBackend>()
         .map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?
         .client;
+    let profile = std::env::var_os("TMV_GPU_PROFILE").is_some();
+    let clock = std::time::Instant::now();
+    let (mut upload_ms, mut launch_ms) = (0.0, 0.0);
     let halves = [client.empty(n * 4), client.empty(n * 4)];
     let groups = n.div_ceil(256) as u32;
     for (i, (frame, d)) in frames.iter().zip(shifts).enumerate() {
         check_cancel()?;
+        let t = std::time::Instant::now();
         let split = |s: f64| (s.floor() as i32, crate::align::catmull_rom((s - s.floor()) as f32), s > s.floor());
         let ((ix, kx, fx), (iy, ky, fy)) = (split(d[0]), split(d[1]));
         let src = client.create_from_slice(f32::as_bytes(frame));
         let shift = client.create_from_slice(i32::as_bytes(&[ix, iy, fx as i32, fy as i32]));
         let k: Vec<f32> = kx.into_iter().chain(ky).collect();
         let k = client.create_from_slice(f32::as_bytes(&k));
+        upload_ms += t.elapsed().as_secs_f64() * 1e3;
+        let t = std::time::Instant::now();
         kernel::tmv_preview_shift_add::launch(
             &client,
             CubeCount::Static(groups.min(1024), groups.div_ceil(1024), 1),
@@ -206,8 +212,13 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
             scale,
             (i < 2) as u32,
         );
+        launch_ms += t.elapsed().as_secs_f64() * 1e3;
     }
+    let t = std::time::Instant::now();
     let read = client.read(vec![halves[0].clone(), halves[1].clone()])?;
+    if profile {
+        eprintln!("GPU_PREVIEW_PROFILE {w}x{h} frames={} upload={upload_ms:.1}ms launch={launch_ms:.1}ms read+wait={:.1}ms total={:.1}ms", frames.len(), t.elapsed().as_secs_f64() * 1e3, clock.elapsed().as_secs_f64() * 1e3);
+    }
     anyhow::ensure!(read.len() == 2 && read.iter().all(|b| b.len() == n * 4), "GPU 预览读取尺寸不一致");
     let floats = |b: &[u8]| -> Vec<f32> { b.chunks_exact(4).map(|v| f32::from_ne_bytes(v.try_into().unwrap())).collect() };
     let (even, odd) = (floats(&read[0]), floats(&read[1]));

@@ -447,8 +447,9 @@ fn preview(prepared: Prepared,p:&Params) -> Result<Corrected> {
     let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
     let start = std::time::Instant::now();
     let (w, h) = (sp.w / sp.bin, sp.h / sp.bin);
+    let mut solved_on_gpu = false;
     let (global, cc) = match crate::align::movie_preview_planes(&sp.frames, w, h, &|_, _| {},&p.backend) {
-        Ok(g) => (smooth(&g.shifts, &g.cc, SMOOTHING), g.cc),
+        Ok(g) => { solved_on_gpu = g.gpu; (smooth(&g.shifts, &g.cc, SMOOTHING), g.cc) },
         Err(e) if e.downcast_ref::<crate::align::NoSignal>().is_some() => {
             warnings.push(format!("{e}；按未校正直接求和"));
             (vec![[0.0; 2]; sp.len()], vec![0.0; sp.len()])
@@ -492,7 +493,7 @@ fn preview(prepared: Prepared,p:&Params) -> Result<Corrected> {
         alignment_ms,
         sum_ms: timer.elapsed().as_secs_f64() * 1000.0,
         total_ms: (took + start.elapsed()).as_secs_f64() * 1000.0,
-        backend: if accelerated {"GPU 预览"} else {"CPU 预览"}.into(),
+        backend: match (solved_on_gpu, accelerated) { (true, true) => "GPU 预览", (true, false) => "GPU 预览（求和 CPU）", (false, true) => "GPU 预览（求解 CPU）", _ => "CPU 预览" }.into(),
         cpu_ms: None,
         gpu_ms: None,
         dose_weighted: false,

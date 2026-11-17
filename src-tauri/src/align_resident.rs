@@ -406,6 +406,7 @@ fn movie_planes_in(
         n: g.n,
         iterations,
         ms: start.elapsed().as_secs_f64() * 1000.,
+        gpu: true,
     })
 }
 
