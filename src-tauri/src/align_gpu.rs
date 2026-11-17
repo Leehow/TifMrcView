@@ -9,15 +9,70 @@ fn upload<const D: usize>(v: Vec<f32>, s: [usize; D], d: &Device) -> Tensor<D> {
 fn down<const D: usize>(t: Tensor<D>) -> Vec<f32> {
     crate::motion::sum_gpu::download(t)
 }
+/// Old FFT route for patch spectra, kept for A/B timing (TMV_PATCH_FFT=1).
+pub(crate) fn fft_path() -> bool {
+    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("TMV_PATCH_FFT").is_some());
+    *ON
+}
+
+/// cos/sin of 2π·row·col/len, shape [rows, cols].
+pub(crate) fn dft_tables(rows: &[i64], cols: &[i64], len: usize, dev: &Device) -> (Tensor<2>, Tensor<2>) {
+    let (mut c, mut s) = (Vec::with_capacity(rows.len() * cols.len()), Vec::with_capacity(rows.len() * cols.len()));
+    for &r in rows {
+        for &k in cols {
+            let a = 2. * PI * (r * k).rem_euclid(len as i64) as f64 / len as f64;
+            c.push(a.cos() as f32);
+            s.push(a.sin() as f32);
+        }
+    }
+    (upload(c, [rows.len(), cols.len()], dev), upload(s, [rows.len(), cols.len()], dev))
+}
+
+/// Forward DFT of real planes [b, n, n] at the frequencies of the tables
+/// (rows: samples, cols: frequencies): [b, fy, fx] real and imaginary.
+pub(crate) fn band_dft(x: Tensor<3>, c: &Tensor<2>, s: &Tensor<2>) -> (Tensor<3>, Tensor<3>) {
+    let [b, n, _] = x.dims();
+    let m = c.dims()[1];
+    let flat = x.reshape([b * n, n]);
+    // Along x, then turn so that y is the contracted axis: rows (b, fx).
+    let p = flat.clone().matmul(c.clone()).reshape([b, n, m]).swap_dims(1, 2).reshape([b * m, n]);
+    let q = flat.matmul(s.clone()).reshape([b, n, m]).swap_dims(1, 2).reshape([b * m, n]);
+    let re = p.clone().matmul(c.clone()) - q.clone().matmul(s.clone());
+    let im = (q.matmul(c.clone()) + p.matmul(s.clone())).neg();
+    (re.reshape([b, m, m]).swap_dims(1, 2), im.reshape([b, m, m]).swap_dims(1, 2))
+}
+
+/// Real part of the inverse DFT (no 1/N) of [b, fy, fx] spectra; tables
+/// rows: frequencies, cols: pixels. Output [b, y, x].
+pub(crate) fn inverse_real(pr: Tensor<3>, pi: Tensor<3>, c: &Tensor<2>, s: &Tensor<2>) -> Tensor<3> {
+    let [b, f, _] = pr.dims();
+    let m = c.dims()[1];
+    let (pr, pi) = (pr.reshape([b * f, f]), pi.reshape([b * f, f]));
+    let tr = (pr.clone().matmul(c.clone()) - pi.clone().matmul(s.clone())).reshape([b, f, m]).swap_dims(1, 2).reshape([b * m, f]);
+    let ti = (pr.matmul(s.clone()) + pi.matmul(c.clone())).reshape([b, f, m]).swap_dims(1, 2).reshape([b * m, f]);
+    (tr.matmul(c.clone()) - ti.matmul(s.clone())).reshape([b, m, m]).swap_dims(1, 2)
+}
+
 /// Coarse inverse FFT and masked maximum stay on the GPU. Read back one
 /// index per patch, rather than every pixel of every correlation surface.
 fn coarse(pr: &Tensor<3>, pi: &Tensor<3>, g: &Geom, max: f64, dev: &Device) -> Vec<[f64;2]> {
     let (k,m)=(pr.dims()[0],g.m);
     let keep=Tensor::<1,Int>::from_data(TensorData::new((0..m).map(|i|((i+m/2)%m) as i32).collect(),[m]),dev);
-    let r=pr.clone().select(1,keep.clone()).select(2,keep.clone());
-    let im=pi.clone().neg().select(1,keep.clone()).select(2,keep);
-    let (r,im)=burn::signal::cfft(r,im,2,None);
-    let (r,_)=burn::signal::cfft(r,im,1,None);
+    let r = if m <= 128 && !fft_path() {
+        // Small planes: two matrix products per axis do only the work asked
+        // for. Burn's complex FFT runs two real FFTs (one of zeros) plus
+        // mirror copies per axis, the main cost of patch correlation.
+        let freqs: Vec<i64> = (0..m as i64).map(|i| i - (m / 2) as i64).collect();
+        let pixels: Vec<i64> = (0..m as i64).collect();
+        let (c, s) = dft_tables(&freqs, &pixels, m, dev);
+        inverse_real(pr.clone(), pi.clone(), &c, &s)
+    } else {
+        let r=pr.clone().select(1,keep.clone()).select(2,keep.clone());
+        let im=pi.clone().neg().select(1,keep.clone()).select(2,keep);
+        let (r,im)=burn::signal::cfft(r,im,2,None);
+        let (r,_)=burn::signal::cfft(r,im,1,None);
+        r
+    };
     let ids=Tensor::<1,Int>::arange(0..(m*m) as i64,dev);
     let signed=|v: Tensor<1,Int>| { let f=v.clone().float(); f.clone().mask_where(v.greater_equal_elem((m/2) as i32),f-m as f32) };
     let step=(g.n/m) as f32;

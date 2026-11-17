@@ -12,12 +12,20 @@ pub struct Batch {
     window: Tensor<3>,
     filter: Tensor<3>,
     keep: Tensor<1, Int>,
+    /// Band DFT tables [n, m]: samples × kept frequencies.
+    cos: Tensor<2>,
+    sin: Tensor<2>,
 }
 impl Batch {
     pub fn new(dev: &Device, n: usize) -> Self {
         let m = n / 2;
         let (win, filter) = crate::align::patch_window(n);
+        let freqs: Vec<i64> = (0..m as i64).map(|i| i - (m / 2) as i64).collect();
+        let samples: Vec<i64> = (0..n as i64).collect();
+        let (cos, sin) = crate::align::dft_tables(&samples, &freqs, n, dev);
         Self {
+            cos,
+            sin,
             dev: dev.clone(),
             n,
             m,
@@ -66,15 +74,20 @@ impl Batch {
         };
         let mean = x.clone().mean_dim(1).mean_dim(2);
         let x = (x - mean) * self.window.clone();
-        let zeros = Tensor::<3>::zeros([2*k,n,n], &self.dev);
-        let (fr, fi) = burn::signal::cfft(x, zeros, 2, None);
-        let (fr, fi) = burn::signal::cfft(fr, fi, 1, None);
-        let band = |x: Tensor<3>| {
-            (x.select(1, self.keep.clone()).select(2, self.keep.clone()) * self.filter.clone())
-                .reshape([2*k,m*m])
+        // Only the kept band is needed: a DFT by matrix products computes
+        // just those m² frequencies, where the full complex FFT did two real
+        // FFTs (one of zeros) and mirror copies per axis over n².
+        let (fr, fi) = if crate::align::fft_path() {
+            let zeros = Tensor::<3>::zeros([2*k,n,n], &self.dev);
+            let (fr, fi) = burn::signal::cfft(x, zeros, 2, None);
+            let (fr, fi) = burn::signal::cfft(fr, fi, 1, None);
+            let band = |x: Tensor<3>| x.select(1, self.keep.clone()).select(2, self.keep.clone());
+            (band(fr), band(fi))
+        } else {
+            crate::align::band_dft(x, &self.cos, &self.sin)
         };
-        let fr = band(fr);
-        let fi = band(fi);
+        let fr = (fr * self.filter.clone()).reshape([2*k,m*m]);
+        let fi = (fi * self.filter.clone()).reshape([2*k,m*m]);
         let ra = fr.clone().narrow(0, 0, k);
         let rb = fr.narrow(0, k, k);
         let ia = fi.clone().narrow(0, 0, k);
@@ -129,7 +142,7 @@ mod throughput_tests {
     #[ignore]
     fn gpu_patch_batch_throughput() {
         let dev=device().expect("GPU required");
-        for (n,count) in [(128,64),(256,64)] {
+        for (n,count) in [(128,64),(256,64),(128,1000)] {
             let pairs=pairs(n,count);let max=n as f64*0.22;
             let batch=Batch::new(dev,n);
             let cpu=||pairs.par_iter().map(|(a,b)|crate::align::patch_shift(a,b,n,max)).collect::<Vec<_>>();
