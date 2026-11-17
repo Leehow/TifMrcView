@@ -119,6 +119,29 @@ impl Eer {
         }
         Ok(())
     }
+    /// The events of one compressed fraction, in detector order: the
+    /// detector pixel shifted left by two, the 2× subpixel (dy, dx) below.
+    fn events(&self, f: &Fraction, up: usize, out: &mut Vec<u32>) -> Result<()> {
+        out.clear();
+        for (j, &(off, len)) in f.strips.iter().enumerate() {
+            let y0 = j * f.rows;
+            if y0 >= self.h {
+                bail!("EER strip 行数超限");
+            }
+            let rows = f.rows.min(self.h - y0);
+            let base = y0 * self.w;
+            events::events(&self.map[off..off + len], rows * self.w, f.bits, |p, sx, sy| {
+                let (dx, dy) = if up == 2 {
+                    (events::subpixel_2x(sx, f.bits.1), events::subpixel_2x(sy, f.bits.2))
+                } else {
+                    (0, 0)
+                };
+                out.push((((base + p) as u32) << 2) | (dy << 1 | dx) as u32);
+            })
+            .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
     pub fn group(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
         if ![1, 2].contains(&up) || start >= self.len() || count == 0 {
             bail!("EER 分组或超分辨率参数无效");
@@ -126,12 +149,56 @@ impl Eer {
         let end = (start + count).min(self.len());
         let rw = self.w * up;
         let len = rw * self.h * up;
-        // Every worker counts the events of its share of the fractions into
-        // a frame of its own (two bytes a pixel), and the frames are added
-        // up: no list of events is kept and no worker waits for another.
-        // At most about 1 GB of such frames at once.
-        let workers = rayon::current_num_threads().clamp(1, ((1usize << 30) / (2 * len)).max(1));
         let fractions = &self.frames[start..end];
+        if self.w * self.h <= 1 << 30 && fractions.iter().all(|f| f.compression != 1) {
+            // Each fraction is decoded on its own (its bit stream is
+            // sequential) into a list of events in detector order; then
+            // bands of rows of the frame are filled in parallel, each from
+            // its slice of every list. No worker allocates a frame of its
+            // own: a frame per worker per group (32 MB at 4096², fresh pages
+            // every time) used to spend half the time in the kernel.
+            let lists: Vec<Vec<u32>> = fractions
+                .par_iter()
+                .map(|f| -> Result<Vec<u32>> {
+                    super::check_cancel()?;
+                    // About eleven bits an event in the 7-bit codes.
+                    let mut v = Vec::with_capacity(f.strips.iter().map(|s| s.1).sum::<usize>() * 8 / 10);
+                    self.events(f, up, &mut v)?;
+                    Ok(v)
+                })
+                .collect::<Result<_>>()?;
+            let mut out = vec![0.0f32; len];
+            let band = 64usize.min(self.h);
+            out.par_chunks_mut(band * up * rw).enumerate().for_each(|(b, rows)| {
+                let (lo, hi) = (((b * band * self.w) as u32) << 2, ((((b + 1) * band).min(self.h) * self.w) as u32) << 2);
+                let first = b * band;
+                for list in &lists {
+                    let a = list.partition_point(|&e| e < lo);
+                    let z = list.partition_point(|&e| e < hi);
+                    for &e in &list[a..z] {
+                        let p = (e >> 2) as usize;
+                        let (dy, dx) = ((e >> 1 & 1) as usize, (e & 1) as usize);
+                        let at = ((p / self.w - first) * up + dy) * rw + (p % self.w) * up + dx;
+                        rows[at] += 1.0;
+                    }
+                }
+            });
+            return Ok(out);
+        }
+        self.group_per_worker(start, count, up)
+    }
+    /// The earlier way, kept for uncompressed fractions (and to compare
+    /// with): every worker counts its share into a frame of its own (two
+    /// bytes a pixel), and the frames are added up. At most about 1 GB of
+    /// such frames at once.
+    pub fn group_per_worker(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
+        if ![1, 2].contains(&up) || start >= self.len() || count == 0 {
+            bail!("EER 分组或超分辨率参数无效");
+        }
+        let fractions = &self.frames[start..(start + count).min(self.len())];
+        let len = self.w * up * self.h * up;
+        let mut out = vec![0.0f32; len];
+        let workers = rayon::current_num_threads().clamp(1, ((1usize << 30) / (2 * len)).max(1));
         let share = fractions.len().div_ceil(workers).max(1);
         let parts: Vec<Vec<u16>> = fractions
             .par_chunks(share)
@@ -144,7 +211,6 @@ impl Eer {
                 Ok(acc)
             })
             .collect::<Result<_>>()?;
-        let mut out = vec![0.0f32; len];
         out.par_iter_mut().enumerate().for_each(|(i, o)| *o = parts.iter().map(|p| p[i] as u32).sum::<u32>() as f32);
         Ok(out)
     }

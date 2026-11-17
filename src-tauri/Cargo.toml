@@ -169,6 +169,10 @@ required-features = ["pro"]
 name = "motion_run"
 required-features = ["pro"]
 
+[[example]]
+name = "eer_group"
+required-features = ["pro"]
+
 
 [[example]]
 name = "cryoet_pipeline"

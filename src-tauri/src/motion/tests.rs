@@ -237,6 +237,11 @@ fn native_eer_group_and_super_resolution() {
     assert_eq!(v.iter().sum::<f32>(), 2.0);
     assert_eq!(v[13], 1.0); // (5,1), raw event at detector (2,0).
     assert_eq!(v[22], 1.0); // (6,2), raw event at detector (3,1).
+    for up in [1, 2] {
+        for (start, count) in [(0, 1), (0, 2), (1, 1)] {
+            assert_eq!(e.group(start, count, up).unwrap(), e.group_per_worker(start, count, up).unwrap());
+        }
+    }
 }
 
 #[test]
