@@ -315,10 +315,27 @@ fn cpu_gpu_fourier_warp_and_dose_sums() {
     }
 }
 
+/// Movies are also looked for in the folder above the mdoc's, so a test
+/// series in a bare temp dir sees the a.mrc/b.mrc of tests running beside
+/// it in the shared temp folder and calls them ambiguous. Nest it.
+struct OwnDir {
+    inner: tempfile::TempDir,
+    _outer: tempfile::TempDir,
+}
+impl OwnDir {
+    fn path(&self) -> &Path {
+        self.inner.path()
+    }
+}
+fn own_dir() -> OwnDir {
+    let outer = tempfile::tempdir().unwrap();
+    OwnDir { inner: tempfile::tempdir_in(outer.path()).unwrap(), _outer: outer }
+}
+
 #[test]
 fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(128, 128); 4];
     for (name, scale) in [("a.mrc", 1.0), ("b.mrc", 2.0)] {
         let data: Vec<Vec<f32>> = frames
@@ -390,7 +407,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
 #[test]
 fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(128, 128); 4];
     for (name, scale) in [("a.mrc", 1.0), ("b.mrc", 2.0), ("c.mrc", 3.0), ("d.mrc", 4.0)] {
         let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
@@ -464,7 +481,7 @@ fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
 #[test]
 fn a_preview_series_is_small_and_is_corrected_again_in_full() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(512, 512); 4];
     for (name, scale) in [("a.mrc", 1.0f32), ("b.mrc", 2.0), ("c.mrc", 3.0)] {
         let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
