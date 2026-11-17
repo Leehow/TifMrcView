@@ -501,11 +501,15 @@ pub fn run(
         plan.push((r, Some(p)));
     }
     // Movies are read and decoded ahead (processor and disk) while the one
-    // before is measured and summed (GPU): one ahead, or three at a time
-    // for previews, whose sums take no time.
+    // before is measured and summed (GPU), and the one before that is
+    // written: two readers, or three for previews, whose sums take no time.
     let mut records: Vec<Record> = vec![];
     let (plan, movies, dir) = (&plan, &movies, &dir);
-    let readers = if req.preview { 3 } else { 1 };
+    // Full corrections: two readers, as the reader (decode, gain, upload)
+    // became the slower side once the sum and the writing left the
+    // consumer; each holds at most one movie ahead (on the GPU too).
+    let readers = if req.preview { 3 } else { 2 };
+    let ahead = if req.preview { 2 * readers } else { readers };
     let (next, taken) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
     let (next, taken) = (&next, &taken);
     let stopped = std::sync::atomic::AtomicBool::new(false);
@@ -536,7 +540,7 @@ pub fn run(
                 }
                 let (Some(p), Some(path)) = (&plan[i].1, &movies[i]) else { continue };
                 // Not further ahead than the readers can hold.
-                while i > taken.load(SeqCst) + 2 * readers && check_cancel().is_ok() && !stopped.load(SeqCst) {
+                while i > taken.load(SeqCst) + ahead && check_cancel().is_ok() && !stopped.load(SeqCst) {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 if check_cancel().is_err() || stopped.load(SeqCst) {
@@ -550,15 +554,94 @@ pub fn run(
         }
         }
         drop(send);
+        // What follows a movie's correction (its sections written, its view
+        // measured and shown, the record saved) runs on a thread of its own
+        // while the next movie is corrected, as MotionCor saves on its own
+        // thread. One movie waits between them at most.
+        struct Post<'a> { i: usize, r: Record, p: Option<&'a Params>, corrected: Option<Result<super::Corrected>>, wait_ms: f64, finish_ms: f64 }
+        let (post_send, post_read) = std::sync::mpsc::sync_channel::<Post>(1);
+        let post = {
+            let (stacks, result, records) = (&mut stacks, &mut result, &mut records);
+            let (open, save, section_of, doc, planned, prior, req) = (&open, &save, &section_of, &doc, &planned, &prior, req);
+            scope.spawn(move || -> Result<()> {
+                for Post { i, mut r, p, corrected, wait_ms, finish_ms } in post_read {
+                    let v = &doc.views[i];
+                    let after = std::time::Instant::now();
+                    let mut ctf_ms = 0.0;
+                    match corrected {
+                        None => {}
+                        Some(corrected) => match corrected {
+                        Ok(super::Corrected { mut sums, result: m }) => {
+                            let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
+                            // Super-resolution frames carry little beyond the
+                            // detector's own pixel: the views are kept at that.
+                            if !req.preview && super_resolution(w, h) {
+                                for v in [Some(&mut sums.unweighted), sums.weighted.as_mut(), Some(&mut sums.even), Some(&mut sums.odd)].into_iter().flatten() {
+                                    if !v.is_empty() {
+                                        *v = halve(v, w, h);
+                                    }
+                                }
+                                (w, h, px) = (w / 2, h / 2, px * 2.0);
+                            }
+                            if stacks.is_none() {
+                                if prior.is_some() && (result.shape[0] != w || result.shape[1] != h) {
+                                    bail!("批次电影尺寸与之前校正的不一致，请重新开始");
+                                }
+                                *stacks = Some(open(w, h, px, prior.is_some())?);
+                                result.shape = [w, h, planned.len()];
+                                result.pixel_a = px;
+                            }
+                            if result.shape[0] != w || result.shape[1] != h || (px - result.pixel_a).abs() > 1e-5 {
+                                bail!("批次电影尺寸或像素标定不一致");
+                            }
+                            let st = stacks.as_mut().unwrap();
+                            let section = section_of(i).unwrap();
+                            let view = sums.weighted.as_deref().unwrap_or(&sums.unweighted);
+                            r.stats.push(st.full.write(section, view)?);
+                            if let Some([even, odd]) = &mut st.halves {
+                                r.stats.push(even.write(section, &sums.even)?);
+                                r.stats.push(odd.write(section, &sums.odd)?);
+                            }
+                            let (small, sw, sh) = shrink(view, w, h);
+                            st.small.write(section, &small)?;
+                            (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
+                            let ctf_clock = std::time::Instant::now();
+                            let fit = quick_ctf(&sums.unweighted, w, h, px, p.map_or(300.0, |p| p.voltage_kv));
+                            ctf_ms = ctf_clock.elapsed().as_secs_f64() * 1e3;
+                            if let Some(f) = fit {
+                                r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
+                                r.fit_res_a = Some(f.fit_res);
+                            }
+                            crate::live::show(&format!("{} · {:+.0}° · 漂移 {:.1} Å{}", name_of(&req.output), v.angle, m.total_drift * m.pixel_a, r.defocus_um.map_or(String::new(), |d| format!(" · 离焦 {d:.1} µm"))), sw, sh, &small, &[]);
+                            r.section = Some(section);
+                            r.result = Some(m);
+                        }
+                        Err(e) => {
+                            check_cancel()?;
+                            r.skipped = Some(format!("处理失败：{e:#}"));
+                        }
+                        },
+                    }
+                    records.push(r);
+                    save(&*result, &*records)?;
+                    if std::env::var_os("TMV_GPU_PROFILE").is_some() {
+                        eprintln!("SERIES_PROFILE movie={i} wait={wait_ms:.0}ms finish={finish_ms:.0}ms after={:.0}ms (ctf {ctf_ms:.0}ms)", after.elapsed().as_secs_f64() * 1e3);
+                    }
+                }
+                Ok(())
+            })
+        };
         let mut ready = std::collections::BTreeMap::new();
         for (i, (r, p)) in plan.iter().enumerate() {
             check_cancel()?;
             let v = &doc.views[i];
             let label = format!("运动校正 {}/{} · {:+.0}°", i + 1, doc.views.len(), v.angle);
             progress(&label, i, doc.views.len());
-            let mut r = r.clone();
+            let r = r.clone();
             let Some(p) = p else {
-                records.push(r);
+                if post_send.send(Post { i, r, p: None, corrected: None, wait_ms: 0.0, finish_ms: 0.0 }).is_err() {
+                    break;
+                }
                 continue;
             };
             taken.store(i, SeqCst);
@@ -574,65 +657,12 @@ pub fn run(
             let finishing = std::time::Instant::now();
             let corrected = prepared.and_then(|m|match m{Ready::Corrected(c)=>Ok(c),Ready::Prepared(m)=>super::finish(m,None,p,&|stage,a,b|progress(&format!("{label} · {stage}"),a,b))});
             let finish_ms = finishing.elapsed().as_secs_f64() * 1e3;
-            let after = std::time::Instant::now();
-            let mut ctf_ms = 0.0;
-            match corrected {
-                Ok(super::Corrected { mut sums, result: m }) => {
-                    let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
-                    // Super-resolution frames carry little beyond the
-                    // detector's own pixel: the views are kept at that.
-                    if !req.preview && super_resolution(w, h) {
-                        for v in [Some(&mut sums.unweighted), sums.weighted.as_mut(), Some(&mut sums.even), Some(&mut sums.odd)].into_iter().flatten() {
-                            if !v.is_empty() {
-                                *v = halve(v, w, h);
-                            }
-                        }
-                        (w, h, px) = (w / 2, h / 2, px * 2.0);
-                    }
-                    if stacks.is_none() {
-                        if prior.is_some() && (result.shape[0] != w || result.shape[1] != h) {
-                            bail!("批次电影尺寸与之前校正的不一致，请重新开始");
-                        }
-                        stacks = Some(open(w, h, px, prior.is_some())?);
-                        result.shape = [w, h, planned.len()];
-                        result.pixel_a = px;
-                    }
-                    if result.shape[0] != w || result.shape[1] != h || (px - result.pixel_a).abs() > 1e-5 {
-                        bail!("批次电影尺寸或像素标定不一致");
-                    }
-                    let st = stacks.as_mut().unwrap();
-                    let section = section_of(i).unwrap();
-                    let view = sums.weighted.as_deref().unwrap_or(&sums.unweighted);
-                    r.stats.push(st.full.write(section, view)?);
-                    if let Some([even, odd]) = &mut st.halves {
-                        r.stats.push(even.write(section, &sums.even)?);
-                        r.stats.push(odd.write(section, &sums.odd)?);
-                    }
-                    let (small, sw, sh) = shrink(view, w, h);
-                    st.small.write(section, &small)?;
-                    (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
-                    let ctf_clock = std::time::Instant::now();
-                    let fit = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv);
-                    ctf_ms = ctf_clock.elapsed().as_secs_f64() * 1e3;
-                    if let Some(f) = fit {
-                        r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
-                        r.fit_res_a = Some(f.fit_res);
-                    }
-                    crate::live::show(&format!("{} · {:+.0}° · 漂移 {:.1} Å{}", name_of(&req.output), v.angle, m.total_drift * m.pixel_a, r.defocus_um.map_or(String::new(), |d| format!(" · 离焦 {d:.1} µm"))), sw, sh, &small, &[]);
-                    r.section = Some(section);
-                    r.result = Some(m);
-                }
-                Err(e) => {
-                    check_cancel()?;
-                    r.skipped = Some(format!("处理失败：{e:#}"));
-                }
-            }
-            records.push(r);
-            save(&result, &records)?;
-            if std::env::var_os("TMV_GPU_PROFILE").is_some() {
-                eprintln!("SERIES_PROFILE movie={i} wait={wait_ms:.0}ms finish={finish_ms:.0}ms after={:.0}ms (ctf {ctf_ms:.0}ms)", after.elapsed().as_secs_f64() * 1e3);
+            if post_send.send(Post { i, r, p: Some(p), corrected: Some(corrected), wait_ms, finish_ms }).is_err() {
+                break;
             }
         }
+        drop(post_send);
+        post.join().map_err(|_| anyhow::anyhow!("运动校正写出线程崩溃"))??;
         Ok(())
     })?;
     // The stacks hold a place for every movie found; the ones that could
