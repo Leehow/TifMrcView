@@ -190,7 +190,7 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: |
-          cargo build --locked --release --manifest-path src-tauri/Cargo.toml --no-default-features --target x86_64-unknown-linux-musl --bin tmv-ssh-preview
+          cargo build --locked --release --manifest-path src-tauri/Cargo.toml --no-default-features --features ssh-preview-helper --target x86_64-unknown-linux-musl --bin tmv-ssh-preview
           file src-tauri/target/x86_64-unknown-linux-musl/release/tmv-ssh-preview | grep -E 'static.*linked'
       - uses: actions/upload-artifact@v4
         with:

@@ -34,6 +34,10 @@ required-features = ["cli"]
 [[bin]]
 name = "tmv-ssh-preview"
 path = "src/bin/ssh-preview.rs"
+# Behind a feature so `tauri build` does not take it for the app: tauri
+# bundles only bins whose required features were passed on its command line,
+# and with the app's own bin left out it renamed this one to the app.
+required-features = ["ssh-preview-helper"]
 
 [lib]
 name = "tifmrcview_lib"
@@ -82,6 +86,8 @@ lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-dec
 default = ["desktop", "recorder"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-deep-link", "dep:tauri-plugin-dialog", "dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls", "ssh"]
 ssh = ["dep:ssh2", "dep:base64"]
+# The static Linux helper `tmv-ssh-preview` run on SSH servers.
+ssh-preview-helper = []
 # TifMrcView Pro: build with --config tauri.pro.conf.json (see src/edition.rs).
 pro = ["dep:tmv-sam", "dep:burn", "dep:burn-store", "dep:burn-cubecl"]
 # The `tmv` command-line tool (Pro without the desktop parts).
