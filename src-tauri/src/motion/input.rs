@@ -105,7 +105,13 @@ impl Movie {
                         if *along_t { *z } else { i },
                         if *along_t { i } else { *t },
                     );
-                    let data = img.page(page)?;
+                    // Retain mmap as an explicit diagnostic comparison. The
+                    // sequential source hook leaves non-MRC decoders unchanged.
+                    let data = if std::env::var("TMV_MOTION_MRC_IO").as_deref() == Ok("mmap") {
+                        img.page(page)?
+                    } else {
+                        img.movie_page(page)?
+                    };
                     let plane = &data[s];
                     out.par_iter_mut()
                         .enumerate()

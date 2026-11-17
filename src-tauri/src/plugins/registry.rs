@@ -751,6 +751,9 @@ impl Source for Augmented {
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
         self.inner.read_page(page)
     }
+    fn read_movie_page(&self, page: usize) -> Option<Result<Vec<Plane>>> {
+        self.inner.read_movie_page(page)
+    }
     fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
         self.inner.raw_page(page)
     }

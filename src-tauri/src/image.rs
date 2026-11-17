@@ -403,6 +403,11 @@ pub trait Source: Send + Sync {
     }
     /// Decodes one page into one plane per sample.
     fn read_page(&self, page: usize) -> Result<Vec<Plane>>;
+    /// Optional bounded-block file read for a movie processed in frame order.
+    /// Other formats keep their existing decoder and cache behavior.
+    fn read_movie_page(&self, _page: usize) -> Option<Result<Vec<Plane>>> {
+        None
+    }
     /// The stored bytes of a one-sample page when they sit uncompressed in a
     /// mapped file, and whether they are little-endian. Side views read
     /// single rows from here instead of decoding whole pages.
@@ -518,6 +523,14 @@ impl OpenImage {
         self.cached_bytes.fetch_add(bytes, Ordering::Relaxed);
         cache.insert(page, planes.clone());
         Ok(planes)
+    }
+
+    /// Movie streaming is separate from interactive random-access viewing.
+    pub(crate) fn movie_page(&self, page: usize) -> Result<Page> {
+        match self.source.read_movie_page(page) {
+            Some(result) => result.map(Arc::new),
+            None => self.page(page),
+        }
     }
 
     pub fn stats(&self, page: usize, sample: usize, planes: &Page) -> Stats {
