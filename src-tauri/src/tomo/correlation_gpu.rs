@@ -40,7 +40,9 @@ impl Batch {
         max: f64,
     ) -> Result<Vec<([f64; 2], f64)>> {
         let (n, m, k) = (self.n, self.m, pairs.len());
-        let batch = ((1usize << 22) / (2 * n * n)).max(1);
+        // 16 M values a batch (512 pairs of 128²): fewer, larger launches
+        // and peak read-backs.
+        let batch = ((1usize << 24) / (2 * n * n)).max(1);
         if k > batch {
             return pairs
                 .chunks(batch)
@@ -52,12 +54,16 @@ impl Batch {
         if k == 0 {
             return Ok(vec![]);
         }
-        let all: Vec<f32> = pairs
-            .iter()
-            .flat_map(|p| p.0.iter().copied())
-            .chain(pairs.iter().flat_map(|p| p.1.iter().copied()))
-            .collect();
-        let x = Tensor::<3>::from_data(TensorData::new(all, [2 * k, n, n]), &self.dev);
+        // Straight into pinned memory: a plain upload measured 0.4 GB/s, and
+        // with 1000 pairs a movie the upload alone made the GPU lose to the CPU.
+        let parts: Vec<&[f32]> = pairs.iter().map(|p| p.0.as_slice()).chain(pairs.iter().map(|p| p.1.as_slice())).collect();
+        let x = match crate::motion::sum_gpu::client_of(&self.dev) {
+            Ok(client) => Tensor::<3>::from_data(
+                TensorData::from_bytes(crate::motion::sum_gpu::pinned(&client, &parts), [2 * k, n, n], burn::tensor::DType::F32),
+                &self.dev,
+            ),
+            Err(_) => Tensor::<3>::from_data(TensorData::new(parts.concat(), [2 * k, n, n]), &self.dev),
+        };
         let mean = x.clone().mean_dim(1).mean_dim(2);
         let x = (x - mean) * self.window.clone();
         let zeros = Tensor::<3>::zeros([2*k,n,n], &self.dev);
