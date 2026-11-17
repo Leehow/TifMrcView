@@ -86,8 +86,11 @@ fn coarse(pr: &Tensor<3>, pi: &Tensor<3>, g: &Geom, max: f64, dev: &Device) -> V
 }
 
 pub(super) fn patch_peak(pr:Tensor<3>,pi:Tensor<3>,energies:Tensor<2>,g:&Geom,max:f64,dev:&Device)->Result<Vec<([f64;2],f64)>> {
+    let t=std::time::Instant::now();
     let starts=coarse(&pr,&pi,g,max,dev);
+    let coarse_ms=t.elapsed().as_secs_f64()*1e3;
     let peaks=refine(&pr,&pi,g,&starts,dev);
+    if std::env::var_os("TMV_GPU_PROFILE").is_some() { eprintln!("PATCH_PEAK_PROFILE coarse={coarse_ms:.1}ms refine={:.1}ms", t.elapsed().as_secs_f64()*1e3-coarse_ms); }
     let e=down(energies);
     let out:Vec<_>=peaks.into_iter().enumerate().map(|(i,(d,v))|(d,norm_cc(v,e[2*i] as f64,e[2*i+1] as f64))).collect();
     anyhow::ensure!(out.iter().all(|(d,c)|d.iter().all(|x|x.is_finite())&&c.is_finite()),"GPU patch returned non-finite peaks");

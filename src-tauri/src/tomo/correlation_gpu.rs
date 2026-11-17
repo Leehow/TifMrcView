@@ -64,6 +64,15 @@ impl Batch {
         }
         // Straight into pinned memory: a plain upload measured 0.4 GB/s, and
         // with 1000 pairs a movie the upload alone made the GPU lose to the CPU.
+        let profile = std::env::var_os("TMV_GPU_PROFILE").is_some();
+        let clock = std::time::Instant::now();
+        let mut marks: Vec<(&str, f64)> = vec![];
+        let mut mark = |name: &'static str, t: Option<Tensor<3>>| {
+            if profile {
+                if let Some(t) = t { let _: f32 = t.slice([0..1, 0..1, 0..1]).into_scalar(); }
+                marks.push((name, clock.elapsed().as_secs_f64() * 1e3));
+            }
+        };
         let parts: Vec<&[f32]> = pairs.iter().map(|p| p.0.as_slice()).chain(pairs.iter().map(|p| p.1.as_slice())).collect();
         let x = match crate::motion::sum_gpu::client_of(&self.dev) {
             Ok(client) => Tensor::<3>::from_data(
@@ -72,6 +81,7 @@ impl Batch {
             ),
             Err(_) => Tensor::<3>::from_data(TensorData::new(parts.concat(), [2 * k, n, n]), &self.dev),
         };
+        mark("upload", Some(x.clone()));
         let mean = x.clone().mean_dim(1).mean_dim(2);
         let x = (x - mean) * self.window.clone();
         // Only the kept band is needed: a DFT by matrix products computes
@@ -86,6 +96,7 @@ impl Batch {
         } else {
             crate::align::band_dft(x, &self.cos, &self.sin)
         };
+        mark("dft", Some(fr.clone()));
         let fr = (fr * self.filter.clone()).reshape([2*k,m*m]);
         let fi = (fi * self.filter.clone()).reshape([2*k,m*m]);
         let ra = fr.clone().narrow(0, 0, k);
@@ -96,10 +107,15 @@ impl Batch {
         let eb = (rb.clone() * rb.clone() + ib.clone() * ib.clone()).sum_dim(1);
         let pr = rb.clone() * ra.clone() + ib.clone() * ia.clone();
         let pi = ib * ra - rb * ia;
-        crate::align::patch_gpu_peak(
-            pr.reshape([k,m,m]), pi.reshape([k,m,m]),
+        let pr = pr.reshape([k,m,m]);
+        mark("cross", Some(pr.clone()));
+        let out = crate::align::patch_gpu_peak(
+            pr, pi.reshape([k,m,m]),
             Tensor::cat(vec![ea, eb], 1), n, max, &self.dev,
-        )
+        );
+        mark("peak", None);
+        if profile { eprintln!("PATCH_PROFILE k={k} n={n} {marks:?}"); }
+        out
     }
 }
 
