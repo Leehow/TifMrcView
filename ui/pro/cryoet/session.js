@@ -21,17 +21,18 @@
   host.innerHTML = `
     <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
-      <button class="primary cs-act cs-start" title="只处理下面勾选的序列">处理勾选序列</button>
+      <button class="primary cs-act cs-start" title="只处理下面勾选的序列">开始</button>
       <div class="cs-purpose-box" role="radiogroup" aria-label="重构用来做什么">
         <button class="cs-use" data-purpose="survey" role="radio"><b>先看看</b><span>最快，粗一点的断层图，看看样品什么样</span></button>
         <button class="cs-use" data-purpose="display" role="radio"><b>看清楚、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢）。用来展示、标结构出三维图，也是子断层平均里挑颗粒时看的图</span></button>
       </div>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
+      <span class="dim cs-selection-count" role="status"></span>
     </div>
-    <p class="dim cs-help cs-only-quick">点击卡片勾选要处理的序列，再点「处理勾选序列」。已处理的序列可点「打开」检查结果。</p>
+    <p class="dim cs-help cs-only-quick">点击卡片勾选要处理的序列，再点「开始」。已处理的序列可点「打开」检查结果。</p>
     <p class="dim cs-help cs-only-recon">选这次重构用来做什么，按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
     <p class="dim cs-discovery" role="status"></p>
-    <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button><span class="dim cs-selection-count" role="status"></span></div>
+    <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button></div>
     <div class="cs-wall"></div>
     <div class="cs-review" hidden></div>`;
   const q = (s) => host.querySelector(s);
@@ -102,7 +103,7 @@
   function selectionChanged(){
     for(const [name,t]of tiles){const on=selected.has(name);t.el.classList.toggle('selected',on);const cb=t.el.querySelector('.cs-take input');if(cb){cb.checked=on;cb.disabled=W.busy;}}
     const shown=session.series.filter(matches).length;
-    q('.cs-selection-count').textContent=`已勾选 ${selected.size} / ${session.series.length} 个序列${q('.cs-search').value?` · 筛选显示 ${shown} 个`:''}`;
+    q('.cs-selection-count').textContent=`已勾选 ${selected.size} 个序列${q('.cs-search').value?` · 筛选显示 ${shown} 个`:''}`;
     const filtered=!!q('.cs-search').value.trim();q('.cs-select-all').textContent=filtered?'全选筛选结果':'全选';q('.cs-select-none').textContent=filtered?'全不选筛选结果':'全不选';
     q('.cs-select-all').disabled=q('.cs-select-none').disabled=W.busy;
     host.querySelectorAll('.cs-act').forEach(b=>b.disabled=W.busy||!folder||!selected.size);

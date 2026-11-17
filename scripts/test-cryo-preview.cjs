@@ -15,6 +15,8 @@ await page.evaluate(()=>{
  window.TifMrcViewPro={cryoet:{panel:$('cryoet-workspace'),busy:false,name:p=>p.split('/').pop(),status:t=>$('test-status').textContent=t,load:async path=>{calls.push({command:'dataset-load',path});await new Promise(r=>setTimeout(r,150));return dataset();},setDataset(){},run:async(_,f)=>f()}};
 });
 const origin=`http://127.0.0.1:${server.address().port}`;await page.addStyleTag({url:origin+'/style.css'});await page.addScriptTag({url:origin+'/rules.js'});await page.addScriptTag({url:origin+'/session.js'});await page.evaluate(()=>{ready=true;document.dispatchEvent(new Event('cryoet-open'));});await page.locator('.cs-tile').first().waitFor();
+assert.equal(await page.locator('.cs-start').textContent(),'开始');
+assert.equal(await page.locator('.cs-controls .cs-selection-count').textContent(),'已勾选 0 个序列');
 assert.equal(await page.locator('.cs-scope').count(),0,'remove the contradictory dropdown scope');
 assert.equal(await page.locator('.cs-take input:checked').count(),0,'processing selection starts explicit and empty');
 await page.locator('.cs-tile').filter({hasText:'TS_B'}).click();assert.equal(await page.locator('.cs-tile').filter({hasText:'TS_B'}).locator('input').isChecked(),true);assert.equal(await page.locator('.cs-review').isVisible(),false,'card click only selects');
