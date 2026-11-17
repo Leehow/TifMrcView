@@ -86,7 +86,7 @@ and non-x86_64 Linux servers keep placeholders. Preview cache identity also
 includes the exact format-package content. An `noexec` home/cache or SFTP-only account also
 keeps placeholders. The full-image open path is unaffected.
 
-Build the helper using `cargo build --release --no-default-features --target
+Build the helper using `cargo build --release --no-default-features --features ssh-preview-helper --target
 x86_64-unknown-linux-musl --bin tmv-ssh-preview`. Set `TMV_SSH_PREVIEW_HELPER`
 to that ELF file while building the desktop app; build.rs embeds it in the
 executable, so updates include the matching helper. CI builds the helper before
