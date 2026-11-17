@@ -135,6 +135,17 @@ enum Stored {
 
 /// Memory for full-size frames before they go to disk.
 const MEMORY: usize = 6 << 30;
+/// Pixels of a movie's frames kept on the GPU (a byte each for counts).
+const RESIDENT: usize = 2 << 30;
+
+/// How many frames `prepare` will group a movie into.
+fn groups_hint(n: usize, p: &Params, movie: &Movie) -> usize {
+    if p.group == 0 && matches!(movie, Movie::Eer(_)) {
+        n.min(eer_frames(p.total_dose))
+    } else {
+        n.div_ceil(p.group.max(1))
+    }
+}
 
 enum Keep<'a> {
     U8(&'a mut [u8]),
@@ -174,6 +185,10 @@ pub struct Spool {
     /// are kept as recorded (counts fit in a byte), a quarter of the gained
     /// floats in memory and on the way to the GPU.
     pub gain: Option<Vec<f32>>,
+    /// The stored frames already on the GPU, uploaded while the movie before
+    /// is being corrected (the way MotionCor keeps a movie on the card): the
+    /// sum then cuts its tiles from them without waiting for an upload.
+    pub resident: Vec<super::sum_gpu::Resident>,
     pub decode_ms: f64,
     pub prepare_ms: f64,
 }
@@ -279,10 +294,18 @@ impl Spool {
             times: vec![],
             original: if preview { vec![] } else { vec![0.0; w * h] },
             gain: None,
+            resident: vec![],
             decode_ms: 0.0,
             prepare_ms: 0.0,
         };
         let gain = load_gain(p, w, h, up)?;
+        // Whole frames go to the GPU here only for a full correction on the
+        // GPU, and only while they take no more than RESIDENT bytes.
+        let mut card = (!preview && !p.benchmark && p.backend != "cpu")
+            .then(crate::ctf_gpu::device)
+            .flatten()
+            .map(|(dev, _)| dev)
+            .filter(|_| w * h * groups_hint(n, p, movie) <= RESIDENT);
         if gain.as_ref().is_some_and(|g| g.par_iter().any(|x| !x.is_finite())) {
             bail!("电影或 gain 含 NaN/Inf");
         }
@@ -394,6 +417,21 @@ impl Spool {
             }
             if let Some(stored) = stored {
                 spool.stored.push(stored);
+                if let Some(dev) = card {
+                    let i = spool.stored.len() - 1;
+                    let mean = (frame.par_iter().map(|&v| v as f64).sum::<f64>() / frame.len() as f64) as f32;
+                    let up = spool.raw(i).and_then(|raw| {
+                        crate::ctf_gpu::guarded(|| super::sum_gpu::Resident::upload(dev, &raw, mean)).and_then(|r| r)
+                    });
+                    match up {
+                        Ok(r) => spool.resident.push(r),
+                        Err(e) => {
+                            eprintln!("电影帧常驻 GPU 失败，求和时再上传：{e:#}");
+                            spool.resident.clear();
+                            card = None;
+                        }
+                    }
+                }
             }
             if bin == 1 {
                 // Nothing to bin: keep the frame itself, not a copy.

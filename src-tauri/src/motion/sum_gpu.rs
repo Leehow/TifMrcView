@@ -207,6 +207,39 @@ mod kernel {
     }
 }
 
+/// A stored frame on the GPU as recorded, in 32-bit words of `bits`-bit
+/// pixels (32: floats), with the mean of the gained frame (the fill of the
+/// tiles that reach past its edges).
+pub struct Resident {
+    handle: burn_cubecl::cubecl::server::Handle,
+    words: usize,
+    bits: u32,
+    mean: f32,
+}
+impl Resident {
+    pub fn upload(dev: &Device, raw: &Raw, mean: f32) -> Result<Resident> {
+        let client = client_of(dev)?;
+        let (handle, words, bits) = up_raw(&client, raw);
+        Ok(Resident { handle, words, bits, mean })
+    }
+}
+fn up_raw(client: &burn_cubecl::cubecl::client::Client, raw: &Raw) -> (burn_cubecl::cubecl::server::Handle, usize, u32) {
+    use burn_cubecl::cubecl::prelude::CubeElement;
+    let (bytes, bits): (&[u8], u32) = match raw {
+        Raw::U8(v) => (v, 8),
+        Raw::U16(v) => (u16::as_bytes(v), 16),
+        Raw::F32(v) => (f32::as_bytes(v), 32),
+    };
+    // Whole 32-bit words: the last one padded.
+    let words = bytes.len().div_ceil(4);
+    let handle = if bytes.len() % 4 == 0 {
+        client.create(pinned_bytes(client, &[bytes]))
+    } else {
+        client.create(pinned_bytes(client, &[bytes, &[0u8; 3][..words * 4 - bytes.len()]]))
+    };
+    (handle, words, bits)
+}
+
 /// Cuts a frame's tiles on the GPU. The gain goes up once a movie.
 struct Cutter {
     client: burn_cubecl::cubecl::client::Client,
@@ -223,21 +256,20 @@ impl Cutter {
         use burn_cubecl::cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
         use rayon::prelude::*;
         let (n, t, px) = (plan.len(), plan.t, sp.w * sp.h);
-        // The fill is the gained frame's mean, summed in the order of `sum::cpu`.
-        let gained = |k: usize, v: f32| sp.gain.as_ref().map_or(v, |g| v * g[k]) as f64;
-        let raw = sp.raw(i)?;
-        let (bytes, bits, total): (&[u8], u32, f64) = match &raw {
-            Raw::U8(v) => (v, 8, v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum()),
-            Raw::U16(v) => (u16::as_bytes(v), 16, v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum()),
-            Raw::F32(v) => (f32::as_bytes(v), 32, v.par_iter().enumerate().map(|(k, &x)| gained(k, x)).sum()),
-        };
-        let mean = (total / px as f64) as f32;
-        // Whole 32-bit words: the last one padded.
-        let words = bytes.len().div_ceil(4);
-        let src = if bytes.len() % 4 == 0 {
-            self.client.create(pinned_bytes(&self.client, &[bytes]))
-        } else {
-            self.client.create(pinned_bytes(&self.client, &[bytes, &[0u8; 3][..words * 4 - bytes.len()]]))
+        let (src, words, bits, mean) = match sp.resident.get(i) {
+            Some(r) => (r.handle.clone(), r.words, r.bits, r.mean),
+            None => {
+                // The fill is the gained frame's mean.
+                let gained = |k: usize, v: f32| sp.gain.as_ref().map_or(v, |g| v * g[k]) as f64;
+                let raw = sp.raw(i)?;
+                let total: f64 = match &raw {
+                    Raw::U8(v) => v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum(),
+                    Raw::U16(v) => v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum(),
+                    Raw::F32(v) => v.par_iter().enumerate().map(|(k, &x)| gained(k, x)).sum(),
+                };
+                let (h, words, bits) = up_raw(&self.client, &raw);
+                (h, words, bits, (total / px as f64) as f32)
+            }
         };
         let at: Vec<i32> = (0..n).flat_map(|k| [(plan.corners[k][0] + shifts[k][0].round() as isize) as i32, (plan.corners[k][1] + shifts[k][1].round() as isize) as i32]).collect();
         let at = self.client.create_from_slice(i32::as_bytes(&at));
