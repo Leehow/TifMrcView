@@ -131,8 +131,9 @@ pub struct Params {
     pub preview_bin: usize,
 }
 
-/// Largest pixel of a preview sum, Å: fine enough for the Thon rings of a
-/// tilt image to be fitted and for a tomogram to look at (about 10 Å voxels).
+/// Pixel a preview sum aims at, Å (the nearest binning, so at most about
+/// 7.8 Å): fine enough for the Thon rings of a tilt image to be fitted and
+/// for a tomogram to look at (about 10 Å voxels).
 pub const PREVIEW_PIXEL: f64 = 5.5;
 impl Default for Params {
     fn default() -> Self {
@@ -435,7 +436,11 @@ pub fn prepare(
     if p.preview {
         let (w, h, _) = movie.shape();
         let up = if matches!(movie, input::Movie::Eer(_)) { p.upsample } else { 1 };
-        p.preview_bin = [8usize, 4, 2].into_iter().find(|&b| pixel * b as f64 <= PREVIEW_PIXEL && w.min(h) * up / b >= 256).unwrap_or(1);
+        // The binning that comes nearest PREVIEW_PIXEL (by ratio), leaving at
+        // least 256 pixels a side: 3.8 Å frames go to 7.6 Å rather than stay
+        // at 4096² (four times the work and memory for a quick look).
+        let off = |b: usize| (pixel * b as f64 / PREVIEW_PIXEL).ln().abs();
+        p.preview_bin = [1usize, 2, 4, 8].into_iter().filter(|&b| b == 1 || w.min(h) * up / b >= 256).min_by(|&a, &b| off(a).total_cmp(&off(b))).unwrap_or(1);
     }
     let sp = input::Spool::prepare(&movie, &p, scratch, progress)?;
     Ok(Prepared { preview: p.preview, sp, pixel, warnings, took: start.elapsed() })
