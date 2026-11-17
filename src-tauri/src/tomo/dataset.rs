@@ -138,6 +138,14 @@ pub struct Dataset {
     /// for each purpose ("survey", "display", "sta").
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub made: std::collections::BTreeMap<String, String>,
+    /// What was done after the reconstruction of each of `made` (the steps
+    /// ticked in 「三维重构」, in words).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub made_steps: std::collections::BTreeMap<String, Vec<String>>,
+    /// The views left out of the alignment after 精对齐 last went over it:
+    /// it is not repeated while they stay the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fine_aligned: Option<Vec<usize>>,
 }
 
 /// Where the dataset of a stack is kept: `2_tomograms/<stem>.tomo.json` of
@@ -183,6 +191,8 @@ impl Dataset {
             take: None,
             aligned: None,
             made: Default::default(),
+            made_steps: Default::default(),
+            fine_aligned: None,
         })
     }
 

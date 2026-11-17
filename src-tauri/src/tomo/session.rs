@@ -56,6 +56,9 @@ pub struct Series {
     pub aligned: Option<String>,
     pub quick: Option<String>,
     pub result: Option<String>,
+    /// What was done after reconstructing `result` ("精对齐", "N2N 降噪", …).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub done: Vec<String>,
     /// Why the last run on it stopped.
     pub error: Option<String>,
     /// Something the user should know about what was made (a step left out).
@@ -187,7 +190,7 @@ pub fn scan(folder: &str) -> Result<Session> {
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, error: None, note: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None }
 }
 
 /// What the dataset of an existing stack says about it.
@@ -204,7 +207,9 @@ fn fill(s: &mut Series) {
     s.take = d.take;
     s.aligned = exists(&d.aligned);
     s.quick = exists(&d.made.get("survey").cloned());
-    s.result = ["display", "sta"].iter().find_map(|k| exists(&d.made.get(*k).cloned()));
+    let result = ["display", "sta"].into_iter().find_map(|k| exists(&d.made.get(k).cloned()).map(|p| (k, p)));
+    s.done = result.as_ref().and_then(|(k, _)| d.made_steps.get(*k).cloned()).unwrap_or_default();
+    s.result = result.map(|(_, p)| p);
     if let Some(a) = &d.alignment {
         s.residual = Some(a.residual);
         s.quality = Some(a.quality.clone());

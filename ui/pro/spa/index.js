@@ -231,6 +231,16 @@
   $("spa-close").onclick = close;
   document.addEventListener("pro-panel", (e) => { if (e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-remote-mounted", () => { if (!panel.hidden) W.useCurrent(); });
+  // A step that kept running on the server while the app was closed is shown
+  // here with its progress and cancel button, and its project when it ends.
+  document.addEventListener("tmv-remote-running", async (e) => {
+    const { record } = e.detail;
+    if (record.command !== "spa_run" || W.busy) return;
+    e.detail.claimed = true;
+    if (panel.hidden) button.click();
+    const r = await W.busyRun("服务器上的处理", () => window.TmvRemote.attach(record));
+    if (r?.project) W.show(r.project);
+  });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) W.useCurrent(); });
   $("btn-fft").addEventListener("click", () => { if (F.on) close(); });
   W.select(0);

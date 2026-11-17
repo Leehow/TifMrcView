@@ -33,7 +33,7 @@ const HELP: &str = r#"tmv — TifMrcView Pro command line (no window needed)
 USAGE
   tmv run <path>                 Detect what <path> is and run the right command
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
-        [--for display|sta|survey] [--pixel Å]
+        [--for display|sta|survey | --steps align,n2n,wedge,flat] [--pixel Å]
                                  (--pixel is needed when the file does not say its pixel size)
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
@@ -56,7 +56,10 @@ USAGE
   Every choice is made automatically, as in the app. --for picks what the
   tomogram is for: display (default: clearest picture, denoised, missing
   wedge filled; --membranes also segments membranes), sta (subtomogram averaging:
-  full detail + RELION 5 folder), survey (quick look).
+  full detail + RELION 5 folder), survey (quick look). --steps instead
+  runs only the ticked steps of the app's 「三维重构」 (any of align =
+  fine alignment, n2n = Noise2Noise, wedge = missing wedge, flat = lay the
+  specimen flat; none = fast).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
   does) or tomograms that tmv tomo --for sta wrote. What to average is the
@@ -555,6 +558,11 @@ fn tomo(o: &Opts) -> Result<Value> {
         "sta" | "averaging" => auto::Purpose::Sta,
         "survey" | "quick" => auto::Purpose::Survey,
         p => bail!("--for {p}: use display, sta or survey"),
+    };
+    // --steps align,n2n,wedge,flat (or none): the steps of 「三维重构」 instead.
+    let purpose = match o.get("steps") {
+        Some(list) => auto::Purpose::Custom(auto::Steps::parse(list)?),
+        None => purpose,
     };
     let pixel = o.number("pixel")?;
     let progress = Progress::new();

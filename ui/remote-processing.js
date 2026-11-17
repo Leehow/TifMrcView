@@ -14,6 +14,8 @@
   const save = records => localStorage.setItem(storage, JSON.stringify(records.slice(-80)));
   const pack = (id,path) => `${prefix}${encodeURIComponent(id)}:${encodeURIComponent(path)}`;
   const unpack = path => { if(typeof path !== 'string' || !path.startsWith(prefix))return null;const i=path.indexOf(':',prefix.length);return {id:decodeURIComponent(path.slice(prefix.length,i)),path:decodeURIComponent(path.slice(i+1))}; };
+  // Keys are canonical so a job the server lists (sorted keys) matches the one the panel asks for.
+  const canon = v => Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v==='object' ? `{${Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')}}` : JSON.stringify(v===undefined?null:v);
   const map = (v,fn) => typeof v === 'string' ? fn(v) : Array.isArray(v) ? v.map(x=>map(x,fn)) : v && typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,map(x,fn)])) : v;
   const current = () => S.folder?.remote ? S.folder.processing : null;
   const label = () => current() ? `运行位置：${S.folder.address} · SSH（原始数据留在服务器）` : '运行位置：本机';
@@ -27,7 +29,7 @@
       for (;;) {
         let state;
         try { state = await request(ctx,{ action:'status',job:record.job,after:cursor },isLong); }
-        catch(e) { throw new Error(`远程任务保留在服务器，重连后点“恢复任务”：${e}`); }
+        catch(e) { ctx.discoveredFor?.clear(); throw new Error(`连接中断，任务仍在服务器上运行；重新连接后会自动接上进度：${e}`); }
         if(cmd==='tomo_session_run' && Date.now()-refreshed>5000){refreshed=Date.now();await emit('tomo-session',{folder:pack(ctx.identity,record.project)});}
         for(const e of state.events || []) { cursor=Math.max(cursor,e.seq);
           if(e.type==='backend'){const p=e.placement;ctx.placements||={};const key=`${p.worker||'本机'}|${p.operation}`;const old=ctx.placements[key];ctx.placements[key]={...p,priorFallback:p.backend==='CPU'&&p.fallback!==false?p.reason:old?.priorFallback};if(p.backend==='CPU'&&p.reason&&p.fallback!==false&&old?.reason!==p.reason)toast(`${p.operation} 使用 CPU：${p.reason}`);localStorage.setItem(`tmv.remote.backends.${ctx.identity}`,JSON.stringify(ctx.placements));if(isLong)record.placements=ctx.placements;continue;}
@@ -62,11 +64,67 @@
     if(cmd==='tomo_view'&&ctx.previewFiles?.has(decoded.path))return native(cmd,{...decoded,path:ctx.previewFiles.get(decoded.path)});
     // project identity is pinned at first submission, including after navigation/reconnect.
     const project = decoded.req?.folder || (cmd==='spa_open'?decoded.source:null) || ctx.project;
-    const key=JSON.stringify([ctx.identity,cmd,decoded]);
+    const key=canon([ctx.identity,cmd,decoded]);
     let record=jobs().find(j=>j.key===key);
     if(!record){record={key,requestId:crypto.randomUUID(),command:cmd,args:decoded,identity:ctx.identity,project,outputRoot:ctx.outputRoot||null};if(cmd==='tomo_session_run'||cmd==='spa_run')save([...jobs(),record]);}
     if(!record.job){if(!ctx.prepared)updateBar(`${label()} · 正在准备服务器处理引擎…`);const result=await request(ctx,{action:'submit',requestId:record.requestId,command:cmd,args:decoded,project:record.project,outputRoot:record.outputRoot},cmd==='tomo_session_run'||cmd==='spa_run');ctx.prepared=true;record.job=result.job; if(cmd==='tomo_session_run'||cmd==='spa_run')save([...jobs().filter(j=>j.key!==key),record]);}
     return watch(ctx,record,cmd);
+  }
+  const running = j => j.state==='queued'||j.state==='running';
+  const within = (p,root) => !!p && !!root && (p===root || p.startsWith(root.replace(/\/+$/,'')+'/'));
+  const kindOf = cmd => cmd==='spa_run'?'spa':'tomo';
+  // A job this client already follows (from this window, this session).
+  const following = job => [...active.values()].some(a=>a.record.job===job);
+  // Long jobs run detached on the server (setsid), so closing the app never
+  // stops them. On every connection the server is asked which jobs of this
+  // folder still run; each is handed to its panel, which shows the progress
+  // as if it had started it. Jobs that ended while the app was closed are
+  // reported once.
+  async function discover(ctx,asked=false){
+    if(!ctx||ctx.discovering)return;ctx.discovering=true;
+    try{
+      let list;
+      try{list=(await request(ctx,{action:'jobs'})).jobs||[];}
+      catch(e){if(asked)toast(`无法读取服务器任务：${e}`);return;}
+      ctx.serverJobs=list;
+      const seenKey=`tmv.remote.lastSeen.${ctx.serverIdentity}`,lastSeen=+localStorage.getItem(seenKey)||0;
+      const records=jobs();let changed=false,resumed=0;
+      for(const j of list){
+        if(!within(j.project,ctx.project))continue;
+        let record=records.find(r=>r.job===j.job&&r.identity===ctx.identity);
+        if(running(j)){
+          if(following(j.job))continue;
+          if(!record){record={key:canon([ctx.identity,j.command,j.args]),requestId:j.requestId,command:j.command,args:j.args,identity:ctx.identity,project:j.project,outputRoot:j.outputRoot??null,job:j.job,cursor:0};records.push(record);changed=true;}
+          record.progress=j.progress||record.progress;record.state=j.state;
+          const detail={kind:kindOf(j.command),record,ctx,claimed:false};
+          document.dispatchEvent(new CustomEvent('tmv-remote-running',{detail}));
+          // No panel took it (not loaded): follow it here so the bar still shows it.
+          if(!detail.claimed)attach(record).catch(()=>{});
+          resumed++;
+        } else if(record || (lastSeen && j.updated>lastSeen)){
+          if(record){records.splice(records.indexOf(record),1);changed=true;}
+          const name=j.command==='spa_run'?'单颗粒处理':'冷冻电镜断层处理';
+          const where=j.project.split('/').filter(Boolean).pop();
+          toast(j.state==='completed'||j.state==='needsChoice'?`软件关闭期间，服务器已完成「${where}」的${name}，结果已在文件夹里`:j.state==='cancelled'?`「${where}」的${name}已取消`:`软件关闭期间，「${where}」的${name}失败：${j.error||'请查看服务器日志'}`);
+        }
+      }
+      if(changed)save(records);
+      localStorage.setItem(seenKey,String(Date.now()));
+      if(resumed)toast(resumed>1?`已接上服务器上仍在运行的 ${resumed} 个任务`:'已接上服务器上仍在运行的任务，正在显示进度');
+      else if(asked)toast('这个文件夹在服务器上没有正在运行的任务');
+      if(asked)save(jobs().filter(r=>r.identity!==ctx.identity||list.some(j=>j.job===r.job&&running(j))));
+      updateBar();
+    } finally { ctx.discovering=false; }
+  }
+  // Follows a job already on the server; resolves like the call that started it.
+  function attach(record){
+    const ctx=contexts.get(record.identity)||current();
+    if(!ctx)return Promise.reject(new Error('请先重新连接 SSH 服务器'));
+    const existing=[...active.values()].find(a=>a.record.job===record.job);
+    if(existing)return existing.promise;
+    const promise=watch(ctx,record,record.command);
+    const entry=active.get(kindOf(record.command));if(entry&&entry.record===record)entry.promise=promise;
+    return promise;
   }
   function updateBar(message) {
     for(const id of ['cryoet-workspace','spa-workspace']) {const panel=$(id);if(!panel)continue;let bar=panel.querySelector('.remote-processing-location');if(!bar){bar=document.createElement('div');bar.className='remote-processing-location';panel.querySelector('.al-head')?.after(bar);}
@@ -78,7 +136,7 @@
         const phase=document.createElement('strong');phase.textContent=rec.state==='queued'?'等待服务器资源…':p?.stage||'正在提交并读取服务器进度…';
         const count=document.createElement('span');count.textContent=p&&p.total>1?`${p.done} / ${p.total}`:'正在处理，请稍候';
         const progress=document.createElement('progress');progress.setAttribute('aria-label','当前阶段进度');if(p&&p.total>1){progress.max=p.total;progress.value=p.done;}
-        status.append(phase,count,progress);bar.append(status);
+        const away=document.createElement('small');away.className='dim remote-task-away';away.textContent='可以关闭软件：任务在服务器上继续运行，下次连接这个文件夹会自动显示进度';status.append(phase,count,progress,away);bar.append(status);
         const workers=Object.entries(rec.workers||{});if(workers.length){const grid=document.createElement('div');grid.className='remote-worker-grid';for(const [name,p]of workers){const card=document.createElement('div');card.className='remote-worker-card';const title=document.createElement('strong');title.textContent=name;const stage=document.createElement('span');stage.textContent=p.stage.replace(/^GPU \d+ · /,'');const meter=document.createElement('progress');meter.setAttribute('aria-label',name+' 当前阶段进度');if(p.total>1){meter.max=p.total;meter.value=p.done;}const count=document.createElement('small');count.textContent=p.total>1?`${p.done} / ${p.total}`:'正在处理';card.append(title,stage,meter,count);grid.append(card);}bar.append(grid);}}
 
       const ctx=current();
@@ -87,13 +145,20 @@
       if(placements.length){const details=document.createElement('details');details.className='remote-backends';details.open=false;const title=document.createElement('summary');title.textContent=task?'每一步实际计算设备':'上次任务的计算设备';details.append(title);for(const p of placements){const row=document.createElement('div');row.className='remote-backend-row';row.classList.toggle('fallback',p.backend==='CPU'&&!!p.reason&&p.fallback!==false);const name=document.createElement('strong');name.textContent=p.operation;const device=document.createElement('span');device.textContent=`${p.backend}${p.device?' · '+p.device:p.worker?' · '+p.worker+' 的 CPU 路径':''}`;row.append(name,device);if(p.reason){const reason=document.createElement('small');reason.textContent=(p.backend==='CPU'?(p.fallback===false?'CPU 分工：':'CPU 回退原因：'):'分工：')+p.reason;row.append(reason);}if(p.priorFallback&&p.backend!=='CPU'){const prior=document.createElement('small');prior.textContent='本次此前曾回退 CPU：'+p.priorFallback;row.append(prior);}details.append(row);}bar.append(details);}
       if(current()?.lastOutputRoot){const details=document.createElement('details');details.className='remote-output-details';const summary=document.createElement('summary');summary.textContent='查看服务器结果目录';const code=document.createElement('code');code.textContent=current().lastOutputRoot;details.append(summary,code);bar.append(details);}
       if(current()) {const input=document.createElement('input');input.className='remote-output';input.placeholder='输出位置：服务器用户缓存（可填写其他磁盘目录）';input.setAttribute('aria-label','服务器输出位置');input.value=current().outputRoot||'';input.disabled=[...active.values()].some(j=>j.ctx.identity===current().identity);input.onchange=()=>{const ctx=current();const path=input.value.trim();if(path&&!path.startsWith('/')){toast('请填写服务器绝对路径');return;}ctx.outputRoot=path||null;localStorage.setItem(`tmv.remote.output.${ctx.identity}`,path);window.TifMrcViewPro?.spa.show(null);window.TifMrcViewPro?.spa.useCurrent?.();document.dispatchEvent(new CustomEvent('cryoet-open'));};bar.append(input);}
-      if(current() && jobs().some(j=>j.identity===current().identity)) {const b=document.createElement('button');b.className='small';b.textContent='恢复任务';b.disabled=[...active.values()].some(j=>j.ctx.identity===current().identity);b.onclick=async()=>{const ctx=current();const record=jobs().find(j=>j.identity===ctx.identity);if(!record)return;try {const result=await remote(ctx,record.command,map(record.args,s=>s.startsWith('/')?pack(ctx.identity,s):s));if(record.command==='spa_run')window.TifMrcViewPro?.spa.show(result.project);else await emit('tomo-session',{folder:S.folder.dir});toast('服务器任务状态已恢复');}catch(e){toast(String(e));}};bar.append(b);}
+      if(current() && !task && jobs().some(j=>j.identity===current().identity && j.job)) {const b=document.createElement('button');b.className='small';b.textContent='恢复任务';b.title='重新显示这个文件夹在服务器上运行的任务';b.onclick=()=>discover(current(),true);bar.append(b);}
+      const others=(ctx?.serverJobs||[]).filter(j=>running(j)&&!within(j.project,ctx.project));
+      if(current() && others.length){const p=document.createElement('p');p.className='dim remote-other-jobs';p.textContent=`这台服务器上还有 ${others.length} 个任务在运行（${others.map(j=>j.project.split('/').filter(Boolean).pop()).join('、')}），打开对应文件夹即可查看进度`;bar.append(p);}
       for(const d of bar.querySelectorAll('details'))if(expanded.has(d.className))d.open=expanded.get(d.className);
     }
   }
   window.TmvRemote={
-    mount(folder){const previous=window.TmvRemote.mountedIdentity;if(folder.processing){folder.processing.serverIdentity ||= folder.processing.identity;folder.processing.identity = `${folder.processing.serverIdentity}|${folder.remotePath}`;folder.processing.label=`运行位置：${folder.address} · SSH`;folder.processing.project=folder.remotePath;folder.processing.outputRoot=localStorage.getItem(`tmv.remote.output.${folder.processing.identity}`)||null;contexts.set(folder.processing.identity,folder.processing);const ctx=folder.processing;if(window.TifMrcViewPro&&!ctx.resourcesLoading){ctx.resourcesLoading=true;request(ctx,{action:'inspect',outputRoot:ctx.outputRoot}).then(r=>{ctx.resources=r.resources;ctx.resourcesAt=Date.now();try{ctx.placements=JSON.parse(localStorage.getItem(`tmv.remote.backends.${ctx.identity}`)||'{}');}catch(_){}updateBar();}).catch(e=>{ctx.resourceError=String(e);updateBar();});}}updateBar();const identity=folder.processing?.identity||null;window.TmvRemote.mountedIdentity=identity;if(identity!==previous)document.dispatchEvent(new CustomEvent('tmv-remote-mounted'));},
-    label, updateBar, pack, displayPath:path=>unpack(path)?.path||path,
+    mount(folder){const previous=window.TmvRemote.mountedIdentity;if(folder.processing){folder.processing.serverIdentity ||= folder.processing.identity;folder.processing.identity = `${folder.processing.serverIdentity}|${folder.remotePath}`;folder.processing.label=`运行位置：${folder.address} · SSH`;folder.processing.project=folder.remotePath;folder.processing.outputRoot=localStorage.getItem(`tmv.remote.output.${folder.processing.identity}`)||null;contexts.set(folder.processing.identity,folder.processing);const ctx=folder.processing;if(window.TifMrcViewPro&&!ctx.resourcesLoading){ctx.resourcesLoading=true;request(ctx,{action:'inspect',outputRoot:ctx.outputRoot}).then(r=>{ctx.resources=r.resources;ctx.resourcesAt=Date.now();try{ctx.placements=JSON.parse(localStorage.getItem(`tmv.remote.backends.${ctx.identity}`)||'{}');}catch(_){}updateBar();}).catch(e=>{ctx.resourceError=String(e);updateBar();});}}updateBar();const identity=folder.processing?.identity||null;window.TmvRemote.mountedIdentity=identity;if(identity!==previous)document.dispatchEvent(new CustomEvent('tmv-remote-mounted'));
+      // Once per connection and folder: pick up jobs that kept running while the app was closed.
+      const ctx=folder.processing;if(ctx){ctx.discoveredFor||=new Set();if(!ctx.discoveredFor.has(identity)){ctx.discoveredFor.add(identity);setTimeout(()=>discover(ctx),0);}}},
+    label, updateBar, pack, attach, discover:()=>discover(current(),true),
+    // A server path as the panels name it: the open folder itself, or a packed remote path.
+    localPath:(record,path)=>{const ctx=contexts.get(record.identity)||current();return path===S.folder?.remotePath&&ctx===current()?S.folder.dir:pack(ctx.identity,path);},
+    displayPath:path=>unpack(path)?.path||path,
     async open(path){const p=unpack(path);if(!p)return false;const ctx=contexts.get(p.id);if(!ctx)throw new Error('请重新连接原 SSH 服务器后打开结果');await ctx.open(p.path);return true;},
     invoke(cmd,args,native){
       const values=[];map(args,s=>{if(unpack(s))values.push(unpack(s));return s;});
