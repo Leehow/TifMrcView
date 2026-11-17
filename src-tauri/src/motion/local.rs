@@ -279,9 +279,10 @@ pub fn estimate(
         None => {
             // The real batch, a whole movie: a tiny sample can reject the
             // GPU even though its upload is paid once for all passes.
-            let q = pairs_for(&shifts);
-            let _ = cpu(&q[..q.len().min(32)]);
+            // A host pass is building the pairs plus correlating them.
+            let _ = cpu(&pairs_for(&shifts)[..32.min(shifts.len())]);
             let t = std::time::Instant::now();
+            let q = pairs_for(&shifts);
             let reference = cpu(&q);
             cpu_pair_ms = t.elapsed().as_secs_f64() * 1000.0;
             drop(q);
@@ -295,10 +296,18 @@ pub fn estimate(
                         drop((b, mv));
                         let t = std::time::Instant::now();
                         let (b, mv) = on_device(dev)?;
+                        let _: f32 = mv.probe();
+                        let up = t.elapsed().as_secs_f64() * 1000.0;
+                        let t = std::time::Instant::now();
                         let r = b.correlate_movie(&mv, &shifts, max)?;
-                        Ok(((b, mv), r, t.elapsed().as_secs_f64() * 1000.0))
+                        Ok(((b, mv), r, (up, t.elapsed().as_secs_f64() * 1000.0)))
                     }) {
+                        // The upload is paid once a movie, a pass up to four
+                        // times (at least two): compare three passes.
+                        let (up, pass) = ms;
+                        let ms = up + 3.0 * pass;
                         gpu_pair_ms = Some(ms);
+                        cpu_pair_ms *= 3.0;
                         use_gpu = peaks
                             .iter()
                             .zip(&reference)

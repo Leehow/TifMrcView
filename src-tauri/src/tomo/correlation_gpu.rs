@@ -10,6 +10,12 @@ pub struct Movie {
     base: Tensor<3>,
     frames: usize,
 }
+impl Movie {
+    /// Waits for the upload (reads one value back).
+    pub fn probe(&self) -> f32 {
+        self.base.clone().slice([0..1, 0..1, 0..1]).into_scalar()
+    }
+}
 
 pub struct Batch {
     dev: Device,
