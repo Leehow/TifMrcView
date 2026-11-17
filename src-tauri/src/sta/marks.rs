@@ -412,7 +412,7 @@ pub fn preview_marks(marks: &[Mark], open: &str, size: Option<&str>) -> Result<V
 /// The workspace's run for marks: like `auto::run_inputs`, the same events
 /// (`sta-progress`, `sta-live`, `sta-note`) and the same result value; the
 /// average goes to `<out>/drawn` so an automatic result in `out` stays.
-pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
+pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, only: bool, out: Option<&str>, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     // Averages are of the tomograms: a look companion handed over is replaced
@@ -427,8 +427,9 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, out: Opt
         // Circled examples: everything that looks like them is found
         // (`circled`). Here nobody looks at what is found first (the
         // command line; the workspace shows it for review, `sta_find`):
-        // what the program would keep by itself is averaged.
-        let found = super::review::find_circled(&inputs, marks, &out.to_string_lossy(), device, emit, b64)?;
+        // what the program would keep by itself is averaged. `only`: the
+        // user circled every one, and just these are averaged.
+        let found = if only { super::review::given_circled(&inputs, marks, &out.to_string_lossy(), emit, b64)? } else { super::review::find_circled(&inputs, marks, &out.to_string_lossy(), device, emit, b64)? };
         let dir = PathBuf::from(found["out"].as_str().context("没有找出的结果")?);
         let mut v = super::review::average_found(&dir, device, emit, b64)?;
         v["found"] = json!({ "total": found["total"], "kept": found["kept"], "limit": found["limit"], "circled": found["circled"] });
@@ -614,7 +615,7 @@ mod tests {
         };
         let device: Device = &|| bail!("no device");
         let line = mark(Kind::Line, &p("a_look.mrc"), &[[1.0; 3], [5.0; 3]]);
-        let _ = run_marks(&[p("a_look.mrc")], &[line], None, None, device, &emit, &|_| String::new());
+        let _ = run_marks(&[p("a_look.mrc")], &[line], None, false, None, device, &emit, &|_| String::new());
         assert_eq!(*seen.lock().unwrap(), [p("a_raw.mrc")]);
         // A look mark is carried onto the tomogram that the input became.
         let sources = vec![source(&p("a_raw.mrc"), Some(Look { path: p("a_look.mrc"), scale: 2.0, offset: [0.0; 3] }))];

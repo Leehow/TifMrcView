@@ -70,7 +70,14 @@ pub fn tiles(path: &str) -> Vec<Tile> {
     let mut out: Vec<Tile> = vec![];
     // The tilt series that have a dataset, in any folder (a new project keeps
     // the datasets in `2_tomograms/` and the raw stacks in the project folder).
-    let stacks_seen: Vec<String> = folders.iter().flat_map(|f| datasets_in(f)).map(|d| name_of(&d.stack)).collect();
+    // Their halves of even and odd frames (motion correction writes them
+    // beside the stack, angles and all) are that series again, not series of their own.
+    let halves = |stack: &str| ["even", "odd"].map(|h| Path::new(stack).file_stem().zip(Path::new(stack).extension()).map(|(s, e)| format!("{}_{h}.{}", s.to_string_lossy(), e.to_string_lossy())));
+    let stacks_seen: Vec<String> = folders
+        .iter()
+        .flat_map(|f| datasets_in(f))
+        .flat_map(|d| [Some(name_of(&d.stack)), d.even.as_deref().map(name_of), d.odd.as_deref().map(name_of)].into_iter().chain(halves(&d.stack)).flatten().collect::<Vec<_>>())
+        .collect();
     for folder in &folders {
         for d in datasets_in(folder) {
             let stack = beside(folder, &d.stack);
@@ -268,7 +275,8 @@ mod tests {
         };
         // 05: tomogram and clean companion. 06: tomogram only. 07: dataset, nothing reconstructed.
         // 08: its tomogram file is gone. 09: a tilt series nobody has opened. notes.mrc: no angles, not a series.
-        for f in ["05.mrc", "05_sart.mrc", "05_look.mrc", "06.mrc", "06_sart.mrc", "07.mrc", "08.mrc", "09.st", "09.rawtlt", "notes.mrc"] {
+        // 05_even, 05_odd: the halves of 05 with their angles beside them, not series of their own.
+        for f in ["05.mrc", "05_sart.mrc", "05_look.mrc", "05_even.mrc", "05_even.tlt", "05_odd.mrc", "05_odd.tlt", "06.mrc", "06_sart.mrc", "07.mrc", "08.mrc", "09.st", "09.rawtlt", "notes.mrc"] {
             write(f);
         }
         dataset("05", serde_json::json!([-60.0, 0.0, 60.0]), serde_json::json!([full("05_sart.mrc", Some("05_look.mrc"))]));

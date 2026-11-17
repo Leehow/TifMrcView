@@ -872,6 +872,12 @@ fn exclusion_keeps_off_borders_and_gold() {
     let plain: Vec<f32> = v.iter().map(|x| x.max(-5.0)).collect();
     let ok = allowed(&plain, dims, r);
     assert!(ok[(10 * dims[1] + 28) * dims[0] + 30]);
+    // Gold seen on a finer grid, where this one shows none (a bead averaged
+    // away in a large voxel), is kept away from all the same.
+    assert_eq!(super::search::gold(&v, dims).len(), gold.len());
+    assert!(super::search::gold(&plain, dims).is_empty());
+    let ok = super::search::allowed_but(&plain, dims, r, &[[30, 28, 10], [999, 0, 0]]);
+    assert!(!ok[(10 * dims[1] + 28) * dims[0] + 30] && !ok[(10 * dims[1] + 28) * dims[0] + 39] && ok[(10 * dims[1] + 28) * dims[0] + 41]);
 }
 
 /// Heavy: the whole-tomogram search finds 32 copies at random orientations

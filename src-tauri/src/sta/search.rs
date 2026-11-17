@@ -680,17 +680,42 @@ pub fn blank(v: &[f32], dims: [usize; 3]) -> Vec<bool> {
 /// standard deviations below the median) or of a blank border (`blank`).
 /// Same layout as `v`.
 pub fn allowed(v: &[f32], dims: [usize; 3], radius: f64) -> Vec<bool> {
+    allowed_but(v, dims, radius, &[])
+}
+
+/// The voxels of gold in `v`, as (x, y, z): more than `GOLD` robust standard
+/// deviations below the median of what the tomogram holds.
+pub fn gold(v: &[f32], dims: [usize; 3]) -> Vec<[usize; 3]> {
+    let [nx, ny, nz] = dims;
+    assert_eq!(v.len(), nx * ny * nz);
+    let limit = gold_limit(v, &blank(v, dims));
+    (0..v.len()).filter(|i| v[*i] < limit).map(|i| [i % nx, i / nx % ny, i / (nx * ny)]).collect()
+}
+
+/// The value below which a voxel of `v` is gold (`blank`: the voxels that hold nothing).
+fn gold_limit(v: &[f32], blank: &[bool]) -> f32 {
+    // What the tomogram is like where it holds something.
+    let held: Vec<f32> = v.iter().zip(blank).filter(|(_, b)| !**b).map(|(x, _)| *x).collect();
+    let (median, sd) = robust(if held.len() >= 1000 { &held } else { v });
+    median - GOLD * sd
+}
+
+/// `allowed`, with `gold` (voxels of `v`, (x, y, z)) counted as gold too:
+/// gold found where it stands out, for a grid so coarse that a bead is
+/// averaged away with what is around it (a bead of 100 Å in voxels of 100 Å
+/// is no longer `GOLD` deviations dark, and was found as a candidate).
+pub fn allowed_but(v: &[f32], dims: [usize; 3], radius: f64, gold: &[[usize; 3]]) -> Vec<bool> {
     let [nx, ny, nz] = dims;
     assert_eq!(v.len(), nx * ny * nz);
     let blank = blank(v, dims);
-    // What the tomogram is like where it holds something.
-    let held: Vec<f32> = v.iter().zip(&blank).filter(|(_, b)| !**b).map(|(x, _)| *x).collect();
-    let (median, sd) = robust(if held.len() >= 1000 { &held } else { v });
-    let limit = median - GOLD * sd;
+    let limit = gold_limit(v, &blank);
     // Squared distance to the nearest gold or blank voxel, one axis at a
     // time (exact; Felzenszwalb and Huttenlocher, Theory of Computing 8, 2012).
     const FAR: f32 = 1e9;
     let mut near: Vec<f32> = v.iter().zip(&blank).map(|(x, b)| if *x < limit || *b { 0.0 } else { FAR }).collect();
+    for g in gold.iter().filter(|g| (0..3).all(|k| g[k] < dims[k])) {
+        near[(g[2] * ny + g[1]) * nx + g[0]] = 0.0;
+    }
     if near.iter().any(|d| *d == 0.0) {
         for (len, stride, lines) in [(nx, 1, ny * nz), (ny, nx, nx * nz), (nz, nx * ny, nx * ny)] {
             let mut line = vec![0f64; len];

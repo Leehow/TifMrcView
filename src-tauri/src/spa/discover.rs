@@ -786,6 +786,14 @@ pub fn centred3(v: &[f32], b: usize) -> Vec<f32> {
 /// hemisphere, then refined at full size. Returns (axis, correlation,
 /// correlation of the half-way turn) or None when nothing matches.
 pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> {
+    // The n comes from the 2D classes; at low resolution the n-fold turn
+    // hardly beats a half-way one (the map is mostly a cylinder), but the
+    // best direction is still the axis. A poor match means no axis.
+    Some(best_axis(v, b, n)).filter(|a| a.1 >= 0.75)
+}
+
+/// `find_axis` without its verdict: the best direction, however poor.
+pub fn best_axis(v: &[f32], b: usize, n: usize) -> ([f64; 3], f64, f64) {
     let small = if b > 32 { super::fourier::resample3(v, b, 32) } else { v.to_vec() };
     let bs = (small.len() as f64).cbrt().round() as usize;
     let step = 360.0 / n as f64;
@@ -834,10 +842,7 @@ pub fn find_axis(v: &[f32], b: usize, n: usize) -> Option<([f64; 3], f64, f64)> 
     }
     let half = score(v, b, best.0, step / 2.0);
     eprintln!("axis search C{n}: {:.2} (half turn {:.2}) along {:.2?}", best.1, half, best.0);
-    // The n comes from the 2D classes; at low resolution the n-fold turn
-    // hardly beats a half-way one (the map is mostly a cylinder), but the
-    // best direction is still the axis. A poor match means no axis.
-    (best.1 >= 0.75).then_some((best.0, best.1, half))
+    (best.0, best.1, half)
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

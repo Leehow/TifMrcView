@@ -75,7 +75,9 @@ USAGE
   from its radius; circles around two or three examples of whatever is to be
   found, kind "example" given as centre + a point on the circle, are taken as
   they look: everything like them in all the inputs is found, at each of the
-  sizes circled, and what stands out is averaged into <out>/circled/), or --template map.mrc|.em (a density map the user already
+  sizes circled, and what stands out is averaged into <out>/circled/; with
+  --only nothing is searched for and just what was circled, four or more, is
+  averaged), or --template map.mrc|.em (a density map the user already
   has is the template: everything like it is found and averaged without
   stopping, into <out>/own/). --kinds (on a folder that already holds an
   average; give the same tomograms and --out) sorts its particles into kinds
@@ -271,7 +273,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 5] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes"];
+        const FLAGS: [&str; 6] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes", "--only"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -710,6 +712,7 @@ fn sta_note(n: &auto_sta::Note, progress: &Progress) {
         Note::NoDataset { tomogram } => eprintln!("warning: no tilt series dataset (*.tomo.json) found for {tomogram}: assuming tilts -60…60"),
         Note::LookMissing { look, tomogram } => eprintln!("tmv sta: the look tomogram {look} of {tomogram} is missing: using the tomogram alone"),
         Note::OlderVersion { tomogram } => eprintln!("tmv sta: {tomogram} was made by an older version: the average will come from the tomogram only (run tmv tomo --for sta again to use the tilt images)"),
+        Note::ForLooking { tomogram } => eprintln!("tmv sta: {tomogram} was reconstructed to be looked at: the average will come from the tomogram only (run tmv tomo --for sta to use the tilt images)"),
         Note::CardsStale { why } => eprintln!("tmv sta: making the cards again: {why}"),
         Note::CardsReused { dir } => eprintln!("tmv sta: reusing the cards in {dir} (delete that folder to make them again)"),
         Note::CardsMade { .. } => progress.done(),
@@ -804,7 +807,7 @@ fn sta_marks(o: &Opts, file: &str, found: &[auto_sta::Resolved], out: &Path, pro
         _ => {}
     };
     let dev = || Ok(device());
-    let mut v = run_marks(&inputs, &marks, size.as_deref(), Some(&out.to_string_lossy()), &dev, &emit, &|_| String::new())?;
+    let mut v = run_marks(&inputs, &marks, size.as_deref(), o.flag("only"), Some(&out.to_string_lossy()), &dev, &emit, &|_| String::new())?;
     progress.done();
     let r = &v["report"];
     let map = r["map"].as_str().unwrap_or("average.mrc");
@@ -987,11 +990,13 @@ fn sta(o: &Opts) -> Result<Value> {
             let d = v["dataset"].as_str().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).or_else(|| auto_sta::dataset_of(&path));
             (path, d)
         } else {
-            let dataset = auto_sta::dataset_of(input);
+            // A clear companion stands for the tomogram it was made from: averages never come from it.
+            let tomogram = auto_sta::raw_of_look(input)?.unwrap_or_else(|| input.clone());
+            let dataset = auto_sta::dataset_of(&tomogram);
             if dataset.is_none() {
                 require_pixel("sta", input, &open_image(input)?, o.number("pixel")?)?;
             }
-            (input.clone(), dataset)
+            (tomogram, dataset)
         };
         found.push(auto_sta::resolve(input, tomogram, dataset, &note));
     }
