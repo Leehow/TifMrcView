@@ -136,21 +136,26 @@ enum Stored {
 /// Memory for full-size frames before they go to disk.
 const MEMORY: usize = 6 << 30;
 
+enum Keep<'a> {
+    U8(&'a mut [u8]),
+    U16(&'a mut [u16]),
+    F32(&'a mut [f32]),
+}
+
 impl Stored {
-    fn new(frame: &[f32], used: &mut usize) -> Stored {
-        let whole = |max: f32| frame.par_iter().all(|v| *v >= 0.0 && *v <= max && v.fract() == 0.0);
-        let (s, bytes) = if whole(255.0) {
-            (Stored::U8(frame.par_iter().map(|v| *v as u8).collect()), frame.len())
-        } else if whole(65535.0) {
-            (Stored::U16(frame.par_iter().map(|v| *v as u16).collect()), 2 * frame.len())
-        } else {
-            (Stored::F32(frame.to_vec()), 4 * frame.len())
-        };
+    /// Room for a frame of `len` pixels, in the narrowest type its values
+    /// (`whole` numbers up to `max`) fit, or on disk past `MEMORY`.
+    fn empty(len: usize, whole: bool, max: f32, used: &mut usize) -> Stored {
+        let bytes = if whole && max <= 255.0 { 1 } else if whole && max <= 65535.0 { 2 } else { 4 } * len;
         if *used + bytes > MEMORY {
             return Stored::Disk;
         }
         *used += bytes;
-        s
+        match bytes / len.max(1) {
+            1 => Stored::U8(vec![0; len]),
+            2 => Stored::U16(vec![0; len]),
+            _ => Stored::F32(vec![0.0; len]),
+        }
     }
 }
 
@@ -300,32 +305,95 @@ impl Spool {
             let decode = std::time::Instant::now();
             let mut frame = movie.group(start, count, up)?;
             spool.decode_ms += decode.elapsed().as_secs_f64() * 1000.0;
-            if frame.par_iter().any(|x| !x.is_finite()) {
+            // One pass for the checks, one for everything else: each pass
+            // over a 4096² frame is a 64 MB walk through memory.
+            let (finite, whole, max) = frame
+                .par_chunks(1 << 16)
+                .map(|c| c.iter().fold((true, true, 0.0f32), |(f, wh, m), &v| (f && v.is_finite(), wh && v >= 0.0 && v.fract() == 0.0, m.max(v))))
+                .reduce(|| (true, true, 0.0), |a, b| (a.0 && b.0, a.1 && b.1, a.2.max(b.2)));
+            if !finite {
                 bail!("电影或 gain 含 NaN/Inf");
             }
             // Kept as recorded; the gain is applied when read.
-            // Kept as recorded; the gain is applied when read.
-            if !preview {
-                let stored = Stored::new(&frame, &mut spool.used);
-                if matches!(stored, Stored::Disk) {
-                    if !spool.dir.exists() {
-                        fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
-                    }
-                    let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
-                    fs::write(spool.dir.join(format!("frame-{}.f32", spool.stored.len())), bytes)?;
+            let mut stored = (!preview).then(|| Stored::empty(frame.len(), whole, max, &mut spool.used));
+            if matches!(stored, Some(Stored::Disk)) {
+                if !spool.dir.exists() {
+                    fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
                 }
+                let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
+                fs::write(spool.dir.join(format!("frame-{}.f32", spool.stored.len())), bytes)?;
+            }
+            // Rows of `bin` lines: stored, gained, added to the original and
+            // binned together while they are in cache.
+            let slab = bin * w;
+            let mut work = if bin == 1 { vec![] } else { vec![0.0f32; ww * hh] };
+            {
+                let mut original: &mut [f32] = if preview { &mut [] } else { &mut spool.original };
+                let gain = gain.as_deref();
+                let mut keep: Option<(&mut [u8], &mut [u16], &mut [f32])> = match stored.as_mut() {
+                    Some(Stored::U8(v)) => Some((v, &mut [], &mut [])),
+                    Some(Stored::U16(v)) => Some((&mut [], v, &mut [])),
+                    Some(Stored::F32(v)) => Some((&mut [], &mut [], v)),
+                    _ => None,
+                };
+                // Split everything into per-slab pieces, then work on them in parallel.
+                let rows = frame.len().div_ceil(slab);
+                let mut jobs = Vec::with_capacity(rows);
+                let mut rest_frame: &mut [f32] = &mut frame;
+                let mut rest_work: &mut [f32] = &mut work;
+                for r in 0..rows {
+                    let take = slab.min(rest_frame.len());
+                    let (f, tail) = std::mem::take(&mut rest_frame).split_at_mut(take);
+                    rest_frame = tail;
+                    let o = if original.is_empty() { None } else {
+                        let (o, tail) = std::mem::take(&mut original).split_at_mut(take);
+                        original = tail;
+                        Some(o)
+                    };
+                    let k = match keep.as_mut() {
+                        Some((a, _, _)) if !a.is_empty() => { let (x, t) = std::mem::take(a).split_at_mut(take); *a = t; Some(Keep::U8(x)) }
+                        Some((_, b, _)) if !b.is_empty() => { let (x, t) = std::mem::take(b).split_at_mut(take); *b = t; Some(Keep::U16(x)) }
+                        Some((_, _, c)) if !c.is_empty() => { let (x, t) = std::mem::take(c).split_at_mut(take); *c = t; Some(Keep::F32(x)) }
+                        _ => None,
+                    };
+                    let wr = if bin > 1 && r < hh && take == slab {
+                        let (x, t) = std::mem::take(&mut rest_work).split_at_mut(ww);
+                        rest_work = t;
+                        Some(x)
+                    } else {
+                        None
+                    };
+                    jobs.push((r * slab, f, o, k, wr));
+                }
+                jobs.into_par_iter().for_each(|(at, f, o, k, wr)| {
+                    match k {
+                        Some(Keep::U8(d)) => d.iter_mut().zip(f.iter()).for_each(|(d, v)| *d = *v as u8),
+                        Some(Keep::U16(d)) => d.iter_mut().zip(f.iter()).for_each(|(d, v)| *d = *v as u16),
+                        Some(Keep::F32(d)) => d.copy_from_slice(f),
+                        None => {}
+                    }
+                    if let Some(g) = gain {
+                        let n = f.len();
+                        f.iter_mut().zip(&g[at..at + n]).for_each(|(x, g)| *x *= g);
+                    }
+                    if let Some(o) = o {
+                        o.iter_mut().zip(f.iter()).for_each(|(o, v)| *o += v);
+                    }
+                    if let Some(row) = wr {
+                        for (x, out) in row.iter_mut().enumerate() {
+                            let mut sum = 0.0;
+                            for dy in 0..bin {
+                                for dx in 0..bin {
+                                    sum += f[dy * w + x * bin + dx];
+                                }
+                            }
+                            *out = sum / (bin * bin) as f32;
+                        }
+                    }
+                });
+            }
+            if let Some(stored) = stored {
                 spool.stored.push(stored);
-            }
-            if let Some(g) = &gain {
-                frame.par_iter_mut().zip(g).for_each(|(x, g)| *x *= g);
-            }
-            // A preview keeps only the binned frames.
-            if !preview {
-                spool
-                    .original
-                    .par_iter_mut()
-                    .zip(&frame)
-                    .for_each(|(o, v)| *o += v);
             }
             if bin == 1 {
                 // Nothing to bin: keep the frame itself, not a copy.
@@ -337,18 +405,6 @@ impl Spool {
                 progress("读取分组", spool.len(), total);
                 continue;
             }
-            let mut work = vec![0.0; ww * hh];
-            work.par_chunks_mut(ww).enumerate().for_each(|(y, row)| {
-                for (x, o) in row.iter_mut().enumerate() {
-                    let mut sum = 0.0;
-                    for dy in 0..bin {
-                        for dx in 0..bin {
-                            sum += frame[(y * bin + dy) * w + x * bin + dx];
-                        }
-                    }
-                    *o = sum / (bin * bin) as f32;
-                }
-            });
             spool.frames.push(work);
             spool.counts.push(count);
             spool
