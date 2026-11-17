@@ -149,6 +149,9 @@ pub fn fit(
     (model, weights)
 }
 
+/// The local correlation's side (GPU: true) by patch size and count.
+static CHOICE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(usize, usize), bool>>> = std::sync::LazyLock::new(Default::default);
+
 pub fn estimate(
     sp: &Spool,
     global: &[[f64; 2]],
@@ -251,7 +254,20 @@ pub fn estimate(
                 .collect::<Vec<_>>()
         };
         let mut calibrated_peaks = None;
-        if it == 0 {
+        // Measured once per process and patch geometry, then kept: measured
+        // again for every movie, a busy processor flipped some movies to the
+        // other side and the same series came out different in the last
+        // digits (and each movie paid for both).
+        let key = (n, pairs.len());
+        let known = (it == 0).then(|| CHOICE.lock().unwrap().get(&key).copied()).flatten();
+        if let Some(gpu_won) = known {
+            if gpu_won && p.backend != "cpu" {
+                if let Some((dev, _)) = crate::ctf_gpu::device() {
+                    gpu = crate::ctf_gpu::guarded(|| Batch::new(dev, n)).ok();
+                    use_gpu = gpu.is_some();
+                }
+            }
+        } else if it == 0 {
             // Measure the real batch: a tiny sample can reject the GPU even
             // though thousands of patches amortize transfer/dispatch costs.
             let q = &pairs[..];
@@ -283,6 +299,7 @@ pub fn estimate(
                 }
             }
             if calibrated_peaks.is_none() { calibrated_peaks = Some(reference); }
+            CHOICE.lock().unwrap().insert(key, use_gpu);
         }
         let peaks = if let Some(peaks) = calibrated_peaks {
             if use_gpu { crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 批量 FFT 与峰值搜索；CPU 几何拟合".into())); }
