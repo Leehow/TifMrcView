@@ -29,10 +29,10 @@ pub use super::package::MAX_PACKAGE;
 pub const MAX_INDEX: u64 = 4 << 20;
 pub const SCHEME: &str = "tifmrcview";
 
-/// Legacy packages shipped in plugins/ at the API 2 transition. A name alone
+/// Official plugins that still use the trusted API 1 loader. A name alone
 /// grants nothing: the exact version and archive hash must also match the
 /// backend's official HTTPS index. Remove this exception as they migrate.
-pub const OFFICIAL_API1_IDS: &[&str] = &["fluoview", "imaris", "lasx", "nis", "recorder"];
+pub const OFFICIAL_API1_IDS: &[&str] = &["fluoview", "imaris", "lasx", "nis", "recorder", "ssh"];
 pub const LEGACY_REJECTED: &str = "不再接受第三方 API 1 插件，请联系开发者升级到 API 2；官方旧版插件须与已读取的插件市场索引完全匹配，请先刷新插件市场";
 
 /// What a `tifmrcview://install-plugin?id=…&version=…` link asks for.

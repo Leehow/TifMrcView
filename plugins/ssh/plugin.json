@@ -1,0 +1,17 @@
+{
+  "id": "ssh",
+  "name": "SSH 远程文件夹",
+  "version": "1.4.0",
+  "description": "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.7.0",
+  "author": "TifMrcView",
+  "native": true,
+  "details": {
+    "zh": [
+      "可选插件，软件默认不附带。需要时从插件市场下载安装，可随时禁用或卸载。",
+      "支持密码和本地私钥登录，通过 SSH / SFTP 浏览远程目录并按需缓存图像。密码与密钥口令不保存，私钥仅在本机读取。"
+    ]
+  }
+}

@@ -1,9 +1,10 @@
 # SSH remote folders
 
-The desktop host includes **SSH 远程文件夹**, a trusted plugin that can be
-enabled or disabled in the plugin dialog. When enabled, an SSH button appears
-in the top toolbar. This is bundled functionality, not a separately published
-market package. Sandboxed third-party plugins receive no new permissions.
+**SSH 远程文件夹** is an optional trusted plugin installed from the plugin
+market. It is not included or loaded by default. After installation, it can be
+enabled, disabled or uninstalled in the plugin dialog. When enabled, an SSH
+button appears in the top toolbar. Its native backend requires the installed
+package. Sandboxed third-party plugins receive no new permissions.
 The SSH UI inherits the edition's accent: standard blue and Pro red, including
 toolbar/folder/image icons, buttons, focus, selection and transfer progress.
 

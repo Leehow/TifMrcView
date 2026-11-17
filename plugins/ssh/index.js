@@ -1,10 +1,16 @@
 "use strict";
 
+{
+const stylesheetUrl = new URL("style.css", document.currentScript.src).href;
 TifMrcView.register({
   id: "ssh", name: "SSH 远程文件夹", version: "1.4.0",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
-    if (!app.hasNative()) return;
+    if (!app.hasNative()) throw new Error("当前版本不支持 SSH，请更新桌面应用");
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = stylesheetUrl;
+    document.head.append(stylesheet);
     const icon = (type) => {
       const paths = {
         server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>',
@@ -422,7 +428,8 @@ TifMrcView.register({
       for (const job of previewQueue.splice(0)) job.reject(new Error("插件已关闭"));
       previews.clear();
       if (connection) native("disconnect").catch(() => {});
-      app.folders.unmount(); dialog.remove(); transfer.remove(); documentView.remove();
+      app.folders.unmount(); dialog.remove(); transfer.remove(); documentView.remove(); stylesheet.remove();
     };
   },
 });
+}

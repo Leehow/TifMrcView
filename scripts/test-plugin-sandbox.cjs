@@ -89,7 +89,7 @@ const server = http.createServer((req, res) => {
           case "plugin_scan":
             S.info = { path: "/test/image.tif", name: "image.tif", width: 8, height: 8, sizeZ: 3, sizeT: 2, sizeC: 1, dtype: "u8", format: "TIFF", metadata: [] };
             S.chans = [{ visible: true, color: [255, 255, 255], min: 0, max: 255 }];
-            return { native: ["recorder"], dir: "/mock/plugins", packages, user: [] };
+            return { native: ["recorder", "ssh"], dir: "/mock/plugins", packages: packages.filter((p) => p.id !== "ssh"), user: [] };
           case "plugin_market_list": return window.mockMarket;
           case "take_install_request": { const req = window.mockRequest; window.mockRequest = null; return req; }
           case "pick_plugin_package": return "/test/demo.zip";
@@ -125,11 +125,18 @@ const server = http.createServer((req, res) => {
     return rec && (!rec.active || S.pluginMeta.some((g) => g.name === "probe:permission")) && window.mockWrites.length;
   });
   await page.waitForFunction(() => pluginHost.plugins.get("sandbox-sample")?.active && !pluginHost.plugins.get("sandbox-sample")?.error);
+  assert.equal(await page.locator(".ssh-toolbar").count(), 0, "SSH must not load before installation");
+  assert(!requests.some((url) => url.startsWith("/tmvplugin/ssh/")), "fresh app must not request SSH assets");
+  await page.evaluate(async (pkg) => loadPackage(pkg), packages.find((p) => p.id === "ssh"));
+  await page.waitForFunction(() => pluginHost.plugins.get("ssh")?.active);
+  await page.waitForFunction(() => [...document.styleSheets].some((s) => s.href?.endsWith("/ssh/style.css")));
+  assert.equal(await page.locator(".ssh-toolbar").count(), 1, "installed SSH adds its toolbar entry");
+  console.log("PASS: fresh app excludes SSH; installed package loads its UI and stylesheet");
   const state = await page.evaluate(() => ({
     plugins: [...pluginHost.plugins.values()].map((r) => ({ id: r.def.id, active: r.active, error: r.error })),
     meta: S.pluginMeta, writes: window.mockWrites,
   }));
-  assert.equal(state.plugins.length, packages.length + 2); // built-in i18n + SSH
+  assert.equal(state.plugins.length, packages.length + 1); // only i18n is built in
   assert(state.plugins.every((p) => p.active && !p.error), JSON.stringify(state.plugins));
   if (process.env.TMV_TEST_SSH_ONLY === "1") {
     await require("./ssh-ui-checks.cjs")(page);
