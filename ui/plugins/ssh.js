@@ -320,6 +320,15 @@ TifMrcView.register({
         processing: (()=>{const identity=processingIdentity;const check=()=>{if(disposed||!connection||identity!==processingIdentity)throw new Error('请重新连接原 SSH 服务器');};return {identity,
           choose: async()=>{check();if(!dialog.open)dialog.showModal();return null;},
           call: request=>{check();return native('processing',{request});},
+          previewFile: async path=>{
+            check();
+            // Only the processed stacks requested by the Cryo-ET review use
+            // this path. Reuse the normal size/mtime-validated download cache.
+            const listing=await native('list',{path:path.replace(/\/[^/]+$/, '')||'/'});
+            const entry=listing.entries.find(e=>e.path===path);
+            if(!entry?.supported||!entry.size||entry.size>2*1024**3)return null;
+            const local=await download(entry);check();return local;
+          },
           open: async path=>{check();const listing=await native('list',{path:path.replace(/\/[^/]+$/, '')||'/'});const entry=listing.entries.find(e=>e.path===path);if(!entry?.supported)throw new Error('结果文件不可读或缺少格式插件');await app.folders.openEntry(entry,download,preview);}
         };})() });
     }

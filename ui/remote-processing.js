@@ -49,10 +49,17 @@
       }
     } finally { if(isLong && active.get(kind)?.record===record){active.delete(kind);updateBar();}else if(!isLong&&!active.size)updateBar(); }
   }
-  async function remote(ctx,cmd,args) {
+  async function remote(ctx,cmd,args,native) {
     if(cmd.endsWith('_cancel')) {const job=active.get(cmd.startsWith('spa_')?'spa':'tomo');if(job)return request(job.ctx,{action:'cancel',job:job.record.job},true);return;}
     if(cmd.startsWith('live_'))return null;
     const decoded=map(args,s=>{const x=unpack(s);if(x){if(x.id!==ctx.identity)throw new Error('项目属于其他服务器，请重新连接原服务器');return x.path;}return s===S.folder.dir?S.folder.remotePath:(typeof ext!=='undefined' && ext.remoteFiles?.get(s)?.remotePath)||s;});
+    if(cmd==='tomo_preview_file'){
+      ctx.previewFiles||=new Map();ctx.previewFiles.delete(decoded.path);
+      const local=await ctx.previewFile?.(decoded.path);
+      if(local)ctx.previewFiles.set(decoded.path,local);
+      return !!local;
+    }
+    if(cmd==='tomo_view'&&ctx.previewFiles?.has(decoded.path))return native(cmd,{...decoded,path:ctx.previewFiles.get(decoded.path)});
     // project identity is pinned at first submission, including after navigation/reconnect.
     const project = decoded.req?.folder || (cmd==='spa_open'?decoded.source:null) || ctx.project;
     const key=JSON.stringify([ctx.identity,cmd,decoded]);
@@ -94,7 +101,8 @@
       const processing=(/^(tomo_|spa_|live_)/.test(cmd) || cmd==='gpu_info');
       if(pinned && !processing && cmd!=='pick_folder')throw new Error('此操作尚未接入远程工作区，请先打开结果图像');
       if(cmd==='pick_folder' && ctx)return ctx.choose();
-      if(processing && (pinned || ctx)) {if(!ctx)throw new Error('请先重新连接 SSH 服务器');return remote(ctx,cmd,args||{});}
+      if(processing && (pinned || ctx)) {if(!ctx)throw new Error('请先重新连接 SSH 服务器');return remote(ctx,cmd,args||{},native);}
+      if(cmd==='tomo_preview_file')return Promise.resolve(false);
       return native(cmd,args);
     },
   };

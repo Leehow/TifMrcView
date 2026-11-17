@@ -573,8 +573,10 @@
       if(!frames[next]){buffering=next;get(next,true);if(failed.has(next)){playing=false;buffering=null;}update();return;}
       show(next);
     },125);
-    show(0);
-    for(let k=0;k<n;k++)get(k);
+    state.textContent='正在准备全部对齐预览…';
+    Promise.resolve().then(()=>invoke('tomo_preview_file',{path:s.aligned}))
+      .catch(e=>W.status(`预览缓存不可用，继续读取小图：${e}`))
+      .then(()=>{if(gen!==rv.gen)return;show(0);for(let k=0;k<n;k++)get(k);});
   }
 
   // Per-view residual by angle; views left out of the alignment are grey.
@@ -664,6 +666,9 @@
     async function start(){
       retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
       try {
+        state.textContent='正在准备全部断层图预览…';
+        try{await invoke('tomo_preview_file',{path:t.path});}catch(e){W.status(`预览缓存不可用，继续读取小图：${e}`);}
+        if(gen!==rv.gen)return;
         const d=await pic(t.path,null,512,gen,true);
         if(gen!==rv.gen)return;
         depth=R.depthFromTitle(d.title)||fromDataset()||1;i=Math.floor(depth/2);
