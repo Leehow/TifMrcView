@@ -164,7 +164,7 @@ pub fn resolve(mdoc: &Path, movie: &str, folder: Option<&Path>) -> Option<PathBu
     for d in dirs {
         let mut candidates = vec![d.clone()];
         if let Ok(entries) = std::fs::read_dir(&d) {
-            candidates.extend(entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).take(128).map(|e| e.path()));
+            candidates.extend(entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))).take(128).map(|e| e.path()));
         }
         for dir in candidates {
             let p = dir.join(name);
