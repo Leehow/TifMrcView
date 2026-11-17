@@ -280,7 +280,7 @@
 
   // ---------- running ----------
 
-  async function runPass(label, purpose, only) {
+  async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only } })) {
     const un = await T.event.listen("tomo-session", async () => {
       // The image list reads the folder again when a series has new files.
       const files = () => session.series.map(bodySig).join("\n");
@@ -288,7 +288,7 @@
       await scan();
       if (files() !== before) document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
     });
-    const r = await W.run(label, () => invoke("tomo_session_run", { req: { folder, purpose, only } }));
+    const r = await W.run(label, call);
     un();
     if (r) {
       adopt(r);
@@ -338,6 +338,25 @@
     if(only.includes(rv.name)){closeReview();stopMedia();rv.name=null;rv.dataset=null;}
     return runPass(purpose?'重构':'处理',purpose,only);
   }
+
+  // A run that kept going on the server while the app was closed: show it
+  // here as if it had just been started (folder, ticks, progress, cancel).
+  document.addEventListener("tmv-remote-running", (e) => {
+    const { record } = e.detail;
+    if (record.command !== "tomo_session_run" || W.busy) return;
+    e.detail.claimed = true;
+    const req = record.args?.req || {};
+    // Open the panel first: opening follows the open folder, which the job may not be.
+    if ($("cryoet-workspace")?.hidden) $("btn-cryoet")?.click();
+    if (W.job?.() === "sta" || (W.job?.() === "recon") !== !!req.purpose) W.go?.(req.purpose ? "recon" : "quick");
+    const f = window.TmvRemote.localPath(record, req.folder);
+    if (f && f !== folder) { folder = f; changedFolder(); }
+    chose = true;
+    selected.clear();
+    for (const n of req.only || []) selected.add(n);
+    scan();
+    runPass(req.purpose ? "重构" : "处理", req.purpose || null, req.only || [], () => window.TmvRemote.attach(record));
+  });
 
   // ---------- the review of one series ----------
 
