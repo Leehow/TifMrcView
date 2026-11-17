@@ -562,6 +562,7 @@ pub fn run(
                 continue;
             };
             taken.store(i, SeqCst);
+            let waited = std::time::Instant::now();
             let prepared = loop {
                 if let Some(p) = ready.remove(&i) {
                     break p;
@@ -569,7 +570,12 @@ pub fn run(
                 let (at, p) = read.recv().map_err(|_| anyhow::anyhow!("已取消"))?;
                 ready.insert(at, p);
             };
+            let wait_ms = waited.elapsed().as_secs_f64() * 1e3;
+            let finishing = std::time::Instant::now();
             let corrected = prepared.and_then(|m|match m{Ready::Corrected(c)=>Ok(c),Ready::Prepared(m)=>super::finish(m,None,p,&|stage,a,b|progress(&format!("{label} · {stage}"),a,b))});
+            let finish_ms = finishing.elapsed().as_secs_f64() * 1e3;
+            let after = std::time::Instant::now();
+            let mut ctf_ms = 0.0;
             match corrected {
                 Ok(super::Corrected { mut sums, result: m }) => {
                     let (mut w, mut h, mut px) = (m.width, m.height, m.pixel_a);
@@ -605,7 +611,10 @@ pub fn run(
                     let (small, sw, sh) = shrink(view, w, h);
                     st.small.write(section, &small)?;
                     (r.mean, r.dark) = crate::tomo::triage::measure(&sums.unweighted, w, h);
-                    if let Some(f) = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv) {
+                    let ctf_clock = std::time::Instant::now();
+                    let fit = quick_ctf(&sums.unweighted, w, h, px, p.voltage_kv);
+                    ctf_ms = ctf_clock.elapsed().as_secs_f64() * 1e3;
+                    if let Some(f) = fit {
                         r.defocus_um = Some(0.5 * (f.df1 + f.df2) / 1e4);
                         r.fit_res_a = Some(f.fit_res);
                     }
@@ -620,6 +629,9 @@ pub fn run(
             }
             records.push(r);
             save(&result, &records)?;
+            if std::env::var_os("TMV_GPU_PROFILE").is_some() {
+                eprintln!("SERIES_PROFILE movie={i} wait={wait_ms:.0}ms finish={finish_ms:.0}ms after={:.0}ms (ctf {ctf_ms:.0}ms)", after.elapsed().as_secs_f64() * 1e3);
+            }
         }
         Ok(())
     })?;

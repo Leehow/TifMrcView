@@ -100,6 +100,7 @@ pub fn run(
     if profile {
         eprintln!("GPU_SUM_PROFILE {}x{} frames={} tiles={n}x{t} cut+upload={cut_ms:.1}ms queue={math_ms:.1}ms", sp.w, sp.h, sp.len());
     }
+    let backing = std::time::Instant::now();
     let back = |re: Tensor<3>, im: Tensor<3>| {
         let v = download(inverse(re, im, t));
         let tiles: Vec<Vec<f32>> = v.chunks(t * t).map(<[f32]>::to_vec).collect();
@@ -109,12 +110,16 @@ pub fn run(
         let scale = norm.sqrt().clamp_min(1e-12).recip().mul_scalar((sp.len() as f32).sqrt());
         back(wr * scale.clone(), wi * scale)
     });
-    Ok(Sums {
+    let sums = Sums {
         unweighted: back(er.clone() + or.clone(), ei.clone() + oi.clone()),
         even: back(er, ei),
         odd: back(or, oi),
         weighted,
-    })
+    };
+    if profile {
+        eprintln!("GPU_SUM_PROFILE back (inverse+download+blend) {:.1}ms", backing.elapsed().as_secs_f64() * 1e3);
+    }
+    Ok(sums)
 }
 
 mod kernel {

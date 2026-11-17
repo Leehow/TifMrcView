@@ -88,6 +88,19 @@ pub struct Sections {
     pub h: usize,
     pub n: usize,
     px: f64,
+    /// Sections on their way to disk: written by a thread of their own, so
+    /// a slow disk does not hold up the next movie (a series writes three
+    /// 4 GB stacks; on a SATA SSD that was 3.9 s a movie of waiting).
+    behind: Option<Behind>,
+}
+struct Behind {
+    send: std::sync::mpsc::SyncSender<(u64, Vec<u8>)>,
+    done: std::thread::JoinHandle<Result<()>>,
+}
+impl Drop for Sections {
+    fn drop(&mut self) {
+        let _ = self.drain();
+    }
 }
 
 impl Sections {
@@ -111,39 +124,68 @@ impl Sections {
             file.write_all(&crate::align::mrc_header(w, h, n, px, [0.0; 4], "TifMrcView Pro: native motion correction"))?;
             file.set_len(Self::bytes(w, h, n))?;
         }
-        Ok(Sections { file, w, h, n, px })
+        Ok(Sections { file, w, h, n, px, behind: None })
     }
 
     /// Writes section `i`; returns its least, greatest, sum and sum of squares.
     pub fn write(&mut self, i: usize, v: &[f32]) -> Result<[f64; 4]> {
-        if i >= self.n || v.len() != self.w * self.h || v.iter().any(|x| !x.is_finite()) {
+        use rayon::prelude::*;
+        if i >= self.n || v.len() != self.w * self.h || v.par_iter().any(|x| !x.is_finite()) {
             bail!("电影输出尺寸或值无效");
         }
-        let (mut lo, mut hi, mut sum, mut sum2) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0);
-        for x in v {
-            let x = *x as f64;
-            lo = lo.min(x);
-            hi = hi.max(x);
-            sum += x;
-            sum2 += x * x;
-        }
-        let bytes: Vec<u8> = v.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (lo, hi, sum, sum2) = v
+            .par_chunks(1 << 16)
+            .map(|c| c.iter().fold((f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0), |(lo, hi, s, s2), &x| {
+                let x = x as f64;
+                (lo.min(x), hi.max(x), s + x, s2 + x * x)
+            }))
+            .reduce(|| (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0), |a, b| (a.0.min(b.0), a.1.max(b.1), a.2 + b.2, a.3 + b.3));
+        let mut bytes = vec![0u8; v.len() * 4];
+        bytes.par_chunks_mut(1 << 18).zip(v.par_chunks(1 << 16)).for_each(|(d, s)| {
+            for (d, s) in d.chunks_exact_mut(4).zip(s) {
+                d.copy_from_slice(&s.to_le_bytes());
+            }
+        });
         let at = 1024 + (i * self.w * self.h) as u64 * 4;
-        self.file.seek(SeekFrom::Start(at))?;
-        self.file.write_all(&bytes)?;
-        // Start writing the section to disk now, without waiting: else a
-        // whole series (three 4 GB stacks) sits in the page cache until
-        // `finish` syncs it, and that took two minutes after the last movie.
-        #[cfg(target_os = "linux")]
-        unsafe {
-            use std::os::fd::AsRawFd;
-            libc::sync_file_range(self.file.as_raw_fd(), at as i64, bytes.len() as i64, libc::SYNC_FILE_RANGE_WRITE);
+        if self.behind.is_none() {
+            let mut file = self.file.try_clone()?;
+            // Two sections in flight at most: memory stays bounded when the
+            // disk is slower than the movies.
+            let (send, read) = std::sync::mpsc::sync_channel::<(u64, Vec<u8>)>(2);
+            let done = std::thread::spawn(move || -> Result<()> {
+                for (at, bytes) in read {
+                    file.seek(SeekFrom::Start(at))?;
+                    file.write_all(&bytes)?;
+                    // Start writing to disk now, not when `finish` syncs a
+                    // whole series out of the page cache.
+                    #[cfg(target_os = "linux")]
+                    unsafe {
+                        use std::os::fd::AsRawFd;
+                        libc::sync_file_range(file.as_raw_fd(), at as i64, bytes.len() as i64, libc::SYNC_FILE_RANGE_WRITE);
+                    }
+                }
+                Ok(())
+            });
+            self.behind = Some(Behind { send, done });
+        }
+        if self.behind.as_ref().unwrap().send.send((at, bytes)).is_err() {
+            // The writer stopped: its error says why.
+            self.drain()?;
+            bail!("电影输出写入线程已停止");
         }
         Ok([lo, hi, sum, sum2])
     }
 
+    /// Waits for the sections on their way to disk.
+    pub fn drain(&mut self) -> Result<()> {
+        let Some(Behind { send, done }) = self.behind.take() else { return Ok(()) };
+        drop(send);
+        done.join().map_err(|_| anyhow::anyhow!("电影输出写入线程崩溃"))?
+    }
+
     pub fn read(&mut self, i: usize) -> Result<Vec<f32>> {
         use std::io::Read;
+        self.drain()?;
         if i >= self.n {
             bail!("电影输出层号无效");
         }
@@ -155,12 +197,14 @@ impl Sections {
 
     /// Keeps only the sections `keep` (rising), moved up into their places.
     pub fn compact(&mut self, keep: &[usize]) -> Result<()> {
+        self.drain()?;
         for (to, &from) in keep.iter().enumerate() {
             if from != to {
                 let v = self.read(from)?;
                 self.write(to, &v)?;
             }
         }
+        self.drain()?;
         self.n = keep.len();
         self.file.set_len(Self::bytes(self.w, self.h, self.n))?;
         Ok(())
@@ -169,6 +213,7 @@ impl Sections {
     /// Writes the header for what the sections hold (`stats` as `write`
     /// returned them, one per section) and flushes the file.
     pub fn finish(&mut self, stats: &[[f64; 4]]) -> Result<()> {
+        self.drain()?;
         let count = (self.w * self.h * stats.len().max(1)) as f64;
         let lo = stats.iter().map(|s| s[0]).fold(f64::INFINITY, f64::min);
         let hi = stats.iter().map(|s| s[1]).fold(f64::NEG_INFINITY, f64::max);
