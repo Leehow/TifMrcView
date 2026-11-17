@@ -497,6 +497,9 @@ mod tests {
         });
     }
 
+    // Windows refuses to shorten a file that is mapped ("user-mapped section
+    // open"), so the truncation this guards against cannot happen there.
+    #[cfg(unix)]
     #[test]
     fn movie_read_reports_truncation_instead_of_returning_partial_pixels() {
         let dir = tempfile::tempdir().unwrap();
