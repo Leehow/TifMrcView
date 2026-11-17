@@ -353,8 +353,12 @@ jobs:
       - name: Stage portable NVRTC runtime for SSH engine
         shell: bash
         run: |
-          python3 -m pip download --no-deps --dest /tmp/tmv-nvrtc nvidia-cuda-nvrtc-cu12==12.8.93
-          python3 - <<'PYRUNTIME'
+          # The manylinux image's /usr/bin/python3 has no pip; its own
+          # Pythons under /opt/python do.
+          py=$(ls -d /opt/python/cp3*/bin/python 2>/dev/null | sort -V | tail -n 1)
+          py=${py:-python3}
+          "$py" -m pip download --no-deps --dest /tmp/tmv-nvrtc nvidia-cuda-nvrtc-cu12==12.8.93
+          "$py" - <<'PYRUNTIME'
           from pathlib import Path
           from zipfile import ZipFile
           dest = Path('src-tauri/target/pro/cuda')
