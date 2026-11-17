@@ -189,3 +189,14 @@ NAD 现有 Metal 18 组原始参考体迭代均 maxdelta=0；未放松任何数�
 最终验收：相同真实0/-27/-57°三部MRC，各进程5次、首轮与热运行分开；旧热运动求解约81ms，驻留GPU约55–65ms，auto约54–61ms，完整单电影热耗时约337–339→308–315ms。首轮auto校准仍有一次性开销，首轮总时间受文件缓存影响，不作为加速证据。所有数值对照最大位移差5.3e-7px，图像相对L2≤8.0e-8。最终2项实际GPU驻留检查、8项对齐和16项运动矫正检查通过。没有通过调整帧数、迭代或输出采样获得提速。
 另外用真实生产CLI quick/survey路径，从MDOC/41部原始电影完整执行到快速断层图，按旧→新→新→旧顺序4个全新输出项目。旧77.336/77.302s，新78.462/75.194s；输出全部为231×239×120、相同bin4/thickness120且像素有限、标定保持一致。整体未建立稳定提速，不能把单电影核心提速当作整套快速看图已优化成功。批处理电影读取/解码中位约4.3–4.4s（包含I/O，尚未拆分纯读盘和解码），运动求解中位仅约53–88ms；GPU计算节省未转化为可靠的总耗时改善。新流程两轮分别因现场校准选择CPU和GPU，保留全部记录，不挑最快一轮。输入41个原始文件的尺寸/mtime、3部实测原片的SHA256及MDOC均保持不变。
 四轮基线CLI复用0.7.218不可变二进制，SHA256与原收据匹配；对照其已验证源码清单与main的174个src文件，仅nad_eed_gpu.rs的后续资格缓存变化不一致（survey不调用NAD），所有运动/频谱/快速处理路径一致。证据 baseline-source-verification.json、series-timings.json、validation.json、final-summary.json；最终源码/不可变二进制摘要source.json，结果汇总acceptance.json。当前定位为实验候选：频谱GPU驻留链跑通且核心加速，但完整快览收益不足以声称整体提速。后续应先拆分读取与解码的实际关键路径；不在本轮追加解码器改造、额外降采样或新UI。未经新的合并/安装指令，保留独立提交，不改变main及已安装App。
+
+
+## 2026-11-16 输入阶段分段测量（继续 quick-motion 实验）
+
+用户批准“拆开测量”：仅测量，不改处理算法、采样、线程数、缓存策略、发布或安装。沿用已登记的codex/quick-motion-gpu-20261116工作区并由生命周期工具恢复active，基线4b5d338。原始主目录和其他工作区不改。证据放在 /Volumes/samsung/tifview-build.noindex/motion-input-profile-20261116。
+在同一实际movie/group及Spool::prepare路径加可选TMV_MOTION_INPUT_PROFILE分段：open、F32输出分配、img.page原始页物化、像素转换/累加、gain/finite/store/bin；series另测消费者等待Prepared及finish时间。计时保留三路实际预读，标签DEBUG-MOTION-INPUT，不引入新算法。测量结束删除生产源码临时探针，仅保留外部instrumentation.patch、源码摘要和不可变计时二进制供复现。两轮41部真实MRC完整survey及单部重复读取分别记录；第一完整试跑启动与单部试跑尾部可能短暂重叠，仅第二轮作为无重叠主测量。
+边界：MRC mode0未压缩，read_page通过mmap取页并复制成字节平面，因此pageMaterializeMs包含可能的缺页I/O、分配与拷贝，不能直接等同纯磁盘时间；convertAccumulateMs包含Rayon等待、内存写入/缺页，不能当作独占CPU算术时间。独立Python读探针用复用8MiB缓冲比较普通read及仅本只读文件描述符的F_NOCACHE，未purge全局缓存，也不保证绕过设备内部缓存。与生产计时分开，不能相加。官方参照：Apple fcntl(2) F_NOCACHE说明 https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fcntl.2.html 和mmap(2)文件映射/首次访问说明 https://www.man7.org/linux/man-pages/man2/mmap.2.html。阶段计时用稳定Instant边界，不修改底层读取方式；此轮是归因测量，不执行诊断技能的算法修复阶段。
+正式第二轮41部电影的每电影中位输入准备4435.49ms，其中原始页获取/物化4199.80ms、F32转换/累加110.03ms、输出分配17.46ms、有限值检查41.87ms、预览分箱52.53ms；本例无gain，不据此推断增益校正成本。按全部电影阶段总和计算，页获取/物化占输入准备94.08%；逐电影已解释比例最低99.91%。三路预读计时有重叠，不能把每电影时间直接累加为整任务墙钟时间。消费者等待输入合计55.87s，运动finish合计4.11s。
+同一部电影热读取三次，中位页物化39.39ms、输入准备250.96ms。独立普通顺序读两部文件首读约1.09s（396–398MiB/s）、重复读约37–41ms；F_NOCACHE在文件已热后仍为内存速度，未建立受控冷盘带宽，不能当作SSD吞吐。mincore控制也不能证明全局文件缓存驻留，排除其归因结果。因此结论限定为原始页获取/物化及缓存状态主导，尚未精确分离物理设备、mmap缺页和内存拷贝成本；不外推EER解码。
+两轮均完整处理41部电影，输出231×239×120且像素有限；去公共平移后与未加计时版本位移最大差分别0和3.73e-6px。报告report.json、逐项phase-summary.json、日志及不可变计时CLI保留在上述证据目录，临时源码探针移除并逐字节核对原提交。此次只提交测量记录，不合并main、不更新App；下一步可在明确批准后对比顺序/分块读取与现有mmap路径，不能把此次测量称作吞吐优化已完成。
+后续SSH实测按当前LAN可达性选择amax或leehow-pc，两者经常切换；本轮本机M1测量没有验证任一服务器当前连通性，也未更改SSH或网络配置。
