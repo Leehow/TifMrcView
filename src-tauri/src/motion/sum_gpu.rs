@@ -157,6 +157,54 @@ mod kernel {
             out[i] = v;
         }
     }
+    /// Many planes, each moved by its own whole-plane shift (Catmull–Rom,
+    /// the rules of `align::shift_plane` with fill 0): `shift` holds 4 ints
+    /// a plane (whole x, whole y, x fractional, y fractional), `k` 8 weights.
+    #[cube(launch)]
+    pub fn tmv_shift_planes(src: &[f32], out: &mut [f32], shift: &[i32], k: &[f32], n: usize) {
+        let i = ABSOLUTE_POS;
+        if i < out.len() {
+            let nn = n * n;
+            let p = i / nn;
+            let r = i % nn;
+            let s = p * 4;
+            let kk = p * 8;
+            let base = p * nn;
+            let ni = i32::cast_from(n);
+            let cx = i32::cast_from(r % n) + shift[s];
+            let cy = i32::cast_from(r / n) + shift[s + 1];
+            let inside_x = cx >= 0 && cx < ni && !(shift[s + 2] != 0 && cx == ni - 1);
+            let inside_y = cy >= 0 && cy < ni && !(shift[s + 3] != 0 && cy == ni - 1);
+            let mut v = 0.0f32;
+            if inside_x && inside_y {
+                #[unroll]
+                for j in 0..4usize {
+                    let mut y = cy + i32::cast_from(j) - 1;
+                    if y < 0 {
+                        y = 0;
+                    }
+                    if y > ni - 1 {
+                        y = ni - 1;
+                    }
+                    let row = base + usize::cast_from(y) * n;
+                    let mut a = 0.0f32;
+                    #[unroll]
+                    for q in 0..4usize {
+                        let mut c = cx + i32::cast_from(q) - 1;
+                        if c < 0 {
+                            c = 0;
+                        }
+                        if c > ni - 1 {
+                            c = ni - 1;
+                        }
+                        a += k[kk + q] * src[row + usize::cast_from(c)];
+                    }
+                    v += k[kk + 4 + j] * a;
+                }
+            }
+            out[i] = v;
+        }
+    }
     /// One frame moved by a whole-plane shift (Catmull–Rom, the rules of
     /// `align::shift_plane` with fill 0) and added, times `scale`, into `out`.
     /// One thread an output pixel; frames are launched in order, so each pixel
@@ -401,6 +449,41 @@ pub(crate) fn pinned_bytes(client: &burn_cubecl::cubecl::client::Client, parts: 
 
 pub(crate) fn upload(client: &burn_cubecl::cubecl::client::Client, v: &[f32]) -> burn_cubecl::cubecl::server::Handle {
     client.create(pinned(client, &[v]))
+}
+
+/// Square planes [b, n, n] on the device, each moved by its own shift: the
+/// GPU form of `align::movie_shift` for a batch.
+pub(crate) fn shift_planes(dev: &Device, planes: &Tensor<3>, shifts: &[[f64; 2]]) -> Result<Tensor<3>> {
+    use burn_cubecl::cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
+    let [b, n, n2] = planes.dims();
+    anyhow::ensure!(n == n2 && shifts.len() == b && n < i32::MAX as usize / 2, "平移平面尺寸不一致");
+    let client = client_of(dev)?;
+    let split = |s: f64| (s.floor() as i32, crate::align::catmull_rom((s - s.floor()) as f32), s > s.floor());
+    let (mut at, mut k) = (Vec::with_capacity(4 * b), Vec::with_capacity(8 * b));
+    for d in shifts {
+        let ((ix, kx, fx), (iy, ky, fy)) = (split(d[0]), split(d[1]));
+        at.extend([ix, iy, fx as i32, fy as i32]);
+        k.extend(kx.into_iter().chain(ky));
+    }
+    let at = client.create_from_slice(i32::as_bytes(&at));
+    let k = client.create_from_slice(f32::as_bytes(&k));
+    let src = planes.clone().try_into_primitive::<burn_cubecl::CubeBackend>().map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?;
+    anyhow::ensure!(src.is_contiguous(), "平移输入不连续");
+    let out = Tensor::<3>::empty([b, n, n], dev).try_into_primitive::<burn_cubecl::CubeBackend>().map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?;
+    let len = b * n * n;
+    let groups = len.div_ceil(256) as u32;
+    kernel::tmv_shift_planes::launch(
+        &client,
+        CubeCount::Static(groups.min(65535), groups.div_ceil(65535), 1),
+        CubeDim::new_1d(256),
+        // Each handle holds exactly the element count given here.
+        unsafe { BufferArg::from_raw_parts(src.handle.clone(), len) },
+        unsafe { BufferArg::from_raw_parts(out.handle.clone(), len) },
+        unsafe { BufferArg::from_raw_parts(at, 4 * b) },
+        unsafe { BufferArg::from_raw_parts(k, 8 * b) },
+        n,
+    );
+    Ok(Tensor::from_primitive::<burn_cubecl::CubeBackend>(out))
 }
 
 /// The CubeCL client behind a Burn device.
