@@ -226,3 +226,7 @@ required-features = ["pro"]
 [[example]]
 name = "local_acceptance"
 required-features = ["cli"]
+
+[[example]]
+name = "quick_motion"
+required-features = ["pro"]

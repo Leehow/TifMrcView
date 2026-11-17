@@ -361,6 +361,8 @@ fn norm_cc(peak: f64, ea: f64, eb: f64) -> f64 {
 #[cfg(feature="pro")]
 #[path="align_gpu.rs"]mod gpu;
 #[cfg(feature="pro")]
+#[path="align_resident.rs"]mod resident;
+#[cfg(feature="pro")]
 thread_local!{static MOVIE_GPU:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 fn align_movie(specs:&[Spec],g:&Geom,fft_m:&Fft,max:f64,progress:&(dyn Fn(usize)+Sync))->Result<(Vec<[f64;2]>,Vec<f64>,usize)>{
  #[cfg(feature="pro")]
@@ -1090,8 +1092,14 @@ impl std::fmt::Display for NoSignal {
 #[cfg(feature = "pro")]
 impl std::error::Error for NoSignal {}
 
+/// Quick-view only: keep both sampling passes and their spectra on-device.
+#[cfg(feature="pro")]
+pub(crate) fn movie_preview_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync), backend: &str) -> Result<Aligned> {
+    resident::select(frames,w,h,progress,backend)
+}
+
 /// Motion workspace: the same iterative movie solver on reduced groups.
-#[cfg(feature = "pro")]
+#[cfg(feature="pro")]
 pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {movie_planes_on(frames,w,h,progress,true)}
 #[cfg(feature="pro")]
 pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn Fn(usize,usize)+Sync),gpu:bool)->Result<Aligned>{

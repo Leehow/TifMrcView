@@ -131,6 +131,18 @@ pub(super) fn movie(
         [k, m, m],
         dev,
     );
+    let energy: Vec<f64> = specs.iter().map(|s| s.energy).collect();
+    movie_tensors(fr, fi, &energy, g, max, progress, dev)
+}
+
+/// Both legacy spectra and quick-view resident spectra use the same solver.
+/// No input frequency plane is downloaded and re-uploaded at this seam.
+pub(super) fn movie_tensors(
+    fr: Tensor<3>, fi: Tensor<3>, energy: &[f64], g: &Geom, max: f64,
+    progress: &(dyn Fn(usize) + Sync), dev: &Device,
+) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+    let k = fr.dims()[0];
+    let m = g.m;
     let mut d = vec![[0.; 2]; k];
     let mut cc = vec![0.; k];
     let mut iterations = 0;
@@ -190,7 +202,7 @@ pub(super) fn movie(
             .fold(0., f64::max);
         for (i, (p, v)) in next.into_iter().enumerate() {
             d[i] = p;
-            cc[i] = norm_cc(v, specs[i].energy, energies[i] as f64);
+            cc[i] = norm_cc(v, energy[i], energies[i] as f64);
         }
         crate::compute::report(
             "电影迭代运动求解",

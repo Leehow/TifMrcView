@@ -447,7 +447,7 @@ fn preview(prepared: Prepared,p:&Params) -> Result<Corrected> {
     let Prepared { sp, pixel, mut warnings, took, .. } = prepared;
     let start = std::time::Instant::now();
     let (w, h) = (sp.w / sp.bin, sp.h / sp.bin);
-    let (global, cc) = match crate::align::movie_planes_on(&sp.frames, w, h, &|_, _| {},p.backend!="cpu") {
+    let (global, cc) = match crate::align::movie_preview_planes(&sp.frames, w, h, &|_, _| {},&p.backend) {
         Ok(g) => (smooth(&g.shifts, &g.cc, SMOOTHING), g.cc),
         Err(e) if e.downcast_ref::<crate::align::NoSignal>().is_some() => {
             warnings.push(format!("{e}；按未校正直接求和"));

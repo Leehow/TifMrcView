@@ -176,3 +176,16 @@ NAD 现有 Metal 18 组原始参考体迭代均 maxdelta=0；未放松任何数�
 
 冻结前复核：补上 NAD 资格检查的瞬态失败重试，只缓存数值检查成功；新增失败→恢复→成功缓存回归测试通过。没有修改 NAD 扩散数值或放松检查。UI 常显当前实际设备，全部步骤历史默认收起，保留用户展开状态，避免挤掉小面板中的操作控件；更新后的 fixture 通过。Pro 和基础版最终 cargo check 均通过。当前真实 SPA 已通过二维分类、初始模型并进入三维精修，最终 Cryo-ET 冷重跑按 GPU 租约排队。真实流程 runner 的编译快照保留在 cli-validated-source-files.json；后加变化仅为未在这两个默认流程中调用的 NAD 资格缓存和前端展示，NAD 独立真实体及参考体会用最终源码重验。
 本轮唯一执行计划的动态验收状态及最终安装/CUA/源码证明继续写入 `/Volumes/samsung/tifview-build.noindex/local-metal-20261116/acceptance.json`，与本节共同构成本轮计划；冻结后不修改构建源码来记进度。main 集成、安装和 CUA 必须等真实流程及最终 NAD 复验通过。SSH Linux 引擎保持 0.7.217 的既有独立包，记录其来源提交与哈希，不声称本次重编译 Linux 引擎。
+
+
+## 2026-11-16 快速查看电影 GPU 驻留试验
+
+用户批准“改一个试试”：先优化 quick-view 电影运动矫正，不扩展到全分辨率局部矫正、EER GPU 解码、新格式支持或发布/安装。main 7482d3d 为基线；独立分支 codex/quick-motion-gpu-20261116，主目录与此前未合并缺失楔分支均保留。先用现有真实 EMPIAR-10164 电影通过生产 motion::correct(preview=true) 测 cold/warm 基线，保留不可变引擎；再排名瓶颈假设，目标在不改变双次取窗、迭代/低信号策略和帧数的前提下减少频谱往返。比较全局位移（去公共平移后最大差≤0.05px）、相关系数差≤0.01、求和像素与完整电影耗时；GPU阶段优化不能冒充解码/整序列提速。原始数据只读，输出与CLI测试全部在 /Volumes/samsung/tifview-build.noindex/quick-motion-gpu-20261116；离线构建，不下载模型。不合并main、不更新App。
+前期官方源码对照：MotionCor3 dd8b6831ae66ef016fb7ef3b9b6172f8b56c79aa 的 CBufferPool.cpp/CStackBuffer.cpp/Align/CCorrFFTStack.cpp，AreTomo3 6b4d6b38e0f1bec7ca2344badeaa795665a38b7f 的 DataUtil/CBufferPool.cpp，确认常驻帧/相关缓存、复用FFT、GPU计算与加载流水；EER CRenderMrcStack.cpp 仍调用 CDecodeEerFrame 的 CPU 循环，不能仅凭仓库有GDecode CUDA文件声称默认解码全GPU。借鉴缓存/驻留组织，不引入外部可执行程序或CUDA-only依赖；Mac复用现有Burn/Metal FFT。与本项目不同：保留原有双次取窗及f64 CPU求解参考做对照，不照搬算法改变精度。
+
+本轮进展：原始MRC头标定0.675Å/px、7420×7676×8，预览应为927×959、5.4Å/px。测试程序初版曾手填1.35Å/px而得到不同预览采样，已修正为读取原始标定；sampling135-*记录保留但不纳入正式比较。正式基线使用生产motion::correct(preview=true)，GPU FFT下载后再上传求解；70ms热求解目标实测失败（中位77.43ms）。首版resident同输入62.81ms通过，位移最大差5.3e-7px、CC差1.4e-7、最终图像相对L2约8e-8。GPU驻留谱数值、非零取窗/分箱、双遍运动和无信号处理2项硬件检查通过，原有align8项与motion16项检查通过。
+交替基线→resident→resident→基线、三个倾角0/-27/-57°对照确认GPU驻留求解普遍提速，但8帧小电影CPU参考仍更快（约47–50ms，resident GPU约52–62ms）。按用户“GPU合批，否则CPU更快就CPU”原则，将auto改为按进程固定设备的尺寸/帧数做一次完整CPU/GPU校准并缓存，先验证位移差<.05px、CC差<.01才允许选GPU；后续小电影走更快CPU。显式gpu走驻留路径并明确执行失败，不伪装CPU成功；首次校准的成本保留在alignmentMs，不当作稳态提速隐去。输入读取/增益/预览缩图仍在CPU，本轮不实现EER GPU解码，不宣称整条运动矫正全GPU。最终自动选择版本硬件复验与独占计时已完成；本节数值与下列完整流水线结果共同构成验收，不代表发布或安装。
+
+最终验收：相同真实0/-27/-57°三部MRC，各进程5次、首轮与热运行分开；旧热运动求解约81ms，驻留GPU约55–65ms，auto约54–61ms，完整单电影热耗时约337–339→308–315ms。首轮auto校准仍有一次性开销，首轮总时间受文件缓存影响，不作为加速证据。所有数值对照最大位移差5.3e-7px，图像相对L2≤8.0e-8。最终2项实际GPU驻留检查、8项对齐和16项运动矫正检查通过。没有通过调整帧数、迭代或输出采样获得提速。
+另外用真实生产CLI quick/survey路径，从MDOC/41部原始电影完整执行到快速断层图，按旧→新→新→旧顺序4个全新输出项目。旧77.336/77.302s，新78.462/75.194s；输出全部为231×239×120、相同bin4/thickness120且像素有限、标定保持一致。整体未建立稳定提速，不能把单电影核心提速当作整套快速看图已优化成功。批处理电影读取/解码中位约4.3–4.4s（包含I/O，尚未拆分纯读盘和解码），运动求解中位仅约53–88ms；GPU计算节省未转化为可靠的总耗时改善。新流程两轮分别因现场校准选择CPU和GPU，保留全部记录，不挑最快一轮。输入41个原始文件的尺寸/mtime、3部实测原片的SHA256及MDOC均保持不变。
+四轮基线CLI复用0.7.218不可变二进制，SHA256与原收据匹配；对照其已验证源码清单与main的174个src文件，仅nad_eed_gpu.rs的后续资格缓存变化不一致（survey不调用NAD），所有运动/频谱/快速处理路径一致。证据 baseline-source-verification.json、series-timings.json、validation.json、final-summary.json；最终源码/不可变二进制摘要source.json，结果汇总acceptance.json。当前定位为实验候选：频谱GPU驻留链跑通且核心加速，但完整快览收益不足以声称整体提速。后续应先拆分读取与解码的实际关键路径；不在本轮追加解码器改造、额外降采样或新UI。未经新的合并/安装指令，保留独立提交，不改变main及已安装App。
