@@ -44,7 +44,7 @@
   let active = 0;
   const LIMIT = 4;
   function pump() {
-    while (active < (S.folder?.remote ? 1 : LIMIT) && queue.length) {
+    while (active < LIMIT && queue.length) {
       const job = queue.shift(); active++;
       job.run().finally(() => { active--; pump(); });
     }
@@ -65,6 +65,10 @@
       cache.set(key, p);
       p.cancelQueued = () => { if (cache.get(key) === p) cache.delete(key); rejectJob(new Error('预览已切换')); };
       if (cache.size > 400) cache.delete(cache.keys().next().value);
+    }
+    if (priority) {
+      const at = queue.findIndex(job => job.key === key);
+      if (at > 0) queue.unshift(queue.splice(at, 1)[0]);
     }
     return cache.get(key);
   }
@@ -541,18 +545,19 @@
     ctl.append(play,slider,retry,lab);body.append(head,ctl,box);
     const bars=barChart(al);if(bars)body.append(bars.node);
     const frames=new Array(n).fill(null),pending=new Set(),failed=new Map();
-    let i=0,playing=!S.folder?.remote,loaded=0,buffering=null;const gen=rv.gen;
+    let i=0,playing=!S.folder?.remote,loaded=0,buffering=null,painted=null;const gen=rv.gen;
     function update(){
       if(gen!==rv.gen)return;
       play.textContent=playing?'暂停':'播放';play.disabled=!frames[i];slider.value=i;
-      const m=framesMeta[i];lab.textContent=`第 ${i+1}/${n} 帧${m?` · ${m.angle.toFixed(1)}°`:''} · 已载入 ${loaded}/${n}${buffering!=null?` · 正在缓冲第 ${buffering+1} 帧`:''}${failed.size?` · ${failed.size} 帧失败，可重试`:''}`;
+      const m=framesMeta[i];lab.textContent=`第 ${i+1}/${n} 帧${m?` · ${m.angle.toFixed(1)}°`:''} · ${loaded===n?'已全部载入':'正在预加载'} ${loaded}/${n}${buffering!=null?` · 正在缓冲第 ${buffering+1} 帧`:''}${failed.size?` · ${failed.size} 帧失败，可重试`:''}`;
       retry.hidden=!failed.size;
       state.hidden=!!frames[i];box.setAttribute('aria-busy',String(!frames[i]));
       if(!frames[i])state.textContent=failed.has(i)?`第 ${i+1} 帧加载失败：${failed.get(i)}；请点“重试”`:`正在${S.folder?.remote?'从服务器':''}读取第 ${i+1} 帧…`;
-      if(frames[i])draw(cv,frames[i]);bars?.mark(m);
+      if(frames[i]&&painted!==frames[i]){draw(cv,frames[i]);painted=frames[i];}bars?.mark(m);
     }
     function get(k,priority=false){
-      if(k<0||k>=n||frames[k]||pending.has(k)||failed.has(k))return;
+      if(k<0||k>=n||frames[k]||failed.has(k))return;
+      if(pending.has(k)){if(priority)pic(s.aligned,k,512,gen,true);return;}
       pending.add(k);
       pic(s.aligned,k,512,gen,priority).then(d=>{
         if(gen!==rv.gen)return;frames[k]=d;loaded++;update();
@@ -569,6 +574,7 @@
       show(next);
     },125);
     show(0);
+    for(let k=0;k<n;k++)get(k);
   }
 
   // Per-view residual by angle; views left out of the alignment are grey.
@@ -636,31 +642,40 @@
     ctl.append(el("span", "dim", "层"), slider, lab);
     ctl.append(retry);body.append(head, ctl, box);
     // The depth comes from the picture's title, else from the dataset's record of this tomogram.
-    let depth = 0, want = 0;
+    let depth = 0, i = 0, painted = null;
     const gen = rv.gen;
     const fromDataset = () => rv.dataset?.tomograms?.find((x) => x.path === t.path)?.thickness || 0;
-    async function load(z) {
-      const mine = ++want;retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
-      state.textContent=`正在${S.folder?.remote?'从服务器':''}读取${z==null?'中间':`第 ${z+1}`}层预览…`;
-      lab.textContent=depth?`${(z??Math.floor(depth/2))+1} / ${depth} · 正在载入`:'正在载入切片…';
+    const frames=new Map(),pending=new Set(),failed=new Map();
+    function update(){
+      if(gen!==rv.gen)return;
+      const d=frames.get(i);retry.hidden=!failed.size;
+      state.hidden=!!d;box.setAttribute('aria-busy',String(!d));
+      if(!d)state.textContent=failed.has(i)?`第 ${i+1} 层加载失败：${failed.get(i)}；请点“重试”`:`正在${S.folder?.remote?'从服务器':''}读取第 ${i+1} 层预览…`;
+      if(d&&painted!==d){draw(cv,d);painted=d;}
+      lab.textContent=`${i+1} / ${depth} · ${frames.size===depth?'已全部载入':'正在预加载'} ${frames.size}/${depth}${failed.size?` · ${failed.size} 层失败，可重试`:''}`;
+    }
+    function get(z,priority=false){
+      if(gen!==rv.gen||frames.has(z)||failed.has(z))return;
+      if(pending.has(z)){if(priority)pic(t.path,z,512,gen,true);return;}
+      pending.add(z);
+      pic(t.path,z,512,gen,priority).then(d=>{if(gen===rv.gen){frames.set(z,d);update();}})
+        .catch(e=>{if(gen===rv.gen){failed.set(z,String(e));update();}}).finally(()=>pending.delete(z));
+    }
+    async function start(){
+      retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
       try {
-        const d = await pic(t.path, z, 512, gen, true);
-        if (mine !== want || gen !== rv.gen) return;
-        draw(cv, d);state.hidden=true;box.setAttribute('aria-busy','false');
-        depth = depth || R.depthFromTitle(d.title) || fromDataset();
-        if (depth && slider.disabled) {
-          slider.max = depth - 1;
-          slider.value = z ?? Math.floor(depth / 2);
-          slider.disabled = false;
-        }
-        lab.textContent = depth ? `${(z ?? Math.floor(depth / 2)) + 1} / ${depth}` : "中间一层";
+        const d=await pic(t.path,null,512,gen,true);
+        if(gen!==rv.gen)return;
+        depth=R.depthFromTitle(d.title)||fromDataset()||1;i=Math.floor(depth/2);
+        frames.set(i,d);slider.max=depth-1;slider.value=i;slider.disabled=false;update();
+        for(let z=0;z<depth;z++)get(z);
       } catch (e) {
-        if (mine === want && gen===rv.gen) {state.hidden=false;state.textContent=`预览加载失败：${e}；请点“重试”`;retry.hidden=false;box.setAttribute('aria-busy','false');lab.textContent='预览未载入';}
+        if(gen===rv.gen){state.hidden=false;state.textContent=`预览加载失败：${e}；请点“重试”`;retry.hidden=false;box.setAttribute('aria-busy','false');lab.textContent='预览未载入';}
       }
     }
-    retry.onclick=()=>load(slider.disabled?null:+slider.value);
-    slider.oninput = () => load(+slider.value);
-    load(null);
+    retry.onclick=()=>{if(!depth)return start();const keys=[...failed.keys()];failed.clear();for(const z of keys)get(z,z===i);update();};
+    slider.oninput=()=>{i=+slider.value;get(i,true);update();};
+    start();
   }
 
   // The panel's first open scans too (cryoet-open); also when scripts load with it already open.

@@ -209,3 +209,8 @@ NAD 现有 Metal 18 组原始参考体迭代均 maxdelta=0；未放松任何数�
 数值验收：MRC21项（含新增3项）和motion12项通过；四轮每次41部均complete、角度/分组/像素标定一致，运动位移/CC/CTF defocus差为0，倾转剔除列表一致，最终231×239×120快速断层图逐像素一致且全部有限。原始41文件尺寸/mtime保持不变，编译时全src源码摘要与验收时一致。两种方式均保留现有低相关度GPU驻留→CPU回退，没有放松数值保护；不能把此轮读取收益说成全GPU运动矫正。
 内存：分块仅改变单帧原始数据获取，每次系统读取最多8MiB，但保留整页临时缓冲（本例每路约57MB，三路约171MB），并非只有8MiB总内存。实测进程peak memory footprint：mmap2.530/2.744GB，分块2.697/2.691GB；范围重叠，不能用首轮差值推断稳定峰值增长。所有运行保留自然系统缓存，不作受控冷盘或物理SSD带宽结论；某轮可见无关桌面进程/另一rustc活动，未冒称全机独占。仅在M1 Max及这批未压缩mode0 MRC上完成性能验证，不外推EER或Linux。
 交付记录：/Volumes/samsung/tifview-build.noindex/motion-read-20261116/acceptance.json、timings.json、逐轮日志、validate.py/run_abba.py、不可变baseline-cli/candidate-cli及source.json。此次只保留独立分支实现与验证记录；未合并main、未打包/更新已安装App，也未访问或修改LAN服务器。
+## 2026-11-16 全帧预览与本地更新
+
+用户追加批准将已验收读取优化合并main、重新打包更新本地App；对齐/断层图打开默认预加载全部小图。继续同一任务工作区，主目录未提交修改不动。小窗现有tomo_view传输最长边512像素RGBA（每帧≤1MiB），后台仍按已有编码缩小；不传完整原始电影。改用有界4任务队列自动预取全部帧，当前帧优先、首帧先显示；SSH底层连接仍按已有串行lane保护控制请求，不改协议/远程引擎。预览载入后本地缓存拖动，不重复取帧；显示全量进度/失败重试，切换取消旧队列。保留现有本地自动播放和远程默认暂停。
+参考OHIF请求池/预取优先级和MDN Promise资源管理：有界队列避免无界并发，不能依赖Promise.all失败来取消其他请求。https://docs.ohif.org/configuration/configurationfiles/；https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Resource_management 。项目既有Playwright夹具扩展为打开后无交互完成全部60帧、缓存拖动不重取、切换取消、失败重试；夹具通过，规则/发布说明12项通过。
+发布目标0.7.222，使用外部统一构建路径、既有稳定TifMrcView Dev证书及两个规范/Applications App路径；沿用已验证Linux引擎0.7.217包及缩略图助手，不声称本次重建或加速Linux读取。发布说明记录本次可见行为与约20%本机实测收益，不发布在线更新。安装、Computer Use、main集成证据写入/Volumes/samsung/tifview-build.noindex/quick-preview-release-20261116/acceptance.json；本节不是这些门槛已完成的声明。
