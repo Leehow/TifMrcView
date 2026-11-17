@@ -81,6 +81,7 @@ pub fn main(args: &[String]) -> i32 {
                 json!({"protocol":1,"version":crate::cli::VERSION,"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"root":root()?,"gpu":null,"gpuProbe":"deferredToTask","resources":crate::resources::inspect(v["outputRoot"].as_str().map(Path::new).or(Some(root()?.as_path())))}),
             ),
             "submit" => submit(&v),
+            "jobs" => jobs(v["project"].as_str()),
             "status" | "cancel" => {
                 let dir = job_path(string(&v, "job")?)?;
                 if v["action"] == "cancel" {
@@ -144,6 +145,88 @@ pub fn main(args: &[String]) -> i32 {
             1
         }
     }
+}
+/// Long jobs on this server, newest first, so a client that was closed (or
+/// another computer) finds them again: running ones to follow, recently
+/// finished ones to report. `project` narrows to one folder and its subfolders.
+fn jobs(project: Option<&str>) -> Result<Value> {
+    let week = std::time::Duration::from_secs(7 * 24 * 3600);
+    let mut out = vec![];
+    let Ok(entries) = fs::read_dir(root()?.join("jobs")) else {
+        return Ok(json!({"jobs":[]}));
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue };
+        if job_path(&id).is_err() {
+            continue;
+        }
+        let Ok(request) = read(&dir.join("request.json")) else { continue };
+        let command = request["command"].as_str().unwrap_or("");
+        if !matches!(command, "tomo_session_run" | "spa_run") {
+            continue;
+        }
+        let job_project = request["project"].as_str().unwrap_or("");
+        if let Some(p) = project {
+            let p = p.trim_end_matches('/');
+            if job_project != p && !job_project.starts_with(&format!("{p}/")) {
+                continue;
+            }
+        }
+        let Ok(mut state) = read(&dir.join("state.json")) else { continue };
+        let modified = ["events.jsonl", "state.json"]
+            .iter()
+            .filter_map(|n| fs::metadata(dir.join(n)).and_then(|m| m.modified()).ok())
+            .max();
+        let age = modified.and_then(|m| m.elapsed().ok()).unwrap_or_default();
+        let mut name = state["state"].as_str().unwrap_or("").to_owned();
+        if matches!(name.as_str(), "queued" | "running") {
+            // Same liveness rule as `status`: a vanished worker is a failed job.
+            #[cfg(target_os = "linux")]
+            if let Some(pid) = state["pid"].as_u64() {
+                if !Path::new(&format!("/proc/{pid}")).exists() {
+                    name = "failed".into();
+                    state["error"] = json!("工作进程已退出；请检查日志，已完成步骤可在下次复用");
+                }
+            }
+        } else if age > week {
+            continue;
+        }
+        // The last progress line, read from the end of a possibly long log.
+        let mut last = Value::Null;
+        if let Ok(mut f) = fs::File::open(dir.join("events.jsonl")) {
+            use std::io::{Seek, SeekFrom};
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            let _ = f.seek(SeekFrom::Start(len.saturating_sub(64 * 1024)));
+            let mut tail = vec![];
+            let _ = f.read_to_end(&mut tail);
+            last = String::from_utf8_lossy(&tail)
+                .lines()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .find(|e| e["type"].is_null())
+                .unwrap_or(Value::Null);
+        }
+        let since = modified
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        out.push(json!({
+            "job": id,
+            "requestId": request["requestId"],
+            "command": command,
+            "args": request["args"],
+            "project": job_project,
+            "outputRoot": request["outputRoot"],
+            "state": name,
+            "error": state["error"],
+            "progress": last,
+            "updated": since,
+        }));
+    }
+    out.sort_by_key(|j| std::cmp::Reverse(j["updated"].as_u64().unwrap_or(0)));
+    out.truncate(20);
+    Ok(json!({ "jobs": out }))
 }
 fn submit(v: &Value) -> Result<Value> {
     let cmd = string(v, "command")?;
