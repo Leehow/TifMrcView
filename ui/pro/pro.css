@@ -513,7 +513,6 @@
 #cryo-session .cs-controls { flex-wrap:wrap; }
 #cryo-session .cs-controls label { display:flex; align-items:center; gap:4px; color:var(--dim); font-size:11px; flex:1; min-width:0; }
 #cryo-session .cs-controls select { flex:1; min-width:0; }
-#cryo-session .cs-start { font-size:13px; padding:0 18px; height:30px; }
 #cryo-session .cs-help { margin:8px 0; line-height:1.5; }
 .cs-wall { display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr)); gap:8px; margin-top:6px; }
 .cs-wall > p { grid-column:1 / -1; line-height:1.6; }
@@ -587,8 +586,7 @@
 .ws-jobs button { height:30px; padding:0 14px; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:none; font-size:13px; color:var(--dim); }
 .ws-jobs button:hover { background:var(--muted); }
 .ws-jobs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
-#cryoet-workspace[data-job="quick"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-sta, .cs-purpose-box, .cs-steps-line, .cs-finish, .cs-only-recon),
-#cryoet-workspace[data-job="recon"] :is(#cryo-sta, .cs-start, .cs-only-quick),
+#cryoet-workspace[data-job="recon"] #cryo-sta,
 #cryoet-workspace[data-job="sta"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-session, #cryo-foot) { display:none; }
 #cryo-sta { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 /* It floats: moved by its title, resized by its corners. */

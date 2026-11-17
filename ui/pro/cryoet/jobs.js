@@ -1,10 +1,10 @@
 "use strict";
-// The Cryo-ET workspace is one panel with three jobs, as tabs under its title:
-//   快速查看 — movies become tilt series to look at and choose from (the first pass);
-//   三维重构 — the tomograms of the chosen series, for a purpose;
+// The Cryo-ET workspace is one panel with two jobs, as tabs under its title:
+//   三维重构 — the folder flow (session.js): movies become tilt series and
+//     tomograms of the ticked series, with the steps the user ticked (none:
+//     the fast tomogram, which is also the look at what the series are like);
 //   子断层平均 — the subtomogram-averaging part (sta/), hosted in this panel.
-// The first two are the folder flow (session.js) with what the other job
-// needs hidden (pro.css, by the panel's data-job); the third is the STA
+// What the other job needs is hidden by pro.css (the panel's data-job); the second is the STA
 // workspace moved in here (sta.host). The job last used is kept.
 // The panel floats over the stage: it is moved by its title and resized by
 // any of its four corners (both kept; a double click on the title puts it back).
@@ -14,7 +14,6 @@
   const sta = window.TifMrcViewPro.sta;
   const panel = W.panel;
   const JOBS = [
-    ["quick", "快速查看", "把电影快速变成倾转序列，看哪些序列、哪几张图能用"],
     ["recon", "三维重构", "把选好的序列重构成断层图"],
     ["sta", "子断层平均", "从断层图里找出同一种颗粒，平均出它的结构"],
   ].filter(([id]) => id !== "sta" || sta?.host);
@@ -22,7 +21,7 @@
   const nav = document.createElement("nav");
   nav.className = "ws-jobs";
   nav.setAttribute("role", "tablist");
-  nav.setAttribute("aria-label", "Cryo-ET 的三个功能");
+  nav.setAttribute("aria-label", "Cryo-ET 的功能");
   for (const [id, name, title] of JOBS) {
     const b = document.createElement("button");
     b.dataset.job = id;
@@ -48,8 +47,9 @@
     new MutationObserver(narrow).observe(panel, { attributes: true, attributeFilter: ["data-job"] });
   }
 
-  let job = pref.get("cryo-job", "quick");
-  if (!JOBS.some(([id]) => id === job)) job = "quick";
+  // An older version's 快速查看 is now part of 三维重构.
+  let job = pref.get("cryo-job", "recon");
+  if (!JOBS.some(([id]) => id === job)) job = "recon";
 
   function go(id) {
     const was = panel.dataset.job;
