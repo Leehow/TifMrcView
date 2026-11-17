@@ -128,8 +128,17 @@ impl Sections {
             sum2 += x * x;
         }
         let bytes: Vec<u8> = v.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.file.seek(SeekFrom::Start(1024 + (i * self.w * self.h) as u64 * 4))?;
+        let at = 1024 + (i * self.w * self.h) as u64 * 4;
+        self.file.seek(SeekFrom::Start(at))?;
         self.file.write_all(&bytes)?;
+        // Start writing the section to disk now, without waiting: else a
+        // whole series (three 4 GB stacks) sits in the page cache until
+        // `finish` syncs it, and that took two minutes after the last movie.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::fd::AsRawFd;
+            libc::sync_file_range(self.file.as_raw_fd(), at as i64, bytes.len() as i64, libc::SYNC_FILE_RANGE_WRITE);
+        }
         Ok([lo, hi, sum, sum2])
     }
 
