@@ -98,7 +98,11 @@ pub(super) fn select(
         .iter()
         .zip(&gpu.shifts)
         .map(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]))
-        .fold(0f64, f64::max);
+        .fold(0f64, f64::max)
+        // Shifts are measured on frames binned to the solver's 1024²: the
+        // agreement asked for is in those pixels (0.12 px of a 4096² frame
+        // is 0.03 of what was measured).
+        / gpu.bin.max(1) as f64;
     let cc_error = cpu
         .cc
         .iter()
@@ -110,7 +114,7 @@ pub(super) fn select(
     let reason = if valid {
         format!("{}×{}、{}帧完整求解校准（含传输/同步）：CPU {cpu_ms:.1} ms，驻留 GPU {gpu_ms:.1} ms；选择{}",w,h,frames.len(),if use_gpu {"GPU"}else{"CPU"})
     } else {
-        format!("GPU 驻留数值校准未通过（位移差 {error:.5} px、CC差 {cc_error:.5}），选择 CPU")
+        format!("GPU 驻留数值校准未通过（位移差 {error:.5} 求解像素、CC差 {cc_error:.5}），选择 CPU")
     };
     CHOICE
         .lock()

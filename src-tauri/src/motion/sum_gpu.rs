@@ -175,7 +175,7 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
     use burn_cubecl::{cubecl, CubeBackend};
     use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
     let n = w * h;
-    anyhow::ensure!(frames.len() >= 2 && frames.len() == shifts.len() && frames.iter().all(|f| f.len() == n), "预览帧尺寸不一致");
+    anyhow::ensure!(!frames.is_empty() && frames.len() == shifts.len() && frames.iter().all(|f| f.len() == n), "预览帧尺寸不一致");
     anyhow::ensure!(w < i32::MAX as usize / 2 && h < i32::MAX as usize / 2, "预览帧过大");
     let client = Tensor::<1>::zeros([1], dev)
         .try_into_primitive::<CubeBackend>()
@@ -215,13 +215,16 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
         launch_ms += t.elapsed().as_secs_f64() * 1e3;
     }
     let t = std::time::Instant::now();
-    let read = client.read(vec![halves[0].clone(), halves[1].clone()])?;
+    // A single frame (the warm-up of a 4096² calibration) has no odd half.
+    let used = frames.len().min(2);
+    let read = client.read(halves[..used].to_vec())?;
     if profile {
         eprintln!("GPU_PREVIEW_PROFILE {w}x{h} frames={} upload={upload_ms:.1}ms launch={launch_ms:.1}ms read+wait={:.1}ms total={:.1}ms", frames.len(), t.elapsed().as_secs_f64() * 1e3, clock.elapsed().as_secs_f64() * 1e3);
     }
-    anyhow::ensure!(read.len() == 2 && read.iter().all(|b| b.len() == n * 4), "GPU 预览读取尺寸不一致");
+    anyhow::ensure!(read.len() == used && read.iter().all(|b| b.len() == n * 4), "GPU 预览读取尺寸不一致");
     let floats = |b: &[u8]| -> Vec<f32> { b.chunks_exact(4).map(|v| f32::from_ne_bytes(v.try_into().unwrap())).collect() };
-    let (even, odd) = (floats(&read[0]), floats(&read[1]));
+    let even = floats(&read[0]);
+    let odd = read.get(1).map_or_else(|| vec![0.0; n], |b| floats(b));
     let unweighted: Vec<f32> = {
         use rayon::prelude::*;
         even.par_iter().zip(&odd).map(|(a, b)| a + b).collect()
