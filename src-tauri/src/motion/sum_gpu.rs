@@ -1,10 +1,11 @@
-//! The method of `sum.rs` on the GPU. Per frame: the tiles are cut on the
-//! CPU (a copy), uploaded as one batch, transformed with Burn's native FFT,
+//! The method of `sum.rs` on the GPU. Per frame: the frame goes up once as
+//! recorded (a byte a pixel for counting cameras; the gain is already on the
+//! card), its tiles are cut and gained by one kernel, transformed with Burn's native FFT,
 //! phase shifted and dose weighted as elementwise ops and added into device
 //! accumulators. The tiles come back once, at the end, to be blended.
 use super::{
     check_cancel, dose,
-    input::Spool,
+    input::{Raw, Spool},
     local::Model,
     sum::{fractional, freq, nyquist, Sums},
     tiles::Plan,
@@ -53,24 +54,22 @@ pub fn run(
     let (mut er, mut ei, mut or, mut oi) = (zeros(), zeros(), zeros(), zeros());
     let (mut wr, mut wi) = (zeros(), zeros());
     let mut norm = Tensor::<3>::zeros([1, t, hw], dev);
-    let mut batch = vec![0.0f32; n * t * t];
+    let cutter = Cutter::new(dev, sp)?;
+    let profile = std::env::var_os("TMV_GPU_PROFILE").is_some();
+    let (mut cut_ms, mut math_ms) = (0.0, 0.0);
     for (i, &g) in global.iter().enumerate() {
         check_cancel()?;
-        let frame = sp.read(i)?;
-        let mean = (frame.iter().map(|&a| a as f64).sum::<f64>() / frame.len() as f64) as f32;
         let shifts: Vec<[f64; 2]> = (0..n).map(|k| plan.shift(k, model, sp.times[i], g)).collect();
-        {
-            use rayon::prelude::*;
-            batch.par_chunks_mut(t * t).enumerate().for_each(|(k, out)| plan.cut(&frame, k, shifts[k], mean, out));
-        }
-        drop(frame);
+        let clock = std::time::Instant::now();
+        let x = cutter.cut(dev, sp, i, &plan, &shifts)?;
+        cut_ms += clock.elapsed().as_secs_f64() * 1e3;
+        let clock = std::time::Instant::now();
         let fracs: Vec<[f64; 2]> = shifts.iter().map(|s| [s[0] - s[0].round(), s[1] - s[1].round()]).collect();
         let ax = up3(fracs.iter().map(|f| (std::f64::consts::TAU * f[0] / t as f64) as f32).collect(), [n, 1, 1]);
         let ay = up3(fracs.iter().map(|f| (std::f64::consts::TAU * f[1] / t as f64) as f32).collect(), [n, 1, 1]);
         // Nyquist bins of fractionally shifted axes drop out (see sum.rs).
         let keep_x = up3(fracs.iter().flat_map(|f| (0..hw).map(move |j| if fractional(f[0]) && nyquist(j, t) { 0.0 } else { 1.0 })).collect(), [n, 1, hw]);
         let keep_y = up3(fracs.iter().flat_map(|f| (0..t).map(move |j| if fractional(f[1]) && nyquist(j, t) { 0.0 } else { 1.0 })).collect(), [n, t, 1]);
-        let x = up3(batch.clone(), [n, t, t]);
         let (re, im) = burn::signal::rfft(x, 2, None);
         let (re, im) = burn::signal::cfft(re, im, 1, None);
         let theta = kx.clone() * ax + ky.clone() * ay;
@@ -95,7 +94,11 @@ pub fn run(
             or = or + r;
             oi = oi + m;
         }
+        math_ms += clock.elapsed().as_secs_f64() * 1e3;
         progress("求和 GPU", i + 1, sp.len());
+    }
+    if profile {
+        eprintln!("GPU_SUM_PROFILE {}x{} frames={} tiles={n}x{t} cut+upload={cut_ms:.1}ms queue={math_ms:.1}ms", sp.w, sp.h, sp.len());
     }
     let back = |re: Tensor<3>, im: Tensor<3>| {
         let v = download(inverse(re, im, t));
@@ -117,6 +120,38 @@ pub fn run(
 mod kernel {
     use burn_cubecl::cubecl;
     use cubecl::prelude::*;
+    /// The tiles of one frame (see `Plan::cut`): thread i is pixel i of the
+    /// n × t × t batch; `at` holds each tile's top-left corner in the frame,
+    /// moved by the whole-pixel part of its shift. Pixels outside the frame
+    /// get `fill` (the frame's mean). The frame comes packed in 32-bit words,
+    /// `bits` (8 or 16) to a pixel, or as floats when `bits` is 32; it is
+    /// multiplied by `gain` when `gained` is set.
+    #[cube(launch)]
+    pub fn tmv_cut_tiles(src: &[u32], gain: &[f32], at: &[i32], out: &mut [f32], w: usize, h: usize, t: usize, bits: u32, gained: u32, fill: f32) {
+        let i = ABSOLUTE_POS;
+        if i < out.len() {
+            let tt = t * t;
+            let k = i / tt;
+            let r = i % tt;
+            let x = at[2 * k] + i32::cast_from(r % t);
+            let y = at[2 * k + 1] + i32::cast_from(r / t);
+            let mut v = fill;
+            if x >= 0 && y >= 0 && x < i32::cast_from(w) && y < i32::cast_from(h) {
+                let p = usize::cast_from(y) * w + usize::cast_from(x);
+                if bits == 8 {
+                    v = f32::cast_from((src[p / 4] >> u32::cast_from((p % 4) * 8)) & 255);
+                } else if bits == 16 {
+                    v = f32::cast_from((src[p / 2] >> u32::cast_from((p % 2) * 16)) & 65535);
+                } else {
+                    v = f32::reinterpret(src[p]);
+                }
+                if gained != 0 {
+                    v *= gain[p];
+                }
+            }
+            out[i] = v;
+        }
+    }
     /// One frame moved by a whole-plane shift (Catmull–Rom, the rules of
     /// `align::shift_plane` with fill 0) and added, times `scale`, into `out`.
     /// One thread an output pixel; frames are launched in order, so each pixel
@@ -164,6 +199,69 @@ mod kernel {
                 out[i] += v * scale;
             }
         }
+    }
+}
+
+/// Cuts a frame's tiles on the GPU. The gain goes up once a movie.
+struct Cutter {
+    client: burn_cubecl::cubecl::client::Client,
+    gain: Option<burn_cubecl::cubecl::server::Handle>,
+}
+impl Cutter {
+    fn new(dev: &Device, sp: &Spool) -> Result<Cutter> {
+        let client = client_of(dev)?;
+        anyhow::ensure!(sp.w < i32::MAX as usize / 2 && sp.h < i32::MAX as usize / 2, "电影帧过大");
+        let gain = sp.gain.as_ref().map(|g| upload(&client, g));
+        Ok(Cutter { client, gain })
+    }
+    fn cut(&self, dev: &Device, sp: &Spool, i: usize, plan: &Plan, shifts: &[[f64; 2]]) -> Result<Tensor<3>> {
+        use burn_cubecl::cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement};
+        use rayon::prelude::*;
+        let (n, t, px) = (plan.len(), plan.t, sp.w * sp.h);
+        // The fill is the gained frame's mean, summed in the order of `sum::cpu`.
+        let gained = |k: usize, v: f32| sp.gain.as_ref().map_or(v, |g| v * g[k]) as f64;
+        let raw = sp.raw(i)?;
+        let (bytes, bits, total): (&[u8], u32, f64) = match &raw {
+            Raw::U8(v) => (v, 8, v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum()),
+            Raw::U16(v) => (u16::as_bytes(v), 16, v.par_iter().enumerate().map(|(k, &x)| gained(k, x as f32)).sum()),
+            Raw::F32(v) => (f32::as_bytes(v), 32, v.par_iter().enumerate().map(|(k, &x)| gained(k, x)).sum()),
+        };
+        let mean = (total / px as f64) as f32;
+        // Whole 32-bit words: the last one padded.
+        let words = bytes.len().div_ceil(4);
+        let src = if bytes.len() % 4 == 0 {
+            self.client.create(pinned_bytes(&self.client, &[bytes]))
+        } else {
+            self.client.create(pinned_bytes(&self.client, &[bytes, &[0u8; 3][..words * 4 - bytes.len()]]))
+        };
+        let at: Vec<i32> = (0..n).flat_map(|k| [(plan.corners[k][0] + shifts[k][0].round() as isize) as i32, (plan.corners[k][1] + shifts[k][1].round() as isize) as i32]).collect();
+        let at = self.client.create_from_slice(i32::as_bytes(&at));
+        let gain = match &self.gain {
+            Some(g) => g.clone(),
+            None => self.client.create_from_slice(f32::as_bytes(&[1.0])),
+        };
+        let out = Tensor::<3>::empty([n, t, t], dev)
+            .try_into_primitive::<burn_cubecl::CubeBackend>()
+            .map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?;
+        let len = n * t * t;
+        let groups = len.div_ceil(256) as u32;
+        kernel::tmv_cut_tiles::launch(
+            &self.client,
+            CubeCount::Static(groups.min(65535), groups.div_ceil(65535), 1),
+            CubeDim::new_1d(256),
+            // Each handle holds exactly the element count given here.
+            unsafe { BufferArg::from_raw_parts(src, words) },
+            unsafe { BufferArg::from_raw_parts(gain, if self.gain.is_some() { px } else { 1 }) },
+            unsafe { BufferArg::from_raw_parts(at, 2 * n) },
+            unsafe { BufferArg::from_raw_parts(out.handle.clone(), len) },
+            sp.w,
+            sp.h,
+            t,
+            bits,
+            self.gain.is_some() as u32,
+            mean,
+        );
+        Ok(Tensor::from_primitive::<burn_cubecl::CubeBackend>(out))
     }
 }
 
@@ -236,28 +334,30 @@ pub fn preview(dev: &Device, frames: &[Vec<f32>], w: usize, h: usize, shifts: &[
 /// PCIe 3 ×16 card that takes 12 GB/s from pinned memory. Falls back to
 /// ordinary memory when the pool has no room.
 pub(crate) fn pinned(client: &burn_cubecl::cubecl::client::Client, parts: &[&[f32]]) -> burn_cubecl::cubecl::bytes::Bytes {
+    use burn_cubecl::cubecl::prelude::CubeElement;
+    let parts: Vec<&[u8]> = parts.iter().map(|p| f32::as_bytes(p)).collect();
+    pinned_bytes(client, &parts)
+}
+/// `pinned` for any bytes.
+pub(crate) fn pinned_bytes(client: &burn_cubecl::cubecl::client::Client, parts: &[&[u8]]) -> burn_cubecl::cubecl::bytes::Bytes {
     use burn_cubecl::cubecl::bytes::Bytes;
     use rayon::prelude::*;
     let len: usize = parts.iter().map(|p| p.len()).sum();
     // Untouched zero pages: the staging copy of them costs no page writes.
     let t = std::time::Instant::now();
-    let mut b = Bytes::from_bytes_vec(vec![0u8; len * 4]);
+    let mut b = Bytes::from_bytes_vec(vec![0u8; len]);
     client.staging(std::iter::once(&mut b), false);
     let staged = t.elapsed().as_secs_f64() * 1e3;
     let pinned = matches!(b.property(), burn_cubecl::cubecl::bytes::AllocationProperty::Pinned);
     let t = std::time::Instant::now();
     let mut dst: &mut [u8] = &mut b;
     for p in parts {
-        let (head, rest) = dst.split_at_mut(p.len() * 4);
-        head.par_chunks_mut(1 << 20).zip(p.par_chunks(1 << 18)).for_each(|(d, s)| {
-            for (d, s) in d.chunks_exact_mut(4).zip(s) {
-                d.copy_from_slice(&s.to_ne_bytes());
-            }
-        });
+        let (head, rest) = dst.split_at_mut(p.len());
+        head.par_chunks_mut(1 << 20).zip(p.par_chunks(1 << 20)).for_each(|(d, s)| d.copy_from_slice(s));
         dst = rest;
     }
     if std::env::var_os("TMV_GPU_PROFILE").is_some() {
-        eprintln!("GPU_PINNED_PROFILE {} MB pinned={pinned} staging={staged:.1}ms fill={:.1}ms", len * 4 >> 20, t.elapsed().as_secs_f64() * 1e3);
+        eprintln!("GPU_PINNED_PROFILE {} MB pinned={pinned} staging={staged:.1}ms fill={:.1}ms", len >> 20, t.elapsed().as_secs_f64() * 1e3);
     }
     b
 }

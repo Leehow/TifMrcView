@@ -165,8 +165,18 @@ pub struct Spool {
     pub counts: Vec<usize>,
     pub times: Vec<f64>,
     pub original: Vec<f32>,
+    /// Gain reference the stored frames are multiplied by when read: frames
+    /// are kept as recorded (counts fit in a byte), a quarter of the gained
+    /// floats in memory and on the way to the GPU.
+    pub gain: Option<Vec<f32>>,
     pub decode_ms: f64,
     pub prepare_ms: f64,
+}
+/// A stored full-size frame as recorded, before the gain.
+pub enum Raw<'a> {
+    U8(&'a [u8]),
+    U16(&'a [u16]),
+    F32(std::borrow::Cow<'a, [f32]>),
 }
 impl Drop for Spool {
     fn drop(&mut self) {
@@ -174,23 +184,33 @@ impl Drop for Spool {
     }
 }
 impl Spool {
+    /// Frame i with the gain applied.
     pub fn read(&self, i: usize) -> Result<Vec<f32>> {
+        let gain = |v: f32, k: usize| self.gain.as_ref().map_or(v, |g| v * g[k]);
+        Ok(match self.raw(i)? {
+            Raw::U8(v) => v.par_iter().enumerate().map(|(k, &x)| gain(x as f32, k)).collect(),
+            Raw::U16(v) => v.par_iter().enumerate().map(|(k, &x)| gain(x as f32, k)).collect(),
+            Raw::F32(v) => v.par_iter().enumerate().map(|(k, &x)| gain(x, k)).collect(),
+        })
+    }
+    /// Frame i as recorded, before the gain.
+    pub fn raw(&self, i: usize) -> Result<Raw<'_>> {
         match &self.stored[i] {
-            Stored::U8(v) => return Ok(v.par_iter().map(|&x| x as f32).collect()),
-            Stored::U16(v) => return Ok(v.par_iter().map(|&x| x as f32).collect()),
-            Stored::F32(v) => return Ok(v.clone()),
+            Stored::U8(v) => return Ok(Raw::U8(v)),
+            Stored::U16(v) => return Ok(Raw::U16(v)),
+            Stored::F32(v) => return Ok(Raw::F32(std::borrow::Cow::Borrowed(v))),
             Stored::Disk => {}
         }
         let bytes = fs::read(self.dir.join(format!("frame-{i}.f32")))?;
         if bytes.len() != self.w * self.h * 4 {
             bail!("电影缓存截断");
         }
-        Ok(bytes
+        Ok(Raw::F32(std::borrow::Cow::Owned(bytes
             .as_chunks::<4>()
             .0
             .iter()
             .map(|b| f32::from_le_bytes(*b))
-            .collect())
+            .collect())))
     }
     pub fn len(&self) -> usize {
         self.frames.len()
@@ -253,10 +273,14 @@ impl Spool {
             counts: vec![],
             times: vec![],
             original: if preview { vec![] } else { vec![0.0; w * h] },
+            gain: None,
             decode_ms: 0.0,
             prepare_ms: 0.0,
         };
         let gain = load_gain(p, w, h, up)?;
+        if gain.as_ref().is_some_and(|g| g.par_iter().any(|x| !x.is_finite())) {
+            bail!("电影或 gain 含 NaN/Inf");
+        }
         // Auto grouping balances the remainder: a one-fraction last frame
         // otherwise has much lower SNR than the rest of a 600–1000-frame EER.
         let groups: Vec<_> = if p.group == 0 && matches!(movie, Movie::Eer(_)) {
@@ -276,11 +300,24 @@ impl Spool {
             let decode = std::time::Instant::now();
             let mut frame = movie.group(start, count, up)?;
             spool.decode_ms += decode.elapsed().as_secs_f64() * 1000.0;
-            if let Some(g) = &gain {
-                frame.par_iter_mut().zip(g).for_each(|(x, g)| *x *= g);
-            }
             if frame.par_iter().any(|x| !x.is_finite()) {
                 bail!("电影或 gain 含 NaN/Inf");
+            }
+            // Kept as recorded; the gain is applied when read.
+            // Kept as recorded; the gain is applied when read.
+            if !preview {
+                let stored = Stored::new(&frame, &mut spool.used);
+                if matches!(stored, Stored::Disk) {
+                    if !spool.dir.exists() {
+                        fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
+                    }
+                    let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
+                    fs::write(spool.dir.join(format!("frame-{}.f32", spool.stored.len())), bytes)?;
+                }
+                spool.stored.push(stored);
+            }
+            if let Some(g) = &gain {
+                frame.par_iter_mut().zip(g).for_each(|(x, g)| *x *= g);
             }
             // A preview keeps only the binned frames.
             if !preview {
@@ -289,15 +326,6 @@ impl Spool {
                     .par_iter_mut()
                     .zip(&frame)
                     .for_each(|(o, v)| *o += v);
-                let stored = Stored::new(&frame, &mut spool.used);
-                if matches!(stored, Stored::Disk) {
-                    if !spool.dir.exists() {
-                        fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
-                    }
-                    let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
-                    fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
-                }
-                spool.stored.push(stored);
             }
             if bin == 1 {
                 // Nothing to bin: keep the frame itself, not a copy.
@@ -330,6 +358,9 @@ impl Spool {
         }
         if spool.len() < 2 {
             bail!("分组后至少需要两帧");
+        }
+        if !preview {
+            spool.gain = gain;
         }
         spool.prepare_ms = now.elapsed().as_secs_f64() * 1000.0;
         Ok(spool)
