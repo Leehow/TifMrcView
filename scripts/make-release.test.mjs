@@ -21,12 +21,14 @@ function release(t, { arg, env, signed = true, edition, extra = {} } = {}) {
     if (signed) fs.writeFileSync(path.join(src, file + ".sig"), `signature of ${file}\n`);
   }
   for (const [file, data] of Object.entries(extra)) fs.writeFileSync(path.join(src, file), data);
-  const childEnv = { ...process.env };
+  const notesFile = path.join(dir, "notes.json");
+  fs.writeFileSync(notesFile, JSON.stringify({ version: "1.2.3", features: ["新增 SSH 远程文件夹浏览。"], fixes: ["修复首次连接失败。"] }));
+  const childEnv = { ...process.env, TMV_RELEASE_NOTES_FILE: notesFile };
   delete childEnv.DIRECT_BASE_URL;
   if (env !== undefined) childEnv.DIRECT_BASE_URL = env;
   delete childEnv.TMV_EDITION;
   if (edition) childEnv.TMV_EDITION = edition;
-  execFileSync(process.execPath, [script, src, out, "1.2.3", cloudflare + "/", "Release notes\non two lines", ...(arg === undefined ? [] : [arg])], { env: childEnv, stdio: "pipe" });
+  execFileSync(process.execPath, [script, src, out, "1.2.3", cloudflare + "/", ...(arg === undefined ? [] : [arg])], { env: childEnv, stdio: "pipe" });
   return { out, read: (name) => JSON.parse(fs.readFileSync(path.join(out, name), "utf8")) };
 }
 
@@ -34,6 +36,7 @@ for (const source of ["argument", "environment"]) {
   test(`direct feed from ${source} keeps metadata, signatures and artifact paths`, (t) => {
     const { out, read } = release(t, source === "argument" ? { arg: direct + "///", env: "https://unused.test" } : { env: direct + "/" });
     const normal = read("latest.json"), fast = read("latest-direct.json");
+    assert.equal(normal.notes, "新功能\n• 新增 SSH 远程文件夹浏览。\n\n修复\n• 修复首次连接失败。");
     assert.equal(Object.keys(normal.platforms).length, 10);
     const platforms = {};
     for (const [key, entry] of Object.entries(normal.platforms)) {
@@ -99,4 +102,13 @@ test("Pro lists the tmv command-line tarball with its checksum", (t) => {
   assert.match(fs.readFileSync(path.join(out, "1.2.3/tmv_1.2.3_linux-x86_64.tar.gz.sha256"), "utf8"), new RegExp(`^${sum}  tmv_1\\.2\\.3`));
   const standard = release(t, { extra: { "tmv_1.2.3_linux-x86_64.tar.gz": "tarball" } });
   assert.equal(standard.read("downloads.json").files.cli, undefined);
+});
+
+test("publication fails before creating output when notes belong to an older version", t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmv-stale-release-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'notes.json'), out = path.join(dir, 'release');
+  fs.writeFileSync(file, JSON.stringify({version:'1.2.2',features:['旧版本功能'],fixes:[]}));
+  assert.throws(() => execFileSync(process.execPath, [script, path.join(dir, 'missing-artifacts'), out, '1.2.3', cloudflare], {env:{...process.env,TMV_RELEASE_NOTES_FILE:file},stdio:'pipe'}), e => /更新说明版本/.test(e.stderr.toString()));
+  assert.equal(fs.existsSync(out), false);
 });

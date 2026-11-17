@@ -141,9 +141,10 @@ pub fn on_device<T>(f: impl Fn(&Device) -> Result<T>) -> Result<(T, &'static str
         match crate::ctf_gpu::guarded(|| f(&dev)) {
             Ok(Ok(v)) => return Ok((v, name)),
             Ok(Err(e)) => return Err(e),
-            Err(e) => eprintln!("classifier: {e}; using the CPU"),
+            Err(e) => { eprintln!("classifier: {e}; using the CPU"); crate::compute::report("GPU 计算后端", "CPU", Some(format!("GPU 执行失败：{e:#}"))); },
         }
     }
+    if name == "CPU" { crate::compute::report("GPU 计算后端", "CPU", Some(crate::compute::no_gpu())); }
     Ok((f(&Device::flex())?, "CPU"))
 }
 

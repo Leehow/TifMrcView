@@ -1,0 +1,64 @@
+/* Actual local execution events, scoped to one invocation and one window. */
+'use strict';
+(() => {
+  const kinds = new Map();
+  for (const name of ['tomo_align','tomo_ctf','tomo_reconstruct','tomo_denoise','tomo_auto','tomo_wedge','tomo_session_run','tomo_save_aligned','tomo_export']) kinds.set(name,'tomo');
+  for (const [name,kind] of Object.entries({spa_run:'spa',denoise_train:'denoise',denoise_preview:'denoise',denoise_save:'denoise',ctf_fit:'ctf',ctf_fit_stack:'ctf',motion_run:'tomo',motion_series:'tomo',align_estimate:'tomo'})) kinds.set(name,kind);
+  const jobs = new Map(), latest = new Map();
+  let listening, resources, resourcesAt = 0;
+  const node = (tag,text) => { const e=document.createElement(tag); if(text!=null)e.textContent=text; return e; };
+  const refresh = () => {
+    if(typeof S!=="undefined" && S.folder?.remote)return;
+    for(const [id,kind] of [['cryoet-workspace','tomo'],['spa-workspace','spa'],['denoise-panel','denoise'],['ctf-box','ctf'],['motion-workspace','motion']]) {
+      const panel=document.getElementById(id);if(!panel)continue;
+      let bar=panel.querySelector('.remote-processing-location');
+      if(!bar){bar=node('div');bar.className='remote-processing-location';const head=panel.querySelector('.al-head,.ctf-head');if(head)head.after(bar);else panel.prepend(bar);}
+      render(bar,kind);
+    }
+  };
+  function render(bar,kind) {
+    const open=bar.querySelector('details')?.open;
+    const record=latest.get(kind);bar.replaceChildren();
+    bar.append(node('strong','运行位置：本机'+(record?.running?' · 正在处理':record?.error?' · 处理失败':record?' · 已完成':'')));
+    if(resources) {
+      let text=`CPU ${resources.cpuThreads} 线程 · 当前可回收内存 ${(resources.memoryAvailableMb/1024).toFixed(1)} GB`;
+      if(resources.metal){const m=resources.metal;text+=` · ${m.name} · ${m.unified?'统一内存':'显存'}新任务预算 ${(m.availableBytes/2**30).toFixed(1)} GB（已预留系统空间）`;}
+      bar.append(node('p',text));
+    }
+    if(record?.error)bar.append(node('p',record.error));
+    if(!record?.placements.size){if(record?.running)bar.append(node('span','正在准备数据；计算步骤开始后显示实际设备…'));return;}
+    const current=record.current;if(current){const status=node('p',`${current.operation}：${current.backend}${current.device?' · '+current.device:''}${current.reason?' · '+current.reason:''}`);status.setAttribute('role','status');bar.append(status);}
+    const details=node('details');details.className='remote-backends';details.open=open??false;
+    details.append(node('summary',`${record.running?'每一步实际计算设备':'本次任务的计算设备'} · ${record.placements.size} 个步骤`));
+    for(const p of record.placements.values()){
+      const row=node('div');row.className='remote-backend-row';row.classList.toggle('fallback',!!p.fallback);
+      row.append(node('strong',p.operation),node('span',p.backend+(p.device?' · '+p.device:'')));
+      if(p.usedBackends?.length>1)row.append(node('small','本步骤实际使用过：'+p.usedBackends.join('；')));
+      if(p.reason)row.append(node('small',(p.fallback?'CPU 回退原因：':p.backend==='CPU'?'CPU 分工：':'分工：')+p.reason));
+      if(p.priorFallback&&!p.fallback)row.append(node('small','本次此前曾回退 CPU：'+p.priorFallback));
+      details.append(row);
+    }
+    bar.append(details);
+  }
+  async function invoke(command,args,native) {
+    if(!kinds.has(command)||!window.TifMrcViewPro)return native(command,args);
+    listening ||= window.__TAURI__.event.listen('local-compute',({payload})=>{
+      const record=jobs.get(payload.id);if(!record)return;
+      const p={...payload.placement},previous=record.placements.get(p.operation);
+      p.priorFallback=previous?.priorFallback||(previous?.fallback?previous.reason:null);
+      p.usedBackends=[...new Set([...(previous?.usedBackends||[]),p.backend+(p.device?' · '+p.device:'')])];
+      record.placements.set(p.operation,p);record.current=p;
+      if(p.fallback && previous?.reason!==p.reason && typeof toast==='function')toast(`${p.operation}已回退 CPU：${p.reason}`);
+      refresh();
+    }).catch(e=>{listening=null;throw e;});
+    await listening;
+    const id=crypto.randomUUID(),kind=kinds.get(command),record={running:true,placements:new Map()};
+    jobs.set(id,record);latest.set(kind,record);refresh();
+    if(Date.now()-resourcesAt>15000){resourcesAt=Date.now();native('local_compute_resources',{}).then(r=>{resources=r;refresh();}).catch(()=>{});}
+    try{return await native(command,{...args,computeId:id});}
+    catch(e){record.error=String(e);throw e;}
+    finally{record.running=false;while(jobs.size>100){const oldest=[...jobs].find(([_,r])=>!r.running);if(!oldest)break;jobs.delete(oldest[0]);}refresh();}
+  }
+  window.TmvLocal={invoke,render};
+  document.addEventListener('pro-panel',refresh);
+})();

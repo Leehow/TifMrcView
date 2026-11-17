@@ -1,6 +1,6 @@
 //! Batched patch Fourier correlations on Burn. Both images of every patch
-//! in a view pair share DFT matrices; one readback supplies all cross powers
-//! and energies to the same CPU subpixel peak finder used by the reference.
+//! in a view pair share native FFT batches. Cross powers and peak search
+//! stay on the device; only small peak grids, indices and energies return.
 //! A measured CPU/GPU comparison chooses the default, not device presence.
 use anyhow::Result;
 use burn::tensor::{Device, Int, Tensor, TensorData};
@@ -9,8 +9,6 @@ pub struct Batch {
     dev: Device,
     n: usize,
     m: usize,
-    wr: Tensor<2>,
-    wi: Tensor<2>,
     window: Tensor<3>,
     filter: Tensor<3>,
     keep: Tensor<1, Int>,
@@ -18,22 +16,11 @@ pub struct Batch {
 impl Batch {
     pub fn new(dev: &Device, n: usize) -> Self {
         let m = n / 2;
-        let phase = |i: usize| -std::f64::consts::TAU * ((i / n) * (i % n) % n) as f64 / n as f64;
-        let wr = Tensor::from_data(
-            TensorData::new((0..n * n).map(|i| phase(i).cos() as f32).collect(), [n, n]),
-            dev,
-        );
-        let wi = Tensor::from_data(
-            TensorData::new((0..n * n).map(|i| phase(i).sin() as f32).collect(), [n, n]),
-            dev,
-        );
         let (win, filter) = crate::align::patch_window(n);
         Self {
             dev: dev.clone(),
             n,
             m,
-            wr,
-            wi,
             window: Tensor::from_data(TensorData::new(win, [1, n, n]), dev),
             filter: Tensor::from_data(TensorData::new(filter, [1, m, m]), dev),
             keep: Tensor::from_data(
@@ -72,25 +59,13 @@ impl Batch {
             .collect();
         let x = Tensor::<3>::from_data(TensorData::new(all, [2 * k, n, n]), &self.dev);
         let mean = x.clone().mean_dim(1).mean_dim(2);
-        let x = ((x - mean) * self.window.clone()).reshape([2 * k * n, n]);
-        let ar = x.clone().matmul(self.wr.clone());
-        let ai = x.matmul(self.wi.clone());
-        let tr = |x: Tensor<2>| {
-            x.reshape([2 * k, n, n])
-                .swap_dims(1, 2)
-                .reshape([2 * k * n, n])
-        };
-        let ar = tr(ar);
-        let ai = tr(ai);
-        let fr = ar.clone().matmul(self.wr.clone()) - ai.clone().matmul(self.wi.clone());
-        let fi = ar.matmul(self.wi.clone()) + ai.matmul(self.wr.clone());
-        let band = |x: Tensor<2>| {
-            (x.reshape([2 * k, n, n])
-                .swap_dims(1, 2)
-                .select(1, self.keep.clone())
-                .select(2, self.keep.clone())
-                * self.filter.clone())
-            .reshape([2 * k, m * m])
+        let x = (x - mean) * self.window.clone();
+        let zeros = Tensor::<3>::zeros([2*k,n,n], &self.dev);
+        let (fr, fi) = burn::signal::cfft(x, zeros, 2, None);
+        let (fr, fi) = burn::signal::cfft(fr, fi, 1, None);
+        let band = |x: Tensor<3>| {
+            (x.select(1, self.keep.clone()).select(2, self.keep.clone()) * self.filter.clone())
+                .reshape([2*k,m*m])
         };
         let fr = band(fr);
         let fi = band(fi);
@@ -102,23 +77,65 @@ impl Batch {
         let eb = (rb.clone() * rb.clone() + ib.clone() * ib.clone()).sum_dim(1);
         let pr = rb.clone() * ra.clone() + ib.clone() * ia.clone();
         let pi = ib * ra - rb * ia;
-        let data = Tensor::cat(vec![pr, pi, ea, eb], 1)
-            .into_data()
-            .convert::<f32>()
-            .try_into_vec::<f32>()
-            .unwrap();
-        let stride = 2 * m * m + 2;
-        Ok(data
-            .chunks(stride)
-            .map(|r| {
-                crate::align::patch_cross_peak(
-                    &r[..m * m],
-                    &r[m * m..2 * m * m],
-                    n,
-                    [r[2 * m * m] as f64, r[2 * m * m + 1] as f64],
-                    max,
-                )
-            })
-            .collect())
+        crate::align::patch_gpu_peak(
+            pr.reshape([k,m,m]), pi.reshape([k,m,m]),
+            Tensor::cat(vec![ea, eb], 1), n, max, &self.dev,
+        )
+    }
+}
+
+#[cfg(test)]
+mod throughput_tests {
+    use super::*;
+    use rayon::prelude::*;
+    fn pairs(n: usize, count: usize) -> Vec<(Vec<f32>, Vec<f32>)> {
+        (0..count).map(|k| {
+            let a: Vec<f32> = (0..n*n).map(|i| {
+                let x=(i%n) as f32; let y=(i/n) as f32;
+                (x*0.37+y*0.21+k as f32).sin() + (x*0.13-y*0.43).cos()
+                    + ((((i as u64).wrapping_mul(6364136223846793005u64).wrapping_add(k as u64))%997) as f32/997.0)*0.3
+            }).collect();
+            let shifts=[[0.,0.],[3.25,-1.8],[-5.4,2.7],[11.2,-9.3]];
+            let b=crate::align::movie_shift(&a,n,n,shifts[k%4]);
+            (a,b)
+        }).collect()
+    }
+    fn device() -> Option<&'static Device> {
+        let d=crate::ctf_gpu::device().map(|p|&p.0);
+        assert!(d.is_some() || std::env::var_os("TMV_REQUIRE_GPU").is_none(), "GPU required");
+        d
+    }
+    #[test]
+    fn gpu_patch_batch_matches_cpu_across_shapes() {
+        let Some(dev)=device() else{return;};
+        for n in [32,64,128,256] {
+            let pairs=pairs(n,8);let max=n as f64*0.22;
+            let reference:Vec<_>=pairs.par_iter().map(|(a,b)|crate::align::patch_shift(a,b,n,max)).collect();
+            let got=Batch::new(dev,n).correlate(&pairs,max).unwrap();
+            for (i,(a,b)) in got.iter().zip(&reference).enumerate() {
+                let error=(a.0[0]-b.0[0]).hypot(a.0[1]-b.0[1]);
+                assert!(error<0.05 && (a.1-b.1).abs()<0.01,"n={n} i={i} error={error} gpu={a:?} cpu={b:?}");
+            }
+            assert!(Batch::new(dev,n).correlate(&[],max).unwrap().is_empty());
+        }
+    }
+    #[test]
+    #[ignore]
+    fn gpu_patch_batch_throughput() {
+        let dev=device().expect("GPU required");
+        for (n,count) in [(128,64),(256,64)] {
+            let pairs=pairs(n,count);let max=n as f64*0.22;
+            let batch=Batch::new(dev,n);
+            let cpu=||pairs.par_iter().map(|(a,b)|crate::align::patch_shift(a,b,n,max)).collect::<Vec<_>>();
+            let _=cpu(); let _=batch.correlate(&pairs,max).unwrap();
+            let mut times=vec![];
+            for _ in 0..3 {
+                let t=std::time::Instant::now();let c=cpu();let cm=t.elapsed().as_secs_f64()*1000.;
+                let t=std::time::Instant::now();let g=batch.correlate(&pairs,max).unwrap();let gm=t.elapsed().as_secs_f64()*1000.;
+                let error=g.iter().zip(&c).map(|(a,b)|(a.0[0]-b.0[0]).hypot(a.0[1]-b.0[1])).fold(0.,f64::max);
+                assert!(error<0.05,"{error}"); times.push((cm,gm));
+            }
+            eprintln!("PATCH_BENCH n={n} count={count} cpuGpuMs={times:?}");
+        }
     }
 }

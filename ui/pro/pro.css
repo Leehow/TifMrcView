@@ -663,3 +663,10 @@
 #fig-scalebar[hidden] { display: none; }
 #fig-scalebar i { display: block; height: 4px; background: currentColor; }
 #fig-scalebar.dark { color: #fff; }
+
+.cs-preview-box{position:relative;display:flex;justify-content:center;align-items:center;min-height:160px;border:1px solid var(--line);background:var(--subtle);border-radius:6px;margin-top:8px;overflow:hidden}.cs-preview-box .cs-film{margin:0}.cs-preview-state{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--subtle);color:var(--dim);text-align:center;overflow-wrap:anywhere}.cs-filmctl{flex-wrap:wrap;position:relative;padding:6px 0}.cs-framelab{white-space:normal;overflow-wrap:anywhere}.cs-discovery{overflow-wrap:anywhere;max-width:100%}
+
+/* Review selection and previews retain their state while tabs are hidden. */
+.cs-selection{flex-wrap:wrap;gap:6px;margin:8px 0}.cs-search{flex:1;min-width:180px}.cs-selection-count{font-variant-numeric:tabular-nums}.cs-tile.selected{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}.cs-tile .cs-open{align-self:flex-start;margin-top:4px}.cs-take{cursor:pointer}.cs-tabbody[hidden],.cs-lb-loading[hidden],.cs-thumb-state[hidden],.cs-lb-placeholder[hidden],.cs-vpic canvas[hidden],.cs-lb-card canvas[hidden]{display:none!important}
+.cs-review-loading,.cs-thumbs-loading,.cs-lb-loading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 0}.cs-thumbs-loading progress{width:120px}.cs-thumb-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;text-align:center;color:var(--dim);background:var(--subtle);position:absolute;inset:0}.cs-view.suggested .cs-vpic,.cs-view.dropped .cs-vpic{opacity:1}.cs-view.suggested .cs-vpic canvas{opacity:.45}.cs-view.dropped .cs-vpic canvas{opacity:.3}.cs-lb-placeholder{width:320px;min-height:220px;display:flex;align-items:center;justify-content:center;background:var(--subtle);color:var(--dim)}.cs-lb-loading{max-width:600px;overflow-wrap:anywhere}.cs-lb-loading progress{width:120px}
+.cs-tile[hidden]{display:none!important}#cryo-session.reviewing .cs-selection{display:none}

@@ -250,9 +250,12 @@ pub fn estimate(
                 .map(|(a, b)| crate::align::patch_shift(a, b, n, max))
                 .collect::<Vec<_>>()
         };
+        let mut calibrated_peaks = None;
         if it == 0 {
-            let q = &pairs[..pairs.len().min(32)];
-            let _ = cpu(q);
+            // Measure the real batch: a tiny sample can reject the GPU even
+            // though thousands of patches amortize transfer/dispatch costs.
+            let q = &pairs[..];
+            let _ = cpu(&q[..q.len().min(32)]);
             let t = std::time::Instant::now();
             let reference = cpu(q);
             cpu_pair_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -260,6 +263,8 @@ pub fn estimate(
                 if let Some((dev, _)) = crate::ctf_gpu::device() {
                     if let Ok(Ok((b, peaks, ms))) = crate::ctf_gpu::guarded(|| -> Result<_> {
                         let b = Batch::new(dev, n);
+                        // Warm the same chunk geometry, including the final
+                        // remainder, so JIT cost cannot reject a useful GPU.
                         let _ = b.correlate(q, max)?;
                         let t = std::time::Instant::now();
                         let r = b.correlate(q, max)?;
@@ -268,18 +273,25 @@ pub fn estimate(
                         gpu_pair_ms = Some(ms);
                         use_gpu = peaks
                             .iter()
-                            .zip(reference)
+                            .zip(&reference)
                             .all(|(a, b)| (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]) < 0.05)
                             && (p.backend == "gpu" || ms < cpu_pair_ms);
+                        if !use_gpu { crate::compute::cpu_stage("电影局部运动相关", &format!("自动选择 CPU：校准或含传输耗时不占优，CPU {cpu_pair_ms:.1} ms，GPU {ms:.1} ms")); }
+                        if use_gpu { calibrated_peaks = Some(peaks); }
                         gpu = Some(b);
                     }
                 }
             }
+            if calibrated_peaks.is_none() { calibrated_peaks = Some(reference); }
         }
-        let peaks = if use_gpu {
+        let peaks = if let Some(peaks) = calibrated_peaks {
+            if use_gpu { crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 批量 FFT 与峰值搜索；CPU 几何拟合".into())); }
+            peaks
+        } else if use_gpu {
             match crate::ctf_gpu::guarded(|| gpu.as_ref().unwrap().correlate(&pairs, max)) {
-                Ok(Ok(v)) => v,
-                _ => {
+                Ok(Ok(v)) => {crate::compute::report("电影局部运动相关","GPU + CPU",Some("GPU 批量 FFT 与峰值搜索；CPU 局部模型拟合".into()));v},
+                e => {
+                    crate::compute::report("电影局部运动相关","CPU",Some(format!("GPU 执行失败：{e:?}")));
                     use_gpu = false;
                     cpu(&pairs)
                 }

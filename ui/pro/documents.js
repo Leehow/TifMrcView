@@ -162,9 +162,18 @@
     toggleAnn(S.annShow);
     $("mod-show").checked = S.modelShow;
     $("meta-list").dataset.file = "";
-    renderMeta(); specOpened(); buildStrip(); markStrip();
-    $("folder-name").textContent = basename(S.folder.dir || "");
-    $("folder-name").title = S.folder.dir || "";
+    renderMeta(); specOpened();
+    if (S.folder.remote && ext.remoteFiles?.has(S.info.path)) {
+      showRemoteFolder(S.folder, S.info.path);
+    } else if (S.folder.remote) {
+      S.folder.dir = null;
+      refreshFolder(S.info.path).catch((e) => toast(String(e)));
+    } else {
+      buildStrip(); markStrip();
+      $("folder-name").textContent = basename(S.folder.dir || "");
+      $("folder-name").title = S.folder.dir || "";
+      $("btn-reveal").hidden = false;
+    }
     setModel(S.model);
     clampView(); draw(); requestRender(); watchLoad();
     T.window.getCurrentWindow().setTitle(`${doc.name} — ${EDITION.name}`).catch(() => {});

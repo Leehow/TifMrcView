@@ -105,7 +105,13 @@ impl Movie {
                         if *along_t { *z } else { i },
                         if *along_t { i } else { *t },
                     );
-                    let data = img.page(page)?;
+                    // Retain mmap as an explicit diagnostic comparison. The
+                    // sequential source hook leaves non-MRC decoders unchanged.
+                    let data = if std::env::var("TMV_MOTION_MRC_IO").as_deref() == Ok("mmap") {
+                        img.page(page)?
+                    } else {
+                        img.movie_page(page)?
+                    };
                     let plane = &data[s];
                     out.par_iter_mut()
                         .enumerate()
@@ -292,6 +298,16 @@ impl Spool {
                     fs::write(spool.dir.join(format!("frame-{}.f32", spool.len())), bytes)?;
                 }
                 spool.stored.push(stored);
+            }
+            if bin == 1 {
+                // Nothing to bin: keep the frame itself, not a copy.
+                spool.frames.push(frame);
+                spool.counts.push(count);
+                spool
+                    .times
+                    .push(2.0 * (start as f64 + count as f64 / 2.0) / n as f64 - 1.0);
+                progress("读取分组", spool.len(), total);
+                continue;
             }
             let mut work = vec![0.0; ww * hh];
             work.par_chunks_mut(ww).enumerate().for_each(|(y, row)| {

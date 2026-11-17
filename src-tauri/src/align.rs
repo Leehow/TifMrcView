@@ -77,6 +77,8 @@ pub struct Aligned {
     pub n: usize,
     pub iterations: usize,
     pub ms: f64,
+    /// Measured on the GPU (the quick-view resident solver).
+    pub gpu: bool,
 }
 
 /// Kept frequencies of one binned slice: m × m, row = ky + m/2, column = kx + m/2.
@@ -132,6 +134,9 @@ impl Geom {
 /// Bins, tapers and transforms one slice; keeps the inner frequencies, filtered.
 /// `off` moves the binned square (full-image pixels; the caller keeps it inside).
 fn spectrum(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl Fn(usize, usize) -> f32 + Sync) -> Spec {
+    spectrum_on(g,fft,filter,off,values,false)
+}
+fn spectrum_on(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl Fn(usize, usize) -> f32 + Sync, gpu:bool) -> Spec {
     let (n, b) = (g.n, g.bin);
     let (x0, y0) = ((g.x0 as isize + off[0]) as usize, (g.y0 as isize + off[1]) as usize);
     let mut re: Vec<f32> = (0..n * n)
@@ -162,7 +167,14 @@ fn spectrum(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl F
         }
     });
     let mut im = vec![0f32; n * n];
-    fft2(fft, &mut re, &mut im, n);
+    let mut accelerated=false;
+    #[cfg(feature="pro")]
+    if gpu {if let Some((dev,_))=crate::ctf_gpu::device(){
+      static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());let _guard=LOCK.lock().unwrap_or_else(|e|e.into_inner());
+      let out=crate::ctf_gpu::guarded(||{use burn::tensor::{Tensor,TensorData};let r=Tensor::<2>::from_data(TensorData::new(re.clone(),[n,n]),dev);let m=Tensor::<2>::zeros([n,n],dev);let (r,m)=crate::motion::fourier::Gpu::new(n,n,dev).transform(r,m,false);(crate::motion::sum_gpu::download(r),crate::motion::sum_gpu::download(m))});
+      match out{Ok((r,m))=>{re=r;im=m;accelerated=true;crate::compute::report("电影全局运动 FFT","GPU + CPU",Some("GPU FFT；CPU 解码、取样与加窗".into()));},Err(e)=>crate::compute::report("电影全局运动 FFT","CPU",Some(format!("GPU 执行失败：{e:#}")))}
+    }else{crate::compute::report("电影全局运动 FFT","CPU",Some(crate::compute::no_gpu()));}}
+    if !accelerated{fft2(fft, &mut re, &mut im, n);}
     // Keep |kx|, |ky| < m/2, centred.
     let m = g.m;
     let mut kr = vec![0f32; m * m];
@@ -348,8 +360,19 @@ fn norm_cc(peak: f64, ea: f64, eb: f64) -> f64 {
     if d > 0.0 { (peak / d).clamp(-1.0, 1.0) } else { 0.0 }
 }
 
+#[cfg(feature="pro")]
+#[path="align_gpu.rs"]mod gpu;
+#[cfg(feature="pro")]
+#[path="align_resident.rs"]mod resident;
+#[cfg(feature="pro")]
+thread_local!{static MOVIE_GPU:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+fn align_movie(specs:&[Spec],g:&Geom,fft_m:&Fft,max:f64,progress:&(dyn Fn(usize)+Sync))->Result<(Vec<[f64;2]>,Vec<f64>,usize)>{
+ #[cfg(feature="pro")]
+ if MOVIE_GPU.with(|v|v.get()){if let Some((dev,_))=crate::ctf_gpu::device(){match crate::ctf_gpu::guarded(||gpu::movie(specs,g,max,progress,dev)).and_then(|r|r){Ok(out)=>return Ok(out),Err(e)=>{if CANCEL.load(Ordering::SeqCst){return Err(e);}crate::compute::report("电影迭代运动求解","CPU",Some(format!("GPU 执行失败：{e:#}")));}}}else{crate::compute::report("电影迭代运动求解","CPU",Some(crate::compute::no_gpu()));}}
+ align_movie_cpu(specs,g,fft_m,max,progress)
+}
 /// Aligns spectra of a movie: each frame to the sum of the others. Shifts in binned pixels.
-fn align_movie(specs: &[Spec], g: &Geom, fft_m: &Fft, max: f64, progress: &(dyn Fn(usize) + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn align_movie_cpu(specs: &[Spec], g: &Geom, fft_m: &Fft, max: f64, progress: &(dyn Fn(usize) + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let len = g.m * g.m;
     let mut d = vec![[0f64; 2]; specs.len()];
     let mut cc = vec![0f64; specs.len()];
@@ -558,7 +581,7 @@ pub fn estimate(img: &Arc<OpenImage>, req: &AlignReq, progress: &(dyn Fn(usize, 
     let tick = || progress((done.fetch_add(1, Ordering::Relaxed) + 1).min(total - 1), total);
     let (shifts, cc, iterations) = measure(&g, zs.len(), series, max, &spec_of, &tick)?;
     progress(total, total);
-    Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3 })
+    Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3, gpu: false })
 }
 
 /// Writes the aligned slices (or their mean) as an MRC file of 32-bit floats.
@@ -576,6 +599,12 @@ pub struct SaveReq {
 }
 
 /// Catmull–Rom weights for a fraction t of a pixel.
+/// The Catmull–Rom weights of `shift_plane`, for the GPU preview sums.
+#[cfg(feature = "pro")]
+pub(crate) fn catmull_rom(t: f32) -> [f32; 4] {
+    cubic(t)
+}
+
 fn cubic(t: f32) -> [f32; 4] {
     let (t2, t3) = (t * t, t * t * t);
     [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
@@ -1038,12 +1067,15 @@ pub(crate) fn patch_shift(a: &[f32], b: &[f32], n: usize, max: f64) -> ([f64; 2]
     pair_shift(&sa,&sb,&plan.g,&plan.small,max)
 }
 
+/// Device-resident batch peak search; shares the reference geometry and CC.
 #[cfg(feature = "pro")]
-pub(crate) fn patch_cross_peak(pr: &[f32], pi: &[f32], n: usize, energies: [f64;2], max: f64) -> ([f64;2],f64) {
-    let p=patch_plan(n);
-    let start=coarse_peak(pr,pi,&p.g,&p.small,max);
-    let (d,v)=refine_peak(pr,pi,&p.g,start);
-    (d,norm_cc(v,energies[0],energies[1]))
+pub(crate) fn patch_gpu_peak(
+    pr: burn::tensor::Tensor<3>, pi: burn::tensor::Tensor<3>,
+    energies: burn::tensor::Tensor<2>, n: usize, max: f64,
+    dev: &burn::tensor::Device,
+) -> Result<Vec<([f64;2],f64)>> {
+    let g=Geom { x0:0, y0:0, bin:1, n, m:n/2, w:n, h:n };
+    gpu::patch_peak(pr,pi,energies,&g,max,dev)
 }
 
 #[cfg(feature = "pro")]
@@ -1068,16 +1100,28 @@ impl std::fmt::Display for NoSignal {
 #[cfg(feature = "pro")]
 impl std::error::Error for NoSignal {}
 
+/// Quick-view only: keep both sampling passes and their spectra on-device.
+#[cfg(feature="pro")]
+pub(crate) fn movie_preview_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync), backend: &str) -> Result<Aligned> {
+    resident::select(frames,w,h,progress,backend)
+}
+
 /// Motion workspace: the same iterative movie solver on reduced groups.
-#[cfg(feature = "pro")]
-pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {
+#[cfg(feature="pro")]
+pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(dyn Fn(usize,usize)+Sync)) -> Result<Aligned> {movie_planes_on(frames,w,h,progress,true)}
+#[cfg(feature="pro")]
+pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn Fn(usize,usize)+Sync),gpu:bool)->Result<Aligned>{
+    struct Reset(bool);impl Drop for Reset{fn drop(&mut self){MOVIE_GPU.with(|v|v.set(self.0));}}
+    let _reset=Reset(MOVIE_GPU.with(|v|{let old=v.get();v.set(gpu);old}));
+
     let start=std::time::Instant::now();
     if frames.len()<2||frames.iter().any(|v|v.len()!=w*h){bail!("电影尺寸不一致");}
     let g=Geom::new([0,0,w,h],1024,w,h)?;let f=Fft::new(g.n);let filter=make_filter(g.m);
-    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{
+    let compute_context=crate::compute::context();
+    let spec_of=|i:usize,off:[isize;2]|->Result<Spec>{crate::compute::with_context(compute_context.clone(), || {
         if CANCEL.load(Ordering::SeqCst){bail!("已取消");}
-        Ok(spectrum(&g,&f,&filter,off,|x,y|frames[i][y*w+x]))
-    };
+        Ok(spectrum_on(&g,&f,&filter,off,|x,y|frames[i][y*w+x],gpu))
+    })};
     let done=std::sync::atomic::AtomicUsize::new(0);let total=2*frames.len()+24;
     let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
     let median=|v:&[f64]| {let mut a=v.to_vec();a.sort_by(f64::total_cmp);a[a.len()/2]};
@@ -1087,7 +1131,7 @@ pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(
         let wide=Geom{x0:(w-n*bin)/2,y0:(h-n*bin)/2,bin,n,m:n/2,w,h};
         let fft=Fft::new(n);let mut low=make_filter(n/2);
         for (i,v) in low.iter_mut().enumerate(){let x=(i%(n/2)) as f64-(n/4) as f64;let y=(i/(n/2)) as f64-(n/4) as f64;*v*=(-0.5*(x*x+y*y)/(n as f64*0.04).powi(2)).exp() as f32;}
-        let specs:Vec<_>=frames.par_iter().map(|v|spectrum(&wide,&fft,&low,[0,0],|x,y|v[y*w+x])).collect();
+        let specs:Vec<_>=frames.par_iter().map(|v|crate::compute::with_context(compute_context.clone(), || spectrum_on(&wide,&fft,&low,[0,0],|x,y|v[y*w+x],gpu))).collect();
         let (mut d,c,it)=align_movie(&specs,&wide,&Fft::new(n/2),n as f64/16.0,&|i|progress(i,MAX_ITER))?;
         if median(&c)>median(&cc){
             let mean:[f64;2]=std::array::from_fn(|k|d.iter().map(|v|v[k]).sum::<f64>()/d.len() as f64);
@@ -1096,7 +1140,7 @@ pub(crate) fn movie_planes(frames: &[Vec<f32>], w: usize, h: usize, progress: &(
         }
         if median(&cc)<0.12{return Err(NoSignal(median(&cc)).into());}
     }
-    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0})
+    Ok(Aligned {zs:(0..frames.len()).collect(),shifts,cc,bin:g.bin,n:g.n,iterations,ms:start.elapsed().as_secs_f64()*1000.0,gpu:false})
 }
 
 /// Untapered image warping shared with native motion correction.

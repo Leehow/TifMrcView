@@ -1,5 +1,10 @@
 # UI plugins: API 2 preview
 
+The host also ships an optional trusted [SSH folder browser](ssh-plugin.md).
+It is enabled/disabled in the plugin dialog and uses its own native SFTP
+backend. API 2 plugins still have no SSH, native, file-opening or arbitrary
+filesystem access; the sandbox permission vocabulary below is unchanged.
+
 API 2 packages set `"apiVersion": 2` and declare `permissions` in
 `plugin.json`. Installation rejects missing/non-array permissions, unknown
 permission names and any `native` field (even `false` or `null`). The permission

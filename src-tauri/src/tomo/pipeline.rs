@@ -403,6 +403,7 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "denoised".into(), method: if mode == Mode::Frames { "n2n-halves" } else { "n2n-neighbours" }.into(), halves: None, ..full });
     d.save()?;
+    crate::compute::executed("自监督去噪", dev);
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
@@ -521,6 +522,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     output::write_mrc(&path, &out, shape, px, false)?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "wedge".into(), method: method.into(), halves: None, ..src });
     d.save()?;
+    crate::compute::executed("缺失楔学习与补全", dev);
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 

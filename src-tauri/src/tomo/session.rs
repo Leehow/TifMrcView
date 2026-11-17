@@ -67,6 +67,8 @@ pub struct Series {
 pub struct Session {
     pub root: String,
     pub series: Vec<Series>,
+    pub warnings: Vec<String>,
+    pub gains: Vec<String>,
 }
 
 /// What went wrong per series (by name), kept in the project.
@@ -78,7 +80,7 @@ struct Notes {
 }
 
 fn notes_path(root: &Path) -> PathBuf {
-    root.join(crate::project_dirs::TOMOGRAMS).join("session.json")
+    std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(||root.to_path_buf()).join(crate::project_dirs::TOMOGRAMS).join("session.json")
 }
 
 fn notes(root: &Path) -> Notes {
@@ -91,18 +93,19 @@ fn note(root: &Path, name: &str, error: Option<String>) {
 
 /// Keeps (or with None forgets) what went wrong with a series, or a note on it.
 fn remark(root: &Path, name: &str, text: Option<String>, error: bool) {
-    let mut n = notes(root);
-    let map = if error { &mut n.errors } else { &mut n.notes };
-    match text {
-        Some(e) => map.insert(name.into(), e),
-        None => map.remove(name),
-    };
-    let file = notes_path(root);
-    if n.errors.is_empty() && n.notes.is_empty() && !file.exists() {
-        return;
-    }
-    let _ = file.parent().map(std::fs::create_dir_all);
-    let _ = std::fs::write(file, serde_json::to_vec_pretty(&n).unwrap_or_default());
+    merge_notes(&notes_path(root),name,text,error);
+}
+fn merge_notes(file:&Path,name:&str,text:Option<String>,error:bool){
+    if let Some(parent)=file.parent(){if std::fs::create_dir_all(parent).is_err(){return;}}
+    // Different GPU processes update this shared summary. Lock the whole
+    // read/modify/rename, not only the final write.
+    let Ok(lock)=std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(file.with_extension("lock"))else{return;};
+    if lock.lock().is_err(){return;}
+    let mut n:Notes=std::fs::read(file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let map=if error{&mut n.errors}else{&mut n.notes};
+    match text{Some(e)=>map.insert(name.into(),e),None=>map.remove(name)};
+    if n.errors.is_empty()&&n.notes.is_empty()&&!file.exists(){return;}
+    if let Ok(text)=serde_json::to_string_pretty(&n){let _=crate::motion::output::text(file,&text);}
 }
 
 fn text(p: &Path) -> String {
@@ -112,8 +115,9 @@ fn text(p: &Path) -> String {
 /// Name of the series an mdoc describes: `TS_01.mrc.mdoc` and `TS_01.mdoc` → `TS_01`.
 fn series_name(mdoc: &Path) -> String {
     let n = mdoc.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let n = n.strip_suffix(".mdoc").unwrap_or(&n);
-    ["mrc", "st", "mrcs", "tif", "tiff", "eer"].iter().find_map(|e| n.strip_suffix(&format!(".{e}"))).unwrap_or(n).to_string()
+    let n=if n.to_ascii_lowercase().ends_with(".mdoc"){&n[..n.len()-5]}else{&n};
+    let ext=Path::new(n).extension().and_then(|e|e.to_str()).unwrap_or("");
+    if ["mrc","st","mrcs","tif","tiff","eer"].iter().any(|e|e.eq_ignore_ascii_case(ext)){n[..n.len()-ext.len()-1].to_string()}else{n.to_string()}
 }
 
 fn exists(p: &Option<String>) -> Option<String> {
@@ -129,8 +133,10 @@ pub fn scan(folder: &str) -> Result<Session> {
     if !root.is_dir() {
         bail!("不是文件夹：{folder}");
     }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&root)?.flatten().map(|e| e.path()).filter(|p| p.is_file() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
-    files.sort();
+    let _index=crate::acquisition::scope(&root)?;
+    let index=crate::acquisition::active().unwrap();
+    let files=index.files.clone();
+    let mut warnings=index.warnings.clone();
     let known = notes(&root);
     let mut series: Vec<Series> = vec![];
     let ext = |p: &Path| p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -140,25 +146,25 @@ pub fn scan(folder: &str) -> Result<Session> {
         let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let angles = ["rawtlt", "tlt", "mdoc"].iter().any(|e| f.with_extension(e).exists()) || Path::new(&format!("{}.mdoc", f.display())).exists();
         if angles {
-            stacks.entry(stem).or_insert_with(|| f.clone());
+            if let Some(old)=stacks.insert(stem.clone(),f.clone()){if old!=*f {bail!("发现同名倾转叠层 {stem}：{} 和 {}，请缩小采集范围",old.display(),f.display());}}
         }
     }
     for f in files.iter().filter(|f| ext(f) == "mdoc") {
         let name = series_name(f);
-        if stacks.contains_key(&name) || series.iter().any(|s| s.name == name) {
-            continue;
-        }
-        let Ok(doc) = std::fs::read_to_string(f).map_err(anyhow::Error::from).and_then(|t| crate::motion::series::parse(&t)) else { continue };
+        if stacks.contains_key(&name) {continue;}
+        if series.iter().any(|s|s.name==name){bail!("存在多个同名采集记录 {name}，请缩小到一个采集目录，避免混合不同序列");}
+        let doc=match std::fs::read_to_string(f).map_err(anyhow::Error::from).and_then(|t|crate::motion::series::parse(&t)){Ok(d)=>d,Err(e)=>{warnings.push(format!("{}：{e}",f.display()));continue}};
         let movies = doc.views.iter().filter(|v| crate::motion::series::resolve(f, &v.movie, None).is_some()).count();
         let stack = crate::project_dirs::motion_output(&text(&root.join(format!("{name}.mrc"))));
         let state = std::fs::read(format!("{stack}.motion-series.json")).ok().and_then(|b| serde_json::from_slice::<crate::motion::series::SeriesResult>(&b).ok()).filter(|r| Path::new(&r.mdoc).file_name() == f.file_name());
         let corrected = state.as_ref().map_or(0, |r| r.records.iter().filter(|r| r.section.is_some()).count());
         let complete = state.as_ref().is_some_and(|r| r.complete) && Path::new(&stack).exists();
-        if movies == 0 && !complete {
-            continue;
-        }
+
         let mut s = blank(name, Some(text(f)), stack);
         s.movies = movies.max(corrected);
+        if movies==0 && !complete {s.error=Some("记录中没有可唯一匹配的电影，请检查文件名、缺失项和重名文件".into());}
+        let expected=doc.views.len();
+        if movies < expected { s.note=Some(format!("采集记录共 {expected} 个电影，匹配 {movies} 个；{} 个缺失或匹配不唯一，处理时会保留跳过原因",expected-movies)); }
         s.corrected = corrected;
         s.small = exists(&state.and_then(|r| r.small));
         if complete {
@@ -173,11 +179,11 @@ pub fn scan(folder: &str) -> Result<Session> {
     }
     series.sort_by(|a, b| crate::formats::sequence::natural_cmp(&a.name, &b.name));
     for s in &mut series {
-        s.error = known.errors.get(&s.name).cloned();
-        s.note = known.notes.get(&s.name).cloned();
+        s.error = known.errors.get(&s.name).cloned().or(s.error.clone());
+        s.note = known.notes.get(&s.name).cloned().or(s.note.clone());
         s.chosen = s.take.unwrap_or(s.verdict.as_ref().is_none_or(|v| v.usable));
     }
-    Ok(Session { root: text(&root), series })
+    Ok(Session { root: text(&root), series, warnings, gains:index.gains().iter().map(|p|text(p)).collect() })
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
@@ -309,9 +315,11 @@ fn stack_of(s: &Series, preview: bool, progress: pipeline::Progress) -> Result<S
 /// The first pass over every series of the folder not yet through it (or
 /// only those named in `only`).
 pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progress: pipeline::Progress, changed: &(dyn Fn() + Sync)) -> Result<Session> {
+    let _index=crate::acquisition::scope(Path::new(folder))?;
     each(folder, &|s| if only.is_empty() { s.stage != Stage::Quick && s.stage != Stage::Done } else { only.contains(&s.name) }, progress, changed, &|s, progress| {
         let stack = stack_of(s, true, progress)?;
         changed();
+        let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
         let mut d = dataset(&stack)?;
         // A series the program would not use is not aligned for nothing;
         // the user who takes it gets it with the next run.
@@ -329,11 +337,13 @@ pub fn prepare(dev: &burn::tensor::Device, folder: &str, only: &[String], progre
 
 /// The tomograms for `purpose` of every series the user (else the program) chose.
 pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, only: &[String], progress: pipeline::Progress, changed: &(dyn Fn() + Sync)) -> Result<Session> {
+    let _index=crate::acquisition::scope(Path::new(folder))?;
     each(folder, &|s| s.chosen && (only.is_empty() || only.contains(&s.name)), progress, changed, &|s, progress| {
         // Averaging needs the views in full (every movie corrected at its
         // own pixel, local motion and dose weighting); what was made for
         // looking is enough for a tomogram to show.
         let stack = stack_of(s, purpose != auto::Purpose::Sta, progress)?;
+        let _turn=if std::env::var_os("TMV_PARENT_GPU_LOCK_DEFERRED").is_some(){crate::cli::gpu_turn()}else{None};
         let mut d = dataset(&stack)?;
         let req = auto::AutoReq { pixel_a: None, purpose, fresh: false, membranes: false };
         Ok(crate::ctf_gpu::guarded(|| auto::run(dev, &mut d, &req, progress))??.note)
@@ -363,7 +373,8 @@ mod tests {
         std::fs::write(p("gone.mdoc"), "[ZValue = 0]\nTiltAngle = 0\nSubFramePath = nowhere.eer\n").unwrap();
         let s = scan(&text(dir.path())).unwrap();
         let names: Vec<(&str, Stage, usize)> = s.series.iter().map(|s| (s.name.as_str(), s.stage, s.movies)).collect();
-        assert_eq!(names, [("a", Stage::Movies, 1), ("b", Stage::Stack, 0)]);
+        assert_eq!(names, [("a", Stage::Movies, 1), ("b", Stage::Stack, 0), ("gone", Stage::Movies, 0)]);
+        assert!(s.series[2].error.is_some(), "missing movies must stay visible with a diagnostic");
         assert!(s.series[0].stack.ends_with("1_motion/a.mrc") && s.series.iter().all(|s| s.chosen));
         note(dir.path(), "a", Some("坏了".into()));
         assert_eq!(scan(&text(dir.path())).unwrap().series[0].error.as_deref(), Some("坏了"));
@@ -371,3 +382,5 @@ mod tests {
         assert!(scan(&text(dir.path())).unwrap().series[0].error.is_none());
     }
 }
+
+#[cfg(test)]mod parallel_notes_tests{use super::*;#[test]fn multi_gpu_notes_merge_without_lost_updates(){let dir=tempfile::tempdir().unwrap();let path=dir.path().join("session.json");std::thread::scope(|scope|{for i in 0..16{let path=&path;scope.spawn(move||merge_notes(path,&format!("TS_{i}"),Some(format!("warning_{i}")),true));}});let n:Notes=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();assert_eq!(n.errors.len(),16);}}

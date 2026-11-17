@@ -177,7 +177,9 @@ When publishing, CI puts the installers and update packages in the download site
 
 Both hosts serve the same deploy directory: `<version>/…`, the three JSON feeds, and `plugins/`. The app tries the direct host first for updates and plugin listings/installs, then Cloudflare on network/HTTP errors; plugin integrity errors stop the install. Browser navigation to the market stays on the main site. The download page keeps relative links unless a 3-second probe of the direct host succeeds; that host must allow cross-origin JSON requests. Port 9443 may be blocked on some networks.
 
-When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a final `[direct-base-url]` argument after `[notes]` to also write `latest-direct.json`. Without it only the original feeds are written; both updater feeds use the same package signatures.
+Before publishing, update `release-notes.json` with the exact release version and user-facing `features` / `fixes` bullet points. Both CI and local publication reject missing, empty or stale-version notes before writing feeds; Git commit subjects are never used. Both editions and direct/fallback updater feeds use the same multiline notes. Keep descriptions concrete: what users can now do and which visible problem was fixed.
+
+When running `scripts/make-release.mjs` locally, set `DIRECT_BASE_URL` or pass a final `[direct-base-url]` argument to also write `latest-direct.json`. Without it only the original feeds are written; both updater feeds use the same package signatures. Local desktop packaging requires `TMV_SSH_PREVIEW_HELPER` pointing to the Linux x86_64 musl `tmv-ssh-preview` artifact (CI builds and embeds it automatically).
 
 ## Command line for servers (`tmv`)
 

@@ -54,6 +54,13 @@ struct Pkg {
     module: OnceLock<std::result::Result<(Module, Exports), String>>,
 }
 
+/// Enabled local format package for the remote WASM preview sandbox.
+pub struct PreviewPackage {
+    pub manifest: serde_json::Value,
+    pub wasm: Vec<u8>,
+    pub app_version: String,
+}
+
 impl Pkg {
     fn module(&self) -> Result<&Module> {
         let r = self.module.get_or_init(|| {
@@ -191,6 +198,32 @@ impl Registry {
     /// Enabled packages, in id order.
     fn active(&self) -> Vec<Arc<Pkg>> {
         self.index().wasm.iter().filter(|p| self.enabled(&p.manifest.id)).cloned().collect()
+    }
+
+    pub fn preview_package(&self, path: &Path) -> Result<Option<PreviewPackage>> {
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let Some(pkg) = self.active().into_iter().find(|p| p.opens(&ext).is_some()) else {
+            return Ok(None);
+        };
+        let wasm_path = pkg.dir.join(
+            package::safe_rel(pkg.manifest.wasm.as_ref().unwrap()).context("无效格式插件路径")?,
+        );
+        if wasm_path.metadata()?.len() > 16 * 1024 * 1024 {
+            bail!("远程预览插件超过 16 MB");
+        }
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(pkg.dir.join("plugin.json"))?)?;
+        manifest["main"] = "index.js".into();
+        manifest["wasm"] = "format.wasm".into();
+        Ok(Some(PreviewPackage {
+            manifest,
+            wasm: std::fs::read(wasm_path)?,
+            app_version: self.app_version.read().unwrap().clone(),
+        }))
     }
 
     /// Whether an enabled plugin opens files with this (lower-case) extension.
@@ -717,6 +750,9 @@ impl Source for Augmented {
     }
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
         self.inner.read_page(page)
+    }
+    fn read_movie_page(&self, page: usize) -> Option<Result<Vec<Plane>>> {
+        self.inner.read_movie_page(page)
     }
     fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
         self.inner.raw_page(page)

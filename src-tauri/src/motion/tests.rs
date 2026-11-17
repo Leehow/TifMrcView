@@ -237,6 +237,11 @@ fn native_eer_group_and_super_resolution() {
     assert_eq!(v.iter().sum::<f32>(), 2.0);
     assert_eq!(v[13], 1.0); // (5,1), raw event at detector (2,0).
     assert_eq!(v[22], 1.0); // (6,2), raw event at detector (3,1).
+    for up in [1, 2] {
+        for (start, count) in [(0, 1), (0, 2), (1, 1)] {
+            assert_eq!(e.group(start, count, up).unwrap(), e.group_per_worker(start, count, up).unwrap());
+        }
+    }
 }
 
 #[test]
@@ -310,10 +315,27 @@ fn cpu_gpu_fourier_warp_and_dose_sums() {
     }
 }
 
+/// Movies are also looked for in the folder above the mdoc's, so a test
+/// series in a bare temp dir sees the a.mrc/b.mrc of tests running beside
+/// it in the shared temp folder and calls them ambiguous. Nest it.
+struct OwnDir {
+    inner: tempfile::TempDir,
+    _outer: tempfile::TempDir,
+}
+impl OwnDir {
+    fn path(&self) -> &Path {
+        self.inner.path()
+    }
+}
+fn own_dir() -> OwnDir {
+    let outer = tempfile::tempdir().unwrap();
+    OwnDir { inner: tempfile::tempdir_in(outer.path()).unwrap(), _outer: outer }
+}
+
 #[test]
 fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(128, 128); 4];
     for (name, scale) in [("a.mrc", 1.0), ("b.mrc", 2.0)] {
         let data: Vec<Vec<f32>> = frames
@@ -385,7 +407,7 @@ fn mdoc_batch_sorts_outputs_but_not_pre_exposure() {
 #[test]
 fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(128, 128); 4];
     for (name, scale) in [("a.mrc", 1.0), ("b.mrc", 2.0), ("c.mrc", 3.0), ("d.mrc", 4.0)] {
         let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
@@ -459,7 +481,7 @@ fn a_stopped_batch_goes_on_and_a_broken_movie_leaves_no_gap() {
 #[test]
 fn a_preview_series_is_small_and_is_corrected_again_in_full() {
     begin();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = own_dir();
     let frames = vec![texture(512, 512); 4];
     for (name, scale) in [("a.mrc", 1.0f32), ("b.mrc", 2.0), ("c.mrc", 3.0)] {
         let data: Vec<Vec<f32>> = frames.iter().map(|v| v.iter().map(|x| x * scale).collect()).collect();
@@ -587,4 +609,24 @@ fn mdoc_batch_finds_the_one_gain_reference() {
     std::fs::write(&movie, "").unwrap();
     std::fs::write(run.join("Gains/TS_1_gain.mrc"), "").unwrap();
     assert_eq!(find_gain(&mdoc, Some(&movie), None), Some(run.join("Gains/TS_1_gain.mrc")));
+}
+
+#[test]
+fn recursive_mrc_and_tiff_movies_and_changed_gain_are_processed() {
+    begin();
+    let dir=tempfile::tempdir().unwrap();let root=dir.path();
+    let metadata=root.join("arbitrary/records/day1");let frames=root.join("camera/session1/raw");std::fs::create_dir_all(&metadata).unwrap();std::fs::create_dir_all(&frames).unwrap();
+    let pixels=texture(256,256);let planes=vec![pixels.clone();4];
+    stack(&frames.join("a.mrc"),&planes,256,256);stack(&frames.join("c.mrcs"),&planes,256,256);
+    let mut tiff=tiff::encoder::TiffEncoder::new(std::fs::File::create(frames.join("b.tiff")).unwrap()).unwrap();
+    for p in &planes{tiff.write_image::<tiff::encoder::colortype::Gray32Float>(256,256,p).unwrap();}drop(tiff);
+    let gain=root.join("gain_reference.mrc");stack(&gain,&[vec![1.;256*256]],256,256);
+    let mdoc=metadata.join("ts.mdoc");std::fs::write(&mdoc,"PixelSpacing = 2\nVoltage = 300\n[ZValue = 0]\nTiltAngle = 0\nSubFramePath = Z:\\obsolete\\a.mrc\nExposureDose = 2\n[ZValue = 1]\nTiltAngle = 3\nSubFramePath = /missing/server/b.tiff\nExposureDose = 2\n[ZValue = 2]\nTiltAngle = -3\nSubFramePath = c.mrcs\nExposureDose = 2\n").unwrap();
+    let req=series::SeriesReq{mdoc:mdoc.to_string_lossy().into(),folder:Some(root.to_string_lossy().into()),output:root.join("ts.mrc").to_string_lossy().into(),params:Params{backend:"cpu".into(),working_size:256,..Default::default()},drop_tilts:true,fresh:false,preview:true};
+    let first=series::run(&req,&|_,_,_|{}).unwrap();assert_eq!(first.angles.len(),3);assert!(first.complete);assert!(first.warnings.iter().any(|w|w.contains("gain_reference")));
+    let work=std::sync::atomic::AtomicUsize::new(0);
+    let report=|s:&str,_:usize,_:usize|{if s.contains("运动校正"){work.fetch_add(1,Ordering::SeqCst);}};
+    series::run(&req,&report).unwrap();assert_eq!(work.load(Ordering::SeqCst),0,"unchanged inputs reuse results");
+    stack(&gain,&[vec![1.1;256*256]],256,256);
+    let next=series::run(&req,&report).unwrap();assert!(work.load(Ordering::SeqCst)>0,"changed gain must recompute instead of returning stale sums");assert_ne!(first.input_signature,next.input_signature);
 }

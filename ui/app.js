@@ -6,7 +6,7 @@ const T = window.__TAURI__;
 const TOUCH = matchMedia("(pointer: coarse)").matches;
 const HIT = TOUCH ? 14 : 6;
 const GRIP = TOUCH ? 9 : 5;
-const invoke = T.core.invoke;
+const invoke = (command,args,...options) => { const native=(c,a)=>window.TmvLocal ? TmvLocal.invoke(c,a,(n,v)=>T.core.invoke(n,v,...options)) : T.core.invoke(c,a,...options); return window.TmvRemote ? TmvRemote.invoke(command,args,native) : native(command,args); };
 const $ = (id) => document.getElementById(id);
 
 // Standard or Pro build (same code; the Pro build has its own product name).
@@ -224,6 +224,7 @@ try {
  */
 async function openPath(path, force = false, series = 0, inTab = false) {
   if (!path) return;
+  try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (!inTab && typeof editionReady !== "undefined") await editionReady;
   if (!inTab && window.TifMrcViewPro?.documents) return window.TifMrcViewPro.documents.open(path, force, series);
   // Clicking the image already shown changes nothing.
@@ -239,6 +240,13 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     $("loading").textContent = "加载中…";
     // Only the latest request may change the image or its loading indicator.
     slow = setTimeout(() => { if (request === openRequest) $("loading").hidden = false; }, 300);
+    const remoteFile = ext.remoteFiles?.get(path);
+    if (remoteFile && !remoteFile.ready) {
+      $("loading").textContent = "正在读取远程图像…";
+      await remoteFile.resolve();
+      if (request !== openRequest) return;
+      remoteFile.ready = true;
+    }
     const res = await invoke("open_image", { path, series, request });
     if (request !== openRequest) return;
     stopPlay();
@@ -496,6 +504,11 @@ function under(path, dir) {
 }
 
 async function refreshFolder(path, keepScroll = false) {
+  const remote = ext.remoteFiles?.get(path);
+  if (remote) {
+    showRemoteFolder(remote.folder, path);
+    return;
+  }
   const token = S.token;
   // A stack made of a folder's slices lists that folder; the stack itself
   // is in the list when a project file describes it.
@@ -550,6 +563,7 @@ function step(delta) {
 
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
 async function openHere(path, force = false, series = 0) {
+  try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (typeof editionReady !== "undefined") await editionReady;
   const docs = window.TifMrcViewPro?.documents;
   if (docs) return docs.open(path, force, series, { replace: true });
@@ -562,7 +576,7 @@ let folderTimer = 0;
 document.addEventListener("tmv-folder-changed", () => {
   clearTimeout(folderTimer);
   folderTimer = setTimeout(async () => {
-    if (!S.info || !S.folder.dir) return;
+    if (!S.info || !S.folder.dir || S.folder.remote) return;
     const top = $("sidebar").scrollTop;
     S.folder.dir = null;
     await refreshFolder(S.info.path, true);
@@ -3859,6 +3873,7 @@ function setStripFold(g, folded) {
 }
 
 function buildStrip() {
+  document.body.classList.toggle("remote-browsing", !!(S.folder.remote && S.folder.entries));
   const strip = $("strip");
   strip.innerHTML = "";
   thumbQueue.length = 0;
@@ -3875,6 +3890,7 @@ function buildStrip() {
     },
     { root: $("sidebar"), rootMargin: "600px 0px" },
   );
+  if (S.folder.remote && S.folder.entries) { buildRemoteDirectory(strip); return; }
   let body = null;
   let group = null;
   S.folder.files.forEach((f, i) => {
@@ -3928,7 +3944,9 @@ function buildStrip() {
       m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
     });
     body.append(el);
-    thumbObserver.observe(el);
+    if (ext.remoteFiles?.get(f) && !ext.remoteFiles.get(f).ready && !ext.remoteFiles.get(f).thumbnail) {
+      el.querySelector(".box").textContent = "SSH · 点按加载";
+    } else thumbObserver.observe(el);
   });
 }
 
@@ -3944,8 +3962,16 @@ function pumpThumbs() {
     const el = thumbQueue.splice(best, 1)[0];
     if (!el.isConnected) continue;
     thumbActive++;
-    invoke("thumbnail", { path: el.dataset.path, size: 256 })
+    const remote = ext.remoteFiles?.get(el.dataset.path);
+    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: el.dataset.path, size: 256 }))
       .then((buf) => {
+        if (!el.isConnected) return;
+        if (typeof buf === "string") {
+          const img = document.createElement("img"); img.src = buf; img.alt = "";
+          img.style.cssText = "max-width:100%;max-height:100%;object-fit:contain";
+          el.querySelector(".box").replaceChildren(img);
+          return;
+        }
         const f = parseFrame(buf);
         const c = document.createElement("canvas");
         c.width = f.w;
@@ -3966,8 +3992,9 @@ function pumpThumbs() {
 function markStrip(keepScroll = false) {
   updateInfo();
   const thumbs = [...$("strip").querySelectorAll(".thumb")];
-  thumbs.forEach((el, i) => el.classList.toggle("cur", i === S.folder.index));
-  const cur = thumbs[S.folder.index];
+  const current = S.folder.files[S.folder.index];
+  thumbs.forEach((el) => el.classList.toggle("cur", el.dataset.path === current));
+  const cur = thumbs.find(el => el.dataset.path === current);
   // Open the folded group the image shown is in.
   const sec = cur && cur.closest(".strip-group.folded");
   if (sec) {

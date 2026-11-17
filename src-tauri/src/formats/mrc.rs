@@ -1,7 +1,9 @@
 //! MRC / MRC2014 reader (cryo-EM maps, tomograms and particle stacks).
 
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use memmap2::Mmap;
@@ -11,6 +13,7 @@ use crate::image::{DType, DimOrder, ImageInfo, Plane, PlaneData, Source};
 
 pub struct MrcSource {
     mmap: Mmap,
+    movie_file: Mutex<File>,
     info: ImageInfo,
     data_offset: usize,
     little: bool,
@@ -107,7 +110,7 @@ impl MrcSource {
         let serial_em = (&mmap[104..108] == b"SERI").then(|| (rs(128).max(0) as usize, rs(130) as i32));
         let ext = 1024..data_offset.min(mmap.len());
         let mean = rf(84);
-        Ok(MrcSource { mmap, info, data_offset, little, mode, ext, serial_em, mean })
+        Ok(MrcSource { mmap, movie_file: Mutex::new(file), info, data_offset, little, mode, ext, serial_em, mean })
     }
 
     /// Sections in the file.
@@ -188,11 +191,46 @@ impl Source for MrcSource {
     }
 
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
-        use rayon::prelude::*;
         let (w, h) = (self.info.width, self.info.height);
         let n = mrc_plane_bytes(self.mode, w, h);
         let start = self.data_offset + page.min(self.info.page_count - 1) * n;
         let bytes = &self.mmap[start..start + n];
+        self.decode_page(bytes)
+    }
+
+    fn read_movie_page(&self, page: usize) -> Option<Result<Vec<Plane>>> {
+        Some((|| {
+            let n = mrc_plane_bytes(self.mode, self.info.width, self.info.height);
+            let start = self.data_offset + page.min(self.info.page_count - 1) * n;
+            let mut bytes = vec![0u8; n];
+            {
+                // One lock per file, never shared between movie readers. Keep
+                // the original file descriptor (no reopen/path replacement race).
+                let mut file = self.movie_file.lock().map_err(|_| anyhow::anyhow!("MRC 读取锁失效"))?;
+                file.seek(SeekFrom::Start(start as u64))?;
+                for block in bytes.chunks_mut(8 << 20) {
+                    file.read_exact(block).context("MRC 电影数据读取失败或被截断")?;
+                }
+            }
+            self.decode_page(&bytes)
+        })())
+    }
+
+    fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
+        if !matches!(self.mode, 0 | 1 | 2 | 6) {
+            return None;
+        }
+        let n = mrc_plane_bytes(self.mode, self.info.width, self.info.height);
+        let start = self.data_offset + page.min(self.info.page_count - 1) * n;
+        Some((&self.mmap[start..start + n], self.little))
+    }
+}
+
+impl MrcSource {
+    /// Both access paths use the same signedness, endian and special-mode rules.
+    fn decode_page(&self, bytes: &[u8]) -> Result<Vec<Plane>> {
+        use rayon::prelude::*;
+        let (w, h) = (self.info.width, self.info.height);
         let little = self.little;
         let data = match self.mode {
             12 => PlaneData::F32(
@@ -246,14 +284,6 @@ impl Source for MrcSource {
         Ok(vec![Plane { w, h, data }])
     }
 
-    fn raw_page(&self, page: usize) -> Option<(&[u8], bool)> {
-        if !matches!(self.mode, 0 | 1 | 2 | 6) {
-            return None;
-        }
-        let n = mrc_plane_bytes(self.mode, self.info.width, self.info.height);
-        let start = self.data_offset + page.min(self.info.page_count - 1) * n;
-        Some((&self.mmap[start..start + n], self.little))
-    }
 }
 
 #[cfg(test)]
@@ -419,6 +449,65 @@ mod tests {
 
     fn open(path: &Path) -> Box<dyn Source> {
         formats::open(path).unwrap()
+    }
+
+    #[test]
+    fn movie_reads_match_mmap_modes_endians_headers_and_page_order() {
+        for mode in [0, 1, 2, 3, 4, 6, 12, 101] {
+            for le in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut h = header([5, 3, 3], mode, le, [5.0, 3.0, 3.0]);
+                put_i32(&mut h, 92, 128, le);
+                h.extend([71u8; 128]);
+                let n = mrc_plane_bytes(mode, 5, 3);
+                let bytes: Vec<_> = (0..3*n).map(|i| (i % 251) as u8).collect();
+                let path = write(&dir, "movie.mrc", h, &bytes);
+                let source = MrcSource::open(&path).unwrap();
+                // Float modes deliberately include unusual bit patterns; compare
+                // bitwise, including NaNs, rather than relaxing the decoder.
+                for page in [2, 0, 1, 0, 99] {
+                    let old = source.read_page(page).unwrap();
+                    let new = source.read_movie_page(page).unwrap().unwrap();
+                    assert_eq!((old[0].w, old[0].h), (new[0].w, new[0].h));
+                    for i in 0..old[0].data.len() {
+                        assert_eq!(old[0].data.get_f64(i).to_bits(), new[0].data.get_f64(i).to_bits(), "mode {mode} endian {le} page {page} pixel {i}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn movie_reads_cross_block_boundary_and_are_thread_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = (8 << 20) + 17;
+        let bytes: Vec<_> = (0..2*w).map(|i| (i % 251) as u8).collect();
+        let path = write(&dir, "blocks.mrc", header([w as i32, 1, 2], 0, true, [1.0; 3]), &bytes);
+        let source = MrcSource::open(&path).unwrap();
+        std::thread::scope(|s| {
+            for page in [1, 0, 1, 0] {
+                let source = &source;
+                let bytes = &bytes;
+                s.spawn(move || {
+                    let planes = source.read_movie_page(page).unwrap().unwrap();
+                    let PlaneData::I8(v) = &planes[0].data else { panic!("signed mode 0"); };
+                    assert!(v.iter().zip(&bytes[page*w..(page+1)*w]).all(|(&a,&b)| a == b as i8));
+                });
+            }
+        });
+    }
+
+    // Windows refuses to shorten a file that is mapped ("user-mapped section
+    // open"), so the truncation this guards against cannot happen there.
+    #[cfg(unix)]
+    #[test]
+    fn movie_read_reports_truncation_instead_of_returning_partial_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "truncate.mrc", header([5, 3, 2], 0, true, [1.0; 3]), &[1; 30]);
+        let source = MrcSource::open(&path).unwrap();
+        // Do not access the existing mapping after truncation.
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(1024+16).unwrap();
+        assert!(source.read_movie_page(1).unwrap().is_err());
     }
 
     #[test]

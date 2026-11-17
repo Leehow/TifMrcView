@@ -37,7 +37,7 @@ type Dev = ();
 /// Window correlation below which the Thon rings no longer follow the fit.
 const FIT_CC: f64 = 0.5;
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Params {
     pub voltage_kv: f64,
@@ -942,7 +942,7 @@ fn fit_slices(
             // slices, on the CPU for one. Measured on an M1 Max: one slice
             // 0.18 s either way (Metal slower until warmed up), 41 slices
             // 1.4 s CPU vs 0.75–0.84 s Metal. "gpu": always on the GPU.
-            let all = params.backend.as_deref() == Some("gpu") || zs.len() > 1;
+            let all = true;
             let tried = crate::ctf_gpu::guarded(|| -> Result<Vec<Fit>> {
                 let logs = spectra(Some(dev))?;
                 if all {
@@ -954,13 +954,16 @@ fn fit_slices(
             match tried.and_then(|r| r) {
                 Ok(f) => {
                     let backend = if all { (*name).into() } else { format!("{name} 谱 + CPU 拟合") };
+                    crate::compute::report("CTF 频谱与网格拟合", "GPU", Some("精细参数优化与诊断由 CPU 完成".into()));
                     return Ok((f, backend, start.elapsed().as_secs_f64() * 1e3));
                 }
                 Err(e) if CANCEL.load(std::sync::atomic::Ordering::SeqCst) => return Err(e),
-                Err(e) => eprintln!("CTF on {name} failed, using the CPU: {e:#}"),
+                Err(e) => { eprintln!("CTF on {name} failed, using the CPU: {e:#}");crate::compute::report("CTF", "CPU", Some(format!("GPU 执行失败：{e:#}"))); },
             }
         }
     }
+    #[cfg(feature="pro")]
+    if params.backend.as_deref()==Some("cpu") || crate::ctf_gpu::device().is_none(){crate::compute::report("CTF","CPU",Some(if params.backend.as_deref()==Some("cpu"){"指定 CPU 后端".into()}else{crate::compute::no_gpu()}));}
     let fits = done(spectra(None)?, &CpuGrid)?;
     Ok((fits, "CPU".into(), start.elapsed().as_secs_f64() * 1e3))
 }

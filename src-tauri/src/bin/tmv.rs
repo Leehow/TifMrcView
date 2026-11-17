@@ -2,7 +2,10 @@
 use std::io::Write;
 
 fn main() {
-    let code = tifmrcview_lib::cli::main(std::env::args().skip(1).collect());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let code = if args.first().is_some_and(|s|s=="gpu-worker"){tifmrcview_lib::gpu_workers::worker()} else if args.first().is_some_and(|s| s == "agent" || s == "agent-worker") {
+        tifmrcview_lib::remote_agent::main(&args)
+    } else { tifmrcview_lib::cli::main(args) };
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     // Leave without unloading libraries: NVIDIA's Vulkan driver keeps a

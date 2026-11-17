@@ -68,7 +68,7 @@
 
   W.register = (i, hooks) => W.hooks.set(i, hooks);
   W.status = (text) => { $("cryo-status").textContent = text; };
-  W.name = (path) => path?.split(/[\\/]/).pop() || "";
+  W.name = (path) => (window.TmvRemote?.displayPath(path)||path)?.split(/[\\/]/).pop() || "";
 
   W.select = (i) => {
     W.current = i;

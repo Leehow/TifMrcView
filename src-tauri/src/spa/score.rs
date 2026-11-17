@@ -68,11 +68,12 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 /// each). Uses the GPU when there is one.
 pub fn best(c: &Coeffs, shifts: usize, refs: &Refs) -> Result<Vec<Best>> {
     #[cfg(feature = "pro")]
-    if let Some((dev, _)) = crate::ctf_gpu::device() {
-        if let Ok(Ok(b)) = crate::ctf_gpu::guarded(|| gpu_best(dev, c, shifts, refs)) {
-            return Ok(b);
+    if let Some((dev, name)) = crate::ctf_gpu::device() {
+        match crate::ctf_gpu::guarded(|| gpu_best(dev, c, shifts, refs)) {
+            Ok(Ok(b)) => { crate::compute::report("单颗粒分类与全局姿态搜索", name, None); return Ok(b); }
+            failure => crate::compute::report("单颗粒分类与全局姿态搜索", "CPU", Some(format!("GPU 搜索失败：{failure:?}"))),
         }
-    }
+    } else { crate::compute::report("单颗粒分类与全局姿态搜索", "CPU", Some(crate::compute::no_gpu())); }
     Ok(cpu_best(c, shifts, refs))
 }
 

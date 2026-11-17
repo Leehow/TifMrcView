@@ -19,8 +19,8 @@
 // market page (always confirmed here first; see plugins/market.rs).
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/i18n.js"];
-const BUILTIN_IDS = ["i18n"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/ssh.js"];
+const BUILTIN_IDS = ["i18n", "ssh"];
 
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, pkg, active, error, cleanup, listeners}
@@ -113,6 +113,17 @@ function makeApi(rec) {
     setZ: (z) => setZ(z),
     setT: (t) => setT(t),
     open: (path) => openPath(path),
+    /** Trusted plugins can present lazily cached files in the normal sidebar. */
+    folders: {
+      mount: (folder) => mountRemoteFolder(id, folder),
+      unmount: () => unmountRemoteFolder(id),
+      openEntry: async (entry, resolve, thumbnail) => {
+        if (!S.folder.remote || S.folder.owner !== id) throw new Error('请先打开对应 SSH 工作区');
+        ext.remoteFiles ||= new Map();
+        ext.remoteFiles.set(entry.local, {folder:S.folder,ready:false,remotePath:entry.path,resolve:()=>resolve(entry),thumbnail:thumbnail?()=>thumbnail(entry):null});
+        return openPath(entry.local);
+      },
+    },
 
     /**
      * Renders a region ([x, y, w, h] in image pixels) of slice z/t with the
@@ -177,6 +188,8 @@ function makeApi(rec) {
     },
 
     dialog: {
+      /** Selects a local SSH private key; never available to sandbox plugins. */
+      pickKey: () => invoke("ssh_pick_key"),
       /** Asks for a save path. Returns `null` when cancelled. */
       save({ name, dir, filter, exts }) {
         return invoke("pick_save_path", {

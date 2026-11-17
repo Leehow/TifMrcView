@@ -215,6 +215,7 @@ impl Project {
     }
 
     pub fn save(&self) -> Result<()> {
+        if std::env::var_os("TMV_SPA_SHARD").is_some()&&std::env::var_os("TMV_GPU_WORKER").is_some(){return Ok(());}
         let tmp = Project::file(&self.dir).with_extension("json.part");
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&tmp, Project::file(&self.dir))?;
@@ -248,7 +249,7 @@ impl Project {
         } else {
             folder
         };
-        let dir = folder.join(DIR);
+        let dir = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(||folder.clone()).join(DIR);
         let dir_s: String = dir.to_string_lossy().into();
         if Project::file(&dir_s).exists() {
             let mut p = Project::load(&dir_s)?;
@@ -439,6 +440,7 @@ impl Project {
 /// Motion correction of every movie (the cryo-ET package's
 /// `motion::run`), dose-weighted sums written to `motion/`.
 pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progress) -> Result<()> {
+    if p.mics.len()>1&&params.backend!="cpu"&&crate::gpu_workers::enabled(){return parallel_mics(p,"motion",serde_json::to_value(params)?,0,progress);}
     if !p.movies {
         bail!("输入已是显微图，不需要运动校正");
     }
@@ -486,7 +488,7 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
                 t: 0,
                 params: params.clone(),
             };
-            let r = crate::motion::run(&req, None, &|_, _, _| {})?;
+            let r = crate::motion::run(&req,None,&|stage,a,b|progress(&format!("运动校正 {}/{} · {stage}",i+1,n),a,b))?;
             // 1 Å/px is the placeholder motion uses when nothing knew the
             // pixel size: never let it replace a known value.
             let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
@@ -508,6 +510,16 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
     Ok(())
 }
 
+/// Workers own per-micrograph products; the coordinator alone saves the
+/// merged project. A shard must never replace the shared project.json.
+fn parallel_mics(p:&mut Project,step:&str,params:serde_json::Value,n_fft:usize,progress:Progress)->Result<()>{
+ let tasks:Vec<_>=p.mics.iter().map(|mic|{let mut shard=p.clone();shard.mics=vec![mic.clone()];serde_json::json!({"kind":"spa","project":shard,"step":step,"params":params,"nFft":n_fft})}).collect();
+ let results=std::sync::Mutex::new(Vec::new());crate::gpu_workers::map(&tasks,progress,&|_|check_cancel(),&|i,r|results.lock().unwrap().push((i,r)))?;
+ let mut results=results.into_inner().unwrap();results.sort_by_key(|r|r.0);
+ for (i,r)in results{check_cancel()?;let mut shard:Project=serde_json::from_value(r?)?;anyhow::ensure!(shard.mics.len()==1,"GPU 微图结果数量无效");p.mics[i]=shard.mics.remove(0);if i==0{p.optics=shard.optics;p.optics_found=shard.optics_found;}}
+ p.save()
+}
+
 /// CTF of every micrograph (`ctf::fit_region` on the whole image).
 pub fn ctf(
     p: &mut Project,
@@ -515,6 +527,7 @@ pub fn ctf(
     n_fft: usize,
     progress: Progress,
 ) -> Result<()> {
+    if p.mics.len()>1&&params.backend.as_deref()!=Some("cpu")&&crate::gpu_workers::enabled(){return parallel_mics(p,"ctf",serde_json::to_value(params)?,n_fft,progress);}
     if p.movies
         && p.mics
             .iter()
@@ -589,6 +602,7 @@ pub fn pick_one(p: &Project, i: usize, params: &PickParams) -> Result<Vec<[f32; 
 }
 
 pub fn pick_all(p: &mut Project, params: &PickParams, progress: Progress) -> Result<usize> {
+    #[cfg(feature="pro")] crate::compute::cpu_stage("单颗粒拾取", "CPU 多尺度筛选与去重");
     let n = p.mics.len();
     let mut all = vec![];
     for i in 0..n {
@@ -662,6 +676,7 @@ pub fn extract_all(
     invert: bool,
     progress: Progress,
 ) -> Result<StackInfo> {
+    #[cfg(feature="pro")] crate::compute::cpu_stage("单颗粒提取与归一化", "CPU 读取局部粒子并写入粒子堆栈");
     let picks = p.picks()?;
     if picks.iter().all(Vec::is_empty) {
         bail!("还没有挑选颗粒");
