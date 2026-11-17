@@ -76,6 +76,7 @@ ssh HOST 'cd ~/tmv-jobs/NAME && nohup ~/.local/bin/tmv COMMAND INPUT [OPTIONS] >
 | Tomogram from a tilt series or from movies + mdoc | `tmv tomo ts.mrc` or `tmv tomo ts.mdoc` |
 | … for subtomogram averaging | `tmv tomo ts.mrc --for sta` (adds a RELION 5 folder and a clear `"look"` tomogram) |
 | … just a quick look | `tmv tomo ts.mrc --for survey` |
+| … only some processing steps | `tmv tomo ts.mrc --steps align,n2n,wedge,flat` (any of them; `none` = fast: about 18 Å voxels, 9 Å once align/n2n/wedge is asked for) |
 | Average a particle from tomograms (subtomogram averaging) | `tmv sta ts.mrc` or `tmv sta ts_sart3_b2_flip.mrc [more.mrc …]` makes the cards and stops; the user chooses, then `--pick N` (step 5) |
 | Membranes, vesicles, microtubules of a tomogram | `tmv membranes tomo.mrc` |
 | Single-particle reconstruction | `tmv spa FOLDER` (see step 5) |

@@ -43,30 +43,89 @@ pub use super::dataset::Look;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+/// The parts of the one pipeline the user ticked in 「三维重构」. What each
+/// does, in which order and with which settings stays the program's choice;
+/// none ticked is the fast tomogram.
+/// - `fine_align`: the held-out choice of patch layout and the views left
+///   out because they make the tomogram worse (`select`).
+/// - `denoise`: Noise2Noise on the even/odd halves (else neighbouring sections).
+/// - `wedge`: missing-wedge correction within `WEDGE_BUDGET`. With halves it
+///   trains on them and denoises as it goes, so Noise2Noise is not run as
+///   well (only when the wedge step is too slow on this computer).
+/// - `flatten`: a lamella milled at an angle is laid flat; without it the
+///   thickness and depth of the specimen are still found, nothing is turned.
+/// Fixed: the deconvolution always runs (cheap, restores the low-resolution
+/// contrast); about 9 Å voxels when any of the first three is ticked, else
+/// about 18 Å; halves are reconstructed when denoise or wedge needs them.
+#[derive(Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Steps {
+    pub fine_align: bool,
+    pub denoise: bool,
+    pub wedge: bool,
+    pub flatten: bool,
+}
+
+impl Steps {
+    pub const ALL: Steps = Steps { fine_align: true, denoise: true, wedge: true, flatten: true };
+    /// Steps worth the finer voxels.
+    fn clear(self) -> bool {
+        self.fine_align || self.denoise || self.wedge
+    }
+    /// From `align,n2n,wedge,flat` (the CLI's `--steps`; empty: none).
+    pub fn parse(list: &str) -> Result<Steps> {
+        let mut s = Steps::default();
+        for w in list.split([',', ' ']).map(str::trim).filter(|w| !w.is_empty()) {
+            match w {
+                "align" | "fine-align" => s.fine_align = true,
+                "n2n" | "denoise" => s.denoise = true,
+                "wedge" => s.wedge = true,
+                "flat" | "flatten" => s.flatten = true,
+                "none" | "fast" => {}
+                _ => bail!("--steps {w}: use align, n2n, wedge, flat (comma separated) or none"),
+            }
+        }
+        Ok(s)
+    }
+}
+
 /// What the tomogram is for.
 #[derive(Clone, Copy, Deserialize, Default, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum Purpose {
+    /// The quick tomogram of the first pass: no steps but flattening.
     Survey,
+    /// As clear as possible: every step.
     #[default]
     Display,
     Sta,
+    /// The steps the user ticked (`{"custom": {...}}`); saved as "display".
+    Custom(Steps),
 }
 
 impl Purpose {
     pub fn name(self) -> &'static str {
         match self {
             Purpose::Survey => "survey",
-            Purpose::Display => "display",
+            Purpose::Display | Purpose::Custom(_) => "display",
             Purpose::Sta => "sta",
+        }
+    }
+    /// The steps this purpose runs (STA's own course is decided in `run`).
+    pub fn steps(self) -> Steps {
+        match self {
+            Purpose::Survey => Steps { flatten: true, ..Steps::default() },
+            Purpose::Display => Steps::ALL,
+            Purpose::Sta => Steps { fine_align: true, flatten: true, ..Steps::default() },
+            Purpose::Custom(s) => s,
         }
     }
     /// Output voxel size aimed at, Å.
     fn voxel(self) -> f64 {
         match self {
-            Purpose::Survey => 18.0,
-            Purpose::Display => 9.0,
             Purpose::Sta => 4.5,
+            p if p.steps().clear() => 9.0,
+            _ => 18.0,
         }
     }
 }
@@ -100,6 +159,8 @@ pub struct AutoResult {
     pub labels: Option<String>,
     /// Something the user should know about the result.
     pub note: Option<String>,
+    /// What was done after the reconstruction, in words ("精对齐", "N2N 降噪", …).
+    pub done: Vec<String>,
     /// Seconds each step took, in order.
     pub timings: Vec<(String, f64)>,
     /// The batches that chose which views to leave out.
@@ -155,14 +216,19 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     // Membranes are segmented at the end of a display tomogram when the
     // user has picked the MemBrain-seg model (the app asks beforehand).
-    let membranes = req.membranes && req.purpose == Purpose::Display && crate::membrane::model_path().is_some();
+    let sta = req.purpose == Purpose::Sta;
+    let st = req.purpose.steps();
+    let membranes = req.membranes && !sta && st.clear() && crate::membrane::model_path().is_some();
     let bin = output_bin(w, h, px, req.purpose.voxel());
+    let halves = (sta || st.denoise || st.wedge) && d.even.is_some() && d.odd.is_some();
+    // With halves the wedge step trains on them and denoises as it goes.
+    let wedge_denoises = st.wedge && halves;
+    let n2n = !sta && st.denoise && !wedge_denoises;
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
-        Purpose::Survey => 5,
-        Purpose::Display => 7 + membranes as usize,
         Purpose::Sta if 2 * bin <= 16 => 8,
         Purpose::Sta => 5,
+        _ => 5 + n2n as usize + st.wedge as usize + membranes as usize,
     };
     // When each step was first and last heard from, for `timings` (steps
     // can overlap).
@@ -209,6 +275,9 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     if d.angles.len() - out.len() < 3 {
         bail!("能用的图不到三张，无法重构");
     }
+    // Whether the views' geometry changes in this run: older tomograms then
+    // no longer sit on the alignment (`stale`).
+    let mut moved = false;
     // An alignment made with other views than these: fewer views now go
     // on from its tracks, a view taken back in is tracked again.
     if let Some(a) = d.alignment.clone() {
@@ -219,10 +288,16 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             let again = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: Some(a.axis), bin: a.bin, sweep: false, patch: Some(a.patch), excluded: out.clone(), groups: None, previous: grown.then_some(a) };
             d.alignment = Some(super::align(&img, &again, &|i, n| stage(1)("倾转对齐", i, n))?);
             d.aligned = None;
+            moved = true;
+            d.fine_aligned = None;
             d.save()?;
         }
     }
     let fresh_alignment = d.alignment.is_none();
+    moved |= fresh_alignment;
+    if fresh_alignment {
+        d.fine_aligned = None;
+    }
     let align_req = super::AlignReq { token: 0, c: 0, t: 0, angles: d.angles.clone(), start: None, step: None, axis: d.axis_hint, bin: 0, sweep: true, patch: None, excluded: out, groups: None, previous: None };
     match (d.alignment.is_none(), d.ctf.is_none()) {
         // With the acquisition's axis known, the CTF does not wait for the
@@ -251,18 +326,26 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     check_cancel()?;
     // Views that make the tomogram worse are left out, judged by quick
-    // tomograms in batches (`select`); not for the quick survey.
+    // tomograms in batches (`select`): 精对齐. Not again for an alignment
+    // it already went over with these views.
     let mut selection = vec![];
-    if req.purpose != Purpose::Survey {
+    let mut done = vec![];
+    let out_now = |d: &Dataset| -> Vec<usize> { d.alignment.as_ref().map(|a| a.views.iter().filter(|v| v.excluded).map(|v| v.file_index).collect()).unwrap_or_default() };
+    if st.fine_align && d.fine_aligned.as_ref() == Some(&out_now(d)) {
+        done.push("精对齐".to_string());
+    } else if st.fine_align {
+        done.push("精对齐".to_string());
         let (chosen, batches) = super::select::choose_patches(&img, d, d.alignment.as_ref().unwrap(), &stage(3))?;
         if batches.iter().any(|b| b.kept.is_some()) {
             d.alignment = Some(chosen);
+            moved = true;
             d.save()?;
         }
         selection.extend(batches);
         let (picked, batches) = super::select::exclude_views(&img, d, d.alignment.as_ref().unwrap(), &stage(3))?;
         if batches.iter().any(|b| b.kept.is_some()) {
             d.alignment = Some(picked);
+            moved = true;
             d.save()?;
         }
         selection.extend(batches);
@@ -283,6 +366,8 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             d.aligned = None;
             d.save()?;
         }
+        d.fine_aligned = Some(out_now(d));
+        d.save()?;
     }
     check_cancel()?;
     // The aligned views at a small size, for the user to see how well the
@@ -297,22 +382,42 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         d.save()?;
     }
     check_cancel()?;
+    // Not flattened: a turn an earlier flattened run saved is taken back.
+    if !st.flatten {
+        if let Some(a) = d.alignment.as_mut().filter(|a| a.tilt_offset != 0.0) {
+            let t = a.tilt_offset;
+            for v in &mut a.views {
+                v.tilt = v.refined() - t;
+            }
+            a.tilt_offset = 0.0;
+            moved = true;
+            d.save()?;
+        }
+    }
     let a = d.alignment.clone().unwrap();
     let ctf = d.ctf.clone().unwrap();
     let mut leveled = a.clone();
-    let place = level(&img, &mut leveled, px, bin, req.purpose != Purpose::Sta, &stage(3))?;
+    let how = if !st.flatten { Flatten::No } else if sta { Flatten::TiltOnly } else { Flatten::Both };
+    let place = level_as(&img, &mut leveled, px, bin, how, &stage(3))?;
+    if st.flatten && !sta {
+        done.push("自动展平".to_string());
+    }
     // The alignment's own offset, so a rerun on an alignment levelled before
     // still reports how far the specimen was turned (this run adds none).
     let tilt_offset = leveled.tilt_offset;
     if place.tilt_offset != 0.0 {
         d.alignment = Some(leveled);
+        moved = true;
         d.save()?;
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let step = pipeline::ReconStep { bin, params, halves: req.purpose != Purpose::Survey && d.even.is_some() && d.odd.is_some(), phase_flip: true, ctf_3d: false, label: None };
+    let step = pipeline::ReconStep { bin, params, halves, phase_flip: true, ctf_3d: false, label: None };
     let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
+    if moved {
+        stale(d, &made.paths)?;
+    }
     let mut look = None;
     if req.purpose == Purpose::Sta {
         check_cancel()?;
@@ -322,30 +427,45 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut path = raw.clone();
     let mut relion = None;
     let mut note = None;
-    if req.purpose == Purpose::Display {
+    if !sta {
+        // Noise2Noise, the deconvolution, then the missing wedge.
+        let mut k = 4;
+        if n2n {
+            check_cancel()?;
+            k += 1;
+            path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(k))?.paths.remove(0);
+            done.push("N2N 降噪".to_string());
+        }
         check_cancel()?;
-        path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(5))?.paths.remove(0);
-    }
-    if req.purpose != Purpose::Sta {
-        check_cancel()?;
-        let k = if req.purpose == Purpose::Display { 6 } else { 5 };
+        k += 1;
         path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
-    }
-    if req.purpose == Purpose::Display {
-        check_cancel()?;
-        let (source, paired) = display_wedge_source(d, &raw, &path);
-        let step = pipeline::WedgeStep { source: Some(source.to_owned()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
-        match pipeline::wedge(dev, d, &step, &stage(7)) {
-            Ok(mut m) => {
-                path = m.paths.remove(0);
-                if paired {
-                    path = pipeline::deconvolve(d, Some(&path), &stage(7))?.paths.remove(0);
+        if st.wedge {
+            check_cancel()?;
+            k += 1;
+            let (source, paired) = display_wedge_source(d, &raw, &path);
+            let step = pipeline::WedgeStep { source: Some(source.to_owned()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
+            match pipeline::wedge(dev, d, &step, &stage(k)) {
+                Ok(mut m) => {
+                    path = m.paths.remove(0);
+                    if paired {
+                        path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+                    }
+                    done.push(if paired && st.denoise { "去缺失楔（同时降噪）" } else { "去缺失楔" }.to_string());
                 }
+                Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
+                    Some(slow) => {
+                        note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0));
+                        // Denoising was left to the wedge step: done now instead.
+                        if st.denoise && wedge_denoises {
+                            check_cancel()?;
+                            path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(raw.clone()), steps: 1000 }, &stage(k))?.paths.remove(0);
+                            path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+                            done.push("N2N 降噪".to_string());
+                        }
+                    }
+                    None => return Err(e),
+                },
             }
-            Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
-                Some(slow) => note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0)),
-                None => return Err(e),
-            },
         }
     }
     let mut labels = None;
@@ -355,7 +475,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
         // pass took 36 min for a 930 × 960 × 240 tomogram on an M1 Max, of
         // 41 in all), the membranes of a tomogram to show are found as well;
         // the membrane tool itself goes over it with all eight.
-        labels = Some(pipeline::membranes_pass(dev, d, Some(&path), crate::membrane::Pass::Copies(2), &stage(8))?.paths.remove(0));
+        labels = Some(pipeline::membranes_pass(dev, d, Some(&path), crate::membrane::Pass::Copies(2), &stage(total))?.paths.remove(0));
     }
     if req.purpose == Purpose::Sta {
         check_cancel()?;
@@ -371,6 +491,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     let shown = look.as_ref().map_or(path.clone(), |l: &Look| l.path.clone());
     d.made.insert(req.purpose.name().into(), shown);
+    if sta {
+        d.made_steps.remove(req.purpose.name());
+    } else {
+        d.made_steps.insert(req.purpose.name().into(), done.clone());
+    }
     d.save()?;
     let dfs: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     let mut sorted = dfs.clone();
@@ -378,7 +503,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let mut heard = heard.into_inner().unwrap();
     heard.sort_by_key(|e| e.0);
     let timings = heard.iter().map(|e| (e.1.clone(), e.3.duration_since(e.2).as_secs_f64())).collect();
-    Ok(AutoResult { path, raw, look, relion, labels, note, timings, selection, levelled: [tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
+    Ok(AutoResult { path, raw, look, relion, labels, note, done, timings, selection, levelled: [tilt_offset, place.y_slope.atan().to_degrees()], bin, thickness, residual: a.residual, defocus_um: sorted[sorted.len() / 2] / 1e4, ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
 /// The tag in the file names of the look tomogram and what is made from it
@@ -503,6 +628,31 @@ const LEVEL: f64 = 0.009;
 /// false, for STA, whose RELION export cannot carry it). Checked and
 /// repeated on a new probe until both are level; then the tomogram covers
 /// the band with a margin, centred on it.
+/// How `level_as` may turn the specimen.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Flatten {
+    /// Not at all: only its thickness and depth are found.
+    No,
+    /// About Y (the tilt offset) only, no depth slope (STA's grids).
+    TiltOnly,
+    Both,
+}
+
+/// Older tomograms of `d` (not `made` now) no longer sit on its alignment:
+/// their placement is forgotten, so subtomogram averaging asks for a new
+/// reconstruction instead of using the wrong geometry.
+fn stale(d: &mut Dataset, made: &[String]) -> Result<()> {
+    let mut any = false;
+    for t in d.tomograms.iter_mut().filter(|t| !made.contains(&t.path) && t.z_offset.is_some()) {
+        t.z_offset = None;
+        any = true;
+    }
+    if any {
+        d.save()?;
+    }
+    Ok(())
+}
+
 pub fn level(
     img: &std::sync::Arc<crate::image::OpenImage>,
     a: &mut super::Alignment,
@@ -511,6 +661,18 @@ pub fn level(
     level_y: bool,
     progress: pipeline::Progress,
 ) -> Result<Placement> {
+    level_as(img, a, px, bin, if level_y { Flatten::Both } else { Flatten::TiltOnly }, progress)
+}
+
+pub fn level_as(
+    img: &std::sync::Arc<crate::image::OpenImage>,
+    a: &mut super::Alignment,
+    px: f64,
+    bin: usize,
+    mode: Flatten,
+    progress: pipeline::Progress,
+) -> Result<Placement> {
+    let level_y = mode == Flatten::Both;
     let probe = 8usize.max(bin);
     // 600 nm of depth is more than a lamella or a thin cell edge has.
     let depth = ((6000.0 / (px * probe as f64)).ceil() as usize).clamp(16, 512);
@@ -524,6 +686,9 @@ pub fn level(
         let how = pipeline::Build { alignment: a, bin: probe, params: &params, ctf: None, ctf_3d: false };
         let vol = pipeline::volume(&how, stack, w, h, &angles)?;
         round += 1;
+        if mode == Flatten::No {
+            break (vol, w, h);
+        }
         let Some([sx, sy, _]) = plane(&vol, w, h, depth) else { break (vol, w, h) };
         let sy = if level_y { sy } else { 0.0 };
         if (sx.abs() < LEVEL && sy.abs() < LEVEL) || round == 4 {

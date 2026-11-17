@@ -587,7 +587,7 @@
 .ws-jobs button { height:30px; padding:0 14px; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:none; font-size:13px; color:var(--dim); }
 .ws-jobs button:hover { background:var(--muted); }
 .ws-jobs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
-#cryoet-workspace[data-job="quick"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-sta, .cs-purpose-box, .cs-finish, .cs-only-recon),
+#cryoet-workspace[data-job="quick"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-sta, .cs-purpose-box, .cs-steps-line, .cs-finish, .cs-only-recon),
 #cryoet-workspace[data-job="recon"] :is(#cryo-sta, .cs-start, .cs-only-quick),
 #cryoet-workspace[data-job="sta"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-session, #cryo-foot) { display:none; }
 #cryo-sta { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
@@ -602,10 +602,14 @@
 .ws-corner:hover::after, .ws-corner:active::after { border-color:var(--accent); }
 /* What the reconstruction is for: three choices side by side. */
 #cryo-session .cs-purpose-box { flex:1 1 100%; display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
-#cryo-session .cs-use { border:1px solid var(--line); border-radius:8px; background:var(--surface); display:flex; flex-direction:column; align-items:flex-start; gap:3px; height:auto; padding:8px 10px; text-align:left; white-space:normal; line-height:1.4; }
-#cryo-session .cs-use span { color:var(--dim); font-size:11px; font-weight:normal; }
-#cryo-session .cs-use.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
-#cryo-session .cs-use.on b { color:var(--accent); }
+@media (max-width:520px) { #cryo-session .cs-purpose-box { grid-template-columns:1fr; } }
+#cryo-session .cs-use { border:1px solid var(--line); border-radius:8px; background:var(--surface); display:flex; align-items:flex-start; gap:8px; padding:8px 10px; text-align:left; white-space:normal; line-height:1.4; cursor:pointer; }
+#cryo-session .cs-use input { margin:2px 0 0; flex:none; }
+#cryo-session .cs-use > span { display:flex; flex-direction:column; gap:3px; }
+#cryo-session .cs-use > span > span { color:var(--dim); font-size:11px; font-weight:normal; }
+#cryo-session .cs-use:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+#cryo-session .cs-use:has(input:checked) b { color:var(--accent); }
+#cryo-session .cs-steps-line { flex:1 1 100%; margin:0; }
 #live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }
 /* Figure flow (figure.js): one panel on the right, over the 2D and the 3D view. */
 #quickbar #btn-figure { width: auto; padding: 0 8px; gap: 5px; }

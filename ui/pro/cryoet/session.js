@@ -22,15 +22,18 @@
     <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
       <button class="primary cs-act cs-start" title="只处理下面勾选的序列">开始</button>
-      <div class="cs-purpose-box" role="radiogroup" aria-label="重构用来做什么">
-        <button class="cs-use" data-purpose="survey" role="radio"><b>先看看</b><span>最快，粗一点的断层图，看看样品什么样</span></button>
-        <button class="cs-use" data-purpose="display" role="radio"><b>看清楚、做论文图</b><span>尽可能清晰：去噪并补缺失楔（约 9 Å 体素，较慢）。用来展示、标结构出三维图，也是子断层平均里挑颗粒时看的图</span></button>
+      <div class="cs-purpose-box" role="group" aria-label="重构时要做的处理">
+        <label class="cs-use"><input type="checkbox" data-step="fineAlign"><span><b>精对齐</b><span>多试几种对齐方式，自动去掉对不齐的倾角（会标出来，可以改回）</span></span></label>
+        <label class="cs-use"><input type="checkbox" data-step="denoise"><span><b>N2N 降噪</b><span>去掉噪点，结构更干净（有电影数据时效果最好）</span></span></label>
+        <label class="cs-use"><input type="checkbox" data-step="wedge"><span><b>去缺失楔</b><span>减轻上下方向的拉长和模糊；这台电脑太慢（超过约 30 分钟）时自动跳过并告诉你</span></span></label>
+        <label class="cs-use"><input type="checkbox" data-step="flatten"><span><b>自动展平</b><span>把斜着的薄片转平，翻层时整层都在样品里</span></span></label>
       </div>
+      <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
       <span class="dim cs-selection-count" role="status"></span>
     </div>
     <p class="dim cs-help cs-only-quick">点击卡片勾选要处理的序列，再点「开始」。已处理的序列可点「打开」检查结果。</p>
-    <p class="dim cs-help cs-only-recon">选这次重构用来做什么，按「开始重构」，程序对勾选的序列做最终断层图。想先看看每个序列、挑图，去「快速查看」。</p>
+    <p class="dim cs-help cs-only-recon">勾选想要的处理（可以都不勾），再点「重构勾选序列」。想先看看每个序列、挑图，去「快速查看」。</p>
     <p class="dim cs-discovery" role="status"></p>
     <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button></div>
     <div class="cs-wall"></div>
@@ -259,6 +262,7 @@
     if (verdict) tile.append(el("div", `cs-verdict ${verdict.tone}`, verdict.text));
     const res = R.residualText(s);
     if (res) tile.append(el("div", "dim", res));
+    if (s.result) tile.append(el("div", "dim cs-done", s.done?.length ? `已重构：${s.done.join(" · ")}` : "已重构（快速）"));
     if (s.error) {
       const e = el("div", "cs-err", s.error);
       e.title = s.error;
@@ -291,24 +295,37 @@
       render();
       syncReview();
       const attn = r.series.filter(R.needsAttention).length;
-      W.status(purpose === "display" ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图` : purpose ? `${label}完成，断层图在右侧栏「③ 断层图」里` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
+      W.status(purpose ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图${noteOf(r, only)}` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
     }
   }
-  // What the tomograms are for (kept). Subtomogram averaging is not asked here:
-  // its part of the panel makes what it needs itself.
-  let usePurpose = pref.get("cryo-purpose", "display");
-  if (!["survey", "display"].includes(usePurpose)) usePurpose = "display";
-  const showPurpose = () => host.querySelectorAll(".cs-use").forEach((b) => {
-    b.classList.toggle("on", b.dataset.purpose === usePurpose);
-    b.setAttribute("aria-checked", b.dataset.purpose === usePurpose);
-  });
-  host.querySelectorAll(".cs-use").forEach((b) => { b.onclick = () => { usePurpose = b.dataset.purpose; pref.set("cryo-purpose", usePurpose); showPurpose(); }; });
-  showPurpose();
+  // The steps of the one pipeline the user ticked (kept; first use: none =
+  // the fast tomogram). Order and settings stay the program's choice.
+  // Subtomogram averaging is not asked here: its part of the panel makes
+  // what it needs itself.
+  const STEP_NAMES = { fineAlign: "精对齐", denoise: "N2N 降噪", wedge: "去缺失楔", flatten: "自动展平" };
+  let steps = { fineAlign: false, denoise: false, wedge: false, flatten: false };
+  try { Object.assign(steps, pref.get("cryo-steps", {}) || {}); } catch {}
+  const boxes = [...host.querySelectorAll(".cs-purpose-box input[data-step]")];
+  const showSteps = () => {
+    for (const b of boxes) b.checked = !!steps[b.dataset.step];
+    const on = Object.keys(STEP_NAMES).filter((k) => steps[k]);
+    const fine = steps.fineAlign || steps.denoise || steps.wedge;
+    q(".cs-steps-line").textContent = !on.length
+      ? "都不勾：快速重构，约 18 Å 体素，每个序列几分钟"
+      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（约 ${fine ? 9 : 18} Å 体素${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
+  };
+  for (const b of boxes) b.onchange = () => { steps = { ...steps, [b.dataset.step]: b.checked }; pref.set("cryo-steps", steps); showSteps(); };
+  showSteps();
+  // What a run left out or said, from the series it made.
+  const noteOf = (r, only) => {
+    const notes = [...new Set(r.series.filter((s) => only.includes(s.name) && s.note).map((s) => s.note))];
+    return notes.length ? `。${notes.join("；")}` : "";
+  };
   q(".cs-start").onclick = () => {
     return runSelected(null);
   };
   q(".cs-finish").onclick = async () => {
-    return runSelected(usePurpose);
+    return runSelected({ custom: { ...steps } });
   };
   async function runSelected(purpose){
     if(W.busy)return;
@@ -326,7 +343,7 @@
 
   const rv = { name: null, open:false, tab: "images", dataset: null, loading:false, sig: "", timer: 0, gen: 0, tabs:new Map(), prepared:new Map() };
   const find = (name) => session.series.find((s) => s.name === name);
-  const bodySig = (s) => [s.stage,s.corrected,s.small,s.aligned,s.quick,s.result,s.views].join("|");
+  const bodySig = (s) => [s.stage,s.corrected,s.small,s.aligned,s.quick,s.result,s.views,(s.done||[]).join(",")].join("|");
   let prepareTail=Promise.resolve();
   function preparePreview(path){
     if(!rv.prepared.has(path)){
