@@ -8552,6 +8552,7 @@ dependencies = [
  "rust-ini",
  "rustls",
  "ruzstd",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",

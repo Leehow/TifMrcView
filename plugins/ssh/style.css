@@ -38,6 +38,7 @@
 .ssh-eyebrow { font-size: 11px; font-weight: 650; color: var(--dim); letter-spacing: .06em; }
 .ssh-form { display: grid; gap: 17px; margin-top: 24px; }
 .ssh-form label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-weight: 550; min-width: 0; }
+.ssh-form label[data-k="remember-group"] { flex-direction: row; align-items: center; font-weight: 400; }
 .ssh-dialog input:not([type=checkbox]) { height: 36px; width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; padding: 0 10px; outline: none; user-select: text; }
 .ssh-dialog input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .ssh-dialog input:disabled { opacity: .65; }

@@ -154,3 +154,19 @@ Implementation precedent: [ssh2 SFTP API](https://docs.rs/ssh2/latest/ssh2/struc
 and [libssh2's SFTP example](https://libssh2.org/examples/sftp.html) both separate
 host-key verification, authentication and SFTP reads. The browser follows that
 ordering and keeps the verified session alive through the trust prompt.
+
+## Remembering passwords
+
+SSH 1.5.0 requires app 0.7.227 or later. “记住密码” is off by default.
+An opted-in password is saved only after successful authentication, SFTP access
+and host trust checks. Recent connections retain only a remember flag, never
+the password; selecting one reads its password from the system credential
+store and fills the form without connecting. Unchecking deletes the saved
+credential immediately. Hosts, ports and case-sensitive usernames have
+separate entries; the two app editions have separate credential namespaces.
+
+macOS uses Keychain Services, Windows uses Credential Manager, and Linux uses
+Secret Service through `secret-tool` (requires libsecret tools and a running
+desktop secret service). No plaintext fallback is used when storage fails.
+The connection remains usable and reports the storage failure. Private key
+passphrases are not remembered.

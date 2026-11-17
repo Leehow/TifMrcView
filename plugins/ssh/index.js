@@ -3,7 +3,7 @@
 {
 const stylesheetUrl = new URL("style.css", document.currentScript.src).href;
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.4.0",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.5.0",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) throw new Error("当前版本不支持 SSH，请更新桌面应用");
@@ -35,14 +35,15 @@ TifMrcView.register({
             <div class="ssh-fields"><label>用户名<input data-k="username" name="ssh-user" required placeholder="用户名" autocomplete="off" spellcheck="false" /></label>
               <label class="ssh-port">端口<input data-k="port" type="number" required min="1" max="65535" value="22" /></label></div>
             <label>登录方式<select data-k="auth-method"><option value="password">密码登录</option><option value="keyFile">本地密钥登录</option></select></label>
-            <label data-k="password-group">密码<span class="ssh-password"><input data-k="password" name="ssh-password" type="password" required placeholder="仅用于本次连接" autocomplete="off" /><button type="button" data-k="show-password" aria-label="显示密码">显示</button></span></label>
+            <label data-k="password-group">密码<span class="ssh-password"><input data-k="password" name="ssh-password" type="password" required placeholder="SSH 登录密码" autocomplete="off" /><button type="button" data-k="show-password" aria-label="显示密码">显示</button></span></label>
+            <label data-k="remember-group"><input data-k="remember-password" type="checkbox" /> 记住密码（保存在系统凭据库）</label>
             <div data-k="key-group" class="ssh-key-group" hidden><label>私钥文件<span class="ssh-key-picker"><input data-k="key-path" placeholder="选择私钥文件，或输入路径" autocomplete="off" spellcheck="false" /><button type="button" data-k="pick-key">选择…</button></span></label>
               <label>密钥口令 <span class="ssh-muted">可选 · 未加密或已在本机解锁时留空</span><input data-k="passphrase" type="password" placeholder="仅用于解锁本次私钥" autocomplete="off" /></label></div>
             <button class="primary ssh-connect" data-k="connect" type="submit">连接服务器 →</button>
           </form>
           <p data-k="connection-status" class="ssh-connect-status" role="status" hidden>首次访问局域网时，请在系统提示中允许 macOS 的本地网络访问。</p>
           <div data-k="connected" class="ssh-connected" hidden><span class="ssh-connected-dot"></span><strong data-k="identity"></strong><p data-k="address"></p><button data-k="disconnect">断开连接</button></div>
-          <div class="ssh-private">密码与密钥口令不保存，私钥仅在本机读取。<br>原始图像只读访问，缩略图按需生成。</div>
+          <div class="ssh-private">仅勾选后保存登录密码；密钥口令不保存，私钥仅在本机读取。<br>原始图像只读访问，缩略图按需生成。</div>
           <div data-k="recent-box" class="ssh-recent" hidden><div class="ssh-eyebrow">最近连接</div><div data-k="recent"></div></div>
         </aside>
         <section class="ssh-browser" aria-label="远程文件浏览器">
@@ -106,21 +107,35 @@ TifMrcView.register({
       catch (e) { job.reject(e); }
       finally { previewActive = false; pumpPreviews(); }
     }
+    let credentialRevision = 0;
     const recent = app.settings.get("recent", []);
-    if (recent[0]) fill(recent[0]);
+    if (recent[0]) fill(recent[0]).catch(error);
 
-    function fill(profile) {
+    function credentialProfile() {
+      return { host: el("host").value.trim(), port: Number(el("port").value), username: el("username").value.trim() };
+    }
+    const profileKey = (p) => JSON.stringify([p.host.toLowerCase(), p.port, p.username]);
+    async function fill(profile) {
       for (const key of ["host", "username", "port"]) el(key).value = profile[key] ?? (key === "port" ? 22 : "");
       el("auth-method").value = profile.authMethod || "password";
       el("key-path").value = profile.keyPath || "";
-      el("password").value = ""; el("passphrase").value = "";
       syncAuth();
+      const revision = credentialRevision;
+      if (profile.authMethod === "keyFile" || !profile.rememberPassword) return;
+      el("remember-password").checked = true;
+      try {
+        const result = await app.native("loadPassword", credentialProfile());
+        if (!disposed && revision === credentialRevision && result?.password != null) el("password").value = result.password;
+      } catch (_) {
+        if (!disposed && revision === credentialRevision) error("无法读取已保存密码，请手动输入；可检查系统凭据库后重试");
+      }
     }
     function syncAuth() {
+      credentialRevision++;
       const key = el("auth-method").value === "keyFile";
-      el("key-group").hidden = !key; el("password-group").hidden = key;
+      el("key-group").hidden = !key; el("password-group").hidden = key; el("remember-group").hidden = key;
       el("key-path").required = key; el("password").required = !key;
-      el("password").value = ""; el("passphrase").value = "";
+      el("password").value = ""; el("passphrase").value = ""; el("remember-password").checked = false;
     }
     function renderRecent() {
       el("recent").replaceChildren();
@@ -128,7 +143,7 @@ TifMrcView.register({
         const button = document.createElement("button");
         button.textContent = `${item.username}@${item.host}`;
         button.title = `端口 ${item.port} · 点击填入连接信息`;
-        button.onclick = () => { if (!busy && !home) fill(item); };
+        button.onclick = () => { if (!busy && !home) fill(item).catch(error); };
         el("recent").append(button);
       }
       el("recent-box").hidden = !recent.length || !!home;
@@ -138,7 +153,7 @@ TifMrcView.register({
       busy = on;
       el("connection-status").hidden = !on || !!home || !navigator.userAgent.includes("Mac");
       el("connect").textContent = on && !home ? label || "正在连接…" : "连接服务器 →";
-      for (const key of ["host", "username", "password", "port", "auth-method", "key-path", "passphrase", "pick-key", "connect", "up", "home", "refresh", "path", "disconnect"]) el(key).disabled = on;
+      for (const key of ["host", "username", "password", "port", "auth-method", "key-path", "passphrase", "pick-key", "remember-password", "connect", "up", "home", "refresh", "path", "disconnect"]) el(key).disabled = on;
       el("connect-form").querySelector("button[type=submit]").disabled = on;
       updateSelection();
       if (!on) pumpPreviews();
@@ -222,6 +237,8 @@ TifMrcView.register({
       error(); setBusy(true);
       const profile = { host: el("host").value.trim(), port: Number(el("port").value), username: el("username").value.trim(), authMethod: el("auth-method").value };
       if (profile.authMethod === "keyFile") profile.keyPath = el("key-path").value.trim();
+      else profile.rememberPassword = el("remember-password").checked;
+      credentialRevision++;
       try {
         const result = await app.native("probe", { host: profile.host, port: profile.port });
         connection = result.connection;
@@ -238,6 +255,7 @@ TifMrcView.register({
         const auth = await native("authenticate", { ...profile, ...credentials, trust: true });
         el("password").value = ""; el("passphrase").value = "";
         if (disposed) { await native("disconnect"); return; }
+        if (auth.credentialWarning) { profile.rememberPassword = false; app.ui.toast(auth.credentialWarning, 8000); }
         processingIdentity = `${profile.username}@${profile.host}:${profile.port}:${auth.fingerprint}`;
         home = auth.path;
         recent.splice(0, recent.length, profile, ...recent.filter((p) => p.host !== profile.host || p.port !== profile.port || p.username !== profile.username).slice(0, 3));
@@ -394,7 +412,7 @@ TifMrcView.register({
     dialog.oncancel = () => { if (trustAnswer) trustAnswer(false); };
     // Keep viewer shortcuts (slice stepping, save, tools) inside the modal.
     dialog.addEventListener("keydown", (event) => event.stopPropagation());
-    dialog.onclose = () => { if (!busy) { el("password").value = ""; el("passphrase").value = ""; } toolbar.focus(); };
+    dialog.onclose = () => { if (!busy) { credentialRevision++; el("password").value = ""; el("passphrase").value = ""; } toolbar.focus(); };
     el("trust-yes").onclick = () => trustAnswer?.(true);
     el("trust-no").onclick = () => trustAnswer?.(false);
     el("disconnect").onclick = disconnect;
@@ -405,6 +423,23 @@ TifMrcView.register({
     el("hidden").onchange = () => { selected = null; renderList(); };
     el("load").onclick = () => load();
     el("auth-method").onchange = syncAuth;
+    for (const key of ["host", "port", "username"]) el(key).addEventListener("input", () => {
+      credentialRevision++; el("password").value = ""; el("remember-password").checked = false;
+    });
+    el("password").addEventListener("input", () => { credentialRevision++; });
+    el("remember-password").onchange = async () => {
+      credentialRevision++;
+      if (el("remember-password").checked) return;
+      const profile = credentialProfile();
+      if (!profile.host || !profile.username) return;
+      setBusy(true, "正在删除已保存密码…");
+      try {
+        await app.native("forgetPassword", profile);
+        for (const item of recent) if (profileKey(item) === profileKey(profile)) item.rememberPassword = false;
+        app.settings.set("recent", recent);
+      } catch (_) { el("remember-password").checked = true; error("无法删除已保存密码，请检查系统凭据库后重试"); }
+      finally { if (!disposed) setBusy(false); }
+    };
     el("pick-key").onclick = async () => {
       try { const path = await app.dialog.pickKey(); if (path && !disposed) el("key-path").value = path; }
       catch (e) { if (!disposed) error(e); }
@@ -423,7 +458,7 @@ TifMrcView.register({
     toolbar.classList.add("ssh-toolbar");
     renderRecent(); updateSelection();
     this.deactivate = () => {
-      disposed = true; browsing++; trustAnswer?.(false); clearTimeout(timer);
+      disposed = true; credentialRevision++; browsing++; trustAnswer?.(false); clearTimeout(timer);
       previewObserver.disconnect();
       for (const job of previewQueue.splice(0)) job.reject(new Error("插件已关闭"));
       previews.clear();

@@ -111,6 +111,7 @@ webpki-root-certs = "1"
 # Runtime extension access is needed only on Metal; other targets stay unchanged.
 burn = { version = "0.22.1", optional = true, default-features = false, features = ["extension"] }
 core-foundation = "0.10"
+security-framework = "=3.7.0"
 libc = "0.2"
 # NSOpenPanel for the folder button (choose an image or a folder in one panel).
 objc2 = "0.6"
@@ -134,7 +135,7 @@ tmv-sam = { path = "sam", optional = true, default-features = false, features = 
 [target.'cfg(windows)'.dependencies]
 # Pro: Vulkan with SPIR-V kernels first, DX12 when there is no Vulkan driver.
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["vulkan"] }
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security", "Win32_Security_Credentials"] }
 
 [profile.release]
 opt-level = 3

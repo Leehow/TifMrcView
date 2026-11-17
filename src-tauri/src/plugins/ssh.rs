@@ -1,5 +1,5 @@
 //! Read-only image access over SFTP. Remote writes are limited to the bundled
-//! preview helper in the user's cache; passwords and key contents never persist.
+//! preview helper in the user's cache. Opted-in passwords use the OS credential store.
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -19,6 +19,9 @@ mod preview;
 mod processing;
 #[path = "ssh_tcp.rs"]
 mod tcp;
+
+#[path = "ssh_credentials.rs"]
+mod credentials;
 
 #[derive(Default)]
 pub struct Ssh {
@@ -118,6 +121,15 @@ impl Ssh {
     }
 
     pub fn call(&self, method: &str, args: Value) -> Result<Value> {
+        if method == "loadPassword" || method == "forgetPassword" {
+            let key = credentials::account(text(&args, "host")?, args["port"].as_u64().context("缺少端口")?, text(&args, "username")?)?;
+            return if method == "loadPassword" {
+                Ok(json!({"password": credentials::load(&key)?}))
+            } else {
+                credentials::delete(&key)?;
+                Ok(Value::Null)
+            };
+        }
         if method == "probe" {
             return self.probe(&args);
         }
@@ -236,9 +248,17 @@ impl Ssh {
                     CheckResult::Match => {}
                 }
             }
+            let home = home.to_str().context("远程主目录不是 UTF-8")?;
+            let mut credential_warning = None;
+            if args["authMethod"].as_str().unwrap_or("password") == "password" && args["rememberPassword"] == true {
+                let key = credentials::account(&conn.host, u64::from(conn.port), username)?;
+                if credentials::save(&key, text(&args, "password")?).is_err() {
+                    credential_warning = Some("连接成功，但密码保存失败；请检查系统钥匙串或凭据管理器后重试");
+                }
+            }
             conn.authenticated.store(true, Ordering::Relaxed);
             return Ok(
-                json!({"path": home.to_str().context("远程主目录不是 UTF-8")?, "fingerprint": conn.fingerprint}),
+                json!({"path": home, "fingerprint": conn.fingerprint, "credentialWarning": credential_warning}),
             );
         }
         if !conn.authenticated.load(Ordering::Relaxed) {

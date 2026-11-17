@@ -8,6 +8,7 @@ module.exports = async function checkSsh(page) {
   await page.evaluate(() => {
     document.getElementById("plugin-dialog").hidden = true;
     window.sshCalls = [];
+    window.sshSavedPasswords = new Map();
     window.sshDownloads = [];
     window.sshOpened = [];
     window.sshFailList = false;
@@ -16,11 +17,20 @@ module.exports = async function checkSsh(page) {
     const image = { name: "sample 01.mrc", path: "/data/sample 01.mrc", local: "/cache/sample 01.mrc", directory: false, supported: true, size: 2048, modified: 1700000000 };
     window.mockSshCall = async (method, args) => {
       sshCalls.push({ method, args });
+      const credentialKey = (p) => JSON.stringify([p.host, p.port, p.username]);
+      if (method === "loadPassword") {
+        if (window.sshDelayLoad) return new Promise(resolve => { window.sshResolvePassword = resolve; });
+        return { password: sshSavedPasswords.get(credentialKey(args)) ?? null };
+      }
+      if (method === "forgetPassword") { sshSavedPasswords.delete(credentialKey(args)); return null; }
       if (method === "probe") return { connection: "test-connection", fingerprint: "SHA256:testFingerprintForOfflineUI", needsTrust: true };
       if (method === "authenticate") {
         if (args.authMethod === "keyFile") {
           if (args.keyPath !== "/fixtures/private_key" || args.passphrase !== "fixture-key-passphrase" || "password" in args) throw new Error("密钥登录参数错误");
         } else if (args.password !== "fixture") throw new Error("身份验证失败");
+        if (args.authMethod !== "keyFile") {
+          if (args.rememberPassword) sshSavedPasswords.set(credentialKey(args), args.password);
+        }
         return { path: "/data", fingerprint: "SHA256:testFingerprintForOfflineUI" };
       }
       if (method === "list") {
@@ -81,6 +91,7 @@ module.exports = async function checkSsh(page) {
   assert.equal(await page.locator('.ssh-dialog').evaluate(d => d.open), false, 'outside click closes SSH dialog');
   await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
   await q("host").fill("127.0.0.1"); await q("username").fill("test"); await q("password").fill("fixture");
+  assert.equal(await q("remember-password").isChecked(), false);
   await checkTheme("rgb(9, 105, 218)");
   if (process.env.TMV_SSH_SCREENSHOT_DIR) {
     fs.mkdirSync(process.env.TMV_SSH_SCREENSHOT_DIR, { recursive: true });
@@ -92,6 +103,10 @@ module.exports = async function checkSsh(page) {
   await q("trust-no").click();
   await q("connect").waitFor({ state: "visible" });
   await page.waitForFunction(() => !document.querySelector('.ssh-dialog [data-k="connect"]').disabled);
+  await q("remember-password").check();
+  await q("password").fill("wrong"); await q("connect").click(); await q("trust-yes").click();
+  await q("error").waitFor({state:"visible"});
+  assert.equal(await page.evaluate(() => sshSavedPasswords.size), 0, "failed login must not save password");
   await q("password").fill("fixture"); await q("connect").click(); await q("trust-yes").click();
   await q("list-wrap").waitFor({ state: "visible" });
   await page.locator('.ssh-entry.image img').first().waitFor({ state: 'visible' });
@@ -163,7 +178,32 @@ module.exports = async function checkSsh(page) {
   await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
   await q("disconnect").click();
   await page.waitForFunction(() => document.querySelector('.ssh-dialog [data-k="connected"]').hidden);
+  assert.equal(await page.evaluate(() => sshSavedPasswords.size), 1, "successful opted-in login saves password");
+  await page.evaluate(() => { const p = pluginHost.plugins.get("ssh"); deactivatePlugin(p); activatePlugin(p); });
+  await page.locator('#plugin-buttons button[data-plugin="ssh"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-k="password"]').value === 'fixture');
+  assert.equal(await q("remember-password").isChecked(), true, "plugin restart remembers opt-in and restores through the credential store");
+  await page.locator('.ssh-recent button').first().click();
+  await page.waitForFunction(() => document.querySelector('[data-k="password"]').value === 'fixture');
+  assert.equal(await q("remember-password").isChecked(), true);
+  assert.equal(await page.evaluate(() => localStorage.getItem("plugin.ssh.recent").includes("fixture")), false);
+  await page.evaluate(() => { window.sshDelayLoad = true; });
+  await page.locator('.ssh-recent button').first().click();
+  await page.waitForFunction(() => typeof window.sshResolvePassword === 'function');
+  await q("host").fill("another-server");
+  await page.evaluate(() => { window.sshDelayLoad = false; sshResolvePassword({password:'fixture'}); });
+  assert.equal(await q("password").inputValue(), "", "late credential must not fill a different server");
+  await page.locator('.ssh-recent button').first().click();
+  await page.waitForFunction(() => document.querySelector('[data-k="password"]').value === 'fixture');
+  const callsBeforeRecall = await page.evaluate(() => sshCalls.filter(c => c.method === 'authenticate').length);
+  await q("remember-password").uncheck();
+  await page.waitForFunction(() => sshSavedPasswords.size === 0);
+  await page.locator('.ssh-recent button').first().click();
+  assert.equal(await q("password").inputValue(), "");
+  assert.equal(await q("remember-password").isChecked(), false);
+  assert.equal(await page.evaluate(() => sshCalls.filter(c => c.method === 'authenticate').length), callsBeforeRecall, "recent connection does not automatically connect");
   await q("auth-method").selectOption("keyFile");
+  assert.equal(await q("remember-password").isVisible(), false);
   assert.equal(await q("password").isVisible(), false);
   await q("pick-key").click();
   assert.equal(await q("key-path").inputValue(), "/fixtures/private_key");
@@ -178,5 +218,5 @@ module.exports = async function checkSsh(page) {
   assert.equal(await page.locator(".ssh-dialog").count(), 0);
   assert.equal(await page.locator('#plugin-buttons button[data-plugin="ssh"]').count(), 0);
   assert.equal(await page.evaluate(() => ext.remoteFiles.size), 0);
-  console.log("PASS: SSH trust gate, no password persistence, directory navigation/filtering, read errors, lazy sidebar loading, blue/red edition themes and plugin cleanup");
+  console.log("PASS: SSH trust gate, opt-in password save/recall/delete without settings persistence, directory navigation/filtering, read errors, lazy sidebar loading, blue/red edition themes and plugin cleanup");
 };
