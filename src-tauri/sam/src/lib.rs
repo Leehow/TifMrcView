@@ -100,6 +100,36 @@ pub fn backends() -> Vec<Backend> {
     v
 }
 
+/// The other GPUs of the backend `name` (as `backends` names it) beyond
+/// the one it picks first, for work split over several cards: CUDA devices
+/// 1 to `cuda_count` − 1 (the caller counts the visible cards), or the
+/// further discrete Vulkan adapters. None for other backends (a Mac has one
+/// GPU; DX12 and integrated GPUs are not split). Not yet tried: the caller
+/// runs a small computation on each before using it.
+#[allow(unused_variables)]
+pub fn more_devices(name: &str, cuda_count: usize) -> Vec<Device> {
+    #[allow(unused_mut)]
+    let mut v: Vec<Device> = vec![];
+    #[cfg(feature = "cuda")]
+    if name == "CUDA" {
+        v.extend((1..cuda_count).map(|i: usize| Device::cuda(i)));
+    }
+    #[cfg(feature = "vulkan")]
+    if name == "Vulkan" && !in_wsl() {
+        use burn::tensor::wgpu::wgpu;
+        use burn::tensor::DeviceKind;
+        let apis = wgpu::Backends::VULKAN;
+        let discrete = guarded(|| {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+            desc.backends = apis;
+            block_on(wgpu::Instance::new(desc).enumerate_adapters(apis)).iter().filter(|a| a.get_info().device_type == wgpu::DeviceType::DiscreteGpu).count()
+        })
+        .unwrap_or(0);
+        v.extend((1..discrete).map(|i| Device::vulkan(DeviceKind::DiscreteGpu(i))));
+    }
+    v
+}
+
 /// A kind of real GPU, in the order they are tried.
 #[cfg(feature = "wgpu")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

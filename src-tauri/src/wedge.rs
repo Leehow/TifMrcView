@@ -390,6 +390,76 @@ fn busiest(vol: &Vol, side: usize, count: usize, seed: u64) -> Vec<[isize; 3]> {
     cands.into_iter().map(|c| c.0).collect()
 }
 
+/// Training cubes where the specimen shows, and held-out ones (with
+/// `validate`; none overlaps a training cube). Each candidate is scored by
+/// the signal both looks share: the covariance of the halves `a` and `b`,
+/// else of each voxel with the one two sections deeper in `a`. Candidates
+/// keep 1/16 of the width away from the XY edges (where the views stop
+/// overlapping); ones with values beyond three times the usual cube's
+/// largest (gold, contamination) or with nothing in them are dropped.
+pub(crate) fn signal_cubes(a: &Vol, b: Option<&Vol>, side: usize, count: usize, seed: u64, validate: bool) -> (Vec<[isize; 3]>, Vec<[isize; 3]>) {
+    let mut rng = Rng(seed | 1);
+    let tries = (count * 6).max(256);
+    let origin = |rng: &mut Rng, ax: usize| -> isize {
+        let n = a.n[ax];
+        if n <= side {
+            return (n as isize - side as isize) / 2;
+        }
+        let m = if ax < 2 { (n / 16).min((n - side) / 2) } else { 0 };
+        (m + rng.below(n - side - 2 * m + 1)) as isize
+    };
+    let origins: Vec<[isize; 3]> = (0..tries).map(|_| std::array::from_fn(|ax| origin(&mut rng, ax))).collect();
+    let at = |v: &Vol, p: [isize; 3]| v.at(std::array::from_fn(|ax| reflect(p[ax], v.n[ax])));
+    let mut cands: Vec<([isize; 3], f32, f32, f32)> = origins
+        .par_iter()
+        .map(|&o| {
+            let (mut k, mut su, mut sv, mut suv, mut suu, mut peak) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f32);
+            for z in (0..side).step_by(2) {
+                for y in (0..side).step_by(2) {
+                    for x in (0..side).step_by(2) {
+                        let p = [o[0] + x as isize, o[1] + y as isize, o[2] + z as isize];
+                        let u = at(a, p);
+                        let v = match b {
+                            Some(b) => at(b, p),
+                            None => at(a, [p[0], p[1], p[2] + 2]),
+                        };
+                        k += 1.0;
+                        su += u as f64;
+                        sv += v as f64;
+                        suv += (u * v) as f64;
+                        suu += (u * u) as f64;
+                        peak = peak.max((0.5 * (u + v)).abs());
+                    }
+                }
+            }
+            let score = (suv / k - su / k * sv / k) as f32;
+            (o, score, peak, (suu / k - (su / k).powi(2)) as f32)
+        })
+        .collect();
+    let mut peaks: Vec<f32> = cands.iter().map(|c| c.2).collect();
+    peaks.sort_by(f32::total_cmp);
+    let usual = peaks.get(peaks.len() / 2).copied().unwrap_or(1.0).max(1e-6);
+    cands.retain(|c| c.3 > 1e-6 && c.2 <= 3.0 * usual);
+    cands.sort_by(|x, y| y.1.total_cmp(&x.1));
+    let overlap = |p: &[isize; 3], q: &[isize; 3]| (0..3).all(|ax| (p[ax] - q[ax]).unsigned_abs() < side);
+    let want_val = if validate { (count / 8).max(2) } else { 0 };
+    let (mut train, mut val): (Vec<[isize; 3]>, Vec<[isize; 3]>) = (vec![], vec![]);
+    for (k, c) in cands.iter().enumerate() {
+        if train.len() >= count && val.len() >= want_val {
+            break;
+        }
+        if k % 8 == 4 && val.len() < want_val && !train.iter().any(|t| overlap(t, &c.0)) {
+            val.push(c.0);
+        } else if train.len() < count && !val.iter().any(|v| overlap(v, &c.0)) {
+            train.push(c.0);
+        }
+    }
+    if train.is_empty() {
+        return (busiest(a, side, count, seed), vec![]);
+    }
+    (train, val)
+}
+
 /// Measures the missing wedge from the power spectrum of the busiest cubes.
 pub fn detect(vol: &Vol) -> Detected {
     let side = match vol.n.iter().copied().min().unwrap() {
@@ -581,11 +651,24 @@ pub struct TrainConfig {
     /// (0 = from the start): the halves method first, then ICECREAM-style
     /// steps from a good start, each with half as many cube pairs.
     pub equi_from: f32,
+    /// Cubes where the specimen shows (`signal_cubes`: what the two halves
+    /// share, else what neighbouring sections share), away from the XY
+    /// edges and without outliers (gold, contamination); off: the cubes
+    /// with the highest spread.
+    pub signal: bool,
+    /// Hold out about one cube in eight (not overlapping any training
+    /// cube), score the network on them every few steps and end with the
+    /// network that scored best.
+    pub validate: bool,
+    /// With `validate`: stop when the held-out score has not improved for
+    /// this many checks (0 = run all the steps), not before the
+    /// equivariance phase has run a tenth of the steps.
+    pub patience: usize,
 }
 
 impl Default for TrainConfig {
     fn default() -> Self {
-        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 }
+        TrainConfig { cube: 64, count: 120, iterations: 10, steps: 200, batch: 4, lr: 4e-4, noise: 0.0, base: 16, levels: 3, seed: 0x1503, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0, signal: false, validate: false, patience: 0 }
     }
 }
 
@@ -633,7 +716,8 @@ pub fn train_live(dev: &Device, vol: &Vol, g: &Geometry, cfg: &TrainConfig, mut 
     }
     let sp = Spectral::new(n, g);
     let rots = rotations(g);
-    let orig: Vec<Vec<f32>> = busiest(vol, n, cfg.count.max(1), cfg.seed).into_iter().map(|o| vol.cube(o, [n; 3])).collect();
+    let origins = if cfg.signal { signal_cubes(vol, None, n, cfg.count.max(1), cfg.seed, false).0 } else { busiest(vol, n, cfg.count.max(1), cfg.seed) };
+    let orig: Vec<Vec<f32>> = origins.into_iter().map(|o| vol.cube(o, [n; 3])).collect();
     let mut data = orig.clone();
     let ad = dev.clone().autodiff();
     ad.seed(cfg.seed);
@@ -837,7 +921,41 @@ fn spectral_cut(x: Tensor<4>, c: &Tensor<2>, s: &Tensor<2>, mask: &Tensor<4>) ->
 }
 
 /// Trains on the two half tomograms `a` and `b` (standardised alike).
-pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
+pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32], cfg: &TrainConfig, progress: impl FnMut(Progress)) -> Result<(Net, f32)> {
+    let f = train_halves_on(&[dev.clone()], a, b, g, tilts, cfg, progress)?;
+    Ok((f.net, f.loss))
+}
+
+/// What `train_halves_on` made.
+pub struct HalvesFit {
+    pub net: Net,
+    /// Running training loss at the end.
+    pub loss: f32,
+    /// Best held-out loss and the step (of all) it came at, with `validate`.
+    pub val: Option<(f32, usize)>,
+    /// (step, held-out loss) of every check.
+    pub history: Vec<(usize, f32)>,
+    /// Steps run, of `iterations × steps`.
+    pub steps: usize,
+    pub cards: usize,
+}
+
+/// Constant tensors of the halves training on one card.
+struct HalvesCard {
+    c: Tensor<2>,
+    s: Tensor<2>,
+    c0: Tensor<2>,
+    s0: Tensor<2>,
+    keep: Tensor<4>,
+    keep_ad: Tensor<4>,
+    taper: Tensor<5>,
+    keep_w: Tensor<4>,
+    turn_idx: Vec<Tensor<1, Int>>,
+}
+
+/// As `train_halves`, on the cards `devs` (plain devices, the primary
+/// first; each step's batch is split over them).
+pub fn train_halves_on(devs: &[Device], a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<HalvesFit> {
     g.check()?;
     if a.n != b.n {
         bail!("两个半断层尺寸不同");
@@ -868,92 +986,181 @@ pub fn train_halves(dev: &Device, a: &Vol, b: &Vol, g: &Geometry, tilts: &[f32],
         if d >= edge { 1.0 } else { (0.5 - 0.5 * (std::f32::consts::PI * (d as f32 + 0.5) / edge as f32).cos()).max(0.0) }
     }).collect();
     let taper: Vec<f32> = (0..n * n * n).map(|i| taper1[i % n] * taper1[(i / n) % n] * taper1[i / (n * n)]).collect();
-    let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
-    let origins = busiest(&mean, n, cfg.count.max(1), cfg.seed);
+    let (origins, held) = if cfg.signal || cfg.validate {
+        signal_cubes(a, Some(b), n, cfg.count.max(1), cfg.seed, cfg.validate)
+    } else {
+        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        (busiest(&mean, n, cfg.count.max(1), cfg.seed), vec![])
+    };
+    let origins = if cfg.signal || !cfg.validate {
+        origins
+    } else {
+        // Held-out cubes wanted, cubes chosen as before: the busiest that
+        // do not overlap a held-out one.
+        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        busiest(&mean, n, cfg.count.max(1) * 2, cfg.seed).into_iter().filter(|o| !held.iter().any(|h| (0..3).all(|ax| (o[ax] - h[ax]).unsigned_abs() < n))).take(cfg.count.max(1)).collect()
+    };
     let orig: [Vec<Vec<f32>>; 2] = [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
-    let ad = dev.clone().autodiff();
-    let (c, s) = dft(n, &ad);
-    let (c0, s0) = dft(n, dev);
-    let keep_v = keep.clone();
-    let turn_idx = if cfg.equivariant > 0.0 { turn_indices(&rots, n, &ad) } else { vec![] };
-    let keep_ad = Tensor::<4>::from_data(TensorData::new(keep.clone(), [1, n, n, n]), &ad);
-    let keep = Tensor::<4>::from_data(TensorData::new(keep, [1, n, n, n]), dev);
+    let orig_val: [Vec<Vec<f32>>; 2] = [a, b].map(|h| held.iter().map(|&o| h.cube(o, [n; 3])).collect());
+    let cards = devs.len().max(1);
+    let ads: Vec<Device> = devs.iter().map(|d| d.clone().autodiff()).collect();
     let eq = cfg.equivariant > 0.0;
+    let measured = keep.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
+    let per_card: Vec<HalvesCard> = devs
+        .iter()
+        .zip(&ads)
+        .map(|(dev, ad)| {
+            let (c, s) = dft(n, ad);
+            let (c0, s0) = dft(n, dev);
+            HalvesCard {
+                c,
+                s,
+                c0,
+                s0,
+                keep: Tensor::<4>::from_data(TensorData::new(keep.clone(), [1, n, n, n]), dev),
+                keep_ad: Tensor::<4>::from_data(TensorData::new(keep.clone(), [1, n, n, n]), ad),
+                taper: Tensor::<5>::from_data(TensorData::new(taper.clone(), [1, 1, n, n, n]), ad),
+                keep_w: Tensor::<4>::from_data(TensorData::new(keep.iter().map(|&k| k / measured).collect::<Vec<f32>>(), [1, n, n, n]), ad),
+                turn_idx: if eq { turn_indices(&rots, n, ad) } else { vec![] },
+            }
+        })
+        .collect();
     // Equivariance steps: half the cube pairs (each runs the network twice
     // on both halves), so a step costs about what a halves step does.
-    let bh = (cfg.batch / 2).max(1);
-    let bb = 2 * bh;
+    let bh = (cfg.batch / 2).max(1).max(cards);
+    let batch = cfg.batch.max(cards);
     let n3 = n * n * n;
-    let window = Tensor::<5>::from_data(TensorData::new(taper.repeat(cfg.batch), [cfg.batch, 1, n, n, n]), &ad);
-    let window_e = Tensor::<5>::from_data(TensorData::new(taper.repeat(bb), [bb, 1, n, n, n]), &ad);
-    let measured = keep_v.iter().filter(|&&k| k > 0.0).count().max(1) as f32;
-    let keep_w = Tensor::<4>::from_data(TensorData::new(keep_v.iter().map(|&k| k / measured).collect::<Vec<f32>>().repeat(bb), [bb, n, n, n]), &ad);
-    ad.seed(cfg.seed);
-    let mut net = Net::new(cfg.base, cfg.levels, &ad);
+    ads[0].seed(cfg.seed);
+    let mut net = Net::new(cfg.base, cfg.levels, &ads[0]);
     let mut opt = AdamConfig::new().init();
     let mut rng = Rng(cfg.seed | 1);
     let total = cfg.iterations * cfg.steps;
     let equi_start = (cfg.equi_from.clamp(0.0, 1.0) * total as f32) as usize;
     let mut loss_avg = 0f32;
-    for it in 0..cfg.iterations {
+    let norm1 = n3 as f32 * (1.0 + cfg.omega);
+    // The halves loss of turned cubes, x cut on the card: mean over the cubes.
+    let halves_loss = |net: &Net, xs: Vec<f32>, ts: Vec<f32>, w: Vec<f32>, cnt: usize, k: usize, plain: bool| -> Tensor<1> {
+        let pc = &per_card[k];
+        let (dev, ad) = (&devs[k], if plain { &devs[k] } else { &ads[k] });
+        let x = Tensor::<4>::from_data(TensorData::new(xs, [cnt, n, n, n]), dev);
+        let x = spectral_cut(x, &pc.c0, &pc.s0, &pc.keep).reshape([cnt, 1, n, n, n]);
+        let x = if plain { x } else { Tensor::<5>::from_data(x.into_data(), ad) };
+        let t = Tensor::<5>::from_data(TensorData::new(ts, [cnt, 1, n, n, n]), ad);
+        let w = Tensor::<4>::from_data(TensorData::new(w, [cnt, n, n, n]), ad);
+        let (c, s, taper) = if plain { (&pc.c0, &pc.s0, Tensor::<5>::from_data(pc.taper.clone().into_data(), dev)) } else { (&pc.c, &pc.s, pc.taper.clone()) };
+        spectral_error((net.forward(x) - t) * taper.repeat_dim(0, cnt), c, s, w) / (cnt as f32 * norm1)
+    };
+    // Held-out score: the halves loss on fixed turns of the held-out cubes,
+    // both ways round.
+    let nr = rots.len();
+    let val_picks: Vec<(usize, usize, usize)> = (0..orig_val[0].len()).flat_map(|i| (0..2).flat_map(move |j| (0..2).map(move |from| (i, (i * 7 + j * 11) % nr, from)))).collect();
+    let score = |net: &Net| -> f32 {
+        let mut total = 0f64;
+        for chunk in val_picks.chunks(4) {
+            let xs: Vec<f32> = chunk.iter().flat_map(|&(i, r, from)| rots[r].apply(&orig_val[from][i], n)).collect();
+            let ts: Vec<f32> = chunk.iter().flat_map(|&(i, r, from)| rots[r].apply(&orig_val[1 - from][i], n)).collect();
+            let w: Vec<f32> = chunk.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
+            let l: f32 = halves_loss(net, xs, ts, w, chunk.len(), 0, true).into_scalar();
+            total += l as f64 * chunk.len() as f64;
+        }
+        (total / val_picks.len().max(1) as f64) as f32
+    };
+    let every = (total / 40).max(25);
+    let mut best: Option<(f32, usize, Net)> = None;
+    let mut since_best = 0;
+    let mut history = vec![];
+    let mut ran = total;
+    'outer: for it in 0..cfg.iterations {
         for step in 0..cfg.steps {
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
-            let loss = if eq && it * cfg.steps + step >= equi_start {
+            let k_all = it * cfg.steps + step;
+            let (grads, lv) = if eq && k_all >= equi_start {
                 // ICECREAM: u = f(y) for both halves; the data term asks
                 // u of one half to match the other half where measured;
                 // the equivariance term turns u (held fixed), cuts the
                 // wedge again and asks the network to give back the turned
                 // u of the other half, where that turned half was measured.
                 let picks: Vec<(usize, usize)> = (0..bh).map(|_| (rng.below(origins.len()), rng.below(rots.len()))).collect();
+                let mut parts = vec![];
+                let mut at = 0;
+                for k in 0..cards {
+                    let m = crate::multi_gpu::share(bh, cards, k);
+                    parts.push((picks[at..at + m].to_vec(), m));
+                    at += m;
+                }
                 let orig = &orig;
-                let y: Vec<f32> = (0..2).flat_map(|h| picks.iter().flat_map(move |&(i, _)| orig[h][i].iter().copied())).collect();
-                let other: Vec<f32> = y[bh * n3..].iter().chain(&y[..bh * n3]).copied().collect();
-                let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [bb, 1, n, n, n]), &ad));
-                let target = Tensor::<5>::from_data(TensorData::new(other, [bb, 1, n, n, n]), &ad);
-                let data = spectral_error((u.clone() - target) * window_e.clone(), &c, &s, keep_w.clone()) / (bb * n3) as f32;
-                // Turned and cut on the device, with the first pass held
-                // fixed: with gradients through it (and the target), noisy
-                // halves let the network shrink its output to a low-pass
-                // blur, which zeroes this term for little data-term cost
-                // (seen on EMPIAR-10164).
-                let which: Vec<usize> = (0..bb).map(|k| picks[k % bh].1).collect();
-                let turned = turn_each(u.detach(), &turn_idx, &which);
-                let z = spectral_cut(turned.clone().reshape([bb, n, n, n]), &c, &s, &keep_ad).reshape([bb, 1, n, n, n]);
-                let goal = Tensor::cat(vec![turned.clone().narrow(0, bh, bh), turned.narrow(0, 0, bh)], 0);
-                let w: Vec<f32> = (0..bb).flat_map(|k| weights[picks[k % bh].1].iter().copied()).collect();
-                let w = Tensor::<4>::from_data(TensorData::new(w, [bb, n, n, n]), &ad);
-                let equi = spectral_error((net.forward(z) - goal) * window_e.clone(), &c, &s, w) / ((bb * n3) as f32 * (1.0 + cfg.omega));
-                data + equi * cfg.equivariant
+                crate::multi_gpu::step_grads(&net, &ads, parts, &|net: &Net, picks: Vec<(usize, usize)>, k| {
+                    let pc = &per_card[k];
+                    let ad = &ads[k];
+                    let m = picks.len();
+                    let mm = 2 * m;
+                    let y: Vec<f32> = (0..2).flat_map(|h| picks.iter().flat_map(move |&(i, _)| orig[h][i].iter().copied())).collect();
+                    let other: Vec<f32> = y[m * n3..].iter().chain(&y[..m * n3]).copied().collect();
+                    let u = net.forward(Tensor::<5>::from_data(TensorData::new(y, [mm, 1, n, n, n]), ad));
+                    let target = Tensor::<5>::from_data(TensorData::new(other, [mm, 1, n, n, n]), ad);
+                    let window = pc.taper.clone().repeat_dim(0, mm);
+                    let data = spectral_error((u.clone() - target) * window.clone(), &pc.c, &pc.s, pc.keep_w.clone().repeat_dim(0, mm)) / (mm * n3) as f32;
+                    // Turned and cut on the device, with the first pass held
+                    // fixed: with gradients through it (and the target), noisy
+                    // halves let the network shrink its output to a low-pass
+                    // blur, which zeroes this term for little data-term cost
+                    // (seen on EMPIAR-10164).
+                    let which: Vec<usize> = (0..mm).map(|j| picks[j % m].1).collect();
+                    let turned = turn_each(u.detach(), &pc.turn_idx, &which);
+                    let z = spectral_cut(turned.clone().reshape([mm, n, n, n]), &pc.c, &pc.s, &pc.keep_ad).reshape([mm, 1, n, n, n]);
+                    let goal = Tensor::cat(vec![turned.clone().narrow(0, m, m), turned.narrow(0, 0, m)], 0);
+                    let w: Vec<f32> = (0..mm).flat_map(|j| weights[picks[j % m].1].iter().copied()).collect();
+                    let w = Tensor::<4>::from_data(TensorData::new(w, [mm, n, n, n]), ad);
+                    let equi = spectral_error((net.forward(z) - goal) * window, &pc.c, &pc.s, w) / ((mm * n3) as f32 * (1.0 + cfg.omega));
+                    data + equi * cfg.equivariant
+                })
             } else {
-            let picks: Vec<(usize, usize, usize)> = (0..cfg.batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
-            let pairs: Vec<(Vec<f32>, Vec<f32>)> = picks
-                .par_iter()
-                .map(|&(i, r, from)| (rots[r].apply(&orig[from][i], n), rots[r].apply(&orig[1 - from][i], n)))
-                .collect();
-            let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
-            let w: Vec<f32> = picks.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
-            let norm = (cfg.batch * n * n * n) as f32 * (1.0 + cfg.omega);
-            // The wedge is cut from the inputs on the device.
-            let x = Tensor::<4>::from_data(TensorData::new(xs.concat(), [cfg.batch, n, n, n]), dev);
-            let x = Tensor::<5>::from_data(spectral_cut(x, &c0, &s0, &keep).reshape([cfg.batch, 1, n, n, n]).into_data(), &ad);
-            let t = Tensor::<5>::from_data(TensorData::new(ts.concat(), [cfg.batch, 1, n, n, n]), &ad);
-            let w = Tensor::<4>::from_data(TensorData::new(w, [cfg.batch, n, n, n]), &ad);
-            spectral_error((net.forward(x) - t) * window.clone(), &c, &s, w) / norm
+                let picks: Vec<(usize, usize, usize)> = (0..batch).map(|_| (rng.below(origins.len()), rng.below(rots.len()), rng.below(2))).collect();
+                let mut parts = vec![];
+                let mut at = 0;
+                for k in 0..cards {
+                    let m = crate::multi_gpu::share(batch, cards, k);
+                    let mine = &picks[at..at + m];
+                    at += m;
+                    let pairs: Vec<(Vec<f32>, Vec<f32>)> = mine.par_iter().map(|&(i, r, from)| (rots[r].apply(&orig[from][i], n), rots[r].apply(&orig[1 - from][i], n))).collect();
+                    let (xs, ts): (Vec<Vec<f32>>, Vec<Vec<f32>>) = pairs.into_iter().unzip();
+                    let w: Vec<f32> = mine.iter().flat_map(|&(_, r, _)| weights[r].iter().copied()).collect();
+                    parts.push(((xs.concat(), ts.concat(), w, m), m));
+                }
+                // The wedge is cut from the inputs on the device.
+                crate::multi_gpu::step_grads(&net, &ads, parts, &|net: &Net, (xs, ts, w, m): (Vec<f32>, Vec<f32>, Vec<f32>, usize), k| halves_loss(net, xs, ts, w, m, k, false))
             };
-            let lv: f32 = loss.clone().into_scalar();
-            loss_avg += if it == 0 && step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
-            let grads = GradientsParams::from_grads(loss.backward(), &net);
-            let k = it * cfg.steps + step;
-            let lr = cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * k as f64 / total.max(1) as f64).cos()));
+            loss_avg += if k_all == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
+            let lr = cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * k_all as f64 / total.max(1) as f64).cos()));
             net = opt.step(lr, net, grads);
             if step % 5 == 4 || step + 1 == cfg.steps {
                 progress(Progress { iteration: it + 1, iterations: cfg.iterations, step: step + 1, steps: cfg.steps, loss: loss_avg });
             }
+            if !val_picks.is_empty() && (k_all % every == every - 1 || k_all + 1 == total) {
+                let v = net.valid();
+                let sc = score(&v);
+                history.push((k_all + 1, sc));
+                if best.as_ref().is_none_or(|b| sc < b.0 * (1.0 - 1e-3)) {
+                    best = Some((sc, k_all + 1, v));
+                    since_best = 0;
+                } else {
+                    since_best += 1;
+                    let earliest = if eq { equi_start + total / 10 } else { total / 3 };
+                    if cfg.patience > 0 && since_best >= cfg.patience && k_all + 1 >= earliest {
+                        ran = k_all + 1;
+                        break 'outer;
+                    }
+                }
+            }
         }
     }
-    Ok((net.valid(), loss_avg))
+    let (val, net) = match best {
+        Some((sc, at, v)) => (Some((sc, at)), v),
+        None => (None, net.valid()),
+    };
+    Ok(HalvesFit { net, loss: loss_avg, val, history, steps: ran, cards })
 }
 
 /// `out` with its lowest measured frequencies (half power at |k| = `half`
@@ -1057,7 +1264,13 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
 /// as `train_and_apply`; `tilts` = the tilt angles used, degrees): denoises
 /// and fills the wedge in one network, and returns the mean of its results
 /// for both halves, in the halves' units.
-pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
+pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
+    Ok(train_halves_and_apply_on(&[dev.clone()], even, odd, dims, tilts, cfg, progress)?.0)
+}
+
+/// As `train_halves_and_apply`, on the cards `devs` (the primary first),
+/// with what the training reported.
+pub fn train_halves_and_apply_on(devs: &[Device], even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Vec<f32>, HalvesFit)> {
     let len = dims[0] * dims[1] * dims[2];
     if even.len() != len || odd.len() != len {
         bail!("体数据大小和尺寸不符");
@@ -1072,7 +1285,8 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
     let std_vol = |v: &[f32]| Vol { n: dims, v: v.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
     let (a, b) = (std_vol(even), std_vol(odd));
     let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
-    let (net, _) = train_halves(dev, &a, &b, &g, tilts, cfg, &mut progress)?;
+    let fit = train_halves_on(devs, &a, &b, &g, tilts, cfg, &mut progress)?;
+    let net = &fit.net;
     let it = cfg.iterations + 1;
     // One pass only: a second pass on the wedge-cut first result (as in
     // ICECREAM) smeared EMPIAR-10164 into a low-pass image, while the
@@ -1080,7 +1294,7 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
     let mut outs = vec![];
     for (h, vol) in [&a, &b].into_iter().enumerate() {
         let mut v = Vol { n: dims, v: vol.v.clone() };
-        v.v = apply(dev, &net, &v, [0; 3], dims, &mut |done, total| {
+        v.v = apply_on(devs, net, &v, [0; 3], dims, &mut |done, total| {
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
@@ -1090,7 +1304,7 @@ pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [us
         outs.push(v.v);
     }
     let out: Vec<f32> = outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect();
-    Ok(restore_low(out, even, odd, dims, tilts, LOW_HALF))
+    Ok((restore_low(out, even, odd, dims, tilts, LOW_HALF), fit))
 }
 
 /// Half power (cycles/voxel) of the measured low frequencies taken from the
@@ -1110,6 +1324,11 @@ const TILE: usize = 112;
 /// edges) and are cross-faded where they meet. `tick(done, total)` after
 /// each tile.
 pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<Vec<f32>> {
+    apply_on(&[dev.clone()], net, vol, origin, size, tick)
+}
+
+/// As `apply`, the tiles handed out to the cards `devs` as they come free.
+pub fn apply_on(devs: &[Device], net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<Vec<f32>> {
     let al = net.align();
     let step = TILE - 2 * MARGIN;
     let starts: [Vec<usize>; 3] = std::array::from_fn(|a| (0..size[a]).step_by(step).collect());
@@ -1117,45 +1336,60 @@ pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usiz
     let len = size[0] * size[1] * size[2];
     let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
     let mut done = 0;
+    let mut tiles: Vec<[usize; 3]> = vec![];
     for &z0 in &starts[2] {
         for &y0 in &starts[1] {
             for &x0 in &starts[0] {
-                let o = [x0, y0, z0];
-                // Output span of this tile along each axis: its step plus
-                // BLEND on each side, inside the box.
-                let lo: [usize; 3] = std::array::from_fn(|a| o[a].saturating_sub(BLEND));
-                let hi: [usize; 3] = std::array::from_fn(|a| (o[a] + step + BLEND).min(size[a]));
-                let side: [usize; 3] = std::array::from_fn(|a| (hi[a] - lo[a] + 2 * (MARGIN - BLEND)).div_ceil(al) * al);
-                let pad = MARGIN - BLEND;
-                let corner: [isize; 3] = std::array::from_fn(|a| (origin[a] + lo[a]) as isize - pad as isize);
-                let tile = vol.cube(corner, side);
-                let x = Tensor::<5>::from_data(TensorData::new(tile, [1, 1, side[2], side[1], side[0]]), dev);
-                let r = net.forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap();
-                // Weight ramps from 0 to 1 across the 2·BLEND overlap.
-                let ramp = |a: usize, i: usize| -> f32 {
-                    let rise = if o[a] == 0 { 1.0 } else { ((i + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
-                    let left = hi[a] - lo[a] - 1 - i;
-                    let fall = if hi[a] == size[a] { 1.0 } else { ((left + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
-                    rise.min(fall)
-                };
-                for z in 0..hi[2] - lo[2] {
-                    let wz = ramp(2, z);
-                    for y in 0..hi[1] - lo[1] {
-                        let wzy = wz * ramp(1, y);
-                        let src = ((z + pad) * side[1] + y + pad) * side[0] + pad;
-                        let dst = ((lo[2] + z) * size[1] + lo[1] + y) * size[0] + lo[0];
-                        for x in 0..hi[0] - lo[0] {
-                            let w = wzy * ramp(0, x);
-                            acc[dst + x] += w * r[src + x];
-                            wsum[dst + x] += w;
-                        }
-                    }
-                }
-                done += 1;
-                tick(done, total)?;
+                tiles.push([x0, y0, z0]);
             }
         }
     }
+    let nets: Vec<Net> = devs.iter().map(|d| net.clone().to_device(d)).collect();
+    // Output span of a tile along each axis: its step plus BLEND on each
+    // side, inside the box.
+    let span = |o: [usize; 3]| -> ([usize; 3], [usize; 3], [usize; 3]) {
+        let lo: [usize; 3] = std::array::from_fn(|a| o[a].saturating_sub(BLEND));
+        let hi: [usize; 3] = std::array::from_fn(|a| (o[a] + step + BLEND).min(size[a]));
+        let side: [usize; 3] = std::array::from_fn(|a| (hi[a] - lo[a] + 2 * (MARGIN - BLEND)).div_ceil(al) * al);
+        (lo, hi, side)
+    };
+    let pad = MARGIN - BLEND;
+    crate::multi_gpu::spread(
+        devs.len(),
+        tiles,
+        &|k, o| {
+            let (lo, _, side) = span(o);
+            let corner: [isize; 3] = std::array::from_fn(|a| (origin[a] + lo[a]) as isize - pad as isize);
+            let tile = vol.cube(corner, side);
+            let x = Tensor::<5>::from_data(TensorData::new(tile, [1, 1, side[2], side[1], side[0]]), &devs[k]);
+            Ok((o, nets[k].forward(x).into_data().convert::<f32>().try_into_vec::<f32>().unwrap()))
+        },
+        &mut |(o, r)| {
+            let (lo, hi, side) = span(o);
+            // Weight ramps from 0 to 1 across the 2·BLEND overlap.
+            let ramp = |a: usize, i: usize| -> f32 {
+                let rise = if o[a] == 0 { 1.0 } else { ((i + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
+                let left = hi[a] - lo[a] - 1 - i;
+                let fall = if hi[a] == size[a] { 1.0 } else { ((left + 1) as f32 / (2 * BLEND + 1) as f32).min(1.0) };
+                rise.min(fall)
+            };
+            for z in 0..hi[2] - lo[2] {
+                let wz = ramp(2, z);
+                for y in 0..hi[1] - lo[1] {
+                    let wzy = wz * ramp(1, y);
+                    let src = ((z + pad) * side[1] + y + pad) * side[0] + pad;
+                    let dst = ((lo[2] + z) * size[1] + lo[1] + y) * size[0] + lo[0];
+                    for x in 0..hi[0] - lo[0] {
+                        let w = wzy * ramp(0, x);
+                        acc[dst + x] += w * r[src + x];
+                        wsum[dst + x] += w;
+                    }
+                }
+            }
+            done += 1;
+            tick(done, total)
+        },
+    )?;
     acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
     Ok(acc)
 }

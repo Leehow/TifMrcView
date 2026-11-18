@@ -140,6 +140,11 @@ pub fn main(args: Vec<String>) -> i32 {
     // RTX 3090 server it segmented membranes 1.7x faster than Vulkan
     // (3.3 vs 5.5 s per window). The CPU stays the fallback.
     let nvidia = Path::new("/dev/nvidiactl").exists() || Path::new("/dev/dxg").exists();
+    // CUDA numbers the cards as nvidia-smi does (`multi_gpu` matches them
+    // to its free memory and locks by number).
+    if std::env::var_os("CUDA_DEVICE_ORDER").is_none() {
+        std::env::set_var("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+    }
     if (nvidia || std::env::var_os("CUDA_VISIBLE_DEVICES").is_some()) && std::env::var_os("TMV_GPU").is_none() {
         std::env::set_var("TMV_GPU", "cuda");
     }
