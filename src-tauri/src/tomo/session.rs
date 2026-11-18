@@ -366,6 +366,35 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
     })
 }
 
+/// 「重置」: what the Cryo-ET steps made in a project is removed, so the next
+/// run starts from the movies (or tilt series) again. Only the step folders
+/// of the intermediate results go (motion-corrected stacks, tomograms and
+/// their datasets, the clean companions; `project_dirs` 1–3); the raw data is
+/// never touched, and the averages (4_sta) and figures (5_figures), which are
+/// results of their own, are kept. On a server the step folders lie under the
+/// job's output root (`TMV_OUTPUT_ROOT`), not in the raw folder. A project of
+/// the old flat layout (datasets beside the raw stacks) is refused: its
+/// intermediate files cannot be told from the user's own by folder.
+/// Answers the folders removed.
+pub fn reset(folder: &str) -> Result<Vec<String>> {
+    use anyhow::Context;
+    use crate::project_dirs::{CLEAN, MOTION, TOMOGRAMS};
+    let dir = Path::new(folder);
+    anyhow::ensure!(dir.is_dir(), "找不到项目文件夹：{folder}");
+    let legacy = std::fs::read_dir(dir)?.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tomo.json"));
+    anyhow::ensure!(!legacy, "这是旧版的项目（中间结果和原始数据放在同一个文件夹里），不能一键清理，请手动删除");
+    let root = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(|| dir.to_path_buf());
+    let mut removed = vec![];
+    for step in [MOTION, TOMOGRAMS, CLEAN] {
+        let d = root.join(step);
+        if d.is_dir() {
+            std::fs::remove_dir_all(&d).with_context(|| format!("无法删除 {}", d.display()))?;
+            removed.push(d.to_string_lossy().into_owned());
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +425,25 @@ mod tests {
         assert_eq!(scan(&text(dir.path())).unwrap().series[0].error.as_deref(), Some("坏了"));
         note(dir.path(), "a", None);
         assert!(scan(&text(dir.path())).unwrap().series[0].error.is_none());
+    }
+
+    #[test]
+    fn a_reset_removes_the_intermediate_steps_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = |n: &str| dir.path().join(n);
+        std::fs::write(p("a.mdoc"), "[ZValue = 0]\n").unwrap();
+        std::fs::write(p("a_0.eer"), b"x").unwrap();
+        for d in ["1_motion", "2_tomograms", "3_clean", "4_sta", "5_figures"] {
+            std::fs::create_dir(p(d)).unwrap();
+            std::fs::write(p(d).join("f"), b"x").unwrap();
+        }
+        let removed = reset(&text(dir.path())).unwrap();
+        assert_eq!(removed.len(), 3);
+        assert!(!p("1_motion").exists() && !p("2_tomograms").exists() && !p("3_clean").exists());
+        assert!(p("4_sta/f").exists() && p("5_figures/f").exists() && p("a.mdoc").exists() && p("a_0.eer").exists());
+        assert!(reset(&text(dir.path())).unwrap().is_empty(), "a second reset has nothing to do");
+        std::fs::write(p("old.tomo.json"), b"{}").unwrap();
+        assert!(reset(&text(dir.path())).is_err(), "an old flat project is refused");
     }
 }
 

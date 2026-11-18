@@ -19,7 +19,11 @@
   };
 
   host.innerHTML = `
-    <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
+    <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button><button class="small cs-reset" title="删除这个项目处理出的中间结果，下次从头做">重置…</button></div>
+    <div class="cs-reset-box" hidden>
+      <p><b>确定要重置吗？</b>会删除这个项目处理出的中间结果：运动校正后的叠层、断层图和清晰版（1_motion、2_tomograms、3_clean 三个文件夹）。原始电影、mdoc 不会动；子断层平均和出图的结果会保留。删除后不能恢复。</p>
+      <div class="al-row"><button class="small cs-reset-go">确认删除</button><button class="small cs-reset-no">取消</button></div>
+    </div>
     <div class="al-row cs-controls">
       <div class="cs-purpose-box" role="group" aria-label="重构时要做的处理">
         <label class="cs-use"><input type="checkbox" data-step="fineAlign"><span><b>精对齐</b><span>多试几种对齐方式，自动去掉对不齐的倾角（会标出来，可以改回）</span></span></label>
@@ -29,6 +33,8 @@
       </div>
       <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
+      <button class="cs-stop" hidden title="停下来；做完的步骤都保留，以后再按「重构勾选序列」或「继续上次的重构」接着做">停止</button>
+      <button class="small cs-resume" hidden title="接着做上次没做完的重构：同样的序列和处理，做完的步骤不再重做"></button>
       <span class="dim cs-selection-count" role="status"></span>
     </div>
     <p class="dim cs-help cs-only-recon">在下面勾选序列，再选想要的处理（都不勾就是快速重构，几分钟一个，适合先看看样品），点「重构勾选序列」。没处理过的电影会先自动校正。点卡片上的「打开」检查倾转图、对齐和断层图，挑掉不好的图后可以再重构。</p>
@@ -127,6 +133,7 @@
     p.title = folder || "";
     host.querySelectorAll(".cs-act").forEach((b) => { b.disabled = W.busy || !folder || !selected.size; });
     host.querySelectorAll(".cs-purpose-box input").forEach((b) => { b.disabled = W.busy; });
+    q(".cs-reset").disabled = W.busy || !folder;
   }
 
   // Takes a session; pictures of a series that got further are loaded again.
@@ -159,6 +166,7 @@
     }
     render();
     syncReview();
+    showResume();
   }
 
   function summary() {
@@ -281,6 +289,55 @@
 
   // ---------- running ----------
 
+  // ---------- stop, continue, reset ----------
+
+  // The run started last in a folder, until it finishes: what 「继续上次的重构」 starts again. The steps
+  // that were done are not done again (every step skips what is already there), so a stopped run, or
+  // one cut off by closing the app, goes on from where it stopped.
+  const lastKey = () => (folder ? `cryo-last-run:${folder}` : null);
+  const lastRun = () => { const k = lastKey(); if (!k) return null; try { return pref.get(k, null); } catch { return null; } };
+  function showRun(on) {
+    const stop = q(".cs-stop");
+    stop.hidden = !on;
+    stop.disabled = false;
+    stop.textContent = "停止";
+  }
+  function showResume() {
+    const b = q(".cs-resume"), last = lastRun();
+    const have = last ? (last.only || []).filter((n) => session.series.some((s) => s.name === n)) : [];
+    b.hidden = W.busy || !have.length;
+    b.textContent = `继续上次的重构（${have.length} 个序列）`;
+  }
+  q(".cs-stop").onclick = () => {
+    const b = q(".cs-stop");
+    b.disabled = true;
+    b.textContent = "正在停止…";
+    invoke("tomo_cancel").catch(() => {});
+  };
+  q(".cs-resume").onclick = async () => {
+    const last = lastRun();
+    if (!last || W.busy) return;
+    selected.clear();
+    for (const n of last.only || []) if (session.series.some((s) => s.name === n)) selected.add(n);
+    selectionChanged();
+    return runSelected(last.purpose ?? null);
+  };
+  q(".cs-reset").onclick = () => { if (!W.busy && folder) q(".cs-reset-box").hidden = !q(".cs-reset-box").hidden; };
+  q(".cs-reset-no").onclick = () => { q(".cs-reset-box").hidden = true; };
+  q(".cs-reset-go").onclick = async () => {
+    q(".cs-reset-box").hidden = true;
+    if (W.busy || !folder) return;
+    try {
+      const gone = await invoke("tomo_session_reset", { folder });
+      const k = lastKey();
+      if (k) pref.set(k, null);
+      changedFolder();
+      await scan();
+      document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+      W.status(gone.length ? "已重置：中间结果删除了，下次从头做" : "没有可以清理的中间结果");
+    } catch (e) { W.status(`无法重置：${e}`); }
+  };
+
   async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only } })) {
     const un = await T.event.listen("tomo-session", async () => {
       // The image list reads the folder again when a series has new files.
@@ -289,8 +346,14 @@
       await scan();
       if (files() !== before) document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
     });
-    const r = await W.run(label, call);
-    un();
+    const key = lastKey();
+    if (key) pref.set(key, { purpose, only, label });
+    showRun(true);
+    let r;
+    try { r = await W.run(label, call); } finally { un(); showRun(false); }
+    // Finished: nothing to continue. Stopped or failed: the run is kept, to be continued.
+    if (r && key) pref.set(key, null);
+    showResume();
     if (r) {
       adopt(r);
       render();

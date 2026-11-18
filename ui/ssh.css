@@ -121,7 +121,7 @@
 
 .remote-processing-location{flex-wrap:wrap;overflow-wrap:anywhere}.remote-processing-location .remote-output{width:100%;font-size:12px;padding:7px 10px}
 
-.remote-task-status{display:grid;grid-template-columns:1fr auto;gap:6px 12px;width:100%;padding:12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;color:var(--text)}.remote-task-status strong{font-size:13px;overflow-wrap:anywhere}.remote-task-status progress{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
+.remote-task-status{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px 12px;width:100%;padding:12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;color:var(--text)}.remote-task-status strong{font-size:13px;overflow-wrap:anywhere}.remote-task-status progress{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
 .remote-task-status .remote-task-away{grid-column:1/-1;font-size:12px}.remote-other-jobs{margin:4px 0;font-size:12px}
 
 .remote-output-details{width:100%;font-size:12px}.remote-output-details code{display:block;padding:8px;overflow-wrap:anywhere;user-select:text}
@@ -133,3 +133,4 @@
 .ws-advanced{width:100%;font-size:12px}.ws-advanced>summary{cursor:pointer}.ws-advanced>details{margin:4px 0 0 14px}.ws-advanced>details>summary{cursor:pointer}
 .remote-output-details p{margin:6px 0 2px}.remote-output-details .remote-output{width:100%;box-sizing:border-box}
 .ws-help-part{margin:8px 0 4px}.ws-help-part ol{margin:4px 0 0;padding-left:20px}.ws-help-part li{margin:3px 0;line-height:1.6}
+.remote-task-status .remote-stop{border-color:#d1242f;color:#d1242f}

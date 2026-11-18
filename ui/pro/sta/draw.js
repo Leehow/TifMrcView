@@ -152,7 +152,7 @@
   function sizeText(vox, tomogram) {
     const px = S.px && S.info?.path === tomogram && typeof UNIT_M !== "undefined" ? S.px : null;
     const m1 = px && UNIT_M[px.unit] ? (vox * px.x * UNIT_M[px.unit]) / 1e-9 : null;
-    if (m1 != null && isFinite(m1)) return `约 ${m1 < 10 ? m1.toFixed(1) : Math.round(m1)} nm`;
+    if (m1 != null && isFinite(m1)) return m1 >= 1000 ? `约 ${(m1 / 1000).toFixed(m1 < 10000 ? 1 : 0)} µm` : `约 ${m1 < 10 ? m1.toFixed(1) : Math.round(m1)} nm`;
     return `约 ${Math.round(vox)} 像素`;
   }
   const isExKind = (m) => m.kind === "example" || m.kind === "paint";

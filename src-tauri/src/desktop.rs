@@ -1967,6 +1967,14 @@ async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>,
     }).await
 }
 
+/// 「重置」 of the Cryo-ET panel: the intermediate step folders of the project
+/// are removed (`tomo::session::reset`); answers the folders removed.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_session_reset(folder: String) -> CmdResult<Vec<String>> {
+    blocking(move || crate::tomo::session::reset(&folder)).await
+}
+
 /// The tilt series of a folder and how far each has come (`tomo::session`).
 #[cfg(feature = "pro")]
 #[tauri::command]
@@ -3746,6 +3754,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_export,
             #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_session,
+            #[cfg(feature = "pro")] tomo_session_reset,
             #[cfg(feature = "pro")] tomo_session_run,
             #[cfg(feature = "pro")] tomo_pick,
             #[cfg(feature = "pro")] tomo_take,
