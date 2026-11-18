@@ -24,7 +24,7 @@
     slices: [],       // main label of each slice, for the Z slider marks
     materials: {},    // label -> {name, color, hidden, locked}
     active: 1,
-    sub: "smart",     // smart | brush | eraser | lasso | wand | classify
+    sub: "brush",     // smart | brush | eraser | lasso | wand | classify
     radius: 6,        // brush radius in image pixels
     guard: false,     // only paint empty pixels / only erase the active label
     tol: 0.1,         // wand tolerance, part of the display range
@@ -72,25 +72,37 @@
 
   // ---------- panel ----------
 
+  const HINTS = {
+    brush: "涂一笔后在旁边选结构类型，就会精细分割；不选就保留你画的。按住 Shift 涂的那一笔不精修。[ ] 调粗细。",
+    eraser: "擦掉标签。[ ] 调粗细。",
+    lasso: "画一圈，圈里涂上标签，再在旁边选结构类型。按住 Alt 画圈是擦除。",
+    wand: "点一下，亮度相近的连通区域涂上标签，再在旁边选结构类型。",
+  };
+
   const sec = document.createElement("section");
   sec.id = "sec-labels";
   sec.innerHTML = `
     <h3>标签分割 <span class="dim" id="lab-busy"></span></h3>
     <div class="row" id="lab-tools">
-      <button class="small" data-sub="smart" title="智能选择：在物体上点一下就选出它；绕着它画一圈、或者沿着它画一笔，选得更准。按住 Alt 是减去。选中后可以「找同类」"><svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.2-6.8L20 11z"/><path d="M17 3v3M15.5 4.5h3M20 16v2M19 17h2"/></svg></button>
       <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg></button>
       <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg></button>
       <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg></button>
       <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg></button>
-      <button class="small" data-sub="classify" title="像素分类：用画笔给每种结构（包括背景）各画几笔不同的标签，训练后自动分出整层或整个栈（按住 Alt 擦掉标注）"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 17h6M17 14v6"/></svg></button>
     </div>
-    <div class="dim" id="lab-hint">在物体上点一下，或者绕着它画一圈。选中后点「找同类」，一次找出所有一样的。</div>
+    <div class="dim" id="lab-hint"></div>
     <label class="slider" id="lab-size-row">大小 <input type="range" id="lab-size" min="1" max="100" step="1" /><span id="lab-size-v"></span></label>
     <label class="slider" id="lab-tol-row">容差 <input type="range" id="lab-tol" min="0" max="0.5" step="0.005" /><span id="lab-tol-v"></span></label>
     <div class="row">
       <label id="lab-3d-row" title="魔棒沿 Z 方向一起长到相邻的层"><input type="checkbox" id="lab-3d" /> <span id="lab-3d-text">三维</span></label>
       <label title="画笔和魔棒只涂没有标签的地方；橡皮只擦当前标签"><input type="checkbox" id="lab-guard" /> 不覆盖其他标签</label>
     </div>
+    <details id="lab-more">
+      <summary>更多工具</summary>
+      <div class="row" id="lab-tools-more">
+        <button class="small" data-sub="smart" title="智能选择：在物体上点一下就选出它；绕着它画一圈、或者沿着它画一笔，选得更准。按住 Alt 是减去。选中后可以「找同类」"><svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.2-6.8L20 11z"/><path d="M17 3v3M15.5 4.5h3M20 16v2M19 17h2"/></svg></button>
+        <button class="small" data-sub="classify" title="像素分类：用画笔给每种结构（包括背景）各画几笔不同的标签，训练后自动分出整层或整个栈（按住 Alt 擦掉标注）"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 17h6M17 14v6"/></svg></button>
+      </div>
+      <div class="dim" id="lab-more-hint">在物体上点一下，或者绕着它画一圈。选中后点「找同类」，一次找出所有一样的。</div>
     <div id="lab-sam" hidden>
       <div class="dim" id="lab-sam-text"></div>
       <div class="row">
@@ -165,6 +177,7 @@
         <button class="small" id="lab-unet-all" title="对所有还没有标签的层分割并写进标签，一步就能撤回（Esc 停止）">应用到其余层</button>
       </div>
     </details>
+    </details>
     <div id="lab-file" class="dim"></div>`;
   $("sec-ann").after(sec);
 
@@ -224,9 +237,12 @@
   TOOL_KEYS.g = "label";
 
   function syncPanel() {
-    for (const b of sec.querySelectorAll("#lab-tools button")) b.classList.toggle("on", b.dataset.sub === L.sub);
+    for (const b of sec.querySelectorAll("#lab-tools button, #lab-tools-more button")) b.classList.toggle("on", b.dataset.sub === L.sub);
     $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "smart";
-    $("lab-hint").hidden = L.sub !== "smart";
+    $("lab-hint").textContent = HINTS[L.sub] || "";
+    $("lab-hint").hidden = !HINTS[L.sub];
+    $("lab-more-hint").hidden = L.sub !== "smart";
+    if ((L.sub === "smart" || L.sub === "classify") && !$("lab-more").open) $("lab-more").open = true;
     syncSam();
     syncCls();
     syncUnet();
@@ -274,17 +290,23 @@
       const n = L.counts[k] || 0;
       row.innerHTML = `<span class="grip" title="拖动排序；拖到另一个标签上，把两个合并">${GRIP}</span>`
         + `<button class="eye" title="显示 / 隐藏（2D 和 3D）">${hidden(k) ? EYE_OFF : EYE}</button>`
-        + `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span><span class="n dim"></span>`
+        + `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span>`
+        + `<select class="ty" title="结构类型：之后在这个图层涂的每一笔都按这个类型精修">${TYPES.map(([t, n]) => `<option value="${t}">${t ? n : "未定类型"}</option>`).join("")}</select>`
+        + `<span class="n dim"></span>`
         + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
         + `<button class="del" title="删除这个标签">✕</button>`;
       const hex = "#" + colorOf(k).map((x) => x.toString(16).padStart(2, "0")).join("");
       row.querySelector(".sw").style.background = hex;
       row.querySelector(".name").textContent = nameOf(k);
       row.querySelector(".name").addEventListener("dblclick", () => rename(k, row.querySelector(".name")));
+      const ty = row.querySelector(".ty");
+      ty.value = structureOf(k);
+      ty.classList.toggle("unset", !ty.value);
+      ty.addEventListener("change", () => setMaterial(k, { structure: ty.value, name: mat(k).name || (ty.value ? typedName(ty.value) : "") }));
       row.querySelector(".del").hidden = !n;
       row.querySelector(".grip").addEventListener("pointerdown", (e) => gripDown(e, k, row));
       row.addEventListener("click", (e) => {
-        const b = e.target.closest("button, label, input, .grip");
+        const b = e.target.closest("button, label, input, select, .grip");
         if (b && b.classList.contains("sw")) return pickColor(k, b, hex);
         if (b && b.classList.contains("del")) return edit({ kind: "delete", label: k });
         if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
@@ -393,15 +415,15 @@
   /** Changes labels' materials ({label: patch}) and stores them with the label file. */
   function setMaterials(patches) {
     const next = { ...L.materials };
-    for (const [k, patch] of Object.entries(patches)) next[k] = { label: +k, name: "", color: null, hidden: false, locked: false, order: null, ...mat(k), ...patch };
+    for (const [k, patch] of Object.entries(patches)) next[k] = { label: +k, name: "", color: null, hidden: false, locked: false, order: null, structure: "", marks: [], ...mat(k), ...patch };
     L.materials = next;
-    const list = Object.values(next).filter((m) => m.name || m.color || m.hidden || m.locked || m.order != null);
+    const list = Object.values(next).filter((m) => m.name || m.color || m.hidden || m.locked || m.order != null || m.structure || (m.marks && m.marks.length));
     if (L.slice) repaint(0, 0, S.info.width, S.info.height);
     renderList();
     renderZMarks();
     if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.materialsChanged();
     draw();
-    edit({ kind: "materials", materials: list });
+    return edit({ kind: "materials", materials: list });
   }
   const setMaterial = (k, patch) => setMaterials({ [k]: patch });
 
@@ -470,7 +492,7 @@
       const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
       L.sam.denoise = tomo;
       Object.assign(L.pick, { hover: null, path: null, last: null });
-      Object.assign(L, { cand: null, sel: null, objects: [] });
+      Object.assign(L, { cand: null, sel: null, objects: [], typeBar: null, askSide: null, sideDown: null });
       syncCand();
       Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
       Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
@@ -564,7 +586,9 @@
     drawUnet(g);
     drawPick(g);
     drawSelection(g);
+    drawSides(g);
     placeChips();
+    placeTypes();
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
       g.save();
       g.beginPath();
@@ -651,8 +675,9 @@
     L.busy = true;
     syncPanel();
     try {
-      const st = await invoke(cmd, args);
+      const res = await invoke(cmd, args);
       if (token !== L.token) return;
+      const st = res && res.state ? res.state : res;
       L.counts = st.counts;
       L.slices = st.slices;
       L.materials = matMap(st.materials);
@@ -664,7 +689,7 @@
       if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label");
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
-      return st;
+      return res;
     } catch (e) {
       L.lastError = String(e);
       toast(L.lastError, 6000);
@@ -824,28 +849,45 @@
   ext.tools.label = {
     down(e, p) {
       if (!ready()) return;
+      // A click (no drag) while asked for a membrane's inside names that side.
+      if (L.askSide && L.sub === "brush" && L.askSide.z === S.z) {
+        L.sideDown = { p, x: e.clientX, y: e.clientY, rough: e.shiftKey };
+        return;
+      }
+      typesHide();
       if (L.sub === "wand") {
         const c = S.chans[channel()];
         const range = Math.abs((c.max ?? 1) - (c.min ?? 0)) || 1;
         const [x, y] = [Math.floor(p[0]), Math.floor(p[1])];
         if (x < 0 || y < 0 || x >= S.info.width || y >= S.info.height) return;
-        edit({ kind: "wand", x, y, z: S.z, c: channel(), t: S.t, tol: L.tol * range, label: L.active, guard: L.guard ? L.active : 0, threeD: L.threeD });
+        const label = L.active, z = S.z, rough = e.shiftKey;
+        edit({ kind: "wand", x, y, z, c: channel(), t: S.t, tol: L.tol * range, label, guard: L.guard ? L.active : 0, threeD: L.threeD }).then((st) => {
+          if (st && st.zs.length && !L.threeD) afterStroke({ z, tool: "wand", pts: [], radius: 0, seed: [x + 0.5, y + 0.5], label, rough });
+        });
         return;
       }
       if (L.sub === "lasso") {
-        L.lasso = { z: S.z, pts: [p], erase: e.altKey };
+        L.lasso = { z: S.z, pts: [p], erase: e.altKey, rough: e.shiftKey };
         draw();
         return;
       }
       if (L.sub === "classify") return clsDown(e, p);
       if (!L.slice || L.z !== S.z) return;
       if (L.sub === "smart") return smartDown(e, p);
-      L.stroke = { z: S.z, pts: [p] };
+      L.stroke = { z: S.z, pts: [p], rough: e.shiftKey, label: L.active };
       stampLocal(p[0], p[1]);
       draw();
     },
     move(e, p) {
       L.hover = p;
+      // The press while asked for a side became a drag: it is a new stroke.
+      if (L.sideDown && Math.hypot(e.clientX - L.sideDown.x, e.clientY - L.sideDown.y) > 4 && L.slice && L.z === S.z) {
+        const a = L.sideDown.p;
+        L.stroke = { z: S.z, pts: [a], rough: L.sideDown.rough, label: L.active };
+        L.sideDown = null;
+        typesHide();
+        stampLocal(a[0], a[1]);
+      }
       if (L.selDrag) {
         L.selDrag.dx = Math.round(p[0] - L.selDrag.a[0]);
         L.selDrag.dy = Math.round(p[1] - L.selDrag.a[1]);
@@ -863,6 +905,11 @@
       draw();
     },
     up() {
+      if (L.sideDown) {
+        const p = L.sideDown.p;
+        L.sideDown = null;
+        return setSide(p);
+      }
       if (L.cls.stroke) return clsUp();
       if (L.selDrag) return selectUp();
       if (L.pick.path) return smartUp();
@@ -872,7 +919,9 @@
         if (la.pts.length < 3) return draw();
         const pts = la.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
         const label = la.erase ? 0 : L.active;
-        edit({ kind: "polygon", z: la.z, pts, label, guard: L.guard ? L.active : 0 });
+        edit({ kind: "polygon", z: la.z, pts, label, guard: L.guard ? L.active : 0 }).then((st) => {
+          if (st && st.zs.length && label) afterStroke({ z: la.z, tool: "lasso", pts, radius: 0, seed: pts[0], label, rough: la.rough });
+        });
         return;
       }
       const st = L.stroke;
@@ -881,7 +930,10 @@
       const label = L.sub === "eraser" ? 0 : L.active;
       const guard = L.guard ? L.active : 0;
       const pts = st.pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
-      edit({ kind: "stroke", z: st.z, pts, radius: L.radius, label, guard });
+      const radius = L.radius;
+      edit({ kind: "stroke", z: st.z, pts, radius, label, guard }).then((res) => {
+        if (res && res.zs.length && label) afterStroke({ z: st.z, tool: "brush", pts, radius, seed: pts[pts.length - 1], label, rough: st.rough });
+      });
     },
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
     undo() {
@@ -900,6 +952,7 @@
     active(on) {
       btn.classList.toggle("on", on);
       if (!on) {
+        typesHide();
         L.hover = null;
         hoverDrop();
         candCancel();
@@ -946,6 +999,186 @@
     syncPanel();
     draw();
     e.preventDefault();
+  });
+
+  // ---------- structure type of a stroke ----------
+  //
+  // After each stroke a small bar beside it offers the structure types. None
+  // chosen = the rough paint stays (fully manual). A type refines the stroke
+  // (structure.rs); a layer that has a type refines its next strokes at once,
+  // and a different type moves the stroke to a new layer of that type.
+
+  const TYPES = [
+    ["", "不精修", "保留你画的样子（粗分割）"],
+    ["particle", "小颗粒", "小颗粒：吸附到颗粒的中心和大小"],
+    ["ball", "球", "实心的球"],
+    ["shell", "空心球", "空心球（囊泡）：沿着那一圈膜"],
+    ["membrane", "单层膜", "单层膜：在你涂的范围里找到真正的膜线，按实际厚度画"],
+    ["membrane2", "双层膜", "两层平行的膜"],
+    ["fibre", "纤维", "纤维：可以是弯的"],
+    ["free", "不规则", "不规则形状：边缘贴到实际边界"],
+  ];
+  const typeName = (t) => (TYPES.find((x) => x[0] === t) || TYPES[0])[1];
+  const structureOf = (k) => mat(k).structure || "";
+
+  const types = document.createElement("div");
+  types.id = "lab-types";
+  types.hidden = true;
+  types.innerHTML = TYPES.map(([t, n, tip]) => `<button data-type="${t}" title="${tip}">${n}</button>`).join("") + '<span id="lab-types-note"></span>';
+  $("stage").append(types);
+  for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "wheel"]) types.addEventListener(type, (e) => e.stopPropagation());
+
+  function typesHide() {
+    L.typeBar = null;
+    L.askSide = null;
+    if (!types.hidden) types.hidden = true;
+  }
+
+  function placeTypes() {
+    const b = L.typeBar;
+    const on = b && S.tool === "label" && S.axis === "xy" && b.stroke.z === S.z && L.token === S.token;
+    if (!on) {
+      if (!types.hidden) types.hidden = true;
+      return;
+    }
+    const cur = b.type ?? "";
+    for (const el of types.querySelectorAll("button[data-type]")) {
+      el.classList.toggle("on", el.dataset.type === cur);
+      el.disabled = !!b.busy;
+    }
+    $("lab-types-note").textContent = b.busy ? "精修中…" : L.askSide ? "点一下膜内那一侧" : "";
+    types.hidden = false;
+    const [x, y] = toScreen(b.at[0], b.at[1]);
+    const stage = $("stage").getBoundingClientRect(), w = types.offsetWidth, h = types.offsetHeight;
+    let top = y + 14;
+    if (top + h > stage.height - 4) top = y - h - 14;
+    types.style.left = `${Math.max(4, Math.min(stage.width - w - 4, x - w / 2))}px`;
+    types.style.top = `${Math.max(4, top)}px`;
+  }
+
+  /** A stroke went into label `s.label`: offer the types, refine at once for a typed layer. */
+  function afterStroke(s) {
+    const at = s.pts.length ? s.pts[s.pts.length - 1] : s.seed;
+    const t = structureOf(s.label);
+    L.typeBar = { stroke: s, at, label: s.label, type: "", refined: false, busy: false };
+    L.askSide = null;
+    if (t && !s.rough) refineTo(t, s.label);
+    else draw();
+  }
+
+  /** Default name of a new layer of type `t`: 单层膜1, 单层膜2… */
+  function typedName(t) {
+    const base = typeName(t);
+    let n = 1;
+    const names = new Set(Object.values(L.materials).map((m) => m.name));
+    while (names.has(`${base}${n}`)) n++;
+    return `${base}${n}`;
+  }
+
+  async function refineTo(t, to) {
+    const b = L.typeBar;
+    if (!b || b.busy) return;
+    const s = b.stroke;
+    b.busy = true;
+    draw();
+    const res = await editWith("labels_refine", { token: L.token, c: channel(), t: S.t, from: s.label, to, guard: L.guard ? s.label : 0, structure: t, stroke: s });
+    b.busy = false;
+    if (L.typeBar !== b) return;
+    b.type = t;
+    b.label = to;
+    b.refined = !!(res && res.state && res.state.zs.length);
+    if (res && res.note) toast(res.note, 4000);
+    if (res && res.mark && (t === "membrane" || t === "membrane2")) {
+      const marks = mat(to).marks || [];
+      L.askSide = { z: s.z, label: to, idx: marks.length - 1 };
+    }
+    draw();
+  }
+
+  types.addEventListener("click", async (e) => {
+    const el = e.target.closest("button[data-type]");
+    const b = L.typeBar;
+    if (!el || !b || b.busy || L.busy) return;
+    const t = el.dataset.type;
+    if (t === (b.type ?? "")) return;
+    L.askSide = null;
+    // Take the last reading back first: the rough stroke is in its first layer again.
+    if (b.refined) {
+      const back = b.label, marks = mat(back).marks || [];
+      await edit({ kind: "undo" });
+      if (b.type && marks.length) await setMaterial(back, { marks: marks.slice(0, -1) });
+      b.refined = false;
+      b.label = b.stroke.label;
+    }
+    b.type = t;
+    if (!t) return draw();
+    const from = b.stroke.label, cur = structureOf(from);
+    let to = from;
+    if (!cur) {
+      await setMaterial(from, { structure: t, name: mat(from).name || typedName(t) });
+    } else if (cur !== t) {
+      to = Math.max(maxUsed(), L.active, ...Object.keys(L.materials).map(Number)) + 1;
+      await setMaterial(to, { structure: t, name: typedName(t) });
+    }
+    if (L.typeBar !== b) return;
+    L.active = to;
+    renderList();
+    refineTo(t, to);
+  });
+
+  /** The membrane just refined: the side of `p` is its inside. */
+  function setSide(p) {
+    const a = L.askSide;
+    L.askSide = null;
+    const marks = (mat(a.label).marks || []).slice();
+    const m = marks[a.idx];
+    if (!m || m.path.length < 2) return draw();
+    let best = 0, bd = Infinity;
+    m.path.forEach(([x, y], i) => {
+      const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    });
+    const q0 = m.path[Math.max(0, best - 1)], q1 = m.path[Math.min(m.path.length - 1, best + 1)];
+    const tx = q1[0] - q0[0], ty = q1[1] - q0[1];
+    const vx = p[0] - m.path[best][0], vy = p[1] - m.path[best][1];
+    marks[a.idx] = { ...m, inside: tx * vy - ty * vx > 0 ? 1 : -1 };
+    setMaterial(a.label, { marks });
+    toast("记下了膜内一侧", 2000);
+  }
+
+  /** Short ticks on the inside of each membrane on the shown slice. */
+  function drawSides(g) {
+    if (!L.show || !L.slice || L.z !== S.z || S.axis !== "xy") return;
+    const w = S.info.width, sc = S.view.scale;
+    for (const m0 of Object.values(L.materials)) {
+      if (!m0.marks || hidden(m0.label)) continue;
+      for (const m of m0.marks) {
+        if (m.z !== S.z || !m.inside || m.path.length < 3) continue;
+        const [mx, my] = m.path[m.path.length >> 1];
+        if (L.slice[Math.floor(my) * w + Math.floor(mx)] !== m0.label) continue;
+        const len = Math.max(7, (m.thickness || 2) * sc * 1.6);
+        g.save();
+        g.beginPath();
+        for (let i = 1; i < m.path.length - 1; i += 4) {
+          const q0 = m.path[i - 1], q1 = m.path[i + 1], n = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1;
+          const nx = (-(q1[1] - q0[1]) / n) * m.inside, ny = ((q1[0] - q0[0]) / n) * m.inside;
+          const [sx, sy] = toScreen(m.path[i][0], m.path[i][1]);
+          g.moveTo(sx, sy);
+          g.lineTo(sx + nx * len, sy + ny * len);
+        }
+        g.lineWidth = 3;
+        g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+        g.stroke();
+        g.lineWidth = 1.5;
+        g.strokeStyle = `rgb(${colorOf(m0.label).join(",")})`;
+        g.stroke();
+        g.restore();
+      }
+    }
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && L.typeBar && S.tool === "label") { typesHide(); draw(); }
   });
 
   // ---------- smart selection (sam_pick.rs, segpick.rs) ----------
@@ -2040,9 +2273,10 @@
 
   // ---------- panel controls ----------
 
-  for (const b of sec.querySelectorAll("#lab-tools button")) {
+  for (const b of sec.querySelectorAll("#lab-tools button, #lab-tools-more button")) {
     b.addEventListener("click", () => {
       L.sub = b.dataset.sub;
+      typesHide();
       if (L.sub !== "smart") { candCancel(); hoverDrop(); }
       syncPanel();
       if (S.tool !== "label") setTool("label");

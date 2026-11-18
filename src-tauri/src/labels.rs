@@ -97,6 +97,26 @@ pub struct Material {
     /// Place in the layer list (smaller is higher); labels without one
     /// follow in label order.
     pub order: Option<i32>,
+    /// Structure type the user chose for this layer ("" = rough painting):
+    /// particle, ball, shell, membrane, membrane2, fibre, free.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub structure: String,
+    /// Refined objects of this layer (line and side of each membrane...).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<Mark>,
+}
+
+/// One refined object: its centre line on slice `z` (image pixels), its
+/// thickness and which side of the line is inside (0 = not said; +1 = the
+/// left of the path's direction, -1 = the right).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Mark {
+    pub z: usize,
+    pub path: Vec<[f32; 2]>,
+    pub thickness: f32,
+    pub inside: i8,
+    pub closed: bool,
 }
 
 /// Euclidean distance from every pixel to the nearest `true` one
@@ -696,6 +716,30 @@ impl Labels {
         self.commit(edit)
     }
 
+    /// Takes `from` off the pixels of `remove` on slice `z` and writes `to`
+    /// under `add`, as one undo step (a rough stroke swapped for its refined
+    /// shape, or moved to another layer).
+    pub fn replace(&mut self, z: usize, remove: &[bool], add: &[bool], from: u16, to: u16, guard: u16) -> Vec<usize> {
+        let n = self.w * self.h;
+        if z >= self.d || remove.len() != n || add.len() != n {
+            return vec![];
+        }
+        let locked = self.locked();
+        let mut edit = vec![];
+        let s = Self::touch(&mut self.slices, &mut edit, z, n);
+        for i in 0..n {
+            if remove[i] && s[i] == from {
+                s[i] = 0;
+            }
+        }
+        for i in 0..n {
+            if add[i] && allowed(s[i], to, guard, &locked) {
+                s[i] = to;
+            }
+        }
+        self.commit(edit)
+    }
+
     /// Paints `label` (0 erases) wherever `mask` is set on slice `z`.
     /// With `trim`, pixels of `label` outside the mask on that slice are
     /// cleared too (a rough brush outline refined by SAM).
@@ -1283,7 +1327,7 @@ mod tests {
         let path = dir.path().join("a.mrc.labels.tif");
         let mut l = Labels::new(9, 7, 5);
         l.stroke(3, &[[4.0, 3.0]], 2.0, 1234, 0);
-        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false, order: None }]);
+        l.set_materials(vec![Material { label: 1234, name: "膜 \"a\"\nb 🦠".into(), color: Some([1, 2, 3]), hidden: true, locked: false, order: None, ..Default::default() }]);
         assert!(l.save(&path).unwrap());
         assert!(!l.dirty);
         let back = Labels::load(&path, 9, 7, 5).unwrap();

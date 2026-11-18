@@ -88,6 +88,20 @@
 #lab-chips-menu button { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; font-size: 12px; border: 0; box-shadow: none; background: none; border-radius: 5px; justify-content: flex-start; }
 #lab-chips-menu button:hover { background: var(--muted); }
 #lab-chips-menu i { flex: none; width: 10px; height: 10px; border-radius: 2px; }
+/* Structure types offered beside a fresh stroke. */
+#lab-types { position: absolute; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); font-size: 12px; white-space: nowrap; }
+#lab-types[hidden] { display: none; }
+#stage:has(#vol3d:not([hidden])) #lab-types { display: none; }
+#lab-types > button { height: 24px; padding: 0 8px; font-size: 12px; border: 0; box-shadow: none; background: none; border-radius: 5px; }
+#lab-types > button:hover:not(:disabled) { background: var(--muted); }
+#lab-types > button.on { background: var(--accent); color: #fff; }
+#lab-types > button[data-type=""] { color: var(--dim); }
+#lab-types > button[data-type=""].on { color: #fff; }
+#lab-types-note { color: var(--accent); padding: 0 6px; font-weight: 600; }
+#lab-types-note:empty { display: none; }
+#lab-list select.ty { flex: none; width: auto; max-width: 70px; height: 20px; padding: 0 2px; font-size: 11px; border: 0; background: none; color: var(--dim); box-shadow: none; }
+#lab-list select.ty.unset { opacity: 0; }
+#lab-list .lab-row:hover select.ty.unset { opacity: 1; }
 #lab-cand { left: 50%; bottom: 18px; transform: translateX(-50%); gap: 8px; padding: 6px 8px 6px 12px; }
 #lab-cand label { display: flex; align-items: center; gap: 5px; color: var(--dim); }
 #lab-cand input[type="range"] { width: 120px; }

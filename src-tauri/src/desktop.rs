@@ -355,6 +355,58 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Refined {
+    state: LabelsState,
+    /// The refined object, when refining worked.
+    mark: Option<crate::labels::Mark>,
+    /// Why the rough paint was kept ("" when nothing to say).
+    note: String,
+}
+
+/// Swaps the stroke just painted in label `from` for the structure the user
+/// named (or keeps it rough), writing the result into label `to`, as one
+/// undo step. The refined object is added to `to`'s marks.
+#[tauri::command]
+async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usize, from: u16, to: u16, guard: u16, structure: String, stroke: crate::structure::Stroke) -> CmdResult<Refined> {
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    blocking(move || {
+        use crate::structure::Outcome;
+        let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
+        let (m, dims) = {
+            let e = e.lock().unwrap();
+            let l = &e.labels;
+            (crate::structure::stroke_pixels(l, &stroke, from), (l.w, l.h, l.d))
+        };
+        if !m.iter().any(|&b| b) {
+            let e = e.lock().unwrap();
+            return Ok(Refined { state: labels_state(&e, vec![]), mark: None, note: String::new() });
+        }
+        let outcome = crate::structure::refine(&vals, dims, &stroke, &structure)?;
+        let mut e = e.lock().unwrap();
+        let l = &mut e.labels;
+        let (zs, mark, note) = match outcome {
+            Outcome::Done(add, mark) => (l.replace(stroke.z, &m, &add, from, to, guard), Some(mark), String::new()),
+            Outcome::Rough(note) => {
+                let zs = if from != to { l.replace(stroke.z, &m, &m, from, to, guard) } else { vec![] };
+                (zs, None, note)
+            }
+        };
+        if let Some(mk) = &mark {
+            let mut mats = l.materials.clone();
+            match mats.iter_mut().find(|x| x.label == to) {
+                Some(x) => x.marks.push(mk.clone()),
+                None => mats.push(crate::labels::Material { label: to, marks: vec![mk.clone()], ..Default::default() }),
+            }
+            l.set_materials(mats);
+        }
+        Ok(Refined { state: labels_state(&e, zs), mark, note })
+    })
+    .await
+}
+
 /// Writes the label file when it changed; returns whether a file exists now.
 #[tauri::command]
 async fn labels_save(state: State<'_, AppState>, token: u64) -> CmdResult<bool> {
@@ -3713,6 +3765,7 @@ pub fn run() {
             labels_open,
             labels_slice,
             labels_edit,
+            labels_refine,
             labels_save,
             labels_volume,
             labels_surfaces,
