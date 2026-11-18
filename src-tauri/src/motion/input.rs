@@ -85,9 +85,9 @@ impl Movie {
     }
     /// A group, and for EER (whole, finite, non-negative counts by
     /// construction) its largest value, so the frame need not be checked.
-    fn group_checked(&self, start: usize, count: usize, up: usize) -> Result<(Vec<f32>, Option<f32>)> {
+    fn group_checked(&self, start: usize, count: usize, up: usize, buf: Vec<f32>) -> Result<(Vec<f32>, Option<f32>)> {
         match self {
-            Self::Eer(e) => e.group_max(start, count, up).map(|(v, m)| (v, Some(m))),
+            Self::Eer(e) => e.group_max_into(start, count, up, buf).map(|(v, m)| (v, Some(m))),
             _ => Ok((self.group(start, count, up)?, None)),
         }
     }
@@ -330,10 +330,12 @@ impl Spool {
         };
         let total = groups.len();
         let (mut check_ms, mut fused_ms, mut upload_ms) = (0.0f64, 0.0f64, 0.0f64);
+        // The decoded frame of one group is the buffer of the next.
+        let mut reuse: Vec<f32> = Vec::new();
         for (start, count) in groups {
             check_cancel()?;
             let decode = std::time::Instant::now();
-            let (mut frame, counted) = movie.group_checked(start, count, up)?;
+            let (mut frame, counted) = movie.group_checked(start, count, up, std::mem::take(&mut reuse))?;
             spool.decode_ms += decode.elapsed().as_secs_f64() * 1000.0;
             // One pass for the checks, one for everything else: each pass
             // over a 4096² frame is a 64 MB walk through memory.
@@ -461,6 +463,7 @@ impl Spool {
                 continue;
             }
             spool.frames.push(work);
+            reuse = frame;
             spool.counts.push(count);
             spool
                 .times
