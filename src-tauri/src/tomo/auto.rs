@@ -8,11 +8,11 @@
 //!   - survey: a quick look at the 3D shape, about 18 Å per voxel, SART
 //!     with phase flipping and the deconvolution; no learned steps.
 //!   - display (default): as clear as possible, about 9 Å per voxel,
-//!     Noise2Noise, the deconvolution and missing-wedge correction when
-//!     this computer's GPU can train it in `WEDGE_BUDGET` (about 20 min on
-//!     a desktop GPU; an M1 Max would take 2.5 h at 4.5 s a step), judged
-//!     from its first half minute of training; else the deconvolved
-//!     tomogram is the result and `note` says why.
+//!     Noise2Noise, the deconvolution and missing-wedge correction, which
+//!     always runs to the end however long it takes on this computer (about
+//!     20 min on a desktop GPU; an M1 Max takes 2.5 h at 4.5 s a step) and
+//!     however little memory it has (`bigbuf`): the user would rather wait
+//!     than have it skipped.
 //!   - STA: the high resolution kept for subtomogram averaging, about
 //!     4.5 Å per voxel, linear steps only (nothing learned or filtered that
 //!     would change the high frequencies), and a RELION 5 folder beside
@@ -49,9 +49,9 @@ use serde::{Deserialize, Serialize};
 /// - `fine_align`: the held-out choice of patch layout and the views left
 ///   out because they make the tomogram worse (`select`).
 /// - `denoise`: Noise2Noise on the even/odd halves (else neighbouring sections).
-/// - `wedge`: missing-wedge correction within `WEDGE_BUDGET`. With halves it
-///   trains on them and denoises as it goes, so Noise2Noise is not run as
-///   well (only when the wedge step is too slow on this computer).
+/// - `wedge`: missing-wedge correction, run to the end however slow. With
+///   halves it trains on them and denoises as it goes, so Noise2Noise is not
+///   run as well.
 /// - `flatten`: a lamella milled at an angle is laid flat; without it the
 ///   thickness and depth of the specimen are still found, nothing is turned.
 /// Fixed: the deconvolution always runs (cheap, restores the low-resolution
@@ -183,9 +183,6 @@ pub struct AutoResult {
     pub defocus_um: f64,
     pub ms: f64,
 }
-
-/// Longest missing-wedge training the display tomogram waits for, seconds.
-const WEDGE_BUDGET: f64 = 30.0 * 60.0;
 
 /// Processed display volumes are not independent halves. Use the original
 /// reconstruction's observations when available, without relabelling them
@@ -454,7 +451,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             check_cancel()?;
             k += 1;
             let (source, paired) = display_wedge_source(d, &raw, &path);
-            let step = pipeline::WedgeStep { source: Some(source.to_owned()), cfg: None, single: false, budget_s: Some(WEDGE_BUDGET) };
+            let step = pipeline::WedgeStep { source: Some(source.to_owned()), cfg: None, single: false, budget_s: None };
             match pipeline::wedge(dev, d, &step, &stage(k)) {
                 Ok(mut m) => {
                     path = m.paths.remove(0);

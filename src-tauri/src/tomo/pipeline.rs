@@ -579,7 +579,8 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
         if p.iteration > p.iterations {
             progress("缺失楔补偿：应用", p.step, p.steps)
         } else {
-            progress(&format!("缺失楔补偿：第 {}/{} 轮", p.iteration, p.iterations), p.step, p.steps)
+            // Counted over all rounds, so the time left covers the whole training.
+            progress(&format!("缺失楔补偿：第 {}/{} 轮", p.iteration, p.iterations), (p.iteration.max(1) - 1) * p.steps + p.step, p.iterations * p.steps)
         }
     };
     // With even/odd halves one network denoises and fills the wedge

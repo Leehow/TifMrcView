@@ -24,7 +24,7 @@
       <div class="cs-purpose-box" role="group" aria-label="重构时要做的处理">
         <label class="cs-use"><input type="checkbox" data-step="fineAlign"><span><b>精对齐</b><span>多试几种对齐方式，自动去掉对不齐的倾角（会标出来，可以改回）</span></span></label>
         <label class="cs-use"><input type="checkbox" data-step="denoise"><span><b>N2N 降噪</b><span>去掉噪点，结构更干净（有电影数据时效果最好）</span></span></label>
-        <label class="cs-use"><input type="checkbox" data-step="wedge"><span><b>去缺失楔</b><span>减轻上下方向的拉长和模糊；这台电脑太慢（超过约 30 分钟）时自动跳过并告诉你</span></span></label>
+        <label class="cs-use"><input type="checkbox" data-step="wedge"><span><b>去缺失楔</b><span>减轻上下方向的拉长和模糊；比较慢（台式机 GPU 每个序列约 20 分钟，更慢的电脑会更久），但一定做完</span></span></label>
         <label class="cs-use"><input type="checkbox" data-step="flatten"><span><b>自动展平</b><span>把斜着的薄片转平，翻层时整层都在样品里</span></span></label>
       </div>
       <label class="cs-bin" title="每个体素合并多少个原始像素（bin）。bin 越小细节越多，但越慢、文件越大">体素大小 <select class="cs-bin-pick" aria-label="体素大小（bin）"></select></label>
@@ -464,7 +464,7 @@
     const res = list.length ? `，分辨率最高约 ${nyq(list, (s) => steps.bin || autoBin(s, voxel))}` : "";
     q(".cs-steps-line").textContent = !on.length
       ? `都不勾：快速重构，${size} 体素${res}，每个序列几分钟`
-      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（${size} 体素${res}${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
+      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（${size} 体素${res}${steps.wedge ? "，去缺失楔每个序列约 20 分钟起，进度里会显示预计剩余时间" : ""}）`;
   };
   for (const b of boxes) b.onchange = () => { steps = { ...steps, [b.dataset.step]: b.checked }; pref.set("cryo-steps", steps); showSteps(); };
   binPick.onchange = () => { steps = { ...steps, bin: binPick.value ? Number(binPick.value) : null }; pref.set("cryo-steps", steps); showSteps(); };
