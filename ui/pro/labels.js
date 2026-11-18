@@ -73,10 +73,10 @@
   // ---------- panel ----------
 
   const HINTS = {
-    brush: "涂一笔后在旁边选结构类型，就会精细分割；不选就保留你画的。按住 Shift 涂的那一笔不精修。[ ] 调粗细。",
+    brush: "涂一笔，再在上面点结构类型，这一笔就按它精细分割；不点就保留你画的。[ ] 调粗细。",
     eraser: "擦掉标签。[ ] 调粗细。",
-    lasso: "画一圈，圈里涂上标签，再在旁边选结构类型。按住 Alt 画圈是擦除。",
-    wand: "点一下，亮度相近的连通区域涂上标签，再在旁边选结构类型。",
+    lasso: "画一圈，圈里涂上标签；要精细分割就再在上面点结构类型。按住 Alt 画圈是擦除。",
+    wand: "点一下，亮度相近的连通区域涂上标签；要精细分割就再在上面点结构类型。",
   };
 
   const sec = document.createElement("section");
@@ -241,6 +241,7 @@
     $("lab-size-row").hidden = L.sub === "wand" || L.sub === "lasso" || L.sub === "smart";
     $("lab-hint").textContent = HINTS[L.sub] || "";
     $("lab-hint").hidden = !HINTS[L.sub];
+    placeTypes();
     $("lab-more-hint").hidden = L.sub !== "smart";
     if ((L.sub === "smart" || L.sub === "classify") && !$("lab-more").open) $("lab-more").open = true;
     syncSam();
@@ -291,7 +292,7 @@
       row.innerHTML = `<span class="grip" title="拖动排序；拖到另一个标签上，把两个合并">${GRIP}</span>`
         + `<button class="eye" title="显示 / 隐藏（2D 和 3D）">${hidden(k) ? EYE_OFF : EYE}</button>`
         + `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span>`
-        + `<select class="ty" title="结构类型：之后在这个图层涂的每一笔都按这个类型精修">${TYPES.map(([t, n]) => `<option value="${t}">${t ? n : "未定类型"}</option>`).join("")}</select>`
+        + `<select class="ty" title="这个图层的结构类型">${TYPES.map(([t, n]) => `<option value="${t}">${t ? n : "未定类型"}</option>`).join("")}</select>`
         + `<span class="n dim"></span>`
         + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
         + `<button class="del" title="删除这个标签">✕</button>`;
@@ -1003,17 +1004,17 @@
 
   // ---------- structure type of a stroke ----------
   //
-  // After each stroke a small bar beside it offers the structure types. None
-  // chosen = the rough paint stays (fully manual). A type refines the stroke
-  // (structure.rs); a layer that has a type refines its next strokes at once,
-  // and a different type moves the stroke to a new layer of that type.
+  // A row under the tools offers the structure types for the last stroke.
+  // Nothing happens by itself: the user paints, then clicks a type to refine
+  // that stroke (structure.rs); not clicking keeps the rough paint. A type
+  // other than the layer's moves the stroke to a new layer of that type.
 
   const TYPES = [
     ["", "不精修", "保留你画的样子（粗分割）"],
     ["particle", "小颗粒", "小颗粒：吸附到颗粒的中心和大小"],
     ["ball", "球", "实心的球"],
     ["shell", "空心球", "空心球（囊泡）：沿着那一圈膜"],
-    ["membrane", "单层膜", "单层膜：在你涂的范围里找到真正的膜线，按实际厚度画"],
+    ["membrane", "单层膜", "单层膜：在你涂的地方附近找到真正的膜线，按实际厚度画；涂偏一点也没关系"],
     ["membrane2", "双层膜", "两层平行的膜"],
     ["fibre", "纤维", "纤维：可以是弯的"],
     ["free", "不规则", "不规则形状：边缘贴到实际边界"],
@@ -1023,47 +1024,37 @@
 
   const types = document.createElement("div");
   types.id = "lab-types";
-  types.hidden = true;
-  types.innerHTML = TYPES.map(([t, n, tip]) => `<button data-type="${t}" title="${tip}">${n}</button>`).join("") + '<span id="lab-types-note"></span>';
-  $("stage").append(types);
-  for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "wheel"]) types.addEventListener(type, (e) => e.stopPropagation());
+  types.className = "row";
+  types.innerHTML = '<span class="dim">结构</span>' + TYPES.map(([t, n, tip]) => `<button class="small" data-type="${t}" title="${tip}">${n}</button>`).join("") + '<div class="dim" id="lab-types-note"></div>';
+  $("lab-tools").after(types);
 
   function typesHide() {
     L.typeBar = null;
     L.askSide = null;
-    if (!types.hidden) types.hidden = true;
+    placeTypes();
   }
 
+  /** The type row in the panel: enabled while the last stroke is on the shown slice. */
   function placeTypes() {
+    const types = $("lab-types");
+    if (!types) return;
+    types.hidden = !["brush", "lasso", "wand"].includes(L.sub);
+    if (types.hidden) return;
     const b = L.typeBar;
-    const on = b && S.tool === "label" && S.axis === "xy" && b.stroke.z === S.z && L.token === S.token;
-    if (!on) {
-      if (!types.hidden) types.hidden = true;
-      return;
-    }
-    const cur = b.type ?? "";
+    const on = !!(b && S.axis === "xy" && b.stroke.z === S.z && L.token === S.token);
+    const cur = on ? b.type ?? "" : null;
     for (const el of types.querySelectorAll("button[data-type]")) {
       el.classList.toggle("on", el.dataset.type === cur);
-      el.disabled = !!b.busy;
+      el.disabled = !on || !!b.busy;
     }
-    $("lab-types-note").textContent = b.busy ? "精修中…" : L.askSide ? "点一下膜内那一侧" : "";
-    types.hidden = false;
-    const [x, y] = toScreen(b.at[0], b.at[1]);
-    const stage = $("stage").getBoundingClientRect(), w = types.offsetWidth, h = types.offsetHeight;
-    let top = y + 14;
-    if (top + h > stage.height - 4) top = y - h - 14;
-    types.style.left = `${Math.max(4, Math.min(stage.width - w - 4, x - w / 2))}px`;
-    types.style.top = `${Math.max(4, top)}px`;
+    $("lab-types-note").textContent = !on ? "涂一笔后点类型，这一笔就按它精细分割" : b.busy ? "精修中…" : L.askSide ? "在图上点一下膜内那一侧" : "";
   }
 
-  /** A stroke went into label `s.label`: offer the types, refine at once for a typed layer. */
+  /** A stroke went into label `s.label`: the type row now acts on it. */
   function afterStroke(s) {
-    const at = s.pts.length ? s.pts[s.pts.length - 1] : s.seed;
-    const t = structureOf(s.label);
-    L.typeBar = { stroke: s, at, label: s.label, type: "", refined: false, busy: false };
+    L.typeBar = { stroke: s, label: s.label, type: "", refined: false, busy: false };
     L.askSide = null;
-    if (t && !s.rough) refineTo(t, s.label);
-    else draw();
+    draw();
   }
 
   /** Default name of a new layer of type `t`: 单层膜1, 单层膜2… */
@@ -1087,10 +1078,11 @@
     b.type = t;
     b.label = to;
     b.refined = !!(res && res.state && res.state.zs.length);
+    b.added = (res && res.marks && res.marks.length) || 0;
     if (res && res.note) toast(res.note, 4000);
-    if (res && res.mark && (t === "membrane" || t === "membrane2")) {
+    if (b.added && (t === "membrane" || t === "membrane2")) {
       const marks = mat(to).marks || [];
-      L.askSide = { z: s.z, label: to, idx: marks.length - 1 };
+      L.askSide = { z: s.z, label: to, first: marks.length - b.added, n: b.added };
     }
     draw();
   }
@@ -1106,7 +1098,8 @@
     if (b.refined) {
       const back = b.label, marks = mat(back).marks || [];
       await edit({ kind: "undo" });
-      if (b.type && marks.length) await setMaterial(back, { marks: marks.slice(0, -1) });
+      if (b.added && marks.length) await setMaterial(back, { marks: marks.slice(0, Math.max(0, marks.length - b.added)) });
+      b.added = 0;
       b.refined = false;
       b.label = b.stroke.label;
     }
@@ -1130,18 +1123,24 @@
   function setSide(p) {
     const a = L.askSide;
     L.askSide = null;
+    // The stretches of one stroke run the same way along it, so the side
+    // read at the nearest one holds for all of them.
     const marks = (mat(a.label).marks || []).slice();
-    const m = marks[a.idx];
-    if (!m || m.path.length < 2) return draw();
-    let best = 0, bd = Infinity;
-    m.path.forEach(([x, y], i) => {
-      const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
-      if (d < bd) { bd = d; best = i; }
-    });
+    let m = null, best = 0, bd = Infinity;
+    for (let k = a.first; k < a.first + a.n; k++) {
+      const mk = marks[k];
+      if (!mk || mk.path.length < 2) continue;
+      mk.path.forEach(([x, y], i) => {
+        const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
+        if (d < bd) { bd = d; best = i; m = mk; }
+      });
+    }
+    if (!m) return draw();
     const q0 = m.path[Math.max(0, best - 1)], q1 = m.path[Math.min(m.path.length - 1, best + 1)];
     const tx = q1[0] - q0[0], ty = q1[1] - q0[1];
     const vx = p[0] - m.path[best][0], vy = p[1] - m.path[best][1];
-    marks[a.idx] = { ...m, inside: tx * vy - ty * vx > 0 ? 1 : -1 };
+    const inside = tx * vy - ty * vx > 0 ? 1 : -1;
+    for (let k = a.first; k < a.first + a.n; k++) if (marks[k]) marks[k] = { ...marks[k], inside };
     setMaterial(a.label, { marks });
     toast("记下了膜内一侧", 2000);
   }

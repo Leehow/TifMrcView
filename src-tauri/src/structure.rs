@@ -8,9 +8,14 @@
 //! Line-like structures use one engine (`band`): the image is straightened
 //! along the stroke's centre line, a ridge filter across the band at the
 //! scale that answers best gives a score per (along, across) position, and
-//! dynamic programming finds the smooth path of the strongest ridge inside
-//! the painted band. A second pass matches each column against the median
-//! profile of the stroke itself (a template learnt from this very stroke).
+//! dynamic programming finds the smooth path of the strongest ridge. A hand
+//! paints beside a thin line as often as on it, so the paint is a hint, not
+//! a boundary: the search reaches a stroke width beyond the paint on each
+//! side, with a cost that grows with the distance from it. A second pass
+//! matches each column against the median profile of the stroke itself (a
+//! template learnt from this very stroke). Each stretch of the stroke is
+//! judged on its own: where the line is clear it is refined, where it is not
+//! the rough paint of that stretch stays.
 
 use crate::labels::{Labels, Mark, Values};
 use anyhow::Result;
@@ -31,8 +36,9 @@ pub struct Stroke {
 }
 
 pub enum Outcome {
-    /// The refined shape (pixels of the slice) and its description.
-    Done(Vec<bool>, Mark),
+    /// The refined shape (pixels of the slice), one description per refined
+    /// stretch, and a note when part of the paint was kept as it was.
+    Done(Vec<bool>, Vec<Mark>, String),
     /// Keep the rough paint; the reason is shown to the user.
     Rough(String),
 }
@@ -286,7 +292,10 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         })
         .collect();
 
-    let half = (width / 2.0 + 2.0).ceil() as usize;
+    // The band reaches one paint width (at least 4 px) beyond the paint.
+    let ph = width / 2.0;
+    let reach = ph.max(4.0);
+    let half = (ph + reach + 2.0).ceil() as usize;
     let t_len = 2 * half + 1;
     let pad = half as f32 + 8.0;
     let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
@@ -294,6 +303,8 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         b = [b[0].min(p[0] - pad), b[1].min(p[1] - pad), b[2].max(p[0] + pad), b[3].max(p[1] + pad)];
     }
     let roi = Roi::read(vals, dims, st.z, b)?;
+    // Cost of leaving the paint: 0 inside it, 1 at the far edge of the band.
+    let away: Vec<f32> = (0..t_len).map(|t| (((t as f32 - half as f32).abs() - ph).max(0.0) / reach).min(1.0)).collect();
 
     // Straightened band: row s along the line, column t across it.
     let mut band = vec![0f32; s_len * t_len];
@@ -330,9 +341,10 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         r
     };
     let row_max_median = |r: &[f32]| median((0..s_len).map(|s| r[s * t_len + 1..(s + 1) * t_len - 1].iter().copied().fold(f32::MIN, f32::max)).collect());
+    // The scale may follow the line's own width, not the paint's.
     let mut best: Option<(f32, f32, f32, Vec<f32>)> = None;
     for &sigma in &[1.0f32, 1.4, 2.0, 2.8, 4.0, 5.6] {
-        if sigma > (width / 4.0).max(1.0) {
+        if sigma > (width / 4.0).max(1.4) {
             break;
         }
         for sign in [1.0f32, -1.0] {
@@ -344,17 +356,40 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         }
     }
     let Some((m1, sigma, sign, r1)) = best else { return Ok(Outcome::Rough("这一笔太细了".into())) };
-    let path1 = best_path(&r1, s_len, t_len, 0.5 * m1.max(0.0));
+    let with_cost = |r: &[f32], m: f32| -> Vec<f32> { (0..s_len * t_len).map(|i| r[i] - 0.5 * m.max(0.0) * away[i % t_len]).collect() };
+    let path1 = best_path(&with_cost(&r1, m1), s_len, t_len, 0.5 * m1.max(0.0));
 
-    // Confidence: the ridge on the path against the spread of the band.
+    // Confidence, stretch by stretch: the ridge on the path against the
+    // spread of the band, averaged over a short piece of the line.
     let inner: Vec<f32> = (0..s_len).flat_map(|s| r1[s * t_len + 1..(s + 1) * t_len - 1].to_vec()).collect();
     let med_all = median(inner.clone());
     let sd = 1.4826 * median(inner.iter().map(|v| (v - med_all).abs()).collect()).max(1e-6);
-    let on_path: Vec<f32> = (0..s_len).map(|s| r1[s * t_len + path1[s]]).collect();
-    let strength = (median(on_path.clone()) - med_all) / sd;
-    if strength < 2.0 {
-        return Ok(Outcome::Rough("在你涂的范围里没找到清楚的膜，先保留你画的样子".into()));
+    let z: Vec<f32> = (0..s_len).map(|s| (r1[s * t_len + path1[s]] - med_all) / sd).collect();
+    let z = smooth1(&z, &gauss_kernel(6.0));
+    let min_run = (width.max(12.0)) as usize;
+    let runs = |ok: &dyn Fn(usize) -> bool| -> Vec<(usize, usize)> {
+        let mut out = vec![];
+        let mut s = 0;
+        while s < s_len {
+            if !ok(s) {
+                s += 1;
+                continue;
+            }
+            let a = s;
+            while s < s_len && ok(s) {
+                s += 1;
+            }
+            if s - a >= min_run {
+                out.push((a, s - 1));
+            }
+        }
+        out
+    };
+    let found = runs(&|s| z[s] >= 2.0);
+    if found.is_empty() {
+        return Ok(Outcome::Rough("在你涂的地方附近没找到清楚的膜，先保留你画的样子".into()));
     }
+    let on_line = |s: usize| found.iter().any(|&(a, b)| s >= a && s <= b);
 
     // Second pass: the stroke's own median profile as a template.
     let hw = half as i64;
@@ -363,6 +398,7 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
             .map(|u| {
                 median(
                     (0..s_len)
+                        .filter(|&s| on_line(s))
                         .filter_map(|s| {
                             let t = path[s] as i64 + u;
                             (t >= 0 && t < t_len as i64).then(|| band[s * t_len + t as usize])
@@ -387,15 +423,14 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         }
     }
     let m2 = row_max_median(&r2);
-    let mut path = best_path(&r2, s_len, t_len, 0.3 * m2.max(0.0));
+    let path = best_path(&with_cost(&r2, m2), s_len, t_len, 0.3 * m2.max(0.0));
 
-    // Trim weak ends (paint overshooting the membrane's end).
+    // Within the clear stretches, drop the ends where the template stops matching.
     let score: Vec<f32> = (0..s_len).map(|s| r2[s * t_len + path[s]]).collect();
-    let cut = 0.3 * median(score.clone());
-    let first = score.iter().position(|&v| v >= cut).unwrap_or(0);
-    let last = score.iter().rposition(|&v| v >= cut).unwrap_or(s_len - 1);
-    if last <= first + 4 {
-        return Ok(Outcome::Rough("在你涂的范围里没找到清楚的膜，先保留你画的样子".into()));
+    let cut = 0.3 * median((0..s_len).filter(|&s| on_line(s)).map(|s| score[s]).collect());
+    let keep_runs = runs(&|s| on_line(s) && score[s] >= cut);
+    if keep_runs.is_empty() {
+        return Ok(Outcome::Rough("在你涂的地方附近没找到清楚的膜，先保留你画的样子".into()));
     }
 
     // Thickness: full width at half depth of the aligned profile, less our blur.
@@ -427,27 +462,56 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
     let blur_w = 2.355f32 * 1.0;
     let thickness = (fwhm * fwhm - blur_w * blur_w).max(1.0).sqrt().clamp(1.0, width);
 
-    // Back to image coordinates.
-    let pts: Vec<[f32; 2]> = (first..=last)
-        .map(|s| {
-            let off = path[s] as f32 - half as f32;
-            [c[s][0] + off * normals[s][0], c[s][1] + off * normals[s][1]]
-        })
-        .collect();
-    path.clear();
+    // Back to image coordinates, one line per clear stretch.
+    let at = |s: usize| -> [f32; 2] {
+        let off = path[s] as f32 - half as f32;
+        [c[s][0] + off * normals[s][0], c[s][1] + off * normals[s][1]]
+    };
     let mut tmp = Labels::new(w, h, 1);
-    tmp.stroke(0, &pts, (thickness / 2.0).max(0.75), 1, 0);
-    let mask: Vec<bool> = match tmp.slice(0) {
-        Some(r) => r.iter().map(|&v| v == 1).collect(),
-        None => return Ok(Outcome::Rough("没找到膜".into())),
-    };
     let r1 = |v: f32| (v * 10.0).round() / 10.0;
-    let mark = Mark {
-        z: st.z,
-        path: pts.iter().step_by(3).chain(pts.last()).map(|p| [r1(p[0]), r1(p[1])]).collect(),
-        thickness: r1(thickness),
-        inside: 0,
-        closed: false,
-    };
-    Ok(Outcome::Done(mask, mark))
+    let mut marks = vec![];
+    for &(a, b) in &keep_runs {
+        let pts: Vec<[f32; 2]> = (a..=b).map(at).collect();
+        tmp.stroke(0, &pts, (thickness / 2.0).max(0.75), 1, 0);
+        marks.push(Mark {
+            z: st.z,
+            path: pts.iter().step_by(3).chain(pts.last()).map(|p| [r1(p[0]), r1(p[1])]).collect(),
+            thickness: r1(thickness),
+            inside: 0,
+            closed: false,
+        });
+    }
+    let Some(lines) = tmp.slice(0) else { return Ok(Outcome::Rough("没找到膜".into())) };
+    let mut mask: Vec<bool> = lines.iter().map(|&v| v == 1).collect();
+
+    // The paint of the stretches without a clear line stays as painted.
+    let refined = |s: usize| keep_runs.iter().any(|&(a, b)| s >= a && s <= b);
+    let mut kept = 0usize;
+    if (0..s_len).any(|s| !refined(s)) {
+        let mut paint = Labels::new(w, h, 1);
+        paint.stroke(0, &st.pts, st.radius, 1, 0);
+        if let Some(pm) = paint.slice(0) {
+            let (x0, y0) = (b[0].max(0.0) as usize, b[1].max(0.0) as usize);
+            let (x1, y1) = ((b[2].ceil().max(0.0) as usize).min(w), (b[3].ceil().max(0.0) as usize).min(h));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = y * w + x;
+                    if pm[i] != 1 {
+                        continue;
+                    }
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let near = (0..s_len).min_by(|&p, &q| {
+                        let d = |s: usize| (c[s][0] - px).powi(2) + (c[s][1] - py).powi(2);
+                        d(p).total_cmp(&d(q))
+                    });
+                    if near.is_some_and(|s| !refined(s)) {
+                        mask[i] = true;
+                        kept += 1;
+                    }
+                }
+            }
+        }
+    }
+    let note = if kept > 0 { "有一段附近没找到清楚的膜，那一段保留了你画的样子".to_string() } else { String::new() };
+    Ok(Outcome::Done(mask, marks, note))
 }

@@ -359,8 +359,8 @@ async fn labels_edit(state: State<'_, AppState>, token: u64, op: LabelOp) -> Cmd
 #[serde(rename_all = "camelCase")]
 struct Refined {
     state: LabelsState,
-    /// The refined object, when refining worked.
-    mark: Option<crate::labels::Mark>,
+    /// The refined objects (one per clear stretch); empty when the paint stayed.
+    marks: Vec<crate::labels::Mark>,
     /// Why the rough paint was kept ("" when nothing to say).
     note: String,
 }
@@ -382,27 +382,27 @@ async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usiz
         };
         if !m.iter().any(|&b| b) {
             let e = e.lock().unwrap();
-            return Ok(Refined { state: labels_state(&e, vec![]), mark: None, note: String::new() });
+            return Ok(Refined { state: labels_state(&e, vec![]), marks: vec![], note: String::new() });
         }
         let outcome = crate::structure::refine(&vals, dims, &stroke, &structure)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
-        let (zs, mark, note) = match outcome {
-            Outcome::Done(add, mark) => (l.replace(stroke.z, &m, &add, from, to, guard), Some(mark), String::new()),
+        let (zs, marks, note) = match outcome {
+            Outcome::Done(add, marks, note) => (l.replace(stroke.z, &m, &add, from, to, guard), marks, note),
             Outcome::Rough(note) => {
                 let zs = if from != to { l.replace(stroke.z, &m, &m, from, to, guard) } else { vec![] };
-                (zs, None, note)
+                (zs, vec![], note)
             }
         };
-        if let Some(mk) = &mark {
+        if !marks.is_empty() {
             let mut mats = l.materials.clone();
             match mats.iter_mut().find(|x| x.label == to) {
-                Some(x) => x.marks.push(mk.clone()),
-                None => mats.push(crate::labels::Material { label: to, marks: vec![mk.clone()], ..Default::default() }),
+                Some(x) => x.marks.extend(marks.iter().cloned()),
+                None => mats.push(crate::labels::Material { label: to, marks: marks.clone(), ..Default::default() }),
             }
             l.set_materials(mats);
         }
-        Ok(Refined { state: labels_state(&e, zs), mark, note })
+        Ok(Refined { state: labels_state(&e, zs), marks, note })
     })
     .await
 }
