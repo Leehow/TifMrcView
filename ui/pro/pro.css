@@ -682,3 +682,5 @@
 #cryo-session .cs-card-acts.asking { flex-direction:column; align-items:stretch; padding:6px 8px; border:1px solid #d1242f; border-radius:8px; background:color-mix(in srgb, #d1242f 6%, var(--surface)); }
 #cryo-session .cs-card-acts.asking p { margin:0 0 4px; font-size:12px; line-height:1.5; }
 #cryo-session .cs-reset-go { color:#fff; background:#d1242f; border-color:#d1242f; }
+/* 漂移校正 and 缺失楔补偿 are steps of the one Cryo-ET panel now: no buttons of their own in the toolbar. */
+#quickbar #btn-align, #quickbar #btn-wedge { display:none !important; }
