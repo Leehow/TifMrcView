@@ -115,12 +115,28 @@
     for (const t of all.some((x) => x.look) ? all.filter((x) => x.look) : all) add(t.path);
     return items;
   }
+  // `W.source`: the file (or folder) whose project the wall shows. When the open file is no tomogram of a
+  // project (nothing open, a tilt series, a movie), the tomograms 三维重构 made in its project folder are
+  // listed, so what was just reconstructed is here to click open and mark on.
+  const asItems = (l) => l.map((s) => ({ path: s.raw, name: s.name || name(s.raw), look: s.look || null, scale: s.lookScale, offset: s.lookOffset, open: !!s.open }));
   async function listed() {
     const open = S.info?.path;
-    if (open && S.info.sizeZ >= 3) {
+    W.source = open && S.info.sizeZ >= 3 ? open : null;
+    if (W.source) {
       try {
         const l = await invoke("sta_siblings", { path: open });
-        if (l?.length) return l.map((s) => ({ path: s.raw, name: s.name || name(s.raw), look: s.look || null, scale: s.lookScale, offset: s.lookOffset, open: !!s.open }));
+        if (l?.length) return asItems(l);
+      } catch (_) { /* no backend (web demo) */ }
+    }
+    const folder = window.TifMrcViewPro.cryoet?.reconFolder?.();
+    if (folder) {
+      try {
+        const tiles = await invoke("sta_gallery", { path: folder });
+        const t = (tiles || []).find((x) => x.raw && (x.status === "ready" || x.status === "noLook"));
+        if (t) {
+          const l = await invoke("sta_siblings", { path: t.raw });
+          if (l?.length) { W.source = folder; return asItems(l).map((i) => ({ ...i, open: S.info?.path === i.path || S.info?.path === i.look })); }
+        }
       } catch (_) { /* no backend (web demo) */ }
     }
     return collect();
@@ -168,7 +184,7 @@
     let t = "";
     if (u.kind === "own") t = `用了你给的密度图${u.name ? ` ${u.name}` : ""}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.kind === "points") t = markedText(u.clicked, u.members, u.sizeA);
-    else if (u.kind === "circled") t = u.only ? `只平均了你圈的 ${u.averaged} 个，没有再去找同类` : `用你圈的 ${u.examples} 个例子找出同类，平均了 ${u.averaged} 个`;
+    else if (u.kind === "circled") t = u.only ? `只平均了你标的 ${u.averaged} 个，没有再去找同类` : `用你标的 ${u.examples} 个例子找出同类，平均了 ${u.averaged} 个`;
     else if (u.kind === "shapes") t = `${shapesText(u)}${size ? `，颗粒约 ${size} Å` : ""}`;
     else if (u.card != null) t = `用了卡片 ${u.card + 1}${size ? `（约 ${size} Å）` : ""}`;
     // The review kept more places than the average could use: the ones whose cube reaches past the tomogram.
@@ -311,7 +327,7 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
-  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板", circled: "圈例子" };
+  const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板", circled: "涂例子" };
   function renderResult() {
     const r = cur().result;
     W.result = r;
@@ -335,7 +351,7 @@
       const b = document.createElement("button");
       b.className = `small${w === r.which ? " on" : ""}`;
       b.textContent = WHICH[w] || w;
-      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果", circled: "用你圈的例子做的结果" }[w] || "";
+      b.title = { auto: "平均所选卡片的结果", points: "用你点的颗粒做的结果", drawn: "用你画的线、面、球做的结果", own: "用你给的现成密度图做的结果", circled: "用你涂（圈）的例子做的结果" }[w] || "";
       b.onclick = async () => {
         if (w === r.which) return;
         const out = W.out;
@@ -680,5 +696,7 @@
   document.addEventListener("sta-pixel", () => { if (!panel.hidden) paint(); });
   document.addEventListener("pro-panel", (e) => { if (!W.hosted && e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
+  // A reconstruction that just finished is listed at once.
+  document.addEventListener("cryoet-idle", () => { if (!panel.hidden) refresh(); });
   $("btn-fft").addEventListener("click", () => { if (F.on && !W.hosted) close(); });
 })();

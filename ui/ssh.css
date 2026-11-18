@@ -121,7 +121,7 @@
 
 .remote-processing-location{flex-wrap:wrap;overflow-wrap:anywhere}.remote-processing-location .remote-output{width:100%;font-size:12px;padding:7px 10px}
 
-.remote-task-status{display:grid;grid-template-columns:1fr auto;gap:6px 12px;width:100%;padding:12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;color:var(--text)}.remote-task-status strong{font-size:13px;overflow-wrap:anywhere}.remote-task-status progress{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
+.remote-task-status{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px 12px;width:100%;padding:12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;color:var(--text)}.remote-task-status strong{font-size:13px;overflow-wrap:anywhere}.remote-task-status progress{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
 .remote-task-status .remote-task-away{grid-column:1/-1;font-size:12px}.remote-other-jobs{margin:4px 0;font-size:12px}
 
 .remote-output-details{width:100%;font-size:12px}.remote-output-details code{display:block;padding:8px;overflow-wrap:anywhere;user-select:text}
@@ -129,3 +129,23 @@
 .remote-resources,.remote-backends{width:100%;font-size:12px}.remote-resources p{margin:6px 0}.remote-backend-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:7px 0;border-bottom:1px solid var(--line)}.remote-backend-row small{grid-column:1/-1;overflow-wrap:anywhere}.remote-backend-row.fallback{color:var(--text)}.remote-backend-row.fallback small{color:#9a6700}
 
 .remote-worker-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;width:100%}.remote-worker-card{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--subtle);color:var(--text)}.remote-worker-card span{font-size:12px;overflow-wrap:anywhere}.remote-worker-card progress{width:100%;height:6px;accent-color:var(--accent)}
+/* 「高级」 under 运行位置: devices, results folder and (Cryo-ET) help, folded inside one another. */
+.ws-advanced{width:100%;font-size:12px}.ws-advanced>summary{cursor:pointer}.ws-advanced>details{margin:4px 0 0 14px}.ws-advanced>details>summary{cursor:pointer}
+.remote-output-details p{margin:6px 0 2px}.remote-output-details .remote-output{width:100%;box-sizing:border-box}
+.ws-help-part{margin:8px 0 4px}.ws-help-part ol{margin:4px 0 0;padding-left:20px}.ws-help-part li{margin:3px 0;line-height:1.6}
+.remote-task-status .remote-stop{border-color:#d1242f;color:#d1242f}
+/* 停止 sits at the right end of the 运行位置 line, where a running task is stopped. */
+.remote-processing-location .remote-stop{order:-1;margin-left:auto;border-color:#d1242f;color:#d1242f}
+.remote-processing-location>:first-child{order:-2}
+/* 结果目录: the folder field with its 选位置… button, free space, and the server folder picker. */
+.remote-output-row{display:flex;gap:6px;align-items:center}.remote-output-row .remote-output{flex:1;min-width:0}
+.ssh-pick-low{color:#9a6700;font-weight:600}
+.ssh-pick{width:min(560px,calc(100vw - 48px));padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);font-size:13px}
+.ssh-pick::backdrop{background:#10182866}
+.ssh-pick h3{margin:0 0 10px;font-size:14px}
+.ssh-pick-disks{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:8px}.ssh-pick-disks button.low{color:#9a6700}
+.ssh-pick-path{display:flex;gap:6px}.ssh-pick-path input{flex:1;min-width:0}
+.ssh-pick ul{list-style:none;margin:8px 0;padding:0;height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.ssh-pick li{padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line)}.ssh-pick li:hover,.ssh-pick li:focus{background:var(--muted);outline:none}
+.ssh-pick li::before{content:"📁 "}
+.ws-advanced p{overflow-wrap:anywhere;white-space:normal;max-width:100%}.ws-advanced details{min-width:0}

@@ -360,7 +360,7 @@
 #sta-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #sta-workspace[hidden], #sta-workspace [hidden] { display:none; }
 /* Inside the Cryo-ET panel: the host gives the place and the size. */
-#sta-workspace.hosted, #sta-workspace.hosted.marking, #sta-workspace.hosted.reviewing, #sta-workspace.hosted.reviewing-shapes { position:static; width:auto; flex:1 1 auto; min-height:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
+#sta-workspace.hosted, #sta-workspace.hosted.marking, #sta-workspace.hosted.reviewing, #sta-workspace.hosted.reviewing-shapes { position:static; z-index:auto; width:auto; flex:none; overflow:visible; min-height:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
 #sta-workspace.hosted > .al-head { display:none; }
 #sta-workspace .ws-img { display:block; width:100%; max-width:480px; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
 #sta-workspace.marking, #sta-workspace.reviewing, #sta-workspace.reviewing-shapes { width:min(360px, calc(100% - 20px)); }
@@ -435,6 +435,9 @@
 #sta-draw .sta-mark { padding:4px 8px; border:1px solid var(--line); border-left:3px solid var(--mark); border-radius:6px; cursor:pointer; }
 #sta-draw .sta-mark .warn { color:#cf222e; font-size:12px; }
 #sta-draw-membrane:empty { display:none; }
+#sta-draw .sta-mark-ends { font-size:12px; margin-top:2px; }
+#sta-draw .sta-mark-side { display:block; margin-top:4px; max-width:160px; max-height:120px; image-rendering:pixelated; border:1px solid var(--line); border-radius:4px; }
+#sta-draw-deep.on { background:var(--muted); color:var(--accent); border-color:var(--accent); }
 #sta-draw .sta-mark.on { background:var(--muted); border-color:var(--accent); border-left-color:var(--mark); }
 #sta-found { margin-top:10px; padding:8px 10px; border:1px solid var(--accent); border-radius:8px; background:color-mix(in srgb, var(--accent) 5%, transparent); }
 #sta-workspace #sta-found h4 { margin:0 0 2px; font-size:14px; }
@@ -522,7 +525,7 @@
 .cs-tile.attn { border-color:#d4a72c; box-shadow:inset 3px 0 0 #d4a72c; }
 .cs-tile.off .cs-pic { opacity:.5; }
 .cs-pic { position:relative; aspect-ratio:1; border-radius:5px; background:#2a2d31; overflow:hidden; display:flex; align-items:center; justify-content:center; }
-.cs-pic canvas { width:100%; height:100%; object-fit:contain; display:block; }
+.cs-pic canvas, .cs-pic img { width:100%; height:100%; object-fit:contain; display:block; }
 .cs-none { font-size:11px; }
 .cs-pic .cs-none { color:#aab1b8; }
 .cs-take { position:absolute; left:4px; top:4px; display:flex; padding:2px; background:rgba(255,255,255,.9); border-radius:4px; cursor:pointer; }
@@ -588,11 +591,15 @@
 .ws-jobs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
 #cryoet-workspace[data-job="recon"] #cryo-sta,
 #cryoet-workspace[data-job="sta"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-session, #cryo-foot) { display:none; }
-#cryo-sta { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+/* The 子断层平均 part scrolls with the whole panel, as 三维重构 does (no box of its own that scrolls). */
+#cryo-sta { flex:none; display:flex; flex-direction:column; }
+#sta-workspace.hosted .sta-wall { max-height:none !important; overflow:visible; }
+#sta-workspace.hosted .ws-foot { position:sticky; bottom:-12px; z-index:2; display:flex; align-items:center; gap:8px; margin-top:8px; padding:8px 0 12px; border-top:1px solid var(--line); background:var(--surface); }
 /* It floats: moved by its title, resized by its corners. */
+#spa-workspace > .al-head { cursor:move; user-select:none; touch-action:none; }
 #cryoet-workspace > .al-head { position:sticky; top:-12px; z-index:3; margin:-12px -12px 0; padding:12px 12px 6px; background:var(--surface); cursor:move; user-select:none; touch-action:none; }
 #cryoet-workspace.narrow { width:min(360px, calc(100% - 20px)) !important; }
-.ws-corner { position:absolute; z-index:10; width:16px; height:16px; touch-action:none; }
+.ws-corner { position:fixed; z-index:61; width:16px; height:16px; touch-action:none; }
 .ws-corner[hidden] { display:none; }
 .ws-nw, .ws-se { cursor:nwse-resize; }
 .ws-ne, .ws-sw { cursor:nesw-resize; }
@@ -608,6 +615,8 @@
 #cryo-session .cs-use:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 #cryo-session .cs-use:has(input:checked) b { color:var(--accent); }
 #cryo-session .cs-steps-line { flex:1 1 100%; margin:0; }
+#cryo-session .cs-bin { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:13px; }
+#cryo-session .cs-bin select { width:auto; flex:0 1 auto; max-width:100%; }
 #live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }
 /* Figure flow (figure.js): one panel on the right, over the 2D and the 3D view. */
 #quickbar #btn-figure { width: auto; padding: 0 8px; gap: 5px; }
@@ -672,3 +681,11 @@
 .cs-selection{flex-wrap:wrap;gap:6px;margin:8px 0}.cs-search{flex:1;min-width:180px}.cs-selection-count{font-variant-numeric:tabular-nums}.cs-tile.selected{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}.cs-tile .cs-open{align-self:flex-start;margin-top:4px}.cs-take{cursor:pointer}.cs-tabbody[hidden],.cs-lb-loading[hidden],.cs-thumb-state[hidden],.cs-lb-placeholder[hidden],.cs-vpic canvas[hidden],.cs-lb-card canvas[hidden]{display:none!important}
 .cs-review-loading,.cs-thumbs-loading,.cs-lb-loading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 0}.cs-thumbs-loading progress{width:120px}.cs-thumb-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;text-align:center;color:var(--dim);background:var(--subtle);position:absolute;inset:0}.cs-view.suggested .cs-vpic,.cs-view.dropped .cs-vpic{opacity:1}.cs-view.suggested .cs-vpic canvas{opacity:.45}.cs-view.dropped .cs-vpic canvas{opacity:.3}.cs-lb-placeholder{width:320px;min-height:220px;display:flex;align-items:center;justify-content:center;background:var(--subtle);color:var(--dim)}.cs-lb-loading{max-width:600px;overflow-wrap:anywhere}.cs-lb-loading progress{width:120px}
 .cs-tile[hidden]{display:none!important}#cryo-session.reviewing .cs-selection{display:none}
+/* 停止 is at the top (运行位置 line); 继续 and 重置 are on each series' card, 重置 asked once more there. */
+#cryo-cancel { display:none !important; }
+#cryo-session .cs-card-acts { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+#cryo-session .cs-card-acts.asking { flex-direction:column; align-items:stretch; padding:6px 8px; border:1px solid #d1242f; border-radius:8px; background:color-mix(in srgb, #d1242f 6%, var(--surface)); }
+#cryo-session .cs-card-acts.asking p { margin:0 0 4px; font-size:12px; line-height:1.5; }
+#cryo-session .cs-reset-go { color:#fff; background:#d1242f; border-color:#d1242f; }
+/* 漂移校正 and 缺失楔补偿 are steps of the one Cryo-ET panel now: no buttons of their own in the toolbar. */
+#quickbar #btn-align, #quickbar #btn-wedge { display:none !important; }

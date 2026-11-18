@@ -313,6 +313,7 @@ fn supported(c: &str) -> bool {
             | "tomo_dataset"
             | "tomo_dataset_save"
             | "tomo_session"
+            | "tomo_session_reset"
             | "tomo_session_run"
             | "tomo_view"
             | "tomo_take"
@@ -563,6 +564,7 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
             Value::Null
         }
         "tomo_session" => serde_json::to_value(crate::tomo::session::scan(string(a, "folder")?)?)?,
+        "tomo_session_reset" => serde_json::to_value(crate::tomo::session::reset(string(a, "folder")?, string(a, "name")?)?)?,
         "tomo_session_run" => {
             let cpu=burn::tensor::Device::default();
             let dev=crate::ctf_gpu::device().map(|(d,_)|d).unwrap_or(&cpu);

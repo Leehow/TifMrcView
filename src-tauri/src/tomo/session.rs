@@ -63,6 +63,13 @@ pub struct Series {
     pub error: Option<String>,
     /// Something the user should know about what was made (a step left out).
     pub note: Option<String>,
+    /// Pixel size of the tilt series (Å) and its views' width and height,
+    /// for choosing the binning; before motion correction the mdoc's
+    /// (approximate: the frames may be made at another pixel size).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<[usize; 2]>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -170,6 +177,8 @@ pub fn scan(folder: &str) -> Result<Session> {
         if movies < expected { s.note=Some(format!("采集记录共 {expected} 个电影，匹配 {movies} 个；{} 个缺失或匹配不唯一，处理时会保留跳过原因",expected-movies)); }
         s.corrected = corrected;
         s.small = exists(&state.and_then(|r| r.small));
+        s.pixel_a = doc.pixel_a;
+        s.size = doc.image_size;
         if complete {
             fill(&mut s);
         }
@@ -190,12 +199,19 @@ pub fn scan(folder: &str) -> Result<Session> {
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None }
 }
 
 /// What the dataset of an existing stack says about it.
 fn fill(s: &mut Series) {
     s.stage = Stage::Stack;
+    if let Ok(img) = pipeline::open(&s.stack) {
+        let i = img.info();
+        s.size = Some([i.width, i.height]);
+        if i.pixel_size.is_some() {
+            s.pixel_a = Some(crate::align::pixel_a(i));
+        }
+    }
     let file = super::dataset::path_for(&s.stack);
     let Some(d) = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Dataset>(&b).ok()) else { return };
     s.views = d.angles.len();
@@ -203,6 +219,7 @@ fn fill(s: &mut Series) {
         Some(a) => a.views.iter().filter(|v| v.excluded).count(),
         None => super::triage::excluded(&d).len(),
     };
+    s.pixel_a = d.optics.pixel_a.or(s.pixel_a);
     s.verdict = d.verdict.clone();
     s.take = d.take;
     s.aligned = exists(&d.aligned);
@@ -366,6 +383,48 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
     })
 }
 
+/// 「重置」 of one series (its card): what the Cryo-ET steps made of it is
+/// removed, so its next run starts from its movies (or its tilt series) again.
+/// Only the step folders of the intermediate results are looked in
+/// (`project_dirs` 1–3: motion-corrected stack, dataset, tomograms, clean
+/// companions); the raw data is never touched, and averages (4_sta) and
+/// figures (5_figures), results of their own, are kept. A file there belongs to
+/// the series whose name it starts with, followed by "." or "_" (TS_1.mrc,
+/// TS_1_even.mrc, TS_1.tomo.json); when several names fit (TS_1 and TS_1_b),
+/// the longest one owns it. On a server the step folders lie under the job's
+/// output root (`TMV_OUTPUT_ROOT`). A project of the old flat layout (datasets
+/// beside the raw stacks) is refused: its intermediate files cannot be told
+/// from the user's own by folder. Answers the files removed.
+pub fn reset(folder: &str, name: &str) -> Result<Vec<String>> {
+    use anyhow::Context;
+    use crate::project_dirs::{CLEAN, MOTION, TOMOGRAMS};
+    let dir = Path::new(folder);
+    anyhow::ensure!(dir.is_dir(), "找不到项目文件夹：{folder}");
+    let legacy = std::fs::read_dir(dir)?.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tomo.json"));
+    anyhow::ensure!(!legacy, "这是旧版的项目（中间结果和原始数据放在同一个文件夹里），不能一键清理，请手动删除");
+    let names: Vec<String> = scan(folder)?.series.into_iter().map(|s| s.name).collect();
+    anyhow::ensure!(names.iter().any(|n| n == name), "这个文件夹里没有序列 {name}");
+    let root = crate::project_dirs::listing_root(dir).unwrap_or_else(|| dir.to_path_buf());
+    let out = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(|| root.clone());
+    let owner = |file: &str| names.iter().filter(|n| file == n.as_str() || file.strip_prefix(n.as_str()).is_some_and(|r| r.starts_with('.') || r.starts_with('_'))).max_by_key(|n| n.len()).cloned();
+    let mut removed = vec![];
+    for step in [MOTION, TOMOGRAMS, CLEAN] {
+        let Ok(rd) = std::fs::read_dir(out.join(step)) else { continue };
+        for e in rd.flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            if owner(&file).as_deref() != Some(name) {
+                continue;
+            }
+            let p = e.path();
+            if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) }.with_context(|| format!("无法删除 {}", p.display()))?;
+            removed.push(text(&p));
+        }
+    }
+    merge_notes(&notes_path(&root), name, None, true);
+    merge_notes(&notes_path(&root), name, None, false);
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +455,32 @@ mod tests {
         assert_eq!(scan(&text(dir.path())).unwrap().series[0].error.as_deref(), Some("坏了"));
         note(dir.path(), "a", None);
         assert!(scan(&text(dir.path())).unwrap().series[0].error.is_none());
+    }
+
+    #[test]
+    fn a_reset_removes_what_was_made_of_one_series_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = |n: &str| dir.path().join(n);
+        for n in ["TS_1", "TS_1_b", "TS_10"] {
+            std::fs::write(p(&format!("{n}.mrc")), b"x").unwrap();
+            std::fs::write(p(&format!("{n}.tlt")), b"0\n").unwrap();
+        }
+        for d in ["1_motion", "2_tomograms", "3_clean", "4_sta"] {
+            std::fs::create_dir(p(d)).unwrap();
+        }
+        let made = ["2_tomograms/TS_1.tomo.json", "2_tomograms/TS_1_sart3_b8.mrc", "3_clean/TS_1_look.mrc", "2_tomograms/TS_1_b.tomo.json", "2_tomograms/TS_10.tomo.json", "3_clean/TS_10_look.mrc", "4_sta/TS_1_sta.json"];
+        for f in made {
+            std::fs::write(p(f), b"{}").unwrap();
+        }
+        let removed = reset(&text(dir.path()), "TS_1").unwrap();
+        assert_eq!(removed.len(), 3, "{removed:?}");
+        assert!(!p("2_tomograms/TS_1.tomo.json").exists() && !p("3_clean/TS_1_look.mrc").exists());
+        for keep in ["2_tomograms/TS_1_b.tomo.json", "2_tomograms/TS_10.tomo.json", "3_clean/TS_10_look.mrc", "4_sta/TS_1_sta.json", "TS_1.mrc", "TS_1.tlt"] {
+            assert!(p(keep).exists(), "{keep} must stay");
+        }
+        assert!(reset(&text(dir.path()), "nope").is_err());
+        std::fs::write(p("old.tomo.json"), b"{}").unwrap();
+        assert!(reset(&text(dir.path()), "TS_10").is_err(), "an old flat project is refused");
     }
 }
 

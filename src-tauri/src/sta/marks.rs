@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use super::auto::{auto_points, default_out, live_png, note_json, raw_inputs, result_value, resolve_tomogram, write_used, Device, Emit, Note, Outcome, DRAWN, MARKED};
 use super::project::{self as sp, to_raw, Drawn, Source};
 use crate::tomo::dataset::Look;
+use super::brush;
 use super::paint::{self, Stroke};
 use super::shape;
 
@@ -42,6 +43,10 @@ pub enum Kind {
     /// centre and a point of the circle; see `circled`. Examples are only
     /// searched from (`review::find_circled`).
     Example,
+    /// An example painted with a brush instead of circled: `strokes` (with
+    /// their widths, Alt-strokes erase), see `brush`. Everywhere an example
+    /// is used, a painted one is too (`example_like`).
+    Paint,
 }
 
 /// One thing marked: the clicks, in voxels of the file `tomogram`.
@@ -59,6 +64,10 @@ pub struct Mark {
     /// Membranes: the freehand strokes (and cuts), in voxels of `tomogram`.
     #[serde(default)]
     pub strokes: Vec<Stroke>,
+    /// Painted examples: follow the thing up and down (the 3D selection of
+    /// a later step). Saved for every new paint; nothing reads it yet.
+    #[serde(default)]
+    pub deep: bool,
 }
 
 /// How large the particles on a line or surface are.
@@ -211,12 +220,40 @@ pub fn points_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Resul
     Ok(out)
 }
 
-/// The examples circled, in voxels of their source's tomogram.
+/// Whether a mark is an example to find alike (circled or painted) that is
+/// complete enough to be searched from.
+pub fn example_like(m: &Mark) -> bool {
+    match m.kind {
+        Kind::Example => m.points.len() >= 2,
+        Kind::Paint => brush::circle_of(&m.strokes).is_some(),
+        _ => false,
+    }
+}
+
+/// The examples circled or painted, in voxels of their source's tomogram. A
+/// painted one stands in as the tight circle round what was painted (its
+/// centre and its farthest painted voxel), which the circled search takes
+/// as it is: the paint already hugs the thing, so the circle is not drawn
+/// in further (`Example::painted`).
 pub fn examples_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Result<Vec<super::circled::Example>> {
+    examples_in(marks, inputs, sources, None)
+}
+
+/// `examples_of`, where a painted example that was followed up and down
+/// (三维选择, cached under `out`) is given by what was found: the centre of
+/// the selection and the ball round it, not the painted section alone.
+pub fn examples_in(marks: &[Mark], inputs: &[String], sources: &[Source], out_dir: Option<&Path>) -> Result<Vec<super::circled::Example>> {
     let mut out = vec![];
-    for m in marks.iter().filter(|m| m.kind == Kind::Example && m.points.len() >= 2) {
-        let Some((source, p)) = to_source(m, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
-        out.push(super::circled::Example { source, at: p[0], radius: dist(p[0], p[1]) });
+    for m in marks.iter().filter(|m| example_like(m)) {
+        // The same carrying over from the look file's voxels as a circle gets: the centre and a point of the circle.
+        let painted = m.kind == Kind::Paint;
+        let followed = out_dir.and_then(|d| super::deep::cached(d, m)).filter(|s| s.voxels > 0);
+        let m = match followed.map(|s| (s.centre, s.radius.max(1.0))).or_else(|| brush::circle_of(&m.strokes).filter(|_| painted)) {
+            Some((c, r)) => Mark { points: vec![c, [c[0] + r, c[1], c[2]]], ..m.clone() },
+            None => m.clone(),
+        };
+        let Some((source, p)) = to_source(&m, inputs, sources) else { bail!("有标注所在的断层图没有被勾选") };
+        out.push(super::circled::Example { source, at: p[0], radius: dist(p[0], p[1]), painted });
     }
     Ok(out)
 }
@@ -240,7 +277,7 @@ fn seeds_of(m: &Mark, p: &[[f64; 3]], spacing: f64) -> Result<(Vec<shape::Seed>,
             }
             shape::ellipsoid(p[0], [r; 3], spacing)
         }
-        Kind::Point | Kind::Membrane | Kind::Example => vec![],
+        Kind::Point | Kind::Membrane | Kind::Example | Kind::Paint => vec![],
     };
     if m.flip && matches!(m.kind, Kind::Surface | Kind::Sphere) {
         for s in &mut seeds {
@@ -292,7 +329,7 @@ pub fn drawn_of(marks: &[Mark], inputs: &[String], sources: &[Source], pixels: &
         Kind::Surface => p.len() >= 2,
         Kind::Sphere => p.len() >= 2,
         Kind::Membrane => paint::has_stroke(m),
-        Kind::Example => false,
+        Kind::Example | Kind::Paint => false,
     });
     if usable.clone().next().is_none() {
         if points_only > 0 {
@@ -423,8 +460,8 @@ pub fn run_marks(inputs: &[String], marks: &[Mark], size: Option<&str>, only: bo
         Some(o) => PathBuf::from(o),
         None => default_out(first),
     };
-    if marks.iter().any(|m| m.kind == Kind::Example) {
-        // Circled examples: everything that looks like them is found
+    if marks.iter().any(|m| matches!(m.kind, Kind::Example | Kind::Paint)) {
+        // Circled or painted examples: everything that looks like them is found
         // (`circled`). Here nobody looks at what is found first (the
         // command line; the workspace shows it for review, `sta_find`):
         // what the program would keep by itself is averaged. `only`: the
@@ -494,7 +531,7 @@ mod tests {
         Source { path: path.into(), tilts: [-60.0, 60.0], look, series: None }
     }
     fn mark(kind: Kind, tomogram: &str, points: &[[f64; 3]]) -> Mark {
-        Mark { kind, tomogram: tomogram.into(), points: points.to_vec(), flip: false, strokes: vec![] }
+        Mark { kind, tomogram: tomogram.into(), points: points.to_vec(), flip: false, strokes: vec![], deep: false }
     }
     fn close(a: [f64; 3], b: [f64; 3]) -> bool {
         (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9)
@@ -749,7 +786,7 @@ mod tests {
         path
     }
     fn stroke(points: &[[f64; 3]], cut: bool) -> Stroke {
-        Stroke { points: points.to_vec(), cut }
+        Stroke { points: points.to_vec(), cut, width: 0.0 }
     }
     fn membrane(tomogram: &str, strokes: Vec<Stroke>) -> Mark {
         Mark { strokes, ..mark(Kind::Membrane, tomogram, &[]) }
@@ -889,5 +926,44 @@ mod tests {
         // A stroke without `cut` is an ordinary one.
         let m: Mark = serde_json::from_str(r#"{"kind":"membrane","tomogram":"/t","points":[],"strokes":[{"points":[[1,2,3]]}]}"#).unwrap();
         assert!(!m.strokes[0].cut);
+    }
+
+    #[test]
+    fn painted_examples_stand_in_as_tight_circles_and_old_marks_load() {
+        let ring: Vec<[f64; 3]> = (0..=40).map(|k| k as f64 / 40.0 * std::f64::consts::TAU).map(|a| [30.0 + 8.0 * a.cos(), 20.0 + 8.0 * a.sin(), 12.0]).collect();
+        let painted = Mark { strokes: vec![Stroke { points: ring, cut: false, width: 3.0 }], deep: true, ..mark(Kind::Paint, "/t/a.mrc", &[]) };
+        let circled = mark(Kind::Example, "/t/a.mrc", &[[5.0, 5.0, 5.0], [9.0, 5.0, 5.0]]);
+        let unfinished = mark(Kind::Paint, "/t/a.mrc", &[]);
+        assert!(example_like(&painted) && example_like(&circled) && !example_like(&unfinished));
+        let sources = vec![source("/t/a.mrc", None)];
+        let inputs = vec!["/t/a.mrc".to_string()];
+        let e = examples_of(&[circled.clone(), painted.clone(), unfinished], &inputs, &sources).unwrap();
+        assert_eq!(e.len(), 2);
+        assert!(!e[0].painted && e[0].radius == 4.0, "a circle is as it was");
+        assert!(e[1].painted && (e[1].at[0] - 30.0).abs() < 0.6 && (e[1].at[1] - 20.0).abs() < 0.6 && e[1].at[2] == 12.0);
+        assert!((e[1].radius - 9.5).abs() < 1.2, "{}", e[1].radius);
+        // On the look file the circle is carried over with the file's scale.
+        let look = Look { path: "/t/a_look.mrc".into(), scale: 2.0, offset: [0.0; 3] };
+        let on_look = Mark { tomogram: "/t/a_look.mrc".into(), ..painted.clone() };
+        let e2 = examples_of(&[on_look], &["/t/a.mrc".to_string()], &[source("/t/a.mrc", Some(look))]).unwrap();
+        assert!((e2[0].radius - 2.0 * e[1].radius).abs() < 1e-6);
+        // Painted marks are examples, never a shape to run directly.
+        assert!(drawn_of(&[painted.clone()], &inputs, &sources, &[10.0], Size::Small).is_err());
+        // What was saved before the brush loads as it did; a painted mark round-trips with its widths.
+        let old = r#"{"marks":[{"kind":"example","tomogram":"/t/a.mrc","points":[[1,2,3],[4,5,3]]},{"kind":"membrane","tomogram":"/t/a.mrc","points":[],"strokes":[{"points":[[1,2,3]],"cut":true}]}]}"#;
+        let s: Saved = serde_json::from_str(old).unwrap();
+        assert!(!s.marks[0].deep && s.marks[1].strokes[0].width == 0.0);
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &Saved { marks: vec![painted.clone()], size: None }).unwrap();
+        // (JSON keeps floats to about 1e-15, not bit for bit.)
+        let back = load(dir.path()).marks;
+        assert_eq!((back.len(), back[0].kind, back[0].deep, back[0].strokes.len(), back[0].strokes[0].width), (1, Kind::Paint, true, 1, 3.0));
+        assert!(back[0].strokes[0].points.iter().zip(&painted.strokes[0].points).all(|(a, b)| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9)));
+        let text = std::fs::read_to_string(dir.path().join("marks.json")).unwrap();
+        assert!(text.contains("\"paint\"") && text.contains("\"width\": 3.0") && text.contains("\"deep\": true"));
+        // The highlight of a painted mark on its section.
+        let runs = paint::section_runs(&painted, "/t/a.mrc", 12).unwrap();
+        assert!(runs.iter().any(|r| r[0] == 20 && r[1] <= 30 && r[2] > 30), "the loop is filled");
+        assert!(paint::section_runs(&painted, "/t/a.mrc", 11).unwrap().is_empty() && paint::section_runs(&painted, "/other.mrc", 12).unwrap().is_empty());
     }
 }

@@ -314,11 +314,81 @@ TifMrcView.register({
       } catch (e) { if (!disposed) { if (!dialog.open) dialog.showModal(); error(e); } }
       finally { if (!disposed) setBusy(false); }
     }
+    // A folder on the server, chosen by browsing its folders (the 结果目录's 「选位置…」): only folders
+    // are listed; 「选这个文件夹」 takes the one shown. Answers its path, or null when cancelled.
+    // `space(path)` (from the processing engine) answers the server's disks and the free space where `path` is.
+    function pickRemoteFolder(start, space) {
+      return new Promise((resolve) => {
+        const d = document.createElement("dialog");
+        d.className = "ssh-pick";
+        d.innerHTML = '<h3>选择保存结果的文件夹（服务器上）</h3><div class="ssh-pick-disks" data-k="disks"></div><div class="ssh-pick-path"><button class="small" data-k="up" title="上一级">↑</button><input data-k="path" spellcheck="false" aria-label="服务器路径"></div><ul data-k="list"></ul><p class="dim" data-k="msg"></p><p data-k="free"></p><div class="al-row"><button class="primary" data-k="ok">选这个文件夹</button><button data-k="no">取消</button></div>';
+        document.body.append(d);
+        const k = (n) => d.querySelector(`[data-k="${n}"]`);
+        let here = null, done = false;
+        const finish = (v) => { if (done) return; done = true; d.close(); d.remove(); resolve(v); };
+        const size = (mb) => (mb >= 1024 * 1024 ? `${(mb / 1024 / 1024).toFixed(1)} TB` : `${(mb / 1024).toFixed(mb < 10240 ? 1 : 0)} GB`);
+        let disksShown = false, asked = 0;
+        // The disks once, the free space of the place shown on every move; a low disk is said plainly.
+        async function measure(path) {
+          if (!space) return;
+          const n = ++asked;
+          try {
+            const r = await space(path);
+            if (done || n !== asked) return;
+            if (!disksShown && r?.disks?.length) {
+              disksShown = true;
+              const box = k("disks");
+              box.append(Object.assign(document.createElement("span"), { className: "dim", textContent: "服务器上的盘（点一下去那里）：" }));
+              for (const dk of r.disks) {
+                const b = document.createElement("button");
+                b.className = "small";
+                b.textContent = `${dk.mount} · 剩 ${size(dk.freeMb)} / 共 ${size(dk.totalMb)}`;
+                b.classList.toggle("low", dk.freeMb < 50 * 1024);
+                b.onclick = () => go(dk.mount);
+                box.append(b);
+              }
+            }
+            const free = r?.outputFreeMb;
+            const f = k("free");
+            f.className = free != null && free < 50 * 1024 ? "ssh-pick-low" : "dim";
+            f.textContent = free == null ? "" : free < 50 * 1024 ? `这个位置所在的盘只剩 ${size(free)}：一个序列的中间结果通常要几 GB 到几十 GB，建议换一个空间大的盘` : `这个位置所在的盘还剩 ${size(free)}`;
+          } catch (_) { /* no engine yet: no numbers */ }
+        }
+        async function go(path) {
+          k("msg").textContent = "正在读取…";
+          try {
+            const r = await native("list", { path });
+            here = r.path;
+            k("path").value = here;
+            const ul = k("list");
+            ul.replaceChildren();
+            for (const e of r.entries.filter((e) => e.directory && !e.name.startsWith(".")).sort((a, b) => a.name.localeCompare(b.name))) {
+              const li = document.createElement("li");
+              li.textContent = e.name;
+              li.tabIndex = 0;
+              li.onclick = li.onkeydown = (ev) => { if (ev.type === "click" || ev.key === "Enter") go(e.path); };
+              ul.append(li);
+            }
+            k("msg").textContent = ul.childElementCount ? "" : "这里没有子文件夹";
+            measure(here);
+          } catch (e) { k("msg").textContent = `无法打开：${e}`; if (here) k("path").value = here; }
+        }
+        k("up").onclick = () => here && go(here.replace(/\/[^/]+\/?$/, "") || "/");
+        k("path").onkeydown = (ev) => { ev.stopPropagation(); if (ev.key === "Enter") go(k("path").value.trim() || "/"); };
+        k("ok").onclick = () => finish(here);
+        k("no").onclick = () => finish(null);
+        d.oncancel = () => finish(null);
+        d.addEventListener("keydown", (ev) => ev.stopPropagation());
+        d.showModal();
+        go(start || current || "/");
+      });
+    }
     function mountFolder() {
       app.folders.mount({ name: current.split('/').filter(Boolean).pop() || '/', path: current, address: el('address').textContent,
         entries, resolve: download, thumbnail: preview, navigate, inspect,
         processing: (()=>{const identity=processingIdentity;const check=()=>{if(disposed||!connection||identity!==processingIdentity)throw new Error('请重新连接原 SSH 服务器');};return {identity,
           choose: async()=>{check();if(!dialog.open)dialog.showModal();return null;},
+          pickFolder: async (start,space)=>{check();return pickRemoteFolder(start,space);},
           call: request=>{check();return native('processing',{request});},
           previewFile: async path=>{
             check();

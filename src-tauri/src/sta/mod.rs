@@ -23,13 +23,16 @@
 pub mod alike;
 pub mod auto;
 pub mod average;
+pub mod brush;
 pub mod cc;
 pub mod cc_gpu;
 pub mod circled;
 pub mod contrast;
+pub mod deep;
 pub mod filaments;
 pub mod flat;
 pub mod gallery;
+pub mod grow;
 pub mod kinds;
 pub mod marks;
 pub mod membranes;

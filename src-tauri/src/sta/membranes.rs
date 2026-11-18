@@ -331,7 +331,7 @@ mod tests {
     }
 
     fn painted(tomogram: &str, at: [f64; 3]) -> Mark {
-        Mark { kind: Kind::Membrane, tomogram: tomogram.into(), points: vec![], flip: false, strokes: vec![Stroke { points: vec![at], cut: false }] }
+        Mark { kind: Kind::Membrane, tomogram: tomogram.into(), points: vec![], flip: false, strokes: vec![Stroke { points: vec![at], cut: false, width: 0.0 }], deep: false }
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         let shells = [([24.0, 24.0, 30.0], 14.0), ([70.0, 26.0, 34.0], 15.0), ([26.0, 70.0, 60.0], 14.5), ([66.0, 68.0, 30.0], 6.0), ([68.0, 68.0, 70.0], 15.0)];
         let a = file(dir.path(), "a.mrc", &shells, &[false, false, false, false, true]);
         // Rough clicks: centres a few voxels off, radii by eye.
-        let sphere = |c: [f64; 3], r: f64| Mark { kind: Kind::Sphere, tomogram: a.clone(), points: vec![c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![] };
+        let sphere = |c: [f64; 3], r: f64| Mark { kind: Kind::Sphere, tomogram: a.clone(), points: vec![c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![], deep: false };
         let marks = [sphere([26.0, 22.0, 31.0], 12.0), sphere([68.0, 27.0, 33.0], 17.0)];
         let found = find_balls(&marks, &[a.clone()], 80.0, &|_| Some(10.0)).unwrap();
         assert!(found.unsegmented.is_empty());

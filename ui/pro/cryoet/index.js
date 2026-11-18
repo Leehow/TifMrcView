@@ -51,7 +51,7 @@
       <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
       <div id="cryo-body"></div>
     </details>
-    <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden>取消</button></div>`;
+    <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden title="停下来；做完的步骤都保留">停止</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
 
@@ -156,7 +156,7 @@
     try {
       return await call();
     } catch (e) {
-      W.status(String(e).includes("已取消") ? `${label}已取消` : `${label}失败：${e}`);
+      W.status(String(e).includes("已取消") ? `${label}已停止：做完的步骤都保留了，序列卡片上的「继续」会从停下的地方接着做` : `${label}失败：${e}`);
       return null;
     } finally {
       un();
