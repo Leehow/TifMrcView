@@ -298,7 +298,8 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     progress("反卷积", 0, 1);
     let (mut v, shape, px) = load(&src.path)?;
     let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
-    super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics);
+    let scratch = std::path::Path::new(&src.path).parent().unwrap_or(std::path::Path::new("."));
+    super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics, scratch)?;
     crate::live::show_section("反卷积：中间层", &v, shape, shape[2] / 2, &[]);
     let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &v, shape, px, false)?;
@@ -320,7 +321,16 @@ pub fn load(path: &str) -> Result<(Vec<f32>, [usize; 3], f64)> {
         let (page, s) = info.locate(0, z, 0);
         let p = img.page(page)?;
         let p = &p[s.min(p.len() - 1)];
-        v.extend((0..w * h).map(|i| p.data.get_f64(i) as f32));
+        let start = v.len();
+        v.resize(start + w * h, 0.0);
+        {
+            use crate::image::Px;
+            use rayon::prelude::*;
+            crate::with_plane!(&p.data, src => v[start..]
+                .par_iter_mut()
+                .zip(&src[..w * h])
+                .for_each(|(d, &s)| *d = s.to_f32() as f64 as f32));
+        }
     }
     Ok((v, [w, h, nz], output::pixel_a(&img)))
 }

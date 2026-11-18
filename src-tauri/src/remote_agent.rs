@@ -579,8 +579,11 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
               let errors=failures.into_inner().unwrap();ensure!(errors.is_empty(),"{}",errors.join("；"));return Ok(serde_json::to_value(crate::tomo::session::scan(folder)?)?);
              }
             }
+            // One series: this process runs it alone, so it gets the cores the
+            // GPU workers would have shared (the global pool was sized for them).
+            let run = || -> Result<_> { Ok(
             // The initial pass uses the user's selected sequence list.
-            let s = if req["purpose"].is_null() {
+            if req["purpose"].is_null() {
                 crate::tomo::session::prepare(dev, folder, &only, emit, &|| {})?
             } else {
                 crate::tomo::session::finish(
@@ -591,6 +594,10 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
                     emit,
                     &|| {},
                 )?
+            }) };
+            let s = match crate::gpu_workers::enabled().then(crate::resources::whole_pool).flatten() {
+                Some(pool) => pool.install(run)?,
+                None => run()?,
             };
             serde_json::to_value(s)?
         }

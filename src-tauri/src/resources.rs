@@ -411,6 +411,16 @@ pub fn try_lease(g: &Gpu) -> anyhow::Result<Option<Lease>> {
     Ok(Some(Lease { _files: files }))
 }
 
+/// A pool with every core but two, for one job running alone in a process
+/// whose global pool `configure_threads` sized to share with GPU workers.
+pub fn whole_pool() -> Option<rayon::ThreadPool> {
+    let cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let threads = cpu.saturating_sub(2).max(1);
+    (threads > rayon::current_num_threads())
+        .then(|| rayon::ThreadPoolBuilder::new().num_threads(threads).build().ok())
+        .flatten()
+}
+
 pub fn configure_threads() {
     if std::env::var_os("RAYON_NUM_THREADS").is_some() {
         return;
