@@ -380,8 +380,13 @@ pub fn usable() -> Vec<Gpu> {
 pub struct Lease {
     _files: Vec<std::fs::File>,
 }
+/// Cards whose GPU lock this process itself holds (`cli::gpu_turn`): a
+/// queue of this same job may use them (a `tmv tomo` run holds its card
+/// while its own movie workers want every card, that one included).
+pub(crate) static HELD_HERE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 pub fn try_lease(g: &Gpu) -> anyhow::Result<Option<Lease>> {
-    if std::env::var_os("TMV_GPU_SHARE").is_some() {
+    if std::env::var_os("TMV_GPU_SHARE").is_some() || HELD_HERE.lock().unwrap_or_else(|e| e.into_inner()).contains(&g.uuid) {
         return Ok(Some(Lease { _files: vec![] }));
     }
     let mut names = vec![
