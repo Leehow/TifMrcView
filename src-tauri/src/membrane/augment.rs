@@ -133,7 +133,7 @@ pub fn sample(img: &[f32], lab: &[u8], n: [usize; 3], p: usize, rng: &mut Rng) -
 }
 
 fn blur(v: &[f32], p: usize, sigma: f32) -> Vec<f32> {
-    smooth(&Vol { n: [p; 3], v: v.to_vec() }, sigma).v
+    smooth(&Vol { n: [p; 3], v: v.to_vec().into() }, sigma).v.into_vec()
 }
 
 fn mean_std(v: &[f32]) -> (f32, f32) {

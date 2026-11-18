@@ -535,16 +535,11 @@ pub struct WedgeStep {
 pub struct TooSlow {
     /// The projected training time, seconds.
     pub projected_s: f64,
-    /// Or not started at all: the memory it needs and the memory there is, GB.
-    pub memory_gb: Option<[f64; 2]>,
 }
 
 impl std::fmt::Display for TooSlow {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.memory_gb {
-            Some([need, have]) => write!(f, "缺失楔补偿约需 {need:.0} GB 内存，这台机器只有 {have:.0} GB 可用"),
-            None => write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0),
-        }
+        write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0)
     }
 }
 
@@ -569,17 +564,6 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     let used: Vec<_> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
     let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
-    // The network works on whole volumes held in memory (standardised halves, the
-    // tiles' sums and weights, both results): about eight copies of the tomogram.
-    // A big one on a smaller server is skipped up front instead of being killed.
-    {
-        let [w, h, nz] = dims(&*open(&src.path)?);
-        let need = (w * h * nz * 4 * 8) as f64 / 1e9;
-        let have = crate::resources::memory_available_bytes() as f64 / 1e9;
-        if have > 0.0 && need > have {
-            return Err(TooSlow { projected_s: 0.0, memory_gb: Some([need, have]) }.into());
-        }
-    }
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
     let started = std::time::Instant::now();
     let projected = std::sync::Mutex::new(None::<f64>);
@@ -602,8 +586,8 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     // (Noise2Noise across the halves); else the IsoNet method on the one.
     let trained = (|| -> Result<_> { Ok(match (&src.halves, req.single) {
         (Some([even, odd]), false) => {
-            // Mapped, not copied: two 10 GB halves plus the 10 GB result did not fit
-            // in a 32 GB server; mapped pages are the file's own and can be dropped.
+            // Mapped, not copied: the halves' pages are the files' own, so the
+            // system can drop them again when memory is short (see `bigbuf`).
             let (a, shape, px) = load_mapped(even)?;
             let (b, odd_shape, odd_px) = load_mapped(odd)?;
             let raw = open(&src.path)?;
@@ -622,12 +606,12 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
         _ => {
             let (v, shape, px) = load(&src.path)?;
             let cfg = req.cfg.clone().unwrap_or_else(single_config);
-            (crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?, shape, px, "isonet")
+            (crate::wedge::train_and_apply(dev, &v, shape, range, &cfg, tick)?.into(), shape, px, "isonet")
         }
     }) })();
     if let Some(projected_s) = *projected.lock().unwrap() {
         crate::wedge::CANCEL.store(false, Ordering::SeqCst);
-        return Err(TooSlow { projected_s, memory_gb: None }.into());
+        return Err(TooSlow { projected_s }.into());
     }
     let (out, shape, px, method) = trained?;
     if CANCEL.load(Ordering::SeqCst) {

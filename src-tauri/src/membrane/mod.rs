@@ -183,7 +183,7 @@ fn resample_linear(v: &[f32], n: [usize; 3], m: [usize; 3], antialias: bool) -> 
     let src;
     let v = if antialias && sigma > 1.2 {
         // σ ≈ 0.4 × the shrink factor keeps aliasing down.
-        src = crate::wedge::smooth(&crate::wedge::Vol { n, v: v.to_vec() }, 0.4 * sigma).v;
+        src = crate::wedge::smooth(&crate::wedge::Vol { n, v: v.to_vec().into() }, 0.4 * sigma).v.into_vec();
         &src[..]
     } else {
         v

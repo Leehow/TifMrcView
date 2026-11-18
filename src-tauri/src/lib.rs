@@ -37,6 +37,8 @@ pub mod classify;
 #[cfg(feature = "pro")]
 pub mod unet;
 #[cfg(feature = "pro")]
+pub mod bigbuf;
+#[cfg(feature = "pro")]
 pub mod wedge;
 #[cfg(feature = "pro")]
 pub mod membrane;

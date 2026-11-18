@@ -44,7 +44,8 @@ pub static CANCEL: AtomicBool = AtomicBool::new(false);
 /// A volume, X fastest, then Y, then Z.
 pub struct Vol {
     pub n: [usize; 3],
-    pub v: Vec<f32>,
+    /// In memory, or in a scratch file when it would not fit (`bigbuf`).
+    pub v: crate::bigbuf::Buf,
 }
 
 impl Vol {
@@ -114,7 +115,7 @@ pub fn load(img: &OpenImage, c: usize, t: usize, bin: usize) -> Result<(Vol, f32
     }
     let (mean, std) = stats(&v);
     v.par_iter_mut().for_each(|x| *x = (*x - mean) / std);
-    Ok((Vol { n, v }, mean, std))
+    Ok((Vol { n, v: v.into() }, mean, std))
 }
 
 pub(crate) fn stats(v: &[f32]) -> (f32, f32) {
@@ -989,7 +990,7 @@ pub fn train_halves_on(devs: &[Device], a: &Vol, b: &Vol, g: &Geometry, tilts: &
     let (origins, held) = if cfg.signal || cfg.validate {
         signal_cubes(a, Some(b), n, cfg.count.max(1), cfg.seed, cfg.validate)
     } else {
-        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v[..]).map(|(x, y)| 0.5 * (x + y)).collect() };
         (busiest(&mean, n, cfg.count.max(1), cfg.seed), vec![])
     };
     let origins = if cfg.signal || !cfg.validate {
@@ -997,7 +998,7 @@ pub fn train_halves_on(devs: &[Device], a: &Vol, b: &Vol, g: &Geometry, tilts: &
     } else {
         // Held-out cubes wanted, cubes chosen as before: the busiest that
         // do not overlap a held-out one.
-        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        let mean = Vol { n: a.n, v: a.v.par_iter().zip(&b.v[..]).map(|(x, y)| 0.5 * (x + y)).collect() };
         busiest(&mean, n, cfg.count.max(1) * 2, cfg.seed).into_iter().filter(|o| !held.iter().any(|h| (0..3).all(|ax| (o[ax] - h[ax]).unsigned_abs() < n))).take(cfg.count.max(1)).collect()
     };
     let orig: [Vec<Vec<f32>>; 2] = [a, b].map(|h| origins.iter().map(|&o| h.cube(o, [n; 3])).collect());
@@ -1170,7 +1171,7 @@ pub fn train_halves_on(devs: &[Device], a: &Vol, b: &Vol, g: &Geometry, tilts: &
 /// the halves networks below WBP at |k| 0.02–0.05). Beam on Z, tilt axis
 /// on Y; the filter is a Gaussian along Y times one in XZ, cut to the
 /// measured angles, so each XZ plane is filtered in 2D.
-pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> Vec<f32> {
+pub fn restore_low<B: std::ops::DerefMut<Target = [f32]> + Sync>(mut out: B, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> B {
     let [w, h, d] = dims;
     let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
     let (lo, hi) = (lo as f64 - 1e-6, hi as f64 + 1e-6);
@@ -1183,9 +1184,8 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
     // Along Y in real space.
     let r = (3.0 * sx).ceil() as isize;
     let kern: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sx * sx)).exp() as f32).collect();
-    let along: Vec<f32> = (0..out.len())
-        .into_par_iter()
-        .map(|i| {
+    // Volume-sized: in a scratch file when it would not fit in memory.
+    let along = crate::bigbuf::Buf::from_fn(out.len(), |i| {
             let (x, y, z) = (i % w, (i / w) % h, i / (w * h));
             let mut acc = 0f32;
             let mut wsum = 0f32;
@@ -1197,8 +1197,7 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
                 }
             }
             if wsum > 0.0 { acc / wsum } else { 0.0 }
-        })
-        .collect();
+        });
     let pad = (3.0 * sx).ceil() as usize;
     let (px, pz) = ((w + pad).next_power_of_two(), (d + pad).next_power_of_two());
     let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
@@ -1216,7 +1215,10 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
         })
         .collect();
     let (fx, fz) = (Fft::new(px), Fft::new(pz));
-    let planes: Vec<Vec<f32>> = (0..h)
+    // XZ planes a band of Y at a time, so only the band is held besides `out`.
+    let band = (rayon::current_num_threads() * 4).max(1);
+    for y0 in (0..h).step_by(band) {
+    let planes: Vec<Vec<f32>> = (y0..(y0 + band).min(h))
         .into_par_iter()
         .map(|y| {
             let mut re = vec![0f32; px * pz];
@@ -1251,12 +1253,14 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
         })
         .collect();
     out.par_chunks_mut(w * h).enumerate().for_each(|(z, slab)| {
-        for y in 0..h {
+        for (k, plane) in planes.iter().enumerate() {
+            let y = y0 + k;
             for x in 0..w {
-                slab[y * w + x] += planes[y][z * w + x];
+                slab[y * w + x] += plane[z * w + x];
             }
         }
     });
+    }
     out
 }
 
@@ -1265,14 +1269,14 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
 /// and fills the wedge in one network, and returns the mean of its results
 /// for both halves, in the halves' units.
 pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
-    Ok(train_halves_and_apply_on(dev, false, even, odd, dims, tilts, cfg, progress)?.0)
+    Ok(train_halves_and_apply_on(dev, false, even, odd, dims, tilts, cfg, progress)?.0.into_vec())
 }
 
 /// As `train_halves_and_apply`, with what the training reported; with
 /// `all_cards` the result is computed on every free card (`multi_gpu`),
 /// taken only once the training is done.
 #[allow(clippy::too_many_arguments)]
-pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Vec<f32>, HalvesFit)> {
+pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(crate::bigbuf::Buf, HalvesFit)> {
     let len = dims[0] * dims[1] * dims[2];
     if even.len() != len || odd.len() != len {
         bail!("体数据大小和尺寸不符");
@@ -1284,7 +1288,10 @@ pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], od
     let (m0, s0) = stats(even);
     let (m1, s1) = stats(odd);
     let (mean, std) = (0.5 * (m0 + m1), 0.5 * (s0 + s1));
-    let std_vol = |v: &[f32]| Vol { n: dims, v: v.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
+    // Every volume here (the two standardised halves, the network's results,
+    // the tiles' sums) is a `Buf`: on a server with too little memory for a
+    // big tomogram they live in scratch files and the job is slower, not killed.
+    let std_vol = |v: &[f32]| Vol { n: dims, v: crate::bigbuf::Buf::from_fn(v.len(), |i| { let x = v[i]; if x.is_finite() { (x - mean) / std } else { 0.0 } }) };
     let (a, b) = (std_vol(even), std_vol(odd));
     let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
     // Trained on one card, applied on all: splitting each step's batch over
@@ -1303,19 +1310,24 @@ pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], od
     // One pass only: a second pass on the wedge-cut first result (as in
     // ICECREAM) smeared EMPIAR-10164 into a low-pass image, while the
     // first pass alone matched full ICECREAM.
-    let mut outs = vec![];
-    for (h, vol) in [&a, &b].into_iter().enumerate() {
-        let mut v = Vol { n: dims, v: vol.v.clone() };
-        v.v = apply_on(devs, net, &v, [0; 3], dims, &mut |done, total| {
+    // The two results are summed into one volume as they come; each half's
+    // standardised copy is let go once it has been through the network.
+    let mut out: Option<crate::bigbuf::Buf> = None;
+    for (h, vol) in [a, b].into_iter().enumerate() {
+        let r = apply_buf(devs, net, &vol, [0; 3], dims, &mut |done, total| {
             if CANCEL.load(Ordering::SeqCst) {
                 bail!("已取消");
             }
             progress(Progress { iteration: it, iterations: cfg.iterations, step: h * total + done, steps: 2 * total, loss: 0.0 });
             Ok(())
         })?;
-        outs.push(v.v);
+        drop(vol);
+        match out.as_mut() {
+            None => out = Some(r),
+            Some(o) => o.par_iter_mut().zip(&r[..]).for_each(|(x, y)| *x = 0.5 * (*x + y) * std + mean),
+        }
     }
-    let out: Vec<f32> = outs[0].par_iter().zip(&outs[1]).map(|(x, y)| 0.5 * (x + y) * std + mean).collect();
+    let out = out.expect("two halves");
     Ok((restore_low(out, even, odd, dims, tilts, LOW_HALF), fit))
 }
 
@@ -1341,12 +1353,18 @@ pub fn apply(dev: &Device, net: &Net, vol: &Vol, origin: [usize; 3], size: [usiz
 
 /// As `apply`, the tiles handed out to the cards `devs` as they come free.
 pub fn apply_on(devs: &[Device], net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<Vec<f32>> {
+    Ok(apply_buf(devs, net, vol, origin, size, tick)?.into_vec())
+}
+
+/// As `apply_on`, the result (and the tiles' sums) in memory or, when they
+/// would not fit, in scratch files.
+pub fn apply_buf(devs: &[Device], net: &Net, vol: &Vol, origin: [usize; 3], size: [usize; 3], tick: &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<crate::bigbuf::Buf> {
     let al = net.align();
     let step = TILE - 2 * MARGIN;
     let starts: [Vec<usize>; 3] = std::array::from_fn(|a| (0..size[a]).step_by(step).collect());
     let total = starts.iter().map(Vec::len).product();
     let len = size[0] * size[1] * size[2];
-    let (mut acc, mut wsum) = (vec![0f32; len], vec![0f32; len]);
+    let (mut acc, mut wsum) = (crate::bigbuf::Buf::zeros(len), crate::bigbuf::Buf::zeros(len));
     let mut done = 0;
     let mut tiles: Vec<[usize; 3]> = vec![];
     for &z0 in &starts[2] {
@@ -1402,7 +1420,8 @@ pub fn apply_on(devs: &[Device], net: &Net, vol: &Vol, origin: [usize; 3], size:
             tick(done, total)
         },
     )?;
-    acc.par_iter_mut().zip(&wsum).for_each(|(a, &w)| *a /= w.max(1e-12));
+    acc.par_iter_mut().zip(&wsum[..]).for_each(|(a, &w)| *a /= w.max(1e-12));
+    drop(wsum);
     Ok(acc)
 }
 
@@ -1554,7 +1573,7 @@ mod tests {
     fn save_fixture() -> Trained {
         Trained {
             net: Net::new(4, 2, &Device::flex()),
-            vol: Arc::new(Vol { n: [8; 3], v: vec![0.5; 8 * 8 * 8] }),
+            vol: Arc::new(Vol { n: [8; 3], v: vec![0.5; 8 * 8 * 8].into() }),
             geometry: Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None },
             bin: 3, mean: 5.0, std: 2.0, loss: 0.0, token: 7, pixel_a: 2.75, c: 0, t: 0,
         }
@@ -1613,7 +1632,7 @@ mod tests {
     fn fft_round_trip_and_masks() {
         let n = 16;
         let fft = Fft::new(n);
-        let v = phantom(n, 3).v;
+        let v = phantom(n, 3).v.into_vec();
         let (mut re, mut im) = (v.clone(), vec![0f32; v.len()]);
         fft3(&fft, n, &mut re, &mut im, false);
         fft3(&fft, n, &mut re, &mut im, true);
@@ -1651,7 +1670,7 @@ mod tests {
             let sp = Spectral::new(64, &g);
             let mut rng = Rng(5);
             let noisy: Vec<f32> = vol.v.iter().map(|v| v + 0.3 * rng.gauss()).collect();
-            let cut = Vol { n: vol.n, v: sp.cut(&noisy) };
+            let cut = Vol { n: vol.n, v: sp.cut(&noisy).into() };
             let d = detect(&cut);
             assert_eq!((d.geometry.beam, d.geometry.tilt), (g.beam, g.tilt), "{d:?}");
             assert!((d.geometry.max_tilt - g.max_tilt).abs() <= 10.0, "{d:?}");
@@ -1773,14 +1792,14 @@ mod tests {
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
         let cfg = TrainConfig { cube: 16, count: 6, iterations: 2, steps: 30, batch: 3, lr: 1e-3, base: 4, levels: 2, seed: 1, signal: true, validate: true, patience: 1, equivariant: 2.0, equi_from: 0.5, ..Default::default() };
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-60.0) };
-        let (va, vb) = (Vol { n: truth.n, v: a.clone() }, Vol { n: truth.n, v: b.clone() });
+        let (va, vb) = (Vol { n: truth.n, v: a.clone().into() }, Vol { n: truth.n, v: b.clone().into() });
         let fit = train_halves_on(&[dev.clone(), dev.clone()], &va, &vb, &g, &tilts, &cfg, |_| {}).unwrap();
         let one = apply(&dev, &fit.net, &va, [0; 3], truth.n, &mut |_, _| Ok(())).unwrap();
         let two = apply_on(&[dev.clone(), dev.clone()], &fit.net, &va, [0; 3], truth.n, &mut |_, _| Ok(())).unwrap();
         assert!(one.iter().zip(&two).all(|(x, y)| (x - y).abs() < 1e-4));
         assert_eq!(fit.cards, 2);
         assert!(fit.val.is_some() && !fit.history.is_empty());
-        let (train, held) = signal_cubes(&Vol { n: truth.n, v: a.clone() }, Some(&Vol { n: truth.n, v: b.clone() }), 16, 6, 1, true);
+        let (train, held) = signal_cubes(&Vol { n: truth.n, v: a.clone().into() }, Some(&Vol { n: truth.n, v: b.clone().into() }), 16, 6, 1, true);
         assert!(!train.is_empty() && held.len() >= 2);
         for h in &held {
             assert!(train.iter().all(|t| (0..3).any(|ax| (t[ax] - h[ax]).unsigned_abs() >= 16)));
@@ -1882,7 +1901,7 @@ mod tests {
         let truth = phantom(n, 21);
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let sp = Spectral::new(n, &g);
-        let vol = Vol { n: truth.n, v: sp.cut(&truth.v) };
+        let vol = Vol { n: truth.n, v: sp.cut(&truth.v).into() };
         let iters: usize = std::env::var("WI").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
@@ -1892,7 +1911,7 @@ mod tests {
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
         let wedge = |v: &[f32]| -> f32 {
-            let d: Vec<f32> = v.iter().zip(&truth.v).map(|(a, b)| a - b).collect();
+            let d: Vec<f32> = v.iter().zip(&truth.v[..]).map(|(a, b)| a - b).collect();
             let inside: Vec<f32> = d.iter().zip(sp.cut(&d)).map(|(a, b)| a - b).collect();
             inside.iter().map(|x| x * x).sum::<f32>().sqrt()
         };
@@ -1941,7 +1960,7 @@ mod tests {
     fn apply_tiles_any_box() {
         let dev = Device::flex();
         let net = Net::new(4, 2, &dev);
-        let vol = Vol { n: [70, 20, 9], v: vec![0.5; 70 * 20 * 9] };
+        let vol = Vol { n: [70, 20, 9], v: vec![0.5; 70 * 20 * 9].into() };
         let out = apply(&dev, &net, &vol, [3, 0, 4], [67, 20, 1], &mut |_, _| Ok(())).unwrap();
         assert_eq!(out.len(), 67 * 20);
         let mid = out[10 * 67 + 30];
@@ -1974,7 +1993,7 @@ mod bench {
         };
         let (a, mean, std, pixel_a) = read(&even);
         let (b, ..) = read(&odd);
-        let both = Vol { n: a.n, v: a.v.iter().zip(&b.v).map(|(x, y)| 0.5 * (x + y)).collect() };
+        let both = Vol { n: a.n, v: a.v.iter().zip(&b.v[..]).map(|(x, y)| 0.5 * (x + y)).collect() };
         let d = detect(&both);
         println!("{:?} after bin {bin}; detected {:?}, contrast {:.2}", a.n, d.geometry, d.contrast);
         let tilts: Vec<f32> = std::env::var("TMV_HALF_TILTS").map(|p| std::fs::read_to_string(p).unwrap().split_whitespace().filter_map(|s| s.parse().ok()).collect()).unwrap_or_default();

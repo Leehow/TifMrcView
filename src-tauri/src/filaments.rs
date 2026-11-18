@@ -168,12 +168,12 @@ pub fn find(values: &[f32], n: [usize; 3], pixel_a: f32) -> Vec<Filament> {
     let work = crate::membrane::resample(&inv, n, m);
     drop(inv);
     let sigma = RADIUS_NM / std::f32::consts::SQRT_2 / WORK_NM;
-    let g = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work.clone() }, sigma).v;
+    let g = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work.clone().into() }, sigma).v.into_vec();
     let (score, axis) = rods(&g, m);
     drop(g);
     let (med, sd) = robust(&score);
     let lumen = pixel_a <= LUMEN_MAX_A;
-    let light = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work }, 0.6).v;
+    let light = crate::wedge::smooth(&crate::wedge::Vol { n: m, v: work.into() }, 0.6).v.into_vec();
     // Lines come out at several thresholds: too low and a microtubule merges
     // with its neighbours, too high and it breaks up, and where that happens
     // depends on the rest of the tomogram. Strictest first; a line is kept

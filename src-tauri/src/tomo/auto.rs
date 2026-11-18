@@ -465,10 +465,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
                 }
                 Err(e) => match e.downcast_ref::<pipeline::TooSlow>() {
                     Some(slow) => {
-                        note = Some(match slow.memory_gb {
-                            Some([need, have]) => format!("补缺失楔约需 {need:.0} GB 内存，这台电脑只有 {have:.0} GB 可用，已跳过（体素选粗一档就能做）"),
-                            None => format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0),
-                        });
+                        note = Some(format!("这台电脑的 GPU 补缺失楔约需 {:.1} 小时，已跳过（可在高级设置⑤里单独运行）", slow.projected_s / 3600.0));
                         // Denoising was left to the wedge step: done now instead.
                         if st.denoise && wedge_denoises {
                             check_cancel()?;
