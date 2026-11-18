@@ -188,6 +188,7 @@ function membranes() {
     channel: () => 0, liveStart: () => {}, liveStop: () => {}, liveFetch: () => {},
     draw: () => {}, renderList: () => {}, drawVesicles: () => {}, toast: () => {},
     syncSam: () => {}, syncCls: () => {}, syncUnet: () => {}, any: () => false,
+    HINTS: {}, placeTypes: () => {},
     sec: { querySelectorAll: () => [] },
   };
   vm.createContext(context);
