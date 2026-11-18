@@ -94,7 +94,9 @@
   }, { root: $("cryoet-workspace"), rootMargin: "200px" });
   function lazyPic(box, path, z, max, onFail = "无图") {
     const c = el("canvas");
-    box.prepend(c);
+    // Until the picture arrives the tile says so (a server may take seconds).
+    const wait = el("span", "cs-none dim cs-wait", "正在加载…");
+    box.prepend(c, wait);
     // Kept as an image, not a canvas: WebKit may drop a hidden canvas's
     // pixels (the wall is hidden during a review, the app goes to the
     // background) and nothing would draw it again.
@@ -104,7 +106,8 @@
       img.alt = "";
       img.src = d.url ||= c.toDataURL();
       c.replaceWith(img);
-    }).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
+      wait.remove();
+    }).catch(() => { c.remove(); wait.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
     seen.observe(box);
   }
 
@@ -158,6 +161,13 @@
     if (!folder) { session = { root: "", series: [] }; loadError = ""; return render(); }
     if (scanning) { rescanAgain = true; return; }
     scanning = 1;
+    // The first reading of a folder (on a server it can take a while) says so.
+    const first = !session.series.length;
+    if (first) {
+      if (!W.busy) W.status("正在读取文件夹里的倾转序列…");
+      wall.replaceChildren(el("p", "dim cs-empty", "正在读取文件夹里的倾转序列…"));
+      tiles.clear();
+    }
     try {
       do {
         rescanAgain = false;
@@ -174,6 +184,7 @@
     }
     render();
     syncReview();
+    if (first && !W.busy) { W.status(""); summary(); }
   }
 
   function summary() {
