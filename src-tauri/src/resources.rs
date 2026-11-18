@@ -203,9 +203,15 @@ pub fn gpu_available_bytes() -> u64 {
             .unwrap_or(512 * 1024 * 1024)
     }
 }
+/// Where nvidia-smi lives: on the PATH natively; under WSL the Windows driver puts it in
+/// /usr/lib/wsl/lib, which a non-interactive SSH login does not have on its PATH.
 #[cfg(not(target_os = "macos"))]
 fn query() -> Option<String> {
-    let mut c = Command::new("nvidia-smi")
+    ["nvidia-smi", "/usr/lib/wsl/lib/nvidia-smi"].into_iter().find_map(query_with)
+}
+#[cfg(not(target_os = "macos"))]
+fn query_with(program: &str) -> Option<String> {
+    let mut c = Command::new(program)
         .args([
             "--query-gpu=index,uuid,name,memory.total,memory.free,utilization.gpu",
             "--format=csv,noheader,nounits",

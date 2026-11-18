@@ -64,7 +64,8 @@ pub fn main(args: &[String]) -> i32 {
     crate::cli::use_bundled_cuda();
     // Explicit backend avoids falling back to a second GPU through Vulkan.
     #[cfg(target_os = "linux")]
-    if Path::new("/dev/nvidiactl").exists() && std::env::var_os("TMV_GPU").is_none() {
+    // /dev/dxg: an NVIDIA card under WSL, which has no /dev/nvidiactl.
+    if (Path::new("/dev/nvidiactl").exists() || Path::new("/dev/dxg").exists()) && std::env::var_os("TMV_GPU").is_none() {
         std::env::set_var("TMV_GPU", "cuda");
     }
     let out = (|| -> Result<Value> {

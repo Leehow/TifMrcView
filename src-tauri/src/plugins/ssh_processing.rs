@@ -146,8 +146,9 @@ pub(super) fn call(session: &Session, args: &Value) -> Result<Value> {
     }
     let checksum = dir.join("SHA256SUMS");
     // Recheck the engine itself each invocation; shared CUDA resources were checked on install.
+    // /usr/lib/wsl/lib holds the driver's libcuda under WSL (absent elsewhere, so harmless).
     let libraries=q(&dir.join("cuda/lib64"));
-    let cmd=format!("umask 077; cd {} && sha256sum -c --status {} && exec env LD_LIBRARY_PATH={libraries}\"${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\" {} agent",q(&dir),q(&checksum),q(&binary));
+    let cmd=format!("umask 077; cd {} && sha256sum -c --status {} && exec env LD_LIBRARY_PATH={libraries}\"${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\":/usr/lib/wsl/lib {} agent",q(&dir),q(&checksum),q(&binary));
     let mut result: Value = serde_json::from_slice(&exec(session, &cmd, &serde_json::to_vec(&req)?)?)?;
     // A job's own failure comes back as a state with an `error` field; only an answer
     // without a state is the engine refusing the request itself.
