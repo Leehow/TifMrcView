@@ -28,6 +28,7 @@ pub mod cc;
 pub mod cc_gpu;
 pub mod circled;
 pub mod contrast;
+pub mod deep;
 pub mod filaments;
 pub mod flat;
 pub mod gallery;

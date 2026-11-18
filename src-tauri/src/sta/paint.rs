@@ -170,12 +170,21 @@ pub fn nothing_touched() -> anyhow::Error {
 /// kinds, for a mark of another file than `tomogram`, and when nothing is
 /// taken.
 pub fn section_runs(m: &Mark, tomogram: &str, z: usize) -> Result<Vec<[usize; 3]>> {
+    section_runs_in(m, tomogram, z, None)
+}
+
+/// `section_runs`, where a painted example with 三维选择 on and a selection
+/// kept under `out` gives what the selection reaches on section `z`.
+pub fn section_runs_in(m: &Mark, tomogram: &str, z: usize, out: Option<&std::path::Path>) -> Result<Vec<[usize; 3]>> {
     if m.tomogram != tomogram {
         return Ok(vec![]);
     }
     // A painted example: what was painted on this section, as it is for now
     // (a later selection through z replaces the raster here, per mark).
     if m.kind == super::marks::Kind::Paint {
+        if let Some(r) = out.and_then(|o| super::deep::section_runs(o, m, z)) {
+            return Ok(r);
+        }
         return Ok(super::brush::section(&m.strokes, z).map_or_else(Vec::new, |r| r.runs()));
     }
     if m.kind != super::marks::Kind::Membrane {
