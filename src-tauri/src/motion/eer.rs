@@ -150,6 +150,11 @@ impl Eer {
     /// the frame (an EER frame holds whole, non-negative counts by
     /// construction).
     pub fn group_max(&self, start: usize, count: usize, up: usize) -> Result<(Vec<f32>, f32)> {
+        self.group_max_into(start, count, up, Vec::new())
+    }
+    /// `group_max` into `buf`, a frame from an earlier group: cleared, not
+    /// allocated again (fresh pages for 64 MB every group cost page faults).
+    pub fn group_max_into(&self, start: usize, count: usize, up: usize, mut buf: Vec<f32>) -> Result<(Vec<f32>, f32)> {
         if ![1, 2].contains(&up) || start >= self.len() || count == 0 {
             bail!("EER 分组或超分辨率参数无效");
         }
@@ -174,7 +179,9 @@ impl Eer {
                     Ok(v)
                 })
                 .collect::<Result<_>>()?;
-            let mut out = vec![0.0f32; len];
+            buf.clear();
+            buf.resize(len, 0.0);
+            let mut out = buf;
             let band = 64usize.min(self.h);
             let max = out.par_chunks_mut(band * up * rw).enumerate().map(|(b, rows)| {
                 let (lo, hi) = (((b * band * self.w) as u32) << 2, ((((b + 1) * band).min(self.h) * self.w) as u32) << 2);
