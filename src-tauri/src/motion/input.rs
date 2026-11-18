@@ -83,6 +83,14 @@ impl Movie {
             _ => None,
         }
     }
+    /// A group, and for EER (whole, finite, non-negative counts by
+    /// construction) its largest value, so the frame need not be checked.
+    fn group_checked(&self, start: usize, count: usize, up: usize) -> Result<(Vec<f32>, Option<f32>)> {
+        match self {
+            Self::Eer(e) => e.group_max(start, count, up).map(|(v, m)| (v, Some(m))),
+            _ => Ok((self.group(start, count, up)?, None)),
+        }
+    }
     fn group(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
         match self {
             Self::Eer(e) => e.group(start, count, up),
@@ -184,7 +192,7 @@ pub struct Spool {
     /// Gain reference the stored frames are multiplied by when read: frames
     /// are kept as recorded (counts fit in a byte), a quarter of the gained
     /// floats in memory and on the way to the GPU.
-    pub gain: Option<Vec<f32>>,
+    pub gain: Option<std::sync::Arc<Vec<f32>>>,
     /// The stored frames already on the GPU, uploaded while the movie before
     /// is being corrected (the way MotionCor keeps a movie on the card): the
     /// sum then cuts its tiles from them without waiting for an upload.
@@ -292,7 +300,8 @@ impl Spool {
             frames: vec![],
             counts: vec![],
             times: vec![],
-            original: if preview { vec![] } else { vec![0.0; w * h] },
+            // The gained full-size sum is only for the diagnostics images.
+            original: if preview || !p.diagnostics { vec![] } else { vec![0.0; w * h] },
             gain: None,
             resident: vec![],
             decode_ms: 0.0,
@@ -306,9 +315,6 @@ impl Spool {
             .flatten()
             .map(|(dev, _)| dev)
             .filter(|_| w * h * groups_hint(n, p, movie) <= RESIDENT);
-        if gain.as_ref().is_some_and(|g| g.par_iter().any(|x| !x.is_finite())) {
-            bail!("电影或 gain 含 NaN/Inf");
-        }
         // Auto grouping balances the remainder: a one-fraction last frame
         // otherwise has much lower SNR than the rest of a 600–1000-frame EER.
         let groups: Vec<_> = if p.group == 0 && matches!(movie, Movie::Eer(_)) {
@@ -323,17 +329,22 @@ impl Spool {
                 .collect()
         };
         let total = groups.len();
+        let (mut check_ms, mut fused_ms, mut upload_ms) = (0.0f64, 0.0f64, 0.0f64);
         for (start, count) in groups {
             check_cancel()?;
             let decode = std::time::Instant::now();
-            let mut frame = movie.group(start, count, up)?;
+            let (mut frame, counted) = movie.group_checked(start, count, up)?;
             spool.decode_ms += decode.elapsed().as_secs_f64() * 1000.0;
             // One pass for the checks, one for everything else: each pass
             // over a 4096² frame is a 64 MB walk through memory.
-            let (finite, whole, max) = frame
-                .par_chunks(1 << 16)
-                .map(|c| c.iter().fold((true, true, 0.0f32), |(f, wh, m), &v| (f && v.is_finite(), wh && v >= 0.0 && v.fract() == 0.0, m.max(v))))
-                .reduce(|| (true, true, 0.0), |a, b| (a.0 && b.0, a.1 && b.1, a.2.max(b.2)));
+            let t_check = std::time::Instant::now();
+            let (finite, whole, max) = match counted {
+                Some(max) => (true, true, max),
+                None => frame
+                    .par_chunks(1 << 16)
+                    .map(|c| c.iter().fold((true, true, 0.0f32), |(f, wh, m), &v| (f && v.is_finite(), wh && v >= 0.0 && v.fract() == 0.0, m.max(v))))
+                    .reduce(|| (true, true, 0.0), |a, b| (a.0 && b.0, a.1 && b.1, a.2.max(b.2))),
+            };
             if !finite {
                 bail!("电影或 gain 含 NaN/Inf");
             }
@@ -346,10 +357,13 @@ impl Spool {
                 let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
                 fs::write(spool.dir.join(format!("frame-{}.f32", spool.stored.len())), bytes)?;
             }
+            check_ms += t_check.elapsed().as_secs_f64() * 1e3; let t_fused = std::time::Instant::now();
             // Rows of `bin` lines: stored, gained, added to the original and
             // binned together while they are in cache.
             let slab = bin * w;
             let mut work = if bin == 1 { vec![] } else { vec![0.0f32; ww * hh] };
+            // The frame mean for the GPU upload, summed while the rows are in cache.
+            let mut frame_sum = 0.0f64;
             {
                 let mut original: &mut [f32] = if preview { &mut [] } else { &mut spool.original };
                 let gain = gain.as_deref();
@@ -388,7 +402,7 @@ impl Spool {
                     };
                     jobs.push((r * slab, f, o, k, wr));
                 }
-                jobs.into_par_iter().for_each(|(at, f, o, k, wr)| {
+                frame_sum = jobs.into_par_iter().map(|(at, f, o, k, wr)| {
                     match k {
                         Some(Keep::U8(d)) => d.iter_mut().zip(f.iter()).for_each(|(d, v)| *d = *v as u8),
                         Some(Keep::U16(d)) => d.iter_mut().zip(f.iter()).for_each(|(d, v)| *d = *v as u16),
@@ -413,13 +427,15 @@ impl Spool {
                             *out = sum / (bin * bin) as f32;
                         }
                     }
-                });
+                    f.iter().map(|&v| v as f64).sum::<f64>()
+                }).sum::<f64>();
             }
+            fused_ms += t_fused.elapsed().as_secs_f64() * 1e3; let t_upload = std::time::Instant::now();
             if let Some(stored) = stored {
                 spool.stored.push(stored);
                 if let Some(dev) = card {
                     let i = spool.stored.len() - 1;
-                    let mean = (frame.par_iter().map(|&v| v as f64).sum::<f64>() / frame.len() as f64) as f32;
+                    let mean = (frame_sum / frame.len() as f64) as f32;
                     let up = spool.raw(i).and_then(|raw| {
                         crate::ctf_gpu::guarded(|| super::sum_gpu::Resident::upload(dev, &raw, mean)).and_then(|r| r)
                     });
@@ -433,6 +449,7 @@ impl Spool {
                     }
                 }
             }
+            upload_ms += t_upload.elapsed().as_secs_f64() * 1e3;
             if bin == 1 {
                 // Nothing to bin: keep the frame itself, not a copy.
                 spool.frames.push(frame);
@@ -457,6 +474,7 @@ impl Spool {
             spool.gain = gain;
         }
         spool.prepare_ms = now.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("TMV_GPU_PROFILE").is_some() { eprintln!("PREP_PROFILE decode={:.0}ms check={check_ms:.0}ms fused={fused_ms:.0}ms mean+upload={upload_ms:.0}ms total={:.0}ms", spool.decode_ms, spool.prepare_ms); }
         Ok(spool)
     }
 }
@@ -476,10 +494,28 @@ pub fn eer_frames(total_dose: Option<f64>) -> usize {
     }
 }
 
-fn load_gain(p: &Params, w: usize, h: usize, up: usize) -> Result<Option<Vec<f32>>> {
+/// The gain of a series is the same file for every movie: read, oriented
+/// and checked once, then shared.
+fn load_gain(p: &Params, w: usize, h: usize, up: usize) -> Result<Option<std::sync::Arc<Vec<f32>>>> {
+    use std::sync::{Arc, LazyLock, Mutex};
+    type Key = (String, Option<std::time::SystemTime>, u64, usize, usize, usize, u8, bool, bool);
+    static LAST: LazyLock<Mutex<Option<(Key, Arc<Vec<f32>>)>>> = LazyLock::new(|| Mutex::new(None));
     let Some(path) = &p.gain_path else {
         return Ok(None);
     };
+    let meta = fs::metadata(path).ok();
+    let key: Key = (path.clone(), meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()), w, h, up, p.gain_rotate as u8, p.gain_flip_x, p.gain_flip_y);
+    if let Some((k, g)) = LAST.lock().unwrap().as_ref() {
+        if *k == key {
+            return Ok(Some(g.clone()));
+        }
+    }
+    let g = Arc::new(read_gain(path, p, w, h, up)?);
+    *LAST.lock().unwrap() = Some((key, g.clone()));
+    Ok(Some(g))
+}
+
+fn read_gain(path: &str, p: &Params, w: usize, h: usize, up: usize) -> Result<Vec<f32>> {
     let img = OpenImage::new(0, crate::formats::open(Path::new(path))?, 64 << 20);
     let page = img.page(0)?;
     let g = &page[0];
@@ -522,5 +558,5 @@ fn load_gain(p: &Params, w: usize, h: usize, up: usize) -> Result<Option<Vec<f32
     if out.iter().any(|v| !v.is_finite() || *v < 0.0) {
         bail!("gain 必须为有限非负值");
     }
-    Ok(Some(out))
+    Ok(out)
 }
