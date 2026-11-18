@@ -47,6 +47,9 @@ pub struct Example {
     pub at: [f64; 3],
     /// The circle's radius, in the same voxels.
     pub radius: f64,
+    /// Painted, not circled: the circle is the tight one round the paint, so
+    /// it is not drawn in any further (`tightened`).
+    pub painted: bool,
 }
 
 /// Voxels across the circle in the search: what a search of every
@@ -611,13 +614,13 @@ fn find_at(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example],
         bail!("没有断层图");
     }
     if examples.is_empty() {
-        bail!("请先圈出 2 到 3 个要找的东西作例子");
+        bail!("请先涂（或圈）出 2 到 3 个要找的东西作例子");
     }
     if let Some(e) = examples.iter().find(|e| e.source >= sources.len()) {
         bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
     }
     if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
-        bail!("有一个圈太小了，请把要找的东西整个圈进去");
+        bail!("有一个例子太小了，请把要找的东西整个涂满（或圈进去）");
     }
     let k = examples.len();
     let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
@@ -750,10 +753,10 @@ pub fn given(sources: &[Source], examples: &[Example]) -> Result<Circled> {
         bail!("圈所在的断层图（第 {} 张）不在要找的断层图里", e.source + 1);
     }
     if examples.iter().any(|e| 2.0 * e.radius < SMALLEST) {
-        bail!("有一个圈太小了，请把要找的东西整个圈进去");
+        bail!("有一个例子太小了，请把要找的东西整个涂满（或圈进去）");
     }
     if examples.len() < FEWEST_CIRCLED {
-        bail!("只圈了 {} 个，太少了：只平均圈的这些，至少要圈 {FEWEST_CIRCLED} 个", examples.len());
+        bail!("只标了 {} 个例子，太少了：只平均涂（圈）的这些，至少要 {FEWEST_CIRCLED} 个", examples.len());
     }
     let k = examples.len();
     let raw_px: Vec<f64> = sources.iter().map(|s| pixel_of(&s.path)).collect::<Result<_>>()?;
@@ -803,7 +806,7 @@ fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example
     let mut drawn_in = false;
     for (z, size) in sizes_a.iter().enumerate() {
         check_cancel()?;
-        let Some(e) = size_of.iter().position(|x| *x == z) else { continue };
+        let Some(e) = (0..examples.len()).find(|i| size_of[*i] == z && !examples[*i].painted) else { continue };
         let x = examples[e];
         let s = &sources[x.source];
         let stage = format!("量大小 {}/{}", z + 1, sizes_a.len());
@@ -840,7 +843,7 @@ fn tightened(dev: &burn::tensor::Device, sources: &[Source], examples: &[Example
         eprintln!("sta: circled at {size:.0} Å; the body in the aligned average of the best {count} is {measured:.0} Å across (pieces {blobs}, elongation {elongation:.2})");
         if blobs == 1 && elongation < ELONGATION && measured * SAME_SIZE < *size {
             let by = (measured / size).max(0.5);
-            for i in (0..examples.len()).filter(|i| size_of[*i] == z) {
+            for i in (0..examples.len()).filter(|i| size_of[*i] == z && !examples[*i].painted) {
                 out[i].radius = (examples[i].radius * by).max(SMALLEST / 2.0);
             }
             drawn_in = true;
@@ -1019,7 +1022,7 @@ mod tests {
         let grain: Vec<f32> = (0..dims[0] * dims[1] * dims[2]).map(|i| ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40) as f32 / (1u64 << 24) as f32).collect();
         crate::tomo::output::write_mrc(&path, &grain, dims, 10.0, false).unwrap();
         let sources = vec![Source { path, tilts: [-60.0, 60.0], look: None, series: None }];
-        let at = |x: f64, y: f64| Example { source: 0, at: [x, y, 32.0], radius: 9.0 };
+        let at = |x: f64, y: f64| Example { source: 0, at: [x, y, 32.0], radius: 9.0, painted: false };
         // Five circled, one of them too near the edge for its cube.
         let examples = [at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(60.0, 60.0), at(4.0, 48.0)];
         let c = given(&sources, &examples).unwrap();
@@ -1157,7 +1160,7 @@ mod tests {
             .iter()
             .map(|i| {
                 let (at, radius, _, _) = things[*i];
-                Example { source: 0, at: std::array::from_fn(|k| at[k] as f64 + 3.0 * rng.unit() - 1.5), radius: 1.05 * radius }
+                Example { source: 0, at: std::array::from_fn(|k| at[k] as f64 + 3.0 * rng.unit() - 1.5), radius: 1.05 * radius, painted: false }
             })
             .collect();
         let started = std::time::Instant::now();

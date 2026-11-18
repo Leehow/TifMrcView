@@ -892,7 +892,7 @@ mod tests {
     }
 
     fn painted(tomogram: &str, at: [f64; 3]) -> Mark {
-        Mark { kind: Kind::Membrane, tomogram: tomogram.into(), points: vec![], flip: false, strokes: vec![Stroke { points: vec![at], cut: false }] }
+        Mark { kind: Kind::Membrane, tomogram: tomogram.into(), points: vec![], flip: false, strokes: vec![Stroke { points: vec![at], cut: false, width: 0.0 }], deep: false }
     }
 
     fn px(_: &str) -> Option<f64> {
@@ -995,7 +995,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let shells = [([24.0, 24.0, 30.0], 14.0), ([70.0, 26.0, 34.0], 15.0), ([26.0, 70.0, 60.0], 14.5), ([68.0, 68.0, 70.0], 15.0)];
         let a = file(dir.path(), "a.mrc", &shells, &[false, false, false, true]);
-        let sphere = |c: [f64; 3], r: f64| Mark { kind: Kind::Sphere, tomogram: a.clone(), points: vec![c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![] };
+        let sphere = |c: [f64; 3], r: f64| Mark { kind: Kind::Sphere, tomogram: a.clone(), points: vec![c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![], deep: false };
         let marks = [sphere([26.0, 22.0, 31.0], 12.0), sphere([68.0, 27.0, 33.0], 17.0)];
         // A vesicle alone gives the size by its radius.
         let size_a = size_of(&marks, Size::Large, &px);
@@ -1007,7 +1007,7 @@ mod tests {
         assert_eq!(s.items.iter().filter(|i| i.example).count(), 2);
         assert_eq!(s.items.iter().filter(|i| i.seeds > 0).count(), 4);
         // Lines and sizes: with a membrane or line mark the chosen size is taken.
-        let line = Mark { kind: Kind::Line, tomogram: a.clone(), points: vec![[1.0; 3], [9.0; 3]], flip: false, strokes: vec![] };
+        let line = Mark { kind: Kind::Line, tomogram: a.clone(), points: vec![[1.0; 3], [9.0; 3]], flip: false, strokes: vec![], deep: false };
         let mixed: Vec<Mark> = marks.iter().cloned().chain([line]).collect();
         assert_eq!(size_of(&mixed, Size::Large, &px), 360.0);
         let (m, _) = done(find_in(&[source(&a, None)], &[a.clone()], &mixed, Size::Small, 130.0, &px, &quiet).unwrap());
@@ -1048,7 +1048,7 @@ mod tests {
 
     fn drawn_line(tomogram: &str) -> Mark {
         let points = (20..=80).step_by(12).enumerate().map(|(k, x)| [x as f64, 30.0 + if k % 2 == 0 { 1.0 } else { -1.0 }, 24.0]).collect();
-        Mark { kind: Kind::Line, tomogram: tomogram.into(), points, flip: false, strokes: vec![] }
+        Mark { kind: Kind::Line, tomogram: tomogram.into(), points, flip: false, strokes: vec![], deep: false }
     }
 
     #[test]

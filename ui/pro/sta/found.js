@@ -123,8 +123,8 @@
     W.panel.classList.toggle("reviewing", show);
     if (!show) { R.add = false; draw(); return; }
     const cir = circled(d);
-    $("sta-found-head").textContent = cir ? `找到 ${d.kept} 个和你圈的像的` : `找到 ${d.total} 个`;
-    $("sta-found-legend").textContent = cir ? "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的，标“例”的是你圈的。点一个圈或下面的小图去掉或加上它。" : "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的。点一个圈去掉或加上它。";
+    $("sta-found-head").textContent = cir ? `找到 ${d.kept} 个和你的例子像的` : `找到 ${d.total} 个`;
+    $("sta-found-legend").textContent = cir ? "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的，标“例”的是你给的例子。点一个圈或下面的小图去掉或加上它。" : "图上：实线圈会被平均，灰色虚线圈是没选上的，打叉的是去掉的，绿圈是加上的。点一个圈去掉或加上它。";
     renderCircled(d);
     const per = $("sta-found-per");
     per.hidden = d.perTomogram.length < 2;
@@ -254,7 +254,7 @@
     R.add = false;
     render();
     if (S.tool === "found") setTool("select");
-    if (cir) { W.draw?.setKind("example"); W.status("请在图上圈 2–3 个你要找的东西（东西不多时可全圈出来，至少 4 个，直接只平均），再按“找出全部同类”"); return; }
+    if (cir) { W.draw?.setKind("paint"); W.status("请在图上涂 2–3 个你要找的东西（东西不多时可全涂出来，至少 4 个，直接只平均），再按“找出全部同类”"); return; }
     W.status("请选择要平均什么：点一张卡片，或在图上点几个颗粒作例子");
   };
   $("sta-found-go").onclick = async () => {
@@ -290,9 +290,9 @@
     findOwn: () => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks: null, out, which: "own" })),
     // Clicked particles (point marks) are the examples.
     findPoints: (marks) => find((inputs, out) => invoke("sta_find", { inputs, pick: null, marks, out })),
-    // Circled examples (draw.js) are the examples: the marks of kind "example".
+    // Painted and circled examples (draw.js) are the examples: the marks of kind "paint" and "example".
     findCircled: (marks) => find((inputs, out) => invoke("sta_find", { inputs, marks, out, which: "circled" })),
-    // Every one is circled already: just these are averaged, nothing is searched for (sta_run_drawn, only).
+    // Every one is marked already: just these are averaged, nothing is searched for (sta_run_drawn, only).
     averageCircled: async (marks) => { await W.go((inputs, out) => invoke("sta_run_drawn", { inputs, marks, out, only: true }), false); R.dismissed.clear(); await load(); },
     // For shapes.js: the time of the review shown (0: none), showing it again after the other one changed, putting it away.
     pendingMs: () => R.d?.foundMs || 0,
@@ -351,12 +351,12 @@
     // at which no other example's picture has a peak at all is.
     const told = c.alike != null && (c.noise == null || c.alike > c.noise);
     info.classList.remove("warn");
-    info.textContent = c.examples < 2 ? "只圈了 1 个例子。再圈 1–2 个，程序才知道多像才算。"
-      : told ? `你圈的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
+    info.textContent = c.examples < 2 ? "只有 1 个例子。再涂 1–2 个，程序才知道多像才算。"
+      : told ? `你的 ${c.examples} 个例子彼此的相似度是 ${c.alike.toFixed(2)}，至少这么像的都算上了。`
       : d.unsure ? "找到的按相似程度排了队，但分数没有一处明显掉下去，程序定不了截在哪里。请拖动滑块自己定，再扫一眼下面的小图：不对的点掉。"
       : "找到的按相似程度排了队，在分数明显掉下去的地方截断。请扫一眼下面的小图：不对的点掉，可以再找一轮。";
     // The search looked wider than the circles (circled::WIDER): said, since the pictures show it.
-    if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按圈的 ${c.wide} 倍范围去比的；小图里的虚线圈是你圈的大小。如果你要找的是一个个独立的颗粒，这多半说明例子没圈准：把圈画在东西正中、刚好圈住它，再找一次。`;
+    if (c.wide > 1) info.textContent += ` 这种东西单看圈里的认不准，连周围一起看才认得出，所以是按例子大小的 ${c.wide} 倍范围去比的；小图里的虚线圈是例子的大小。如果你要找的是一个个独立的颗粒，这多半说明例子没涂准：把东西涂满、别涂到旁边，再找一次。`;
     const warns = [];
     if (c.examples >= 2) (c.byOthers || []).forEach((v, k) => { if (v == null) warns.push(`第 ${k + 1} 个例子用其他几个的样子找不到，可以把它删掉换一个再找。`); });
     $("sta-circled-warns").replaceChildren(...warns.map((t) => { const p = document.createElement("p"); p.className = "warn"; p.textContent = t; return p; }));
@@ -376,7 +376,7 @@
       const drawn = c.drawnA?.[g.size];
       const differs = drawn > 0 && Math.abs(drawn - g.sizeA) > 0.05 * drawn;
       const nm = Math.round(g.sizeA / 10);
-      l.append(cb, differs ? `像例 ${g.like + 1} · 程序量出约 ${nm} nm（你圈的约 ${Math.round(drawn / 10)} nm）：${g.found} 个` : `像例 ${g.like + 1} · 约 ${nm} nm：${g.found} 个`);
+      l.append(cb, differs ? `像例 ${g.like + 1} · 程序量出约 ${nm} nm（你标的约 ${Math.round(drawn / 10)} nm）：${g.found} 个` : `像例 ${g.like + 1} · 约 ${nm} nm：${g.found} 个`);
       return l;
     })));
     $("sta-circled-sizes").hidden = gs.length < 2 || new Set(gs.map((g) => g.size)).size < 2;
