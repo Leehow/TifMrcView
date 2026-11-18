@@ -300,7 +300,8 @@ impl Spool {
             frames: vec![],
             counts: vec![],
             times: vec![],
-            original: if preview { vec![] } else { vec![0.0; w * h] },
+            // The gained full-size sum is only for the diagnostics images.
+            original: if preview || !p.diagnostics { vec![] } else { vec![0.0; w * h] },
             gain: None,
             resident: vec![],
             decode_ms: 0.0,
