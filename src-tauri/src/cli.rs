@@ -141,6 +141,11 @@ pub fn main(args: Vec<String>) -> i32 {
     // RTX 3090 server it segmented membranes 1.7x faster than Vulkan
     // (3.3 vs 5.5 s per window). The CPU stays the fallback.
     let nvidia = Path::new("/dev/nvidiactl").exists() || Path::new("/dev/dxg").exists();
+    // CUDA numbers the cards as nvidia-smi does (`multi_gpu` matches them
+    // to its free memory and locks by number).
+    if std::env::var_os("CUDA_DEVICE_ORDER").is_none() {
+        std::env::set_var("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+    }
     if (nvidia || std::env::var_os("CUDA_VISIBLE_DEVICES").is_some()) && std::env::var_os("TMV_GPU").is_none() {
         std::env::set_var("TMV_GPU", "cuda");
     }
@@ -416,7 +421,17 @@ fn gpu() -> Option<&'static (burn::tensor::Device, &'static str)> {
 /// CUDA_VISIBLE_DEVICES, released when the job ends however it ends).
 /// None when there is no GPU, when TMV_GPU_SHARE is set, or when the lock
 /// cannot be had at all (the job then runs as before).
-pub(crate) struct GpuTurn { _files: Vec<std::fs::File> }
+pub(crate) struct GpuTurn { _files: Vec<std::fs::File>, card: Option<String> }
+impl Drop for GpuTurn {
+    fn drop(&mut self) {
+        if let Some(c) = &self.card {
+            let mut held = crate::resources::HELD_HERE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(i) = held.iter().position(|h| h == c) {
+                held.remove(i);
+            }
+        }
+    }
+}
 pub(crate) fn gpu_turn() -> Option<GpuTurn> {
     gpu()?;
     if std::env::var_os("TMV_GPU_SHARE").is_some(){return None;}
@@ -433,7 +448,9 @@ pub(crate) fn gpu_turn() -> Option<GpuTurn> {
     }
     names.sort();names.dedup();let mut files=vec![];
     for name in names{files.push(take_turn(&std::env::temp_dir().join(name),&||eprintln!("等待该 GPU 的已有任务释放资源"))?);}
-    Some(GpuTurn{_files:files})
+    let card=selected.map(|g|g.uuid.clone());
+    if let Some(c)=&card{crate::resources::HELD_HERE.lock().unwrap_or_else(|e|e.into_inner()).push(c.clone());}
+    Some(GpuTurn{_files:files,card})
 }
 
 /// The lock on `path`, waiting for whoever holds it (`waiting` is called

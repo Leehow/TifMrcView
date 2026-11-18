@@ -349,11 +349,17 @@ pub fn pin_primary() {
         if g.len() > 1 && std::env::var_os("TMV_GPU").is_none() {
             std::env::set_var("TMV_GPU", "cuda");
         }
+        // All allowed cards stay visible, the freest first (CUDA device 0):
+        // a job can then train on the others too (`multi_gpu`), while the
+        // GPU lock and the memory budget follow the first. The snapshot
+        // keeps the same order, so `discover()[i]` is CUDA device i.
+        let mut order: Vec<&Gpu> = vec![first];
+        order.extend(g.iter().filter(|o| o.uuid != first.uuid));
         std::env::set_var(
             "TMV_ALLOWED_GPU_SNAPSHOT",
-            serde_json::to_string(&g).unwrap(),
+            serde_json::to_string(&order).unwrap(),
         );
-        std::env::set_var("CUDA_VISIBLE_DEVICES", &first.uuid);
+        std::env::set_var("CUDA_VISIBLE_DEVICES", order.iter().map(|o| o.uuid.as_str()).collect::<Vec<_>>().join(","));
         std::env::set_var(
             "TMV_GPU_LABEL",
             format!("GPU {} · {}", first.index, first.name),
@@ -380,8 +386,13 @@ pub fn usable() -> Vec<Gpu> {
 pub struct Lease {
     _files: Vec<std::fs::File>,
 }
+/// Cards whose GPU lock this process itself holds (`cli::gpu_turn`): a
+/// queue of this same job may use them (a `tmv tomo` run holds its card
+/// while its own movie workers want every card, that one included).
+pub(crate) static HELD_HERE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 pub fn try_lease(g: &Gpu) -> anyhow::Result<Option<Lease>> {
-    if std::env::var_os("TMV_GPU_SHARE").is_some() {
+    if std::env::var_os("TMV_GPU_SHARE").is_some() || HELD_HERE.lock().unwrap_or_else(|e| e.into_inner()).contains(&g.uuid) {
         return Ok(Some(Lease { _files: vec![] }));
     }
     let mut names = vec![

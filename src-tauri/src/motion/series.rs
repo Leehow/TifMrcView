@@ -523,7 +523,11 @@ pub fn run(
         enum Ready{Prepared(super::Prepared),Corrected(super::Corrected)}
         let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<Ready>)>(0);
         let _stop = Stop(stopped);
-        if crate::gpu_workers::enabled(){
+        // One movie per GPU worker process was slower than this process's
+        // own pipeline on one card (amax, 2×3090, EER: 5.5–6 s a tilt on two
+        // workers against 2.0–2.5 s here; decoding is CPU-bound and each
+        // worker gets a share of the threads), so it is used only on request.
+        if crate::gpu_workers::enabled() && std::env::var_os("TMV_MOVIE_WORKERS").is_some(){
          let send=send.clone();scope.spawn(move||{
           let indexes:Vec<usize>=(0..plan.len()).filter(|&i|plan[i].1.is_some()&&movies[i].is_some()).collect();
           let tasks:Vec<_>=indexes.iter().map(|&i|serde_json::json!({"kind":"movie","path":movies[i],"params":plan[i].1})).collect();
