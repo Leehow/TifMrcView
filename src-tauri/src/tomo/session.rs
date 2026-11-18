@@ -70,6 +70,9 @@ pub struct Series {
     pub pixel_a: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[usize; 2]>,
+    /// Binning of the tomogram shown on the card (`result`, else `quick`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bin: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -199,7 +202,7 @@ pub fn scan(folder: &str) -> Result<Session> {
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None, bin: None }
 }
 
 /// What the dataset of an existing stack says about it.
@@ -238,6 +241,9 @@ fn fill(s: &mut Series) {
     if s.result.is_some() {
         s.stage = Stage::Done;
     }
+    let shown = s.result.as_ref().or(s.quick.as_ref());
+    // A clean companion (N2N, deconvolved) is not listed itself: it has its full tomogram's binning.
+    s.bin = shown.and_then(|p| d.tomograms.iter().find(|t| &t.path == p).or_else(|| d.tomograms.iter().rev().find(|t| t.kind == "full")).map(|t| t.bin));
 }
 
 /// The dataset of a series' stack as saved.
