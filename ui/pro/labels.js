@@ -266,6 +266,33 @@
     $("lab-3d-surf").disabled = L.busy || !any() || !(S.info && S.info.sizeZ > 1);
   }
 
+  // The Layers panel's 上移 / 下移 / 删除 act on the labels when a label row
+  // was clicked last, on the image layers when an image row was (layers.js).
+  function focusLabels() {
+    document.body.dataset.layerFocus = "label";
+    if (window.TifMrcViewPro.layersSync) window.TifMrcViewPro.layersSync();
+  }
+
+  /** Deletes label `k` (one undo step) and moves the highlight to the next one. */
+  async function deleteLabel(k) {
+    const ks = listed(), i = ks.indexOf(k);
+    const rest = ks.filter((x) => x !== k && (L.counts[x] || 0) > 0);
+    if ((L.counts[k] || 0) > 0) await edit({ kind: "delete", label: k });
+    if (L.active === k) {
+      L.active = rest.length ? rest[Math.min(Math.max(0, i), rest.length - 1)] : Math.max(maxUsed(), k, ...Object.keys(L.materials).map(Number)) + 1;
+    }
+    renderList();
+    draw();
+  }
+
+  /** Moves the active label one place up (`delta` 1) or down (-1) in the list. */
+  function moveLabel(delta) {
+    const ks = listed(), i = ks.indexOf(L.active), j = i - delta;
+    if (i < 0 || j < 0 || j >= ks.length) return;
+    [ks[i], ks[j]] = [ks[j], ks[i]];
+    setMaterials(Object.fromEntries(ks.map((x, n) => [x, { order: n }])));
+  }
+
   // Place in the list: where the user dragged it, otherwise by label number.
   const orderOf = (k) => mat(k).order ?? 1e6 + k;
   /** Labels in the list, top first: the ones in use and the active one. */
@@ -309,13 +336,14 @@
       row.addEventListener("click", (e) => {
         const b = e.target.closest("button, label, input, select, .grip");
         if (b && b.classList.contains("sw")) return pickColor(k, b, hex);
-        if (b && b.classList.contains("del")) return edit({ kind: "delete", label: k });
+        if (b && b.classList.contains("del")) return deleteLabel(k);
         if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
         if (b && b.classList.contains("lock")) return setMaterial(k, { locked: !locked(k) });
         if (b) return;
         // Only move the highlight, so a double-click still reaches the name.
         L.active = k;
         for (const r of list.querySelectorAll(".lab-row")) r.classList.toggle("on", r === row);
+        focusLabels();
       });
       list.appendChild(row);
     }
@@ -326,6 +354,7 @@
       list.appendChild(more);
     }
     syncCounts();
+    if (document.body.dataset.layerFocus === "label" && window.TifMrcViewPro.layersSync) window.TifMrcViewPro.layersSync();
   }
 
   /** The number beside each label: its objects on the shown slice. */
@@ -2297,6 +2326,7 @@
   $("lab-new").addEventListener("click", () => {
     L.active = Math.max(maxUsed(), L.active, ...Object.keys(L.materials).map(Number)) + 1;
     renderList();
+    focusLabels();
     if (S.tool !== "label") setTool("label");
   });
 
@@ -2346,6 +2376,13 @@
 
   window.TifMrcViewPro.labels = {
     token: () => L.token,
+    /** For the Layers panel's buttons when a label row has the focus. */
+    rows: () => {
+      const ks = listed(), i = ks.indexOf(L.active);
+      return { shown: !$("label-layers").hidden && ks.length > 0, up: i > 0, down: i >= 0 && i < ks.length - 1, del: (L.counts[L.active] || 0) > 0 };
+    },
+    moveActive: moveLabel,
+    deleteActive: () => deleteLabel(L.active),
     any,
     flush,
     colorTable,

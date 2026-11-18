@@ -309,7 +309,11 @@
       thumb.setAttribute("aria-hidden", "true");
       const name = document.createElement("span"); name.textContent = l.name;
       pick.append(thumb, name); pick.title = l.path;
-      pick.onclick = () => { if (doc) { doc.selected = l.id; D.touch(doc); sync(); request(); } };
+      pick.onclick = () => {
+        document.body.dataset.layerFocus = "image";
+        if (doc) { doc.selected = l.id; D.touch(doc); request(); }
+        sync();
+      };
       pick.ondblclick = () => { $("merge-transform").open = true; $("merge-name").focus(); $("merge-name").select(); };
       row.append(visible, pick); list.append(row);
     });
@@ -318,7 +322,15 @@
     $("merge-transform").hidden = !l;
     $("merge-levels").hidden = !l;
     for (const id of ["merge-up", "merge-down", "merge-delete"]) $(id).disabled = !l;
-    if (l) {
+    // A single image cannot lose its only layer (that left a black canvas).
+    if (l && shown.layers.length < 2) $("merge-delete").disabled = true;
+    const rows = labelFocus();
+    if (rows) {
+      $("merge-up").disabled = !rows.up;
+      $("merge-down").disabled = !rows.down;
+      $("merge-delete").disabled = !rows.del;
+    }
+    if (l && !rows) {
       const index = shown.layers.indexOf(l);
       $("merge-up").disabled = index === shown.layers.length - 1;
       $("merge-down").disabled = index === 0;
@@ -565,7 +577,15 @@
     else sync();
   };
   $("merge-background").onchange = (e) => { const value = e.target.value; edit((doc) => { doc.background = value; }); };
-  for (const [id, delta] of [["merge-up", 1], ["merge-down", -1]]) $(id).onclick = () => edit((doc, l) => {
+  /** The label rows' state when the bar acts on them (a label row was clicked last). */
+  function labelFocus() {
+    const labels = window.TifMrcViewPro.labels;
+    if (document.body.dataset.layerFocus !== "label" || !labels) return null;
+    const rows = labels.rows();
+    return rows.shown ? rows : null;
+  }
+  window.TifMrcViewPro.layersSync = () => sync();
+  for (const [id, delta] of [["merge-up", 1], ["merge-down", -1]]) $(id).onclick = () => labelFocus() ? window.TifMrcViewPro.labels.moveActive(delta) : edit((doc, l) => {
     if (!l) return;
     const i = doc.layers.indexOf(l), j = M.clamp(i + delta, 0, doc.layers.length - 1);
     [doc.layers[i], doc.layers[j]] = [doc.layers[j], doc.layers[i]];
@@ -576,7 +596,7 @@
     doc.selected = doc.layers.at(-1)?.id;
     // Undo may need this source; all handles are released when its tab closes.
   });
-  $("merge-delete").onclick = deleteLayer;
+  $("merge-delete").onclick = () => labelFocus() ? window.TifMrcViewPro.labels.deleteActive() : deleteLayer();
 
   function point(e, doc) {
     const rect = preview.getBoundingClientRect(), v = doc.view;

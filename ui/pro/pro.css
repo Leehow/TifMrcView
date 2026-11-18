@@ -56,6 +56,10 @@
 #lab-list .lab-row { position: relative; display: flex; align-items: center; gap: 3px; min-height: 30px; padding: 0 2px 0 0; border: 1px solid transparent; border-bottom-color: var(--line); cursor: pointer; font-size: 12px; min-width: 0; }
 #lab-list .lab-row:hover { background: var(--muted); }
 #lab-list .lab-row.on { background: var(--subtle); border-color: var(--line-strong); box-shadow: inset 2px 0 0 var(--accent); }
+/* One row is selected in the Layers panel: a label row or an image row. The
+   active label keeps only its accent bar while an image row is selected. */
+body:not([data-layer-focus="label"]) #lab-list .lab-row.on { background: none; border-color: transparent; border-bottom-color: var(--line); }
+body[data-layer-focus="label"] .merge-layer-row.selected { background: none; border-color: transparent; border-bottom-color: var(--line); }
 #lab-list .grip { flex: none; display: flex; align-items: center; width: 14px; height: 26px; cursor: grab; color: var(--faint); touch-action: none; }
 #lab-list .grip svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
 #lab-list .lab-row.dragging { opacity: 0.45; }
