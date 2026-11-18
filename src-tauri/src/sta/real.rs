@@ -27,7 +27,7 @@ fn v17_spheres() {
     let out = std::env::var("TMV_OUT").expect("TMV_OUT = a folder for the result");
     let marks: Vec<Mark> = V17
         .iter()
-        .map(|(c, r)| Mark { kind: Kind::Sphere, tomogram: file.clone(), points: vec![*c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![] })
+        .map(|(c, r)| Mark { kind: Kind::Sphere, tomogram: file.clone(), points: vec![*c, [c[0] + r, c[1], c[2]]], flip: false, strokes: vec![], deep: false })
         .collect();
     let started = std::time::Instant::now();
     let emit = |name: &str, v: Value| {

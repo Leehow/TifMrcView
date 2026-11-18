@@ -33,7 +33,7 @@ const HELP: &str = r#"tmv — TifMrcView Pro command line (no window needed)
 USAGE
   tmv run <path>                 Detect what <path> is and run the right command
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
-        [--for display|sta|survey | --steps align,n2n,wedge,flat] [--pixel Å]
+        [--for display|sta|survey | --steps align,n2n,wedge,flat,binN] [--pixel Å]
                                  (--pixel is needed when the file does not say its pixel size)
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
@@ -59,7 +59,8 @@ USAGE
   full detail + RELION 5 folder), survey (quick look). --steps instead
   runs only the ticked steps of the app's 「三维重构」 (any of align =
   fine alignment, n2n = Noise2Noise, wedge = missing wedge, flat = lay the
-  specimen flat; none = fast).
+  specimen flat; none = fast; bin1..bin16 = the binning instead of
+  the program's choice).
 
   tmv sta takes tilt series (made into tomograms first, as tmv tomo --for sta
   does) or tomograms that tmv tomo --for sta wrote. What to average is the

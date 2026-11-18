@@ -219,14 +219,17 @@ pub fn write_mrc(
     yzx: bool,
 ) -> Result<()> {
     let [w, h, z] = shape;
-    if data.len() != w * h * z || data.iter().any(|v| !v.is_finite()) {
+    if data.len() != w * h * z || { use rayon::prelude::*; data.par_iter().any(|v| !v.is_finite()) } {
         bail!("输出体积无效");
     }
+    use rayon::prelude::*;
     let count = data.len() as f64;
-    let mean = data.iter().map(|&v| v as f64).sum::<f64>() / count;
-    let rms = (data.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / count).sqrt();
-    let lo = data.iter().copied().fold(f32::INFINITY, f32::min);
-    let hi = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mean = data.par_iter().map(|&v| v as f64).sum::<f64>() / count;
+    let rms = (data.par_iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / count).sqrt();
+    let (lo, hi) = data
+        .par_iter()
+        .fold(|| (f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)))
+        .reduce(|| (f32::INFINITY, f32::NEG_INFINITY), |(a, b), (c, d)| (a.min(c), b.max(d)));
     atomic_write(Path::new(path), |f| {
         f.write_all(&crate::align::mrc_header(
             w,
@@ -236,18 +239,17 @@ pub fn write_mrc(
             [lo, hi, mean as f32, rms as f32],
             "TifMrcView Pro: single-axis tomography",
         ))?;
+        // One section at a time, converted to little-endian bytes in parallel.
+        let mut bytes = vec![0u8; w * h * 4];
         for k in 0..z {
             check_cancel()?;
-            for y in 0..h {
-                for x in 0..w {
-                    let i = if yzx {
-                        (y * z + k) * w + x
-                    } else {
-                        (k * h + y) * w + x
-                    };
-                    f.write_all(&data[i].to_le_bytes())?;
+            bytes.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                let s = if yzx { (y * z + k) * w } else { (k * h + y) * w };
+                for (d, v) in row.chunks_exact_mut(4).zip(&data[s..s + w]) {
+                    d.copy_from_slice(&v.to_le_bytes());
                 }
-            }
+            });
+            f.write_all(&bytes)?;
         }
         Ok(())
     })

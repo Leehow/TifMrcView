@@ -6,20 +6,25 @@
 // program takes the whole membrane under it from the automatic membrane
 // segmentation, see src-tauri/src/sta/paint.rs), 面 (a membrane drawn by
 // hand: points on it, the fallback), 球 (a vesicle: the centre, then a point
-// on its surface), 圈例子 (anything at all: drag a circle round a thing to find; 2–3
-// circles are the examples and everything alike is found in all ticked tomograms; sta::circled).
+// on its surface), 涂例子 (anything at all: paint over a thing to find with a brush; 2–3
+// paintings are the examples and everything alike is found in all ticked tomograms; sta::circled).
 // The software completes the shape and the size (see
 // src-tauri/src/sta/marks.rs); nothing is typed.
 // 点 alone: click 2–3 particles (one is allowed, more is fine) and the program
 // finds all the others like them (their directions are unknown, so no shape is
 // drawn) and SHOWS them before averaging (found.js: 找出全部同类); points and
 // shapes are averaged separately.
-// 圈例子: press at the centre, drag outwards, release (or click the centre, then a point of the circle):
-// one mark {kind: "example", points: [centre, a point on the circle at the same z]} per circle. Examples
-// are examples like clicked points: 找出全部同类 runs the circled search (found.js, which = "circled")
-// and, when there are examples, the other marks wait.
-// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"example", tomogram,
-// points: [[x, y, z]…], flip, strokes: [{points, cut}…]} (strokes: membranes
+// 涂例子: drag a round brush over the thing (a fixed ~14 screen pixels across, so its size in the
+// tomogram follows the zoom; [ and ] change it; the width is stored in voxels). A stroke that ends
+// where it began is a loop and its inside is filled, a click is one dab, Alt-drag erases. A stroke that
+// touches the painted region of a mark on that section adds to that mark, one that touches nothing
+// starts a new example (no "finish" button): one mark {kind: "paint", strokes: [{points, cut, width}…],
+// deep} per example (src-tauri/src/sta/brush.rs makes the mask). Painted examples are examples like
+// clicked points: 找出全部同类 runs the circled search (found.js, which = "circled") and, when there are
+// examples, the other marks wait. Circles made by an older version ({kind: "example", points: [centre, a
+// point on the circle]}) are still read, drawn and searched; there is no tool to make new ones.
+// A mark is {kind: "point"|"line"|"surface"|"sphere"|"membrane"|"paint"|"example", tomogram,
+// points: [[x, y, z]…], flip, deep, strokes: [{points, cut, width}…]} (strokes: membranes and paint
 // only, each on one section; a cut stroke ends a sheet where two membranes
 // are joined: Alt-drag on a selected membrane) in voxels of the file that was open when it was clicked (the tomogram or
 // its clear companion: the backend converts). Marks are kept in the one
@@ -34,34 +39,41 @@
 // Membranes need the automatic segmentation of the open file: choosing 膜
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
-// (sta_mark_section: runs [y, x0, x1) of the voxels on that section).
+// (sta_mark_section: runs [y, x0, x1) of the voxels on that section); the same call fills what a
+// painted example covers: with 三维选择 on (the chip beside the tools, remembered, on by default) the backend follows
+// the painted thing up and down (sta_paint_shape, ~0.4 s after a stroke; cached under <out>/paint/) and
+// sta_mark_section (with out) then gives what it reaches on every section.
 // Painted membranes, marked spheres and drawn lines are EXAMPLES: 找出全部同类 finds
 // all of that kind in every ticked tomogram and shows them for checking
 // (shapes.js, sta::shapes); 点 does the same for particles (found.js). Hand-drawn
 // surfaces alone keep the direct run 「平均我标的」.
 // Backend: sta_run_drawn, sta_marks_load, sta_marks_save, sta_mark_preview,
-// sta_membrane_status, sta_membrane_segment, sta_mark_section. Every call is
+// sta_membrane_status, sta_membrane_segment, sta_mark_section, sta_paint_shape. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
 // Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw, toast.
 (() => {
   const W = window.TifMrcViewPro.sta;
   if (!W) return;
-  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [] };
+  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [], brush: 14, hover: null, hoverAlt: false, hist: [], deep: pref.get("sta-deep", true) !== false };
   const KINDS = {
     point: { name: "点", color: "#0969da", hint: "在 2–3 个颗粒的中心各点一下，程序会找出其余的同类颗粒给你看，你确认后才平均" },
     line: { name: "线", color: "#2da44e", hint: "沿着丝状物依次点几个点，点完按“完成这一条”" },
     membrane: { name: "膜", color: "#d6336c", title: "在膜上涂一笔，自动选中整片膜", hint: "在膜上拖着涂一笔，程序会选中整片膜；涂完的这一片保持选中，再涂就加一片（要另起一组，先在列表里点一下取消选中）。两片膜连在一起时，按住 Alt 在连接处涂一笔把它们切开" },
     surface: { name: "面", color: "#bf8700", title: "面（手画）：自动找膜用不了或找得不对时，自己在膜上点几个点", hint: "在膜上点几个点（可以换几层再点），点完按“完成这一片”" },
     sphere: { name: "球", color: "#8250df", hint: "先点球的中心，再点球面上的一点（可以在另一层）" },
-    example: { name: "圈例子", color: "#c2570c", title: "圈出 2–3 个你要找的东西，是什么都行", hint: "在要找的东西中心按下，往外拖到把它整个圈进去再松开。圈 2–3 个；大小不一样的各圈一个。东西不多时也可以把它们全圈出来（至少 4 个），直接只平均圈的这些。程序会在所有勾选的断层图里找出长得像的。" },
+    paint: { name: "涂例子", color: "#c2570c", title: "在你要找的东西上涂一下，是什么都行", hint: "在要找的东西上涂一下，把它涂满就行；涂 2–3 个。涂多了按住 Alt 擦掉。画一个圈把它圈起来也可以，圈里会自动填满。" },
+    // Circles from an older version: drawn and listed, not offered as a tool.
+    example: { name: "圈例子", color: "#c2570c", hidden: true },
   };
+  // The brush is D.brush (14 to start) screen pixels across; its width in voxels follows the zoom ([ and ] change it, between these).
+  const BRUSH = { least: 4, most: 80 };
   const ICONS = {
     point: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/>',
     line: '<path d="M4 18C9 18 9 6 14 6S18 12 20 6"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="14" cy="6" r="1.6" fill="currentColor"/><circle cx="20" cy="6" r="1.6" fill="currentColor"/>',
     membrane: '<path d="M3 13c3-5 6-5 9-1s6 3 9-3"/><path d="M5 19c4-2 9-2 14 0" stroke-dasharray="2 3"/>',
     surface: '<path d="M3 9c4-4 6 2 9-1s6-2 9 1v8c-3-3-6-4-9-1S7 13 3 17z"/>',
     sphere: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8"/>',
-    example: '<circle cx="12" cy="12" r="8.5" stroke-dasharray="3.2 3"/><circle cx="12" cy="12" r="2" fill="currentColor"/>',
+    paint: '<path d="M14 4.5l5.5 5.5-8 8H6v-5.5z"/><path d="M4 20.5h7"/>',
   };
   // A 点 run needs one click at least; two or three examples are more exact.
   const GOOD_POINTS = 2;
@@ -75,6 +87,7 @@
     <h4>自己标注</h4>
     <p class="dim">程序找不到、或者不是你想要的？自己在断层图上标出来：选一个工具，在图上点几下，其余的交给程序。</p>
     <div id="sta-draw-tools" class="al-row"></div>
+    <div id="sta-draw-deeprow" class="al-row" hidden><button id="sta-draw-deep" class="small" title="涂完后，程序顺着涂的东西上下找，看它有多厚；关掉就按大小估计厚度">三维选择</button></div>
     <p id="sta-draw-hint" class="dim"></p>
     <p id="sta-draw-membrane" class="dim" hidden></p>
     <p id="sta-draw-side" class="dim" hidden>箭头指向颗粒朝外的一侧；不对就点「翻面」</p>
@@ -91,6 +104,7 @@
   const tools = $("sta-draw-tools");
   const btn = {};
   for (const [k, v] of Object.entries(KINDS)) {
+    if (v.hidden) continue;
     const b = document.createElement("button");
     b.className = "small";
     b.title = v.title || `${v.name}：${v.hint}`;
@@ -113,25 +127,52 @@
 
   const count = (m) => m.points.length;
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
-  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && m.kind !== "example" && count(m) >= 2);
+  const usable = (m) => (m.kind === "membrane" ? taking(m) > 0 : m.kind !== "point" && m.kind !== "example" && m.kind !== "paint" && count(m) >= 2);
   // A painted membrane or a complete sphere is an example of what to find (shapes.js).
   // A complete line (a filament) is one too: all filaments like it are found.
   const isExample = (m) => (m.kind === "membrane" && taking(m) > 0) || ((m.kind === "sphere" || m.kind === "line") && count(m) >= 2);
-  // A circled example: the centre and a point on the circle.
+  // A circled example (older versions): the centre and a point on the circle.
   const isCircle = (m) => m.kind === "example" && count(m) >= 2;
+  // A painted example: at least one stroke that takes (a mark of erasing only has nothing left).
+  const isPaint = (m) => m.kind === "paint" && taking(m) > 0;
+  // What 找出全部同类 searches from, of either kind.
+  const isEx = (m) => isCircle(m) || isPaint(m);
   const radius = (m) => Math.hypot(m.points[1][0] - m.points[0][0], m.points[1][1] - m.points[0][1]);
-  // "直径约 N nm" when the pixel size of the file the circle was drawn on is known, else in voxels.
-  function diameter(m) {
-    const d = 2 * radius(m);
-    const px = S.px && S.info?.path === m.tomogram && typeof UNIT_M !== "undefined" ? S.px : null;
-    const m1 = px && UNIT_M[px.unit] ? (d * px.x * UNIT_M[px.unit]) / 1e-9 : null;
-    if (m1 != null && isFinite(m1)) return `直径约 ${m1 < 10 ? m1.toFixed(1) : Math.round(m1)} nm`;
-    return `直径约 ${Math.round(d)} 像素`;
+  const sectionOf = (st) => Math.round(st.points[0][2]);
+  // How far across a painted example is, in voxels: the box round its strokes on the section with most
+  // of them, and the brush's own width, taken as the longer side. It is "about": erased parts are not taken away.
+  function paintExtent(m) {
+    const by = new Map();
+    for (const st of m.strokes || []) if (!st.cut && st.points.length) { const z = sectionOf(st); (by.get(z) || by.set(z, []).get(z)).push(st); }
+    let best = [];
+    for (const v of by.values()) if (v.reduce((n, st) => n + st.points.length, 0) > best.reduce((n, st) => n + st.points.length, 0)) best = v;
+    if (!best.length) return 0;
+    const xs = best.flatMap((st) => st.points.map((p) => p[0])), ys = best.flatMap((st) => st.points.map((p) => p[1]));
+    const brush = Math.max(...best.map((st) => st.width || 1));
+    return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) + brush;
   }
+  // "约 N nm" when the pixel size of the file the example was marked on is known, else in voxels.
+  function sizeText(vox, tomogram) {
+    const px = S.px && S.info?.path === tomogram && typeof UNIT_M !== "undefined" ? S.px : null;
+    const m1 = px && UNIT_M[px.unit] ? (vox * px.x * UNIT_M[px.unit]) / 1e-9 : null;
+    if (m1 != null && isFinite(m1)) return m1 >= 1000 ? `约 ${(m1 / 1000).toFixed(m1 < 10000 ? 1 : 0)} µm` : `约 ${m1 < 10 ? m1.toFixed(1) : Math.round(m1)} nm`;
+    return `约 ${Math.round(vox)} 像素`;
+  }
+  const isExKind = (m) => m.kind === "example" || m.kind === "paint";
   const hasSide = (m) => m && (m.kind === "surface" || m.kind === "sphere" || m.kind === "membrane");
   const label = (m, i) => {
-    const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind).length;
-    if (m.kind === "example") return count(m) >= 2 ? `例子 · ${diameter(m)}` : "例子 · 还差圈上的一点";
+    const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind || (isExKind(x) && isExKind(m))).length;
+    if (m.kind === "example") return count(m) >= 2 ? `例子 ${n} · ${sizeText(2 * radius(m), m.tomogram)}` : `例子 ${n} · 还差圈上的一点`;
+    if (m.kind === "paint") {
+      if (!taking(m)) return `例子 ${n} · 都擦掉了`;
+      const h = SH.get(m), r = h?.info;
+      if (m.deep && h && h.sig === shapeSig(m) && !h.err) {
+        if (!r) return `例子 ${n} · 正在上下找…`;
+        const nm = Math.max(r.sizeNm[0], r.sizeNm[1]), size = `约 ${nm < 10 ? nm.toFixed(1) : Math.round(nm)} nm`;
+        return r.estimated ? `例子 ${n} · ${size} · 厚度按大小估计` : `例子 ${n} · ${size} · 上下共 ${r.used[1] - r.used[0] + 1} 层（第 ${r.used[0] + 1}–${r.used[1] + 1} 层）`;
+      }
+      return `例子 ${n} · ${sizeText(paintExtent(m), m.tomogram)}`;
+    }
     const name = `${KINDS[m.kind].name} ${n}`;
     if (m.kind === "membrane") {
       const cuts = (m.strokes || []).length - taking(m);
@@ -142,7 +183,44 @@
     return `${name} · ${count(m)} 个点`;
   };
 
-  const plain = () => D.marks.map(({ kind, tomogram, points, flip, strokes }) => ({ kind, tomogram, points, flip: !!flip, strokes: strokes || [] }));
+  // 三维选择: what the backend found for each painted example (sta_paint_shape), kept per mark with the
+  // strokes it was made from (`sig`); {sig, info, err, timer}. info: {z, used, sizeNm, estimated, endText, sidePng…}.
+  const SH = new WeakMap();
+  const shapeSig = (m) => `${m.deep ? 1 : 0}|${(m.strokes || []).map((st) => `${st.cut ? "c" : "p"}${st.width}:${st.points.length}:${st.points[0]}:${st.points[st.points.length - 1]}`).join(";")}`;
+  // ~0.4 s after the marks stop changing, every painted example whose strokes are not what its answer was made
+  // from asks again; an answer to older strokes is dropped (the backend cancels the older run itself).
+  function planShapes() {
+    if (!W.out || !S.info) return;
+    for (const m of D.marks) {
+      if (m.kind !== "paint" || !taking(m)) continue;
+      const sig = shapeSig(m), h = SH.get(m);
+      if (h?.sig === sig) continue;
+      clearTimeout(h?.timer);
+      const cur = { sig, info: null, err: false, timer: 0 };
+      SH.set(m, cur);
+      // Without 三维选择 the example is the painted section: nothing to ask, and no wait.
+      if (!m.deep) continue;
+      cur.timer = setTimeout(() => askShape(m, cur), 400);
+    }
+  }
+  async function askShape(m, cur) {
+    const i = D.marks.indexOf(m);
+    if (i < 0 || SH.get(m) !== cur) return;
+    const out = W.out;
+    try {
+      const r = await invoke("sta_paint_shape", { out, marks: plain(), mark: i, tomogram: m.tomogram });
+      if (SH.get(m) !== cur || !D.marks.includes(m)) return;
+      cur.info = r;
+    } catch (_) {
+      /* no backend (demo), or cancelled by a newer stroke */
+      if (SH.get(m) !== cur) return;
+      cur.err = true;
+    }
+    sections(true);
+    render();
+  }
+  const fmtEnds = (r) => (r.endText?.[0] === r.endText?.[1] ? r.endText[0] : `上端：${r.endText?.[0]}；下端：${r.endText?.[1]}`);
+  const plain = () => D.marks.map(({ kind, tomogram, points, flip, strokes, deep }) => ({ kind, tomogram, points, flip: !!flip, strokes: strokes || [], deep: !!deep }));
   // The sampled points of the shapes, for the arrows; the latest answer wins.
   let timer = 0, asked = 0;
   function refresh(wait = 0) {
@@ -161,6 +239,7 @@
   D.setKind = (k) => setKind(k);
   async function save() {
     sections(true);
+    planShapes();
     if (!W.out) return;
     try { await invoke("sta_marks_save", { out: W.out, marks: plain(), size: D.size }); } catch (_) { /* no backend (demo) */ }
     refresh(300);
@@ -169,6 +248,7 @@
     if (!out || out === D.loaded) return;
     D.loaded = out;
     D.marks = [];
+    D.hist = [];
     D.sel = D.open = null;
     render();
     try {
@@ -177,8 +257,10 @@
       sections(true);
       D.size = r.size || "medium";
       D.sel = D.open = null;
+      // An answer kept on disk comes back at once (nothing is followed again).
       render();
       refresh();
+      planShapes();
     } catch (_) { /* no backend (demo) */ }
   }
 
@@ -195,7 +277,7 @@
     const open = S.info?.path, z = S.z;
     if (!open || S.axis !== "xy") return;
     const need = [];
-    D.marks.forEach((m, i) => { if (m.kind === "membrane" && m.tomogram === open && taking(m) && !secs.has(`${open}|${i}|${z}`)) need.push(i); });
+    D.marks.forEach((m, i) => { if ((m.kind === "membrane" || m.kind === "paint") && m.tomogram === open && taking(m) && !secs.has(`${open}|${i}|${z}`)) need.push(i); });
     if (!need.length) return;
     const want = `${secGen}|${open}|${z}|${need.join()}`;
     if (want === secWant) return;
@@ -206,8 +288,9 @@
       const gen = secGen;
       const marks = plain();
       await Promise.all(need.map(async (i) => {
-        let runs = [];
-        try { const r = await invoke("sta_mark_section", { marks, mark: i, tomogram: open, z }); runs = Array.isArray(r) ? r : []; } catch (_) { /* no backend (demo) */ }
+        // null: no answer (the demo has no backend); a painted example then shows its strokes as they are.
+        let runs = null;
+        try { const r = await invoke("sta_mark_section", { marks, mark: i, tomogram: open, z, out: W.out || null }); runs = Array.isArray(r) ? r : []; } catch (_) { /* no backend (demo) */ }
         if (gen !== secGen) return;
         if (secs.size > 600) secs.clear();
         secs.set(`${open}|${i}|${z}`, runs);
@@ -268,6 +351,7 @@
   function setKind(k) {
     D.kind = k;
     D.open = null;
+    if (k !== "paint") D.hover = null;
     if (needsSeg(k)) { M.tried.delete(S.info?.path); M.line = ""; checkMembrane(); }
     if (k) { if (S.tool !== "mark") setTool("mark"); } else if (S.tool === "mark") setTool("select");
     render();
@@ -279,20 +363,24 @@
     W.panel.classList.toggle("marking", !!D.kind || D.marks.length > 0);
     const pointsN = D.marks.filter((m) => m.kind === "point").reduce((n, m) => n + count(m), 0);
     const shapes = D.marks.some(usable);
-    // Circled examples find everything alike first (found.js, which = "circled"); the other marks wait.
-    const circN = D.marks.filter(isCircle).length;
+    // Painted (or circled) examples find everything alike first (found.js, which = "circled"); the other marks wait.
+    const circN = D.marks.filter(isEx).length;
+    const paintN = D.marks.filter(isPaint).length;
     const mixed = circN === 0 && pointsN > 0 && D.marks.some((m) => m.kind !== "point");
     const few = pointsN > 0 && pointsN < GOOD_POINTS && !D.marks.some((m) => m.kind !== "point");
     // Membranes and vesicles are examples: all of that kind are found and shown first (shapes.js).
     const examples = D.marks.filter(isExample).length;
     const fewShapes = circN === 0 && examples === 1;
     const fewCircles = circN === 1;
-    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? "再圈 1–2 个会更准" : "", circN > 0 && D.marks.some((m) => m.kind !== "example") ? "圈了例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
+    $("sta-draw-hint").textContent = [D.kind ? KINDS[D.kind].hint : mixed ? "点和线、面、球、膜要分开平均：这次只平均线、面、球、膜，点先不算" : "", few ? "再点 1–2 个会更准" : "", fewShapes ? "再标 1–2 个会更准" : "", fewCircles ? `再${paintN ? "涂" : "圈"} 1–2 个会更准` : "", circN > 0 && D.marks.some((m) => !isExKind(m)) ? "有例子时只按例子找，其余的标注先放着" : ""].filter(Boolean).map((p) => p.replace(/[。\s]+$/, "")).join("。");
     const ml = $("sta-draw-membrane");
     ml.textContent = needsSeg(D.kind) ? M.line : "";
     ml.hidden = !ml.textContent;
     const needSize = circN === 0 && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
     $("sta-draw-sizes").hidden = !needSize;
+    $("sta-draw-deeprow").hidden = D.kind !== "paint";
+    $("sta-draw-deep").classList.toggle("on", D.deep);
+    $("sta-draw-deep").setAttribute("aria-pressed", D.deep ? "true" : "false");
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
     const open = D.open != null ? D.marks[D.open] : null;
     const done = $("sta-draw-done");
@@ -309,6 +397,23 @@
         w.textContent = "没有碰到膜";
         row.append(" ", w);
       }
+      // 三维选择: what it saw at the two ends, and the side view (x across, z down) to see the height at a glance.
+      const sh = m.kind === "paint" ? SH.get(m) : null;
+      if (sh?.info && sh.sig === shapeSig(m)) {
+        const r = sh.info;
+        const t = document.createElement("div");
+        t.className = "dim sta-mark-ends";
+        t.textContent = fmtEnds(r);
+        row.append(t);
+        if (r.sidePng) {
+          const im = document.createElement("img");
+          im.className = "sta-mark-side";
+          im.src = r.sidePng;
+          im.alt = "从侧面看：横向是 x，竖向是层";
+          im.title = "从侧面看：横向是 x，竖向是层；橙色是选出来的部分";
+          row.append(im);
+        }
+      }
       row.style.setProperty("--mark", KINDS[m.kind].color);
       row.title = m.tomogram;
       row.onclick = () => { D.sel = D.sel === i ? null : i; render(); draw(); };
@@ -322,7 +427,7 @@
     $("sta-draw-side").hidden = !side;
     $("sta-draw-undo").disabled = !D.marks.length || W.busy;
     const last = D.marks[D.open != null ? D.open : D.marks.length - 1];
-    $("sta-draw-undo").title = last?.kind === "membrane" ? "去掉最后涂的一笔" : last?.kind === "example" ? "去掉最后圈的一个例子" : "去掉最后点的一个点";
+    $("sta-draw-undo").title = last?.kind === "membrane" || last?.kind === "paint" ? "去掉最后涂的一笔" : last?.kind === "example" ? "去掉最后圈的一个例子" : "去掉最后点的一个点";
     const pointsOnly = pointsN > 0 && D.marks.every((m) => m.kind === "point");
     const ok = shapes || pointsOnly || circN > 0;
     // Points alone find everything like them first; shapes are averaged directly.
@@ -330,12 +435,13 @@
     $("sta-draw-run").textContent = finds ? "找出全部同类" : "平均我标的";
     $("sta-draw-run").disabled = !ok || W.busy || !!M.seg || W.pixelNeed.length > 0;
     // Every one circled already (a few dozen things seen by eye): just these are averaged, nothing is searched for.
-    const all = circN >= ONLY_FEWEST && D.marks.every(isCircle);
+    const all = circN >= ONLY_FEWEST && D.marks.every(isEx);
+    const verb = paintN === circN ? "涂" : paintN === 0 ? "圈" : "标";
     $("sta-draw-only").hidden = !all;
-    $("sta-draw-only").textContent = `只平均圈的这 ${circN} 个`;
-    $("sta-draw-only").title = "不再去找别的：只把你圈的这些对齐、平均。适合数量不多、你已经全部圈出来的东西";
+    $("sta-draw-only").textContent = `只平均${verb}的这 ${circN} 个`;
+    $("sta-draw-only").title = `不再去找别的：只把你${verb}的这些对齐、平均。适合数量不多、你已经全部标出来的东西`;
     $("sta-draw-only").disabled = W.busy || !!M.seg || W.pixelNeed.length > 0;
-    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? "再圈 1–2 个会更准" : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要拖出一个圈" : "先在图上标一个东西";
+    $("sta-draw-run").title = W.pixelNeed.length ? W.pixelLine : ok ? (fewCircles ? `再${paintN ? "涂" : "圈"} 1–2 个会更准` : pointsOnly && pointsN < GOOD_POINTS ? "再点 1–2 个会更准" : fewShapes ? "再标 1–2 个会更准" : "") : D.marks.length ? "线和面至少要点 2 个点，球要点中心和球面上的一点，膜要在膜上涂一笔，例子要在要找的东西上涂一下" : "先在图上标一个东西";
     draw();
     W.wall?.render();
   }
@@ -362,8 +468,23 @@
     render();
   }
 
+  // 三维选择 for the examples painted from now on (the ones painted already keep what they were made with).
+  $("sta-draw-deep").onclick = () => { D.deep = !D.deep; pref.set("sta-deep", D.deep); render(); };
   $("sta-draw-done").onclick = () => { D.open = null; render(); };
   $("sta-draw-undo").onclick = () => {
+    // A painted example: the last stroke made goes (of whichever example it was added to).
+    while (D.hist.length && !D.marks.includes(D.hist[D.hist.length - 1].m)) D.hist.pop();
+    const top = D.hist[D.hist.length - 1];
+    if (D.marks[D.marks.length - 1]?.kind === "paint" && top) {
+      D.hist.pop();
+      const k = top.m.strokes.indexOf(top.s);
+      if (k >= 0) top.m.strokes.splice(k, 1);
+      if (!taking(top.m)) { D.marks.splice(D.marks.indexOf(top.m), 1); D.open = null; }
+      D.sel = null;
+      save();
+      render();
+      return;
+    }
     const i = D.open != null ? D.open : D.marks.length - 1;
     const m = D.marks[i];
     if (!m) return;
@@ -396,7 +517,7 @@
     render();
   };
   $("sta-draw-only").onclick = () => {
-    const circles = plain().filter((m) => m.kind === "example" && m.points.length >= 2);
+    const circles = plain().filter(isEx);
     if (circles.length < ONLY_FEWEST || !W.found) return;
     D.open = null;
     setKind(null);
@@ -405,10 +526,10 @@
   $("sta-draw-run").onclick = () => {
     const marks = plain();
     const onlyPoints = marks.length > 0 && marks.every((m) => m.kind === "point");
-    const circles = marks.filter((m) => m.kind === "example" && m.points.length >= 2);
+    const circles = marks.filter(isEx);
     D.open = null;
     setKind(null);
-    // Circled examples: everything that looks like them, in all ticked tomograms.
+    // Painted or circled examples: everything that looks like them, in all ticked tomograms.
     if (circles.length && W.found) return W.found.findCircled(circles);
     if (onlyPoints && W.found) return W.found.findPoints(marks);
     // Membranes and vesicles: find all of that kind, show them, average after the user confirms.
@@ -441,6 +562,75 @@
     save();
     render();
   }
+  // The brush's width in voxels: a fixed size on the screen, so it follows the zoom.
+  const brushVox = () => {
+    const sc = toScreen(1, 0)[0] - toScreen(0, 0)[0];
+    return Math.round((D.brush / (sc || 1)) * 100) / 100;
+  };
+  const segDist = (p, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+    return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+  };
+  const inPoly = (p, poly) => {
+    let inside = false;
+    for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+      if ((poly[a][1] > p[1]) !== (poly[b][1] > p[1]) && p[0] < ((poly[b][0] - poly[a][0]) * (p[1] - poly[a][1])) / (poly[b][1] - poly[a][1]) + poly[a][0]) inside = !inside;
+    }
+    return inside;
+  };
+  // A stroke that ends within one brush width of its start is a loop (brush.rs fills it).
+  const isLoop = (pts, width) => pts.length >= 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) <= Math.max(width || 1, 1);
+  // Whether a stroke (points `pts`, brush radius `rad`) touches what the paint mark has on section `z`: a
+  // point of it within the two brushes' reach of one of the mark's strokes, or inside a loop of the mark.
+  function touches(pts, rad, mark, z) {
+    for (const st of mark.strokes || []) {
+      if (st.cut || !st.points.length || sectionOf(st) !== z) continue;
+      const r = rad + (st.width || 1) / 2, sp = st.points, loop = isLoop(sp, st.width);
+      for (const q of pts) {
+        if (loop && inPoly(q, sp)) return true;
+        if (sp.length === 1 ? Math.hypot(q[0] - sp[0][0], q[1] - sp[0][1]) <= r : sp.some((a, k) => k < sp.length - 1 && segDist(q, a, sp[k + 1]) <= r)) return true;
+      }
+    }
+    return false;
+  }
+  // A painted stroke is made: it joins the example it touches (two touched become one), or starts a new
+  // example; Alt erases from every example it touches (none: nothing to erase).
+  function commitPaint(l) {
+    if (!l.vox.length || !S.info || W.busy) return;
+    const z = S.z, file = S.info.path;
+    const stroke = { points: l.vox, cut: l.cut, width: l.width };
+    const near = D.marks.filter((m) => m.kind === "paint" && m.tomogram === file && touches(l.vox, l.width / 2, m, z));
+    if (l.cut) {
+      if (!near.length) return;
+      for (const m of near) { m.strokes.push(stroke); D.hist.push({ m, s: stroke }); }
+    } else {
+      let m = near[0];
+      if (m) {
+        for (const o of near.slice(1)) { m.strokes.push(...o.strokes); D.marks.splice(D.marks.indexOf(o), 1); }
+        m.strokes.push(stroke);
+      } else {
+        m = { kind: "paint", tomogram: file, points: [], flip: false, deep: D.deep, strokes: [stroke] };
+        D.marks.push(m);
+      }
+      D.hist.push({ m, s: stroke });
+    }
+    D.open = D.sel = null;
+    save();
+    render();
+    if (l.cut) dropEmpty(near, z, file);
+  }
+  // An example that was erased entirely on the only section it was painted on is gone.
+  async function dropEmpty(list, z, file) {
+    for (const t of list) {
+      const i = D.marks.indexOf(t);
+      if (i < 0 || t.strokes.some((st) => !st.cut && st.points.length && sectionOf(st) !== z)) continue;
+      let runs;
+      try { runs = await invoke("sta_mark_section", { marks: plain(), mark: i, tomogram: file, z, out: null }); } catch (_) { continue; /* no backend (demo) */ }
+      const j = D.marks.indexOf(t);
+      if (j >= 0 && Array.isArray(runs) && !runs.length) { D.marks.splice(j, 1); D.open = D.sel = null; save(); render(); }
+    }
+  }
   // A circle dragged out: its centre where the press was, a point on it where the pointer was released.
   function commitCircle(t) {
     if (!S.info || t.d < 3 || W.busy) return;
@@ -456,8 +646,16 @@
     save();
     render();
   }
+  const clampV = (v) => [Math.max(-0.5, Math.min(S.info.width - 0.5, v[0])), Math.max(-0.5, Math.min(S.info.height - 0.5, v[1])), v[2]];
   ext.tools.mark = {
     down(e, p) {
+      if (D.kind === "paint") {
+        if (W.busy) return;
+        if (!S.info || S.axis !== "xy" || S.info.sizeZ < 3) return W.status("请在断层图的 XY 截面上标注");
+        live = { x: e.clientX, y: e.clientY, vox: [clampV(voxel(p))], cut: !!e.altKey, width: brushVox(), paint: true };
+        draw();
+        return;
+      }
       if (D.kind === "membrane") {
         if (!canPaint()) return;
         if (!S.info || S.axis !== "xy" || S.info.sizeZ < 3) return W.status("请在断层图的 XY 截面上标注");
@@ -472,7 +670,7 @@
         if (Math.hypot(e.clientX - live.x, e.clientY - live.y) >= 3) {
           live.x = e.clientX;
           live.y = e.clientY;
-          live.vox.push(voxel(p));
+          live.vox.push(live.paint ? clampV(voxel(p)) : voxel(p));
           draw();
         }
         return;
@@ -489,14 +687,14 @@
     up() {
       const l = live;
       live = null;
-      if (l) { commitStroke(l); draw(); return; }
+      if (l) { if (l.paint) commitPaint(l); else commitStroke(l); draw(); return; }
       const t = press;
       press = null;
       if (t && D.kind === "example" && t.moved) { commitCircle(t); draw(); return; }
       if (t && !t.moved) add(t.p);
       draw();
     },
-    active(on) { if (!on && D.kind) { live = null; press = null; D.kind = null; D.open = null; render(); } },
+    active(on) { if (!on && D.kind) { live = null; press = null; D.kind = D.hover = null; D.open = null; render(); } },
   };
 
   // The points of a mark in voxels of the file open in the viewer: marks made
@@ -518,6 +716,50 @@
   }
   D.onOpen = onOpen;
 
+  // The edge of the painted voxels: runs [y, x0, x1) to segments [x0, y0, x1, y1] (voxel-edge coordinates).
+  // A run's left and right ends are edges; its top and bottom are, where the row beside it is not painted.
+  function outlineOf(runs) {
+    const rows = new Map();
+    for (const [y, a, b] of runs) (rows.get(y) || rows.set(y, []).get(y)).push([a, b]);
+    const uncovered = (a, b, others) => {
+      let parts = [[a, b]];
+      for (const [c, d] of others) parts = parts.flatMap(([p, q]) => (d <= p || c >= q ? [[p, q]] : [...(c > p ? [[p, c]] : []), ...(d < q ? [[d, q]] : [])]));
+      return parts;
+    };
+    const out = [];
+    for (const [y, a, b] of runs) {
+      out.push([a, y, a, y + 1], [b, y, b, y + 1]);
+      for (const [p, q] of uncovered(a, b, rows.get(y - 1) || [])) out.push([p, y, q, y]);
+      for (const [p, q] of uncovered(a, b, rows.get(y + 1) || [])) out.push([p, y + 1, q, y + 1]);
+    }
+    return out;
+  }
+  // A stroke as it is drawn, before (or without) the backend's fill: a thick line the brush's width, its
+  // inside filled when it is a loop. Erasing is a thin dashed line.
+  function brushPreview(ctx, at, sc, st, col, alpha) {
+    ctx.save();
+    ctx.lineCap = ctx.lineJoin = "round";
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = ctx.fillStyle = col;
+    ctx.beginPath();
+    st.points.forEach((p, k) => { const [x, y] = at(p); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+    if (st.cut) {
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+    } else if (st.points.length === 1) {
+      const [x, y] = at(st.points[0]);
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(1, (st.width || 1) * sc) / 2, 0, 2 * Math.PI);
+      ctx.fill();
+    } else {
+      if (isLoop(st.points, st.width)) ctx.fill();
+      ctx.lineWidth = Math.max(2, (st.width || 1) * sc);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   // Marks over the image: faint on the slices near the clicked one.
   ext.overlays.push((ctx) => {
     // While the found membranes and vesicles are shown, the examples are among them.
@@ -556,7 +798,65 @@
       }
       ctx.setLineDash([]);
     });
-    if (live) {
+    // The painted examples: the fill the backend gives (the strokes as they are until it answers), the outline on
+    // the section they were painted on, and "例 n" above.
+    D.marks.forEach((mark, i) => {
+      if (mark.kind !== "paint" || mark.tomogram !== S.info.path) return;
+      const col = KINDS.paint.color, on = D.sel === i;
+      const here = (mark.strokes || []).filter((st) => st.points.length && sectionOf(st) === S.z);
+      const runs = secs.get(`${S.info.path}|${i}|${S.z}`);
+      // Sections the 三维选择 reaches are filled too, painted on or not.
+      if (!here.length && !runs?.length) return;
+      if (runs == null) {
+        for (const st of here) brushPreview(ctx, at, sc, st, col, on ? 0.5 : 0.35);
+        return;
+      }
+      if (!runs.length) return;
+      ctx.globalAlpha = on ? 0.5 : 0.32;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      for (const [y, x0, x1] of runs) {
+        const [sx, sy] = toScreen(x0, y);
+        ctx.rect(sx, sy, (x1 - x0) * sc, sc);
+      }
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = on ? 2.4 : 1.6;
+      ctx.beginPath();
+      for (const [x0, y0, x1, y1] of outlineOf(runs)) {
+        const [ax, ay] = toScreen(x0, y0), [bx, by] = toScreen(x1, y1);
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+      const top = runs.reduce((a, r) => (r[0] < a[0] ? r : a), runs[0]);
+      const [lx, ly] = toScreen((top[1] + top[2]) / 2, top[0]);
+      const n = D.marks.slice(0, i + 1).filter(isExKind).length;
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#fff";
+      ctx.strokeText(`例 ${n}`, lx, ly - 3);
+      ctx.fillStyle = col;
+      ctx.fillText(`例 ${n}`, lx, ly - 3);
+    });
+    if (live?.paint) brushPreview(ctx, at, sc, { points: live.vox, cut: live.cut, width: live.width }, KINDS.paint.color, 0.4);
+    if (D.kind === "paint" && D.hover && !W.busy && !(live && !live.paint)) {
+      const [hx, hy] = toScreen(D.hover[0], D.hover[1]);
+      ctx.globalAlpha = 1;
+      ctx.setLineDash(D.hoverAlt || live?.cut ? [4, 3] : []);
+      for (const [w, c] of [[3.5, "#fff"], [1.6, KINDS.paint.color]]) {
+        ctx.lineWidth = w;
+        ctx.strokeStyle = c;
+        ctx.beginPath();
+        ctx.arc(hx, hy, D.brush / 2, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+    if (live && !live.paint) {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = KINDS.membrane.color;
       ctx.lineWidth = 2;
@@ -580,7 +880,7 @@
       ctx.setLineDash([]);
     }
     D.marks.forEach((mark, i) => {
-      if (mark.kind === "membrane") return;
+      if (mark.kind === "membrane" || mark.kind === "paint") return;
       const pts = onOpen(mark);
       if (!pts) return;
       const m = { kind: mark.kind, points: pts };
@@ -693,6 +993,26 @@
   document.addEventListener("sta-out", (e) => { load(e.detail); draw(); });
   document.addEventListener("sta-busy", () => render());
   document.addEventListener("sta-pixel", () => render());
+  // The brush outline follows the pointer when no button is down; [ and ] change its size (as in labels.js).
+  $("view").addEventListener("pointermove", (e) => {
+    if (D.kind !== "paint" || S.tool !== "mark" || e.pointerType === "touch") return;
+    D.hover = toImage(e);
+    D.hoverAlt = e.altKey;
+    draw();
+  });
+  $("view").addEventListener("pointerleave", () => { if (D.hover) { D.hover = null; draw(); } });
+  window.addEventListener("keydown", (e) => {
+    if (D.kind !== "paint" || S.tool !== "mark" || e.ctrlKey || e.metaKey) return;
+    const tag = e.target.tagName;
+    if (tag === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "range") return;
+    if (e.key === "Alt") { D.hoverAlt = true; draw(); return; }
+    if (e.key !== "[" && e.key !== "]") return;
+    const up = e.key === "]";
+    D.brush = Math.max(BRUSH.least, Math.min(BRUSH.most, Math.round(D.brush * (up ? 1.25 : 0.8)) + (up ? 1 : 0)));
+    draw();
+    e.preventDefault();
+  });
+  window.addEventListener("keyup", (e) => { if (e.key === "Alt" && D.hoverAlt) { D.hoverAlt = false; draw(); } });
   // Closing the workspace puts the tool away.
   new MutationObserver(() => { if (W.panel.hidden && D.kind) setKind(null); }).observe(W.panel, { attributes: true, attributeFilter: ["hidden"] });
   render();

@@ -313,6 +313,7 @@ fn supported(c: &str) -> bool {
             | "tomo_dataset"
             | "tomo_dataset_save"
             | "tomo_session"
+            | "tomo_session_reset"
             | "tomo_session_run"
             | "tomo_view"
             | "tomo_take"
@@ -563,6 +564,7 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
             Value::Null
         }
         "tomo_session" => serde_json::to_value(crate::tomo::session::scan(string(a, "folder")?)?)?,
+        "tomo_session_reset" => serde_json::to_value(crate::tomo::session::reset(string(a, "folder")?, string(a, "name")?)?)?,
         "tomo_session_run" => {
             let cpu=burn::tensor::Device::default();
             let dev=crate::ctf_gpu::device().map(|(d,_)|d).unwrap_or(&cpu);
@@ -577,8 +579,11 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
               let errors=failures.into_inner().unwrap();ensure!(errors.is_empty(),"{}",errors.join("；"));return Ok(serde_json::to_value(crate::tomo::session::scan(folder)?)?);
              }
             }
+            // One series: this process runs it alone, so it gets the cores the
+            // GPU workers would have shared (the global pool was sized for them).
+            let run = || -> Result<_> { Ok(
             // The initial pass uses the user's selected sequence list.
-            let s = if req["purpose"].is_null() {
+            if req["purpose"].is_null() {
                 crate::tomo::session::prepare(dev, folder, &only, emit, &|| {})?
             } else {
                 crate::tomo::session::finish(
@@ -589,6 +594,10 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
                     emit,
                     &|| {},
                 )?
+            }) };
+            let s = match crate::gpu_workers::enabled().then(crate::resources::whole_pool).flatten() {
+                Some(pool) => pool.install(run)?,
+                None => run()?,
             };
             serde_json::to_value(s)?
         }

@@ -27,6 +27,7 @@
         <label class="cs-use"><input type="checkbox" data-step="wedge"><span><b>去缺失楔</b><span>减轻上下方向的拉长和模糊；这台电脑太慢（超过约 30 分钟）时自动跳过并告诉你</span></span></label>
         <label class="cs-use"><input type="checkbox" data-step="flatten"><span><b>自动展平</b><span>把斜着的薄片转平，翻层时整层都在样品里</span></span></label>
       </div>
+      <label class="cs-bin" title="每个体素合并多少个原始像素（bin）。bin 越小细节越多，但越慢、文件越大">体素大小 <select class="cs-bin-pick" aria-label="体素大小（bin）"></select></label>
       <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
       <span class="dim cs-selection-count" role="status"></span>
@@ -61,7 +62,10 @@
         rejectJob = reject;
         const job = { group, key, store, run: () => invoke("tomo_view", { path, z, max })
           .then(buf => { const d = R.decodePicture(buf); d ? resolve(d) : reject(new Error("空图像")); }).catch(reject) };
-        if (priority) queue.unshift(job); else queue.push(job);
+        // The wall's thumbnails go before a review's preloading of sections.
+        if (priority) queue.unshift(job);
+        else if (group == null) { const at = queue.findIndex((j) => j.group != null); at < 0 ? queue.push(job) : queue.splice(at, 0, job); }
+        else queue.push(job);
         pump();
       });
       p.catch(() => { if (store.get(key) === p) store.delete(key); });
@@ -91,7 +95,16 @@
   function lazyPic(box, path, z, max, onFail = "无图") {
     const c = el("canvas");
     box.prepend(c);
-    box._load = () => pic(path, z, max).then((d) => draw(c, d)).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
+    // Kept as an image, not a canvas: WebKit may drop a hidden canvas's
+    // pixels (the wall is hidden during a review, the app goes to the
+    // background) and nothing would draw it again.
+    box._load = () => pic(path, z, max).then((d) => {
+      draw(c, d);
+      const img = el("img");
+      img.alt = "";
+      img.src = d.url ||= c.toDataURL();
+      c.replaceWith(img);
+    }).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
     seen.observe(box);
   }
 
@@ -108,13 +121,17 @@
     const filtered=!!q('.cs-search').value.trim();q('.cs-select-all').textContent=filtered?'全选筛选结果':'全选';q('.cs-select-none').textContent=filtered?'全不选筛选结果':'全不选';
     q('.cs-select-all').disabled=q('.cs-select-none').disabled=W.busy;
     host.querySelectorAll('.cs-act').forEach(b=>b.disabled=W.busy||!folder||!selected.size);
+    refreshSteps();
   }
+  let refreshSteps=()=>{};
   function toggleSelection(name,on=!selected.has(name)){if(W.busy)return;on?selected.add(name):selected.delete(name);selectionChanged();}
   q('.cs-search').oninput=()=>{for(const [name,t]of tiles)t.el.hidden=!matches(find(name));selectionChanged();};
   q('.cs-select-all').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.add(s.name);selectionChanged();};
   q('.cs-select-none').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.delete(s.name);selectionChanged();};
   function changedFolder(){selected.clear();q('.cs-search').value='';closeReview();stopMedia();rv.name=null;rv.dataset=null;for(const job of queue.splice(0))job.store.get(job.key)?.cancelQueued?.();wallCache.clear();rev.clear();}
   const visible = () => !W.panel.hidden;
+  // The project folder of 三维重构: the 子断层平均 part lists the tomograms made there (sta/index.js).
+  W.reconFolder = () => folder;
 
   function defaultFolder() {
     return S.folder?.dir || (S.info ? dirname(S.info.path) : null);
@@ -216,7 +233,7 @@
     for (const [n, t] of tiles) if (!names.has(n)) { t.el.remove(); tiles.delete(n); }
     list.forEach((s, i) => {
       let t = tiles.get(s.name);
-      const sig = JSON.stringify(s);
+      const sig = JSON.stringify([s, W.busy, confirming.has(s.name), lastRun()?.only?.includes(s.name) ?? false]);
       if (!t) {
         t = { el: el("div", "cs-tile"), sig: "" };
         tiles.set(s.name, t);
@@ -273,11 +290,77 @@
       tile.append(n);
     }
     if(s.aligned||s.small||s.quick||s.result){const open=el('button','small cs-open','打开');open.setAttribute('aria-label',`打开`);open.title=`打开 ${s.name} 的结果`;open.onclick=e=>{e.stopPropagation();openReview(s.name);};tile.append(open);}
+    cardActions(tile, s);
     tile.onclick=e=>{if(!e.target.closest('button,label,input'))toggleSelection(s.name);};
     tile.onkeydown=e=>{if(e.target===tile&&(e.key==='Enter'||e.key===' ')){e.preventDefault();toggleSelection(s.name);}};
   }
 
   // ---------- running ----------
+
+  // ---------- continue and reset, on each series' card ----------
+
+  // The run started last in a folder, until it finishes. A series of it that was not finished gets
+  // 「继续」 on its card: the same processing again, and the steps that were done are not done again
+  // (every step skips what is already there), so a run that was stopped, or cut off by closing the
+  // app, goes on from where it stopped. A series that is part-way without such a run continues with
+  // the processing ticked now. 「重置」 removes what was made of that series (asked once more on the
+  // card first), so its next run starts from its movies again.
+  const lastKey = () => (folder ? `cryo-last-run:${folder}` : null);
+  const lastRun = () => { const k = lastKey(); if (!k) return null; try { return pref.get(k, null); } catch { return null; } };
+  const confirming = new Set();
+  const unfinished = (s) => {
+    const last = lastRun();
+    if (last?.only?.includes(s.name) && s.stage !== "done") return last.purpose ?? null;
+    const partway = (s.stage !== "movies" && s.stage !== "done") || (s.stage === "movies" && s.corrected > 0);
+    return partway ? { custom: { ...steps } } : undefined;
+  };
+  const made = (s) => s.stage !== "movies" || s.corrected > 0 || !!s.small || !!s.error;
+  function cardActions(tile, s) {
+    const row = el("div", "cs-card-acts");
+    row.onclick = (e) => e.stopPropagation();
+    if (confirming.has(s.name)) {
+      row.classList.add("asking");
+      row.append(el("p", null, "清除这个序列的中间结果（校正后的叠层、断层图、清晰版）？原始数据不动，不能恢复。"));
+      const go = el("button", "small cs-reset-go", "确认清除"), no = el("button", "small", "取消");
+      go.onclick = async () => {
+        confirming.delete(s.name);
+        if (W.busy) return fillTile(tile, s);
+        try {
+          await invoke("tomo_session_reset", { folder, name: s.name });
+          rev.clear();
+          await scan();
+          document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+          W.status(`已重置 ${s.name}：下次从头处理`);
+        } catch (e) { W.status(`无法重置 ${s.name}：${e}`); fillTile(tile, s); }
+      };
+      no.onclick = () => { confirming.delete(s.name); fillTile(tile, s); };
+      row.append(go, no);
+      tile.append(row);
+      return;
+    }
+    const purpose = unfinished(s);
+    if (purpose !== undefined) {
+      const b = el("button", "small cs-resume", "继续");
+      b.title = "接着做这个序列没做完的处理，做完的步骤不再重做";
+      b.disabled = W.busy;
+      b.onclick = () => {
+        if (W.busy) return;
+        selected.clear();
+        selected.add(s.name);
+        selectionChanged();
+        runSelected(purpose);
+      };
+      row.append(b);
+    }
+    if (made(s)) {
+      const b = el("button", "small cs-reset", "重置");
+      b.title = "清除这个序列做出的中间结果，下次从头处理";
+      b.disabled = W.busy;
+      b.onclick = () => { confirming.add(s.name); fillTile(tile, s); };
+      row.append(b);
+    }
+    if (row.childElementCount) tile.append(row);
+  }
 
   async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only } })) {
     const un = await T.event.listen("tomo-session", async () => {
@@ -287,8 +370,13 @@
       await scan();
       if (files() !== before) document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
     });
-    const r = await W.run(label, call);
-    un();
+    const key = lastKey();
+    if (key) pref.set(key, { purpose, only, label });
+    let r;
+    try { const running = W.run(label, call); render(); r = await running; } finally { un(); }
+    // Finished: nothing to continue. Stopped or failed: the run is kept, to be continued (the cards' 继续).
+    if (r && key) pref.set(key, null);
+    render();
     if (r) {
       adopt(r);
       render();
@@ -302,18 +390,60 @@
   // Subtomogram averaging is not asked here: its part of the panel makes
   // what it needs itself.
   const STEP_NAMES = { fineAlign: "精对齐", denoise: "N2N 降噪", wedge: "去缺失楔", flatten: "自动展平" };
-  let steps = { fineAlign: false, denoise: false, wedge: false, flatten: false };
+  let steps = { fineAlign: false, denoise: false, wedge: false, flatten: false, bin: null };
   try { Object.assign(steps, pref.get("cryo-steps", {}) || {}); } catch {}
   const boxes = [...host.querySelectorAll(".cs-purpose-box input[data-step]")];
+  const binPick = q(".cs-bin-pick");
+  // The binning: the program's (as the engine chooses it, `auto::output_bin`)
+  // or one the user picked, each with the voxel size it gives for the series
+  // ticked (else all of them), from their pixel size.
+  const BINS = [1, 2, 4, 8, 16], MAX_PIXELS = 4.2e6;
+  const autoBin = (s, voxel) => BINS.filter((b) => !s.size || s.size[0] * s.size[1] / (b * b) <= MAX_PIXELS || b === 16)
+    .reduce((a, b) => Math.abs(Math.log(s.pixelA * b / voxel)) < Math.abs(Math.log(s.pixelA * a / voxel)) ? b : a);
+  const fmtA = (v) => v >= 10 ? v.toFixed(0) : v.toFixed(1);
+  const span = (list) => {
+    if (!list.length) return "";
+    const lo = Math.min(...list), hi = Math.max(...list);
+    return hi / lo < 1.05 ? `约 ${fmtA(lo)} Å` : `约 ${fmtA(lo)}–${fmtA(hi)} Å`;
+  };
+  // Voxel size, image size after binning, and the finest detail it can hold (Nyquist: two voxels).
+  const dims = (list, binOf) => {
+    const d = [...new Set(list.filter((s) => s.size).map((s) => `${Math.floor(s.size[0] / binOf(s))}×${Math.floor(s.size[1] / binOf(s))}`))];
+    return d.length === 1 ? d[0] : d.length ? `${d[0]} 等` : "";
+  };
+  const nyq = (list, binOf) => span(list.map((s) => 2 * s.pixelA * binOf(s))).replace("约 ", "");
+  const detail = (list, binOf) => [span(list.map((s) => s.pixelA * binOf(s))), dims(list, binOf), `分辨率最高约 ${nyq(list, binOf)}`].filter(Boolean).join(" · ");
+  const known = () => {
+    const pool = session.series.filter((s) => s.pixelA > 0);
+    const ticked = pool.filter((s) => selected.has(s.name));
+    return ticked.length ? ticked : pool;
+  };
   const showSteps = () => {
     for (const b of boxes) b.checked = !!steps[b.dataset.step];
     const on = Object.keys(STEP_NAMES).filter((k) => steps[k]);
     const fine = steps.fineAlign || steps.denoise || steps.wedge;
+    const voxel = fine ? 9 : 18;
+    const list = known();
+    const autoText = list.length ? span(list.map((s) => s.pixelA * autoBin(s, voxel))) : `约 ${voxel} Å`;
+    const autoDetail = list.length ? detail(list, (s) => autoBin(s, voxel)) : autoText;
+    const opts = [["", `自动（${autoDetail}）`]];
+    for (const b of BINS) {
+      const big = list.some((s) => s.size && s.size[0] * s.size[1] / (b * b) > MAX_PIXELS);
+      opts.push([String(b), `bin ${b}${list.length ? ` · ${detail(list, () => b)}` : ""}${big ? "（很慢，文件很大）" : ""}`]);
+    }
+    const want = steps.bin ? String(steps.bin) : "";
+    binPick.replaceChildren(...opts.map(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; return o; }));
+    binPick.value = want;
+    binPick.disabled = !!W.busy;
+    const size = steps.bin ? (list.length ? span(list.map((s) => s.pixelA * steps.bin)) : `bin ${steps.bin}`) : autoText;
+    const res = list.length ? `，分辨率最高约 ${nyq(list, (s) => steps.bin || autoBin(s, voxel))}` : "";
     q(".cs-steps-line").textContent = !on.length
-      ? "都不勾：快速重构，约 18 Å 体素，每个序列几分钟"
-      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（约 ${fine ? 9 : 18} Å 体素${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
+      ? `都不勾：快速重构，${size} 体素${res}，每个序列几分钟`
+      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（${size} 体素${res}${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
   };
   for (const b of boxes) b.onchange = () => { steps = { ...steps, [b.dataset.step]: b.checked }; pref.set("cryo-steps", steps); showSteps(); };
+  binPick.onchange = () => { steps = { ...steps, bin: binPick.value ? Number(binPick.value) : null }; pref.set("cryo-steps", steps); showSteps(); };
+  refreshSteps = showSteps;
   showSteps();
   // What a run left out or said, from the series it made.
   const noteOf = (r, only) => {

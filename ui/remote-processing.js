@@ -1,3 +1,43 @@
+// The 「高级」 fold under 运行位置 of the Cryo-ET and SPA workspaces (local and SSH alike): the devices
+// each step ran on, the results folder and, in Cryo-ET, a 「帮助」 fold saying how to go from movies
+// to a tomogram and from tomograms to an average. Built here and used by local-processing.js too.
+(() => {
+  const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+  const RECON = [
+    "点「选文件夹…」，选放着电影（EER / TIFF）和 .mdoc 的项目文件夹；每个倾转序列在下面占一格。",
+    "点一格可以看这个序列的图像、对齐和断层图；不好的倾角程序会标出来，可以去掉或改回。",
+    "勾上要重构的序列。需要的话勾「精对齐」「N2N 降噪」「去缺失楔」「自动展平」，都不勾最快。",
+    "按「重构勾选序列」。做好的断层图出现在右侧栏，也会列在「子断层平均」里。",
+  ];
+  const STA = [
+    "切到「子断层平均」：上面列出三维重构做出的断层图。勾上的参加平均；点图片，在主界面打开它的清晰版。",
+    "在清晰版的 XY 截面上给 2–3 个例子：「涂例子」在你要找的东西上涂满（按住 Alt 擦掉），什么东西都行；膜用「膜」涂一笔，丝状物用「线」，囊泡用「球」。",
+    "按「找出全部同类」：程序在所有勾选的断层图里找，找到的给你看。拖「少 / 多」，点掉错的、点上漏的，或「再找一轮」。",
+    "确认后按平均。结果显示三个截面和分辨率，可以在查看器里打开。也可以先按「找候选」，从程序做的卡片里挑一张。",
+  ];
+  function steps(title, list) {
+    const box = el("div", null, "ws-help-part");
+    box.append(el("b", title));
+    const ol = el("ol");
+    for (const t of list) ol.append(el("li", t));
+    box.append(ol);
+    return box;
+  }
+  window.TmvHelp = {
+    advanced() {
+      const d = el("details", null, "ws-advanced");
+      d.append(el("summary", "高级"));
+      return d;
+    },
+    // The help fold goes last, and only in the Cryo-ET workspace.
+    finish(advanced, id) {
+      if (id !== "cryoet-workspace") return;
+      const h = el("details", null, "ws-help");
+      h.append(el("summary", "帮助：怎么做三维重构和子断层平均"), steps("三维重构", RECON), steps("子断层平均", STA));
+      advanced.append(h);
+    },
+  };
+})();
 "use strict";
 // One routing boundary: local calls remain native; remote paths never reach local FS.
 (() => {
@@ -132,6 +172,8 @@
       const expanded=new Map([...bar.querySelectorAll('details')].map(d=>[d.className,d.open]));
       bar.replaceChildren();const text=document.createElement('span');text.textContent=message||label();bar.append(text);
       const task=[...active.values()].find(j=>j.ctx.identity===current()?.identity);
+      // 停止, at the right of the 运行位置 line: the steps done stay on the server, and the series' cards offer 继续.
+      if(task){const stop=document.createElement('button');stop.className='small remote-stop';stop.textContent=task.stopping?'正在停止…':'停止';stop.disabled=!!task.stopping;stop.title='停下这个任务；做完的步骤保留在服务器上，以后可以接着做';stop.onclick=()=>{task.stopping=true;stop.disabled=true;stop.textContent='正在停止…';request(task.ctx,{action:'cancel',job:task.record.job},true).catch(e=>{task.stopping=false;if(typeof toast==='function')toast(`无法停止：${e}`);updateBar();});};bar.append(stop);}
       if(task){const rec=task.record,p=rec.progress;const status=document.createElement('div');status.className='remote-task-status';status.setAttribute('role','status');
         const phase=document.createElement('strong');phase.textContent=rec.state==='queued'?'等待服务器资源…':p?.stage||'正在提交并读取服务器进度…';
         const count=document.createElement('span');count.textContent=p&&p.total>1?`${p.done} / ${p.total}`:'正在处理，请稍候';
@@ -142,12 +184,15 @@
       const ctx=current();
       if(ctx?.resources){const r=ctx.resources,details=document.createElement('details');details.className='remote-resources';const title=document.createElement('summary');title.textContent=`服务器资源：CPU ${r.cpuThreads} 线程 · 可用内存 ${(r.memoryAvailableMb/1024).toFixed(1)} GB · ${r.gpus.length} 张 GPU`;details.append(title);for(const g of r.gpus){const row=document.createElement('p');row.textContent=`GPU ${g.index} · ${g.name} · 可用显存 ${(g.freeMb/1024).toFixed(1)}/${(g.totalMb/1024).toFixed(1)} GB · 当前利用率 ${g.utilization}%`;details.append(row);}if(r.outputFreeMb!=null){const row=document.createElement('p');row.textContent=`输出磁盘可用 ${(r.outputFreeMb/1024).toFixed(1)} GB`;details.append(row);}for(const w of r.warnings||[]){const row=document.createElement('p');row.textContent=w;details.append(row);}bar.append(details);}
       const placements=Object.values(ctx?.placements||{});
-      if(placements.length){const details=document.createElement('details');details.className='remote-backends';details.open=false;const title=document.createElement('summary');title.textContent=task?'每一步实际计算设备':'上次任务的计算设备';details.append(title);for(const p of placements){const row=document.createElement('div');row.className='remote-backend-row';row.classList.toggle('fallback',p.backend==='CPU'&&!!p.reason&&p.fallback!==false);const name=document.createElement('strong');name.textContent=p.operation;const device=document.createElement('span');device.textContent=`${p.backend}${p.device?' · '+p.device:p.worker?' · '+p.worker+' 的 CPU 路径':''}`;row.append(name,device);if(p.reason){const reason=document.createElement('small');reason.textContent=(p.backend==='CPU'?(p.fallback===false?'CPU 分工：':'CPU 回退原因：'):'分工：')+p.reason;row.append(reason);}if(p.priorFallback&&p.backend!=='CPU'){const prior=document.createElement('small');prior.textContent='本次此前曾回退 CPU：'+p.priorFallback;row.append(prior);}details.append(row);}bar.append(details);}
-      if(current()?.lastOutputRoot){const details=document.createElement('details');details.className='remote-output-details';const summary=document.createElement('summary');summary.textContent='查看服务器结果目录';const code=document.createElement('code');code.textContent=current().lastOutputRoot;details.append(summary,code);bar.append(details);}
-      if(current()) {const input=document.createElement('input');input.className='remote-output';input.placeholder='输出位置：服务器用户缓存（可填写其他磁盘目录）';input.setAttribute('aria-label','服务器输出位置');input.value=current().outputRoot||'';input.disabled=[...active.values()].some(j=>j.ctx.identity===current().identity);input.onchange=()=>{const ctx=current();const path=input.value.trim();if(path&&!path.startsWith('/')){toast('请填写服务器绝对路径');return;}ctx.outputRoot=path||null;localStorage.setItem(`tmv.remote.output.${ctx.identity}`,path);window.TifMrcViewPro?.spa.show(null);window.TifMrcViewPro?.spa.useCurrent?.();document.dispatchEvent(new CustomEvent('cryoet-open'));};bar.append(input);}
+      const advanced=window.TmvHelp.advanced(id);
+      if(placements.length){const details=document.createElement('details');details.className='remote-backends';details.open=false;const title=document.createElement('summary');title.textContent=task?'每一步实际计算设备':'上次任务的计算设备';details.append(title);for(const p of placements){const row=document.createElement('div');row.className='remote-backend-row';row.classList.toggle('fallback',p.backend==='CPU'&&!!p.reason&&p.fallback!==false);const name=document.createElement('strong');name.textContent=p.operation;const device=document.createElement('span');device.textContent=`${p.backend}${p.device?' · '+p.device:p.worker?' · '+p.worker+' 的 CPU 路径':''}`;row.append(name,device);if(p.reason){const reason=document.createElement('small');reason.textContent=(p.backend==='CPU'?(p.fallback===false?'CPU 分工：':'CPU 回退原因：'):'分工：')+p.reason;row.append(reason);}if(p.priorFallback&&p.backend!=='CPU'){const prior=document.createElement('small');prior.textContent='本次此前曾回退 CPU：'+p.priorFallback;row.append(prior);}details.append(row);}advanced.append(details);}
+      // The results folder: where the last task wrote, and where the next one writes (editable), folded together.
+      let out=null;if(current()){out=document.createElement('details');out.className='remote-output-details';const summary=document.createElement('summary');summary.textContent='结果目录';out.append(summary);if(current().lastOutputRoot){const p=document.createElement('p');p.className='dim';p.textContent='上次的结果在：';const code=document.createElement('code');code.textContent=current().lastOutputRoot;out.append(p,code);}advanced.append(out);}
+      if(current()) {const input=document.createElement('input');input.className='remote-output';input.placeholder='输出位置：服务器用户缓存（可填写其他磁盘目录）';input.setAttribute('aria-label','服务器输出位置');input.value=current().outputRoot||'';input.disabled=[...active.values()].some(j=>j.ctx.identity===current().identity);const setOut=path=>{const ctx=current();if(path&&!path.startsWith('/')){toast('请填写服务器绝对路径');return;}ctx.outputRoot=path||null;localStorage.setItem(`tmv.remote.output.${ctx.identity}`,path);window.TifMrcViewPro?.spa.show(null);window.TifMrcViewPro?.spa.useCurrent?.();document.dispatchEvent(new CustomEvent('cryoet-open'));};input.onchange=()=>setOut(input.value.trim());const lab=document.createElement('p');lab.className='dim';lab.textContent='以后的结果保存到（服务器上的绝对路径；空着就用服务器用户缓存）：';const pick=document.createElement('button');pick.className='small remote-output-pick';pick.textContent='选位置…';pick.title='在服务器上浏览文件夹，选一个保存结果';pick.disabled=input.disabled;pick.onclick=async()=>{const ctx=current();if(!ctx?.pickFolder)return;try{const p=await ctx.pickFolder(ctx.outputRoot||ctx.lastOutputRoot||ctx.project,path=>request(ctx,{action:'inspect',outputRoot:path}).then(r=>r.resources));if(p&&p!==ctx.outputRoot){input.value=p;setOut(p);updateBar();}}catch(e){if(typeof toast==='function')toast(`${e}`);}};const row=document.createElement('div');row.className='remote-output-row';row.append(input,pick);out.append(lab,row);const free=ctx?.resources?.outputFreeMb;if(free!=null){const f=document.createElement('p');f.className=free<50*1024?'ssh-pick-low':'dim';f.textContent=`${ctx.outputRoot?'这个位置':'服务器用户缓存'}所在的盘还剩 ${free>=1048576?(free/1048576).toFixed(1)+' TB':(free/1024).toFixed(1)+' GB'}${free<50*1024?'，空间不多，建议换一个盘':''}`;out.append(f);}}
       if(current() && !task && jobs().some(j=>j.identity===current().identity && j.job)) {const b=document.createElement('button');b.className='small';b.textContent='恢复任务';b.title='重新显示这个文件夹在服务器上运行的任务';b.onclick=()=>discover(current(),true);bar.append(b);}
       const others=(ctx?.serverJobs||[]).filter(j=>running(j)&&!within(j.project,ctx.project));
       if(current() && others.length){const p=document.createElement('p');p.className='dim remote-other-jobs';p.textContent=`这台服务器上还有 ${others.length} 个任务在运行（${others.map(j=>j.project.split('/').filter(Boolean).pop()).join('、')}），打开对应文件夹即可查看进度`;bar.append(p);}
+      window.TmvHelp.finish(advanced,id);if(advanced.childElementCount>1)bar.append(advanced);
       for(const d of bar.querySelectorAll('details'))if(expanded.has(d.className))d.open=expanded.get(d.className);
     }
   }
