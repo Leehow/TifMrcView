@@ -101,10 +101,18 @@ pub fn run(
         eprintln!("GPU_SUM_PROFILE {}x{} frames={} tiles={n}x{t} cut+upload={cut_ms:.1}ms queue={math_ms:.1}ms", sp.w, sp.h, sp.len());
     }
     let backing = std::time::Instant::now();
+    // Blended on the device, so only the w × h result comes back (not the
+    // n × t × t tiles); the processor's blend if the device cannot.
     let back = |re: Tensor<3>, im: Tensor<3>| {
-        let v = download(inverse(re, im, t));
-        let tiles: Vec<Vec<f32>> = v.chunks(t * t).map(<[f32]>::to_vec).collect();
-        plan.blend(&tiles)
+        let tiles = inverse(re, im, t);
+        match blend_gpu(&plan, tiles.clone(), dev) {
+            Ok(v) => v,
+            Err(_) => {
+                let v = download(tiles);
+                let tiles: Vec<Vec<f32>> = v.chunks(t * t).map(<[f32]>::to_vec).collect();
+                plan.blend(&tiles)
+            }
+        }
     };
     let weighted = exposures.map(|_| {
         let scale = norm.sqrt().clamp_min(1e-12).recip().mul_scalar((sp.len() as f32).sqrt());
@@ -155,6 +163,44 @@ mod kernel {
                 }
             }
             out[i] = v;
+        }
+    }
+    /// The blend of `Plan::blend` on the device: thread i is output pixel i;
+    /// it adds the (at most 2 × 2) tiles that cover it, in tile order, with
+    /// the same linear ramps over `ramp` pixels. Tiles are t × t, on the
+    /// grid of `Plan::new` (corner k·stride − margin, nx × ny of them).
+    #[cube(launch)]
+    pub fn tmv_blend_tiles(tiles: &[f32], out: &mut [f32], w: usize, t: usize, stride: usize, margin: usize, nx: usize, ny: usize, ramp: f32) {
+        let i = ABSOLUTE_POS;
+        if i < out.len() {
+            let x = i32::cast_from(i % w);
+            let y = i32::cast_from(i / w);
+            let ti = i32::cast_from(t);
+            let st = i32::cast_from(stride);
+            let m = i32::cast_from(margin);
+            let kx0 = (x + m) / st;
+            let ky0 = (y + m) / st;
+            let mut sum = 0.0f32;
+            let mut weight = 0.0f32;
+            for dy in 0..2u32 {
+                let ky = ky0 - 1 + i32::cast_from(dy);
+                let j = y - (ky * st - m);
+                if ky >= 0 && ky < i32::cast_from(ny) && j >= 0 && j < ti {
+                    let ej = f32::min((f32::cast_from(i32::min(j, ti - 1 - j)) + 0.5) / ramp, 1.0);
+                    for dx in 0..2u32 {
+                        let kx = kx0 - 1 + i32::cast_from(dx);
+                        let c = x - (kx * st - m);
+                        if kx >= 0 && kx < i32::cast_from(nx) && c >= 0 && c < ti {
+                            let ec = f32::min((f32::cast_from(i32::min(c, ti - 1 - c)) + 0.5) / ramp, 1.0);
+                            let a = ec * ej;
+                            let k = usize::cast_from(ky * i32::cast_from(nx) + kx);
+                            sum += a * tiles[(k * t + usize::cast_from(j)) * t + usize::cast_from(c)];
+                            weight += a;
+                        }
+                    }
+                }
+            }
+            out[i] = sum / f32::max(weight, 1e-12);
         }
     }
     /// Many planes, each moved by its own whole-plane shift (Catmull–Rom,
@@ -484,6 +530,36 @@ pub(crate) fn shift_planes(dev: &Device, planes: &Tensor<3>, shifts: &[[f64; 2]]
         n,
     );
     Ok(Tensor::from_primitive::<burn_cubecl::CubeBackend>(out))
+}
+
+/// `Plan::blend` on the device (`kernel::tmv_blend_tiles`); returns the w × h image.
+fn blend_gpu(plan: &Plan, tiles: Tensor<3>, dev: &Device) -> Result<Vec<f32>> {
+    use burn_cubecl::cubecl::prelude::{BufferArg, CubeCount, CubeDim};
+    let (w, h, t, stride) = (plan.w, plan.h, plan.t, plan.stride);
+    let (nx, ny) = (w.div_ceil(stride).max(1), h.div_ceil(stride).max(1));
+    anyhow::ensure!(nx * ny == plan.len() && tiles.dims() == [plan.len(), t, t] && w * h < i32::MAX as usize, "拼接尺寸不一致");
+    let client = client_of(dev)?;
+    let src = tiles.try_into_primitive::<burn_cubecl::CubeBackend>().map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?;
+    anyhow::ensure!(src.is_contiguous(), "拼接输入不连续");
+    let out = Tensor::<1>::empty([w * h], dev).try_into_primitive::<burn_cubecl::CubeBackend>().map_err(|_| anyhow::anyhow!("GPU 后端不支持自定义计算"))?;
+    let len = w * h;
+    let groups = len.div_ceil(256) as u32;
+    kernel::tmv_blend_tiles::launch(
+        &client,
+        CubeCount::Static(groups.min(65535), groups.div_ceil(65535), 1),
+        CubeDim::new_1d(256),
+        // Each handle holds exactly the element count given here.
+        unsafe { BufferArg::from_raw_parts(src.handle.clone(), plan.len() * t * t) },
+        unsafe { BufferArg::from_raw_parts(out.handle.clone(), len) },
+        w,
+        t,
+        stride,
+        (t - stride) / 2,
+        nx,
+        ny,
+        (t - stride) as f32,
+    );
+    Ok(download(Tensor::<1>::from_primitive::<burn_cubecl::CubeBackend>(out)))
 }
 
 /// The CubeCL client behind a Burn device.
