@@ -393,10 +393,13 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
     };
     crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
     let cfg = TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
-    // Every free card: the batch is split over them while training, the
-    // sections handed out while applying.
+    // Every free card applies the network (sections handed out as cards
+    // come free). Training stays on one: its steps are small (8 patches of
+    // 64²), and split over two RTX 3090s they took as long as on one
+    // (amax, 1000 steps, 72 s vs 71 s; both cards at 30–45 %).
+    // TMV_N2N_CARDS=all splits the batch anyway.
     let gpus = crate::multi_gpu::gpus(dev);
-    let cards = if std::env::var_os("TMV_N2N_ONE_CARD").is_some() { &gpus.devs[..1] } else { &gpus.devs[..] };
+    let cards = if std::env::var("TMV_N2N_CARDS").as_deref() == Ok("all") { &gpus.devs[..] } else { &gpus.devs[..1] };
     let images: Vec<crate::denoise_learn::Img> = pairs.iter().map(|(a, b)| crate::denoise_learn::Img { a, b: b.as_deref(), w, h }).collect();
     let fit = crate::denoise_learn::fit(cards, &images, mode, &cfg, &crate::denoise_learn::Fitting::default(), |s, n, _| progress("Noise2Noise 训练", s, n), &mut |_, _, _, _, _| {})?;
     drop(pairs);
