@@ -82,9 +82,9 @@ async fn local_compute<T: Send + 'static>(app: AppHandle, id: Option<String>, f:
 }
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn local_compute_resources() -> CmdResult<serde_json::Value> {
-    blocking(|| {
-        let mut value = serde_json::to_value(crate::resources::inspect(None))?;
+async fn local_compute_resources(output: Option<String>) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let mut value = serde_json::to_value(crate::resources::inspect(output.as_deref().map(std::path::Path::new)))?;
         #[cfg(target_os = "macos")]
         { value["metal"] = serde_json::to_value(crate::resources::metal_memory())?; }
         Ok(value)

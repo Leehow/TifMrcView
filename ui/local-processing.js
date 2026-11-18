@@ -31,6 +31,19 @@
     if(record?.error)bar.append(node('p',record.error));
     const id=kind==='tomo'?'cryoet-workspace':kind==='spa'?'spa-workspace':'';
     const advanced=window.TmvHelp?.advanced(id);
+    // 结果目录 (Cryo-ET): results go into the project folder's step folders; the disks and their free space are shown.
+    if(advanced&&kind==='tomo'){
+      const folder=window.TifMrcViewPro?.cryoet?.reconFolder?.();
+      if(Date.now()-resourcesAt>15000||resources?.for!==folder){resourcesAt=Date.now();window.__TAURI__.core.invoke('local_compute_resources',{output:folder||null}).then(r=>{resources={...r,for:folder};refresh();}).catch(()=>{});}
+      const size=mb=>mb>=1048576?`${(mb/1048576).toFixed(1)} TB`:`${(mb/1024).toFixed(mb<10240?1:0)} GB`;
+      const out=node('details');out.className='remote-output-details';out.append(node('summary','结果目录'));
+      out.append(node('p',folder?`结果保存在项目文件夹「${folder.split(/[\\/]/).filter(Boolean).pop()}」里（1_motion、2_tomograms、3_clean、4_sta 等子文件夹），原始数据不动。`:'结果保存在项目文件夹里（1_motion、2_tomograms、3_clean、4_sta 等子文件夹），原始数据不动。'));
+      const free=resources?.for===folder?resources?.outputFreeMb:null;
+      if(free!=null){const f=node('p',`项目文件夹所在的盘还剩 ${size(free)}${free<50*1024?'：空间不多，一个序列的中间结果通常要几 GB 到几十 GB，建议把数据放到空间大的盘上':''}`);f.className=free<50*1024?'ssh-pick-low':'dim';out.append(f);}
+      if(resources?.disks?.length){const l=node('p','这台电脑的盘：'+resources.disks.map(d=>`${d.mount} 剩 ${size(d.freeMb)} / 共 ${size(d.totalMb)}`).join('；'));l.className='dim';out.append(l);}
+      if(folder){const b=node('button','在文件夹中打开');b.className='small';b.onclick=()=>window.__TAURI__.core.invoke('open_folder',{path:folder}).catch(()=>{});out.append(b);}
+      advanced.append(out);
+    }
     const done=()=>{if(advanced){window.TmvHelp.finish(advanced,id);if(advanced.childElementCount>1)bar.append(advanced);}for(const d of bar.querySelectorAll('details'))if(expanded.has(d.className))d.open=expanded.get(d.className);};
     if(!record?.placements.size){if(record?.running)bar.append(node('span','正在准备数据；计算步骤开始后显示实际设备…'));return done();}
     const current=record.current;if(current){const status=node('p',`${current.operation}：${current.backend}${current.device?' · '+current.device:''}${current.reason?' · '+current.reason:''}`);status.setAttribute('role','status');bar.append(status);}
@@ -61,7 +74,7 @@
     await listening;
     const id=crypto.randomUUID(),kind=kinds.get(command),record={running:true,placements:new Map()};
     jobs.set(id,record);latest.set(kind,record);refresh();
-    if(Date.now()-resourcesAt>15000){resourcesAt=Date.now();native('local_compute_resources',{}).then(r=>{resources=r;refresh();}).catch(()=>{});}
+    if(Date.now()-resourcesAt>15000){resourcesAt=Date.now();native('local_compute_resources',{output:window.TifMrcViewPro?.cryoet?.reconFolder?.()||null}).then(r=>{resources={...r,for:window.TifMrcViewPro?.cryoet?.reconFolder?.()};refresh();}).catch(()=>{});}
     try{return await native(command,{...args,computeId:id});}
     catch(e){record.error=String(e);throw e;}
     finally{record.running=false;while(jobs.size>100){const oldest=[...jobs].find(([_,r])=>!r.running);if(!oldest)break;jobs.delete(oldest[0]);}refresh();}

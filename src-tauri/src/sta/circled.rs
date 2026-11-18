@@ -1036,7 +1036,7 @@ mod tests {
         assert!(c.found.places.iter().all(|p| c.found.turn_of(p, &turns).is_some_and(|r| turns.iter().all(|t| distance(t, &crate::sta::IDENTITY) >= distance(&r, &crate::sta::IDENTITY)))));
         // Too few to average.
         let err = given(&sources, &examples[..3]).err().unwrap().to_string();
-        assert!(err.contains("至少要圈 4 个"), "{err}");
+        assert!(err.contains("至少要 4 个"), "{err}");
         assert!(given(&sources, &[at(30.0, 30.0), at(60.0, 30.0), at(30.0, 60.0), at(4.0, 48.0)]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

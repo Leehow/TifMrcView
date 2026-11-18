@@ -137,3 +137,15 @@
 /* 停止 sits at the right end of the 运行位置 line, where a running task is stopped. */
 .remote-processing-location .remote-stop{order:-1;margin-left:auto;border-color:#d1242f;color:#d1242f}
 .remote-processing-location>:first-child{order:-2}
+/* 结果目录: the folder field with its 选位置… button, free space, and the server folder picker. */
+.remote-output-row{display:flex;gap:6px;align-items:center}.remote-output-row .remote-output{flex:1;min-width:0}
+.ssh-pick-low{color:#9a6700;font-weight:600}
+.ssh-pick{width:min(560px,calc(100vw - 48px));padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);font-size:13px}
+.ssh-pick::backdrop{background:#10182866}
+.ssh-pick h3{margin:0 0 10px;font-size:14px}
+.ssh-pick-disks{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:8px}.ssh-pick-disks button.low{color:#9a6700}
+.ssh-pick-path{display:flex;gap:6px}.ssh-pick-path input{flex:1;min-width:0}
+.ssh-pick ul{list-style:none;margin:8px 0;padding:0;height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.ssh-pick li{padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line)}.ssh-pick li:hover,.ssh-pick li:focus{background:var(--muted);outline:none}
+.ssh-pick li::before{content:"📁 "}
+.ws-advanced p{overflow-wrap:anywhere;white-space:normal;max-width:100%}.ws-advanced details{min-width:0}

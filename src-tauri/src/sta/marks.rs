@@ -947,7 +947,10 @@ mod tests {
         assert!(!s.marks[0].deep && s.marks[1].strokes[0].width == 0.0);
         let dir = tempfile::tempdir().unwrap();
         save(dir.path(), &Saved { marks: vec![painted.clone()], size: None }).unwrap();
-        assert_eq!(load(dir.path()).marks, vec![painted.clone()]);
+        // (JSON keeps floats to about 1e-15, not bit for bit.)
+        let back = load(dir.path()).marks;
+        assert_eq!((back.len(), back[0].kind, back[0].deep, back[0].strokes.len(), back[0].strokes[0].width), (1, Kind::Paint, true, 1, 3.0));
+        assert!(back[0].strokes[0].points.iter().zip(&painted.strokes[0].points).all(|(a, b)| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9)));
         let text = std::fs::read_to_string(dir.path().join("marks.json")).unwrap();
         assert!(text.contains("\"paint\"") && text.contains("\"width\": 3.0") && text.contains("\"deep\": true"));
         // The highlight of a painted mark on its section.

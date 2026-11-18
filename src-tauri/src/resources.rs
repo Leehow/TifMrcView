@@ -23,7 +23,84 @@ pub struct Resources {
     pub memory_available_mb: u64,
     pub gpus: Vec<Gpu>,
     pub output_free_mb: Option<u64>,
+    /// The disks results can be written to, with their free space (for choosing where results go).
+    #[serde(default)]
+    pub disks: Vec<Disk>,
     pub warnings: Vec<String>,
+}
+/// A mounted disk: where it is mounted, its free (usable) and total space.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Disk {
+    pub mount: String,
+    pub free_mb: u64,
+    pub total_mb: u64,
+}
+
+/// Free and total MB of the file system holding `path` (or its nearest existing parent).
+#[cfg(unix)]
+pub fn space(path: &Path) -> Option<(u64, u64)> {
+    let p = path.ancestors().find(|p| p.exists()).unwrap_or(path);
+    let p = std::ffi::CString::new(p.to_string_lossy().as_bytes()).ok()?;
+    let mut s = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(p.as_ptr(), s.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let s = unsafe { s.assume_init() };
+    Some((s.f_bavail as u64 * s.f_frsize as u64 / 1024 / 1024, s.f_blocks as u64 * s.f_frsize as u64 / 1024 / 1024))
+}
+#[cfg(not(unix))]
+pub fn space(_: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// The disks a user can put results on: on Linux the real file systems of
+/// /proc/mounts (no proc, tmpfs, overlays of containers, snaps, boot
+/// partitions), one per device; on macOS the system disk and /Volumes/*.
+/// Small ones (under 1 GB) are left out.
+pub fn disks() -> Vec<Disk> {
+    let mut mounts: Vec<String> = vec![];
+    #[cfg(target_os = "linux")]
+    {
+        let skip_fs = ["proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay", "squashfs", "securityfs", "pstore", "debugfs", "tracefs", "configfs", "fusectl", "mqueue", "hugetlbfs", "bpf", "autofs", "binfmt_misc", "efivarfs", "ramfs", "nsfs", "rpc_pipefs", "fuse.lxcfs", "fuse.portal", "fuse.gvfsd-fuse"];
+        let mut devices: Vec<String> = vec![];
+        for line in std::fs::read_to_string("/proc/mounts").unwrap_or_default().lines() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 3 || skip_fs.contains(&f[2]) {
+                continue;
+            }
+            let mount = f[1].replace("\\040", " ");
+            if mount.starts_with("/boot") || mount.starts_with("/snap") || mount.starts_with("/proc") || mount.starts_with("/sys") || mount.starts_with("/dev") || mount.starts_with("/run") || mount.starts_with("/var/lib/docker") {
+                continue;
+            }
+            if devices.contains(&f[0].to_string()) {
+                continue;
+            }
+            devices.push(f[0].to_string());
+            mounts.push(mount);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mounts.push("/".into());
+        if let Ok(rd) = std::fs::read_dir("/Volumes") {
+            for e in rd.flatten() {
+                let p = e.path();
+                // The system disk shows up in /Volumes as a link to /.
+                if std::fs::canonicalize(&p).map(|c| c == Path::new("/")).unwrap_or(false) {
+                    continue;
+                }
+                mounts.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut out: Vec<Disk> = mounts
+        .into_iter()
+        .filter_map(|m| space(Path::new(&m)).map(|(free_mb, total_mb)| Disk { mount: m, free_mb, total_mb }))
+        .filter(|d| d.total_mb >= 1024)
+        .collect();
+    out.sort_by(|a, b| a.mount.cmp(&b.mount));
+    out
 }
 /// The device's recommended working set is a performance limit, not free RAM.
 #[cfg(target_os = "macos")]
@@ -223,19 +300,7 @@ pub fn inspect(output: Option<&Path>) -> Resources {
     let mut warnings = vec![];
     let gpus = discover();
     let memory_available_mb = memory_available_bytes() / 1024 / 1024;
-    let mut output_free_mb = None;
-    #[cfg(unix)]
-    if let Some(p) = output {
-        let p = p.ancestors().find(|p| p.exists()).unwrap_or(p);
-        let p = std::ffi::CString::new(p.to_string_lossy().as_bytes());
-        if let Ok(p) = p {
-            let mut s = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-            if unsafe { libc::statvfs(p.as_ptr(), s.as_mut_ptr()) } == 0 {
-                let s = unsafe { s.assume_init() };
-                output_free_mb = Some(s.f_bavail as u64 * s.f_frsize as u64 / 1024 / 1024);
-            }
-        }
-    }
+    let output_free_mb = output.and_then(space).map(|(free, _)| free);
     for g in &gpus {
         if g.free_mb < 2048 {
             warnings.push(format!(
@@ -261,6 +326,7 @@ pub fn inspect(output: Option<&Path>) -> Resources {
         memory_available_mb,
         gpus,
         output_free_mb,
+        disks: disks(),
         warnings,
     }
 }
@@ -360,4 +426,14 @@ pub fn configure_threads() {
     }
     .max(1);
     std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
+}
+
+#[cfg(test)]
+mod disk_tests {
+    #[test]
+    fn the_disks_have_space_and_the_root_is_among_them() {
+        let d = super::disks();
+        assert!(d.iter().all(|d| d.free_mb <= d.total_mb && d.total_mb >= 1024));
+        assert!(super::space(std::path::Path::new("/tmp/does/not/exist")).is_some(), "the nearest existing parent is measured");
+    }
 }
