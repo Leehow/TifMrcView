@@ -27,6 +27,7 @@
         <label class="cs-use"><input type="checkbox" data-step="wedge"><span><b>去缺失楔</b><span>减轻上下方向的拉长和模糊；这台电脑太慢（超过约 30 分钟）时自动跳过并告诉你</span></span></label>
         <label class="cs-use"><input type="checkbox" data-step="flatten"><span><b>自动展平</b><span>把斜着的薄片转平，翻层时整层都在样品里</span></span></label>
       </div>
+      <label class="cs-bin" title="每个体素合并多少个原始像素（bin）。bin 越小细节越多，但越慢、文件越大">体素大小 <select class="cs-bin-pick" aria-label="体素大小（bin）"></select></label>
       <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
       <span class="dim cs-selection-count" role="status"></span>
@@ -108,7 +109,9 @@
     const filtered=!!q('.cs-search').value.trim();q('.cs-select-all').textContent=filtered?'全选筛选结果':'全选';q('.cs-select-none').textContent=filtered?'全不选筛选结果':'全不选';
     q('.cs-select-all').disabled=q('.cs-select-none').disabled=W.busy;
     host.querySelectorAll('.cs-act').forEach(b=>b.disabled=W.busy||!folder||!selected.size);
+    refreshSteps();
   }
+  let refreshSteps=()=>{};
   function toggleSelection(name,on=!selected.has(name)){if(W.busy)return;on?selected.add(name):selected.delete(name);selectionChanged();}
   q('.cs-search').oninput=()=>{for(const [name,t]of tiles)t.el.hidden=!matches(find(name));selectionChanged();};
   q('.cs-select-all').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.add(s.name);selectionChanged();};
@@ -375,18 +378,60 @@
   // Subtomogram averaging is not asked here: its part of the panel makes
   // what it needs itself.
   const STEP_NAMES = { fineAlign: "精对齐", denoise: "N2N 降噪", wedge: "去缺失楔", flatten: "自动展平" };
-  let steps = { fineAlign: false, denoise: false, wedge: false, flatten: false };
+  let steps = { fineAlign: false, denoise: false, wedge: false, flatten: false, bin: null };
   try { Object.assign(steps, pref.get("cryo-steps", {}) || {}); } catch {}
   const boxes = [...host.querySelectorAll(".cs-purpose-box input[data-step]")];
+  const binPick = q(".cs-bin-pick");
+  // The binning: the program's (as the engine chooses it, `auto::output_bin`)
+  // or one the user picked, each with the voxel size it gives for the series
+  // ticked (else all of them), from their pixel size.
+  const BINS = [1, 2, 4, 8, 16], MAX_PIXELS = 4.2e6;
+  const autoBin = (s, voxel) => BINS.filter((b) => !s.size || s.size[0] * s.size[1] / (b * b) <= MAX_PIXELS || b === 16)
+    .reduce((a, b) => Math.abs(Math.log(s.pixelA * b / voxel)) < Math.abs(Math.log(s.pixelA * a / voxel)) ? b : a);
+  const fmtA = (v) => v >= 10 ? v.toFixed(0) : v.toFixed(1);
+  const span = (list) => {
+    if (!list.length) return "";
+    const lo = Math.min(...list), hi = Math.max(...list);
+    return hi / lo < 1.05 ? `约 ${fmtA(lo)} Å` : `约 ${fmtA(lo)}–${fmtA(hi)} Å`;
+  };
+  // Voxel size, image size after binning, and the finest detail it can hold (Nyquist: two voxels).
+  const dims = (list, binOf) => {
+    const d = [...new Set(list.filter((s) => s.size).map((s) => `${Math.floor(s.size[0] / binOf(s))}×${Math.floor(s.size[1] / binOf(s))}`))];
+    return d.length === 1 ? d[0] : d.length ? `${d[0]} 等` : "";
+  };
+  const nyq = (list, binOf) => span(list.map((s) => 2 * s.pixelA * binOf(s))).replace("约 ", "");
+  const detail = (list, binOf) => [span(list.map((s) => s.pixelA * binOf(s))), dims(list, binOf), `分辨率最高约 ${nyq(list, binOf)}`].filter(Boolean).join(" · ");
+  const known = () => {
+    const pool = session.series.filter((s) => s.pixelA > 0);
+    const ticked = pool.filter((s) => selected.has(s.name));
+    return ticked.length ? ticked : pool;
+  };
   const showSteps = () => {
     for (const b of boxes) b.checked = !!steps[b.dataset.step];
     const on = Object.keys(STEP_NAMES).filter((k) => steps[k]);
     const fine = steps.fineAlign || steps.denoise || steps.wedge;
+    const voxel = fine ? 9 : 18;
+    const list = known();
+    const autoText = list.length ? span(list.map((s) => s.pixelA * autoBin(s, voxel))) : `约 ${voxel} Å`;
+    const autoDetail = list.length ? detail(list, (s) => autoBin(s, voxel)) : autoText;
+    const opts = [["", `自动（${autoDetail}）`]];
+    for (const b of BINS) {
+      const big = list.some((s) => s.size && s.size[0] * s.size[1] / (b * b) > MAX_PIXELS);
+      opts.push([String(b), `bin ${b}${list.length ? ` · ${detail(list, () => b)}` : ""}${big ? "（很慢，文件很大）" : ""}`]);
+    }
+    const want = steps.bin ? String(steps.bin) : "";
+    binPick.replaceChildren(...opts.map(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; return o; }));
+    binPick.value = want;
+    binPick.disabled = !!W.busy;
+    const size = steps.bin ? (list.length ? span(list.map((s) => s.pixelA * steps.bin)) : `bin ${steps.bin}`) : autoText;
+    const res = list.length ? `，分辨率最高约 ${nyq(list, (s) => steps.bin || autoBin(s, voxel))}` : "";
     q(".cs-steps-line").textContent = !on.length
-      ? "都不勾：快速重构，约 18 Å 体素，每个序列几分钟"
-      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（约 ${fine ? 9 : 18} Å 体素${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
+      ? `都不勾：快速重构，${size} 体素${res}，每个序列几分钟`
+      : `将运行：${on.map((k) => STEP_NAMES[k]).join(" · ")}（${size} 体素${res}${steps.wedge ? "，去缺失楔每个序列最多约 30 分钟" : ""}）`;
   };
   for (const b of boxes) b.onchange = () => { steps = { ...steps, [b.dataset.step]: b.checked }; pref.set("cryo-steps", steps); showSteps(); };
+  binPick.onchange = () => { steps = { ...steps, bin: binPick.value ? Number(binPick.value) : null }; pref.set("cryo-steps", steps); showSteps(); };
+  refreshSteps = showSteps;
   showSteps();
   // What a run left out or said, from the series it made.
   const noteOf = (r, only) => {

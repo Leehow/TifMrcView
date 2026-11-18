@@ -63,6 +63,13 @@ pub struct Series {
     pub error: Option<String>,
     /// Something the user should know about what was made (a step left out).
     pub note: Option<String>,
+    /// Pixel size of the tilt series (Å) and its views' width and height,
+    /// for choosing the binning; before motion correction the mdoc's
+    /// (approximate: the frames may be made at another pixel size).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<[usize; 2]>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -170,6 +177,8 @@ pub fn scan(folder: &str) -> Result<Session> {
         if movies < expected { s.note=Some(format!("采集记录共 {expected} 个电影，匹配 {movies} 个；{} 个缺失或匹配不唯一，处理时会保留跳过原因",expected-movies)); }
         s.corrected = corrected;
         s.small = exists(&state.and_then(|r| r.small));
+        s.pixel_a = doc.pixel_a;
+        s.size = doc.image_size;
         if complete {
             fill(&mut s);
         }
@@ -190,12 +199,19 @@ pub fn scan(folder: &str) -> Result<Session> {
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None }
 }
 
 /// What the dataset of an existing stack says about it.
 fn fill(s: &mut Series) {
     s.stage = Stage::Stack;
+    if let Ok(img) = pipeline::open(&s.stack) {
+        let i = img.info();
+        s.size = Some([i.width, i.height]);
+        if i.pixel_size.is_some() {
+            s.pixel_a = Some(crate::align::pixel_a(i));
+        }
+    }
     let file = super::dataset::path_for(&s.stack);
     let Some(d) = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Dataset>(&b).ok()) else { return };
     s.views = d.angles.len();
@@ -203,6 +219,7 @@ fn fill(s: &mut Series) {
         Some(a) => a.views.iter().filter(|v| v.excluded).count(),
         None => super::triage::excluded(&d).len(),
     };
+    s.pixel_a = d.optics.pixel_a.or(s.pixel_a);
     s.verdict = d.verdict.clone();
     s.take = d.take;
     s.aligned = exists(&d.aligned);

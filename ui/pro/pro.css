@@ -612,6 +612,8 @@
 #cryo-session .cs-use:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 #cryo-session .cs-use:has(input:checked) b { color:var(--accent); }
 #cryo-session .cs-steps-line { flex:1 1 100%; margin:0; }
+#cryo-session .cs-bin { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:13px; }
+#cryo-session .cs-bin select { width:auto; flex:0 1 auto; max-width:100%; }
 #live-dock.right, #stage:has(#tools:not([hidden])) #live-dock.right { left:auto; right:10px; }
 /* Figure flow (figure.js): one panel on the right, over the 2D and the 3D view. */
 #quickbar #btn-figure { width: auto; padding: 0 8px; gap: 5px; }

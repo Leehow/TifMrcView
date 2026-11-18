@@ -64,10 +64,13 @@ pub struct Steps {
     pub denoise: bool,
     pub wedge: bool,
     pub flatten: bool,
+    /// The binning the user chose (1, 2, 4, 8 or 16 stack pixels per voxel);
+    /// None: the program's (about 9 Å with the clearing steps, else 18 Å).
+    pub bin: Option<usize>,
 }
 
 impl Steps {
-    pub const ALL: Steps = Steps { fine_align: true, denoise: true, wedge: true, flatten: true };
+    pub const ALL: Steps = Steps { fine_align: true, denoise: true, wedge: true, flatten: true, bin: None };
     /// Steps worth the finer voxels.
     fn clear(self) -> bool {
         self.fine_align || self.denoise || self.wedge
@@ -80,6 +83,11 @@ impl Steps {
                 "align" | "fine-align" => s.fine_align = true,
                 "n2n" | "denoise" => s.denoise = true,
                 "wedge" => s.wedge = true,
+                w if w.starts_with("bin") => {
+                    let b: usize = w.trim_start_matches("bin").trim_start_matches(['=', ':']).parse().map_err(|_| anyhow::anyhow!("--steps {w}: bin1, bin2, bin4, bin8 or bin16"))?;
+                    super::validate_bin(b)?;
+                    s.bin = Some(b);
+                }
                 "flat" | "flatten" => s.flatten = true,
                 "none" | "fast" => {}
                 _ => bail!("--steps {w}: use align, n2n, wedge, flat (comma separated) or none"),
@@ -219,7 +227,10 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     let sta = req.purpose == Purpose::Sta;
     let st = req.purpose.steps();
     let membranes = req.membranes && !sta && st.clear() && crate::membrane::model_path().is_some();
-    let bin = output_bin(w, h, px, req.purpose.voxel());
+    let bin = match st.bin.filter(|b| super::validate_bin(*b).is_ok()) {
+        Some(b) if req.purpose != Purpose::Survey && req.purpose != Purpose::Sta => b,
+        _ => output_bin(w, h, px, req.purpose.voxel()),
+    };
     let halves = (sta || st.denoise || st.wedge) && d.even.is_some() && d.odd.is_some();
     // With halves the wedge step trains on them and denoises as it goes.
     let wedge_denoises = st.wedge && halves;
