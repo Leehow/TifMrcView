@@ -31,6 +31,7 @@ pub mod contrast;
 pub mod filaments;
 pub mod flat;
 pub mod gallery;
+pub mod grow;
 pub mod kinds;
 pub mod marks;
 pub mod membranes;
