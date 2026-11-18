@@ -21,7 +21,8 @@
 //! - loo: one network on all the other series (a series it never saw)
 //! - sep_signal / sep_val / sep_both: sep with patches only where the halves
 //!   share signal / with held-out cells and early stopping / both
-//! N2N_ONE_CARD=1 trains on one GPU only.
+//! N2N_ONE_CARD=1 trains on one GPU only; N2N_SEED sets the seed (to see how
+//! much scores move from run to run).
 use anyhow::{Context, Result};
 use std::time::Instant;
 use tifmrcview_lib::denoise_learn::{fit, Fit, Fitting, Img, Mode, TrainConfig};
@@ -82,7 +83,8 @@ fn main() -> Result<()> {
     let gpus = tifmrcview_lib::multi_gpu::gpus(&primary);
     let cards = if std::env::var_os("N2N_ONE_CARD").is_some() { &gpus.devs[..1] } else { &gpus.devs[..] };
     eprintln!("{} card(s)", cards.len());
-    let cfg = TrainConfig { steps, ..Default::default() };
+    let seed: u64 = std::env::var("N2N_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0x5eed);
+    let cfg = TrainConfig { steps, seed, ..Default::default() };
     let holdout = |s: &Series| -> Vec<(Vec<f32>, Option<Vec<f32>>, usize, usize)> { s.held.iter().map(|(a, b)| (a.clone(), Some(b.clone()), s.hw, s.h)).collect() };
     let run = |images: &[Img], cfg: &TrainConfig, how: Fitting| -> Result<(Fit, f64)> {
         let t = Instant::now();

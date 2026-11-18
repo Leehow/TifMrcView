@@ -405,7 +405,7 @@ pub fn fit(
     let cards = devs.len().max(1);
     let ads: Vec<Device> = devs.iter().map(|d| d.clone().autodiff()).collect();
     let mut net = match &how.start {
-        Some(n) => n.clone().fork(&ads[0]),
+        Some(n) => n.clone().fork(&ads[0]).train(),
         None => Net::new(&ads[0]),
     };
     let mut opt = AdamConfig::new().init();
@@ -687,6 +687,20 @@ mod tests {
         assert_eq!(f.cards, 2);
         assert!(f.val.is_some() && f.holdout.is_some_and(|v| v.is_finite()));
         assert!(f.steps <= 60);
+    }
+
+    /// Fine-tuning starts from a trained (validation) network.
+    #[test]
+    fn fit_fine_tunes_a_trained_network() {
+        let dev = Device::flex();
+        let (w, h) = (64, 64);
+        let (clean, noisy) = phantom(w, h, 0.4);
+        let other: Vec<f32> = clean.iter().enumerate().map(|(i, &c)| c + 0.4 * gauss(99, i as u64)).collect();
+        let images = [Img { a: &noisy, b: Some(&other), w, h }];
+        let cfg = TrainConfig { steps: 10, batch: 2, patch: 16, lr: 2e-3, seed: 7 };
+        let first = fit(&[dev.clone()], &images, Mode::Frames, &cfg, &Fitting::default(), |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        let again = fit(&[dev.clone()], &images, Mode::Frames, &cfg, &Fitting { start: Some(first.net), ..Default::default() }, |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        assert!(again.loss.is_finite());
     }
 
     #[test]
