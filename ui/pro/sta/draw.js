@@ -40,19 +40,21 @@
 // checks it (sta_membrane_status) and runs it once if the model is there
 // (sta_membrane_segment). The membrane a mark takes is filled on each section
 // (sta_mark_section: runs [y, x0, x1) of the voxels on that section); the same call fills what a
-// painted example covers (for now only the sections it was painted on).
+// painted example covers: with 三维选择 on (the chip beside the tools, remembered, on by default) the backend follows
+// the painted thing up and down (sta_paint_shape, ~0.4 s after a stroke; cached under <out>/paint/) and
+// sta_mark_section (with out) then gives what it reaches on every section.
 // Painted membranes, marked spheres and drawn lines are EXAMPLES: 找出全部同类 finds
 // all of that kind in every ticked tomogram and shows them for checking
 // (shapes.js, sta::shapes); 点 does the same for particles (found.js). Hand-drawn
 // surfaces alone keep the direct run 「平均我标的」.
 // Backend: sta_run_drawn, sta_marks_load, sta_marks_save, sta_mark_preview,
-// sta_membrane_status, sta_membrane_segment, sta_mark_section. Every call is
+// sta_membrane_status, sta_membrane_segment, sta_mark_section, sta_paint_shape. Every call is
 // guarded: under the web demo they are missing and nothing is saved.
 // Shares app.js globals: S, ext, $, invoke, setTool, toScreen, draw, toast.
 (() => {
   const W = window.TifMrcViewPro.sta;
   if (!W) return;
-  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [], brush: 14, hover: null, hoverAlt: false, hist: [] };
+  const D = W.draw = { marks: [], size: "medium", sel: null, open: null, kind: null, loaded: "", preview: [], brush: 14, hover: null, hoverAlt: false, hist: [], deep: pref.get("sta-deep", true) !== false };
   const KINDS = {
     point: { name: "点", color: "#0969da", hint: "在 2–3 个颗粒的中心各点一下，程序会找出其余的同类颗粒给你看，你确认后才平均" },
     line: { name: "线", color: "#2da44e", hint: "沿着丝状物依次点几个点，点完按“完成这一条”" },
@@ -85,6 +87,7 @@
     <h4>自己标注</h4>
     <p class="dim">程序找不到、或者不是你想要的？自己在断层图上标出来：选一个工具，在图上点几下，其余的交给程序。</p>
     <div id="sta-draw-tools" class="al-row"></div>
+    <div id="sta-draw-deeprow" class="al-row" hidden><button id="sta-draw-deep" class="small" title="涂完后，程序顺着涂的东西上下找，看它有多厚；关掉就按大小估计厚度">三维选择</button></div>
     <p id="sta-draw-hint" class="dim"></p>
     <p id="sta-draw-membrane" class="dim" hidden></p>
     <p id="sta-draw-side" class="dim" hidden>箭头指向颗粒朝外的一侧；不对就点「翻面」</p>
@@ -160,7 +163,16 @@
   const label = (m, i) => {
     const n = D.marks.slice(0, i + 1).filter((x) => x.kind === m.kind || (isExKind(x) && isExKind(m))).length;
     if (m.kind === "example") return count(m) >= 2 ? `例子 ${n} · ${sizeText(2 * radius(m), m.tomogram)}` : `例子 ${n} · 还差圈上的一点`;
-    if (m.kind === "paint") return taking(m) ? `例子 ${n} · ${sizeText(paintExtent(m), m.tomogram)}` : `例子 ${n} · 都擦掉了`;
+    if (m.kind === "paint") {
+      if (!taking(m)) return `例子 ${n} · 都擦掉了`;
+      const h = SH.get(m), r = h?.info;
+      if (m.deep && h && h.sig === shapeSig(m) && !h.err) {
+        if (!r) return `例子 ${n} · 正在上下找…`;
+        const nm = Math.max(r.sizeNm[0], r.sizeNm[1]), size = `约 ${nm < 10 ? nm.toFixed(1) : Math.round(nm)} nm`;
+        return r.estimated ? `例子 ${n} · ${size} · 厚度按大小估计` : `例子 ${n} · ${size} · 上下共 ${r.used[1] - r.used[0] + 1} 层（第 ${r.used[0] + 1}–${r.used[1] + 1} 层）`;
+      }
+      return `例子 ${n} · ${sizeText(paintExtent(m), m.tomogram)}`;
+    }
     const name = `${KINDS[m.kind].name} ${n}`;
     if (m.kind === "membrane") {
       const cuts = (m.strokes || []).length - taking(m);
@@ -171,6 +183,43 @@
     return `${name} · ${count(m)} 个点`;
   };
 
+  // 三维选择: what the backend found for each painted example (sta_paint_shape), kept per mark with the
+  // strokes it was made from (`sig`); {sig, info, err, timer}. info: {z, used, sizeNm, estimated, endText, sidePng…}.
+  const SH = new WeakMap();
+  const shapeSig = (m) => `${m.deep ? 1 : 0}|${(m.strokes || []).map((st) => `${st.cut ? "c" : "p"}${st.width}:${st.points.length}:${st.points[0]}:${st.points[st.points.length - 1]}`).join(";")}`;
+  // ~0.4 s after the marks stop changing, every painted example whose strokes are not what its answer was made
+  // from asks again; an answer to older strokes is dropped (the backend cancels the older run itself).
+  function planShapes() {
+    if (!W.out || !S.info) return;
+    for (const m of D.marks) {
+      if (m.kind !== "paint" || !taking(m)) continue;
+      const sig = shapeSig(m), h = SH.get(m);
+      if (h?.sig === sig) continue;
+      clearTimeout(h?.timer);
+      const cur = { sig, info: null, err: false, timer: 0 };
+      SH.set(m, cur);
+      // Without 三维选择 the example is the painted section: nothing to ask, and no wait.
+      if (!m.deep) continue;
+      cur.timer = setTimeout(() => askShape(m, cur), 400);
+    }
+  }
+  async function askShape(m, cur) {
+    const i = D.marks.indexOf(m);
+    if (i < 0 || SH.get(m) !== cur) return;
+    const out = W.out;
+    try {
+      const r = await invoke("sta_paint_shape", { out, marks: plain(), mark: i, tomogram: m.tomogram });
+      if (SH.get(m) !== cur || !D.marks.includes(m)) return;
+      cur.info = r;
+    } catch (_) {
+      /* no backend (demo), or cancelled by a newer stroke */
+      if (SH.get(m) !== cur) return;
+      cur.err = true;
+    }
+    sections(true);
+    render();
+  }
+  const fmtEnds = (r) => (r.endText?.[0] === r.endText?.[1] ? r.endText[0] : `上端：${r.endText?.[0]}；下端：${r.endText?.[1]}`);
   const plain = () => D.marks.map(({ kind, tomogram, points, flip, strokes, deep }) => ({ kind, tomogram, points, flip: !!flip, strokes: strokes || [], deep: !!deep }));
   // The sampled points of the shapes, for the arrows; the latest answer wins.
   let timer = 0, asked = 0;
@@ -190,6 +239,7 @@
   D.setKind = (k) => setKind(k);
   async function save() {
     sections(true);
+    planShapes();
     if (!W.out) return;
     try { await invoke("sta_marks_save", { out: W.out, marks: plain(), size: D.size }); } catch (_) { /* no backend (demo) */ }
     refresh(300);
@@ -207,8 +257,10 @@
       sections(true);
       D.size = r.size || "medium";
       D.sel = D.open = null;
+      // An answer kept on disk comes back at once (nothing is followed again).
       render();
       refresh();
+      planShapes();
     } catch (_) { /* no backend (demo) */ }
   }
 
@@ -238,7 +290,7 @@
       await Promise.all(need.map(async (i) => {
         // null: no answer (the demo has no backend); a painted example then shows its strokes as they are.
         let runs = null;
-        try { const r = await invoke("sta_mark_section", { marks, mark: i, tomogram: open, z }); runs = Array.isArray(r) ? r : []; } catch (_) { /* no backend (demo) */ }
+        try { const r = await invoke("sta_mark_section", { marks, mark: i, tomogram: open, z, out: W.out || null }); runs = Array.isArray(r) ? r : []; } catch (_) { /* no backend (demo) */ }
         if (gen !== secGen) return;
         if (secs.size > 600) secs.clear();
         secs.set(`${open}|${i}|${z}`, runs);
@@ -326,6 +378,9 @@
     ml.hidden = !ml.textContent;
     const needSize = circN === 0 && D.marks.some((m) => m.kind === "line" || m.kind === "surface" || m.kind === "membrane");
     $("sta-draw-sizes").hidden = !needSize;
+    $("sta-draw-deeprow").hidden = D.kind !== "paint";
+    $("sta-draw-deep").classList.toggle("on", D.deep);
+    $("sta-draw-deep").setAttribute("aria-pressed", D.deep ? "true" : "false");
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
     const open = D.open != null ? D.marks[D.open] : null;
     const done = $("sta-draw-done");
@@ -341,6 +396,23 @@
         w.className = "warn";
         w.textContent = "没有碰到膜";
         row.append(" ", w);
+      }
+      // 三维选择: what it saw at the two ends, and the side view (x across, z down) to see the height at a glance.
+      const sh = m.kind === "paint" ? SH.get(m) : null;
+      if (sh?.info && sh.sig === shapeSig(m)) {
+        const r = sh.info;
+        const t = document.createElement("div");
+        t.className = "dim sta-mark-ends";
+        t.textContent = fmtEnds(r);
+        row.append(t);
+        if (r.sidePng) {
+          const im = document.createElement("img");
+          im.className = "sta-mark-side";
+          im.src = r.sidePng;
+          im.alt = "从侧面看：横向是 x，竖向是层";
+          im.title = "从侧面看：横向是 x，竖向是层；橙色是选出来的部分";
+          row.append(im);
+        }
       }
       row.style.setProperty("--mark", KINDS[m.kind].color);
       row.title = m.tomogram;
@@ -396,6 +468,8 @@
     render();
   }
 
+  // 三维选择 for the examples painted from now on (the ones painted already keep what they were made with).
+  $("sta-draw-deep").onclick = () => { D.deep = !D.deep; pref.set("sta-deep", D.deep); render(); };
   $("sta-draw-done").onclick = () => { D.open = null; render(); };
   $("sta-draw-undo").onclick = () => {
     // A painted example: the last stroke made goes (of whichever example it was added to).
@@ -536,7 +610,7 @@
         for (const o of near.slice(1)) { m.strokes.push(...o.strokes); D.marks.splice(D.marks.indexOf(o), 1); }
         m.strokes.push(stroke);
       } else {
-        m = { kind: "paint", tomogram: file, points: [], flip: false, deep: true, strokes: [stroke] };
+        m = { kind: "paint", tomogram: file, points: [], flip: false, deep: D.deep, strokes: [stroke] };
         D.marks.push(m);
       }
       D.hist.push({ m, s: stroke });
@@ -552,7 +626,7 @@
       const i = D.marks.indexOf(t);
       if (i < 0 || t.strokes.some((st) => !st.cut && st.points.length && sectionOf(st) !== z)) continue;
       let runs;
-      try { runs = await invoke("sta_mark_section", { marks: plain(), mark: i, tomogram: file, z }); } catch (_) { continue; /* no backend (demo) */ }
+      try { runs = await invoke("sta_mark_section", { marks: plain(), mark: i, tomogram: file, z, out: null }); } catch (_) { continue; /* no backend (demo) */ }
       const j = D.marks.indexOf(t);
       if (j >= 0 && Array.isArray(runs) && !runs.length) { D.marks.splice(j, 1); D.open = D.sel = null; save(); render(); }
     }
@@ -730,8 +804,9 @@
       if (mark.kind !== "paint" || mark.tomogram !== S.info.path) return;
       const col = KINDS.paint.color, on = D.sel === i;
       const here = (mark.strokes || []).filter((st) => st.points.length && sectionOf(st) === S.z);
-      if (!here.length) return;
       const runs = secs.get(`${S.info.path}|${i}|${S.z}`);
+      // Sections the 三维选择 reaches are filled too, painted on or not.
+      if (!here.length && !runs?.length) return;
       if (runs == null) {
         for (const st of here) brushPreview(ctx, at, sc, st, col, on ? 0.5 : 0.35);
         return;

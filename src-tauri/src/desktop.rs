@@ -2765,15 +2765,38 @@ async fn sta_membrane_segment(app: AppHandle, tomogram: String) -> CmdResult<ser
     }).await
 }
 
-/// The voxels membrane mark number `mark` of `marks` takes on section `z`
-/// of `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight.
-/// Empty for other kinds of marks and for marks of another file.
+/// The voxels mark number `mark` of `marks` takes on section `z` of
+/// `tomogram`, as runs [[y, x0, x1], …] (x1 excluded): the highlight.
+/// Empty for other kinds of marks and for marks of another file. With `out`,
+/// a painted example whose 三维选择 was made (`sta_paint_shape`) gives what
+/// it reaches on that section.
 #[cfg(feature = "pro")]
 #[tauri::command]
-async fn sta_mark_section(marks: Vec<crate::sta::marks::Mark>, mark: usize, tomogram: String, z: usize) -> CmdResult<Vec<[usize; 3]>> {
+async fn sta_mark_section(marks: Vec<crate::sta::marks::Mark>, mark: usize, tomogram: String, z: usize, out: Option<String>) -> CmdResult<Vec<[usize; 3]>> {
     blocking(move || match marks.get(mark) {
-        Some(m) => crate::sta::paint::section_runs(m, &tomogram, z),
+        Some(m) => crate::sta::paint::section_runs_in(m, &tomogram, z, out.as_deref().filter(|o| !o.is_empty()).map(std::path::Path::new)),
         None => Ok(vec![]),
+    }).await
+}
+
+/// Follows the painted example `mark` up and down through its file
+/// (三维选择; cached under `out`). Reports `sta-paint-progress` {mark, done,
+/// total}; a newer call cancels this one. Returns {z, used, voxels, sizeNm,
+/// centre, radius, engine ("cut" | "flat"), estimated, ends, endText,
+/// sidePng (data URL)}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_paint_shape(app: AppHandle, out: String, marks: Vec<crate::sta::marks::Mark>, mark: usize, tomogram: String) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let Some(m) = marks.get(mark) else { anyhow::bail!("没有这个例子") };
+        if m.tomogram != tomogram {
+            anyhow::bail!("这个例子不是涂在这张图上的");
+        }
+        let progress = |done: usize, total: usize| {
+            let _ = app.emit("sta-paint-progress", serde_json::json!({ "done": done, "total": total, "mark": mark }));
+        };
+        let (sel, px) = crate::sta::deep::shape(std::path::Path::new(&out), m, mark, &progress)?;
+        Ok(crate::sta::deep::summary(&sel, px, &base64))
     }).await
 }
 
@@ -3806,6 +3829,7 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_membrane_status,
             #[cfg(feature = "pro")] sta_membrane_segment,
             #[cfg(feature = "pro")] sta_mark_section,
+            #[cfg(feature = "pro")] sta_paint_shape,
             diffraction_find,
             diffraction_zones,
             eds_quant,

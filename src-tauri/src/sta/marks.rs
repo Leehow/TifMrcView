@@ -236,11 +236,19 @@ pub fn example_like(m: &Mark) -> bool {
 /// as it is: the paint already hugs the thing, so the circle is not drawn
 /// in further (`Example::painted`).
 pub fn examples_of(marks: &[Mark], inputs: &[String], sources: &[Source]) -> Result<Vec<super::circled::Example>> {
+    examples_in(marks, inputs, sources, None)
+}
+
+/// `examples_of`, where a painted example that was followed up and down
+/// (三维选择, cached under `out`) is given by what was found: the centre of
+/// the selection and the ball round it, not the painted section alone.
+pub fn examples_in(marks: &[Mark], inputs: &[String], sources: &[Source], out_dir: Option<&Path>) -> Result<Vec<super::circled::Example>> {
     let mut out = vec![];
     for m in marks.iter().filter(|m| example_like(m)) {
         // The same carrying over from the look file's voxels as a circle gets: the centre and a point of the circle.
         let painted = m.kind == Kind::Paint;
-        let m = match brush::circle_of(&m.strokes).filter(|_| painted) {
+        let followed = out_dir.and_then(|d| super::deep::cached(d, m)).filter(|s| s.voxels > 0);
+        let m = match followed.map(|s| (s.centre, s.radius.max(1.0))).or_else(|| brush::circle_of(&m.strokes).filter(|_| painted)) {
             Some((c, r)) => Mark { points: vec![c, [c[0] + r, c[1], c[2]]], ..m.clone() },
             None => m.clone(),
         };
