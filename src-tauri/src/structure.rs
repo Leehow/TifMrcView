@@ -109,6 +109,7 @@ pub fn refine_all(vals: &dyn Values, dims: (usize, usize, usize), z: usize, pain
     let mut marks = vec![];
     let mut notes: Vec<String> = vec![];
     let mut rough = 0;
+    let mut done = 0;
     for part in parts {
         let px: Vec<usize> = part.into_iter().filter(|&i| paint[i]).collect();
         if px.len() < 4 {
@@ -119,6 +120,7 @@ pub fn refine_all(vals: &dyn Values, dims: (usize, usize, usize), z: usize, pain
         px.iter().for_each(|&i| one[i] = true);
         match refine(vals, dims, z, &one, gap, structure)? {
             Outcome::Done(a, m, note) => {
+                done += 1;
                 for (o, v) in add.iter_mut().zip(a) {
                     *o |= v;
                 }
@@ -138,7 +140,7 @@ pub fn refine_all(vals: &dyn Values, dims: (usize, usize, usize), z: usize, pain
     }
     notes.dedup();
     let note = notes.first().cloned().unwrap_or_default();
-    if marks.is_empty() {
+    if done == 0 {
         return Ok((None, note));
     }
     let note = if rough > 0 && note.is_empty() { format!("有 {rough} 处没找到清楚的结构，保留了你画的样子") } else { note };
@@ -152,6 +154,11 @@ pub fn refine(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &
     match structure {
         // A fibre is an open line like a membrane: same band engine.
         "membrane" | "fibre" => membrane(vals, dims, z, paint, gap),
+        "membrane2" => membrane2(vals, dims, z, paint, gap),
+        "particle" => particles(vals, dims, z, paint),
+        "ball" => round(vals, dims, z, paint, gap, false),
+        "shell" => round(vals, dims, z, paint, gap, true),
+        "free" => free(vals, dims, z, paint),
         "" => Ok(Outcome::Rough(String::new())),
         _ => Ok(Outcome::Rough("这个类型的精细分割还没做好，先保留你画的样子".into())),
     }
@@ -447,10 +454,19 @@ fn centre_line(paint: &[bool], w: usize, h: usize, gap: f32) -> Option<(Vec<[f32
 
 fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32) -> Result<Outcome> {
     let (w, h, _) = dims;
-    let slice_z = z;
     let Some((centre, hw)) = centre_line(paint, w, h, gap) else {
         return Ok(Outcome::Rough(String::new()));
     };
+    band_line(vals, dims, z, &centre, hw, paint, None, false)
+}
+
+/// The line engine: finds the strongest ridge line along `centre` (paint
+/// half width `hw`), refines it and returns it. `avoid`: pixels the line must
+/// not run through (a line found already). `closed`: the centre is a loop.
+#[allow(clippy::too_many_arguments)]
+fn band_line(vals: &dyn Values, dims: (usize, usize, usize), z: usize, centre: &[[f32; 2]], hw: f32, paint: &[bool], avoid: Option<&[bool]>, closed: bool) -> Result<Outcome> {
+    let (w, h, _) = dims;
+    let slice_z = z;
     if centre.len() < 2 {
         return Ok(Outcome::Rough("这一笔太短，看不出膜的走向，先保留你画的样子".into()));
     }
@@ -540,7 +556,19 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[b
             }
         }
     }
-    let Some((m1, sigma, sign, r1)) = best else { return Ok(Outcome::Rough("这一笔太细了".into())) };
+    let Some((m1, sigma, sign, mut r1)) = best else { return Ok(Outcome::Rough("这一笔太细了".into())) };
+    // Positions on a line found already are out of bounds.
+    let blocked: Vec<bool> = (0..s_len * t_len)
+        .map(|i| {
+            let Some(av) = avoid else { return false };
+            let (s, t) = (i / t_len, i % t_len);
+            let off = t as f32 - half as f32;
+            let (x, y) = (c[s][0] + off * normals[s][0], c[s][1] + off * normals[s][1]);
+            x >= 0.0 && y >= 0.0 && (x as usize) < w && (y as usize) < h && av[y as usize * w + x as usize]
+        })
+        .collect();
+    let block = |r: &mut [f32], m: f32| r.iter_mut().zip(&blocked).filter(|(_, &b)| b).for_each(|(v, _)| *v = -4.0 * m.abs().max(1e-3));
+    block(&mut r1, m1);
     let with_cost = |r: &[f32], m: f32| -> Vec<f32> { (0..s_len * t_len).map(|i| r[i] - 0.5 * m.max(0.0) * away[i % t_len]).collect() };
     let path1 = best_path(&with_cost(&r1, m1), s_len, t_len, 0.5 * m1.max(0.0));
 
@@ -625,6 +653,7 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[b
         }
     }
     let m2 = row_max_median(&r2);
+    block(&mut r2, m2);
     let path = best_path(&with_cost(&r2, m2), s_len, t_len, 0.3 * m2.max(0.0));
 
     // Trim the ends of each stretch where the template stops matching
@@ -688,7 +717,7 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[b
             path: pts.iter().step_by(3).chain(pts.last()).map(|p| [r1(p[0]), r1(p[1])]).collect(),
             thickness: r1(thickness),
             inside: 0,
-            closed: false,
+            closed,
         });
     }
     let Some(lines) = tmp.slice(0) else { return Ok(Outcome::Rough("没找到膜".into())) };
@@ -723,4 +752,426 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[b
     }
     let note = if kept > 0 { "有一段附近没找到清楚的膜，那一段保留了你画的样子".to_string() } else { String::new() };
     Ok(Outcome::Done(mask, marks, note))
+}
+
+// ---------- shared by the round and free types ----------
+
+/// The paint's pixels: centroid, equivalent radius (of a disc of its area),
+/// farthest pixel from the centroid, and bounding box.
+struct Blob {
+    c: [f32; 2],
+    r_eq: f32,
+    r_max: f32,
+    bbox: [f32; 4],
+    n: usize,
+}
+
+fn blob(paint: &[bool], w: usize) -> Option<Blob> {
+    let (mut sx, mut sy, mut n) = (0f64, 0f64, 0usize);
+    let mut bbox = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for (i, _) in paint.iter().enumerate().filter(|(_, &v)| v) {
+        let (x, y) = ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+        sx += x as f64;
+        sy += y as f64;
+        n += 1;
+        bbox = [bbox[0].min(x), bbox[1].min(y), bbox[2].max(x), bbox[3].max(y)];
+    }
+    if n < 4 {
+        return None;
+    }
+    let c = [(sx / n as f64) as f32, (sy / n as f64) as f32];
+    let r_max = paint.iter().enumerate().filter(|(_, &v)| v).map(|(i, _)| (((i % w) as f32 + 0.5 - c[0]).powi(2) + ((i / w) as f32 + 0.5 - c[1]).powi(2)).sqrt()).fold(0f32, f32::max);
+    Some(Blob { c, r_eq: (n as f32 / std::f32::consts::PI).sqrt(), r_max, bbox, n })
+}
+
+/// A filled disc as pixels of the slice.
+fn disc(w: usize, h: usize, c: [f32; 2], r: f32) -> Vec<bool> {
+    let mut m = vec![false; w * h];
+    let (x0, y0) = ((c[0] - r).floor().max(0.0) as usize, (c[1] - r).floor().max(0.0) as usize);
+    let (x1, y1) = (((c[0] + r).ceil().max(0.0) as usize).min(w), ((c[1] + r).ceil().max(0.0) as usize).min(h));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if (x as f32 + 0.5 - c[0]).powi(2) + (y as f32 + 0.5 - c[1]).powi(2) <= r * r {
+                m[y * w + x] = true;
+            }
+        }
+    }
+    m
+}
+
+/// A circle as a closed polyline (first point repeated at the end).
+fn circle_pts(c: [f32; 2], r: f32) -> Vec<[f32; 2]> {
+    let n = ((2.0 * std::f32::consts::PI * r).ceil() as usize).max(16);
+    (0..=n).map(|k| {
+        let a = k as f32 / n as f32 * 2.0 * std::f32::consts::PI;
+        [c[0] + r * a.cos(), c[1] + r * a.sin()]
+    }).collect()
+}
+
+/// Least-squares circle through `pts` (Kåsa), refitted twice without the
+/// points farther than 2.5 robust sd from it. Returns centre, radius and the
+/// share of points kept.
+fn fit_circle(pts: &[[f32; 2]]) -> Option<([f32; 2], f32, f32)> {
+    let mut use_: Vec<bool> = vec![true; pts.len()];
+    let mut out = None;
+    for _ in 0..3 {
+        let sel: Vec<[f64; 2]> = pts.iter().zip(&use_).filter(|(_, &u)| u).map(|(p, _)| [p[0] as f64, p[1] as f64]).collect();
+        if sel.len() < 5 {
+            return out;
+        }
+        // Solve [x y 1]·[a b c] = x²+y² in least squares.
+        let (mut m, mut v) = ([[0f64; 3]; 3], [0f64; 3]);
+        for p in &sel {
+            let row = [p[0], p[1], 1.0];
+            let rhs = p[0] * p[0] + p[1] * p[1];
+            for i in 0..3 {
+                for j in 0..3 {
+                    m[i][j] += row[i] * row[j];
+                }
+                v[i] += row[i] * rhs;
+            }
+        }
+        let det = |m: &[[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        let d = det(&m);
+        if d.abs() < 1e-9 {
+            return out;
+        }
+        let solve = |k: usize| {
+            let mut mk = m;
+            for i in 0..3 {
+                mk[i][k] = v[i];
+            }
+            det(&mk) / d
+        };
+        let (a, b, c) = (solve(0), solve(1), solve(2));
+        let (cx, cy) = (a / 2.0, b / 2.0);
+        let r = (c + cx * cx + cy * cy).max(0.0).sqrt();
+        let res: Vec<f32> = pts.iter().map(|p| (((p[0] as f64 - cx).powi(2) + (p[1] as f64 - cy).powi(2)).sqrt() - r).abs() as f32).collect();
+        let sd = 1.4826 * median(res.iter().zip(&use_).filter(|(_, &u)| u).map(|(v, _)| *v).collect()) + 0.5;
+        use_ = res.iter().map(|&e| e <= 2.5 * sd).collect();
+        let kept = use_.iter().filter(|&&u| u).count() as f32 / pts.len() as f32;
+        out = Some(([cx as f32, cy as f32], r as f32, kept));
+    }
+    out
+}
+
+// ---------- 小颗粒 ----------
+
+/// Small particles in the paint: maxima of the scale-normalised Laplacian of
+/// Gaussian inside the paint (dark or bright, whichever answers more
+/// strongly), each outlined by the sharpest flood region around it (a disc
+/// of the detected scale when the flood finds nothing that fits).
+fn particles(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool]) -> Result<Outcome> {
+    let (w, h, _) = dims;
+    let Some(bl) = blob(paint, w) else { return Ok(Outcome::Rough(String::new())) };
+    let reach = bl.r_max.max(4.0);
+    let pad = reach + 8.0;
+    let roi = Roi::read(vals, dims, z, [bl.bbox[0] - pad, bl.bbox[1] - pad, bl.bbox[2] + pad, bl.bbox[3] + pad])?;
+    let (rw, rh) = (roi.w, roi.h);
+    let inside = |x: usize, y: usize| {
+        let (ix, iy) = (roi.x0 + x, roi.y0 + y);
+        ix < w && iy < h && paint[iy * w + ix]
+    };
+    // Scale-normalised LoG at radii up to the paint's size; a particle is a
+    // maximum over position and scale (noise specks peak at the finest scale
+    // only, inside a particle the particle's own scale wins).
+    let sigmas: Vec<f32> = [1.0f32, 1.4, 2.0, 2.8, 4.0, 5.6, 8.0, 11.0].into_iter().filter(|s| s * std::f32::consts::SQRT_2 <= bl.r_max.max(3.0)).collect();
+    let laps: Vec<Vec<f32>> = sigmas
+        .iter()
+        .map(|&sigma| {
+            let g = blur(&roi.v, rw, rh, sigma);
+            let mut lap = vec![0f32; rw * rh];
+            for y in 1..rh - 1 {
+                for x in 1..rw - 1 {
+                    let i = y * rw + x;
+                    lap[i] = sigma * sigma * (g[i - 1] + g[i + 1] + g[i - rw] + g[i + rw] - 4.0 * g[i]);
+                }
+            }
+            lap
+        })
+        .collect();
+    let mut best: Vec<(f32, usize, usize, f32, f32)> = vec![]; // (response, x, y, sigma, sign)
+    let mut all = vec![];
+    for (k, lap) in laps.iter().enumerate() {
+        all.extend(lap.iter().step_by(7).map(|v| v.abs()));
+        for sign in [1.0f32, -1.0] {
+            for y in 2..rh - 2 {
+                for x in 2..rw - 2 {
+                    let i = y * rw + x;
+                    let v = sign * lap[i];
+                    if v <= 0.0 || !inside(x, y) {
+                        continue;
+                    }
+                    let near = [i - 1, i + 1, i - rw, i + rw, i - rw - 1, i - rw + 1, i + rw - 1, i + rw + 1];
+                    let space = near.iter().all(|&j| sign * lap[j] < v);
+                    let scale = (k == 0 || sign * laps[k - 1][i] < v) && (k + 1 == laps.len() || sign * laps[k + 1][i] < v);
+                    if space && scale && k > 0 {
+                        best.push((v, x, y, sigmas[k], sign));
+                    }
+                }
+            }
+        }
+    }
+    if best.is_empty() {
+        return Ok(Outcome::Rough("在你涂的地方没找到颗粒，先保留你画的样子".into()));
+    }
+    // Significance against the spread of the filter responses in the window.
+    let (_, sd) = crate::segpick::median_sd(&all);
+    best.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // One polarity: the one of the strongest particle.
+    let sign = best[0].4;
+    let mut picked: Vec<(f32, usize, usize, f32)> = vec![];
+    // Particles answer about as strongly as the strongest one; noise
+    // specks answer far less (and only at the smallest scales).
+    let floor = (3.0 * sd).max(0.6 * best[0].0);
+    for &(v, x, y, sigma, sg) in &best {
+        if sg != sign || v < floor {
+            continue;
+        }
+        let r = sigma * std::f32::consts::SQRT_2;
+        if picked.iter().any(|&(_, px, py, ps)| ((px as f32 - x as f32).powi(2) + (py as f32 - y as f32).powi(2)).sqrt() < (r + ps * std::f32::consts::SQRT_2) * 0.8) {
+            continue;
+        }
+        picked.push((v, x, y, sigma));
+    }
+    if picked.is_empty() {
+        return Ok(Outcome::Rough("在你涂的地方没找到清楚的颗粒，先保留你画的样子".into()));
+    }
+    let noise = crate::segpick::noise_sigma(&roi.v, rw, rh);
+    let mut mask = vec![false; w * h];
+    let mut marks = vec![];
+    for &(_, x, y, sigma) in &picked {
+        let r = sigma * std::f32::consts::SQRT_2;
+        let want = std::f32::consts::PI * r * r;
+        let regions = crate::segpick::flood(&roi.v, rw, rh, (x, y), noise);
+        let fit = regions.iter().filter(|g| (g.bright == (sign < 0.0))).filter(|g| {
+            let a = g.pix.len() as f32;
+            a >= 0.4 * want && a <= 2.5 * want
+        }).max_by(|a, b| a.edge.total_cmp(&b.edge));
+        let (cx, cy) = (roi.x0 as f32 + x as f32 + 0.5, roi.y0 as f32 + y as f32 + 0.5);
+        let mut diameter = 2.0 * r;
+        match fit {
+            Some(g) => {
+                for &j in &g.pix {
+                    mask[(roi.y0 + j / rw) * w + roi.x0 + j % rw] = true;
+                }
+                diameter = 2.0 * (g.pix.len() as f32 / std::f32::consts::PI).sqrt();
+            }
+            None => {
+                for (o, v) in mask.iter_mut().zip(disc(w, h, [cx, cy], r)) {
+                    *o |= v;
+                }
+            }
+        }
+        marks.push(Mark { z, path: vec![[(cx * 10.0).round() / 10.0, (cy * 10.0).round() / 10.0]], thickness: (diameter * 10.0).round() / 10.0, inside: 0, closed: false });
+    }
+    let _ = bl.n;
+    let note = if picked.len() > 1 { format!("找到 {} 个颗粒", picked.len()) } else { String::new() };
+    Ok(Outcome::Done(mask, marks, note))
+}
+
+// ---------- 球 / 空心球 ----------
+
+/// A ball (solid: its outline is an edge) or a shell (hollow: its outline is
+/// a thin line). Rays from the paint's centre find the outline on each side;
+/// a robust circle fit through those points gives the round object. A ball
+/// is the disc; a shell is refined further with the line engine along the
+/// fitted circle, so the drawn ring follows the real membrane.
+fn round(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32, shell: bool) -> Result<Outcome> {
+    let (w, h, _) = dims;
+    let Some(bl) = blob(paint, w) else { return Ok(Outcome::Rough(String::new())) };
+    let r_out = bl.r_max + gap.max(4.0);
+    let pad = r_out + 6.0;
+    let roi = Roi::read(vals, dims, z, [bl.c[0] - pad, bl.c[1] - pad, bl.c[0] + pad, bl.c[1] + pad])?;
+    let g = blur(&roi.v, roi.w, roi.h, 1.0);
+    let at = |x: f32, y: f32| {
+        let (lx, ly) = (x - roi.x0 as f32 - 0.5, y - roi.y0 as f32 - 0.5);
+        if lx < 0.0 || ly < 0.0 || lx >= (roi.w - 1) as f32 || ly >= (roi.h - 1) as f32 {
+            return f32::NAN;
+        }
+        let (ix, iy) = (lx as usize, ly as usize);
+        let (fx, fy) = (lx - ix as f32, ly - iy as f32);
+        let q = |a: usize, b: usize| g[b * roi.w + a];
+        (q(ix, iy) * (1.0 - fx) + q(ix + 1, iy) * fx) * (1.0 - fy) + (q(ix, iy + 1) * (1.0 - fx) + q(ix + 1, iy + 1) * fx) * fy
+    };
+    let r_min = (0.25 * bl.r_eq).max(2.0);
+    let n_rays = 64;
+    // Profiles along each ray, smoothed a little along the ray.
+    let steps = r_out.ceil() as usize + 1;
+    let k = gauss_kernel(1.0);
+    let profiles: Vec<Vec<f32>> = (0..n_rays)
+        .map(|k_| {
+            let a = k_ as f32 / n_rays as f32 * 2.0 * std::f32::consts::PI;
+            let p: Vec<f32> = (0..steps).map(|t| at(bl.c[0] + t as f32 * a.cos(), bl.c[1] + t as f32 * a.sin())).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
+            smooth1(&p, &k)
+        })
+        .collect();
+    // Per ray, the best outline candidate for each polarity; the polarity
+    // that answers more strongly over all rays wins.
+    let score = |p: &[f32], t: usize, sign: f32| -> f32 {
+        if shell {
+            // A line: darker (or brighter) than both sides.
+            if t < 2 || t + 2 >= p.len() {
+                return f32::MIN;
+            }
+            sign * (p[t - 2] + p[t + 2] - 2.0 * p[t])
+        } else {
+            // An edge: inside differs from outside.
+            if t < 2 || t + 2 >= p.len() {
+                return f32::MIN;
+            }
+            sign * ((p[t - 2] + p[t - 1]) - (p[t + 1] + p[t + 2]))
+        }
+    };
+    // The outline is looked for where the paint is (a painted ring limits
+    // it to the ring; a filled disc allows the whole disc), plus the gap.
+    let near = crate::labels::edt(paint, w, h);
+    let allowed = |a: f32, t: usize| {
+        let (x, y) = (bl.c[0] + t as f32 * a.cos(), bl.c[1] + t as f32 * a.sin());
+        x >= 0.0 && y >= 0.0 && (x as usize) < w && (y as usize) < h && near[y as usize * w + x as usize] <= gap.max(4.0)
+    };
+    let mut best: Option<(f32, Vec<[f32; 2]>)> = None;
+    for sign in [1.0f32, -1.0] {
+        let mut total = 0f32;
+        let mut pts = vec![];
+        for (k_, p) in profiles.iter().enumerate() {
+            let a = k_ as f32 / n_rays as f32 * 2.0 * std::f32::consts::PI;
+            let (t, v) = (r_min.ceil() as usize..p.len()).filter(|&t| allowed(a, t)).map(|t| (t, score(p, t, sign))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, f32::MIN));
+            if v > 0.0 {
+                total += v;
+                pts.push([bl.c[0] + t as f32 * a.cos(), bl.c[1] + t as f32 * a.sin()]);
+            }
+        }
+        if best.as_ref().map_or(true, |b| total > b.0) {
+            best = Some((total, pts));
+        }
+    }
+    let Some((_, pts)) = best else { return Ok(Outcome::Rough(String::new())) };
+    let what = if shell { "空心球" } else { "球" };
+    let Some((c, r, kept)) = fit_circle(&pts) else {
+        return Ok(Outcome::Rough(format!("没找到清楚的{what}边界，先保留你画的样子")));
+    };
+    // The fit must be carried by most rays and stay near the paint.
+    let off = ((c[0] - bl.c[0]).powi(2) + (c[1] - bl.c[1]).powi(2)).sqrt();
+    if kept < 0.5 || r < r_min || r > r_out + 2.0 || off > r.max(4.0) {
+        return Ok(Outcome::Rough(format!("没找到清楚的{what}边界，先保留你画的样子")));
+    }
+    let r1 = |v: f32| (v * 10.0).round() / 10.0;
+    if !shell {
+        let mark = Mark { z, path: vec![[r1(c[0]), r1(c[1])]], thickness: r1(2.0 * r), inside: 0, closed: false };
+        return Ok(Outcome::Done(disc(w, h, c, r), vec![mark], String::new()));
+    }
+    // Shell: the line engine along the circle, the whole paint as the region
+    // whose unclear stretches stay rough. The paint half width is the ring's
+    // uncertainty: a quarter of the radius, at least the brush gap.
+    let ring = circle_pts(c, r);
+    // The fitted circle is close already: search only a little around it.
+    let hw = (0.12 * r).clamp(3.0, 8.0);
+    let ring_paint = {
+        let mut m = disc(w, h, c, r + hw);
+        let hole = disc(w, h, c, (r - hw).max(0.0));
+        m.iter_mut().zip(hole).for_each(|(a, b)| *a &= !b);
+        m
+    };
+    // The paint inside the ring is replaced too (a filled disc painted for a vesicle).
+    // Unclear stretches keep only what was painted there; the paint inside
+    // the ring (a filled disc painted for a vesicle) is replaced.
+    let keep: Vec<bool> = ring_paint.iter().zip(paint).map(|(a, b)| *a && *b).collect();
+    let mut out = band_line(vals, dims, z, &ring, hw, &keep, None, true)?;
+    if let Outcome::Done(mask, marks, _) = &mut out {
+        // A stretch that left the circle followed something else.
+        marks.retain(|m| {
+            let dev = median(m.path.iter().map(|p| (((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt() - r).abs()).collect());
+            dev <= (0.12 * r).max(3.0)
+        });
+        if marks.is_empty() {
+            return Ok(Outcome::Rough("没找到清楚的空心球的膜，先保留你画的样子".into()));
+        }
+        let mut lines = Labels::new(w, h, 1);
+        for m in marks.iter() {
+            lines.stroke(0, &m.path, (m.thickness / 2.0).max(0.75), 1, 0);
+        }
+        if let Some(l) = lines.slice(0) {
+            mask.iter_mut().zip(l).for_each(|(a, &b)| *a = b == 1);
+        }
+        for m in marks.iter_mut() {
+            // Inside of a ring is its centre.
+            if m.path.len() >= 3 {
+                let k = m.path.len() / 2;
+                let (q0, q1) = (m.path[k - 1], m.path[k + 1]);
+                let (tx, ty) = (q1[0] - q0[0], q1[1] - q0[1]);
+                let (vx, vy) = (c[0] - m.path[k][0], c[1] - m.path[k][1]);
+                m.inside = if tx * vy - ty * vx > 0.0 { 1 } else { -1 };
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ---------- 双层膜 ----------
+
+/// Two parallel lines: the strongest line first, then the strongest other
+/// line in the same paint that keeps clear of the first. When the second is
+/// not clear the single line is kept, with a note.
+fn membrane2(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32) -> Result<Outcome> {
+    let (w, h, _) = dims;
+    let Some((centre, hw)) = centre_line(paint, w, h, gap) else { return Ok(Outcome::Rough(String::new())) };
+    let first = band_line(vals, dims, z, &centre, hw, paint, None, false)?;
+    let Outcome::Done(m1, marks1, note1) = first else { return Ok(first) };
+    // Keep the second line off the first: its pixels widened by its thickness.
+    let t1 = marks1.iter().map(|m| m.thickness).fold(1f32, f32::max);
+    let near = crate::labels::edt(&m1, w, h);
+    let avoid: Vec<bool> = near.iter().map(|&d| d <= t1 + 1.0).collect();
+    let second = band_line(vals, dims, z, &centre, hw, paint, Some(&avoid), false)?;
+    if let Outcome::Done(m2, marks2, _) = second {
+        // The two must run side by side: mean distance between them about
+        // a few line widths, not crossing.
+        let d1 = crate::labels::edt(&m1, w, h);
+        let ds: Vec<f32> = m2.iter().enumerate().filter(|(_, &v)| v).map(|(i, _)| d1[i]).collect();
+        let md = median(ds);
+        if md > t1 && md < 2.0 * hw + 4.0 {
+            let mask: Vec<bool> = m1.iter().zip(&m2).map(|(a, b)| *a || *b).collect();
+            let mut marks = marks1;
+            marks.extend(marks2);
+            return Ok(Outcome::Done(mask, marks, note1));
+        }
+    }
+    Ok(Outcome::Done(m1, marks1, "只找到一层清楚的膜，先按单层画".into()))
+}
+
+// ---------- 不规则 ----------
+
+/// An object of any shape: the flood region around the paint whose outline
+/// is sharpest and which overlaps the paint best. The paint stays when no
+/// region matches it well.
+fn free(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool]) -> Result<Outcome> {
+    let (w, h, _) = dims;
+    let Some(bl) = blob(paint, w) else { return Ok(Outcome::Rough(String::new())) };
+    let pad = bl.r_max + 12.0;
+    let roi = Roi::read(vals, dims, z, [bl.bbox[0] - pad, bl.bbox[1] - pad, bl.bbox[2] + pad, bl.bbox[3] + pad])?;
+    let (rw, rh) = (roi.w, roi.h);
+    let noise = crate::segpick::noise_sigma(&roi.v, rw, rh);
+    let local: Vec<bool> = (0..rw * rh).map(|j| {
+        let (x, y) = (roi.x0 + j % rw, roi.y0 + j / rw);
+        x < w && y < h && paint[y * w + x]
+    }).collect();
+    // Seeds: a few points inside the paint (its centre and around it).
+    let seeds: Vec<(usize, usize)> = local.iter().enumerate().filter(|(_, &v)| v).map(|(j, _)| (j % rw, j / rw)).step_by((bl.n / 24).max(1)).collect();
+    let mut best: Option<(f32, Vec<usize>)> = None;
+    for &sd in &seeds {
+        for g in crate::segpick::flood(&roi.v, rw, rh, sd, noise) {
+            let inter = g.pix.iter().filter(|&&j| local[j]).count() as f32;
+            let iou = inter / (g.pix.len() as f32 + bl.n as f32 - inter);
+            let score = iou * g.edge.min(8.0);
+            if iou >= 0.4 && best.as_ref().map_or(true, |b| score > b.0) {
+                best = Some((score, g.pix));
+            }
+        }
+    }
+    let Some((_, pix)) = best else { return Ok(Outcome::Rough("没找到和你涂的范围吻合的清楚边界，先保留你画的样子".into())) };
+    let mut mask = vec![false; w * h];
+    for &j in &pix {
+        mask[(roi.y0 + j / rw) * w + roi.x0 + j % rw] = true;
+    }
+    Ok(Outcome::Done(mask, vec![], String::new()))
 }

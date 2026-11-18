@@ -100,6 +100,9 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #lab-types > button[data-type=""]:not(.on) { color: var(--dim); }
 #lab-types-note { flex-basis: 100%; }
 #lab-types-note:empty { display: none; }
+#lab-side { gap: 4px; flex-wrap: wrap; }
+#lab-side[hidden] { display: none; }
+#lab-side > button.on { background: var(--accent); color: #fff; }
 #lab-list select.ty { flex: none; width: auto; max-width: 70px; height: 20px; padding: 0 2px; font-size: 11px; border: 0; background: none; color: var(--dim); box-shadow: none; }
 #lab-list select.ty.unset { opacity: 0; }
 #lab-list .lab-row:hover select.ty.unset { opacity: 1; }

@@ -523,7 +523,7 @@
       const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
       L.sam.denoise = tomo;
       Object.assign(L.pick, { hover: null, path: null, last: null });
-      Object.assign(L, { cand: null, sel: null, objects: [], typeBar: null, askSide: null, sideDown: null, pending: [] });
+      Object.assign(L, { cand: null, sel: null, objects: [], typeBar: null, askSide: null, sideDown: null, pending: [], sideTarget: null });
       syncCand();
       Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
       Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
@@ -881,7 +881,7 @@
     down(e, p) {
       if (!ready()) return;
       // A click (no drag) while asked for a membrane's inside names that side.
-      if (L.askSide && L.sub === "brush" && L.askSide.z === S.z) {
+      if (L.askSide && L.askSide.z === S.z && ["brush", "lasso", "wand"].includes(L.sub)) {
         L.sideDown = { p, x: e.clientX, y: e.clientY, rough: e.shiftKey };
         return;
       }
@@ -1049,7 +1049,7 @@
     ["free", "不规则", "不规则形状：边缘贴到实际边界"],
   ];
   // Types whose refinement exists (structure.rs); the others are greyed out.
-  const DONE = new Set(["", "membrane", "fibre"]);
+  const DONE = new Set(["", "particle", "ball", "shell", "membrane", "membrane2", "fibre", "free"]);
   const typeName = (t) => (TYPES.find((x) => x[0] === t) || TYPES[0])[1];
   const structureOf = (k) => mat(k).structure || "";
 
@@ -1070,7 +1070,10 @@
     const types = $("lab-types");
     if (!types) return;
     types.hidden = !["brush", "lasso", "wand"].includes(L.sub);
-    if (types.hidden) return;
+    if (types.hidden) {
+      if ($("lab-side")) $("lab-side").hidden = true;
+      return;
+    }
     const b = typeTarget();
     const paint = S.axis === "xy" && L.token === S.token && !!L.slice && L.z === S.z && L.slice.includes(b.label);
     const busy = !!b.busy || L.busy;
@@ -1080,7 +1083,8 @@
       el.disabled = !paint || busy || !ready;
       el.title = ready ? (TYPES.find((x) => x[0] === t) || TYPES[0])[2] : "这个类型还在做，下一版就能用";
     }
-    $("lab-types-note").textContent = !paint ? "先用画笔、套索或魔棒涂上当前标签，再点类型" : busy ? "精修中…" : L.askSide ? "在图上点一下膜内那一侧" : b === L.typeBar ? "" : "点类型：精修当前标签在这一层还没精修的涂抹";
+    $("lab-types-note").textContent = !paint ? "先用画笔、套索或魔棒涂上当前标签，再点类型" : busy ? "精修中…" : b === L.typeBar ? "" : "点类型：精修当前标签在这一层还没精修的涂抹";
+    if ($("lab-side")) syncSide();
   }
 
   /** What a type click acts on: the last stroke (and the unrefined strokes
@@ -1146,9 +1150,9 @@
     if (b.refined) L.pending = (L.pending || []).filter((x) => !b.group.includes(x));
     b.added = (res && res.marks && res.marks.length) || 0;
     if (res && res.note) toast(res.note, 4000);
-    if (b.added && (t === "membrane" || t === "membrane2")) {
-      const marks = mat(to).marks || [];
-      L.askSide = { z: s.z, label: to, first: marks.length - b.added, n: b.added };
+    if (b.added) {
+      const n = (mat(to).marks || []).length;
+      L.sideTarget = { z: s.z, label: to, idxs: Array.from({ length: b.added }, (_, k) => n - b.added + k) };
     }
     draw();
   }
@@ -1188,15 +1192,68 @@
     refineTo(t, to);
   });
 
-  /** The membrane just refined: the side of `p` is its inside. */
+  // ---------- inside / outside of membranes ----------
+  //
+  // A row under the types: 「点选膜内」 waits for one click on the inside of
+  // the current membrane (the one just refined, or all membranes of the
+  // active layer on this slice); 「翻转」 swaps the sides. Arrows on the image
+  // point from inside to outside. Shells know their inside (the centre).
+
+  const side = document.createElement("div");
+  side.id = "lab-side";
+  side.className = "row";
+  side.innerHTML = '<span class="dim">内外</span><button class="small" id="lab-side-pick" title="然后在图上膜的里面一侧点一下">点选膜内</button><button class="small" id="lab-side-flip" title="把膜内和膜外对调">翻转</button><span class="dim" id="lab-side-note"></span>';
+  $("lab-types").after(side);
+
+  /** The membranes the side row acts on: [label, [mark index…]]. */
+  function sideMarks() {
+    const t = L.sideTarget;
+    if (t && t.z === S.z && t.label === L.active) {
+      const marks = mat(t.label).marks || [];
+      const idxs = t.idxs.filter((k) => marks[k] && marks[k].path.length > 1);
+      if (idxs.length) return [t.label, idxs];
+    }
+    const marks = mat(L.active).marks || [];
+    return [L.active, marks.map((m, k) => (m.z === S.z && m.path.length > 1 ? k : -1)).filter((k) => k >= 0)];
+  }
+
+  function syncSide() {
+    const st = structureOf(L.active);
+    const membrane = st === "membrane" || st === "membrane2" || (L.typeBar && (L.typeBar.type === "membrane" || L.typeBar.type === "membrane2"));
+    side.hidden = !membrane || types.hidden;
+    if (side.hidden) return;
+    const [k, idxs] = sideMarks();
+    const marks = mat(k).marks || [];
+    const set = idxs.filter((i) => marks[i].inside).length;
+    $("lab-side-pick").disabled = !idxs.length || L.busy;
+    $("lab-side-flip").disabled = !set || L.busy;
+    $("lab-side-pick").classList.toggle("on", !!L.askSide);
+    $("lab-side-note").textContent = !idxs.length ? "这一层还没有精修好的膜" : L.askSide ? "在图上点一下膜内那一侧" : set === idxs.length ? "箭头指向膜外" : set ? "有的膜还没设内外" : "还没设内外";
+  }
+
+  $("lab-side-pick").addEventListener("click", () => {
+    if (L.askSide) { L.askSide = null; return draw(); }
+    const [label, idxs] = sideMarks();
+    if (!idxs.length) return;
+    L.askSide = { z: S.z, label, idxs };
+    draw();
+  });
+  $("lab-side-flip").addEventListener("click", () => {
+    const [label, idxs] = sideMarks();
+    const marks = (mat(label).marks || []).slice();
+    for (const k of idxs) if (marks[k] && marks[k].inside) marks[k] = { ...marks[k], inside: -marks[k].inside };
+    setMaterial(label, { marks });
+  });
+
+  /** A click while waiting: the side of `p` is the inside of the membranes asked for. */
   function setSide(p) {
     const a = L.askSide;
     L.askSide = null;
-    // The stretches of one stroke run the same way along it, so the side
-    // read at the nearest one holds for all of them.
+    // The stretches of one object run the same way, so the side read at the
+    // nearest one holds for all of them.
     const marks = (mat(a.label).marks || []).slice();
     let m = null, best = 0, bd = Infinity;
-    for (let k = a.first; k < a.first + a.n; k++) {
+    for (const k of a.idxs) {
       const mk = marks[k];
       if (!mk || mk.path.length < 2) continue;
       mk.path.forEach(([x, y], i) => {
@@ -1209,36 +1266,46 @@
     const tx = q1[0] - q0[0], ty = q1[1] - q0[1];
     const vx = p[0] - m.path[best][0], vy = p[1] - m.path[best][1];
     const inside = tx * vy - ty * vx > 0 ? 1 : -1;
-    for (let k = a.first; k < a.first + a.n; k++) if (marks[k]) marks[k] = { ...marks[k], inside };
+    for (const k of a.idxs) if (marks[k] && !marks[k].closed) marks[k] = { ...marks[k], inside };
     setMaterial(a.label, { marks });
-    toast("记下了膜内一侧", 2000);
   }
 
-  /** Short ticks on the inside of each membrane on the shown slice. */
+  /** Arrows from the inside of each membrane to its outside, on the shown slice. */
   function drawSides(g) {
     if (!L.show || !L.slice || L.z !== S.z || S.axis !== "xy") return;
     const w = S.info.width, sc = S.view.scale;
     for (const m0 of Object.values(L.materials)) {
       if (!m0.marks || hidden(m0.label)) continue;
+      const col = `rgb(${colorOf(m0.label).join(",")})`;
       for (const m of m0.marks) {
         if (m.z !== S.z || !m.inside || m.path.length < 3) continue;
         const [mx, my] = m.path[m.path.length >> 1];
         if (L.slice[Math.floor(my) * w + Math.floor(mx)] !== m0.label) continue;
-        const len = Math.max(7, (m.thickness || 2) * sc * 1.6);
+        const len = Math.max(12, (m.thickness || 2) * sc * 2.5), head = Math.min(7, len * 0.45);
+        // One arrow every ~60 screen pixels along the line.
+        const step = Math.max(2, Math.round(60 / (3 * sc)));
         g.save();
         g.beginPath();
-        for (let i = 1; i < m.path.length - 1; i += 4) {
+        for (let i = Math.max(1, step >> 1); i < m.path.length - 1; i += step) {
           const q0 = m.path[i - 1], q1 = m.path[i + 1], n = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1;
-          const nx = (-(q1[1] - q0[1]) / n) * m.inside, ny = ((q1[0] - q0[0]) / n) * m.inside;
+          // Outward: against the inside normal.
+          const ox = ((q1[1] - q0[1]) / n) * m.inside, oy = (-(q1[0] - q0[0]) / n) * m.inside;
           const [sx, sy] = toScreen(m.path[i][0], m.path[i][1]);
-          g.moveTo(sx, sy);
-          g.lineTo(sx + nx * len, sy + ny * len);
+          const bx = sx + ox * (m.thickness || 2) * sc * 0.6, by = sy + oy * (m.thickness || 2) * sc * 0.6;
+          const ex = bx + ox * len, ey = by + oy * len;
+          g.moveTo(bx, by);
+          g.lineTo(ex, ey);
+          g.moveTo(ex - ox * head - oy * head * 0.6, ey - oy * head + ox * head * 0.6);
+          g.lineTo(ex, ey);
+          g.lineTo(ex - ox * head + oy * head * 0.6, ey - oy * head - ox * head * 0.6);
         }
-        g.lineWidth = 3;
-        g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+        g.lineCap = "round";
+        g.lineJoin = "round";
+        g.lineWidth = 4;
+        g.strokeStyle = "rgba(0, 0, 0, 0.7)";
         g.stroke();
-        g.lineWidth = 1.5;
-        g.strokeStyle = `rgb(${colorOf(m0.label).join(",")})`;
+        g.lineWidth = 2;
+        g.strokeStyle = col;
         g.stroke();
         g.restore();
       }
