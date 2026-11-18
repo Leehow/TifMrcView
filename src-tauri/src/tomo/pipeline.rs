@@ -320,7 +320,16 @@ pub fn load(path: &str) -> Result<(Vec<f32>, [usize; 3], f64)> {
         let (page, s) = info.locate(0, z, 0);
         let p = img.page(page)?;
         let p = &p[s.min(p.len() - 1)];
-        v.extend((0..w * h).map(|i| p.data.get_f64(i) as f32));
+        let start = v.len();
+        v.resize(start + w * h, 0.0);
+        {
+            use crate::image::Px;
+            use rayon::prelude::*;
+            crate::with_plane!(&p.data, src => v[start..]
+                .par_iter_mut()
+                .zip(&src[..w * h])
+                .for_each(|(d, &s)| *d = s.to_f32() as f64 as f32));
+        }
     }
     Ok((v, [w, h, nz], output::pixel_a(&img)))
 }
