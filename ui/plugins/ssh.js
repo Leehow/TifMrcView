@@ -1,7 +1,7 @@
 "use strict";
 
 TifMrcView.register({
-  id: "ssh", name: "SSH 远程文件夹", version: "1.4.0",
+  id: "ssh", name: "SSH 远程文件夹", version: "1.4.1",
   description: "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像",
   activate(app) {
     if (!app.hasNative()) return;
@@ -194,6 +194,7 @@ TifMrcView.register({
         el("crumbs").append(button);
       }
     }
+    let lastKey = null;
     async function browse(path) {
       for (const job of previewQueue.splice(0)) { previews.delete(job.key); job.reject(new Error('目录已变化')); }
       const request = ++browsing;
@@ -202,6 +203,8 @@ TifMrcView.register({
         const result = await native("list", { path });
         if (disposed || request !== browsing) return;
         current = result.path; entries = result.entries; selected = null;
+        // Where this server was last browsed: the next connection opens there.
+        if (lastKey) { const last = app.settings.get("last-folder") || {}; last[lastKey] = current; app.settings.set("last-folder", last); }
         el("path").value = current; el("search").value = "";
         el("navigation").hidden = false; el("empty").hidden = true; el("list-wrap").hidden = false;
         el("list").scrollTop = 0;
@@ -240,7 +243,9 @@ TifMrcView.register({
         el("identity").textContent = profile.username; el("address").textContent = `${profile.host}:${profile.port}`;
         el("badge").textContent = "已连接"; el("badge").classList.add("online");
         el("badge").title = auth.fingerprint; renderRecent();
-        await browse(home);
+        lastKey = `${profile.username}@${profile.host}:${profile.port}`;
+        const last = (app.settings.get("last-folder") || {})[lastKey];
+        if (!(last && last !== home && await browse(last))) { error(); await browse(home); }
       } catch (e) {
         error(e);
         if (connection) await native("disconnect").catch(() => {});
@@ -256,7 +261,7 @@ TifMrcView.register({
     async function disconnect() {
       if (busy || transferring) return;
       const pending = connection;
-      connection = null; home = ""; current = ""; entries = []; selected = null; browsing++;
+      connection = null; lastKey = null; home = ""; current = ""; entries = []; selected = null; browsing++;
       if (pending) await app.native("disconnect", { connection: pending }).catch(() => {});
       app.folders.unmount();
       el("connect-form").hidden = false; el("connected").hidden = true;
