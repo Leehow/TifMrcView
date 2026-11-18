@@ -385,7 +385,24 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         }
         out
     };
-    let found = runs(&|s| z[s] >= 2.0);
+    // Hysteresis: a stretch is seeded where the line is clearly there (2 sd)
+    // and followed while it stays above 1 sd, so a faint piece between two
+    // clear ones does not cut the line.
+    let mut grown = vec![false; s_len];
+    for s in 0..s_len {
+        if z[s] >= 2.0 && !grown[s] {
+            let mut a = s;
+            while a > 0 && z[a - 1] >= 1.0 {
+                a -= 1;
+            }
+            let mut b = s;
+            while b + 1 < s_len && z[b + 1] >= 1.0 {
+                b += 1;
+            }
+            grown[a..=b].iter_mut().for_each(|g| *g = true);
+        }
+    }
+    let found = runs(&|s| grown[s]);
     if found.is_empty() {
         return Ok(Outcome::Rough("在你涂的地方附近没找到清楚的膜，先保留你画的样子".into()));
     }
@@ -425,10 +442,18 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
     let m2 = row_max_median(&r2);
     let path = best_path(&with_cost(&r2, m2), s_len, t_len, 0.3 * m2.max(0.0));
 
-    // Within the clear stretches, drop the ends where the template stops matching.
+    // Trim the ends of each stretch where the template stops matching
+    // (paint overshooting the line's end).
     let score: Vec<f32> = (0..s_len).map(|s| r2[s * t_len + path[s]]).collect();
     let cut = 0.3 * median((0..s_len).filter(|&s| on_line(s)).map(|s| score[s]).collect());
-    let keep_runs = runs(&|s| on_line(s) && score[s] >= cut);
+    let keep_runs: Vec<(usize, usize)> = found
+        .iter()
+        .filter_map(|&(a, b)| {
+            let a2 = (a..=b).find(|&s| score[s] >= cut)?;
+            let b2 = (a..=b).rev().find(|&s| score[s] >= cut)?;
+            (b2 + 1 >= a2 + min_run).then_some((a2, b2))
+        })
+        .collect();
     if keep_runs.is_empty() {
         return Ok(Outcome::Rough("在你涂的地方附近没找到清楚的膜，先保留你画的样子".into()));
     }
