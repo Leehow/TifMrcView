@@ -39,10 +39,19 @@
   };
 })();
 "use strict";
+// 约剩 X 分钟 for a running stage, from its own pace since it began (a stage is its
+// text without the numbers, so "运动校正 3/61 · +10°" and "运动校正 4/61 · +12°" are one).
+window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
+  return (p) => { if (!p || !(p.total > 1)) return '';
+    const k = String(p.stage || '').replace(/[\d.+\-−°]+/g, '') + '|' + p.total, now = Date.now();
+    if (k !== key || p.done < d0) { key = k; at = now; d0 = p.done; return ''; }
+    const n = p.done - d0, t = now - at; if (n < 1 || t < 5000) return '';
+    const s = (p.total - p.done) * t / n / 1000;
+    return s < 60 ? '约剩不到 1 分钟' : s < 3600 ? `约剩 ${Math.round(s / 60)} 分钟` : `约剩 ${(s / 3600).toFixed(1)} 小时`; }; };
 // One routing boundary: local calls remain native; remote paths never reach local FS.
 (() => {
   const prefix = 'tmv-ssh:';
-  const contexts = new Map(), active = new Map(), lanes=new Map();
+  const contexts = new Map(), active = new Map(), lanes=new Map(), etas=new Map();
   function request(ctx,body,control=false){
     const key=ctx.serverIdentity||ctx.identity;let lane=lanes.get(key);if(!lane){lane={busy:false,control:[],read:[]};lanes.set(key,lane);}
     return new Promise((resolve,reject)=>{(control?lane.control:lane.read).push({ctx,body,resolve,reject});pumpLane(lane);});
@@ -81,7 +90,7 @@
         if(cmd==='tomo_session_run' && Date.now()-refreshed>5000){refreshed=Date.now();await emit('tomo-session',{folder:pack(ctx.identity,record.project)});}
         for(const e of state.events || []) { cursor=Math.max(cursor,e.seq);
           if(e.type==='backend'){const p=e.placement;ctx.placements||={};const key=`${p.worker||'本机'}|${p.operation}`;const old=ctx.placements[key];ctx.placements[key]={...p,priorFallback:p.backend==='CPU'&&p.fallback!==false?p.reason:old?.priorFallback};if(p.backend==='CPU'&&p.reason&&p.fallback!==false&&old?.reason!==p.reason)toast(`${p.operation} 使用 CPU：${p.reason}`);localStorage.setItem(`tmv.remote.backends.${ctx.identity}`,JSON.stringify(ctx.placements));if(isLong)record.placements=ctx.placements;continue;}
-          if(isLong){record.progress=e;record.updated=Date.now();if(e.worker){record.workers||={};record.workers[e.worker]=e;}} await emit(cmd.startsWith('spa_')?'spa-progress':'tomo-progress',e); }
+          if(isLong){if(e.stage){etas.has(record.job)||etas.set(record.job,TmvEta());record.eta=etas.get(record.job)(e);}record.progress=e;record.updated=Date.now();if(e.worker){record.workers||={};record.workers[e.worker]=e;}} await emit(cmd.startsWith('spa_')?'spa-progress':'tomo-progress',e); }
         if(isLong){record.cursor=cursor;record.state=state.state;save([...jobs().filter(j=>j.requestId!==record.requestId),record]);}
         if(state.outputRoot)ctx.lastOutputRoot=state.outputRoot;
         if(isLong)updateBar(`${ctx.label || label()} · ${state.state==='queued'?'等待资源':state.state==='running'?'正在服务器上运行':state.state}`);
@@ -191,7 +200,7 @@
       if(task){const stop=document.createElement('button');stop.className='small remote-stop';stop.textContent=task.stopping?'正在停止…':'停止';stop.disabled=!!task.stopping;stop.title='停下这个任务；做完的步骤保留在服务器上，以后可以接着做';stop.onclick=()=>{task.stopping=true;stop.disabled=true;stop.textContent='正在停止…';request(task.ctx,{action:'cancel',job:task.record.job},true).catch(e=>{task.stopping=false;if(typeof toast==='function')toast(`无法停止：${e}`);updateBar();});};bar.append(stop);}
       if(task){const rec=task.record,p=rec.progress;const status=document.createElement('div');status.className='remote-task-status';status.setAttribute('role','status');
         const phase=document.createElement('strong');phase.textContent=rec.state==='queued'?'等待服务器资源…':p?.stage||'正在提交并读取服务器进度…';
-        const count=document.createElement('span');count.textContent=p&&p.total>1?`${p.done} / ${p.total}`:'正在处理，请稍候';
+        const count=document.createElement('span');count.textContent=p&&p.total>1?`${p.done} / ${p.total}${rec.eta?' · '+rec.eta:''}`:'正在处理，请稍候';
         const progress=document.createElement('progress');progress.setAttribute('aria-label','当前阶段进度');if(p&&p.total>1){progress.max=p.total;progress.value=p.done;}
         const away=document.createElement('small');away.className='dim remote-task-away';away.textContent='可以关闭软件：任务在服务器上继续运行，下次连接这个文件夹会自动显示进度';status.append(phase,count,progress,away);bar.append(status);
         const workers=Object.entries(rec.workers||{});if(workers.length){const grid=document.createElement('div');grid.className='remote-worker-grid';for(const [name,p]of workers){const card=document.createElement('div');card.className='remote-worker-card';const title=document.createElement('strong');title.textContent=name;const stage=document.createElement('span');stage.textContent=p.stage.replace(/^GPU \d+ · /,'');const meter=document.createElement('progress');meter.setAttribute('aria-label',name+' 当前阶段进度');if(p.total>1){meter.max=p.total;meter.value=p.done;}const count=document.createElement('small');count.textContent=p.total>1?`${p.done} / ${p.total}`:'正在处理';card.append(title,stage,meter,count);grid.append(card);}bar.append(grid);}}
