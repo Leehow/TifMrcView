@@ -114,3 +114,6 @@ pub mod resources;
 
 #[cfg(feature="pro")]
 pub mod gpu_workers;
+
+#[cfg(feature="pro")]
+pub mod multi_gpu;

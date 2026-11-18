@@ -353,7 +353,7 @@ pub struct DenoiseStep {
 }
 
 pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, progress: Progress) -> Result<Made> {
-    use crate::denoise_learn::{train, Learned, Mode, TrainConfig};
+    use crate::denoise_learn::{Learned, Mode, TrainConfig};
     let now = std::time::Instant::now();
     let full = source(d, req.source.as_deref())?.clone();
     let present = full.halves.clone().filter(|[e, o]| Path::new(e).exists() && Path::new(o).exists());
@@ -393,18 +393,37 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
     };
     crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
     let cfg = TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
-    let (net, mean, std, loss) = train(dev, &pairs, w, h, mode, &cfg, |s, n, _| progress("Noise2Noise 训练", s, n))?;
-    let model = Learned { net, mode, mean, std, loss, source: full.path.clone(), bin: 1 };
+    // Every free card applies the network (sections handed out as cards
+    // come free). Training stays on one: its steps are small (8 patches of
+    // 64²), and split over two RTX 3090s they took as long as on one
+    // (amax, 1000 steps, 72 s vs 71 s; both cards at 30–45 %).
+    // TMV_SPLIT_TRAINING=1 splits the batch anyway.
+    // The further cards are taken only when needed, so a long training
+    // does not keep them from other jobs.
+    let split = std::env::var_os("TMV_SPLIT_TRAINING").is_some();
+    let mut gpus = if split { crate::multi_gpu::gpus(dev) } else { crate::multi_gpu::Gpus::one(dev) };
+    let images: Vec<crate::denoise_learn::Img> = pairs.iter().map(|(a, b)| crate::denoise_learn::Img { a, b: b.as_deref(), w, h }).collect();
+    let fit = crate::denoise_learn::fit(&gpus.devs, &images, mode, &cfg, &crate::denoise_learn::Fitting::default(), |s, n, _| progress("Noise2Noise 训练", s, n), &mut |_, _, _, _, _| {})?;
+    if !split {
+        gpus = crate::multi_gpu::gpus(dev);
+    }
+    drop(pairs);
+    let model = Learned { net: fit.net, mode, mean: fit.mean, std: fit.std, loss: fit.loss, source: full.path.clone(), bin: 1 };
     let mut out = vec![0.0f32; plane * nz];
     for (k, v) in inputs.iter().enumerate() {
-        for z in 0..nz {
+        let mut done = 0;
+        let model = &model;
+        crate::multi_gpu::spread(gpus.len(), (0..nz).collect(), &|c, z: usize| {
             check_cancel()?;
-            let r = model.apply(dev, &v[z * plane..(z + 1) * plane], w, h);
+            Ok((z, model.apply(&gpus.devs[c], &v[z * plane..(z + 1) * plane], w, h)))
+        }, &mut |(z, r)| {
             for (o, x) in out[z * plane..(z + 1) * plane].iter_mut().zip(r) {
                 *o += x / inputs.len() as f32;
             }
-            progress("去噪", k * nz + z + 1, inputs.len() * nz);
-        }
+            done += 1;
+            progress("去噪", k * nz + done, inputs.len() * nz);
+            Ok(())
+        })?;
         // The middle section so far, in the workspace.
         let part: Vec<f32> = out[nz / 2 * plane..(nz / 2 + 1) * plane].iter().map(|v| v * inputs.len() as f32 / (k + 1) as f32).collect();
         crate::live::show("去噪：中间层", w, h, &part, &[]);
@@ -511,7 +530,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
             let tilts: Vec<f32> = used.iter().map(|&t| t as f32).collect();
             let cfg = req.cfg.clone().unwrap_or_else(halves_config);
             let method = if cfg.equivariant > 0.0 { "icecream" } else { "halves" };
-            (crate::wedge::train_halves_and_apply(dev, &a, &b, shape, &tilts, &cfg, tick)?, shape, px, method)
+            (crate::wedge::train_halves_and_apply_on(dev, true, &a, &b, shape, &tilts, &cfg, tick)?.0, shape, px, method)
         }
         _ => {
             let (v, shape, px) = load(&src.path)?;

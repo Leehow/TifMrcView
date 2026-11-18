@@ -24,7 +24,7 @@ use anyhow::{bail, Result};
 use burn::module::Module;
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::PaddingConfig2d;
-use burn::optim::{AdamConfig, GradientsParams};
+use burn::optim::AdamConfig;
 use burn::tensor::activation::relu;
 use burn::tensor::module::{interpolate, max_pool2d};
 use burn::tensor::ops::{InterpolateMode, InterpolateOptions, MaxPoolOptions};
@@ -246,103 +246,332 @@ pub fn train_live(
     h: usize,
     mode: Mode,
     cfg: &TrainConfig,
-    mut progress: impl FnMut(usize, usize, f32),
+    progress: impl FnMut(usize, usize, f32),
     snapshot: &mut dyn FnMut(Net, f32, f32, usize, f32),
 ) -> Result<(Net, f32, f32, f32)> {
-    if pairs.is_empty() {
+    let images: Vec<Img> = pairs.iter().map(|(a, b)| Img { a, b: b.as_deref(), w, h }).collect();
+    let f = fit(&[dev.clone()], &images, mode, cfg, &Fitting::default(), progress, snapshot)?;
+    Ok((f.net, f.mean, f.std, f.loss))
+}
+
+/// One training image (and its Noise2Noise partner), w × h.
+#[derive(Clone, Copy)]
+pub struct Img<'a> {
+    pub a: &'a [f32],
+    pub b: Option<&'a [f32]>,
+    pub w: usize,
+    pub h: usize,
+}
+
+/// How `fit` chooses its training patches and when it stops.
+#[derive(Clone, Default)]
+pub struct Fitting {
+    /// Patches only where the images show signal: the image is cut into
+    /// cells, each scored by what the two noisy looks share (the covariance
+    /// of input and target; the variance for Noise2Void), cells with
+    /// outliers (gold, ice crystals: values far past the usual cell's) or
+    /// no content (padding) dropped, and the best `signal_keep` of the
+    /// rest kept. Off: anywhere.
+    pub signal: bool,
+    pub signal_keep: f32,
+    /// Hold out every eighth cell, score the network on them every few
+    /// steps (the same loss, nothing learned from them), and end with the
+    /// network that scored best.
+    pub validate: bool,
+    /// With `validate`: stop when the held-out score has not improved for
+    /// this many checks (0 = run all the steps), after at least a third of
+    /// the steps.
+    pub patience: usize,
+    /// Start from this network instead of a new one (fine-tuning).
+    pub start: Option<Net>,
+    /// Standardise with this mean and spread instead of the data's own (a
+    /// network carried over from other data keeps its scale).
+    pub scale: Option<(f32, f32)>,
+    /// Extra held-out data scored like the held-out cells (other images
+    /// than the training ones), for comparing ways of training.
+    pub holdout: Vec<(Vec<f32>, Option<Vec<f32>>, usize, usize)>,
+}
+
+/// What `fit` made.
+pub struct Fit {
+    pub net: Net,
+    pub mean: f32,
+    pub std: f32,
+    /// Running training loss at the end.
+    pub loss: f32,
+    /// Best held-out loss (with `validate`), and the step it came at.
+    pub val: Option<(f32, usize)>,
+    /// Held-out loss on `Fitting::holdout`, of the network returned.
+    pub holdout: Option<f32>,
+    /// Steps run (fewer than asked when it stopped early).
+    pub steps: usize,
+    /// (step, held-out loss) of every check.
+    pub history: Vec<(usize, f32)>,
+    pub cards: usize,
+}
+
+/// A training cell: image, top-left corner.
+type Cell = (usize, usize, usize);
+
+/// Cells of side p over every image, with their signal score, without the
+/// ones holding outliers or nothing.
+fn scored_cells(data: &[(Vec<f32>, Option<Vec<f32>>, usize, usize)], p: usize) -> Vec<(Cell, f32)> {
+    use rayon::prelude::*;
+    let mut cells: Vec<(Cell, f32, f32, f32)> = data
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(i, (a, b, w, h))| {
+            let (w, h) = (*w, *h);
+            (0..h / p).flat_map(move |cy| (0..w / p).map(move |cx| (cx * p, cy * p))).map(move |(x0, y0)| {
+                let (mut n, mut sa, mut sb, mut sab, mut saa, mut peak) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f32);
+                for y in (y0..y0 + p).step_by(2) {
+                    for x in (x0..x0 + p).step_by(2) {
+                        let u = a[y * w + x];
+                        let v = b.as_ref().map_or(u, |b| b[y * w + x]);
+                        n += 1.0;
+                        sa += u as f64;
+                        sb += v as f64;
+                        sab += (u * v) as f64;
+                        saa += (u * u) as f64;
+                        peak = peak.max((0.5 * (u + v)).abs());
+                    }
+                }
+                let var = saa / n - (sa / n).powi(2);
+                let score = (sab / n - sa / n * sb / n) as f32;
+                ((i, x0, y0), score, peak, var as f32)
+            })
+        })
+        .collect();
+    if cells.is_empty() {
+        return vec![];
+    }
+    let mut peaks: Vec<f32> = cells.iter().map(|c| c.2).collect();
+    peaks.sort_by(f32::total_cmp);
+    let usual = peaks[peaks.len() / 2].max(1e-6);
+    cells.retain(|c| c.3 > 1e-6 && c.2 <= 3.0 * usual);
+    cells.into_iter().map(|c| (c.0, c.1)).collect()
+}
+
+/// Trains a denoiser on `images` (all standardised alike) on the cards
+/// `devs` (plain devices, the first the primary; the batch is split over
+/// them each step).
+pub fn fit(
+    devs: &[Device],
+    images: &[Img],
+    mode: Mode,
+    cfg: &TrainConfig,
+    how: &Fitting,
+    mut progress: impl FnMut(usize, usize, f32),
+    snapshot: &mut dyn FnMut(Net, f32, f32, usize, f32),
+) -> Result<Fit> {
+    if images.is_empty() {
         bail!("没有训练数据");
     }
-    if w < ALIGN * 2 || h < ALIGN * 2 {
+    let small = images.iter().map(|i| i.w.min(i.h)).min().unwrap();
+    if small < ALIGN * 2 {
         bail!("图像太小");
     }
-    if (mode == Mode::N2v) != pairs.iter().all(|p| p.1.is_none()) {
+    if (mode == Mode::N2v) != images.iter().all(|p| p.b.is_none()) {
         bail!("训练数据和方式对不上");
     }
-    let all: Vec<&[f32]> = pairs.iter().flat_map(|(a, b)| std::iter::once(a.as_slice()).chain(b.as_deref())).collect();
-    let (mean, std) = stats(&all);
-    let data: Vec<(Vec<f32>, Option<Vec<f32>>)> = pairs.iter().map(|(a, b)| (standardise(a, mean, std), b.as_ref().map(|b| standardise(b, mean, std)))).collect();
-    let p = (cfg.patch.min(w).min(h) / ALIGN * ALIGN).max(ALIGN);
+    let all: Vec<&[f32]> = images.iter().flat_map(|i| std::iter::once(i.a).chain(i.b)).collect();
+    let (mean, std) = how.scale.unwrap_or_else(|| stats(&all));
+    let data: Vec<(Vec<f32>, Option<Vec<f32>>, usize, usize)> = images.iter().map(|i| (standardise(i.a, mean, std), i.b.map(|b| standardise(b, mean, std)), i.w, i.h)).collect();
+    let holdout: Vec<(Vec<f32>, Option<Vec<f32>>, usize, usize)> = how.holdout.iter().map(|(a, b, w, h)| (standardise(a, mean, std), b.as_ref().map(|b| standardise(b, mean, std)), *w, *h)).collect();
+    let p = (cfg.patch.min(small) / ALIGN * ALIGN).max(ALIGN);
     let mut rng = Rng(cfg.seed | 1);
-    let ad = dev.clone().autodiff();
-    let mut net = Net::new(&ad);
+    // Where patches come from: cells ranked by signal (else all cells),
+    // every eighth of them held out.
+    let mut cells: Vec<(Cell, f32)> = if how.signal { scored_cells(&data, p) } else { data.iter().enumerate().flat_map(|(i, (_, _, w, h))| (0..h / p).flat_map(move |cy| (0..w / p).map(move |cx| ((i, cx * p, cy * p), 0.0)))).collect() };
+    if how.signal {
+        cells.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let keep = ((cells.len() as f32 * how.signal_keep.clamp(0.05, 1.0)).ceil() as usize).max(1);
+        cells.truncate(keep);
+    } else {
+        // Every eighth of a shuffled list: spread over the images.
+        for i in (1..cells.len()).rev() {
+            cells.swap(i, rng.below(i + 1));
+        }
+    }
+    let (mut train_cells, mut val_cells) = (vec![], vec![]);
+    for (k, c) in cells.into_iter().enumerate() {
+        if how.validate && k % 8 == 4 { val_cells.push(c.0) } else { train_cells.push(c.0) }
+    }
+    if train_cells.is_empty() {
+        bail!("没有可训练的区域");
+    }
+    val_cells.truncate(96);
+    let held: std::collections::HashSet<Cell> = val_cells.iter().copied().collect();
+    let cards = devs.len().max(1);
+    let ads: Vec<Device> = devs.iter().map(|d| d.clone().autodiff()).collect();
+    let mut net = match &how.start {
+        Some(n) => n.clone().fork(&ads[0]).train(),
+        None => Net::new(&ads[0]),
+    };
     let mut opt = AdamConfig::new().init();
     let mut loss_avg = 0f32;
     const CELL: usize = 8;
-    let mut shot = std::time::Instant::now();
-    for step in 0..cfg.steps {
-        if CANCEL.load(Ordering::SeqCst) {
-            bail!("已取消");
-        }
-        let b = cfg.batch;
-        let (mut xs, mut ts, mut ms) = (Vec::with_capacity(b * p * p), Vec::with_capacity(b * p * p), Vec::with_capacity(b * p * p));
-        for _ in 0..b {
-            let s = rng.below(data.len());
-            let (x0, y0) = (rng.below(w - p + 1), rng.below(h - p + 1));
-            let (fx, fy, tr) = (rng.below(2) == 1, rng.below(2) == 1, rng.below(2) == 1);
-            // Noise2Noise pairs work both ways.
-            let swap = rng.below(2) == 1;
-            let (src, dst) = match &data[s] {
-                (a, Some(b)) if swap => (b, Some(a)),
-                (a, b) => (a, b.as_ref()),
-            };
-            let at = |img: &Vec<f32>, x: usize, y: usize| {
-                let (mut sx, mut sy) = if tr { (y, x) } else { (x, y) };
-                if fx {
-                    sx = p - 1 - sx;
-                }
-                if fy {
-                    sy = p - 1 - sy;
-                }
-                img[(y0 + sy) * w + x0 + sx]
-            };
-            let base = xs.len();
-            for y in 0..p {
-                for x in 0..p {
-                    xs.push(at(src, x, y));
-                    ts.push(at(dst.unwrap_or(src), x, y));
-                }
+    // One sample: input, target, mask of the scored pixels.
+    let sample = |rng: &mut Rng, src_img: &[f32], dst_img: Option<&[f32]>, w: usize, x0: usize, y0: usize, aug: bool, xs: &mut Vec<f32>, ts: &mut Vec<f32>, ms: &mut Vec<f32>| {
+        let (fx, fy, tr) = if aug { (rng.below(2) == 1, rng.below(2) == 1, rng.below(2) == 1) } else { (false, false, false) };
+        let at = |img: &[f32], x: usize, y: usize| {
+            let (mut sx, mut sy) = if tr { (y, x) } else { (x, y) };
+            if fx {
+                sx = p - 1 - sx;
             }
-            match dst {
-                Some(_) => ms.extend(std::iter::repeat_n(1f32, p * p)),
-                None => {
-                    // Blind spots: one per cell, its value from a random neighbour.
-                    ms.extend(std::iter::repeat_n(0f32, p * p));
-                    for cy in (0..p).step_by(CELL) {
-                        for cx in (0..p).step_by(CELL) {
-                            let (x, y) = (cx + rng.below(CELL.min(p - cx)), cy + rng.below(CELL.min(p - cy)));
-                            let (nx, ny) = loop {
-                                let (dx, dy) = (rng.below(5) as isize - 2, rng.below(5) as isize - 2);
-                                if dx != 0 || dy != 0 {
-                                    break ((x as isize + dx).clamp(0, p as isize - 1) as usize, (y as isize + dy).clamp(0, p as isize - 1) as usize);
-                                }
-                            };
-                            xs[base + y * p + x] = ts[base + ny * p + nx];
-                            ms[base + y * p + x] = 1.0;
-                        }
+            if fy {
+                sy = p - 1 - sy;
+            }
+            img[(y0 + sy) * w + x0 + sx]
+        };
+        let base = xs.len();
+        for y in 0..p {
+            for x in 0..p {
+                xs.push(at(src_img, x, y));
+                ts.push(at(dst_img.unwrap_or(src_img), x, y));
+            }
+        }
+        match dst_img {
+            Some(_) => ms.extend(std::iter::repeat_n(1f32, p * p)),
+            None => {
+                // Blind spots: one per cell, its value from a random neighbour.
+                ms.extend(std::iter::repeat_n(0f32, p * p));
+                for cy in (0..p).step_by(CELL) {
+                    for cx in (0..p).step_by(CELL) {
+                        let (x, y) = (cx + rng.below(CELL.min(p - cx)), cy + rng.below(CELL.min(p - cy)));
+                        let (nx, ny) = loop {
+                            let (dx, dy) = (rng.below(5) as isize - 2, rng.below(5) as isize - 2);
+                            if dx != 0 || dy != 0 {
+                                break ((x as isize + dx).clamp(0, p as isize - 1) as usize, (y as isize + dy).clamp(0, p as isize - 1) as usize);
+                            }
+                        };
+                        xs[base + y * p + x] = ts[base + ny * p + nx];
+                        ms[base + y * p + x] = 1.0;
                     }
                 }
             }
         }
-        let x = Tensor::<4>::from_data(TensorData::new(xs, [b, 1, p, p]), &ad);
-        let t = Tensor::<4>::from_data(TensorData::new(ts, [b, 1, p, p]), &ad);
-        let m = Tensor::<4>::from_data(TensorData::new(ms, [b, 1, p, p]), &ad);
+    };
+    let loss_of = |net: &Net, (xs, ts, ms, b): (Vec<f32>, Vec<f32>, Vec<f32>, usize), dev: &Device| -> Tensor<1> {
+        let x = Tensor::<4>::from_data(TensorData::new(xs, [b, 1, p, p]), dev);
+        let t = Tensor::<4>::from_data(TensorData::new(ts, [b, 1, p, p]), dev);
+        let m = Tensor::<4>::from_data(TensorData::new(ms, [b, 1, p, p]), dev);
         let e = net.forward(x) - t;
-        let loss = (e.clone() * e * m.clone()).sum() / m.sum().clamp_min(1.0);
-        let lv: f32 = loss.clone().into_scalar();
+        (e.clone() * e * m.clone()).sum() / m.sum().clamp_min(1.0)
+    };
+    // Held-out score: the same loss on fixed samples (both directions of
+    // each pair, no augmentation, blind spots from a fixed seed).
+    let score = |net: &Net, set: &[(&[f32], Option<&[f32]>, usize, usize, usize)]| -> f32 {
+        if set.is_empty() {
+            return f32::NAN;
+        }
+        let mut r = Rng(0x7a11d);
+        let (mut total, mut n) = (0f64, 0usize);
+        for chunk in set.chunks(16) {
+            let (mut xs, mut ts, mut ms) = (vec![], vec![], vec![]);
+            for &(a, b, w, x0, y0) in chunk {
+                sample(&mut r, a, b, w, x0, y0, false, &mut xs, &mut ts, &mut ms);
+            }
+            let l: f32 = loss_of(net, (xs, ts, ms, chunk.len()), &devs[0]).into_scalar();
+            total += l as f64 * chunk.len() as f64;
+            n += chunk.len();
+        }
+        (total / n as f64) as f32
+    };
+    let val_set: Vec<(&[f32], Option<&[f32]>, usize, usize, usize)> = val_cells
+        .iter()
+        .flat_map(|&(i, x0, y0)| {
+            let (a, b, w, _) = &data[i];
+            let one = (a.as_slice(), b.as_deref(), *w, x0, y0);
+            let other = b.as_deref().map(|b| (b, Some(a.as_slice()), *w, x0, y0));
+            std::iter::once(one).chain(other)
+        })
+        .collect();
+    let hold_set: Vec<(&[f32], Option<&[f32]>, usize, usize, usize)> = holdout
+        .iter()
+        .flat_map(|(a, b, w, h)| {
+            let (w, h) = (*w, *h);
+            (0..h / p).flat_map(move |cy| (0..w / p).map(move |cx| (cx * p, cy * p))).flat_map(move |(x0, y0)| {
+                let one = (a.as_slice(), b.as_deref(), w, x0, y0);
+                let other = b.as_deref().map(|b| (b, Some(a.as_slice()), w, x0, y0));
+                std::iter::once(one).chain(other)
+            })
+        })
+        .collect();
+    let every = (cfg.steps / 40).max(25);
+    let mut best: Option<(f32, usize, Net)> = None;
+    let mut since_best = 0;
+    let mut history = vec![];
+    let mut shot = std::time::Instant::now();
+    let mut ran = cfg.steps;
+    for step in 0..cfg.steps {
+        if CANCEL.load(Ordering::SeqCst) {
+            bail!("已取消");
+        }
+        let b = cfg.batch.max(cards);
+        let mut parts = Vec::with_capacity(cards);
+        for k in 0..cards {
+            let nk = crate::multi_gpu::share(b, cards, k);
+            let (mut xs, mut ts, mut ms) = (Vec::with_capacity(nk * p * p), Vec::with_capacity(nk * p * p), Vec::with_capacity(nk * p * p));
+            for _ in 0..nk {
+                let (i, cx, cy) = train_cells[rng.below(train_cells.len())];
+                let (a, bimg, w, h) = &data[i];
+                // A random shift within half a cell, unless it would reach
+                // into a held-out cell.
+                let jitter = |r: &mut Rng, c: usize, n: usize| (c as isize + r.below(p + 1) as isize - (p / 2) as isize).clamp(0, (n - p) as isize) as usize;
+                let (mut x0, mut y0) = (jitter(&mut rng, cx, *w), jitter(&mut rng, cy, *h));
+                if !held.is_empty() {
+                    let touches = [(x0 / p, y0 / p), ((x0 + p - 1) / p, y0 / p), (x0 / p, (y0 + p - 1) / p), ((x0 + p - 1) / p, (y0 + p - 1) / p)]
+                        .iter()
+                        .any(|&(gx, gy)| held.contains(&(i, gx * p, gy * p)));
+                    if touches {
+                        (x0, y0) = (cx, cy);
+                    }
+                }
+                // Noise2Noise pairs work both ways.
+                let swap = rng.below(2) == 1;
+                let (src, dst) = match bimg {
+                    Some(bb) if swap => (bb.as_slice(), Some(a.as_slice())),
+                    _ => (a.as_slice(), bimg.as_deref()),
+                };
+                sample(&mut rng, src, dst, *w, x0, y0, true, &mut xs, &mut ts, &mut ms);
+            }
+            parts.push(((xs, ts, ms, nk), nk));
+        }
+        let (grads, lv) = crate::multi_gpu::step_grads(&net, &ads, parts, &|n: &Net, part, k| loss_of(n, part, &ads[k]));
         loss_avg += if step == 0 { lv - loss_avg } else { 0.05 * (lv - loss_avg) };
-        let grads = GradientsParams::from_grads(loss.backward(), &net);
         // Cosine decay of the learning rate.
         let lr = cfg.lr * 0.5 * (1.0 + (std::f64::consts::PI * step as f64 / cfg.steps as f64).cos());
         net = opt.step(lr, net, grads);
         if step % 10 == 9 || step + 1 == cfg.steps {
             progress(step + 1, cfg.steps, loss_avg);
         }
+        if !val_set.is_empty() && (step % every == every - 1 || step + 1 == cfg.steps) {
+            let v = net.valid();
+            let s = score(&v, &val_set);
+            history.push((step + 1, s));
+            if best.as_ref().is_none_or(|b| s < b.0 * (1.0 - 1e-3)) {
+                best = Some((s, step + 1, v));
+                since_best = 0;
+            } else {
+                since_best += 1;
+                if how.patience > 0 && since_best >= how.patience && step + 1 >= cfg.steps / 3 {
+                    ran = step + 1;
+                    break;
+                }
+            }
+        }
         if step + 1 < cfg.steps && shot.elapsed().as_secs_f32() > 2.5 {
             snapshot(net.valid(), mean, std, step + 1, loss_avg);
             shot = std::time::Instant::now();
         }
     }
-    Ok((net.valid(), mean, std, loss_avg))
+    let (val, net) = match best {
+        Some((s, at, v)) => (Some((s, at)), v),
+        None => (None, net.valid()),
+    };
+    let held_out = (!hold_set.is_empty()).then(|| score(&net, &hold_set));
+    Ok(Fit { net, mean, std, loss: loss_avg, val, holdout: held_out, steps: ran, history, cards })
 }
 
 impl Learned {
@@ -442,6 +671,36 @@ mod tests {
             _ => rmse(&clean, &noisy.iter().zip(&other).map(|(a, b)| 0.5 * (a + b)).collect::<Vec<_>>()),
         };
         (before, rmse(&clean, &out))
+    }
+
+    /// Two "cards" (the same CPU), signal cells and held-out early stopping.
+    #[test]
+    fn fit_splits_the_batch_and_validates() {
+        let dev = Device::flex();
+        let (w, h) = (96, 96);
+        let (clean, noisy) = phantom(w, h, 0.4);
+        let other: Vec<f32> = clean.iter().enumerate().map(|(i, &c)| c + 0.4 * gauss(99, i as u64)).collect();
+        let cfg = TrainConfig { steps: 60, batch: 4, patch: 16, lr: 2e-3, seed: 7 };
+        let how = Fitting { signal: true, signal_keep: 0.6, validate: true, patience: 2, holdout: vec![(noisy.clone(), Some(other.clone()), w, h)], ..Default::default() };
+        let images = [Img { a: &noisy, b: Some(&other), w, h }];
+        let f = fit(&[dev.clone(), dev.clone()], &images, Mode::Frames, &cfg, &how, |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        assert_eq!(f.cards, 2);
+        assert!(f.val.is_some() && f.holdout.is_some_and(|v| v.is_finite()));
+        assert!(f.steps <= 60);
+    }
+
+    /// Fine-tuning starts from a trained (validation) network.
+    #[test]
+    fn fit_fine_tunes_a_trained_network() {
+        let dev = Device::flex();
+        let (w, h) = (64, 64);
+        let (clean, noisy) = phantom(w, h, 0.4);
+        let other: Vec<f32> = clean.iter().enumerate().map(|(i, &c)| c + 0.4 * gauss(99, i as u64)).collect();
+        let images = [Img { a: &noisy, b: Some(&other), w, h }];
+        let cfg = TrainConfig { steps: 10, batch: 2, patch: 16, lr: 2e-3, seed: 7 };
+        let first = fit(&[dev.clone()], &images, Mode::Frames, &cfg, &Fitting::default(), |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        let again = fit(&[dev.clone()], &images, Mode::Frames, &cfg, &Fitting { start: Some(first.net), ..Default::default() }, |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        assert!(again.loss.is_finite());
     }
 
     #[test]
