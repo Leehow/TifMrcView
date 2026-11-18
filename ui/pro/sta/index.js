@@ -115,12 +115,28 @@
     for (const t of all.some((x) => x.look) ? all.filter((x) => x.look) : all) add(t.path);
     return items;
   }
+  // `W.source`: the file (or folder) whose project the wall shows. When the open file is no tomogram of a
+  // project (nothing open, a tilt series, a movie), the tomograms 三维重构 made in its project folder are
+  // listed, so what was just reconstructed is here to click open and mark on.
+  const asItems = (l) => l.map((s) => ({ path: s.raw, name: s.name || name(s.raw), look: s.look || null, scale: s.lookScale, offset: s.lookOffset, open: !!s.open }));
   async function listed() {
     const open = S.info?.path;
-    if (open && S.info.sizeZ >= 3) {
+    W.source = open && S.info.sizeZ >= 3 ? open : null;
+    if (W.source) {
       try {
         const l = await invoke("sta_siblings", { path: open });
-        if (l?.length) return l.map((s) => ({ path: s.raw, name: s.name || name(s.raw), look: s.look || null, scale: s.lookScale, offset: s.lookOffset, open: !!s.open }));
+        if (l?.length) return asItems(l);
+      } catch (_) { /* no backend (web demo) */ }
+    }
+    const folder = window.TifMrcViewPro.cryoet?.reconFolder?.();
+    if (folder) {
+      try {
+        const tiles = await invoke("sta_gallery", { path: folder });
+        const t = (tiles || []).find((x) => x.raw && (x.status === "ready" || x.status === "noLook"));
+        if (t) {
+          const l = await invoke("sta_siblings", { path: t.raw });
+          if (l?.length) { W.source = folder; return asItems(l).map((i) => ({ ...i, open: S.info?.path === i.path || S.info?.path === i.look })); }
+        }
       } catch (_) { /* no backend (web demo) */ }
     }
     return collect();
@@ -680,5 +696,7 @@
   document.addEventListener("sta-pixel", () => { if (!panel.hidden) paint(); });
   document.addEventListener("pro-panel", (e) => { if (!W.hosted && e.detail !== panel.id && !panel.hidden) close(); });
   document.addEventListener("tmv-opened", () => { if (!panel.hidden) refresh(); });
+  // A reconstruction that just finished is listed at once.
+  document.addEventListener("cryoet-idle", () => { if (!panel.hidden) refresh(); });
   $("btn-fft").addEventListener("click", () => { if (F.on && !W.hosted) close(); });
 })();

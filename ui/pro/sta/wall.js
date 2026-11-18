@@ -35,7 +35,7 @@
 
   const box = document.createElement("div");
   box.id = "sta-wall-box";
-  box.innerHTML = '<button id="sta-wall-fold" type="button" class="sta-wall-fold" hidden aria-expanded="false"></button><div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>' +
+  box.innerHTML = '<p id="sta-wall-head" class="dim">三维重构做出的断层图：点图片在主界面打开（打开清晰版，在上面标），勾上的参加平均</p><button id="sta-wall-fold" type="button" class="sta-wall-fold" hidden aria-expanded="false"></button><div id="sta-wall" class="sta-wall"></div><p id="sta-wall-count" class="dim"></p>' +
     '<p id="sta-pixel" class="sta-pixel" hidden><span id="sta-pixel-text"></span><input id="sta-pixel-val" type="number" min="0" step="any" inputmode="decimal" aria-label="像素大小，单位 Å/像素"> Å/像素 <button id="sta-pixel-ok" type="button" class="small">确定</button></p>';
   $("sta-data").replaceWith(box);
   const wall = $("sta-wall");
@@ -64,7 +64,7 @@
   // What the gallery says about the project of the open file.
   async function load() {
     const gen = ++G.gen;
-    const path = S.info?.path && S.info.sizeZ >= 3 ? S.info.path : W.items[0]?.path;
+    const path = W.source || W.items[0]?.path;
     let list = [];
     if (path) { try { const r = await invoke("sta_gallery", { path }); if (Array.isArray(r)) list = r; } catch (_) { /* no backend (web demo): the plain list */ } }
     if (gen !== G.gen) return;
@@ -286,7 +286,7 @@
     sync(wall, [...nodes, plus]);
     // The line under the wall.
     const total = list.length, on = list.filter(ticked).length, no = list.filter((t) => !usable(t)).length;
-    $("sta-wall-count").textContent = total ? `共 ${total} 个断层图，已选 ${on} 个${no ? `，${no} 个还不能用` : ""}` : "先打开一张断层图，或在 Cryo-ET 工作区里完成“子断层平均”用途的重构";
+    $("sta-wall-count").textContent = total ? `共 ${total} 个断层图，已选 ${on} 个${no ? `，${no} 个还不能用` : ""}` : "还没有断层图：先在「三维重构」里重构，或打开一张断层图";
     // Folded while a review shows.
     const rev = (W.reviewed?.found?.length || 0) + (W.reviewed?.shapes?.length || 0) > 0 && total > 0;
     if (rev && !reviewing) unfolded = false;
@@ -298,6 +298,7 @@
     foldBtn.setAttribute("aria-expanded", String(!folded));
     wall.hidden = folded;
     $("sta-wall-count").hidden = folded;
+    $("sta-wall-head").hidden = folded || !total;
     fit();
     // The open one in sight (once per change).
     const o = list.find(isOpen);

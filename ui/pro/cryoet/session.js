@@ -115,6 +115,8 @@
   q('.cs-select-none').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.delete(s.name);selectionChanged();};
   function changedFolder(){selected.clear();q('.cs-search').value='';closeReview();stopMedia();rv.name=null;rv.dataset=null;for(const job of queue.splice(0))job.store.get(job.key)?.cancelQueued?.();wallCache.clear();rev.clear();}
   const visible = () => !W.panel.hidden;
+  // The project folder of 三维重构: the 子断层平均 part lists the tomograms made there (sta/index.js).
+  W.reconFolder = () => folder;
 
   function defaultFolder() {
     return S.folder?.dir || (S.info ? dirname(S.info.path) : null);
