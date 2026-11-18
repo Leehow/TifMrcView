@@ -233,6 +233,11 @@ jobs:
           name: ssh-preview-linux-x64
           path: ssh-preview
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-engine-linux-x64
+          path: ssh-engine
+
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -282,7 +287,11 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build ${{ matrix.args }} --config src-tauri/tauri.ci.conf.json
+        run: |
+          # Pro's ssh2 builds OpenSSL from source; its Configure needs a full
+          # Perl, which Git Bash's perl is not (no Locale::Maketext::Simple).
+          if [ "$RUNNER_OS" = Windows ]; then export OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe; fi
+          npx tauri build ${{ matrix.args }} --config src-tauri/tauri.ci.conf.json
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
