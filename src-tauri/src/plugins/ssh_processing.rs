@@ -148,9 +148,23 @@ pub(super) fn call(session: &Session, args: &Value) -> Result<Value> {
     // Recheck the engine itself each invocation; shared CUDA resources were checked on install.
     let libraries=q(&dir.join("cuda/lib64"));
     let cmd=format!("umask 077; cd {} && sha256sum -c --status {} && exec env LD_LIBRARY_PATH={libraries}\"${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\" {} agent",q(&dir),q(&checksum),q(&binary));
-    let result: Value = serde_json::from_slice(&exec(session, &cmd, &serde_json::to_vec(&req)?)?)?;
-    if let Some(error) = result["error"].as_str() {
-        anyhow::bail!("{error}")
+    let mut result: Value = serde_json::from_slice(&exec(session, &cmd, &serde_json::to_vec(&req)?)?)?;
+    // A job's own failure comes back as a state with an `error` field; only an answer
+    // without a state is the engine refusing the request itself.
+    if result["state"].is_null() {
+        if let Some(error) = result["error"].as_str() {
+            anyhow::bail!("{error}")
+        }
+    }
+    // Whether results can be written where the user wants them (a read-only disk, or a
+    // folder of someone else), asked of the nearest existing folder so nothing is created.
+    if req["action"] == "inspect" && result["resources"].is_object() {
+        if let Some(out) = req["outputRoot"].as_str().filter(|s| s.starts_with('/')) {
+            let probe = format!("p={}; while [ ! -e \"$p\" ]; do p=$(dirname \"$p\"); done; if [ -d \"$p\" ] && [ -w \"$p\" ]; then printf yes; else printf no; fi", quote(out));
+            if let Ok(answer) = exec(session, &probe, &[]) {
+                result["resources"]["outputWritable"] = json!(answer == b"yes");
+            }
+        }
     }
     Ok(result)
 }

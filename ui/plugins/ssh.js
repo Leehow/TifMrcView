@@ -355,12 +355,16 @@ TifMrcView.register({
             }
             const free = r?.outputFreeMb;
             const f = k("free");
+            // A read-only disk (or a folder of someone else) cannot hold results: say so, and do not offer it.
+            k("ok").disabled = r?.outputWritable === false;
+            if (r?.outputWritable === false) { f.className = "ssh-pick-low"; f.textContent = "这个位置不能写入（只读的盘或没有权限），结果存不进去，请换一个文件夹"; return; }
             f.className = free != null && free < 50 * 1024 ? "ssh-pick-low" : "dim";
             f.textContent = free == null ? "" : free < 50 * 1024 ? `这个位置所在的盘只剩 ${size(free)}：一个序列的中间结果通常要几 GB 到几十 GB，建议换一个空间大的盘` : `这个位置所在的盘还剩 ${size(free)}`;
           } catch (_) { /* no engine yet: no numbers */ }
         }
         async function go(path) {
           k("msg").textContent = "正在读取…";
+          k("ok").disabled = false;
           try {
             const r = await native("list", { path });
             here = r.path;
