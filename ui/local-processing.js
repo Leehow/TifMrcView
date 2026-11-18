@@ -17,7 +17,7 @@
     }
   };
   function render(bar,kind) {
-    const open=bar.querySelector('details')?.open;
+    const expanded=new Map([...bar.querySelectorAll('details')].map(d=>[d.className,d.open]));
     const record=latest.get(kind);bar.replaceChildren();
     bar.append(node('strong','运行位置：本机'+(record?.running?' · 正在处理':record?.error?' · 处理失败':record?' · 已完成':'')));
     if(resources) {
@@ -26,9 +26,12 @@
       bar.append(node('p',text));
     }
     if(record?.error)bar.append(node('p',record.error));
-    if(!record?.placements.size){if(record?.running)bar.append(node('span','正在准备数据；计算步骤开始后显示实际设备…'));return;}
+    const id=kind==='tomo'?'cryoet-workspace':kind==='spa'?'spa-workspace':'';
+    const advanced=window.TmvHelp?.advanced(id);
+    const done=()=>{if(advanced){window.TmvHelp.finish(advanced,id);if(advanced.childElementCount>1)bar.append(advanced);}for(const d of bar.querySelectorAll('details'))if(expanded.has(d.className))d.open=expanded.get(d.className);};
+    if(!record?.placements.size){if(record?.running)bar.append(node('span','正在准备数据；计算步骤开始后显示实际设备…'));return done();}
     const current=record.current;if(current){const status=node('p',`${current.operation}：${current.backend}${current.device?' · '+current.device:''}${current.reason?' · '+current.reason:''}`);status.setAttribute('role','status');bar.append(status);}
-    const details=node('details');details.className='remote-backends';details.open=open??false;
+    const details=node('details');details.className='remote-backends';
     details.append(node('summary',`${record.running?'每一步实际计算设备':'本次任务的计算设备'} · ${record.placements.size} 个步骤`));
     for(const p of record.placements.values()){
       const row=node('div');row.className='remote-backend-row';row.classList.toggle('fallback',!!p.fallback);
@@ -38,7 +41,8 @@
       if(p.priorFallback&&!p.fallback)row.append(node('small','本次此前曾回退 CPU：'+p.priorFallback));
       details.append(row);
     }
-    bar.append(details);
+    (advanced||bar).append(details);
+    done();
   }
   async function invoke(command,args,native) {
     if(!kinds.has(command)||!window.TifMrcViewPro)return native(command,args);

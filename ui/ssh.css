@@ -129,3 +129,7 @@
 .remote-resources,.remote-backends{width:100%;font-size:12px}.remote-resources p{margin:6px 0}.remote-backend-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:7px 0;border-bottom:1px solid var(--line)}.remote-backend-row small{grid-column:1/-1;overflow-wrap:anywhere}.remote-backend-row.fallback{color:var(--text)}.remote-backend-row.fallback small{color:#9a6700}
 
 .remote-worker-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;width:100%}.remote-worker-card{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--subtle);color:var(--text)}.remote-worker-card span{font-size:12px;overflow-wrap:anywhere}.remote-worker-card progress{width:100%;height:6px;accent-color:var(--accent)}
+/* 「高级」 under 运行位置: devices, results folder and (Cryo-ET) help, folded inside one another. */
+.ws-advanced{width:100%;font-size:12px}.ws-advanced>summary{cursor:pointer}.ws-advanced>details{margin:4px 0 0 14px}.ws-advanced>details>summary{cursor:pointer}
+.remote-output-details p{margin:6px 0 2px}.remote-output-details .remote-output{width:100%;box-sizing:border-box}
+.ws-help-part{margin:8px 0 4px}.ws-help-part ol{margin:4px 0 0;padding-left:20px}.ws-help-part li{margin:3px 0;line-height:1.6}
