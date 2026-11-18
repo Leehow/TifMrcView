@@ -298,7 +298,8 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     progress("反卷积", 0, 1);
     let (mut v, shape, px) = load(&src.path)?;
     let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
-    super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics);
+    let scratch = std::path::Path::new(&src.path).parent().unwrap_or(std::path::Path::new("."));
+    super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics, scratch)?;
     crate::live::show_section("反卷积：中间层", &v, shape, shape[2] / 2, &[]);
     let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_deconv", stem_suffix(&src.path, &d.stack)));
     output::write_mrc(&path, &v, shape, px, false)?;

@@ -37,114 +37,255 @@ impl Shared {
     }
 }
 
-/// Deconvolves a volume [z][y][x] in place on all CPU cores.
+/// Where the half spectrum [k < z][y][x < nx/2+1] lives between passes:
+/// in memory, or in a scratch file when the free memory is too small.
+/// Elements are complex, stored as (re, im) f32 pairs; tasks touch
+/// disjoint ranges.
+enum Store {
+    /// The buffer and a pointer into it taken while it was uniquely borrowed.
+    Ram(Vec<f32>, Shared),
+    File(std::fs::File, std::path::PathBuf),
+}
+
+impl Store {
+    fn read(&self, at: usize, re: &mut [f32], im: &mut [f32]) -> std::io::Result<()> {
+        let pairs = |d: &mut dyn Iterator<Item = (f32, f32)>, re: &mut [f32], im: &mut [f32]| {
+            for ((r, m), (a, b)) in re.iter_mut().zip(im.iter_mut()).zip(d) {
+                (*r, *m) = (a, b);
+            }
+        };
+        match self {
+            Store::Ram(_, p) => {
+                // SAFETY: in bounds; no task writes the range another reads.
+                let v = unsafe { std::slice::from_raw_parts(p.at(2 * at), 2 * re.len()) };
+                pairs(&mut v.chunks_exact(2).map(|c| (c[0], c[1])), re, im)
+            }
+            Store::File(f, _) => {
+                let mut bytes = vec![0u8; re.len() * 8];
+                read_at(f, &mut bytes, at as u64 * 8)?;
+                let f32_at = |c: &[u8]| f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                pairs(&mut bytes.chunks_exact(8).map(|c| (f32_at(&c[..4]), f32_at(&c[4..]))), re, im)
+            }
+        }
+        Ok(())
+    }
+
+    /// SAFETY (Ram): concurrent callers write disjoint ranges.
+    fn write(&self, at: usize, re: &[f32], im: &[f32]) -> std::io::Result<()> {
+        match self {
+            Store::Ram(_, out) => {
+                for (i, (&r, &m)) in re.iter().zip(im).enumerate() {
+                    unsafe {
+                        *out.at(2 * (at + i)) = r;
+                        *out.at(2 * (at + i) + 1) = m;
+                    }
+                }
+            }
+            Store::File(f, _) => {
+                let mut bytes = vec![0u8; re.len() * 8];
+                for (c, (&r, &m)) in bytes.chunks_exact_mut(8).zip(re.iter().zip(im)) {
+                    c[..4].copy_from_slice(&r.to_le_bytes());
+                    c[4..].copy_from_slice(&m.to_le_bytes());
+                }
+                write_at(f, &bytes, at as u64 * 8)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        if let Store::File(_, path) = self {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_at(f: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
+}
+#[cfg(unix)]
+fn write_at(f: &std::fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(f, buf, at)
+}
+#[cfg(windows)]
+fn read_at(f: &std::fs::File, mut buf: &mut [u8], mut at: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_read(f, buf, at)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        (buf, at) = (&mut buf[n..], at + n as u64);
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn write_at(f: &std::fs::File, mut buf: &[u8], mut at: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_write(f, buf, at)?;
+        (buf, at) = (&buf[n..], at + n as u64);
+    }
+    Ok(())
+}
+
+/// Bytes of memory to keep free for the rest of the system.
+const RESERVE: u64 = 2 << 30;
+
+/// Deconvolves a volume [z][y][x] in place on all CPU cores, within the
+/// memory that is free now.
 ///
 /// Same padding (powers of two) and filter as `cpu_reference`, but the
 /// input is real, so the transform keeps only the nx/2+1 non-negative x
-/// frequencies (two real rows per complex FFT); the zero padding is
-/// skipped; every pass runs in parallel without a single-threaded copy
-/// back; and the z pass applies the filter and transforms back in one go.
-pub(crate) fn cpu(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics) {
+/// frequencies (two real rows per complex FFT), and the slabs of zero
+/// padding are never stored. Pass 1 transforms each z slab in x and y;
+/// pass 2 takes blocks of y rows through z, the filter and back; pass 3
+/// transforms each slab back into the volume. Between passes the half
+/// spectrum (about the size of the volume, 8 bytes per voxel of x/2)
+/// stays in memory if it fits in the free memory, else in a scratch file
+/// in `scratch`; the blocks of pass 2 are sized to the free memory too.
+pub(crate) fn cpu(vol: &mut [f32], shape: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics, scratch: &std::path::Path) -> anyhow::Result<()> {
+    cpu_in(vol, shape, pixel_a, defocus_a, optics, scratch, std::env::var_os("TMV_DECONV_FILE").is_some())
+}
+
+fn cpu_in(vol: &mut [f32], shape: [usize; 3], pixel_a: f64, defocus_a: f64, optics: &Optics, scratch: &std::path::Path, force_file: bool) -> anyhow::Result<()> {
+    let [w, h, z] = shape;
     let (nx, ny, nz) = (w.next_power_of_two().max(2), h.next_power_of_two(), z.next_power_of_two().max(2));
     let hx = nx / 2 + 1;
+    let threads = rayon::current_num_threads().max(1);
+    let spectrum = (z * ny * hx * 8) as u64;
+    // Per task in passes 1 and 3: a slab (re, im) and a block of columns.
+    let slab_work = (hx * ny * 8 + 2 * 16 * ny * 4 + 2 * nx * 4) as u64 * threads as u64;
+    let free = crate::resources::memory_available_bytes();
+    let in_memory = !force_file && (free == 0 || spectrum + slab_work + RESERVE < free);
+    let store = if in_memory {
+        let mut v = vec![0f32; 2 * z * ny * hx];
+        let p = Shared(v.as_mut_ptr());
+        Store::Ram(v, p)
+    } else {
+        let path = scratch.join(format!(".deconv-{}-{}.spectrum", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+        let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+        f.set_len(spectrum)?;
+        crate::compute::report("反卷积", "CPU", Some(format!("可用内存 {:.1} GB 不够放下 {:.1} GB 频谱，改为分块经由临时文件计算", free as f64 / 1e9, spectrum as f64 / 1e9)));
+        Store::File(f, path)
+    };
+    // Rows of y per block in pass 2, so that all blocks in flight fit.
+    let budget = if free == 0 { 4u64 << 30 } else if in_memory { (free - spectrum - RESERVE.min(free - spectrum)).max(256 << 20) } else { free.saturating_sub(RESERVE).max(256 << 20) };
+    let per_row = (z * hx * 8 + 2 * nz * 4) as u64;
+    let rows = ((budget / threads as u64 / per_row.max(1)) as usize).clamp(1, ny.div_ceil(threads).max(1));
+
     let mean = (vol.par_iter().map(|&v| v as f64).sum::<f64>() / vol.len() as f64) as f32;
     let (fx, fy, fz) = (crate::fft::Fft::new(nx), (ny >= 2).then(|| crate::fft::Fft::new(ny)), crate::fft::Fft::new(nz));
-    // Half spectrum [nz][ny][hx].
-    let mut re = vec![0f32; hx * ny * nz];
-    let mut im = vec![0f32; hx * ny * nz];
+    // Columns of the slab [y][hx] through y, in blocks; `inverse` conjugates around a forward FFT.
+    let y_columns = |r: &mut [f32], m: &mut [f32], br: &mut [f32], bi: &mut [f32], inverse: bool| {
+        let Some(fy) = &fy else { return };
+        const B: usize = 16;
+        for x0 in (0..hx).step_by(B) {
+            let nb = B.min(hx - x0);
+            for y in 0..ny {
+                for c in 0..nb {
+                    br[c * ny + y] = r[y * hx + x0 + c];
+                    bi[c * ny + y] = if inverse { -m[y * hx + x0 + c] } else { m[y * hx + x0 + c] };
+                }
+            }
+            for c in 0..nb {
+                fy.run(&mut br[c * ny..][..ny], &mut bi[c * ny..][..ny]);
+            }
+            for y in 0..ny {
+                for c in 0..nb {
+                    r[y * hx + x0 + c] = br[c * ny + y];
+                    m[y * hx + x0 + c] = if inverse { -bi[c * ny + y] } else { bi[c * ny + y] };
+                }
+            }
+        }
+    };
+    let slab_buffers = || (vec![0f32; hx * ny], vec![0f32; hx * ny], vec![0f32; 16 * ny], vec![0f32; 16 * ny], vec![0f32; nx], vec![0f32; nx]);
+    let failed = std::sync::Mutex::new(None::<anyhow::Error>);
+    let fail = |e: anyhow::Error| {
+        failed.lock().unwrap().get_or_insert(e);
+    };
+    let stop = || failed.lock().unwrap().is_some() || super::check_cancel().is_err();
 
-    // x: rows (k, y) for y < h, k < z; two real rows per complex FFT.
+    // Pass 1: x (two real rows per complex FFT) and y, slab by slab.
     {
-        let rows: Vec<usize> = (0..z).flat_map(|k| (0..h).map(move |y| k * ny + y)).collect();
-        let (pr, pi) = (Shared(re.as_mut_ptr()), Shared(im.as_mut_ptr()));
         let vol = &*vol;
-        rows.par_chunks(2).for_each_init(
-            || (vec![0f32; nx], vec![0f32; nx]),
-            |(a, b), pair| {
-                let src = |row: usize, out: &mut [f32]| {
-                    let (k, y) = (row / ny, row % ny);
-                    let s = &vol[(k * h + y) * w..][..w];
-                    for (o, &v) in out.iter_mut().zip(s) {
-                        *o = v - mean;
+        (0..z).into_par_iter().for_each_init(slab_buffers, |(r, m, br, bi, a, b), k| {
+            if stop() {
+                return;
+            }
+            r.fill(0.0);
+            m.fill(0.0);
+            for y0 in (0..h).step_by(2) {
+                let row = |y: usize, out: &mut [f32]| {
+                    if y < h {
+                        let s = &vol[(k * h + y) * w..][..w];
+                        for (o, &v) in out.iter_mut().zip(s) {
+                            *o = v - mean;
+                        }
+                        out[w..].fill(0.0);
+                    } else {
+                        out.fill(0.0);
                     }
-                    out[w..].fill(0.0);
                 };
-                src(pair[0], a);
-                if pair.len() > 1 { src(pair[1], b) } else { b.fill(0.0) }
+                row(y0, a);
+                row(y0 + 1, b);
                 fx.run(a, b);
-                for (i, &row) in pair.iter().enumerate() {
-                    // SAFETY: each row is written by exactly one task.
-                    let (r, m) = unsafe {
-                        (std::slice::from_raw_parts_mut(pr.at(row * hx), hx), std::slice::from_raw_parts_mut(pi.at(row * hx), hx))
-                    };
+                for i in 0..2.min(h - y0) {
+                    let (rr, mm) = (&mut r[(y0 + i) * hx..][..hx], &mut m[(y0 + i) * hx..][..hx]);
                     for x in 0..hx {
                         let j = (nx - x) % nx;
                         // A = (Z[x] + conj Z[-x]) / 2, B = (Z[x] - conj Z[-x]) / 2i.
                         if i == 0 {
-                            r[x] = 0.5 * (a[x] + a[j]);
-                            m[x] = 0.5 * (b[x] - b[j]);
+                            rr[x] = 0.5 * (a[x] + a[j]);
+                            mm[x] = 0.5 * (b[x] - b[j]);
                         } else {
-                            r[x] = 0.5 * (b[x] + b[j]);
-                            m[x] = -0.5 * (a[x] - a[j]);
+                            rr[x] = 0.5 * (b[x] + b[j]);
+                            mm[x] = -0.5 * (a[x] - a[j]);
                         }
                     }
                 }
-            },
-        );
+            }
+            y_columns(r, m, br, bi, false);
+            if let Err(e) = store.write(k * ny * hx, r, m) {
+                fail(e.into());
+            }
+        });
     }
+    if let Some(e) = failed.lock().unwrap().take() {
+        return Err(e);
+    }
+    super::check_cancel()?;
 
-    // y: one z slab per task, columns in blocks; `inverse` conjugates around a forward FFT.
-    let y_pass = |re: &mut [f32], im: &mut [f32], inverse: bool| {
-        let Some(fy) = &fy else { return };
-        const B: usize = 16;
-        re.par_chunks_mut(hx * ny).zip(im.par_chunks_mut(hx * ny)).take(z).for_each_init(
-            || (vec![0f32; B * ny], vec![0f32; B * ny]),
-            |(br, bi), (r, m)| {
-                for x0 in (0..hx).step_by(B) {
-                    let nb = B.min(hx - x0);
-                    for y in 0..ny {
-                        for c in 0..nb {
-                            br[c * ny + y] = r[y * hx + x0 + c];
-                            bi[c * ny + y] = if inverse { -m[y * hx + x0 + c] } else { m[y * hx + x0 + c] };
-                        }
-                    }
-                    for c in 0..nb {
-                        fy.run(&mut br[c * ny..][..ny], &mut bi[c * ny..][..ny]);
-                    }
-                    for y in 0..ny {
-                        for c in 0..nb {
-                            r[y * hx + x0 + c] = br[c * ny + y];
-                            m[y * hx + x0 + c] = if inverse { -bi[c * ny + y] } else { bi[c * ny + y] };
-                        }
-                    }
-                }
-            },
-        );
-    };
-    y_pass(&mut re, &mut im, false);
-
-    // z: per y, forward, filter, inverse (only the slabs k < z are kept).
+    // Pass 2: per block of y rows, z forward, the filter, z back (k < z kept).
     {
         let f = |i: usize, n: usize| crate::motion::sum::freq(i, n) / n as f64;
         let scale = 10f64.powf(3.0 * STRENGTH);
-        let (pr, pi) = (Shared(re.as_mut_ptr()), Shared(im.as_mut_ptr()));
-        (0..ny).into_par_iter().for_each_init(
-            || (vec![0f32; nz], vec![0f32; nz]),
-            |(br, bi), y| {
-                let fy2 = f(y, ny).powi(2);
-                for x in 0..hx {
-                    let fxy = f(x, nx).powi(2) + fy2;
-                    // SAFETY: the elements (k, y, x) for this y belong to this task.
-                    for k in 0..nz {
-                        let i = (k * ny + y) * hx + x;
-                        unsafe {
-                            br[k] = *pr.at(i);
-                            bi[k] = *pi.at(i);
-                        }
+        let blocks: Vec<usize> = (0..ny).step_by(rows).collect();
+        blocks.par_iter().for_each_init(
+            || (vec![0f32; z * rows * hx], vec![0f32; z * rows * hx], vec![0f32; nz], vec![0f32; nz]),
+            |(sr, si, br, bi), &y0| {
+                if stop() {
+                    return;
+                }
+                let n = rows.min(ny - y0) * hx;
+                for k in 0..z {
+                    if let Err(e) = store.read((k * ny + y0) * hx, &mut sr[k * n..][..n], &mut si[k * n..][..n]) {
+                        return fail(e.into());
                     }
-                    if br.iter().chain(bi.iter()).all(|&v| v == 0.0) {
+                }
+                for c in 0..n {
+                    let (y, x) = (y0 + c / hx, c % hx);
+                    for k in 0..z {
+                        br[k] = sr[k * n + c];
+                        bi[k] = si[k * n + c];
+                    }
+                    if br[..z].iter().chain(&bi[..z]).all(|&v| v == 0.0) {
                         continue;
                     }
+                    br[z..].fill(0.0);
+                    bi[z..].fill(0.0);
+                    let fxy = f(x, nx).powi(2) + f(y, ny).powi(2);
                     fz.run(br, bi);
                     for k in 0..nz {
                         let g = gain((fxy + f(k, nz).powi(2)).sqrt(), pixel_a, defocus_a, optics, scale) as f32;
@@ -153,49 +294,60 @@ pub(crate) fn cpu(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64, defocus_
                     }
                     fz.run(br, bi);
                     for k in 0..z {
-                        let i = (k * ny + y) * hx + x;
-                        unsafe {
-                            *pr.at(i) = br[k];
-                            *pi.at(i) = -bi[k];
-                        }
+                        sr[k * n + c] = br[k];
+                        si[k * n + c] = -bi[k];
+                    }
+                }
+                for k in 0..z {
+                    if let Err(e) = store.write((k * ny + y0) * hx, &sr[k * n..][..n], &si[k * n..][..n]) {
+                        return fail(e.into());
                     }
                 }
             },
         );
     }
-    y_pass(&mut re, &mut im, true);
+    if let Some(e) = failed.lock().unwrap().take() {
+        return Err(e);
+    }
+    super::check_cancel()?;
 
-    // x back to real: two half-spectrum rows as one complex inverse FFT.
+    // Pass 3: y back, then x back to real (two half-spectrum rows per complex FFT).
     let norm = 1.0 / (nx * ny * nz) as f32;
-    let rows: Vec<usize> = (0..z).flat_map(|k| (0..h).map(move |y| k * ny + y)).collect();
     let out = Shared(vol.as_mut_ptr());
-    let (re, im) = (&re, &im);
-    rows.par_chunks(2).for_each_init(
-        || (vec![0f32; nx], vec![0f32; nx], vec![0f32; hx]),
-        |(a, b, zero), pair| {
-            let row = |i: usize| pair.get(i).map(|&r| (&re[r * hx..][..hx], &im[r * hx..][..hx]));
-            let (ar, ai) = row(0).unwrap();
-            let (cr, ci) = row(1).unwrap_or((&*zero, &*zero));
+    (0..z).into_par_iter().for_each_init(slab_buffers, |(r, m, br, bi, a, b), k| {
+        if stop() {
+            return;
+        }
+        if let Err(e) = store.read(k * ny * hx, r, m) {
+            return fail(e.into());
+        }
+        y_columns(r, m, br, bi, true);
+        for y0 in (0..h).step_by(2) {
+            let pair = 2.min(h - y0);
+            let (ar, ai) = (&r[y0 * hx..][..hx], &m[y0 * hx..][..hx]);
             // Z = A + iB over all x, from the Hermitian halves; conjugated for the inverse.
             for x in 0..nx {
                 let (j, s) = if x < hx { (x, 1.0) } else { (nx - x, -1.0) };
-                let (a_r, a_i, b_r, b_i) = (ar[j], s * ai[j], cr[j], s * ci[j]);
-                a[x] = a_r - b_i;
-                b[x] = -(a_i + b_r);
+                let (b_r, b_i) = if pair > 1 { (r[(y0 + 1) * hx + j], s * m[(y0 + 1) * hx + j]) } else { (0.0, 0.0) };
+                a[x] = ar[j] - b_i;
+                b[x] = -(s * ai[j] + b_r);
             }
             fx.run(a, b);
-            for (i, &r) in pair.iter().enumerate() {
-                let (k, y) = (r / ny, r % ny);
-                let src = if i == 0 { &*a } else { &*b };
-                let sign = if i == 0 { norm } else { -norm };
+            for i in 0..pair {
+                let (src, sign) = if i == 0 { (&*a, norm) } else { (&*b, -norm) };
                 // SAFETY: each output row is written by exactly one task.
-                let dst = unsafe { std::slice::from_raw_parts_mut(out.at((k * h + y) * w), w) };
+                let dst = unsafe { std::slice::from_raw_parts_mut(out.at((k * h + y0 + i) * w), w) };
                 for (d, &v) in dst.iter_mut().zip(src) {
                     *d = v * sign;
                 }
             }
-        },
-    );
+        }
+    });
+    if let Some(e) = failed.lock().unwrap().take() {
+        return Err(e);
+    }
+    super::check_cancel()?;
+    Ok(())
 }
 
 /// The original full complex implementation, kept as the reference.
@@ -239,14 +391,14 @@ pub(crate) fn cpu_reference(vol: &mut [f32], [w, h, z]: [usize; 3], pixel_a: f64
 }
 
 /// Keep the FFT chain on the GPU when its complete memory budget fits.
-pub(crate) fn deconvolve(vol:&mut [f32],shape:[usize;3],pixel:f64,df:f64,optics:&Optics){
+pub(crate) fn deconvolve(vol:&mut [f32],shape:[usize;3],pixel:f64,df:f64,optics:&Optics,scratch:&std::path::Path)->anyhow::Result<()>{
  if let Some((dev,_))=crate::ctf_gpu::device(){
   match crate::ctf_gpu::guarded(|| gpu(vol,shape,pixel,df,optics,dev)).and_then(|r|r){
-   Ok(v)=>{vol.copy_from_slice(&v);crate::compute::report("反卷积 FFT 与滤波","GPU",None);return;}
-   Err(e)=>{if super::check_cancel().is_err(){return;}crate::compute::report("反卷积","CPU",Some(format!("GPU 执行失败：{e:#}")));}
+   Ok(v)=>{vol.copy_from_slice(&v);crate::compute::report("反卷积 FFT 与滤波","GPU",None);return Ok(());}
+   Err(e)=>{super::check_cancel()?;crate::compute::report("反卷积","CPU",Some(format!("GPU 执行失败：{e:#}")));}
   }
  }else{crate::compute::report("反卷积","CPU",Some(crate::compute::no_gpu()));}
- cpu(vol,shape,pixel,df,optics);
+ cpu(vol,shape,pixel,df,optics,scratch)
 }
 fn gpu(vol: &[f32], [w,h,z]: [usize;3], pixel: f64, df: f64, o: &Optics, dev: &burn::tensor::Device) -> anyhow::Result<Vec<f32>> {
  use burn::tensor::{Tensor,TensorData};
@@ -335,7 +487,7 @@ mod gpu_tests{
   let path=std::env::var("TMV_DECONV_BENCH").expect("TMV_DECONV_BENCH");
   let t=std::time::Instant::now();let (input,shape,px)=super::super::pipeline::load(&path).unwrap();eprintln!("load {shape:?} {px} Å: {:.1} s",t.elapsed().as_secs_f64());
   let o=Optics::of(300.,2.7,0.07);let df=40000.;
-  let mut new=input.clone();let t=std::time::Instant::now();cpu(&mut new,shape,px,df,&o);eprintln!("new CPU ({} threads): {:.1} s",rayon::current_num_threads(),t.elapsed().as_secs_f64());
+  let mut new=input.clone();let t=std::time::Instant::now();cpu(&mut new,shape,px,df,&o,std::path::Path::new(&path).parent().unwrap()).unwrap();eprintln!("new CPU ({} threads): {:.1} s",rayon::current_num_threads(),t.elapsed().as_secs_f64());
   if let Some((dev,_))=crate::ctf_gpu::device(){let t=std::time::Instant::now();match gpu(&input,shape,px,df,&o,dev){Ok(_)=>eprintln!("GPU: {:.1} s",t.elapsed().as_secs_f64()),Err(e)=>eprintln!("GPU skipped: {e:#}")}}
   if std::env::var_os("TMV_DECONV_REF").is_some(){
    let mut old=input.clone();let t=std::time::Instant::now();cpu_reference(&mut old,shape,px,df,&o);eprintln!("old CPU: {:.1} s",t.elapsed().as_secs_f64());
@@ -350,9 +502,11 @@ mod gpu_tests{
    let n=shape[0]*shape[1]*shape[2];
    let input:Vec<f32>=(0..n).map(|i|((i*37%251) as f32/125.-1.)+((i%17) as f32*0.3).sin()).collect();
    let mut reference=input.clone();cpu_reference(&mut reference,shape,3.2,25000.,&o);
-   let mut actual=input.clone();cpu(&mut actual,shape,3.2,25000.,&o);
+   for file in [false,true]{
+   let mut actual=input.clone();cpu_in(&mut actual,shape,3.2,25000.,&o,&std::env::temp_dir(),file).unwrap();
    let error=actual.iter().zip(&reference).map(|(a,b)|(*a as f64-*b as f64).powi(2)).sum::<f64>();let norm=reference.iter().map(|v|(*v as f64).powi(2)).sum::<f64>().max(1e-30);
-   let relative=(error/norm).sqrt();eprintln!("{shape:?} CPU vs reference relative RMS {relative}");assert!(relative<1e-5,"{shape:?} {relative}");
+   let relative=(error/norm).sqrt();eprintln!("{shape:?} file {file} CPU vs reference relative RMS {relative}");assert!(relative<1e-5,"{shape:?} {relative}");
+   }
   }
  }
  #[test]
