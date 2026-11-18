@@ -808,7 +808,7 @@ mod tests {
             crate::tomo::output::write_mrc(p.to_str().unwrap(), &vol, N, 10.0, false).unwrap();
         }
         let (a, b) = (a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string());
-        let marks = vec![Mark { kind: marks::Kind::Line, tomogram: a.clone(), points: drawn().remove(0), flip: false, strokes: vec![] }];
+        let marks = vec![Mark { kind: marks::Kind::Line, tomogram: a.clone(), points: drawn().remove(0), flip: false, strokes: vec![], deep: false }];
         let found = find(&marks, &[a.clone(), b.clone()]).unwrap();
         assert!(found.kind.is_some());
         for (file, examples) in [(&a, 1), (&b, 0)] {

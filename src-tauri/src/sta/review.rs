@@ -895,7 +895,7 @@ fn circled_review(inputs: &[String], marks: &[Mark], out: &str, device: Option<D
         let (inputs, sources) = marks::without_looks(&inputs, sources);
         let examples = marks::examples_of(marks, &inputs, &sources)?;
         if examples.is_empty() {
-            bail!("请先圈出 2 到 3 个要找的东西作例子");
+            bail!("请先涂（或圈）出 2 到 3 个要找的东西作例子");
         }
         let device_given = device.is_none();
         let c = match device {
