@@ -90,10 +90,12 @@ pub fn stroke_pixels(l: &Labels, s: &Stroke, from: u16) -> Vec<bool> {
     m
 }
 
-/// Refines `stroke` as `structure`.
-pub fn refine(vals: &dyn Values, dims: (usize, usize, usize), stroke: &Stroke, structure: &str) -> Result<Outcome> {
+/// Refines the rough paint `paint` (pixels of slice `z`: one object, maybe
+/// painted in several strokes) as `structure`. `gap`: pieces of paint this
+/// close belong together (about a brush radius).
+pub fn refine(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32, structure: &str) -> Result<Outcome> {
     match structure {
-        "membrane" => membrane(vals, dims, stroke),
+        "membrane" => membrane(vals, dims, z, paint, gap),
         "" => Ok(Outcome::Rough(String::new())),
         _ => Ok(Outcome::Rough("这个类型的精细分割还没做好，先保留你画的样子".into())),
     }
@@ -264,13 +266,140 @@ fn best_path(r: &[f32], s_len: usize, t_len: usize, lambda: f32) -> Vec<usize> {
 
 // ---------- 单层膜 ----------
 
-fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Result<Outcome> {
-    if st.tool != "brush" || st.pts.len() < 2 {
-        return Ok(Outcome::Rough("膜请用画笔沿着膜涂一笔，这一笔先保留你画的样子".into()));
+/// Thins `m` (`w`×`h`, false on the border) to one-pixel lines (Zhang & Suen).
+fn thin(m: &mut [bool], w: usize, h: usize) {
+    let mut del = vec![];
+    loop {
+        let mut changed = false;
+        for step in 0..2 {
+            del.clear();
+            for y in 1..h - 1 {
+                for x in 1..w - 1 {
+                    let i = y * w + x;
+                    if !m[i] {
+                        continue;
+                    }
+                    // P2..P9 clockwise from north.
+                    let p = [m[i - w], m[i - w + 1], m[i + 1], m[i + w + 1], m[i + w], m[i + w - 1], m[i - 1], m[i - w - 1]];
+                    let b = p.iter().filter(|&&v| v).count();
+                    let a = (0..8).filter(|&k| !p[k] && p[(k + 1) % 8]).count();
+                    let ok = if step == 0 { !(p[0] && p[2] && p[4]) && !(p[2] && p[4] && p[6]) } else { !(p[0] && p[2] && p[6]) && !(p[0] && p[4] && p[6]) };
+                    if (2..=6).contains(&b) && a == 1 && ok {
+                        del.push(i);
+                    }
+                }
+            }
+            for &i in &del {
+                m[i] = false;
+            }
+            changed |= !del.is_empty();
+        }
+        if !changed {
+            break;
+        }
     }
+}
+
+/// The centre line of a painted object, however it was painted (one stroke,
+/// several overlapping ones, a stroke that doubles back, a lasso or a wand
+/// region): pieces within `gap` are joined, the joined paint is thinned to a
+/// skeleton, and the longest path through the skeleton is the line. Also
+/// returns the paint's half width along that line.
+fn centre_line(paint: &[bool], w: usize, h: usize, gap: f32) -> Option<(Vec<[f32; 2]>, f32)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+    for (i, _) in paint.iter().enumerate().filter(|(_, &v)| v) {
+        let (x, y) = (i % w, i / w);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    if x0 > x1 {
+        return None;
+    }
+    let pad = gap.ceil() as usize + 2;
+    let (ox, oy) = (x0 as i64 - pad as i64, y0 as i64 - pad as i64);
+    let (lw, lh) = (x1 - x0 + 1 + 2 * pad, y1 - y0 + 1 + 2 * pad);
+    let local: Vec<bool> = (0..lw * lh)
+        .map(|j| {
+            let (x, y) = ((j % lw) as i64 + ox, (j / lw) as i64 + oy);
+            x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && paint[y as usize * w + x as usize]
+        })
+        .collect();
+    let inside = crate::labels::edt(&local.iter().map(|&v| !v).collect::<Vec<_>>(), lw, lh);
+    let near = crate::labels::edt(&local, lw, lh);
+    let mut sk: Vec<bool> = near.iter().map(|&d| d <= gap).collect();
+    for x in 0..lw {
+        sk[x] = false;
+        sk[(lh - 1) * lw + x] = false;
+    }
+    for y in 0..lh {
+        sk[y * lw] = false;
+        sk[y * lw + lw - 1] = false;
+    }
+    thin(&mut sk, lw, lh);
+    // Longest path: farthest pixel from any pixel, then farthest from that,
+    // in every piece of the skeleton; the longest wins.
+    let nbrs = |i: usize| {
+        let (x, y) = ((i % lw) as i64, (i / lw) as i64);
+        [(-1i64, -1i64), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].into_iter().filter_map(move |(dx, dy)| {
+            let (a, b) = (x + dx, y + dy);
+            (a >= 0 && b >= 0 && (a as usize) < lw && (b as usize) < lh).then(|| (b as usize * lw + a as usize, if dx != 0 && dy != 0 { 1.414f32 } else { 1.0 }))
+        })
+    };
+    // Dijkstra-lite: skeletons are thin, a few passes of relaxation suffice.
+    let far = |start: usize| -> (usize, Vec<f32>, Vec<usize>) {
+        let mut dist = vec![f32::INFINITY; lw * lh];
+        let mut from = vec![usize::MAX; lw * lh];
+        let mut queue = std::collections::VecDeque::from([start]);
+        dist[start] = 0.0;
+        while let Some(i) = queue.pop_front() {
+            for (j, c) in nbrs(i) {
+                if sk[j] && dist[i] + c < dist[j] {
+                    dist[j] = dist[i] + c;
+                    from[j] = i;
+                    queue.push_back(j);
+                }
+            }
+        }
+        let end = (0..lw * lh).filter(|&j| dist[j].is_finite()).max_by(|&a, &b| dist[a].total_cmp(&dist[b])).unwrap_or(start);
+        (end, dist, from)
+    };
+    let mut seen = vec![false; lw * lh];
+    let mut best: Option<(f32, Vec<usize>)> = None;
+    for i in 0..lw * lh {
+        if !sk[i] || seen[i] {
+            continue;
+        }
+        let (a, d0, _) = far(i);
+        d0.iter().enumerate().filter(|(_, d)| d.is_finite()).for_each(|(j, _)| seen[j] = true);
+        let (b, d1, from) = far(a);
+        if best.as_ref().map_or(true, |x| d1[b] > x.0) {
+            let mut path = vec![b];
+            while *path.last().unwrap() != a {
+                let p = from[*path.last().unwrap()];
+                if p == usize::MAX {
+                    break;
+                }
+                path.push(p);
+            }
+            best = Some((d1[b], path));
+        }
+    }
+    let (_, path) = best?;
+    let hw = median(path.iter().filter(|&&j| local[j]).map(|&j| inside[j]).collect());
+    let pts = path.iter().map(|&j| [(j % lw) as f32 + ox as f32 + 0.5, (j / lw) as f32 + oy as f32 + 0.5]).collect();
+    Some((pts, if hw > 0.0 { hw } else { gap.max(1.5) }))
+}
+
+fn membrane(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32) -> Result<Outcome> {
     let (w, h, _) = dims;
-    let width = (2.0 * st.radius).max(3.0);
-    let line = resample(&st.pts, 1.0);
+    let slice_z = z;
+    let Some((centre, hw)) = centre_line(paint, w, h, gap) else {
+        return Ok(Outcome::Rough(String::new()));
+    };
+    if centre.len() < 2 {
+        return Ok(Outcome::Rough("这一笔太短，看不出膜的走向，先保留你画的样子".into()));
+    }
+    let width = (2.0 * hw).max(3.0);
+    let line = resample(&centre, 1.0);
     if line.len() < 8 {
         return Ok(Outcome::Rough("这一笔太短，看不出膜的走向，先保留你画的样子".into()));
     }
@@ -302,7 +431,7 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
     for p in &c {
         b = [b[0].min(p[0] - pad), b[1].min(p[1] - pad), b[2].max(p[0] + pad), b[3].max(p[1] + pad)];
     }
-    let roi = Roi::read(vals, dims, st.z, b)?;
+    let roi = Roi::read(vals, dims, z, b)?;
     // Cost of leaving the paint: 0 inside it, 1 at the far edge of the band.
     let away: Vec<f32> = (0..t_len).map(|t| (((t as f32 - half as f32).abs() - ph).max(0.0) / reach).min(1.0)).collect();
 
@@ -499,7 +628,7 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
         let pts: Vec<[f32; 2]> = (a..=b).map(at).collect();
         tmp.stroke(0, &pts, (thickness / 2.0).max(0.75), 1, 0);
         marks.push(Mark {
-            z: st.z,
+            z: slice_z,
             path: pts.iter().step_by(3).chain(pts.last()).map(|p| [r1(p[0]), r1(p[1])]).collect(),
             thickness: r1(thickness),
             inside: 0,
@@ -513,15 +642,14 @@ fn membrane(vals: &dyn Values, dims: (usize, usize, usize), st: &Stroke) -> Resu
     let refined = |s: usize| keep_runs.iter().any(|&(a, b)| s >= a && s <= b);
     let mut kept = 0usize;
     if (0..s_len).any(|s| !refined(s)) {
-        let mut paint = Labels::new(w, h, 1);
-        paint.stroke(0, &st.pts, st.radius, 1, 0);
-        if let Some(pm) = paint.slice(0) {
+        {
+            let pm = paint;
             let (x0, y0) = (b[0].max(0.0) as usize, b[1].max(0.0) as usize);
             let (x1, y1) = ((b[2].ceil().max(0.0) as usize).min(w), (b[3].ceil().max(0.0) as usize).min(h));
             for y in y0..y1 {
                 for x in x0..x1 {
                     let i = y * w + x;
-                    if pm[i] != 1 {
+                    if !pm[i] {
                         continue;
                     }
                     let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);

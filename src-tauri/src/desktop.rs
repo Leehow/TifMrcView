@@ -369,28 +369,38 @@ struct Refined {
 /// named (or keeps it rough), writing the result into label `to`, as one
 /// undo step. The refined object is added to `to`'s marks.
 #[tauri::command]
-async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usize, from: u16, to: u16, guard: u16, structure: String, stroke: crate::structure::Stroke) -> CmdResult<Refined> {
+async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usize, from: u16, to: u16, guard: u16, structure: String, strokes: Vec<crate::structure::Stroke>) -> CmdResult<Refined> {
     let e = labels_entry(&state, token)?;
     let img = current(&state, token)?;
     blocking(move || {
         use crate::structure::Outcome;
         let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
+        // The strokes of one object (the panel sends the last stroke and the
+        // unrefined ones of its layer touching it): refined together.
+        let Some(z) = strokes.first().map(|s| s.z) else { anyhow::bail!("没有笔画") };
         let (m, dims) = {
             let e = e.lock().unwrap();
             let l = &e.labels;
-            (crate::structure::stroke_pixels(l, &stroke, from), (l.w, l.h, l.d))
+            let mut m = vec![false; l.w * l.h];
+            for s in strokes.iter().filter(|s| s.z == z) {
+                for (a, b) in m.iter_mut().zip(crate::structure::stroke_pixels(l, s, from)) {
+                    *a |= b;
+                }
+            }
+            (m, (l.w, l.h, l.d))
         };
+        let gap = strokes.iter().map(|s| s.radius).fold(0f32, f32::max).max(4.0);
         if !m.iter().any(|&b| b) {
             let e = e.lock().unwrap();
             return Ok(Refined { state: labels_state(&e, vec![]), marks: vec![], note: String::new() });
         }
-        let outcome = crate::structure::refine(&vals, dims, &stroke, &structure)?;
+        let outcome = crate::structure::refine(&vals, dims, z, &m, gap, &structure)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
         let (zs, marks, note) = match outcome {
-            Outcome::Done(add, marks, note) => (l.replace(stroke.z, &m, &add, from, to, guard), marks, note),
+            Outcome::Done(add, marks, note) => (l.replace(z, &m, &add, from, to, guard), marks, note),
             Outcome::Rough(note) => {
-                let zs = if from != to { l.replace(stroke.z, &m, &m, from, to, guard) } else { vec![] };
+                let zs = if from != to { l.replace(z, &m, &m, from, to, guard) } else { vec![] };
                 (zs, vec![], note)
             }
         };

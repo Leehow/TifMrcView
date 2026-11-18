@@ -522,7 +522,7 @@
       const tomo = /mrc|rec|st\b/i.test(i.format) && i.sizeZ * 2 <= Math.max(i.width, i.height);
       L.sam.denoise = tomo;
       Object.assign(L.pick, { hover: null, path: null, last: null });
-      Object.assign(L, { cand: null, sel: null, objects: [], typeBar: null, askSide: null, sideDown: null });
+      Object.assign(L, { cand: null, sel: null, objects: [], typeBar: null, askSide: null, sideDown: null, pending: [] });
       syncCand();
       Object.assign(L.cls, { z: -1, scribbles: null, stroke: null, info: null, pred: null, predZ: -1 });
       Object.assign(L.unet, { info: null, pred: null, predZ: -1 });
@@ -1081,7 +1081,8 @@
 
   /** A stroke went into label `s.label`: the type row now acts on it. */
   function afterStroke(s) {
-    L.typeBar = { stroke: s, label: s.label, type: "", refined: false, busy: false };
+    (L.pending ||= []).push(s);
+    L.typeBar = { stroke: s, group: null, label: s.label, type: "", refined: false, busy: false };
     L.askSide = null;
     draw();
   }
@@ -1095,18 +1096,40 @@
     return `${base}${n}`;
   }
 
+  /** The not yet refined strokes of `s`'s layer on its slice that touch it,
+   *  directly or through each other (within about a brush width): one object
+   *  painted in several goes. */
+  function strokeGroup(s) {
+    const pool = (L.pending || []).filter((x) => x !== s && x.z === s.z && x.label === s.label);
+    const pts = (x) => (x.pts && x.pts.length ? x.pts : [x.seed]);
+    const r = (x) => x.radius || 6;
+    const near = (a, b) => {
+      const lim = r(a) + r(b) + Math.max(r(a), r(b), 4);
+      for (const p of pts(a)) for (const q of pts(b)) if ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 <= lim * lim) return true;
+      return false;
+    };
+    const group = [s];
+    for (let i = 0; i < group.length; i++) {
+      for (let j = pool.length - 1; j >= 0; j--) if (near(group[i], pool[j])) group.push(...pool.splice(j, 1));
+    }
+    return group;
+  }
+
   async function refineTo(t, to) {
     const b = L.typeBar;
     if (!b || b.busy) return;
     const s = b.stroke;
+    b.group ||= strokeGroup(s);
     b.busy = true;
     draw();
-    const res = await editWith("labels_refine", { token: L.token, c: channel(), t: S.t, from: s.label, to, guard: L.guard ? s.label : 0, structure: t, stroke: s });
+    const res = await editWith("labels_refine", { token: L.token, c: channel(), t: S.t, from: s.label, to, guard: L.guard ? s.label : 0, structure: t, strokes: b.group });
     b.busy = false;
     if (L.typeBar !== b) return;
     b.type = t;
     b.label = to;
     b.refined = !!(res && res.state && res.state.zs.length);
+    // Refined strokes are one object now; unrefined ones can join a later stroke.
+    if (b.refined) L.pending = (L.pending || []).filter((x) => !b.group.includes(x));
     b.added = (res && res.marks && res.marks.length) || 0;
     if (res && res.note) toast(res.note, 4000);
     if (b.added && (t === "membrane" || t === "membrane2")) {
@@ -1131,6 +1154,7 @@
       b.added = 0;
       b.refined = false;
       b.label = b.stroke.label;
+      L.pending = [...(L.pending || []), ...b.group.filter((x) => !(L.pending || []).includes(x))];
     }
     b.type = t;
     if (!t) return draw();
