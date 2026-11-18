@@ -3203,7 +3203,8 @@ canvas.addEventListener("pointerdown", (e) => {
     ext.tools[S.tool].context(e);
     return;
   }
-  if (e.button === 2 && S.tool !== "select") {
+  // The label tool keeps its tool: a right drag pans the image there.
+  if (e.button === 2 && S.tool !== "select" && S.tool !== "label") {
     S.op = null;
     setTool("select");
     showSize(null);

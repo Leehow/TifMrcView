@@ -271,6 +271,7 @@
   function focusLabels() {
     document.body.dataset.layerFocus = "label";
     if (window.TifMrcViewPro.layersSync) window.TifMrcViewPro.layersSync();
+    placeTypes();
   }
 
   /** Deletes label `k` (one undo step) and moves the highlight to the next one. */
@@ -968,16 +969,15 @@
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
     undo() {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
+      L.typeBar = null;
+      L.askSide = null;
       edit({ kind: "undo" });
     },
     redo() {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
+      L.typeBar = null;
+      L.askSide = null;
       edit({ kind: "redo" });
-    },
-    // Right-click undoes, as the label tool has no other use for it.
-    context() {
-      if (L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke || L.cand) return;
-      undo();
     },
     active(on) {
       btn.classList.toggle("on", on);
@@ -1048,6 +1048,8 @@
     ["fibre", "纤维", "纤维：可以是弯的"],
     ["free", "不规则", "不规则形状：边缘贴到实际边界"],
   ];
+  // Types whose refinement exists (structure.rs); the others are greyed out.
+  const DONE = new Set(["", "membrane", "fibre"]);
   const typeName = (t) => (TYPES.find((x) => x[0] === t) || TYPES[0])[1];
   const structureOf = (k) => mat(k).structure || "";
 
@@ -1069,14 +1071,26 @@
     if (!types) return;
     types.hidden = !["brush", "lasso", "wand"].includes(L.sub);
     if (types.hidden) return;
-    const b = L.typeBar;
-    const on = !!(b && S.axis === "xy" && b.stroke.z === S.z && L.token === S.token);
-    const cur = on ? b.type ?? "" : null;
+    const b = typeTarget();
+    const paint = S.axis === "xy" && L.token === S.token && !!L.slice && L.z === S.z && L.slice.includes(b.label);
+    const busy = !!b.busy || L.busy;
     for (const el of types.querySelectorAll("button[data-type]")) {
-      el.classList.toggle("on", el.dataset.type === cur);
-      el.disabled = !on || !!b.busy;
+      const t = el.dataset.type, ready = DONE.has(t);
+      el.classList.toggle("on", b === L.typeBar && el.dataset.type === (b.type ?? ""));
+      el.disabled = !paint || busy || !ready;
+      el.title = ready ? (TYPES.find((x) => x[0] === t) || TYPES[0])[2] : "这个类型还在做，下一版就能用";
     }
-    $("lab-types-note").textContent = !on ? "涂一笔后点类型，这一笔就按它精细分割" : b.busy ? "精修中…" : L.askSide ? "在图上点一下膜内那一侧" : "";
+    $("lab-types-note").textContent = !paint ? "先用画笔、套索或魔棒涂上当前标签，再点类型" : busy ? "精修中…" : L.askSide ? "在图上点一下膜内那一侧" : b === L.typeBar ? "" : "点类型：精修当前标签在这一层还没精修的涂抹";
+  }
+
+  /** What a type click acts on: the last stroke (and the unrefined strokes
+   *  touching it) when it is in the active layer on this slice, otherwise
+   *  all of the active layer's unrefined paint on this slice. */
+  function typeTarget() {
+    const b = L.typeBar;
+    if (b && b.stroke.z === S.z && (b.label === L.active || b.stroke.label === L.active)) return b;
+    const region = { z: S.z, tool: "region", pts: [], radius: 0, seed: [0, 0], label: L.active };
+    return { stroke: region, group: [region], label: L.active, type: null, refined: false, busy: false };
   }
 
   /** A stroke went into label `s.label`: the type row now acts on it. */
@@ -1141,8 +1155,10 @@
 
   types.addEventListener("click", async (e) => {
     const el = e.target.closest("button[data-type]");
+    if (!el || el.disabled || L.busy) return;
+    if (typeTarget() !== L.typeBar) { L.typeBar = typeTarget(); L.askSide = null; }
     const b = L.typeBar;
-    if (!el || !b || b.busy || L.busy) return;
+    if (b.busy) return;
     const t = el.dataset.type;
     if (t === (b.type ?? "")) return;
     L.askSide = null;

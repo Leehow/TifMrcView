@@ -373,7 +373,6 @@ async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usiz
     let e = labels_entry(&state, token)?;
     let img = current(&state, token)?;
     blocking(move || {
-        use crate::structure::Outcome;
         let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
         // The strokes of one object (the panel sends the last stroke and the
         // unrefined ones of its layer touching it): refined together.
@@ -387,6 +386,16 @@ async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usiz
                     *a |= b;
                 }
             }
+            // The whole layer was asked for: leave its refined objects alone.
+            if strokes.iter().any(|s| s.tool == "region") {
+                let mut done = crate::labels::Labels::new(l.w, l.h, 1);
+                for mk in l.materials.iter().filter(|x| x.label == from).flat_map(|x| x.marks.iter()).filter(|mk| mk.z == z) {
+                    done.stroke(0, &mk.path, mk.thickness / 2.0 + 1.5, 1, 0);
+                }
+                if let Some(d) = done.slice(0) {
+                    m.iter_mut().zip(d).for_each(|(a, &b)| *a &= b == 0);
+                }
+            }
             (m, (l.w, l.h, l.d))
         };
         let gap = strokes.iter().map(|s| s.radius).fold(0f32, f32::max).max(4.0);
@@ -394,14 +403,14 @@ async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usiz
             let e = e.lock().unwrap();
             return Ok(Refined { state: labels_state(&e, vec![]), marks: vec![], note: String::new() });
         }
-        let outcome = crate::structure::refine(&vals, dims, z, &m, gap, &structure)?;
+        let (outcome, note) = crate::structure::refine_all(&vals, dims, z, &m, gap, &structure)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
-        let (zs, marks, note) = match outcome {
-            Outcome::Done(add, marks, note) => (l.replace(z, &m, &add, from, to, guard), marks, note),
-            Outcome::Rough(note) => {
+        let (zs, marks) = match outcome {
+            Some((add, marks)) => (l.replace(z, &m, &add, from, to, guard), marks),
+            None => {
                 let zs = if from != to { l.replace(z, &m, &m, from, to, guard) } else { vec![] };
-                (zs, vec![], note)
+                (zs, vec![])
             }
         };
         if !marks.is_empty() {

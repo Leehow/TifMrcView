@@ -51,6 +51,13 @@ pub fn stroke_pixels(l: &Labels, s: &Stroke, from: u16) -> Vec<bool> {
     let at = |i: usize| cur.map_or(0, |c| c[i]);
     let mut m = vec![false; n];
     match s.tool.as_str() {
+        // All of the layer's paint on the slice (the caller removes what is
+        // refined already).
+        "region" => {
+            for (i, v) in m.iter_mut().enumerate() {
+                *v = at(i) == from;
+            }
+        }
         "wand" => {
             let (x, y) = (s.seed[0].floor() as i64, s.seed[1].floor() as i64);
             if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
@@ -90,12 +97,61 @@ pub fn stroke_pixels(l: &Labels, s: &Stroke, from: u16) -> Vec<bool> {
     m
 }
 
+/// Refines every object of the rough paint `paint` on slice `z` on its own:
+/// pieces within `gap` of each other are one object. Returns the pixels to
+/// write (refined objects, and the paint of those that stayed rough), the
+/// refined objects' descriptions and a note, or `None` when nothing refined.
+pub fn refine_all(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32, structure: &str) -> Result<(Option<(Vec<bool>, Vec<Mark>)>, String)> {
+    let (w, h, _) = dims;
+    let near = crate::labels::edt(paint, w, h);
+    let parts = crate::labels::components_where(w, h, |i| near[i] <= gap / 2.0);
+    let mut add = vec![false; w * h];
+    let mut marks = vec![];
+    let mut notes: Vec<String> = vec![];
+    let mut rough = 0;
+    for part in parts {
+        let px: Vec<usize> = part.into_iter().filter(|&i| paint[i]).collect();
+        if px.len() < 4 {
+            px.iter().for_each(|&i| add[i] = true);
+            continue;
+        }
+        let mut one = vec![false; w * h];
+        px.iter().for_each(|&i| one[i] = true);
+        match refine(vals, dims, z, &one, gap, structure)? {
+            Outcome::Done(a, m, note) => {
+                for (o, v) in add.iter_mut().zip(a) {
+                    *o |= v;
+                }
+                marks.extend(m);
+                if !note.is_empty() {
+                    notes.push(note);
+                }
+            }
+            Outcome::Rough(note) => {
+                px.iter().for_each(|&i| add[i] = true);
+                rough += 1;
+                if !note.is_empty() {
+                    notes.push(note);
+                }
+            }
+        }
+    }
+    notes.dedup();
+    let note = notes.first().cloned().unwrap_or_default();
+    if marks.is_empty() {
+        return Ok((None, note));
+    }
+    let note = if rough > 0 && note.is_empty() { format!("有 {rough} 处没找到清楚的结构，保留了你画的样子") } else { note };
+    Ok((Some((add, marks)), note))
+}
+
 /// Refines the rough paint `paint` (pixels of slice `z`: one object, maybe
 /// painted in several strokes) as `structure`. `gap`: pieces of paint this
 /// close belong together (about a brush radius).
 pub fn refine(vals: &dyn Values, dims: (usize, usize, usize), z: usize, paint: &[bool], gap: f32, structure: &str) -> Result<Outcome> {
     match structure {
-        "membrane" => membrane(vals, dims, z, paint, gap),
+        // A fibre is an open line like a membrane: same band engine.
+        "membrane" | "fibre" => membrane(vals, dims, z, paint, gap),
         "" => Ok(Outcome::Rough(String::new())),
         _ => Ok(Outcome::Rough("这个类型的精细分割还没做好，先保留你画的样子".into())),
     }
