@@ -143,6 +143,13 @@ impl Eer {
         Ok(())
     }
     pub fn group(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
+        Ok(self.group_max(start, count, up)?.0)
+    }
+    /// `group`, with the frame's largest count: taken from each band of rows
+    /// while it is still in cache, so a reader needs no pass of its own over
+    /// the frame (an EER frame holds whole, non-negative counts by
+    /// construction).
+    pub fn group_max(&self, start: usize, count: usize, up: usize) -> Result<(Vec<f32>, f32)> {
         if ![1, 2].contains(&up) || start >= self.len() || count == 0 {
             bail!("EER 分组或超分辨率参数无效");
         }
@@ -169,7 +176,7 @@ impl Eer {
                 .collect::<Result<_>>()?;
             let mut out = vec![0.0f32; len];
             let band = 64usize.min(self.h);
-            out.par_chunks_mut(band * up * rw).enumerate().for_each(|(b, rows)| {
+            let max = out.par_chunks_mut(band * up * rw).enumerate().map(|(b, rows)| {
                 let (lo, hi) = (((b * band * self.w) as u32) << 2, ((((b + 1) * band).min(self.h) * self.w) as u32) << 2);
                 let first = b * band;
                 for list in &lists {
@@ -182,10 +189,13 @@ impl Eer {
                         rows[at] += 1.0;
                     }
                 }
-            });
-            return Ok(out);
+                rows.iter().fold(0.0f32, |m, &v| m.max(v))
+            }).reduce(|| 0.0, f32::max);
+            return Ok((out, max));
         }
-        self.group_per_worker(start, count, up)
+        let out = self.group_per_worker(start, count, up)?;
+        let max = out.par_iter().copied().reduce(|| 0.0, f32::max);
+        Ok((out, max))
     }
     /// The earlier way, kept for uncompressed fractions (and to compare
     /// with): every worker counts its share into a frame of its own (two

@@ -83,6 +83,14 @@ impl Movie {
             _ => None,
         }
     }
+    /// A group, and for EER (whole, finite, non-negative counts by
+    /// construction) its largest value, so the frame need not be checked.
+    fn group_checked(&self, start: usize, count: usize, up: usize) -> Result<(Vec<f32>, Option<f32>)> {
+        match self {
+            Self::Eer(e) => e.group_max(start, count, up).map(|(v, m)| (v, Some(m))),
+            _ => Ok((self.group(start, count, up)?, None)),
+        }
+    }
     fn group(&self, start: usize, count: usize, up: usize) -> Result<Vec<f32>> {
         match self {
             Self::Eer(e) => e.group(start, count, up),
@@ -324,15 +332,18 @@ impl Spool {
         for (start, count) in groups {
             check_cancel()?;
             let decode = std::time::Instant::now();
-            let mut frame = movie.group(start, count, up)?;
+            let (mut frame, counted) = movie.group_checked(start, count, up)?;
             spool.decode_ms += decode.elapsed().as_secs_f64() * 1000.0;
             // One pass for the checks, one for everything else: each pass
             // over a 4096² frame is a 64 MB walk through memory.
             let t_check = std::time::Instant::now();
-            let (finite, whole, max) = frame
-                .par_chunks(1 << 16)
-                .map(|c| c.iter().fold((true, true, 0.0f32), |(f, wh, m), &v| (f && v.is_finite(), wh && v >= 0.0 && v.fract() == 0.0, m.max(v))))
-                .reduce(|| (true, true, 0.0), |a, b| (a.0 && b.0, a.1 && b.1, a.2.max(b.2)));
+            let (finite, whole, max) = match counted {
+                Some(max) => (true, true, max),
+                None => frame
+                    .par_chunks(1 << 16)
+                    .map(|c| c.iter().fold((true, true, 0.0f32), |(f, wh, m), &v| (f && v.is_finite(), wh && v >= 0.0 && v.fract() == 0.0, m.max(v))))
+                    .reduce(|| (true, true, 0.0), |a, b| (a.0 && b.0, a.1 && b.1, a.2.max(b.2))),
+            };
             if !finite {
                 bail!("电影或 gain 含 NaN/Inf");
             }
