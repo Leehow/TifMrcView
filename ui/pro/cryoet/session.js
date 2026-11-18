@@ -62,7 +62,10 @@
         rejectJob = reject;
         const job = { group, key, store, run: () => invoke("tomo_view", { path, z, max })
           .then(buf => { const d = R.decodePicture(buf); d ? resolve(d) : reject(new Error("空图像")); }).catch(reject) };
-        if (priority) queue.unshift(job); else queue.push(job);
+        // The wall's thumbnails go before a review's preloading of sections.
+        if (priority) queue.unshift(job);
+        else if (group == null) { const at = queue.findIndex((j) => j.group != null); at < 0 ? queue.push(job) : queue.splice(at, 0, job); }
+        else queue.push(job);
         pump();
       });
       p.catch(() => { if (store.get(key) === p) store.delete(key); });
@@ -92,7 +95,16 @@
   function lazyPic(box, path, z, max, onFail = "无图") {
     const c = el("canvas");
     box.prepend(c);
-    box._load = () => pic(path, z, max).then((d) => draw(c, d)).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
+    // Kept as an image, not a canvas: WebKit may drop a hidden canvas's
+    // pixels (the wall is hidden during a review, the app goes to the
+    // background) and nothing would draw it again.
+    box._load = () => pic(path, z, max).then((d) => {
+      draw(c, d);
+      const img = el("img");
+      img.alt = "";
+      img.src = d.url ||= c.toDataURL();
+      c.replaceWith(img);
+    }).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
     seen.observe(box);
   }
 

@@ -525,7 +525,7 @@
 .cs-tile.attn { border-color:#d4a72c; box-shadow:inset 3px 0 0 #d4a72c; }
 .cs-tile.off .cs-pic { opacity:.5; }
 .cs-pic { position:relative; aspect-ratio:1; border-radius:5px; background:#2a2d31; overflow:hidden; display:flex; align-items:center; justify-content:center; }
-.cs-pic canvas { width:100%; height:100%; object-fit:contain; display:block; }
+.cs-pic canvas, .cs-pic img { width:100%; height:100%; object-fit:contain; display:block; }
 .cs-none { font-size:11px; }
 .cs-pic .cs-none { color:#aab1b8; }
 .cs-take { position:absolute; left:4px; top:4px; display:flex; padding:2px; background:rgba(255,255,255,.9); border-radius:4px; cursor:pointer; }
