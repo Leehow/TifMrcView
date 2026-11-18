@@ -78,8 +78,9 @@
 
   const stage = $("stage");
   const head = panel.querySelector(".al-head");
-  // Left, top, width, height inside the stage; none until the user moves or resizes it.
-  let box = pref.get("cryo-box", null);
+  // Left, top, width, height in the window; none until the user moves or resizes it. Once moved, the
+  // panel is placed in the window, not the stage, so it can go over the toolbar and the side panel.
+  let box = pref.get("cryo-box-win", null);
   const MIN_W = 340, MIN_H = 240;
   const corners = ["nw", "ne", "sw", "se"].map((c) => {
     const g = document.createElement("div");
@@ -91,24 +92,24 @@
   });
 
   const rect = () => {
-    const s = stage.getBoundingClientRect(), r = panel.getBoundingClientRect();
-    return { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
+    const r = panel.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
   };
-  // Keeps the panel inside the stage, whatever the window has become.
+  // Keeps the panel inside the window, whatever the window has become.
   function fit(b) {
-    const s = stage.getBoundingClientRect();
-    b.w = Math.max(MIN_W, Math.min(b.w, s.width));
-    b.h = Math.max(MIN_H, Math.min(b.h, s.height));
-    b.x = Math.max(0, Math.min(b.x, s.width - b.w));
-    b.y = Math.max(0, Math.min(b.y, s.height - b.h));
+    const W = window.innerWidth, H = window.innerHeight;
+    b.w = Math.max(MIN_W, Math.min(b.w, W));
+    b.h = Math.max(MIN_H, Math.min(b.h, H));
+    b.x = Math.max(0, Math.min(b.x, W - b.w));
+    b.y = Math.max(0, Math.min(b.y, H - b.h));
     return b;
   }
   function place() {
     if (box && !panel.hidden) {
       fit(box);
-      Object.assign(panel.style, { left: `${box.x}px`, top: `${box.y}px`, right: "auto", bottom: "auto", width: `${box.w}px`, height: `${box.h}px` });
+      Object.assign(panel.style, { position: "fixed", zIndex: "60", left: `${box.x}px`, top: `${box.y}px`, right: "auto", bottom: "auto", width: `${box.w}px`, height: `${box.h}px` });
     } else if (!box) {
-      for (const k of ["left", "top", "right", "bottom", "width", "height"]) panel.style[k] = "";
+      for (const k of ["position", "zIndex", "left", "top", "right", "bottom", "width", "height"]) panel.style[k] = "";
     }
     const show = !panel.hidden && !panel.classList.contains("narrow");
     const r = show ? rect() : null;
@@ -132,7 +133,7 @@
     };
     target.onpointerup = target.onpointercancel = () => {
       target.onpointermove = target.onpointerup = target.onpointercancel = null;
-      pref.set("cryo-box", box);
+      pref.set("cryo-box-win", box);
     };
   }
   head.addEventListener("pointerdown", (e) => {
@@ -143,20 +144,21 @@
   head.addEventListener("dblclick", (e) => {
     if (e.target.closest("button")) return;
     box = null;
-    pref.set("cryo-box", null);
+    pref.set("cryo-box-win", null);
     place();
   });
   for (const g of corners) {
     g.onpointerdown = (e) => drag(e, (f, dx, dy) => {
-      const c = g.dataset.corner, s = stage.getBoundingClientRect();
+      const c = g.dataset.corner;
       // The opposite corner stays where it is.
       if (c[1] === "w") { box.x = Math.max(0, Math.min(f.x + dx, f.x + f.w - MIN_W)); box.w = f.x + f.w - box.x; }
-      else box.w = Math.max(MIN_W, Math.min(f.w + dx, s.width - f.x));
+      else box.w = Math.max(MIN_W, Math.min(f.w + dx, window.innerWidth - f.x));
       if (c[0] === "n") { box.y = Math.max(0, Math.min(f.y + dy, f.y + f.h - MIN_H)); box.h = f.y + f.h - box.y; }
-      else box.h = Math.max(MIN_H, Math.min(f.h + dy, s.height - f.y));
+      else box.h = Math.max(MIN_H, Math.min(f.h + dy, window.innerHeight - f.y));
     });
   }
   new MutationObserver(place).observe(panel, { attributes: true, attributeFilter: ["hidden", "class"] });
   new ResizeObserver(place).observe(stage);
+  window.addEventListener("resize", place);
   place();
 })();
