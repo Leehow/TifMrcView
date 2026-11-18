@@ -673,6 +673,22 @@ mod tests {
         (before, rmse(&clean, &out))
     }
 
+    /// Two "cards" (the same CPU), signal cells and held-out early stopping.
+    #[test]
+    fn fit_splits_the_batch_and_validates() {
+        let dev = Device::flex();
+        let (w, h) = (96, 96);
+        let (clean, noisy) = phantom(w, h, 0.4);
+        let other: Vec<f32> = clean.iter().enumerate().map(|(i, &c)| c + 0.4 * gauss(99, i as u64)).collect();
+        let cfg = TrainConfig { steps: 60, batch: 4, patch: 16, lr: 2e-3, seed: 7 };
+        let how = Fitting { signal: true, signal_keep: 0.6, validate: true, patience: 2, holdout: vec![(noisy.clone(), Some(other.clone()), w, h)], ..Default::default() };
+        let images = [Img { a: &noisy, b: Some(&other), w, h }];
+        let f = fit(&[dev.clone(), dev.clone()], &images, Mode::Frames, &cfg, &how, |_, _, _| {}, &mut |_, _, _, _, _| {}).unwrap();
+        assert_eq!(f.cards, 2);
+        assert!(f.val.is_some() && f.holdout.is_some_and(|v| v.is_finite()));
+        assert!(f.steps <= 60);
+    }
+
     #[test]
     fn noise2noise_learns_the_signal() {
         let (before, after) = denoised(Mode::Frames, 60);

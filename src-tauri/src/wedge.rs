@@ -1750,6 +1750,27 @@ mod tests {
         assert!(out.iter().all(|v| v.is_finite()));
     }
 
+    /// Two "cards" (the same CPU), signal cubes and held-out early stopping.
+    #[test]
+    fn trains_on_halves_split_and_validated() {
+        let dev = Device::flex();
+        let truth = phantom(40, 4);
+        let mut rng = Rng(2);
+        let half = |rng: &mut Rng| -> Vec<f32> { truth.v.iter().map(|v| v + 0.5 * rng.gauss()).collect() };
+        let (a, b) = (half(&mut rng), half(&mut rng));
+        let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
+        let cfg = TrainConfig { cube: 16, count: 6, iterations: 2, steps: 30, batch: 3, lr: 1e-3, base: 4, levels: 2, seed: 1, signal: true, validate: true, patience: 1, equivariant: 2.0, equi_from: 0.5, ..Default::default() };
+        let (out, fit) = train_halves_and_apply_on(&[dev.clone(), dev.clone()], &a, &b, truth.n, &tilts, &cfg, |_| {}).unwrap();
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert_eq!(fit.cards, 2);
+        assert!(fit.val.is_some() && !fit.history.is_empty());
+        let (train, held) = signal_cubes(&Vol { n: truth.n, v: a.clone() }, Some(&Vol { n: truth.n, v: b.clone() }), 16, 6, 1, true);
+        assert!(!train.is_empty() && held.len() >= 2);
+        for h in &held {
+            assert!(train.iter().all(|t| (0..3).any(|ax| (t[ax] - h[ax]).unsigned_abs() >= 16)));
+        }
+    }
+
     /// Halves against one tomogram, on a noisy phantom (slow on the CPU):
     /// cargo test --release --features pro --lib wedge::tests::halves_beat -- --ignored --nocapture
     /// (env as for learns_to_fill_the_wedge, WNOISE noise σ per half, WO omega, WE ICECREAM weight,
@@ -1824,7 +1845,7 @@ mod tests {
         let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: None };
         let truth = phantom(24, 4);
         let values: Vec<f32> = Spectral::new(32, &g).cut(&phantom(32, 4).v)[..24 * 24 * 24].to_vec();
-        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 };
+        let cfg = TrainConfig { cube: 16, count: 4, iterations: 2, steps: 3, batch: 2, lr: 1e-3, noise: 0.1, base: 4, levels: 2, seed: 1, smooth: 1.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0, ..Default::default() };
         let mut last = None;
         let out = train_and_apply(&dev, &values, truth.n, [-60.0, 60.0], &cfg, |p| last = Some(p)).unwrap();
         assert_eq!(out.len(), values.len());
@@ -1850,7 +1871,7 @@ mod tests {
         let steps: usize = std::env::var("WS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
         let base = std::env::var("WB").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
         let lr = std::env::var("WL").ok().and_then(|s| s.parse().ok()).unwrap_or(2e-3);
-        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0 };
+        let cfg = TrainConfig { cube, count: 24, iterations: iters, steps, batch: 4, lr, noise: 0.0, base, levels: 2, seed: 9, smooth: 0.0, omega: 2.0, equivariant: 0.0, equi_from: 0.0, ..Default::default() };
         let (net, _) = train(&dev, &vol, &g, &cfg, |p| if p.step == p.steps { eprintln!("round {} loss {}", p.iteration, p.loss) }).unwrap();
         let out = apply(&dev, &net, &vol, [0; 3], vol.n, &mut |_, _| Ok(())).unwrap();
         // Error inside the wedge, before (nothing there) and after.
