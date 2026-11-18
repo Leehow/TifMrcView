@@ -143,9 +143,11 @@
     const was = buttons.map((b) => b.disabled);
     buttons.forEach((b) => { b.disabled = true; });
     await dock.start();
+    const eta = window.TmvEta?.();
     const un = await T.event.listen("tomo-progress", (e) => {
       const p = e.payload;
-      const text = `${p.stage || label} ${p.done} / ${p.total}`;
+      const left = eta?.({ ...p, stage: p.stage || label }) || "";
+      const text = `${p.stage || label} ${p.done} / ${p.total}${left ? ` · ${left}` : ""}`;
       W.status(text);
       dock.progress(text);
       dock.refresh();

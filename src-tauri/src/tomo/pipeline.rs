@@ -309,6 +309,55 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     Ok(Made { paths: vec![path], backend: "CPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
 }
 
+/// A volume's values, either read into memory or mapped from a float32 MRC file.
+pub enum Values {
+    Read(Vec<f32>),
+    Mapped(memmap2::Mmap, usize, usize),
+}
+
+impl std::ops::Deref for Values {
+    type Target = [f32];
+    fn deref(&self) -> &[f32] {
+        match self {
+            Values::Read(v) => v,
+            // The map starts on a page and `at` is a multiple of 4, so the floats are aligned;
+            // the length was checked against the file when it was mapped.
+            Values::Mapped(m, at, n) => unsafe { std::slice::from_raw_parts(m.as_ptr().add(*at) as *const f32, *n) },
+        }
+    }
+}
+
+/// Like `load`, but a little-endian float32 MRC (what this program writes) is mapped
+/// instead of read, so a big tomogram does not have to fit in memory.
+pub fn load_mapped(path: &str) -> Result<(Values, [usize; 3], f64)> {
+    let mapped = (|| -> Option<(memmap2::Mmap, usize, [usize; 3])> {
+        if !cfg!(target_endian = "little") {
+            return None;
+        }
+        let f = std::fs::File::open(path).ok()?;
+        let m = unsafe { memmap2::Mmap::map(&f) }.ok()?;
+        let word = |i: usize| -> Option<i32> { Some(i32::from_le_bytes(m.get(i * 4..i * 4 + 4)?.try_into().ok()?)) };
+        let (nx, ny, nz, mode, ext) = (word(0)?, word(1)?, word(2)?, word(3)?, word(23)?);
+        if mode != 2 || nx <= 0 || ny <= 0 || nz <= 0 || ext < 0 || m.get(212)? & 0xf0 != 0x40 {
+            return None;
+        }
+        let (shape, at) = ([nx as usize, ny as usize, nz as usize], 1024 + ext as usize);
+        let n = shape[0] * shape[1] * shape[2];
+        (at % 4 == 0 && m.len() == at + n * 4).then_some((m, at, shape))
+    })();
+    match mapped {
+        Some((m, at, shape)) => {
+            let px = output::pixel_a(&open(path)?);
+            let n = shape[0] * shape[1] * shape[2];
+            Ok((Values::Mapped(m, at, n), shape, px))
+        }
+        None => {
+            let (v, shape, px) = load(path)?;
+            Ok((Values::Read(v), shape, px))
+        }
+    }
+}
+
 /// All sections of a volume, [z][y][x], with its shape and pixel size.
 /// A tomogram as values (X fastest), its size and pixel size (Å).
 pub fn load(path: &str) -> Result<(Vec<f32>, [usize; 3], f64)> {
@@ -357,40 +406,33 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
     let now = std::time::Instant::now();
     let full = source(d, req.source.as_deref())?.clone();
     let present = full.halves.clone().filter(|[e, o]| Path::new(e).exists() && Path::new(o).exists());
-    let (shape, px, halves) = match present {
-        Some([e, o]) => {
-            let (ev, shape, px) = load(&e)?;
-            let (od, s2, _) = load(&o)?;
-            if s2 != shape {
-                bail!("奇偶半断层尺寸不一致");
-            }
-            (shape, px, Some((ev, od)))
-        }
-        None => {
-            let (_, shape, px) = load(&full.path)?;
-            (shape, px, None)
-        }
+    // Section by section: a 2048×2048×600 tomogram is 10 GB as floats, and holding both
+    // halves and the result at once (30 GB) was more than a 32 GB server could give.
+    // Only the sampled training sections and a few working sections are ever in memory.
+    let inputs: Vec<Arc<OpenImage>> = match &present {
+        Some([e, o]) => vec![open(e)?, open(o)?],
+        None => vec![open(&full.path)?],
     };
+    let shape = dims(&inputs[0]);
+    if inputs.iter().any(|i| dims(i) != shape) {
+        bail!("奇偶半断层尺寸不一致");
+    }
+    let px = output::pixel_a(&inputs[0]);
     let [w, h, nz] = shape;
-    let plane = w * h;
+    let mode = if inputs.len() == 2 { Mode::Frames } else { Mode::Neighbours };
     // Training pairs: at most 64 sections spread over the depth.
     let picks: Vec<usize> = (0..nz).step_by((nz / 64).max(1)).collect();
-    let (pairs, mode, inputs): (Vec<(Vec<f32>, Option<Vec<f32>>)>, Mode, Vec<Vec<f32>>) = match halves {
-        Some((ev, od)) => {
-            let mut pairs = Vec::new();
-            for &z in &picks {
-                let (a, b) = (ev[z * plane..(z + 1) * plane].to_vec(), od[z * plane..(z + 1) * plane].to_vec());
-                pairs.push((a.clone(), Some(b.clone())));
-                pairs.push((b, Some(a)));
-            }
-            (pairs, Mode::Frames, vec![ev, od])
+    let mut pairs: Vec<(Vec<f32>, Option<Vec<f32>>)> = Vec::new();
+    for &z in &picks {
+        check_cancel()?;
+        if mode == Mode::Frames {
+            let (a, b) = (section(&inputs[0], z)?, section(&inputs[1], z)?);
+            pairs.push((a.clone(), Some(b.clone())));
+            pairs.push((b, Some(a)));
+        } else if z + 1 < nz {
+            pairs.push((section(&inputs[0], z)?, Some(section(&inputs[0], z + 1)?)));
         }
-        None => {
-            let (v, _, _) = load(&full.path)?;
-            let pairs = picks.iter().filter(|&&z| z + 1 < nz).map(|&z| (v[z * plane..(z + 1) * plane].to_vec(), Some(v[(z + 1) * plane..(z + 2) * plane].to_vec()))).collect();
-            (pairs, Mode::Neighbours, vec![v])
-        }
-    };
+    }
     crate::denoise_learn::CANCEL.store(false, Ordering::SeqCst);
     let cfg = TrainConfig { steps: req.steps.clamp(20, 20000), ..Default::default() };
     // Every free card applies the network (sections handed out as cards
@@ -407,33 +449,60 @@ pub fn denoise(dev: &burn::tensor::Device, d: &mut Dataset, req: &DenoiseStep, p
     if !split {
         gpus = crate::multi_gpu::gpus(dev);
     }
+    drop(images);
     drop(pairs);
     let model = Learned { net: fit.net, mode, mean: fit.mean, std: fit.std, loss: fit.loss, source: full.path.clone(), bin: 1 };
-    let mut out = vec![0.0f32; plane * nz];
-    for (k, v) in inputs.iter().enumerate() {
-        let mut done = 0;
-        let model = &model;
-        crate::multi_gpu::spread(gpus.len(), (0..nz).collect(), &|c, z: usize| {
-            check_cancel()?;
-            Ok((z, model.apply(&gpus.devs[c], &v[z * plane..(z + 1) * plane], w, h)))
-        }, &mut |(z, r)| {
-            for (o, x) in out[z * plane..(z + 1) * plane].iter_mut().zip(r) {
+    let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
+    let mut file = output::VolumeFile::create(&path, shape, px)?;
+    let mut done = 0;
+    let model = &model;
+    // Each section (of both halves) is read, denoised and written on its own.
+    crate::multi_gpu::spread(gpus.len(), (0..nz).collect(), &|c, z: usize| {
+        check_cancel()?;
+        let mut out = vec![0.0f32; w * h];
+        for input in &inputs {
+            let r = model.apply(&gpus.devs[c], &section(input, z)?, w, h);
+            for (o, x) in out.iter_mut().zip(r) {
                 *o += x / inputs.len() as f32;
             }
-            done += 1;
-            progress("去噪", k * nz + done, inputs.len() * nz);
-            Ok(())
-        })?;
-        // The middle section so far, in the workspace.
-        let part: Vec<f32> = out[nz / 2 * plane..(nz / 2 + 1) * plane].iter().map(|v| v * inputs.len() as f32 / (k + 1) as f32).collect();
-        crate::live::show("去噪：中间层", w, h, &part, &[]);
-    }
-    let path = output_path(d, crate::project_dirs::CLEAN, &format!("{}_n2n", stem_suffix(&full.path, &d.stack)));
-    output::write_mrc(&path, &out, shape, px, false)?;
+        }
+        Ok((z, out))
+    }, &mut |(z, out): (usize, Vec<f32>)| {
+        if z == nz / 2 {
+            crate::live::show("去噪：中间层", w, h, &out, &[]);
+        }
+        file.write_block(0, h, z, 1, &out)?;
+        done += 1;
+        progress("去噪", done, nz);
+        Ok(())
+    })?;
+    let path = file.finish()?;
     d.add_tomogram(Tomogram { path: path.clone(), kind: "denoised".into(), method: if mode == Mode::Frames { "n2n-halves" } else { "n2n-neighbours" }.into(), halves: None, ..full });
     d.save()?;
     crate::compute::executed("自监督去噪", dev);
     Ok(Made { paths: vec![path], backend: "GPU".into(), ms: now.elapsed().as_secs_f64() * 1e3 })
+}
+
+fn dims(img: &OpenImage) -> [usize; 3] {
+    let i = img.info();
+    [i.width, i.height, i.size_z]
+}
+
+/// Section `z` of a volume as values (X fastest).
+fn section(img: &OpenImage, z: usize) -> Result<Vec<f32>> {
+    let info = img.info();
+    let (w, h) = (info.width, info.height);
+    let (page, s) = info.locate(0, z, 0);
+    let p = img.page(page)?;
+    let p = &p[s.min(p.len() - 1)];
+    let mut v = vec![0.0f32; w * h];
+    use crate::image::Px;
+    use rayon::prelude::*;
+    crate::with_plane!(&p.data, src => v
+        .par_iter_mut()
+        .zip(&src[..w * h])
+        .for_each(|(d, &s)| *d = s.to_f32() as f64 as f32));
+    Ok(v)
 }
 
 /// The part of a tomogram's name after the stack's stem (`rec_b4_flip`).
@@ -466,11 +535,16 @@ pub struct WedgeStep {
 pub struct TooSlow {
     /// The projected training time, seconds.
     pub projected_s: f64,
+    /// Or not started at all: the memory it needs and the memory there is, GB.
+    pub memory_gb: Option<[f64; 2]>,
 }
 
 impl std::fmt::Display for TooSlow {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0)
+        match self.memory_gb {
+            Some([need, have]) => write!(f, "缺失楔补偿约需 {need:.0} GB 内存，这台机器只有 {have:.0} GB 可用"),
+            None => write!(f, "缺失楔补偿预计要 {:.0} 分钟，超出时限", self.projected_s / 60.0),
+        }
     }
 }
 
@@ -495,6 +569,17 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     let used: Vec<_> = a.views.iter().filter(|v| !v.excluded).map(|v| v.refined()).collect();
     let range = [used.iter().copied().fold(f64::INFINITY, f64::min) as f32, used.iter().copied().fold(f64::NEG_INFINITY, f64::max) as f32];
     let src = source(d, req.source.as_deref())?.clone();
+    // The network works on whole volumes held in memory (standardised halves, the
+    // tiles' sums and weights, both results): about eight copies of the tomogram.
+    // A big one on a smaller server is skipped up front instead of being killed.
+    {
+        let [w, h, nz] = dims(&*open(&src.path)?);
+        let need = (w * h * nz * 4 * 8) as f64 / 1e9;
+        let have = crate::resources::memory_available_bytes() as f64 / 1e9;
+        if have > 0.0 && need > have {
+            return Err(TooSlow { projected_s: 0.0, memory_gb: Some([need, have]) }.into());
+        }
+    }
     crate::wedge::CANCEL.store(false, Ordering::SeqCst);
     let started = std::time::Instant::now();
     let projected = std::sync::Mutex::new(None::<f64>);
@@ -517,8 +602,10 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     // (Noise2Noise across the halves); else the IsoNet method on the one.
     let trained = (|| -> Result<_> { Ok(match (&src.halves, req.single) {
         (Some([even, odd]), false) => {
-            let (a, shape, px) = load(even)?;
-            let (b, odd_shape, odd_px) = load(odd)?;
+            // Mapped, not copied: two 10 GB halves plus the 10 GB result did not fit
+            // in a 32 GB server; mapped pages are the file's own and can be dropped.
+            let (a, shape, px) = load_mapped(even)?;
+            let (b, odd_shape, odd_px) = load_mapped(odd)?;
             let raw = open(&src.path)?;
             let info = raw.info();
             let same_pixel = |p: f64| p.is_finite() && px.is_finite() && p > 0.0 && px > 0.0
@@ -540,7 +627,7 @@ pub fn wedge(dev: &burn::tensor::Device, d: &mut Dataset, req: &WedgeStep, progr
     }) })();
     if let Some(projected_s) = *projected.lock().unwrap() {
         crate::wedge::CANCEL.store(false, Ordering::SeqCst);
-        return Err(TooSlow { projected_s }.into());
+        return Err(TooSlow { projected_s, memory_gb: None }.into());
     }
     let (out, shape, px, method) = trained?;
     if CANCEL.load(Ordering::SeqCst) {
