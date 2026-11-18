@@ -524,11 +524,15 @@ pub fn finish(
     let g = crate::align::movie_planes_on(&sp.frames, sp.w / sp.bin, sp.h / sp.bin, &|done, total| {
         progress("全局对齐", done, total)
     },p.backend!="cpu");
+    let global_ms = alignment_start.elapsed().as_secs_f64() * 1000.0;
+    let mut local_ms = 0.0;
     let (global, local, cc) = match g {
         Ok(g) => {
             let measured: Vec<_> = g.shifts.iter().map(|d| d.map(|v| v * sp.bin as f64)).collect();
             let global = smooth(&measured, &g.cc, SMOOTHING);
+            let t = std::time::Instant::now();
             let local = local::estimate(&sp, &global, p, progress)?;
+            local_ms = t.elapsed().as_secs_f64() * 1000.0;
             (global, local, g.cc)
         }
         // Frames with no measurable signal (an empty hole, a blank tilt):
@@ -702,6 +706,9 @@ pub fn finish(
         }
     };
     let sum_ms = timer.elapsed().as_secs_f64() * 1000.0;
+    if std::env::var_os("TMV_GPU_PROFILE").is_some() {
+        eprintln!("FINISH_PROFILE global={global_ms:.1}ms local={local_ms:.1}ms sum={sum_ms:.1}ms");
+    }
     if let Some(target) = diagnostics {
         output::diagnostics(target, &sp.original, &sums.unweighted, sp.w, sp.h)?;
     }
