@@ -137,6 +137,53 @@ fn spectrum(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl F
     spectrum_on(g,fft,filter,off,values,false)
 }
 fn spectrum_on(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: impl Fn(usize, usize) -> f32 + Sync, gpu:bool) -> Spec {
+    let n = g.n;
+    let mut re = sampled(g, off, values);
+    let mut im = vec![0f32; n * n];
+    let mut accelerated=false;
+    #[cfg(feature="pro")]
+    if gpu {if let Some((dev,_))=crate::ctf_gpu::device(){
+      let _guard=GPU_FFT.lock().unwrap_or_else(|e|e.into_inner());
+      let out=crate::ctf_gpu::guarded(||{use burn::tensor::{Tensor,TensorData};let r=Tensor::<2>::from_data(TensorData::new(re.clone(),[n,n]),dev);let m=Tensor::<2>::zeros([n,n],dev);let (r,m)=crate::motion::fourier::Gpu::new(n,n,dev).transform(r,m,false);(crate::motion::sum_gpu::download(r),crate::motion::sum_gpu::download(m))});
+      match out{Ok((r,m))=>{re=r;im=m;accelerated=true;crate::compute::report("电影全局运动 FFT","GPU + CPU",Some("GPU FFT；CPU 解码、取样与加窗".into()));},Err(e)=>crate::compute::report("电影全局运动 FFT","CPU",Some(format!("GPU 执行失败：{e:#}")))}
+    }else{crate::compute::report("电影全局运动 FFT","CPU",Some(crate::compute::no_gpu()));}}
+    if !accelerated{fft2(fft, &mut re, &mut im, n);}
+    // Keep |kx|, |ky| < m/2, centred.
+    let m = g.m;
+    kept(g, filter, |r, c| {
+        let sy = (r as isize - (m / 2) as isize).rem_euclid(n as isize) as usize;
+        let sx = (c as isize - (m / 2) as isize).rem_euclid(n as isize) as usize;
+        (re[sy * n + sx], im[sy * n + sx])
+    })
+}
+
+/// GPU FFTs of the movie path, one at a time (the device is shared).
+#[cfg(feature="pro")]
+static GPU_FFT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The filtered inner frequencies (m × m, centred) of a transform, from
+/// `at(r, c)`: the transform's value at row r, column c of that square.
+fn kept(g: &Geom, filter: &[f32], at: impl Fn(usize, usize) -> (f32, f32)) -> Spec {
+    let m = g.m;
+    let mut kr = vec![0f32; m * m];
+    let mut ki = vec![0f32; m * m];
+    let mut energy = 0f64;
+    for r in 0..m {
+        for c in 0..m {
+            let f = filter[r * m + c];
+            let (re, im) = at(r, c);
+            let (a, b) = (re * f, im * f);
+            kr[r * m + c] = a;
+            ki[r * m + c] = b;
+            energy += (a as f64).powi(2) + (b as f64).powi(2);
+        }
+    }
+    Spec { re: kr, im: ki, energy }
+}
+
+/// Bins the square (moved by `off`), removes its mean and tapers its edges:
+/// the real input of the transform.
+fn sampled(g: &Geom, off: [isize; 2], values: impl Fn(usize, usize) -> f32 + Sync) -> Vec<f32> {
     let (n, b) = (g.n, g.bin);
     let (x0, y0) = ((g.x0 as isize + off[0]) as usize, (g.y0 as isize + off[1]) as usize);
     let mut re: Vec<f32> = (0..n * n)
@@ -166,34 +213,7 @@ fn spectrum_on(g: &Geom, fft: &Fft, filter: &[f32], off: [isize; 2], values: imp
             *v = (*v - mean as f32) * taper[x] * taper[y];
         }
     });
-    let mut im = vec![0f32; n * n];
-    let mut accelerated=false;
-    #[cfg(feature="pro")]
-    if gpu {if let Some((dev,_))=crate::ctf_gpu::device(){
-      static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());let _guard=LOCK.lock().unwrap_or_else(|e|e.into_inner());
-      let out=crate::ctf_gpu::guarded(||{use burn::tensor::{Tensor,TensorData};let r=Tensor::<2>::from_data(TensorData::new(re.clone(),[n,n]),dev);let m=Tensor::<2>::zeros([n,n],dev);let (r,m)=crate::motion::fourier::Gpu::new(n,n,dev).transform(r,m,false);(crate::motion::sum_gpu::download(r),crate::motion::sum_gpu::download(m))});
-      match out{Ok((r,m))=>{re=r;im=m;accelerated=true;crate::compute::report("电影全局运动 FFT","GPU + CPU",Some("GPU FFT；CPU 解码、取样与加窗".into()));},Err(e)=>crate::compute::report("电影全局运动 FFT","CPU",Some(format!("GPU 执行失败：{e:#}")))}
-    }else{crate::compute::report("电影全局运动 FFT","CPU",Some(crate::compute::no_gpu()));}}
-    if !accelerated{fft2(fft, &mut re, &mut im, n);}
-    // Keep |kx|, |ky| < m/2, centred.
-    let m = g.m;
-    let mut kr = vec![0f32; m * m];
-    let mut ki = vec![0f32; m * m];
-    let mut energy = 0f64;
-    for r in 0..m {
-        let ky = r as isize - (m / 2) as isize;
-        let sy = ky.rem_euclid(n as isize) as usize;
-        for c in 0..m {
-            let kx = c as isize - (m / 2) as isize;
-            let sx = kx.rem_euclid(n as isize) as usize;
-            let f = filter[r * m + c];
-            let (a, b) = (re[sy * n + sx] * f, im[sy * n + sx] * f);
-            kr[r * m + c] = a;
-            ki[r * m + c] = b;
-            energy += (a as f64).powi(2) + (b as f64).powi(2);
-        }
-    }
-    Spec { re: kr, im: ki, energy }
+    re
 }
 
 /// 2D forward FFT in place, row major (row = y).
@@ -423,10 +443,31 @@ fn pair_shift(a: &Spec, b: &Spec, g: &Geom, fft_m: &Fft, max: f64) -> ([f64; 2],
 
 /// Spectrum of slice i (index into the slices aligned), its square moved by an offset.
 type SpecOf<'a> = dyn Fn(usize, [isize; 2]) -> Result<Spec> + Sync + 'a;
+/// All slices' spectra at once, the squares moved by the offsets given.
+type SpecsOf<'a> = dyn Fn(&[[isize; 2]]) -> Result<Vec<Spec>> + Sync + 'a;
+
+/// The spectra of a movie's frames together: sampled and tapered on the
+/// processor as `spectrum_on` does, then one upload, the same transform
+/// batched over the frames, the kept frequencies cut on the device, and
+/// only those read back (a quarter of each transform).
+#[cfg(feature="pro")]
+fn movie_spectra_gpu(g: &Geom, filter: &[f32], offs: &[[isize; 2]], frames: &[Vec<f32>], w: usize, dev: &burn::tensor::Device) -> Result<Vec<Spec>> {
+    use burn::tensor::{Int, Tensor, TensorData};
+    let (n, m, k) = (g.n, g.m, offs.len());
+    let planes: Vec<Vec<f32>> = offs.par_iter().enumerate().map(|(i, &off)| sampled(g, off, |x, y| frames[i][y * w + x])).collect();
+    let re = Tensor::<3>::from_data(TensorData::new(planes.concat(), [k, n, n]), dev);
+    let (re, im) = burn::signal::cfft(re, Tensor::<3>::zeros([k, n, n], dev), 2, None);
+    let (re, im) = burn::signal::cfft(re, im, 1, None);
+    let keep = Tensor::<1, Int>::arange(0..m as i64, dev).add_scalar((n - m / 2) as i32).remainder_scalar(n as i32);
+    let re = re.select(1, keep.clone()).select(2, keep.clone());
+    let im = im.select(1, keep.clone()).select(2, keep);
+    let (cr, ci) = (crate::motion::sum_gpu::download(re), crate::motion::sum_gpu::download(im));
+    Ok((0..k).map(|i| kept(g, filter, |r, c| (cr[(i * m + r) * m + c], ci[(i * m + r) * m + c]))).collect())
+}
 
 /// Shifts (binned pixels) and correlations of `count` slices, with the
 /// squares moved by `offs`. Series: each to its neighbour, summed.
-fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spec_of: &SpecOf, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spec_of: &SpecOf, specs_of: Option<&SpecsOf>, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let fft_m = Fft::new(g.m);
     let get = |i: usize| -> Result<Spec> {
         let s = spec_of(i, offs[i]);
@@ -434,7 +475,14 @@ fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spe
         s
     };
     if !series {
-        let specs: Vec<Spec> = (0..count).map(get).collect::<Result<_>>()?;
+        let specs: Vec<Spec> = match specs_of {
+            Some(all) => {
+                let specs = all(offs)?;
+                (0..count).for_each(|_| tick());
+                specs
+            }
+            None => (0..count).map(get).collect::<Result<_>>()?,
+        };
         return align_movie(&specs, g, &fft_m, max, &|_| tick());
     }
     // Neighbours, a chunk of slices at a time.
@@ -508,13 +556,13 @@ fn pass(g: &Geom, count: usize, offs: &[[isize; 2]], series: bool, max: f64, spe
 /// Two passes: the second with each square moved by the shift the first
 /// found, so the tapered edges no longer pull the peak toward zero shift.
 /// Returns full-image pixel shifts relative to the middle slice.
-fn measure(g: &Geom, count: usize, series: bool, max: f64, spec_of: &SpecOf, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
+fn measure(g: &Geom, count: usize, series: bool, max: f64, spec_of: &SpecOf, specs_of: Option<&SpecsOf>, tick: &(dyn Fn() + Sync)) -> Result<(Vec<[f64; 2]>, Vec<f64>, usize)> {
     let zero = vec![[0isize; 2]; count];
-    let (d1, _, it1) = pass(g, count, &zero, series, max, spec_of, tick)?;
+    let (d1, _, it1) = pass(g, count, &zero, series, max, spec_of, specs_of, tick)?;
     let mid = d1[count / 2];
     let offs: Vec<[isize; 2]> = d1.iter().map(|d| g.offset([d[0] - mid[0], d[1] - mid[1]])).collect();
     // What is left is small; search a few binned pixels around it.
-    let (d2, cc, it2) = pass(g, count, &offs, series, (max / 4.0).max(8.0), spec_of, tick)?;
+    let (d2, cc, it2) = pass(g, count, &offs, series, (max / 4.0).max(8.0), spec_of, specs_of, tick)?;
 
     let mut d: Vec<[f64; 2]> = if series {
         d2.iter().map(|v| [v[0] * g.bin as f64 + offs[0][0] as f64, v[1] * g.bin as f64 + offs[0][1] as f64]).collect()
@@ -579,7 +627,7 @@ pub fn estimate(img: &Arc<OpenImage>, req: &AlignReq, progress: &(dyn Fn(usize, 
     let total = 2 * zs.len() + if series { 0 } else { 8 };
     let done = std::sync::atomic::AtomicUsize::new(0);
     let tick = || progress((done.fetch_add(1, Ordering::Relaxed) + 1).min(total - 1), total);
-    let (shifts, cc, iterations) = measure(&g, zs.len(), series, max, &spec_of, &tick)?;
+    let (shifts, cc, iterations) = measure(&g, zs.len(), series, max, &spec_of, None, &tick)?;
     progress(total, total);
     Ok(Aligned { zs, shifts, cc, bin: g.bin, n: g.n, iterations, ms: start.elapsed().as_secs_f64() * 1e3, gpu: false })
 }
@@ -832,7 +880,7 @@ mod tests {
         let g = Geom::new([0, 0, w, h], n, w, h).unwrap();
         let (fft_n, filter) = (Fft::new(g.n), make_filter(g.m));
         let spec_of = |i: usize, off: [isize; 2]| Ok(spectrum(&g, &fft_n, &filter, off, |x, y| fr[i][y * w + x]));
-        let (d, cc, _) = measure(&g, fr.len(), series, g.n as f64 / 4.0, &spec_of, &|| ()).unwrap();
+        let (d, cc, _) = measure(&g, fr.len(), series, g.n as f64 / 4.0, &spec_of, None, &|| ()).unwrap();
         (d, cc)
     }
 
@@ -1123,7 +1171,20 @@ pub(crate) fn movie_planes_on(frames: &[Vec<f32>],w:usize,h:usize,progress:&(dyn
         Ok(spectrum_on(&g,&f,&filter,off,|x,y|frames[i][y*w+x],gpu))
     })};
     let done=std::sync::atomic::AtomicUsize::new(0);let total=2*frames.len()+24;
-    let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
+    // On the GPU the frames' spectra are made together (one upload and one
+    // batched transform a pass), the same values as one at a time.
+    let device=if gpu{crate::ctf_gpu::device()}else{None};
+    let all_specs=|offs:&[[isize;2]]|->Result<Vec<Spec>>{
+        if CANCEL.load(Ordering::SeqCst){bail!("已取消");}
+        let (dev,_)=device.as_ref().expect("device");
+        let out={let _guard=GPU_FFT.lock().unwrap_or_else(|e|e.into_inner());crate::ctf_gpu::guarded(||movie_spectra_gpu(&g,&filter,offs,frames,w,dev)).and_then(|r|r)};
+        match out{
+            Ok(v)=>{crate::compute::report("电影全局运动 FFT","GPU + CPU",Some("GPU 批量 FFT；CPU 取样与加窗".into()));Ok(v)}
+            Err(e)=>{crate::compute::report("电影全局运动 FFT","CPU",Some(format!("GPU 批量执行失败：{e:#}")));offs.iter().enumerate().map(|(i,&o)|spec_of(i,o)).collect()}
+        }
+    };
+    let specs_of:Option<&SpecsOf>=if device.is_some(){Some(&all_specs)}else{None};
+    let (mut shifts,mut cc,mut iterations)=measure(&g,frames.len(),false,g.n as f64/4.0,&spec_of,specs_of,&||progress((done.fetch_add(1,Ordering::Relaxed)+1).min(total),total))?;
     let median=|v:&[f64]| {let mut a=v.to_vec();a.sort_by(f64::total_cmp);a[a.len()/2]};
     if median(&cc)<0.08 {
         // Low-contrast movies need the full field and a narrower frequency band.
