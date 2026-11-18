@@ -366,32 +366,45 @@ pub fn finish(dev: &burn::tensor::Device, folder: &str, purpose: auto::Purpose, 
     })
 }
 
-/// 「重置」: what the Cryo-ET steps made in a project is removed, so the next
-/// run starts from the movies (or tilt series) again. Only the step folders
-/// of the intermediate results go (motion-corrected stacks, tomograms and
-/// their datasets, the clean companions; `project_dirs` 1–3); the raw data is
-/// never touched, and the averages (4_sta) and figures (5_figures), which are
-/// results of their own, are kept. On a server the step folders lie under the
-/// job's output root (`TMV_OUTPUT_ROOT`), not in the raw folder. A project of
-/// the old flat layout (datasets beside the raw stacks) is refused: its
-/// intermediate files cannot be told from the user's own by folder.
-/// Answers the folders removed.
-pub fn reset(folder: &str) -> Result<Vec<String>> {
+/// 「重置」 of one series (its card): what the Cryo-ET steps made of it is
+/// removed, so its next run starts from its movies (or its tilt series) again.
+/// Only the step folders of the intermediate results are looked in
+/// (`project_dirs` 1–3: motion-corrected stack, dataset, tomograms, clean
+/// companions); the raw data is never touched, and averages (4_sta) and
+/// figures (5_figures), results of their own, are kept. A file there belongs to
+/// the series whose name it starts with, followed by "." or "_" (TS_1.mrc,
+/// TS_1_even.mrc, TS_1.tomo.json); when several names fit (TS_1 and TS_1_b),
+/// the longest one owns it. On a server the step folders lie under the job's
+/// output root (`TMV_OUTPUT_ROOT`). A project of the old flat layout (datasets
+/// beside the raw stacks) is refused: its intermediate files cannot be told
+/// from the user's own by folder. Answers the files removed.
+pub fn reset(folder: &str, name: &str) -> Result<Vec<String>> {
     use anyhow::Context;
     use crate::project_dirs::{CLEAN, MOTION, TOMOGRAMS};
     let dir = Path::new(folder);
     anyhow::ensure!(dir.is_dir(), "找不到项目文件夹：{folder}");
     let legacy = std::fs::read_dir(dir)?.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tomo.json"));
     anyhow::ensure!(!legacy, "这是旧版的项目（中间结果和原始数据放在同一个文件夹里），不能一键清理，请手动删除");
-    let root = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(|| dir.to_path_buf());
+    let names: Vec<String> = scan(folder)?.series.into_iter().map(|s| s.name).collect();
+    anyhow::ensure!(names.iter().any(|n| n == name), "这个文件夹里没有序列 {name}");
+    let root = crate::project_dirs::listing_root(dir).unwrap_or_else(|| dir.to_path_buf());
+    let out = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(|| root.clone());
+    let owner = |file: &str| names.iter().filter(|n| file == n.as_str() || file.strip_prefix(n.as_str()).is_some_and(|r| r.starts_with('.') || r.starts_with('_'))).max_by_key(|n| n.len()).cloned();
     let mut removed = vec![];
     for step in [MOTION, TOMOGRAMS, CLEAN] {
-        let d = root.join(step);
-        if d.is_dir() {
-            std::fs::remove_dir_all(&d).with_context(|| format!("无法删除 {}", d.display()))?;
-            removed.push(d.to_string_lossy().into_owned());
+        let Ok(rd) = std::fs::read_dir(out.join(step)) else { continue };
+        for e in rd.flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            if owner(&file).as_deref() != Some(name) {
+                continue;
+            }
+            let p = e.path();
+            if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) }.with_context(|| format!("无法删除 {}", p.display()))?;
+            removed.push(text(&p));
         }
     }
+    merge_notes(&notes_path(&root), name, None, true);
+    merge_notes(&notes_path(&root), name, None, false);
     Ok(removed)
 }
 
@@ -428,22 +441,29 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_removes_the_intermediate_steps_and_nothing_else() {
+    fn a_reset_removes_what_was_made_of_one_series_and_nothing_else() {
         let dir = tempfile::tempdir().unwrap();
         let p = |n: &str| dir.path().join(n);
-        std::fs::write(p("a.mdoc"), "[ZValue = 0]\n").unwrap();
-        std::fs::write(p("a_0.eer"), b"x").unwrap();
-        for d in ["1_motion", "2_tomograms", "3_clean", "4_sta", "5_figures"] {
-            std::fs::create_dir(p(d)).unwrap();
-            std::fs::write(p(d).join("f"), b"x").unwrap();
+        for n in ["TS_1", "TS_1_b", "TS_10"] {
+            std::fs::write(p(&format!("{n}.mrc")), b"x").unwrap();
+            std::fs::write(p(&format!("{n}.tlt")), b"0\n").unwrap();
         }
-        let removed = reset(&text(dir.path())).unwrap();
-        assert_eq!(removed.len(), 3);
-        assert!(!p("1_motion").exists() && !p("2_tomograms").exists() && !p("3_clean").exists());
-        assert!(p("4_sta/f").exists() && p("5_figures/f").exists() && p("a.mdoc").exists() && p("a_0.eer").exists());
-        assert!(reset(&text(dir.path())).unwrap().is_empty(), "a second reset has nothing to do");
+        for d in ["1_motion", "2_tomograms", "3_clean", "4_sta"] {
+            std::fs::create_dir(p(d)).unwrap();
+        }
+        let made = ["2_tomograms/TS_1.tomo.json", "2_tomograms/TS_1_sart3_b8.mrc", "3_clean/TS_1_look.mrc", "2_tomograms/TS_1_b.tomo.json", "2_tomograms/TS_10.tomo.json", "3_clean/TS_10_look.mrc", "4_sta/TS_1_sta.json"];
+        for f in made {
+            std::fs::write(p(f), b"{}").unwrap();
+        }
+        let removed = reset(&text(dir.path()), "TS_1").unwrap();
+        assert_eq!(removed.len(), 3, "{removed:?}");
+        assert!(!p("2_tomograms/TS_1.tomo.json").exists() && !p("3_clean/TS_1_look.mrc").exists());
+        for keep in ["2_tomograms/TS_1_b.tomo.json", "2_tomograms/TS_10.tomo.json", "3_clean/TS_10_look.mrc", "4_sta/TS_1_sta.json", "TS_1.mrc", "TS_1.tlt"] {
+            assert!(p(keep).exists(), "{keep} must stay");
+        }
+        assert!(reset(&text(dir.path()), "nope").is_err());
         std::fs::write(p("old.tomo.json"), b"{}").unwrap();
-        assert!(reset(&text(dir.path())).is_err(), "an old flat project is refused");
+        assert!(reset(&text(dir.path()), "TS_10").is_err(), "an old flat project is refused");
     }
 }
 

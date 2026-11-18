@@ -20,6 +20,9 @@
     const expanded=new Map([...bar.querySelectorAll('details')].map(d=>[d.className,d.open]));
     const record=latest.get(kind);bar.replaceChildren();
     bar.append(node('strong','运行位置：本机'+(record?.running?' · 正在处理':record?.error?' · 处理失败':record?' · 已完成':'')));
+    // 停止, at the right of the 运行位置 line: what was done is kept (the series' cards offer 继续).
+    const cancel={tomo:'tomo_cancel',spa:'spa_cancel'}[kind];
+    if(record?.running&&cancel){const stop=node('button',record.stopping?'正在停止…':'停止');stop.className='small remote-stop';stop.disabled=!!record.stopping;stop.title='停下来；做完的步骤都保留，以后可以接着做';stop.onclick=()=>{record.stopping=true;render(bar,kind);window.__TAURI__.core.invoke(cancel).catch(()=>{});};bar.append(stop);}
     if(resources) {
       let text=`CPU ${resources.cpuThreads} 线程 · 当前可回收内存 ${(resources.memoryAvailableMb/1024).toFixed(1)} GB`;
       if(resources.metal){const m=resources.metal;text+=` · ${m.name} · ${m.unified?'统一内存':'显存'}新任务预算 ${(m.availableBytes/2**30).toFixed(1)} GB（已预留系统空间）`;}

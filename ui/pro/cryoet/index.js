@@ -156,7 +156,7 @@
     try {
       return await call();
     } catch (e) {
-      W.status(String(e).includes("已取消") ? `${label}已停止：做完的步骤都保留了，再按「重构勾选序列」或「继续上次的重构」会接着做` : `${label}失败：${e}`);
+      W.status(String(e).includes("已取消") ? `${label}已停止：做完的步骤都保留了，序列卡片上的「继续」会从停下的地方接着做` : `${label}失败：${e}`);
       return null;
     } finally {
       un();

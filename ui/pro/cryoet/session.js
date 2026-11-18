@@ -19,11 +19,7 @@
   };
 
   host.innerHTML = `
-    <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button><button class="small cs-reset" title="删除这个项目处理出的中间结果，下次从头做">重置…</button></div>
-    <div class="cs-reset-box" hidden>
-      <p><b>确定要重置吗？</b>会删除这个项目处理出的中间结果：运动校正后的叠层、断层图和清晰版（1_motion、2_tomograms、3_clean 三个文件夹）。原始电影、mdoc 不会动；子断层平均和出图的结果会保留。删除后不能恢复。</p>
-      <div class="al-row"><button class="small cs-reset-go">确认删除</button><button class="small cs-reset-no">取消</button></div>
-    </div>
+    <div class="al-row cs-folder"><span class="dim">项目文件夹</span><b class="cs-path" title=""></b><button class="small cs-pick" title="换一个放着倾转序列的文件夹">选文件夹…</button></div>
     <div class="al-row cs-controls">
       <div class="cs-purpose-box" role="group" aria-label="重构时要做的处理">
         <label class="cs-use"><input type="checkbox" data-step="fineAlign"><span><b>精对齐</b><span>多试几种对齐方式，自动去掉对不齐的倾角（会标出来，可以改回）</span></span></label>
@@ -33,8 +29,6 @@
       </div>
       <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
-      <button class="cs-stop" hidden title="停下来；做完的步骤都保留，以后再按「重构勾选序列」或「继续上次的重构」接着做">停止</button>
-      <button class="small cs-resume" hidden title="接着做上次没做完的重构：同样的序列和处理，做完的步骤不再重做"></button>
       <span class="dim cs-selection-count" role="status"></span>
     </div>
     <p class="dim cs-help cs-only-recon">在下面勾选序列，再选想要的处理（都不勾就是快速重构，几分钟一个，适合先看看样品），点「重构勾选序列」。没处理过的电影会先自动校正。点卡片上的「打开」检查倾转图、对齐和断层图，挑掉不好的图后可以再重构。</p>
@@ -133,7 +127,6 @@
     p.title = folder || "";
     host.querySelectorAll(".cs-act").forEach((b) => { b.disabled = W.busy || !folder || !selected.size; });
     host.querySelectorAll(".cs-purpose-box input").forEach((b) => { b.disabled = W.busy; });
-    q(".cs-reset").disabled = W.busy || !folder;
   }
 
   // Takes a session; pictures of a series that got further are loaded again.
@@ -166,7 +159,6 @@
     }
     render();
     syncReview();
-    showResume();
   }
 
   function summary() {
@@ -226,7 +218,7 @@
     for (const [n, t] of tiles) if (!names.has(n)) { t.el.remove(); tiles.delete(n); }
     list.forEach((s, i) => {
       let t = tiles.get(s.name);
-      const sig = JSON.stringify(s);
+      const sig = JSON.stringify([s, W.busy, confirming.has(s.name), lastRun()?.only?.includes(s.name) ?? false]);
       if (!t) {
         t = { el: el("div", "cs-tile"), sig: "" };
         tiles.set(s.name, t);
@@ -283,60 +275,77 @@
       tile.append(n);
     }
     if(s.aligned||s.small||s.quick||s.result){const open=el('button','small cs-open','打开');open.setAttribute('aria-label',`打开`);open.title=`打开 ${s.name} 的结果`;open.onclick=e=>{e.stopPropagation();openReview(s.name);};tile.append(open);}
+    cardActions(tile, s);
     tile.onclick=e=>{if(!e.target.closest('button,label,input'))toggleSelection(s.name);};
     tile.onkeydown=e=>{if(e.target===tile&&(e.key==='Enter'||e.key===' ')){e.preventDefault();toggleSelection(s.name);}};
   }
 
   // ---------- running ----------
 
-  // ---------- stop, continue, reset ----------
+  // ---------- continue and reset, on each series' card ----------
 
-  // The run started last in a folder, until it finishes: what 「继续上次的重构」 starts again. The steps
-  // that were done are not done again (every step skips what is already there), so a stopped run, or
-  // one cut off by closing the app, goes on from where it stopped.
+  // The run started last in a folder, until it finishes. A series of it that was not finished gets
+  // 「继续」 on its card: the same processing again, and the steps that were done are not done again
+  // (every step skips what is already there), so a run that was stopped, or cut off by closing the
+  // app, goes on from where it stopped. A series that is part-way without such a run continues with
+  // the processing ticked now. 「重置」 removes what was made of that series (asked once more on the
+  // card first), so its next run starts from its movies again.
   const lastKey = () => (folder ? `cryo-last-run:${folder}` : null);
   const lastRun = () => { const k = lastKey(); if (!k) return null; try { return pref.get(k, null); } catch { return null; } };
-  function showRun(on) {
-    const stop = q(".cs-stop");
-    stop.hidden = !on;
-    stop.disabled = false;
-    stop.textContent = "停止";
-  }
-  function showResume() {
-    const b = q(".cs-resume"), last = lastRun();
-    const have = last ? (last.only || []).filter((n) => session.series.some((s) => s.name === n)) : [];
-    b.hidden = W.busy || !have.length;
-    b.textContent = `继续上次的重构（${have.length} 个序列）`;
-  }
-  q(".cs-stop").onclick = () => {
-    const b = q(".cs-stop");
-    b.disabled = true;
-    b.textContent = "正在停止…";
-    invoke("tomo_cancel").catch(() => {});
-  };
-  q(".cs-resume").onclick = async () => {
+  const confirming = new Set();
+  const unfinished = (s) => {
     const last = lastRun();
-    if (!last || W.busy) return;
-    selected.clear();
-    for (const n of last.only || []) if (session.series.some((s) => s.name === n)) selected.add(n);
-    selectionChanged();
-    return runSelected(last.purpose ?? null);
+    if (last?.only?.includes(s.name) && s.stage !== "done") return last.purpose ?? null;
+    const partway = (s.stage !== "movies" && s.stage !== "done") || (s.stage === "movies" && s.corrected > 0);
+    return partway ? { custom: { ...steps } } : undefined;
   };
-  q(".cs-reset").onclick = () => { if (!W.busy && folder) q(".cs-reset-box").hidden = !q(".cs-reset-box").hidden; };
-  q(".cs-reset-no").onclick = () => { q(".cs-reset-box").hidden = true; };
-  q(".cs-reset-go").onclick = async () => {
-    q(".cs-reset-box").hidden = true;
-    if (W.busy || !folder) return;
-    try {
-      const gone = await invoke("tomo_session_reset", { folder });
-      const k = lastKey();
-      if (k) pref.set(k, null);
-      changedFolder();
-      await scan();
-      document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
-      W.status(gone.length ? "已重置：中间结果删除了，下次从头做" : "没有可以清理的中间结果");
-    } catch (e) { W.status(`无法重置：${e}`); }
-  };
+  const made = (s) => s.stage !== "movies" || s.corrected > 0 || !!s.small || !!s.error;
+  function cardActions(tile, s) {
+    const row = el("div", "cs-card-acts");
+    row.onclick = (e) => e.stopPropagation();
+    if (confirming.has(s.name)) {
+      row.classList.add("asking");
+      row.append(el("p", null, "清除这个序列的中间结果（校正后的叠层、断层图、清晰版）？原始数据不动，不能恢复。"));
+      const go = el("button", "small cs-reset-go", "确认清除"), no = el("button", "small", "取消");
+      go.onclick = async () => {
+        confirming.delete(s.name);
+        if (W.busy) return fillTile(tile, s);
+        try {
+          await invoke("tomo_session_reset", { folder, name: s.name });
+          rev.clear();
+          await scan();
+          document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+          W.status(`已重置 ${s.name}：下次从头处理`);
+        } catch (e) { W.status(`无法重置 ${s.name}：${e}`); fillTile(tile, s); }
+      };
+      no.onclick = () => { confirming.delete(s.name); fillTile(tile, s); };
+      row.append(go, no);
+      tile.append(row);
+      return;
+    }
+    const purpose = unfinished(s);
+    if (purpose !== undefined) {
+      const b = el("button", "small cs-resume", "继续");
+      b.title = "接着做这个序列没做完的处理，做完的步骤不再重做";
+      b.disabled = W.busy;
+      b.onclick = () => {
+        if (W.busy) return;
+        selected.clear();
+        selected.add(s.name);
+        selectionChanged();
+        runSelected(purpose);
+      };
+      row.append(b);
+    }
+    if (made(s)) {
+      const b = el("button", "small cs-reset", "重置");
+      b.title = "清除这个序列做出的中间结果，下次从头处理";
+      b.disabled = W.busy;
+      b.onclick = () => { confirming.add(s.name); fillTile(tile, s); };
+      row.append(b);
+    }
+    if (row.childElementCount) tile.append(row);
+  }
 
   async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only } })) {
     const un = await T.event.listen("tomo-session", async () => {
@@ -348,12 +357,11 @@
     });
     const key = lastKey();
     if (key) pref.set(key, { purpose, only, label });
-    showRun(true);
     let r;
-    try { r = await W.run(label, call); } finally { un(); showRun(false); }
-    // Finished: nothing to continue. Stopped or failed: the run is kept, to be continued.
+    try { const running = W.run(label, call); render(); r = await running; } finally { un(); }
+    // Finished: nothing to continue. Stopped or failed: the run is kept, to be continued (the cards' 继续).
     if (r && key) pref.set(key, null);
-    showResume();
+    render();
     if (r) {
       adopt(r);
       render();
