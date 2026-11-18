@@ -1019,17 +1019,23 @@
     draw();
   });
 
-  // [ and ] change the brush size.
+  // [ and ] change the brush size: by the physical key, so a Chinese input
+  // source (which types 【 】) works too, whatever button has the focus; only
+  // text fields keep their keys. Captured before other handlers see them.
   window.addEventListener("keydown", (e) => {
-    if (S.tool !== "label" || e.ctrlKey || e.metaKey) return;
-    const tag = e.target.tagName;
-    if (tag === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "range") return;
-    if (e.key !== "[" && e.key !== "]") return;
-    L.radius = Math.max(1, Math.min(100, Math.round(L.radius * (e.key === "]" ? 1.25 : 0.8)) + (e.key === "]" ? 1 : 0)));
+    if (S.tool !== "label" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "range", "radio", "button"].includes(t.type)))) return;
+    const up = e.code === "BracketRight" || e.key === "]" || e.key === "】";
+    const down = e.code === "BracketLeft" || e.key === "[" || e.key === "【";
+    if (!up && !down) return;
+    L.radius = Math.max(1, Math.min(100, Math.round(L.radius * (up ? 1.25 : 0.8)) + (up ? 1 : 0)));
     syncPanel();
     draw();
+    toast(`画笔大小 ${L.radius * 2}`, 800);
     e.preventDefault();
-  });
+    e.stopPropagation();
+  }, true);
 
   // ---------- structure type of a stroke ----------
   //
@@ -1087,20 +1093,21 @@
     if ($("lab-side")) syncSide();
   }
 
-  /** What a type click acts on: the last stroke (and the unrefined strokes
-   *  touching it) when it is in the active layer on this slice, otherwise
-   *  all of the active layer's unrefined paint on this slice. */
+  /** What a type click acts on: all of the active layer's unrefined paint
+   *  on this slice, each connected piece (strokes within a brush width of
+   *  each other join) on its own. The last click's target is kept, so
+   *  clicking another type redoes that click with the new type. */
   function typeTarget() {
     const b = L.typeBar;
-    if (b && b.stroke.z === S.z && (b.label === L.active || b.stroke.label === L.active)) return b;
-    const region = { z: S.z, tool: "region", pts: [], radius: 0, seed: [0, 0], label: L.active };
+    if (b && b.stroke.tool === "region" && b.stroke.z === S.z && b.type != null && (b.label === L.active || b.stroke.label === L.active)) return b;
+    const region = { z: S.z, tool: "region", pts: [], radius: L.radius, seed: [0, 0], label: L.active };
     return { stroke: region, group: [region], label: L.active, type: null, refined: false, busy: false };
   }
 
-  /** A stroke went into label `s.label`: the type row now acts on it. */
+  /** A stroke went into label `s.label`: the next type click is a new one. */
   function afterStroke(s) {
     (L.pending ||= []).push(s);
-    L.typeBar = { stroke: s, group: null, label: s.label, type: "", refined: false, busy: false };
+    L.typeBar = null;
     L.askSide = null;
     draw();
   }
@@ -1149,7 +1156,7 @@
     // Refined strokes are one object now; unrefined ones can join a later stroke.
     if (b.refined) L.pending = (L.pending || []).filter((x) => !b.group.includes(x));
     b.added = (res && res.marks && res.marks.length) || 0;
-    if (res && res.note) toast(res.note, 4000);
+    if (res && res.note) toast(res.note, 5000);
     if (b.added) {
       const n = (mat(to).marks || []).length;
       L.sideTarget = { z: s.z, label: to, idxs: Array.from({ length: b.added }, (_, k) => n - b.added + k) };
