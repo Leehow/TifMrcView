@@ -97,7 +97,14 @@
     const decoded=map(args,s=>{const x=unpack(s);if(x){if(x.id!==ctx.identity)throw new Error('项目属于其他服务器，请重新连接原服务器');return x.path;}return s===S.folder.dir?S.folder.remotePath:(typeof ext!=='undefined' && ext.remoteFiles?.get(s)?.remotePath)||s;});
     if(cmd==='tomo_preview_file'){
       ctx.previewFiles||=new Map();ctx.previewFiles.delete(decoded.path);
-      const local=await ctx.previewFile?.(decoded.path);
+      let local=await ctx.previewFile?.(decoded.path);
+      // A big file (a tomogram) is not fetched whole: the server makes a small byte copy of all
+      // its sections (tomo_preview_stack), and that comes over in one transfer.
+      if(!local&&ctx.previewFile){
+        const made=await remote(ctx,'tomo_preview_stack',{path:args.path,max:512},native);
+        const small=unpack(made?.path)?.path||made?.path;
+        if(small)local=await ctx.previewFile(small);
+      }
       if(local)ctx.previewFiles.set(decoded.path,local);
       return !!local;
     }

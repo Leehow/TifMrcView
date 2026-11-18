@@ -401,7 +401,7 @@ TifMrcView.register({
             // this path. Reuse the normal size/mtime-validated download cache.
             const listing=await native('list',{path:path.replace(/\/[^/]+$/, '')||'/'});
             const entry=listing.entries.find(e=>e.path===path);
-            if(!entry?.supported||!entry.size||entry.size>2*1024**3)return null;
+            if(!entry?.supported||!entry.size||entry.size>256*1024**2)return null;
             const local=await download(entry);check();return local;
           },
           open: async path=>{check();const listing=await native('list',{path:path.replace(/\/[^/]+$/, '')||'/'});const entry=listing.entries.find(e=>e.path===path);if(!entry?.supported)throw new Error('结果文件不可读或缺少格式插件');await app.folders.openEntry(entry,download,preview);}

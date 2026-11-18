@@ -316,6 +316,7 @@ fn supported(c: &str) -> bool {
             | "tomo_session_reset"
             | "tomo_session_run"
             | "tomo_view"
+            | "tomo_preview_stack"
             | "tomo_take"
             | "tomo_pick"
             | "spa_open"
@@ -601,6 +602,10 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
             };
             serde_json::to_value(s)?
         }
+        "tomo_preview_stack" => json!({"path": crate::tomo::session::preview_stack(
+            string(a, "path")?,
+            a["max"].as_u64().unwrap_or(512) as usize,
+        )?}),
         "tomo_view" => {
             let b = crate::tomo::session::view(
                 string(a, "path")?,

@@ -873,7 +873,7 @@
     async function start(){
       retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
       try {
-        state.textContent='正在准备全部断层图预览…';
+        state.textContent=S.folder?.remote?'正在服务器上把整个断层图缩小成预览，再一次下载过来（大的断层图要几十秒）…':'正在准备全部断层图预览…';
         try{await preparePreview(t.path);}catch(e){if(gen===rv.gen)W.status(`预览缓存不可用，继续读取小图：${e}`);}
         if(gen!==rv.gen)return;
         const d=await pic(t.path,null,512,gen,true);
