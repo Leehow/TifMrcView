@@ -70,6 +70,9 @@ pub struct Series {
     pub pixel_a: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[usize; 2]>,
+    /// Binning of the tomogram shown on the card (`result`, else `quick`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bin: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -199,7 +202,7 @@ pub fn scan(folder: &str) -> Result<Session> {
 }
 
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
-    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None }
+    Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None, bin: None }
 }
 
 /// What the dataset of an existing stack says about it.
@@ -238,6 +241,9 @@ fn fill(s: &mut Series) {
     if s.result.is_some() {
         s.stage = Stage::Done;
     }
+    let shown = s.result.as_ref().or(s.quick.as_ref());
+    // A clean companion (N2N, deconvolved) is not listed itself: it has its full tomogram's binning.
+    s.bin = shown.and_then(|p| d.tomograms.iter().find(|t| &t.path == p).or_else(|| d.tomograms.iter().rev().find(|t| t.kind == "full")).map(|t| t.bin));
 }
 
 /// The dataset of a series' stack as saved.
@@ -288,6 +294,88 @@ pub fn view(path: &str, z: Option<usize>, max: usize) -> Result<Vec<u8>> {
     let p = &p[sample.min(p.len() - 1)];
     let values: Vec<f32> = (0..p.w * p.h).map(|i| p.data.get_f64(i) as f32).collect();
     Ok(crate::live::encode(&crate::live::Picture { title: format!("z {} / {}", z + 1, info.size_z), w: p.w, h: p.h, values, mask: vec![] }, max.clamp(32, 2048)))
+}
+
+/// A small copy of a whole tomogram for looking through it on another
+/// computer (the review's 断层图 tab over SSH): every section box-averaged to
+/// at most `max` pixels a side, as bytes (one contrast for all sections, from
+/// the middle one), in an MRC file in this computer's cache. Made once per
+/// file version; answers its path.
+pub fn preview_stack(path: &str, max: usize) -> Result<String> {
+    use sha2::Digest;
+    use std::io::Write;
+    let meta = std::fs::metadata(path)?;
+    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let key = format!("{path}|{}|{mtime}|{max}", meta.len());
+    let hash: String = sha2::Sha256::digest(key.as_bytes()).iter().take(12).map(|b| format!("{b:02x}")).collect();
+    let dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("tifmrcview/previews");
+    std::fs::create_dir_all(&dir)?;
+    let out = dir.join(format!("{hash}.mrc"));
+    if out.exists() {
+        return Ok(text(&out));
+    }
+    let img = pipeline::open(path)?;
+    let info = img.info();
+    let (w, h, d) = (info.width, info.height, info.size_z);
+    let f = w.max(h).div_ceil(max.clamp(64, 2048)).max(1);
+    let (sw, sh) = (w / f, h / f);
+    anyhow::ensure!(sw > 0 && sh > 0 && d > 0, "断层图太小");
+    let section = |z: usize| -> Result<Vec<f32>> {
+        let (page, sample) = info.locate(0, z, 0);
+        let p = img.page(page)?;
+        let p = &p[sample.min(p.len() - 1)];
+        let mut o = vec![0f32; sw * sh];
+        for y in 0..sh {
+            for x in 0..sw {
+                let mut acc = 0f64;
+                for dy in 0..f {
+                    let row = (y * f + dy) * p.w;
+                    for dx in 0..f {
+                        acc += p.data.get_f64(row + x * f + dx);
+                    }
+                }
+                o[y * sw + x] = (acc / (f * f) as f64) as f32;
+            }
+        }
+        Ok(o)
+    };
+    let mut mid = section(d / 2)?;
+    mid.retain(|v| v.is_finite());
+    anyhow::ensure!(!mid.is_empty(), "断层图中间一层是空的");
+    mid.sort_by(f32::total_cmp);
+    let (lo, hi) = (mid[mid.len() / 200], mid[mid.len() - 1 - mid.len() / 200]);
+    let scale = if hi > lo { 255.0 / (hi - lo) } else { 1.0 };
+    let tmp = dir.join(format!("{hash}.part"));
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+    let mut head = vec![0u8; 1024];
+    let mut put = |at: usize, v: [u8; 4]| head[at..at + 4].copy_from_slice(&v);
+    for (i, n) in [sw, sh, d, 0, 0, 0, 0, sw, sh, d].iter().enumerate() {
+        put(i * 4, (*n as i32).to_le_bytes());
+    }
+    let px = if info.pixel_size.is_some() { crate::align::pixel_a(info) * f as f64 } else { 1.0 };
+    for (i, n) in [sw, sh, d].iter().enumerate() {
+        put(40 + i * 4, ((*n as f64 * px) as f32).to_le_bytes());
+        put(52 + i * 4, 90f32.to_le_bytes());
+        put(64 + i * 4, ((i + 1) as i32).to_le_bytes());
+    }
+    put(76, 0f32.to_le_bytes());
+    put(80, 255f32.to_le_bytes());
+    put(84, 127f32.to_le_bytes());
+    put(152, 1146047817i32.to_le_bytes());
+    put(156, 0i32.to_le_bytes());
+    head[208..212].copy_from_slice(b"MAP ");
+    head[212..216].copy_from_slice(&[0x44, 0x44, 0, 0]);
+    file.write_all(&head)?;
+    for z in 0..d {
+        super::check_cancel()?;
+        let v = section(z)?;
+        let bytes: Vec<u8> = v.iter().map(|x| if x.is_finite() { ((x - lo) * scale).round().clamp(0.0, 255.0) as u8 } else { 0 }).collect();
+        file.write_all(&bytes)?;
+    }
+    file.flush()?;
+    drop(file);
+    std::fs::rename(&tmp, &out)?;
+    Ok(text(&out))
 }
 
 fn cancelled(e: &anyhow::Error) -> bool {
@@ -428,6 +516,26 @@ pub fn reset(folder: &str, name: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_preview_stack_is_a_small_byte_copy_of_every_section() {
+        let dir = std::env::temp_dir().join(format!("tmv-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("t.mrc");
+        let (w, h, d) = (200usize, 100usize, 7usize);
+        let data: Vec<f32> = (0..w * h * d).map(|i| (i % w) as f32 + (i / (w * h)) as f32 * 10.0).collect();
+        crate::tomo::output::write_mrc(&text(&src), &data, [w, h, d], 5.0, false).unwrap();
+        let out = preview_stack(&text(&src), 64).unwrap();
+        let img = pipeline::open(&out).unwrap();
+        let i = img.info();
+        assert_eq!((i.width, i.height, i.size_z), (50, 25, 7));
+        assert_eq!(preview_stack(&text(&src), 64).unwrap(), out, "made once");
+        let p = &img.page(i.locate(0, 3, 0).0).unwrap()[0];
+        let (a, b) = (p.data.get_f64(0), p.data.get_f64(49));
+        assert!(a < b && (0.0..=255.0).contains(&a) && (0.0..=255.0).contains(&b), "{a} {b}");
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_mdoc_names_its_series() {

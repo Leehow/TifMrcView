@@ -528,6 +528,7 @@
 .cs-pic canvas, .cs-pic img { width:100%; height:100%; object-fit:contain; display:block; }
 .cs-none { font-size:11px; }
 .cs-pic .cs-none { color:#aab1b8; }
+.cs-pic .cs-wait { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
 .cs-take { position:absolute; left:4px; top:4px; display:flex; padding:2px; background:rgba(255,255,255,.9); border-radius:4px; cursor:pointer; }
 .cs-take input { margin:0; cursor:pointer; }
 .cs-nm { font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -689,3 +690,18 @@
 #cryo-session .cs-reset-go { color:#fff; background:#d1242f; border-color:#d1242f; }
 /* 漂移校正 and 缺失楔补偿 are steps of the one Cryo-ET panel now: no buttons of their own in the toolbar. */
 #quickbar #btn-align, #quickbar #btn-wedge { display:none !important; }
+/* Series cards: one line per fact, buttons at the bottom of every card. */
+#cryo-session .cs-tile .cs-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.45; }
+#cryo-session .cs-tile .cs-chip.cs-verdict.ok { background:#dafbe1; color:#1a7f37; }
+#cryo-session .cs-tile .cs-chip.cs-verdict.warn { background:#fff8c5; color:#9a6700; }
+#cryo-session .cs-tile .cs-chip.cs-verdict.bad { background:#ffebe9; color:#cf222e; }
+#cryo-session .cs-tile .cs-card-acts { margin-top:auto; padding-top:6px; display:flex; gap:4px; align-items:center; }
+#cryo-session .cs-tile .cs-card-acts .cs-open { margin:0; }
+#cryo-session .cs-tile .cs-card-acts .cs-reset { margin:0 0 0 auto; color:var(--dim); border-color:transparent; background:transparent; }
+#cryo-session .cs-tile .cs-card-acts .cs-reset:hover { color:#cf222e; border-color:#cf222e; }
+dialog.cs-ask { max-width:380px; border:1px solid var(--line); border-radius:10px; padding:16px 18px; background:var(--surface); color:var(--text, inherit); box-shadow:0 10px 30px rgba(0,0,0,.2); }
+dialog.cs-ask::backdrop { background:rgba(0,0,0,.25); }
+dialog.cs-ask h3 { margin:0 0 8px; font-size:15px; }
+dialog.cs-ask p { margin:0 0 14px; font-size:13px; line-height:1.6; }
+dialog.cs-ask .cs-ask-row { display:flex; justify-content:flex-end; gap:8px; }
+dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }

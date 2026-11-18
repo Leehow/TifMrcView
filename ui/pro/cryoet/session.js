@@ -94,7 +94,9 @@
   }, { root: $("cryoet-workspace"), rootMargin: "200px" });
   function lazyPic(box, path, z, max, onFail = "无图") {
     const c = el("canvas");
-    box.prepend(c);
+    // Until the picture arrives the tile says so (a server may take seconds).
+    const wait = el("span", "cs-none dim cs-wait", "正在加载…");
+    box.prepend(c, wait);
     // Kept as an image, not a canvas: WebKit may drop a hidden canvas's
     // pixels (the wall is hidden during a review, the app goes to the
     // background) and nothing would draw it again.
@@ -104,7 +106,8 @@
       img.alt = "";
       img.src = d.url ||= c.toDataURL();
       c.replaceWith(img);
-    }).catch(() => { c.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
+      wait.remove();
+    }).catch(() => { c.remove(); wait.remove(); box.prepend(el("span", "cs-none dim", onFail)); });
     seen.observe(box);
   }
 
@@ -158,6 +161,13 @@
     if (!folder) { session = { root: "", series: [] }; loadError = ""; return render(); }
     if (scanning) { rescanAgain = true; return; }
     scanning = 1;
+    // The first reading of a folder (on a server it can take a while) says so.
+    const first = !session.series.length;
+    if (first) {
+      if (!W.busy) W.status("正在读取文件夹里的倾转序列…");
+      wall.replaceChildren(el("p", "dim cs-empty", "正在读取文件夹里的倾转序列…"));
+      tiles.clear();
+    }
     try {
       do {
         rescanAgain = false;
@@ -174,6 +184,7 @@
     }
     render();
     syncReview();
+    if (first && !W.busy) { W.status(""); summary(); }
   }
 
   function summary() {
@@ -233,7 +244,7 @@
     for (const [n, t] of tiles) if (!names.has(n)) { t.el.remove(); tiles.delete(n); }
     list.forEach((s, i) => {
       let t = tiles.get(s.name);
-      const sig = JSON.stringify([s, W.busy, confirming.has(s.name), lastRun()?.only?.includes(s.name) ?? false]);
+      const sig = JSON.stringify([s, W.busy, lastRun()?.only?.includes(s.name) ?? false]);
       if (!t) {
         t = { el: el("div", "cs-tile"), sig: "" };
         tiles.set(s.name, t);
@@ -248,6 +259,8 @@
     selectionChanged();
   }
 
+  // The movie-matching note in a few words (the whole note is the line's tooltip).
+  const shortNote = (t) => { const m = t.match(/采集记录共 (\d+) 个电影，匹配 (\d+) 个/); return m ? `电影匹配 ${m[2]}/${m[1]}，其余跳过` : t; };
   function fillTile(tile, s) {
     const chip = R.stageChip(s), verdict = R.verdictLine(s);
     tile.className = `cs-tile${R.needsAttention(s) ? " attn" : ""}${selected.has(s.name)?' selected':''}`;
@@ -269,28 +282,32 @@
     take.append(cb);
     take.onclick = (e) => e.stopPropagation();
     box.append(take);
+    // Card text, top to bottom: name; state chips; one line of numbers; what was done; a note or
+    // an error (one line each, the whole text on hover); the buttons at the bottom of every card.
     const nm = el("div", "cs-nm", s.name);
+    nm.title = s.name;
     const meta = el("div", "cs-meta");
     meta.append(el("span", `cs-chip ${chip.tone}`, chip.text));
-    const out = R.leftOutText(s);
-    if (out) meta.append(el("span", "dim", out));
+    if (verdict) {
+      const v = el("span", `cs-chip cs-verdict ${verdict.tone}`, verdict.tone === "ok" ? "可用" : verdict.tone === "warn" ? "看一下" : "不建议用");
+      v.title = verdict.text;
+      meta.append(v);
+    }
     tile.append(box, nm, meta);
-    if (verdict) tile.append(el("div", `cs-verdict ${verdict.tone}`, verdict.text));
-    const res = R.residualText(s);
-    if (res) tile.append(el("div", "dim", res));
-    if (s.result) tile.append(el("div", "dim cs-done", s.done?.length ? `已重构：${s.done.join(" · ")}` : "已重构（快速）"));
-    if (s.error) {
-      const e = el("div", "cs-err", s.error);
-      e.title = s.error;
-      tile.append(e);
-    }
-    if (s.note) {
-      const n = el("div", "dim", s.note);
-      n.title = s.note;
-      tile.append(n);
-    }
-    if(s.aligned||s.small||s.quick||s.result){const open=el('button','small cs-open','打开');open.setAttribute('aria-label',`打开`);open.title=`打开 ${s.name} 的结果`;open.onclick=e=>{e.stopPropagation();openReview(s.name);};tile.append(open);}
-    cardActions(tile, s);
+    const facts = [];
+    if (s.bin) facts.push(s.pixelA > 0 ? `bin ${s.bin} · ${fmtA(s.pixelA * s.bin)} Å · 分辨率 ${fmtA(2 * s.pixelA * s.bin)} Å` : `bin ${s.bin}`);
+    const nums = [R.leftOutText(s), s.residual != null ? `残差 ${s.residual.toFixed(1)} px` : ""].filter(Boolean).join(" · ");
+    for (const t of facts) tile.append(el("div", "cs-line", t));
+    if (nums) { const l = el("div", "cs-line dim", nums); l.title = R.residualText(s); tile.append(l); }
+    if (s.result) tile.append(el("div", "cs-line dim cs-done", s.done?.length ? `已做：${s.done.join(" · ")}` : "已做：快速重构"));
+    if (verdict && verdict.tone !== "ok") { const l = el("div", `cs-line cs-verdict ${verdict.tone}`, verdict.text); l.title = verdict.text; tile.append(l); }
+    if (s.error) { const e = el("div", "cs-line cs-err", s.error); e.title = s.error; tile.append(e); }
+    if (s.note) { const n = el("div", "cs-line dim", shortNote(s.note)); n.title = s.note; tile.append(n); }
+    const acts = el("div", "cs-card-acts");
+    acts.onclick = (e) => e.stopPropagation();
+    if(s.aligned||s.small||s.quick||s.result){const open=el('button','small cs-open','打开');open.title=`打开 ${s.name} 的结果`;open.onclick=e=>{e.stopPropagation();openReview(s.name);};acts.append(open);}
+    tile.append(acts);
+    cardActions(acts, s);
     tile.onclick=e=>{if(!e.target.closest('button,label,input'))toggleSelection(s.name);};
     tile.onkeydown=e=>{if(e.target===tile&&(e.key==='Enter'||e.key===' ')){e.preventDefault();toggleSelection(s.name);}};
   }
@@ -307,37 +324,35 @@
   // card first), so its next run starts from its movies again.
   const lastKey = () => (folder ? `cryo-last-run:${folder}` : null);
   const lastRun = () => { const k = lastKey(); if (!k) return null; try { return pref.get(k, null); } catch { return null; } };
-  const confirming = new Set();
+  // 「继续」 only for a series left part-way: one of the last run that it did not finish, one whose
+  // movies were only partly corrected, or one whose last run stopped with an error. A series with
+  // its quick or final tomogram is not part-way.
   const unfinished = (s) => {
+    if (s.stage === "done") return undefined;
     const last = lastRun();
-    if (last?.only?.includes(s.name) && s.stage !== "done") return last.purpose ?? null;
-    const partway = (s.stage !== "movies" && s.stage !== "done") || (s.stage === "movies" && s.corrected > 0);
+    if (last?.only?.includes(s.name)) return last.purpose ?? null;
+    const partway = (s.stage === "movies" && s.corrected > 0) || (s.error && s.stage !== "quick");
     return partway ? { custom: { ...steps } } : undefined;
   };
   const made = (s) => s.stage !== "movies" || s.corrected > 0 || !!s.small || !!s.error;
-  function cardActions(tile, s) {
-    const row = el("div", "cs-card-acts");
-    row.onclick = (e) => e.stopPropagation();
-    if (confirming.has(s.name)) {
-      row.classList.add("asking");
-      row.append(el("p", null, "清除这个序列的中间结果（校正后的叠层、断层图、清晰版）？原始数据不动，不能恢复。"));
-      const go = el("button", "small cs-reset-go", "确认清除"), no = el("button", "small", "取消");
-      go.onclick = async () => {
-        confirming.delete(s.name);
-        if (W.busy) return fillTile(tile, s);
-        try {
-          await invoke("tomo_session_reset", { folder, name: s.name });
-          rev.clear();
-          await scan();
-          document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
-          W.status(`已重置 ${s.name}：下次从头处理`);
-        } catch (e) { W.status(`无法重置 ${s.name}：${e}`); fillTile(tile, s); }
-      };
-      no.onclick = () => { confirming.delete(s.name); fillTile(tile, s); };
-      row.append(go, no);
-      tile.append(row);
-      return;
-    }
+  // A modal question; answers true when the user confirms.
+  function ask(title, text, ok) {
+    return new Promise((resolve) => {
+      const d = el("dialog", "cs-ask");
+      d.append(el("h3", null, title), el("p", null, text));
+      const row = el("div", "cs-ask-row"), no = el("button", null, "取消"), go = el("button", "danger", ok);
+      row.append(no, go);
+      d.append(row);
+      const done = (v) => { d.close(); d.remove(); resolve(v); };
+      no.onclick = () => done(false);
+      go.onclick = () => done(true);
+      d.oncancel = (e) => { e.preventDefault(); done(false); };
+      document.body.append(d);
+      d.showModal();
+      no.focus();
+    });
+  }
+  function cardActions(row, s) {
     const purpose = unfinished(s);
     if (purpose !== undefined) {
       const b = el("button", "small cs-resume", "继续");
@@ -353,13 +368,23 @@
       row.append(b);
     }
     if (made(s)) {
-      const b = el("button", "small cs-reset", "重置");
-      b.title = "清除这个序列做出的中间结果，下次从头处理";
+      const b = el("button", "small cs-reset", "清理");
+      b.title = "删掉这个序列做出的中间结果，下次从头处理";
       b.disabled = W.busy;
-      b.onclick = () => { confirming.add(s.name); fillTile(tile, s); };
+      b.onclick = async () => {
+        if (W.busy) return;
+        if (!await ask(`清理 ${s.name}？`, "会删掉这个序列做出的校正叠层、断层图和清晰版，下次从头处理。原始数据（电影、mdoc）不会动。删掉的文件不能恢复。", "清理")) return;
+        if (W.busy) return;
+        try {
+          await invoke("tomo_session_reset", { folder, name: s.name });
+          rev.clear();
+          await scan();
+          document.dispatchEvent(new CustomEvent("tmv-folder-changed"));
+          W.status(`已清理 ${s.name}：下次从头处理`);
+        } catch (e) { W.status(`无法清理 ${s.name}：${e}`); }
+      };
       row.append(b);
     }
-    if (row.childElementCount) tile.append(row);
   }
 
   async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only } })) {
@@ -400,7 +425,7 @@
   const BINS = [1, 2, 4, 8, 16], MAX_PIXELS = 4.2e6;
   const autoBin = (s, voxel) => BINS.filter((b) => !s.size || s.size[0] * s.size[1] / (b * b) <= MAX_PIXELS || b === 16)
     .reduce((a, b) => Math.abs(Math.log(s.pixelA * b / voxel)) < Math.abs(Math.log(s.pixelA * a / voxel)) ? b : a);
-  const fmtA = (v) => v >= 10 ? v.toFixed(0) : v.toFixed(1);
+  function fmtA(v) { return v >= 10 ? v.toFixed(0) : v.toFixed(1); }
   const span = (list) => {
     if (!list.length) return "";
     const lo = Math.min(...list), hi = Math.max(...list);
@@ -848,7 +873,7 @@
     async function start(){
       retry.hidden=true;state.hidden=false;box.setAttribute('aria-busy','true');
       try {
-        state.textContent='正在准备全部断层图预览…';
+        state.textContent=S.folder?.remote?'正在服务器上把整个断层图缩小成预览，再一次下载过来（大的断层图要几十秒）…':'正在准备全部断层图预览…';
         try{await preparePreview(t.path);}catch(e){if(gen===rv.gen)W.status(`预览缓存不可用，继续读取小图：${e}`);}
         if(gen!==rv.gen)return;
         const d=await pic(t.path,null,512,gen,true);
