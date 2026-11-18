@@ -1265,12 +1265,14 @@ pub fn restore_low(mut out: Vec<f32>, even: &[f32], odd: &[f32], dims: [usize; 3
 /// and fills the wedge in one network, and returns the mean of its results
 /// for both halves, in the halves' units.
 pub fn train_halves_and_apply(dev: &Device, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, progress: impl FnMut(Progress)) -> Result<Vec<f32>> {
-    Ok(train_halves_and_apply_on(&[dev.clone()], even, odd, dims, tilts, cfg, progress)?.0)
+    Ok(train_halves_and_apply_on(dev, false, even, odd, dims, tilts, cfg, progress)?.0)
 }
 
-/// As `train_halves_and_apply`, on the cards `devs` (the primary first),
-/// with what the training reported.
-pub fn train_halves_and_apply_on(devs: &[Device], even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Vec<f32>, HalvesFit)> {
+/// As `train_halves_and_apply`, with what the training reported; with
+/// `all_cards` the result is computed on every free card (`multi_gpu`),
+/// taken only once the training is done.
+#[allow(clippy::too_many_arguments)]
+pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], cfg: &TrainConfig, mut progress: impl FnMut(Progress)) -> Result<(Vec<f32>, HalvesFit)> {
     let len = dims[0] * dims[1] * dims[2];
     if even.len() != len || odd.len() != len {
         bail!("体数据大小和尺寸不符");
@@ -1285,7 +1287,17 @@ pub fn train_halves_and_apply_on(devs: &[Device], even: &[f32], odd: &[f32], dim
     let std_vol = |v: &[f32]| Vol { n: dims, v: v.par_iter().map(|&x| if x.is_finite() { (x - mean) / std } else { 0.0 }).collect() };
     let (a, b) = (std_vol(even), std_vol(odd));
     let g = Geometry { beam: 2, tilt: 1, max_tilt: hi, min_tilt: Some(lo) };
-    let fit = train_halves_on(devs, &a, &b, &g, tilts, cfg, &mut progress)?;
+    // Trained on one card, applied on all: splitting each step's batch over
+    // two RTX 3090s made the training no faster (amax, cube 48: 0.9 h
+    // projected on two cards, 0.8 h on one) and the second card's memory
+    // grew by about 1 GB/s. TMV_SPLIT_TRAINING=1 splits it anyway.
+    let split = all_cards && std::env::var_os("TMV_SPLIT_TRAINING").is_some();
+    let mut gpus = if split { crate::multi_gpu::gpus(dev) } else { crate::multi_gpu::Gpus::one(dev) };
+    let fit = train_halves_on(&gpus.devs, &a, &b, &g, tilts, cfg, &mut progress)?;
+    if all_cards && !split {
+        gpus = crate::multi_gpu::gpus(dev);
+    }
+    let devs = &gpus.devs[..];
     let net = &fit.net;
     let it = cfg.iterations + 1;
     // One pass only: a second pass on the wedge-cut first result (as in
@@ -1760,8 +1772,12 @@ mod tests {
         let (a, b) = (half(&mut rng), half(&mut rng));
         let tilts: Vec<f32> = (-20..=20).map(|i| i as f32 * 3.0).collect();
         let cfg = TrainConfig { cube: 16, count: 6, iterations: 2, steps: 30, batch: 3, lr: 1e-3, base: 4, levels: 2, seed: 1, signal: true, validate: true, patience: 1, equivariant: 2.0, equi_from: 0.5, ..Default::default() };
-        let (out, fit) = train_halves_and_apply_on(&[dev.clone(), dev.clone()], &a, &b, truth.n, &tilts, &cfg, |_| {}).unwrap();
-        assert!(out.iter().all(|v| v.is_finite()));
+        let g = Geometry { beam: 2, tilt: 1, max_tilt: 60.0, min_tilt: Some(-60.0) };
+        let (va, vb) = (Vol { n: truth.n, v: a.clone() }, Vol { n: truth.n, v: b.clone() });
+        let fit = train_halves_on(&[dev.clone(), dev.clone()], &va, &vb, &g, &tilts, &cfg, |_| {}).unwrap();
+        let one = apply(&dev, &fit.net, &va, [0; 3], truth.n, &mut |_, _| Ok(())).unwrap();
+        let two = apply_on(&[dev.clone(), dev.clone()], &fit.net, &va, [0; 3], truth.n, &mut |_, _| Ok(())).unwrap();
+        assert!(one.iter().zip(&two).all(|(x, y)| (x - y).abs() < 1e-4));
         assert_eq!(fit.cards, 2);
         assert!(fit.val.is_some() && !fit.history.is_empty());
         let (train, held) = signal_cubes(&Vol { n: truth.n, v: a.clone() }, Some(&Vol { n: truth.n, v: b.clone() }), 16, 6, 1, true);
