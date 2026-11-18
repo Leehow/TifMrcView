@@ -43,7 +43,7 @@ impl Shared {
 /// disjoint ranges.
 enum Store {
     /// The buffer and a pointer into it taken while it was uniquely borrowed.
-    Ram(Vec<f32>, Shared),
+    Ram { _keep: Vec<f32>, ptr: Shared },
     File(std::fs::File, std::path::PathBuf),
 }
 
@@ -55,7 +55,7 @@ impl Store {
             }
         };
         match self {
-            Store::Ram(_, p) => {
+            Store::Ram { ptr: p, .. } => {
                 // SAFETY: in bounds; no task writes the range another reads.
                 let v = unsafe { std::slice::from_raw_parts(p.at(2 * at), 2 * re.len()) };
                 pairs(&mut v.chunks_exact(2).map(|c| (c[0], c[1])), re, im)
@@ -73,7 +73,7 @@ impl Store {
     /// SAFETY (Ram): concurrent callers write disjoint ranges.
     fn write(&self, at: usize, re: &[f32], im: &[f32]) -> std::io::Result<()> {
         match self {
-            Store::Ram(_, out) => {
+            Store::Ram { ptr: out, .. } => {
                 for (i, (&r, &m)) in re.iter().zip(im).enumerate() {
                     unsafe {
                         *out.at(2 * (at + i)) = r;
@@ -162,7 +162,7 @@ fn cpu_in(vol: &mut [f32], shape: [usize; 3], pixel_a: f64, defocus_a: f64, opti
     let store = if in_memory {
         let mut v = vec![0f32; 2 * z * ny * hx];
         let p = Shared(v.as_mut_ptr());
-        Store::Ram(v, p)
+        Store::Ram { _keep: v, ptr: p }
     } else {
         let path = scratch.join(format!(".deconv-{}-{}.spectrum", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
         let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
@@ -173,7 +173,11 @@ fn cpu_in(vol: &mut [f32], shape: [usize; 3], pixel_a: f64, defocus_a: f64, opti
     // Rows of y per block in pass 2, so that all blocks in flight fit.
     let budget = if free == 0 { 4u64 << 30 } else if in_memory { (free - spectrum - RESERVE.min(free - spectrum)).max(256 << 20) } else { free.saturating_sub(RESERVE).max(256 << 20) };
     let per_row = (z * hx * 8 + 2 * nz * 4) as u64;
-    let rows = ((budget / threads as u64 / per_row.max(1)) as usize).clamp(1, ny.div_ceil(threads).max(1));
+    // Blocks only need to be big enough for long reads: at most 16 MB each
+    // in memory and 64 MB through the file.
+    let cap = if in_memory { 16u64 << 20 } else { 64u64 << 20 };
+    let rows = ((budget / threads as u64).min(cap) / per_row.max(1)) as usize;
+    let rows = rows.clamp(1, ny.div_ceil(threads).max(1));
 
     let mean = (vol.par_iter().map(|&v| v as f64).sum::<f64>() / vol.len() as f64) as f32;
     let (fx, fy, fz) = (crate::fft::Fft::new(nx), (ny >= 2).then(|| crate::fft::Fft::new(ny)), crate::fft::Fft::new(nz));
