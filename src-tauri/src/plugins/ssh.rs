@@ -1,6 +1,6 @@
 //! Read-only image access over SFTP. Remote writes are limited to the bundled
 //! preview helper in the user's cache; passwords and key contents never persist.
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -30,6 +30,9 @@ pub struct Ssh {
 
 struct Connection {
     preview_helper: Mutex<Option<PathBuf>>,
+    /// How this connection logged in, kept in memory only, so a connection the server
+    /// dropped (or that refuses new channels) is opened again without asking.
+    login: Mutex<Option<Value>>,
     session: Mutex<Session>,
     host: String,
     port: u16,
@@ -98,6 +101,80 @@ fn cache_path(root: &Path, remote: &Path) -> Result<PathBuf> {
         .join(name))
 }
 
+/// Logs `session` in with the user's choice (password, key file or agent).
+fn login(session: &Session, args: &Value) -> Result<()> {
+    let username = text(args, "username")?;
+    match args["authMethod"].as_str().unwrap_or("password") {
+        "password" => session
+            .userauth_password(username, text(args, "password")?)
+            .context("身份验证失败，请检查用户名、密码以及服务器是否允许密码登录")?,
+        "keyFile" => {
+            let value = text(args, "keyPath")?;
+            let path = if let Some(relative) = value.strip_prefix("~/") {
+                dirs::home_dir().context("无法定位主目录")?.join(relative)
+            } else {
+                PathBuf::from(value)
+            };
+            let metadata = path
+                .metadata()
+                .context("无法读取私钥，请重新选择本地私钥文件")?;
+            if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+                bail!("请选择有效的 SSH 私钥文件（小于 1 MB）");
+            }
+            let passphrase = args["passphrase"].as_str().filter(|s| !s.is_empty());
+            if let Err(error) =
+                session.userauth_pubkey_file(username, None, &path, passphrase)
+            {
+                // Use only the unlocked agent identity matching the selected key.
+                let from_agent = (|| -> Result<()> {
+                    if passphrase.is_some() {
+                        return Err(error.into());
+                    }
+                    let mut public_path = path.as_os_str().to_os_string();
+                    public_path.push(".pub");
+                    let public = std::fs::read_to_string(PathBuf::from(public_path))?;
+                    let encoded =
+                        public.split_whitespace().nth(1).context("公钥格式无效")?;
+                    let blob = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+                    let mut agent = session.agent()?;
+                    agent.connect()?;
+                    agent.list_identities()?;
+                    let identity = agent
+                        .identities()?
+                        .into_iter()
+                        .find(|key| key.blob() == blob)
+                        .context("选中的密钥尚未在本机解锁")?;
+                    agent.userauth(username, &identity)?;
+                    Ok(())
+                })();
+                from_agent.context("密钥登录失败：请检查私钥和用户名；加密私钥请填写口令，或先在本机解锁对应密钥")?;
+            }
+        }
+        _ => bail!("不支持的 SSH 登录方式"),
+    }
+    Ok(())
+}
+
+/// A transport failure of the connection itself, as opposed to a refused request.
+fn broken(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        if let Some(e) = c.downcast_ref::<ssh2::Error>() {
+            // CHANNEL_FAILURE, SOCKET_SEND, SOCKET_DISCONNECT, SOCKET_RECV
+            return matches!(e.code(), ssh2::ErrorCode::Session(-21 | -7 | -13 | -43));
+        }
+        c.downcast_ref::<std::io::Error>().is_some_and(|e| {
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        })
+    })
+}
+
 impl Ssh {
     fn trust_path(&self) -> Result<PathBuf> {
         #[cfg(test)]
@@ -144,7 +221,7 @@ impl Ssh {
                 json!({"done": conn.done.load(Ordering::Relaxed), "total": conn.total.load(Ordering::Relaxed)}),
             );
         }
-        let session = conn.session.lock().unwrap();
+        let mut session = conn.session.lock().unwrap();
         if conn.closed.load(Ordering::Relaxed) {
             bail!("连接已断开");
         }
@@ -155,55 +232,7 @@ impl Ssh {
             if conn.needs_trust && args["trust"] != true {
                 bail!("请先确认服务器指纹");
             }
-            let username = text(&args, "username")?;
-            match args["authMethod"].as_str().unwrap_or("password") {
-                "password" => session
-                    .userauth_password(username, text(&args, "password")?)
-                    .context("身份验证失败，请检查用户名、密码以及服务器是否允许密码登录")?,
-                "keyFile" => {
-                    let value = text(&args, "keyPath")?;
-                    let path = if let Some(relative) = value.strip_prefix("~/") {
-                        dirs::home_dir().context("无法定位主目录")?.join(relative)
-                    } else {
-                        PathBuf::from(value)
-                    };
-                    let metadata = path
-                        .metadata()
-                        .context("无法读取私钥，请重新选择本地私钥文件")?;
-                    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
-                        bail!("请选择有效的 SSH 私钥文件（小于 1 MB）");
-                    }
-                    let passphrase = args["passphrase"].as_str().filter(|s| !s.is_empty());
-                    if let Err(error) =
-                        session.userauth_pubkey_file(username, None, &path, passphrase)
-                    {
-                        // Use only the unlocked agent identity matching the selected key.
-                        let from_agent = (|| -> Result<()> {
-                            if passphrase.is_some() {
-                                return Err(error.into());
-                            }
-                            let mut public_path = path.as_os_str().to_os_string();
-                            public_path.push(".pub");
-                            let public = std::fs::read_to_string(PathBuf::from(public_path))?;
-                            let encoded =
-                                public.split_whitespace().nth(1).context("公钥格式无效")?;
-                            let blob = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-                            let mut agent = session.agent()?;
-                            agent.connect()?;
-                            agent.list_identities()?;
-                            let identity = agent
-                                .identities()?
-                                .into_iter()
-                                .find(|key| key.blob() == blob)
-                                .context("选中的密钥尚未在本机解锁")?;
-                            agent.userauth(username, &identity)?;
-                            Ok(())
-                        })();
-                        from_agent.context("密钥登录失败：请检查私钥和用户名；加密私钥请填写口令，或先在本机解锁对应密钥")?;
-                    }
-                }
-                _ => bail!("不支持的 SSH 登录方式"),
-            }
+            login(&session, &args)?;
             if !session.authenticated() {
                 bail!("服务器未接受身份验证");
             }
@@ -237,6 +266,7 @@ impl Ssh {
                 }
             }
             conn.authenticated.store(true, Ordering::Relaxed);
+            *conn.login.lock().unwrap() = Some(args.clone());
             return Ok(
                 json!({"path": home.to_str().context("远程主目录不是 UTF-8")?, "fingerprint": conn.fingerprint}),
             );
@@ -244,13 +274,39 @@ impl Ssh {
         if !conn.authenticated.load(Ordering::Relaxed) {
             bail!("请先登录");
         }
-        if method == "processing" { return processing::call(&session, &args); }
+        let first = self.run(&conn, &session, method, &args);
+        match first {
+            Err(e) if broken(&e) && conn.login.lock().unwrap().is_some() => {
+                // The server dropped this connection or refuses new channels on it
+                // (sshd restarted, too many sessions, a tunnel that came back): open a
+                // fresh one to the same, already trusted server and try once more.
+                let fresh = self
+                    .reopen(&conn)
+                    .with_context(|| format!("与服务器的连接断了，自动重连也没成功（{e}）。请检查服务器或网络，然后重新连接"))?;
+                *session = fresh;
+                self.run(&conn, &session, method, &args)
+            }
+            other => other,
+        }
+    }
+
+    fn reopen(&self, conn: &Connection) -> Result<Session> {
+        let (session, fingerprint, _) = self.open(&conn.host, conn.port)?;
+        ensure!(fingerprint == conn.fingerprint, "服务器密钥变了，已停止自动重连");
+        let args = conn.login.lock().unwrap().clone().context("请重新连接")?;
+        login(&session, &args)?;
+        ensure!(session.authenticated(), "服务器未接受身份验证");
+        Ok(session)
+    }
+
+    fn run(&self, conn: &Connection, session: &Session, method: &str, args: &Value) -> Result<Value> {
+        if method == "processing" { return processing::call(session, args); }
         if method == "thumbnail" {
             return preview::render(
-                &session,
+                session,
                 &mut conn.preview_helper.lock().unwrap(),
                 &conn.cache,
-                &args,
+                args,
             );
         }
         if conn.cancelled.load(Ordering::Relaxed)
@@ -260,11 +316,11 @@ impl Ssh {
         }
         let sftp = session.sftp().context("无法打开 SFTP，请重新连接")?;
         let remote = sftp
-            .realpath(Path::new(text(&args, "path")?))
+            .realpath(Path::new(text(args, "path")?))
             .context("无法访问路径，请检查路径及读取权限")?;
         match method {
             "resolveMovie" => {
-                let name = text(&args, "movie")?
+                let name = text(args, "movie")?
                     .rsplit(['/', '\\'])
                     .next()
                     .context("缺少电影文件名")?;
@@ -409,7 +465,7 @@ impl Ssh {
                     &conn
                         .cache
                         .join(format!("{}-{}", size, before.mtime.unwrap_or(0))),
-                    Path::new(text(&args, "path")?),
+                    Path::new(text(args, "path")?),
                 )?;
                 let stamp = local.with_extension("ssh-stamp");
                 let version = json!({"size": size, "modified": before.mtime});
@@ -471,29 +527,8 @@ impl Ssh {
         }
     }
 
-    fn probe(&self, args: &Value) -> Result<Value> {
-        let host = text(args, "host")?.trim();
-        if host.is_empty()
-            || host.len() > 253
-            || host.chars().any(char::is_whitespace)
-            || host.contains(['/', '\\', '@'])
-        {
-            bail!("请输入主机名或 IP 地址，端口单独填写");
-        }
-        let port = args["port"]
-            .as_u64()
-            .filter(|&p| p > 0 && p <= 65535)
-            .context("端口应在 1–65535 之间")? as u16;
-        {
-            let mut map = self.connections.lock().unwrap();
-            map.retain(|_, c| {
-                c.authenticated.load(Ordering::Relaxed)
-                    || c.created.elapsed() < Duration::from_secs(120)
-            });
-            if map.len() >= 8 {
-                bail!("连接数已达上限，请先断开其他连接");
-            }
-        }
+    /// A handshaken session to `host:port` whose key is checked against the trusted hosts.
+    fn open(&self, host: &str, port: u16) -> Result<(Session, String, bool)> {
         let addresses: Vec<_> = (host, port)
             .to_socket_addrs()
             .context("无法解析主机地址")?
@@ -548,6 +583,33 @@ impl Ssh {
                 "服务器密钥与已保存记录不一致，已停止连接。请向管理员核对服务器指纹：{fingerprint}"
             ),
         };
+        Ok((session, fingerprint, needs_trust))
+    }
+
+    fn probe(&self, args: &Value) -> Result<Value> {
+        let host = text(args, "host")?.trim();
+        if host.is_empty()
+            || host.len() > 253
+            || host.chars().any(char::is_whitespace)
+            || host.contains(['/', '\\', '@'])
+        {
+            bail!("请输入主机名或 IP 地址，端口单独填写");
+        }
+        let port = args["port"]
+            .as_u64()
+            .filter(|&p| p > 0 && p <= 65535)
+            .context("端口应在 1–65535 之间")? as u16;
+        {
+            let mut map = self.connections.lock().unwrap();
+            map.retain(|_, c| {
+                c.authenticated.load(Ordering::Relaxed)
+                    || c.created.elapsed() < Duration::from_secs(120)
+            });
+            if map.len() >= 8 {
+                bail!("连接数已达上限，请先断开其他连接");
+            }
+        }
+        let (session, fingerprint, needs_trust) = self.open(host, port)?;
         let serial = self.sequence.fetch_add(1, Ordering::Relaxed);
         let id = digest(
             format!(
@@ -562,6 +624,7 @@ impl Ssh {
             id.clone(),
             Arc::new(Connection {
                 preview_helper: Mutex::new(None),
+                login: Mutex::new(None),
                 session: Mutex::new(session),
                 host: host.into(),
                 port,
