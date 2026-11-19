@@ -49,6 +49,22 @@ USAGE
   tmv ctf <folder>               CTF of every micrograph (movies are motion corrected)
         [--pixel Å] [--kv kV] [--dose e/Å²] [--gain file] [--fresh]
   tmv denoise <image|stack>      Self-supervised denoising → <name>_denoised.mrc
+  tmv look <image> [--z N] [--region x,y,w,h] [--size px]
+                                 A PNG of slice N (default: the middle one) for an agent
+                                 to read coordinates from: contrast stretched, label
+                                 layers outlined, a grid with image-pixel numbers
+  tmv labels <image> --marks marks.json
+                                 Label layers from marks given as numbers: a point
+                                 [x,y,z] on an object is a click of the smart
+                                 selection tool, polygons are filled, strokes painted
+                                 → <image>.labels.tif, the layers the app's Labels brush
+                                 shows. marks.json: {"layers": [{"name": "膜",
+                                 "color": [r,g,b], "points": [[x,y,z],…], "size": px,
+                                 "polygons": [{"z": z, "pts": [[x,y],…]}],
+                                 "strokes": [{"z": z, "pts": […], "radius": px}],
+                                 "erase": false}], "masks": ["own_mask.tif"]}
+                                 (pixels, z from 0; size: about how large the
+                                 objects are; masks: whole masks made elsewhere)
   tmv info                       Version, GPU and models found
   tmv app [action] [key=value …] Drive the open TifMrcView Pro window: the user
                                  watches each step (tmv app --help)
@@ -186,7 +202,7 @@ pub fn main(args: Vec<String>) -> i32 {
     }
     let started = Instant::now();
     // Held until this job ends.
-    let _turn = if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") { gpu_turn() } else { None };
+    let _turn = if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise" | "labels") { gpu_turn() } else { None };
     let result = match cmd {
         "run" => run(&opts),
         "tomo" => tomo(&opts),
@@ -195,6 +211,8 @@ pub fn main(args: Vec<String>) -> i32 {
         "spa" => spa(&opts),
         "ctf" => ctf(&opts),
         "denoise" => denoise(&opts),
+        "labels" => labels(&opts),
+        "look" => look(&opts),
         "info" => info(),
         "setup" => setup(&opts),
         other => Err(anyhow!("unknown command `{other}` (see tmv --help)")),
@@ -1435,6 +1453,52 @@ fn denoise(o: &Opts) -> Result<Value> {
 }
 
 /// `tmv info`: what this server offers.
+/// `tmv look IMAGE`: look.rs, with the image's label layers when it has any.
+fn look(o: &Opts) -> Result<Value> {
+    let input = o.input()?;
+    let img = open_image(input)?;
+    let info = img.info();
+    let z = match o.get("z") { Some(z) => z.parse::<usize>().with_context(|| format!("--z: `{z}` is not a slice number (0, 1, …)"))?, None => info.size_z / 2 };
+    let region = match o.get("region") {
+        Some(r) => {
+            let v: Vec<usize> = r.split(',').map(|x| x.trim().parse::<f64>().map(|f| f.max(0.0) as usize)).collect::<std::result::Result<_, _>>().context("--region x,y,w,h")?;
+            anyhow::ensure!(v.len() == 4, "--region x,y,w,h");
+            Some([v[0], v[1], v[2], v[3]])
+        }
+        None => None,
+    };
+    let size = o.number("size")?.map(|s| s as usize).unwrap_or(1024);
+    let path = crate::labels::labels_path(&info.path, info.series_index);
+    let labels = if Path::new(&path).exists() { crate::labels::Labels::load(Path::new(&path), info.width, info.height, info.size_z).ok() } else { None };
+    let (png, mut meta) = crate::look::look(&img, labels.as_ref(), z, region, size)?;
+    let out = match o.get("out") { Some(p) => PathBuf::from(p), None => crate::look::out_path(&info.name, z) };
+    std::fs::write(&out, png)?;
+    meta["png"] = json!(out);
+    meta["open"] = json!(info.path);
+    Ok(meta)
+}
+
+/// `tmv labels IMAGE --marks marks.json`: label_marks.rs on the image's label map.
+fn labels(o: &Opts) -> Result<Value> {
+    let input = o.input()?;
+    let file = o.get("marks").context("--marks marks.json is needed (see tmv labels --help)")?;
+    let marks: crate::label_marks::Marks = serde_json::from_str(&std::fs::read_to_string(file).with_context(|| format!("cannot read {file}"))?)
+        .with_context(|| format!("{file} is not marks JSON"))?;
+    let img = open_image(input)?;
+    let info = img.info();
+    let path = crate::labels::labels_path(&info.path, info.series_index);
+    let mut l = if Path::new(&path).exists() {
+        crate::labels::Labels::load(Path::new(&path), info.width, info.height, info.size_z)?
+    } else {
+        crate::labels::Labels::new(info.width, info.height, info.size_z)
+    };
+    let picks = marks.layers.iter().any(|m| !m.points.is_empty());
+    let sam = if picks { sam().unwrap_or_default() } else { crate::sam::Sam::default() };
+    let (zs, layers) = crate::label_marks::apply(&mut l, &img, &sam, 1, &marks)?;
+    l.save(Path::new(&path))?;
+    Ok(json!({"labels": path, "open": info.path, "layers": layers, "slicesChanged": zs.len()}))
+}
+
 fn info() -> Result<Value> {
     let (gpu, card) = match gpu() {
         Some((dev, name)) => (*name, crate::ctf_gpu::guarded(|| dev.identity().map(|i| i.name)).ok().flatten()),

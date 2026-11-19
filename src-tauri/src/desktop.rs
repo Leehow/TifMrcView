@@ -3851,6 +3851,8 @@ pub fn run() {
             #[cfg(feature = "pro")] agent_reply,
             #[cfg(feature = "pro")] agent_info,
             #[cfg(feature = "pro")] agent_install_tmv,
+            #[cfg(feature = "pro")] labels_marks,
+            #[cfg(feature = "pro")] agent_look,
             #[cfg(feature = "pro")] close_document,
             #[cfg(feature = "pro")] open_layer_source,
             #[cfg(feature = "pro")] read_merge_project,

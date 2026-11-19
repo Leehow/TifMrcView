@@ -54,9 +54,46 @@ series; `all=true` ticks all; `for=survey|display`), `tmv app sta`,
 `tmv app denoise path=…`, `tmv app info`, `tmv app setup sam=true`,
 `tmv app run path=…`. Other tools open with `tmv app workspace name=<id>`
 (`help` lists the ids) and are then driven with `ui` / `click` / `set`.
-Label layers: `tmv app labels`, `tmv app label_set label=2 name=膜 hidden=false`,
-`tmv app label_paint label=1 z=40 polygon=[[x,y],…]` (image pixels;
-undoable with the window's undo).
+Label layers: `tmv app labels` lists them, `tmv app label_set label=2
+name=膜 hidden=false` renames or hides one.
+
+## Segmenting by looking (you mark, the app makes the layers)
+
+You can often see structures better than an automatic tool. The app gives
+you a clear picture with coordinates and turns your marks into the same
+label layers its Labels brush paints (`<image>.labels.tif`), which the user
+sees at once, can undo in one step, and STA / SPA / the 3D view use.
+
+1. **Look.** `tmv app look z=40` (or headless `tmv look IMAGE --z 40`): a
+   PNG of the slice, contrast stretched, existing layers outlined in colour,
+   a yellow grid with image-pixel numbers (x along the top, y down the
+   left). Start with the whole slice, then zoom where it matters:
+   `look z=40 region=[200,120,160,160]` (x, y, width, height). Read
+   coordinates off the grid; the JSON says how (`scale`, `region`).
+2. **Mark**, one layer per kind of structure, named in the user's words:
+   ```sh
+   tmv app labels layers='[{"name":"线粒体","points":[[260,180,40],[410,95,40]],"size":60}]'
+   tmv app labels layers=@marks.json      # same format as tmv labels --marks
+   ```
+   - `points` `[x, y, z]`: one point well inside each compact object (a
+     vesicle, a particle, a mitochondrion); the smart selection tool finds
+     its outline. Give `size` ≈ the object's diameter in pixels.
+   - `polygons` `{"z", "pts": [[x,y],…]}`: an outline you trace yourself,
+     8–40 points along the boundary, for objects the picker gets wrong.
+   - `strokes` `{"z", "pts", "radius"}`: thin things (membranes,
+     filaments): points along the centre line, `radius` ≈ half the
+     thickness in pixels.
+   - `"erase": true` on a layer takes those marks away (fix mistakes).
+   - `"masks": ["mask.tif"]` beside `"layers"`: a whole mask you computed
+     yourself (same size as the image, or a whole fraction) becomes layers.
+3. **Check.** `look` again: your layers are outlined on the picture. Fix
+   with more marks or `erase`, then go on to the next slices (marking every
+   few slices and asking the user is better than guessing a whole volume).
+4. **Say what you marked** and let the user correct it; they can paint over
+   your layers with the brush.
+
+Headless, the same: `tmv look IMAGE …`, `tmv labels IMAGE --marks
+marks.json` (writes `<image>.labels.tif`, the layers the app opens).
 
 Rules, as in the app: never invent processing parameters (the app chooses
 them); what to average or which particle kind to keep is the user's choice:

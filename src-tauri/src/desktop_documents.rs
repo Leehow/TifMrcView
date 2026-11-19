@@ -120,3 +120,37 @@ fn agent_info() -> serde_json::Value {
 fn agent_install_tmv() -> CmdResult<String> {
     crate::app_control::install_tmv_link().map(|p| p.to_string_lossy().into_owned()).map_err(err)
 }
+
+/// Paints marks given as numbers into the open image's labels (label_marks.rs); undoable.
+#[tauri::command]
+async fn labels_marks(app: AppHandle, token: u64, marks: crate::label_marks::Marks) -> CmdResult<serde_json::Value> {
+    let state = app.state::<AppState>();
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let mut e = e.lock().unwrap();
+        let (zs, layers) = crate::label_marks::apply(&mut e.labels, &img, &sam, token, &marks)?;
+        let st = labels_state(&e, zs);
+        Ok(serde_json::json!({"state": st, "layers": layers}))
+    })
+    .await
+}
+
+/// A picture of slice `z` of the open image with a coordinate grid and its
+/// label layers, for an agent (look.rs, the same as `tmv look`); the PNG's path.
+#[tauri::command]
+async fn agent_look(state: State<'_, AppState>, token: u64, z: usize, region: Option<[usize; 4]>, size: Option<usize>) -> CmdResult<serde_json::Value> {
+    let img = current(&state, token)?;
+    let labels = labels_entry(&state, token).ok();
+    blocking(move || {
+        let guard = labels.as_ref().map(|e| e.lock().unwrap());
+        let (png, mut meta) = crate::look::look(&img, guard.as_ref().map(|e| &e.labels), z, region, size.unwrap_or(1024))?;
+        let out = crate::look::out_path(&img.info().name, z);
+        std::fs::write(&out, png)?;
+        meta["png"] = serde_json::json!(out);
+        Ok(meta)
+    })
+    .await
+}

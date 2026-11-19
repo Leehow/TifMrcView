@@ -205,7 +205,8 @@ USAGE
   tmv app <action> [key=value …] [--json '{…}'] [--timeout S] [--no-launch]
 
   Values are read as JSON when they parse (z=12, on=true, pts=[[1,2],[3,4]]),
-  else as text (path=/data/ts01.mrc, text=找候选). The app is started when it
+  else as text (path=/data/ts01.mrc, text=找候选); key=@file.json reads a JSON
+  file (tmv app labels layers=@marks.json). The app is started when it
   is not running (--no-launch: fail instead). The first call asks the user in
   the window to allow the agent. The answer is one JSON object on stdout;
   exit status 0 when "ok" is true, else 1.
@@ -215,6 +216,12 @@ USAGE
 "#;
 
 fn parse_value(v: &str) -> Value {
+    // key=@file.json reads the value from a JSON file (marks for `tmv app labels`).
+    if let Some(Ok(text)) = v.strip_prefix('@').map(std::fs::read_to_string) {
+        if let Ok(j) = serde_json::from_str(&text) {
+            return j;
+        }
+    }
     serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()))
 }
 
@@ -680,6 +687,10 @@ mod tests {
         assert_eq!(parse_value("[[1,2]]"), json!([[1, 2]]));
         assert_eq!(parse_value("/data/ts01.mrc"), json!("/data/ts01.mrc"));
         assert_eq!(parse_value("找候选"), json!("找候选"));
+        let f = std::env::temp_dir().join(format!("tmv-marks-{}.json", std::process::id()));
+        std::fs::write(&f, r#"{"layers":[]}"#).unwrap();
+        assert_eq!(parse_value(&format!("@{}", f.display())), json!({"layers": []}));
+        let _ = std::fs::remove_file(f);
     }
 
     #[cfg(feature = "desktop")]

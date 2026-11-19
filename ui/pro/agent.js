@@ -324,6 +324,25 @@
     }
   }
 
+  function labelList() {
+    const L = Pro.labels || fail("这个窗口没有标签工具");
+    return { ...L.state(), labels: L.used().map((k) => ({ label: k, name: L.nameOf(k), color: L.colorOf(k), pixels: L.count(k), hidden: L.hidden(k) })) };
+  }
+
+  async function labelMarks(a) {
+    const L = Pro.labels || fail("这个窗口没有标签工具");
+    if (!S.info) fail("没有打开的图像");
+    const marks = Array.isArray(a.layers) ? { layers: a.layers } : a.layers?.layers ? a.layers : fail("layers 要是数组，或 marks.json 里的 {layers}");
+    if (S.tool !== "label") setTool("label");
+    for (let i = 0; i < 50 && !L.state().ready; i++) await sleep(100);
+    const first = marks.layers.map((m) => m.points?.[0]?.[2] ?? m.polygons?.[0]?.z ?? m.strokes?.[0]?.z).find((z) => z != null);
+    if (first != null && first !== S.z) setZ(Math.round(first));
+    doing(`按坐标画 ${marks.layers.length} 个标签图层`);
+    const r = await L.marks(marks);
+    if (!r) fail(L.state().error || "标签现在不能画（图像还在加载，或不在 XY 视图）");
+    return { made: r.layers, ...labelList() };
+  }
+
   const needPath = async (a) => { if (a.path) await open(a.path); if (!S.info) fail("先打开数据（给 path）"); };
 
   // name: {args, desc, run(args, call)}; `help` lists them.
@@ -395,15 +414,26 @@
       if (v3 && visible(v3)) try { out.view3d = v3.toDataURL("image/png"); } catch (_) {}
       return out;
     } },
+    look: { args: "[z=N] [region=[x,y,w,h]] [size=1024]", desc: "看清一层：对比度拉开、标签图层描边、带图像像素坐标网格的 PNG（对应 tmv look）；先整体看，再用 region 放大局部读坐标，再用 labels 标记", run: async (a) => {
+      if (!S.info) fail("没有打开的图像");
+      const z = a.z ?? S.z;
+      if (z !== S.z) setZ(z);
+      doing(`看第 ${z} 层${a.region ? ` 的 [${a.region.join(", ")}]` : ""}`);
+      // Show the user which part the agent is looking at.
+      if (a.region) {
+        const [x, y, w, h] = a.region;
+        const box = (g) => { const [x0, y0] = toScreen(x, y), [x1, y1] = toScreen(x + w, y + h); g.save(); g.strokeStyle = "#4c8dff"; g.lineWidth = 2; g.setLineDash([6, 4]); g.strokeRect(x0, y0, x1 - x0, y1 - y0); g.restore(); };
+        ext.overlays.push(box); draw();
+        setTimeout(() => { const i = ext.overlays.indexOf(box); if (i >= 0) ext.overlays.splice(i, 1); draw(); }, 6000);
+      }
+      return await invoke("agent_look", { token: S.token, z, region: a.region || null, size: a.size || null });
+    } },
     workspace: { args: "name=<features 里的 id> [close=true]", desc: "打开（或关闭）一个工具面板，例如 cryoet 用 tomo、spa、sta、denoise、align、wedge、volume、figure", run: async (a) => {
       const f = await workspace(a.name, a.close === true);
       const panel = (f.ui.ids || []).find((id) => $(id) && visible($(id)));
       return { feature: f.id, panels: openPanels(), controls: panel ? await snapshotOf(panel) : [] };
     } },
-    labels: { args: "", desc: "标签图层：每个标签的编号、名字、颜色、像素数、是否隐藏，当前标签和工具", run: () => {
-      const L = Pro.labels || fail("这个窗口没有标签工具");
-      return { ...L.state(), labels: L.used().map((k) => ({ label: k, name: L.nameOf(k), color: L.colorOf(k), pixels: L.count(k), hidden: L.hidden(k) })) };
-    } },
+    labels: { args: "[layers=[{name, color, points:[[x,y,z],…], size, polygons:[{z,pts}], strokes:[{z,pts,radius}], erase}] 或 layers=@marks.json]", desc: "标签图层：不给参数时列出每层的编号、名字、颜色、像素数；给 layers 时按坐标做图层（对应 tmv labels）：每个点像智能选择点一下选出物体，polygons 填满，strokes 画线，一步可撤销", run: (a) => (a && a.layers ? labelMarks(a) : labelList()) },
     label_set: { args: "label=N [name=…] [color=[r,g,b]] [hidden=true|false] [active=true]", desc: "改标签的名字、颜色、显示，或设为当前标签", run: async (a) => {
       const L = Pro.labels || fail("这个窗口没有标签工具");
       if (!(a.label > 0)) fail("要给 label（从 1 起）");
@@ -412,7 +442,7 @@
       doing(`标签 ${a.label}${patch.name ? ` 叫「${patch.name}」` : ""}`);
       if (Object.keys(patch).length) await L.setMaterial(a.label, patch);
       if (a.active) L.setActive(a.label);
-      return ACTIONS.labels.run();
+      return labelList();
     } },
     label_paint: { args: "label=N z=N polygon=[[x,y],…] | stroke=[[x,y],…] radius=px [erase=true]", desc: "在第 z 层画标签（图像像素坐标）：polygon 填满多边形，stroke 沿线画；能撤销", run: async (a) => {
       const L = Pro.labels || fail("这个窗口没有标签工具");
@@ -427,7 +457,7 @@
       const op = a.polygon ? { kind: "polygon", z, pts, label, guard: 0 } : { kind: "stroke", z, pts, radius: a.radius || 6, label, guard: 0 };
       const st = await L.edit(op);
       if (!st) fail(L.state().error || "标签现在不能画（图像还在加载，或不在 XY 视图）");
-      return ACTIONS.labels.run();
+      return labelList();
     } },
 
     // The `tmv` commands, done in the window (features.js: app = cli).

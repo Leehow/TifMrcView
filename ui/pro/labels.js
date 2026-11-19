@@ -2558,5 +2558,7 @@
     setActive: (label) => { L.active = label; syncPanel(); renderList(); draw(); },
     /** One undoable edit of labels.rs, as the tools send it ({kind: "polygon"|"stroke"|…}); resolves to the new state or undefined. */
     edit: (op) => (ready() ? edit(op) : Promise.resolve(undefined)),
+    /** Marks given as numbers → label layers (label_marks.rs), one undo step; resolves to {state, layers}. */
+    marks: (marks) => (ready() ? editWith("labels_marks", { token: L.token, marks }) : Promise.resolve(undefined)),
   };
 })();
