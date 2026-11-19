@@ -1171,7 +1171,7 @@ pub fn train_halves_on(devs: &[Device], a: &Vol, b: &Vol, g: &Geometry, tilts: &
 /// the halves networks below WBP at |k| 0.02–0.05). Beam on Z, tilt axis
 /// on Y; the filter is a Gaussian along Y times one in XZ, cut to the
 /// measured angles, so each XZ plane is filtered in 2D.
-pub fn restore_low<B: std::ops::DerefMut<Target = [f32]> + Sync>(mut out: B, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> B {
+pub fn restore_low<B: std::ops::DerefMut<Target = [f32]> + Sync + crate::bigbuf::Trim>(mut out: B, even: &[f32], odd: &[f32], dims: [usize; 3], tilts: &[f32], half: f32) -> B {
     let [w, h, d] = dims;
     let (lo, hi) = tilts.iter().fold((f32::MAX, f32::MIN), |(l, h), &t| (l.min(t), h.max(t)));
     let (lo, hi) = (lo as f64 - 1e-6, hi as f64 + 1e-6);
@@ -1198,6 +1198,8 @@ pub fn restore_low<B: std::ops::DerefMut<Target = [f32]> + Sync>(mut out: B, eve
             }
             if wsum > 0.0 { acc / wsum } else { 0.0 }
         });
+    along.trim();
+    out.trim();
     let pad = (3.0 * sx).ceil() as usize;
     let (px, pz) = ((w + pad).next_power_of_two(), (d + pad).next_power_of_two());
     let f = |i: usize, n: usize| (if i <= n / 2 { i as f64 } else { i as f64 - n as f64 }) / n as f64;
@@ -1260,6 +1262,8 @@ pub fn restore_low<B: std::ops::DerefMut<Target = [f32]> + Sync>(mut out: B, eve
             }
         }
     });
+    out.trim();
+    along.trim();
     }
     out
 }
@@ -1324,7 +1328,10 @@ pub fn train_halves_and_apply_on(dev: &Device, all_cards: bool, even: &[f32], od
         drop(vol);
         match out.as_mut() {
             None => out = Some(r),
-            Some(o) => o.par_iter_mut().zip(&r[..]).for_each(|(x, y)| *x = 0.5 * (*x + y) * std + mean),
+            Some(o) => {
+                o.par_iter_mut().zip(&r[..]).for_each(|(x, y)| *x = 0.5 * (*x + y) * std + mean);
+                o.trim();
+            }
         }
     }
     let out = out.expect("two halves");
@@ -1417,11 +1424,19 @@ pub fn apply_buf(devs: &[Device], net: &Net, vol: &Vol, origin: [usize; 3], size
                 }
             }
             done += 1;
+            // Tiles go along z, so what lies behind is finished: written to
+            // the disk and let go when the sums are in scratch files.
+            if done % 32 == 0 {
+                acc.trim();
+                wsum.trim();
+                vol.v.trim();
+            }
             tick(done, total)
         },
     )?;
     acc.par_iter_mut().zip(&wsum[..]).for_each(|(a, &w)| *a /= w.max(1e-12));
     drop(wsum);
+    acc.trim();
     Ok(acc)
 }
 
