@@ -191,6 +191,7 @@
       <input type="range" id="lab-op" min="0.05" max="1" step="0.05" title="标签的不透明度" aria-label="标签的不透明度" />
       <button class="ll-btn" id="lab-show" title="显示 / 隐藏所有标签"></button>
       <button class="ll-btn" id="lab-new" title="新标签：之后选出来的东西放进一个新的标签">＋</button>
+      <button class="ll-btn" id="lab-import" title="导入别的软件做的 mask（IMOD、membrain-seg、Amira、Fiji 等导出的 MRC / TIFF / PNG）：整数标签图每个值一个标签，概率图取一半以上；可以是图像大小的整数分之一">导入</button>
     </div>
     <div id="lab-list" role="list" aria-label="标签"></div>`;
   if ($("merge-list")) $("merge-list").before(layersBox);
@@ -2438,6 +2439,17 @@
     if (!(L.counts[L.active] > 0)) return toast("先用画笔或套索隔几层画出当前标签的轮廓");
     const st = await edit({ kind: "interpolate", label: L.active, guard: L.guard ? L.active : 0 });
     if (st) toast(st.zs.length ? `补齐了 ${st.zs.length} 层` : "没有要补的层：当前标签画过的层之间没有空层");
+  });
+  $("lab-import").addEventListener("click", async () => {
+    if (!L.token || L.busy) return;
+    const path = await invoke("pick_file").catch(() => null);
+    if (!path) return;
+    const res = await editWith("labels_import", { token: L.token, path });
+    if (res?.imported) {
+      const names = res.imported.layers.map((x) => x[1]).join("、");
+      const sc = res.imported.scale;
+      toast(`已导入 ${res.imported.layers.length} 个标签：${names}${sc.some((v) => v > 1) ? `（mask 放大 ${sc.join("×")} 对齐到图像）` : ""}`, 5000);
+    }
   });
   $("lab-new").addEventListener("click", () => {
     L.active = Math.max(maxUsed(), L.active, ...Object.keys(L.materials).map(Number)) + 1;

@@ -312,6 +312,21 @@ async fn labels_open(state: State<'_, AppState>, token: u64) -> CmdResult<Labels
     Ok(out)
 }
 
+/// Adds a mask made elsewhere (any volume the app reads, the image's size or
+/// a whole-number fraction of it) to the open image's labels as new layers
+/// (`label_import`); one undo step.
+#[tauri::command]
+async fn labels_import(state: State<'_, AppState>, token: u64, path: String) -> CmdResult<serde_json::Value> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let mut e = e.lock().unwrap();
+        let r = crate::label_import::import(&mut e.labels, Path::new(&path))?;
+        let st = labels_state(&e, r.zs.clone());
+        Ok(serde_json::json!({ "state": st, "imported": r }))
+    })
+    .await
+}
+
 /// One slice of the label map as little-endian u16.
 #[tauri::command]
 async fn labels_slice(state: State<'_, AppState>, token: u64, z: usize) -> CmdResult<Response> {
@@ -3838,6 +3853,7 @@ pub fn run() {
             render_view,
             volume_data,
             labels_open,
+            labels_import,
             labels_slice,
             labels_edit,
             labels_refine,
