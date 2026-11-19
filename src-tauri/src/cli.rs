@@ -1493,10 +1493,16 @@ fn labels(o: &Opts) -> Result<Value> {
         crate::labels::Labels::new(info.width, info.height, info.size_z)
     };
     let picks = marks.layers.iter().any(|m| !m.points.is_empty());
-    let sam = if picks { sam().unwrap_or_default() } else { crate::sam::Sam::default() };
+    let loaded = if picks { sam() } else { None };
+    let without_sam = picks && loaded.is_none();
+    let sam = loaded.unwrap_or_default();
     let (zs, layers) = crate::label_marks::apply(&mut l, &img, &sam, 1, &marks)?;
     l.save(Path::new(&path))?;
-    Ok(json!({"labels": path, "open": info.path, "layers": layers, "slicesChanged": zs.len()}))
+    let mut v = json!({"labels": path, "open": info.path, "layers": layers, "slicesChanged": zs.len()});
+    if without_sam {
+        v["note"] = json!("SAM 2.1 is not set up here, so points were picked by the simpler picker; `tmv setup --sam` (156 MB) makes them better, or give polygons");
+    }
+    Ok(v)
 }
 
 fn info() -> Result<Value> {
