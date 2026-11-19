@@ -50,6 +50,9 @@ USAGE
         [--pixel Å] [--kv kV] [--dose e/Å²] [--gain file] [--fresh]
   tmv denoise <image|stack>      Self-supervised denoising → <name>_denoised.mrc
   tmv info                       Version, GPU and models found
+  tmv app [action] [key=value …] Drive the open TifMrcView Pro window: the user
+                                 watches each step (tmv app --help)
+  tmv mcp                        The same as an MCP server on stdin/stdout
   tmv setup [--membrane membrain.ckpt] [--sam]
                                  Remember the MemBrain-seg model; download SAM 2.1
 
@@ -164,6 +167,13 @@ pub fn main(args: Vec<String>) -> i32 {
     if args[1..].iter().any(|a| matches!(a.as_str(), "-h" | "--help")) {
         print!("{HELP}");
         return 0;
+    }
+    // Driving the open desktop app (app_control.rs) needs no GPU turn.
+    if cmd == "app" {
+        return crate::app_control::cli_app(&args[1..]);
+    }
+    if cmd == "mcp" {
+        return crate::app_control::cli_mcp(VERSION);
     }
     let opts = match Opts::parse(&args[1..]) {
         Ok(o) => o,

@@ -108,6 +108,10 @@ pub mod cli;
 #[cfg(feature = "pro")]
 pub mod remote_agent;
 
+/// Agents driving the running app (tmv app, tmv mcp).
+#[cfg(feature = "pro")]
+pub mod app_control;
+
 #[cfg(feature = "pro")]
 pub mod acquisition;
 

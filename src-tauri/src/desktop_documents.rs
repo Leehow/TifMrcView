@@ -94,3 +94,27 @@ async fn save_merged_image(state: State<'_, AppState>, request: tauri::ipc::Requ
         Ok(())
     }).await
 }
+
+/// The page's answer to an agent's call (app_control.rs, ui/pro/agent.js).
+#[tauri::command]
+fn agent_reply(pending: State<'_, std::sync::Arc<crate::app_control::server::Pending>>, id: u64, reply: serde_json::Value) -> bool {
+    pending.answer(id, reply)
+}
+
+/// What the "AI 助手" dialog shows: how an agent starts `tmv` from this app.
+#[tauri::command]
+fn agent_info() -> serde_json::Value {
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    serde_json::json!({
+        "exe": exe,
+        "running": crate::app_control::read_endpoint().is_some_and(|e| e.pid == std::process::id()),
+        "link": crate::app_control::tmv_link().map(|p| p.to_string_lossy().into_owned()),
+        "linked": crate::app_control::tmv_link().and_then(|p| std::fs::canonicalize(p).ok()) == std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok()),
+    })
+}
+
+/// Puts a `tmv` command (a link to this app) where the shell finds it.
+#[tauri::command]
+fn agent_install_tmv() -> CmdResult<String> {
+    crate::app_control::install_tmv_link().map(|p| p.to_string_lossy().into_owned()).map_err(err)
+}

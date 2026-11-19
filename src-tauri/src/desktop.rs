@@ -3829,6 +3829,12 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(feature = "pro")]
+            {
+                let pending = std::sync::Arc::new(crate::app_control::server::Pending::default());
+                app.manage(pending.clone());
+                crate::app_control::server::start(app.handle().clone(), pending);
+            }
             let dir = app.path().app_config_dir().ok();
             std::thread::spawn(move || {
                 crate::plugin_assoc::sync_plugin_formats();
@@ -3842,6 +3848,9 @@ pub fn run() {
             #[cfg(feature = "pro")] activate_document,
             #[cfg(feature = "pro")] close_pro_window,
             #[cfg(feature = "pro")] pick_merge_project,
+            #[cfg(feature = "pro")] agent_reply,
+            #[cfg(feature = "pro")] agent_info,
+            #[cfg(feature = "pro")] agent_install_tmv,
             #[cfg(feature = "pro")] close_document,
             #[cfg(feature = "pro")] open_layer_source,
             #[cfg(feature = "pro")] read_merge_project,
@@ -4048,6 +4057,8 @@ pub fn run() {
                 #[cfg(feature = "pro")]
                 state.documents.close_all();
                 prune_labels(&state);
+                #[cfg(feature = "pro")]
+                crate::app_control::server::stop();
             }
             // macOS delivers double-clicked files as an event, not as argv.
             // tifmrcview:// links arrive here too; the deep-link plugin

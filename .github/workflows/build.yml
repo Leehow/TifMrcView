@@ -162,7 +162,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           node --test scripts/make-release.test.mjs scripts/release-notes.test.mjs scripts/pack-cli.test.mjs
-          node --test scripts/cli-skill.test.mjs
+          node --test scripts/cli-skill.test.mjs scripts/agent-parity.test.mjs
 
       - name: Image ownership regressions
         if: runner.os == 'Linux'
