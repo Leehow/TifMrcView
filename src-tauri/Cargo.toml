@@ -103,7 +103,6 @@ recorder = ["desktop", "dep:openh264"]
 
 # Desktop only: Android has one instance per app and updates through the APK.
 [target.'cfg(not(target_os = "android"))'.dependencies]
-ssh2 = { version = "0.9.7", optional = true, features = ["vendored-openssl"] }
 tauri-plugin-single-instance = { optional = true, version = "2.5", features = ["deep-link"] }
 tauri-plugin-updater = { version = "2.14", optional = true }
 
@@ -111,6 +110,12 @@ tauri-plugin-updater = { version = "2.14", optional = true }
 # (plugin market) checks against Mozilla's root certificates instead.
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-root-certs = "1"
+
+# SSH remote folders. libssh2 on Windows uses the system's WinCNG crypto, so
+# OpenSSL is built in only elsewhere: on Windows `vendored-openssl` compiled
+# an unused OpenSSL, which needs a native Perl that most machines lack.
+[target.'cfg(not(any(target_os = "android", windows)))'.dependencies]
+ssh2 = { version = "0.9.7", optional = true, features = ["vendored-openssl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Select the already-installed fp32 implicit-GEMM kernel for membrane convs.
@@ -138,6 +143,7 @@ rust-ini = "=0.21.1"
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["cuda", "vulkan"] }
 
 [target.'cfg(windows)'.dependencies]
+ssh2 = { version = "0.9.7", optional = true }
 # Pro: Vulkan with SPIR-V kernels first, DX12 when there is no Vulkan driver.
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["vulkan"] }
 windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security"] }
