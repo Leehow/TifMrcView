@@ -235,9 +235,9 @@ impl Project {
         Ok(p)
     }
 
-    /// Opens the project of a folder (or of the folder of a file), creating
-    /// it from the micrographs or movies found there.
-    pub fn open(source: &str) -> Result<Project> {
+    /// The data folder of `source` (a folder, a file in it, or the project
+    /// folder itself) and the project folder made for it.
+    fn dirs(source: &str) -> (PathBuf, PathBuf) {
         let src = Path::new(source);
         let folder = if src.is_dir() {
             src.to_path_buf()
@@ -250,6 +250,24 @@ impl Project {
             folder
         };
         let dir = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(||folder.clone()).join(DIR);
+        (folder, dir)
+    }
+
+    /// The project of a folder as saved, or None when there is none; nothing
+    /// is made or written (the sidebar's list of processed results).
+    pub fn peek(source: &str) -> Result<Option<Project>> {
+        let (_, dir) = Project::dirs(source);
+        let dir_s: String = dir.to_string_lossy().into();
+        if !Project::file(&dir_s).exists() {
+            return Ok(None);
+        }
+        Project::load(&dir_s).map(Some)
+    }
+
+    /// Opens the project of a folder (or of the folder of a file), creating
+    /// it from the micrographs or movies found there.
+    pub fn open(source: &str) -> Result<Project> {
+        let (folder, dir) = Project::dirs(source);
         let dir_s: String = dir.to_string_lossy().into();
         if Project::file(&dir_s).exists() {
             let mut p = Project::load(&dir_s)?;

@@ -3891,6 +3891,8 @@ function buildStrip() {
     },
     { root: $("sidebar"), rootMargin: "600px 0px" },
   );
+  // Pro lists the folder's processed results above the files (pro/results.js).
+  document.dispatchEvent(new CustomEvent("tmv-strip"));
   if (S.folder.remote && S.folder.entries) { buildRemoteDirectory(strip); return; }
   let body = null;
   let group = null;

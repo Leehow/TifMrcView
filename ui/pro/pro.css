@@ -748,3 +748,19 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+
+/* 「处理结果」 at the top of the right sidebar (results.js). */
+.pr-results { flex: none; margin-bottom: 6px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.pr-kind { font-size: 11px; color: var(--faint); padding: 6px 8px 2px; }
+.pr-row { display: flex; gap: 8px; align-items: flex-start; width: 100%; height: auto; white-space: normal; flex: none; text-align: left; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font: inherit; }
+.pr-row:hover { background: var(--subtle); }
+.pr-row.cur { background: var(--muted); }
+.pr-row.cur .pr-nm { color: var(--accent); }
+.pr-row.attn .pr-nm::after { content: " ⚠"; color: #b26a00; font-weight: 400; }
+.pr-pic { flex: none; width: 56px; height: 56px; border-radius: 4px; background: #111; color: var(--faint); font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.pr-pic img { width: 100%; height: 100%; object-fit: cover; }
+.pr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.pr-nm { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-line { font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+.pr-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 1px; }
+.pr-chip { font-size: 10.5px; line-height: 16px; padding: 0 5px; border-radius: 8px; background: #e8f3ec; color: #1a7f37; white-space: nowrap; }

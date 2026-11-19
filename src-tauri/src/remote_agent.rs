@@ -321,6 +321,7 @@ fn supported(c: &str) -> bool {
             | "tomo_take"
             | "tomo_pick"
             | "spa_open"
+            | "spa_peek"
             | "spa_settings"
             | "spa_run"
             | "spa_preview"
@@ -625,6 +626,7 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
             a["keep"].as_bool(),
         )?)?,
         "spa_open" => serde_json::to_value(sp::Project::open(string(a, "source")?)?)?,
+        "spa_peek" => serde_json::to_value(sp::Project::peek(string(a, "source")?)?)?,
         "spa_settings" => {
             let mut p = sp::Project::load(string(req, "dir")?)?;
             if let Some(d) = req["diameterA"].as_f64().filter(|v| *v > 0.) {

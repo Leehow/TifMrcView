@@ -154,6 +154,8 @@
       if (old && bodySig(old) !== bodySig(n)) for (const p of [n.small, n.aligned, n.quick, n.result]) if (p) rev.set(p, (rev.get(p) || 0) + 1);
     }
     session = s;
+    // The sidebar's 「处理结果」 lists the same reading (pro/results.js).
+    document.dispatchEvent(new CustomEvent("cryoet-session", { detail: { folder, session: s } }));
     for(const name of selected)if(!s.series.some(s=>s.name===name))selected.delete(name);
   }
 

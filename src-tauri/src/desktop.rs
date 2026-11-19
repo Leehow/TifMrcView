@@ -2197,6 +2197,14 @@ async fn spa_open(source: String) -> CmdResult<crate::spa::project::Project> {
     blocking(move || crate::spa::project::Project::open(&source)).await
 }
 
+/// The single-particle project of a folder if one was made there (None
+/// otherwise); read only, for the sidebar's list of processed results.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_peek(source: String) -> CmdResult<Option<crate::spa::project::Project>> {
+    blocking(move || crate::spa::project::Project::peek(&source)).await
+}
+
 /// Settings edited in the workspace: particle diameter, pixel size, excluded micrographs.
 #[cfg(feature = "pro")]
 #[derive(serde::Deserialize)]
@@ -3931,6 +3939,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_reconstruct,
             #[cfg(feature = "pro")] tomo_cancel,
             #[cfg(feature = "pro")] spa_open,
+            #[cfg(feature = "pro")] spa_peek,
             #[cfg(feature = "pro")] spa_settings,
             #[cfg(feature = "pro")] spa_run,
             #[cfg(feature = "pro")] spa_preview,
