@@ -164,16 +164,16 @@ pub fn main(args: Vec<String>) -> i32 {
         println!("tmv {VERSION}");
         return 0;
     }
-    if args[1..].iter().any(|a| matches!(a.as_str(), "-h" | "--help")) {
-        print!("{HELP}");
-        return 0;
-    }
     // Driving the open desktop app (app_control.rs) needs no GPU turn.
     if cmd == "app" {
         return crate::app_control::cli_app(&args[1..]);
     }
     if cmd == "mcp" {
         return crate::app_control::cli_mcp(VERSION);
+    }
+    if args[1..].iter().any(|a| matches!(a.as_str(), "-h" | "--help")) {
+        print!("{HELP}");
+        return 0;
     }
     let opts = match Opts::parse(&args[1..]) {
         Ok(o) => o,
