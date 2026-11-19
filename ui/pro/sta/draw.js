@@ -85,8 +85,8 @@
   box.id = "sta-draw";
   box.innerHTML = `
     <h4>自己标注</h4>
-    <p class="dim">程序找不到、或者不是你想要的？自己在断层图上标出来：选一个工具，在图上点几下，其余的交给程序。</p>
-    <div id="sta-draw-tools" class="al-row"></div>
+    <h4 class="sta-draw-head">② 要平均的标注</h4>
+    <div id="sta-draw-tools" class="al-row" hidden></div>
     <div id="sta-draw-deeprow" class="al-row" hidden><button id="sta-draw-deep" class="small" title="涂完后，程序顺着涂的东西上下找，看它有多厚；关掉就按大小估计厚度">三维选择</button></div>
     <p id="sta-draw-hint" class="dim"></p>
     <p id="sta-draw-membrane" class="dim" hidden></p>
@@ -237,6 +237,14 @@
   }
   D.refresh = refresh;
   D.setKind = (k) => setKind(k);
+  // The marks made from ticked label layers (layers.js) replace the marks shown.
+  D.setMarks = (marks) => {
+    D.marks = marks.map((m) => ({ ...m, strokes: m.strokes || [] }));
+    D.hist = [];
+    D.sel = D.open = null;
+    save();
+    render();
+  };
   async function save() {
     sections(true);
     planShapes();

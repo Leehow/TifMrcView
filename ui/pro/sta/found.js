@@ -60,7 +60,7 @@
     <p id="sta-found-msg" class="dim"></p>
     <div class="al-row"><button id="sta-found-go" class="primary"></button><button id="sta-found-other" class="small" title="回到选例子">换一个例子</button></div>`;
   // Above the cards: what was found is what the user looks at next.
-  $("sta-cards-box").before(box);
+  $("sta-auto-box").before(box);
   const curve = $("sta-found-curve");
 
   const pendingOf = (d) => !!d && !d.stale && (d.averageMs == null || d.foundMs > d.averageMs);

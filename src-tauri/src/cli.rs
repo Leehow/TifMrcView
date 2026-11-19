@@ -1368,7 +1368,7 @@ fn spa(o: &Opts) -> Result<Value> {
     }
     let diameter = sp::choose(&mut p, chosen.clone())?;
     let symmetry = o.get("symmetry").unwrap_or("").trim().to_uppercase();
-    let r = sp::auto(&mut p, &sp::AutoParams { symmetry }, outliner, &report)?;
+    let r = sp::auto(&mut p, &sp::AutoParams { symmetry, picked: false }, outliner, &report)?;
     progress.done();
     let guessed = p.symmetry.as_ref().map(|s| serde_json::to_value(s).unwrap_or(Value::Null));
     Ok(json!({

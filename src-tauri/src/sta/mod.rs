@@ -34,6 +34,7 @@ pub mod flat;
 pub mod gallery;
 pub mod grow;
 pub mod kinds;
+pub mod layers;
 pub mod marks;
 pub mod membranes;
 pub mod near;

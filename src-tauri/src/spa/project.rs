@@ -1058,6 +1058,9 @@ pub fn choose(p: &mut Project, kinds: Vec<usize>) -> Result<f64> {
 pub struct AutoParams {
     /// Point group; empty: the one the 2D classes suggest.
     pub symmetry: String,
+    /// The picks are there already (found from the user's examples and
+    /// checked): no picking of its own.
+    pub picked: bool,
 }
 
 /// Everything after the choice of particle: picking, extraction, 2D
@@ -1073,8 +1076,8 @@ pub fn auto(
         diameter_a: p.diameter_a,
         ..p.pick.clone().unwrap_or_default()
     };
-    let mut n = pick_all(p, &pick, progress)?;
-    if let Some(f) = outline {
+    let mut n = if a.picked { p.picks()?.iter().map(Vec::len).sum() } else { pick_all(p, &pick, progress)? };
+    if let (Some(f), false) = (outline, a.picked) {
         n = sam_filter(p, f, progress)?;
     }
     if n < 100 {

@@ -723,3 +723,13 @@ dialog.cs-ask h3 { margin:0 0 8px; font-size:15px; }
 dialog.cs-ask p { margin:0 0 14px; font-size:13px; line-height:1.6; }
 dialog.cs-ask .cs-ask-row { display:flex; justify-content:flex-end; gap:8px; }
 dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
+/* STA: label layers to tick (sta/layers.js) and the optional automatic cards. */
+#sta-layers .sta-teach { margin:4px 0 8px; padding-left:18px; }
+#sta-layers .sta-teach li { margin:2px 0; }
+#sta-layers .sta-layers { display:flex; flex-direction:column; gap:6px; }
+#sta-layers .sta-layer-item { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+#sta-layers .sta-layer-item .al-row { justify-content:space-between; margin:0 0 4px; }
+#sta-layers .sta-layer { display:flex; align-items:center; gap:6px; padding:2px 0; cursor:pointer; }
+#sta-layers .sta-layer-dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex:none; }
+#sta-auto-box { margin-top:10px; }
+#sta-auto-box > summary { cursor:pointer; color:var(--dim, inherit); }

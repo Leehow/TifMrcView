@@ -2270,6 +2270,7 @@ async fn spa_run(app: AppHandle, req: SpaStep, compute_id: Option<String>) -> Cm
                 serde_json::to_value(sp::discover(&mut p, outliner, &emit)?)?
             }
             "choose" => serde_json::json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
+            "examples" | "examplesUse" => crate::spa::examples::step(&mut p, &req.step, &v, &emit)?,
             "auto" => {
                 // SAM 2.1 drops picks that are clumps or fragments when its model is here.
                 let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(false);
@@ -2303,6 +2304,46 @@ async fn spa_preview(dir: String, mic: usize, params: Option<crate::spa::pick::P
         let (img, w, h) = crate::spa::project::read_mic(&m.path)?;
         let (png, scale) = crate::spa::render::mic_preview(&img, w, h, &picks, p.diameter_a / 2.0 / p.optics.pixel_a, 900)?;
         Ok(serde_json::json!({"png": base64(&png), "picks": picks.len(), "scale": scale}))
+    }).await
+}
+
+/// The places found from the user's examples on one micrograph, for checking:
+/// {png (base64, the micrograph binned to ≤ 900 px), scale (micrograph pixels
+/// per PNG pixel), radius (micrograph pixels), cutoff, suggested, kept (all
+/// micrographs), places: [{x, y, score, neg, user, kept}], examples: [{x, y, radius}]}.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_examples_view(dir: String, mic: usize) -> CmdResult<serde_json::Value> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let f = crate::spa::examples::load(&p)?;
+        let m = p.mics.get(mic).ok_or_else(|| anyhow::anyhow!("没有这张显微图"))?;
+        let (img, w, h) = crate::spa::project::read_mic(&m.path)?;
+        let (png, scale) = crate::spa::render::mic_preview(&img, w, h, &[], 0.0, 900)?;
+        let places: Vec<serde_json::Value> = f.mics.get(mic).map(|l| l.iter().map(|q| serde_json::json!({"x": q.x, "y": q.y, "score": q.score, "neg": q.neg, "user": q.user, "kept": q.kept(f.cutoff)})).collect()).unwrap_or_default();
+        let examples: Vec<serde_json::Value> = f.examples.iter().filter(|e| e.mic == mic).map(|e| serde_json::json!({"x": e.x, "y": e.y, "radius": e.radius})).collect();
+        Ok(serde_json::json!({"png": base64(&png), "scale": scale, "radius": f.radius_px(), "cutoff": f.cutoff, "suggested": f.suggested, "kept": f.kept(), "places": places, "examples": examples,
+            "perMic": f.mics.iter().map(|l| l.iter().filter(|q| q.kept(f.cutoff)).count()).collect::<Vec<_>>()}))
+    }).await
+}
+
+/// Changes the check of the places found: a new `cutoff`, and/or a click at
+/// (x, y) micrograph pixels on micrograph `mic` (on a place: keep ⇄ drop;
+/// elsewhere: a place added). Returns how many are kept in all.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn spa_examples_set(dir: String, cutoff: Option<f32>, mic: Option<usize>, at: Option<[f32; 2]>) -> CmdResult<usize> {
+    blocking(move || {
+        let p = crate::spa::project::Project::load(&dir)?;
+        let mut f = crate::spa::examples::load(&p)?;
+        if let Some(c) = cutoff {
+            f.cutoff = c;
+        }
+        if let (Some(m), Some([x, y])) = (mic, at) {
+            crate::spa::examples::click(&mut f, m, x, y)?;
+        }
+        crate::spa::examples::save(&p, &f)?;
+        Ok(f.kept())
     }).await
 }
 
@@ -2875,6 +2916,21 @@ async fn sta_paint_shape(app: AppHandle, out: String, marks: Vec<crate::sta::mar
 #[tauri::command]
 fn sta_marks_save(out: String, marks: Vec<crate::sta::marks::Mark>, size: Option<String>) -> CmdResult<()> {
     crate::sta::marks::save(std::path::Path::new(&out), &crate::sta::marks::Saved { marks, size }).map_err(|e| e.to_string())
+}
+
+/// The label layers of each of `images` (their `<image>.labels.tif`), made with
+/// the viewer's label brush: [{image, label, name, structure, color, objects, sections, lines}].
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_label_layers(images: Vec<String>) -> CmdResult<Vec<crate::sta::layers::Layer>> {
+    blocking(move || Ok(crate::sta::layers::layers_of(&images))).await
+}
+
+/// The marks of the ticked label layers ([[image, label]…]), `sta::layers::marks_of`.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_layers_marks(ticked: Vec<(String, u16)>) -> CmdResult<Vec<crate::sta::marks::Mark>> {
+    blocking(move || crate::sta::layers::marks_of(&ticked)).await
 }
 
 #[cfg(feature = "pro")]
@@ -3897,6 +3953,10 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_review_tile,
             #[cfg(feature = "pro")] sta_marks_load,
             #[cfg(feature = "pro")] sta_marks_save,
+            #[cfg(feature = "pro")] sta_label_layers,
+            #[cfg(feature = "pro")] spa_examples_view,
+            #[cfg(feature = "pro")] spa_examples_set,
+            #[cfg(feature = "pro")] sta_layers_marks,
             #[cfg(feature = "pro")] sta_mark_preview,
             #[cfg(feature = "pro")] sta_membrane_status,
             #[cfg(feature = "pro")] sta_membrane_segment,
