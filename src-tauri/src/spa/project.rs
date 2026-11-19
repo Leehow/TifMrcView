@@ -519,7 +519,7 @@ pub fn ctf(
     n_fft: usize,
     progress: Progress,
 ) -> Result<()> {
-    if p.mics.len()>1&&params.backend.as_deref()!=Some("cpu")&&crate::gpu_workers::enabled(){return parallel_mics(p,"ctf",serde_json::to_value(params)?,n_fft,progress);}
+    if p.mics.len()>1&&params.backend.as_deref()!=Some("cpu")&&crate::gpu_workers::enabled()&&std::env::var_os("TMV_MOVIE_WORKERS").is_some(){return parallel_mics(p,"ctf",serde_json::to_value(params)?,n_fft,progress);}
     if p.movies
         && p.mics
             .iter()
@@ -541,41 +541,57 @@ pub fn ctf(
     }
     p.optics_found.cs = true;
     p.optics_found.amplitude = true;
+    // Micrographs of one size are fitted in batches, as the views of a
+    // tilt series are (`ctf::fit_images`: spectra and grid search on the GPU
+    // once for the batch); others one by one.
+    const BATCH: usize = 32;
+    let paths: Vec<String> = p.mics.iter().map(|m| m.path.clone()).collect();
+    let size_of = |i: usize| -> Option<(usize, usize)> { open_image(&paths[i]).ok().map(|m| (m.info().width, m.info().height)) };
+    let mut groups: Vec<((usize, usize), Vec<usize>)> = vec![];
     for i in 0..n {
-        check_cancel()?;
-        let img = open_image(&p.mics[i].path)?;
-        let (w, h) = (img.info().width, img.info().height);
-        let req = crate::ctf::FitReq {
-            token: 0,
-            z: 0,
-            t: 0,
-            c: 0,
-            region: [0.0, 0.0, w as f64, h as f64],
-            n: n_fft,
-            params: params.clone(),
-        };
-        match crate::ctf::fit_region(&img, &req) {
-            Ok(f) if f.score.is_finite() => {
-                p.mics[i].ctf = Some(MicCtf {
-                    df1: f.df1,
-                    df2: f.df2,
-                    angle: f.angle,
-                    score: f.score,
-                    fit_res: f.fit_res,
-                })
-            }
-            Ok(_) => {
+        match size_of(i) {
+            Some(s) => match groups.iter_mut().find(|g| g.0 == s) {
+                Some(g) => g.1.push(i),
+                None => groups.push((s, vec![i])),
+            },
+            None => {
                 p.mics[i].ctf = None;
                 p.mics[i].excluded = true;
-                eprintln!("CTF {}: no fit", p.mics[i].path);
-            }
-            Err(e) => {
-                p.mics[i].ctf = None;
-                p.mics[i].excluded = true;
-                eprintln!("CTF {}: {e}", p.mics[i].path);
+                eprintln!("CTF {}: cannot open", p.mics[i].path);
             }
         }
-        progress("CTF", i + 1, n);
+    }
+    let mut done = 0;
+    for (_, idx) in groups {
+        for chunk in idx.chunks(BATCH) {
+            check_cancel()?;
+            let imgs: Vec<Arc<OpenImage>> = chunk.iter().map(|&i| open_image(&paths[i])).collect::<Result<_>>()?;
+            let before = done;
+            let fits = crate::ctf::fit_images(&imgs, n_fft, &params, &|k, _| progress("CTF", (before + k).min(n), n));
+            done += chunk.len();
+            match fits {
+                Ok((fits, _)) => {
+                    for (&i, f) in chunk.iter().zip(fits) {
+                        if f.score.is_finite() {
+                            p.mics[i].ctf = Some(MicCtf { df1: f.df1, df2: f.df2, angle: f.angle, score: f.score, fit_res: f.fit_res });
+                        } else {
+                            p.mics[i].ctf = None;
+                            p.mics[i].excluded = true;
+                            eprintln!("CTF {}: no fit", p.mics[i].path);
+                        }
+                    }
+                }
+                Err(e) => {
+                    check_cancel()?;
+                    for &i in chunk {
+                        p.mics[i].ctf = None;
+                        p.mics[i].excluded = true;
+                    }
+                    eprintln!("CTF batch: {e}");
+                }
+            }
+            progress("CTF", done, n);
+        }
     }
     p.save()
 }
