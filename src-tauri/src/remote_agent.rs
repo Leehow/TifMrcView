@@ -51,7 +51,7 @@ fn job_path(id: &str) -> Result<PathBuf> {
 fn long(cmd: &str) -> bool {
     matches!(
         cmd,
-        "tomo_session_run" | "spa_run" | "tomo_dataset_save" | "tomo_take" | "tomo_pick"
+        "tomo_session_run" | "spa_run" | "tomo_dataset_save" | "tomo_take" | "tomo_pick" | "tomo_trial"
     )
 }
 
@@ -320,6 +320,8 @@ fn supported(c: &str) -> bool {
             | "tomo_preview_stack"
             | "tomo_take"
             | "tomo_pick"
+            | "tomo_trial"
+            | "tomo_trial_source"
             | "spa_open"
             | "spa_settings"
             | "spa_run"
@@ -624,6 +626,13 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
             a["z"].as_u64().context("z")? as usize,
             a["keep"].as_bool(),
         )?)?,
+        "tomo_trial_source" => serde_json::to_value(crate::tomo::trial::describe(string(a, "path")?)?)?,
+        "tomo_trial" => {
+            let step: crate::tomo::trial::TrialReq = serde_json::from_value(req.clone())?;
+            let mut d = dataset(string(req, "stack")?)?;
+            let r = crate::tomo::trial::run(&mut d, &step, emit)?;
+            json!({"result": r, "dataset": d})
+        }
         "spa_open" => serde_json::to_value(sp::Project::open(string(a, "source")?)?)?,
         "spa_settings" => {
             let mut p = sp::Project::load(string(req, "dir")?)?;

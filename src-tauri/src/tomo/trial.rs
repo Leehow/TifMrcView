@@ -71,6 +71,23 @@ pub fn source(path: &str) -> Option<String> {
     None
 }
 
+/// What the reconstruction button needs to know of the open image: None
+/// when it is no tilt series and no dataset lists it; else the series, its
+/// dataset, the settings a first trial starts from, its width and pixel size.
+/// The app (`tomo_trial_source`) and the SSH engine both answer with this.
+pub fn describe(path: &str) -> Result<Option<serde_json::Value>> {
+    let Some(stack) = source(path) else { return Ok(None) };
+    let img = pipeline::open(&stack)?;
+    let info = img.info();
+    let d = Dataset::open(&info.path, info.size_z, info.pixel_size.is_some().then(|| crate::align::pixel_a(info)))?;
+    if d.angles.len() != info.size_z {
+        return Ok(None);
+    }
+    let px = d.optics.pixel_a.or_else(|| super::output::pixel_known(&img));
+    let defaults = defaults(info.width, px);
+    Ok(Some(serde_json::json!({ "stack": stack, "dataset": d, "defaults": defaults, "width": info.width, "pixelA": px })))
+}
+
 /// The part of the file name that tells trials apart; the method, its
 /// iterations, the binning and phase flipping are named by `reconstruct`.
 pub fn label(req: &TrialReq) -> String {

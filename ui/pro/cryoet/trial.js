@@ -205,9 +205,9 @@
     const path = S.info?.path;
     if (path === R.path) return;
     R.path = path;
-    const local = path && !(typeof S.folder !== "undefined" && S.folder?.remote) && S.info.sizeZ >= 3;
+    // On an SSH folder the question (and every trial) goes to the server engine (remote-processing.js).
     let src = null;
-    if (local) src = await invoke("tomo_trial_source", { path }).catch(() => null);
+    if (path && S.info.sizeZ >= 3) src = await invoke("tomo_trial_source", { path }).catch(() => null);
     if (R.path !== path) return;
     btn.disabled = !src;
     if (!src) { if (!R.busy) close(); return; }

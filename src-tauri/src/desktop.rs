@@ -2040,16 +2040,7 @@ async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_trial_source(path: String) -> CmdResult<Option<serde_json::Value>> {
-    blocking(move || {
-        let Some(stack) = crate::tomo::trial::source(&path) else { return Ok(None) };
-        let (img, d) = tomo_open(&stack)?;
-        if d.angles.len() != img.info().size_z {
-            return Ok(None);
-        }
-        let px = d.optics.pixel_a.or_else(|| crate::tomo::output::pixel_known(&img));
-        let defaults = crate::tomo::trial::defaults(img.info().width, px);
-        Ok(Some(serde_json::json!({ "stack": stack, "dataset": d, "defaults": defaults, "width": img.info().width, "pixelA": px })))
-    }).await
+    blocking(move || crate::tomo::trial::describe(&path)).await
 }
 
 /// One reconstruction trial (`tomo::trial::run`): aligns first when the
