@@ -151,6 +151,9 @@
 
   // "ask": the first call of each run of the app asks; "always"; "off".
   const mode = () => pref.get("agent.allow", "ask");
+  // Automated tests start the app with TMV_AGENT_ALLOW=always (agent_info).
+  let envAllow = null;
+  invoke("agent_info").then((i) => { envAllow = i.envAllow || null; }).catch(() => {});
   let allowed = false, asking = null;
   $("agent-stop").onclick = () => { allowed = false; strip.hidden = true; toast("已停止 AI 助手；它下次操作时会再问你"); };
 
@@ -181,7 +184,7 @@
   async function permitted() {
     const m = mode();
     if (m === "off") fail("用户在 ⚙ → AI 助手 里关闭了 AI 助手操作");
-    if (m === "always" || allowed) return;
+    if (m === "always" || allowed || envAllow === "always") return;
     if (!await ask()) fail("用户没有允许 AI 助手操作这个窗口");
   }
 

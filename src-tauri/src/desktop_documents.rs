@@ -109,6 +109,8 @@ fn agent_info() -> serde_json::Value {
         "exe": exe,
         "running": crate::app_control::read_endpoint().is_some_and(|e| e.pid == std::process::id()),
         "link": crate::app_control::tmv_link().map(|p| p.to_string_lossy().into_owned()),
+        // Tests start the app with TMV_AGENT_ALLOW=always so no one has to click 允许.
+        "envAllow": std::env::var("TMV_AGENT_ALLOW").ok(),
         "linked": crate::app_control::tmv_link().and_then(|p| std::fs::canonicalize(p).ok()) == std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok()),
     })
 }
