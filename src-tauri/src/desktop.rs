@@ -2294,6 +2294,16 @@ async fn spa_run(app: AppHandle, req: SpaStep, compute_id: Option<String>) -> Cm
                 let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
                 serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, outliner, &emit)?)?
             }
+            // The wizard's two halves of "auto": 2D classes (the user checks
+            // them), then the 3D map from the classes as chosen.
+            "autoClasses" => {
+                let use_sam = v.get("sam").and_then(|b| b.as_bool()).unwrap_or(false);
+                let sam = app.state::<crate::sam::Sam>();
+                let outline = |img: &[f32], w: usize, h: usize, pts: &[[f32; 2]]| sam.outline(img, w, h, pts);
+                let outliner: Option<crate::spa::discover::Outliner> = (use_sam && sam.status().downloaded).then_some(&outline);
+                serde_json::to_value(sp::auto_classes(&mut p, &serde_json::from_value(v)?, outliner, &emit)?)?
+            }
+            "autoMap" => serde_json::to_value(sp::auto_map(&mut p, &serde_json::from_value(v)?, &emit)?)?,
             "refine" => {
                 let reference = v.get("reference").and_then(|r| r.as_str()).map(str::to_string);
                 serde_json::to_value(sp::refine(&mut p, &serde_json::from_value(v["params"].clone())?, reference.as_deref(), &emit)?)?

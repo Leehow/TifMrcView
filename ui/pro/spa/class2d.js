@@ -24,40 +24,47 @@
     <div id="spa-gallery" class="ws-gallery"></div>
     <p id="spa-2d-summary" class="dim"></p>`;
 
-  async function showClasses() {
+  // The class averages as a gallery in `gallery` (a click adds or removes a
+  // class; `changed` is told), the counts in `summary`. Returns the state
+  // ({counts, chosen: Set, …}) or null. Shared with the wizard (auto.js).
+  W.drawClasses = async (gallery, summary, changed = () => {}) => {
     const p = W.project;
-    if (!p?.class2d) { $("spa-gallery").replaceChildren(); $("spa-2d-summary").textContent = ""; return; }
-    try {
-      const r = await invoke("spa_classes", { dir: p.dir });
-      classes = { ...r, chosen: new Set(r.selected) };
-      const g = $("spa-gallery");
-      g.replaceChildren();
-      const img = new Image();
-      img.src = `data:image/png;base64,${r.png}`;
-      img.onload = () => {
-        r.counts.forEach((n, i) => {
-          const c = document.createElement("canvas");
-          c.width = c.height = r.cell;
-          c.getContext("2d").drawImage(img, (i % r.cols) * r.cell, Math.floor(i / r.cols) * r.cell, r.cell, r.cell, 0, 0, r.cell, r.cell);
-          const cell = document.createElement("figure");
-          cell.className = classes.chosen.has(i) ? "on" : "";
-          const res = r.res && r.res[i] < 999 ? `${fmt(r.res[i], 0)} Å` : "";
-          cell.title = `类 ${i + 1}：${n} 个颗粒 · 相关 ${fmt(r.scores[i], 2)}${res ? ` · 分辨率 ${res}` : ""}`;
-          const cap = document.createElement("figcaption");
-          cap.textContent = res ? `${n} · ${res}` : `${i + 1} · ${n}`;
-          cell.append(c, cap);
-          cell.onclick = () => {
-            classes.chosen.has(i) ? classes.chosen.delete(i) : classes.chosen.add(i);
-            cell.className = classes.chosen.has(i) ? "on" : "";
-            $("spa-keep").disabled = false;
-          };
-          g.append(cell);
-        });
-      };
-      const total = r.counts.reduce((a, b) => a + b, 0);
-      const kept = r.selected.length ? r.selected.reduce((a, i) => a + r.counts[i], 0) : total;
-      $("spa-2d-summary").textContent = `${r.counts.length} 类 · ${total} 个颗粒 · 后续使用 ${kept} 个`;
-    } catch (e) { W.status(`${e}`); }
+    if (!p?.class2d) { gallery.replaceChildren(); summary.textContent = ""; return null; }
+    let r;
+    try { r = await invoke("spa_classes", { dir: p.dir }); } catch (e) { W.status(`${e}`); return null; }
+    const st = { ...r, chosen: new Set(r.selected) };
+    const used = () => (st.chosen.size ? [...st.chosen].reduce((a, i) => a + r.counts[i], 0) : r.counts.reduce((a, b) => a + b, 0));
+    const sum = () => { summary.textContent = `${r.counts.length} 类 · ${r.counts.reduce((a, b) => a + b, 0)} 个颗粒 · 选中 ${st.chosen.size} 类，共 ${used()} 个颗粒`; };
+    gallery.replaceChildren();
+    const img = new Image();
+    img.src = `data:image/png;base64,${r.png}`;
+    img.onload = () => {
+      r.counts.forEach((n, i) => {
+        const c = document.createElement("canvas");
+        c.width = c.height = r.cell;
+        c.getContext("2d").drawImage(img, (i % r.cols) * r.cell, Math.floor(i / r.cols) * r.cell, r.cell, r.cell, 0, 0, r.cell, r.cell);
+        const cell = document.createElement("figure");
+        cell.className = st.chosen.has(i) ? "on" : "";
+        const res = r.res && r.res[i] < 999 ? `${fmt(r.res[i], 0)} Å` : "";
+        cell.title = `类 ${i + 1}：${n} 个颗粒 · 相关 ${fmt(r.scores[i], 2)}${res ? ` · 分辨率 ${res}` : ""}`;
+        const cap = document.createElement("figcaption");
+        cap.textContent = res ? `${n} · ${res}` : `${i + 1} · ${n}`;
+        cell.append(c, cap);
+        cell.onclick = () => {
+          st.chosen.has(i) ? st.chosen.delete(i) : st.chosen.add(i);
+          cell.className = st.chosen.has(i) ? "on" : "";
+          sum();
+          changed(st);
+        };
+        gallery.append(cell);
+      });
+    };
+    sum();
+    return st;
+  };
+
+  async function showClasses() {
+    classes = await W.drawClasses($("spa-gallery"), $("spa-2d-summary"), () => { $("spa-keep").disabled = false; });
   }
 
   W.register(3, {

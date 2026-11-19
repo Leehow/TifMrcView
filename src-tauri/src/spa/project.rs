@@ -1080,6 +1080,20 @@ pub fn auto(
     outline: Option<discover::Outliner>,
     progress: Progress,
 ) -> Result<RefineInfo> {
+    auto_classes(p, a, outline, progress)?;
+    auto_map(p, a, progress)
+}
+
+/// The first half of `auto` (the wizard's 2D step): picking unless the
+/// picks are there, extraction and 2D classification with the sharp
+/// classes chosen. It stops there so the user can look at the classes and
+/// change the choice before the 3D half (`auto_map`).
+pub fn auto_classes(
+    p: &mut Project,
+    a: &AutoParams,
+    outline: Option<discover::Outliner>,
+    progress: Progress,
+) -> Result<Class2dInfo> {
     let pick = PickParams {
         diameter_a: p.diameter_a,
         ..p.pick.clone().unwrap_or_default()
@@ -1099,7 +1113,14 @@ pub fn auto(
         128
     };
     extract_all(p, max_box, true, progress)?;
-    let c = class2d(p, &Class2dParams::default(), progress)?;
+    class2d(p, &Class2dParams::default(), progress)
+}
+
+/// The second half of `auto` (the wizard's 3D step), from the 2D classes
+/// as chosen: the point group (from the class averages unless given), the
+/// initial model and the gold-standard refinement.
+pub fn auto_map(p: &mut Project, a: &AutoParams, progress: Progress) -> Result<RefineInfo> {
+    let c = p.class2d.clone().context("还没有二维分类")?;
     let sym = if a.symmetry.trim().is_empty() {
         let (v, dims, _) = data::read_volume(&c.path)?;
         let b = dims[0];

@@ -6,8 +6,8 @@
 // The step modules (mics.js, ctf.js, pick.js, class2d.js, initial.js,
 // refine.js) fill `sections` and call `register` with their hooks:
 // `show(project)` after every change, `enter()` when the step is opened.
-// One-click mode (auto.js) is the panel itself; the steps sit under
-// 高级设置. The folder is always the one of the file open in the viewer.
+// The three-step guide (auto.js) is the panel itself; the six steps by
+// hand sit under 高级设置. The folder is always the one of the file open in the viewer.
 // Shares app.js globals: S, T, F, invoke, $, setFft, openPath, saveDir.
 (() => {
   const STEPS = ["① 显微图", "② CTF", "③ 挑选", "④ 二维分类", "⑤ 初始模型", "⑥ 三维精修"];
@@ -39,7 +39,7 @@
     </div>
     <div id="spa-auto"></div>
     <details id="spa-advanced">
-      <summary>高级设置（分步操作）</summary>
+      <summary>高级设置：每一步单独做、调参数</summary>
       <nav class="ws-steps" id="spa-steps" aria-label="单颗粒步骤"></nav>
       <div class="ws-body" id="spa-body"></div>
     </details>
@@ -172,10 +172,16 @@
     const was = buttons.map((b) => b.disabled);
     buttons.forEach((b) => { b.disabled = true; });
     const t0 = performance.now();
+    let stage = "", s0 = 0, d0 = 0;
     const un = await T.event.listen("spa-progress", (e) => {
       const p = e.payload;
       const s = (performance.now() - t0) / 1000;
-      W.status(`${p.stage} ${p.done} / ${p.total} · ${s < 120 ? s.toFixed(0) + " s" : (s / 60).toFixed(1) + " min"}`);
+      // Time left from this stage's pace, once a few items are done.
+      if (p.stage !== stage) { stage = p.stage; s0 = s; d0 = p.done; }
+      const pace = p.done - d0 >= 2 && s - s0 > 3 ? (s - s0) / (p.done - d0) : 0;
+      const left = pace ? pace * (p.total - p.done) : 0;
+      const eta = left > 90 ? ` · 约剩 ${Math.round(left / 60)} 分钟` : left > 0 ? ` · 约剩 ${Math.max(1, Math.round(left))} 秒` : "";
+      W.status(`${p.stage} ${p.done} / ${p.total} · ${s < 120 ? s.toFixed(0) + " s" : (s / 60).toFixed(1) + " min"}${eta}`);
     });
     W.status(`${label}…`);
     try {

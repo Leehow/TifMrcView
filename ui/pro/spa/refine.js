@@ -19,8 +19,8 @@
     <canvas id="spa-fsc" width="600" height="220" hidden title="FSC：灰 = 未掩膜，蓝 = 掩膜；虚线 0.143"></canvas>
     <p id="spa-files" class="dim"></p>`;
 
-  function fsc(r) {
-    const cv = $("spa-fsc"), ctx = cv.getContext("2d"), w = cv.width, h = cv.height;
+  function fsc(r, cv = $("spa-fsc")) {
+    const ctx = cv.getContext("2d"), w = cv.width, h = cv.height;
     cv.hidden = false;
     ctx.clearRect(0, 0, w, h);
     const n = r.fsc.length, x = (i) => 40 + i / Math.max(1, n - 1) * (w - 55), y = (v) => 15 + (1 - Math.max(-0.1, Math.min(1, v))) / 1.1 * (h - 45);
@@ -44,6 +44,8 @@
       ctx.fillText(`${(r.boxPx * r.pixelA / i).toFixed(1)} Å`, x(i) - 18, h - 8);
     }
   }
+
+  W.drawFsc = fsc;
 
   W.register(5, {
     show(p) {

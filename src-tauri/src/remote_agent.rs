@@ -748,6 +748,8 @@ fn spa_run(req: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<Va
         "choose" => json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
         s @ ("examples" | "examplesUse") => crate::spa::examples::step(&mut p, s, &v, emit)?,
         "auto" => serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, None, emit)?)?,
+        "autoClasses" => serde_json::to_value(sp::auto_classes(&mut p, &serde_json::from_value(v)?, None, emit)?)?,
+        "autoMap" => serde_json::to_value(sp::auto_map(&mut p, &serde_json::from_value(v)?, emit)?)?,
         "refine" => serde_json::to_value(sp::refine(
             &mut p,
             &serde_json::from_value(v["params"].clone())?,

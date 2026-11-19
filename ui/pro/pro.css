@@ -322,9 +322,32 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 /* Single-particle workspace (same frame as the Cryo-ET one). */
 #spa-workspace { position:absolute; top:10px; bottom:10px; right:10px; z-index:9; width:min(660px, calc(100% - 20px)); display:flex; flex-direction:column; overflow:auto; padding:12px; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
 #spa-workspace[hidden], #spa-workspace [hidden] { display:none; }
-#spa-auto { padding:4px 0 10px; border-bottom:1px solid var(--line); }
+#spa-auto { padding:4px 0 6px; }
 #spa-auto p { line-height:1.6; }
-#spa-a-start, #spa-a-go { font-size:13px; padding:6px 18px; }
+/* The three-step guide: a card per step, the active one open and marked. */
+#spa-workspace .spa-intro { margin:0 0 8px; }
+#spa-workspace .spa-wz { margin:0 0 8px; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+#spa-workspace .spa-wz > header { display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:pointer; user-select:none; }
+#spa-workspace .spa-wz > header b { font-size:13px; }
+#spa-workspace .spa-wz-n { flex:none; display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; background:var(--muted); color:var(--dim); font-weight:600; font-variant-numeric:tabular-nums; }
+#spa-workspace .spa-wz-state { margin-left:auto; display:inline-flex; align-items:center; gap:4px; color:var(--dim); font-size:11px; }
+#spa-workspace .spa-wz-state svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; }
+#spa-workspace .spa-wz-body { display:none; padding:0 12px 10px 40px; }
+#spa-workspace .spa-wz.open .spa-wz-body { display:block; }
+#spa-workspace .spa-wz-body h4 { margin:10px 0 2px; font-size:12px; }
+#spa-workspace .spa-wz-result { margin:0; padding:0 12px 8px 40px; line-height:1.5; font-variant-numeric:tabular-nums; }
+#spa-workspace .spa-wz.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+#spa-workspace .spa-wz.active .spa-wz-n { background:var(--accent); color:#fff; }
+#spa-workspace .spa-wz.active .spa-wz-state { color:var(--accent); font-weight:600; }
+#spa-workspace .spa-wz.done .spa-wz-n { background:color-mix(in srgb, #1a7f37 18%, transparent); color:#1a7f37; }
+#spa-workspace .spa-wz.done .spa-wz-result { color:#1a7f37; }
+#spa-workspace .spa-wz.locked { opacity:.55; }
+#spa-workspace .spa-wz.locked > header { cursor:default; }
+#spa-workspace .spa-wz .primary:not(.small) { font-size:13px; padding:6px 18px; }
+#spa-workspace .spa-wz-tip { margin:6px 0 2px; }
+#spa-workspace .spa-autobox { margin-top:10px; }
+#spa-workspace .spa-autobox > summary { cursor:pointer; color:var(--dim); }
+#spa-workspace .spa-fsc { width:100%; height:auto; margin-top:6px; background:var(--subtle); border:1px solid var(--line); border-radius:6px; }
 #spa-advanced { margin-top:8px; display:flex; flex-direction:column; min-height:0; }
 #spa-advanced > summary { cursor:pointer; color:var(--dim); padding:4px 0 8px; }
 #spa-workspace .ws-dataset { display:flex; align-items:center; gap:8px; padding-bottom:8px; }
@@ -748,3 +771,4 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+#spa-ex .spa-teach li { line-height:1.6; margin:2px 0; }

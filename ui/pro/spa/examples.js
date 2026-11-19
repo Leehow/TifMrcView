@@ -8,9 +8,8 @@
 // found are shown on one micrograph at a time to check (spa_examples_view): green circles are
 // kept, grey ones are not. A click on a circle flips it, a click elsewhere adds one, the slider
 // moves how alike is alike enough (spa_examples_set), 再找一轮 searches again with the user's
-// clicks as more examples and counter-examples. 用这些颗粒完成重构 makes the kept places the picks
-// (step "examplesUse") and runs the rest ("auto" with picked: extraction, 2D classes, symmetry,
-// initial model, refinement). Shares app.js globals: S, $, invoke, openPath, setTool.
+// clicks as more examples and counter-examples. 用这些颗粒，去第 3 步 makes the kept places the
+// picks (step "examplesUse") and opens the guide's step 3 (auto.js). Shares app.js globals: S, $, invoke, openPath, setTool.
 (() => {
   const W = window.TifMrcViewPro.spa;
   const { fmt } = W;
@@ -21,13 +20,14 @@
   const box = document.createElement("div");
   box.id = "spa-ex";
   box.innerHTML = `
-    <h4>挑颗粒：涂几个例子</h4>
-    <ol class="dim spa-teach">
-      <li>按「打开一张显微图标注」（或在查看器里打开任意一张），换成标签画笔。</li>
-      <li>在 2–3 个你要的颗粒上涂一下，点结构类型「小颗粒」，让涂的贴到颗粒上。不同朝向（顶视、侧视）都要的话各涂一两个。</li>
-      <li>回到这里，勾选这个图层，按「按例子找颗粒」。</li>
+    <h4>怎么挑</h4>
+    <ol class="spa-teach">
+      <li>按下面的「打开一张显微图来涂」，查看器会打开 CTF 最好的一张并换成标签画笔。</li>
+      <li>在 2–3 个你要的颗粒上各涂一下（不用涂满），然后点结构类型「小颗粒」，涂的会贴合到颗粒上。顶视、侧视等不同朝向都要的话，各涂一两个。</li>
+      <li>回到这里按「刷新图层」，勾选刚涂的图层，按「按例子找颗粒」。</li>
+      <li>检查找到的颗粒，满意后按「用这些颗粒，去第 3 步」。</li>
     </ol>
-    <div class="al-row"><button id="spa-ex-open" class="small">打开一张显微图标注</button><button id="spa-ex-reload" class="small" title="标签画笔改过之后，重新读一遍各显微图的图层">刷新图层</button></div>
+    <div class="al-row"><button id="spa-ex-open" class="small primary">打开一张显微图来涂</button><button id="spa-ex-reload" class="small" title="标签画笔改过之后，重新读一遍各显微图的图层">刷新图层</button></div>
     <div id="spa-ex-layers" class="spa-ex-layers"></div>
     <div class="al-row"><button id="spa-ex-find" class="primary" disabled>按例子找颗粒</button></div>
     <div id="spa-ex-review" hidden>
@@ -37,12 +37,8 @@
       </div>
       <div class="spa-ex-view"><canvas id="spa-ex-canvas" title="点圆圈：要 ⇄ 不要；点空白处：加一个颗粒"></canvas></div>
       <label class="al-wide spa-ex-cut">像例子的程度<input id="spa-ex-cutoff" type="range" min="0" max="1" step="0.005"><span id="spa-ex-cutval" class="dim"></span><button id="spa-ex-reset" class="small" title="回到程序按例子建议的松紧">建议值</button></label>
-      <p class="dim">绿色是要的，灰色是不要的。点圆圈切换，点空白处加一个；点得多了按「再找一轮」，程序会把你加的当成例子、去掉的当成反例再找。</p>
-      <div class="al-opts">
-        <label>对称性<select id="spa-ex-sym"><option value="">自动判断</option><option>C1</option></select></label>
-        <label>或填写<input id="spa-ex-sym-text" type="text" placeholder="如 C4、D7、O" size="5"></label>
-      </div>
-      <div class="al-row"><button id="spa-ex-again" class="small">再找一轮</button><button id="spa-ex-go" class="primary">用这些颗粒完成重构</button></div>
+      <p class="dim">橙色是你涂的例子，绿色是要的，灰色是不要的。用 ◀ ▶ 翻几张看看：点圆圈切换要不要，点空白处加一个；漏得多或错得多就拖动「像例子的程度」，或者改几个后按「再找一轮」，程序会把你加的当成例子、去掉的当成反例再找。</p>
+      <div class="al-row"><button id="spa-ex-again" class="small">再找一轮</button><button id="spa-ex-go" class="primary">用这些颗粒，去第 3 步</button></div>
     </div>`;
   $("spa-ex-slot").append(box);
 
@@ -103,7 +99,7 @@
     if (!m) return W.status("请先打开一张显微图或电影");
     try { await openPath(m.path); } catch (e) { return W.status(`${e}`); }
     if (typeof setTool === "function") setTool("label");
-    W.status("用标签画笔在 2–3 个颗粒上涂一下，点「小颗粒」，再回到这里勾选图层");
+    W.status("用标签画笔在 2–3 个颗粒上涂一下，点「小颗粒」，再回到这里按「刷新图层」并勾选图层");
   };
   $("spa-ex-reload").onclick = reload;
 
@@ -120,9 +116,8 @@
   $("spa-ex-go").onclick = async () => {
     const n = await W.run("保存挑选", "examplesUse", {});
     if (n == null) return;
-    const symmetry = ($("spa-ex-sym-text").value.trim() || $("spa-ex-sym").value).toUpperCase();
-    const r = await W.run(`重构（${n} 个颗粒，直径 ${fmt(W.project.diameterA, 0)} Å）`, "auto", { symmetry, picked: true });
-    if (r) W.showResult?.(W.project);
+    W.status(`已保存 ${n} 个颗粒。下一步：第 3 步，二维分类`);
+    W.next?.(3);
   };
 
   async function loadView(mic, quiet) {
