@@ -440,7 +440,9 @@ impl Project {
 /// Motion correction of every movie (the cryo-ET package's
 /// `motion::run`), dose-weighted sums written to `motion/`.
 pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progress) -> Result<()> {
-    if p.mics.len()>1&&params.backend!="cpu"&&crate::gpu_workers::enabled(){return parallel_mics(p,"motion",serde_json::to_value(params)?,0,progress);}
+    // One movie per GPU worker was slower than one process's own read-ahead
+    // pipeline (measured for tilt series, `motion::series`): as there, only on request.
+    if p.mics.len()>1&&params.backend!="cpu"&&crate::gpu_workers::enabled()&&std::env::var_os("TMV_MOVIE_WORKERS").is_some(){return parallel_mics(p,"motion",serde_json::to_value(params)?,0,progress);}
     if !p.movies {
         bail!("输入已是显微图，不需要运动校正");
     }
@@ -465,48 +467,38 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
     }
     params.even_odd = false;
     params.unweighted = false;
+    let movies: Vec<PathBuf> = p.mics.iter().map(|m| PathBuf::from(m.movie.clone().unwrap_or_else(|| m.path.clone()))).collect();
+    let outs: Vec<PathBuf> = movies.iter().map(|m| out_dir.join(format!("{}.mrc", m.file_stem().unwrap_or_default().to_string_lossy()))).collect();
+    // Movies already corrected are only measured; the rest go through the
+    // batch pipeline that corrects tilt series (`motion::batch`).
     for i in 0..n {
-        check_cancel()?;
-        let movie = p.mics[i]
-            .movie
-            .clone()
-            .unwrap_or_else(|| p.mics[i].path.clone());
-        let stem = Path::new(&movie)
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let out = out_dir.join(format!("{stem}.mrc"));
-        if !out.exists() {
-            let req = crate::motion::RunReq {
-                token: None,
-                path: Some(movie.clone()),
-                mdoc: None,
-                output: out.to_string_lossy().into(),
-                c: 0,
-                z: 0,
-                t: 0,
-                params: params.clone(),
-            };
-            let r = crate::motion::run(&req,None,&|stage,a,b|progress(&format!("运动校正 {}/{} · {stage}",i+1,n),a,b))?;
-            // 1 Å/px is the placeholder motion uses when nothing knew the
-            // pixel size: never let it replace a known value.
-            let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
-            if r.pixel_a > 0.0 && !placeholder && (i == 0 || p.optics.pixel_a <= 1.0) {
-                p.optics.pixel_a = r.pixel_a;
-                p.optics_found.pixel = true;
-            }
-            p.mics[i].width = r.width;
-            p.mics[i].height = r.height;
-        } else {
-            let (_, w, h) = read_mic(&out.to_string_lossy())?;
+        if outs[i].exists() {
+            let (_, w, h) = read_mic(&outs[i].to_string_lossy())?;
             p.mics[i].width = w;
             p.mics[i].height = h;
+            p.mics[i].path = outs[i].to_string_lossy().into();
         }
-        p.mics[i].path = out.to_string_lossy().into();
-        progress("运动校正", i + 1, n);
-        p.save()?;
     }
+    let jobs: Vec<Option<(&Path, &crate::motion::Params)>> = (0..n).map(|i| (!outs[i].exists()).then_some((movies[i].as_path(), &params))).collect();
+    let label = |i: usize| format!("运动校正 {}/{}", i + 1, n);
+    let mut first = true;
+    crate::motion::batch::each(&jobs, &out_dir, &label, progress, |i, corrected| {
+        let r = crate::motion::write(&outs[i].to_string_lossy(), corrected?, &params)?;
+        // 1 Å/px is the placeholder motion uses when nothing knew the
+        // pixel size: never let it replace a known value.
+        let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
+        if r.pixel_a > 0.0 && !placeholder && (first || p.optics.pixel_a <= 1.0) {
+            p.optics.pixel_a = r.pixel_a;
+            p.optics_found.pixel = true;
+        }
+        first = false;
+        p.mics[i].width = r.width;
+        p.mics[i].height = r.height;
+        p.mics[i].path = outs[i].to_string_lossy().into();
+        progress("运动校正", i + 1, n);
+        p.save()
+    })?;
+    progress("运动校正", n, n);
     Ok(())
 }
 
