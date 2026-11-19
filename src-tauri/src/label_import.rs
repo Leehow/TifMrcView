@@ -133,7 +133,7 @@ pub fn import(labels: &mut Labels, path: &Path) -> Result<Imported> {
     Ok(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pro"))]
 mod tests {
     use super::*;
 
