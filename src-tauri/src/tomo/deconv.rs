@@ -102,13 +102,43 @@ impl Drop for Store {
     }
 }
 
+/// Largest single read or write of the scratch spectrum. A Windows disk
+/// under WSL (drvfs/9p) answered 64 MB requests with ENOMEM ("Cannot
+/// allocate memory") once memory was tight; small pieces, retried, go through.
+#[cfg(unix)]
+const PIECE: usize = 4 << 20;
+
+/// `op` on `PIECE`-sized pieces of `len` bytes from `at`; a piece refused for
+/// want of memory is retried, smaller and after a pause, before giving up.
+#[cfg(unix)]
+fn in_pieces(len: usize, at: u64, mut op: impl FnMut(std::ops::Range<usize>, u64) -> std::io::Result<()>) -> std::io::Result<()> {
+    let mut done = 0;
+    let mut piece = PIECE;
+    let mut tries = 0;
+    while done < len {
+        let n = piece.min(len - done);
+        match op(done..done + n, at + done as u64) {
+            Ok(()) => {
+                done += n;
+                tries = 0;
+            }
+            Err(e) if e.raw_os_error() == Some(libc::ENOMEM) && tries < 20 => {
+                tries += 1;
+                piece = (piece / 2).max(64 << 10);
+                std::thread::sleep(std::time::Duration::from_millis(50 * tries));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
 #[cfg(unix)]
 fn read_at(f: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
-    std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
+    in_pieces(buf.len(), at, |r, at| std::os::unix::fs::FileExt::read_exact_at(f, &mut buf[r], at))
 }
 #[cfg(unix)]
 fn write_at(f: &std::fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
-    std::os::unix::fs::FileExt::write_all_at(f, buf, at)
+    in_pieces(buf.len(), at, |r, at| std::os::unix::fs::FileExt::write_all_at(f, &buf[r], at))
 }
 #[cfg(windows)]
 fn read_at(f: &std::fs::File, mut buf: &mut [u8], mut at: u64) -> std::io::Result<()> {

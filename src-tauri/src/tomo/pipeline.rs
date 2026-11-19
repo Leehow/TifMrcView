@@ -296,7 +296,19 @@ pub fn deconvolve(d: &mut Dataset, source: Option<&str>, progress: Progress) -> 
     let mut df: Vec<f64> = ctf.tilts.iter().map(|t| 0.5 * (t.df1 + t.df2)).collect();
     df.sort_by(f64::total_cmp);
     progress("反卷积", 0, 1);
-    let (mut v, shape, px) = load(&src.path)?;
+    // The tomogram in a buffer that goes to a scratch file when memory is
+    // short (`bigbuf`), read a section at a time: a 10 GB volume read whole
+    // failed on a 32 GB server shared with other jobs.
+    let img = open(&src.path)?;
+    let shape = dims(&img);
+    let px = output::pixel_a(&img);
+    let plane = shape[0] * shape[1];
+    let mut v = crate::bigbuf::Buf::zeros(plane * shape[2]);
+    for z in 0..shape[2] {
+        check_cancel()?;
+        v[z * plane..(z + 1) * plane].copy_from_slice(&section(&img, z)?);
+    }
+    drop(img);
     let optics = crate::ctf::Optics::of(d.optics.kv, d.optics.cs_mm, d.optics.amplitude);
     let scratch = std::path::Path::new(&src.path).parent().unwrap_or(std::path::Path::new("."));
     super::deconv::deconvolve(&mut v, shape, px, df[df.len() / 2], &optics, scratch)?;
