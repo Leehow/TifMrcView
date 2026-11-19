@@ -20,12 +20,9 @@
   const { fmt } = W;
   const lockSvg = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
   $("spa-auto").innerHTML = `
-    <p class="dim spa-intro">三步得到颗粒的三维结构。按顺序做，每步做完下一步才会亮起；关掉软件再打开，会接着上次做到的地方。</p>
-
     <section class="spa-wz" id="spa-wz-1">
       <header><span class="spa-wz-n">1</span><b>运动校正和 CTF</b><span class="spa-wz-state"></span></header>
       <div class="spa-wz-body">
-        <p class="dim">把电影里每一帧的漂移对齐、叠成清晰的显微图，再测出每张图的离焦（CTF）。全自动，参数从文件夹里的配置文件读取。</p>
         <p id="spa-optics-line" class="dim"></p>
         <div id="spa-ask" class="al-opts" hidden>
           <p class="dim al-wide">文件夹里没有找到这些参数，请填写：</p>
@@ -40,7 +37,6 @@
     <section class="spa-wz" id="spa-wz-2">
       <header><span class="spa-wz-n">2</span><b>挑颗粒</b><span class="spa-wz-state"></span></header>
       <div class="spa-wz-body">
-        <p class="dim">程序不知道你要的是哪种颗粒，所以先由你在一张显微图上涂几个例子，程序再到所有显微图里找出像它们的，给你检查。</p>
         <div id="spa-ex-slot"></div>
         <details id="spa-a-autobox" class="spa-autobox">
           <summary>换一种方式：让程序先找出几种颗粒，你点选（适合教程那样干净的数据）</summary>
@@ -57,7 +53,6 @@
       <header><span class="spa-wz-n">3</span><b>平均：二维分类和三维重构</b><span class="spa-wz-state"></span></header>
       <div class="spa-wz-body">
         <h4>3a · 二维分类</h4>
-        <p class="dim">把挑到的颗粒剪下来，按长相分成约 20 类，每类叠加平均。平均后清晰的类说明颗粒挑得好，程序会自动选中它们。</p>
         <div class="al-row"><button id="spa-c-run" class="primary">剪出颗粒并做二维分类</button></div>
         <div id="spa-c-box" hidden>
           <p class="dim spa-wz-tip">蓝框是选中的类，只有它们的颗粒用于三维重构。点一下可以加选或去掉：模糊的、只有噪声的、冰渣或碳膜边的类去掉；能看清结构的类都留着（顶视、侧视等不同朝向都要）。</p>
@@ -65,7 +60,6 @@
           <p id="spa-c-sum" class="dim"></p>
         </div>
         <h4>3b · 三维重构</h4>
-        <p class="dim">用选中的类：程序判断对称性，从头建初始模型，再做金标准三维精修（颗粒分两半各自对齐，两半的 FSC 给出分辨率），最后锐化。</p>
         <div class="al-opts">
           <label>对称性<select id="spa-a-sym"><option value="">自动判断</option><option>C1</option></select></label>
           <label>或填写<input id="spa-a-sym-text" type="text" placeholder="如 C4、D7、O" size="5"></label>
@@ -81,6 +75,15 @@
     </section>`;
 
   const cards = [1, 2, 3].map((i) => $(`spa-wz-${i}`));
+  // The thin step row on top with its 「怎么做」 lines (guide.js, shared with Cryo-ET).
+  const guide = window.TifMrcViewPro.guide($("spa-auto"), "spa", [
+    { title: "运动校正和 CTF", go: () => W.next(1),
+      help: "把电影里每一帧的漂移对齐、叠成清晰的显微图，再测出每张图的离焦（CTF）。全自动，像素大小、电压从文件夹里的配置文件读；读不到会请你填。按卡片里的「开始运动校正和 CTF」。" },
+    { title: "挑颗粒", go: () => W.next(2),
+      help: "程序不知道你要哪种颗粒：你在一张显微图上用标签画笔涂 2–3 个例子（点「小颗粒」让涂的贴上去），程序到所有显微图里找出像它们的，你翻几张检查，点圆圈改要不要，满意后按「用这些颗粒，去第 3 步」。" },
+    { title: "二维分类和三维重构", go: () => W.next(3),
+      help: "先按「剪出颗粒并做二维分类」：颗粒按长相分约 20 类并平均，清晰的类自动选中（蓝框），模糊的、冰渣碳边的点掉。再按「用选中的类做三维重构」：程序判断对称性、从头建模、金标准精修（两半数据的 FSC 给出分辨率）并锐化，完成后「打开三维图」。" },
+  ]);
   const userOpen = new Map(); // cards opened or closed by hand: i → open
   cards.forEach((c, i) => {
     c.querySelector("header").onclick = () => {
@@ -147,6 +150,7 @@
       "下一步：二维分类（第 3 步）",
       "",
     ];
+    guide.set(step.map((x, i) => (x ? "done" : !p || (i > 0 && !step[i - 1]) ? "locked" : i === active ? "now" : "open")));
     cards.forEach((c, i) => {
       const locked = !p || (i > 0 && !step[i - 1]);
       c.classList.toggle("locked", locked);
@@ -326,7 +330,9 @@
 
   // Opens step `i` (1-based) and scrolls to it.
   W.next = (i) => {
+    if (cards[i - 1].classList.contains("locked")) return;
     userOpen.clear();
+    userOpen.set(i - 1, true);
     if (W.project) W.show(W.project);
     cards[i - 1].scrollIntoView({ behavior: "smooth", block: "start" });
   };

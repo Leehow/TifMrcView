@@ -627,10 +627,6 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #live-dock.folded .ld-text { max-width:200px; }
 
 /* The three jobs of the Cryo-ET panel (cryoet/jobs.js): tabs under its title. */
-.ws-jobs { display:flex; gap:2px; margin:2px 0 10px; border-bottom:1px solid var(--line); }
-.ws-jobs button { height:30px; padding:0 14px; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:none; font-size:13px; color:var(--dim); }
-.ws-jobs button:hover { background:var(--muted); }
-.ws-jobs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
 #cryoet-workspace[data-job="recon"] #cryo-sta,
 #cryoet-workspace[data-job="sta"] :is(#cryo-dataset, #cryo-export-box, #cryo-advanced, #cryo-session, #cryo-foot) { display:none; }
 /* The 子断层平均 part scrolls with the whole panel, as 三维重构 does (no box of its own that scrolls). */
@@ -772,3 +768,26 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
 #spa-ex .spa-teach li { line-height:1.6; margin:2px 0; }
+/* The step guide on top of a workspace (guide.js): one thin row of steps and a 「怎么做」 switch. */
+.pg { margin:2px 0 10px; border-bottom:1px solid var(--line); }
+.pg-row { display:flex; align-items:center; gap:6px; }
+.pg-steps { flex:1; min-width:0; display:flex; align-items:stretch; gap:2px; margin:0; padding:0; list-style:none; }
+.pg-steps li { display:flex; align-items:center; min-width:0; }
+.pg-steps li + li::before { content:""; flex:none; width:10px; height:1px; margin:0 2px; background:var(--line-strong, var(--line)); }
+.pg-steps button { display:flex; align-items:center; gap:6px; min-width:0; height:32px; padding:0 8px; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:none; color:var(--dim); font-size:13px; }
+.pg-steps button:hover { background:var(--muted); }
+.pg-steps .pg-t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pg-n { flex:none; display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:var(--muted); font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; }
+.pg-n svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
+.pg-steps .pg-done .pg-n { background:color-mix(in srgb, #1a7f37 18%, transparent); color:#1a7f37; }
+.pg-steps .pg-now .pg-n { background:var(--accent); color:#fff; }
+.pg-steps .pg-locked { opacity:.6; }
+.pg-steps .pg-locked .pg-n svg { width:10px; height:10px; stroke-width:2; }
+.pg-steps .pg-at { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.pg-help { flex:none; color:var(--dim); }
+.pg-help.on { color:var(--accent); border-color:var(--accent); }
+.pg-detail { margin:0 0 8px; padding:8px 10px; border-radius:8px; background:var(--subtle, var(--muted)); font-size:12px; line-height:1.6; }
+.pg-detail b { margin-right:8px; }
+.pg-detail .pg-tag { color:var(--dim); font-size:11px; }
+.pg-detail div { margin-top:2px; }
+.pg-detail[hidden] { display:none; }

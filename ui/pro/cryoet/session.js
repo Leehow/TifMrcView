@@ -226,7 +226,9 @@
   // ---------- the wall ----------
 
   const tiles = new Map();
+  W.series = () => session.series;
   function render() {
+    document.dispatchEvent(new CustomEvent("pro-guide"));
     showFolder();
     q('.cs-discovery').textContent=[...(session.warnings||[]),(session.gains||[]).length===1?`增益参考：${W.name(session.gains[0])}`:(session.gains||[]).length>1?'发现多个增益参考，开始前需明确选择或缩小范围':''].filter(Boolean).join('；');
     const list = R.sortSeries(session.series);

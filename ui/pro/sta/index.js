@@ -333,6 +333,7 @@
   function renderResult() {
     const r = cur().result;
     W.result = r;
+    document.dispatchEvent(new CustomEvent("pro-guide"));
     $("sta-result").hidden = !r;
     if (!r) { W.found?.placed?.sync(); return renderKinds(); }
     const res = r.resolutionA != null ? `分辨率 ${fmt(r.resolutionA)} Å · ${r.particles} 个颗粒` : `${r.particles} 个颗粒 · 两半图不够一致，没有给出分辨率`;

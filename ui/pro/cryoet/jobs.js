@@ -1,5 +1,6 @@
 "use strict";
-// The Cryo-ET workspace is one panel with two jobs, as tabs under its title:
+// The Cryo-ET workspace is one panel with two jobs, steps 1 and 3 of the step guide under its
+// title (step 2, painting what to average, sits at the top of the second):
 //   三维重构 — the folder flow (session.js): movies become tilt series and
 //     tomograms of the ticked series, with the steps the user ticked (none:
 //     the fast tomogram, which is also the look at what the series are like);
@@ -18,20 +19,35 @@
     ["sta", "子断层平均", "从断层图里找出同一种颗粒，平均出它的结构"],
   ].filter(([id]) => id !== "sta" || sta?.host);
 
-  const nav = document.createElement("nav");
-  nav.className = "ws-jobs";
-  nav.setAttribute("role", "tablist");
-  nav.setAttribute("aria-label", "Cryo-ET 的功能");
-  for (const [id, name, title] of JOBS) {
-    const b = document.createElement("button");
-    b.dataset.job = id;
-    b.textContent = name;
-    b.title = title;
-    b.setAttribute("role", "tab");
-    b.onclick = () => go(id);
-    nav.append(b);
+  // The two jobs are steps 1 and 3 of the guide on top (guide.js, shared with the single-particle
+  // panel); step 2, marking what to average with the label brush, is done on the tomograms and its
+  // list of layers is part of 子断层平均 (sta/layers.js).
+  const part = (sel) => () => { go("sta"); requestAnimationFrame(() => $(sel)?.scrollIntoView({ behavior: "smooth", block: "start" })); };
+  const steps = [
+    { title: "三维重构", go: () => go("recon"),
+      help: "选放着倾转序列（电影或 .st / .mrc）的项目文件夹，勾选序列，再勾想要的处理（都不勾就是几分钟一个的快速重构，适合先看看样品），按「重构勾选序列」。卡片上的「打开」可以检查倾转图、对齐和断层图，挑掉不好的图后再重构。" },
+  ];
+  if (JOBS.some(([id]) => id === "sta")) steps.push(
+    { title: "画标签（mask）", go: part("#sta-layers"),
+      help: "在断层图上标出要平均的东西：在「子断层平均」里点一张断层图的「打开并标注」，查看器换成标签画笔。每种东西一个图层，涂几下，点结构类型（小颗粒、空心球、单层膜、纤维…）让程序贴到真实的边上；想要整张图里所有同类，用「找同类」再「沿 Z」。" },
+    { title: "子断层平均", go: part("#sta-layers-use"),
+      help: "勾选要平均的图层（可以跨好几张断层图，比如只勾膜），按「用勾选的图层」：程序在原始断层图里找全同类、对齐、平均，并用两半数据的 FSC 给出分辨率。" },
+  );
+  const guide = window.TifMrcViewPro.guide(panel, "cryoet", steps);
+  panel.querySelector(".al-head").after(guide.el);
+  W.guide = guide;
+  // Done: a tomogram of the folder; a painted layer on one; an average.
+  function states() {
+    const series = W.series?.() || [];
+    const done = [
+      series.some((s) => s.result || s.quick) || (sta?.items?.length > 0),
+      (sta?.layersMarked || 0) > 0,
+      !!sta?.result,
+    ].slice(0, steps.length);
+    const now = done.findIndex((d) => !d);
+    guide.set(done.map((d, i) => (d ? "done" : i === now ? "now" : i > 0 && !done[i - 1] ? "locked" : "open")));
   }
-  panel.querySelector(".al-head").after(nav);
+  for (const e of ["pro-guide", "cryoet-idle", "cryoet-open", "sta-out", "sta-busy"]) document.addEventListener(e, states);
 
   const staBox = document.createElement("div");
   staBox.id = "cryo-sta";
@@ -56,10 +72,9 @@
     job = id;
     pref.set("cryo-job", id);
     panel.dataset.job = id;
-    for (const b of nav.children) {
-      b.classList.toggle("on", b.dataset.job === id);
-      b.setAttribute("aria-selected", b.dataset.job === id);
-    }
+    // The guide shows the part that is open (a click on a step has set it already).
+    if (id === "recon") guide.show(0);
+    else if (guide.at() === 0) guide.show(steps.length > 2 && (sta?.layersMarked || 0) > 0 ? 2 : 1);
     if (id === "sta") {
       if (!panel.hidden) sta.show();
     } else if (was === "sta") {
@@ -70,6 +85,7 @@
   W.job = () => panel.dataset.job;
   W.go = go;
   go(job);
+  states();
   // The hosted part is refreshed whenever the panel shows it again.
   document.addEventListener("cryoet-open", () => { if (job === "sta" && hosted) sta.show(); });
   document.addEventListener("cryoet-close", () => { if (job === "sta" && hosted) sta.hide(); });

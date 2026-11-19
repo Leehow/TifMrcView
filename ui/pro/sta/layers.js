@@ -64,6 +64,8 @@
   }
 
   function render() {
+    W.layersMarked = L.layers.filter((l) => (l.objects || 0) + (l.lines || 0) > 0).length;
+    document.dispatchEvent(new CustomEvent("pro-guide"));
     const list = $("sta-layers-list");
     const ticks = ticksOf();
     // Ticks of layers that are gone are dropped.
