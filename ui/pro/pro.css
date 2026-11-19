@@ -744,3 +744,7 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
 #spa-ex .spa-ex-cut input { flex:1; }
 #spa-a-autobox { margin-top:12px; }
 #spa-a-autobox > summary { cursor:pointer; }
+/* The panel scrolls as a whole: its parts keep their height (a flex column shrank them and the
+   advanced summary ran over the status line), and the status line stays at the bottom. */
+#spa-workspace > * { flex-shrink:0; }
+#spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }

@@ -49,7 +49,20 @@ pub fn mic_preview(img: &[f32], w: usize, h: usize, picks: &[[f32; 3]], radius_p
 
 /// Class averages in a grid of `cols` columns, each scaled to `cell` pixels.
 pub fn gallery(avgs: &[Vec<f32>], b: usize, cols: usize, cell: usize) -> Result<Vec<u8>> {
-    gallery_with(avgs, b, cols, cell, &to_gray)
+    gallery_with(avgs, b, cols, cell, &|a: &[f32]| class_gray(a, b))
+}
+
+/// Grey of a class average: mean ± 3 standard deviations of the disc the
+/// average was masked to. A robust spread (`to_gray`) is no use here: most
+/// of a masked box is one flat value, its deviation about nothing, and the
+/// panel came out black and white.
+fn class_gray(v: &[f32], b: usize) -> Vec<u8> {
+    let c = b as f64 / 2.0;
+    let inner: Vec<f64> = (0..v.len()).filter(|&i| ((i % b) as f64 + 0.5 - c).powi(2) + ((i / b) as f64 + 0.5 - c).powi(2) <= c * c).map(|i| v[i] as f64).filter(|x| x.is_finite()).collect();
+    let n = inner.len().max(1) as f64;
+    let m = inner.iter().sum::<f64>() / n;
+    let s = (inner.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n).sqrt().max(1e-12);
+    v.iter().map(|&x| (((x as f64 - m) / s / 6.0 + 0.5) * 255.0).clamp(0.0, 255.0) as u8).collect()
 }
 
 /// `gallery` with its own grey mapping of each panel.
