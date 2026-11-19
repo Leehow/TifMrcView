@@ -2033,6 +2033,33 @@ async fn tomo_reconstruct(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline
     tomo_step(app, req, compute_id, |d, s, p| crate::tomo::pipeline::reconstruct(d, s, p)).await
 }
 
+/// The tilt series behind the open image for the toolbar's reconstruction
+/// button (`tomo::trial::source`): None when it is no tilt series and none
+/// of its datasets lists it; else the series, its dataset and the settings
+/// a first trial starts from.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_trial_source(path: String) -> CmdResult<Option<serde_json::Value>> {
+    blocking(move || {
+        let Some(stack) = crate::tomo::trial::source(&path) else { return Ok(None) };
+        let (img, d) = tomo_open(&stack)?;
+        if d.angles.len() != img.info().size_z {
+            return Ok(None);
+        }
+        let px = d.optics.pixel_a.or_else(|| crate::tomo::output::pixel_known(&img));
+        let defaults = crate::tomo::trial::defaults(img.info().width, px);
+        Ok(Some(serde_json::json!({ "stack": stack, "dataset": d, "defaults": defaults, "width": img.info().width, "pixelA": px })))
+    }).await
+}
+
+/// One reconstruction trial (`tomo::trial::run`): aligns first when the
+/// series has no alignment yet.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_trial(app: AppHandle, req: TomoStepReq<crate::tomo::trial::TrialReq>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
+    tomo_step(app, req, compute_id, |d, s, p| crate::tomo::trial::run(d, s, p)).await
+}
+
 #[cfg(feature = "pro")]
 #[tauri::command]
 async fn tomo_denoise(app: AppHandle, req: TomoStepReq<crate::tomo::pipeline::DenoiseStep>, compute_id: Option<String>) -> CmdResult<serde_json::Value> {
@@ -3929,6 +3956,8 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_align,
             #[cfg(feature = "pro")] tomo_save_aligned,
             #[cfg(feature = "pro")] tomo_reconstruct,
+            #[cfg(feature = "pro")] tomo_trial,
+            #[cfg(feature = "pro")] tomo_trial_source,
             #[cfg(feature = "pro")] tomo_cancel,
             #[cfg(feature = "pro")] spa_open,
             #[cfg(feature = "pro")] spa_settings,

@@ -2,7 +2,7 @@
 'use strict';
 (() => {
   const kinds = new Map();
-  for (const name of ['tomo_align','tomo_ctf','tomo_reconstruct','tomo_denoise','tomo_auto','tomo_wedge','tomo_session_run','tomo_save_aligned','tomo_export']) kinds.set(name,'tomo');
+  for (const name of ['tomo_align','tomo_ctf','tomo_reconstruct','tomo_trial','tomo_denoise','tomo_auto','tomo_wedge','tomo_session_run','tomo_save_aligned','tomo_export']) kinds.set(name,'tomo');
   for (const [name,kind] of Object.entries({spa_run:'spa',denoise_train:'denoise',denoise_preview:'denoise',denoise_save:'denoise',ctf_fit:'ctf',ctf_fit_stack:'ctf',motion_run:'tomo',motion_series:'tomo',align_estimate:'tomo'})) kinds.set(name,kind);
   const jobs = new Map(), latest = new Map();
   let listening, resources, resourcesAt = 0;

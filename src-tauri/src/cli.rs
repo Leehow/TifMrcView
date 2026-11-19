@@ -35,6 +35,11 @@ USAGE
   tmv tomo <tilt-series|.mdoc>   One-click cryo-ET reconstruction
         [--for display|sta|survey | --steps align,n2n,wedge,flat,binN] [--pixel Å]
                                  (--pixel is needed when the file does not say its pixel size)
+  tmv recon <tilt-series|its tomogram>
+                                 One quick reconstruction to compare methods
+        [--method wbp|sirt|sart] [--iterations N] [--filter ramp|cosine|hamming]
+        [--bin N] [--thickness N] [--offset N] [--lambda λ] [--positive] [--flip]
+        [--pixel Å]       (the app's reconstruction button; each setting its own file)
   tmv sta <tilt-series|tomogram> [MORE …]
                                  Subtomogram averaging: makes the cards, then STOPS
         [--pick N | --points marks.json | --marks marks.json [--size small|medium|large]
@@ -176,10 +181,11 @@ pub fn main(args: Vec<String>) -> i32 {
     }
     let started = Instant::now();
     // Held until this job ends.
-    let _turn = if matches!(cmd, "run" | "tomo" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") { gpu_turn() } else { None };
+    let _turn = if matches!(cmd, "run" | "tomo" | "recon" | "sta" | "membranes" | "membrane" | "spa" | "ctf" | "denoise") { gpu_turn() } else { None };
     let result = match cmd {
         "run" => run(&opts),
         "tomo" => tomo(&opts),
+        "recon" => recon(&opts),
         "sta" => sta(&opts),
         "membranes" | "membrane" => membranes(&opts),
         "spa" => spa(&opts),
@@ -253,6 +259,7 @@ fn result_file(cmd: &str, o: &Opts) -> Option<PathBuf> {
     let purpose = match (cmd, o.get("for")) {
         ("tomo", Some("sta" | "averaging")) => ".sta",
         ("tomo", Some("survey" | "quick")) => ".survey",
+        ("recon", _) => ".recon",
         _ => "",
     };
     Some(if p.is_dir() { p.join("tmv.json") } else { PathBuf::from(format!("{input}{purpose}.tmv.json")) })
@@ -282,7 +289,7 @@ struct Opts {
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts> {
-        const FLAGS: [&str; 6] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes", "--only"];
+        const FLAGS: [&str; 8] = ["--sam", "--fresh", "--auto", "--kinds", "--membranes", "--only", "--positive", "--flip"];
         let mut o = Opts::default();
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -661,6 +668,55 @@ fn tomo(o: &Opts) -> Result<Value> {
     }
     v["open"] = json!(r.path);
     Ok(v)
+}
+
+/// `tmv recon`: one reconstruction trial (`tomo::trial`, the app's
+/// reconstruction button) with the method and settings given; what is not
+/// given starts where the app starts (binned to at most 512 pixels, about
+/// 300 nm thick). The series is aligned first when it has no alignment yet.
+fn recon(o: &Opts) -> Result<Value> {
+    use crate::tomo::{dataset::Dataset, recon::{Filter, Method, Params}, trial};
+    let input = o.input()?;
+    let Some(stack) = trial::source(input) else {
+        bail!("{input} is no tilt series with tilt angles (.mdoc/.tlt beside it), nor a tomogram made from one")
+    };
+    let img = crate::tomo::pipeline::open(&stack)?;
+    let info = img.info();
+    let px = require_pixel("recon", &stack, &img, o.number("pixel")?)?;
+    let mut d = Dataset::open(&info.path, info.size_z, Some(px))?;
+    let start = trial::defaults(info.width, Some(px));
+    drop(img);
+    let whole = |key: &str| -> Result<Option<usize>> {
+        o.get(key).map(|s| s.parse::<usize>().ok().filter(|v| *v > 0).with_context(|| format!("--{key}: `{s}` is not a positive whole number"))).transpose()
+    };
+    let method = match o.get("method").unwrap_or("wbp") {
+        "wbp" => Method::Wbp,
+        "sirt" => Method::Sirt,
+        "sart" => Method::Sart,
+        m => bail!("--method {m}: use wbp, sirt or sart"),
+    };
+    let filter = match o.get("filter").unwrap_or("ramp") {
+        "ramp" => Filter::Ramp,
+        "cosine" => Filter::Cosine,
+        "hamming" => Filter::Hamming,
+        f => bail!("--filter {f}: use ramp, cosine or hamming"),
+    };
+    let offset = o.get("offset").map(|s| s.parse::<f64>().with_context(|| format!("--offset: `{s}` is not a number"))).transpose()?.unwrap_or(0.0);
+    let params = Params {
+        thickness: whole("thickness")?.unwrap_or(start.thickness),
+        method,
+        iterations: whole("iterations")?.unwrap_or(if method == Method::Sart { 3 } else { 15 }),
+        lambda: o.number("lambda")?.map_or(if method == Method::Sart { 0.5 } else { 1.0 }, |l| l as f32),
+        non_negative: o.flag("positive"),
+        z_offset: offset,
+        filter,
+        ..Default::default()
+    };
+    let req = trial::TrialReq { bin: whole("bin")?.unwrap_or(start.bin), params, phase_flip: o.flag("flip") };
+    let progress = Progress::new();
+    let r = trial::run(&mut d, &req, &|s: &str, i: usize, n: usize| progress.report(s, i, n))?;
+    progress.done();
+    Ok(json!({ "series": stack, "path": r.path, "settings": r.summary, "alignedNow": r.aligned, "backend": r.backend, "open": r.path }))
 }
 
 /// `--out`, else the project's `4_sta/` for a tomogram of a new project (or

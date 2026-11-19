@@ -154,7 +154,7 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #ctf-plot { width: 100%; height: 90px; display: block; margin-top: 6px; background: var(--subtle); border: 1px solid var(--line); border-radius: 6px; }
 #fft-panel { max-height: calc(100% - 20px); overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
 
-#align-panel, #diff-panel, #denoise-panel, #wedge-panel, #stem-panel, #part-panel {
+#align-panel, #recon-panel, #diff-panel, #denoise-panel, #wedge-panel, #stem-panel, #part-panel {
   position: absolute; top: 10px; right: 10px; z-index: 6;
   width: 290px; max-height: calc(100% - 20px); overflow-y: auto; box-sizing: border-box;
   padding: 8px 10px 10px; font-size: 12px;
@@ -195,7 +195,7 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 .df-cell { grid-template-columns: 1fr 1fr 1fr; }
 .ctf-warn { margin-top: 4px; color: #9a6700; line-height: 1.4; }
 /* Right-hand panels move left of the show-sidebar button while the sidebar is folded. */
-#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #diff-panel, #denoise-panel, #wedge-panel, #stem-panel, #part-panel) { right: 40px; }
+#stage:has(#btn-show-sidebar:not([hidden])) :is(#fft-panel, #align-panel, #recon-panel, #diff-panel, #denoise-panel, #wedge-panel, #stem-panel, #part-panel) { right: 40px; }
 #df-zones { overflow-x: auto; }
 #df-zones table { table-layout: auto; }
 #df-zones td, #df-zones th { padding: 1px 3px; }
@@ -748,3 +748,14 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+
+/* 重构试验 (cryoet/trial.js) */
+#recon-panel #rt-series, #recon-panel #rt-size { margin: 0 0 6px; line-height: 1.4; }
+#recon-panel #rt-status { margin: 6px 0 0; line-height: 1.4; font-variant-numeric: tabular-nums; }
+#recon-panel [hidden] { display: none !important; }
+#rt-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+#rt-list .rt-head { font-size: 11px; }
+#rt-list .rt-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: pointer; font-size: 12px; }
+#rt-list .rt-item span { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+#rt-list .rt-item:hover { background: var(--subtle); }
+#rt-list .rt-item.on { border-color: var(--accent, #e71316); }

@@ -45,7 +45,7 @@
     for (const t of d?.tomograms ?? []) {
       const row = document.createElement("div");
       row.className = "al-row";
-      const kinds = { full: "断层", even: "偶数帧半", odd: "奇数帧半", denoised: "去噪", wedge: "缺失楔补偿" };
+      const kinds = { full: "断层", trial: "重构试验", even: "偶数帧半", odd: "奇数帧半", denoised: "去噪", wedge: "缺失楔补偿" };
       row.innerHTML = `<span class="dim"></span><button class="small">打开</button>`;
       row.firstChild.textContent = `${kinds[t.kind] || t.kind} · ${t.method.toUpperCase()} · bin ${t.bin} · Z ${t.thickness}${t.phaseFlipped ? " · 相位翻转" : ""} · ${W.name(t.path)}`;
       row.lastChild.onclick = () => openPath(t.path);

@@ -25,6 +25,7 @@ pub mod session;
 mod tests;
 pub mod track;
 pub mod triage;
+pub mod trial;
 
 use crate::image::OpenImage;
 use anyhow::{bail, Result};
