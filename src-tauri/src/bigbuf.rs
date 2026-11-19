@@ -139,12 +139,34 @@ impl Buf {
     /// `len` values `f(i)`, computed in parallel.
     pub fn from_fn(len: usize, f: impl Fn(usize) -> f32 + Sync) -> Buf {
         let mut b = Buf::zeros(len);
-        b.par_chunks_mut(1 << 16).enumerate().for_each(|(k, chunk)| {
-            for (j, v) in chunk.iter_mut().enumerate() {
-                *v = f(k * (1 << 16) + j);
-            }
-        });
+        // A slab at a time, so a scratch file's pages are let go as it fills.
+        let slab = 1 << 26;
+        for s0 in (0..len).step_by(slab) {
+            let end = (s0 + slab).min(len);
+            b[s0..end].par_chunks_mut(1 << 16).enumerate().for_each(|(k, chunk)| {
+                for (j, v) in chunk.iter_mut().enumerate() {
+                    *v = f(s0 + k * (1 << 16) + j);
+                }
+            });
+            b.trim();
+        }
         b
+    }
+
+    /// For a buffer in a scratch file: writes what changed to the disk and
+    /// lets go of its pages, so a mapping as big as the free memory does not
+    /// fill it (on a shared server a 10 GB buffer had left 92 MB free).
+    /// Later reads page the values back in. Nothing for one in memory.
+    pub fn trim(&self) {
+        if let Buf::Map(m, ..) = self {
+            if m.flush().is_err() {
+                return;
+            }
+            #[cfg(unix)]
+            unsafe {
+                libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_DONTNEED);
+            }
+        }
     }
 
     /// Whether the values are in a scratch file.
@@ -210,6 +232,8 @@ impl Clone for Buf {
     fn clone(&self) -> Buf {
         let mut b = Buf::zeros(self.len());
         b.par_chunks_mut(1 << 16).zip(self.par_chunks(1 << 16)).for_each(|(d, s)| d.copy_from_slice(s));
+        b.trim();
+        self.trim();
         b
     }
 }
@@ -258,5 +282,16 @@ mod tests {
         assert_eq!(m.into_vec()[10], 10.0);
         // The scratch file is already gone from the folder.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+/// Values whose pages can be let go (`Buf::trim`); nothing for a vector.
+pub trait Trim {
+    fn trim(&self) {}
+}
+impl Trim for Vec<f32> {}
+impl Trim for Buf {
+    fn trim(&self) {
+        Buf::trim(self)
     }
 }
