@@ -82,7 +82,6 @@
       open.onclick = async () => {
         try { await openPath(it.look || it.path); } catch (e) { $("sta-layers-note").textContent = `${e}`; return; }
         if (typeof setTool === "function") setTool("label");
-        $("sta-fold")?.getAttribute("aria-expanded") === "true" && $("sta-fold").click();
       };
       head.append(title, open);
       row.append(head);

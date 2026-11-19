@@ -191,8 +191,23 @@ fn objects(path: &str, want: Option<&[u16]>) -> Result<(Vec<Material>, Vec<Objec
             slot => *slot = Some(o.clone()),
         }
     }
-    Ok((materials, merged.into_iter().flatten().collect(), sections))
+    let mut objs: Vec<Object> = merged.into_iter().flatten().collect();
+    // Specks (a few stray voxels of an automatic segmentation, the crumbs of
+    // an eraser) are no things to average: a layer keeps the objects of at
+    // least `SPECK` voxels and of at least a fiftieth of its largest one.
+    let mut largest: Vec<(u16, f64)> = vec![];
+    for o in &objs {
+        match largest.iter_mut().find(|x| x.0 == o.label) {
+            Some(x) => x.1 = x.1.max(o.voxels),
+            None => largest.push((o.label, o.voxels)),
+        }
+    }
+    objs.retain(|o| o.voxels >= SPECK && o.voxels >= largest.iter().find(|x| x.0 == o.label).map_or(0.0, |x| x.1) / 50.0);
+    Ok((materials, objs, sections))
 }
+
+/// Fewest voxels of an object.
+const SPECK: f64 = 30.0;
 
 /// One painted object of a label file, for other workspaces (single
 /// particles take the objects of micrographs as examples): its label, its
@@ -275,10 +290,19 @@ pub fn marks_of(ticked: &[(String, u16)]) -> Result<Vec<Mark>> {
             let before = out.len();
             let mark = |kind: Kind, points: Vec<[f64; 3]>, flip: bool| Mark { kind, tomogram: image.to_string(), points, flip, strokes: vec![], deep: false };
             match m.structure.as_str() {
-                "shell" => out.extend(mine.iter().map(|o| {
-                    let c = o.centre();
-                    mark(Kind::Sphere, vec![c, [c[0] + o.half, c[1], c[2]]], false)
-                })),
+                "shell" => {
+                    // The refined rings (several stretches a vesicle, on one or more sections) give the
+                    // spheres; paint that was never refined falls back to its objects.
+                    let spheres = vesicles(&m.marks);
+                    if spheres.is_empty() {
+                        out.extend(mine.iter().map(|o| {
+                            let c = o.centre();
+                            mark(Kind::Sphere, vec![c, [c[0] + o.half, c[1], c[2]]], false)
+                        }));
+                    } else {
+                        out.extend(spheres.into_iter().map(|(c, r)| mark(Kind::Sphere, vec![c, [c[0] + r, c[1], c[2]]], false)));
+                    }
+                }
                 "membrane" | "membrane2" | "fibre" => {
                     let kind = if m.structure == "fibre" { Kind::Line } else { Kind::Surface };
                     for k in m.marks.iter().filter(|k| k.path.len() >= 2) {
@@ -304,6 +328,67 @@ pub fn marks_of(ticked: &[(String, u16)]) -> Result<Vec<Mark>> {
         }
     }
     Ok(out)
+}
+
+/// The circle through the points of a line (least squares, Kåsa): centre and radius.
+fn circle(pts: &[[f32; 2]]) -> Option<([f64; 2], f64)> {
+    if pts.len() < 3 {
+        return None;
+    }
+    let n = pts.len() as f64;
+    let (mx, my) = (pts.iter().map(|p| p[0] as f64).sum::<f64>() / n, pts.iter().map(|p| p[1] as f64).sum::<f64>() / n);
+    let (mut suu, mut svv, mut suv, mut suuu, mut svvv, mut suvv, mut svuu) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for p in pts {
+        let (u, v) = (p[0] as f64 - mx, p[1] as f64 - my);
+        suu += u * u;
+        svv += v * v;
+        suv += u * v;
+        suuu += u * u * u;
+        svvv += v * v * v;
+        suvv += u * v * v;
+        svuu += v * u * u;
+    }
+    let det = suu * svv - suv * suv;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let (b1, b2) = (0.5 * (suuu + suvv), 0.5 * (svvv + svuu));
+    let uc = (b1 * svv - b2 * suv) / det;
+    let vc = (suu * b2 - suv * b1) / det;
+    let r = (uc * uc + vc * vc + (suu + svv) / n).sqrt();
+    r.is_finite().then_some(([uc + mx, vc + my], r))
+}
+
+/// The vesicles of a layer of 空心球: the refined ring stretches fitted with
+/// circles, the ones about the same centre (a vesicle's stretches, and its
+/// rings on neighbouring sections) taken as one sphere: (centre, radius).
+fn vesicles(marks: &[crate::labels::Mark]) -> Vec<([f64; 3], f64)> {
+    let mut rings: Vec<([f64; 3], f64, f64)> = vec![];
+    for k in marks.iter().filter(|k| k.path.len() >= 5) {
+        let Some((c, r)) = circle(&k.path) else { continue };
+        // A nearly straight stretch fits a huge circle: not a vesicle's.
+        let span = k.path.iter().map(|p| ((p[0] as f64 - c[0]).powi(2) + (p[1] as f64 - c[1]).powi(2)).sqrt()).fold(0.0, f64::max);
+        if r < 2.0 || span > 1.5 * r {
+            continue;
+        }
+        rings.push(([c[0], c[1], k.z as f64], r, k.path.len() as f64));
+    }
+    // Greedy: each ring joins the first sphere whose centre is within half a radius in the plane and a radius in Z.
+    let mut out: Vec<([f64; 3], f64, f64)> = vec![];
+    for (c, r, w) in rings {
+        match out.iter_mut().find(|(s, sr, _)| ((s[0] - c[0]).powi(2) + (s[1] - c[1]).powi(2)).sqrt() < 0.5 * sr.max(r) && (s[2] - c[2]).abs() <= sr.max(r)) {
+            Some((s, sr, sw)) => {
+                let t = *sw + w;
+                for d in 0..3 {
+                    s[d] = (s[d] * *sw + c[d] * w) / t;
+                }
+                *sr = sr.max(r);
+                *sw = t;
+            }
+            None => out.push((c, r, w)),
+        }
+    }
+    out.into_iter().map(|(c, r, _)| (c, r)).collect()
 }
 
 fn name(p: &str) -> &str {
@@ -347,7 +432,7 @@ mod tests {
         let image = write(dir.path(), vec![particle, membrane], |x, y, z| {
             if (5..9).contains(&x) && (5..9).contains(&y) && (1..4).contains(&z) {
                 1
-            } else if (25..30).contains(&x) && (5..10).contains(&y) && z == 4 {
+            } else if (25..31).contains(&x) && (5..11).contains(&y) && z == 4 {
                 1
             } else if y == 20 && z == 3 {
                 2
@@ -373,6 +458,34 @@ mod tests {
         assert_eq!(marks[0].kind, Kind::Surface);
         assert!(marks[0].flip);
         assert!(marks[0].points.iter().all(|p| p[2] == 3.0));
+    }
+
+    #[test]
+    fn the_stretches_of_a_vesicle_are_one_sphere() {
+        let arc = |cx: f32, cy: f32, r: f32, a0: f32, a1: f32, z: usize| crate::labels::Mark {
+            z,
+            path: (0..20).map(|i| { let a = a0 + (a1 - a0) * i as f32 / 19.0; [cx + r * a.cos(), cy + r * a.sin()] }).collect(),
+            thickness: 2.0,
+            inside: 1,
+            closed: true,
+        };
+        // Vesicle 1: three stretches on section 5 and one on section 7; vesicle 2: one ring.
+        let marks = vec![arc(50.0, 50.0, 20.0, 0.0, 2.0, 5), arc(50.0, 50.0, 20.0, 2.2, 4.0, 5), arc(50.0, 50.0, 20.0, 4.2, 6.0, 5), arc(51.0, 50.0, 19.0, 0.0, 6.0, 7), arc(150.0, 60.0, 30.0, 0.0, 6.2, 5)];
+        let v = vesicles(&marks);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!((v[0].0[0] - 50.0).abs() < 1.5 && (v[0].1 - 20.0).abs() < 1.5, "{v:?}");
+        assert!((v[1].1 - 30.0).abs() < 1.0);
+    }
+
+    /// `TMV_IMAGE` (an image with a label file): its layers and the marks of each.
+    #[test]
+    #[ignore]
+    fn real_layers() {
+        let image = std::env::var("TMV_IMAGE").unwrap();
+        for l in layers_of(&[image.clone()]) {
+            let marks = marks_of(&[(image.clone(), l.label)]);
+            eprintln!("{} {} objects {} lines {} → {:?}", l.name, l.structure, l.objects, l.lines, marks.map(|m| m.iter().map(|k| (format!("{:?}", k.kind), k.points.first().map(|p| p.map(|v| v.round())), k.points.get(1).map(|q| (q[0] - k.points[0][0]).round()))).collect::<Vec<_>>()));
+        }
     }
 
     #[test]
