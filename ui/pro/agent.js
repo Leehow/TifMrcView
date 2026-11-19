@@ -40,7 +40,12 @@
   function labelOf(el) {
     const own = el.getAttribute("aria-label");
     if (own) return clip(own);
-    if (el.labels && el.labels.length) return clip(el.labels[0].textContent);
+    if (el.labels && el.labels.length) {
+      // The label's own words, without the options of a select inside it.
+      const l = el.labels[0].cloneNode(true);
+      l.querySelectorAll("select, input, textarea, option").forEach((x) => x.remove());
+      return clip(l.textContent);
+    }
     const text = clip(el.textContent);
     if (text) return text;
     return clip(el.title || el.placeholder || el.getAttribute("alt") || el.value || "");
@@ -206,9 +211,12 @@
     if (lab?.busy) b.labels = true;
     if ($("lab-busy")?.textContent.trim()) b.labels = clip($("lab-busy").textContent);
     if (visible($("loading"))) b.loading = clip($("loading").textContent) || true;
-    // A visible 取消 / 停止 button means a job is running.
-    for (const el of document.querySelectorAll("button[id$='-cancel'], button[id$='-stop']")) {
-      if (el.id !== "agent-stop" && visible(el) && !el.disabled) b[el.id] = true;
+    // A visible 取消 / 停止 button means a job is running (a start button
+    // turns into one while its job runs, e.g. 训练 → 取消).
+    for (const el of document.querySelectorAll("button")) {
+      if (el.id === "agent-stop" || el.closest("#agent-ask, #agent-setup") || el.disabled) continue;
+      const t = el.textContent.trim();
+      if ((/-(cancel|stop)$/.test(el.id) || t === "取消" || t === "停止") && visible(el)) b[el.id || refOf(el)] = true;
     }
     return b;
   }
