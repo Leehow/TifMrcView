@@ -379,6 +379,7 @@ pub fn tmv_link() -> Option<PathBuf> {
 /// name). A real `tmv` already there (the server package) is left alone.
 pub fn install_tmv_link() -> Result<PathBuf> {
     let link = tmv_link().ok_or_else(|| anyhow!("Windows 上请直接用程序的完整路径加 tmv（见对话框里的命令）"))?;
+    #[cfg(unix)]
     let exe = std::env::current_exe()?;
     if let Ok(meta) = std::fs::symlink_metadata(&link) {
         if !meta.file_type().is_symlink() {

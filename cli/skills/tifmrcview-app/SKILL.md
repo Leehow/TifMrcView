@@ -16,7 +16,9 @@ asks the user to allow you; if they refuse, stop and say so.
 - `tmv` on the PATH (the app's ⚙ → AI 助手 → 安装 tmv 命令 links
   `~/.local/bin/tmv` to the app), or
 - macOS: `"/Applications/TifMrcView Pro.app/Contents/MacOS/tifmrcview-pro" tmv …`
-- Windows: `"C:\Program Files\TifMrcView Pro\tifmrcview-pro.exe" tmv …`
+- Windows: `& "C:\Program Files\TifMrcView Pro\tifmrcview-pro.exe" tmv … | Out-String`
+  in PowerShell, or the same path in Git Bash. Plain cmd.exe does not wait
+  for it (it is a window program) and shows nothing; MCP is not affected.
 - Linux: `tifmrcview-pro tmv …`
 
 The same binary also runs every headless command (`tmv tomo`, `tmv sta`, …;
