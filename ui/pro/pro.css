@@ -748,3 +748,24 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+/* The 对照 pane (cryoet/compare.js): the tilt series beside its tomogram, in the stage's lower corner. */
+#cryo-compare { position:absolute; right:10px; bottom:10px; z-index:8; width:260px; display:flex; flex-direction:column; gap:6px; padding:8px; box-sizing:border-box; border:1px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:var(--shadow); font-size:12px; }
+#cryo-compare[hidden], #cryo-compare .cc-state[hidden] { display:none; }
+#cryo-compare.left { right:auto; left:10px; }
+#stage:has(#tools:not([hidden])) #cryo-compare.left { left:calc(var(--tools-w, 288px) + 22px); }
+#cryo-compare .cc-head { display:flex; align-items:center; gap:6px; }
+#cryo-compare .cc-head b { white-space:nowrap; }
+#cryo-compare .cc-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#cryo-compare .cc-head button { width:24px; height:22px; padding:0; justify-content:center; flex:none; }
+#cryo-compare .cc-head svg { width:14px; height:14px; }
+#cryo-compare .cc-fold svg { transition:transform .15s; }
+#cryo-compare.folded .cc-fold svg { transform:rotate(180deg); }
+#cryo-compare.folded .cc-body { display:none; }
+#cryo-compare.folded { width:auto; max-width:260px; }
+#cryo-compare .cc-pic { position:relative; cursor:pointer; border-radius:4px; background:#000; min-height:120px; display:flex; align-items:center; justify-content:center; }
+#cryo-compare .cc-pic:hover { outline:2px solid var(--accent); }
+#cryo-compare canvas { display:block; width:100%; height:auto; max-height:40vh; object-fit:contain; border-radius:4px; }
+#cryo-compare .cc-state { position:absolute; inset:auto 6px 6px; color:#ddd; font-size:11px; text-align:center; }
+#cryo-compare .cc-ctl { display:flex; align-items:center; gap:6px; }
+#cryo-compare .cc-slider { flex:1; min-width:0; }
+#cryo-compare .cc-lab { font-variant-numeric:tabular-nums; white-space:nowrap; }

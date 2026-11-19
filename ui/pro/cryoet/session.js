@@ -154,6 +154,8 @@
       if (old && bodySig(old) !== bodySig(n)) for (const p of [n.small, n.aligned, n.quick, n.result]) if (p) rev.set(p, (rev.get(p) || 0) + 1);
     }
     session = s;
+    // The 对照 pane (compare.js) knows each series' tilt series and tomogram.
+    window.TifMrcViewPro.cryoCompare?.learn(s.series);
     for(const name of selected)if(!s.series.some(s=>s.name===name))selected.delete(name);
   }
 
@@ -741,7 +743,7 @@
     const head = el("div", "al-row");
     const text = el("span", "cs-aligntext", R.residualText(s) || (al ? `残差 ${al.residual.toFixed(2)} px${al.quality ? ` · ${al.quality}` : ""}` : "对齐后的倾转序列"));
     const open = el("button", "small", "在主窗口打开");
-    open.onclick = () => openHere(s.aligned);
+    open.onclick = () => (window.TifMrcViewPro.cryoCompare ? window.TifMrcViewPro.cryoCompare.open(s, "tilt") : openHere(s.aligned));
     head.append(text, open);
     const cv = el("canvas", "cs-film");
     const box = el('div','cs-preview-box'), state = el('div','cs-preview-state','正在读取对齐预览…');
@@ -837,7 +839,7 @@
     const head = el("div", "al-row");
     const text = el("span", "cs-aligntext", t.label);
     const open = el("button", "small", "在主窗口打开");
-    open.onclick = () => openHere(t.path);
+    open.onclick = () => (window.TifMrcViewPro.cryoCompare ? window.TifMrcViewPro.cryoCompare.open(s, "tomo") : openHere(t.path));
     head.append(text, open);
     const cv = el("canvas", "cs-film");
     const box=el('div','cs-preview-box'),state=el('div','cs-preview-state','正在读取断层切片预览…');state.setAttribute('role','status');box.append(cv,state);
