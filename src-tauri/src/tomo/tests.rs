@@ -401,6 +401,7 @@ fn sorted_input_and_shared_even_odd_geometry() {
         phase_flip: false,
         ctf_3d: false,
         label: None,
+        cache_aligned: false,
     };
     let out = pipeline::reconstruct(&mut d, &step, &|_, _, _| {}).unwrap();
     assert_eq!(out.paths.len(), 3);
@@ -664,6 +665,7 @@ fn look_mapping(w: usize, h: usize, thickness: usize, z_offset: f64) {
         phase_flip: false,
         ctf_3d: false,
         label: None,
+        cache_aligned: false,
     };
     let raw = pipeline::reconstruct(&mut d, &raw_step, &|_, _, _| {}).unwrap().paths.remove(0);
     // A display tomogram the user already has, at the look's binning (the name

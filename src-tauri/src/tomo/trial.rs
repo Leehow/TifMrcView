@@ -187,7 +187,7 @@ pub fn run(d: &mut Dataset, req: &TrialReq, progress: pipeline::Progress) -> Res
         bail!("binning 应在 1–16 之间");
     }
     let aligned = ensure_aligned(d, progress)?;
-    let step = pipeline::ReconStep { bin: req.bin, params: p.clone(), halves: false, phase_flip: req.phase_flip, ctf_3d: false, label: Some(label(req)) };
+    let step = pipeline::ReconStep { bin: req.bin, params: p.clone(), halves: false, phase_flip: req.phase_flip, ctf_3d: false, label: Some(label(req)), cache_aligned: true };
     let made = pipeline::reconstruct(d, &step, progress)?;
     let Some(path) = made.paths.first().cloned() else { bail!("重构没有输出") };
     // A trial is not the series' tomogram: STA and the flow keep theirs.
@@ -196,6 +196,69 @@ pub fn run(d: &mut Dataset, req: &TrialReq, progress: pipeline::Progress) -> Res
     }
     d.save()?;
     Ok(Trial { path, backend: made.backend, ms: made.ms, aligned, summary: summary(req) })
+}
+
+/// Aligned views of `src` at `bin` (`output::aligned`), kept as raw floats
+/// in the project's `2_tomograms/.trial-cache/` with what they were made of
+/// (the source file, its size and time, the alignment, the binning) and
+/// read back while all of that is the same: a trial with other settings
+/// does not read and resample the whole stack again. Stacks over 1 GiB are
+/// not kept (bin more for quick trials).
+pub fn aligned_cached(
+    img: &std::sync::Arc<crate::image::OpenImage>,
+    src: &str,
+    a: &super::Alignment,
+    bin: usize,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<(Vec<f32>, usize, usize, Vec<f64>)> {
+    use sha2::{Digest, Sha256};
+    let meta = std::fs::metadata(src)?;
+    let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis());
+    let mut h = Sha256::new();
+    h.update(serde_json::to_vec(&(src, meta.len(), modified as u64, bin))?);
+    h.update(serde_json::to_vec(a)?);
+    let key = format!("{:x}", h.finalize());
+    let stem = Path::new(src).file_stem().and_then(|s| s.to_str()).unwrap_or("stack");
+    let dir = crate::project_dirs::output_file(src, crate::project_dirs::TOMOGRAMS, ".trial-cache");
+    let data = dir.join(format!("{stem}_b{bin}.f32"));
+    let head = dir.join(format!("{stem}_b{bin}.json"));
+    #[derive(Serialize, Deserialize)]
+    struct Head {
+        key: String,
+        w: usize,
+        h: usize,
+        angles: Vec<f64>,
+    }
+    if let Some(hd) = std::fs::read(&head).ok().and_then(|b| serde_json::from_slice::<Head>(&b).ok()).filter(|hd| hd.key == key) {
+        if let Ok(bytes) = std::fs::read(&data) {
+            if bytes.len() == hd.w * hd.h * hd.angles.len() * 4 {
+                let stack = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                progress(1, 1);
+                return Ok((stack, hd.w, hd.h, hd.angles));
+            }
+        }
+    }
+    let (stack, w, h, angles) = super::output::aligned(img, a, bin, 0, 0, progress)?;
+    if stack.len() * 4 <= 1 << 30 {
+        // Best effort: a trial is not lost because its cache could not be written.
+        let kept = (|| -> Result<()> {
+            std::fs::create_dir_all(&dir)?;
+            let _ = std::fs::remove_file(&head);
+            let mut bytes = Vec::with_capacity(stack.len() * 4);
+            for v in &stack {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            let part = data.with_extension("f32.part");
+            std::fs::write(&part, bytes)?;
+            std::fs::rename(&part, &data)?;
+            std::fs::write(&head, serde_json::to_vec(&Head { key, w, h, angles: angles.clone() })?)?;
+            Ok(())
+        })();
+        if let Err(e) = kept {
+            eprintln!("trial: aligned views not kept: {e:#}");
+        }
+    }
+    Ok((stack, w, h, angles))
 }
 
 #[cfg(test)]

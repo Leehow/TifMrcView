@@ -420,7 +420,7 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     }
     let thickness = place.thickness;
     let params = recon::Params { thickness, method: recon::Method::Sart, iterations: 3, lambda: 0.5, z_offset: place.z_offset, y_slope: place.y_slope, ..Default::default() };
-    let step = pipeline::ReconStep { bin, params, halves, phase_flip: true, ctf_3d: false, label: None };
+    let step = pipeline::ReconStep { bin, params, halves, phase_flip: true, ctf_3d: false, label: None, cache_aligned: false };
     let made = pipeline::reconstruct(d, &step, &stage(4))?;
     let raw = made.paths[0].clone();
     if moved {
@@ -605,7 +605,7 @@ pub fn reconstruct_look(d: &mut Dataset, raw_step: &pipeline::ReconStep, progres
     };
     let params = recon::Params { thickness: p.thickness.div_ceil(2), z_offset: p.z_offset / 2.0, ..p.clone() };
     let (raw_grid, look_grid) = (Grid::of(w, h, raw_step.bin, p.thickness, p.z_offset), Grid::of(w, h, bin, params.thickness, params.z_offset));
-    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false, label: Some(LOOK_LABEL.into()) };
+    let step = pipeline::ReconStep { bin, params, halves: raw_step.halves, phase_flip: raw_step.phase_flip, ctf_3d: false, label: Some(LOOK_LABEL.into()), cache_aligned: false };
     let made = pipeline::reconstruct(d, &step, progress)?;
     let (scale, offset) = look_map(raw_grid, look_grid);
     let path = made.paths[0].clone();

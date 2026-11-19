@@ -67,6 +67,11 @@ pub struct ReconStep {
     /// has. Everything made from it (`_n2n`, `_deconv`) keeps the tag.
     #[serde(default)]
     pub label: Option<String>,
+    /// Keep the aligned, binned views on disk and read them back next time
+    /// (`trial::aligned_cached`): quick trials of other methods and settings
+    /// then skip reading the whole stack again.
+    #[serde(default)]
+    pub cache_aligned: bool,
 }
 
 /// Largest defocus change across one 3D-CTF slab, Å.
@@ -121,7 +126,12 @@ pub fn reconstruct(d: &mut Dataset, req: &ReconStep, progress: Progress) -> Resu
         // The look companion (and its halves) is made to look at: `3_clean`.
         let step = if req.label.as_deref() == Some(super::auto::LOOK_LABEL) { crate::project_dirs::CLEAN } else { crate::project_dirs::TOMOGRAMS };
         let path = output_path(d, step, &if kind == "full" { tag.clone() } else { format!("{tag}_{kind}") });
-        let (stack, w, h, angles) = output::aligned(&img, &a, req.bin, 0, 0, &|i, n| progress(&format!("{stage}：对齐叠层"), i, n))?;
+        let aligned_progress = |i, n| progress(&format!("{stage}：对齐叠层"), i, n);
+        let (stack, w, h, angles) = if req.cache_aligned {
+            super::trial::aligned_cached(&img, &src, &a, req.bin, &aligned_progress)?
+        } else {
+            output::aligned(&img, &a, req.bin, 0, 0, &aligned_progress)?
+        };
         let mut out = output::VolumeFile::create(&path, [w, h, req.params.thickness], px * req.bin as f64)?;
         let how = Build { alignment: &a, bin: req.bin, params: &req.params, ctf: flip.as_ref().map(|c| (c, &d.optics, px)), ctf_3d: three_d };
         // The middle section shows in the workspace as its rows are made.
