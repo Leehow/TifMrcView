@@ -12,8 +12,10 @@
 //! - The scale: micrographs are binned so a painted particle is about
 //!   `ACROSS` pixels across, and band-passed round that size.
 //! - How alike is alike enough: each example is also found by the others
-//!   with some score (`Found::mutual`); places that score at least about as
-//!   much count as one more (`suggested`). With one example, or examples
+//!   with some score (`Found::mutual`, in robust deviations of that
+//!   example's own scores on the micrograph, so a long side view and a round
+//!   top view are measured alike); places that score about as much as the
+//!   examples typically do count as one more (`suggested`). With one example, or examples
 //!   that do not find each other (different views), the scores of all places
 //!   are split where they fall into two groups (Otsu). The user moves the
 //!   cut-off with a slider, clicks a wrong place away and clicks a missed one
@@ -59,7 +61,8 @@ pub struct Example {
 pub struct Place {
     pub x: f32,
     pub y: f32,
-    /// Best score with an example (−1 for a place the user clicked in).
+    /// Best score with an example, in robust deviations above that example's
+    /// typical score on the micrograph (−1 for a place the user clicked in).
     pub score: f32,
     /// Best score with a counter-example (−1: none).
     pub neg: f32,
@@ -385,7 +388,9 @@ pub fn find(p: &Project, examples: Vec<Example>, negatives: Vec<Example>, before
     }
     let px = p.optics.pixel_a;
     let radius = median(examples.iter().map(|e| e.radius).collect());
-    let f = ((2.0 * radius / ACROSS).floor() as usize).max(1);
+    // Binned at least so far that a micrograph fits a 1024² transform: one of 2048² costs four times as much.
+    let side = p.mics.iter().map(|m| m.width.max(m.height)).max().unwrap_or(1024);
+    let f = ((2.0 * radius / ACROSS).floor() as usize).max(side.div_ceil(1024)).max(1);
     let d = 2.0 * radius / f as f64;
     let nmics = p.mics.len();
     // The templates come from the prepared micrographs the examples are on.
@@ -424,7 +429,18 @@ pub fn find(p: &Project, examples: Vec<Example>, negatives: Vec<Example>, before
         }
         let (img, w, h) = read_mic(&p.mics[m].path)?;
         let (v, bw, bh) = prepared(&img, w, h, f, d);
-        let (n, maps) = scores(&v, bw, bh, &searched);
+        let (n, mut maps) = scores(&v, bw, bh, &searched);
+        // Each example's scores in units of its own spread on this micrograph: an elongated
+        // example (a side view) correlates less with anything than a round one, so raw scores
+        // of different examples are not comparable, while how far a place stands out is.
+        {
+            let margin = smallest.ceil() as usize;
+            for map in maps.iter_mut() {
+                let valid: Vec<f32> = (margin..bh.saturating_sub(margin)).flat_map(|y| (margin..bw.saturating_sub(margin)).map(move |x| y * n + x)).map(|k| map[k]).collect();
+                let (med, sd) = robust(&valid);
+                map.iter_mut().for_each(|v| *v = (*v - med) / sd);
+            }
+        }
         // How each example on this micrograph scores with the others.
         for (i, e) in examples.iter().enumerate().filter(|(_, e)| e.mic == m) {
             let (cx, cy) = ((e.x / f as f64).round() as i64, (e.y / f as f64).round() as i64);
@@ -449,7 +465,7 @@ pub fn find(p: &Project, examples: Vec<Example>, negatives: Vec<Example>, before
         let win = (0.3 * 2.0 * smallest).round().max(1.0) as i64;
         let valid: Vec<f32> = (margin..bh.saturating_sub(margin)).flat_map(|y| (margin..bw.saturating_sub(margin)).map(move |x| (x, y))).map(|(x, y)| pos[y * n + x]).collect();
         let (med, sd) = robust(&valid);
-        let floor = med + 3.0 * sd;
+        let floor = (med + 2.0 * sd).max(2.0);
         let mut peaks: Vec<(f32, usize, usize)> = vec![];
         for y in margin..bh.saturating_sub(margin) {
             for x in margin..bw.saturating_sub(margin) {
@@ -507,13 +523,9 @@ pub fn find(p: &Project, examples: Vec<Example>, negatives: Vec<Example>, before
     let mutual: Vec<f32> = mutual.into_iter().map(|m| if m == f32::MIN { -1.0 } else { m }).collect();
     let alike: Vec<f32> = mutual.iter().copied().filter(|&m| m > 0.0).collect();
     let split = otsu(&scores);
-    let suggested = if alike.len() >= 2 {
-        // What the examples score with each other, a little below; never under the split of all scores' lower group.
-        let low = alike.iter().copied().fold(f32::MAX, f32::min) * 0.9;
-        low.max(split.min(low))
-    } else {
-        split
-    };
+    // What the examples typically score with each other, a little below (the median: one
+    // example unlike the rest, a rare view, would otherwise let everything in).
+    let suggested = if alike.len() >= 2 { median(alike.iter().map(|&m| m as f64).collect()) as f32 * 0.9 } else { split };
     let diameter_a = ((2.0 * radius * px * 1.15) / 5.0).round() * 5.0;
     Ok(Found { examples, negatives, mics, cutoff: suggested, suggested, mutual, bin: f, diameter_a })
 }
@@ -631,6 +643,28 @@ mod tests {
         let bar_high = bars.iter().map(|&(x, y)| at(x, y)).fold(f32::MIN, f32::max);
         assert!(ring_low > bar_high + 0.1, "rings {ring_low} bars {bar_high}");
         assert!(ring_low > 0.4, "{ring_low}");
+    }
+
+    /// On real data, not in the repository: `TMV_SPA_DIR` (a project folder),
+    /// `TMV_EXAMPLES` ("mic,x,y,radius;…" marked by eye, micrograph pixels),
+    /// `TMV_OUT` (a JSON file for what was found). Scoring is done outside.
+    #[test]
+    #[ignore]
+    fn real_examples() {
+        let dir = std::env::var("TMV_SPA_DIR").unwrap();
+        let p = Project::load(&dir).unwrap();
+        let examples: Vec<Example> = std::env::var("TMV_EXAMPLES")
+            .unwrap()
+            .split(';')
+            .map(|e| {
+                let v: Vec<f64> = e.split(',').map(|x| x.trim().parse().unwrap()).collect();
+                Example { mic: v[0] as usize, x: v[1], y: v[2], radius: v[3] }
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        let f = find(&p, examples, vec![], None, &|_, _, _| {}).unwrap();
+        eprintln!("{:.1} s, bin {}, mutual {:?}, suggested {}, kept {}", t.elapsed().as_secs_f64(), f.bin, f.mutual, f.suggested, f.kept());
+        std::fs::write(std::env::var("TMV_OUT").unwrap(), serde_json::to_vec(&f).unwrap()).unwrap();
     }
 
     #[test]

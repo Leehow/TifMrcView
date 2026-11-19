@@ -733,3 +733,14 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
 #sta-layers .sta-layer-dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex:none; }
 #sta-auto-box { margin-top:10px; }
 #sta-auto-box > summary { cursor:pointer; color:var(--dim, inherit); }
+/* SPA: picking by example (spa/examples.js). */
+#spa-ex .spa-teach { margin:4px 0 8px; padding-left:18px; }
+#spa-ex .spa-ex-layers { display:flex; flex-direction:column; gap:2px; margin:6px 0; }
+#spa-ex .sta-layer { display:flex; align-items:center; gap:6px; cursor:pointer; }
+#spa-ex .sta-layer-dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex:none; }
+#spa-ex .spa-ex-view canvas { display:block; width:100%; height:auto; cursor:crosshair; border-radius:6px; }
+#spa-ex .spa-ex-nav { align-items:center; gap:8px; }
+#spa-ex .spa-ex-cut { display:flex; align-items:center; gap:8px; }
+#spa-ex .spa-ex-cut input { flex:1; }
+#spa-a-autobox { margin-top:12px; }
+#spa-a-autobox > summary { cursor:pointer; }

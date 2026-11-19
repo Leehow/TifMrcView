@@ -743,6 +743,8 @@
     L.saveTimer = 0;
     try {
       await invoke("labels_save", { token: L.token });
+      // The STA and single-particle workspaces list the layers saved.
+      document.dispatchEvent(new CustomEvent("pro-labels-saved"));
     } catch (e) {
       if (e !== "stale") toast(`标签保存失败：${e}`, 6000);
     }

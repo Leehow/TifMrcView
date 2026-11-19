@@ -2,21 +2,29 @@
 // One-click mode, the panel's default view (the steps by hand are under
 // 高级设置). Motion correction and CTF use the optics read from the open
 // folder; pixel size and voltage are asked only when no file had them.
-// The kinds of particle found on a few denoised micrographs are cards.
-// The user clicks theirs; picking, 2D classification, the point group,
-// the initial model and the refinement then run on their own.
+// Then it stops: the program cannot know which particle the user wants.
+// The user marks a few with the viewer's label brush and ticks the layers
+// (examples.js finds the rest and shows them for checking). Picking, 2D
+// classification, the point group, the initial model and the refinement
+// then run on their own. The old way, the kinds of particle found on a few
+// denoised micrographs as cards to click, is kept as an option
+// (自动找颗粒种类): it works on tidy tutorial data.
 (() => {
   const W = window.TifMrcViewPro.spa;
   const { fmt } = W;
   $("spa-auto").innerHTML = `
-    <p class="dim">对当前打开的文件所在文件夹自动做运动校正和 CTF，在几张去噪后的显微图上找出不同种类的颗粒。点出你的样品后，挑选、二维分类、初始模型和三维精修会接着做完。</p>
+    <p class="dim">对当前打开的文件所在文件夹自动做运动校正和 CTF，然后停下来：用标签画笔在显微图上涂几个你要的颗粒，程序在所有显微图里找出相似的给你检查；确认后，二维分类、初始模型和三维精修会接着做完。</p>
     <p id="spa-optics-line" class="dim"></p>
     <div id="spa-ask" class="al-opts" hidden>
       <p class="dim al-wide">当前文件夹里没有找到配置文件中的这些参数，请填写：</p>
       <label id="spa-ask-pixel-row">像素大小 Å<input id="spa-ask-pixel" type="number" min="0.05" step="0.001" placeholder="例如 1.06"></label>
       <label id="spa-ask-kv-row">电压 kV<input id="spa-ask-kv" type="number" min="20" max="400" step="10" placeholder="例如 300"></label>
     </div>
-    <div class="al-row"><button id="spa-a-start" class="primary">一键开始</button></div>
+    <div class="al-row"><button id="spa-a-start" class="primary">运动校正和 CTF</button></div>
+    <div id="spa-ex-slot"></div>
+    <details id="spa-a-autobox" class="spa-autobox">
+    <summary>自动找颗粒种类（可选，适合教程那样干净的数据）</summary>
+    <div class="al-row"><button id="spa-a-discover">在几张去噪的显微图上找颗粒种类</button></div>
     <div id="spa-a-kinds" class="ws-kinds"></div>
     <p id="spa-a-hint" class="dim"></p>
     <div id="spa-a-finish" hidden>
@@ -26,6 +34,7 @@
       </div>
       <div class="al-row"><button id="spa-a-go" class="primary" disabled>用选中的颗粒完成重构</button></div>
     </div>
+    </details>
     <p id="spa-a-result" class="dim"></p>
     <div class="al-row" id="spa-a-open" hidden><button id="spa-a-map" class="small">打开三维图</button><button id="spa-a-more" class="small">在高级设置里查看</button></div>`;
 
@@ -143,6 +152,11 @@
     if (!p.mics.some((m) => m.ctf)) {
       if (await $("spa-run-ctf").onclick() == null) return;
     }
+    W.status("运动校正和 CTF 已完成：用标签画笔在显微图上涂几个你要的颗粒");
+    W.examples?.reload();
+  };
+  $("spa-a-discover").onclick = async () => {
+    if (!W.project) return W.status("请先打开一张显微图或电影");
     if (await W.run("寻找颗粒", "discover", { sam: true }) != null) showKinds();
   };
 
@@ -153,6 +167,8 @@
     const r = await W.run(`重构（颗粒直径 ${fmt(d, 0)} Å）`, "auto", { symmetry, sam: true });
     if (r) showResult(W.project);
   };
+  W.symmetry = () => ($("spa-a-sym-text").value.trim() || $("spa-a-sym").value).toUpperCase();
+  W.showResult = showResult;
   $("spa-a-map").onclick = () => W.project?.refine && openPath(W.project.refine.sharpened, true);
   $("spa-a-more").onclick = () => { $("spa-advanced").open = true; W.select(5); };
 })();
