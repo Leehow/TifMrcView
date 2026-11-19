@@ -1,6 +1,6 @@
 //! A picture of one slice for an agent to read coordinates from: the region
 //! asked for, contrast-stretched (1st–99th percentile), enlarged or reduced
-//! to about `size` pixels, the label layers drawn as coloured outlines, and a
+//! to about `size` pixels, the label layers drawn as coloured outlines, and a (blue)
 //! grid with image-pixel numbers on the margins. An agent that segments by
 //! looking (it may see better than our tools) reads x and y off the grid
 //! and gives marks back (label_marks.rs). Used by `tmv look` and by the
@@ -128,18 +128,18 @@ pub fn look(img: &Arc<OpenImage>, labels: Option<&Labels>, z: usize, region: Opt
     while gx < rx + rw {
         let ox = ((gx - rx) as f64 * scale) as usize;
         for oy in 0..oh {
-            c.blend(MARGIN_L + ox, MARGIN_T + oy, [255, 220, 0], 0.35);
+            c.blend(MARGIN_L + ox, MARGIN_T + oy, [90, 200, 255], 0.35);
         }
-        c.number(MARGIN_L + ox + 1, 2, gx, [255, 220, 0]);
+        c.number(MARGIN_L + ox + 1, 2, gx, [90, 200, 255]);
         gx += step;
     }
     let mut gy = first(ry);
     while gy < ry + rh {
         let oy = ((gy - ry) as f64 * scale) as usize;
         for ox in 0..ow {
-            c.blend(MARGIN_L + ox, MARGIN_T + oy, [255, 220, 0], 0.35);
+            c.blend(MARGIN_L + ox, MARGIN_T + oy, [90, 200, 255], 0.35);
         }
-        c.number(1, MARGIN_T + oy + 1, gy, [255, 220, 0]);
+        c.number(1, MARGIN_T + oy + 1, gy, [90, 200, 255]);
         gy += step;
     }
     let mut png = Vec::new();
@@ -151,7 +151,7 @@ pub fn look(img: &Arc<OpenImage>, labels: Option<&Labels>, z: usize, region: Opt
     let meta = json!({
         "z": z, "region": [rx, ry, rw, rh], "scale": (scale * 1000.0).round() / 1000.0, "gridStep": step,
         "imageSize": [w, h, info.size_z],
-        "howToRead": "yellow numbers are image pixels (x along the top, y down the left); a point at picture pixel (px, py) is image x = region[0] + (px - 34) / scale, y = region[1] + (py - 16) / scale",
+        "howToRead": "blue numbers are image pixels (x along the top, y down the left); a point at picture pixel (px, py) is image x = region[0] + (px - 34) / scale, y = region[1] + (py - 16) / scale",
     });
     Ok((png, meta))
 }

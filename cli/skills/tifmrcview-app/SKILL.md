@@ -43,7 +43,8 @@ tmv app screenshot               # PNG of the image view (path in the JSON)
 ```
 
 Arguments are `key=value` (JSON when it parses: `z=12`, `all=true`,
-`polygon=[[10,10],[60,10],[60,60]]`). The answer is one JSON object; exit
+`'region=[10,10,60,60]'`; quote anything with brackets or spaces), and
+`key=@file.json` reads a JSON file. The answer is one JSON object; exit
 status 0 when `"ok": true`. `"error"` is in Chinese: translate it for the
 user if needed.
 
@@ -66,13 +67,14 @@ sees at once, can undo in one step, and STA / SPA / the 3D view use.
 
 1. **Look.** `tmv app look z=40` (or headless `tmv look IMAGE --z 40`): a
    PNG of the slice, contrast stretched, existing layers outlined in colour,
-   a yellow grid with image-pixel numbers (x along the top, y down the
+   a blue grid with image-pixel numbers (x along the top, y down the
    left). Start with the whole slice, then zoom where it matters:
-   `look z=40 region=[200,120,160,160]` (x, y, width, height). Read
+   `tmv app look z=40 'region=[200,120,160,160]'` (x, y, width, height;
+   quote arguments with brackets, zsh would expand them). Read
    coordinates off the grid; the JSON says how (`scale`, `region`).
 2. **Mark**, one layer per kind of structure, named in the user's words:
    ```sh
-   tmv app labels layers='[{"name":"线粒体","points":[[260,180,40],[410,95,40]],"size":60}]'
+   tmv app labels 'layers=[{"name":"线粒体","points":[[260,180,40],[410,95,40]],"size":60}]'
    tmv app labels layers=@marks.json      # same format as tmv labels --marks
    ```
    - `points` `[x, y, z]`: one point well inside each compact object (a
