@@ -1,11 +1,11 @@
 "use strict";
-// One table for what TifMrcView Pro can do, read by the window (ui/pro/agent.js: `tmv app`, `tmv mcp`) and checked by scripts/agent-parity.test.mjs. Every tool button of the window (`btn-…`) and every `tmv` command (src/cli.rs) has a row. `app` is the action `tmv app <app>` runs in the window, the user watching; `cli` is the `tmv <cli>` command that does the same without a window, or null when the feature only makes sense on screen (`cliWhy` says why). `ui.button` opens the feature in the window; `ui.ids` are the controls the action presses. Add a feature on one side, add its row and the other side.
+// One table for what TifMrcView Pro can do, read by the window (ui/pro/agent.js: `tmv app`, `tmv mcp`) and checked by scripts/agent-parity.test.mjs. Every tool button of the window (`btn-…`) and every `tmv` command (src/cli.rs) has a row. `app` is the action `tmv app <app>` runs in the window, the user watching; `cli` is the `tmv <cli>` command that does the same without a window, or null when the feature only makes sense on screen (`cliWhy` says why). `ui.button` opens the feature in the window (`alsoButtons`: its own button when it is not inside another panel); `ui.ids` are the controls the action presses. Add a feature on one side, add its row and the other side.
 // The table between `=` and the final `;` is plain JSON (the test parses it).
 window.TmvFeatures = {
   "features": [
     {"id": "run", "name": "自动判断并处理", "app": "run", "cli": "run", "ui": {"ids": ["btn-open"]}},
     {"id": "tomo", "name": "Cryo-ET 一键重构断层", "app": "tomo", "cli": "tomo", "ui": {"button": "btn-cryoet", "ids": ["cryoet-workspace", "cryo-status", "cryo-cancel"]}},
-    {"id": "sta", "name": "子断层平均（找候选卡片，由用户选）", "app": "sta", "cli": "sta", "ui": {"button": "btn-sta", "ids": ["sta-workspace", "sta-run", "sta-again", "sta-cards"]}},
+    {"id": "sta", "name": "子断层平均（找候选卡片，由用户选）", "app": "sta", "cli": "sta", "ui": {"button": "btn-cryoet", "alsoButtons": ["btn-sta"], "ids": ["cryo-sta", "sta-workspace", "sta-run", "sta-again", "sta-cards"]}},
     {"id": "spa", "name": "单颗粒重构（一键）", "app": "spa", "cli": "spa", "ui": {"button": "btn-spa", "ids": ["spa-workspace", "spa-a-start", "spa-a-kinds", "spa-a-go", "spa-status"]}},
     {"id": "ctf", "name": "显微图的 CTF / 离焦", "app": "ctf", "cli": "ctf", "ui": {"button": "btn-spa", "ids": ["spa-advanced", "spa-run-ctf"]}},
     {"id": "membranes", "name": "膜、囊泡、微管分割", "app": "membranes", "cli": "membranes", "ui": {"ids": ["sec-labels", "lab-mem", "lab-mem-run"]}},

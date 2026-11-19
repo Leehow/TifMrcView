@@ -293,6 +293,13 @@
     return f;
   }
 
+  /** Opens the Cryo-ET panel on its job "recon" or "sta" (the tabs under its title). */
+  async function cryoJob(id) {
+    await workspace("tomo");
+    const tab = document.querySelector(`#cryoet-workspace .ws-jobs [data-job="${id}"]`);
+    if (tab && tab.getAttribute("aria-selected") !== "true") await press(tab);
+  }
+
   async function ensurePanel(button, panel) {
     if ($(panel) && !$(panel).hidden && visible($(panel))) return;
     if (!$(button)) fail(`窗口里没有 ${button}`);
@@ -433,7 +440,7 @@
     tomo: { args: "[path=倾转序列/.mdoc] [for=display|survey] [all=true]", desc: "Cryo-ET 面板里重构勾选的序列（对应 tmv tomo）；all=true 先全选", run: async (a) => {
       if (a.for === "sta") fail("子断层平均用 sta 动作：它自己做需要的断层图");
       if (a.path) await open(a.path);
-      await workspace("tomo");
+      await cryoJob("recon");
       const host = $("cryo-session");
       const use = host.querySelector(`.cs-use[data-purpose="${a.for || "display"}"]`);
       if (use && use.getAttribute("aria-checked") !== "true") await press(use);
@@ -443,8 +450,8 @@
     } },
     sta: { args: "[path=断层图]", desc: "子断层平均：做出候选卡片后停下（对应 tmv sta）。卡片给用户看，由用户选，再 click 那张卡片和「找出全部」", run: async (a) => {
       if (a.path) await open(a.path);
-      if (Pro.sta?.show && Pro.sta.hosted) Pro.sta.show();
-      else await workspace("sta");
+      if (Pro.sta?.hosted) await cryoJob("sta");
+      else await ensurePanel("btn-sta", "sta-workspace");
       await press($("sta-run") || fail("没有「找候选」按钮"));
       return { ...status(), next: "wait 等卡片做好，ui in=sta-cards 看卡片，screenshot 给用户看；用户选定后 click 那张卡片，再 click text=找出全部" };
     } },

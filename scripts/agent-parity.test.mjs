@@ -57,7 +57,7 @@ test('every feature can be done from the command line', () => {
 });
 
 test('every tool button of the window has a feature row', () => {
-  const buttons = new Set(features.map((f) => f.ui?.button).filter(Boolean));
+  const buttons = new Set(features.flatMap((f) => [f.ui?.button, ...(f.ui?.alsoButtons || [])]).filter(Boolean));
   for (const p of uiJs.filter((p) => p.startsWith('ui/pro/'))) {
     for (const m of read(p).matchAll(/\.id = "(btn-[a-z0-9-]+)"/g)) {
       assert.ok(buttons.has(m[1]), `${p} adds the tool button ${m[1]}; add its row (and tmv side) to ui/pro/features.js`);
@@ -67,7 +67,7 @@ test('every tool button of the window has a feature row', () => {
 
 test('the controls the table names are still in the page', () => {
   for (const f of features) {
-    for (const id of [f.ui?.button, ...(f.ui?.ids || [])].filter(Boolean)) {
+    for (const id of [f.ui?.button, ...(f.ui?.alsoButtons || []), ...(f.ui?.ids || [])].filter(Boolean)) {
       assert.ok(uiText.includes(`"${id}"`) || uiText.includes(`id="${id}"`), `${f.id}: no control with id ${id} in ui/`);
     }
   }
