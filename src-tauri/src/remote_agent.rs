@@ -746,6 +746,7 @@ fn spa_run(req: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) -> Result<Va
         }
         "discover" => serde_json::to_value(sp::discover(&mut p, None, emit)?)?,
         "choose" => json!(sp::choose(&mut p, serde_json::from_value(v)?)?),
+        s @ ("examples" | "examplesUse") => crate::spa::examples::step(&mut p, s, &v, emit)?,
         "auto" => serde_json::to_value(sp::auto(&mut p, &serde_json::from_value(v)?, None, emit)?)?,
         "refine" => serde_json::to_value(sp::refine(
             &mut p,

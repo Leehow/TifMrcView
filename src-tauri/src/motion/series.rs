@@ -514,13 +514,17 @@ pub fn run(
     let (next, taken) = (&next, &taken);
     let stopped = std::sync::atomic::AtomicBool::new(false);
     let stopped = &stopped;
+    enum Ready{Prepared(super::Prepared),Corrected(super::Corrected)}
+    let jobs: Vec<Option<(&Path, &Params)>> = plan.iter().zip(movies.iter()).map(|((_, p), m)| m.as_deref().zip(p.as_ref())).collect();
+    let jobs = &jobs;
+    let wrap = |p: super::Prepared| Ready::Prepared(p);
+    let wrap = &wrap;
     std::thread::scope(|scope| -> Result<()> {
         use std::sync::atomic::Ordering::SeqCst;
         // Release readers waiting on the bounded window when the consumer
         // exits early (disk error, dimension mismatch or cancellation).
         struct Stop<'a>(&'a std::sync::atomic::AtomicBool);
         impl Drop for Stop<'_> { fn drop(&mut self) { self.0.store(true, SeqCst); } }
-        enum Ready{Prepared(super::Prepared),Corrected(super::Corrected)}
         let (send, read) = std::sync::mpsc::sync_channel::<(usize, Result<Ready>)>(0);
         let _stop = Stop(stopped);
         // One movie per GPU worker process was slower than this process's
@@ -535,27 +539,7 @@ pub fn run(
           if let Err(e)=r{eprintln!("multi-GPU movies: {e:#}");}
          });
         }else{
-        for _ in 0..readers {
-            let send = send.clone();
-            scope.spawn(move || loop {
-                let i = next.fetch_add(1, SeqCst);
-                if i >= plan.len() {
-                    break;
-                }
-                let (Some(p), Some(path)) = (&plan[i].1, &movies[i]) else { continue };
-                // Not further ahead than the readers can hold.
-                while i > taken.load(SeqCst) + ahead && check_cancel().is_ok() && !stopped.load(SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                if check_cancel().is_err() || stopped.load(SeqCst) {
-                    break;
-                }
-                let prepared = path.to_str().context("电影路径编码无效").and_then(|path| super::prepare(path, None, dir, 0, 0, 0, p, vec![], &|_, _, _| {}));
-                if send.send((i, prepared.map(Ready::Prepared))).is_err() {
-                    break;
-                }
-            });
-        }
+            super::batch::spawn_readers(scope, jobs, dir.as_path(), readers, ahead, next, taken, stopped, send.clone(), wrap);
         }
         drop(send);
         // What follows a movie's correction (its sections written, its view

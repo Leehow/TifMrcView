@@ -31,6 +31,7 @@ pub mod fft;
 pub mod formats;
 pub mod imod;
 pub mod labels;
+pub mod label_import;
 pub mod surfaces;
 #[cfg(feature = "pro")]
 pub mod classify;

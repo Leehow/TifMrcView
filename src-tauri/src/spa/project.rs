@@ -440,7 +440,9 @@ impl Project {
 /// Motion correction of every movie (the cryo-ET package's
 /// `motion::run`), dose-weighted sums written to `motion/`.
 pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progress) -> Result<()> {
-    if p.mics.len()>1&&params.backend!="cpu"&&crate::gpu_workers::enabled(){return parallel_mics(p,"motion",serde_json::to_value(params)?,0,progress);}
+    // One movie per GPU worker was slower than one process's own read-ahead
+    // pipeline (measured for tilt series, `motion::series`): as there, only on request.
+    if p.mics.len()>1&&params.backend!="cpu"&&crate::gpu_workers::enabled()&&std::env::var_os("TMV_MOVIE_WORKERS").is_some(){return parallel_mics(p,"motion",serde_json::to_value(params)?,0,progress);}
     if !p.movies {
         bail!("输入已是显微图，不需要运动校正");
     }
@@ -465,48 +467,38 @@ pub fn motion(p: &mut Project, params: &crate::motion::Params, progress: Progres
     }
     params.even_odd = false;
     params.unweighted = false;
+    let movies: Vec<PathBuf> = p.mics.iter().map(|m| PathBuf::from(m.movie.clone().unwrap_or_else(|| m.path.clone()))).collect();
+    let outs: Vec<PathBuf> = movies.iter().map(|m| out_dir.join(format!("{}.mrc", m.file_stem().unwrap_or_default().to_string_lossy()))).collect();
+    // Movies already corrected are only measured; the rest go through the
+    // batch pipeline that corrects tilt series (`motion::batch`).
     for i in 0..n {
-        check_cancel()?;
-        let movie = p.mics[i]
-            .movie
-            .clone()
-            .unwrap_or_else(|| p.mics[i].path.clone());
-        let stem = Path::new(&movie)
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let out = out_dir.join(format!("{stem}.mrc"));
-        if !out.exists() {
-            let req = crate::motion::RunReq {
-                token: None,
-                path: Some(movie.clone()),
-                mdoc: None,
-                output: out.to_string_lossy().into(),
-                c: 0,
-                z: 0,
-                t: 0,
-                params: params.clone(),
-            };
-            let r = crate::motion::run(&req,None,&|stage,a,b|progress(&format!("运动校正 {}/{} · {stage}",i+1,n),a,b))?;
-            // 1 Å/px is the placeholder motion uses when nothing knew the
-            // pixel size: never let it replace a known value.
-            let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
-            if r.pixel_a > 0.0 && !placeholder && (i == 0 || p.optics.pixel_a <= 1.0) {
-                p.optics.pixel_a = r.pixel_a;
-                p.optics_found.pixel = true;
-            }
-            p.mics[i].width = r.width;
-            p.mics[i].height = r.height;
-        } else {
-            let (_, w, h) = read_mic(&out.to_string_lossy())?;
+        if outs[i].exists() {
+            let (_, w, h) = read_mic(&outs[i].to_string_lossy())?;
             p.mics[i].width = w;
             p.mics[i].height = h;
+            p.mics[i].path = outs[i].to_string_lossy().into();
         }
-        p.mics[i].path = out.to_string_lossy().into();
-        progress("运动校正", i + 1, n);
-        p.save()?;
     }
+    let jobs: Vec<Option<(&Path, &crate::motion::Params)>> = (0..n).map(|i| (!outs[i].exists()).then_some((movies[i].as_path(), &params))).collect();
+    let label = |i: usize| format!("运动校正 {}/{}", i + 1, n);
+    let mut first = true;
+    crate::motion::batch::each(&jobs, &out_dir, &label, progress, |i, corrected| {
+        let r = crate::motion::write(&outs[i].to_string_lossy(), corrected?, &params)?;
+        // 1 Å/px is the placeholder motion uses when nothing knew the
+        // pixel size: never let it replace a known value.
+        let placeholder = params.pixel_a.is_none() && (r.pixel_a - 1.0).abs() < 1e-6;
+        if r.pixel_a > 0.0 && !placeholder && (first || p.optics.pixel_a <= 1.0) {
+            p.optics.pixel_a = r.pixel_a;
+            p.optics_found.pixel = true;
+        }
+        first = false;
+        p.mics[i].width = r.width;
+        p.mics[i].height = r.height;
+        p.mics[i].path = outs[i].to_string_lossy().into();
+        progress("运动校正", i + 1, n);
+        p.save()
+    })?;
+    progress("运动校正", n, n);
     Ok(())
 }
 
@@ -527,7 +519,7 @@ pub fn ctf(
     n_fft: usize,
     progress: Progress,
 ) -> Result<()> {
-    if p.mics.len()>1&&params.backend.as_deref()!=Some("cpu")&&crate::gpu_workers::enabled(){return parallel_mics(p,"ctf",serde_json::to_value(params)?,n_fft,progress);}
+    if p.mics.len()>1&&params.backend.as_deref()!=Some("cpu")&&crate::gpu_workers::enabled()&&std::env::var_os("TMV_MOVIE_WORKERS").is_some(){return parallel_mics(p,"ctf",serde_json::to_value(params)?,n_fft,progress);}
     if p.movies
         && p.mics
             .iter()
@@ -549,41 +541,57 @@ pub fn ctf(
     }
     p.optics_found.cs = true;
     p.optics_found.amplitude = true;
+    // Micrographs of one size are fitted in batches, as the views of a
+    // tilt series are (`ctf::fit_images`: spectra and grid search on the GPU
+    // once for the batch); others one by one.
+    const BATCH: usize = 32;
+    let paths: Vec<String> = p.mics.iter().map(|m| m.path.clone()).collect();
+    let size_of = |i: usize| -> Option<(usize, usize)> { open_image(&paths[i]).ok().map(|m| (m.info().width, m.info().height)) };
+    let mut groups: Vec<((usize, usize), Vec<usize>)> = vec![];
     for i in 0..n {
-        check_cancel()?;
-        let img = open_image(&p.mics[i].path)?;
-        let (w, h) = (img.info().width, img.info().height);
-        let req = crate::ctf::FitReq {
-            token: 0,
-            z: 0,
-            t: 0,
-            c: 0,
-            region: [0.0, 0.0, w as f64, h as f64],
-            n: n_fft,
-            params: params.clone(),
-        };
-        match crate::ctf::fit_region(&img, &req) {
-            Ok(f) if f.score.is_finite() => {
-                p.mics[i].ctf = Some(MicCtf {
-                    df1: f.df1,
-                    df2: f.df2,
-                    angle: f.angle,
-                    score: f.score,
-                    fit_res: f.fit_res,
-                })
-            }
-            Ok(_) => {
+        match size_of(i) {
+            Some(s) => match groups.iter_mut().find(|g| g.0 == s) {
+                Some(g) => g.1.push(i),
+                None => groups.push((s, vec![i])),
+            },
+            None => {
                 p.mics[i].ctf = None;
                 p.mics[i].excluded = true;
-                eprintln!("CTF {}: no fit", p.mics[i].path);
-            }
-            Err(e) => {
-                p.mics[i].ctf = None;
-                p.mics[i].excluded = true;
-                eprintln!("CTF {}: {e}", p.mics[i].path);
+                eprintln!("CTF {}: cannot open", p.mics[i].path);
             }
         }
-        progress("CTF", i + 1, n);
+    }
+    let mut done = 0;
+    for (_, idx) in groups {
+        for chunk in idx.chunks(BATCH) {
+            check_cancel()?;
+            let imgs: Vec<Arc<OpenImage>> = chunk.iter().map(|&i| open_image(&paths[i])).collect::<Result<_>>()?;
+            let before = done;
+            let fits = crate::ctf::fit_images(&imgs, n_fft, &params, &|k, _| progress("CTF", (before + k).min(n), n));
+            done += chunk.len();
+            match fits {
+                Ok((fits, _)) => {
+                    for (&i, f) in chunk.iter().zip(fits) {
+                        if f.score.is_finite() {
+                            p.mics[i].ctf = Some(MicCtf { df1: f.df1, df2: f.df2, angle: f.angle, score: f.score, fit_res: f.fit_res });
+                        } else {
+                            p.mics[i].ctf = None;
+                            p.mics[i].excluded = true;
+                            eprintln!("CTF {}: no fit", p.mics[i].path);
+                        }
+                    }
+                }
+                Err(e) => {
+                    check_cancel()?;
+                    for &i in chunk {
+                        p.mics[i].ctf = None;
+                        p.mics[i].excluded = true;
+                    }
+                    eprintln!("CTF batch: {e}");
+                }
+            }
+            progress("CTF", done, n);
+        }
     }
     p.save()
 }
@@ -1058,6 +1066,9 @@ pub fn choose(p: &mut Project, kinds: Vec<usize>) -> Result<f64> {
 pub struct AutoParams {
     /// Point group; empty: the one the 2D classes suggest.
     pub symmetry: String,
+    /// The picks are there already (found from the user's examples and
+    /// checked): no picking of its own.
+    pub picked: bool,
 }
 
 /// Everything after the choice of particle: picking, extraction, 2D
@@ -1073,8 +1084,8 @@ pub fn auto(
         diameter_a: p.diameter_a,
         ..p.pick.clone().unwrap_or_default()
     };
-    let mut n = pick_all(p, &pick, progress)?;
-    if let Some(f) = outline {
+    let mut n = if a.picked { p.picks()?.iter().map(Vec::len).sum() } else { pick_all(p, &pick, progress)? };
+    if let (Some(f), false) = (outline, a.picked) {
         n = sam_filter(p, f, progress)?;
     }
     if n < 100 {

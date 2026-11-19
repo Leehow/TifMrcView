@@ -52,7 +52,7 @@
     <p id="sta-shapes-msg" class="dim"></p>
     <div class="al-row"><button id="sta-shapes-go" class="primary"></button><button id="sta-shapes-other" class="small" title="回到选例子">换一批例子</button></div>`;
   // Where the particle review sits: what was found is what the user looks at next.
-  $("sta-cards-box").before(box);
+  $("sta-auto-box").before(box);
 
   const pendingOf = (d) => !!d && !d.stale && (d.averageMs == null || d.foundMs > d.averageMs);
   const open = () => S.info?.path || W.items?.[0]?.path || "";

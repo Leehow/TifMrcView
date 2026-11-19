@@ -40,3 +40,12 @@ available; use them.
 - The private website repository has no Actions minutes: its workflows
   cannot start, so its pages are uploaded from a local machine instead
   (see that repository's CLAUDE.md).
+
+## Reuse before building
+
+Use what the app already has before writing a new one: one label brush
+(the viewer's Labels panel) is where users mark things, and workspaces
+(STA, single particles) read its layers instead of adding brushes of their
+own; single-particle processing calls the cryo-ET motion, CTF and denoising
+code instead of keeping copies. Before adding a tool, an engine or a step,
+look for one that does the job and extend it.

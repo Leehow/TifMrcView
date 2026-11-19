@@ -200,7 +200,7 @@ pub fn components_where(w: usize, h: usize, inside: impl Fn(usize) -> bool) -> V
 }
 
 /// Key of the materials line in the label file's ImageJ description.
-const MATERIALS_KEY: &str = "tmv_materials=";
+pub(crate) const MATERIALS_KEY: &str = "tmv_materials=";
 
 /// TIFF text tags must be ASCII, so other characters become \u escapes.
 fn ascii_json(json: &str) -> String {

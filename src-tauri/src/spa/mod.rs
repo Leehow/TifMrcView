@@ -6,6 +6,7 @@
 pub mod class2d;
 pub mod data;
 pub mod discover;
+pub mod examples;
 pub mod export;
 pub mod extract;
 pub mod fourier;

@@ -57,22 +57,24 @@
   panel.hidden = true;
   panel.innerHTML = `
     <div class="al-head"><b>子断层平均 · Subtomogram averaging</b><span class="sta-head-btns"><button id="sta-fold" class="small" title="收起面板，让出图像" aria-expanded="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button><button id="sta-close" class="small" title="关闭">✕</button></span></div>
-    <p class="dim">选好断层图，按“找候选”：程序做出候选的“卡片”，然后停下来，由你在清晰的断层图上决定平均什么；你选定之后，其余的（找出所有同样的颗粒给你看、对齐、平均）都由程序完成。</p>
+    <p class="dim">程序不知道你想平均什么：用标签画笔在三维重构得到的断层图上标出来（膜、颗粒、囊泡…），在这里勾选要用的图层，其余的（回到原始断层图、找齐、对齐、平均）由程序完成。</p>
     <div id="sta-data"></div>
-    <div class="al-row">
-      <button id="sta-run" class="primary" title="自动做出候选卡片；不会替你选，也不会平均">找候选</button>
-    </div>
+    <div id="sta-draw-slot"></div>
+    <details id="sta-auto-box" class="sta-auto">
+      <summary>自动找候选（可选，适合颗粒成群、教程那样的数据）</summary>
+      <div class="al-row">
+        <button id="sta-run" title="自动做出候选卡片；不会替你选，也不会平均">找候选</button>
+      </div>
     <p id="sta-line" class="dim"></p>
     <p id="sta-lookhint" class="dim" hidden>这张断层图没有清晰版，可在原图上选择</p>
     <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <div id="sta-cards-box" hidden>
-      <h4>① 点一张卡片，或用现成的密度图</h4>
+      <h4>点一张卡片，或用现成的密度图</h4>
       <p id="sta-cards-hint" class="dim"></p>
       <div id="sta-cards" class="sta-cards"></div>
       <div class="al-row"><button id="sta-again" class="primary" disabled>找出全部</button></div>
     </div>
-    <h4 id="sta-mark-head">② 或者自己标</h4>
-    <div id="sta-draw-slot"></div>
+    </details>
     <div id="sta-result" hidden>
       <h4>结果</h4>
       <div id="sta-which" class="al-row sta-which" hidden></div>
@@ -466,7 +468,7 @@
     $("sta-lookhint").hidden = !s.noLook;
     const run = $("sta-run");
     run.textContent = s.cards.length ? "重新找候选" : "找候选";
-    run.classList.toggle("primary", !s.cards.length);
+    run.classList.remove("primary");
     const live = $("sta-live");
     live.hidden = !(here() && s.live);
     if (s.live) live.querySelector("img").src = s.live;
@@ -499,6 +501,7 @@
     // Tomograms added from elsewhere stay with the folder.
     W.items = [...base, ...cur().added.filter((a) => !base.some((b) => b.path === a.path))];
     paint();
+    W.layers?.refresh();
     document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
     if (W.busy && W.runOut === out) return;
     try {

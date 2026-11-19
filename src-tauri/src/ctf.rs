@@ -22,7 +22,7 @@
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -895,8 +895,38 @@ fn fit_slices(
     params: &Params,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(Vec<Fit>, String, f64)> {
+    let planes: Vec<(&Arc<OpenImage>, usize)> = zs.iter().map(|&z| (img, z)).collect();
+    fit_planes(&planes, c, t, r, want_n, params, progress)
+}
+
+/// Fits of whole images of one size (the micrographs of a single-particle
+/// project), their first plane each, in one batch: the spectra and the grid
+/// search run once for all of them on the GPU, as a tilt series' do.
+pub(crate) fn fit_images(imgs: &[Arc<OpenImage>], want_n: usize, params: &Params, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<(Vec<Fit>, String)> {
+    let Some(first) = imgs.first() else { return Ok((vec![], String::new())) };
+    let (w, h) = (first.info().width, first.info().height);
+    if imgs.iter().any(|i| (i.info().width, i.info().height) != (w, h)) {
+        bail!("显微图大小不一致");
+    }
+    let planes: Vec<(&Arc<OpenImage>, usize)> = imgs.iter().map(|i| (i, 0)).collect();
+    let (fits, backend, _) = fit_planes(&planes, 0, 0, [0.0, 0.0, w as f64, h as f64], want_n, params, progress)?;
+    Ok((fits, backend))
+}
+
+/// Spectra of a region on each plane (an image and its slice), then
+/// `fit_many`; the planes share the size of the first one's image.
+#[allow(clippy::too_many_arguments)]
+fn fit_planes(
+    planes: &[(&Arc<OpenImage>, usize)],
+    c: usize,
+    t: usize,
+    r: [f64; 4],
+    want_n: usize,
+    params: &Params,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<(Vec<Fit>, String, f64)> {
     let start = std::time::Instant::now();
-    let info = img.info();
+    let info = planes.first().context("没有可拟合的图")?.0.info();
     let x0 = r[0].max(0.0).floor() as usize;
     let y0 = r[1].max(0.0).floor() as usize;
     let x1 = ((r[0] + r[2]).ceil() as usize).min(info.width);
@@ -908,13 +938,14 @@ fn fit_slices(
     // Bad parameters fail here, before any GPU work.
     let (n, _, _) = fft::tiling(region, want_n)?;
     check_params(n, params)?;
-    let total = zs.len() + 1;
+    let total = planes.len() + 1;
     let spectra = |gpu: Option<&Dev>| -> Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(zs.len());
-        for (i, &z) in zs.iter().enumerate() {
+        let mut out = Vec::with_capacity(planes.len());
+        for (i, &(img, z)) in planes.iter().enumerate() {
             if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
                 bail!("已取消");
             }
+            let info = img.info();
             let (page, sample) = info.locate(c, z, t);
             let planes = img.page(page)?;
             let p = &planes[sample.min(planes.len() - 1)];

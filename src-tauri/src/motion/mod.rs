@@ -2,6 +2,7 @@
 //! of the published global/patch-polynomial method (Zheng et al. 2017) and
 //! critical-exposure weighting (Grant & Grigorieff 2015). EER grouping is
 //! native and streaming; the Thermo wasm plugin shares the event decoder.
+pub mod batch;
 pub mod dose;
 pub mod eer;
 pub mod fourier;
@@ -325,7 +326,14 @@ fn run_movie(
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let Corrected { sums, mut result } = correct(path, img, parent, p.diagnostics.then_some(target), c, z, t, p, warnings, progress)?;
+    let corrected = correct(path, img, parent, p.diagnostics.then_some(target), c, z, t, p, warnings, progress)?;
+    write(target, corrected, p)
+}
+
+/// Writes a corrected movie as `run` does: the sum (dose weighted when it
+/// was), the unweighted one, the halves when asked, and `<target>.motion.json`.
+pub fn write(target: &str, corrected: Corrected, p: &Params) -> Result<MotionResult> {
+    let Corrected { sums, mut result } = corrected;
     let (w, h, pixel) = (result.width, result.height, result.pixel_a);
     let weighted = sums.weighted.is_some();
     output::single(
