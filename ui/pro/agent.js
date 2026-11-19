@@ -8,14 +8,13 @@
 // user allows an agent once (or always, or never: ⚙ → AI 助手) and can stop
 // it from the strip.
 // Which feature is where on both sides (window and `tmv`) is in
-// pro/features.json; scripts/agent-parity.test.mjs keeps it complete.
+// pro/features.js; scripts/agent-parity.test.mjs keeps it complete.
 // Shares app.js globals: S, T, invoke, $, pref, toast, openPath, setZ, setT, showPanel, ext.
 (() => {
   if (!T?.webviewWindow) return; // the web demo has no app behind it
   const thisWindow = T.webviewWindow.getCurrentWebviewWindow();
   const Pro = window.TifMrcViewPro;
-  let features = [];
-  fetch("pro/features.json").then((r) => r.json()).then((j) => { features = j.features; }).catch(() => {});
+  const features = window.TmvFeatures?.features || [];
 
   // ---------- helpers ----------
 
@@ -369,7 +368,14 @@
     wait: { args: "[text=等这段文字出现] [timeoutMs=…]", desc: "等到没有任务在运行（或出现某段文字），再返回 status", run: (a, call) => waitIdle(a, call.timeoutMs || 60000) },
     screenshot: { args: "", desc: "用户看到的图像视图（PNG 文件）", run: () => {
       doing("看一下图像");
-      const out = { view: $("view").toDataURL("image/png") };
+      // On the window's background, as the user sees it (the canvas is clear around the image).
+      const v = $("view"), c = document.createElement("canvas");
+      c.width = v.width; c.height = v.height;
+      const g = c.getContext("2d");
+      g.fillStyle = getComputedStyle($("stage") || document.body).backgroundColor || "#000";
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(v, 0, 0);
+      const out = { view: c.toDataURL("image/png") };
       const v3 = document.querySelector("#vol3d canvas");
       if (v3 && visible(v3)) try { out.view3d = v3.toDataURL("image/png"); } catch (_) {}
       return out;
@@ -409,7 +415,7 @@
       return ACTIONS.labels.run();
     } },
 
-    // The `tmv` commands, done in the window (features.json: app = cli).
+    // The `tmv` commands, done in the window (features.js: app = cli).
     run: { args: "path=…", desc: "打开数据，说明它是什么、接着能做什么（对应 tmv run）", run: async (a) => {
       await needPath(a);
       const i = S.info;

@@ -1,4 +1,4 @@
-// The window and the `tmv` command can do the same things (ui/pro/features.json):
+// The window and the `tmv` command can do the same things (ui/pro/features.js):
 // every tmv command and every tool button of the window has a row there,
 // every row's window action exists in ui/pro/agent.js, and every control a
 // row names is still in the page. Adding a feature on one side without the
@@ -10,7 +10,8 @@ import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const read = (p) => readFileSync(join(root, p), 'utf8');
-const { features } = JSON.parse(read('ui/pro/features.json'));
+const table = read('ui/pro/features.js');
+const { features } = JSON.parse(table.slice(table.indexOf('= ') + 2, table.lastIndexOf(';')));
 
 function files(dir) {
   return readdirSync(join(root, dir)).flatMap((f) => {
@@ -41,10 +42,10 @@ test('every tmv command has a feature that the window does too', () => {
   assert.ok(cmds.length >= 8, `found tmv commands: ${cmds}`);
   for (const c of cmds) {
     const f = features.find((x) => x.cli === c);
-    assert.ok(f, `tmv ${c} has no row in ui/pro/features.json`);
+    assert.ok(f, `tmv ${c} has no row in ui/pro/features.js`);
     assert.equal(f.app, c, `tmv ${c} should be "tmv app ${c}" in the window too`);
   }
-  for (const f of features) if (f.cli) assert.ok(cmds.includes(f.cli), `features.json names tmv ${f.cli}, which src/cli.rs does not have`);
+  for (const f of features) if (f.cli) assert.ok(cmds.includes(f.cli), `features.js names tmv ${f.cli}, which src/cli.rs does not have`);
 });
 
 test('every feature can be done from the command line', () => {
@@ -59,7 +60,7 @@ test('every tool button of the window has a feature row', () => {
   const buttons = new Set(features.map((f) => f.ui?.button).filter(Boolean));
   for (const p of uiJs.filter((p) => p.startsWith('ui/pro/'))) {
     for (const m of read(p).matchAll(/\.id = "(btn-[a-z0-9-]+)"/g)) {
-      assert.ok(buttons.has(m[1]), `${p} adds the tool button ${m[1]}; add its row (and tmv side) to ui/pro/features.json`);
+      assert.ok(buttons.has(m[1]), `${p} adds the tool button ${m[1]}; add its row (and tmv side) to ui/pro/features.js`);
     }
   }
 });

@@ -145,7 +145,7 @@ MCP server `tmv mcp` drive its window through a port on 127.0.0.1 guarded by
 a token, and the user watches every step (and allows it the first time).
 Each `tmv` command has the same-named action in the window (`tmv app tomo`,
 `tmv app sta`, …), and any button can be pressed with `tmv app ui` /
-`tmv app click`; `ui/pro/features.json` lists both sides and
+`tmv app click`; `ui/pro/features.js` lists both sides and
 `scripts/agent-parity.test.mjs` keeps them in step. The agent skill is
 `skills/tifmrcview-app/`:
 
