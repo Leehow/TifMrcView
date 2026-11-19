@@ -73,8 +73,8 @@
   // ---------- panel ----------
 
   const HINTS = {
-    brush: "涂一笔，再在上面点结构类型，这一笔就按它精细分割；不点就保留你画的。[ ] 调粗细。",
-    eraser: "擦掉标签。[ ] 调粗细。",
+    brush: "涂一笔，再在上面点结构类型，这一笔就按它精细分割；不点就保留你画的。+ − 调粗细。",
+    eraser: "擦掉标签。+ − 调粗细。",
     lasso: "画一圈，圈里涂上标签；要精细分割就再在上面点结构类型。按住 Alt 画圈是擦除。",
     wand: "点一下，亮度相近的连通区域涂上标签；要精细分割就再在上面点结构类型。",
   };
@@ -84,8 +84,8 @@
   sec.innerHTML = `
     <h3>标签分割 <span class="dim" id="lab-busy"></span></h3>
     <div class="row" id="lab-tools">
-      <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg></button>
-      <button class="small" data-sub="eraser" title="橡皮：擦掉标签（[ ] 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg></button>
+      <button class="small" data-sub="brush" title="画笔：按住拖动涂上当前标签（+ − 调大小）"><svg viewBox="0 0 24 24"><path d="M4 20c2.5 0 4-1.5 4-4a3 3 0 0 0-3-3"/><path d="M8 13l9-9 3 3-9 9"/></svg></button>
+      <button class="small" data-sub="eraser" title="橡皮：擦掉标签（+ − 调大小）"><svg viewBox="0 0 24 24"><path d="M8 20h12"/><path d="M4 15l9-9 6 6-7 7H8z"/></svg></button>
       <button class="small" data-sub="lasso" title="套索：按住画一圈，松开后把圈里涂上当前标签（按住 Alt 画圈是擦除）"><svg viewBox="0 0 24 24"><path d="M12 4c5 0 9 2.5 9 6s-4 6-9 6c-1.5 0-3-.2-4.2-.6"/><path d="M12 4C7 4 3 6.5 3 10c0 1.6.9 3 2.3 4.1"/><circle cx="6" cy="17" r="2"/><path d="M6 19c0 1.5-1 2.5-2 3"/></svg></button>
       <button class="small" data-sub="wand" title="魔棒：点一下，把和点击处亮度相近的连通区域涂上当前标签"><svg viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M17 3v3M17 12v3M11 7h3M20 7h3M19 5l1.5-1.5M19 9l1.5 1.5"/></svg></button>
     </div>
@@ -1022,15 +1022,17 @@
     draw();
   });
 
-  // [ and ] change the brush size: by the physical key, so a Chinese input
-  // source (which types 【 】) works too, whatever button has the focus; only
-  // text fields keep their keys. Captured before other handlers see them.
+  // + and − change the size of the brush and the eraser (instead of zooming,
+  // while one of them is the tool): by the physical key (= / + and − of the
+  // main keys, + and − of the keypad), so a Chinese input source (which may
+  // type ＋ － ＝) works too, whatever button has the focus; only text fields
+  // keep their keys. Captured before other handlers see them.
   window.addEventListener("keydown", (e) => {
-    if (S.tool !== "label" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (S.tool !== "label" || (L.sub !== "brush" && L.sub !== "eraser") || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (t && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "range", "radio", "button"].includes(t.type)))) return;
-    const up = e.code === "BracketRight" || e.key === "]" || e.key === "】";
-    const down = e.code === "BracketLeft" || e.key === "[" || e.key === "【";
+    const up = e.code === "Equal" || e.code === "NumpadAdd" || ["+", "=", "＋", "＝"].includes(e.key);
+    const down = e.code === "Minus" || e.code === "NumpadSubtract" || ["-", "－", "—", "_"].includes(e.key);
     if (!up && !down) return;
     L.radius = Math.max(1, Math.min(100, Math.round(L.radius * (up ? 1.25 : 0.8)) + (up ? 1 : 0)));
     syncPanel();
