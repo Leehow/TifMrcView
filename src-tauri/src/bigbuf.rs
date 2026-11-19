@@ -14,23 +14,57 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Bytes of in-memory buffers alive now.
 static IN_MEMORY: AtomicU64 = AtomicU64::new(0);
 
-/// Floats in memory, or in a mapped scratch file (already unlinked).
+/// Floats in memory, or in a mapped scratch file: unlinked at once where the
+/// disk allows it, else (`Some(path)`) removed when the buffer is dropped.
 pub enum Buf {
     Mem(Vec<f32>),
-    Map(memmap2::MmapMut, usize),
+    Map(memmap2::MmapMut, usize, Option<PathBuf>),
 }
 
 /// Buffers smaller than this are always in memory.
 const SMALL: u64 = 256 << 20;
 
-/// Where scratch files go: beside the job's results (the big disk the user
-/// chose), else the system's temporary folder.
-fn scratch_dir() -> PathBuf {
-    std::env::var_os("TMV_SCRATCH")
-        .or_else(|| std::env::var_os("TMV_OUTPUT_ROOT"))
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(std::env::temp_dir)
+/// Where scratch files may go, best first: beside the job's results (the big
+/// disk the user chose), else the system's temporary folder.
+fn scratch_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = ["TMV_SCRATCH", "TMV_OUTPUT_ROOT"].iter().filter_map(std::env::var_os).map(PathBuf::from).filter(|p| p.is_dir()).collect();
+    dirs.push(std::env::temp_dir());
+    dirs
+}
+
+/// Free bytes on the disk of `dir`, if known.
+fn free_bytes(dir: &std::path::Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        if unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let st = unsafe { st.assume_init() };
+        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        None
+    }
+}
+
+/// Scratch files left by a process that was killed (so never removed).
+fn sweep(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(".tmv-scratch-")).and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        #[cfg(target_os = "linux")]
+        if pid != std::process::id() && !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = std::fs::remove_file(e.path());
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+    }
 }
 
 /// Whether `bytes` more fit in memory, keeping a margin for everything else.
@@ -53,15 +87,38 @@ fn fits(bytes: u64) -> bool {
     held.saturating_add(bytes) <= budget.saturating_sub(2 << 30)
 }
 
-fn mapped(len: usize) -> std::io::Result<memmap2::MmapMut> {
-    let dir = scratch_dir();
-    let name = format!(".tmv-scratch-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
-    let path = dir.join(name);
-    let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-    // Gone from the folder at once; the mapping keeps the space until dropped.
-    let _ = std::fs::remove_file(&path);
-    file.set_len((len.max(1) * 4) as u64)?;
-    unsafe { memmap2::MmapMut::map_mut(&file) }
+fn mapped(len: usize) -> std::io::Result<(memmap2::MmapMut, Option<PathBuf>)> {
+    let bytes = (len.max(1) * 4) as u64;
+    let mut last = std::io::Error::other("no scratch folder");
+    for dir in scratch_dirs() {
+        sweep(&dir);
+        // Room for it and a margin: a full system disk breaks everything else.
+        if free_bytes(&dir).is_some_and(|f| f < bytes + (2 << 30)) {
+            last = std::io::Error::other(format!("{} 空间不够", dir.display()));
+            continue;
+        }
+        let path = dir.join(format!(".tmv-scratch-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let made = (|| -> std::io::Result<memmap2::MmapMut> {
+            let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+            // Size and map first, unlink after: a Windows disk under WSL
+            // (drvfs, /mnt/e) refuses to size a file that is already unlinked.
+            file.set_len(bytes)?;
+            unsafe { memmap2::MmapMut::map_mut(&file) }
+        })();
+        match made {
+            Ok(m) => {
+                // Gone from the folder at once where the disk allows it; the
+                // mapping keeps the space until dropped.
+                let keep = std::fs::remove_file(&path).err().map(|_| path);
+                return Ok((m, keep));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                last = e;
+            }
+        }
+    }
+    Err(last)
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -72,7 +129,7 @@ impl Buf {
         let bytes = (len * 4) as u64;
         if !fits(bytes) {
             match mapped(len) {
-                Ok(m) => return Buf::Map(m, len),
+                Ok((m, keep)) => return Buf::Map(m, len, keep),
                 Err(e) => eprintln!("scratch file unavailable ({e}); keeping {} MB in memory", bytes >> 20),
             }
         }
@@ -117,8 +174,14 @@ impl From<Vec<f32>> for Buf {
 
 impl Drop for Buf {
     fn drop(&mut self) {
-        if let Buf::Mem(v) = self {
-            IN_MEMORY.fetch_sub((v.len() * 4) as u64, Ordering::Relaxed);
+        match self {
+            Buf::Mem(v) => {
+                IN_MEMORY.fetch_sub((v.len() * 4) as u64, Ordering::Relaxed);
+            }
+            Buf::Map(_, _, Some(path)) => {
+                let _ = std::fs::remove_file(path);
+            }
+            Buf::Map(..) => {}
         }
     }
 }
@@ -129,7 +192,7 @@ impl Deref for Buf {
         match self {
             Buf::Mem(v) => v,
             // A mapping starts on a page boundary, so the floats are aligned.
-            Buf::Map(m, n) => unsafe { std::slice::from_raw_parts(m.as_ptr() as *const f32, *n) },
+            Buf::Map(m, n, _) => unsafe { std::slice::from_raw_parts(m.as_ptr() as *const f32, *n) },
         }
     }
 }
@@ -138,7 +201,7 @@ impl DerefMut for Buf {
     fn deref_mut(&mut self) -> &mut [f32] {
         match self {
             Buf::Mem(v) => v,
-            Buf::Map(m, n) => unsafe { std::slice::from_raw_parts_mut(m.as_mut_ptr() as *mut f32, *n) },
+            Buf::Map(m, n, _) => unsafe { std::slice::from_raw_parts_mut(m.as_mut_ptr() as *mut f32, *n) },
         }
     }
 }
@@ -182,13 +245,9 @@ mod tests {
     #[test]
     fn a_mapped_buffer_reads_and_writes_like_a_vector() {
         let dir = tempfile::tempdir().unwrap();
-        let m = Buf::Map(
-            {
-                std::env::set_var("TMV_SCRATCH", dir.path());
-                mapped(1000).unwrap()
-            },
-            1000,
-        );
+        std::env::set_var("TMV_SCRATCH", dir.path());
+        let (map, keep) = mapped(1000).unwrap();
+        let m = Buf::Map(map, 1000, keep);
         let mut m = m;
         assert!(m.iter().all(|&v| v == 0.0));
         for (i, v) in m.iter_mut().enumerate() {
