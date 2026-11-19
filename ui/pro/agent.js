@@ -81,7 +81,7 @@
   function statusLines() {
     const out = [];
     for (const el of document.querySelectorAll("[role=status], #toast, #loading")) {
-      if (!visible(el)) continue;
+      if (!visible(el) || el.closest("#agent-strip")) continue;
       const t = clip(el.textContent, 300);
       if (t) out.push({ in: el.id || placeOf(el), text: t });
     }
