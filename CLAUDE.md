@@ -19,8 +19,9 @@ here that changes the UI or features needs a companion change there:
 - **Feature text.** Update the feature description on the site's home page
   and all its languages, and the plugin market text for plugins.
 - **What stays here.** The release workflow (`build.yml`) still uploads
-  installers, `latest*.json`, `downloads*.json` and the plugin packages to
-  the same server; `plugins.yml` uploads plugin packages when `plugins/`
+  installers, `latest*.json`, `downloads*.json`, Pro's SSH engine
+  (`tmv-engine_<version>_linux-x86_64.tar.gz`, downloaded by Pro on first
+  remote processing) and the plugin packages to the same server; `plugins.yml` uploads plugin packages when `plugins/`
   changes. README screenshots are in `docs/shots/`.
 
 ## CI and releases
@@ -40,6 +41,13 @@ available; use them.
 - The private website repository has no Actions minutes: its workflows
   cannot start, so its pages are uploaded from a local machine instead
   (see that repository's CLAUDE.md).
+
+## Pro's SSH engine
+
+Pro installers do not carry the Linux engine for SSH processing; build.rs
+pins its size and SHA-256 (`TMV_SSH_ENGINE_PACKAGE`) and Pro downloads it
+from its version's folder on first use. A local test build whose engine is
+not on the download site must set `TMV_SSH_ENGINE_EMBED=1` to embed it.
 
 ## Reuse before building
 

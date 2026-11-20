@@ -584,8 +584,6 @@ fn sam_status(sam: State<'_, crate::sam::Sam>) -> crate::sam::Status {
 /// Downloads the SAM model once, reporting `sam-download` {done, total}.
 #[tauri::command]
 async fn sam_download(app: AppHandle) -> CmdResult<()> {
-    use sha2::{Digest, Sha256};
-    use std::io::Write;
     use std::sync::atomic::Ordering::SeqCst;
     let sam = app.state::<crate::sam::Sam>();
     if !crate::edition::PRO {
@@ -596,52 +594,12 @@ async fn sam_download(app: AppHandle) -> CmdResult<()> {
     }
     let result = async {
         let path = crate::sam::model_path().ok_or("找不到存放模型的文件夹")?;
-        std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
-        let part = path.with_extension("part");
-        if rustls::crypto::CryptoProvider::get_default().is_none() {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-        }
-        let client = reqwest::Client::builder()
-            .user_agent(format!("{}/{}", crate::edition::NAME, env!("CARGO_PKG_VERSION")))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .read_timeout(std::time::Duration::from_secs(60))
-            .build()
-            .map_err(err)?;
-        let mut last_err = String::new();
-        for url in crate::sam::MODEL_URLS {
-            let attempt = async {
-                let mut resp = client.get(url).send().await.map_err(err)?;
-                if !resp.status().is_success() {
-                    return Err(format!("服务器返回 {}", resp.status().as_u16()));
-                }
-                let total = resp.content_length().unwrap_or(crate::sam::MODEL_SIZE);
-                let mut file = std::io::BufWriter::new(std::fs::File::create(&part).map_err(err)?);
-                let mut hash = Sha256::new();
-                let (mut done, mut shown) = (0u64, 0u64);
-                while let Some(chunk) = resp.chunk().await.map_err(err)? {
-                    file.write_all(&chunk).map_err(err)?;
-                    hash.update(&chunk);
-                    done += chunk.len() as u64;
-                    if done - shown > 1 << 20 || done == total {
-                        shown = done;
-                        let _ = app.emit("sam-download", serde_json::json!({ "done": done, "total": total }));
-                    }
-                }
-                file.flush().map_err(err)?;
-                drop(file);
-                let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-                crate::sam::verify(done, &hex).map_err(err)?;
-                std::fs::rename(&part, &path).map_err(err)
-            };
-            match attempt.await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    let _ = std::fs::remove_file(&part);
-                    last_err = e;
-                }
-            }
-        }
-        Err(format!("模型下载失败：{last_err}"))
+        let urls: Vec<String> = crate::sam::MODEL_URLS.iter().map(|u| u.to_string()).collect();
+        crate::fetch::to_file(&urls, &path, crate::sam::MODEL_SIZE, crate::sam::MODEL_SHA256, |done, total| {
+            let _ = app.emit("sam-download", serde_json::json!({ "done": done, "total": total }));
+        })
+        .await
+        .map_err(|e| format!("模型下载失败：{e}"))
     }
     .await;
     sam.downloading.store(false, SeqCst);
@@ -3803,6 +3761,7 @@ pub fn run() {
             let dir = plugins::user_dir(app.handle());
             plugins::registry::Registry::global().configure(dir.clone(), &app.package_info().version.to_string());
             app.manage(plugins::Plugins::new(dir));
+            plugins::configure_ssh_engine(app.handle());
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 // Windows / Linux: a link to a running app comes through the

@@ -47,6 +47,9 @@ const kinds = [
   // Pro only: the `tmv` command-line tool for servers (scripts/pack-cli.mjs),
   // which the site's cli/install.sh finds through files.cli.
   ...(pro ? [{ id: "cli", re: /tmv_.*_linux-x86_64\.tar\.gz$/, name: `tmv_${version}_linux-x86_64.tar.gz`, os: "cli", label: "tmv（命令行）", note: "Linux x86_64 服务器，无需界面" }] : []),
+  // Pro only: the Linux engine Pro sends to SSH servers (scripts/pack-ssh-engine.mjs),
+  // downloaded by the app on first use. Not a download on the page.
+  ...(pro ? [{ id: "engine", re: /ssh-engine\.tar\.gz$/, name: `tmv-engine_${version}_linux-x86_64.tar.gz` }] : []),
 ];
 
 const files = walk(src);

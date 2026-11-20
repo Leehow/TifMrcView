@@ -7,10 +7,122 @@ use std::{
     io::{Read, Write},
     path::Path,
 };
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+// The Linux engine (tmv + NVRTC, scripts/pack-ssh-engine.mjs) is not in the
+// installer: Pro knows its size and SHA-256 (build.rs) and downloads it from
+// its version's folder on the download site the first time a server needs
+// it. Local test builds may embed it instead (TMV_SSH_ENGINE_EMBED=1).
 #[cfg(feature = "pro")]
-const PACKAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ssh-engine.tar.gz"));
+const EMBEDDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ssh-engine.tar.gz"));
+#[cfg(feature = "pro")]
+const ENGINE_SHA256: &str = env!("TMV_SSH_ENGINE_SHA256");
 #[cfg(not(feature = "pro"))]
-const PACKAGE: &[u8] = &[];
+const EMBEDDED: &[u8] = &[];
+#[cfg(not(feature = "pro"))]
+const ENGINE_SHA256: &str = "";
+const ENGINE_SIZE: &str = env!("TMV_SSH_ENGINE_SIZE");
+
+static URLS: OnceLock<Vec<String>> = OnceLock::new();
+static FETCHING: AtomicBool = AtomicBool::new(false);
+static DONE: AtomicU64 = AtomicU64::new(0);
+static TOTAL: AtomicU64 = AtomicU64::new(0);
+static FETCH_LOCK: Mutex<()> = Mutex::new(());
+
+/// `roots`: the download site's folders, e.g. https://tifmrcview.com/tifmrcview/.
+pub fn set_engine_urls(roots: &[String], version: &str) {
+    let _ = URLS.set(roots.iter().map(|r| format!("{r}{version}/tmv-engine_{version}_linux-x86_64.tar.gz")).collect());
+}
+
+/// How far the engine download is, for the 运行位置 line.
+pub(super) fn fetch_progress() -> Value {
+    json!({"active": FETCHING.load(Ordering::Relaxed), "done": DONE.load(Ordering::Relaxed), "total": TOTAL.load(Ordering::Relaxed)})
+}
+
+fn engine_size() -> u64 {
+    ENGINE_SIZE.parse().unwrap_or(0)
+}
+
+fn engine_hash() -> Result<&'static str> {
+    ensure!(!ENGINE_SHA256.is_empty(), "当前安装包未附带远程计算引擎，请更新 App");
+    Ok(ENGINE_SHA256)
+}
+
+fn local_engine(root: &Path) -> Result<std::path::PathBuf> {
+    Ok(root.join("engine").join(format!("{}.tar.gz", engine_hash()?)))
+}
+
+/// Whether this computer already has the engine (embedded or downloaded).
+pub(super) fn have_engine(root: &Path) -> bool {
+    !EMBEDDED.is_empty()
+        || local_engine(root).is_ok_and(|p| p.metadata().is_ok_and(|m| m.len() == engine_size()))
+}
+
+/// Downloads the engine into `root` once; other engines there are removed.
+pub(super) fn fetch_engine(root: &Path) -> Result<()> {
+    let _guard = FETCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if have_engine(root) {
+        return Ok(());
+    }
+    let path = local_engine(root)?;
+    let urls = URLS.get().cloned().unwrap_or_default();
+    ensure!(!urls.is_empty(), "不知道从哪里下载远程计算引擎");
+    FETCHING.store(true, Ordering::Relaxed);
+    let result = tauri::async_runtime::block_on(crate::fetch::to_file(&urls, &path, engine_size(), ENGINE_SHA256, |done, total| {
+        DONE.store(done, Ordering::Relaxed);
+        TOTAL.store(total, Ordering::Relaxed);
+    }));
+    FETCHING.store(false, Ordering::Relaxed);
+    result.map_err(|e| anyhow::anyhow!("下载远程计算引擎失败：{e}。请检查本机网络后重试"))?;
+    if let Ok(entries) = std::fs::read_dir(path.parent().unwrap()) {
+        for e in entries.flatten().filter(|e| e.path() != path) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    Ok(())
+}
+
+fn package(root: &Path) -> Result<Cow<'static, [u8]>> {
+    if !EMBEDDED.is_empty() {
+        return Ok(Cow::Borrowed(EMBEDDED));
+    }
+    fetch_engine(root)?;
+    let path = local_engine(root)?;
+    let bytes = std::fs::read(&path)?;
+    if digest(&bytes) != engine_hash()? {
+        let _ = std::fs::remove_file(&path);
+        anyhow::bail!("本机缓存的远程计算引擎已损坏，已删除，请重试");
+    }
+    Ok(Cow::Owned(bytes))
+}
+
+/// Where this server keeps the engine, and whether it is installed there.
+fn engine_dir(session: &Session) -> Result<(std::path::PathBuf, std::path::PathBuf, bool)> {
+    let sftp = session.sftp()?;
+    let home = sftp.realpath(Path::new("."))?;
+    let base = home.join(".cache/tifmrcview/engines");
+    let dir = base.join(engine_hash()?);
+    let installed = exec(
+        session,
+        &format!(
+            "uname -sm; test -f {} && printf ready || true",
+            quote(&dir.join("ready").to_string_lossy())
+        ),
+        &[],
+    )?;
+    ensure!(
+        installed.starts_with(b"Linux x86_64"),
+        "远程计算支持 Linux x86_64；此服务器平台不匹配"
+    );
+    Ok((base, dir, installed.ends_with(b"ready")))
+}
+
+/// Whether the server already has this engine (then nothing is downloaded).
+pub(super) fn server_has_engine(session: &Session) -> Result<bool> {
+    Ok(engine_dir(session)?.2)
+}
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -33,31 +145,14 @@ fn exec(s: &Session, cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
     );
     Ok(out)
 }
-pub(super) fn call(session: &Session, args: &Value) -> Result<Value> {
-    ensure!(
-        !PACKAGE.is_empty(),
-        "当前安装包未附带远程计算引擎，请更新 App"
-    );
+pub(super) fn call(session: &Session, args: &Value, root: &Path) -> Result<Value> {
+    let hash = engine_hash()?;
     let sftp = session.sftp()?;
-    let home = sftp.realpath(Path::new("."))?;
-    let base = home.join(".cache/tifmrcview/engines");
-    let hash = digest(PACKAGE);
-    let dir = base.join(&hash);
+    let (base, dir, ready) = engine_dir(session)?;
     let binary = dir.join("tmv");
     let q = |p: &Path| quote(&p.to_string_lossy());
-    let installed = exec(
-        session,
-        &format!(
-            "uname -sm; test -f {} && printf ready || true",
-            q(&dir.join("ready"))
-        ),
-        &[],
-    )?;
-    ensure!(
-        installed.starts_with(b"Linux x86_64"),
-        "远程计算支持 Linux x86_64；此服务器平台不匹配"
-    );
-    if !installed.ends_with(b"ready") {
+    if !ready {
+        let package = package(root)?;
         exec(session, &format!("umask 077; mkdir -p {}", q(&base)), &[])?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -66,7 +161,7 @@ pub(super) fn call(session: &Session, args: &Value) -> Result<Value> {
         let stage = base.join(format!(".{hash}-{}-{nonce}.stage", std::process::id()));
         let upload = (|| -> Result<()> {
             let mut f = sftp.create(&partial)?;
-            f.write_all(PACKAGE)?;
+            f.write_all(&package)?;
             f.close()?;
             let check = quote(&format!("{hash}  {}\n", partial.display()));
             // Extract privately, verify completely, then publish one immutable directory.

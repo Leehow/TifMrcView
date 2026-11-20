@@ -137,6 +137,12 @@ function build(which, out) {
     const found = walk(bundleRoot).filter((f) => f.includes(`${path.sep}bundle${path.sep}`) && bundleFile.test(f));
     if (!found.length) throw new Error("no bundles found");
     for (const f of found) fs.copyFileSync(f, path.join(dest, path.basename(f)));
+    // Pro downloads this engine on first SSH use and checks it against the
+    // SHA-256 built in above, so it is published with the release.
+    if (edition === "pro") {
+      fs.mkdirSync(path.join(out, "pro", "engine"), { recursive: true });
+      fs.copyFileSync(process.env.TMV_SSH_ENGINE_PACKAGE, path.join(out, "pro", "engine", "ssh-engine.tar.gz"));
+    }
     console.log(`${edition} ${platform} ${v}: ${found.length} files in ${((Date.now() - started) / 60000).toFixed(1)} min -> ${dest}`);
   }
 }
@@ -183,6 +189,7 @@ function publish(artifacts, dryRun) {
     }
   }
   if (!walk(path.join(artifacts, "standard", "android")).some((f) => f.endsWith("_arm64.apk"))) missing.push("standard/android");
+  if (!fs.existsSync(path.join(artifacts, "pro", "engine", "ssh-engine.tar.gz"))) missing.push("pro/engine");
   if (missing.length) throw new Error(`missing builds: ${missing.join(", ")}`);
   for (const f of walk(artifacts)) {
     const m = path.basename(f).match(/_(\d+\.\d+\.\d+)_/);

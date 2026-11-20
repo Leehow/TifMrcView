@@ -53,6 +53,8 @@ pub mod ortho;
 mod open_requests;
 #[cfg(feature = "desktop")]
 mod mem;
+#[cfg(feature = "desktop")]
+pub(crate) mod fetch;
 #[cfg(all(test, feature = "desktop"))]
 mod ipc_config_tests;
 pub mod plugins;
