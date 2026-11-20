@@ -295,3 +295,210 @@ impl Trim for Buf {
         Buf::trim(self)
     }
 }
+
+/// Largest single read or write of a big file. A Windows disk under WSL
+/// (drvfs/9p) answered 64 MB requests with ENOMEM ("Cannot allocate
+/// memory") once memory was tight, and a whole tilt series then failed on
+/// its first movie; small pieces, retried, go through.
+pub const PIECE: usize = 4 << 20;
+
+/// Whether `e` is the system saying it is short of memory for the request
+/// (ENOMEM; Windows: not enough memory or system resources).
+pub fn short_of_memory(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::OutOfMemory || (cfg!(windows) && e.raw_os_error() == Some(1450))
+}
+
+/// `op` on `PIECE`-sized pieces of `len` bytes from `at`; a piece refused for
+/// want of memory is retried, smaller and after a growing pause (up to about
+/// two minutes in all, while the system frees memory), before giving up.
+pub fn in_pieces(len: usize, at: u64, mut op: impl FnMut(std::ops::Range<usize>, u64) -> std::io::Result<()>) -> std::io::Result<()> {
+    let mut done = 0;
+    let mut patience = Patience::default();
+    while done < len {
+        let n = patience.piece.min(len - done);
+        match op(done..done + n, at + done as u64) {
+            Ok(()) => {
+                done += n;
+                patience.tries = 0;
+            }
+            Err(e) => patience.wait(e)?,
+        }
+    }
+    Ok(())
+}
+
+/// The piece size and the retries left for one request.
+struct Patience {
+    piece: usize,
+    tries: u64,
+}
+impl Default for Patience {
+    fn default() -> Self {
+        Patience { piece: PIECE, tries: 0 }
+    }
+}
+impl Patience {
+    /// Waits before the retry of a piece refused for want of memory (and
+    /// halves the piece); any other error, or one that lasts, is returned.
+    fn wait(&mut self, e: std::io::Error) -> std::io::Result<()> {
+        if !short_of_memory(&e) || self.tries >= 60 {
+            return Err(e);
+        }
+        self.tries += 1;
+        self.piece = (self.piece / 2).max(64 << 10);
+        std::thread::sleep(std::time::Duration::from_millis((50 * self.tries).min(2000)));
+        Ok(())
+    }
+}
+
+/// Reads exactly `buf.len()` bytes at `at`, in pieces (`in_pieces`).
+pub fn read_at(f: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+    in_pieces(buf.len(), at, |r, at| exact_at(f, &mut buf[r], at))
+}
+
+/// Writes all of `buf` at `at`, in pieces (`in_pieces`).
+pub fn write_at(f: &std::fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
+    in_pieces(buf.len(), at, |r, at| all_at(f, &buf[r], at))
+}
+
+#[cfg(unix)]
+fn exact_at(f: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
+}
+#[cfg(unix)]
+fn all_at(f: &std::fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(f, buf, at)
+}
+#[cfg(windows)]
+fn exact_at(f: &std::fs::File, mut buf: &mut [u8], mut at: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_read(f, buf, at)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        (buf, at) = (&mut buf[n..], at + n as u64);
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn all_at(f: &std::fs::File, mut buf: &[u8], mut at: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_write(f, buf, at)?;
+        (buf, at) = (&buf[n..], at + n as u64);
+    }
+    Ok(())
+}
+
+/// A file (or any reader/writer) whose reads and writes go to it in pieces
+/// of at most `PIECE` bytes, a piece refused for want of memory retried
+/// smaller after a pause: for streams of big sections (`write_all` of a
+/// 64 MB section, `read_to_end` of a cached frame).
+pub struct Patient<F>(pub F);
+
+impl<F: std::io::Write> std::io::Write for Patient<F> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut patience = Patience::default();
+        loop {
+            match self.0.write(&buf[..patience.piece.min(buf.len())]) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => patience.wait(e)?,
+            }
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<F: std::io::Read> std::io::Read for Patient<F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut patience = Patience::default();
+        loop {
+            let n = patience.piece.min(buf.len());
+            match self.0.read(&mut buf[..n]) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => patience.wait(e)?,
+            }
+        }
+    }
+}
+
+impl<F: std::io::Seek> std::io::Seek for Patient<F> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
+/// The whole file at `path`, read in pieces (`Patient`).
+pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    let mut out = Vec::with_capacity(f.metadata().map_or(0, |m| m.len() as usize));
+    Patient(f).read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// `bytes` as the whole file at `path`, written in pieces (`Patient`).
+pub fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    Patient(std::fs::File::create(path)?).write_all(bytes)
+}
+
+#[cfg(test)]
+mod patient_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// A writer that refuses for want of memory the first few times and any
+    /// request bigger than 1 MB.
+    struct Tight(Vec<u8>, usize);
+    impl Write for Tight {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.1 > 0 || buf.len() > 1 << 20 {
+                self.1 = self.1.saturating_sub(1);
+                return Err(std::io::ErrorKind::OutOfMemory.into());
+            }
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_big_write_refused_for_memory_goes_through_in_smaller_pieces() {
+        let data: Vec<u8> = (0..(9 << 20)).map(|i| i as u8).collect();
+        let mut w = Patient(Tight(vec![], 2));
+        w.write_all(&data).unwrap();
+        assert_eq!(w.0 .0, data);
+    }
+
+    #[test]
+    fn other_errors_are_not_retried() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        let mut v = vec![];
+        assert_eq!(Patient(Broken).read_to_end(&mut v).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn files_round_trip_in_pieces() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x");
+        let data: Vec<u8> = (0..(5 << 20) + 3).map(|i| (i * 7) as u8).collect();
+        write_file(&p, &data).unwrap();
+        assert_eq!(read_file(&p).unwrap(), data);
+        let f = std::fs::OpenOptions::new().read(true).write(true).open(&p).unwrap();
+        write_at(&f, &[1, 2, 3], 10).unwrap();
+        let mut b = [0u8; 3];
+        read_at(&f, &mut b, 10).unwrap();
+        assert_eq!(b, [1, 2, 3]);
+    }
+}

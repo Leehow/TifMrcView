@@ -383,6 +383,12 @@ fn cancelled(e: &anyhow::Error) -> bool {
 }
 
 /// One series through `work`; a failure is noted and does not stop the rest.
+/// A series that failed for want of memory (a server busy with something
+/// else, a Windows disk under WSL refusing a big write) is not given up: its
+/// turn waits until memory is free again and it goes on from where it
+/// stopped (the steps done are kept), a few times; and every series still
+/// failed when the others are through is tried once more, as its card's
+/// 「继续」 would, so the user need not press it.
 fn each(
     folder: &str,
     wanted: &dyn Fn(&Series) -> bool,
@@ -393,18 +399,106 @@ fn each(
     let session = scan(folder)?;
     let root = PathBuf::from(&session.root);
     let todo: Vec<&Series> = session.series.iter().filter(|s| wanted(s)).collect();
+    let mut failed = vec![];
     for (i, s) in todo.iter().enumerate() {
-        super::check_cancel()?;
         let label = format!("{}（{}/{}）", s.name, i + 1, todo.len());
-        note(&root, &s.name, None);
-        match work(s, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b)) {
-            Ok(said) => remark(&root, &s.name, said, false),
-            Err(e) if cancelled(&e) => return Err(e),
-            Err(e) => note(&root, &s.name, Some(format!("{e:#}"))),
+        if !one(&root, s, &label, MEMORY_TRIES, progress, changed, work)? {
+            failed.push(*s);
         }
-        changed();
+    }
+    for (i, s) in failed.iter().enumerate() {
+        let label = format!("{}（再试失败的 {}/{}）", s.name, i + 1, failed.len());
+        one(&root, s, &label, 1, progress, changed, work)?;
     }
     scan(folder)
+}
+
+/// Times a series is tried in its turn while it fails for want of memory.
+const MEMORY_TRIES: usize = 4;
+
+/// `s` through `work`, again (up to `tries` in all) while it fails for want
+/// of memory, after the memory is free again. Whether it went through; Err
+/// only when cancelled.
+fn one(
+    root: &Path,
+    s: &Series,
+    label: &str,
+    tries: usize,
+    progress: pipeline::Progress,
+    changed: &(dyn Fn() + Sync),
+    work: &dyn Fn(&Series, pipeline::Progress) -> Result<Option<String>>,
+) -> Result<bool> {
+    for k in 1..=tries.max(1) {
+        super::check_cancel()?;
+        note(root, &s.name, None);
+        let r = work(s, &|stage, a, b| progress(&format!("{label} · {stage}"), a, b));
+        release_memory();
+        match r {
+            Ok(said) => {
+                remark(root, &s.name, said, false);
+                changed();
+                return Ok(true);
+            }
+            Err(e) if cancelled(&e) => return Err(e),
+            Err(e) if k < tries && short_of_memory(&e) => {
+                note(root, &s.name, Some(format!("内存不够（{e:#}），等内存空出来后自动接着做（第 {k} 次）")));
+                changed();
+                wait_for_memory(&|left| progress(&format!("{label} · 内存不够，等内存空出来后接着做（第 {k} 次重试，最多再等 {left} 秒）"), 0, 1))?;
+            }
+            Err(e) => {
+                note(root, &s.name, Some(format!("{e:#}")));
+                changed();
+                return Ok(false);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `e` came from the system (or the GPU) being short of memory.
+fn short_of_memory(e: &anyhow::Error) -> bool {
+    if e.chain().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(crate::bigbuf::short_of_memory)) {
+        return true;
+    }
+    let t = format!("{e:#}").to_lowercase();
+    ["cannot allocate memory", "os error 12", "out of memory", "outofmemory", "memory allocation", "内存不足", "内存不够", "显存不足"].iter().any(|k| t.contains(k))
+}
+
+/// Gives the memory freed by the series before back to the system (the
+/// allocator keeps freed pages for itself otherwise, and a long batch's
+/// process grows until the system has none left for anyone).
+fn release_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// Waits (at most five minutes; `waiting` is told the seconds left) until
+/// 8 GB of memory are free or nothing more is being given back.
+fn wait_for_memory(waiting: &dyn Fn(u64)) -> Result<()> {
+    const MOST: u64 = 300;
+    let start = std::time::Instant::now();
+    let mut last = 0u64;
+    let mut still = 0;
+    loop {
+        super::check_cancel()?;
+        release_memory();
+        let free = crate::resources::memory_available_bytes();
+        let waited = start.elapsed().as_secs();
+        if free == 0 || waited >= MOST || free >= 8 << 30 {
+            return Ok(());
+        }
+        // Not freeing any more for half a minute: try again anyway (the
+        // steps go slower, in smaller pieces, when memory is short).
+        still = if free <= last + (64 << 20) { still + 1 } else { 0 };
+        if waited >= 10 && still >= 6 {
+            return Ok(());
+        }
+        last = free;
+        waiting(MOST - waited);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
 }
 
 /// The tilt series of `s`, its movies corrected first when it has any (as

@@ -188,23 +188,23 @@ impl Drop for TempFile {
 }
 fn atomic_write(
     path: &Path,
-    write: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<()>,
+    write: impl FnOnce(&mut BufWriter<crate::bigbuf::Patient<std::fs::File>>) -> Result<()>,
 ) -> Result<()> {
     let part = path.with_extension(format!(
         "{}.tomo-part",
         path.extension().and_then(|s| s.to_str()).unwrap_or("out")
     ));
-    let mut f = BufWriter::new(
+    let mut f = BufWriter::new(crate::bigbuf::Patient(
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&part)?,
-    );
+    ));
     let guard = TempFile(part.clone());
     write(&mut f)?;
     check_cancel()?;
     f.flush()?;
-    f.get_ref().sync_all()?;
+    f.get_ref().0.sync_all()?;
     drop(f);
     std::fs::rename(&part, path)?;
     drop(guard);
@@ -382,7 +382,6 @@ impl VolumeFile {
 
     /// Rows y0..y0+n of sections z0..z0+nz, given as [n][nz][w].
     pub fn write_block(&mut self, y0: usize, n: usize, z0: usize, nz: usize, slab: &[f32]) -> Result<()> {
-        use std::io::{Seek, SeekFrom};
         let [w, h, z] = self.shape;
         if slab.len() != n * nz * w || y0 + n > h || z0 + nz > z {
             bail!("重构分块尺寸不一致");
@@ -403,8 +402,7 @@ impl VolumeFile {
                     band[(y * w + x) * 4..(y * w + x + 1) * 4].copy_from_slice(&v.to_le_bytes());
                 }
             }
-            self.file.seek(SeekFrom::Start(HEADER + ((k * h + y0) * w * 4) as u64))?;
-            self.file.write_all(&band)?;
+            crate::bigbuf::write_at(&self.file, &band, HEADER + ((k * h + y0) * w * 4) as u64)?;
         }
         self.count += n * nz * w;
         Ok(())
