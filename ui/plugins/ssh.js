@@ -399,6 +399,7 @@ TifMrcView.register({
           choose: async()=>{check();if(!dialog.open)dialog.showModal();return null;},
           pickFolder: async (start,space)=>{check();return pickRemoteFolder(start,space);},
           call: request=>{check();return native('processing',{request});},
+          engineProgress: ()=>native('engineProgress'),
           previewFile: async path=>{
             check();
             // Only the processed stacks requested by the Cryo-ET review use

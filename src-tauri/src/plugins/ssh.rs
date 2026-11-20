@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 mod preview;
 #[path = "ssh_processing.rs"]
 mod processing;
+pub use processing::set_engine_urls;
 #[path = "ssh_tcp.rs"]
 mod tcp;
 
@@ -198,6 +199,9 @@ impl Ssh {
         if method == "probe" {
             return self.probe(&args);
         }
+        if method == "engineProgress" {
+            return Ok(processing::fetch_progress());
+        }
         let id = text(&args, "connection")?;
         let conn = self
             .connections
@@ -220,6 +224,17 @@ impl Ssh {
             return Ok(
                 json!({"done": conn.done.load(Ordering::Relaxed), "total": conn.total.load(Ordering::Relaxed)}),
             );
+        }
+        // First remote processing on this computer: download the engine without
+        // holding the connection, unless the server already has it.
+        if method == "processing" && conn.authenticated.load(Ordering::Relaxed) {
+            let root = self.cache_root()?;
+            if !processing::have_engine(&root) {
+                let on_server = processing::server_has_engine(&conn.session.lock().unwrap()).unwrap_or(false);
+                if !on_server {
+                    processing::fetch_engine(&root)?;
+                }
+            }
         }
         let mut session = conn.session.lock().unwrap();
         if conn.closed.load(Ordering::Relaxed) {
@@ -300,7 +315,7 @@ impl Ssh {
     }
 
     fn run(&self, conn: &Connection, session: &Session, method: &str, args: &Value) -> Result<Value> {
-        if method == "processing" { return processing::call(session, args); }
+        if method == "processing" { return processing::call(session, args, conn.cache.parent().context("缓存目录")?); }
         if method == "thumbnail" {
             return preview::render(
                 session,
@@ -678,6 +693,34 @@ mod tests {
         assert!(ssh
             .call("download", json!({"connection": "missing", "path": "/x"}))
             .is_err());
+    }
+
+    // Pro's first remote processing on a computer downloads the engine from
+    // TMV_SSH_ENGINE_ACCEPT_ROOT (laid out like the download site), installs it
+    // on the server, and the next call downloads and uploads nothing.
+    #[test]
+    #[ignore = "requires a Linux SSH server and the engine served over HTTP"]
+    fn engine_download_and_install_acceptance() {
+        let env = |k: &str| std::env::var(k).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Ssh { storage: Some(dir.path().into()), ..Ssh::default() };
+        set_engine_urls(&[env("TMV_SSH_ENGINE_ACCEPT_ROOT")], &env("TMV_SSH_ENGINE_ACCEPT_VERSION"));
+        let probe = ssh.call("probe", json!({"host": env("TMV_SSH_ACCEPT_HOST"), "port": 22})).unwrap();
+        let id = &probe["connection"];
+        ssh.call("authenticate", json!({"connection": id, "trust": true, "authMethod": "keyFile",
+            "username": env("TMV_SSH_ACCEPT_USER"), "keyPath": env("TMV_SSH_ACCEPT_KEY"), "passphrase": ""})).unwrap();
+        let inspect = json!({"connection": id, "request": {"action": "inspect"}});
+        let first = ssh.call("processing", inspect.clone()).unwrap();
+        assert!(first["resources"].is_object(), "{first}");
+        let cached = dir.path().join("cache/engine");
+        assert_eq!(std::fs::read_dir(&cached).unwrap().count(), 1);
+        assert_eq!(ssh.call("engineProgress", json!({}))
+            .unwrap()["active"], false);
+        // Gone locally but installed on the server: nothing is downloaded again.
+        std::fs::remove_dir_all(&cached).unwrap();
+        let again = ssh.call("processing", inspect).unwrap();
+        assert!(again["resources"].is_object());
+        assert!(!cached.exists());
     }
 
     // Started by scripts/test-ssh-native.py: an isolated loopback SFTP server.

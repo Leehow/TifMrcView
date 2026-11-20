@@ -814,14 +814,6 @@ pub fn likeness(prev: &[bool], next: &[bool], w: usize, h: usize) -> f32 {
     near(next, prev).min(near(prev, next))
 }
 
-/// Checks a downloaded model file against the known size and SHA-256.
-pub fn verify(bytes_len: u64, sha256_hex: &str) -> Result<()> {
-    if bytes_len != MODEL_SIZE || sha256_hex != MODEL_SHA256 {
-        bail!("下载的模型文件不完整或已损坏，请重试");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

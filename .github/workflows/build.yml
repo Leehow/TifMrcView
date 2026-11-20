@@ -510,6 +510,14 @@ jobs:
           github-token: ${{ github.token }}
           path: artifacts/pro/cli
 
+      # The SSH engine Pro downloads on first use (its SHA-256 is built into Pro).
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-engine-linux-x64
+          run-id: ${{ env.ARTIFACT_RUN }}
+          github-token: ${{ github.token }}
+          path: artifacts/pro/engine
+
       # Only a signed APK (TifMrcView_<version>_arm64.apk) is published.
       - uses: actions/download-artifact@v4
         with:

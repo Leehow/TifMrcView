@@ -229,8 +229,10 @@ pub fn open_plugin_dir(plugins: State<'_, Plugins>) -> Result<(), String> {
 }
 
 /// Markets sit next to either updater feed, in endpoint order.
-fn market_urls(updater: Option<&Value>) -> Vec<String> {
-    let mut bases = Vec::new();
+/// The download site's folders (ending in `/`) behind the update feeds, in
+/// the feeds' order: the direct host first, then the main site.
+fn update_roots(updater: Option<&Value>) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
     if let Some(endpoints) = updater.and_then(|u| u["endpoints"].as_array()) {
         for endpoint in endpoints.iter().filter_map(Value::as_str) {
             // latest.json, latest-direct.json, and Pro's latest-pro(-direct).json share one folder.
@@ -238,13 +240,30 @@ fn market_urls(updater: Option<&Value>) -> Vec<String> {
                 .iter()
                 .find_map(|feed| endpoint.strip_suffix(feed));
             if let Some(base) = base.filter(|b| b.starts_with("https://") && b.ends_with('/')) {
-                let url = format!("{base}plugins/");
-                if !bases.contains(&url) { bases.push(url); }
+                if !roots.iter().any(|r| r == base) { roots.push(base.into()); }
             }
         }
     }
+    roots
+}
+
+fn market_urls(updater: Option<&Value>) -> Vec<String> {
+    let mut bases: Vec<String> = update_roots(updater).into_iter().map(|r| format!("{r}plugins/")).collect();
     if bases.is_empty() { bases.push(MARKET_URL.into()); }
     bases
+}
+
+/// Pro downloads its Linux engine for SSH processing from this version's
+/// folder on the download site (scripts/make-release.mjs puts it there).
+pub fn configure_ssh_engine<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut roots = update_roots(app.config().plugins.0.get("updater"));
+        if roots.is_empty() { roots.push(MARKET_URL.trim_end_matches("plugins/").into()); }
+        ssh::set_engine_urls(&roots, &app_version(app));
+    }
+    #[cfg(target_os = "android")]
+    let _ = app;
 }
 
 /// Browser navigation uses the last (main site / Cloudflare) endpoint.
@@ -441,6 +460,11 @@ mod tests {
         assert_eq!(market_url(conf["plugins"].get("updater")), "https://tifmrcview.com/tifmrcview/plugins/");
         assert_eq!(market_urls(conf["plugins"].get("updater")), vec![
             "https://dl.tifmrcview.com:9443/tifmrcview/plugins/", MARKET_URL,
+        ]);
+        // Pro's SSH engine comes from the same folders as its update feeds.
+        let pro_conf: Value = serde_json::from_str(include_str!("../../tauri.pro.conf.json")).unwrap();
+        assert_eq!(update_roots(pro_conf["plugins"].get("updater")), vec![
+            "https://dl.tifmrcview.com:9443/tifmrcview/", "https://tifmrcview.com/tifmrcview/",
         ]);
         // Pro uses the same market.
         let pro: Value = serde_json::from_str(include_str!("../../tauri.pro.conf.json")).unwrap();

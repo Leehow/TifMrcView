@@ -44,6 +44,7 @@ name = "tifmrcview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+sha2 = "0.10"
 tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
