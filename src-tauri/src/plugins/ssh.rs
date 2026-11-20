@@ -22,7 +22,8 @@ mod tcp;
 
 #[derive(Default)]
 pub struct Ssh {
-    connections: Mutex<HashMap<String, Arc<Connection>>>,
+    connections: Arc<Mutex<HashMap<String, Arc<Connection>>>>,
+    keepalive: AtomicBool,
     sequence: AtomicU64,
     #[cfg(test)]
     storage: Option<PathBuf>,
@@ -155,6 +156,33 @@ fn login(session: &Session, args: &Value) -> Result<()> {
     Ok(())
 }
 
+const KEEPALIVE_SECS: u32 = 15;
+/// Seconds between reconnect attempts after a dropped connection (~30 s in all).
+const REOPEN_WAITS: [u64; 5] = [1, 2, 4, 8, 15];
+
+/// A failure to reach the server that may clear up by itself shortly.
+fn transient(e: &anyhow::Error) -> bool {
+    broken(e)
+        || e.chain().any(|c| {
+            if let Some(e) = c.downcast_ref::<ssh2::Error>() {
+                // TIMEOUT, KEX_FAILURE, BANNER_RECV
+                return matches!(e.code(), ssh2::ErrorCode::Session(-9 | -5 | -2));
+            }
+            c.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::HostUnreachable
+                        | std::io::ErrorKind::NetworkUnreachable
+                        | std::io::ErrorKind::NetworkDown
+                        | std::io::ErrorKind::AddrNotAvailable
+                )
+            })
+        })
+}
+
 /// A transport failure of the connection itself, as opposed to a refused request.
 fn broken(e: &anyhow::Error) -> bool {
     e.chain().any(|c| {
@@ -281,13 +309,58 @@ impl Ssh {
                 // (sshd restarted, too many sessions, a tunnel that came back): open a
                 // fresh one to the same, already trusted server and try once more.
                 let fresh = self
-                    .reopen(&conn)
+                    .reopen_patiently(&conn)
                     .with_context(|| format!("与服务器的连接断了，自动重连也没成功（{e}）。请检查服务器或网络，然后重新连接"))?;
                 *session = fresh;
                 self.run(&conn, &session, method, &args)
             }
             other => other,
         }
+    }
+
+    /// A dropped connection is often a moment's outage: a laptop waking from sleep,
+    /// Wi-Fi switching, or an SSH tunnel being restarted. Keep trying for about
+    /// half a minute before giving up; stop at once on anything that is not a
+    /// network failure (a changed host key, a refused login).
+    fn reopen_patiently(&self, conn: &Connection) -> Result<Session> {
+        let mut waits = REOPEN_WAITS.iter();
+        loop {
+            match self.reopen(conn) {
+                Ok(session) => return Ok(session),
+                Err(e) => match waits.next() {
+                    Some(&secs) if transient(&e) && !conn.closed.load(Ordering::Relaxed) => {
+                        std::thread::sleep(Duration::from_secs(secs))
+                    }
+                    _ => return Err(e),
+                },
+            }
+        }
+    }
+
+    /// Idle connections get an SSH keepalive every few seconds so NAT routers,
+    /// firewalls and the server's ClientAlive timer do not drop them silently.
+    fn start_keepalive(&self) {
+        if self.keepalive.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let connections = Arc::downgrade(&self.connections);
+        let _ = std::thread::Builder::new()
+            .name("ssh-keepalive".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(KEEPALIVE_SECS as u64));
+                let Some(map) = connections.upgrade() else { return };
+                let live: Vec<_> = map.lock().unwrap().values().cloned().collect();
+                drop(map);
+                for conn in live {
+                    if !conn.authenticated.load(Ordering::Relaxed) || conn.closed.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    // Never wait behind a running request: it keeps the link busy anyway.
+                    if let Ok(session) = conn.session.try_lock() {
+                        let _ = session.keepalive_send();
+                    }
+                }
+            });
     }
 
     fn reopen(&self, conn: &Connection) -> Result<Session> {
@@ -548,6 +621,8 @@ impl Ssh {
         session.set_timeout(20_000);
         session.set_tcp_stream(socket);
         session.handshake().context("SSH 握手失败")?;
+        session.set_keepalive(false, KEEPALIVE_SECS);
+        self.start_keepalive();
         let (key, _) = session.host_key().context("服务器未提供密钥")?;
         let fingerprint = format!(
             "SHA256:{}",
