@@ -110,6 +110,18 @@ pub mod cli;
 #[cfg(feature = "pro")]
 pub mod remote_agent;
 
+/// Pictures of a slice with a coordinate grid, for agents (tmv look).
+#[cfg(feature = "pro")]
+pub mod look;
+
+/// Label layers from marks given as numbers (tmv labels, the window's labels_marks).
+#[cfg(feature = "pro")]
+pub mod label_marks;
+
+/// Agents driving the running app (tmv app, tmv mcp).
+#[cfg(feature = "pro")]
+pub mod app_control;
+
 #[cfg(feature = "pro")]
 pub mod acquisition;
 

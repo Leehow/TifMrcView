@@ -2552,5 +2552,13 @@
     setMaterial: (k, patch) => setMaterial(k, patch),
     /** Labels in use, ascending. */
     used: () => L.counts.map((n, k) => (k > 0 && n > 0 ? k : 0)).filter((k) => k),
+    /** What the panel shows, for agents (agent.js): the active label and tool, busy, an open error. */
+    state: () => ({ ready: !!L.token && L.token === S.token && !L.error, active: L.active, tool: L.sub, radius: L.radius, busy: L.busy, error: L.error || L.lastError || "", file: L.path }),
+    /** Makes `label` the one the tools paint with. */
+    setActive: (label) => { L.active = label; syncPanel(); renderList(); draw(); },
+    /** One undoable edit of labels.rs, as the tools send it ({kind: "polygon"|"stroke"|…}); resolves to the new state or undefined. */
+    edit: (op) => (ready() ? edit(op) : Promise.resolve(undefined)),
+    /** Marks given as numbers → label layers (label_marks.rs), one undo step; resolves to {state, layers}. */
+    marks: (marks) => (ready() ? editWith("labels_marks", { token: L.token, marks }) : Promise.resolve(undefined)),
   };
 })();

@@ -137,6 +137,21 @@ or copy `AGENTS.md` into the project folder. Then ask in plain words, e.g.
 "Reconstruct ~/data/ts01.mrc on gpu1 and bring the result back" or
 "在 gpu1 上把 /data/tomo/ 里的断层做膜分割，统计囊泡大小".
 
+## Driving the open app (your own computer)
+
+The desktop Pro app is a `tmv` too (`tifmrcview-pro tmv …`; ⚙ → AI 助手 can
+link `~/.local/bin/tmv` to it). While the app is open, `tmv app …` and the
+MCP server `tmv mcp` drive its window through a port on 127.0.0.1 guarded by
+a token, and the user watches every step (and allows it the first time).
+Each `tmv` command has the same-named action in the window (`tmv app tomo`,
+`tmv app sta`, …), and any button can be pressed with `tmv app ui` /
+`tmv app click`; `ui/pro/features.js` lists both sides and
+`scripts/agent-parity.test.mjs` keeps them in step. The agent skill is
+`skills/tifmrcview-app/`:
+
+    claude mcp add tifmrcview -- "/Applications/TifMrcView Pro.app/Contents/MacOS/tifmrcview-pro" tmv mcp
+    mkdir -p ~/.claude/skills && cp -R skills/tifmrcview-app ~/.claude/skills/
+
 ## Membrane model
 
 Membrane segmentation uses the published MemBrain-seg model, which you
