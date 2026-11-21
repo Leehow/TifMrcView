@@ -34,7 +34,7 @@
     </div>
     <p class="dim cs-help cs-only-recon">在下面勾选序列，再选想要的处理（都不勾就是快速重构，几分钟一个，适合先看看样品），点「重构勾选序列」。没处理过的电影会先自动校正。点卡片上的「打开」检查倾转图、对齐和断层图，挑掉不好的图后可以再重构。</p>
     <p class="dim cs-discovery" role="status"></p>
-    <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button></div>
+    <div class="al-row cs-selection"><input class="cs-search" type="search" placeholder="按序列名称搜索…" aria-label="搜索序列"><button class="small cs-select-all">全选</button><button class="small cs-select-none">全不选</button><button class="small cs-select-failed" title="只勾选出错或没做完的序列（有「继续」的卡片），再点「重构勾选序列」就一起接着做，做完的步骤不再重做">勾选没做完的</button></div>
     <div class="cs-wall"></div>
     <div class="cs-review" hidden></div>`;
   const q = (s) => host.querySelector(s);
@@ -122,7 +122,8 @@
     const shown=session.series.filter(matches).length;
     q('.cs-selection-count').textContent=`已勾选 ${selected.size} 个序列${q('.cs-search').value?` · 筛选显示 ${shown} 个`:''}`;
     const filtered=!!q('.cs-search').value.trim();q('.cs-select-all').textContent=filtered?'全选筛选结果':'全选';q('.cs-select-none').textContent=filtered?'全不选筛选结果':'全不选';
-    q('.cs-select-all').disabled=q('.cs-select-none').disabled=W.busy;
+    q('.cs-select-all').disabled=q('.cs-select-none').disabled=q('.cs-select-failed').disabled=W.busy;
+    q('.cs-select-failed').hidden=!session.series.some(failedOrPartway);
     host.querySelectorAll('.cs-act').forEach(b=>b.disabled=W.busy||!folder||!selected.size);
     refreshSteps();
   }
@@ -130,6 +131,9 @@
   function toggleSelection(name,on=!selected.has(name)){if(W.busy)return;on?selected.add(name):selected.delete(name);selectionChanged();}
   q('.cs-search').oninput=()=>{for(const [name,t]of tiles)t.el.hidden=!matches(find(name));selectionChanged();};
   q('.cs-select-all').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.add(s.name);selectionChanged();};
+  // Every series (of those shown) that failed or was left part-way, and nothing else: one
+  // 「重构勾选序列」 then goes on with all of them, each from where it stopped.
+  q('.cs-select-failed').onclick=()=>{if(W.busy)return;const pick=session.series.filter(matches).filter(failedOrPartway);if(!pick.length)return W.status('没有出错或没做完的序列');for(const s of session.series.filter(matches))selected.delete(s.name);for(const s of pick)selected.add(s.name);selectionChanged();W.status(`已勾选 ${pick.length} 个出错或没做完的序列，点「重构勾选序列」接着做`);};
   q('.cs-select-none').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.delete(s.name);selectionChanged();};
   function changedFolder(){selected.clear();q('.cs-search').value='';closeReview();stopMedia();rv.name=null;rv.dataset=null;for(const job of queue.splice(0))job.store.get(job.key)?.cancelQueued?.();wallCache.clear();rev.clear();}
   const visible = () => !W.panel.hidden;
@@ -334,6 +338,7 @@
     const partway = (s.stage === "movies" && s.corrected > 0) || (s.error && s.stage !== "quick");
     return partway ? { custom: { ...steps } } : undefined;
   };
+  const failedOrPartway = (s) => !!s.error || unfinished(s) !== undefined;
   const made = (s) => s.stage !== "movies" || s.corrected > 0 || !!s.small || !!s.error;
   // A modal question; answers true when the user confirms.
   function ask(title, text, ok) {

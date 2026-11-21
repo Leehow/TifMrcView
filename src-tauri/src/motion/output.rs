@@ -1,7 +1,7 @@
 //! Float32 MRC products. Create-new staging protects existing temporary
 //! files; owned staging is removed on cancellation/errors before rename.
 use super::check_cancel;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::{
     fs::{self, OpenOptions},
     io::{BufWriter, Seek, SeekFrom, Write},
@@ -39,7 +39,7 @@ pub fn write(
         .create_new(true)
         .open(&part)?;
     let temp = Temp(part.clone());
-    let mut f = BufWriter::new(file);
+    let mut f = BufWriter::new(crate::bigbuf::Patient(file));
     f.write_all(&[0u8; 1024])?;
     let (mut lo, mut hi, mut sum, mut sum2) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0.0);
     for i in 0..n {
@@ -71,7 +71,7 @@ pub fn write(
         "TifMrcView Pro: native motion correction",
     ))?;
     f.flush()?;
-    f.get_ref().sync_all()?;
+    f.get_ref().0.sync_all()?;
     drop(f);
     check_cancel()?;
     fs::rename(&part, path)?;
@@ -148,14 +148,14 @@ impl Sections {
         });
         let at = 1024 + (i * self.w * self.h) as u64 * 4;
         if self.behind.is_none() {
-            let mut file = self.file.try_clone()?;
+            let file = self.file.try_clone()?;
             // Two sections in flight at most: memory stays bounded when the
             // disk is slower than the movies.
             let (send, read) = std::sync::mpsc::sync_channel::<(u64, Vec<u8>)>(2);
             let done = std::thread::spawn(move || -> Result<()> {
                 for (at, bytes) in read {
-                    file.seek(SeekFrom::Start(at))?;
-                    file.write_all(&bytes)?;
+                    // In pieces, retried when the system is short of memory.
+                    crate::bigbuf::write_at(&file, &bytes, at).context("写出运动校正后的倾转序列")?;
                     // Start writing to disk now, not when `finish` syncs a
                     // whole series out of the page cache.
                     #[cfg(target_os = "linux")]
@@ -184,14 +184,12 @@ impl Sections {
     }
 
     pub fn read(&mut self, i: usize) -> Result<Vec<f32>> {
-        use std::io::Read;
         self.drain()?;
         if i >= self.n {
             bail!("电影输出层号无效");
         }
         let mut bytes = vec![0u8; self.w * self.h * 4];
-        self.file.seek(SeekFrom::Start(1024 + (i * self.w * self.h) as u64 * 4))?;
-        self.file.read_exact(&mut bytes)?;
+        crate::bigbuf::read_at(&self.file, &mut bytes, 1024 + (i * self.w * self.h) as u64 * 4)?;
         Ok(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect())
     }
 

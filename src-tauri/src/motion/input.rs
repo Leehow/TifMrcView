@@ -229,7 +229,7 @@ impl Spool {
             Stored::F32(v) => return Ok(Raw::F32(std::borrow::Cow::Borrowed(v))),
             Stored::Disk => {}
         }
-        let bytes = fs::read(self.dir.join(format!("frame-{i}.f32")))?;
+        let bytes = crate::bigbuf::read_file(&self.dir.join(format!("frame-{i}.f32")))?;
         if bytes.len() != self.w * self.h * 4 {
             bail!("电影缓存截断");
         }
@@ -357,7 +357,7 @@ impl Spool {
                     fs::create_dir(&spool.dir).context("无法创建电影临时目录")?;
                 }
                 let bytes: Vec<u8> = frame.par_chunks(4096).flat_map_iter(|v| v.iter().flat_map(|v| v.to_le_bytes())).collect();
-                fs::write(spool.dir.join(format!("frame-{}.f32", spool.stored.len())), bytes)?;
+                crate::bigbuf::write_file(&spool.dir.join(format!("frame-{}.f32", spool.stored.len())), &bytes).context("写出电影临时帧")?;
             }
             check_ms += t_check.elapsed().as_secs_f64() * 1e3; let t_fused = std::time::Instant::now();
             // Rows of `bin` lines: stored, gained, added to the original and
