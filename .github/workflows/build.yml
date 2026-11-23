@@ -1,4 +1,4 @@
-name: Linux packaged local folder QA
+name: Packaged local folder QA
 
 on:
   workflow_dispatch:
@@ -6,6 +6,10 @@ on:
       publish:
         type: boolean
         default: false
+      platform:
+        type: choice
+        options: [linux, windows]
+        default: windows
 
 permissions:
   actions: read
@@ -13,7 +17,7 @@ permissions:
 
 jobs:
   linux-folder:
-    if: ${{ !inputs.publish }}
+    if: ${{ !inputs.publish && inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 100
     env:
@@ -59,4 +63,63 @@ jobs:
         with:
           name: linux-native-folder-evidence
           path: linux-qa-*.png
+          if-no-files-found: ignore
+
+  windows-folder:
+    if: ${{ !inputs.publish && inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    timeout-minutes: 100
+    env:
+      SOURCE_RUN: '45137410969'
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright client for the packaged WebView2 application
+        shell: pwsh
+        run: npm install --prefix "$env:RUNNER_TEMP\tmv-qa-node" --ignore-scripts --no-audit --no-package-lock playwright@1.58.2
+      - name: Wait for the Windows Pro package from the publication build
+        shell: bash
+        run: |
+          for _ in {1..140}; do
+            artifact=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/artifacts" --jq '.artifacts[] | select(.name=="TifMrcView-pro-windows-x64") | .id')
+            if [[ -n "$artifact" ]]; then exit 0; fi
+            state=$(gh run view "$SOURCE_RUN" --json status --jq .status)
+            if [[ "$state" == 'completed' ]]; then echo 'Windows Pro package is missing'; exit 1; fi
+            sleep 30
+          done
+          echo 'Timed out waiting for Windows Pro package'
+          exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: TifMrcView-pro-windows-x64
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Run the packaged Windows application
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath artifacts -Recurse -Filter '*-setup.exe' | Select-Object -First 1
+          if (!$installer) { throw 'Packaged installer missing' }
+          $unpacked = Join-Path $env:RUNNER_TEMP 'tmv-qa-app'
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer.FullName "-o$unpacked" -y | Select-Object -Last 8
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract installer' }
+          $exe = Get-ChildItem -LiteralPath $unpacked -Recurse -Filter 'tifmrcview-pro.exe' | Select-Object -First 1
+          if (!$exe) { throw 'Packaged Pro executable missing' }
+          $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:RUNNER_TEMP 'tmv-qa-webview'
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-address=127.0.0.1 --remote-debugging-port=19231'
+          $env:NODE_PATH = Join-Path $env:RUNNER_TEMP 'tmv-qa-node\node_modules'
+          $dir = python -c "import runpy; print(runpy.run_path('scripts/linux-folder-smoke.py')['fixture'](r'$env:RUNNER_TEMP'))"
+          $app = Start-Process -FilePath $exe.FullName -PassThru
+          try {
+            node scripts/windows-folder-smoke.cjs $dir $app.Id
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows folder test failed' }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-folder-evidence
+          path: windows-qa-*.png
           if-no-files-found: ignore
