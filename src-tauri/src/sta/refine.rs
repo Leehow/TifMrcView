@@ -58,12 +58,22 @@ impl Set<'_> {
 
     /// The average of the particles `keep` picks, at their poses.
     pub fn average(&self, poses: &[Pose], keep: impl Fn(usize) -> bool + Sync) -> Sum {
+        self.average_sym(poses, &[IDENTITY], keep)
+    }
+
+    /// The average of the particles `keep` picks, expanded by point-group
+    /// symmetry `sym` (each mate at `R·g`).
+    pub fn average_sym(&self, poses: &[Pose], sym: &[Mat], keep: impl Fn(usize) -> bool + Sync) -> Sum {
+        let group: &[Mat] = if sym.is_empty() { &[IDENTITY] } else { sym };
         let ids: Vec<usize> = (0..self.particles.len()).filter(|i| keep(*i)).collect();
         ids.par_chunks(8)
             .map(|chunk| {
                 let mut s = Sum::new(self.n);
                 for &i in chunk {
-                    s.add(&self.particles[i], self.wedge(i), &poses[i]);
+                    let p = poses[i];
+                    for g in group {
+                        s.add(&self.particles[i], self.wedge(i), &Pose { r: mul(&p.r, g), ..p });
+                    }
                 }
                 s
             })
@@ -476,19 +486,21 @@ fn centre(set: &Set, poses: &mut [Pose], model: Vec<f32>) -> Vec<f32> {
 /// One round of `align` on the device: the particles are prepared a chunk
 /// at a time (the CPU part, the transform of each), and each chunk's two
 /// halves are searched against their own references. `tick(done)` follows.
-fn local_on(dev: &Device, set: &Set, engine: &Engine, against: &[super::cc::Reference; 2], poses: &[Pose], steps: &[Mat], tick: &(dyn Fn(usize) + Sync)) -> Result<Vec<Pose>> {
+#[allow(clippy::too_many_arguments)]
+fn local_on(dev: &Device, set: &Set, engine: &Engine, against: &[super::cc::Reference; 2], poses: &[Pose], half_of: Option<&[u8]>, steps: &[Mat], tick: &(dyn Fn(usize) + Sync)) -> Result<Vec<Pose>> {
     use super::cc_gpu::{chunk_of, Gpu};
     let gpu = Gpu::new(dev, engine, set.shift());
     let bound = [gpu.bind(&against[0]), gpu.bind(&against[1])];
     let m = set.particles.len();
     let mut out = poses.to_vec();
     let chunk = chunk_of(engine);
+    let half_idx = |i: usize| half_of.map_or(i % 2, |h| (h[i] & 1) as usize);
     for first in (0..m).step_by(chunk) {
         check_cancel()?;
         let ids: Vec<usize> = (first..(first + chunk).min(m)).collect();
         let prepared: Vec<Prepared> = ids.par_iter().map(|i| engine.prepare(&set.particles[*i], set.wedge(*i))).collect();
         for half in 0..2 {
-            let mine: Vec<usize> = (0..ids.len()).filter(|j| ids[*j] % 2 == half).collect();
+            let mine: Vec<usize> = (0..ids.len()).filter(|j| half_idx(ids[*j]) == half).collect();
             let xs: Vec<&Prepared> = mine.iter().map(|j| &prepared[*j]).collect();
             let from: Vec<Pose> = mine.iter().map(|j| poses[ids[*j]]).collect();
             for (j, p) in mine.iter().zip(bound[half].local(&xs, &from, steps)?) {
@@ -556,13 +568,28 @@ pub fn align_from(set: &Set, model: &[f32], start: &[Pose], band: f64, shift: us
     align_within(None, set, model, start, Some((band, shift)), progress, live)
 }
 
+/// `align_from` with explicit persistent per-particle half labels (`half_of`)
+/// and point-group symmetry (`sym`).
+#[allow(clippy::too_many_arguments)]
+pub fn align_from_halves(set: &Set, model: &[f32], start: &[Pose], half_of: &[u8], band: f64, shift: usize, sym: &[Mat], progress: Progress, live: Live) -> Result<Aligned> {
+    align_ranges(None, set, [model, model], start, Some(half_of), Some((band, shift)), &RANGES, sym, progress, live)
+}
+
 /// Local search ranges of `align_fine`, degrees.
 const RANGES_FINE: [f64; 2] = [4.0, 2.0];
 
 /// `align_from` for places already aligned at twice the voxel: they stand
 /// right to a few degrees, so the rounds search `RANGES_FINE` only.
 pub fn align_fine(set: &Set, model: &[f32], start: &[Pose], band: f64, shift: usize, progress: Progress, live: Live) -> Result<Aligned> {
-    align_ranges(None, set, model, start, Some((band, shift)), &RANGES_FINE, progress, live)
+    align_ranges(None, set, [model, model], start, None, Some((band, shift)), &RANGES_FINE, &[IDENTITY], progress, live)
+}
+
+/// Gold-standard fine alignment continuing from two ALREADY independent half
+/// maps (`start_halves`) with persistent per-particle half assignments (`half_of`),
+/// so the two halves never mix across coarse→fine transitions.
+#[allow(clippy::too_many_arguments)]
+pub fn align_fine_halves(set: &Set, start_halves: [&[f32]; 2], start: &[Pose], half_of: &[u8], band: f64, shift: usize, sym: &[Mat], progress: Progress, live: Live) -> Result<Aligned> {
+    align_ranges(None, set, start_halves, start, Some(half_of), Some((band, shift)), &RANGES_FINE, sym, progress, live)
 }
 
 /// Whether `align_on` runs its local searches on the device. Measured on
@@ -580,17 +607,46 @@ pub fn align_on(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
     align_within(dev, set, model, start, None, progress, live)
 }
 
+/// Gold-standard local alignment preserving explicit half-set assignments (`half_of`)
+/// and starting from independent half references (`start_halves`), with optional
+/// point-group symmetry `sym` enforced strictly within each half.
+#[allow(clippy::too_many_arguments)]
+pub fn align_halves_on(dev: Option<&Device>, set: &Set, start_halves: [&[f32]; 2], start: &[Pose], half_of: &[u8], sym: &[Mat], progress: Progress, live: Live) -> Result<Aligned> {
+    align_ranges(dev, set, start_halves, start, Some(half_of), None, &RANGES, sym, progress, live)
+}
+
 fn align_within(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], known: Option<(f64, usize)>, progress: Progress, live: Live) -> Result<Aligned> {
-    align_ranges(dev, set, model, start, known, &RANGES, progress, live)
+    align_ranges(dev, set, [model, model], start, None, known, &RANGES, &[IDENTITY], progress, live)
 }
 
 /// `align_within` with the local search range of each round given, degrees.
 #[allow(clippy::too_many_arguments)]
-fn align_ranges(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], known: Option<(f64, usize)>, ranges: &[f64], progress: Progress, live: Live) -> Result<Aligned> {
+fn align_ranges(
+    dev: Option<&Device>,
+    set: &Set,
+    start_refs: [&[f32]; 2],
+    start: &[Pose],
+    half_of: Option<&[u8]>,
+    known: Option<(f64, usize)>,
+    ranges: &[f64],
+    sym: &[Mat],
+    progress: Progress,
+    live: Live,
+) -> Result<Aligned> {
     set.check()?;
     let m = set.particles.len();
+    if let Some(h) = half_of {
+        if h.len() != m {
+            bail!("颗粒和半集标记数目不一致");
+        }
+        let n0 = h.iter().filter(|&&v| (v & 1) == 0).count();
+        if n0 < 2 || m - n0 < 2 {
+            bail!("半集里的颗粒太少，无法做独立半图校验");
+        }
+    }
+    let half_idx = |i: usize| half_of.map_or(i % 2, |h| (h[i] & 1) as usize);
     let mut poses = start.to_vec();
-    let mut refs = [model.to_vec(), model.to_vec()];
+    let mut refs = [start_refs[0].to_vec(), start_refs[1].to_vec()];
     // The shared start is trusted only at low resolution.
     let top = set.n as f64 / 2.0 - 3.0;
     let mut low_pass = (set.n as f64 / (2.0 * set.radius) * 3.0).clamp(2.0, top);
@@ -608,7 +664,7 @@ fn align_ranges(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
         let against = [engine.reference(&refs[0]), engine.reference(&refs[1])];
         let done = std::sync::atomic::AtomicUsize::new(0);
         let stage = format!("对齐 第 {}/{} 轮", round + 1, ranges.len());
-        let on_device = dev.filter(|_| LOCAL_ON_DEVICE).and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, &steps, &|n| progress(&stage, n, m))) {
+        let on_device = dev.filter(|_| LOCAL_ON_DEVICE).and_then(|dev| match crate::ctf_gpu::guarded(|| local_on(dev, set, &engine, &against, &poses, half_of, &steps, &|n| progress(&stage, n, m))) {
             Ok(Ok(found)) => Some(found),
             Ok(Err(e)) | Err(e) => {
                 if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
@@ -627,14 +683,14 @@ fn align_ranges(dev: Option<&Device>, set: &Set, model: &[f32], start: &[Pose], 
                         return poses[i];
                     }
                     let x = engine.prepare(&set.particles[i], set.wedge(i));
-                    let p = engine.local(&x, &against[i % 2], &poses[i], &steps, shift);
+                    let p = engine.local(&x, &against[half_idx(i)], &poses[i], &steps, shift);
                     progress(&stage, done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, m);
                     p
                 })
                 .collect(),
         };
         check_cancel()?;
-        let (a, b) = (set.average(&poses, |i| i % 2 == 0), set.average(&poses, |i| i % 2 == 1));
+        let (a, b) = (set.average_sym(&poses, sym, |i| half_idx(i) == 0), set.average_sym(&poses, sym, |i| half_idx(i) == 1));
         let halves = [a.finish(), b.finish()];
         let fsc = post::fsc(&halves[0], &halves[1], set.n, set.radius + 2.0);
         let shell = cut(&fsc);
@@ -659,5 +715,34 @@ mod tests {
         assert_eq!(cut(&dip).floor(), 4.0);
         assert_eq!(extent(&dip), 9.0);
         assert_eq!(extent(&[1.0, 0.9, 0.5, 0.1, 0.0, 0.0]), 2.0);
+    }
+
+    /// Gold-standard half-set independence: pure independent noise particles
+    /// whose half labels are preserved through a second-stage refinement against
+    /// separate half maps must stay uncorrelated (no FSC inflation), even when
+    /// the array order is reshuffled between stages.
+    #[test]
+    fn persistent_halves_stay_independent_across_reordering() {
+        let n = 16usize;
+        let mut rng = Rng(42);
+        let m = 24usize;
+        let particles: Vec<Vec<f32>> = (0..m).map(|_| (0..n * n * n).map(|_| rng.gauss() as f32).collect()).collect();
+        let wedges = vec![super::super::cc::wedge(n, -60.0, 60.0)];
+        let wedge_of = vec![0; m];
+        let halves: Vec<u8> = (0..m).map(|i| (i % 2) as u8).collect();
+        let poses: Vec<Pose> = (0..m).map(|_| Pose { r: IDENTITY, t: [0.0; 3], score: 0.0 }).collect();
+        let set = Set { n, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius: 5.0 };
+        let h0 = set.average(&poses, |i| halves[i] == 0).finish();
+        let h1 = set.average(&poses, |i| halves[i] == 1).finish();
+        // Reorder particles (all half 0 first, then half 1) — `i % 2` would completely mix halves,
+        // whereas `align_fine_halves` with persistent `halves_reordered` keeps them strictly separate.
+        let mut order: Vec<usize> = (0..m).filter(|&i| halves[i] == 0).collect();
+        order.extend((0..m).filter(|&i| halves[i] == 1));
+        let p_re: Vec<Vec<f32>> = order.iter().map(|&i| particles[i].clone()).collect();
+        let h_re: Vec<u8> = order.iter().map(|&i| halves[i]).collect();
+        let set_re = Set { n, particles: &p_re, wedges: &wedges, wedge_of: &wedge_of, radius: 5.0 };
+        let res = align_fine_halves(&set_re, [&h0, &h1], &poses, &h_re, 5.0, 2, &[IDENTITY], &|_, _, _| {}, &|_| {}).unwrap();
+        let mean_hi: f64 = res.fsc[3..].iter().sum::<f64>() / (res.fsc.len() - 3) as f64;
+        assert!(mean_hi.abs() < 0.2, "pure noise with preserved independent halves should have near-zero FSC, got {mean_hi:.3} ({:?})", res.fsc);
     }
 }

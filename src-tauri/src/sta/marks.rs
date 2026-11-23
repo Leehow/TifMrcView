@@ -77,6 +77,8 @@ pub enum Size {
     Small,
     Medium,
     Large,
+    /// Explicit size in Å (clamped to 40..=2000 Å).
+    Custom(u32),
 }
 
 impl Size {
@@ -85,13 +87,29 @@ impl Size {
             Size::Small => 130.0,
             Size::Medium => 220.0,
             Size::Large => 360.0,
+            Size::Custom(a) => (a as f64).clamp(40.0, 2000.0),
         }
     }
     pub fn parse(s: Option<&str>) -> Size {
-        match s {
-            Some("small") => Size::Small,
-            Some("large") => Size::Large,
-            _ => Size::Medium,
+        let Some(raw) = s.map(str::trim).filter(|v| !v.is_empty()) else { return Size::Medium };
+        match raw.to_ascii_lowercase().as_str() {
+            "small" => Size::Small,
+            "medium" => Size::Medium,
+            "large" => Size::Large,
+            other => {
+                if let Some(nm) = other.strip_suffix("nm").and_then(|v| v.trim().parse::<f64>().ok()) {
+                    if nm.is_finite() && nm > 0.0 {
+                        return Size::Custom((nm * 10.0).round().clamp(40.0, 2000.0) as u32);
+                    }
+                }
+                let stripped = other.trim_end_matches(['a', 'å', 'Å']);
+                if let Ok(a) = stripped.trim().parse::<f64>() {
+                    if a.is_finite() && a > 0.0 {
+                        return Size::Custom(a.round().clamp(40.0, 2000.0) as u32);
+                    }
+                }
+                Size::Medium
+            }
         }
     }
 }

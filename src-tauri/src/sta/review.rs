@@ -290,9 +290,13 @@ impl State {
     /// first): the first `keep` but the removed and the ones "find again"
     /// took out, the added and the ones it brought in; none that is off.
     pub fn kept(&self) -> Vec<usize> {
+        self.kept_up_to(MOST_KEPT)
+    }
+
+    pub fn kept_up_to(&self, limit: usize) -> Vec<usize> {
         let l = self.lists();
         let mut out: Vec<usize> = (0..self.total()).filter(|i| Self::counts(self.state_with(&l, *i, true, self.edits.on_shapes))).collect();
-        out.truncate(MOST_KEPT);
+        out.truncate(limit.max(1));
         out
     }
 
@@ -417,7 +421,11 @@ impl State {
     }
 
     pub fn set_keep(&mut self, keep: usize) {
-        self.edits.keep = keep.clamp(usize::from(self.total() > 0), self.total().min(MOST_KEPT));
+        self.set_keep_up_to(keep, MOST_KEPT);
+    }
+
+    pub fn set_keep_up_to(&mut self, keep: usize, limit: usize) {
+        self.edits.keep = keep.clamp(usize::from(self.total() > 0), self.total().min(limit.max(1)));
     }
 
     /// Back to the program's suggestion, no edits.
@@ -563,7 +571,8 @@ fn scores_of(found: &Found) -> Vec<f32> {
 /// `places` are those of the open tomogram only, as `{i, pos, score, state}`
 /// in the open file's voxels.
 pub fn review_value(s: &State, dir: &Path, open: &str) -> Value {
-    let kept = s.kept();
+    let limit = super::options::load(dir).max_particles;
+    let kept = s.kept_up_to(limit);
     let per: Vec<Value> = s
         .inputs
         .iter()
@@ -717,12 +726,17 @@ pub fn set_review(dir: &Path, open: &str, edit: &Edit) -> Result<Value> {
     // Edits read the file, change it and write it back: one at a time.
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let mut s = load(dir).context("这里还没有找出的结果")?;
-    apply(&mut s, open, edit)?;
+    let limit = super::options::load(dir).max_particles;
+    apply_with_limit(&mut s, open, edit, limit)?;
     save(dir, &s)?;
     Ok(review_value(&s, dir, open))
 }
 
 pub fn apply(s: &mut State, open: &str, edit: &Edit) -> Result<()> {
+    apply_with_limit(s, open, edit, MOST_KEPT)
+}
+
+fn apply_with_limit(s: &mut State, open: &str, edit: &Edit, limit: usize) -> Result<()> {
     if edit.reset {
         s.reset();
     }
@@ -736,7 +750,7 @@ pub fn apply(s: &mut State, open: &str, edit: &Edit) -> Result<()> {
         s.set_group([g.like, g.size], g.on);
     }
     if let Some(k) = edit.keep {
-        s.set_keep(k);
+        s.set_keep_up_to(k, limit);
     }
     if let Some(i) = edit.toggle {
         s.toggle(i)?;
@@ -749,10 +763,14 @@ pub fn apply(s: &mut State, open: &str, edit: &Edit) -> Result<()> {
 
 /// What goes into `average_found`: the kept places, or why not.
 pub fn kept_places(s: &State) -> Result<Vec<Place>> {
+    kept_places_up_to(s, MOST_KEPT)
+}
+
+pub fn kept_places_up_to(s: &State, limit: usize) -> Result<Vec<Place>> {
     if let Some(why) = s.stale() {
         bail!(why);
     }
-    let kept = s.kept();
+    let kept = s.kept_up_to(limit);
     if kept.len() < s.found.fewest() {
         bail!("保留的只有 {} 个，至少要 {} 个", kept.len(), s.found.fewest());
     }
@@ -999,7 +1017,8 @@ pub fn tile(dir: &Path, i: usize) -> Result<Vec<u8>> {
 /// workspace shows it as it does today.
 pub fn average_found(dir: &Path, device: Device, emit: Emit, b64: &(dyn Fn(&[u8]) -> String + Sync)) -> Result<Value> {
     let s = load(dir).context("这里还没有找出的结果")?;
-    let places = kept_places(&s)?;
+    let limit = super::options::load(dir).max_particles;
+    let places = kept_places_up_to(&s, limit)?;
     let (removed, added) = s.changes();
     events(emit, b64, |progress, live, note| {
         let sources: Vec<sp::Source> = s.inputs.iter().map(|i| resolve_tomogram(i, note).source()).collect();

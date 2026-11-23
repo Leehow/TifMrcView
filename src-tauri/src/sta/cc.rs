@@ -165,6 +165,10 @@ pub struct Engine {
     pub n: usize,
     pub(super) band: Band,
     mask: Vec<f32>,
+    /// Precomputed e^{2πi·k·t/n} for k in −reach..=reach and t in −max_s..=max_s,
+    /// avoiding repeated per-call allocations and trig calls inside `score`.
+    wave: Vec<(f32, f32)>,
+    wave_max_s: i32,
 }
 
 fn band_weight(k: f64, low_pass: f64, high_pass: f64) -> f32 {
@@ -208,7 +212,17 @@ impl Engine {
                 }
             }
         }
-        Engine { n, band, mask: ball(n, radius, 3.0) }
+        let max_s = (n / 2 - 1) as i32;
+        let full_side = (2 * max_s + 1) as usize;
+        let wide = (2 * reach + 1) as usize;
+        let mut wave = vec![(0f32, 0f32); wide * full_side];
+        for k in -reach..=reach {
+            for t in -max_s..=max_s {
+                let a = 2.0 * std::f64::consts::PI * (k * t).rem_euclid(n as i32) as f64 / n as f64;
+                wave[(k + reach) as usize * full_side + (t + max_s) as usize] = (a.cos() as f32, a.sin() as f32);
+            }
+        }
+        Engine { n, band, mask: ball(n, radius, 3.0), wave, wave_max_s: max_s }
     }
 
     pub fn prepare(&self, particle: &[f32], wedge: &[f32]) -> Prepared {
@@ -308,16 +322,9 @@ impl Engine {
         let s = max_shift.min(n / 2 - 1) as i32;
         let side = (2 * s + 1) as usize;
         let reach = self.band.reach;
-        // e^{2πi·k·t/n} for k in −reach..=reach, t in −s..=s.
-        let wide = (2 * reach + 1) as usize;
-        let mut wave = vec![(0f32, 0f32); wide * side];
-        for k in -reach..=reach {
-            for t in -s..=s {
-                let a = 2.0 * std::f64::consts::PI * (k * t).rem_euclid(n as i32) as f64 / n as f64;
-                wave[(k + reach) as usize * side + (t + s) as usize] = (a.cos() as f32, a.sin() as f32);
-            }
-        }
-        let wave_of = |k: i16| -> &[(f32, f32)] { &wave[(k as i32 + reach) as usize * side..][..side] };
+        let full_side = (2 * self.wave_max_s + 1) as usize;
+        let offset = (self.wave_max_s - s) as usize;
+        let wave_of = |k: i16| -> &[(f32, f32)] { &self.wave[(k as i32 + reach) as usize * full_side + offset..][..side] };
         // Along kx for each row, then ky into a plane per kz, then kz.
         let mut plane = vec![(0f32, 0f32); side * side];
         let mut cube = vec![0f32; side * side * side];
@@ -428,5 +435,39 @@ impl Engine {
             }
         }
         best
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Precomputed `wave` table produces identical scores and sub-voxel shifts
+    /// across different `max_shift` search radii.
+    #[test]
+    fn precomputed_wave_recovers_consistent_shift_across_radii() {
+        let n = 16usize;
+        let c = (n / 2) as f64;
+        let truth: Vec<f32> = (0..n * n * n)
+            .map(|i| {
+                let (x, y, z) = ((i % n) as f64 - c, (i / n % n) as f64 - c, (i / n / n) as f64 - c);
+                let g = |qx: f64, qy: f64, qz: f64| (-((x - qx).powi(2) + (y - qy).powi(2) + (z - qz).powi(2)) / 3.0).exp();
+                (g(2.0, -1.0, 0.5) + 0.7 * g(-2.0, 1.5, -1.0)) as f32
+            })
+            .collect();
+        let shift = [1.25, -0.75, 1.5];
+        let moved = transform(&truth, n, &super::super::IDENTITY, [-shift[0], -shift[1], -shift[2]]);
+        let w = vec![1.0f32; n * n * n];
+        let eng = Engine::new(n, 6.0, 1.0, 6.0);
+        let x = eng.prepare(&moved, &w);
+        let r = eng.reference(&truth);
+        let t = eng.turn(&r, &super::super::IDENTITY);
+        let (s3, p3) = eng.score(&x, &t, 3);
+        let (s6, p6) = eng.score(&x, &t, 6);
+        assert!((s3 - s6).abs() < 1e-6, "score differed across max_shift: {s3} vs {s6}");
+        for k in 0..3 {
+            assert!((p3[k] - p6[k]).abs() < 1e-6, "shift[{k}] differed: {} vs {}", p3[k], p6[k]);
+            assert!((p3[k] - shift[k]).abs() < 0.15, "shift[{k}] off: {} vs {}", p3[k], shift[k]);
+        }
     }
 }

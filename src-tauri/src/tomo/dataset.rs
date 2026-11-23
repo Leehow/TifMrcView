@@ -146,6 +146,12 @@ pub struct Dataset {
     /// it is not repeated while they stay the same.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fine_aligned: Option<Vec<usize>>,
+    /// Per-section exposure dose (e⁻/Å²) from acquisition metadata (`.mdoc`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doses: Vec<Option<f64>>,
+    /// Per-section cumulative pre-exposure (`PriorRecordDose` in `.mdoc`), e⁻/Å².
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_doses: Vec<Option<f64>>,
 }
 
 /// Where the dataset of a stack is kept: `2_tomograms/<stem>.tomo.json` of
@@ -193,7 +199,21 @@ impl Dataset {
             made: Default::default(),
             made_steps: Default::default(),
             fine_aligned: None,
+            doses: meta.doses,
+            prior_doses: meta.prior_doses,
         })
+    }
+
+    /// Cumulative mid-exposure dose (e⁻/Å²) per section of `self.stack`,
+    /// falling back to `.mdoc` metadata for datasets saved before doses were kept.
+    pub fn cumulative_doses(&self) -> Vec<Option<f64>> {
+        if !self.prior_doses.is_empty() || !self.doses.is_empty() {
+            return geometry::cumulative_doses(&self.angles, &self.doses, &self.prior_doses);
+        }
+        if let Ok(meta) = geometry::metadata(&self.stack, self.angles.len()) {
+            return geometry::cumulative_doses(&self.angles, &meta.doses, &meta.prior_doses);
+        }
+        vec![None; self.angles.len()]
     }
 
     pub fn save(&self) -> Result<()> {

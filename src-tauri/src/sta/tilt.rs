@@ -43,6 +43,26 @@ pub struct View {
     /// Defocus at the tilt axis, Å, and the direction of df1 in the aligned
     /// view, radians; None when the series has no CTF (then C = 1).
     pub ctf: Option<[f64; 3]>,
+    /// Cumulative mid-exposure dose (e⁻/Å²) at this tilt; None when unknown.
+    pub dose: Option<f64>,
+}
+
+/// Grant & Grigorieff (2015) critical-exposure dose weight at spatial
+/// frequency `freq_inv_a` (Å⁻¹) and cumulative exposure `dose_e_a2` (e⁻/Å²).
+/// Scales critical dose by 0.8 at 200 kV relative to 300 kV.
+pub fn dose_weight(freq_inv_a: f64, dose_e_a2: f64, kv: f64) -> f64 {
+    if !dose_e_a2.is_finite() || dose_e_a2 <= 0.0 || !freq_inv_a.is_finite() || freq_inv_a <= 1e-6 {
+        return 1.0;
+    }
+    let scale = if kv <= 200.0 {
+        0.8
+    } else if kv >= 300.0 {
+        1.0
+    } else {
+        0.8 + 0.2 * (kv - 200.0) / 100.0
+    };
+    let n_e = (0.245 * freq_inv_a.powf(-1.665) + 2.81) * scale;
+    (-dose_e_a2 / (2.0 * n_e)).exp()
 }
 
 /// The tomogram's grid on the aligned views.
@@ -115,6 +135,7 @@ impl Series {
         let img = crate::tomo::pipeline::open(&dataset.stack)?;
         let (stack, w, h, angles) = crate::tomo::output::aligned(&img, a, bin, 0, 0, progress)?;
         let kept: Vec<&crate::tomo::View> = a.views.iter().filter(|v| !v.excluded).collect();
+        let cum_doses = dataset.cumulative_doses();
         let views = kept
             .iter()
             .zip(&angles)
@@ -122,7 +143,8 @@ impl Series {
                 let fit = dataset.ctf.as_ref().and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
                 // As `tomo::output::flip_views`: the fit's angle in the aligned view.
                 let psi = 90.0 - (a.axis + v.rotation);
-                View { theta: *theta, ctf: fit.map(|f| [f.df1, f.df2, (f.angle - psi).to_radians()]) }
+                let dose = cum_doses.get(v.file_index).and_then(|d| *d);
+                View { theta: *theta, ctf: fit.map(|f| [f.df1, f.df2, (f.angle - psi).to_radians()]), dose }
             })
             .collect();
         Ok(Series {
@@ -212,21 +234,123 @@ impl Series {
         Some((re, im, [off[0] / f as f64, off[1] / f as f64]))
     }
 
-    /// sin γ at the half plane's frequencies for view `i` with `extra` Å of
-    /// defocus (1 everywhere without a CTF).
+    /// Delocalization-safe patch extraction: when high defocus spreads CTF
+    /// Fresnel fringes beyond the patch width, cuts a 2× larger box (if in
+    /// bounds), phase-flips there to bring delocalized signal back inside the
+    /// particle box, then crops to `fold * b`. Returns `(re, im, off, flipped)`.
+    fn patch_ctf(&self, i: usize, centre: [f64; 2], defocus_extra: f64, b: usize, fft: &Fft, fft2: &Fft) -> Option<(Vec<f32>, Vec<f32>, [f64; 2], bool)> {
+        let f = self.fold.max(1);
+        let raw_b = f * b;
+        if let Some([df1, df2, angle]) = self.views[i].ctf {
+            let mean_df = 0.5 * (df1 + df2) + defocus_extra;
+            let o = crate::ctf::Optics::of(self.optics[0], self.optics[1], self.optics[2]);
+            let v_e = self.optics[0] * 1e3;
+            let lambda_a = 12.2643 / (v_e * (1.0 + 0.97845e-6 * v_e)).sqrt();
+            // Delocalization radius at box Nyquist in raw view pixels: λ·|Δf|/(2·fold·px²).
+            let deloc_px = lambda_a * mean_df.abs() / (2.0 * f as f64 * self.pixel_a * self.pixel_a);
+            let big = 2 * raw_b;
+            let whole = [centre[0].round(), centre[1].round()];
+            let (x0, y0) = (whole[0] as isize - (big / 2) as isize, whole[1] as isize - (big / 2) as isize);
+            if deloc_px > 0.20 * raw_b as f64 && x0 >= 0 && y0 >= 0 && x0 as usize + big <= self.w && y0 as usize + big <= self.h {
+                let plane = &self.stack[i * self.w * self.h..][..self.w * self.h];
+                let mut wide = Vec::with_capacity(big * big);
+                for y in 0..big {
+                    let row = (y0 as usize + y) * self.w + x0 as usize;
+                    wide.extend_from_slice(&plane[row..row + big]);
+                }
+                let mean = wide.iter().map(|v| *v as f64).sum::<f64>() / wide.len() as f64;
+                let edge = (big as f64 / 16.0).max(2.0);
+                let taper = |k: usize| -> f64 {
+                    let d = (k.min(big - 1 - k)) as f64;
+                    if d >= edge { 1.0 } else { 0.5 - 0.5 * (std::f64::consts::PI * (d + 0.5) / edge).cos() }
+                };
+                for y in 0..big {
+                    for x in 0..big {
+                        wide[y * big + x] = ((wide[y * big + x] as f64 - mean) * taper(x) * taper(y)) as f32;
+                    }
+                }
+                let (mut wre, mut wim) = ft2(fft2, big, &wide);
+                let scale = 1.0 / (big as f64 * self.pixel_a);
+                let astig = 0.5 * (df1 - df2);
+                for ky in 0..big {
+                    let fy = crate::spa::fourier::freq(ky, big) as f64 * scale;
+                    for kx in 0..big {
+                        let fx = crate::spa::fourier::freq(kx, big) as f64 * scale;
+                        let df = mean_df + astig * (2.0 * (fy.atan2(fx) - angle)).cos();
+                        let s = if o.gamma(df, fx * fx + fy * fy, 0.0).sin() < 0.0 { -1.0f32 } else { 1.0f32 };
+                        let j = ky * big + kx;
+                        wre[j] *= s;
+                        wim[j] *= s;
+                    }
+                }
+                let flipped = ift2(fft2, big, &wre, &wim);
+                // Crop central raw_b × raw_b and apply the standard normalisation and soft window.
+                let off_c = (big - raw_b) / 2;
+                let mut out = Vec::with_capacity(raw_b * raw_b);
+                for y in 0..raw_b {
+                    let row = (off_c + y) * big + off_c;
+                    out.extend_from_slice(&flipped[row..row + raw_b]);
+                }
+                let mean = out.iter().map(|v| *v as f64).sum::<f64>() / out.len() as f64;
+                let sd = (out.iter().map(|v| (*v as f64 - mean).powi(2)).sum::<f64>() / out.len() as f64).sqrt().max(1e-12);
+                let edge_s = (raw_b as f64 / 16.0).max(2.0);
+                let taper_s = |k: usize| -> f64 {
+                    let d = (k.min(raw_b - 1 - k)) as f64;
+                    if d >= edge_s { 1.0 } else { 0.5 - 0.5 * (std::f64::consts::PI * (d + 0.5) / edge_s).cos() }
+                };
+                let off = [centre[0] - whole[0], centre[1] - whole[1]];
+                for y in 0..raw_b {
+                    for x in 0..raw_b {
+                        let mut v = ((out[y * raw_b + x] as f64 - mean) / sd) * taper_s(x) * taper_s(y);
+                        if self.window > 0.0 {
+                            let soft = (self.window / 4.0).max(3.0);
+                            let d = ((x as f64 - (raw_b / 2) as f64 - off[0]).powi(2) + (y as f64 - (raw_b / 2) as f64 - off[1]).powi(2)).sqrt();
+                            let w = if d <= self.window { 1.0 } else if d >= self.window + soft { 0.0 } else { 0.5 + 0.5 * (std::f64::consts::PI * (d - self.window) / soft).cos() };
+                            v *= w;
+                        }
+                        out[y * raw_b + x] = v as f32;
+                    }
+                }
+                let (re, im) = ft2(fft, raw_b, &out);
+                let (re, im) = if f == 1 { (re, im) } else { resize2(&re, &im, raw_b, b) };
+                return Some((re, im, [off[0] / f as f64, off[1] / f as f64], true));
+            }
+        }
+        let (re, im, off) = self.patch(i, centre, b, fft)?;
+        Some((re, im, off, false))
+    }
+
+    /// Effective transfer `sin γ · w_dose(k)` at the half plane's frequencies
+    /// for view `i` with `extra` Å of defocus (pure dose weight or 1 without CTF).
     fn transfer(&self, i: usize, extra: f64, half: &Half) -> Vec<f32> {
-        let Some([df1, df2, angle]) = self.views[i].ctf else { return vec![1.0; half.len()] };
-        let o = crate::ctf::Optics::of(self.optics[0], self.optics[1], self.optics[2]);
         let scale = 1.0 / (half.b as f64 * self.pixel_a * self.fold.max(1) as f64);
-        let (mean, astig) = (0.5 * (df1 + df2) + extra, 0.5 * (df1 - df2));
-        half.k
-            .iter()
-            .map(|&[kx, ky]| {
-                let (kx, ky) = (kx as f64 * scale, ky as f64 * scale);
-                let df = mean + astig * (2.0 * (ky.atan2(kx) - angle)).cos();
-                o.gamma(df, kx * kx + ky * ky, 0.0).sin() as f32
-            })
-            .collect()
+        let dose = self.views[i].dose;
+        let kv = self.optics[0];
+        match self.views[i].ctf {
+            None => half
+                .k
+                .iter()
+                .map(|&[kx, ky]| {
+                    let f = ((kx as f64 * scale).powi(2) + (ky as f64 * scale).powi(2)).sqrt();
+                    dose.map_or(1.0, |d| dose_weight(f, d, kv)) as f32
+                })
+                .collect(),
+            Some([df1, df2, angle]) => {
+                let o = crate::ctf::Optics::of(self.optics[0], self.optics[1], self.optics[2]);
+                let (mean, astig) = (0.5 * (df1 + df2) + extra, 0.5 * (df1 - df2));
+                half.k
+                    .iter()
+                    .map(|&[kx, ky]| {
+                        let (kx, ky) = (kx as f64 * scale, ky as f64 * scale);
+                        let s2 = kx * kx + ky * ky;
+                        let df = mean + astig * (2.0 * (ky.atan2(kx) - angle)).cos();
+                        let ctf = o.gamma(df, s2, 0.0).sin();
+                        let dw = dose.map_or(1.0, |d| dose_weight(s2.sqrt(), d, kv));
+                        (ctf * dw) as f32
+                    })
+                    .collect()
+            }
+        }
     }
 }
 
@@ -239,12 +363,17 @@ pub fn frame(theta: f64) -> Mat {
 /// What one particle adds to an average: for every view it is in, the
 /// points of its plane with C·X and C².
 pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum, out: &mut Vec<Pt>) {
+    let fft2 = Fft::new(2 * series.fold.max(1) * half.b);
+    points_with(series, p, half, fft, &fft2, acc, out);
+}
+
+fn points_with(series: &Series, p: &Particle, half: &Half, fft: &Fft, fft2: &Fft, acc: &Accum, out: &mut Vec<Pt>) {
     let b = half.b;
     let k = half.len();
     let (mut x, mut c2) = (vec![0f32; 2 * k], vec![0f32; k]);
     for i in 0..series.views.len() {
         let (centre, defocus) = series.place(p.at, i);
-        let Some((re, im, off)) = series.patch(i, centre, b, fft) else { continue };
+        let Some((re, im, off, flipped)) = series.patch_ctf(i, centre, defocus, b, fft, fft2) else { continue };
         let c = series.transfer(i, defocus, half);
         for j in 0..k {
             let [kx, ky] = half.k[j];
@@ -253,8 +382,11 @@ pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum
             let a = 2.0 * std::f64::consts::PI * (kx as f64 * off[0] + ky as f64 * off[1]) / b as f64;
             let (sn, cs) = (a.sin() as f32, a.cos() as f32);
             let (r, m) = (re[half.idx[j] as usize], im[half.idx[j] as usize]);
-            x[2 * j] = (r * cs - m * sn) * c[j];
-            x[2 * j + 1] = (r * sn + m * cs) * c[j];
+            // If `patch_ctf` already applied sign(CTF) on the 2× box, multiply only by |C|
+            // so `X_pf · |C| == X · C` while `c2 == C²`.
+            let amp = if flipped { c[j].abs() } else { c[j] };
+            x[2 * j] = (r * cs - m * sn) * amp;
+            x[2 * j + 1] = (r * sn + m * cs) * amp;
             c2[j] = c[j] * c[j];
         }
         let r = mul(&frame(series.views[i].theta), &p.r);
@@ -711,6 +843,7 @@ impl Sums {
     /// Adds the particles of one series.
     pub fn add(&mut self, series: &Series, particles: &[Particle], tick: &(dyn Fn(usize, usize) + Sync)) -> Result<()> {
         let fft = Fft::new(series.fold.max(1) * self.b);
+        let fft2 = Fft::new(2 * series.fold.max(1) * self.b);
         let mut done = 0;
         for chunk in particles.chunks(32) {
             check_cancel()?;
@@ -720,7 +853,7 @@ impl Sums {
                 .par_iter()
                 .map(|p| {
                     let mut out = vec![];
-                    points(series, p, half, &fft, acc, &mut out);
+                    points_with(series, p, half, &fft, &fft2, acc, &mut out);
                     (p.half, out)
                 })
                 .collect();
@@ -739,7 +872,17 @@ impl Sums {
 
     /// The half maps, their FSC inside `radius` voxels, and the average of
     /// all particles weighted by it.
-    pub fn finish(mut self, radius: f64) -> (Vec<f32>, [Vec<f32>; 2], Vec<f64>) {
+    pub fn finish(self, radius: f64) -> (Vec<f32>, [Vec<f32>; 2], Vec<f64>) {
+        self.finish_sym(radius, &[super::IDENTITY])
+    }
+
+    /// `finish`, applying point-group symmetry `sym` independently to each half
+    /// before computing their FSC and combined Wiener average.
+    pub fn finish_sym(mut self, radius: f64, sym: &[Mat]) -> (Vec<f32>, [Vec<f32>; 2], Vec<f64>) {
+        if sym.len() > 1 {
+            self.halves[0].symmetrize(sym);
+            self.halves[1].symmetrize(sym);
+        }
         let halves = [self.halves[0].reconstruct(None), self.halves[1].reconstruct(None)];
         let fsc = post::fsc(&halves[0], &halves[1], self.b, radius);
         let [mut all, other] = self.halves;
@@ -749,6 +892,127 @@ impl Sums {
         let whole: Vec<f64> = fsc.iter().map(|f| (2.0 * f.max(0.0) / (1.0 + f.max(0.0))).min(1.0)).collect();
         (all.reconstruct(Some(&whole)), halves, fsc)
     }
+}
+
+/// Gold-standard local 6-DOF pose refinement directly against the 2D tilt
+/// images: each particle is compared solely against its own half's reference
+/// (`refs[p.half]`) under per-view CTF and dose weights.
+///
+/// For every particle, tilt patches are extracted once across all views, local
+/// rotations within `±angle_range_deg` are scored by normalised CTF-weighted
+/// cross-correlation summed across views, and (if `shift_reach > 0`) a sub-voxel
+/// 3D shift refinement follows at the winning rotation. Returns how many
+/// particles improved their rotation.
+pub fn refine_poses(
+    series: &Series,
+    particles: &mut [Particle],
+    refs: &[Vec<f32>; 2],
+    b: usize,
+    weight: &[f64],
+    angle_range_deg: f64,
+    shift_reach: f64,
+) -> usize {
+    if particles.is_empty() || angle_range_deg <= 0.0 {
+        return 0;
+    }
+    // Remove sub-voxel position errors first so high-frequency phase ramps
+    // do not distort rotational scoring across tilt views.
+    if shift_reach > 0.0 {
+        let _ = settle(series, particles, refs, b, weight, shift_reach);
+    }
+    let m = Matcher::new(series, refs, b, weight);
+    let half = &m.half;
+    let k = half.len();
+    let top = m.top;
+    let coarse_steps = crate::spa::geom::local(angle_range_deg, 2);
+    let fine_steps = crate::spa::geom::local(angle_range_deg * 0.5, 2);
+    let frames: Vec<Mat> = series.views.iter().map(|v| frame(v.theta)).collect();
+    let fft2 = Fft::new(2 * series.fold.max(1) * b);
+
+    // Phase-shifted patch spectrum + effective transfer per view of one particle,
+    // normalised by shell power and multiplied by shell weight once.
+    struct ViewPatch {
+        view: usize,
+        x_w: Vec<[f32; 2]>, // w/power_s * C_eff * X_shifted (or |C_eff| if phase-flipped)
+        c2_w: Vec<f32>,     // w/power_s * C_eff^2
+    }
+
+    let improved = std::sync::atomic::AtomicUsize::new(0);
+    particles.par_iter_mut().for_each(|p| {
+        if super::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let mut patches: Vec<ViewPatch> = Vec::with_capacity(series.views.len());
+        for i in 0..series.views.len() {
+            let (centre, defocus) = series.place(p.at, i);
+            let Some((re, im, off, flipped)) = series.patch_ctf(i, centre, defocus, b, &m.fft, &fft2) else { continue };
+            let c = series.transfer(i, defocus, half);
+            let mut power = vec![0f64; top + 2];
+            for j in 0..k {
+                let s = (half.shell[j] as usize).min(top + 1);
+                let (r, imv) = (re[half.idx[j] as usize] as f64, im[half.idx[j] as usize] as f64);
+                power[s] += r * r + imv * imv;
+            }
+            let mut x_w = vec![[0f32; 2]; k];
+            let mut c2_w = vec![0f32; k];
+            for j in 0..k {
+                let s = (half.shell[j] as usize).min(top + 1);
+                let w = m.weight.get(s).copied().unwrap_or(0.0);
+                if w <= 0.0 || power[s] <= 0.0 {
+                    continue;
+                }
+                let [kx, ky] = half.k[j];
+                let a = 2.0 * std::f64::consts::PI * (kx as f64 * off[0] + ky as f64 * off[1]) / b as f64;
+                let (sn, cs) = (a.sin() as f32, a.cos() as f32);
+                let (r, imv) = (re[half.idx[j] as usize], im[half.idx[j] as usize]);
+                let (xr, xi) = (r * cs - imv * sn, r * sn + imv * cs);
+                let f = (w / power[s]) as f32;
+                let amp = if flipped { c[j].abs() } else { c[j] };
+                x_w[j] = [xr * amp * f, xi * amp * f];
+                c2_w[j] = c[j] * c[j] * f;
+            }
+            patches.push(ViewPatch { view: i, x_w, c2_w });
+        }
+        if patches.is_empty() {
+            return;
+        }
+        let proj = &m.projectors[p.half];
+        let mut slice = vec![0f32; 2 * k];
+        let mut score_rot = |cand: &Mat| -> f64 {
+            let (mut num, mut den) = (0.0f64, 0.0f64);
+            for vp in &patches {
+                proj.slice(&mul(&frames[vp.view], cand), half, &mut slice);
+                for j in 0..k {
+                    let (pr, pi) = (slice[2 * j], slice[2 * j + 1]);
+                    num += (vp.x_w[j][0] * pr + vp.x_w[j][1] * pi) as f64;
+                    den += ((pr * pr + pi * pi) * vp.c2_w[j]) as f64;
+                }
+            }
+            if den > 0.0 { num / den.sqrt() } else { f64::NEG_INFINITY }
+        };
+        let base = score_rot(&p.r);
+        let mut best_score = base;
+        let mut best_r = p.r;
+        for steps in [&coarse_steps, &fine_steps] {
+            let origin = best_r;
+            for d in steps {
+                let cand = mul(d, &origin);
+                let sc = score_rot(&cand);
+                if sc > best_score {
+                    best_score = sc;
+                    best_r = cand;
+                }
+            }
+        }
+        if best_score > base + 1e-9 {
+            p.r = best_r;
+            improved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+    if shift_reach > 0.0 {
+        let _ = settle(series, particles, refs, b, weight, (shift_reach * 0.5).max(0.5));
+    }
+    improved.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -810,7 +1074,7 @@ mod tests {
             stack: vec![0.0; w * h * thetas.len()],
             w,
             h,
-            views: thetas.iter().enumerate().map(|(i, t)| View { theta: *t, ctf: ctf.map(|d| [d[i], d[i], 0.0]) }).collect(),
+            views: thetas.iter().enumerate().map(|(i, t)| View { theta: *t, ctf: ctf.map(|d| [d[i], d[i], 0.0]), dose: None }).collect(),
             pixel_a: px,
             gradient: 0,
             optics: [300.0, 2.7, 0.07],
@@ -1069,5 +1333,100 @@ mod tests {
             let worst = o.iter().zip(n).fold(0f32, |a, (x, y)| a.max((x - y).abs()));
             assert!(worst / peak < 1e-3, "view {i}: {worst} of {peak}");
         }
+    }
+
+    #[test]
+    fn dose_weighting_attenuates_high_dose_high_frequency_views() {
+        // Grant & Grigorieff curve: higher dose and higher spatial frequency decay faster; 200 kV decays faster than 300 kV.
+        assert!((dose_weight(0.1, 0.0, 300.0) - 1.0).abs() < 1e-12);
+        let lo_dose = dose_weight(0.125, 5.0, 300.0);
+        let hi_dose = dose_weight(0.125, 100.0, 300.0);
+        assert!(lo_dose > 0.7 && hi_dose < 0.05 && hi_dose < lo_dose, "lo {lo_dose}, hi {hi_dose}");
+        assert!(dose_weight(0.125, 40.0, 200.0) < dose_weight(0.125, 40.0, 300.0));
+        // Synthetic reconstruction at high resolution (1.5 Å/px): radiation-damaged
+        // high-dose high-tilt views (signal damped + noisy) downweighted by dose_weight
+        // suppress high-frequency noise and improve overall correlation over unweighted averaging.
+        let parts = particles(16);
+        let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
+        let mut s_unw = series(&parts, &thetas, None);
+        s_unw.pixel_a = 1.5;
+        let mut rng = Rng(17);
+        for (i, t) in thetas.iter().enumerate() {
+            let plane = &mut s_unw.stack[i * s_unw.w * s_unw.h..][..s_unw.w * s_unw.h];
+            if t.abs() > 30.0 {
+                // High-dose high-tilt views suffer severe radiation damage + shot noise.
+                for v in plane.iter_mut() {
+                    *v = *v * 0.1 + 15.0 * rng.gauss() as f32;
+                }
+            } else {
+                for v in plane.iter_mut() {
+                    *v += 2.0 * rng.gauss() as f32;
+                }
+            }
+        }
+        let s_dw = Series {
+            stack: s_unw.stack.clone(),
+            w: s_unw.w,
+            h: s_unw.h,
+            views: s_unw
+                .views
+                .iter()
+                .map(|v| View { theta: v.theta, ctf: v.ctf, dose: Some(if v.theta.abs() > 30.0 { 120.0 } else { 3.0 }) })
+                .collect(),
+            pixel_a: s_unw.pixel_a,
+            gradient: s_unw.gradient,
+            optics: s_unw.optics,
+            grid: s_unw.grid,
+            fold: s_unw.fold,
+            window: s_unw.window,
+            fixes: s_unw.fixes.clone(),
+        };
+        let mut sum_u = Sums::new(N, N as f64 / 2.0 - 2.0);
+        sum_u.add(&s_unw, &parts, &|_, _| {}).unwrap();
+        let (map_u, _, fsc_u) = sum_u.finish(11.0);
+        let mut sum_d = Sums::new(N, N as f64 / 2.0 - 2.0);
+        sum_d.add(&s_dw, &parts, &|_, _| {}).unwrap();
+        let (map_d, _, fsc_d) = sum_d.finish(11.0);
+        let truth = phantom();
+        let (cu, cd) = (corr(&map_u, &truth), corr(&map_d, &truth));
+        let fsc_area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
+        let (au, ad) = (fsc_area(&fsc_u), fsc_area(&fsc_d));
+        eprintln!("dose-weighted corr {cd:.4} vs unweighted {cu:.4}; FSC area {ad:.3} vs {au:.3}");
+        assert!(cd > cu + 0.008, "expected dose weighting to improve correlation: {cd:.4} vs {cu:.4}");
+        assert!(ad > au, "expected dose weighting to improve half-map FSC area: {ad:.3} vs {au:.3}");
+    }
+
+    #[test]
+    fn refine_poses_recovers_small_orientation_and_shift_errors() {
+        let parts = particles(16);
+        let thetas: Vec<f64> = (0..21).map(|i| -60.0 + 6.0 * i as f64).collect();
+        let defocus: Vec<f64> = (0..21).map(|i| 5000.0 + 200.0 * i as f64).collect();
+        let s = series(&parts, &thetas, Some(&defocus));
+        let truth = phantom();
+        let mut rng = Rng(29);
+        let mut perturbed: Vec<Particle> = parts
+            .iter()
+            .map(|p| {
+                let axis = [rng.gauss(), rng.gauss(), rng.gauss()];
+                let dr = axis_angle(axis, 4.0);
+                Particle { at: [p.at[0] + 0.6, p.at[1] - 0.5, p.at[2] + 0.4], r: mul(&dr, &p.r), half: p.half }
+            })
+            .collect();
+        let mean_ang = |ps: &[Particle]| ps.iter().zip(&parts).map(|(a, b)| crate::spa::geom::distance(&a.r, &b.r)).sum::<f64>() / ps.len() as f64;
+        let mean_pos = |ps: &[Particle]| {
+            ps.iter()
+                .zip(&parts)
+                .map(|(a, b)| (0..3).map(|k| (a.at[k] - b.at[k]).powi(2)).sum::<f64>().sqrt())
+                .sum::<f64>()
+                / ps.len() as f64
+        };
+        let (ang0, pos0) = (mean_ang(&perturbed), mean_pos(&perturbed));
+        let weight: Vec<f64> = (0..N / 2).map(|k| if (1..=10).contains(&k) { 1.0 } else { 0.0 }).collect();
+        let n_imp = refine_poses(&s, &mut perturbed, &[truth.clone(), truth.clone()], N, &weight, 5.0, 1.5);
+        let (ang1, pos1) = (mean_ang(&perturbed), mean_pos(&perturbed));
+        eprintln!("2D pose refine: {n_imp}/{} improved; angle {ang0:.2}°→{ang1:.2}°, pos {pos0:.2}→{pos1:.2} vx", perturbed.len());
+        assert!(n_imp >= perturbed.len() / 2);
+        assert!(ang1 < ang0 * 0.7, "angle error did not shrink enough: {ang0:.2} -> {ang1:.2}");
+        assert!(pos1 < pos0 * 0.5, "position error did not shrink enough: {pos0:.2} -> {pos1:.2}");
     }
 }

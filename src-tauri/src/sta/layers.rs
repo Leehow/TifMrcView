@@ -194,7 +194,9 @@ fn objects(path: &str, want: Option<&[u16]>) -> Result<(Vec<Material>, Vec<Objec
     let mut objs: Vec<Object> = merged.into_iter().flatten().collect();
     // Specks (a few stray voxels of an automatic segmentation, the crumbs of
     // an eraser) are no things to average: a layer keeps the objects of at
-    // least `SPECK` voxels and of at least a fiftieth of its largest one.
+    // least `min_voxels` and of at least a fiftieth of its largest one.
+    // Small single-slice particles painted on a binned tomogram (e.g. 10–15 Å/vx,
+    // radius 2–3 vx → ~12–28 vx) use a lower floor than automatic masks.
     let mut largest: Vec<(u16, f64)> = vec![];
     for o in &objs {
         match largest.iter_mut().find(|x| x.0 == o.label) {
@@ -202,12 +204,20 @@ fn objects(path: &str, want: Option<&[u16]>) -> Result<(Vec<Material>, Vec<Objec
             None => largest.push((o.label, o.voxels)),
         }
     }
-    objs.retain(|o| o.voxels >= SPECK && o.voxels >= largest.iter().find(|x| x.0 == o.label).map_or(0.0, |x| x.1) / 50.0);
+    let min_voxels = |label: u16| -> f64 {
+        match materials.iter().find(|m| m.label == label).map(|m| m.structure.as_str()).unwrap_or("") {
+            "particle" | "ball" | "free" | "" => PARTICLE_SPECK,
+            _ => SPECK,
+        }
+    };
+    objs.retain(|o| o.voxels >= min_voxels(o.label) && o.voxels >= largest.iter().find(|x| x.0 == o.label).map_or(0.0, |x| x.1) / 50.0);
     Ok((materials, objs, sections))
 }
 
-/// Fewest voxels of an object.
+/// Fewest voxels of an object for segmented / extended structures.
 const SPECK: f64 = 30.0;
+/// Fewest voxels of a small painted particle (allows ~3×3 px on one section).
+const PARTICLE_SPECK: f64 = 9.0;
 
 /// One painted object of a label file, for other workspaces (single
 /// particles take the objects of micrographs as examples): its label, its
@@ -303,14 +313,20 @@ pub fn marks_of(ticked: &[(String, u16)]) -> Result<Vec<Mark>> {
                         out.extend(spheres.into_iter().map(|(c, r)| mark(Kind::Sphere, vec![c, [c[0] + r, c[1], c[2]]], false)));
                     }
                 }
-                "membrane" | "membrane2" | "fibre" => {
-                    let kind = if m.structure == "fibre" { Kind::Line } else { Kind::Surface };
+                "membrane" | "membrane2" => {
+                    // Group refined membrane lines belonging to the same 3D sheet across
+                    // consecutive/nearby sections into a single multi-section Surface so
+                    // `shape::surface` computes true 3D normals (non-zero Z component)
+                    // instead of forcing every tilted membrane vertical along Z.
+                    for (pts, flip) in membranes(&m.marks) {
+                        out.push(mark(Kind::Surface, pts, flip));
+                    }
+                }
+                "fibre" => {
                     for k in m.marks.iter().filter(|k| k.path.len() >= 2) {
                         let pts: Vec<[f64; 3]> = thinned(&k.path, 4.0).into_iter().map(|p| [p[0], p[1], k.z as f64]).collect();
                         if pts.len() >= 2 {
-                            // A one-section surface's normal is (ty, −tx) for the direction t of the line,
-                            // which is the outward side when +1 (left) is the inside; −1 flips it.
-                            out.push(mark(kind, pts, k.inside < 0));
+                            out.push(mark(Kind::Line, pts, k.inside < 0));
                         }
                     }
                 }
@@ -389,6 +405,91 @@ fn vesicles(marks: &[crate::labels::Mark]) -> Vec<([f64; 3], f64)> {
         }
     }
     out.into_iter().map(|(c, r, _)| (c, r)).collect()
+}
+
+/// Maximum Z gap (sections) between consecutive strokes of one 3D membrane sheet.
+const MEMBRANE_Z_GAP: usize = 4;
+
+/// Mean nearest XY distance from points of `a` to points of `b`, symmetric (max of both directions' medians).
+fn polyline_gap(a: &[[f64; 2]], b: &[[f64; 2]]) -> f64 {
+    let one_way = |src: &[[f64; 2]], dst: &[[f64; 2]]| -> f64 {
+        let mut ds: Vec<f64> = src
+            .iter()
+            .map(|p| {
+                dst.iter()
+                    .map(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt())
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        ds.sort_by(f64::total_cmp);
+        ds[ds.len() / 2]
+    };
+    one_way(a, b).min(one_way(b, a))
+}
+
+/// Groups refined membrane strokes (`labels::Mark`) across Z sections into 3D
+/// sheets: each sheet is a flattened point list ordered by ascending Z (one
+/// stroke per Z section, compatible with `marks::strokes` and `shape::surface`)
+/// and a `flip` flag voting the user's `inside` direction along the first stroke.
+fn membranes(marks: &[crate::labels::Mark]) -> Vec<(Vec<[f64; 3]>, bool)> {
+    struct Stroke2d {
+        z: usize,
+        pts: Vec<[f64; 2]>,
+        inside: i8,
+        thickness: f64,
+    }
+    let mut strokes: Vec<Stroke2d> = marks
+        .iter()
+        .filter(|k| k.path.len() >= 2)
+        .filter_map(|k| {
+            let pts = thinned(&k.path, 4.0);
+            (pts.len() >= 2).then_some(Stroke2d { z: k.z, pts, inside: k.inside, thickness: (k.thickness as f64).max(3.0) })
+        })
+        .collect();
+    strokes.sort_by_key(|s| s.z);
+
+    struct Sheet {
+        last_z: usize,
+        last_pts: Vec<[f64; 2]>,
+        points: Vec<[f64; 3]>,
+        inside_vote: i32,
+    }
+    let mut sheets: Vec<Sheet> = vec![];
+    for mut s in strokes {
+        // Pick the closest active sheet from an earlier (strictly lower) section within MEMBRANE_Z_GAP.
+        let mut best: Option<(usize, f64)> = None;
+        for (idx, sh) in sheets.iter().enumerate() {
+            if s.z <= sh.last_z || s.z - sh.last_z > MEMBRANE_Z_GAP {
+                continue;
+            }
+            let dz = (s.z - sh.last_z) as f64;
+            // Allow sloped membranes up to ~75° (~3.7 px/section) plus thickness margin.
+            let limit = 6.0 + 4.0 * dz + s.thickness;
+            let gap = polyline_gap(&s.pts, &sh.last_pts);
+            if gap <= limit && best.is_none_or(|b| gap < b.1) {
+                best = Some((idx, gap));
+            }
+        }
+        if let Some((idx, _)) = best {
+            let sh = &mut sheets[idx];
+            // Align stroke direction to the previous stroke of the sheet so `inside` signs combine consistently.
+            let dist2 = |a: [f64; 2], b: [f64; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+            let same = dist2(s.pts[0], sh.last_pts[0]) + dist2(*s.pts.last().unwrap(), *sh.last_pts.last().unwrap());
+            let flipped = dist2(*s.pts.last().unwrap(), sh.last_pts[0]) + dist2(s.pts[0], *sh.last_pts.last().unwrap());
+            if flipped < same {
+                s.pts.reverse();
+                s.inside = -s.inside;
+            }
+            sh.inside_vote += s.inside as i32;
+            sh.points.extend(s.pts.iter().map(|p| [p[0], p[1], s.z as f64]));
+            sh.last_z = s.z;
+            sh.last_pts = s.pts;
+        } else {
+            let points = s.pts.iter().map(|p| [p[0], p[1], s.z as f64]).collect();
+            sheets.push(Sheet { last_z: s.z, last_pts: s.pts, points, inside_vote: s.inside as i32 });
+        }
+    }
+    sheets.into_iter().map(|sh| (sh.points, sh.inside_vote < 0)).collect()
 }
 
 fn name(p: &str) -> &str {
@@ -495,5 +596,53 @@ mod tests {
         let image = write(dir.path(), vec![membrane], |_, y, z| u16::from(y == 3 && z == 0));
         let e = marks_of(&[(image, 1)]).unwrap_err().to_string();
         assert!(e.contains("外膜") && e.contains("精修"), "{e}");
+    }
+
+    #[test]
+    fn tilted_membrane_across_sections_joins_into_3d_surface_with_nonzero_nz() {
+        // A membrane tilted at 45° in Y-Z (y = 10 + z) across z = 1..5, plus a second separate membrane at y = 60.
+        let mut marks = vec![];
+        for z in 1..=5usize {
+            let y = 10.0 + z as f32;
+            // Alternate stroke direction + inside sign on z=3 to test orientation consistency voting.
+            let (path, inside) = if z == 3 {
+                (vec![[30.0, y], [15.0, y], [0.0, y]], -1)
+            } else {
+                (vec![[0.0, y], [15.0, y], [30.0, y]], 1)
+            };
+            marks.push(crate::labels::Mark { z, path, thickness: 3.0, inside, closed: false });
+            marks.push(crate::labels::Mark { z, path: vec![[0.0, 60.0], [15.0, 60.0], [30.0, 60.0]], thickness: 3.0, inside: -1, closed: false });
+        }
+        let sheets = membranes(&marks);
+        assert_eq!(sheets.len(), 2, "two distinct sheets across 5 sections");
+        let (tilted_pts, tilted_flip) = &sheets[0];
+        assert!(!tilted_flip, "consistent inside=+1 across all 5 strokes");
+        // Verify shape::surface reconstructs a true 3D normal with |nz| ~ 1/sqrt(2), NOT nz == 0!
+        let mut strokes: Vec<Vec<[f64; 3]>> = vec![];
+        for p in tilted_pts {
+            match strokes.last_mut() {
+                Some(s) if s[0][2].round() == p[2].round() => s.push(*p),
+                _ => strokes.push(vec![*p]),
+            }
+        }
+        assert_eq!(strokes.len(), 5);
+        let seeds = super::super::shape::surface(&strokes, 4.0, None);
+        assert!(!seeds.is_empty());
+        let mean_nz = seeds.iter().map(|s| s.axis[2].abs()).sum::<f64>() / seeds.len() as f64;
+        assert!((mean_nz - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.08, "expected 45° normal |nz| ≈ 0.707, got {mean_nz}");
+        assert!(sheets[1].1, "second membrane with inside=-1 should have flip=true");
+    }
+
+    #[test]
+    fn small_single_slice_particle_is_not_dropped_as_speck() {
+        let dir = tempfile::tempdir().unwrap();
+        let particle = Material { label: 1, name: "小蛋白".into(), structure: "particle".into(), ..Default::default() };
+        // A 4x4 (16-voxel) painted particle on a single section: previously dropped by SPECK=30.
+        let image = write(dir.path(), vec![particle], |x, y, z| u16::from((10..14).contains(&x) && (10..14).contains(&y) && z == 2));
+        let layers = layers_of(&[image.clone()]);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].objects, 1);
+        let marks = marks_of(&[(image, 1)]).unwrap();
+        assert_eq!(marks.len(), 1);
     }
 }

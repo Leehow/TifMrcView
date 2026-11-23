@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::pick::{blobs, Blob};
-use super::refine::{align, align_on, classes_on, first_model, Class, Live, Progress, Set};
+use super::refine::{align_on, classes_on, first_model, Class, Live, Progress, Set};
 use super::{cc, check_cancel, Pose};
 use crate::spa::geom::{angles, axis_angle, grid, mul, Mat};
 use crate::spa::fourier::resample3;
@@ -442,7 +442,20 @@ pub(super) struct Cut {
     /// deviations below the tomogram's median: gold and other very dense
     /// things stand far out.
     darkest: f32,
+    /// Persistent Gold-Standard half-set assignment (0 or 1), preserved across
+    /// coarse→fine cutting, reordering, 2D tilt averaging and CSV output.
+    pub(super) half: u8,
     pub(super) cube: Vec<f32>,
+}
+
+fn assign_halves(cuts: &mut [Cut]) {
+    for (i, c) in cuts.iter_mut().enumerate() {
+        c.half = (i % 2) as u8;
+    }
+}
+
+fn halves_of(cuts: &[Cut]) -> Vec<u8> {
+    cuts.iter().map(|c| c.half).collect()
 }
 
 /// See `Cut::darkest`. `c` and `radius` in voxels of `v`.
@@ -640,7 +653,7 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
                 // The centre of working voxel c in source voxels.
                 let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
                 let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
-                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
+                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, half: 0, cube });
             }
         }
     }
@@ -650,8 +663,11 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
     if cuts.len() < 20 {
         bail!("这种尺寸的颗粒只找到 {} 个，太少了", cuts.len());
     }
+    let opts = super::options::load(Path::new(out_dir));
+    let sym = super::options::symmetry_group(Path::new(out_dir));
     cuts.sort_by(|a, b| b.score.total_cmp(&a.score));
-    cuts.truncate(MOST);
+    cuts.truncate(opts.max_particles);
+    assign_halves(&mut cuts);
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
     // Sizes from the scale space are rough and tend to be small: masks
     // and search ranges allow for a particle 1.6 times as large.
@@ -674,7 +690,8 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         let placed = engine.global(&rest, &model, &rotations, shift, &|a, b| progress("放置全部颗粒", a, b))?;
         poses.extend(placed);
     }
-    let out = align(&set, &model, &poses, progress, live)?;
+    let halves = halves_of(&cuts);
+    let out = super::refine::align_halves_on(None, &set, [&model, &model], &poses, &halves, &sym, progress, live)?;
 
     // (Leaving out the candidates that match the average worst was tried
     // on EMPIAR-10045 and removed: at this resolution dense debris matches
@@ -696,7 +713,7 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     output::write_mrc(&file("half1.mrc"), &out.halves[0], shape, voxel_a, false)?;
     output::write_mrc(&file("half2.mrc"), &out.halves[1], shape, voxel_a, false)?;
     let mut csv = String::from("tomogram,x,y,z,rot,tilt,psi,score,half,blob,strength,darkest\n");
-    for (i, (c, p)) in cuts.iter().zip(&out.poses).enumerate() {
+    for (c, p) in cuts.iter().zip(&out.poses) {
         let Pose { r, t, score } = *p;
         let [rot, tilt, psi] = angles(&r);
         let k = c.bin as f64;
@@ -710,7 +727,7 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
             tilt,
             psi,
             score,
-            i % 2 + 1,
+            (c.half & 1) as usize + 1,
             c.score,
             c.strength,
             c.darkest
@@ -1303,7 +1320,7 @@ fn kind_cuts(sources: &[Source], size: f64, progress: Progress) -> Result<(Vec<C
             if let Some(cube) = cube(&v, dims, c) {
                 let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
                 let darkest = darkest(&v, dims, c, 0.5 * size / voxel, median, sd);
-                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, cube });
+                cuts.push(Cut { source: i, at, bin, score: b.score, strength: b.strength, darkest, half: 0, cube });
             }
         }
     }
@@ -1879,7 +1896,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
                 if let Some(cube) = cube(&v, dims, c) {
                     let at = c.map(|v| v as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0);
                     let darkest = darkest(&v, dims, c, 0.5 * size_a / voxel, median, sd);
-                    cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, cube });
+                    cuts.push(Cut { source: i, at, bin, score: 0.0, strength: 0.0, darkest, half: 0, cube });
                     axes.push(d.axis);
                 }
             }
@@ -1928,16 +1945,20 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
     let particles: Vec<Vec<f32>> = keep.iter().map(|i| particles[*i].clone()).collect();
     let wedge_of: Vec<usize> = keep.iter().map(|i| wedge_of[*i]).collect();
     let mut taken: Vec<Option<Cut>> = cuts.into_iter().map(Some).collect();
-    let cuts: Vec<Cut> = keep.iter().map(|i| taken[*i].take().expect("each place once")).collect();
+    let mut cuts: Vec<Cut> = keep.iter().map(|i| taken[*i].take().expect("each place once")).collect();
     if cuts.len() < 4 {
         bail!("合并重复位置后只剩 {} 个颗粒", cuts.len());
     }
+    assign_halves(&mut cuts);
+    let opts = super::options::load(Path::new(out_dir));
+    let sym = super::options::symmetry_group(Path::new(out_dir));
+    let halves = halves_of(&cuts);
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
     let out = match detail {
         // The pattern was found at this detail: the first round must see it
         // too and may not slide a place onto the next row.
-        Some((band, slide)) => super::refine::align_from(&set, &model, &poses, band, slide, progress, live)?,
-        None => align(&set, &model, &poses, progress, live)?,
+        Some((band, slide)) => super::refine::align_from_halves(&set, &model, &poses, &halves, band, slide, &sym, progress, live)?,
+        None => super::refine::align_halves_on(None, &set, [&model, &model], &poses, &halves, &sym, progress, live)?,
     };
     // A pattern is found at a sampling that only just shows it; what its
     // places look like is averaged from finer voxels where there are any.
@@ -1950,7 +1971,7 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
             (cuts, out, voxel_a) = (fine, average, voxel);
             // There the places are aligned again: the poses had only seen
             // the coarse sampling.
-            let Some((better, with_turns)) = refined(sources, &cuts, &out, radius, pattern.map_or(1, |p| p.fold), progress, live)? else { break };
+            let Some((better, with_turns)) = refined(sources, &cuts, &out, radius, pattern.map_or(1, |p| p.fold), &sym, progress, live)? else { break };
             out = better;
             if let Some(p) = &mut pattern {
                 p.symmetric = with_turns;
@@ -1985,7 +2006,47 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         table: None,
         ms: 0,
     };
-    save(&mut report, sources, &cuts, &out, out_dir, size_a, voxel_a, started)?;
+    // Also reconstruct from the 2D tilt images when the series are on record,
+    // keeping the tilt average whenever its halves agree at least as well.
+    let mut final_voxel = voxel_a;
+    if sources.iter().all(|s| s.series.is_some()) {
+        let n = (out.map.len() as f64).cbrt().round() as usize;
+        let tilt_sym: Vec<Mat> = if pattern.is_some_and(|p| p.symmetric && p.fold > 1) && sym.len() <= 1 {
+            (0..pattern.unwrap().fold).map(|k| super::cc_axis(360.0 * k as f64 / pattern.unwrap().fold as f64)).collect()
+        } else {
+            sym.clone()
+        };
+        if let Ok(tilted) = from_tilts(sources, &cuts, &out.poses, n, final_voxel, size_a, &tilt_sym, None, false, progress) {
+            let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
+            let better = area(&tilted.fsc) >= area(&out.fsc);
+            report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
+            report.fsc_other = Some(if better { out.fsc.clone() } else { tilted.fsc.clone() });
+            if better {
+                out = tilted;
+                live(&out.map);
+                if super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 {
+                    if let Ok(finer_t) = from_tilts(sources, &cuts, &out.poses, 2 * n, final_voxel / 2.0, size_a, &tilt_sym, None, false, progress) {
+                        if strength(&finer_t.fsc, final_voxel / 2.0) >= strength(&out.fsc, final_voxel) {
+                            out = finer_t;
+                            final_voxel /= 2.0;
+                            live(&out.map);
+                        }
+                    }
+                }
+                let n_cur = (out.map.len() as f64).cbrt().round() as usize;
+                let weight = shell_weight(&out.fsc);
+                if let Ok(ref_t) = from_tilts(sources, &cuts, &out.poses, n_cur, final_voxel, size_a, &tilt_sym, Some((&out.halves, &weight)), opts.refine_2d_poses, progress) {
+                    let better_r = strength(&ref_t.fsc, final_voxel) > strength(&out.fsc, final_voxel) * 1.01;
+                    report.views_refined = Some(better_r);
+                    if better_r {
+                        out = ref_t;
+                        live(&out.map);
+                    }
+                }
+            }
+        }
+    }
+    save(&mut report, sources, &cuts, &out, out_dir, size_a, final_voxel, started)?;
     Ok(report)
 }
 
@@ -2155,7 +2216,7 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
             let row = &saved.rows[order[*k]];
             let (c, t) = on_grid(row.at, bin);
             poses[*k] = Pose { r: row.r, t, score: row.score };
-            cuts[*k] = Some(Cut { source: s, at: c.map(|x| x as f64 * bin as f64 + half), bin, score: row.blob, strength: row.strength, darkest: row.darkest, cube: vec![] });
+            cuts[*k] = Some(Cut { source: s, at: c.map(|x| x as f64 * bin as f64 + half), bin, score: row.blob, strength: row.strength, darkest: row.darkest, half: (row.half.saturating_sub(1)).min(1) as u8, cube: vec![] });
         }
         for chunk in of.chunks(32) {
             check_cancel()?;
@@ -2164,7 +2225,8 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
                 .fold(empty, |mut sum, &k| {
                     let (c, _) = on_grid(saved.rows[order[k]].at, bin);
                     if let Some(cube) = cube_n(&v, dims, c, n) {
-                        sum[k % 2].add(&cube, &wedge, &poses[k]);
+                        let h = (saved.rows[order[k]].half.saturating_sub(1)).min(1);
+                        sum[h].add(&cube, &wedge, &poses[k]);
                     }
                     sum
                 })
@@ -2188,7 +2250,7 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
     let map = both.finish();
     live(&map);
     let cuts: Vec<Cut> = cuts.into_iter().map(|c| c.expect("every place has its tomogram")).collect();
-    let out = super::refine::Aligned { map, halves, poses, fsc, shell };
+    let mut out = super::refine::Aligned { map, halves, poses, fsc, shell };
     let mut report = Report {
         kinds: vec![],
         diameter_a: None,
@@ -2213,6 +2275,19 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
         ms: 0,
     };
     let kept = Path::new(dir).join("kinds").join("kept");
+    let sym = super::options::symmetry_group(&kept);
+    if sources.iter().all(|s| s.series.is_some()) {
+        if let Ok(tilted) = from_tilts(sources, &cuts, &out.poses, n, voxel, saved.size_a, &sym, None, false, progress) {
+            let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
+            let better = area(&tilted.fsc) >= area(&out.fsc);
+            report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
+            report.fsc_other = Some(if better { out.fsc.clone() } else { tilted.fsc.clone() });
+            if better {
+                out = tilted;
+                live(&out.map);
+            }
+        }
+    }
     save(&mut report, sources, &cuts, &out, &kept.to_string_lossy(), saved.size_a, voxel, started)?;
     Ok(report)
 }
@@ -2242,7 +2317,8 @@ const FINE_HOLD: usize = 4000;
 /// and the halves agree less. Whether it was kept is returned.
 ///
 /// None when the cubes are too many to hold or one cannot be cut.
-fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius: f64, fold: usize, progress: Progress, live: Live) -> Result<Option<(super::refine::Aligned, bool)>> {
+#[allow(clippy::too_many_arguments)]
+fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius: f64, fold: usize, sym: &[Mat], progress: Progress, live: Live) -> Result<Option<(super::refine::Aligned, bool)>> {
     use super::average::Sum;
     let n = FINE_BOX;
     if cuts.len() > FINE_HOLD {
@@ -2268,9 +2344,11 @@ fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radiu
     }
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
     let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+    let halves_id = halves_of(cuts);
     let set = Set { n, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let aligned = super::refine::align_fine(&set, &out.map, &out.poses, out.shell + 1.0, 2, progress, live)?;
-    if fold < 2 {
+    // Gold-standard: refine each half strictly against its own independent half map, never `&out.map`.
+    let aligned = super::refine::align_fine_halves(&set, [&out.halves[0], &out.halves[1]], &out.poses, &halves_id, out.shell + 1.0, 2, sym, progress, live)?;
+    if fold < 2 || sym.len() > 1 {
         return Ok(Some((aligned, false)));
     }
     progress("按对称性平均", 0, fold);
@@ -2281,7 +2359,7 @@ fn refined(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radiu
         let turn = super::cc_axis(360.0 * k as f64 / fold as f64);
         let turned: Vec<Pose> = aligned.poses.iter().map(|p| Pose { r: mul(&p.r, &turn), ..*p }).collect();
         for (half, sum) in sums.iter_mut().enumerate() {
-            sum.merge(&set.average(&turned, |i| i % 2 == half));
+            sum.merge(&set.average(&turned, |i| (halves_id[i] & 1) as usize == half));
         }
         progress("按对称性平均", k + 1, fold);
     }
@@ -2339,13 +2417,12 @@ fn finer(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius:
         (at, std::array::from_fn(|k| q[k] - at[k] as f64), whole)
     };
     let places: Vec<([usize; 3], [f64; 3], bool)> = (0..m).map(place).collect();
-    // Even and odd places are the halves: a place that does not fit takes
-    // the other of its pair with it, so the rest stay in their halves.
-    let kept: Vec<usize> = (0..m).filter(|i| places[*i].2 && (i ^ 1 >= m || places[i ^ 1].2)).collect();
-    if kept.len() < 4 {
+    // Keep every particle that fits, preserving its persistent half assignment.
+    let kept: Vec<usize> = (0..m).filter(|i| places[*i].2).collect();
+    let n0 = kept.iter().filter(|&&i| (cuts[i].half & 1) == 0).count();
+    if n0 < 2 || kept.len() - n0 < 2 {
         return Ok(None);
     }
-    let order: std::collections::HashMap<usize, usize> = kept.iter().enumerate().map(|(k, i)| (*i, k)).collect();
     let empty = || [Sum::new(n), Sum::new(n)];
     let mut sums = empty();
     let mut fine_voxel = 0.5 * voxel_a;
@@ -2367,7 +2444,7 @@ fn finer(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius:
                 .par_iter()
                 .fold(empty, |mut sum, &i| {
                     if let Some(cube) = cube_n(&v, dims, places[i].0, n) {
-                        sum[order[&i] % 2].add(&cube, &wedge, &Pose { r: out.poses[i].r, t: places[i].1, score: out.poses[i].score });
+                        sum[(cuts[i].half & 1) as usize].add(&cube, &wedge, &Pose { r: out.poses[i].r, t: places[i].1, score: out.poses[i].score });
                     }
                     sum
                 })
@@ -2395,7 +2472,7 @@ fn finer(sources: &[Source], cuts: &[Cut], out: &super::refine::Aligned, radius:
             let c = &cuts[i];
             let (bin, _) = grids[c.source].expect("every source of a cut");
             let half = (bin as f64 - 1.0) / 2.0;
-            Cut { source: c.source, at: places[i].0.map(|x| x as f64 * bin as f64 + half), bin, score: c.score, strength: c.strength, darkest: c.darkest, cube: vec![] }
+            Cut { source: c.source, at: places[i].0.map(|x| x as f64 * bin as f64 + half), bin, score: c.score, strength: c.strength, darkest: c.darkest, half: c.half, cube: vec![] }
         })
         .collect();
     let poses = kept.iter().map(|&i| Pose { r: out.poses[i].r, t: places[i].1, score: out.poses[i].score }).collect();
@@ -2575,7 +2652,7 @@ fn on_surfaces(sources: &[Source], drawn: &[Drawn], size_a: f64, probe: bool, pr
             let Some(cube) = cube(&h.v, h.dims, c) else { continue };
             let r = mul(&origin[k].1.frame_at(found[k].t[0], found[k].t[1]), &found[k].r);
             let darkest = darkest(&h.v, h.dims, c, 0.5 * size_a / h.voxel, h.median, h.sd);
-            cuts.push(Cut { source: i, at: c.map(|x| x as f64 * h.bin as f64 + half), bin: h.bin, score: 0.0, strength: 0.0, darkest, cube });
+            cuts.push(Cut { source: i, at: c.map(|x| x as f64 * h.bin as f64 + half), bin: h.bin, score: 0.0, strength: 0.0, darkest, half: 0, cube });
             poses.push(Pose { r, t: std::array::from_fn(|d| p[d] - c[d] as f64), score: found[k].score });
         }
     }
@@ -3209,7 +3286,7 @@ pub(super) fn cut_places(sources: &[Source], found: &Found, places: &[Place]) ->
         let (v, dims, _, bin) = binned(&s.path, voxel_a)?;
         for (k, p) in places.iter().enumerate().filter(|(_, p)| p.source == i && p.bin == bin) {
             if let (Some(cube), Some(r)) = (cube(&v, dims, p.c), found.turn_of(p, &turns)) {
-                cuts.push((k, Cut { source: i, at: p.at(), bin, score: p.score, strength: 0.0, darkest: 0.0, cube }, Pose { r, t: [0.0; 3], score: p.score }));
+                cuts.push((k, Cut { source: i, at: p.at(), bin, score: p.score, strength: 0.0, darkest: 0.0, half: 0, cube }, Pose { r, t: [0.0; 3], score: p.score }));
             }
         }
     }
@@ -3370,7 +3447,7 @@ fn by_surroundings(dev: &burn::tensor::Device, sources: &[Source], cuts: &[Cut],
             let (c, _) = on_grid(at, bin);
             if let Some(cube) = cube(&v, dims, c) {
                 let old = &cuts[*k];
-                out.push((*k, Cut { source: i, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: old.score, strength: old.strength, darkest: old.darkest, cube }, Pose { r: p.r, t: [0.0; 3], score: p.score }));
+                out.push((*k, Cut { source: i, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: old.score, strength: old.strength, darkest: old.darkest, half: old.half, cube }, Pose { r: p.r, t: [0.0; 3], score: p.score }));
             }
         }
     }
@@ -3404,10 +3481,14 @@ pub fn run_places(
     assert_eq!(template.len(), BOX * BOX * BOX);
     let candidates = found.places.len();
     let mut voxel = found.voxel_a;
+    let opts = super::options::load(Path::new(out_dir));
+    let sym = super::options::symmetry_group(Path::new(out_dir));
+    let places = if places.len() > opts.max_particles { &places[..opts.max_particles] } else { places };
     let (mut cuts, poses) = cut_places(sources, found, places)?;
     if cuts.len() < found.fewest() {
         bail!("只找到 {} 个，太少了（至少要 {} 个）", cuts.len(), found.fewest());
     }
+    assign_halves(&mut cuts);
     let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(BOX, s.tilts[0], s.tilts[1])).collect();
     let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
     let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
@@ -3438,7 +3519,8 @@ pub fn run_places(
     };
     let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
     let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
-    let mut out = align_on(Some(dev), &set, template, &poses, &first_pass, live)?;
+    let halves_id = halves_of(&cuts);
+    let mut out = super::refine::align_halves_on(Some(dev), &set, [template, template], &poses, &halves_id, &sym, &first_pass, live)?;
     // What was circled is also aligned by its surroundings first, where the
     // search was told by them (`Found::wide`) or the particles are few; the
     // one of the two averages whose halves agree over more is kept (both
@@ -3448,12 +3530,13 @@ pub fn run_places(
         if let Some((cuts2, start2, around, around_voxel)) = by_surroundings(dev, sources, &cuts, &searched, voxel, circled_a, by, progress, live)? {
             let particles2: Vec<Vec<f32>> = cuts2.iter().map(|c| c.cube.clone()).collect();
             let wedge_of2: Vec<usize> = cuts2.iter().map(|c| c.source).collect();
+            let halves2 = halves_of(&cuts2);
             let whole = (0.5 * circled_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
             let set2 = Set { n: BOX, particles: &particles2, wedges: &wedges, wedge_of: &wedge_of2, radius: whole };
             let own = set2.average(&start2, |_| true).finish();
             let measured = body(&own, BOX, whole).map_or(circled_a, |d| (d * voxel).clamp(0.5 * circled_a, circled_a));
             let set2 = Set { radius: (0.5 * measured / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0), ..set2 };
-            let out2 = align_on(Some(dev), &set2, &own, &start2, &|s: &str, a: usize, b: usize| first_pass(&format!("连周围一起 · {s}"), a, b), live)?;
+            let out2 = super::refine::align_halves_on(Some(dev), &set2, [&own, &own], &start2, &halves2, &sym, &|s: &str, a: usize, b: usize| first_pass(&format!("连周围一起 · {s}"), a, b), live)?;
             let agree = |a: &super::refine::Aligned| strength(&crate::spa::post::fsc(&a.halves[0], &a.halves[1], BOX, whole + 2.0), voxel);
             let (direct, wide) = (agree(&out), agree(&out2));
             let better = wide > direct;
@@ -3508,7 +3591,8 @@ pub fn run_places(
             voxel = got;
         }
         // `kept` follows the order of the sources, as `cuts` does only when
-        // sorted by source: sort both the same way first.
+        // sorted by source: sort both the same way first. Each surviving Cut
+        // keeps its original `c.half` so the Gold-Standard split never mixes.
         let mut order: Vec<usize> = (0..cuts.len()).collect();
         order.sort_by_key(|i| cuts[*i].source);
         let mut it = kept.iter();
@@ -3529,12 +3613,19 @@ pub fn run_places(
         cuts = sorted;
         let wedges: Vec<Vec<f32>> = sources.iter().map(|s| cc::wedge(n, s.tilts[0], s.tilts[1])).collect();
         let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+        let fine_halves = halves_of(&cuts);
         let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
-        // The tomogram bins by whole numbers only, so the finer voxel is
-        // not always half the coarse one (13.0 Å gives 8.7 Å, not 6.5 Å).
-        let model = if (coarse / voxel - 2.0).abs() < 1e-3 { crate::spa::fourier::resample3(&out.map, BOX, n) } else { rescale_cube(&out.map, BOX, coarse, n, voxel) };
+        // Gold-standard: resample the two independent half maps separately (never the merged `out.map`).
+        let resample_half = |m: &[f32]| {
+            if (coarse / voxel - 2.0).abs() < 1e-3 {
+                crate::spa::fourier::resample3(m, BOX, n)
+            } else {
+                rescale_cube(m, BOX, coarse, n, voxel)
+            }
+        };
+        let half_refs = [resample_half(&out.halves[0]), resample_half(&out.halves[1])];
         let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
-        out = align_on(Some(dev), &set, &model, &start, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
+        out = super::refine::align_halves_on(Some(dev), &set, [&half_refs[0], &half_refs[1]], &start, &fine_halves, &sym, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
     }
     let mut report = Report {
         kinds: vec![],
@@ -3567,7 +3658,7 @@ pub fn run_places(
     let mut tilted_kept = false;
     if fine && sources.iter().all(|s| s.series.is_some()) {
         let n = (out.map.len() as f64).cbrt().round() as usize;
-        match from_tilts(sources, &cuts, &out.poses, n, voxel, diameter_a, None, progress) {
+        match from_tilts(sources, &cuts, &out.poses, n, voxel, diameter_a, &sym, None, false, progress) {
             Ok(tilted) => {
                 let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
                 let better = area(&tilted.fsc) >= area(&out.fsc);
@@ -3583,7 +3674,7 @@ pub fn run_places(
                 // same poses, voxels half the size. Kept when the halves then
                 // agree over more (the area under the curve, 1/Å).
                 if better && super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 {
-                    match from_tilts(sources, &cuts, &out.poses, 2 * n, voxel / 2.0, diameter_a, None, progress) {
+                    match from_tilts(sources, &cuts, &out.poses, 2 * n, voxel / 2.0, diameter_a, &sym, None, false, progress) {
                         Ok(finer) => {
                             eprintln!("sta: at half the voxel size, FSC {}", finer.fsc.iter().map(|f| format!("{f:.3}")).collect::<Vec<_>>().join(" "));
                             if strength(&finer.fsc, voxel / 2.0) >= strength(&out.fsc, voxel) {
@@ -3600,16 +3691,12 @@ pub fn run_places(
         }
     }
     // The views themselves: what all particles of a tomogram share (each
-    // view's image shift, the tomogram's defocus) is found from the
-    // particles together (`tilt::views`) against the halves just made, and
-    // the average made again with it. Gold standard: the fixes are shared by
-    // both halves (a few numbers per view against thousands of particles) and
-    // each particle is compared only with the reference of its own half, so
-    // the halves stay independent as far as the agreement tells. One round.
+    // view's image shift, plus optional per-particle 2D local 6-DOF pose refinement)
+    // is found against the halves just made, and the average made again with it.
     if tilted_kept {
         let n = (out.map.len() as f64).cbrt().round() as usize;
         let weight = shell_weight(&out.fsc);
-        match from_tilts(sources, &cuts, &out.poses, n, final_voxel, diameter_a, Some((&out.halves, &weight)), progress) {
+        match from_tilts(sources, &cuts, &out.poses, n, final_voxel, diameter_a, &sym, Some((&out.halves, &weight)), opts.refine_2d_poses, progress) {
             Ok(refined) => {
                 // Kept only for a clear gain: the strengths of two builds
                 // from the same particles differ a little by chance.
@@ -3692,27 +3779,35 @@ fn shell_weight(fsc: &[f64]) -> Vec<f64> {
 /// the views of each series are first refined by all its particles
 /// (`tilt::views`).
 #[allow(clippy::too_many_arguments)]
-fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel: f64, diameter_a: f64, refine: Option<(&[Vec<f32>; 2], &[f64])>, progress: Progress) -> Result<super::refine::Aligned> {
+fn from_tilts(
+    sources: &[Source],
+    cuts: &[Cut],
+    poses: &[Pose],
+    n: usize,
+    voxel: f64,
+    diameter_a: f64,
+    sym: &[Mat],
+    refine: Option<(&[Vec<f32>; 2], &[f64])>,
+    refine_2d_poses: bool,
+    progress: Progress,
+) -> Result<super::refine::Aligned> {
     use super::tilt::{Particle, Series, Sums};
-    // One series in memory at a time (half a gigabyte each). The particles
-    // stay where the tomograms have them: put where the views have them
-    // (`tilt::settle`) they moved by half a voxel and the halves agreed no
-    // better, so those moves were noise; that waits for the refinement of
-    // the views themselves.
     let mut sums = Sums::new(n, n as f64 / 2.0 - 2.0);
+    let mut out_poses = poses.to_vec();
     let total = cuts.len().max(1);
     let mut before = 0;
     for (i, s) in sources.iter().enumerate() {
-        let particles: Vec<Particle> = cuts
-            .iter()
-            .zip(poses)
-            .enumerate()
-            .filter(|(_, (c, _))| c.source == i)
-            .map(|(j, (c, p))| Particle { at: std::array::from_fn(|k| c.at[k] + p.t[k] * c.bin as f64), r: p.r, half: j % 2 })
-            .collect();
-        if particles.is_empty() {
+        let indices: Vec<usize> = cuts.iter().enumerate().filter(|(_, c)| c.source == i).map(|(j, _)| j).collect();
+        if indices.is_empty() {
             continue;
         }
+        let mut particles: Vec<Particle> = indices
+            .iter()
+            .map(|&j| {
+                let (c, p) = (&cuts[j], &poses[j]);
+                Particle { at: std::array::from_fn(|k| c.at[k] + p.t[k] * c.bin as f64), r: p.r, half: (c.half & 1) as usize }
+            })
+            .collect();
         check_cancel()?;
         let file = s.series.as_ref().unwrap();
         let mut d: crate::tomo::dataset::Dataset = serde_json::from_slice(&std::fs::read(file).with_context(|| format!("无法读取 {file}"))?)?;
@@ -3758,13 +3853,15 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel:
                 fix.shift[0] += f.shift[0];
                 fix.shift[1] += f.shift[1];
             }
-            // The defocus is not looked for (`tilt::views` would). On seven real
-            // tomograms it was zero within 50 Å for four, and +0.44 and
-            // +0.32 µm for two, beyond the range their own views were fitted
-            // in: with defocus of micrometres the transfer spreads the
-            // particle beyond its patch, and the fit leans one way. It waits
-            // for patches that hold what the transfer spreads.
-            // Where each view was moved, for whoever wants to plot it against the tilt.
+            if refine_2d_poses {
+                let n_imp = super::tilt::refine_poses(&series, &mut particles, refs, n, weight, 3.0, 1.0);
+                eprintln!("sta:   2D pose refinement updated {n_imp}/{} particles", particles.len());
+                for (&j, p) in indices.iter().zip(&particles) {
+                    let c = &cuts[j];
+                    out_poses[j].r = p.r;
+                    out_poses[j].t = std::array::from_fn(|k| (p.at[k] - c.at[k]) / c.bin as f64);
+                }
+            }
             let moved: Vec<String> = series.views.iter().zip(&found).map(|(v, f)| format!("{:.0}°:{:+.1},{:+.1}", v.theta, f.shift[0] * series.pixel_a, f.shift[1] * series.pixel_a)).collect();
             eprintln!("sta:   view shifts (Å): {}", moved.join(" "));
         }
@@ -3775,9 +3872,9 @@ fn from_tilts(sources: &[Source], cuts: &[Cut], poses: &[Pose], n: usize, voxel:
         bail!("颗粒太少");
     }
     let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
-    let (map, halves, fsc) = sums.finish(radius + 2.0);
+    let (map, halves, fsc) = sums.finish_sym(radius + 2.0, sym);
     let shell = super::refine::cut(&fsc);
-    Ok(super::refine::Aligned { map, halves, poses: poses.to_vec(), fsc, shell })
+    Ok(super::refine::Aligned { map, halves, poses: out_poses, fsc, shell })
 }
 
 #[cfg(test)]
@@ -4431,7 +4528,7 @@ mod around_tests {
             let off = [rng.gauss(), rng.gauss(), rng.gauss()];
             let norm = off.iter().map(|x| x * x).sum::<f64>().sqrt();
             let (c, _) = on_grid(std::array::from_fn(|a| at[a] + 6.0 * off[a] / norm), bin);
-            cuts.push(Cut { source: 0, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: 1.0, strength: 0.0, darkest: 0.0, cube: cube(&binned, bdims, c).unwrap() });
+            cuts.push(Cut { source: 0, at: c.map(|x| x as f64 * bin as f64 + (bin as f64 - 1.0) / 2.0), bin, score: 1.0, strength: 0.0, darkest: 0.0, half: 0, cube: cube(&binned, bdims, c).unwrap() });
         }
         let poses = vec![Pose { r: super::super::IDENTITY, t: [0.0; 3], score: 1.0 }; cuts.len()];
         let far = |c: &Cut, k: usize| (0..3).map(|a| (c.at[a] - things[k].0[a]).powi(2)).sum::<f64>().sqrt();

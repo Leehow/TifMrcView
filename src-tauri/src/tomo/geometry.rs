@@ -16,11 +16,51 @@ pub struct Metadata {
     pub axis: Option<f64>,
     pub pixel_a: Option<f64>,
     pub doses: Vec<Option<f64>>,
+    /// Cumulative pre-exposure before each section (`PriorRecordDose` in SerialEM mdoc), e⁻/Å².
+    #[serde(default)]
+    pub prior_doses: Vec<Option<f64>>,
+}
+
+/// Cumulative mid-exposure dose (e⁻/Å²) per section from per-tilt exposure
+/// `doses` and optional `prior_doses` (`PriorRecordDose`). When `prior_doses`
+/// is missing, accumulates `doses` in dose-symmetric order (|angle| ascending)
+/// if angles are already monotonic, or in section order otherwise.
+pub fn cumulative_doses(angles: &[f64], doses: &[Option<f64>], prior_doses: &[Option<f64>]) -> Vec<Option<f64>> {
+    let n = angles.len();
+    if n == 0 {
+        return vec![];
+    }
+    if prior_doses.len() == n && prior_doses.iter().any(|d| d.is_some()) {
+        return (0..n)
+            .map(|i| {
+                prior_doses[i].map(|pre| pre.max(0.0) + 0.5 * doses.get(i).and_then(|d| *d).unwrap_or(0.0).max(0.0))
+            })
+            .collect();
+    }
+    if doses.len() != n || !doses.iter().any(|d| d.is_some_and(|v| v > 0.0)) {
+        return vec![None; n];
+    }
+    let mono_inc = angles.windows(2).all(|w| w[0] <= w[1] + 1e-6);
+    let mono_dec = angles.windows(2).all(|w| w[0] >= w[1] - 1e-6);
+    let mut order: Vec<usize> = (0..n).collect();
+    if mono_inc || mono_dec {
+        // Sorted-by-angle stack without PriorRecordDose: assume dose-symmetric acquisition from 0° outward.
+        order.sort_by(|&a, &b| angles[a].abs().total_cmp(&angles[b].abs()).then(a.cmp(&b)));
+    }
+    let mut out = vec![None; n];
+    let mut acc = 0.0;
+    for i in order {
+        if let Some(d) = doses[i].filter(|&v| v.is_finite() && v > 0.0) {
+            out[i] = Some(acc + 0.5 * d);
+            acc += d;
+        }
+    }
+    out
 }
 
 pub fn parse_mdoc(text: &str) -> Result<Metadata> {
     let mut m = Metadata::default();
-    let mut sections: Vec<(usize, Option<f64>, Option<f64>)> = Vec::new();
+    let mut sections: Vec<(usize, Option<f64>, Option<f64>, Option<f64>)> = Vec::new();
     let mut current = None;
     for line in text.lines().map(str::trim) {
         if m.axis.is_none() {
@@ -43,7 +83,7 @@ pub fn parse_mdoc(text: &str) -> Result<Metadata> {
                 .and_then(|s| s.split_once('=').map(|(_, v)| v))
             {
                 let z = v.trim().trim_end_matches(']').trim().parse::<usize>()?;
-                sections.push((z, None, None));
+                sections.push((z, None, None, None));
                 current = Some(sections.len() - 1);
             }
             continue;
@@ -63,18 +103,24 @@ pub fn parse_mdoc(text: &str) -> Result<Metadata> {
                     sections[i].2 = v;
                 }
             }
+            "PriorRecordDose" => {
+                if let Some(i) = current {
+                    sections[i].3 = v;
+                }
+            }
             "PixelSpacing" if m.pixel_a.is_none() => m.pixel_a = v.filter(|v| *v > 0.0),
             _ => {}
         }
     }
     sections.sort_by_key(|s| s.0);
-    for (i, (z, angle, dose)) in sections.into_iter().enumerate() {
+    for (i, (z, angle, dose, prior)) in sections.into_iter().enumerate() {
         if i != z {
             bail!("mdoc ZValue 必须连续且从 0 开始");
         }
         m.angles
             .push(angle.ok_or_else(|| anyhow::anyhow!("mdoc 缺少 TiltAngle: {z}"))?);
         m.doses.push(dose);
+        m.prior_doses.push(prior);
     }
     if m.axis.is_some_and(|v| !v.is_finite()) {
         bail!("mdoc 倾转轴角无效");

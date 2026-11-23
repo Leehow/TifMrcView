@@ -14,6 +14,7 @@
   if (!W?.draw) return;
   const D = W.draw;
   const TYPE = { particle: "小颗粒", ball: "球", shell: "空心球", membrane: "单层膜", membrane2: "双层膜", fibre: "纤维", free: "不规则", "": "未选类型" };
+  const FAMILY = { particle: "颗粒/例子", ball: "颗粒/例子", free: "颗粒/例子", "": "颗粒/例子", shell: "囊泡", membrane: "膜", membrane2: "膜", fibre: "纤维" };
   const WHAT = {
     particle: (l) => `${l.objects} 个`, ball: (l) => `${l.objects} 个`, shell: (l) => `${l.objects} 个`, free: (l) => `${l.objects} 个`, "": (l) => `${l.objects} 块`,
     membrane: (l) => `${l.lines} 条膜线`, membrane2: (l) => `${l.lines} 条膜线`, fibre: (l) => `${l.lines} 条`,
@@ -34,6 +35,7 @@
       <li>回到这里，勾选要平均的图层（可以跨好几张断层图，比如只勾膜），按「用勾选的图层」。</li>
     </ol>
     <div id="sta-layers-list" class="sta-layers"></div>
+    <p id="sta-layers-warn" class="warn" hidden></p>
     <p id="sta-layers-note" class="dim"></p>
     <div class="al-row"><button id="sta-layers-use" class="primary" disabled>用勾选的图层</button><button id="sta-layers-reload" class="small" title="标签画笔改过之后，重新读一遍各断层图的图层">刷新图层</button></div>`;
   $("sta-draw-slot").before(box);
@@ -68,7 +70,7 @@
     const ticks = ticksOf();
     // Ticks of layers that are gone are dropped.
     for (const k of [...ticks]) if (!L.layers.some((l) => key(l) === k)) ticks.delete(k);
-    list.replaceChildren(...W.items.map((it) => {
+    const makeRow = (it, mine) => {
       const row = document.createElement("div");
       row.className = "sta-layer-item";
       const head = document.createElement("div");
@@ -85,7 +87,6 @@
       };
       head.append(title, open);
       row.append(head);
-      const mine = L.layers.filter((l) => l.image === it.path || l.image === it.look);
       if (!mine.length) {
         const p = document.createElement("div");
         p.className = "dim";
@@ -109,7 +110,40 @@
         row.append(lab);
       }
       return row;
-    }));
+    };
+    const withLayers = [], withoutLayers = [];
+    for (const it of W.items) {
+      const mine = L.layers.filter((l) => l.image === it.path || l.image === it.look);
+      if (mine.length) withLayers.push([it, mine]); else withoutLayers.push([it, mine]);
+    }
+    const nodes = withLayers.map(([it, mine]) => makeRow(it, mine));
+    if (withoutLayers.length) {
+      // Avoid duplicating a long wall of unlabelled tomograms when some already have labels.
+      if (withLayers.length && withoutLayers.length > 2) {
+        const det = document.createElement("details");
+        det.className = "sta-layers-empty";
+        const sum = document.createElement("summary");
+        sum.textContent = `还有 ${withoutLayers.length} 张断层图尚无标签（展开标注）`;
+        det.append(sum, ...withoutLayers.map(([it, mine]) => makeRow(it, mine)));
+        nodes.push(det);
+      } else {
+        nodes.push(...withoutLayers.map(([it, mine]) => makeRow(it, mine)));
+      }
+    }
+    list.replaceChildren(...nodes);
+    // Warn immediately when incompatible structure families are ticked together.
+    const tickedLayers = L.layers.filter((l) => ticks.has(key(l)));
+    const families = [...new Set(tickedLayers.map((l) => FAMILY[l.structure] || "颗粒/例子"))];
+    const hasParticles = families.includes("颗粒/例子");
+    const hasShapes = families.some((f) => f !== "颗粒/例子");
+    const warn = $("sta-layers-warn");
+    if (hasParticles && hasShapes) {
+      warn.textContent = `同时勾选了「${families.join("」和「")}」：颗粒和膜/囊泡/纤维需分开平均，建议每次只勾同一类结构。`;
+      warn.hidden = false;
+    } else {
+      warn.textContent = "";
+      warn.hidden = true;
+    }
     const n = ticks.size;
     $("sta-layers-use").disabled = !n || L.busy || W.busy;
     if (!L.busy) {

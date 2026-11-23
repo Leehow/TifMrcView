@@ -2527,6 +2527,41 @@ fn sta_pixel_set(out: String, files: Vec<String>, pixel_a: f64) -> CmdResult<()>
     crate::sta::pixel::set(std::path::Path::new(&out), &files, pixel_a).map_err(|e| e.to_string())
 }
 
+/// Reads advanced per-project STA options (`<out>/options.json`): symmetry,
+/// particle cap, custom shape size, and 2D tilt-image pose refinement toggle.
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_options_get(out: String) -> crate::sta::options::Options {
+    crate::sta::options::load(std::path::Path::new(&out))
+}
+
+/// Validates and saves per-project STA options (`<out>/options.json`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+fn sta_options_set(out: String, options: crate::sta::options::Options) -> CmdResult<crate::sta::options::Options> {
+    crate::sta::options::save(std::path::Path::new(&out), &options).map_err(|e| e.to_string())
+}
+
+/// Exports the STA result's `particles.csv` to RELION 5 (`particles.star`)
+/// and/or Dynamo (`particles.tbl` + `tomograms.vll`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_export_star(out: String, which: Option<String>, dir: String, format: String) -> CmdResult<Vec<String>> {
+    blocking(move || {
+        let base = std::path::Path::new(&out);
+        let result_dir = match which.as_deref() {
+            Some(w) => crate::sta::auto::results_of(base)
+                .into_iter()
+                .find(|(k, _)| *k == w)
+                .map(|(_, p)| p)
+                .unwrap_or_else(|| base.to_path_buf()),
+            None => base.to_path_buf(),
+        };
+        crate::sta::export::export(&result_dir, std::path::Path::new(&dir), &format)
+    })
+    .await
+}
+
 /// The tomograms to average together with the open file (a tomogram or its
 /// look companion): `sta::auto::siblings`, [{raw, look, lookScale, lookOffset, name, open}].
 #[cfg(feature = "pro")]
@@ -3956,6 +3991,9 @@ pub fn run() {
             #[cfg(feature = "pro")] sta_out,
             #[cfg(feature = "pro")] sta_pixel_needed,
             #[cfg(feature = "pro")] sta_pixel_set,
+            #[cfg(feature = "pro")] sta_options_get,
+            #[cfg(feature = "pro")] sta_options_set,
+            #[cfg(feature = "pro")] sta_export_star,
             #[cfg(feature = "pro")] sta_siblings,
             #[cfg(feature = "pro")] sta_gallery,
             #[cfg(feature = "pro")] sta_thumbnail,

@@ -218,18 +218,24 @@ pub fn relion5(d: &Dataset, dir: &str, progress: &(dyn Fn(usize, usize) + Sync))
     if halves {
         labels.extend(["rlnMicrographNameEven", "rlnMicrographNameOdd"]);
     }
+    let cum_doses = d.cumulative_doses();
     let rows: Vec<Vec<String>> = kept
         .iter()
         .map(|v| {
             let [z, sx, sy] = relion_pose(a, v, px);
             let ctf = d.ctf.as_ref().and_then(|c| c.tilts.iter().find(|f| f.z == v.file_index));
             let (du, dv, da, res) = ctf.map_or((0.0, 0.0, 0.0, 0.0), |f| (f.df1, f.df2, f.angle, f.fit_res));
+            let pre_dose = d
+                .prior_doses
+                .get(v.file_index)
+                .and_then(|x| *x)
+                .or_else(|| cum_doses.get(v.file_index).and_then(|x| *x))
+                .unwrap_or(0.0);
             let mut r = vec![
                 frame(v, ""),
                 format!("{:.3}", v.angle),
                 format!("{z:.3}"),
-                // The dataset keeps no dose; RELION's dose weighting then does nothing.
-                "0.000".into(),
+                format!("{pre_dose:.3}"),
                 format!("{du:.1}"),
                 format!("{dv:.1}"),
                 format!("{da:.2}"),

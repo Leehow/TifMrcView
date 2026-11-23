@@ -441,19 +441,32 @@
 
   // ---- on the image ----
   const css = () => getComputedStyle(document.documentElement);
+  // Maps 3D tomogram voxel coords [x, y, z] onto the active orthogonal slice [u, v, depth]
+  // matching `reslice.rs` (xy: x,y,z; xz: x,z,y; yz: y,z,x).
+  function onAxis(p) {
+    if (S.axis === "xz") return [p[0], p[2], p[1]];
+    if (S.axis === "yz") return [p[1], p[2], p[0]];
+    return [p[0], p[1], p[2]];
+  }
+  function fromAxis(u, v, d) {
+    if (S.axis === "xz") return [u, d, v];
+    if (S.axis === "yz") return [d, u, v];
+    return [u, v, d];
+  }
   // The places drawn on the slice shown: a particle is a ball, so its circle
   // shrinks away from its centre section and is gone beyond its radius;
-  // near the centre it is solid, further off faint (as the marks in draw.js fade with distance).
+  // works across XY, XZ and YZ orthogonal views.
   function seen() {
     const d = R.d;
-    if (!d || !d.open || !(d.radius || circled(d)) || !S.info || S.axis !== "xy") return [];
+    if (!d || !d.open || !(d.radius || circled(d)) || !S.info || (S.axis !== "xy" && S.axis !== "xz" && S.axis !== "yz")) return [];
     const out = [];
     for (const p of d.places) {
       // A circled place has a radius of its own (the size of the example it resembles).
       const R0 = p.r || d.radius;
-      const dz = Math.abs(p.pos[2] - S.z);
+      const [u, v, depth] = onAxis(p.pos);
+      const dz = Math.abs(depth - S.z);
       if (!R0 || dz >= R0 || p.state === "off" || p.state === "groupOff") continue;
-      out.push({ p, r: Math.sqrt(R0 * R0 - dz * dz), a: dz <= 0.25 * R0 ? 1 : 0.4 });
+      out.push({ p, u, v, r: Math.sqrt(R0 * R0 - dz * dz), a: dz <= 0.25 * R0 ? 1 : 0.4 });
     }
     return out;
   }
@@ -463,8 +476,8 @@
     const accent = css().getPropertyValue("--accent").trim() || "#0969da";
     ctx.save();
     ctx.lineCap = "round";
-    for (const { p, r, a } of seen()) {
-      const [x, y] = toScreen(p.pos[0] + 0.5, p.pos[1] + 0.5);
+    for (const { p, u, v, r, a } of seen()) {
+      const [x, y] = toScreen(u + 0.5, v + 0.5);
       const rr = Math.max(3, r * sc);
       ctx.globalAlpha = a;
       ctx.setLineDash([]);
@@ -530,8 +543,8 @@
       const [x, y] = [t.p[0] - 0.5, t.p[1] - 0.5];
       // The nearest circle the tap is inside of.
       let hit = null, best = Infinity;
-      for (const { p, r } of seen()) {
-        const dist = Math.hypot(p.pos[0] - x, p.pos[1] - y);
+      for (const { p, u, v, r } of seen()) {
+        const dist = Math.hypot(u - x, v - y);
         const reach = Math.max(r, 3 / S.view.scale);
         if (dist <= reach && dist < best) { hit = p; best = dist; }
       }
@@ -543,7 +556,8 @@
         render();
         edit({ toggle: hit.i });
       } else if (R.add) {
-        edit({ addAt: [Math.round(x * 100) / 100, Math.round(y * 100) / 100, S.z] });
+        const pt = fromAxis(x, y, S.z).map((n) => Math.round(n * 100) / 100);
+        edit({ addAt: pt });
       }
     },
     active(on) { if (!on) { press = null; R.add = false; if (R.d) render(); } },
@@ -646,18 +660,20 @@
 
   ext.overlays.push((ctx) => {
     const d = P.d;
-    if (!P.on || !d || !d.open || !S.info || S.axis !== "xy") return;
+    if (!P.on || !d || !d.open || !S.info || (S.axis !== "xy" && S.axis !== "xz" && S.axis !== "yz")) return;
     const sc = toScreen(1, 0)[0] - toScreen(0, 0)[0];
     const R = d.radius || 10;
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineWidth = 2;
     for (const p of d.places) {
-      const dz = Math.abs(p.pos[2] - S.z);
+      const [u, v, depth] = onAxis(p.pos);
+      const [au, av] = onAxis(p.axis);
+      const dz = Math.abs(depth - S.z);
       if (dz >= R) continue;
       const colour = kindColour(p.kind);
-      const [x, y] = toScreen(p.pos[0] + 0.5, p.pos[1] + 0.5);
-      const [ex, ey] = toScreen(p.pos[0] + 0.5 + p.axis[0] * R * 0.9, p.pos[1] + 0.5 + p.axis[1] * R * 0.9);
+      const [x, y] = toScreen(u + 0.5, v + 0.5);
+      const [ex, ey] = toScreen(u + 0.5 + au * R * 0.9, v + 0.5 + av * R * 0.9);
       ctx.globalAlpha = dz <= 0.25 * R ? 1 : 0.4;
       ctx.strokeStyle = colour;
       ctx.beginPath();

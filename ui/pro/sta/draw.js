@@ -79,19 +79,18 @@
   const GOOD_POINTS = 2;
   // Fewest circles that can be averaged by themselves (project::FEWEST_CIRCLED).
   const ONLY_FEWEST = 4;
-  const SIZES = [["small", "小"], ["medium", "中"], ["large", "大"]];
+  const SIZES = [["small", "小 13 nm"], ["medium", "中 22 nm"], ["large", "大 36 nm"]];
 
   const box = document.createElement("div");
   box.id = "sta-draw";
   box.innerHTML = `
-    <h4>自己标注</h4>
     <h4 class="sta-draw-head">② 要平均的标注</h4>
     <div id="sta-draw-tools" class="al-row" hidden></div>
     <div id="sta-draw-deeprow" class="al-row" hidden><button id="sta-draw-deep" class="small" title="涂完后，程序顺着涂的东西上下找，看它有多厚；关掉就按大小估计厚度">三维选择</button></div>
     <p id="sta-draw-hint" class="dim"></p>
     <p id="sta-draw-membrane" class="dim" hidden></p>
     <p id="sta-draw-side" class="dim" hidden>箭头指向颗粒朝外的一侧；不对就点「翻面」</p>
-    <div id="sta-draw-sizes" class="al-row" hidden><span class="dim" title="线和面看不出颗粒多大，请选最接近的一个">颗粒大小</span></div>
+    <div id="sta-draw-sizes" class="al-row" hidden><span class="dim" title="线和面看不出颗粒多大，请选最接近的一个，或直接填纳米数">颗粒大小</span></div>
     <div id="sta-draw-list" class="sta-marks"></div>
     <div class="al-row">
       <button id="sta-draw-done" class="small" hidden>完成</button>
@@ -118,12 +117,32 @@
     const b = document.createElement("button");
     b.className = "small";
     b.textContent = label;
-    // 小/中/大 stay as they are in every interface language (the word list turns a lone 中 into "Medium").
     b.setAttribute("data-no-i18n", "");
-    b.onclick = () => { D.size = k; save(); render(); };
+    b.onclick = () => { D.size = k; $("sta-size-custom").value = ""; save(); render(); };
     $("sta-draw-sizes").append(b);
     sizes[k] = b;
   }
+  const customSize = document.createElement("input");
+  customSize.id = "sta-size-custom";
+  customSize.type = "number";
+  customSize.min = "4";
+  customSize.max = "200";
+  customSize.step = "1";
+  customSize.placeholder = "自定义 nm";
+  customSize.title = "直接输入颗粒直径（单位 nm，范围 4–200）";
+  customSize.onchange = () => {
+    const nm = parseFloat(customSize.value);
+    if (isFinite(nm) && nm >= 4 && nm <= 200) {
+      D.size = `${Math.round(nm * 10)}a`;
+      save();
+      render();
+    } else if (!customSize.value.trim()) {
+      D.size = "medium";
+      save();
+      render();
+    }
+  };
+  $("sta-draw-sizes").append(customSize);
 
   const count = (m) => m.points.length;
   const taking = (m) => (m.strokes || []).filter((s) => !s.cut).length;
@@ -390,6 +409,14 @@
     $("sta-draw-deep").classList.toggle("on", D.deep);
     $("sta-draw-deep").setAttribute("aria-pressed", D.deep ? "true" : "false");
     for (const [k, b] of Object.entries(sizes)) b.classList.toggle("on", D.size === k);
+    if (document.activeElement !== customSize) {
+      if (D.size && !sizes[D.size]) {
+        const m = String(D.size).match(/^(\d+(?:\.\d+)?)\s*(nm|a|å|Å)?$/i);
+        customSize.value = m ? String(m[2]?.toLowerCase() === "nm" ? m[1] : Math.round(parseFloat(m[1]) / 10)) : "";
+      } else {
+        customSize.value = "";
+      }
+    }
     const open = D.open != null ? D.marks[D.open] : null;
     const done = $("sta-draw-done");
     done.hidden = !(open && (open.kind === "line" || open.kind === "surface" || open.kind === "point"));

@@ -60,14 +60,23 @@
     <p class="dim">程序不知道你想平均什么：用标签画笔在三维重构得到的断层图上标出来（膜、颗粒、囊泡…），在这里勾选要用的图层，其余的（回到原始断层图、找齐、对齐、平均）由程序完成。</p>
     <div id="sta-data"></div>
     <div id="sta-draw-slot"></div>
+    <details id="sta-opts-box" class="sta-opts">
+      <summary>高级选项（对称性、颗粒上限、2D 姿态精修）</summary>
+      <div class="sta-opts-grid">
+        <label><span>对称性</span><select id="sta-opt-sym"><option value="C1">C1（无对称）</option><option value="C2">C2</option><option value="C3">C3</option><option value="C4">C4</option><option value="C5">C5</option><option value="C6">C6</option><option value="C8">C8</option><option value="D2">D2</option><option value="D3">D3</option><option value="D4">D4</option><option value="D6">D6</option><option value="D7">D7</option><option value="T">T</option><option value="O">O</option><option value="I">I</option></select></label>
+        <label><span>颗粒上限</span><input id="sta-opt-max" type="number" min="20" max="50000" step="500" value="3000"></label>
+        <label class="sta-opt-check"><input id="sta-opt-2d" type="checkbox" checked><span>在 2D 倾转图上精修颗粒姿态</span></label>
+      </div>
+      <p id="sta-opts-msg" class="dim"></p>
+    </details>
+    <p id="sta-line" class="dim"></p>
+    <p id="sta-lookhint" class="dim" hidden>这张断层图没有清晰版，可在原图上选择</p>
+    <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <details id="sta-auto-box" class="sta-auto">
       <summary>自动找候选（可选，适合颗粒成群、教程那样的数据）</summary>
       <div class="al-row">
         <button id="sta-run" title="自动做出候选卡片；不会替你选，也不会平均">找候选</button>
       </div>
-    <p id="sta-line" class="dim"></p>
-    <p id="sta-lookhint" class="dim" hidden>这张断层图没有清晰版，可在原图上选择</p>
-    <figure id="sta-live" class="sta-live" hidden><img alt="正在得到的平均"><figcaption class="dim">正在得到的平均（正中的三个截面）</figcaption></figure>
     <div id="sta-cards-box" hidden>
       <h4>点一张卡片，或用现成的密度图</h4>
       <p id="sta-cards-hint" class="dim"></p>
@@ -84,7 +93,11 @@
       <p id="sta-used" class="dim"></p>
       <img id="sta-slices" class="ws-img" alt="平均结构的三个中心截面（XY、XZ、YZ）">
       <div id="sta-fsc"></div>
-      <div class="al-row"><button id="sta-open" class="small primary">在查看器中打开</button><button id="sta-folder" class="small">打开结果文件夹</button></div>
+      <div class="al-row"><button id="sta-open" class="small primary">在查看器中打开</button><button id="sta-folder" class="small">打开结果文件夹</button><button id="sta-export" class="small" title="导出颗粒坐标和姿态到 RELION 5 (.star) 或 Dynamo (.tbl)">导出 STAR / TBL…</button></div>
+      <div id="sta-export-box" class="al-row sta-export-box" hidden>
+        <select id="sta-export-fmt"><option value="both">RELION 5 (.star) + Dynamo (.tbl)</option><option value="relion">RELION 5 (particles.star)</option><option value="dynamo">Dynamo (particles.tbl)</option></select>
+        <button id="sta-export-go" class="small primary">选择目录并导出</button>
+      </div>
       <div class="al-row sta-more"><button id="sta-placed" class="small" title="在清晰的断层图上，标出这些颗粒在哪里、朝哪个方向">在图上看这些颗粒</button><button id="sta-kinds-go" class="small" title="看这些颗粒是不是有几种不同的样子">看看有没有不同种类</button></div>
       <div id="sta-placed-box" class="sta-placed" hidden>
         <p class="dim">图上：小圆点是颗粒的位置，短线指向颗粒的“上”。</p>
@@ -502,6 +515,7 @@
     W.items = [...base, ...cur().added.filter((a) => !base.some((b) => b.path === a.path))];
     paint();
     W.layers?.refresh();
+    loadOptions(out);
     document.dispatchEvent(new CustomEvent("sta-out", { detail: out }));
     if (W.busy && W.runOut === out) return;
     try {
@@ -651,6 +665,57 @@
   };
   $("sta-open").onclick = () => W.result?.map && openPath(W.result.map, true);
   $("sta-folder").onclick = () => (W.result?.out || W.out) && invoke("open_folder", { path: W.result?.out || W.out }).catch((e) => status(`${e}`));
+  $("sta-export").onclick = () => { $("sta-export-box").hidden = !$("sta-export-box").hidden; };
+  $("sta-export-go").onclick = async () => {
+    const out = W.out;
+    if (!out || !W.result) return status("还没有可导出的结果");
+    let dir;
+    try { dir = await invoke("pick_folder", { dir: typeof saveDir === "function" ? saveDir() : "" }); } catch (e) { return status(`${e}`); }
+    if (!dir) return;
+    try {
+      const files = await invoke("sta_export_star", { out, which: W.result.which || null, dir, format: $("sta-export-fmt").value });
+      status(`已导出 ${files.length} 个文件到 ${dir}`);
+      $("sta-export-box").hidden = true;
+    } catch (e) {
+      status(`导出失败：${e}`);
+    }
+  };
+
+  // Per-project advanced STA options (<out>/options.json).
+  let optGen = 0;
+  async function loadOptions(out) {
+    const gen = ++optGen;
+    if (!out) return;
+    try {
+      const o = await invoke("sta_options_get", { out });
+      if (gen !== optGen || out !== W.out || !o) return;
+      $("sta-opt-sym").value = o.symmetry || "C1";
+      $("sta-opt-max").value = String(o.maxParticles || 3000);
+      $("sta-opt-2d").checked = o.refine2dPoses !== false;
+      $("sta-opts-msg").textContent = "";
+    } catch (_) { /* web demo */ }
+  }
+  async function saveOptions() {
+    const out = W.out;
+    if (!out) return;
+    const maxParticles = Math.max(20, Math.min(50000, Math.round(Number($("sta-opt-max").value) || 3000)));
+    const options = {
+      symmetry: $("sta-opt-sym").value || "C1",
+      maxParticles,
+      refine2dPoses: $("sta-opt-2d").checked,
+    };
+    try {
+      const saved = await invoke("sta_options_set", { out, options });
+      $("sta-opt-sym").value = saved.symmetry;
+      $("sta-opt-max").value = String(saved.maxParticles);
+      $("sta-opts-msg").textContent = `已保存：${saved.symmetry} · 上限 ${saved.maxParticles} 个${saved.refine2dPoses ? " · 含 2D 姿态精修" : ""}`;
+    } catch (e) {
+      $("sta-opts-msg").textContent = `${e}`;
+    }
+  }
+  $("sta-opt-sym").onchange = saveOptions;
+  $("sta-opt-max").onchange = saveOptions;
+  $("sta-opt-2d").onchange = saveOptions;
 
   // Folding the panel to its head frees the image; the state lasts while the app runs.
   function fold(on) {

@@ -400,7 +400,6 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #sta-again { font-size:13px; padding:6px 18px; }
 #sta-again:disabled { opacity:.5; cursor:not-allowed; }
 #sta-workspace #sta-mark-head { margin-top:14px; }
-#sta-draw > h4:first-child { display:none; }
 #sta-lookhint { margin:2px 0; }
 #quickbar #btn-sta { width:auto; padding:0 8px; gap:5px; }
 /* The wall of tomograms: three tiles per row, scrolling by itself beyond about two and a half rows. */
@@ -731,6 +730,18 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
 #sta-layers .sta-layer-item .al-row { justify-content:space-between; margin:0 0 4px; }
 #sta-layers .sta-layer { display:flex; align-items:center; gap:6px; padding:2px 0; cursor:pointer; }
 #sta-layers .sta-layer-dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex:none; }
+#sta-layers .sta-layers-empty { border:1px dashed var(--line); border-radius:6px; padding:4px 8px; }
+#sta-layers .sta-layers-empty > summary { cursor:pointer; color:var(--dim); font-size:12px; }
+#sta-layers .sta-layers-empty .sta-layer-item { margin-top:6px; }
+#sta-layers-warn { color:#9a6700; margin:4px 0; font-size:12px; }
+#sta-size-custom { width:76px; }
+#sta-opts-box { margin-top:8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--subtle); }
+#sta-opts-box > summary { cursor:pointer; color:var(--dim, inherit); font-size:12px; }
+#sta-opts-box .sta-opts-grid { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin-top:6px; font-size:12px; }
+#sta-opts-box .sta-opts-grid label { display:inline-flex; align-items:center; gap:5px; }
+#sta-opts-box #sta-opt-max { width:76px; }
+#sta-opts-msg:empty { display:none; }
+#sta-export-box { margin-top:4px; align-items:center; }
 #sta-auto-box { margin-top:10px; }
 #sta-auto-box > summary { cursor:pointer; color:var(--dim, inherit); }
 /* SPA: picking by example (spa/examples.js). */

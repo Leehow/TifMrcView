@@ -323,13 +323,22 @@ impl Accum {
         });
         let big = fourier::ift3(n, &re, &im);
         let o = (n - b) / 2;
-        // Slice values are sums over voxels, so the padded grid needs no rescaling.
-        let s = 1.0f32;
+        // Compensate the real-space sinc² attenuation introduced by trilinear
+        // Fourier splatting onto the padded grid (gridding correction, as in RELION).
+        let c = (b / 2) as f64;
+        let inv_sinc2: Vec<f32> = (0..b)
+            .map(|i| {
+                let u = std::f64::consts::PI * (i as f64 - c) / n as f64;
+                if u.abs() < 1e-12 { 1.0 } else { (u / u.sin()).powi(2) as f32 }
+            })
+            .collect();
         let mut out = vec![0f32; b * b * b];
         out.par_chunks_mut(b * b).enumerate().for_each(|(z, plane)| {
+            let gz = inv_sinc2[z];
             for y in 0..b {
+                let gyz = gz * inv_sinc2[y];
                 for x in 0..b {
-                    plane[y * b + x] = big[((z + o) * n + y + o) * n + x + o] * s;
+                    plane[y * b + x] = big[((z + o) * n + y + o) * n + x + o] * gyz * inv_sinc2[x];
                 }
             }
         });
