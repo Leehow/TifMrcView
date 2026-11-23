@@ -672,6 +672,9 @@ pub fn level(
     level_as(img, a, px, bin, if level_y { Flatten::Both } else { Flatten::TiltOnly }, progress)
 }
 
+/// Most the views are turned in all to lay the specimen flat (degrees).
+const MOST_TURN: f64 = 20.0;
+
 pub fn level_as(
     img: &std::sync::Arc<crate::image::OpenImage>,
     a: &mut super::Alignment,
@@ -705,6 +708,14 @@ pub fn level_as(
         // The band rises by sx sections per column: turning every view by
         // −atan(sx) lays it flat.
         let turn = -sx.atan().to_degrees();
+        // A band fitted on a badly aligned series can slope as steeply as it
+        // likes; a specimen is not tilted by more than MOST_TURN, and no view
+        // may be turned past the reconstruction's ±89.5°: such a slope is not
+        // believed, the views are left as they are.
+        let steepest = a.views.iter().map(|v| (v.refined() + turn).abs()).fold(0.0, f64::max);
+        if (offset + turn).abs() > MOST_TURN || steepest >= 85.0 {
+            break (vol, w, h);
+        }
         for v in &mut a.views {
             v.tilt = v.refined() + turn;
         }
