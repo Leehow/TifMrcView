@@ -75,9 +75,9 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Playwright client for the packaged WebView2 application
+      - name: Install Tauri's native WebDriver adapter
         shell: pwsh
-        run: npm install --prefix "$env:RUNNER_TEMP\tmv-qa-node" --ignore-scripts --no-audit --no-package-lock playwright@1.58.2
+        run: cargo install tauri-driver --locked
       - name: Wait for the Windows Pro package from the publication build
         shell: bash
         run: |
@@ -96,41 +96,27 @@ jobs:
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
           path: artifacts
-      - name: Run the packaged Windows application
+      - name: Install Pro and verify its real Windows folder chooser
         shell: pwsh
         run: |
           $installer = Get-ChildItem -LiteralPath artifacts -Recurse -Filter '*-setup.exe' | Select-Object -First 1
           if (!$installer) { throw 'Packaged installer missing' }
-          $unpacked = Join-Path $env:RUNNER_TEMP 'tmv-qa-app'
-          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer.FullName "-o$unpacked" -y | Select-Object -Last 8
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract installer' }
-          $exe = Get-ChildItem -LiteralPath $unpacked -Recurse -Filter 'tifmrcview-pro.exe' | Select-Object -First 1
-          if (!$exe) { throw 'Packaged Pro executable missing' }
-          $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:RUNNER_TEMP 'tmv-qa-webview'
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-address=127.0.0.1 --remote-debugging-port=19231'
-          $env:NODE_PATH = Join-Path $env:RUNNER_TEMP 'tmv-qa-node\node_modules'
-          $dir = python -c "import runpy; print(runpy.run_path('scripts/linux-folder-smoke.py')['fixture'](r'$env:RUNNER_TEMP'))"
-          $app = Start-Process -FilePath $exe.FullName -PassThru
-          try {
-            $webviewReady = $false
-            for ($attempt = 0; $attempt -lt 40; $attempt++) {
-              if ($app.HasExited) { throw "Packaged app exited with code $($app.ExitCode)" }
-              try {
-                $targets = Invoke-RestMethod -Uri 'http://127.0.0.1:19231/json/list' -TimeoutSec 1
-                if ($targets | Where-Object { $_.type -eq 'page' -and $_.url -match 'tauri.localhost' }) {
-                  $webviewReady = $true
-                  break
-                }
-              } catch {
-                Start-Sleep -Milliseconds 500
-              }
-            }
-            if (!$webviewReady) { throw 'The packaged WebView2 never opened a Tauri page' }
-            node scripts/windows-folder-smoke.cjs $dir $app.Id
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows folder test failed' }
-          } finally {
-            if (!$app.HasExited) { Stop-Process -Id $app.Id }
-          }
+          $installed = Join-Path $env:RUNNER_TEMP 'tmv-qa-app'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installed" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exited with $($setup.ExitCode)" }
+          $exe = Get-ChildItem -LiteralPath $installed -Recurse -Filter 'tifmrcview-pro.exe' | Select-Object -First 1
+          if (!$exe) { throw 'Installed Pro executable missing' }
+          $runtimeRoot = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'
+          $runtime = Get-ChildItem -Path "$runtimeRoot\*\msedgewebview2.exe" | Sort-Object { [version]$_.VersionInfo.ProductVersion } | Select-Object -Last 1
+          if (!$runtime) { throw 'Installed WebView2 runtime missing' }
+          $version = $runtime.VersionInfo.ProductVersion
+          Write-Output "WebView2 $version"
+          $zip = Join-Path $env:RUNNER_TEMP 'tmv-edge-driver.zip'
+          $driverDir = Join-Path $env:RUNNER_TEMP 'tmv-edge-driver'
+          Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $zip -TimeoutSec 45
+          Expand-Archive -LiteralPath $zip -DestinationPath $driverDir
+          python scripts/windows-folder-smoke.py $exe.FullName (Join-Path $driverDir 'msedgedriver.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows folder test failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
