@@ -112,6 +112,20 @@ jobs:
           $dir = python -c "import runpy; print(runpy.run_path('scripts/linux-folder-smoke.py')['fixture'](r'$env:RUNNER_TEMP'))"
           $app = Start-Process -FilePath $exe.FullName -PassThru
           try {
+            $webviewReady = $false
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              if ($app.HasExited) { throw "Packaged app exited with code $($app.ExitCode)" }
+              try {
+                $targets = Invoke-RestMethod -Uri 'http://127.0.0.1:19231/json/list' -TimeoutSec 1
+                if ($targets | Where-Object { $_.type -eq 'page' -and $_.url -match 'tauri.localhost' }) {
+                  $webviewReady = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (!$webviewReady) { throw 'The packaged WebView2 never opened a Tauri page' }
             node scripts/windows-folder-smoke.cjs $dir $app.Id
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows folder test failed' }
           } finally {
