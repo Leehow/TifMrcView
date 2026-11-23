@@ -113,7 +113,7 @@
 
   // ---------- the folder and its session ----------
 
-  let folder = null, chose = false, session = { root: "", series: [] }, scanning = 0, rescanAgain = false, loadError = "";
+  let folder = null, chose = false, session = { root: "", series: [] }, activeScan = null, loadError = "";
   const selected=new Set();
   const selectedNames=()=>session.series.filter(s=>selected.has(s.name)).map(s=>s.name);
   const matches=s=>s.name.toLocaleLowerCase().includes(q('.cs-search').value.trim().toLocaleLowerCase());
@@ -135,7 +135,23 @@
   // 「重构勾选序列」 then goes on with all of them, each from where it stopped.
   q('.cs-select-failed').onclick=()=>{if(W.busy)return;const pick=session.series.filter(matches).filter(failedOrPartway);if(!pick.length)return W.status('没有出错或没做完的序列');for(const s of session.series.filter(matches))selected.delete(s.name);for(const s of pick)selected.add(s.name);selectionChanged();W.status(`已勾选 ${pick.length} 个出错或没做完的序列，点「重构勾选序列」接着做`);};
   q('.cs-select-none').onclick=()=>{if(W.busy)return;for(const s of session.series.filter(matches))selected.delete(s.name);selectionChanged();};
-  function changedFolder(){selected.clear();q('.cs-search').value='';closeReview();stopMedia();rv.name=null;rv.dataset=null;for(const job of queue.splice(0))job.store.get(job.key)?.cancelQueued?.();wallCache.clear();rev.clear();}
+  function changedFolder() {
+    activeScan = null;
+    selected.clear();
+    q(".cs-search").value = "";
+    closeReview();
+    stopMedia();
+    rv.name = null;
+    rv.dataset = null;
+    for (const job of queue.splice(0)) job.store.get(job.key)?.cancelQueued?.();
+    wallCache.clear();
+    rev.clear();
+    session = { root: "", series: [] };
+    loadError = "";
+    wall.replaceChildren();
+    tiles.clear();
+    selectionChanged();
+  }
   const visible = () => !W.panel.hidden;
   // The project folder of 三维重构: the 子断层平均 part lists the tomograms made there (sta/index.js).
   W.reconFolder = () => folder;
@@ -162,30 +178,34 @@
   }
 
   async function scan() {
-    if (!folder) { session = { root: "", series: [] }; loadError = ""; return render(); }
-    if (scanning) { rescanAgain = true; return; }
-    scanning = 1;
-    // The first reading of a folder (on a server it can take a while) says so.
+    if (!folder) {
+      activeScan = null;
+      session = { root: "", series: [] };
+      loadError = "";
+      return render();
+    }
+    if (activeScan?.folder === folder) { activeScan.again = true; return; }
+    const scan = activeScan = { folder, again: false };
     const first = !session.series.length;
     if (first) {
       if (!W.busy) W.status("正在读取文件夹里的倾转序列…");
       wall.replaceChildren(el("p", "dim cs-empty", "正在读取文件夹里的倾转序列…"));
       tiles.clear();
     }
-    try {
-      do {
-        rescanAgain = false;
-        try {
-          adopt(await invoke("tomo_session", { folder }));
-          loadError = "";
-        } catch (e) {
-          session = { root: "", series: [] };
-          loadError = String(e);
-        }
-      } while (rescanAgain);
-    } finally {
-      scanning = 0;
-    }
+    do {
+      scan.again = false;
+      try {
+        const result = await invoke("tomo_session", { folder: scan.folder });
+        if (scan !== activeScan || scan.folder !== folder) return;
+        adopt(result);
+        loadError = "";
+      } catch (e) {
+        if (scan !== activeScan || scan.folder !== folder) return;
+        session = { root: "", series: [] };
+        loadError = String(e);
+      }
+    } while (scan.again);
+    activeScan = null;
     render();
     syncReview();
     if (first && !W.busy) { W.status(""); summary(); }
@@ -219,9 +239,15 @@
   }
   document.addEventListener("cryoet-open", async () => { follow();if(rv.name&&!review.hidden)rv.open=true;await scan(); if (!W.busy) summary(); });
   document.addEventListener("cryoet-close", () => {rv.open=false;rv.closeLightbox?.();});
-  document.addEventListener("cryoet-idle", () => { showFolder(); scan(); });
+  document.addEventListener("cryoet-idle", () => { follow(); scan(); });
+  document.addEventListener("tmv-local-directory-mounted", (e) => {
+    if (e.detail.changed) chose = false;
+    if (visible() && !W.busy) { follow(); scan(); }
+  });
   let folderTimer = 0;
-  document.addEventListener("tmv-remote-mounted", () => { if (visible() && !W.busy) { follow(); scan(); } });
+  document.addEventListener("tmv-remote-mounted", () => {
+    if ((S.folder.remote || !S.folder.entries) && visible() && !W.busy) { follow(); scan(); }
+  });
   document.addEventListener("tmv-folder-changed", () => {
     clearTimeout(folderTimer);
     folderTimer = setTimeout(() => { if (visible() && !W.busy) { follow(); scan(); } }, 700);

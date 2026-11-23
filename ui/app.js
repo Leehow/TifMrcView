@@ -506,7 +506,12 @@ function under(path, dir) {
 async function refreshFolder(path, keepScroll = false) {
   const remote = ext.remoteFiles?.get(path);
   if (remote) {
-    showRemoteFolder(remote.folder, path);
+    showBrowserFolder(remote.folder, path);
+    return;
+  }
+  if (!S.folder.remote && S.folder.entries && S.folder.files.includes(path)) {
+    S.folder.index = S.folder.files.indexOf(path);
+    markStrip(keepScroll);
     return;
   }
   const token = S.token;
@@ -517,7 +522,7 @@ async function refreshFolder(path, keepScroll = false) {
   // between its step folders keeps the list.
   const inProject = !stackDir && S.folder.steps && under(path, S.folder.dir);
   const dir = stackDir || (inProject ? S.folder.dir : dirname(path));
-  if (dir !== S.folder.dir) {
+  if (dir !== S.folder.dir || S.folder.entries) {
     const f = await invoke("list_folder", { path: stackDir || path });
     if (token !== S.token) return;
     const stacks = f.stacks || [];
@@ -576,7 +581,12 @@ let folderTimer = 0;
 document.addEventListener("tmv-folder-changed", () => {
   clearTimeout(folderTimer);
   folderTimer = setTimeout(async () => {
-    if (!S.info || !S.folder.dir || S.folder.remote) return;
+    if (!S.folder.dir || S.folder.remote) return;
+    if (S.folder.entries) {
+      await browseLocalDirectory(S.folder.dir).catch((e) => toast(String(e)));
+      return;
+    }
+    if (!S.info) return;
     const top = $("sidebar").scrollTop;
     S.folder.dir = null;
     await refreshFolder(S.info.path, true);
@@ -591,36 +601,65 @@ async function pickFile() {
 
 /** Opens a folder of slices (FIB-SEM, serial sections…) as one Z stack. */
 async function pickStackFolder() {
-  const dir = await invoke("pick_folder", { dir: S.info ? dirname(S.info.folder || S.info.path) : "" });
-  if (dir) openPath(dir);
+  try {
+    const dir = await T.core.invoke("pick_folder", { dir: S.folder.remote ? "" : S.info ? dirname(S.info.folder || S.info.path) : "" });
+    if (dir) openPath(dir);
+  } catch (e) {
+    toast(String(e));
+  }
 }
 
-/**
- * The folder button: one dialog for an image or a folder of slices on macOS,
- * where the system panel can choose both. The Windows and Linux dialogs pick
- * either files or folders, so there the button asks which first.
- */
+let localPickerOpen = false;
+async function pickLocalDirectory() {
+  if (localPickerOpen) return;
+  localPickerOpen = true;
+  try {
+    const dir = S.folder.remote ? "" : S.folder.dir || (S.info ? dirname(S.info.path) : "");
+    // This toolbar action always targets the local filesystem.
+    const picked = await T.core.invoke("pick_folder", { dir });
+    if (picked) {
+      await browseLocalDirectory(picked);
+      if (S.folder.dir === picked && !S.folder.remote) {
+        if (window.TifMrcViewPro?.layers) window.TifMrcViewPro.layers.setPanel("images");
+        else toggleSidebar(true);
+      }
+    }
+  } catch (e) {
+    toast(`无法打开本地文件夹：${e}`);
+  } finally {
+    localPickerOpen = false;
+  }
+}
+
+/** Pro opens the directory browser or explicitly loads an image or Z stack.
+ * Standard macOS keeps its combined file and slice-folder picker. */
 function openAny() {
-  if (IS_MAC) {
+  if (IS_MAC && !EDITION.pro) {
     invoke("pick_open", { dir: S.info ? dirname(S.info.folder || S.info.path) : "" })
       .then((p) => p && openPath(p))
       .catch((e) => toast(`${e}`));
     return;
   }
   if (closeMenu($("btn-open"))) return;
+  const mod = IS_MAC ? "⌘" : "Ctrl";
   openMenu(
     $("btn-open"),
     [
-      { value: "file", label: "打开图像…", key: "Ctrl+O", icon: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>' },
+      { value: "file", label: "打开图像…", key: `${mod}+O`, icon: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>' },
+      ...(EDITION.pro ? [{
+        value: "browse",
+        label: "打开本地文件夹…",
+        icon: DIRECTORY_FOLDER_PATH,
+      }] : []),
       {
-        value: "folder",
-        label: "打开文件夹…",
+        value: "stack",
+        label: EDITION.pro ? "打开文件夹为堆叠…" : "打开文件夹…",
         hint: "切片组成 Z 堆叠",
-        key: "Ctrl+Shift+O",
+        key: `${mod}+Shift+O`,
         icon: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
       },
     ],
-    (v) => (v === "folder" ? pickStackFolder : pickFile)(),
+    (v) => ({ browse: pickLocalDirectory, stack: pickStackFolder, file: pickFile })[v](),
   );
 }
 
@@ -3501,7 +3540,7 @@ window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod) {
-    if (key === "o") (e.shiftKey ? pickStackFolder : IS_MAC ? openAny : pickFile)();
+    if (key === "o") (e.shiftKey ? pickStackFolder : IS_MAC && !EDITION.pro ? openAny : pickFile)();
     else if (key === "s") quickSave();
     else if (key === "z") (e.shiftKey ? redo : undo)();
     else if (key === "y") redo();
@@ -3603,7 +3642,10 @@ window.addEventListener("keydown", (e) => {
 $("btn-open").addEventListener("click", openAny);
 $("btn-prev").addEventListener("click", () => step(-1));
 $("btn-reveal").title = IS_MAC ? "在访达中显示当前图像" : /Win/.test(navigator.platform) ? "在资源管理器中显示当前图像" : "打开图像所在的文件夹";
-$("btn-reveal").addEventListener("click", () => S.info && invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(`${e}`)));
+$("btn-reveal").addEventListener("click", () => {
+  if (!S.folder.remote && S.folder.entries) invoke("open_folder", { path: S.folder.dir }).catch((e) => toast(String(e)));
+  else if (S.info) invoke("reveal_in_folder", { path: S.info.path }).catch((e) => toast(String(e)));
+});
 $("btn-reveal-save").addEventListener("click", () => S.info && invoke("open_folder", { path: saveDir() }).catch((e) => toast(`${e}`)));
 $("save-dir-pick").addEventListener("click", pickSaveDir);
 $("save-dir-reset").addEventListener("click", () => setSaveDir(null));
@@ -3891,7 +3933,7 @@ function buildStrip() {
     },
     { root: $("sidebar"), rootMargin: "600px 0px" },
   );
-  if (S.folder.remote && S.folder.entries) { buildRemoteDirectory(strip); return; }
+  if (S.folder.entries) { buildDirectoryBrowser(strip); return; }
   let body = null;
   let group = null;
   S.folder.files.forEach((f, i) => {

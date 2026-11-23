@@ -164,7 +164,7 @@
     $("meta-list").dataset.file = "";
     renderMeta(); specOpened();
     if (S.folder.remote && ext.remoteFiles?.has(S.info.path)) {
-      showRemoteFolder(S.folder, S.info.path);
+      showBrowserFolder(S.folder, S.info.path);
     } else if (S.folder.remote) {
       S.folder.dir = null;
       refreshFolder(S.info.path).catch((e) => toast(String(e)));

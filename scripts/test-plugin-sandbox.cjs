@@ -131,6 +131,12 @@ const server = http.createServer((req, res) => {
   }));
   assert.equal(state.plugins.length, packages.length + 2); // built-in i18n + SSH
   assert(state.plugins.every((p) => p.active && !p.error), JSON.stringify(state.plugins));
+  if (process.env.TMV_TEST_LOCAL_FOLDER_ONLY === "1") {
+    await require("./local-folder-ui-checks.cjs")(page);
+    assert.deepEqual(external, [], "Local folder browser tests must stay offline");
+    assert.deepEqual(errors, [], "Unexpected uncaught errors");
+    return;
+  }
   if (process.env.TMV_TEST_SSH_ONLY === "1") {
     await require("./ssh-ui-checks.cjs")(page);
     assert.deepEqual(external, [], "SSH browser tests must stay offline");

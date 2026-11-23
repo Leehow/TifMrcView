@@ -8,7 +8,7 @@ function remoteEntryRelevant(entry) {
 }
 
 // Lucide folder (ISC), https://lucide.dev/icons/folder; license in licenses/lucide.txt.
-const REMOTE_FOLDER_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
+const DIRECTORY_FOLDER_PATH = '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>';
 
 // Local cache paths keep all native image readers and Pro tabs unchanged.
 // Only an explicit image open resolves the full file. Previews transfer small PNGs.
@@ -24,22 +24,43 @@ function mountRemoteFolder(owner, { name, path, address = "", entries, resolve, 
     ext.remoteFiles.set(entry.local, { folder, ready: old?.ready || false,
       remotePath: entry.path, resolve: () => resolve(entry), thumbnail: thumbnail ? () => thumbnail(entry) : null });
   }
-  showRemoteFolder(folder, null);
+  showBrowserFolder(folder, null);
+}
+
+let localListingRequest = 0;
+
+async function browseLocalDirectory(path) {
+  const request = ++localListingRequest;
+  const previous = S.folder;
+  const { parent, entries } = await invoke("list_directory", { path });
+  if (request !== localListingRequest || S.folder !== previous) return;
+  const images = entries.filter(e => e.supported);
+  const sameDirectory = !previous.remote && previous.dir === path && previous.entries;
+  const folder = {
+    dir: path, parent, name: basename(path) || path, entries,
+    files: images.map(e => e.path), sizes: images.map(e => e.size),
+    groups: images.map(e => fileGroup(e.name)), stacks: {},
+    navigate: browseLocalDirectory, view: sameDirectory ? previous.view : { query: "", limit: 100 },
+  };
+  showBrowserFolder(folder, S.info?.path);
+  document.dispatchEvent(new CustomEvent("tmv-local-directory-mounted", { detail: { changed: !sameDirectory } }));
 }
 
 /** A real directory browser: directories and metadata do not become images. */
-function buildRemoteDirectory(strip) {
+function buildDirectoryBrowser(strip) {
   const folder = S.folder;
   const nav = document.createElement("div"); nav.className = "remote-navigation";
   const up = document.createElement("button"); up.textContent = "↑ 上级目录";
-  up.disabled = folder.remotePath === "/";
+  const path = folder.remote ? folder.remotePath : folder.dir;
+  const parent = folder.remote ? (path === "/" ? null : path.replace(/\/[^/]+\/?$/, "") || "/") : folder.parent;
+  up.disabled = !parent;
   const run = async (button, path) => { button.disabled = true; count.textContent = '正在读取目录…'; try { await folder.navigate(path); } catch (e) { toast(String(e)); } finally { button.disabled = false; if (button.isConnected) render(); } };
-  up.onclick = () => run(up, folder.remotePath.replace(/\/[^/]+\/?$/, "") || "/");
-  const refresh = document.createElement("button"); refresh.textContent = "↻"; refresh.setAttribute("aria-label", "刷新远程目录");
-  refresh.onclick = () => run(refresh, folder.remotePath);
+  up.onclick = () => run(up, parent);
+  const refresh = document.createElement("button"); refresh.textContent = "↻"; refresh.setAttribute("aria-label", folder.remote ? "刷新远程目录" : "刷新目录");
+  refresh.onclick = () => run(refresh, path);
   nav.append(up, refresh); strip.append(nav);
   const search = document.createElement("input"); search.type = "search"; search.className = "remote-search";
-  search.placeholder = "筛选文件夹和文件…"; search.setAttribute("aria-label", "筛选远程侧栏"); search.value = folder.view.query;
+  search.placeholder = "筛选文件夹和文件…"; search.setAttribute("aria-label", folder.remote ? "筛选远程侧栏" : "筛选本地文件夹"); search.value = folder.view.query;
   strip.append(search);
   const count = document.createElement("div"); count.className = "remote-directory-count"; strip.append(count);
   const rows = document.createElement("div"); rows.className = "remote-directory-rows"; strip.append(rows);
@@ -51,24 +72,26 @@ function buildRemoteDirectory(strip) {
     count.textContent = `${all.filter(e => e.directory).length} 个文件夹 · ${all.filter(e => !e.directory).length} 个文件`;
     for (const entry of all.slice(0, folder.view.limit)) {
       if (entry.supported && !entry.directory) {
-        const item = document.createElement('div'); item.className = 'thumb remote-entry'; item.dataset.path = entry.local;
+        const file = folder.remote ? entry.local : entry.path;
+        const item = document.createElement('div'); item.className = 'thumb remote-entry'; item.dataset.path = file;
         item.innerHTML = '<div class="box"></div><div class="nm"></div><div class="meta"></div>';
-        item.querySelector('.box').textContent = '正在生成远程预览…';
+        item.querySelector('.box').textContent = folder.remote ? '正在生成远程预览…' : '正在生成预览…';
         item.querySelector('.nm').textContent = entry.name;
         item.querySelector('.meta').textContent = `${entry.name.split('.').pop().toUpperCase()} · ${fmtBytes(entry.size || 0)}`;
         item.title = entry.path;
-        item.onclick = e => e.metaKey || e.ctrlKey ? openPath(entry.local) : openHere(entry.local);
+        item.onclick = e => e.metaKey || e.ctrlKey ? openPath(file) : openHere(file);
         rows.append(item); thumbObserver.observe(item);
       } else {
-        const item = document.createElement('button'); item.className = `remote-entry remote-file${entry.directory ? ' remote-folder' : ''}`;
+        const item = document.createElement(entry.directory || folder.inspect ? 'button' : 'div'); item.className = `remote-entry remote-file${entry.directory ? ' remote-folder' : ''}`;
         item.setAttribute('aria-label', `${entry.name}${entry.directory ? '，文件夹' : ''}`);
         const symbol = document.createElement('span'); symbol.className = 'remote-file-icon';
-        if (entry.directory) symbol.innerHTML = REMOTE_FOLDER_SVG;
+        if (entry.directory) symbol.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${DIRECTORY_FOLDER_PATH}</svg>`;
         else symbol.textContent = '▤';
         const label = document.createElement('span'); label.textContent = entry.name;
         const detail = document.createElement('small'); detail.textContent = entry.directory ? '文件夹 ›' : fmtBytes(entry.size || 0);
         item.append(symbol, label, detail); item.title = entry.path;
-        item.onclick = () => entry.directory ? run(item, entry.path) : folder.inspect(entry);
+        if (entry.directory) item.onclick = () => run(item, entry.path);
+        else if (folder.inspect) item.onclick = () => folder.inspect(entry);
         rows.append(item);
       }
     }
@@ -81,13 +104,13 @@ function buildRemoteDirectory(strip) {
   render();
 }
 
-function showRemoteFolder(folder, path) {
+function showBrowserFolder(folder, path) {
   $("sidebar").scrollTop = 0;
   S.folder = { ...folder, index: folder.files.indexOf(path) };
   window.TmvRemote?.mount(S.folder);
-  $("folder-name").textContent = `SSH · ${folder.name}`;
-  $("folder-name").title = folder.remotePath;
-  $("btn-reveal").hidden = true;
+  $("folder-name").textContent = folder.remote ? `SSH · ${folder.name}` : folder.name;
+  $("folder-name").title = folder.remote ? folder.remotePath : folder.dir;
+  $("btn-reveal").hidden = !!folder.remote;
   buildStrip();
   markStrip();
 }

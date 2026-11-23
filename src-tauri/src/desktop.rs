@@ -1610,6 +1610,57 @@ fn folder_stacks(dir: &Path) -> Vec<StackEntry> {
     }
 }
 
+/// One level of the local project browser. Only metadata is read here.
+#[cfg(feature = "pro")]
+#[derive(Serialize)]
+struct DirectoryEntry {
+    name: String,
+    path: String,
+    directory: bool,
+    supported: bool,
+    size: u64,
+}
+
+#[cfg(feature = "pro")]
+#[derive(Serialize)]
+struct DirectoryListing {
+    parent: Option<String>,
+    entries: Vec<DirectoryEntry>,
+}
+
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn list_directory(path: String) -> CmdResult<DirectoryListing> {
+    blocking(move || {
+        let dir = Path::new(&path);
+        let parent = dir.parent().map(|p| p.to_string_lossy().into_owned());
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            // Follow directory symlinks on an explicit visit. Ignore vanished
+            // entries and broken links without losing the whole listing.
+            let Ok(meta) = std::fs::metadata(&path) else { continue };
+            if !meta.is_dir() && !meta.is_file() {
+                continue;
+            }
+            entries.push(DirectoryEntry {
+                name,
+                directory: meta.is_dir(),
+                supported: meta.is_file() && formats::is_supported(&path) && !crate::labels::is_labels_file(&path),
+                size: if meta.is_file() { meta.len() } else { 0 },
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+        entries.sort_by(|a, b| b.directory.cmp(&a.directory).then_with(|| natural_cmp(&a.name, &b.name)));
+        Ok(DirectoryListing { parent, entries })
+    }).await
+}
+
 #[tauri::command]
 async fn list_folder(path: String) -> CmdResult<Folder> {
     blocking(move || {
@@ -3359,13 +3410,14 @@ async fn pick_folder(app: AppHandle, dir: String) -> Option<String> {
     }
     #[cfg(not(target_os = "android"))]
     {
-    use tauri_plugin_dialog::DialogExt;
-    app.dialog()
-        .file()
-        .set_directory(dir)
-        .blocking_pick_folder()
-        .and_then(|f| f.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
+        use tauri_plugin_dialog::DialogExt;
+        tauri::async_runtime::spawn_blocking(move || {
+            let dialog = app.dialog().file();
+            let dialog = if dir.is_empty() { dialog } else { dialog.set_directory(dir) };
+            dialog.blocking_pick_folder()
+                .and_then(|f| f.into_path().ok())
+                .map(|p| p.to_string_lossy().into_owned())
+        }).await.ok().flatten()
     }
 }
 
@@ -3856,6 +3908,7 @@ pub fn run() {
             live_clear,
             pixel_values,
             list_folder,
+            #[cfg(feature = "pro")] list_directory,
             thumbnail,
             pick_file,
             set_default_app,
