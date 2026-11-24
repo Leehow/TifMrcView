@@ -226,6 +226,6 @@
   // A 2D layer remains at Z=0, independently of any other stack's depth.
   function setZ(item, z) { item.z = clamp(Math.round(z), 0, item.info.sizeZ - 1); }
 
-  window.TmvMerge = { copy, clamp, layer, create, add, move, sourcePixel, fromImage, reframe, project, validate, setZ, handles, resize, scaleBarGeometry,
+  window.TmvMerge = { copy, clamp, layer, create, add, move, sourcePixel, canvasPixel, fromImage, reframe, project, validate, setZ, handles, resize, scaleBarGeometry,
     operation: (mode) => ({ normal: "source-over", add: "lighter", screen: "screen" })[mode] || "source-over" };
 })();

@@ -13,7 +13,7 @@
   // Suspend source tools without their close/reset/cancel handlers: training,
   // model weights, results and the source view still belong to the image.
   const sourcePanels = ".pro-panel, .pro-workspace, #align-panel, #cryoet-workspace, #fft-panel, #spec-panel, #vol3d, #vol-panel, .mem-model";
-  const sourceControls = "#stage > #view, #tools, #tools-resizer, .edge-rail, #stage > #size-out, #text-edit, #ann-menu, #loading, #zbar";
+  const sourceControls = "#stage > #view, #stage > #size-out, #text-edit, #ann-menu, #loading, #zbar";
   const sourceSurfaces = `${sourcePanels}, ${sourceControls}`;
   const suspended = new Map();
   let sourceUiSuspended = false;

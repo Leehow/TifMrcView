@@ -1824,7 +1824,8 @@ function drawTag(g, text, x, y) {
 }
 
 function requestRender() {
-  if (!sourceUiActive()) return;
+  // In a Pro composition the tools panel edits the selected layer.
+  if (!sourceUiActive()) { window.TifMrcViewPro?.layers?.toolsChanged?.(); return; }
   if (S.xyz) { xyz.reload(); return; }
   if (!S.info) return;
   if (S.inflight) {

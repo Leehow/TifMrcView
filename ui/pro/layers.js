@@ -192,7 +192,6 @@
       g.globalAlpha = l.opacity; g.globalCompositeOperation = M.operation(l.mode);
       g.drawImage(image, l.x * k, l.y * k, l.width * k, l.height * k);
     }
-    paintScaleBar(doc, g, k);
     doc.thumbnail = output; doc._thumbnailRevision = doc.revision;
     if (doc.path && !doc.dirty) D.rememberProject(doc);
     syncProjects();
@@ -272,14 +271,14 @@
     $("merge-empty-add").disabled = !S.info && !doc;
     syncProjects();
     // Keep the original image tools from applying to a hidden source tab.
-    for (const button of document.querySelectorAll("#toolbar button, #channels input, #channels select, #series")) {
+    for (const button of document.querySelectorAll("#toolbar button, #channels select, #series")) {
       if (["btn-open", "btn-save", "btn-settings", "btn-scalebar", "btn-zoom", "btn-zoomin", "btn-zoomout", "btn-undo", "btn-redo", "scroll-left", "scroll-right"].includes(button.id)) continue;
       if (doc) { if (!busyButtons.has(button)) busyButtons.set(button, button.disabled); button.disabled = true; }
       else if (busyButtons.has(button)) { button.disabled = busyButtons.get(button); busyButtons.delete(button); }
     }
     if (!shown) { zkey = ""; return; }
-    $("btn-scalebar").disabled = !!doc && !doc.layers[0]?.scaleBar;
-    if (doc) $("btn-scalebar").classList.toggle("on", !!doc.layers[0]?.scaleBar?.visible);
+    $("btn-scalebar").disabled = !!doc && !barLayer(doc)?.scaleBar;
+    if (doc) $("btn-scalebar").classList.toggle("on", !!barLayer(doc)?.scaleBar?.visible);
     if (doc) {
       $("st-info").textContent = `合成 · ${doc.width}×${doc.height} · ${doc.layers.length} 个图层`;
       $("st-pixel").textContent = "";
@@ -377,9 +376,73 @@
       return;
     }
     syncZBars(doc);
+    bindTools(doc);
     if (!doc.view) fit(doc);
     updateZoom(doc);
     request();
+  }
+
+  // ---- the left tools panel (brightness/contrast) edits the selected layer ----
+  // In a composition the hidden source tab's state was saved on leaving it, so
+  // the shared state S can describe the selected layer for the panel.
+  let boundSig = "", toolEditAt = 0;
+  const layerSig = (l) => JSON.stringify([l.id, l.token, l.z, l.t, l.gamma, l.channels]);
+  function bindTools(doc) {
+    const l = selected(doc);
+    if (!l) return;
+    const sig = layerSig(l);
+    if (sig === boundSig && S.token === l.token) return;
+    const sameImage = S.token === l.token && S.z === l.z && S.t === l.t;
+    boundSig = sig;
+    const ranges = cache.get(l.id)?.ranges || [];
+    Object.assign(S, { token: l.token, info: l.info, z: l.z, t: l.t, gamma: l.gamma, axis: "xy", base: null });
+    if (!sameImage) S.hist = null;
+    S.chans = l.info.channels.map((c, i) => {
+      const k = l.channels.findIndex((x) => x.index === i), lc = l.channels[k], r = k >= 0 ? ranges[k] : null;
+      const auto = !lc || lc.min === null || lc.max === null;
+      return { visible: k >= 0, color: [...(lc?.color || c.color)], name: c.name,
+        min: auto ? r?.min ?? null : lc.min, max: auto ? r?.max ?? null : lc.max, auto, dmin: r?.dmin, dmax: r?.dmax };
+    });
+    const visible = S.chans.map((c) => c.visible);
+    S.sel = Math.max(0, Math.min(S.sel, S.chans.length - 1));
+    if (!S.chans[S.sel].visible) S.sel = Math.max(0, visible.indexOf(true));
+    buildChannels();
+    // buildChannels applies the app-wide channel choice; a layer keeps its own.
+    S.chans.forEach((c, i) => { c.visible = visible[i]; });
+    if (S.chans.length > 1) paintChannels();
+    $("gamma").value = S.gamma;
+    $("gamma-v").textContent = S.gamma.toFixed(2);
+    syncContrast();
+    loadHist();
+  }
+  /** After a render: auto display ranges of the selected layer into the panel. */
+  function toolRanges(doc) {
+    const l = selected(doc), ranges = l && cache.get(l.id)?.ranges;
+    if (!ranges || S.token !== l.token) return;
+    l.channels.forEach((lc, k) => {
+      const c = S.chans[lc.index], r = ranges[k];
+      if (!c || !r) return;
+      c.dmin = r.dmin; c.dmax = r.dmax;
+      if (c.auto) { c.min = r.min; c.max = r.max; }
+    });
+    syncContrast();
+  }
+  /** The panel changed S (contrast, gamma, channel on/off or colour): apply it to the layer. */
+  function toolsChanged() {
+    const doc = current(), l = doc && selected(doc);
+    if (!l || S.token !== l.token) return;
+    const channels = S.chans.flatMap((c, index) => c.visible
+      ? [{ index, color: [...c.color], min: c.auto ? null : c.min, max: c.auto ? null : c.max }] : []);
+    if (!channels.length) return;
+    if (JSON.stringify(channels) === JSON.stringify(l.channels) && S.gamma === l.gamma) return;
+    // One undo step per gesture, not per slider tick.
+    const history = Date.now() - toolEditAt > 600;
+    toolEditAt = Date.now();
+    edit((_doc, item) => {
+      if (item?.id !== l.id) return;
+      item.channels = channels; item.gamma = S.gamma;
+      boundSig = layerSig(item);
+    }, history);
   }
 
   function syncZBars(doc) {
@@ -440,24 +503,42 @@
     }
     const image = document.createElement("canvas"); image.width = frame.w; image.height = frame.h;
     image.getContext("2d").putImageData(frame.image, 0, 0);
-    if (!full) cache.set(l.id, { key, canvas: image });
+    if (!full) cache.set(l.id, { key, canvas: image, ranges: frame.ranges });
     return image;
   }
 
-  function paintScaleBar(doc, g, scale) {
-    const bar = M.scaleBarGeometry(doc.layers[0]);
-    if (!bar) return;
+  /** The layer whose calibration and on/off the canvas scale bar follows. */
+  function barLayer(doc) { return doc.layers.find((l) => l.scaleBar && M.sourcePixel(l)); }
+
+  /** A scale bar for the canvas, as the single-image view draws one: about
+   * 120 screen pixels on screen, 15 % of the width in an export. */
+  function drawBar(doc, g, origin, scale, onScreen) {
+    const l = barLayer(doc), p = M.canvasPixel(doc);
+    if (!l?.scaleBar?.visible || !p) return;
+    const dpr = onScreen ? window.devicePixelRatio || 1 : 1;
+    let ox = origin[0], oy = origin[1], outW = doc.width * scale, outH = doc.height * scale;
+    if (onScreen) {
+      const x1 = Math.min(g.canvas.width, ox + outW), y1 = Math.min(g.canvas.height, oy + outH);
+      ox = Math.max(0, ox); oy = Math.max(0, oy); outW = x1 - ox; outH = y1 - oy;
+      if (outW < 60 * dpr || outH < 40 * dpr) return;
+    }
+    const len = niceLength((onScreen ? 120 * dpr : outW * 0.15) / scale * p.x);
+    const barPx = len / p.x * scale;
+    const thick = onScreen ? 4 * dpr : Math.max(3, Math.round(outH * 0.008));
+    const font = onScreen ? 13 * dpr : Math.max(12, Math.round(outH * 0.025));
+    const margin = onScreen ? 18 * dpr : Math.max(10, Math.round(outW * 0.025));
+    const x1 = ox + outW - margin, x0 = x1 - barPx, y = oy + outH - margin;
     g.save();
     g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
-    g.fillStyle = "#fff"; g.shadowColor = "#000"; g.shadowBlur = Math.max(1, bar.font * scale * 0.23);
-    g.fillRect(bar.x * scale, bar.y * scale, bar.width * scale, bar.height * scale);
-    g.font = `600 ${bar.font * scale}px -apple-system, "Segoe UI", sans-serif`;
+    g.fillStyle = "#fff"; g.shadowColor = "#000"; g.shadowBlur = 3 * dpr;
+    g.fillRect(x0, y - thick, barPx, thick);
+    g.font = `600 ${font}px -apple-system, "Segoe UI", sans-serif`;
     g.textAlign = "center"; g.textBaseline = "bottom";
-    g.fillText(bar.label, (bar.x + bar.width / 2) * scale, (bar.y - bar.font * 0.3) * scale);
+    g.fillText(fmtLength(len), (x0 + x1) / 2, y - thick - font * 0.3);
     g.restore();
   }
 
-  async function paint(doc, output, origin, scale, full = false) {
+  async function paint(doc, output, origin, scale, full = false, onScreen = false) {
     const g = output.getContext("2d");
     g.clearRect(0, 0, output.width, output.height);
     g.save();
@@ -473,10 +554,9 @@
         g.globalAlpha = l.opacity;
         g.drawImage(image, l.x * scale, l.y * scale, l.width * scale, l.height * scale);
       }
-      // Keep the base image's calibrated bar neutral and above the merged
-      // channels. Its geometry is attached to that layer, not the viewport.
-      paintScaleBar(doc, g, scale);
     } finally { g.restore(); }
+    // The bar is neutral and above the merged channels, sized for the output.
+    drawBar(doc, g, origin, scale, onScreen);
   }
 
   function request() {
@@ -497,8 +577,11 @@
     const scale = view.scale * dpr;
     const origin = [output.width / 2 - view.cx * scale, output.height / 2 - view.cy * scale];
     try {
-      await paint(doc, output, origin, scale);
-      if (current() !== doc || doc.revision !== revision || JSON.stringify(doc.view) !== JSON.stringify(view)) { again = true; return; }
+      await paint(doc, output, origin, scale, false, true);
+      if (current() !== doc || JSON.stringify(doc.view) !== JSON.stringify(view)) { again = true; return; }
+      // A newer edit (e.g. a Z slider still moving) shows this frame meanwhile
+      // and renders again, so scrubbing updates instead of freezing.
+      if (doc.revision !== revision) again = true;
       const l = selected(doc);
       if (l?.visible && sideMode === "layers" && !$("sidebar").classList.contains("collapsed")) {
         const g = output.getContext("2d");
@@ -516,7 +599,8 @@
       preview.getContext("2d").drawImage(output, 0, 0);
       updateZoom(doc);
       $("st-info").textContent = `合成 · ${doc.width}×${doc.height} · ${doc.layers.length} 个图层`;
-      updateThumbnail(doc);
+      if (!again) updateThumbnail(doc);
+      toolRanges(doc);
     } catch (e) { if (current() === doc) toast(`合成预览失败：${e}`, 6500); }
     finally { rendering = false; if (again) { again = false; request(); } }
   }
@@ -683,7 +767,7 @@
     request();
   }
   preview.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(-e.deltaY * 0.002), e); }, { passive: false });
-  for (const [id, action] of [["btn-save", () => $("merge-export").click()], ["btn-scalebar", () => edit((doc) => { const bar = doc.layers[0]?.scaleBar; if (bar) bar.visible = !bar.visible; })], ["btn-undo", () => undo()], ["btn-redo", () => undo(true)], ["btn-zoom", () => { fit(); D.touch(); }], ["btn-zoomin", () => zoom(1.25)], ["btn-zoomout", () => zoom(0.8)]]) $(id).addEventListener("click", (e) => {
+  for (const [id, action] of [["btn-save", () => $("merge-export").click()], ["btn-scalebar", () => edit((doc) => { const bar = barLayer(doc)?.scaleBar; if (bar) bar.visible = !bar.visible; })], ["btn-undo", () => undo()], ["btn-redo", () => undo(true)], ["btn-zoom", () => { fit(); D.touch(); }], ["btn-zoomin", () => zoom(1.25)], ["btn-zoomout", () => zoom(0.8)]]) $(id).addEventListener("click", (e) => {
     if (!current()) return;
     e.preventDefault(); e.stopImmediatePropagation(); action();
   }, true);
@@ -786,14 +870,17 @@
     if (result) setPanel("layers");
   }
 
+  let lastActive = null;
   document.addEventListener("tmv-document", () => {
+    // Back in a composition from another tab: S holds that tab's image now.
+    if (D.current() !== lastActive) { lastActive = D.current(); boundSig = ""; }
     const live = new Set(D.tabs.flatMap((d) => d.type === "merge" ? d.layers.map((l) => l.id) : []));
     for (const key of cache.keys()) if (!live.has(key)) cache.delete(key);
     sync();
   });
   document.addEventListener("tmv-save", () => { syncSaveState(); syncProjects(); });
   new ResizeObserver(request).observe(stage);
-  window.TifMrcViewPro.layers = { fit, exportImage, paint, sync, request, setPanel, dropFiles,
+  window.TifMrcViewPro.layers = { fit, exportImage, paint, sync, request, setPanel, dropFiles, toolsChanged,
     sourceChanged() {
       if (current() || sideMode !== "layers" || sourceScheduled) return;
       sourceScheduled = true;

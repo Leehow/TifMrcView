@@ -12,7 +12,9 @@ html[data-edition="pro"] #sidebar.collapsed { display:none; }
 #right-sidebar-tabs .panel-open { position:static; width:30px; height:27px; border-right:0; border-radius:6px 0 0 6px; }
 #right-sidebar-tabs [aria-selected="true"] { background:var(--muted); color:var(--accent); }
 #right-sidebar-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
-.merge-mode #stage > #view, .merge-mode #tools, .merge-mode #tools-resizer, .merge-mode .edge-rail,
+/* The left panel's brightness/contrast edits the selected layer (layers.js); its other sections act on a single image. */
+.merge-mode #tools > section:not(#sec-contrast), .merge-mode #btn-info { display:none !important; }
+.merge-mode #stage > #view,
 .merge-mode #stage > #size-out, .merge-mode #fft-panel, .merge-mode #spec-panel, .merge-mode #vol3d, .merge-mode #vol-panel { visibility:hidden; pointer-events:none; }
 .merge-mode .pro-panel, .merge-mode .pro-workspace, .merge-mode #align-panel, .merge-mode #cryoet-workspace,
 .merge-mode .mem-model, .merge-mode #ann-menu, .merge-mode [data-merge-suspended] { visibility:hidden !important; pointer-events:none !important; }
