@@ -26,7 +26,7 @@ test('the 21st tab evicts the stalest idle image tab', () => {
 });
 
 test('sidebar clicks open here, Ctrl/Cmd, middle click and the menu open a new tab', () => {
-  assert.match(app, /e\.metaKey \|\| e\.ctrlKey \? openPath\(f\) : openHere\(f\)/);
+  assert.match(app, /e\.metaKey \|\| e\.ctrlKey \? openPath\(target\(\)\) : openHere\(target\(\)\)/);
   assert.match(app, /openHere\(files\[next\]\)/);
   assert.match(app, /在新标签页打开/);
   assert.match(app, /docs\.open\(path, force, series, \{ replace: true \}\)/);

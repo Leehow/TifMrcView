@@ -21,10 +21,6 @@ const LANGS = [
 
 // prettier-ignore
 const WORDS = [
-  ["按原始层叠打开", "Open as recorded", "Wie aufgenommen öffnen", "元のスタックで開く", "Abrir como se adquirió", "Ouvrir telle qu’acquise", "Открыть как снято"],
-  ["安装插件", "Install plugin", "Plugin installieren", "プラグインをインストール", "Instalar complemento", "Installer l’extension", "Установить плагин"],
-  ["更新插件", "Update plugin", "Plugin aktualisieren", "プラグインを更新", "Actualizar complemento", "Mettre à jour l’extension", "Обновить плагин"],
-  ["启用插件", "Switch on plugin", "Plugin einschalten", "プラグインをオンにする", "Activar complemento", "Activer l’extension", "Включить плагин"],
   // Install-time permissions and package policy.
   ["插件权限", "Plugin permissions", "Plugin-Berechtigungen", "プラグインの権限", "Permisos del complemento", "Autorisations de l’extension", "Разрешения плагина"],
   ["无额外权限", "No additional permissions", "Keine zusätzlichen Berechtigungen", "追加の権限なし", "Sin permisos adicionales", "Aucune autorisation supplémentaire", "Без дополнительных разрешений"],
@@ -220,6 +216,10 @@ const WORDS = [
   ["没有匹配的插件", "No matching plugins", "Keine passenden Plugins", "一致するプラグインがありません", "No hay complementos que coincidan", "Aucune extension correspondante", "Подходящих плагинов нет"],
   ["插件市场上的插件都已安装", "All plugins in the market are installed", "Alle Plugins im Plugin-Markt sind installiert", "マーケットのプラグインはすべてインストール済みです", "Todos los complementos de la tienda están instalados", "Toutes les extensions du catalogue sont installées", "Все плагины из каталога установлены"],
   ["正在更新…", "Updating…", "Wird aktualisiert…", "更新中…", "Actualizando…", "Mise à jour…", "Обновление…"],
+  ["按原始层叠打开", "Open as recorded", "Wie aufgenommen öffnen", "元のスタックで開く", "Abrir como se adquirió", "Ouvrir telle qu’acquise", "Открыть как снято"],
+  ["安装插件", "Install plugin", "Plugin installieren", "プラグインをインストール", "Instalar complemento", "Installer l’extension", "Установить плагин"],
+  ["更新插件", "Update plugin", "Plugin aktualisieren", "プラグインを更新", "Actualizar complemento", "Mettre à jour l’extension", "Обновить плагин"],
+  ["启用插件", "Switch on plugin", "Plugin einschalten", "プラグインをオンにする", "Activar complemento", "Activer l’extension", "Включить плагин"],
   ["关闭", "Close", "Schließen", "閉じる", "Cerrar", "Fermer", "Закрыть"],
   ["FFT 功率谱", "FFT power spectrum", "FFT-Leistungsspektrum", "FFT パワースペクトル", "Espectro de potencia FFT", "Spectre de puissance FFT", "Спектр мощности FFT"],
   ["FFT 功率谱：对当前看到的区域计算，看晶格间距和 CTF 的 Thon 环", "FFT power spectrum of the visible area: lattice spacings and the CTF's Thon rings", "FFT-Leistungsspektrum des sichtbaren Bereichs: Gitterabstände und Thon-Ringe der CTF", "表示中の領域の FFT パワースペクトル：格子間隔と CTF のトーンリング", "Espectro de potencia FFT del área visible: espaciados de red y anillos de Thon de la CTF", "Spectre de puissance FFT de la zone visible : distances réticulaires et anneaux de Thon de la CTF", "Спектр мощности FFT видимой области: межплоскостные расстояния и кольца Тона CTF"],
