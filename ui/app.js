@@ -4144,6 +4144,12 @@ function buildStrip() {
       el.title = `${one.name}（${one.detail}）\n${file}`;
       el.querySelector(".nm").textContent = one.name;
       el.querySelector(".meta").textContent = `${basename(file)} · ${one.detail}`;
+      // The container lacks this image's data: its exported TIFF stands in.
+      if (one.fallback) {
+        el.dataset.open = one.fallback;
+        el.title += `\n文件里缺这幅图的数据，打开导出的 ${basename(one.fallback)}`;
+        el.querySelector(".meta").textContent = `${one.detail} · 用导出的 TIF`;
+      }
     } else if (stack) {
       el.classList.add("stack");
       el.title = `${stack.name}：${stack.slices} 张切片组成的 Z 堆叠\n${f}`;
@@ -4154,7 +4160,8 @@ function buildStrip() {
       const ext = (f.match(/\.([^.\\/]+)$/) || [, ""])[1].toUpperCase();
       el.querySelector(".meta").textContent = `${ext} · ${fmtBytes(S.folder.sizes[i] || 0)}`;
     }
-    el.addEventListener("click", (e) => (e.metaKey || e.ctrlKey ? openPath(f) : openHere(f)));
+    const target = () => el.dataset.open || f;
+    el.addEventListener("click", (e) => (e.metaKey || e.ctrlKey ? openPath(target()) : openHere(target())));
     // Tabs (Pro) only: middle click and the context menu open a new tab.
     el.addEventListener("auxclick", (e) => {
       if (e.button !== 1 || !window.TifMrcViewPro?.documents) return;
@@ -4189,7 +4196,7 @@ function pumpThumbs() {
     if (!el.isConnected) continue;
     thumbActive++;
     const remote = ext.remoteFiles?.get(el.dataset.path);
-    const [thumbPath, thumbSeries] = splitSeriesKey(el.dataset.path);
+    const [thumbPath, thumbSeries] = el.dataset.open ? [el.dataset.open, 0] : splitSeriesKey(el.dataset.path);
     (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: thumbPath, size: 256, series: thumbSeries }))
       .then((buf) => {
         if (!el.isConnected) return;

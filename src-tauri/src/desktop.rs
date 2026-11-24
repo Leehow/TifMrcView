@@ -1583,13 +1583,13 @@ struct Folder {
     /// The images inside files that hold several (a Leica LIF project, ND2
     /// positions…), so the side panel lists each one.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    series: HashMap<String, Vec<crate::image::SeriesInfo>>,
+    series: HashMap<String, Vec<SeriesEntry>>,
 }
 
 /// Files of the folder that hold several images, with their images. Only
 /// files a plugin opens (vendor containers) are looked into, and at most a
 /// few dozen, so listing a folder stays quick.
-fn folder_series(files: &[String]) -> HashMap<String, Vec<crate::image::SeriesInfo>> {
+fn folder_series(files: &[String]) -> HashMap<String, Vec<SeriesEntry>> {
     use rayon::prelude::*;
     let reg = plugins::registry::Registry::global();
     let containers: Vec<&String> = files
@@ -1603,11 +1603,44 @@ fn folder_series(files: &[String]) -> HashMap<String, Vec<crate::image::SeriesIn
     containers
         .par_iter()
         .filter_map(|f| {
-            let src = formats::open_pixels_with(Path::new(f.as_str()), 0, reg).ok()?.0;
+            let path = Path::new(f.as_str());
+            let src = formats::open_pixels_with(path, 0, reg).ok()?.0;
             let s = src.info().series.clone();
-            (s.len() > 1).then(|| ((*f).clone(), s))
+            if s.len() < 2 {
+                return None;
+            }
+            // Images whose data a cut-short container lacks open from the
+            // TIFF exported from them, when the plugin knows it.
+            let exports = match reg.stack(path, 0, None) {
+                Some(Ok(plan)) if plan.series_files.len() == s.len() => plan.series_files,
+                _ => vec![],
+            };
+            let entries = s
+                .into_iter()
+                .enumerate()
+                .map(|(i, info)| {
+                    let export = exports.get(i).filter(|e| e.len() == 1).and_then(|e| e.first());
+                    // Image 0 opened above; the others are tried only when an export exists.
+                    let fallback = export
+                        .filter(|_| i > 0 && formats::open_pixels_with(path, i, reg).is_err())
+                        .map(|p| p.to_string_lossy().into_owned());
+                    SeriesEntry { name: info.name, detail: info.detail, fallback }
+                })
+                .collect();
+            Some(((*f).clone(), entries))
         })
         .collect()
+}
+
+/// One image of a multi-image file, for the side panel.
+#[derive(Serialize)]
+struct SeriesEntry {
+    name: String,
+    detail: String,
+    /// The TIFF exported from this image, opened instead when the file
+    /// itself lacks the image's data (a project cut short).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback: Option<String>,
 }
 
 #[derive(Serialize)]

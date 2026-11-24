@@ -793,6 +793,9 @@ pub struct StackPlan {
     /// A file that holds this same image (image `.1` of it), better opened
     /// than the slices: the vendor container next to its exported TIFFs.
     pub open: Option<(PathBuf, usize)>,
+    /// The slices of every series, when the plugin lists them (parallel to
+    /// `series`): the files exported from each image of a container.
+    pub series_files: Vec<Vec<PathBuf>>,
 }
 
 #[derive(Deserialize)]
@@ -904,9 +907,15 @@ fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usiz
         series: vec![],
         series_index: 0,
         open,
+        series_files: vec![],
     };
     if !j.series.is_empty() && j.series_index < j.series.len() {
         plan.series_index = j.series_index;
+        plan.series_files = j
+            .series
+            .iter()
+            .map(|s| s.files.iter().filter(|f| known.contains(f.as_str())).map(|f| base.join(f)).collect())
+            .collect();
         plan.series = j
             .series
             .into_iter()
@@ -1088,6 +1097,36 @@ mod tests {
         if let Some(xml) = xml {
             let plan = reg.stack(&xml, 0, None).unwrap().unwrap();
             println!("MetaData stack: {} files, px {:?}, z {:?}, open {:?}", plan.files.len(), plan.pixel_size, plan.z_spacing, plan.open);
+        }
+    }
+
+    /// Every image of a real LIF: TMV_LIF (the file) and TMV_LASX_WASM.
+    /// `cargo test lif_every_series -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn lif_every_series() {
+        let (Ok(lif), Ok(wasm)) = (std::env::var("TMV_LIF"), std::env::var("TMV_LASX_WASM")) else { return };
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("lasx");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins/lasx");
+        for f in ["plugin.json", "index.js"] {
+            std::fs::copy(src.join(f), pkg.join(f)).unwrap();
+        }
+        std::fs::copy(&wasm, pkg.join("lasx.wasm")).unwrap();
+        let reg = Registry::new(Some(tmp.path().to_path_buf()), "0.7.335");
+        let path = PathBuf::from(lif);
+        let first = crate::formats::open_series_with(&path, 0, &reg).unwrap();
+        let series = first.info().series.clone();
+        for (i, s) in series.iter().enumerate() {
+            match crate::formats::open_series_with(&path, i, &reg) {
+                Ok(src) => {
+                    let inf = src.info();
+                    let page = src.read_page(inf.page_count.saturating_sub(1)).map(|_| "ok").unwrap_or("read failed");
+                    println!("{i} {} [{}] -> {}x{} c{} z{} pages {} last page {page}", s.name, s.detail, inf.width, inf.height, inf.size_c, inf.size_z, inf.page_count);
+                }
+                Err(e) => println!("{i} {} [{}] -> ERROR {e:#}", s.name, s.detail),
+            }
         }
     }
 
