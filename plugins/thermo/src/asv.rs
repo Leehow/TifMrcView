@@ -183,6 +183,7 @@ pub fn stack(listing: &[&str], series: u32) -> Result<Stack> {
                 name: r.dir.rsplit('/').next().unwrap_or(r.dir).to_string(),
                 detail: format!("{} 张 · {}", r.files.len(), r.pattern.replace('#', "N")),
                 dir: r.dir.to_string(),
+                files: r.files.iter().map(|f| f.to_string()).collect(),
             })
             .collect();
         out.series_index = i as u32;
