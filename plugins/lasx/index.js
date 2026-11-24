@@ -11,7 +11,7 @@
 TifMrcView.register({
   id: "lasx",
   name: "Leica LAS X",
-  version: "1.1.0",
+  version: "1.1.1",
   description: "打开徕卡 LAS X / LAS AF 保存的 LIF 项目和 LOF 文件，并显示物镜、扫描、探测器和激光等采集参数",
   activate() {},
 });

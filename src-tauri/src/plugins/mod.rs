@@ -5,12 +5,11 @@
 //! MP4 recorder, also have a Rust half implementing [`NativePlugin`]; the
 //! UI half reaches it through the `plugin_call` command.
 //!
-//! `ui/plugins/i18n.js` and the optional SSH browser are built in. Other plugins are installed as
-//! packages (see [`package`]) into `<plugin dir>/<id>/`; loose `.js` files in
-//! the plugin dir still load too. Both are served to the webview through the
-//! `tmvplugin://` scheme. The native halves are compiled in but stay dormant
-//! until a package with their id is installed. SSH is the explicit built-in
-//! exception; its connection state is created only when the user connects.
+//! Only `ui/plugins/i18n.js` is built in. Other plugins, SSH included, are
+//! installed as packages (see [`package`]) into `<plugin dir>/<id>/`; loose
+//! `.js` files in the plugin dir still load too. Both are served to the
+//! webview through the `tmvplugin://` scheme. The native halves are compiled
+//! in but stay dormant until a package with their id is installed.
 //!
 //! Packages can also carry a sandboxed WebAssembly module that opens new
 //! file formats or reads vendor metadata (see [`registry`] and

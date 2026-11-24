@@ -38,6 +38,17 @@ available; use them.
 - **While developing**, put `[skip ci]` in the commit messages of pushes
   that do not need the full matrix (it takes over an hour), and test on a
   local machine. Let CI run when a change is ready to merge.
+- **Local test builds** that are installed for the owner to try (in
+  /Applications, standard or Pro) carry the *next* release's version with a
+  `-local.N` suffix, e.g. `0.7.336-local.1` when 0.7.335 is the newest
+  release: newer than the release, so plugins' `minAppVersion` checks pass,
+  but older than the real 0.7.336, so the updater still offers it. Never
+  give a local build a plain number above the release (a local 0.7.344
+  hides every release up to 0.7.344). Build with
+  `TAURI_CONFIG='{"version":"<v>"}'` and `TMV_VERSION`/`TMV_APP_VERSION`
+  set to `<v>`; a plain `cargo build` reports the crate's 0.7.0. Several
+  threads may install into the same app: merge the other active branches
+  into the build, and keep one copy of each edition.
 - The private website repository has no Actions minutes: its workflows
   cannot start, so its pages are uploaded from a local machine instead
   (see that repository's CLAUDE.md).

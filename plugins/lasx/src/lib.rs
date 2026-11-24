@@ -117,28 +117,84 @@ fn container() -> Result<Container> {
     Ok(Container { kind: Kind::Lif, xml, blocks: end, lof_block: None })
 }
 
-/// (offset, size) of the memory block called `id` in a LIF file, found by
-/// walking the block headers (the data between them is skipped).
-fn find_block(c: &Container, version: u32, id: &str) -> Result<(u64, u64)> {
-    let want: Vec<u8> = id.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+/// One memory block of a LIF file: id, where its data starts, and its size
+/// as the header gives it (the data may run past the end of a cut-short file).
+struct Block {
+    id: String,
+    data: u64,
+    size: u64,
+}
+
+/// Every memory block, found by walking the block headers (the data between
+/// them is skipped). Stops at the end of the file, which in a file that was
+/// cut short (an interrupted scan, an incomplete copy) is inside a block.
+fn blocks(c: &Container, version: u32) -> Result<Vec<Block>> {
     // 0x70, length, 0x2A, size (u32 in version 1, u64 later), 0x2A, id length.
     let (hdr, size_len) = if version >= 2 { (22usize, 8usize) } else { (18, 4) };
     let fsize = file::size();
     let mut pos = c.blocks;
-    while pos + hdr as u64 <= fsize {
-        let b = file::read_at_most(pos, hdr + want.len())?;
+    let mut out = vec![];
+    while pos + hdr as u64 <= fsize && out.len() < 1_000_000 {
+        let b = file::read_at_most(pos, hdr)?;
         if b.len() < hdr || le_u32(&b, 0) != 0x70 || b[8] != 0x2A || b[9 + size_len] != 0x2A {
-            bail!("LIF 文件损坏：数据块头不对");
+            if out.is_empty() {
+                bail!("LIF 文件损坏：数据块头不对");
+            }
+            break;
         }
         let size = if size_len == 8 { le_u64(&b, 9) } else { le_u32(&b, 9) as u64 };
         let id_len = le_u32(&b, 10 + size_len) as u64 * 2;
+        let raw = file::read_at_most(pos + hdr as u64, id_len.min(512) as usize)?;
+        let id = String::from_utf8_lossy(&utf16_to_utf8(&raw)).into_owned();
         let data = pos + hdr as u64 + id_len;
-        if id_len == want.len() as u64 && b.len() >= hdr + want.len() && b[hdr..] == want[..] {
-            return Ok((data, size));
-        }
+        out.push(Block { id, data, size });
         pos = data.saturating_add(size);
     }
-    bail!("LIF 文件里找不到图像数据块 {id}")
+    Ok(out)
+}
+
+/// What is wrong with an image's pixel data, if anything: shown in the
+/// series picker so cut-short projects are not a mystery.
+fn data_state(blocks: &[Block], mem_id: &str, l: &Layout) -> Option<String> {
+    let fsize = file::size();
+    match blocks.iter().find(|b| b.id == mem_id) {
+        None => Some("数据不在文件里".into()),
+        Some(b) if b.data.saturating_add(b.size) > fsize => {
+            let n = complete_z(l, b.data, fsize);
+            Some(if n == 0 { "数据不完整".into() } else { format!("文件不完整，只有前 {n} 层") })
+        }
+        Some(_) => None,
+    }
+}
+
+/// How many Z planes of an image whose memory block starts at `start` are
+/// complete before `end` (all channels, every tile), when Z is the slowest
+/// axis; otherwise all or nothing.
+fn complete_z(l: &Layout, start: u64, end: u64) -> u64 {
+    let item = l.dtype.size() as u64;
+    let row = l.w as u64 * if l.interleaved { l.x_inc } else { item };
+    let plane = l.y_inc * (l.h as u64 - 1) + row;
+    let chan = if l.interleaved { 0 } else { l.chans.iter().map(|c| c.inc).max().unwrap_or(0) };
+    let tile = l.tile.as_ref().map_or(0, |d| d.inc * (d.n - 1));
+    let one = chan + tile + plane;
+    let avail = end.saturating_sub(start);
+    match &l.z {
+        Some(z) if l.size_t() == 1 && z.inc > 0 => {
+            if avail < one {
+                0
+            } else {
+                ((avail - one) / z.inc + 1).min(z.n)
+            }
+        }
+        _ => {
+            let total = l.size_z() * l.size_t();
+            if avail >= one && total <= 1 {
+                1
+            } else {
+                0
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ XML helpers
@@ -529,11 +585,33 @@ impl Lasx {
         let img = imgs.get(series).context("文件里没有这个图像")?;
         let layout = Layout::parse(img.data)?;
 
+        let blocks = if c.lof_block.is_some() { vec![] } else { blocks(&c, version)? };
         let (off, size) = match c.lof_block {
             Some(b) => b,
-            None => find_block(&c, version, &img.mem_id)?,
+            None => match blocks.iter().find(|b| b.id == img.mem_id) {
+                Some(b) => (b.data, b.size),
+                None => {
+                    // A project cut short: name the image the file ends in.
+                    let fsize = file::size();
+                    let cut = blocks
+                        .iter()
+                        .find(|b| b.data.saturating_add(b.size) > fsize)
+                        .and_then(|b| imgs.iter().find(|i| i.mem_id == b.id))
+                        .map(|i| format!("文件在「{}」中途就结束了（采集中断或拷贝不完整）。", i.path))
+                        .unwrap_or_default();
+                    bail!(
+                        "LIF 文件不完整：「{}」的像素数据不在文件里。{cut}同目录如有 LAS X 导出的这幅图的 TIFF，可以直接打开它。",
+                        img.path
+                    );
+                }
+            },
         };
         let mem = (off, off + size.min(file::size().saturating_sub(off)));
+        // A block cut short by the end of the file: only its complete planes.
+        let cut_z = (off.saturating_add(size) > file::size()).then(|| complete_z(&layout, off, mem.1));
+        if cut_z == Some(0) {
+            bail!("LIF 文件不完整：「{}」连一层完整的数据都没有（文件在这幅图中途结束）", img.path);
+        }
 
         let mut info =
             Info::new(layout.w, layout.h, layout.dtype, if c.kind == Kind::Lof { "Leica LOF" } else { "Leica LIF" });
@@ -543,6 +621,10 @@ impl Lasx {
             bail!("LIF 图像的平面数太多");
         }
         info.page_count = layout.pages() as u32;
+        if let Some(n) = cut_z.filter(|&n| n < layout.size_z() && layout.size_t() == 1) {
+            info.page_count = (layout.pages() / layout.size_z() * n) as u32;
+            info.size_z = n as u32;
+        }
         if layout.interleaved {
             info.size_c = layout.size_c() as u32;
             info.samples_per_page = layout.size_c() as u32;
@@ -586,8 +668,25 @@ impl Lasx {
         }
 
         info.metadata = groups(&c, &layout, img, hw.as_ref(), &tinfo, (w, h), (px, py, pz));
-        info.series =
-            imgs.iter().map(|i| Series { name: i.path.clone(), detail: Layout::parse(i.data).map_or_else(|e| e.0, |l| l.detail()) }).collect();
+        if let Some(n) = cut_z {
+            let mut g = Group::new("LIF 文件不完整");
+            g.add_str("说明", "文件在这幅图中途结束（采集中断或拷贝不完整），只显示完整的层");
+            g.add_str("完整的层", &format!("{n} / {}", layout.size_z()));
+            info.metadata.insert(0, g);
+        }
+        info.series = imgs
+            .iter()
+            .map(|i| {
+                let detail = match Layout::parse(i.data) {
+                    Ok(l) => match (c.lof_block.is_none()).then(|| data_state(&blocks, &i.mem_id, &l)).flatten() {
+                        Some(state) => format!("{} · {state}", l.detail()),
+                        None => l.detail(),
+                    },
+                    Err(e) => e.0,
+                };
+                Series { name: i.path.clone(), detail }
+            })
+            .collect();
         info.series_index = series as u32;
         Ok(Lasx { info, layout, mem, tiles })
     }

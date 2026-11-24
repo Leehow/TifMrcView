@@ -19,8 +19,8 @@
 // market page (always confirmed here first; see plugins/market.rs).
 
 const PLUGIN_API_VERSION = 1;
-const BUILTIN_PLUGINS = ["plugins/i18n.js", "plugins/ssh.js"];
-const BUILTIN_IDS = ["i18n", "ssh"];
+const BUILTIN_PLUGINS = ["plugins/i18n.js"];
+const BUILTIN_IDS = ["i18n"];
 
 const pluginHost = {
   plugins: new Map(), // id -> {def, source, pkg, active, error, cleanup, listeners}

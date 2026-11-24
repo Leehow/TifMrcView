@@ -115,8 +115,8 @@ pub async fn plugin_call(plugins: State<'_, Plugins>, request: tauri::ipc::Reque
         tauri::ipc::InvokeBody::Json(_) => vec![],
     };
     let plugin = plugins.native.get(id.as_str()).cloned().ok_or_else(|| format!("no native plugin {id}"))?;
-    // SSH is bundled with the host. Other native plugins require installation.
-    if id != "ssh" && !plugins.dir.as_deref().is_some_and(|d| package::is_installed(d, &id)) {
+    // Native plugins (SSH included) run only for an installed package.
+    if !plugins.dir.as_deref().is_some_and(|d| package::is_installed(d, &id)) {
         return Err(format!("插件 {id} 没有安装，请先在插件市场下载安装"));
     }
     tauri::async_runtime::spawn_blocking(move || plugin.call(&method, args, &body))
