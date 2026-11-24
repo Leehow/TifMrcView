@@ -1062,13 +1062,13 @@ mod tests {
             std::fs::copy(src.join(f), pkg.join(f)).unwrap();
         }
         std::fs::copy(&wasm, pkg.join("lasx.wasm")).unwrap();
-        let empty = Registry::new(Some(tmp.path().join("none")), "0.7.0");
+        let empty = Registry::new(Some(tmp.path().join("none")), "0.7.334");
         let mut tifs: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "tif")).collect();
         tifs.sort();
         let tif = &tifs[tifs.len() / 2];
         println!("without plugin: {:?}", empty.companion(tif));
         assert!(matches!(empty.companion(tif), Some(Companion::Plugin { action: "install", .. })));
-        let reg = Registry::new(Some(tmp.path().to_path_buf()), "0.7.0");
+        let reg = Registry::new(Some(tmp.path().to_path_buf()), "0.7.334");
         let c = reg.companion(tif);
         match &c {
             Some(Companion::Open { path, series, title, matched, files, .. }) => {
