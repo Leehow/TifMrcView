@@ -166,23 +166,31 @@ fn glob_match(pat: &str, s: &str) -> bool {
     rest.len() >= last.len() && rest.ends_with(last)
 }
 
+/// `stacks` of plugin.json. Names this app does not understand (written for
+/// a newer app) are left out with a warning instead of failing the whole
+/// plugin: its images still open, only that project file is not read.
 fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
     let Some(v) = v else { return Ok(vec![]) };
     let mut out = vec![];
-    for d in v.as_array().ok_or_else(|| anyhow!("stacks 必须是列表"))? {
-        let files = d.get("files").and_then(Value::as_array).ok_or_else(|| anyhow!("stacks 的 files 必须是文件名列表"))?;
+    let Some(list) = v.as_array() else {
+        eprintln!("plugin.json: stacks 不是列表，已忽略");
+        return Ok(out);
+    };
+    for d in list {
+        let files = d.get("files").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
         let mut names = vec![];
         for f in files {
             let f = f.as_str().unwrap_or("");
             let (sub, name) = f.split_once('/').unwrap_or(("", f));
             let bad_sub = f.contains('/') && (sub.is_empty() || sub.contains('*') || sub.chars().all(|c| c == '.'));
             if f.is_empty() || f.len() > 64 || name.contains(['/', '\\']) || sub.contains('\\') || bad_sub || name.chars().all(|c| c == '*' || c == '.') {
-                bail!("stacks 里的文件名不对：{f}");
+                eprintln!("plugin.json: stacks 里的文件名 {f:?} 这个版本不认识，已忽略");
+                continue;
             }
             names.push(f.to_string());
         }
         if names.is_empty() {
-            bail!("stacks 至少要有一个文件名");
+            continue;
         }
         let name = d.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         out.push(StackDecl { files: names, name });
@@ -693,9 +701,13 @@ mod tests {
         assert_eq!(d.priority("", "p.lif"), Some(0));
         assert_eq!(d.priority("MetaData", "a.xml"), Some(1));
         assert_eq!(d.subfolders().collect::<Vec<_>>(), ["MetaData"]);
+        // Names this app cannot read are skipped; the plugin still loads.
         for bad in [r#"[{"files":[]}]"#, r#"[{"files":["a/b/c.dat"]}]"#, r#"[{"files":["../b.dat"]}]"#, r#"[{"files":["*/b.dat"]}]"#, r#"[{"files":["/b.dat"]}]"#, r#"[{"files":["*"]}]"#, r#"{"files":["a"]}"#] {
-            assert!(parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).is_err(), "{bad}");
+            let m = parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).unwrap();
+            assert!(m.stacks.is_empty(), "{bad}");
         }
+        let m = parse(r#""wasm":"v.wasm","stacks":[{"files":["../b.dat","ok.dat"]}]"#).unwrap();
+        assert_eq!(m.stacks[0].files, ["ok.dat"]);
         assert!(glob_match("a*b*c", "aXbYc") && glob_match("a*", "a") && !glob_match("a*b", "ab_") && glob_match("*.tif", ".tif"));
     }
 
