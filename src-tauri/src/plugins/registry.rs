@@ -1116,6 +1116,10 @@ mod tests {
         std::fs::copy(&wasm, pkg.join("lasx.wasm")).unwrap();
         let reg = Registry::new(Some(tmp.path().to_path_buf()), "0.7.335");
         let path = PathBuf::from(lif);
+        if let Some(Ok(plan)) = reg.stack(&path, 0, None) {
+            let exported: Vec<usize> = plan.series_files.iter().map(Vec::len).collect();
+            println!("exports per image: {exported:?}");
+        }
         let first = crate::formats::open_series_with(&path, 0, &reg).unwrap();
         let series = first.info().series.clone();
         for (i, s) in series.iter().enumerate() {
