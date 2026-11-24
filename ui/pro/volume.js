@@ -526,6 +526,7 @@ void main() { outColor = vec4(1.0); }`;
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, table);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      this.lutTable = table;
       this.draw();
     }
 
@@ -546,6 +547,7 @@ void main() { outColor = vec4(1.0); }`;
       for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
       this.hasLabels = !!ok;
       this.labDims = ok ? [lab.w, lab.h, lab.d] : null;
+      this.labData = ok ? lab.data : null; // for picking points (pick)
       this.draw();
     }
 
@@ -565,6 +567,11 @@ void main() { outColor = vec4(1.0); }`;
     }
 
     render(fast) {
+      this.renderScene(fast);
+      if (this.onRender) this.onRender();
+    }
+
+    renderScene(fast) {
       const gl = this.gl, c = this.canvas;
       const dpr = window.devicePixelRatio || 1;
       const scale = fast ? 0.5 : 1;
@@ -803,6 +810,134 @@ void main() { outColor = vec4(1.0); }`;
       return [thr, upp];
     }
 
+    /// The camera in CSS pixels of the canvas: view-projection and the part
+    /// of the canvas the scene is drawn in (left edge x0, width w, height h).
+    cssCamera() {
+      const c = this.canvas, x0 = freeRect().x0;
+      const w = Math.max(1, c.clientWidth - x0 - this.rightInset()), h = Math.max(1, c.clientHeight);
+      return { vp: this.camera(w / h).vp, x0, w, h };
+    }
+
+    /// A point of the image [x, y, z] (x, y in pixels, slice i at z = i) in the scene's box.
+    toWorld(q) {
+      const e = this.extent(), i = S.info;
+      const f = [q[0] / i.width, q[1] / i.height, (q[2] + 0.5) / i.sizeZ];
+      return [(f[0] - 0.5) * 2 * e[0], (0.5 - f[1]) * 2 * e[1], (f[2] - 0.5) * 2 * e[2]];
+    }
+
+    /// CSS pixel of a scene point, or null behind the camera.
+    project(p, cam) {
+      const m = cam.vp;
+      const r = [0, 1, 2, 3].map((i) => m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]);
+      if (r[3] <= 1e-6) return null;
+      return [cam.x0 + ((r[0] / r[3] + 1) / 2) * cam.w, ((1 - r[1] / r[3]) / 2) * cam.h];
+    }
+
+    /// The image point [x, y, z] shown under CSS pixel (cx, cy), or null:
+    /// along the ray, the first voxel over the surface level (surface mode),
+    /// the brightest one (maximum intensity), where the blend becomes half
+    /// opaque (translucent), or the first label / the slice (segmentation surfaces).
+    pick(cx, cy) {
+      const v = this.vol, s = this.settings, i = S.info;
+      if (!v || !i) return null;
+      const cam = this.cssCamera();
+      const nx = ((cx - cam.x0) / cam.w) * 2 - 1, ny = 1 - (cy / cam.h) * 2;
+      if (Math.abs(nx) > 1 || Math.abs(ny) > 1) return null;
+      const inv = invert(cam.vp);
+      const un = (z) => {
+        const r = [0, 1, 2, 3].map((k) => inv[k] * nx + inv[4 + k] * ny + inv[8 + k] * z + inv[12 + k]);
+        return [r[0] / r[3], r[1] / r[3], r[2] / r[3]];
+      };
+      const ro = un(-1), far = un(1);
+      const len = Math.hypot(far[0] - ro[0], far[1] - ro[1], far[2] - ro[2]);
+      const rd = far.map((x, k) => (x - ro[k]) / len);
+      const e = this.extent();
+      let tn = 0, tf = Infinity;
+      for (let k = 0; k < 3; k++) {
+        const a = (-e[k] - ro[k]) / rd[k], b = (e[k] - ro[k]) / rd[k];
+        tn = Math.max(tn, Math.min(a, b));
+        tf = Math.min(tf, Math.max(a, b));
+      }
+      if (!(tf > tn)) return null;
+      const toTex = (p) => [p[0] / e[0] * 0.5 + 0.5, 0.5 - p[1] / e[1] * 0.5, p[2] / e[2] * 0.5 + 0.5];
+      const out = (t) => [t[0] * i.width, t[1] * i.height, t[2] * i.sizeZ - 0.5];
+      const at = (tt) => toTex(ro.map((x, k) => x + rd[k] * tt));
+      // Segmentation surfaces: the first shown label, else the XY slice under them.
+      const labelAt = (t) => {
+        if (!this.labData || !this.hasLabels) return 0;
+        const [w, h, d] = this.labDims;
+        const x = Math.min(w - 1, Math.floor(t[0] * w)), y = Math.min(h - 1, Math.floor(t[1] * h)), z = Math.min(d - 1, Math.floor(t[2] * d));
+        const l = this.labData[(z * h + y) * w + x];
+        return l && (!this.lutTable || this.lutTable[l * 4 + 3] > 127) ? l : 0;
+      };
+      const steps = Math.min(4096, Math.round(2 * Math.max(v.w, v.h, v.d)));
+      const dt = (tf - tn) / steps;
+      if (s.mode === 3) {
+        for (let k = 0; k < steps; k++) {
+          const t = at(tn + (k + 0.5) * dt);
+          if (labelAt(t)) return out(t);
+        }
+        if (!s.showSlice) return null;
+        const zw = (s.slice - 0.5) * 2 * e[2];
+        const tt = (zw - ro[2]) / rd[2];
+        if (!(tt >= tn && tt <= tf)) return null;
+        return out(at(tt));
+      }
+      // Values as the ray marcher sees them; smoothing is stood in for by a box average.
+      const r = s.smooth > 0 ? Math.round(s.smooth) : 0;
+      const value = (c, t) => {
+        const data = v.chans[c].data;
+        const fx = t[0] * v.w - 0.5, fy = t[1] * v.h - 0.5, fz = t[2] * v.d - 0.5;
+        let raw;
+        if (r > 0) {
+          const X = Math.round(fx), Y = Math.round(fy), Z = Math.round(fz);
+          let sum = 0, n = 0;
+          for (let z = Math.max(0, Z - r); z <= Math.min(v.d - 1, Z + r); z++)
+            for (let y = Math.max(0, Y - r); y <= Math.min(v.h - 1, Y + r); y++)
+              for (let x = Math.max(0, X - r); x <= Math.min(v.w - 1, X + r); x++) { sum += data[(z * v.h + y) * v.w + x]; n++; }
+          raw = n ? sum / n : 0;
+        } else {
+          const x0 = Math.max(0, Math.min(v.w - 1, Math.floor(fx))), y0 = Math.max(0, Math.min(v.h - 1, Math.floor(fy))), z0 = Math.max(0, Math.min(v.d - 1, Math.floor(fz)));
+          const x1 = Math.min(v.w - 1, x0 + 1), y1 = Math.min(v.h - 1, y0 + 1), z1 = Math.min(v.d - 1, z0 + 1);
+          const ax = Math.max(0, Math.min(1, fx - x0)), ay = Math.max(0, Math.min(1, fy - y0)), az = Math.max(0, Math.min(1, fz - z0));
+          const g = (x, y, z) => data[(z * v.h + y) * v.w + x];
+          const lx = (y, z) => g(x0, y, z) * (1 - ax) + g(x1, y, z) * ax;
+          const ly = (z) => lx(y0, z) * (1 - ay) + lx(y1, z) * ay;
+          raw = ly(z0) * (1 - az) + ly(z1) * az;
+        }
+        const k = Math.max(0, Math.min(1, (raw / 255 - this.remap[c * 2]) * this.remap[c * 2 + 1]));
+        return s.invert ? 1 - k : k;
+      };
+      const [lo, hi] = s.levels[s.mode];
+      const [thr, upp] = this.levelsPerChannel(lo, hi);
+      const nch = Math.min(v.chans.length, MAX_CHANNELS);
+      const showLabels = this.hasLabels && s.showLabels && s.mode !== 1;
+      let best = null, bestScore = 0, alpha = 0;
+      for (let k = 0; k < steps; k++) {
+        const t = at(tn + (k + 0.5) * dt);
+        if (showLabels && labelAt(t)) return out(t);
+        if (s.mode === 2) {
+          for (let c = 0; c < nch; c++) if (value(c, t) > thr[c]) return out(t);
+        } else if (s.mode === 0) {
+          for (let c = 0; c < nch; c++) {
+            const score = (value(c, t) - thr[c]) / Math.max(upp[c] - thr[c], 1e-3);
+            if (score > bestScore) { bestScore = score; best = t; }
+          }
+        } else {
+          let a1 = 0;
+          for (let c = 0; c < nch; c++) {
+            const x = Math.max(0, Math.min(1, (value(c, t) - thr[c]) / Math.max(upp[c] - thr[c], 1e-3)));
+            a1 = Math.max(a1, x * x * (3 - 2 * x));
+          }
+          a1 = 1 - Math.pow(1 - Math.max(0, Math.min(1, a1 * s.opacity)), dt * 200);
+          alpha += (1 - alpha) * a1;
+          if (a1 > bestScore) { bestScore = a1; best = t; }
+          if (alpha >= 0.5) return out(t);
+        }
+      }
+      return best ? out(best) : null;
+    }
+
     /// Moves the view by (dx, dy) CSS pixels, so the volume follows the pointer.
     panBy(dx, dy) {
       const z = [Math.cos(this.pitch) * Math.sin(this.yaw), Math.sin(this.pitch), Math.cos(this.pitch) * Math.cos(this.yaw)];
@@ -841,6 +976,11 @@ void main() { outColor = vec4(1.0); }`;
   canvas3d.id = "vol3d";
   canvas3d.hidden = true;
   stage.appendChild(canvas3d);
+  // Axes with ticks and the measurements, drawn over the 3D picture.
+  const over = document.createElement("canvas");
+  over.id = "vol3d-over";
+  over.hidden = true;
+  stage.appendChild(over);
 
   const panel = document.createElement("div");
   panel.id = "vol-panel";
@@ -892,6 +1032,10 @@ void main() { outColor = vec4(1.0); }`;
       <label class="vp-check"><input type="checkbox" id="vp-lab" checked> 显示标签</label>
       <label>标签不透明度 <input type="range" id="vp-lab-op" min="0.05" max="1" step="0.01" value="0.7"></label>
     </div>
+    <div class="vp-row vp-pre">
+      <label class="vp-check" title="在体外框上标出长、宽、高的刻度（物理单位）"><input type="checkbox" id="vp-axes" checked> 标尺</label>
+    </div>
+    <div class="vp-hint" id="vp-measure-hint" hidden>测距：在结构上点起点，再点终点。点在表面或最亮的地方；Esc 取消。</div>
     <div class="vp-row">
       <button id="vp-reset">复位视角</button>
       <button id="vp-reload" title="按 2D 视图当前的通道和对比度重新读取">刷新</button>
@@ -1355,6 +1499,10 @@ void main() { outColor = vec4(1.0); }`;
     }
     canvas3d.hidden = false;
     panel.hidden = false;
+    over.hidden = false;
+    // The 2D tools panel and the X / Y / Z sliders do nothing in 3D.
+    document.body.classList.add("vol3d-on");
+    view.onRender = drawOverlay;
     btn.classList.add("on");
     syncRows();
     view.draw();
@@ -1371,6 +1519,10 @@ void main() { outColor = vec4(1.0); }`;
     $("vp-obj").hidden = true;
     canvas3d.hidden = true;
     panel.hidden = true;
+    over.hidden = true;
+    document.body.classList.remove("vol3d-on");
+    pending = null;
+    hover = null;
     btn.classList.remove("on");
     if (view) view.dispose();
     shownToken = 0;
@@ -1401,7 +1553,11 @@ void main() { outColor = vec4(1.0); }`;
   canvas3d.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas3d.addEventListener("auxclick", (e) => e.preventDefault());
   canvas3d.addEventListener("pointermove", (e) => {
-    if (!drag) return;
+    if (!drag) {
+      canvas3d.style.cursor = S.tool === "measure" ? "crosshair" : "";
+      if (pending) hoverAt(e);
+      return;
+    }
     if (drag.pan) {
       view.panBy(e.clientX - drag.x, e.clientY - drag.y);
       drag.x = e.clientX;
@@ -1416,7 +1572,10 @@ void main() { outColor = vec4(1.0); }`;
   // A click without dragging picks an object of the segmentation surfaces.
   canvas3d.addEventListener("pointerup", (e) => {
     const click = drag && !drag.pan && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 4;
-    if (click && view.settings.mode === 3 && surfaces) {
+    if (click && S.tool === "measure") {
+      const r = canvas3d.getBoundingClientRect();
+      measureClick(e.clientX - r.left, e.clientY - r.top);
+    } else if (click && view.settings.mode === 3 && surfaces) {
       const r = canvas3d.getBoundingClientRect();
       showObject(view.pickAt(e.clientX - r.left, e.clientY - r.top));
     }
@@ -1490,6 +1649,211 @@ void main() { outColor = vec4(1.0); }`;
   });
   $("vp-reset").addEventListener("click", () => view && view.resetView());
   $("vp-reload").addEventListener("click", load);
+
+  // --- axes with physical ticks, and the ruler (the 2D measure tool) in 3D ---
+  let pending = null; // first end of a measurement being made, [x, y, z]
+  let hover = null; // where the second end would go
+
+  /// Step of about n ticks over `len`: 1, 2 or 5 times a power of ten.
+  function niceStep(len, n = 5) {
+    const raw = len / n, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
+    return p * (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10);
+  }
+
+  /// Length of the image along x, y and z with the unit shown on the axes.
+  function axisLengths() {
+    const i = S.info;
+    if (!S.px || !UNIT_M[S.px.unit]) return { len: [i.width, i.height, i.sizeZ], unit: "px", zUnit: "层" };
+    const m = UNIT_M[S.px.unit];
+    const meters = [i.width * S.px.x * m, i.height * (S.axis === "xy" ? S.px.y : S.px.x) * m, i.sizeZ * zStep() * m];
+    const unit = lengthUnit(Math.max(...meters));
+    return { len: meters.map((x) => x / UNIT_M[unit]), unit, zUnit: unit };
+  }
+
+  function drawOverlay() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas3d.clientWidth, h = canvas3d.clientHeight;
+    if (over.width !== Math.round(w * dpr) || over.height !== Math.round(h * dpr)) {
+      over.width = Math.round(w * dpr);
+      over.height = Math.round(h * dpr);
+    }
+    const g = over.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, over.width, over.height);
+    $("vp-measure-hint").hidden = S.tool !== "measure";
+    if (!view || !view.vol || !S.info || canvas3d.hidden) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cam = view.cssCamera();
+    const light = view.settings.mode === 3 && !view.settings.fig;
+    if ($("vp-axes").checked && !view.settings.fig) drawAxes(g, cam, light);
+    drawMeasures(g, cam, light);
+  }
+
+  function drawAxes(g, cam, light) {
+    const e = view.extent();
+    const P = (p) => view.project(p, cam);
+    const corners = [];
+    for (let k = 0; k < 8; k++) corners.push([k & 1 ? e[0] : -e[0], k & 2 ? e[1] : -e[1], k & 4 ? e[2] : -e[2]]);
+    const pts = corners.map(P);
+    if (pts.some((p) => !p)) return;
+    const ink = light ? "rgba(40,44,52,.75)" : "rgba(255,255,255,.6)";
+    const text = light ? "#1f2328" : "#fff";
+    g.save();
+    g.lineWidth = 1;
+    g.strokeStyle = ink;
+    g.beginPath();
+    for (let a = 0; a < 8; a++) for (const bit of [1, 2, 4]) {
+      if (a & bit) continue;
+      g.moveTo(...pts[a]);
+      g.lineTo(...pts[a | bit]);
+    }
+    g.stroke();
+    const cx = pts.reduce((s, p) => s + p[0], 0) / 8, cy = pts.reduce((s, p) => s + p[1], 0) / 8;
+    const { len, unit, zUnit } = axisLengths();
+    const names = ["X", "Y", "Z"];
+    g.font = "11px -apple-system, system-ui, sans-serif";
+    g.fillStyle = text;
+    for (let ax = 0; ax < 3; ax++) {
+      // Of the four edges along this axis, the one lowest on screen (for Y, the leftmost).
+      const others = [0, 1, 2].filter((k) => k !== ax);
+      let best = null;
+      for (const sa of [-1, 1]) for (const sb of [-1, 1]) {
+        const at = (f) => { const p = [0, 0, 0]; p[ax] = f; p[others[0]] = sa * e[others[0]]; p[others[1]] = sb * e[others[1]]; return p; };
+        const a = P(at(-e[ax])), b = P(at(e[ax]));
+        if (!a || !b) continue;
+        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const score = ax === 1 ? -mid[0] : mid[1];
+        if (!best || score > best.score) best = { score, at, mid };
+      }
+      if (!best) continue;
+      let ox = best.mid[0] - cx, oy = best.mid[1] - cy;
+      const ol = Math.hypot(ox, oy) || 1;
+      ox /= ol; oy /= ol;
+      // About one tick per 70 screen pixels, at least two.
+      const a0 = P(best.at(-e[ax])), a1 = P(best.at(e[ax]));
+      const span = Math.hypot(a1[0] - a0[0], a1[1] - a0[1]);
+      const step = niceStep(len[ax], Math.max(1.5, Math.min(8, span / 70)));
+      // Fraction along the image axis -> scene coordinate (image y runs downwards).
+      const world = (f) => (ax === 1 ? (0.5 - f) : (f - 0.5)) * 2 * e[ax];
+      const digits = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+      // The axis name sits outside the middle of the edge; tick labels next to it give way.
+      const tip = [best.mid[0] + ox * 34, best.mid[1] + oy * 30];
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      for (let val = 0; val <= len[ax] + step * 1e-6; val += step) {
+        const p = P(best.at(world(val / len[ax])));
+        if (!p) continue;
+        g.beginPath();
+        g.moveTo(p[0], p[1]);
+        g.lineTo(p[0] + ox * 5, p[1] + oy * 5);
+        g.stroke();
+        const lx = p[0] + ox * 16, ly = p[1] + oy * 14;
+        if (Math.hypot(lx - tip[0], ly - tip[1]) > 30) g.fillText(val.toFixed(digits), lx, ly);
+      }
+      g.font = "600 12px -apple-system, system-ui, sans-serif";
+      g.fillText(`${names[ax]} (${ax === 2 ? zUnit : unit})`, tip[0], tip[1]);
+      g.font = "11px -apple-system, system-ui, sans-serif";
+    }
+    g.restore();
+  }
+
+  /// Every measurement of the image: drawn in 2D, XZ / YZ or here.
+  function drawMeasures(g, cam, light) {
+    if (!S.annShow) return;
+    const items = S.ann.filter((a) => a.type === "line" && a.pts && a.pts.length >= 2);
+    const ends = (a) => a.p3 || [[...a.pts[0], a.z ?? 0], [...a.pts[a.pts.length - 1], a.z ?? 0]];
+    g.save();
+    g.lineCap = "round";
+    g.font = "600 12px -apple-system, system-ui, sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "bottom";
+    const line = (p3, color, label) => {
+      const [a, b] = p3.map((q) => view.project(view.toWorld(q), cam));
+      if (!a || !b) return;
+      g.strokeStyle = color;
+      g.fillStyle = color;
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(...a);
+      g.lineTo(...b);
+      g.stroke();
+      for (const p of [a, b]) { g.beginPath(); g.arc(p[0], p[1], 3.5, 0, Math.PI * 2); g.fill(); }
+      if (!label) return;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 - 6;
+      const tw = g.measureText(label).width;
+      g.fillStyle = light ? "rgba(255,255,255,.85)" : "rgba(31,35,40,.85)";
+      g.beginPath();
+      g.roundRect(mx - tw / 2 - 6, my - 15, tw + 12, 19, 5);
+      g.fill();
+      g.fillStyle = light ? "#1f2328" : "#fff";
+      g.fillText(label, mx, my);
+    };
+    for (const a of items) line(ends(a), a.color || "#ffb020", annLength(a).text.split("  (")[0]);
+    if (pending) {
+      const color = $("ann-color").value;
+      if (hover) line([pending, hover], color, lineLength3(pending, hover).text.split("  (")[0]);
+      else {
+        const p = view.project(view.toWorld(pending), cam);
+        if (p) { g.fillStyle = color; g.beginPath(); g.arc(p[0], p[1], 4, 0, Math.PI * 2); g.fill(); }
+      }
+    }
+    g.restore();
+  }
+
+  function measureClick(x, y) {
+    const q = view.pick(x, y);
+    if (!q) {
+      status("这里没有碰到结构：点在看得见的表面或亮处上");
+      return;
+    }
+    if (!pending) {
+      pending = q;
+      hover = null;
+      status("再点终点");
+      drawOverlay();
+      return;
+    }
+    const snap = snapshot();
+    const a = setLineEnds({ type: "line", color: $("ann-color").value, width: +$("ann-width").value }, [pending, q]);
+    pending = null;
+    hover = null;
+    pushHistory(snap);
+    toggleAnn(true);
+    S.ann.push(a);
+    S.lastDrawn = a;
+    status(`测距 ${annLength(a).text}`);
+    annChanged();
+    drawOverlay();
+  }
+
+  let hoverFrame = 0;
+  function hoverAt(e) {
+    const r = canvas3d.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (hoverFrame) cancelAnimationFrame(hoverFrame);
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (!pending || !view) return;
+      hover = view.pick(x, y);
+      drawOverlay();
+    });
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && pending && !canvas3d.hidden) {
+      pending = null;
+      hover = null;
+      status("");
+      drawOverlay();
+    }
+  });
+  window.addEventListener("tmv-annotations", () => { if (view && !canvas3d.hidden) drawOverlay(); });
+  $("vp-axes").addEventListener("change", () => drawOverlay());
+  // Picking another tool shows or hides the hint, and drops a half-made measurement.
+  $("toolbtns").addEventListener("click", () => setTimeout(() => {
+    if (S.tool !== "measure") { pending = null; hover = null; }
+    if (view && !canvas3d.hidden) drawOverlay();
+  }));
 
   // Labels changed in 2D: refresh them in the open 3D view.
   let labelTimer = 0;

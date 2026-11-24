@@ -48,6 +48,62 @@
     if (kind === "xz") return ["x", "z"];
     return ["y", "z"];
   }
+  // A point [x, y, z] of a measurement (x, y in pixels, slice i at z = i)
+  // in a pane's (u, v), and how far it is along the pane's normal, in the
+  // units of that pane's slice index.
+  function uvOf(kind, q) {
+    return kind === "xy" ? [q[0], q[1]] : kind === "xz" ? [q[0], q[2] + 0.5] : [q[1], q[2] + 0.5];
+  }
+  function depthOf(kind, q) {
+    return kind === "xy" ? q[2] : kind === "xz" ? q[1] - 0.5 : q[0] - 0.5;
+  }
+  function sliceOf(kind) {
+    return kind === "xy" ? S.xyz.z : kind === "xz" ? S.xyz.y : S.xyz.x;
+  }
+  // The point in the volume under pane (u, v) on the shown slice.
+  function pointOf(kind, u, v) {
+    if (kind === "xy") return [u, v, S.xyz.z];
+    if (kind === "xz") return [u, S.xyz.y + 0.5, v - 0.5];
+    return [S.xyz.x + 0.5, u, v - 0.5];
+  }
+  function inPlane(kind, a) {
+    const k = sliceOf(kind);
+    return a.p3.every((q) => Math.abs(depthOf(kind, q) - k) <= 0.5);
+  }
+  // A measurement with 3D ends in this pane: drawn whole when it lies in the
+  // shown slice, otherwise a dot where it passes through it.
+  function drawLine3(ctx, a, kind, map) {
+    if (inPlane(kind, a)) {
+      drawAnnotations(ctx, map, 1, [{ ...a, pts: a.p3.map((q) => uvOf(kind, q)) }]);
+      return;
+    }
+    const k = sliceOf(kind);
+    const [d0, d1] = a.p3.map((q) => depthOf(kind, q) - k);
+    if (d0 * d1 > 0 || d0 === d1) return;
+    const t = d0 / (d0 - d1);
+    const q = a.p3[0].map((v, i) => v + t * (a.p3[1][i] - v));
+    const [x, y] = map(...uvOf(kind, q));
+    ctx.save();
+    ctx.fillStyle = a.color || COL.z;
+    ctx.beginPath();
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  // The end of a shown 3D measurement under screen point (sx, sy) in this pane.
+  function endAt(kind, sx, sy) {
+    const g = geom(kind);
+    for (let i = S.ann.length - 1; i >= 0; i--) {
+      const a = S.ann[i];
+      if (!a.p3 || !inPlane(kind, a)) continue;
+      for (let j = 0; j < 2; j++) {
+        const [x, y] = g.map(...uvOf(kind, a.p3[j]));
+        if (Math.hypot(x - sx, y - sy) < HIT * 1.6) return { a, j };
+      }
+    }
+    return null;
+  }
+
   // Screen pixels per voxel at zoom 1, so every pane fits.
   function baseStep() {
     const L = layout();
@@ -418,6 +474,7 @@
   function marks() {
     const list = S.annShow ? S.ann.filter((a) => a && a.type !== "crop") : [];
     if (S.op && S.op.kind === "draw" && S.op.item) list.push(S.op.item);
+    if (drag && drag.kind === "measure" && drag.fresh && drag.moved) list.push(drag.item);
     return list;
   }
   function drawModelOn(ctx, kind, map) {
@@ -475,14 +532,16 @@
         ctx.imageSmoothingEnabled = g.su < 1;
         ctx.drawImage(im.canvas, sx, sy, im.region[2] * g.su, im.region[3] * g.sv);
       }
+      const all = marks();
       if (kind === "xy") {
-        const items = marks().filter((a) => onSlice(a, S.xyz.z));
+        const items = all.filter((a) => !a.p3 && onSlice(a, S.xyz.z));
         drawAnnotations(ctx, g.map, 1, items);
         drawModel(ctx, (x, y) => g.map(x + 0.5, y + 0.5), g.su, 1, S.xyz.z);
       } else {
-        for (const a of marks()) drawCut(ctx, a, kind, g.map);
+        for (const a of all) if (!a.p3) drawCut(ctx, a, kind, g.map);
         drawModelOn(ctx, kind, g.map);
       }
+      for (const a of all) if (a.p3) drawLine3(ctx, a, kind, g.map);
       ctx.restore();
       ctx.save();
       ctx.strokeStyle = kind === "xy" ? COL.z : kind === "xz" ? COL.y : COL.x;
@@ -607,6 +666,22 @@
         if (e.button === 2) return false;
         const pane = paneAt(sx, sy);
         if (!pane) return false;
+        // The ruler measures in every slice pane, before the crosshair lines
+        // (which run right through the point being looked at) can take the press.
+        if (e.button === 0 && S.tool === "measure" && (pane === "xz" || pane === "yz")) {
+          const g = geom(pane);
+          const hit = endAt(pane, sx, sy);
+          const snap = snapshot();
+          if (hit) drag = { kind: "measure", pane, item: hit.a, i: hit.j, snap, cx: e.clientX, cy: e.clientY, moved: false };
+          else {
+            const q = pointOf(pane, ...g.unmap(sx, sy));
+            const item = setLineEnds({ type: "line", color: $("ann-color").value, width: +$("ann-width").value }, [q, q.slice()]);
+            drag = { kind: "measure", pane, item, i: 1, snap, fresh: true, cx: e.clientX, cy: e.clientY, moved: false };
+          }
+          canvas.setPointerCapture?.(e.pointerId);
+          return true;
+        }
+        if (pane === "xy" && e.button === 0 && DRAW.has(S.tool)) return false;
         const axis = lineAt(sx, sy);
         if (axis) {
           drag = { kind: "line", axis };
@@ -623,6 +698,20 @@
         if (!drag) return false;
         if (drag.kind === "line") {
           setFromPointer(drag.axis, sx, sy);
+          return true;
+        }
+        if (drag.kind === "measure") {
+          if (Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 3) drag.moved = true;
+          if (!drag.moved) return true;
+          const [nu, nv] = dims(drag.pane);
+          let [u, v] = geom(drag.pane).unmap(sx, sy);
+          u = clamp(u, 0, nu);
+          v = clamp(v, 0.5, nv - 0.5);
+          const ends = drag.item.p3.map((q) => q.slice());
+          ends[drag.i] = pointOf(drag.pane, u, v);
+          setLineEnds(drag.item, ends);
+          showSize(drag.item);
+          paint();
           return true;
         }
         if (Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 4) drag.moved = true;
@@ -646,6 +735,25 @@
       if (!drag) return false;
       const d = drag;
       drag = null;
+      if (d.kind === "measure") {
+        if (d.moved) {
+          pushHistory(d.snap);
+          if (d.fresh) {
+            toggleAnn(true);
+            S.ann.push(d.item);
+            S.lastDrawn = d.item;
+          }
+          showSize(d.item);
+          annChanged();
+        } else if (d.fresh) {
+          // A click without dragging still moves the crosshair there.
+          const [u, v] = geom(d.pane).unmap(sx, sy);
+          if (d.pane === "xz") setPoint({ x: u, z: v });
+          else setPoint({ y: u, z: v });
+        }
+        paint();
+        return true;
+      }
       if (d.kind === "nav" && !d.moved) {
         const g = geom(d.pane);
         const [u, v] = g.unmap(sx, sy);

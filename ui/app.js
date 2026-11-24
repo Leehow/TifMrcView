@@ -1272,7 +1272,8 @@ function freeRect() {
   const r = canvas.getBoundingClientRect();
   const panel = $("tools");
   let x0 = 0;
-  if (!panel.hidden) {
+  // Pro's 3D view hides the panel with CSS while it is open.
+  if (!panel.hidden && panel.getClientRects().length) {
     const inset = Math.max(0, panel.getBoundingClientRect().right - r.left + 10);
     if (r.width - inset >= 200) x0 = inset;
   }
@@ -1371,6 +1372,55 @@ function lineLength(a, b) {
   return { px, text: `${fmtLength(m)}  (${fmt(+px.toFixed(1))} px)` };
 }
 
+/** Distance between Z slices in the pixel unit; X's pixel size when the file gives none. */
+function zStep() {
+  return S.pz > 0 ? S.pz : S.px ? S.px.x : 1;
+}
+
+/**
+ * Length of a line through the stack. Points are [x, y, z] with x and y in
+ * image pixels and z in slices (slice i at z = i), as in `a.p3`.
+ */
+function lineLength3(a, b) {
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const px = Math.hypot(...d);
+  if (!S.px) return { px, text: `${fmt(+px.toFixed(1))} px` };
+  // Side views put the Z spacing into px.y; the ends are always in XY's pixels.
+  const py = S.axis === "xy" ? S.px.y : S.px.x;
+  const m = Math.hypot(d[0] * S.px.x, d[1] * py, d[2] * zStep()) * UNIT_M[S.px.unit];
+  const guess = d[2] && !(S.pz > 0) ? " · Z 间距未知，按 X 计" : "";
+  return { px, text: `${fmtLength(m)}  (${fmt(+px.toFixed(1))} px${guess})` };
+}
+
+/** Length of a measurement: across slices when it has 3D ends (drawn in XZ, YZ or 3D). */
+function annLength(a) {
+  return a.p3 ? lineLength3(a.p3[0], a.p3[1]) : lineLength(a.pts[0], a.pts[a.pts.length - 1]);
+}
+
+/**
+ * Gives a measurement 3D ends `p3` ([x, y, z] each). Its 2D form follows:
+ * the XY projection over the slices it spans, so XY views and the saved
+ * file keep working with it.
+ */
+function setLineEnds(a, p3) {
+  a.p3 = p3.map((q) => q.slice(0, 3));
+  a.pts = a.p3.map((q) => [q[0], q[1]]);
+  const zs = a.p3.map((q) => Math.round(q[2]));
+  a.z = Math.min(...zs);
+  if (Math.max(...zs) !== a.z) a.z1 = Math.max(...zs);
+  else delete a.z1;
+  return a;
+}
+
+/** After a measurement with 3D ends was moved in an XY view, its 3D ends follow. */
+function syncLineEnds(a) {
+  if (!a.p3) return;
+  a.p3.forEach((q, i) => {
+    const p = a.pts[i];
+    if (p) { q[0] = p[0]; q[1] = p[1]; }
+  });
+}
+
 /**
  * Draws annotations. `map` turns image coordinates into context
  * coordinates and `unit` is the size of one screen pixel in the context.
@@ -1414,7 +1464,7 @@ function drawAnnotations(g, map, unit, items) {
         g.lineTo(x + Math.cos(ang) * tk, y + Math.sin(ang) * tk);
         g.stroke();
       }
-      const label = lineLength(a.pts[0], a.pts[1]).text.split("  (")[0];
+      const label = annLength(a).text.split("  (")[0];
       drawAnnLabel(g, label, (x0 + x1) / 2, (y0 + y1) / 2 - 6 * unit, unit, a.color);
     } else if (a.type === "rect" || a.type === "ellipse") {
       // Width and height above the shape, like the length of a measurement.
@@ -3006,6 +3056,7 @@ function boxText(w, h) {
 
 function sizeText(a) {
   if (a.type === "text") return "文字";
+  if (a.p3) return annLength(a).text;
   if (TWO_POINT.has(a.type)) return lineLength(a.pts[0], a.pts[a.pts.length - 1]).text;
   const [, , w, h] = rectOf(a);
   return (a.type === "crop" ? "裁剪 " : "") + boxText(w, h);
@@ -3190,6 +3241,8 @@ function updateZMarks() {
 
 function annChanged() {
   draw();
+  // The 3D view (Pro) draws measurements too.
+  window.dispatchEvent(new Event("tmv-annotations"));
   // Side views share the file name; their marks are not saved.
   if (!S.info || S.axis !== "xy") return;
   S.annPending = { path: S.info.path, series: S.info.seriesIndex, size: [S.info.width, S.info.height] };
@@ -3203,8 +3256,10 @@ async function flushAnn() {
   if (!p) return;
   S.annPending = null;
   // z1 is the last Z of a range; it is absent for a single slice.
-  const items = S.ann.map(({ type, z, z1, color, width, pts, text }) => ({
+  // p3: 3D ends of a measurement drawn in XZ, YZ or the 3D view.
+  const items = S.ann.map(({ type, z, z1, color, width, pts, text, p3 }) => ({
     type, z, z1, color, width, text, pts: pts.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
+    p3: p3 ? p3.map((q) => q.map((v) => +v.toFixed(2))) : undefined,
   }));
   const json = items.length
     ? JSON.stringify({ app: "TifMrcView", version: 1, image: basename(p.path), size: p.size, items })
@@ -3239,6 +3294,10 @@ async function loadAnn(path, series) {
       S.ann = items.filter(
         (a) => ok.has(a.type) && Array.isArray(a.pts) && a.pts.length && (a.type !== "text" || typeof a.text === "string"),
       );
+      for (const a of S.ann) {
+        const good = a.type === "line" && Array.isArray(a.p3) && a.p3.length === 2 && a.p3.every((q) => Array.isArray(q) && q.length === 3 && q.every(Number.isFinite));
+        if (!good) delete a.p3;
+      }
     } catch (_) {
       toast(`${annName(path, series)} 读取失败`);
     }
@@ -3578,6 +3637,7 @@ canvas.addEventListener("pointermove", (e) => {
     const sy = y1 > y0 ? (ny1 - ny0) / (y1 - y0) : 1;
     it.pts = op.orig.map(([x, y]) => [nx0 + (x - x0) * sx, ny0 + (y - y0) * sy]);
   }
+  if (it.p3) syncLineEnds(it);
   op.changed = true;
   showSize(it);
   draw();
