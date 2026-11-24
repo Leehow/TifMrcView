@@ -4370,7 +4370,9 @@ T.webview
     $("drop-hint").hidden = !(type === "enter" || type === "over");
     if (type === "drop" && paths.length) {
       const documents = window.TifMrcViewPro?.documents;
-      if (documents) paths.forEach((path) => documents.open(path));
+      const layers = window.TifMrcViewPro?.layers;
+      if (layers?.dropFiles) layers.dropFiles(paths);
+      else if (documents) paths.forEach((path) => documents.open(path));
       else openPath(paths[0]);
     }
   })

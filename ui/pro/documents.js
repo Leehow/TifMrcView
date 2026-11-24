@@ -309,7 +309,7 @@
         doc.id = previous.id;
         doc.folder = previous.state.folder;
       } else doc = !startNew && previous?.type === "merge" ? previous : newMerge();
-      const added = [];
+      const added = [], notes = [];
       for (const image of opened) {
         const imageTab = tabs.find((d) => d.type === "image" && d.token === image.token);
         const state = imageTab?.state;
@@ -317,6 +317,7 @@
           channels: state.chans.flatMap((c, index) => c.visible ? [{ index, color: c.color, min: c.auto ? null : c.min, max: c.auto ? null : c.max }] : []) } : {};
         if (settings.channels && !settings.channels.length) delete settings.channels;
         added.push(TmvMerge.add(doc, TmvMerge.layer(image, { ...settings, scaleBar: scaleBarSnapshot(image, state) })));
+        notes.push({ ...doc.lastAdded, name: added.at(-1).name, info: image.info });
       }
       if (convert) {
         tabs.splice(tabs.indexOf(previous), 1, doc);
@@ -335,8 +336,20 @@
         window.TifMrcViewPro.layers?.request();
       }
       if (!doc.view) window.TifMrcViewPro.layers?.fit(doc);
+      placementHint(doc, notes);
       return { doc, added };
     });
+  }
+
+  /** Says why a new layer sits where it does, so the order and size never puzzle. */
+  function placementHint(doc, notes) {
+    const lines = [];
+    for (const n of notes) {
+      if (n.placedUnder?.length) lines.push(`「${n.name}」比「${n.placedUnder.join("」「")}」大，已放在它下面，免得把小图遮住；可在右侧栏「图层」里调整顺序（右键图层可上移、下移、置顶、置底）`);
+      else if (n.scaledBy === "fit-mismatch") lines.push(`「${n.name}」和当前图只有一张有比例尺，无法按实际大小对齐，已按画布大小放置`);
+      else if (n.scaledBy === "fit" && (n.info.width !== doc.width || n.info.height !== doc.height)) lines.push(`「${n.name}」和当前图都没有比例尺，已按画布大小放置`);
+    }
+    if (lines.length) toast(lines.join("；"), 8000);
   }
 
   async function openProject(path, recovery = null) {

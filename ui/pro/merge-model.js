@@ -54,19 +54,100 @@
     return doc;
   }
 
-  function add(doc, item) {
-    if (!doc.layers.length) { doc.width = item.info.width; doc.height = item.info.height; item.mode = "normal"; }
-    else {
-      // Match one canvas dimension without cropping or stretching the source.
-      const scale = Math.min(doc.width / item.info.width, doc.height / item.info.height);
-      item.width = item.info.width * scale; item.height = item.info.height * scale;
-      item.x = (doc.width - item.width) / 2; item.y = (doc.height - item.height) / 2;
+  // Metres per pixel of each length unit a scale bar can carry (diffraction's
+  // reciprocal units do not mix with real-space images).
+  const METRES = { "Å": 1e-10, nm: 1e-9, "µm": 1e-6, mm: 1e-3 };
+  /** Physical size of one source pixel of `item` in metres, or null if uncalibrated. */
+  function sourcePixel(item) {
+    const p = item?.scaleBar?.pixelSize, u = p && METRES[p.unit];
+    if (!u || !(p.x > 0)) return null;
+    return { x: p.x * u, y: (p.y > 0 ? p.y : p.x) * u };
+  }
+  /** Metres per canvas pixel, from the lowest calibrated layer already placed. */
+  function canvasPixel(doc) {
+    for (const l of doc.layers) {
+      const p = sourcePixel(l);
+      if (p && l.width > 0 && l.height > 0) return { x: p.x * l.info.width / l.width, y: p.y * l.info.height / l.height };
     }
-    doc.layers.push(item);
+    return null;
+  }
+  const area = (l) => l.width * l.height;
+  const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const MAX_CANVAS = 100000;
+
+  /**
+   * Adds `item` on top of `doc`. When both it and the canvas are calibrated it
+   * is sized by its physical pixel size (the canvas grows to hold it);
+   * otherwise it is fitted into the canvas. A layer bigger than ones it would
+   * cover goes under them, so nothing is hidden. `doc.lastAdded` tells the
+   * UI how it was sized (`scaledBy`) and which layers stay above it (`placedUnder`).
+   */
+  function add(doc, item) {
+    const note = { id: item.id, scaledBy: "base", placedUnder: [] };
+    if (!doc.layers.length) {
+      doc.width = item.info.width; doc.height = item.info.height; item.mode = "normal";
+      doc.layers.push(item);
+    } else {
+      const canvas = canvasPixel(doc), own = sourcePixel(item);
+      let width = 0, height = 0;
+      if (canvas && own) {
+        width = item.info.width * own.x / canvas.x; height = item.info.height * own.y / canvas.y;
+        // Ten thousand times bigger or smaller is a wrong header, not a sample.
+        const k = width / item.info.width;
+        if (!(k > 1e-4 && k < 1e4) || Math.max(width, height) > MAX_CANVAS) width = height = 0;
+      }
+      if (width > 0) {
+        note.scaledBy = "pixel";
+        item.width = width; item.height = height;
+        // Grow the canvas evenly so the new layer fits, keeping everything centred.
+        const grow = [Math.max(0, Math.ceil(width - doc.width - 1e-6)), Math.max(0, Math.ceil(height - doc.height - 1e-6))];
+        if (grow[0] || grow[1]) {
+          for (const l of doc.layers) { l.x += grow[0] / 2; l.y += grow[1] / 2; }
+          doc.width += grow[0]; doc.height += grow[1];
+          if (doc.view) { doc.view.cx += grow[0] / 2; doc.view.cy += grow[1] / 2; }
+        }
+      } else {
+        note.scaledBy = canvas || own ? "fit-mismatch" : "fit";
+        // Match one canvas dimension without cropping or stretching the source.
+        const scale = Math.min(doc.width / item.info.width, doc.height / item.info.height);
+        item.width = item.info.width * scale; item.height = item.info.height * scale;
+      }
+      item.x = (doc.width - item.width) / 2; item.y = (doc.height - item.height) / 2;
+      // Same footprint as the layer below: blend like a channel. Different
+      // footprint (another magnification): draw it as it is.
+      const below = doc.layers.at(-1);
+      const same = below && Math.abs(below.width - item.width) <= 0.02 * below.width && Math.abs(below.height - item.height) <= 0.02 * below.height
+        && Math.abs(below.x - item.x) <= 0.02 * below.width && Math.abs(below.y - item.y) <= 0.02 * below.height;
+      item.mode = same ? "screen" : "normal";
+      // Newest on top, except under smaller layers it would cover.
+      let at = doc.layers.length;
+      while (at > 0 && area(doc.layers[at - 1]) < area(item) * 0.98 && overlaps(doc.layers[at - 1], item)) at--;
+      note.placedUnder = doc.layers.slice(at).map((l) => l.name);
+      if (at === 0) {
+        // The bottom layer is drawn as it is and carries the canvas scale bar.
+        const old = doc.layers[0];
+        item.mode = "normal";
+        if (item.scaleBar && old.scaleBar) item.scaleBar.visible = old.scaleBar.visible;
+      }
+      doc.layers.splice(at, 0, item);
+    }
+    doc.lastAdded = note;
     doc.selected = item.id;
     doc.dirty = true;
     doc.revision++;
     return item;
+  }
+
+  /** Moves `item` to the top, bottom, or one step up (+1) / down (-1). */
+  function move(doc, item, where) {
+    const i = doc.layers.indexOf(item);
+    if (i < 0) return false;
+    const last = doc.layers.length - 1;
+    const j = where === "top" ? last : where === "bottom" ? 0 : clamp(i + where, 0, last);
+    if (i === j) return false;
+    doc.layers.splice(i, 1);
+    doc.layers.splice(j, 0, item);
+    return true;
   }
 
   const handles = [["nw", 0, 0], ["n", 0.5, 0], ["ne", 1, 0], ["e", 1, 0.5],
@@ -145,6 +226,6 @@
   // A 2D layer remains at Z=0, independently of any other stack's depth.
   function setZ(item, z) { item.z = clamp(Math.round(z), 0, item.info.sizeZ - 1); }
 
-  window.TmvMerge = { copy, clamp, layer, create, add, fromImage, reframe, project, validate, setZ, handles, resize, scaleBarGeometry,
+  window.TmvMerge = { copy, clamp, layer, create, add, move, sourcePixel, fromImage, reframe, project, validate, setZ, handles, resize, scaleBarGeometry,
     operation: (mode) => ({ normal: "source-over", add: "lighter", screen: "screen" })[mode] || "source-over" };
 })();

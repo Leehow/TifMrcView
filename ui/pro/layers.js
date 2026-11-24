@@ -315,6 +315,25 @@
         sync();
       };
       pick.ondblclick = () => { $("merge-transform").open = true; $("merge-name").focus(); $("merge-name").select(); };
+      // Right-click on the canvas pans, so the order menu lives on the row.
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        if (shown.layers.length < 2) return;
+        document.body.dataset.layerFocus = "image";
+        if (doc && doc.selected !== l.id) { doc.selected = l.id; D.touch(doc); request(); }
+        const i = shown.layers.findIndex((item) => item.id === l.id), top = shown.layers.length - 1;
+        const items = [
+          i < top && { value: "top", label: "置于顶层" },
+          i < top && { value: 1, label: "上移一层" },
+          i > 0 && { value: -1, label: "下移一层" },
+          i > 0 && { value: "bottom", label: "置于底层" },
+        ].filter(Boolean);
+        closeMenu();
+        openMenu(row, items, (where) => moveLayer(l.id, where));
+        const menu = $("dropmenu");
+        menu.style.top = `${Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)}px`;
+        menu.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
+      };
       row.append(visible, pick); list.append(row);
     });
     const l = selected(shown);
@@ -585,10 +604,15 @@
     return rows.shown ? rows : null;
   }
   window.TifMrcViewPro.layersSync = () => sync();
+  /** Moves a layer: "top", "bottom", or one step up (1) / down (-1). */
+  function moveLayer(id, where) {
+    edit((doc, l) => {
+      const item = doc.layers.find((x) => x.id === id) || l;
+      if (item) { doc.selected = item.id; M.move(doc, item, where); }
+    });
+  }
   for (const [id, delta] of [["merge-up", 1], ["merge-down", -1]]) $(id).onclick = () => labelFocus() ? window.TifMrcViewPro.labels.moveActive(delta) : edit((doc, l) => {
-    if (!l) return;
-    const i = doc.layers.indexOf(l), j = M.clamp(i + delta, 0, doc.layers.length - 1);
-    [doc.layers[i], doc.layers[j]] = [doc.layers[j], doc.layers[i]];
+    if (l) M.move(doc, l, delta);
   });
   const deleteLayer = () => edit((doc, l) => {
     if (!l) return;
@@ -727,6 +751,41 @@
     if (insideStage(e)) D.addPaths([drop.path]);
   });
   $("strip").addEventListener("pointercancel", () => { fileDrag = null; ghost.hidden = true; stage.classList.remove("merge-drop-target"); });
+  /** Asks whether dropped files open in new tabs or go on the current image as layers. */
+  function askDrop(paths) {
+    return new Promise((resolve) => {
+      const dialog = document.createElement("dialog");
+      dialog.className = "merge-close-dialog";
+      const title = document.createElement("h3");
+      title.textContent = paths.length > 1 ? `打开 ${paths.length} 张图片` : `打开「${basename(paths[0])}」`;
+      const text = document.createElement("p");
+      text.textContent = "已经打开了一张图。要新开标签页，还是叠加到当前图上作为图层？叠加时按各自的比例尺（像素大小）对齐显示。";
+      const row = document.createElement("div");
+      const button = (label, value, cls) => {
+        const b = document.createElement("button"); b.textContent = label; if (cls) b.className = cls;
+        b.onclick = () => dialog.close(value); return b;
+      };
+      const layer = button("叠加到当前图", "layer", "primary");
+      row.append(button("取消", ""), button("新标签页打开", "tab"), layer);
+      dialog.append(title, text, row);
+      dialog.onclose = () => { dialog.remove(); resolve(dialog.returnValue || null); };
+      document.body.append(dialog);
+      dialog.showModal();
+      layer.focus();
+    });
+  }
+  async function dropFiles(paths) {
+    const open = () => paths.forEach((path) => D.open(path));
+    const active = D.current();
+    const images = paths.filter((p) => !/\.tmvmerge$/i.test(p) && /\.[^/\\]+$/.test(basename(p)));
+    if (!active || !images.length || images.length !== paths.length || (active.type === "image" && !S.info)) return open();
+    const choice = await askDrop(paths);
+    if (choice === "tab") return open();
+    if (choice !== "layer") return;
+    const result = await D.addPaths(images);
+    if (result) setPanel("layers");
+  }
+
   document.addEventListener("tmv-document", () => {
     const live = new Set(D.tabs.flatMap((d) => d.type === "merge" ? d.layers.map((l) => l.id) : []));
     for (const key of cache.keys()) if (!live.has(key)) cache.delete(key);
@@ -734,7 +793,7 @@
   });
   document.addEventListener("tmv-save", () => { syncSaveState(); syncProjects(); });
   new ResizeObserver(request).observe(stage);
-  window.TifMrcViewPro.layers = { fit, exportImage, paint, sync, request, setPanel,
+  window.TifMrcViewPro.layers = { fit, exportImage, paint, sync, request, setPanel, dropFiles,
     sourceChanged() {
       if (current() || sideMode !== "layers" || sourceScheduled) return;
       sourceScheduled = true;

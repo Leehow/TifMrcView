@@ -111,6 +111,54 @@ test('new layers fit and center in the base canvas at any source pixel size', ()
   }
 });
 
+const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} ≈ ${b}`);
+function calibrated(path, token, width, height, nm) {
+  const image = source(path, token); Object.assign(image.info, { width, height });
+  return M.layer(image, { scaleBar: { visible: true, pixelSize: { x: nm, y: nm, unit: 'nm' }, length: 10, label: '', region: [0, 0, width, height], font: 13, thickness: 4, margin: 18 } });
+}
+
+test('calibrated layers are sized by physical pixel size and a smaller later image stays on top', () => {
+  const doc = M.create(); M.add(doc, calibrated('overview.tif', 1, 1000, 800, 10));
+  const detail = M.add(doc, calibrated('detail.tif', 2, 500, 500, 1));
+  near(detail.width, 50); near(detail.height, 50);
+  assert.equal(doc.width, 1000); assert.equal(doc.layers.at(-1), detail);
+  assert.deepEqual(plain(doc.lastAdded.placedUnder), []);
+  assert.equal(doc.lastAdded.scaledBy, 'pixel');
+  assert.equal(detail.mode, 'normal');
+  near(detail.x + 25, 500); near(detail.y + 25, 400);
+});
+
+test('a bigger later image goes under the smaller one, grows the canvas and keeps the view still', () => {
+  const doc = M.create(); const small = M.add(doc, calibrated('detail.tif', 1, 400, 300, 1));
+  doc.view = { cx: 200, cy: 150, scale: 1 };
+  const big = M.add(doc, calibrated('overview.tif', 2, 100, 100, 10));
+  near(big.width, 1000); near(big.height, 1000);
+  assert.equal(doc.width, 1000); assert.equal(doc.height, 1000);
+  assert.deepEqual(plain(doc.layers.map((l) => l.name)), ['overview.tif', 'detail.tif']);
+  assert.deepEqual(plain(doc.lastAdded.placedUnder), ['detail.tif']);
+  assert.equal(small.x, 300); assert.equal(small.y, 350);
+  assert.equal(doc.view.cx, 500); assert.equal(doc.view.cy, 500);
+  assert.equal(big.mode, 'normal');
+  assert.doesNotThrow(() => M.validate(M.project(doc)));
+});
+
+test('one uncalibrated image falls back to fitting the canvas', () => {
+  const doc = M.create(); M.add(doc, calibrated('a.tif', 1, 400, 300, 1));
+  const plainImage = M.add(doc, M.layer(source('b.tif', 2)));
+  assert.equal(doc.lastAdded.scaledBy, 'fit-mismatch');
+  assert.equal(plainImage.width, 400);
+});
+
+test('move puts a layer on top, bottom or one step', () => {
+  const doc = M.create();
+  const [a, b, c] = ['a', 'b', 'c'].map((n, i) => M.add(doc, M.layer(source(n, i + 1))));
+  const names = () => doc.layers.map((l) => l.name).join('');
+  assert.ok(M.move(doc, a, 'top')); assert.equal(names(), 'bca');
+  assert.ok(M.move(doc, a, 'bottom')); assert.equal(names(), 'abc');
+  assert.ok(M.move(doc, b, 1)); assert.equal(names(), 'acb');
+  assert.ok(!M.move(doc, b, 1)); assert.ok(M.move(doc, c, -1)); assert.equal(names(), 'cab');
+});
+
 test('all eight transform handles preserve the opposite anchor and aspect ratio', () => {
   const rect = { x: 23, y: 41, width: 320, height: 240 };
   assert.equal(M.handles.length, 8);
