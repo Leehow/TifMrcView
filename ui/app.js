@@ -224,6 +224,8 @@ try {
  */
 async function openPath(path, force = false, series = 0, inTab = false) {
   if (!path) return;
+  // A side-panel entry for one image of a multi-image file.
+  if (isSeriesKey(path)) [path, series] = splitSeriesKey(path);
   try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (!inTab && typeof editionReady !== "undefined") await editionReady;
   if (!inTab && window.TifMrcViewPro?.documents) return window.TifMrcViewPro.documents.open(path, force, series);
@@ -276,6 +278,7 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     showSize(null);
     $("measure-out").textContent = "";
     setModel(null);
+    rememberDisplay();
     S.chans = res.info.channels.map((c) => ({
       visible: true,
       color: c.color,
@@ -284,6 +287,7 @@ async function openPath(path, force = false, series = 0, inTab = false) {
       max: null,
       auto: true,
     }));
+    recallDisplay(res.info);
     const ps = res.info.pixelSize;
     if (ps && ps[0] > 0 && UNIT_M[normUnit(res.info.unit)] && plausiblePixel(ps[0], normUnit(res.info.unit))) {
       S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(res.info.unit) };
@@ -491,8 +495,26 @@ function normUnit(u) {
 
 /** Where the open image is in the folder list: a stack's entry is its
  * project file, or its folder when the project file is further up. */
+// The side panel lists each image of a file that holds several (a Leica LIF
+// project…) as its own entry, keyed by the path and the image's number.
+const SERIES_SEP = "\u0001";
+function seriesKey(path, i) {
+  return `${path}${SERIES_SEP}${i}`;
+}
+function isSeriesKey(k) {
+  return typeof k === "string" && k.includes(SERIES_SEP);
+}
+function splitSeriesKey(k) {
+  const i = k.lastIndexOf(SERIES_SEP);
+  return i < 0 ? [k, 0] : [k.slice(0, i), +k.slice(i + 1) || 0];
+}
+
 function folderIndex(path) {
   const { files } = S.folder;
+  if (S.info && S.info.path === path && S.info.series?.length > 1) {
+    const i = files.indexOf(seriesKey(path, S.info.seriesIndex));
+    if (i >= 0) return i;
+  }
   if (!(S.info && S.info.folder)) return files.indexOf(path);
   const i = files.indexOf(S.info.path);
   return i >= 0 ? i : files.indexOf(S.info.folder);
@@ -528,11 +550,23 @@ async function refreshFolder(path, keepScroll = false) {
     const stacks = f.stacks || [];
     const steps = !stackDir && f.steps && f.root ? f.steps : null;
     // List the files group by group, in the order the side panel shows them.
+    const series = f.series || {};
     const all = [
       ...stacks.map((s) => ({ path: s.path, size: 0, group: STACK_GROUP })),
-      ...f.files.map((p, i) => ({ path: p, size: f.sizes[i], group: steps ? STEP_GROUPS[steps[i]] || STEP_GROUPS.raw : fileGroup(p) })),
+      ...f.files.flatMap((p, i) => {
+        const group = steps ? STEP_GROUPS[steps[i]] || STEP_GROUPS.raw : fileGroup(p);
+        // Each image of a multi-image file (a LIF project) is an entry.
+        if (series[p]) return series[p].map((s, k) => ({ path: seriesKey(p, k), size: f.sizes[i], group, series: s }));
+        return [{ path: p, size: f.sizes[i], group }];
+      }),
     ];
-    all.sort((a, b) => a.group.order - b.group.order);
+    // Microscope files beside TIFFs are the originals the TIFFs were
+    // exported from: their groups come first, and open.
+    const vendor = (g) => g.light && !steps;
+    const hasTiff = all.some((e) => e.group.id === "tiff");
+    const rank = (g) => (hasTiff && vendor(g) ? -1 : g.order);
+    all.sort((a, b) => rank(a.group) - rank(b.group));
+    if (hasTiff) for (const e of all) if (vendor(e.group) && !(e.group.id in stripFold)) stripOpened.add(e.group.id);
     S.folder = {
       dir: steps ? f.root : dir,
       steps: !!steps,
@@ -540,6 +574,7 @@ async function refreshFolder(path, keepScroll = false) {
       sizes: all.map((e) => e.size),
       groups: all.map((e) => e.group),
       stacks: Object.fromEntries(stacks.map((s) => [s.path, s])),
+      series: Object.fromEntries(all.filter((e) => e.series).map((e) => [e.path, e.series])),
       index: -1,
     };
     $("folder-name").textContent = basename(S.folder.dir) || S.folder.dir;
@@ -566,8 +601,107 @@ function step(delta) {
   if (next >= 0 && next < files.length) openHere(files[next]);
 }
 
+// ---------- the acquisition an opened image belongs to ----------
+//
+// After an image opens, the backend looks at its folder (folder_companion):
+// TIFFs exported by an acquisition program (Leica LAS X…) next to the
+// original project or its MetaData. With the vendor plugin installed it
+// offers the whole acquisition (channels, Z, series); without, it offers
+// to install the plugin, then opens the acquisition.
+const companion = { dir: null, answer: null, dismissed: new Set(), installing: null };
+
+function companionKey(c) {
+  return c.kind === "open" ? `${c.path}#${c.series}` : `plugin:${c.id}`;
+}
+
+function hideCompanion() {
+  $("companion").hidden = true;
+  companion.shown = null;
+}
+
+function showCompanion(c, opened) {
+  if (!c || companion.dismissed.has(companionKey(c))) return hideCompanion();
+  companion.shown = c;
+  let text, go;
+  if (c.kind === "open") {
+    const what = c.detail ? `${c.title}（${c.detail}）` : c.title;
+    text = c.matched
+      ? `${basename(opened)} 是 ${basename(c.path)} 里「${what}」导出的一层。`
+      : `这个文件夹里有原始项目 ${basename(c.path)}（${what}）。`;
+    go = "按原始层叠打开";
+  } else {
+    const verb = { install: "安装", update: "更新", enable: "启用" }[c.action] || "安装";
+    text = `这个文件夹是 ${c.plugin} 的采集数据（找到 ${c.found}）。${verb}「${c.plugin}」插件后，可以按原始的多通道 / Z 栈 / 多序列打开。`;
+    go = `${verb}插件`;
+  }
+  $("companion-text").textContent = text;
+  $("companion-go").textContent = go;
+  $("companion").hidden = false;
+}
+
+/** Looks at the folder of the image just opened, in the background. */
+async function checkCompanion() {
+  const info = S.info;
+  const path = info && info.path;
+  const token = S.token;
+  // Stacks, folders, remote files and the vendor files themselves have nothing to add.
+  if (!path || info.folder || info.series?.length > 1 || ext.remoteFiles?.get(path)) return hideCompanion();
+  const dir = dirname(path);
+  const a = companion.answer;
+  // Flipping through one export reuses the answer.
+  if (companion.dir === dir && a && (a.kind !== "open" || a.files.includes(path))) return showCompanion(a, path);
+  hideCompanion();
+  let c = null;
+  try {
+    c = await invoke("folder_companion", { path });
+  } catch (e) {
+    console.warn("folder_companion", e);
+  }
+  if (token !== S.token) return;
+  companion.dir = dir;
+  companion.answer = c;
+  showCompanion(c, path);
+}
+
+async function companionGo() {
+  const c = companion.shown;
+  if (!c) return;
+  hideCompanion();
+  if (c.kind === "open") return openHere(c.path, false, c.series);
+  if (c.action === "enable") {
+    toast(`请在「插件」里启用「${c.plugin}」`, 5000);
+    if (typeof togglePluginDialog === "function") togglePluginDialog(true);
+    return;
+  }
+  // The market's own confirmation; the plugin-installed event continues below.
+  companion.installing = { id: c.id, path: S.info && S.info.path };
+  if (typeof confirmInstall === "function") confirmInstall({ id: c.id });
+}
+
+$("companion-go").addEventListener("click", companionGo);
+$("companion-close").addEventListener("click", () => {
+  if (companion.shown) companion.dismissed.add(companionKey(companion.shown));
+  hideCompanion();
+});
+document.addEventListener("tmv-opened", () => checkCompanion());
+// Installed from the bar: open the acquisition right away.
+T.event.listen("plugin-installed", async (e) => {
+  const want = companion.installing;
+  if (!want || e.payload?.manifest?.id !== want.id) return;
+  companion.installing = null;
+  companion.dir = null;
+  // The backend reloads its plugin list on the same event; ask once it has.
+  await new Promise((r) => setTimeout(r, 300));
+  const c = await invoke("folder_companion", { path: want.path }).catch(() => null);
+  if (c && c.kind === "open") {
+    if (typeof togglePluginDialog === "function") togglePluginDialog(false);
+    openHere(c.path, false, c.series);
+  } else if (S.info && S.info.path === want.path) checkCompanion();
+});
+
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
 async function openHere(path, force = false, series = 0) {
+  if (isSeriesKey(path)) [path, series] = splitSeriesKey(path);
   try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (typeof editionReady !== "undefined") await editionReady;
   const docs = window.TifMrcViewPro?.documents;
@@ -769,6 +903,49 @@ function paintChannels() {
 }
 
 // ---------- contrast ----------
+
+// Display settings of each image seen in this session, so going back to an
+// image shows it as it was left: per file and series, per channel.
+// (Which channels are shown is one setting for all images; see restoreChannelVisibility.)
+const displayMemory = new Map();
+const DISPLAY_MEMORY_MAX = 500;
+
+function displayKey(info) {
+  return info ? `${info.seriesIndex || 0}\u0000${info.path}` : null;
+}
+
+/** Saves the display settings of the image shown now (its XY view, not a side view). */
+function rememberDisplay() {
+  const info = S.base ? S.base.info : S.info;
+  const key = displayKey(info);
+  if (!key || !S.chans.length) return;
+  displayMemory.delete(key);
+  displayMemory.set(key, {
+    gamma: S.gamma,
+    sel: S.sel,
+    chans: S.chans.map((c) => ({ color: [...c.color], auto: c.auto, min: c.min, max: c.max })),
+  });
+  if (displayMemory.size > DISPLAY_MEMORY_MAX) displayMemory.delete(displayMemory.keys().next().value);
+}
+
+/** Puts back the settings `info`'s image had when it was last shown. */
+function recallDisplay(info) {
+  const saved = displayMemory.get(displayKey(info));
+  if (!saved || saved.chans.length !== S.chans.length) return;
+  saved.chans.forEach((d, i) => {
+    const c = S.chans[i];
+    c.color = [...d.color];
+    c.auto = d.auto || d.min === null || d.max === null;
+    if (!c.auto) {
+      c.min = d.min;
+      c.max = d.max;
+    }
+  });
+  S.sel = Math.min(saved.sel, S.chans.length - 1);
+  S.gamma = saved.gamma;
+  $("gamma").value = S.gamma;
+  $("gamma-v").textContent = S.gamma.toFixed(2);
+}
 
 function dataRange(c) {
   if (S.hist && S.hist.c === S.sel && S.hist.max > S.hist.min) return [S.hist.min, S.hist.max];
@@ -3862,11 +4039,11 @@ const FILE_GROUPS = [
   { id: "gatan", name: "Gatan DM3/DM4", em: true, ext: ["dm3", "dm4"] },
   { id: "thermo", name: "Thermo Fisher SER/EMD/EER", em: true, ext: ["ser", "emi", "emd", "eer"] },
   { id: "tvips", name: "TVIPS", em: true, ext: ["tvips"] },
-  { id: "zeiss", name: "Zeiss CZI/LSM", em: false, ext: ["czi", "lsm"] },
-  { id: "leica", name: "Leica LIF/LOF", em: false, ext: ["lif", "lof"] },
-  { id: "nikon", name: "Nikon ND2", em: false, ext: ["nd2"] },
-  { id: "olympus", name: "Olympus OIB/OIR", em: false, ext: ["oib", "oir"] },
-  { id: "imaris", name: "Imaris IMS", em: false, ext: ["ims"] },
+  { id: "zeiss", name: "Zeiss CZI/LSM", em: false, light: true, ext: ["czi", "lsm"] },
+  { id: "leica", name: "Leica LIF/LOF", em: false, light: true, ext: ["lif", "lof"] },
+  { id: "nikon", name: "Nikon ND2", em: false, light: true, ext: ["nd2"] },
+  { id: "olympus", name: "Olympus OIB/OIR", em: false, light: true, ext: ["oib", "oir"] },
+  { id: "imaris", name: "Imaris IMS", em: false, light: true, ext: ["ims"] },
   { id: "image", name: "普通图片", em: false, ext: ["png", "jpg", "jpeg", "gif", "bmp", "webp"] },
 ];
 FILE_GROUPS.forEach((g, i) => (g.order = i));
@@ -3961,7 +4138,13 @@ function buildStrip() {
     el.dataset.path = f;
     el.innerHTML = `<div class="box"></div><div class="nm"></div><div class="meta"></div>`;
     const stack = S.folder.stacks[f];
-    if (stack) {
+    const one = S.folder.series && S.folder.series[f];
+    if (one) {
+      const [file] = splitSeriesKey(f);
+      el.title = `${one.name}（${one.detail}）\n${file}`;
+      el.querySelector(".nm").textContent = one.name;
+      el.querySelector(".meta").textContent = `${basename(file)} · ${one.detail}`;
+    } else if (stack) {
       el.classList.add("stack");
       el.title = `${stack.name}：${stack.slices} 张切片组成的 Z 堆叠\n${f}`;
       el.querySelector(".nm").textContent = stack.name;
@@ -4006,7 +4189,8 @@ function pumpThumbs() {
     if (!el.isConnected) continue;
     thumbActive++;
     const remote = ext.remoteFiles?.get(el.dataset.path);
-    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: el.dataset.path, size: 256 }))
+    const [thumbPath, thumbSeries] = splitSeriesKey(el.dataset.path);
+    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: thumbPath, size: 256, series: thumbSeries }))
       .then((buf) => {
         if (!el.isConnected) return;
         if (typeof buf === "string") {

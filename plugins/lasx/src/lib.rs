@@ -22,8 +22,10 @@
 use std::borrow::Cow;
 
 use tifmrcview_plugin_sdk::xml::{self, Node};
+mod stack;
+
 use tifmrcview_plugin_sdk::{
-    bail, export_format, file, flags, le_u32, le_u64, Channel, Chunk, Context, DType, Format, Group, Info, Recipe,
+    bail, export_format, export_stack, file, flags, le_u32, le_u64, Channel, Chunk, Context, DType, Format, Group, Info, Recipe,
     Result, Series,
 };
 
@@ -39,6 +41,8 @@ const MAX_ITEMS: usize = 40_000;
 enum Kind {
     Lif,
     Lof,
+    /// The XML LAS X writes beside exported TIFFs (`MetaData/*.xml`).
+    Export,
 }
 
 /// The header XML and where the memory blocks start.
@@ -590,6 +594,7 @@ impl Lasx {
 }
 
 export_format!(Lasx);
+export_stack!(stack::LasxStacks);
 
 // ------------------------------------------------------------------ tiles
 
@@ -797,7 +802,14 @@ fn groups(
 
     // --- image
     let mut g = Group::new("LAS X 图像");
-    g.add_str("文件类型", if c.kind == Kind::Lof { "Leica LOF" } else { "Leica LIF" });
+    g.add_str(
+        "文件类型",
+        match c.kind {
+            Kind::Lof => "Leica LOF",
+            Kind::Lif => "Leica LIF",
+            Kind::Export => "LAS X 导出（TIFF + MetaData）",
+        },
+    );
     g.add_str("图像", &img.path);
     g.add("软件", hw.and_then(|h| val(h.setting, "Software")));
     g.add("系统", hw.and_then(|h| val(h.setting, "SystemTypeName")));

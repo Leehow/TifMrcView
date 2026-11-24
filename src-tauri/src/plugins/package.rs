@@ -111,7 +111,9 @@ fn parse_exts(v: Option<&Value>, what: &str) -> Result<Vec<String>> {
 }
 
 /// `stacks` entry of plugin.json: file names (`*` matches any run of
-/// characters, case is ignored) and a display name.
+/// characters, case is ignored) and a display name. A name may sit in one
+/// subfolder (`MetaData/*.xml`): the project file is then in that folder of
+/// the acquisition folder, and its listing covers the acquisition folder.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StackDecl {
     pub files: Vec<String>,
@@ -119,8 +121,32 @@ pub struct StackDecl {
 }
 
 impl StackDecl {
+    /// Whether a project file called `file_name`, in a folder called
+    /// `folder`, is one of these.
+    pub fn matches_in(&self, folder: &str, file_name: &str) -> bool {
+        self.priority(folder, file_name).is_some()
+    }
+
+    /// Like [`Self::matches_in`], for names without a subfolder.
     pub fn matches(&self, file_name: &str) -> bool {
-        self.files.iter().any(|p| glob_match(&p.to_lowercase(), &file_name.to_lowercase()))
+        self.priority("", file_name).is_some()
+    }
+
+    /// Which of the names matches first (earlier names are preferred).
+    pub fn priority(&self, folder: &str, file_name: &str) -> Option<usize> {
+        let (folder, name) = (folder.to_lowercase(), file_name.to_lowercase());
+        self.files.iter().position(|p| {
+            let p = p.to_lowercase();
+            match p.split_once('/') {
+                Some((sub, pat)) => sub == folder && glob_match(pat, &name),
+                None => glob_match(&p, &name),
+            }
+        })
+    }
+
+    /// The subfolder a name points into, if any.
+    pub fn subfolders(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().filter_map(|p| p.split_once('/').map(|(d, _)| d))
     }
 }
 
@@ -148,7 +174,9 @@ fn parse_stacks(v: Option<&Value>) -> Result<Vec<StackDecl>> {
         let mut names = vec![];
         for f in files {
             let f = f.as_str().unwrap_or("");
-            if f.is_empty() || f.len() > 64 || f.contains(['/', '\\']) || f.chars().all(|c| c == '*' || c == '.') {
+            let (sub, name) = f.split_once('/').unwrap_or(("", f));
+            let bad_sub = f.contains('/') && (sub.is_empty() || sub.contains('*') || sub.chars().all(|c| c == '.'));
+            if f.is_empty() || f.len() > 64 || name.contains(['/', '\\']) || sub.contains('\\') || bad_sub || name.chars().all(|c| c == '*' || c == '.') {
                 bail!("stacks 里的文件名不对：{f}");
             }
             names.push(f.to_string());
@@ -659,7 +687,13 @@ mod tests {
         assert_eq!(d.name, "ASV");
         assert!(d.matches("projectdata.DAT") && d.matches("run.A3D") && !d.matches("ProjectData.dat.bak") && !d.matches("x.a3dx"));
         assert!(parse(r#""stacks":[{"files":["a.dat"]}]"#).is_err(), "stacks without wasm");
-        for bad in [r#"[{"files":[]}]"#, r#"[{"files":["a/b.dat"]}]"#, r#"[{"files":["*"]}]"#, r#"{"files":["a"]}"#] {
+        let m = parse(r#""wasm":"v.wasm","stacks":[{"files":["*.lif","MetaData/*.xml"]}]"#).unwrap();
+        let d = &m.stacks[0];
+        assert!(d.matches("p.LIF") && !d.matches("a.xml") && d.matches_in("metadata", "a.xml") && !d.matches_in("other", "a.xml"));
+        assert_eq!(d.priority("", "p.lif"), Some(0));
+        assert_eq!(d.priority("MetaData", "a.xml"), Some(1));
+        assert_eq!(d.subfolders().collect::<Vec<_>>(), ["MetaData"]);
+        for bad in [r#"[{"files":[]}]"#, r#"[{"files":["a/b/c.dat"]}]"#, r#"[{"files":["../b.dat"]}]"#, r#"[{"files":["*/b.dat"]}]"#, r#"[{"files":["/b.dat"]}]"#, r#"[{"files":["*"]}]"#, r#"{"files":["a"]}"#] {
             assert!(parse(&format!(r#""wasm":"v.wasm","stacks":{bad}"#)).is_err(), "{bad}");
         }
         assert!(glob_match("a*b*c", "aXbYc") && glob_match("a*", "a") && !glob_match("a*b", "ab_") && glob_match("*.tif", ".tif"));

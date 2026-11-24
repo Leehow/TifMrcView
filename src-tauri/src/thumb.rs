@@ -12,8 +12,10 @@ const MAX_DECODE_BYTES: usize = 128 << 20;
 pub const MAX_SIZE: u32 = 2048;
 static PLUGINS: Once = Once::new();
 
+/// The OS thumbnailers check plugins' `minAppVersion` against the release
+/// version (CI sets TMV_APP_VERSION), like the app itself.
 pub fn configure_plugins(dir: Option<std::path::PathBuf>) {
-    configure_plugins_version(dir, env!("CARGO_PKG_VERSION"));
+    configure_plugins_version(dir, option_env!("TMV_APP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")));
 }
 
 pub fn configure_plugins_version(dir: Option<std::path::PathBuf>, version: &str) {

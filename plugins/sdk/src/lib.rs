@@ -530,6 +530,9 @@ pub struct StackSeries {
     /// The folder holding its slices, relative to the project file; lets
     /// the app pick this stack when the user opens that folder.
     pub dir: String,
+    /// Its slices (as in the listing), when known for every series: lets
+    /// the app pick this series when the user opened one of them.
+    pub files: Vec<String>,
 }
 
 /// The image stack an acquisition project file describes (`tmv_stack`).
@@ -542,7 +545,16 @@ pub struct Stack {
     pub format: Option<String>,
     /// Distance between slices, in `unit` (`nm`, `µm`…).
     pub z_spacing: Option<f64>,
+    /// X/Y pixel size in `unit`, when the project knows it better than the
+    /// slices (exported TIFFs often carry none). App 0.7.0 ignores it.
+    pub pixel_size: Option<[f64; 2]>,
     pub unit: String,
+    /// A file in the listing (or `"."`, the project file itself) that holds
+    /// this same image as image `open_series`, e.g. the vendor container
+    /// next to its exported slices: the app opens it instead of the slices.
+    /// `files` may then be empty. App 0.7.0 ignores it.
+    pub open: Option<String>,
+    pub open_series: u32,
     /// Groups for the image-info panel, before the first slice's own.
     pub metadata: Vec<Group>,
     /// Every stack in the project when there are several, and which one this is.
@@ -567,7 +579,16 @@ impl Stack {
         }
         if let Some(z) = self.z_spacing {
             j.num("zSpacing", z);
+        }
+        if let Some([x, y]) = self.pixel_size {
+            j.raw("pixelSize", &format!("[{},{}]", num(x), num(y)));
+        }
+        if self.z_spacing.is_some() || self.pixel_size.is_some() {
             j.str("unit", &self.unit);
+        }
+        if let Some(o) = &self.open {
+            j.str("open", o);
+            j.num("openSeries", self.open_series as f64);
         }
         j.raw("metadata", &groups_json(&self.metadata));
         if !self.series.is_empty() {
@@ -580,6 +601,17 @@ impl Stack {
                 o.str("name", &x.name);
                 o.str("detail", &x.detail);
                 o.str("dir", &x.dir);
+                if !x.files.is_empty() {
+                    let mut f = String::from("[");
+                    for (k, name) in x.files.iter().enumerate() {
+                        if k > 0 {
+                            f.push(',');
+                        }
+                        json_str(&mut f, name);
+                    }
+                    f.push(']');
+                    o.raw("files", &f);
+                }
                 s.push_str(&o.finish());
             }
             s.push(']');

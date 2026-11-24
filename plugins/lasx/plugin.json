@@ -1,15 +1,28 @@
 {
   "id": "lasx",
   "name": "Leica LAS X",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "打开徕卡 LAS X / LAS AF 保存的 LIF 项目和 LOF 文件，并显示物镜、扫描、探测器和激光等采集参数",
   "main": "index.js",
   "apiVersion": 1,
-  "minAppVersion": "0.5.0",
+  "minAppVersion": "0.7.334",
   "author": "TifMrcView",
   "native": false,
   "wasm": "lasx.wasm",
-  "formats": [{ "ext": ["lif"], "name": "Leica LIF" }, { "ext": ["lof"], "name": "Leica LOF" }],
+  "formats": [
+    {
+      "ext": [
+        "lif"
+      ],
+      "name": "Leica LIF"
+    },
+    {
+      "ext": [
+        "lof"
+      ],
+      "name": "Leica LOF"
+    }
+  ],
   "i18n": {
     "en": {
       "name": "Leica LAS X",
@@ -41,43 +54,62 @@
       "打开徕卡显微镜软件 LAS X（及旧版 LAS AF）保存的 LIF 项目和 LOF 单图像文件（TCS SP8、STELLARIS 等共聚焦，以及宽场系统）。TifMrcView 本身不带 LIF 读取代码；装上这个插件后即可打开 .lif 和 .lof：多通道、Z 栈、时间序列和多维组合都支持，RGB 彩色图像也能识别。LIF 项目里通常有很多幅图像（文件夹里的各次采集），插件把每一幅有像素的图像列为一个序列，在查看器的序列选择器里按名称（如 Experiment/Position 1/Series003）和尺寸挑选。",
       "拼块扫描（Tile Scan / Mosaic）会按文件里记录的拼块位置拼成一幅大图；位置信息缺失或不规则时只显示第 1 个拼块。像素尺寸取自各维度的 Length 和 NumberOfElements，通道颜色取自 LUT 名称。插件以 WebAssembly 形式在沙箱里运行，只能读取正在打开的那个文件，像素本身没有压缩，由应用直接按步长读取，速度和内置格式一样。",
       "插件还把嵌入的 XML 整理成采集参数，显示在图像信息面板里。「LAS X 图像」：软件版本、采集时间、位深、各维度尺寸、像素尺寸、Z 步长和时间间隔。「LAS X 显微镜」：显微镜与系统型号、物镜、数值孔径、浸没介质、缩放、扫描速度与方向、针孔、行与帧平均、像素驻留时间。每个通道单独一组：染料、探测器及其增益和偏移、检测波长范围、激光谱线及强度。「LAS X 全部参数」把当前这幅图像的所有元数据展开列出，方便查找。",
-      "安装后无需设置，直接打开 .lif 或 .lof 文件即可。需要 TifMrcView 0.5.0 或更新版本。"
+      "打开 LAS X 导出的单张 TIFF（如 Project_Series002_z050_ch00.tif）时，应用会在后台查看所在文件夹：旁边有原始的 .lif/.lof 项目，就提示按徕卡原始数据打开对应的那幅图像（原始位深、全部通道、Z 栈和其他序列）；只有导出的 TIFF 和 MetaData 文件夹时，把这些 TIFF 按 MetaData 里的 XML 排成 Z 栈，带上像素尺寸、Z 步长和采集参数；.xlef/.xlif 项目则列出其中的 .lof 图像。没装插件时，应用会在这样的文件夹里提示安装。",
+      "安装后无需设置，直接打开 .lif 或 .lof 文件即可。需要 TifMrcView 0.7.334 或更新版本。"
     ],
     "en": [
       "Opens LIF projects and single-image LOF files saved by LAS X, the software of Leica microscopes (and its predecessor LAS AF): TCS SP8 and STELLARIS confocals as well as widefield systems. TifMrcView itself contains no LIF code; with this plugin installed, .lif and .lof files open with channels, Z stacks, time series and their combinations, and RGB colour images are recognised. A LIF project usually holds many images (the acquisitions in its folders): the plugin lists every image that has pixels as a series, and you pick one by name (for example Experiment/Position 1/Series003) and size in the viewer's series picker.",
       "Tile scans (mosaics) are stitched into one large image using the tile positions stored in the file; when the positions are missing or irregular, only the first tile is shown. Pixel size comes from each dimension's Length and NumberOfElements, channel colours from the LUT names. The plugin runs sandboxed as WebAssembly and can only read the file being opened; the pixels are uncompressed and read by the app itself straight from the file using the stored strides, as fast as for built-in formats.",
       "The plugin also turns the embedded XML into acquisition settings in the image-info panel. \"LAS X image\": software version, acquisition time, bit depth, size of every dimension, pixel size, Z step and time interval. \"LAS X microscope\": microscope and system model, objective, numerical aperture, immersion, zoom, scan speed and direction, pinhole, line and frame averaging, pixel dwell time. Each channel gets its own group: dye, detector with its gain and offset, detection wavelength range, laser lines and intensities. \"LAS X all settings\" flattens every metadata field of the selected image so you can search it.",
-      "There is nothing to configure: install it and open .lif or .lof files. Needs TifMrcView 0.5.0 or newer."
+      "When you open a single TIFF exported by LAS X (such as Project_Series002_z050_ch00.tif), the app looks at its folder in the background: with the original .lif/.lof project beside it, it offers to open that image from the Leica data (original bit depth, all channels, the Z stack and the other series); with only the exported TIFFs and their MetaData folder, it stacks the TIFFs in Z using the XML in MetaData, with pixel size, Z step and acquisition settings; for .xlef/.xlif projects it offers their .lof images. Without the plugin, the app suggests installing it in such folders.",
+      "There is nothing to configure: install it and open .lif or .lof files. Needs TifMrcView 0.7.334 or newer."
     ],
     "de": [
       "Öffnet LIF-Projekte und LOF-Einzelbilddateien von LAS X, der Software der Leica-Mikroskope (und ihrem Vorgänger LAS AF): TCS-SP8- und STELLARIS-Konfokalmikroskope sowie Weitfeldsysteme. TifMrcView selbst enthält keinen LIF-Lesecode; mit diesem Plugin lassen sich .lif und .lof mit Kanälen, Z-Stapeln, Zeitserien und deren Kombinationen öffnen; RGB-Farbbilder werden erkannt. Ein LIF-Projekt enthält meist viele Bilder (die Aufnahmen in seinen Ordnern): Das Plugin listet jedes Bild mit Pixeldaten als Serie auf. In der Serienauswahl wählen Sie nach Name (etwa Experiment/Position 1/Series003) und Größe.",
       "Kachelaufnahmen (Mosaike) werden anhand der gespeicherten Kachelpositionen zu einem großen Bild zusammengefügt; fehlen die Positionen oder sind sie unregelmäßig, wird nur die erste Kachel angezeigt. Die Pixelgröße wird aus Length und NumberOfElements jeder Dimension bestimmt, die Kanalfarben aus den LUT-Namen. Das Plugin läuft als WebAssembly in einer Sandbox und kann nur die gerade geöffnete Datei lesen; die unkomprimierten Pixel liest die App selbst mit den gespeicherten Schrittweiten direkt aus der Datei, genauso schnell wie bei integrierten Formaten.",
       "Das Plugin bereitet außerdem das eingebettete XML als Aufnahmeparameter im Bildinformationsbereich auf. „LAS X-Bild“: Softwareversion, Aufnahmezeit, Bittiefe, Größe jeder Dimension, Pixelgröße, Z-Schritt und Zeitintervall. „LAS X-Mikroskop“: Mikroskop- und Systemmodell, Objektiv, numerische Apertur, Immersion, Zoom, Scangeschwindigkeit und -richtung, Lochblende, Zeilen- und Bildmittelung, Pixelverweilzeit. Jeder Kanal erhält eine eigene Gruppe: Farbstoff, Detektor mit Verstärkung und Offset, Detektionswellenlängenbereich, Laserlinien und Intensitäten. „Alle LAS X-Einstellungen“ listet sämtliche Metadatenfelder des ausgewählten Bildes zum Durchsuchen auf.",
-      "Keine Konfiguration nötig: nach der Installation .lif- oder .lof-Dateien öffnen. Benötigt TifMrcView 0.5.0 oder neuer."
+      "Beim Öffnen einer einzelnen von LAS X exportierten TIFF-Datei (etwa Project_Series002_z050_ch00.tif) prüft die App im Hintergrund den Ordner: Liegt das ursprüngliche .lif/.lof-Projekt daneben, bietet sie an, das Bild aus den Leica-Daten zu öffnen (ursprüngliche Bittiefe, alle Kanäle, Z-Stapel und weitere Serien); gibt es nur die exportierten TIFFs mit ihrem MetaData-Ordner, stapelt sie die TIFFs anhand des XML in Z, mit Pixelgröße, Z-Schritt und Aufnahmeparametern; bei .xlef/.xlif-Projekten bietet sie deren .lof-Bilder an. Ohne Plugin schlägt die App in solchen Ordnern die Installation vor.",
+      "Keine Konfiguration nötig: nach der Installation .lif- oder .lof-Dateien öffnen. Benötigt TifMrcView 0.7.334 oder neuer."
     ],
     "ja": [
       "Leica 顕微鏡のソフトウェア LAS X（および旧 LAS AF）で保存した LIF プロジェクトと単一画像の LOF を開きます。TCS SP8・STELLARIS 共焦点顕微鏡や広視野システムに対応します。TifMrcView 本体には LIF の読み取りコードは含まれていません。このプラグインを入れると、チャンネル、Z スタック、時系列とその組み合わせを含む .lif / .lof を開け、RGB カラー画像も認識します。LIF プロジェクトには通常、各フォルダーの取得画像が多数含まれています。プラグインはピクセルを持つ各画像をシリーズとして一覧にし、ビューアーのシリーズ選択で名前（例：Experiment/Position 1/Series003）とサイズを見て選べます。",
       "タイル走査（モザイク）は、ファイル内のタイル位置を使って大きな 1 枚の画像に結合します。位置が欠けているか不規則な場合は最初のタイルだけを表示します。ピクセルサイズは各次元の Length と NumberOfElements から、チャンネル色は LUT 名から取得します。プラグインは WebAssembly としてサンドボックス内で動作し、開いているファイルだけを読み取ります。非圧縮のピクセルは保存されたストライドを使ってアプリ本体がファイルから直接読み取るため、内蔵形式と同じ速度で読み込めます。",
       "埋め込み XML を整理し、画像情報パネルに取得条件として表示します。「LAS X 画像」にはソフトウェアバージョン、取得時刻、ビット深度、各次元のサイズ、ピクセルサイズ、Z ステップ、時間間隔を表示します。「LAS X 顕微鏡」には顕微鏡・システムのモデル、対物レンズ、開口数、液浸、ズーム、走査速度と方向、ピンホール、ライン・フレーム平均化、ピクセル滞留時間を表示します。チャンネルごとに色素、検出器とゲイン・オフセット、検出波長範囲、レーザー波長と強度をまとめます。「LAS X 全設定」では選択中の画像の全メタデータ項目を展開して検索できます。",
-      "設定は不要です。インストール後に .lif / .lof を開くだけで使えます。TifMrcView 0.5.0 以降が必要です。"
+      "LAS X で書き出した TIFF を 1 枚開くと（例：Project_Series002_z050_ch00.tif）、アプリがバックグラウンドでそのフォルダーを確認します。元の .lif/.lof プロジェクトがあれば、その画像を Leica の元データ（元のビット深度、全チャンネル、Z スタック、他のシリーズ）で開くよう提案します。書き出した TIFF と MetaData フォルダーだけの場合は、MetaData の XML を使って TIFF を Z スタックにまとめ、ピクセルサイズ、Z ステップ、取得条件を付けます。.xlef/.xlif プロジェクトでは中の .lof 画像を提示します。プラグイン未導入のときは、こうしたフォルダーでインストールを提案します。",
+      "設定は不要です。インストール後に .lif / .lof を開くだけで使えます。TifMrcView 0.7.334 以降が必要です。"
     ],
     "es": [
       "Abre proyectos LIF y archivos LOF de una sola imagen guardados por LAS X, el software de los microscopios Leica (y su predecesor LAS AF): confocales TCS SP8 y STELLARIS y sistemas de campo amplio. TifMrcView no incluye código LIF; este complemento abre .lif y .lof con canales, pilas Z, series temporales y sus combinaciones, y reconoce imágenes RGB. Un proyecto LIF suele contener muchas imágenes (las adquisiciones de sus carpetas): el complemento enumera como serie cada imagen con píxeles, que se puede elegir por nombre (por ejemplo Experiment/Position 1/Series003) y tamaño en el selector de series.",
       "Los barridos por teselas (mosaicos) se ensamblan en una imagen grande usando las posiciones guardadas en el archivo; si faltan o son irregulares, solo se muestra la primera tesela. El tamaño de píxel se obtiene de Length y NumberOfElements de cada dimensión, y los colores de los canales de los nombres LUT. El complemento se ejecuta como WebAssembly en un entorno aislado y solo puede leer el archivo abierto; la propia aplicación lee directamente los píxeles sin comprimir usando los pasos de memoria almacenados, con la misma rapidez que los formatos integrados.",
       "También convierte el XML integrado en parámetros de adquisición en el panel de información. «Imagen LAS X»: versión del software, hora de adquisición, profundidad de bits, tamaño de cada dimensión, tamaño de píxel, paso Z e intervalo temporal. «Microscopio LAS X»: modelo del microscopio y del sistema, objetivo, apertura numérica, inmersión, zoom, velocidad y dirección de barrido, pinhole, promediado de líneas y fotogramas, tiempo de permanencia por píxel. Cada canal tiene su propio grupo: colorante, detector con ganancia y offset, rango de longitudes de onda de detección, líneas láser e intensidades. «Todos los parámetros LAS X» despliega todos los metadatos de la imagen seleccionada para poder buscarlos.",
-      "No requiere configuración: instálalo y abre .lif o .lof. Requiere TifMrcView 0.5.0 o posterior."
+      "Al abrir un TIFF exportado por LAS X (por ejemplo Project_Series002_z050_ch00.tif), la aplicación revisa su carpeta en segundo plano: si junto a él está el proyecto .lif/.lof original, ofrece abrir esa imagen desde los datos de Leica (profundidad de bits original, todos los canales, la pila Z y las demás series); si solo están los TIFF exportados y su carpeta MetaData, apila los TIFF en Z con el XML de MetaData, con tamaño de píxel, paso Z y parámetros de adquisición; en proyectos .xlef/.xlif ofrece sus imágenes .lof. Sin el complemento, la aplicación propone instalarlo en esas carpetas.",
+      "No requiere configuración: instálalo y abre .lif o .lof. Requiere TifMrcView 0.7.334 o posterior."
     ],
     "fr": [
       "Ouvre les projets LIF et les fichiers LOF à image unique enregistrés par LAS X, le logiciel des microscopes Leica (et son prédécesseur LAS AF) : confocaux TCS SP8 et STELLARIS, ainsi que systèmes à champ large. TifMrcView ne contient pas de code LIF ; cette extension ouvre les .lif et .lof avec canaux, piles Z, séries temporelles et leurs combinaisons, et reconnaît les images couleur RGB. Un projet LIF contient généralement de nombreuses images (les acquisitions de ses dossiers) : chaque image contenant des pixels est listée comme une série, à choisir par nom (par exemple Experiment/Position 1/Series003) et taille dans le sélecteur de séries.",
       "Les acquisitions en tuiles (mosaïques) sont assemblées en une grande image à partir des positions enregistrées ; si les positions sont absentes ou irrégulières, seule la première tuile est affichée. La taille de pixel provient de Length et NumberOfElements de chaque dimension, et les couleurs des canaux des noms de LUT. L’extension s’exécute en WebAssembly dans un environnement isolé et ne lit que le fichier ouvert ; l’application lit elle-même les pixels non compressés directement dans le fichier selon les pas mémoire enregistrés, aussi vite que pour les formats intégrés.",
       "L’extension convertit aussi le XML intégré en paramètres d’acquisition dans le panneau d’informations. « Image LAS X » : version du logiciel, heure d’acquisition, profondeur de bits, taille de chaque dimension, taille de pixel, pas Z et intervalle temporel. « Microscope LAS X » : modèles du microscope et du système, objectif, ouverture numérique, immersion, zoom, vitesse et sens du balayage, diaphragme confocal, moyennage des lignes et des images, temps de séjour par pixel. Chaque canal dispose de son groupe : colorant, détecteur avec gain et offset, plage de longueurs d’onde de détection, raies laser et intensités. « Tous les paramètres LAS X » déroule tous les champs de métadonnées de l’image sélectionnée pour permettre leur recherche.",
-      "Aucune configuration nécessaire : installez l’extension et ouvrez des .lif ou .lof. Nécessite TifMrcView 0.5.0 ou une version ultérieure."
+      "À l’ouverture d’un TIFF exporté par LAS X (par exemple Project_Series002_z050_ch00.tif), l’application examine son dossier en arrière-plan : si le projet .lif/.lof d’origine est à côté, elle propose d’ouvrir cette image depuis les données Leica (profondeur de bits d’origine, tous les canaux, la pile Z et les autres séries) ; s’il n’y a que les TIFF exportés et leur dossier MetaData, elle empile les TIFF en Z d’après le XML de MetaData, avec la taille de pixel, le pas Z et les paramètres d’acquisition ; pour les projets .xlef/.xlif, elle propose leurs images .lof. Sans l’extension, l’application propose de l’installer dans ces dossiers.",
+      "Aucune configuration nécessaire : installez l’extension et ouvrez des .lif ou .lof. Nécessite TifMrcView 0.7.334 ou une version ultérieure."
     ],
     "ru": [
       "Открывает проекты LIF и файлы LOF с одним изображением, сохранённые LAS X — программой микроскопов Leica (и её предшественником LAS AF): конфокальных TCS SP8 и STELLARIS, а также широкопольных систем. В самом TifMrcView нет кода LIF; плагин открывает .lif и .lof с каналами, Z-стеками, временными сериями и их сочетаниями, распознаёт цветные изображения RGB. Проект LIF обычно содержит много изображений — съёмок в его папках. Плагин перечисляет каждое изображение с пикселями как серию; в списке серий можно выбрать её по имени (например Experiment/Position 1/Series003) и размеру.",
       "Плиточные сканирования (мозаики) сшиваются в одно большое изображение по позициям плиток из файла; если позиции отсутствуют или нерегулярны, отображается только первая плитка. Размер пикселя определяется по Length и NumberOfElements каждого измерения, цвета каналов — по названиям LUT. Плагин работает как WebAssembly в изолированной среде и читает только открываемый файл; несжатые пиксели приложение читает напрямую из файла по сохранённым шагам адресации, так же быстро, как для встроенных форматов.",
       "Плагин также преобразует встроенный XML в параметры съёмки на панели информации. «Изображение LAS X»: версия программы, время съёмки, битовая глубина, размер каждого измерения, размер пикселя, шаг Z и временной интервал. «Микроскоп LAS X»: модель микроскопа и системы, объектив, числовая апертура, иммерсия, масштаб, скорость и направление сканирования, пинхол, усреднение строк и кадров, время выдержки пикселя. У каждого канала своя группа: краситель, детектор с усилением и смещением, диапазон длин волн детекции, линии лазеров и интенсивности. «Все параметры LAS X» разворачивает все поля метаданных выбранного изображения для поиска.",
-      "Настройка не требуется: установите плагин и открывайте .lif или .lof. Требуется TifMrcView 0.5.0 или новее."
+      "При открытии одного TIFF, экспортированного LAS X (например Project_Series002_z050_ch00.tif), приложение в фоне просматривает его папку: если рядом лежит исходный проект .lif/.lof, оно предлагает открыть это изображение из данных Leica (исходная битовая глубина, все каналы, Z-стек и другие серии); если есть только экспортированные TIFF и папка MetaData, TIFF собираются в Z-стек по XML из MetaData с размером пикселя, шагом Z и параметрами съёмки; для проектов .xlef/.xlif предлагаются их изображения .lof. Без плагина приложение предлагает установить его в таких папках.",
+      "Настройка не требуется: установите плагин и открывайте .lif или .lof. Требуется TifMrcView 0.7.334 или новее."
     ]
-  }
+  },
+  "stacks": [
+    {
+      "files": [
+        "*.lif",
+        "*.lof",
+        "*.xlef",
+        "*.xlif",
+        "MetaData/*.xml"
+      ],
+      "name": "Leica LAS X"
+    }
+  ]
 }
