@@ -280,7 +280,7 @@ impl Registry {
     /// handles `ext`; also returns that plugin's id.
     pub fn open(&self, path: &Path, ext: &str, series: usize) -> Option<Result<(Box<dyn Source>, String)>> {
         let pkg = self.active().into_iter().find(|p| p.opens(ext).is_some())?;
-        Some(WasmSource::open(&pkg, path, series).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
+        Some(WasmSource::open(pkg.clone(), path, series).map(|s| (Box::new(s) as Box<dyn Source>, pkg.manifest.id.clone())))
     }
 
     fn stack_pkg(&self, path: &Path) -> Option<(Arc<Pkg>, String)> {
@@ -706,19 +706,51 @@ fn parse_info(json: &[u8], path: &Path, default_format: &str) -> Result<ImageInf
     Ok(info)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PyramidJson {
+    #[serde(default)]
+    series_index: usize,
+    #[serde(default)]
+    pyramid: Vec<[u64; 3]>,
+}
+
+fn is_pyramid(json: &[u8]) -> bool {
+    serde_json::from_slice::<PyramidJson>(json).is_ok_and(|j| j.pyramid.len() > 1)
+}
+
+/// The smaller levels of a full-resolution image whose plugin lists its
+/// series as resolution levels: each narrower than the one before, and the
+/// first one this image.
+fn pyramid(json: &[u8], info: &ImageInfo) -> Vec<[usize; 3]> {
+    let Ok(j) = serde_json::from_slice::<PyramidJson>(json) else { return vec![] };
+    let sizes: Vec<[usize; 3]> = j.pyramid.iter().map(|s| s.map(|v| usize::try_from(v).unwrap_or(0))).collect();
+    let ok = j.series_index == 0
+        && sizes.len() > 1
+        && sizes[0] == [info.width, info.height, info.size_z]
+        && sizes.iter().all(|s| s[0] > 0 && s[1] > 0 && s[2] > 0)
+        && sizes.windows(2).all(|p| p[1][0] < p[0][0] && p[1][1] <= p[0][1] && p[1][2] <= p[0][2]);
+    if ok { sizes[1..].to_vec() } else { vec![] }
+}
+
 /// A file read through a format plugin. The plugin instance is used only
 /// briefly per page (to get the recipe), behind a lock; decoding happens
 /// outside it, so prefetch threads still decode in parallel.
 pub struct WasmSource {
     file: Arc<Mmap>,
     info: ImageInfo,
+    pkg: Arc<Pkg>,
+    path: PathBuf,
+    /// The image at lower resolutions (width, height, Z), when the plugin
+    /// says its series are that (`pyramid`); entry i is series i + 1.
+    levels: Vec<[usize; 3]>,
     plugin: Mutex<(Instance, i32)>,
     /// Pages stored as one uncompressed run of the file: (offset, little endian).
     raw: Mutex<HashMap<usize, Option<(usize, bool)>>>,
 }
 
 impl WasmSource {
-    fn open(pkg: &Pkg, path: &Path, series: usize) -> Result<WasmSource> {
+    fn open(pkg: Arc<Pkg>, path: &Path, series: usize) -> Result<WasmSource> {
         let module = pkg.module()?;
         let file = map_file(path)?;
         let mut inst = Instance::new(module, file.clone(), &pkg.manifest.id)?;
@@ -727,8 +759,22 @@ impl WasmSource {
         let json = inst.info(handle)?;
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         let name = pkg.opens(&ext).filter(|n| !n.is_empty()).unwrap_or(&pkg.manifest.name).to_string();
-        let info = parse_info(&json, path, &name)?;
-        Ok(WasmSource { file, info, plugin: Mutex::new((inst, handle)), raw: Mutex::new(HashMap::new()) })
+        let mut info = parse_info(&json, path, &name)?;
+        let levels = pyramid(&json, &info);
+        if !levels.is_empty() || series > 0 && is_pyramid(&json) {
+            // Resolution levels are read by the viewer, not picked.
+            info.series.clear();
+            info.series_index = 0;
+        }
+        Ok(WasmSource {
+            file,
+            info,
+            pkg,
+            path: path.to_path_buf(),
+            levels,
+            plugin: Mutex::new((inst, handle)),
+            raw: Mutex::new(HashMap::new()),
+        })
     }
 
     fn recipe(&self, page: usize) -> Result<recipe::Recipe> {
@@ -745,6 +791,15 @@ impl WasmSource {
 impl Source for WasmSource {
     fn info(&self) -> &ImageInfo {
         &self.info
+    }
+
+    fn levels(&self) -> &[[usize; 3]] {
+        &self.levels
+    }
+
+    fn open_level(&self, level: usize) -> Option<Result<Box<dyn Source>>> {
+        self.levels.get(level.checked_sub(1)?)?;
+        Some(WasmSource::open(self.pkg.clone(), &self.path, level).map(|s| Box::new(s) as Box<dyn Source>))
     }
 
     fn read_page(&self, page: usize) -> Result<Vec<Plane>> {
@@ -1010,6 +1065,24 @@ impl Source for Augmented {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolution_levels_from_the_pyramid_list() {
+        let p = Path::new("/x/a.ims");
+        let j = br#"{"width":8,"height":6,"sizeZ":4,"dtype":"u16","series":[{"name":"a"},{"name":"b"},{"name":"c"}],"seriesIndex":0,"pyramid":[[8,6,4],[4,3,2],[2,1,1]]}"#;
+        let info = parse_info(j, p, "IMS").unwrap();
+        assert_eq!(pyramid(j, &info), vec![[4, 3, 2], [2, 1, 1]]);
+        assert!(is_pyramid(j));
+        // Not this image's size, not shrinking, or another series open: none.
+        for bad in [
+            &br#"{"width":8,"height":6,"sizeZ":4,"dtype":"u16","seriesIndex":0,"pyramid":[[9,6,4],[4,3,2]]}"#[..],
+            br#"{"width":8,"height":6,"sizeZ":4,"dtype":"u16","seriesIndex":0,"pyramid":[[8,6,4],[8,3,2]]}"#,
+            br#"{"width":8,"height":6,"sizeZ":4,"dtype":"u16","seriesIndex":1,"pyramid":[[8,6,4],[4,3,2]]}"#,
+            br#"{"width":8,"height":6,"sizeZ":4,"dtype":"u16"}"#,
+        ] {
+            assert!(pyramid(bad, &parse_info(bad, p, "IMS").unwrap()).is_empty());
+        }
+    }
 
     #[test]
     fn info_json_is_checked_and_completed() {

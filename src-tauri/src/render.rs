@@ -19,7 +19,7 @@ pub struct ChanReq {
     pub max: Option<f32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderReq {
     pub token: u64,
@@ -46,6 +46,24 @@ fn one() -> f32 {
 /// Layout of the reply: `u32 width, u32 height, u32 channels`, then per
 /// channel `f32 min, f32 max, f32 data_min, f32 data_max`, then RGBA bytes.
 pub fn render(img: &Arc<OpenImage>, req: &RenderReq) -> Result<Vec<u8>> {
+    // Shown reduced: read the smallest stored resolution that still has a
+    // pixel for every screen pixel, as Imaris does.
+    if img.has_levels() {
+        let scale = (req.region[2] / req.out_w.max(1) as f64).min(req.region[3] / req.out_h.max(1) as f64);
+        let level = img.level_for(scale);
+        img.shown_level.store(level.map_or(0, |l| l.0), std::sync::atomic::Ordering::Relaxed);
+        if let Some((l, f)) = level {
+            let low = img.level(l)?;
+            let li = low.info();
+            let mut r = req.clone();
+            r.z = ((req.z as f64 + 0.5) / f[2]) as usize;
+            r.z = r.z.min(li.size_z.saturating_sub(1));
+            let [x, y, w, h] = req.region;
+            r.region = [x / f[0], y / f[1], w / f[0], h / f[1]];
+            low.set_focus(li.locate(0, r.z, r.t).0);
+            return render(&low, &r);
+        }
+    }
     let info = img.info();
     let (iw, ih) = (info.width, info.height);
     let out_w = req.out_w.clamp(1, 16384);

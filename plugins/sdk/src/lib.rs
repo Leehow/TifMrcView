@@ -424,6 +424,12 @@ pub struct Info {
     pub series: Vec<Series>,
     /// Which entry of `series` this is.
     pub series_index: u32,
+    /// When `series` are one image at several resolutions (series 0 the
+    /// full one, then smaller): the size (width, height, Z) of each. The app
+    /// then shows no picker, and reads a smaller series itself wherever it
+    /// shows the image reduced (fit to the window, 3D). Apps before 0.7.337
+    /// ignore it and show the picker.
+    pub pyramid: Vec<[u32; 3]>,
     /// Set when the pixels are spectra rather than a picture.
     pub spectrum: Option<Spectrum>,
 }
@@ -449,6 +455,7 @@ impl Info {
             metadata: vec![],
             series: vec![],
             series_index: 0,
+            pyramid: vec![],
             spectrum: None,
         }
     }
@@ -487,6 +494,10 @@ impl Info {
             s.push(']');
             j.raw("series", &s);
             j.num("seriesIndex", self.series_index as f64);
+            if self.pyramid.len() == self.series.len() {
+                let sizes: Vec<String> = self.pyramid.iter().map(|[w, h, z]| format!("[{w},{h},{z}]")).collect();
+                j.raw("pyramid", &format!("[{}]", sizes.join(",")));
+            }
         }
         j.finish()
     }

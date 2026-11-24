@@ -55,6 +55,25 @@ pub fn factors(w: usize, h: usize, d: usize, max_voxels: usize) -> (usize, usize
 /// size x, y, z (relative; 1 when the file does not say), then per channel
 /// `f32 min, max` used for scaling followed by `width*height*depth` bytes.
 pub fn volume(img: &Arc<OpenImage>, req: &VolumeReq) -> Result<Vec<u8>> {
+    // With lower resolutions stored, start from the smallest one that is
+    // still at least about the size of the result instead of reading the
+    // whole full-size stack.
+    let sizes = img.source.levels();
+    if !sizes.is_empty() {
+        let voxels = |[w, h, d]: [usize; 3]| w.saturating_mul(h).saturating_mul(d);
+        let info = img.info();
+        let full = voxels([info.width, info.height, info.size_z]);
+        // The coarsest level with at least the voxels asked for; else the
+        // largest level, unless the full size is not much larger.
+        let pick = match sizes.iter().rposition(|&s| voxels(s) >= req.max_voxels) {
+            Some(i) => i + 1,
+            None if full > req.max_voxels.saturating_mul(8) => 1,
+            None => 0,
+        };
+        if pick > 0 {
+            return volume(&img.level(pick)?, req);
+        }
+    }
     let info = img.info();
     let (w, h, d) = (info.width, info.height, info.size_z);
     if d < 2 {
