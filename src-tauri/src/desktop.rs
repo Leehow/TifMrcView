@@ -488,6 +488,24 @@ async fn figure_movie(state: State<'_, AppState>, request: tauri::ipc::Request<'
         .map_err(|e| format!("{e:#}"))
 }
 
+/// The recorder plugin's raw TIF export of a range of slices (see
+/// `tif_series`); available while that plugin is installed.
+#[tauri::command]
+async fn export_tif_series(
+    state: State<'_, AppState>,
+    plugins: State<'_, crate::plugins::Plugins>,
+    req: crate::tif_series::Request,
+) -> CmdResult<crate::tif_series::Written> {
+    if !plugins.installed("recorder") {
+        return Err("导出 TIF 序列需要先安装「录制视频」插件".into());
+    }
+    if !state.save_paths.allowed(&req.path) {
+        return Err(format!("不允许写入：{}", req.path));
+    }
+    let img = current(&state, req.token)?;
+    blocking(move || crate::tif_series::export(&img, &req)).await
+}
+
 // ---------- Pro SAM segmentation ----------
 
 #[tauri::command]
@@ -3688,6 +3706,7 @@ pub fn run() {
             labels_object_relabel,
             labels_surfaces_export,
             #[cfg(feature = "recorder")] figure_movie,
+            export_tif_series,
             #[cfg(feature = "pro")] figure_dir,
             sam_status,
             sam_download,

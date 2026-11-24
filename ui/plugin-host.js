@@ -105,10 +105,13 @@ function makeApi(rec) {
         height: i ? i.height : 0,
         selection: S.cropBox || S.crop ? [...(S.cropBox || S.crop)] : null,
         view: i ? visibleRegion() : null,
+        crop: S.crop ? [...S.crop] : null,
+        zLimits: i ? sliderLimits() : [0, 0],
+        axis: S.axis,
         pixelSize: S.px ? { ...S.px } : null,
       };
     },
-    /** Events: "open" (info), "slice" ({z, t}), "render". Returns an unsubscribe function. */
+    /** Events: "open" (info), "slice" ({z, t}), "render", "view" ({axis}), "crop" ({crop}). Returns an unsubscribe function. */
     on,
     setZ: (z) => setZ(z),
     setT: (t) => setT(t),
@@ -131,6 +134,17 @@ function makeApi(rec) {
      * `size` = [w, h] scales the output.
      */
     renderRegion: (region, opts) => renderRegion(region, opts),
+
+    /**
+     * Writes slices from..to (indices from 0, both included) of the shown
+     * image, cropped to `region`, as raw TIFF to `path` (from dialog.save):
+     * one multi-page file, or with `sequence` a folder of one file per slice.
+     * Only for the recorder plugin's package (the backend checks it).
+     */
+    exportTif: ({ from, to, region, path, sequence = false, t = S.t }) =>
+      invoke("export_tif_series", {
+        req: { token: S.token, from, to, t, region: region.map(Math.round), path, sequence },
+      }),
 
     ui: {
       toast: (msg, ms) => toast(msg, ms),
@@ -180,6 +194,21 @@ function makeApi(rec) {
         return { set: (v) => (entry.value = v) };
       },
       showTools: () => showPanel("all"),
+      /**
+       * Marks a range below the "z" or "t" slider: {from, to, color}, indices
+       * from 0, `to` null for the start alone; `null` clears it.
+       */
+      sliderRange(axis, range) {
+        setSliderRange(axis, range);
+        if (!rec.clearsRanges) {
+          rec.clearsRanges = true;
+          rec.cleanup.push(() => {
+            rec.clearsRanges = false;
+            setSliderRange("z", null);
+            setSliderRange("t", null);
+          });
+        }
+      },
       /** Shows a busy overlay with `text`; `null` hides it. */
       busy(text) {
         $("loading").textContent = text || "";

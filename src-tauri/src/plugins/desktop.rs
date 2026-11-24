@@ -39,6 +39,11 @@ impl Plugins {
     fn dir(&self) -> Result<&Path, String> {
         self.dir.as_deref().ok_or_else(|| "no plugin folder".into())
     }
+
+    /// Whether the package `id` is installed (features that come with a plugin).
+    pub fn installed(&self, id: &str) -> bool {
+        self.dir.as_deref().is_some_and(|d| package::is_installed(d, id))
+    }
 }
 
 /// Folder for user plugins, created on demand.

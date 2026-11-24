@@ -58,6 +58,8 @@ mod plugin_assoc;
 pub mod render;
 pub mod relocate;
 pub mod reslice;
+#[cfg(feature = "desktop")]
+pub mod tif_series;
 pub mod spectro;
 pub mod particles;
 pub mod stem4d;

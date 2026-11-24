@@ -73,8 +73,9 @@ const S = {
   op: null,         // pointer drag in progress
   picked: null,     // annotation chosen with the select tool
   cropBox: null,    // crop rectangle being drawn, {type: "crop", pts}
-  crop: null,       // applied crop [x, y, w, h] in image pixels
-  cropStack: [],    // earlier crops, for undo
+  crop: null,       // the crop as this view shows it, [x, y, w, h] (see syncCrop)
+  vcrop: null,      // applied crop of the whole volume, {x, y, z: [first, count]}, each optional
+  vcropStack: [],   // earlier volume crops, for undo
   px: null,         // {x, y, unit} physical pixel size
   pz: null,         // distance between Z slices, in px.unit
   pluginMeta: [],   // metadata groups plugins added for the open file
@@ -272,7 +273,8 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     S.op = null;
     S.cropBox = null;
     S.crop = null;
-    S.cropStack = [];
+    S.vcrop = null;
+    S.vcropStack = [];
     showSize(null);
     $("measure-out").textContent = "";
     setModel(null);
@@ -380,7 +382,7 @@ async function setAxis(axis) {
   const prev = S.axis;
   if (prev === "xy") {
     flushAnn();
-    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, future: S.future, model: S.model, crop: S.crop, cropStack: S.cropStack };
+    S.base = { token: S.token, info: S.info, z: S.z, ann: S.ann, history: S.history, future: S.future, model: S.model };
   }
   let token, info, z;
   if (axis === "xy") {
@@ -393,7 +395,7 @@ async function setAxis(axis) {
       if (prev === "xy") S.base = null;
       return;
     }
-    z = Math.floor(info.sizeZ / 2);
+    z = null;
   }
   stopPlay();
   // A side view needs every slice in memory; show progress until it draws.
@@ -412,11 +414,15 @@ async function setAxis(axis) {
   S.lastDrawn = null;
   showSize(null);
   if (axis === "xy") {
-    Object.assign(S, { ann: S.base.ann, history: S.base.history, future: S.base.future, model: S.base.model, crop: S.base.crop, cropStack: S.base.cropStack });
+    Object.assign(S, { ann: S.base.ann, history: S.base.history, future: S.base.future, model: S.base.model });
     S.base = null;
   } else {
-    Object.assign(S, { ann: [], history: [], future: [], model: null, crop: null, cropStack: [] });
+    Object.assign(S, { ann: [], history: [], future: [], model: null });
   }
+  // The crop belongs to the volume, so every view shows the same part of it.
+  syncCrop();
+  const [lo, hi] = sliderLimits();
+  S.z = Math.max(lo, Math.min(hi, z ?? Math.floor((lo + hi) / 2)));
   const ps = info.pixelSize;
   if (S.pxSource !== "手动" && ps && ps[0] > 0 && UNIT_M[normUnit(info.unit)] && plausiblePixel(ps[0], normUnit(info.unit), true)) {
     S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(info.unit) };
@@ -428,6 +434,7 @@ async function setAxis(axis) {
   syncScaleUi();
   updateInfo();
   specOpened();
+  pluginEmit("view", { axis });
   fit();
   watchLoad();
 }
@@ -849,7 +856,9 @@ function setupSliders() {
   $("btn-axis").hidden = $("axis-sep").hidden = !stack;
   $("axis-label").textContent = S.xyz ? "XYZ" : S.axis.toUpperCase();
   $("zbar").hidden = sizeZ <= 1 && sizeT <= 1;
-  $("zslider").max = sizeZ - 1;
+  const [lo, hi] = sliderLimits();
+  $("zslider").min = lo;
+  $("zslider").max = hi;
   $("zslider").value = S.z;
   $("zslider").disabled = sizeZ <= 1;
   $("btn-play").disabled = sizeZ <= 1;
@@ -863,11 +872,13 @@ function updateZLabel() {
   $("zname").textContent = { xy: "Z", xz: "Y", yz: "X" }[S.axis];
   $("zlabel").textContent = `${S.z + 1} / ${S.info.sizeZ}`;
   $("tlabel").textContent = `${S.t + 1} / ${S.info.sizeT}`;
+  drawSliderRanges();
 }
 
 function setZ(z) {
   if (!S.info) return;
-  z = Math.max(0, Math.min(S.info.sizeZ - 1, z));
+  const [lo, hi] = sliderLimits();
+  z = Math.max(lo, Math.min(hi, z));
   if (S.xyz) {
     if (z === S.z && z === S.xyz.z) return;
     S.z = z;
@@ -923,7 +934,8 @@ function togglePlay() {
   $("btn-play").textContent = "❚❚";
   S.playing = setInterval(() => {
     if (S.inflight) return; // never queue frames faster than we can draw
-    setZ(S.z + 1 >= S.info.sizeZ ? 0 : S.z + 1);
+    const [lo, hi] = sliderLimits();
+    setZ(S.z + 1 > hi ? lo : S.z + 1);
   }, 1000 / 20);
 }
 
@@ -2677,6 +2689,47 @@ function toggleSidebar(force) {
   if (show) markStrip();
 }
 
+// The crop is kept per volume (X, Y and Z ranges) and each view shows its
+// two in-plane ranges, so XY, XZ, YZ and XYZ all agree. The axes of a view:
+// horizontal, vertical, and the one its slider walks.
+const VIEW_AXES = { xy: ["x", "y", "z"], xz: ["x", "z", "y"], yz: ["y", "z", "x"] };
+
+/** Size of the volume along "x", "y" or "z" (the XY view's file). */
+function volumeSize(a) {
+  const i = S.base ? S.base.info : S.info;
+  return a === "x" ? i.width : a === "y" ? i.height : i.sizeZ;
+}
+
+/** The cropped [first, count] of the volume along "x", "y" or "z". */
+function cropRange(a) {
+  const r = S.vcrop && S.vcrop[a];
+  return r ? r : [0, volumeSize(a)];
+}
+
+/** Sets S.crop, the crop as the current view shows it, from the volume crop. */
+function syncCrop() {
+  const [u, v] = VIEW_AXES[S.axis];
+  if (!S.vcrop || !(S.vcrop[u] || S.vcrop[v])) return void (S.crop = null);
+  const [x, w] = cropRange(u);
+  const [y, h] = cropRange(v);
+  S.crop = [x, y, w, h];
+}
+
+/** First and last index the Z (or side view) slider may reach inside the crop. */
+function sliderLimits() {
+  if (!S.info) return [0, 0];
+  const a = VIEW_AXES[S.axis][2];
+  if (!S.vcrop || !S.vcrop[a]) return [0, Math.max(0, S.info.sizeZ - 1)];
+  const [lo, n] = S.vcrop[a];
+  return [lo, lo + n - 1];
+}
+
+/** Where index z sits along the slider track, 0 to 1. */
+function sliderFrac(z) {
+  const [lo, hi] = sliderLimits();
+  return hi > lo ? (z - lo) / (hi - lo) : 0;
+}
+
 /** The part of the image that is shown: the crop, or all of it. */
 function bounds() {
   return S.crop || [0, 0, S.info.width, S.info.height];
@@ -2817,7 +2870,7 @@ function showSize(a) {
 // Undo history: every change to annotations or the crop first saves a
 // snapshot of both.
 function snapshot() {
-  return { ann: JSON.stringify(S.ann), crop: S.crop, cropStack: S.cropStack.slice() };
+  return { ann: JSON.stringify(S.ann), vcrop: S.vcrop, vcropStack: S.vcropStack.slice() };
 }
 
 function pushHistory(snap) {
@@ -2866,12 +2919,10 @@ function restore(h) {
   S.lastDrawn = null;
   S.cropBox = null;
   showSize(null);
-  if (h.crop !== S.crop) {
-    S.crop = h.crop;
-    S.cropStack = h.cropStack;
-    S.frame = null;
-    updateSaveButtons();
-    fit();
+  if (h.vcrop !== S.vcrop) {
+    S.vcrop = h.vcrop;
+    S.vcropStack = h.vcropStack;
+    cropChanged();
   }
   if (annChange) annChanged();
   else draw();
@@ -2951,20 +3002,55 @@ for (const el of [$("ann-z0"), $("ann-z1")])
     }
   });
 
+/**
+ * A range a plugin marks below the Z or T slider: {z|t: {from, to, color}},
+ * indices from 0; `to` null marks the start alone.
+ */
+const sliderRanges = { z: null, t: null };
+function setSliderRange(axis, range) {
+  sliderRanges[axis] = range && range.from != null ? { ...range } : null;
+  drawSliderRanges();
+}
+function drawSliderRanges() {
+  for (const axis of ["z", "t"]) {
+    const box = $(axis === "z" ? "zrange" : "trange");
+    if (!box) continue;
+    box.innerHTML = "";
+    const r = sliderRanges[axis];
+    if (!r || !S.info) continue;
+    const frac = axis === "z" ? sliderFrac : (i) => (S.info.sizeT > 1 ? i / (S.info.sizeT - 1) : 0);
+    const pct = (i) => `${Math.max(0, Math.min(1, frac(i))) * 100}%`;
+    if (r.color) box.style.setProperty("--rec", r.color);
+    if (r.to != null && r.to !== r.from) {
+      const band = document.createElement("i");
+      const a = Math.min(r.from, r.to), b = Math.max(r.from, r.to);
+      band.style.left = pct(a);
+      band.style.width = `calc(${pct(b)} - ${pct(a)})`;
+      box.append(band);
+    }
+    for (const i of r.to != null ? [r.from, r.to] : [r.from]) {
+      const dot = document.createElement("b");
+      dot.style.left = pct(i);
+      box.append(dot);
+    }
+  }
+}
+
 /** Marks on the Z slider where annotations are shown. */
 let zMarksKey = "";
 function updateZMarks() {
   const n = S.info ? S.info.sizeZ : 0;
   const items = n > 1 ? S.ann.filter((a) => a.z !== undefined) : [];
-  const key = n + "|" + items.map((a) => `${a.z},${a.z1 ?? a.z},${a.color}`).join(";");
+  const key = n + "|" + sliderLimits() + "|" + items.map((a) => `${a.z},${a.z1 ?? a.z},${a.color}`).join(";");
   if (key === zMarksKey) return;
   zMarksKey = key;
   const box = $("zmarks");
   box.innerHTML = "";
   for (const a of items) {
     const i = document.createElement("i");
-    const f0 = a.z / (n - 1);
-    const f1 = (a.z1 ?? a.z) / (n - 1);
+    const f0 = sliderFrac(a.z);
+    const f1 = sliderFrac(a.z1 ?? a.z);
+    if (f1 < 0 || f0 > 1) continue;
     i.style.left = `${f0 * 100}%`;
     i.style.width = `calc(${(f1 - f0) * 100}% + 6px)`;
     i.style.background = a.color;
@@ -3043,22 +3129,33 @@ function applyCrop() {
   showSize(null);
   if (w < 2 || h < 2) return draw();
   pushHistory(snapshot());
-  S.cropStack.push(S.crop);
-  S.crop = [x, y, w, h];
-  S.frame = null;
-  updateSaveButtons();
-  fit();
-  toast(`已裁剪到 ${w} × ${h} px，按 Esc 或退格撤回`);
+  S.vcropStack.push(S.vcrop);
+  const [u, v] = VIEW_AXES[S.axis];
+  S.vcrop = { ...S.vcrop, [u]: [x, w], [v]: [y, h] };
+  cropChanged();
+  toast(`已裁剪到 ${w} × ${h} px，切换 XZ / YZ / XYZ 视图也保持；按 Esc 或退格撤回`);
 }
 
 function undoCrop() {
-  if (!S.crop) return false;
+  if (!S.vcrop) return false;
   pushHistory(snapshot());
-  S.crop = S.cropStack.pop() ?? null;
+  S.vcrop = S.vcropStack.pop() ?? null;
+  cropChanged();
+  return true;
+}
+
+/** Redraws after the volume crop changed; keeps the slider inside it. */
+function cropChanged() {
+  syncCrop();
   S.frame = null;
   updateSaveButtons();
-  fit();
-  return true;
+  setupSliders();
+  const [lo, hi] = sliderLimits();
+  if (S.z < lo || S.z > hi) setZ(S.z);
+  zMarksKey = "";
+  pluginEmit("crop", { crop: S.crop && [...S.crop] });
+  if (S.xyz) xyz.cropped();
+  else fit();
 }
 
 // ---------- pointer ----------
@@ -3529,7 +3626,7 @@ window.addEventListener("keydown", (e) => {
       setZ(0);
       break;
     case "End":
-      if (S.info) setZ(S.info.sizeZ - 1);
+      if (S.info) setZ(sliderLimits()[1]);
       break;
     case " ":
       togglePlay();

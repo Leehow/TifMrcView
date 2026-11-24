@@ -37,11 +37,15 @@
       yz: { x: left + cw + gap, y: top + ch + gap, w: cw, h: ch },
     };
   }
+  // The volume crop (app.js cropRange): each pane shows only the cropped
+  // part, in the volume's own coordinates.
   function dims(kind) {
-    const i = info();
-    if (kind === "xy") return [i.width, i.height];
-    if (kind === "xz") return [i.width, i.sizeZ];
-    return [i.height, i.sizeZ];
+    const [au, av] = axes(kind);
+    return [cropRange(au)[1], cropRange(av)[1]];
+  }
+  function lows(kind) {
+    const [au, av] = axes(kind);
+    return [cropRange(au)[0], cropRange(av)[0]];
   }
   function axes(kind) {
     if (kind === "xy") return ["x", "y"];
@@ -57,11 +61,11 @@
       const ah = Math.max(1, pane.h - 32);
       return Math.min(aw / (nu * su), ah / (nv * sv));
     };
-    const i = info();
+    const [nx, ny, nz] = ["x", "y", "z"].map((a) => cropRange(a)[1]);
     return Math.min(
-      fit(L.xy, i.width, i.height, v.x, v.y),
-      fit(L.xz, i.width, i.sizeZ, v.x, v.z),
-      fit(L.yz, i.height, i.sizeZ, v.y, v.z),
+      fit(L.xy, nx, ny, v.x, v.y),
+      fit(L.xz, nx, nz, v.x, v.z),
+      fit(L.yz, ny, nz, v.y, v.z),
     );
   }
   function geom(kind) {
@@ -78,10 +82,11 @@
     const dh = nv * sv;
     const ox = pane.x + (pane.w - dw) / 2 + panU * su;
     const oy = pane.y + 20 + (pane.h - 20 - dh) / 2 + panV * sv;
+    const [lu, lv] = lows(kind);
     return {
-      pane, su, sv, ox, oy, nu, nv,
-      map: (u, vv) => [ox + u * su, oy + vv * sv],
-      unmap: (sx, sy) => [(sx - ox) / su, (sy - oy) / sv],
+      pane, su, sv, ox, oy, nu, nv, lu, lv,
+      map: (u, vv) => [ox + (u - lu) * su, oy + (vv - lv) * sv],
+      unmap: (sx, sy) => [(sx - ox) / su + lu, (sy - oy) / sv + lv],
     };
   }
   function local(e) {
@@ -123,33 +128,38 @@
   function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
   }
+  function range(a) {
+    const [lo, n] = cropRange(a);
+    return [lo, lo + Math.max(1, n) - 1];
+  }
   function syncBars() {
     const i = info();
     const p = S.xyz;
-    $("xyz-x").max = Math.max(0, i.width - 1);
-    $("xyz-y").max = Math.max(0, i.height - 1);
+    for (const [a, id] of [["x", "xyz-x"], ["y", "xyz-y"], ["z", "zslider"]]) {
+      const [lo, hi] = range(a);
+      $(id).min = lo;
+      $(id).max = hi;
+    }
     $("xyz-x").value = p.x;
     $("xyz-y").value = p.y;
     $("xyz-xl").textContent = `${p.x + 1} / ${i.width}`;
     $("xyz-yl").textContent = `${p.y + 1} / ${i.height}`;
-    $("zslider").max = Math.max(0, i.sizeZ - 1);
     $("zslider").value = p.z;
     $("zlabel").textContent = `${p.z + 1} / ${i.sizeZ}`;
   }
   function setPoint(part) {
-    const i = info();
     const p = S.xyz;
     const planes = [];
     if (part.x != null) {
-      const x = clamp(Math.round(part.x), 0, i.width - 1);
+      const x = clamp(Math.round(part.x), ...range("x"));
       if (x !== p.x) { p.x = x; planes.push("yz"); }
     }
     if (part.y != null) {
-      const y = clamp(Math.round(part.y), 0, i.height - 1);
+      const y = clamp(Math.round(part.y), ...range("y"));
       if (y !== p.y) { p.y = y; planes.push("xz"); }
     }
     if (part.z != null) {
-      const z = clamp(Math.round(part.z), 0, i.sizeZ - 1);
+      const z = clamp(Math.round(part.z), ...range("z"));
       if (z !== p.z) {
         p.z = z;
         S.z = z;
@@ -177,11 +187,11 @@
     setPoint(part);
   }
   function visible(g, pane) {
-    const [nu, nv] = [g.nu, g.nv];
-    const u0 = clamp(Math.floor(g.unmap(pane.x, pane.y)[0]), 0, nu - 1);
-    const v0 = clamp(Math.floor(g.unmap(pane.x, pane.y)[1]), 0, nv - 1);
-    const u1 = clamp(Math.ceil(g.unmap(pane.x + pane.w, pane.y)[0]), u0 + 1, nu);
-    const v1 = clamp(Math.ceil(g.unmap(pane.x, pane.y + pane.h)[1]), v0 + 1, nv);
+    const ue = g.lu + g.nu, ve = g.lv + g.nv;
+    const u0 = clamp(Math.floor(g.unmap(pane.x, pane.y)[0]), g.lu, ue - 1);
+    const v0 = clamp(Math.floor(g.unmap(pane.x, pane.y)[1]), g.lv, ve - 1);
+    const u1 = clamp(Math.ceil(g.unmap(pane.x + pane.w, pane.y)[0]), u0 + 1, ue);
+    const v1 = clamp(Math.ceil(g.unmap(pane.x, pane.y + pane.h)[1]), v0 + 1, ve);
     return [u0, v0, Math.max(1, u1 - u0), Math.max(1, v1 - v0)];
   }
 
@@ -222,14 +232,15 @@
 
   async function fetchOverview(kind, mine) {
     const [w, h] = dims(kind);
+    const [lu, lv] = lows(kind);
     const index = kind === "xy" ? S.xyz.z : kind === "xz" ? S.xyz.y : S.xyz.x;
     const channels = channelReqs().map((c) => ({ ...c, min: S.chans[c.index].min, max: S.chans[c.index].max }));
     const scale = Math.min(1, 512 / Math.max(w, h));
     const outW = Math.max(1, Math.round(w * scale));
     const outH = Math.max(1, Math.round(h * scale));
-    const key = JSON.stringify([S.token, kind, index, S.t, channels, S.gamma, w, h]);
+    const key = JSON.stringify([S.token, kind, index, S.t, channels, S.gamma, lu, lv, w, h]);
     if (overview[kind]?.key === key) return;
-    const req = { token: S.token, z: index, t: S.t, channels, region: [0, 0, w, h], outW, outH, gamma: S.gamma, invert: false, plane: kind === "xy" ? "" : kind };
+    const req = { token: S.token, z: index, t: S.t, channels, region: [lu, lv, w, h], outW, outH, gamma: S.gamma, invert: false, plane: kind === "xy" ? "" : kind };
     try {
       const f = parseFrame(await invoke("render_view", { req }));
       if (mine !== gen || !S.xyz) return;
@@ -245,15 +256,16 @@
   // Orthographic projection; split at the intersection so nearer patches
   // occlude farther patches rather than drawing one entire plane on top.
   function drawOverview(pane) {
-    const i = info(), v = voxel(), p = S.xyz;
-    const size = [i.width * v.x, i.height * v.y, i.sizeZ * v.z];
+    const v = voxel(), p = S.xyz;
+    const [cx0, cy0, cz0] = ["x", "y", "z"].map((a) => cropRange(a)[0]);
+    const size = ["x", "y", "z"].map((a) => cropRange(a)[1] * v[a]);
     const basis = [[0.866, 0.35], [-0.866, 0.35], [0, 0.8]];
     const bw = 0.866 * (size[0] + size[1]);
     const bh = 0.35 * (size[0] + size[1]) + 0.8 * size[2];
     const scale = Math.min(Math.max(1, pane.w - 40) / bw, Math.max(1, pane.h - 55) / bh);
     const project = (q) => [pane.x + pane.w / 2 + scale * q.reduce((a, n, j) => a + (n - size[j] / 2) * basis[j][0], 0),
       pane.y + pane.h / 2 + scale * q.reduce((a, n, j) => a + (n - size[j] / 2) * basis[j][1], 0)];
-    const point = [(p.x + 0.5) * v.x, (p.y + 0.5) * v.y, (p.z + 0.5) * v.z];
+    const point = [(p.x - cx0 + 0.5) * v.x, (p.y - cy0 + 0.5) * v.y, (p.z - cz0 + 0.5) * v.z];
     const specs = [{ kind: "xy", u: 0, v: 1, color: COL.z },
       { kind: "xz", u: 0, v: 2, color: COL.y },
       { kind: "yz", u: 1, v: 2, color: COL.x }];
@@ -546,10 +558,11 @@
         return;
       }
       stopPlay();
+      const mid = (a) => Math.floor((range(a)[0] + range(a)[1]) / 2);
       S.xyz = {
-        x: Math.floor(S.info.width / 2),
-        y: Math.floor(S.info.height / 2),
-        z: S.z,
+        x: mid("x"),
+        y: mid("y"),
+        z: clamp(S.z, ...range("z")),
         zoom: 1,
         pan: { x: 0, y: 0, z: 0 },
       };
@@ -595,6 +608,20 @@
       zoomAt(k, L.xy.x + L.xy.w / 2, L.xy.y + L.xy.h / 2, "xy");
     },
     reload() { reload(); },
+    /** The volume crop changed: keep the point inside it and refit. */
+    cropped() {
+      if (!S.xyz) return;
+      const p = S.xyz;
+      p.x = clamp(p.x, ...range("x"));
+      p.y = clamp(p.y, ...range("y"));
+      p.z = S.z = clamp(p.z, ...range("z"));
+      p.zoom = 1;
+      p.pan = { x: 0, y: 0, z: 0 };
+      cache.xy = cache.xz = cache.yz = null;
+      syncBars();
+      paint();
+      reload();
+    },
     paint,
     toVolume(e) {
       const [sx, sy] = local(e);
