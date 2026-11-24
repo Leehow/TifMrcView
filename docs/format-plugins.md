@@ -77,7 +77,7 @@ plugin market) with a `.wasm` file and three more fields in `plugin.json`:
 | `wasm` | Path of the module inside the package. |
 | `formats` | File types the module opens: `ext` (lower-case, no dot, `[a-z0-9]{1,16}`) and a display `name` (used as the format name when the plugin gives none). Needs the format exports. |
 | `metadata` | Extensions whose files `tmv_metadata` should see. Needs the metadata export. |
-| `stacks` | Optional. Project files of acquisition programs that describe a Z stack of separate slice images (FIB-SEM, serial sections): `[{ "files": ["ProjectData.dat"], "name": "Thermo Auto Slice & View" }]`. `files` are file names, `*` matches any run of characters, case is ignored. Needs the stack export (below) and app 0.7.0. |
+| `stacks` | Optional. Project files of acquisition programs that describe a Z stack of separate slice images (FIB-SEM, serial sections, exported confocal planes): `[{ "files": ["ProjectData.dat"], "name": "Thermo Auto Slice & View" }]`. `files` are file names, `*` matches any run of characters, case is ignored; earlier names are preferred when a folder has several. A name may sit in one subfolder of the acquisition folder (`"MetaData/*.xml"`). A file type the plugin also opens (`formats`) still opens as an image; it is a project file only for the folder around it. Needs the stack export (below) and app 0.7.0. |
 | `replaces` | Optional ids of older plugins this one takes over, e.g. when several plugins merge into one. While both are installed the old ones never run. Installing the official market package (from the market, or the same zip by hand) also removes them, and at start-up the app installs such a replacement for users who have the old plugins, when it asks for no permissions. The market entry must list the same ids. |
 
 `main` (a JavaScript file) is still required: it registers the plugin so it
@@ -228,12 +228,20 @@ skipped, up to four folders deep and 200 000 files. It returns:
 | `files` | The slices in Z order, each one a line of the listing; the app opens them with the core or other plugins, so they can be in any format it reads. Required. |
 | `zSpacing`, `unit` | Distance between slices; the X/Y pixel size comes from the slices. |
 | `format`, `metadata` | Status-bar name (default: the `stacks` entry's `name`) and groups shown before the first slice's own. |
-| `series`, `seriesIndex` | Several stacks in one project (one per detector…): the picker reopens with `series`. `dir` is the folder of that stack's slices, so opening that folder picks it. |
+| `series`, `seriesIndex` | Several stacks in one project (one per detector…): the picker reopens with `series`. `dir` is the folder of that stack's slices, so opening that folder picks it; `files` (optional) lists its slices, so opening one of them picks it. |
+| `pixelSize` | Optional `[x, y]` in `unit`, replacing the slices' own (exported TIFFs often carry none). |
+| `open`, `openSeries` | Optional. A file of the listing (or `"."`, the project file itself) holding this same image as image `openSeries`, e.g. the vendor container beside its exported slices. The app opens it instead of the slices, and offers it when one of the slices is opened. `files` may then be empty. |
 
 The app asks for it when the user opens the project file, opens a folder
 that holds one or whose project file is one or two folders up (and the
 stack is that folder's slices), and when it lists a folder for the
-thumbnails: the stack then shows as an extra entry at the top. With the
+thumbnails: the stack then shows as an extra entry at the top. After a
+single image opens, the app also asks in the background whether it is
+one of a stack's slices (or of an `open` target's exports) and offers the
+whole acquisition in a bar above the image. A project file of an official
+plugin that is not installed (a Leica `.lif`, `MetaData/*.lif_*.xml`…;
+`KNOWN_PROJECTS` in `plugins/registry.rs`) offers that plugin instead.
+The Leica plugin (`plugins/lasx/src/stack.rs`) is the example of `open`. With the
 SDK, implement `Stacks` and use `export_stack!` (see
 `plugins/thermo/src/asv.rs`).
 

@@ -67,10 +67,22 @@ pub fn open_series_with(path: &Path, series: usize, reg: &Registry) -> Result<Bo
 pub(crate) fn open_pixels_with(path: &Path, series: usize, reg: &Registry) -> Result<(Box<dyn Source>, Option<String>)> {
     // A folder of slices, or an acquisition program's project file that
     // lists them: one Z stack.
+    // A vendor container that holds the same image as the exported slices
+    // (a Leica LIF next to its TIFFs) is opened instead.
     if path.is_dir() {
+        if let Some(plan) = sequence::Sequence::plan_for_dir(path, series, reg) {
+            if let Some((target, s)) = plan.open.clone() {
+                return open_pixels_with(&target, s, reg);
+            }
+        }
         return Ok((Box::new(sequence::Sequence::open_dir(path, series, reg)?), None));
     }
     if reg.is_stack_file(path) {
+        if let Some(Ok(plan)) = reg.stack(path, series, None) {
+            if let Some((target, s)) = plan.open.filter(|(t, _)| t != path) {
+                return open_pixels_with(&target, s, reg);
+            }
+        }
         return Ok((Box::new(sequence::Sequence::open_project(path, series, reg)?), None));
     }
     let ext = ext_of(path);

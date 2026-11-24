@@ -181,26 +181,35 @@ impl Sequence {
     /// The stack of the slices in `dir`, or the stack a plugin builds from a
     /// project file in `dir` or the two folders above it.
     pub fn open_dir(dir: &Path, series: usize, reg: &Registry) -> Result<Sequence> {
-        // "slices/" and "slices" are the same stack.
-        let dir: &Path = &dir.components().collect::<PathBuf>();
-        if let Some(config) = reg.find_stack_file(dir) {
-            // A project file above the folder only counts when the stack it
-            // describes is this folder's (not, say, its log images).
-            let here = config.parent() == Some(dir);
-            match reg.stack(&config, series, Some(dir)) {
-                Some(Ok(plan)) if here || plan.files.iter().all(|f| f.parent() == Some(dir)) => {
-                    return Sequence::from_plan(plan, reg)
+        match Sequence::plan_for_dir(dir, series, reg) {
+            Some(plan) => Sequence::from_plan(plan, reg),
+            None => {
+                if series > 0 {
+                    bail!("这个文件夹只有一个图像序列");
                 }
-                Some(Ok(_)) => {}
-                Some(Err(e)) => eprintln!("{}: {e:#}", config.display()),
-                None => {}
+                let files = slices_in(dir, reg)?;
+                Sequence::new(files, dir, reg, None)
             }
         }
-        if series > 0 {
-            bail!("这个文件夹只有一个图像序列");
+    }
+
+    /// The plan a project file makes of the slices in `dir`, if any.
+    pub fn plan_for_dir(dir: &Path, series: usize, reg: &Registry) -> Option<StackPlan> {
+        // "slices/" and "slices" are the same stack.
+        let dir: &Path = &dir.components().collect::<PathBuf>();
+        match reg.stack_for(dir, series, Some(dir)) {
+            // A project file above the folder only counts when the stack it
+            // describes is this folder's (not, say, its log images).
+            Some((config, Ok(plan)))
+                if !plan.files.is_empty()
+                    && (config.parent() == Some(dir)
+                        || plan.files.iter().all(|f| f.parent() == Some(dir))
+                        || plan.open.is_some()) =>
+            {
+                Some(plan)
+            }
+            _ => None,
         }
-        let files = slices_in(dir, reg)?;
-        Sequence::new(files, dir, reg, None)
     }
 
     /// The stack a plugin describes in a project file.
@@ -214,8 +223,10 @@ impl Sequence {
     fn from_plan(plan: StackPlan, reg: &Registry) -> Result<Sequence> {
         let config = plan.config.clone();
         let mut seq = Sequence::new(plan.files.clone(), &config, reg, Some(&plan))?;
-        seq.info.series = plan.series;
-        seq.info.series_index = plan.series_index;
+        if plan.series.len() > 1 {
+            seq.info.series = plan.series;
+            seq.info.series_index = plan.series_index;
+        }
         Ok(seq)
     }
 
@@ -259,6 +270,12 @@ impl Sequence {
         add("第一张", file_name(&files[0]));
         add("最后一张", file_name(&files[n - 1]));
 
+        // X/Y pixel size the project file knows (exports often carry none).
+        if let Some(([x, y], unit)) = plan.and_then(|p| p.pixel_size.clone()) {
+            info.pixel_size = Some([x, y, 0.0]);
+            info.unit = unit;
+            add("像素尺寸", format!("{} × {} {}（项目文件）", trim_num(x), trim_num(y), info.unit));
+        }
         // Z spacing: from the project file, converted to the slices' unit.
         let mut z_note = "未知（可在「工具」里填写）".to_string();
         if let Some(z) = plan.and_then(|p| p.z_spacing.clone()) {

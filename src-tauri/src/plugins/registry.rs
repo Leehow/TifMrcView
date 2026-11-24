@@ -47,6 +47,40 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("tvips", "tvips", "TVIPS"),
 ];
 
+/// Acquisition folders the official plugins read (`stacks` in their
+/// manifests), so a folder can suggest the plugin before it is installed:
+/// (project file names as in `stacks`, plugin id, plugin name).
+const KNOWN_PROJECTS: &[(&[&str], &str, &str)] = &[
+    (&["*.lif", "*.lof", "*.xlef", "*.xlif", "MetaData/*.lif_*.xml"], "lasx", "Leica LAS X"),
+    (&["ProjectData.dat"], "thermo", "Thermo Fisher"),
+];
+
+/// What the folder of an opened image says about it (`Registry::companion`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Companion {
+    /// The image belongs to a stack an enabled plugin reads: open `path`
+    /// (image `series`) to see the whole acquisition.
+    #[serde(rename_all = "camelCase")]
+    Open {
+        plugin: String,
+        path: PathBuf,
+        series: usize,
+        /// The image in the acquisition (series name or file name).
+        title: String,
+        detail: String,
+        /// Whether the opened image is one of `files` (else the folder just
+        /// holds the project).
+        matched: bool,
+        /// The other files of the same image, for the UI to reuse the answer.
+        files: Vec<PathBuf>,
+    },
+    /// A plugin that is not installed (or switched off, or too old) would
+    /// read the project file `found`.
+    #[serde(rename_all = "camelCase")]
+    Plugin { id: String, plugin: String, found: String, action: &'static str },
+}
+
 /// One installed package with a WebAssembly module.
 struct Pkg {
     manifest: Manifest,
@@ -82,9 +116,11 @@ impl Pkg {
         self.manifest.metadata.iter().any(|e| e == ext)
     }
 
-    /// The `stacks` entry for a project file with this name.
-    fn stack_decl(&self, file_name: &str) -> Option<&package::StackDecl> {
-        self.manifest.stacks.iter().find(|d| d.matches(file_name))
+    /// The `stacks` entry for a project file `path` (its name, and the name
+    /// of its folder for entries that point into a subfolder).
+    fn stack_decl(&self, path: &Path) -> Option<&package::StackDecl> {
+        let (folder, name) = folder_and_name(path)?;
+        self.manifest.stacks.iter().find(|d| d.matches_in(&folder, &name))
     }
 }
 
@@ -248,41 +284,172 @@ impl Registry {
     }
 
     fn stack_pkg(&self, path: &Path) -> Option<(Arc<Pkg>, String)> {
-        let name = path.file_name()?.to_str()?;
         self.active().into_iter().find_map(|p| {
-            let d = p.stack_decl(name)?.name.clone();
+            let d = p.stack_decl(path)?.name.clone();
             Some((p, d))
         })
     }
 
-    /// Whether an enabled plugin reads `path` as an acquisition project file.
+    /// Whether an enabled plugin reads `path` as an acquisition project
+    /// file. A file a plugin opens as an image (a Leica LIF) stays an image
+    /// when opened; it is a project file only for the folder around it.
     pub fn is_stack_file(&self, path: &Path) -> bool {
-        path.is_file() && self.stack_pkg(path).is_some()
+        path.is_file() && self.stack_pkg(path).is_some() && !self.opens_as_image(path)
     }
 
-    /// A project file an enabled plugin reads, in `dir` or one or two
-    /// folders above it (programs keep the slices in subfolders).
-    pub fn find_stack_file(&self, dir: &Path) -> Option<PathBuf> {
-        if !self.active().iter().any(|p| !p.manifest.stacks.is_empty()) {
-            return None;
+    fn opens_as_image(&self, path: &Path) -> bool {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        self.active().iter().any(|p| p.opens(&ext).is_some())
+    }
+
+    /// Project files enabled plugins read for `dir`: in `dir` or one or two
+    /// folders above it (programs keep the slices in subfolders), from the
+    /// nearest folder that has any. The best first: the plugin's earlier
+    /// `stacks` names, then the file whose name begins the opened file's.
+    pub fn find_stack_files(&self, dir: &Path, opened: Option<&Path>) -> Vec<PathBuf> {
+        let active = self.active();
+        if !active.iter().any(|p| !p.manifest.stacks.is_empty()) {
+            return vec![];
         }
+        let subs: Vec<String> =
+            active.iter().flat_map(|p| p.manifest.stacks.iter().flat_map(|d| d.subfolders().map(str::to_string))).collect();
+        let opened_name = opened.and_then(|o| o.file_name()).map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
         for d in dir.ancestors().take(3) {
-            let Ok(rd) = std::fs::read_dir(d) else { continue };
-            let mut found: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| self.is_stack_file(p)).collect();
-            found.sort();
-            if let Some(f) = found.into_iter().next() {
-                return Some(f);
+            let mut found: Vec<(usize, bool, PathBuf)> = vec![];
+            let mut look = |folder: &Path| {
+                let Ok(rd) = std::fs::read_dir(folder) else { return };
+                for e in rd.filter_map(|e| e.ok()) {
+                    let p = e.path();
+                    if !p.is_file() {
+                        continue;
+                    }
+                    let Some((fname, name)) = folder_and_name(&p) else { continue };
+                    let rank = active.iter().filter_map(|k| k.manifest.stacks.iter().find_map(|s| s.priority(&fname, &name))).min();
+                    if let Some(rank) = rank {
+                        let stem = name.rsplit_once('.').map_or(name.as_str(), |s| s.0).to_lowercase();
+                        let begins = !opened_name.is_empty() && opened_name.starts_with(&stem);
+                        found.push((rank, begins, p));
+                    }
+                }
+            };
+            look(d);
+            for sub in &subs {
+                if let Ok(rd) = std::fs::read_dir(d) {
+                    for e in rd.filter_map(|e| e.ok()) {
+                        if e.file_name().to_string_lossy().eq_ignore_ascii_case(sub) && e.path().is_dir() {
+                            look(&e.path());
+                        }
+                    }
+                }
+            }
+            if !found.is_empty() {
+                found.sort_by(|a, b| {
+                    a.0.cmp(&b.0)
+                        .then(b.1.cmp(&a.1))
+                        .then_with(|| crate::formats::sequence::natural_cmp(&a.2.to_string_lossy(), &b.2.to_string_lossy()))
+                });
+                return found.into_iter().map(|f| f.2).collect();
             }
         }
-        None
+        vec![]
+    }
+
+    /// The best project file for `dir` (see [`Self::find_stack_files`]).
+    pub fn find_stack_file(&self, dir: &Path) -> Option<PathBuf> {
+        self.find_stack_files(dir, None).into_iter().next()
+    }
+
+    /// The stack the first readable project file for `dir` describes, and
+    /// that file; `opened` (the folder or a file in it) picks the series.
+    pub fn stack_for(&self, dir: &Path, series: usize, opened: Option<&Path>) -> Option<(PathBuf, Result<StackPlan>)> {
+        let mut last = None;
+        for config in self.find_stack_files(dir, opened) {
+            match self.stack(&config, series, opened) {
+                Some(Ok(plan)) => return Some((config, Ok(plan))),
+                Some(Err(e)) => {
+                    eprintln!("{}: {e:#}", config.display());
+                    last = Some((config, Err(e)));
+                }
+                None => {}
+            }
+        }
+        last
     }
 
     /// Asks the plugin that reads project file `config` for image stack
-    /// `series`. When the stack is opened as folder `opened`, the series
-    /// whose slices are in that folder is picked instead.
+    /// `series`. When the stack is opened as folder `opened`, or `opened`
+    /// is one of its slices, that series is picked instead.
     pub fn stack(&self, config: &Path, series: usize, opened: Option<&Path>) -> Option<Result<StackPlan>> {
         let (pkg, name) = self.stack_pkg(config)?;
         Some(read_stack(self, &pkg, &name, config, series, opened))
+    }
+
+    /// What the folder of the opened image `file` adds to it: the whole
+    /// acquisition it belongs to (a Leica project next to its exported
+    /// TIFFs…), or the plugin that would read that acquisition.
+    pub fn companion(&self, file: &Path) -> Option<Companion> {
+        let dir = file.parent()?;
+        if !file.is_file() || self.is_stack_file(file) {
+            return None;
+        }
+        if let Some((config, Ok(plan))) = self.stack_for(dir, 0, Some(file)) {
+            let same = |a: &Path| std::fs::canonicalize(a).ok() == std::fs::canonicalize(file).ok();
+            let matched = plan.files.iter().any(|f| same(f));
+            let title = plan.series.get(plan.series_index).map(|s| s.name.clone());
+            let detail = plan.series.get(plan.series_index).map(|s| s.detail.clone()).unwrap_or_default();
+            let plugin = plan.format.clone().unwrap_or_default();
+            if let Some((target, series)) = plan.open.clone() {
+                if same(&target) {
+                    return None;
+                }
+                let title = title.unwrap_or_else(|| target.file_name().unwrap_or_default().to_string_lossy().into_owned());
+                return Some(Companion::Open { plugin, path: target, series, title, detail, matched, files: plan.files });
+            }
+            if matched && plan.files.len() > 1 {
+                let title = title.unwrap_or_else(|| format!("{} 层", plan.files.len()));
+                return Some(Companion::Open { plugin, path: config, series: plan.series_index, title, detail, matched, files: plan.files });
+            }
+            return None;
+        }
+        self.missing_project(dir, file)
+    }
+
+    /// A project file in `dir` that an official plugin would read, when
+    /// that plugin is not ready to.
+    fn missing_project(&self, dir: &Path, file: &Path) -> Option<Companion> {
+        let idx = self.index();
+        let mut names: Vec<(String, String)> = vec![];
+        let entries: Vec<PathBuf> = std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        for p in &entries {
+            if p.is_file() && p != file {
+                names.push((String::new(), p.file_name()?.to_string_lossy().into_owned()));
+            } else if p.is_dir() {
+                let sub = p.file_name()?.to_string_lossy().into_owned();
+                if KNOWN_PROJECTS.iter().any(|k| k.0.iter().any(|f| f.split_once('/').is_some_and(|(d, _)| d.eq_ignore_ascii_case(&sub)))) {
+                    for e in std::fs::read_dir(p).ok()?.filter_map(|e| e.ok()) {
+                        names.push((sub.clone(), e.file_name().to_string_lossy().into_owned()));
+                    }
+                }
+            }
+        }
+        names.sort();
+        for &(files, id, name) in KNOWN_PROJECTS {
+            let decl = package::StackDecl { files: files.iter().map(|f| f.to_string()).collect(), name: String::new() };
+            let Some((sub, found)) = names.iter().filter(|(d, n)| !n.starts_with('.') && decl.matches_in(d, n)).min_by_key(|(d, n)| (decl.priority(d, n), d.clone(), n.clone())) else {
+                continue;
+            };
+            let ready = idx.wasm.iter().find(|p| p.manifest.id == id);
+            let action = match (ready, idx.installed.get(id)) {
+                (Some(p), _) if self.enabled(id) && !p.manifest.stacks.is_empty() => continue,
+                (Some(_), _) if !self.enabled(id) => "enable",
+                (_, Some(Some(_))) | (Some(_), _) => "update",
+                (None, Some(None)) => "update",
+                (None, None) => "install",
+            };
+            let found = if sub.is_empty() { found.clone() } else { format!("{sub}/{found}") };
+            return Some(Companion::Plugin { id: id.into(), plugin: name.into(), found, action });
+        }
+        None
     }
 
     /// Why a file with this extension cannot be opened, when a plugin could help.
@@ -618,17 +785,27 @@ pub struct StackPlan {
     pub format: Option<String>,
     /// Distance between slices and its unit.
     pub z_spacing: Option<(f64, String)>,
+    /// X/Y pixel size the project knows, replacing the slices' own.
+    pub pixel_size: Option<([f64; 2], String)>,
     pub metadata: Vec<MetaGroup>,
     pub series: Vec<SeriesInfo>,
     pub series_index: usize,
+    /// A file that holds this same image (image `.1` of it), better opened
+    /// than the slices: the vendor container next to its exported TIFFs.
+    pub open: Option<(PathBuf, usize)>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StackJson {
+    #[serde(default)]
     files: Vec<String>,
     format: Option<String>,
     z_spacing: Option<f64>,
+    pixel_size: Option<Vec<f64>>,
+    open: Option<String>,
+    #[serde(default)]
+    open_series: usize,
     #[serde(default)]
     unit: String,
     #[serde(default)]
@@ -648,10 +825,19 @@ struct StackSeriesJson {
     /// The folder holding this series' slices, relative to the project file.
     #[serde(default)]
     dir: String,
+    /// Its slices, when the plugin lists them for every series.
+    #[serde(default)]
+    files: Vec<String>,
 }
 
 fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usize, opened: Option<&Path>) -> Result<StackPlan> {
-    let base = config.parent().context("项目文件没有所在文件夹")?.to_path_buf();
+    let decl = pkg.stack_decl(config).context("项目文件不对")?;
+    let parent = config.parent().context("项目文件没有所在文件夹")?;
+    // A project file in a subfolder (`MetaData/*.xml`) describes the folder above.
+    let in_sub = folder_and_name(config).is_some_and(|(f, n)| {
+        !f.is_empty() && decl.priority(&f, &n).is_some_and(|i| decl.files[i].contains('/'))
+    });
+    let base = if in_sub { parent.parent().context("项目文件没有上级文件夹")? } else { parent }.to_path_buf();
     let listing = crate::formats::sequence::list_tree(&base);
     let mut inst = Instance::new(pkg.module()?, map_file(config)?, &pkg.manifest.id)?;
     let path = config.to_string_lossy();
@@ -661,10 +847,17 @@ fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usiz
         serde_json::from_slice(&json).map_err(|e| anyhow!("插件返回的堆叠信息不对：{e}"))
     };
     let mut j = call(&mut inst, series)?;
-    // Opened as one of the project's folders: show that folder's stack.
-    if let (Some(dir), 0) = (opened, series) {
-        let same = |rel: &str| !rel.is_empty() && std::fs::canonicalize(base.join(rel)).ok() == std::fs::canonicalize(dir).ok();
-        if let Some(i) = j.series.iter().position(|s| same(&s.dir)) {
+    // Opened as one of the project's folders, or as one of its slices:
+    // show that stack.
+    if let (Some(o), 0) = (opened, series) {
+        let canon = std::fs::canonicalize(o).ok();
+        let same = |rel: &str| !rel.is_empty() && std::fs::canonicalize(base.join(rel)).ok() == canon;
+        let pick = if o.is_dir() {
+            j.series.iter().position(|s| same(&s.dir))
+        } else {
+            j.series.iter().position(|s| s.files.iter().any(|f| same(f)))
+        };
+        if let Some(i) = pick {
             if i != j.series_index {
                 j = call(&mut inst, i)?;
             }
@@ -682,19 +875,37 @@ fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usiz
         }
         files.push(p);
     }
-    if files.is_empty() {
+    let open = match j.open.as_deref().filter(|o| !o.is_empty()) {
+        Some(o) if o == "." => Some((config.to_path_buf(), j.open_series)),
+        Some(o) if known.contains(o) => Some((base.join(o), j.open_series)),
+        Some(o) => bail!("插件给出的图像文件不在项目文件夹里：{o}"),
+        None => None,
+    };
+    if files.is_empty() && open.is_none() {
         bail!("项目里没有找到切片图像");
     }
+    let pixel_size = j
+        .pixel_size
+        .as_deref()
+        .and_then(|p| match p {
+            [x, y, ..] if x.is_finite() && *x > 0.0 => Some([*x, if y.is_finite() && *y > 0.0 { *y } else { *x }]),
+            [x] if x.is_finite() && *x > 0.0 => Some([*x, *x]),
+            _ => None,
+        })
+        .filter(|_| !j.unit.is_empty())
+        .map(|p| (p, j.unit.clone()));
     let mut plan = StackPlan {
         config: config.to_path_buf(),
         files,
         format: j.format.filter(|f| !f.is_empty()).or_else(|| (!name.is_empty()).then(|| name.to_string())),
         z_spacing: j.z_spacing.filter(|z| z.is_finite() && *z > 0.0).map(|z| (z, j.unit.clone())),
+        pixel_size,
         metadata: j.metadata.into_iter().map(GroupJson::into_group).collect(),
         series: vec![],
         series_index: 0,
+        open,
     };
-    if j.series.len() > 1 && j.series_index < j.series.len() {
+    if !j.series.is_empty() && j.series_index < j.series.len() {
         plan.series_index = j.series_index;
         plan.series = j
             .series
@@ -704,6 +915,13 @@ fn read_stack(reg: &Registry, pkg: &Pkg, name: &str, config: &Path, series: usiz
             .collect();
     }
     Ok(plan)
+}
+
+/// The name of the folder holding `path`, and the file name.
+fn folder_and_name(path: &Path) -> Option<(String, String)> {
+    let name = path.file_name()?.to_str()?.to_string();
+    let folder = path.parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    Some((folder, name))
 }
 
 // ---------------------------------------------------------------- metadata
@@ -826,6 +1044,51 @@ mod tests {
         assert_eq!(info.metadata.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["core", "V"]);
         let m: Option<MetaJson> = serde_json::from_str("null").unwrap();
         assert!(m.is_none());
+    }
+
+    /// End to end on a real Leica folder: TMV_LEICA_DIR (a LAS X folder
+    /// with a LIF and TIFFs exported from it) and TMV_LASX_WASM (the built
+    /// plugin). `cargo test leica_folder -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn leica_folder() {
+        let (Ok(dir), Ok(wasm)) = (std::env::var("TMV_LEICA_DIR"), std::env::var("TMV_LASX_WASM")) else { return };
+        let dir = PathBuf::from(dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("lasx");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins/lasx");
+        for f in ["plugin.json", "index.js"] {
+            std::fs::copy(src.join(f), pkg.join(f)).unwrap();
+        }
+        std::fs::copy(&wasm, pkg.join("lasx.wasm")).unwrap();
+        let empty = Registry::new(Some(tmp.path().join("none")), "0.7.0");
+        let mut tifs: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "tif")).collect();
+        tifs.sort();
+        let tif = &tifs[tifs.len() / 2];
+        println!("without plugin: {:?}", empty.companion(tif));
+        assert!(matches!(empty.companion(tif), Some(Companion::Plugin { action: "install", .. })));
+        let reg = Registry::new(Some(tmp.path().to_path_buf()), "0.7.0");
+        let c = reg.companion(tif);
+        match &c {
+            Some(Companion::Open { path, series, title, matched, files, .. }) => {
+                println!("open {} series {series} ({title}), matched {matched}, {} files", path.display(), files.len())
+            }
+            other => panic!("{other:?}"),
+        }
+        let started = std::time::Instant::now();
+        let src = crate::formats::open_with(&dir, &reg).unwrap();
+        let i = src.info();
+        println!("folder opens as {} {}x{} c{} z{} series {}/{} ({:?})", i.format, i.width, i.height, i.size_c, i.size_z, i.series_index, i.series.len(), started.elapsed());
+        // Without the LIF only the exports and MetaData remain.
+        let xml = std::fs::read_dir(dir.join("MetaData")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+            let n = p.file_name().unwrap().to_string_lossy().to_string();
+            n.ends_with(".xml") && !n.contains(".lif_") && !n.contains("roperties")
+        });
+        if let Some(xml) = xml {
+            let plan = reg.stack(&xml, 0, None).unwrap().unwrap();
+            println!("MetaData stack: {} files, px {:?}, z {:?}, open {:?}", plan.files.len(), plan.pixel_size, plan.z_spacing, plan.open);
+        }
     }
 
     #[test]

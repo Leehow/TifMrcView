@@ -267,6 +267,19 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
   font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
 }
 #loading { right: 12px; color: var(--dim); }
+/* An opened image's folder holds the acquisition it came from. */
+#companion {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  max-width: min(720px, calc(100% - 24px));
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 14px; border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  z-index: 5;
+}
+#companion[hidden] { display: none; }
+#companion-text { flex: 1; min-width: 0; line-height: 1.4; }
+#companion button { flex: none; white-space: nowrap; }
 #loading.progress {
   color: var(--text);
   background: linear-gradient(to right, color-mix(in srgb, var(--accent) 28%, var(--surface)) var(--p, 0%), var(--surface) var(--p, 0%));
