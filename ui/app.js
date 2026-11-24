@@ -561,6 +561,104 @@ function step(delta) {
   if (next >= 0 && next < files.length) openHere(files[next]);
 }
 
+// ---------- the acquisition an opened image belongs to ----------
+//
+// After an image opens, the backend looks at its folder (folder_companion):
+// TIFFs exported by an acquisition program (Leica LAS X…) next to the
+// original project or its MetaData. With the vendor plugin installed it
+// offers the whole acquisition (channels, Z, series); without, it offers
+// to install the plugin, then opens the acquisition.
+const companion = { dir: null, answer: null, dismissed: new Set(), installing: null };
+
+function companionKey(c) {
+  return c.kind === "open" ? `${c.path}#${c.series}` : `plugin:${c.id}`;
+}
+
+function hideCompanion() {
+  $("companion").hidden = true;
+  companion.shown = null;
+}
+
+function showCompanion(c, opened) {
+  if (!c || companion.dismissed.has(companionKey(c))) return hideCompanion();
+  companion.shown = c;
+  let text, go;
+  if (c.kind === "open") {
+    const what = c.detail ? `${c.title}（${c.detail}）` : c.title;
+    text = c.matched
+      ? `${basename(opened)} 是 ${basename(c.path)} 里「${what}」导出的一层。`
+      : `这个文件夹里有原始项目 ${basename(c.path)}（${what}）。`;
+    go = "按原始层叠打开";
+  } else {
+    const verb = { install: "安装", update: "更新", enable: "启用" }[c.action] || "安装";
+    text = `这个文件夹是 ${c.plugin} 的采集数据（找到 ${c.found}）。${verb}「${c.plugin}」插件后，可以按原始的多通道 / Z 栈 / 多序列打开。`;
+    go = `${verb}插件`;
+  }
+  $("companion-text").textContent = text;
+  $("companion-go").textContent = go;
+  $("companion").hidden = false;
+}
+
+/** Looks at the folder of the image just opened, in the background. */
+async function checkCompanion() {
+  const info = S.info;
+  const path = info && info.path;
+  const token = S.token;
+  // Stacks, folders, remote files and the vendor files themselves have nothing to add.
+  if (!path || info.folder || info.series?.length > 1 || ext.remoteFiles?.get(path)) return hideCompanion();
+  const dir = dirname(path);
+  const a = companion.answer;
+  // Flipping through one export reuses the answer.
+  if (companion.dir === dir && a && (a.kind !== "open" || a.files.includes(path))) return showCompanion(a, path);
+  hideCompanion();
+  let c = null;
+  try {
+    c = await invoke("folder_companion", { path });
+  } catch (e) {
+    console.warn("folder_companion", e);
+  }
+  if (token !== S.token) return;
+  companion.dir = dir;
+  companion.answer = c;
+  showCompanion(c, path);
+}
+
+async function companionGo() {
+  const c = companion.shown;
+  if (!c) return;
+  hideCompanion();
+  if (c.kind === "open") return openHere(c.path, false, c.series);
+  if (c.action === "enable") {
+    toast(`请在「插件」里启用「${c.plugin}」`, 5000);
+    if (typeof togglePluginDialog === "function") togglePluginDialog(true);
+    return;
+  }
+  // The market's own confirmation; the plugin-installed event continues below.
+  companion.installing = { id: c.id, path: S.info && S.info.path };
+  if (typeof confirmInstall === "function") confirmInstall({ id: c.id });
+}
+
+$("companion-go").addEventListener("click", companionGo);
+$("companion-close").addEventListener("click", () => {
+  if (companion.shown) companion.dismissed.add(companionKey(companion.shown));
+  hideCompanion();
+});
+document.addEventListener("tmv-opened", () => checkCompanion());
+// Installed from the bar: open the acquisition right away.
+T.event.listen("plugin-installed", async (e) => {
+  const want = companion.installing;
+  if (!want || e.payload?.manifest?.id !== want.id) return;
+  companion.installing = null;
+  companion.dir = null;
+  // The backend reloads its plugin list on the same event; ask once it has.
+  await new Promise((r) => setTimeout(r, 300));
+  const c = await invoke("folder_companion", { path: want.path }).catch(() => null);
+  if (c && c.kind === "open") {
+    if (typeof togglePluginDialog === "function") togglePluginDialog(false);
+    openHere(c.path, false, c.series);
+  } else if (S.info && S.info.path === want.path) checkCompanion();
+});
+
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
 async function openHere(path, force = false, series = 0) {
   try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }

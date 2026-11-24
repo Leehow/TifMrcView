@@ -1550,20 +1550,21 @@ struct StackEntry {
 /// The stack a plugin reads from a project file for the slices in `dir`.
 fn folder_stacks(dir: &Path) -> Vec<StackEntry> {
     let reg = plugins::registry::Registry::global();
-    let Some(config) = reg.find_stack_file(dir) else { return vec![] };
-    let here = config.parent() == Some(dir);
-    match reg.stack(&config, 0, Some(dir)) {
-        Some(Ok(plan)) if here || plan.files.iter().all(|f| f.parent() == Some(dir)) => {
-            let path = if here { config.clone() } else { dir.to_path_buf() };
-            let name = plan.format.clone().unwrap_or_else(|| "堆叠".into());
-            vec![StackEntry { path: path.to_string_lossy().into_owned(), name, slices: plan.files.len() }]
-        }
-        Some(Err(e)) => {
-            eprintln!("{}: {e:#}", config.display());
-            vec![]
-        }
-        _ => vec![],
-    }
+    // A container to open instead (a Leica LIF) is offered by
+    // `folder_companion` rather than listed as a stack.
+    let Some(plan) = formats::sequence::Sequence::plan_for_dir(dir, 0, reg).filter(|p| p.open.is_none()) else { return vec![] };
+    let here = plan.config.parent() == Some(dir);
+    let path = if here { plan.config.clone() } else { dir.to_path_buf() };
+    let name = plan.format.clone().unwrap_or_else(|| "堆叠".into());
+    vec![StackEntry { path: path.to_string_lossy().into_owned(), name, slices: plan.files.len() }]
+}
+
+/// What the folder of the opened image adds to it: the acquisition it
+/// belongs to (a Leica project beside its exported TIFFs), or the plugin
+/// that would read that acquisition. Run after the image is shown.
+#[tauri::command]
+async fn folder_companion(path: String) -> CmdResult<Option<plugins::registry::Companion>> {
+    blocking(move || Ok(plugins::registry::Registry::global().companion(Path::new(&path)))).await
 }
 
 #[tauri::command]
@@ -3722,6 +3723,7 @@ pub fn run() {
             live_clear,
             pixel_values,
             list_folder,
+            folder_companion,
             thumbnail,
             pick_file,
             set_default_app,
