@@ -1,0 +1,27 @@
+{
+  "id": "ssh",
+  "name": "SSH 远程文件夹",
+  "version": "1.5.0",
+  "description": "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像；TifMrcView Pro 还用它在服务器上处理数据",
+  "main": "index.js",
+  "apiVersion": 1,
+  "minAppVersion": "0.7.336",
+  "author": "TifMrcView",
+  "native": true,
+  "i18n": {
+    "en": {
+      "name": "SSH remote folders",
+      "description": "Connect over SSH / SFTP with a password or a local key, browse remote folders and load images on demand; TifMrcView Pro also uses it to process data on the server"
+    }
+  },
+  "details": {
+    "zh": [
+      "可选插件，软件默认不附带。需要时从插件市场安装，可随时停用或卸载。安装后顶部工具栏出现 SSH 按钮。",
+      "支持密码和本地私钥登录，通过 SSH / SFTP 浏览远程目录并按需缓存图像。TifMrcView Pro 的服务器处理也通过它连接。"
+    ],
+    "en": [
+      "Optional: not bundled with the app. Install it from the plugin market when you need it; it can be switched off or uninstalled at any time. Once installed, an SSH button appears in the toolbar.",
+      "Logs in with a password or a local private key, browses remote folders over SSH / SFTP and caches images on demand. TifMrcView Pro's server processing connects through it too."
+    ]
+  }
+}

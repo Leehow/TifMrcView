@@ -330,6 +330,8 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     return res;
   } catch (e) {
     if (request !== openRequest) return;
+    // Missing plugin: a bar above the image installs it and opens the file.
+    if (needsPlugin(e) && (await offerPluginFor(path, series))) return;
     toast(`无法打开 ${basename(path)}：${e}`, needsPlugin(e) ? 8000 : 3500);
     // The plugin window has the way to the plugin market.
     if (needsPlugin(e) && typeof togglePluginDialog === "function") togglePluginDialog(true);
@@ -607,21 +609,30 @@ function step(delta) {
 // TIFFs exported by an acquisition program (Leica LAS X…) next to the
 // original project or its MetaData. With the vendor plugin installed it
 // offers the whole acquisition (channels, Z, series); without, it offers
-// to install the plugin, then opens the acquisition.
-const companion = { dir: null, answer: null, dismissed: new Set(), installing: null };
+// to install the plugin, then opens the acquisition. A file that cannot be
+// opened for want of a plugin (plugin_for_file) gets the same bar: one
+// click installs the plugin and opens the file.
+const companion = { dir: null, answer: null, dismissed: new Set(), busy: false };
 
 function companionKey(c) {
-  return c.kind === "open" ? `${c.path}#${c.series}` : `plugin:${c.id}`;
+  return c.kind === "open" ? `${c.path}#${c.series}` : `plugin:${c.id}:${c.found}`;
 }
 
 function hideCompanion() {
+  if (companion.busy) return;
   $("companion").hidden = true;
   companion.shown = null;
 }
 
-function showCompanion(c, opened) {
+/**
+ * Shows `c` above the image. `opened` is the image it is about; `retry`
+ * ({path, series}) is the file that failed to open for want of the plugin.
+ */
+function showCompanion(c, opened, retry = null) {
+  if (companion.busy) return;
   if (!c || companion.dismissed.has(companionKey(c))) return hideCompanion();
   companion.shown = c;
+  companion.retry = retry;
   let text, go;
   if (c.kind === "open") {
     const what = c.detail ? `${c.title}（${c.detail}）` : c.title;
@@ -631,11 +642,14 @@ function showCompanion(c, opened) {
     go = "按原始层叠打开";
   } else {
     const verb = { install: "安装", update: "更新", enable: "启用" }[c.action] || "安装";
-    text = `这个文件夹是 ${c.plugin} 的采集数据（找到 ${c.found}）。${verb}「${c.plugin}」插件后，可以按原始的多通道 / Z 栈 / 多序列打开。`;
+    text = retry
+      ? `打开 ${basename(retry.path)} 需要「${c.plugin}」插件。`
+      : `这个文件夹是 ${c.plugin} 的采集数据（找到 ${c.found}）。${verb}「${c.plugin}」插件后，可以按原始的多通道 / Z 栈 / 多序列打开。`;
     go = `${verb}插件`;
   }
   $("companion-text").textContent = text;
   $("companion-go").textContent = go;
+  $("companion-go").disabled = false;
   $("companion").hidden = false;
 }
 
@@ -663,40 +677,88 @@ async function checkCompanion() {
   showCompanion(c, path);
 }
 
+/** Offers the plugin `path` needs after it failed to open; false when no plugin would help. */
+async function offerPluginFor(path, series) {
+  const c = await invoke("plugin_for_file", { path }).catch(() => null);
+  if (!c) return false;
+  companion.dismissed.delete(companionKey(c));
+  showCompanion(c, path, { path, series });
+  return true;
+}
+
+/**
+ * Installs official plugin `id` from the market in one click (its market
+ * entry is the approval, as with the market's own 安装 button). Plugins that
+ * ask for permissions still go through the market's confirmation.
+ * Resolves to true once installed.
+ */
+async function installPluginNow(id) {
+  if (typeof loadMarket !== "function") return false;
+  await loadMarket(true);
+  const item = (market.list || []).find((l) => l.entry.id === id);
+  if (!item) {
+    toast(market.error ? `读不到插件市场：${market.error}` : `插件市场上没有插件 ${id}`, 6000);
+    return false;
+  }
+  if (item.state === "needsApp") {
+    toast(`这个插件需要 TifMrcView ${item.entry.minAppVersion} 或更新版本，请先在 ⚙ 菜单的「更新」里检查更新`, 8000);
+    return false;
+  }
+  if (item.state === "installed") return true;
+  if ((item.entry.permissions || []).length) {
+    confirmInstall({ id });
+    return false;
+  }
+  const error = await installFromMarket(id, true, item.entry);
+  if (error) {
+    toast(`安装失败：${error}`, 8000);
+    return false;
+  }
+  return true;
+}
+
 async function companionGo() {
   const c = companion.shown;
-  if (!c) return;
-  hideCompanion();
-  if (c.kind === "open") return openHere(c.path, false, c.series);
-  if (c.action === "enable") {
-    toast(`请在「插件」里启用「${c.plugin}」`, 5000);
-    if (typeof togglePluginDialog === "function") togglePluginDialog(true);
-    return;
+  if (!c || companion.busy) return;
+  const retry = companion.retry;
+  if (c.kind === "open") {
+    hideCompanion();
+    return openHere(c.path, false, c.series);
   }
-  // The market's own confirmation; the plugin-installed event continues below.
-  companion.installing = { id: c.id, path: S.info && S.info.path };
-  if (typeof confirmInstall === "function") confirmInstall({ id: c.id });
+  const target = retry ? retry.path : S.info && S.info.path;
+  if (c.action === "enable") {
+    hideCompanion();
+    const rec = pluginHost.plugins.get(c.id);
+    setPluginEnabled(c.id, true);
+    if (rec) activatePlugin(rec);
+    if (typeof renderPluginList === "function") renderPluginList();
+    await syncDisabled();
+  } else {
+    companion.busy = true;
+    $("companion-go").disabled = true;
+    $("companion-go").textContent = c.action === "update" ? "正在更新…" : "正在安装…";
+    const ok = await installPluginNow(c.id).finally(() => (companion.busy = false));
+    hideCompanion();
+    if (!ok) return;
+  }
+  // Open what the plugin was installed for.
+  companion.dir = null;
+  if (retry) return openHere(retry.path, true, retry.series || 0);
+  const next = target && (await invoke("folder_companion", { path: target }).catch(() => null));
+  if (next && next.kind === "open") openHere(next.path, false, next.series);
+  else if (target) openHere(target, true);
 }
 
 $("companion-go").addEventListener("click", companionGo);
 $("companion-close").addEventListener("click", () => {
   if (companion.shown) companion.dismissed.add(companionKey(companion.shown));
+  companion.busy = false;
   hideCompanion();
 });
-document.addEventListener("tmv-opened", () => checkCompanion());
-// Installed from the bar: open the acquisition right away.
-T.event.listen("plugin-installed", async (e) => {
-  const want = companion.installing;
-  if (!want || e.payload?.manifest?.id !== want.id) return;
-  companion.installing = null;
-  companion.dir = null;
-  // The backend reloads its plugin list on the same event; ask once it has.
-  await new Promise((r) => setTimeout(r, 300));
-  const c = await invoke("folder_companion", { path: want.path }).catch(() => null);
-  if (c && c.kind === "open") {
-    if (typeof togglePluginDialog === "function") togglePluginDialog(false);
-    openHere(c.path, false, c.series);
-  } else if (S.info && S.info.path === want.path) checkCompanion();
+document.addEventListener("tmv-opened", () => {
+  // A file that opened no longer needs the bar about the one that did not.
+  if (companion.retry && companion.retry.path !== S.info?.path) companion.retry = null;
+  checkCompanion();
 });
 
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */

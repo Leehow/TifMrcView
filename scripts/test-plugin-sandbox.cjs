@@ -129,7 +129,7 @@ const server = http.createServer((req, res) => {
     plugins: [...pluginHost.plugins.values()].map((r) => ({ id: r.def.id, active: r.active, error: r.error })),
     meta: S.pluginMeta, writes: window.mockWrites,
   }));
-  assert.equal(state.plugins.length, packages.length + 2); // built-in i18n + SSH
+  assert.equal(state.plugins.length, packages.length + 1); // only i18n is built in; SSH was loaded as a package above
   assert(state.plugins.every((p) => p.active && !p.error), JSON.stringify(state.plugins));
   if (process.env.TMV_TEST_LOCAL_FOLDER_ONLY === "1") {
     await require("./local-folder-ui-checks.cjs")(page);

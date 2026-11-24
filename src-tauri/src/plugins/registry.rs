@@ -466,6 +466,24 @@ impl Registry {
         })
     }
 
+    /// The plugin a file needs and what to do about it (install, update,
+    /// switch on), when it cannot be opened for want of one: what the
+    /// one-click install button offers.
+    pub fn missing_plugin(&self, path: &Path) -> Option<Companion> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let found = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let idx = self.index();
+        if let Some(p) = idx.wasm.iter().find(|p| p.opens(&ext).is_some()) {
+            if self.enabled(&p.manifest.id) {
+                return None;
+            }
+            return Some(Companion::Plugin { id: p.manifest.id.clone(), plugin: p.manifest.name.clone(), found, action: "enable" });
+        }
+        let &(_, id, name) = KNOWN.iter().find(|k| k.0 == ext)?;
+        let action = if idx.installed.contains_key(id) { "update" } else { "install" };
+        Some(Companion::Plugin { id: id.into(), plugin: name.into(), found, action })
+    }
+
     /// Lets metadata plugins add to what the opener found. Plugin errors
     /// are logged and otherwise ignored: the image itself is fine.
     pub fn add_metadata(&self, path: &Path, ext: &str, src: Box<dyn Source>, skip: Option<&str>) -> Box<dyn Source> {

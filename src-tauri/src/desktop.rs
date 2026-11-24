@@ -1664,6 +1664,13 @@ fn folder_stacks(dir: &Path) -> Vec<StackEntry> {
     vec![StackEntry { path: path.to_string_lossy().into_owned(), name, slices: plan.files.len() }]
 }
 
+/// The plugin a file that failed to open needs (install, update, switch
+/// on), for the one-click install button.
+#[tauri::command]
+async fn plugin_for_file(path: String) -> CmdResult<Option<plugins::registry::Companion>> {
+    blocking(move || Ok(plugins::registry::Registry::global().missing_plugin(Path::new(&path)))).await
+}
+
 /// What the folder of the opened image adds to it: the acquisition it
 /// belongs to (a Leica project beside its exported TIFFs), or the plugin
 /// that would read that acquisition. Run after the image is shown.
@@ -4012,6 +4019,7 @@ pub fn run() {
             list_folder,
             #[cfg(feature = "pro")] list_directory,
             folder_companion,
+            plugin_for_file,
             thumbnail,
             pick_file,
             set_default_app,
