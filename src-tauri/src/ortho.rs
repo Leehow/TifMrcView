@@ -62,6 +62,7 @@ pub fn render_plane(img: &Arc<OpenImage>, plane: &str, req: &RenderReq) -> Resul
         out_h: req.out_h,
         gamma: req.gamma,
         invert: req.invert,
+        preview: false,
         plane: String::new(),
     };
     render::render(&mem, &view)

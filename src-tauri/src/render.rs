@@ -37,7 +37,14 @@ pub struct RenderReq {
     pub gamma: f32,
     #[serde(default)]
     pub invert: bool,
+    /// The view changes fast (Z slider dragged): with lower resolutions
+    /// stored, a small one is enough until it settles.
+    #[serde(default)]
+    pub preview: bool,
 }
+
+/// Longest side, in image pixels of the level read, of a `preview` frame.
+const PREVIEW_SIDE: f64 = 700.0;
 
 fn one() -> f32 {
     1.0
@@ -49,7 +56,10 @@ pub fn render(img: &Arc<OpenImage>, req: &RenderReq) -> Result<Vec<u8>> {
     // Shown reduced: read the smallest stored resolution that still has a
     // pixel for every screen pixel, as Imaris does.
     if img.has_levels() {
-        let scale = (req.region[2] / req.out_w.max(1) as f64).min(req.region[3] / req.out_h.max(1) as f64);
+        let mut scale = (req.region[2] / req.out_w.max(1) as f64).min(req.region[3] / req.out_h.max(1) as f64);
+        if req.preview {
+            scale = scale.max(req.region[2].max(req.region[3]) / PREVIEW_SIDE);
+        }
         let level = img.level_for(scale);
         img.shown_level.store(level.map_or(0, |l| l.0), std::sync::atomic::Ordering::Relaxed);
         if let Some((l, f)) = level {
@@ -235,6 +245,7 @@ pub fn thumbnail(img: &Arc<OpenImage>, size: usize) -> Result<Vec<u8>> {
         out_h: oh,
         gamma: 1.0,
         invert: false,
+        preview: false,
         plane: String::new(),
     };
     render(img, &req)
@@ -263,6 +274,7 @@ mod tests {
             out_h: out,
             gamma: 1.0,
             invert: false,
+            preview: false,
             plane: String::new(),
         }
     }

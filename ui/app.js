@@ -1916,7 +1916,8 @@ async function renderNow() {
   const outH = Math.max(1, Math.round(region[3] * k));
   const channels = channelReqs();
   const token = S.token;
-  const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };
+  // While scrubbing, files that store smaller resolutions (Imaris) answer from a small one.
+  const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false, preview: !!S.scrubbing };
   S.inflight = true;
   S.dirty = false;
   try {

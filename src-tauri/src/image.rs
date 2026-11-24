@@ -511,7 +511,7 @@ impl OpenImage {
         if let Some(l) = levels.get(&level) {
             return Ok(l.clone());
         }
-        let img = OpenImage::new(self.token, src, self.budget.load(Ordering::Relaxed) / 2);
+        let img = OpenImage::new(self.token, src, self.budget.load(Ordering::Relaxed) / 4);
         if self.cancelled.load(Ordering::Relaxed) {
             img.cancelled.store(true, Ordering::Relaxed);
         }
@@ -552,7 +552,7 @@ impl OpenImage {
     pub(crate) fn set_cache_budget(&self, budget: usize) {
         self.budget.store(budget, Ordering::Relaxed);
         for l in self.levels.lock().unwrap().values() {
-            l.set_cache_budget(budget / 2);
+            l.set_cache_budget(budget / 4);
         }
         let mut cache = self.cache.lock().unwrap();
         while self.cached_bytes.load(Ordering::Relaxed) > budget && !cache.is_empty() {
@@ -1252,6 +1252,7 @@ mod level_tests {
             out_h: out,
             gamma: 1.0,
             invert: false,
+            preview: false,
         };
         // 8 image pixels on 4 screen pixels: level 1 (value 15), Z 3 -> 1.
         let px = |b: &[u8]| b[b.len() - 4];
