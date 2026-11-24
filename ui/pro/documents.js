@@ -137,6 +137,7 @@
     stopPlay();
     if (S.xyz) xyz.close(true);
     if (S.axis !== "xy") await setAxis("xy");
+    rememberDisplay();
     active.state = { ...S, view: { ...S.view }, chans: S.chans.map((c) => ({ ...c, color: [...c.color] })),
       folder: { ...S.folder }, frame: null, ov: null, fade: null, hist: null,
       op: null, picked: null, cropBox: null, inflight: false, dirty: false,

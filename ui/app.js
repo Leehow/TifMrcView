@@ -276,6 +276,7 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     showSize(null);
     $("measure-out").textContent = "";
     setModel(null);
+    rememberDisplay();
     S.chans = res.info.channels.map((c) => ({
       visible: true,
       color: c.color,
@@ -284,6 +285,7 @@ async function openPath(path, force = false, series = 0, inTab = false) {
       max: null,
       auto: true,
     }));
+    recallDisplay(res.info);
     const ps = res.info.pixelSize;
     if (ps && ps[0] > 0 && UNIT_M[normUnit(res.info.unit)] && plausiblePixel(ps[0], normUnit(res.info.unit))) {
       S.px = { x: ps[0], y: ps[1] > 0 ? ps[1] : ps[0], unit: normUnit(res.info.unit) };
@@ -730,6 +732,49 @@ function paintChannels() {
 }
 
 // ---------- contrast ----------
+
+// Display settings of each image seen in this session, so going back to an
+// image shows it as it was left: per file and series, per channel.
+// (Which channels are shown is one setting for all images; see restoreChannelVisibility.)
+const displayMemory = new Map();
+const DISPLAY_MEMORY_MAX = 500;
+
+function displayKey(info) {
+  return info ? `${info.seriesIndex || 0}\u0000${info.path}` : null;
+}
+
+/** Saves the display settings of the image shown now (its XY view, not a side view). */
+function rememberDisplay() {
+  const info = S.base ? S.base.info : S.info;
+  const key = displayKey(info);
+  if (!key || !S.chans.length) return;
+  displayMemory.delete(key);
+  displayMemory.set(key, {
+    gamma: S.gamma,
+    sel: S.sel,
+    chans: S.chans.map((c) => ({ color: [...c.color], auto: c.auto, min: c.min, max: c.max })),
+  });
+  if (displayMemory.size > DISPLAY_MEMORY_MAX) displayMemory.delete(displayMemory.keys().next().value);
+}
+
+/** Puts back the settings `info`'s image had when it was last shown. */
+function recallDisplay(info) {
+  const saved = displayMemory.get(displayKey(info));
+  if (!saved || saved.chans.length !== S.chans.length) return;
+  saved.chans.forEach((d, i) => {
+    const c = S.chans[i];
+    c.color = [...d.color];
+    c.auto = d.auto || d.min === null || d.max === null;
+    if (!c.auto) {
+      c.min = d.min;
+      c.max = d.max;
+    }
+  });
+  S.sel = Math.min(saved.sel, S.chans.length - 1);
+  S.gamma = saved.gamma;
+  $("gamma").value = S.gamma;
+  $("gamma-v").textContent = S.gamma.toFixed(2);
+}
 
 function dataRange(c) {
   if (S.hist && S.hist.c === S.sel && S.hist.max > S.hist.min) return [S.hist.min, S.hist.max];
