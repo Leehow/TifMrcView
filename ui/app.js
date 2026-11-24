@@ -224,6 +224,8 @@ try {
  */
 async function openPath(path, force = false, series = 0, inTab = false) {
   if (!path) return;
+  // A side-panel entry for one image of a multi-image file.
+  if (isSeriesKey(path)) [path, series] = splitSeriesKey(path);
   try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (!inTab && typeof editionReady !== "undefined") await editionReady;
   if (!inTab && window.TifMrcViewPro?.documents) return window.TifMrcViewPro.documents.open(path, force, series);
@@ -491,8 +493,26 @@ function normUnit(u) {
 
 /** Where the open image is in the folder list: a stack's entry is its
  * project file, or its folder when the project file is further up. */
+// The side panel lists each image of a file that holds several (a Leica LIF
+// project…) as its own entry, keyed by the path and the image's number.
+const SERIES_SEP = "\u0001";
+function seriesKey(path, i) {
+  return `${path}${SERIES_SEP}${i}`;
+}
+function isSeriesKey(k) {
+  return typeof k === "string" && k.includes(SERIES_SEP);
+}
+function splitSeriesKey(k) {
+  const i = k.lastIndexOf(SERIES_SEP);
+  return i < 0 ? [k, 0] : [k.slice(0, i), +k.slice(i + 1) || 0];
+}
+
 function folderIndex(path) {
   const { files } = S.folder;
+  if (S.info && S.info.path === path && S.info.series?.length > 1) {
+    const i = files.indexOf(seriesKey(path, S.info.seriesIndex));
+    if (i >= 0) return i;
+  }
   if (!(S.info && S.info.folder)) return files.indexOf(path);
   const i = files.indexOf(S.info.path);
   return i >= 0 ? i : files.indexOf(S.info.folder);
@@ -528,11 +548,23 @@ async function refreshFolder(path, keepScroll = false) {
     const stacks = f.stacks || [];
     const steps = !stackDir && f.steps && f.root ? f.steps : null;
     // List the files group by group, in the order the side panel shows them.
+    const series = f.series || {};
     const all = [
       ...stacks.map((s) => ({ path: s.path, size: 0, group: STACK_GROUP })),
-      ...f.files.map((p, i) => ({ path: p, size: f.sizes[i], group: steps ? STEP_GROUPS[steps[i]] || STEP_GROUPS.raw : fileGroup(p) })),
+      ...f.files.flatMap((p, i) => {
+        const group = steps ? STEP_GROUPS[steps[i]] || STEP_GROUPS.raw : fileGroup(p);
+        // Each image of a multi-image file (a LIF project) is an entry.
+        if (series[p]) return series[p].map((s, k) => ({ path: seriesKey(p, k), size: f.sizes[i], group, series: s }));
+        return [{ path: p, size: f.sizes[i], group }];
+      }),
     ];
-    all.sort((a, b) => a.group.order - b.group.order);
+    // Microscope files beside TIFFs are the originals the TIFFs were
+    // exported from: their groups come first, and open.
+    const vendor = (g) => g.light && !steps;
+    const hasTiff = all.some((e) => e.group.id === "tiff");
+    const rank = (g) => (hasTiff && vendor(g) ? -1 : g.order);
+    all.sort((a, b) => rank(a.group) - rank(b.group));
+    if (hasTiff) for (const e of all) if (vendor(e.group) && !(e.group.id in stripFold)) stripOpened.add(e.group.id);
     S.folder = {
       dir: steps ? f.root : dir,
       steps: !!steps,
@@ -540,6 +572,7 @@ async function refreshFolder(path, keepScroll = false) {
       sizes: all.map((e) => e.size),
       groups: all.map((e) => e.group),
       stacks: Object.fromEntries(stacks.map((s) => [s.path, s])),
+      series: Object.fromEntries(all.filter((e) => e.series).map((e) => [e.path, e.series])),
       index: -1,
     };
     $("folder-name").textContent = basename(S.folder.dir) || S.folder.dir;
@@ -666,6 +699,7 @@ T.event.listen("plugin-installed", async (e) => {
 
 /** Opens `path` in the current tab (Pro: the tab's image is replaced); without tabs it is `openPath`. */
 async function openHere(path, force = false, series = 0) {
+  if (isSeriesKey(path)) [path, series] = splitSeriesKey(path);
   try { if (await window.TmvRemote?.open(path)) return; } catch(e) { toast(String(e)); return; }
   if (typeof editionReady !== "undefined") await editionReady;
   const docs = window.TifMrcViewPro?.documents;
@@ -3960,11 +3994,11 @@ const FILE_GROUPS = [
   { id: "gatan", name: "Gatan DM3/DM4", em: true, ext: ["dm3", "dm4"] },
   { id: "thermo", name: "Thermo Fisher SER/EMD/EER", em: true, ext: ["ser", "emi", "emd", "eer"] },
   { id: "tvips", name: "TVIPS", em: true, ext: ["tvips"] },
-  { id: "zeiss", name: "Zeiss CZI/LSM", em: false, ext: ["czi", "lsm"] },
-  { id: "leica", name: "Leica LIF/LOF", em: false, ext: ["lif", "lof"] },
-  { id: "nikon", name: "Nikon ND2", em: false, ext: ["nd2"] },
-  { id: "olympus", name: "Olympus OIB/OIR", em: false, ext: ["oib", "oir"] },
-  { id: "imaris", name: "Imaris IMS", em: false, ext: ["ims"] },
+  { id: "zeiss", name: "Zeiss CZI/LSM", em: false, light: true, ext: ["czi", "lsm"] },
+  { id: "leica", name: "Leica LIF/LOF", em: false, light: true, ext: ["lif", "lof"] },
+  { id: "nikon", name: "Nikon ND2", em: false, light: true, ext: ["nd2"] },
+  { id: "olympus", name: "Olympus OIB/OIR", em: false, light: true, ext: ["oib", "oir"] },
+  { id: "imaris", name: "Imaris IMS", em: false, light: true, ext: ["ims"] },
   { id: "image", name: "普通图片", em: false, ext: ["png", "jpg", "jpeg", "gif", "bmp", "webp"] },
 ];
 FILE_GROUPS.forEach((g, i) => (g.order = i));
@@ -4059,7 +4093,13 @@ function buildStrip() {
     el.dataset.path = f;
     el.innerHTML = `<div class="box"></div><div class="nm"></div><div class="meta"></div>`;
     const stack = S.folder.stacks[f];
-    if (stack) {
+    const one = S.folder.series && S.folder.series[f];
+    if (one) {
+      const [file] = splitSeriesKey(f);
+      el.title = `${one.name}（${one.detail}）\n${file}`;
+      el.querySelector(".nm").textContent = one.name;
+      el.querySelector(".meta").textContent = `${basename(file)} · ${one.detail}`;
+    } else if (stack) {
       el.classList.add("stack");
       el.title = `${stack.name}：${stack.slices} 张切片组成的 Z 堆叠\n${f}`;
       el.querySelector(".nm").textContent = stack.name;
@@ -4104,7 +4144,8 @@ function pumpThumbs() {
     if (!el.isConnected) continue;
     thumbActive++;
     const remote = ext.remoteFiles?.get(el.dataset.path);
-    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: el.dataset.path, size: 256 }))
+    const [thumbPath, thumbSeries] = splitSeriesKey(el.dataset.path);
+    (remote && !remote.ready && remote.thumbnail ? remote.thumbnail() : invoke("thumbnail", { path: thumbPath, size: 256, series: thumbSeries }))
       .then((buf) => {
         if (!el.isConnected) return;
         if (typeof buf === "string") {

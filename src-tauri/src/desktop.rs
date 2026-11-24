@@ -1580,6 +1580,34 @@ struct Folder {
     /// The project folder `files` come from (set with `steps`).
     #[serde(skip_serializing_if = "Option::is_none")]
     root: Option<String>,
+    /// The images inside files that hold several (a Leica LIF project, ND2
+    /// positions…), so the side panel lists each one.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    series: HashMap<String, Vec<crate::image::SeriesInfo>>,
+}
+
+/// Files of the folder that hold several images, with their images. Only
+/// files a plugin opens (vendor containers) are looked into, and at most a
+/// few dozen, so listing a folder stays quick.
+fn folder_series(files: &[String]) -> HashMap<String, Vec<crate::image::SeriesInfo>> {
+    use rayon::prelude::*;
+    let reg = plugins::registry::Registry::global();
+    let containers: Vec<&String> = files
+        .iter()
+        .filter(|f| {
+            let ext = Path::new(f).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            !formats::CORE_EXTENSIONS.contains(&ext.as_str()) && reg.opens(&ext)
+        })
+        .take(64)
+        .collect();
+    containers
+        .par_iter()
+        .filter_map(|f| {
+            let src = formats::open_pixels_with(Path::new(f.as_str()), 0, reg).ok()?.0;
+            let s = src.info().series.clone();
+            (s.len() > 1).then(|| ((*f).clone(), s))
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -1681,7 +1709,7 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
                 let steps = listed.iter().map(|(_, g)| g.to_string()).collect();
                 let files = listed.into_iter().map(|(f, _)| f).collect();
                 let root: PathBuf = root.components().collect();
-                return Ok(Folder { files, sizes, index, stacks: vec![], steps: Some(steps), root: Some(root.to_string_lossy().into_owned()) });
+                return Ok(Folder { files, sizes, index, stacks: vec![], steps: Some(steps), root: Some(root.to_string_lossy().into_owned()), series: HashMap::new() });
             }
         }
         let mut files: Vec<String> = std::fs::read_dir(&dir)?
@@ -1695,27 +1723,32 @@ async fn list_folder(path: String) -> CmdResult<Folder> {
         let index = files.iter().position(|f| Path::new(f) == p);
         let sizes = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
         let dir: PathBuf = dir.components().collect();
-        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir), steps: None, root: None })
+        let series = folder_series(&files);
+        Ok(Folder { files, sizes, index, stacks: folder_stacks(&dir), steps: None, root: None, series })
     })
     .await
 }
 
 #[tauri::command]
-async fn thumbnail(state: State<'_, AppState>, path: String, size: usize) -> CmdResult<Response> {
+async fn thumbnail(state: State<'_, AppState>, path: String, size: usize, series: Option<usize>) -> CmdResult<Response> {
+    let series = series.unwrap_or(0);
     let mtime = std::fs::metadata(&path)
         .and_then(|m| m.modified())
         .map(|t| format!("{t:?}"))
         .unwrap_or_default();
-    let key = format!("{path}|{mtime}|{size}");
+    let key = format!("{path}|{mtime}|{size}|{series}");
     if let Some(t) = state.thumbs.lock().unwrap().get(&key) {
         return Ok(Response::new(t.as_ref().clone()));
     }
     // Reuse the decoded pages when the thumbnail is for the open file.
-    let open = state.current.lock().unwrap().values().find(|i| i.info().path == path).cloned();
+    let open = state.current.lock().unwrap().values().find(|i| i.info().path == path && i.info().series_index == series).cloned();
     let bytes = blocking(move || {
         image::bg_pool().install(|| {
             let img = match open {
                 Some(i) => i,
+                None if series > 0 => {
+                    OpenImage::new(0, formats::open_pixels_with(Path::new(&path), series, plugins::registry::Registry::global())?.0, usize::MAX)
+                }
                 None => OpenImage::new(0, formats::open_pixels(Path::new(&path))?, usize::MAX),
             };
             render::thumbnail(&img, size)
