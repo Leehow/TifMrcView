@@ -16,13 +16,20 @@ macro_rules! lasx {
     () => {
         match common::install(&["lasx"]) {
             Some(mut p) => {
-                // The plugin needs 0.5.0 (series); the crate may still say 0.4.x.
-                p.registry = Registry::new(Some(p.dir.path().to_path_buf()), "0.5.0");
+                // The app version the plugin asks for (the crate still says 0.7.0).
+                p.registry = Registry::new(Some(p.dir.path().to_path_buf()), &app_version());
                 p
             }
             None => return,
         }
     };
+}
+
+/// The `minAppVersion` of plugins/lasx/plugin.json.
+fn app_version() -> String {
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins/lasx/plugin.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["minAppVersion"].as_str().unwrap().to_string()
 }
 
 fn values(p: &PlaneData) -> Vec<f64> {
@@ -384,12 +391,15 @@ fn stopped_scans_and_broken_files() {
         p
     };
 
-    // The last plane is missing (acquisition stopped): the others still read, it stays blank.
+    // The last plane is missing (acquisition stopped, copy cut short): only
+    // the complete Z planes are shown, and the info panel says so.
     let path = fresh(&full[..full.len() - 100]);
     let src = open(&p.registry, &path, 0);
+    assert_eq!(src.info().size_z, 2);
+    assert_eq!(src.info().page_count, 4);
+    assert!(src.info().metadata.iter().any(|g| g.name == "LIF 文件不完整"));
     assert_eq!(plane(&*src, 0, 0, 0), pattern_plane(16, 16, 0, 0, 0, u16::MAX));
-    assert_eq!(plane(&*src, 1, 2, 0), vec![0.0; 256]);
-    assert_eq!(plane(&*src, 0, 2, 0), pattern_plane(16, 16, 0, 2, 0, u16::MAX));
+    assert_eq!(plane(&*src, 1, 1, 0), pattern_plane(16, 16, 1, 1, 0, u16::MAX));
 
     // Garbage and cuts anywhere are errors, never crashes.
     for cut in [0, 5, 12, 40, 400, 1500, full.len() / 2] {
@@ -408,7 +418,7 @@ fn stopped_scans_and_broken_files() {
     let xml_end = 13 + 2 * u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
     bytes.truncate(xml_end);
     let path = fresh(&bytes);
-    assert!(err(&p.registry, &path, 0).contains("找不到图像数据块"));
+    assert!(err(&p.registry, &path, 0).contains("数据不在文件里"));
 
     // Unsupported pixel type, and a layout that is not row-major.
     let mut bad = lasx::stack("S", 4, 4, 1, 1, 1, 8);
@@ -428,7 +438,7 @@ fn needs_the_plugin_and_follows_the_switch() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("a.lif");
     lasx::write_lif(&path, 2, "P", &[Node::Image(lasx::stack("S", 4, 4, 1, 1, 1, 8))]);
-    let none = Registry::new(Some(tmp.path().join("no-plugins")), "0.5.0");
+    let none = Registry::new(Some(tmp.path().join("no-plugins")), &app_version());
     // (The host's list of well-known plugins is what turns this into "install the plugin".)
     assert!(err(&none, &path, 0).contains(".lif"));
     assert!(!formats::is_supported_with(&path, &none));
