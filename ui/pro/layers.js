@@ -778,7 +778,7 @@
     const open = () => paths.forEach((path) => D.open(path));
     const active = D.current();
     const images = paths.filter((p) => !/\.tmvmerge$/i.test(p) && /\.[^/\\]+$/.test(basename(p)));
-    if (!active || !images.length || images.length !== paths.length || (active.type === "image" && !S.info)) return open();
+    if (!active || !images.length || images.length !== paths.length || active.type === "start" || (active.type === "image" && !S.info)) return open();
     const choice = await askDrop(paths);
     if (choice === "tab") return open();
     if (choice !== "layer") return;

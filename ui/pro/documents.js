@@ -119,8 +119,9 @@
     const add = document.createElement("button");
     add.id = "document-open";
     add.textContent = "+";
-    add.title = "打开图像（新标签页）";
-    add.onclick = openAny;
+    add.title = "新标签页";
+    // A new tab shows the start page, as a freshly opened app does.
+    add.onclick = () => enqueue(() => openStart());
     bar.append(add);
     bar.querySelector(".selected")?.scrollIntoView({ inline: "nearest", block: "nearest" });
     document.body.classList.toggle("merge-mode", active?.type === "merge");
@@ -190,6 +191,7 @@
     active = doc;
     changed();
     if (doc.type === "image") { restore(doc); changed(); }
+    else if (doc.type === "start") showStart();
     else {
       stopPlay();
       $("empty").hidden = true;
@@ -204,7 +206,7 @@
     return enqueue(async () => {
       if (/\.tmvmerge$/i.test(path)) return openProject(path);
       const existing = tabs.find((d) => d.type === "image" && d.path === path && d.series === series);
-      const here = TmvTabRules.replacesActive(active, opts) && (!existing || existing === active);
+      const here = (active?.type === "start" || TmvTabRules.replacesActive(active, opts)) && (!existing || existing === active);
       if (existing && !here && !force) return activate(existing);
       if (existing && here && !force) return existing;
       if (!here && !existing && !await makeRoom()) return null;
@@ -212,6 +214,16 @@
       const previous = active;
       const result = await openPath(path, force || previous?.type !== "image", series, true);
       if (!result) return null;
+      if (here && previous?.type === "start") {
+        const doc = { id: previous.id, type: "image", path, series, token: result.token,
+          name: result.info.name, state: null, dirty: false, used: Date.now() };
+        sources.set(result.token, result);
+        tabs.splice(tabs.indexOf(previous), 1, doc);
+        active = doc;
+        await capture();
+        changed();
+        return doc;
+      }
       if (here) {
         // Same tab, new image: the old backend document goes when nothing else uses it.
         Object.assign(previous, { path, series, token: result.token, name: result.info.name, used: Date.now() });
@@ -269,7 +281,7 @@
     const used = new Set(pins.keys());
     for (const d of tabs) {
       if (d.type === "image") used.add(d.token);
-      else {
+      else if (d.type === "merge") {
         if (!d.path && d.autosaveToken) used.add(d.autosaveToken);
         d.layers.forEach((l) => used.add(l.token));
         for (const h of [...(d.history || []), ...(d.future || [])]) h.layers.forEach((l) => used.add(l.token));
@@ -507,6 +519,33 @@
     return false;
   }
 
+  /** The empty start page, as shown when the app has just opened. */
+  function showStart() {
+    stopPlay();
+    clearTimeout(S.loadTimer);
+    Object.assign(S, { token: 0, info: null, frame: null, ov: null, ann: [], hist: null, model: null, base: null, axis: "xy", chans: [] });
+    $("empty").hidden = false;
+    $("loading").hidden = true;
+    $("zbar").hidden = true;
+    buildChannels(); buildSeries(); updateInfo(); updateSaveButtons(); draw();
+    T.window.getCurrentWindow().setTitle(EDITION.name).catch(() => {});
+  }
+
+  /** "+": a new tab with the start page (an existing empty one is reused). */
+  async function openStart() {
+    const blank = tabs.find((d) => d.type === "start");
+    if (blank) return activate(blank);
+    if (!active) return null;
+    if (!await makeRoom()) return null;
+    if (!await capture()) return null;
+    const doc = { id: `document-${++nextId}`, type: "start", name: "新标签页", dirty: false, used: Date.now() };
+    tabs.push(doc);
+    active = doc;
+    changed();
+    showStart();
+    return doc;
+  }
+
   async function closeTab(doc) {
     if (!await mayClose(doc)) return;
     if (doc === active) await capture();
@@ -516,15 +555,7 @@
       active = null;
       const next = tabs[Math.min(index, tabs.length - 1)];
       if (next) await activate(next);
-      else {
-        stopPlay();
-        clearTimeout(S.loadTimer);
-        Object.assign(S, { token: 0, info: null, frame: null, ov: null, ann: [], hist: null, model: null, base: null, axis: "xy", chans: [] });
-        $("empty").hidden = false;
-        $("zbar").hidden = true;
-        buildChannels(); buildSeries(); updateInfo(); updateSaveButtons(); draw();
-        T.window.getCurrentWindow().setTitle(EDITION.name).catch(() => {});
-      }
+      else showStart();
     }
     await releaseUnused();
     changed();
