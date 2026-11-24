@@ -43,8 +43,10 @@ pub struct RenderReq {
     pub preview: bool,
 }
 
-/// Longest side, in image pixels of the level read, of a `preview` frame.
-const PREVIEW_SIDE: f64 = 700.0;
+/// A `preview` frame reads a level at most about this many pixels across
+/// (Imaris: 678 px for a 5425 px image; its pages then all fit in memory,
+/// read ahead in the background).
+const PREVIEW_SIDE: f64 = 600.0;
 
 fn one() -> f32 {
     1.0
