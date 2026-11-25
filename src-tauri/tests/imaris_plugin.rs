@@ -87,7 +87,7 @@ fn old_style_hdf5_gzip_chunks_metadata_and_pixels() {
     assert_eq!(img("尺寸").as_deref(), Some("X=19  Y=12  Z=5  C=2  T=2"));
     assert_eq!(img("压缩").as_deref(), Some("gzip（级别 2）"));
     assert_eq!(img("分块 (Z×Y×X)").as_deref(), Some("4×8×16"));
-    assert_eq!(img("分辨率层级").as_deref(), Some("2（显示最高分辨率）"));
+    assert_eq!(img("分辨率层级").as_deref(), Some("2（显示原始分辨率）"));
     assert_eq!(img("Z 步长").as_deref(), Some("1.5 µm"));
     assert_eq!(img("时间间隔（平均）").as_deref(), Some("2.5 s"));
     assert_eq!(item(&i, "通道 1：EGFP", "激发波长").as_deref(), Some("488 nm"));
