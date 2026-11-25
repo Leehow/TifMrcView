@@ -111,14 +111,17 @@ test("permission vocabulary matches Rust and the runtime; API 2 is strict", () =
 
 test("install permissions and errors have all seven i18n columns", () => {
   const { WORDS } = vm.runInNewContext(fs.readFileSync(path.join(root, "ui/plugins/i18n.js"), "utf8") + "; ({WORDS})", { TifMrcView: { register() {} } });
-  // The install-time rows are grouped at the start of WORDS.
-  for (const row of WORDS.slice(0, 15)) {
+  // The install-time rows are grouped near the start of WORDS, from the
+  // permission heading on; rows added above it must not shift the check.
+  const at = WORDS.findIndex((row) => row[0] === "插件权限");
+  assert.ok(at >= 0, "permission heading row");
+  for (const row of WORDS.slice(0, at + 15)) {
     assert.equal(row.length, 7, row[0]);
     assert.ok(row.every((s) => typeof s === "string" && s.trim()), row[0]);
   }
   const rust = ["src/desktop.rs", "src/plugins/desktop.rs", "src/plugins/market.rs", "src/plugins/package.rs"]
     .map((p) => fs.readFileSync(path.join(root, "src-tauri", p), "utf8")).join("\n");
-  for (const row of WORDS.slice(9, 15)) assert.ok(rust.includes(row[0]), `UI error must match backend: ${row[0]}`);
+  for (const row of WORDS.slice(at + 9, at + 15)) assert.ok(rust.includes(row[0]), `UI error must match backend: ${row[0]}`);
 });
 
 test("source checks share manifest rules and distinguish a missing build", (t) => {
