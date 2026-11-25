@@ -1,6 +1,6 @@
 [package]
 name = "tmv-plugin-imaris"
-version = "1.0.0"
+version = "1.0.2"
 description = "Imaris IMS reader for TifMrcView (WebAssembly format plugin)"
 edition = "2021"
 license = "Apache-2.0"

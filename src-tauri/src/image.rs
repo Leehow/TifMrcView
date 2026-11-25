@@ -419,9 +419,25 @@ pub trait Source: Send + Sync {
     fn progress(&self) -> Option<(usize, usize)> {
         None
     }
+    /// The image at lower resolutions, largest first: (width, height, Z) of
+    /// each. Level i (from 1) is opened with [`Source::open_level`].
+    fn levels(&self) -> &[[usize; 3]] {
+        &[]
+    }
+    fn open_level(&self, _level: usize) -> Option<Result<Box<dyn Source>>> {
+        None
+    }
 }
 
 pub type Page = Arc<Vec<Plane>>;
+
+/// Memory for decoded pages, shared by the files open in all windows.
+pub fn page_budget() -> usize {
+    #[cfg(feature = "desktop")]
+    return crate::mem::cache_budget();
+    #[cfg(not(feature = "desktop"))]
+    return 3 << 30;
+}
 
 /// Pool for background work (prefetch, thumbnails). It leaves one core free
 /// so the page the user is looking at always decodes and renders promptly on
@@ -453,6 +469,10 @@ pub struct OpenImage {
     pub cancelled: AtomicBool,
     /// The page the user looks at; background reads stay around it.
     focus: AtomicUsize,
+    /// Lower resolutions opened so far (see [`Source::levels`]), by level.
+    levels: Mutex<HashMap<usize, Arc<OpenImage>>>,
+    /// The level the main view showed last (0 = full resolution).
+    pub(crate) shown_level: AtomicUsize,
 }
 
 impl OpenImage {
@@ -469,7 +489,59 @@ impl OpenImage {
             budget: AtomicUsize::new(budget),
             cancelled: AtomicBool::new(false),
             focus: AtomicUsize::new(0),
+            levels: Mutex::new(HashMap::new()),
+            shown_level: AtomicUsize::new(0),
         })
+    }
+
+    /// Whether the file holds this image at lower resolutions too.
+    pub fn has_levels(&self) -> bool {
+        !self.source.levels().is_empty()
+    }
+
+    /// Lower resolution `level` (1 = the largest of them), opened on first
+    /// use with its own page cache and background reader.
+    pub fn level(&self, level: usize) -> Result<Arc<OpenImage>> {
+        if let Some(l) = self.levels.lock().unwrap().get(&level) {
+            return Ok(l.clone());
+        }
+        let Some(src) = self.source.open_level(level) else { anyhow::bail!("没有第 {level} 级分辨率") };
+        let src = src?;
+        let mut levels = self.levels.lock().unwrap();
+        if let Some(l) = levels.get(&level) {
+            return Ok(l.clone());
+        }
+        let img = OpenImage::new(self.token, src, self.budget.load(Ordering::Relaxed) / 4);
+        if self.cancelled.load(Ordering::Relaxed) {
+            img.cancelled.store(true, Ordering::Relaxed);
+        }
+        levels.insert(level, img.clone());
+        img.prefetch(0);
+        Ok(img)
+    }
+
+    /// The smallest level that still has at least one stored pixel per
+    /// shown pixel when the image is drawn `scale` times reduced (image
+    /// pixels per screen pixel), with how much smaller it is in X, Y and Z.
+    /// None: the full resolution.
+    pub fn level_for(&self, scale: f64) -> Option<(usize, [f64; 3])> {
+        let info = self.info();
+        let mut best = None;
+        for (i, &[w, h, d]) in self.source.levels().iter().enumerate() {
+            let f = [info.width as f64 / w as f64, info.height as f64 / h as f64, info.size_z as f64 / d.max(1) as f64];
+            if f[0].max(f[1]) <= scale * 1.0001 {
+                best = Some((i + 1, f));
+            }
+        }
+        best
+    }
+
+    /// Stops the background readers of the lower resolutions too.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        for l in self.levels.lock().unwrap().values() {
+            l.cancelled.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn info(&self) -> &ImageInfo {
@@ -479,6 +551,9 @@ impl OpenImage {
     /// Pro shares its decoded-page allowance across retained tabs and layers.
     pub(crate) fn set_cache_budget(&self, budget: usize) {
         self.budget.store(budget, Ordering::Relaxed);
+        for l in self.levels.lock().unwrap().values() {
+            l.set_cache_budget(budget / 4);
+        }
         let mut cache = self.cache.lock().unwrap();
         while self.cached_bytes.load(Ordering::Relaxed) > budget && !cache.is_empty() {
             let focus = self.focus.load(Ordering::Relaxed);
@@ -544,6 +619,13 @@ impl OpenImage {
 
     /// How many pages are in memory, and whether the whole file fits.
     pub fn load_progress(&self) -> (usize, usize, bool) {
+        // Shown from a lower resolution: that level's progress.
+        let shown = self.shown_level.load(Ordering::Relaxed);
+        if shown > 0 {
+            if let Some(l) = self.levels.lock().unwrap().get(&shown).cloned() {
+                return l.load_progress();
+            }
+        }
         if let Some((done, total)) = self.source.progress() {
             return (done, total, true);
         }
@@ -568,6 +650,11 @@ impl OpenImage {
     /// file is closed. Statistics are computed here too, off the UI path.
     pub fn prefetch(self: &Arc<Self>, center: usize) {
         self.set_focus(center);
+        // A file with lower resolutions is shown from them; its full-size
+        // pages are read only for close-ups (each level reads ahead itself).
+        if self.has_levels() {
+            return;
+        }
         let me = self.clone();
         std::thread::spawn(move || {
             let n = me.info().page_count;
@@ -1069,5 +1156,125 @@ pub(crate) mod tests {
         assert_eq!((s.min, s.max), (1.0, 1.0));
         // Out-of-range sample index is clamped.
         assert_eq!(img.stats(1, 5, &p).min, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    /// An 8×8×4 stack stored also at 4×4×2 and 2×2×1; every pixel of a level
+    /// holds that level's number, so a render shows which one it read.
+    struct Pyramid {
+        info: ImageInfo,
+        level: usize,
+        sizes: Vec<[usize; 3]>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    fn info(w: usize, d: usize) -> ImageInfo {
+        let mut i = ImageInfo {
+            path: String::new(),
+            name: String::new(),
+            format: String::new(),
+            width: w,
+            height: w,
+            size_c: 1,
+            size_z: d,
+            size_t: 1,
+            dtype: DType::U8,
+            is_rgb: false,
+            channels: vec![],
+            pixel_size: None,
+            unit: String::new(),
+            metadata: vec![],
+            samples_per_page: 1,
+            order: DimOrder::CZT,
+            page_count: d,
+            series: vec![],
+            series_index: 0,
+            folder: None,
+            spectrum: None,
+        };
+        i.fill_default_channels();
+        i
+    }
+
+    impl Source for Pyramid {
+        fn info(&self) -> &ImageInfo {
+            &self.info
+        }
+        fn read_page(&self, _page: usize) -> Result<Vec<Plane>> {
+            if self.level == 0 {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+            }
+            let n = self.info.width * self.info.height;
+            Ok(vec![Plane { w: self.info.width, h: self.info.height, data: PlaneData::U8(vec![10 * self.level as u8 + 5; n]) }])
+        }
+        fn levels(&self) -> &[[usize; 3]] {
+            if self.level == 0 { &self.sizes } else { &[] }
+        }
+        fn open_level(&self, level: usize) -> Option<Result<Box<dyn Source>>> {
+            let [w, _, d] = *self.sizes.get(level.checked_sub(1)?)?;
+            Some(Ok(Box::new(Pyramid { info: info(w, d), level, sizes: vec![], reads: self.reads.clone() })))
+        }
+    }
+
+    fn open() -> (Arc<OpenImage>, Arc<AtomicUsize>) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let src = Pyramid { info: info(8, 4), level: 0, sizes: vec![[4, 4, 2], [2, 2, 1]], reads: reads.clone() };
+        (OpenImage::new(1, Box::new(src), 1 << 20), reads)
+    }
+
+    #[test]
+    fn picks_the_smallest_level_with_a_pixel_per_screen_pixel() {
+        let (img, _) = open();
+        assert_eq!(img.level_for(1.0), None);
+        assert_eq!(img.level_for(1.9).map(|l| l.0), None);
+        assert_eq!(img.level_for(2.0).map(|l| l.0), Some(1));
+        assert_eq!(img.level_for(3.0).map(|l| l.0), Some(1));
+        assert_eq!(img.level_for(4.0), Some((2, [4.0, 4.0, 4.0])));
+        assert_eq!(img.level_for(100.0).map(|l| l.0), Some(2));
+        img.cancel();
+    }
+
+    #[test]
+    fn reduced_views_read_the_level_and_close_ups_the_full_size() {
+        let (img, reads) = open();
+        let req = |out: usize, z: usize| crate::render::RenderReq {
+            token: 1,
+            z,
+            t: 0,
+            channels: vec![crate::render::ChanReq { index: 0, color: [255, 255, 255], min: Some(0.0), max: Some(255.0) }],
+            plane: String::new(),
+            region: [0.0, 0.0, 8.0, 8.0],
+            out_w: out,
+            out_h: out,
+            gamma: 1.0,
+            invert: false,
+            preview: false,
+        };
+        // 8 image pixels on 4 screen pixels: level 1 (value 15), Z 3 -> 1.
+        let px = |b: &[u8]| b[b.len() - 4];
+        let out = crate::render::render(&img, &req(4, 3)).unwrap();
+        assert_eq!(px(&out), 15);
+        assert_eq!(reads.load(Ordering::Relaxed), 0, "the full size is not read");
+        assert_eq!(img.shown_level.load(Ordering::Relaxed), 1);
+        // 8 on 2: level 2.
+        assert_eq!(px(&crate::render::render(&img, &req(2, 0)).unwrap()), 25);
+        // 8 on 8: full size.
+        assert_eq!(px(&crate::render::render(&img, &req(8, 2)).unwrap()), 5);
+        assert!(reads.load(Ordering::Relaxed) > 0);
+        assert_eq!(img.shown_level.load(Ordering::Relaxed), 0);
+        img.cancel();
+    }
+
+    #[test]
+    fn full_size_is_not_read_ahead_when_levels_exist() {
+        let (img, reads) = open();
+        img.prefetch(0);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        img.cancel();
     }
 }

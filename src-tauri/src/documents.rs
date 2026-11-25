@@ -26,14 +26,14 @@ impl Documents {
 
     pub fn remove(&self, window: &str, token: u64) {
         if let Some(image) = self.0.lock().unwrap().get_mut(window).and_then(|images| images.remove(&token)) {
-            image.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            image.cancel();
         }
     }
 
     pub fn close_window(&self, window: &str) {
         if let Some(images) = self.0.lock().unwrap().remove(window) {
             for image in images.values() {
-                image.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                image.cancel();
             }
         }
     }
@@ -41,7 +41,7 @@ impl Documents {
     pub fn close_all(&self) {
         let windows = std::mem::take(&mut *self.0.lock().unwrap());
         for images in windows.values() {
-            for image in images.values() { image.cancelled.store(true, std::sync::atomic::Ordering::Relaxed); }
+            for image in images.values() { image.cancel(); }
         }
     }
 

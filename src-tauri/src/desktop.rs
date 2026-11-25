@@ -160,7 +160,7 @@ async fn open_image(
         state.documents.keep(window.label(), img.clone());
         if let Some(old) = cur.insert(window.label().to_string(), img.clone()) {
             #[cfg(not(feature = "pro"))]
-            old.cancelled.store(true, Ordering::Relaxed);
+            old.cancel();
             #[cfg(feature = "pro")]
             let _ = old;
         }
@@ -4161,7 +4161,7 @@ pub fn run() {
                 #[cfg(feature = "pro")]
                 state.documents.close_window(label);
                 if let Some(img) = state.current.lock().unwrap().remove(label) {
-                    img.cancelled.store(true, Ordering::Relaxed);
+                    img.cancel();
                 }
                 state.pending.lock().unwrap().remove(label);
                 state.showing.lock().unwrap().remove(label);

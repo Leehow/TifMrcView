@@ -332,6 +332,8 @@ async function openPath(path, force = false, series = 0, inTab = false) {
     if (request !== openRequest) return;
     // Missing plugin: a bar above the image installs it and opens the file.
     if (needsPlugin(e) && (await offerPluginFor(path, series))) return;
+    // An installed plugin that failed may be fixed in its newer version.
+    if (!needsPlugin(e) && (await offerPluginUpdateFor(path, series, e))) return;
     toast(`无法打开 ${basename(path)}：${e}`, needsPlugin(e) ? 8000 : 3500);
     // The plugin window has the way to the plugin market.
     if (needsPlugin(e) && typeof togglePluginDialog === "function") togglePluginDialog(true);
@@ -642,7 +644,9 @@ function showCompanion(c, opened, retry = null) {
     go = "按原始层叠打开";
   } else {
     const verb = { install: "安装", update: "更新", enable: "启用" }[c.action] || "安装";
-    text = retry
+    text = retry && retry.error && c.version
+      ? `无法打开 ${basename(retry.path)}：${retry.error}。「${c.plugin}」插件有新版 ${c.version}（已装 ${c.installed}），可能已经修好，更新后会重新打开。`
+      : retry
       ? `打开 ${basename(retry.path)} 需要「${c.plugin}」插件。`
       : `这个文件夹是 ${c.plugin} 的采集数据（找到 ${c.found}）。${verb}「${c.plugin}」插件后，可以按原始的多通道 / Z 栈 / 多序列打开。`;
     go = `${verb}插件`;
@@ -678,6 +682,26 @@ async function checkCompanion() {
 }
 
 /** Offers the plugin `path` needs after it failed to open; false when no plugin would help. */
+/**
+ * When the plugin that reads `path` has a newer version in the market,
+ * shows the bar that updates it and opens the file again. The market list
+ * is the one already fetched this session (fetched once if not).
+ */
+async function offerPluginUpdateFor(path, series, error) {
+  if (typeof loadMarket !== "function") return false;
+  const ext = (basename(path).split(".").pop() || "").toLowerCase();
+  if (!market.list && !market.error) await loadMarket().catch(() => {});
+  const item = (market.list || []).find(
+    (l) => l.state === "update" && (l.entry.formats || []).some((f) => (f.ext || []).map((x) => x.toLowerCase()).includes(ext)),
+  );
+  if (!item) return false;
+  const p = item.entry;
+  const c = { kind: "plugin", id: p.id, plugin: marketText(p, "name") || p.name || p.id, found: basename(path), action: "update", installed: item.installed, version: p.version };
+  companion.dismissed.delete(companionKey(c));
+  showCompanion(c, path, { path, series, error: String(error) });
+  return true;
+}
+
 async function offerPluginFor(path, series) {
   const c = await invoke("plugin_for_file", { path }).catch(() => null);
   if (!c) return false;
@@ -1892,7 +1916,8 @@ async function renderNow() {
   const outH = Math.max(1, Math.round(region[3] * k));
   const channels = channelReqs();
   const token = S.token;
-  const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false };
+  // While scrubbing, files that store smaller resolutions (Imaris) answer from a small one.
+  const req = { token, z: S.z, t: S.t, channels, region, outW, outH, gamma: S.gamma, invert: false, preview: !!S.scrubbing };
   S.inflight = true;
   S.dirty = false;
   try {

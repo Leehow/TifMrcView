@@ -7,7 +7,8 @@
 //! (Z × Y × X) per channel and time point, chunked (e.g. 16×256×256) and
 //! usually gzip-compressed, with its dimensions padded up to whole chunks;
 //! the real size is in the `ImageSizeX/Y/Z` attributes of the channel
-//! group. Lower resolution levels are skipped. Metadata lives in
+//! group. Each resolution level (`ResolutionLevel N`, halved in XY and
+//! often in Z) is offered as an image of its own. Metadata lives in
 //! attributes of the groups under `/DataSetInfo` (Image, Channel N,
 //! TimeInfo, ImarisDataSet, vendor groups), stored as arrays of
 //! one-character strings.
@@ -31,7 +32,7 @@ use std::rc::Rc;
 
 use hdf5::{ChunkRef, Dataset, Layout, Object, H5};
 use tifmrcview_plugin_sdk::{
-    bail, export_format, file, flags, Channel, Chunk, Codec, DType, Error, Format, Group, Info, Recipe, Result,
+    bail, export_format, file, flags, Channel, Chunk, Codec, DType, Error, Format, Group, Info, Recipe, Result, Series,
 };
 
 const DEFAULT_COLORS: [[u8; 3]; 7] =
@@ -190,6 +191,51 @@ fn index_volume(h5: &H5<HostFile>, ds: Dataset) -> Result<Volume> {
 
 impl Format for Ims {
     fn open(_path: &str) -> Result<Ims> {
+        Ims::load(0)
+    }
+
+    fn open_series(_path: &str, series: u32) -> Result<Ims> {
+        Ims::load(series as usize)
+    }
+
+    fn info(&mut self) -> Result<Info> {
+        Ok(std::mem::replace(&mut self.info, Info::new(1, 1, DType::U8, "")))
+    }
+
+    fn page(&self, page: u32) -> Result<Recipe> {
+        self.recipe(page)
+    }
+}
+
+/// Size (X, Y, Z) of resolution level `rl`: its first channel's
+/// `ImageSize*` attributes, else its padded dataset.
+fn level_size(h5: &H5<HostFile>, rl: u64) -> Result<[u64; 3]> {
+    let tps = numbered_links(h5, &h5.object(rl)?, "TimePoint ")?;
+    let Some(&(_, tp)) = tps.first() else { bail!("IMS 文件里没有时间点") };
+    let chans = numbered_links(h5, &h5.object(tp)?, "Channel ")?;
+    let Some(&(_, ch)) = chans.first() else { bail!("IMS 文件里没有通道") };
+    let ch = h5.object(ch)?;
+    let attrs = h5.attributes(&ch).unwrap_or_default();
+    let mut dims = [0u64; 3];
+    if let Some(d) = child(h5, &ch, "Data")? {
+        let ds = h5.dataset(&h5.object(d)?)?;
+        if ds.dims.len() == 3 {
+            dims = [ds.dims[2], ds.dims[1], ds.dims[0]];
+        }
+    }
+    let mut out = [0u64; 3];
+    for (k, a) in ["ImageSizeX", "ImageSizeY", "ImageSizeZ"].iter().enumerate() {
+        out[k] = get_num(&attrs, a).map(|v| v as u64).filter(|&v| v > 0).unwrap_or(dims[k]);
+        if dims[k] > 0 {
+            out[k] = out[k].min(dims[k]);
+        }
+    }
+    Ok(out)
+}
+
+impl Ims {
+    /// Opens resolution level `level` (0 = full resolution).
+    fn load(level: usize) -> Result<Ims> {
         let head = file::read_at_most(0, 32)?;
         if head.starts_with(b"II*\0") && head.get(8..21) == Some(b"ImarisDataSet".as_slice()) {
             bail!("这是旧版 Imaris 3 格式（IMS3）的文件，暂不支持；请用 Imaris 另存为 Imaris 5.5 格式的 .ims");
@@ -209,8 +255,11 @@ impl Format for Ims {
 
         let ds_obj = h5.object(ds_addr)?;
         let levels = numbered_links(&h5, &ds_obj, "ResolutionLevel ")?;
-        let Some(&(0, rl0)) = levels.first() else { bail!("IMS 文件里没有 ResolutionLevel 0") };
-        let tps = numbered_links(&h5, &h5.object(rl0)?, "TimePoint ")?;
+        if levels.first().map(|l| l.0) != Some(0) {
+            bail!("IMS 文件里没有 ResolutionLevel 0");
+        }
+        let Some(&(_, rl)) = levels.get(level) else { bail!("IMS 文件里只有 {} 级分辨率（请求第 {} 级）", levels.len(), level + 1) };
+        let tps = numbered_links(&h5, &h5.object(rl)?, "TimePoint ")?;
         if tps.is_empty() {
             bail!("IMS 文件里没有时间点");
         }
@@ -258,10 +307,11 @@ impl Format for Ims {
         let empty = Attrs::new();
         let group = |name: &str| info_groups.iter().find(|(n, _)| n == name).map(|(_, a)| a).unwrap_or(&empty);
         let image = group("Image");
-        // Real size: the channel group's attributes, else DataSetInfo/Image,
-        // else the (padded) dataset.
+        // Real size: the channel group's attributes, else DataSetInfo/Image
+        // (full resolution only), else the (padded) dataset.
         let size = |k: usize, attr: &str, img: &str| -> u64 {
-            let v = get_num(&ch0_attrs, attr).or(get_num(image, img)).map(|v| v as u64).unwrap_or(vol0.dims[k]);
+            let whole = if level == 0 { get_num(image, img) } else { None };
+            let v = get_num(&ch0_attrs, attr).or(whole).map(|v| v as u64).unwrap_or(vol0.dims[k]);
             v.clamp(1, vol0.dims[k].max(1))
         };
         let (w, h, z) = (size(2, "ImageSizeX", "X"), size(1, "ImageSizeY", "Y"), size(0, "ImageSizeZ", "Z"));
@@ -294,7 +344,13 @@ impl Format for Ims {
                 _ => 0.0,
             }
         };
-        let img_n = |attr: &str, fallback: u64| get_num(image, attr).map(|v| v as u64).filter(|&v| v > 0).unwrap_or(fallback);
+        // The extents cover the whole image at every level.
+        let img_n = |attr: &str, fallback: u64| {
+            if level > 0 {
+                return fallback;
+            }
+            get_num(image, attr).map(|v| v as u64).filter(|&v| v > 0).unwrap_or(fallback)
+        };
         let mut ps = [extent(0, img_n("X", w)), extent(1, img_n("Y", h)), if z > 1 { extent(2, img_n("Z", z)) } else { 0.0 }];
         if let Some((unit, scale)) = unit_scale {
             if ps[0] > 0.0 {
@@ -337,7 +393,8 @@ impl Format for Ims {
         g.add_str("压缩", &filters_text);
         g.add("分块 (Z×Y×X)", chunk_text);
         if levels.len() > 1 {
-            g.add_str("分辨率层级", &format!("{}（显示最高分辨率）", levels.len()));
+            let shown = if level == 0 { "原始分辨率".to_string() } else { format!("第 {} 级", level + 1) };
+            g.add_str("分辨率层级", &format!("{}（显示{shown}）", levels.len()));
         }
         if let Some(p) = info.pixel_size {
             let u = &info.unit;
@@ -389,6 +446,31 @@ impl Format for Ims {
         g.push_to(&mut out);
         info.metadata = out;
 
+        // Every resolution level is an image of its own; the app reads the
+        // smaller ones wherever it shows the image reduced (fit to the
+        // window, 3D), as Imaris does, instead of offering a picker.
+        if levels.len() > 1 {
+            let mut sizes = vec![];
+            for (i, &(_, a)) in levels.iter().enumerate() {
+                let [x, y, zz] = if i == level { [w, h, z] } else { level_size(&h5, a).unwrap_or([0; 3]) };
+                let name = if i == 0 {
+                    "原始分辨率".to_string()
+                } else {
+                    let full = if level == 0 { w } else { level_size(&h5, levels[0].1).map(|s| s[0]).unwrap_or(0) };
+                    let f = if x > 0 { (full as f64 / x as f64).round() as u64 } else { 0 };
+                    if f > 1 { format!("缩小 1/{f}") } else { format!("分辨率第 {} 级", i + 1) }
+                };
+                let detail = if x > 0 { format!("{x}×{y}×{zz}") } else { String::new() };
+                info.series.push(Series { name, detail });
+                sizes.push([x, y, zz].map(|v| v.min(u32::MAX as u64) as u32));
+            }
+            info.series_index = level as u32;
+            // Each level must be smaller than the one before.
+            if sizes.iter().all(|s| s[0] > 0 && s[1] > 0) && sizes.windows(2).all(|p| p[1][0] < p[0][0]) {
+                info.pyramid = sizes;
+            }
+        }
+
         let mut volumes = BTreeMap::new();
         volumes.insert(0, Some(Rc::new(vol0)));
         Ok(Ims {
@@ -406,11 +488,7 @@ impl Format for Ims {
         })
     }
 
-    fn info(&mut self) -> Result<Info> {
-        Ok(std::mem::replace(&mut self.info, Info::new(1, 1, DType::U8, "")))
-    }
-
-    fn page(&self, page: u32) -> Result<Recipe> {
+    fn recipe(&self, page: u32) -> Result<Recipe> {
         let page = page as usize;
         let c = page % self.size_c;
         let z = (page / self.size_c) % self.size_z;

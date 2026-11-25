@@ -235,6 +235,81 @@ fn unshuffle(v: &[u8], size: usize) -> Vec<u8> {
     out
 }
 
+/// Largest chunk decoded whole for [`chunk_cache`].
+const MAX_WHOLE_CHUNK: usize = 1 << 30;
+
+/// Recently decoded chunks that hold more than one page, shared by all open
+/// files. Keyed by where the compressed bytes are mapped, their length and
+/// their first bytes, so a later mapping at the same address does not match
+/// a stale entry.
+mod chunk_cache {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    use anyhow::Result;
+
+    type Key = (usize, usize, [u8; 16]);
+
+    #[derive(Default)]
+    struct Cache {
+        map: HashMap<Key, (Arc<Vec<u8>>, u64)>,
+        bytes: usize,
+        tick: u64,
+    }
+
+    fn cache() -> &'static Mutex<Cache> {
+        static C: OnceLock<Mutex<Cache>> = OnceLock::new();
+        C.get_or_init(Default::default)
+    }
+
+    /// A quarter of the decoded-page allowance: room for a Z slab of every
+    /// channel of an Imaris level that fills the window.
+    fn budget() -> usize {
+        crate::image::page_budget() / 4
+    }
+
+    fn key(src: &[u8]) -> Key {
+        let mut head = [0u8; 16];
+        let n = src.len().min(16);
+        head[..n].copy_from_slice(&src[..n]);
+        (src.as_ptr() as usize, src.len(), head)
+    }
+
+    pub fn get_or_decode(src: &[u8], decode: impl FnOnce() -> Result<Vec<u8>>) -> Result<Arc<Vec<u8>>> {
+        let k = key(src);
+        {
+            let mut c = cache().lock().unwrap();
+            c.tick += 1;
+            let t = c.tick;
+            if let Some((v, used)) = c.map.get_mut(&k) {
+                *used = t;
+                return Ok(v.clone());
+            }
+        }
+        let v = Arc::new(decode()?);
+        let n = v.len();
+        let max = budget();
+        if n > max / 8 {
+            return Ok(v);
+        }
+        let mut c = cache().lock().unwrap();
+        while c.bytes + n > max {
+            let Some(old) = c.map.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| *k) else { break };
+            if let Some((gone, _)) = c.map.remove(&old) {
+                c.bytes -= gone.len();
+            }
+        }
+        c.tick += 1;
+        let t = c.tick;
+        if c.map.insert(k, (v.clone(), t)).is_none() {
+            c.bytes += n;
+        } else {
+            c.bytes = c.map.values().map(|(v, _)| v.len()).sum();
+        }
+        Ok(v)
+    }
+}
+
 /// The decoded bytes of one chunk: `rows` rows of `stride` bytes.
 struct Decoded<'a> {
     bytes: Cow<'a, [u8]>,
@@ -275,6 +350,15 @@ fn decode_chunk<'a>(c: &Chunk, i: usize, rows: usize, file: &'a [u8], payload: &
             }
             let img = image::load_from_memory_with_format(src, image::ImageFormat::Jpeg)?;
             Cow::Owned(if c.samples == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() })
+        }
+        // A chunk deeper than one page (an HDF5 chunk of 64 Z planes) is
+        // decoded whole once and kept, so the next planes are copies.
+        codec if skip > 0 => {
+            let whole = chunk_cache::get_or_decode(src, || {
+                let v = decompress(codec, src, MAX_WHOLE_CHUNK)?;
+                Ok(if shuffle { unshuffle(&v, size) } else { v })
+            })?;
+            Cow::Owned(whole.get(skip.min(whole.len())..(skip + want).min(whole.len())).unwrap_or(&[]).to_vec())
         }
         codec => {
             let mut v = if shuffle { unshuffle(&decompress(codec, src, 1 << 32)?, size) } else { decompress(codec, src, skip + want)? };

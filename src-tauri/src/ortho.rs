@@ -13,6 +13,36 @@ use crate::render::{self, RenderReq};
 /// `plane` is "xz" (fixed Y) or "yz" (fixed X). `index` is that coordinate.
 /// `req.region` is in the plane's pixels: XZ is (X, Z), YZ is (Y, Z).
 pub fn render_plane(img: &Arc<OpenImage>, plane: &str, req: &RenderReq) -> Result<Vec<u8>> {
+    // A side view needs every Z page: with lower resolutions stored, read
+    // the one that fits the screen, and never one larger than a quarter of
+    // the page cache (the full size of a 72 GB Imaris file would take hours).
+    if img.has_levels() {
+        let scale = (req.region[2] / req.out_w.max(1) as f64).min(req.region[3] / req.out_h.max(1) as f64);
+        let info = img.info();
+        let fits = |w: usize, h: usize, d: usize| (w * h * d * info.size_c * info.dtype.size()) as u64 <= crate::image::page_budget() as u64 / 4;
+        let mut pick = img.level_for(scale);
+        if pick.is_none() && !fits(info.width, info.height, info.size_z) {
+            pick = img.level_for(1.0);
+        }
+        // Coarser until the whole level fits.
+        let sizes = img.source.levels();
+        if let Some((mut l, _)) = pick {
+            while l < sizes.len() && !fits(sizes[l - 1][0], sizes[l - 1][1], sizes[l - 1][2]) {
+                l += 1;
+            }
+            let [w, h, d] = sizes[l - 1];
+            pick = Some((l, [info.width as f64 / w as f64, info.height as f64 / h as f64, info.size_z as f64 / d.max(1) as f64]));
+        }
+        if let Some((l, f)) = pick {
+            let low = img.level(l)?;
+            let (fa, fi) = if plane == "xz" { (f[0], f[1]) } else { (f[1], f[0]) };
+            let mut r = req.clone();
+            r.z = ((req.z as f64 + 0.5) / fi) as usize;
+            let [x, y, w, h] = req.region;
+            r.region = [x / fa, y / f[2], w / fa, h / f[2]];
+            return render_plane(&low, plane, &r);
+        }
+    }
     let (w, h, pages) = extract(img, plane, req.z, req.t)?;
     let mut info = img.info().clone();
     info.width = w;
@@ -32,6 +62,7 @@ pub fn render_plane(img: &Arc<OpenImage>, plane: &str, req: &RenderReq) -> Resul
         out_h: req.out_h,
         gamma: req.gamma,
         invert: req.invert,
+        preview: false,
         plane: String::new(),
     };
     render::render(&mem, &view)
