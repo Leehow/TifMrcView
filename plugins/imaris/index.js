@@ -12,7 +12,7 @@
 TifMrcView.register({
   id: "imaris",
   name: "Imaris",
-  version: "1.0.0",
+  version: "1.0.2",
   description: "打开 Imaris（.ims）文件，并显示像素尺寸、通道颜色与波长、采集时间等参数",
   activate() {},
 });
