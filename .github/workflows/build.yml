@@ -70,6 +70,8 @@ jobs:
           fi
 
   test:
+    # Plugin checks compare minAppVersion with the version this commit builds.
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -153,7 +155,7 @@ jobs:
           node --test scripts/tmv-plugin.test.mjs
           for p in plugins/*/ templates/format-plugin/; do
             [ -f "$p/plugin.json" ] || continue
-            node scripts/tmv-plugin.mjs check "$p"
+            node scripts/tmv-plugin.mjs check "$p" --app-version "${{ needs.version.outputs.version }}"
           done
           node templates/format-plugin/build.mjs
           node scripts/tmv-plugin.mjs check templates/format-plugin/dist/*.zip
