@@ -94,3 +94,63 @@ async fn save_merged_image(state: State<'_, AppState>, request: tauri::ipc::Requ
         Ok(())
     }).await
 }
+
+/// The page's answer to an agent's call (app_control.rs, ui/pro/agent.js).
+#[tauri::command]
+fn agent_reply(pending: State<'_, std::sync::Arc<crate::app_control::server::Pending>>, id: u64, reply: serde_json::Value) -> bool {
+    pending.answer(id, reply)
+}
+
+/// What the "AI 助手" dialog shows: how an agent starts `tmv` from this app.
+#[tauri::command]
+fn agent_info() -> serde_json::Value {
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    serde_json::json!({
+        "exe": exe,
+        "running": crate::app_control::read_endpoint().is_some_and(|e| e.pid == std::process::id()),
+        "link": crate::app_control::tmv_link().map(|p| p.to_string_lossy().into_owned()),
+        // Tests start the app with TMV_AGENT_ALLOW=always so no one has to click 允许.
+        "envAllow": std::env::var("TMV_AGENT_ALLOW").ok(),
+        "linked": crate::app_control::tmv_link().and_then(|p| std::fs::canonicalize(p).ok()) == std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok()),
+    })
+}
+
+/// Puts a `tmv` command (a link to this app) where the shell finds it.
+#[tauri::command]
+fn agent_install_tmv() -> CmdResult<String> {
+    crate::app_control::install_tmv_link().map(|p| p.to_string_lossy().into_owned()).map_err(err)
+}
+
+/// Paints marks given as numbers into the open image's labels (label_marks.rs); undoable.
+#[tauri::command]
+async fn labels_marks(app: AppHandle, token: u64, marks: crate::label_marks::Marks) -> CmdResult<serde_json::Value> {
+    let state = app.state::<AppState>();
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    let app2 = app.clone();
+    blocking(move || {
+        let sam = app2.state::<crate::sam::Sam>();
+        let mut e = e.lock().unwrap();
+        let (zs, layers) = crate::label_marks::apply(&mut e.labels, &img, &sam, token, &marks)?;
+        let st = labels_state(&e, zs);
+        Ok(serde_json::json!({"state": st, "layers": layers}))
+    })
+    .await
+}
+
+/// A picture of slice `z` of the open image with a coordinate grid and its
+/// label layers, for an agent (look.rs, the same as `tmv look`); the PNG's path.
+#[tauri::command]
+async fn agent_look(state: State<'_, AppState>, token: u64, z: usize, region: Option<[usize; 4]>, size: Option<usize>) -> CmdResult<serde_json::Value> {
+    let img = current(&state, token)?;
+    let labels = labels_entry(&state, token).ok();
+    blocking(move || {
+        let guard = labels.as_ref().map(|e| e.lock().unwrap());
+        let (png, mut meta) = crate::look::look(&img, guard.as_ref().map(|e| &e.labels), z, region, size.unwrap_or(1024))?;
+        let out = crate::look::out_path(&img.info().name, z);
+        std::fs::write(&out, png)?;
+        meta["png"] = serde_json::json!(out);
+        Ok(meta)
+    })
+    .await
+}

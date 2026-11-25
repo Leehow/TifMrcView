@@ -55,6 +55,8 @@ tauri-plugin-dialog = { version = "2.8", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "7"
+# The token of the local agent connection (app_control.rs).
+getrandom = "0.3"
 tiff = "0.11"
 weezl = "0.1"
 flate2 = "1"
@@ -147,7 +149,7 @@ tmv-sam = { path = "sam", optional = true, default-features = false, features = 
 ssh2 = { version = "0.9.7", optional = true }
 # Pro: Vulkan with SPIR-V kernels first, DX12 when there is no Vulkan driver.
 tmv-sam = { path = "sam", optional = true, default-features = false, features = ["vulkan"] }
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Security", "Win32_System_Console"] }
 
 [profile.release]
 opt-level = 3

@@ -353,6 +353,28 @@ impl Labels {
         (back, zs)
     }
 
+    /// How many steps can be undone (for `squash_since`).
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Makes the steps recorded since the history was `depth` long one undo
+    /// step (several tools run for one request, e.g. label_marks.rs).
+    pub fn squash_since(&mut self, depth: usize) {
+        if self.undo.len() <= depth + 1 {
+            return;
+        }
+        let mut merged: Edit = vec![];
+        for edit in self.undo.drain(depth..) {
+            for (z, old) in edit {
+                if !merged.iter().any(|(k, _)| *k == z) {
+                    merged.push((z, old));
+                }
+            }
+        }
+        self.undo.push(merged);
+    }
+
     pub fn undo(&mut self) -> Vec<usize> {
         let Some(e) = self.undo.pop() else { return vec![] };
         let (back, zs) = self.swap(e);
