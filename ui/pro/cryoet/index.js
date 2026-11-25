@@ -51,7 +51,7 @@
       <nav id="cryo-steps" aria-label="Cryo-ET 步骤"></nav>
       <div id="cryo-body"></div>
     </details>
-    <div id="cryo-foot"><span id="cryo-status" role="status" class="dim"></span><button id="cryo-cancel" class="small" hidden title="停下来；做完的步骤都保留">停止</button></div>`;
+    <div id="cryo-foot"><span id="cryo-status" role="status" class="dim" title="点一下展开或收起"></span><button id="cryo-status-x" class="small" hidden title="关闭这条提示" aria-label="关闭提示">×</button><button id="cryo-cancel" class="small" hidden title="停下来；做完的步骤都保留">停止</button></div>`;
   $("stage").append(panel);
   W.panel = panel;
 
@@ -67,7 +67,15 @@
   }
 
   W.register = (i, hooks) => W.hooks.set(i, hooks);
-  W.status = (text) => { $("cryo-status").textContent = text; };
+  // Long notices stay at two lines (click to unfold) and can be closed with the × beside them.
+  W.status = (text) => {
+    const st = $("cryo-status");
+    st.textContent = text;
+    st.classList.remove("open");
+    $("cryo-status-x").hidden = !text;
+  };
+  $("cryo-status").onclick = (e) => e.currentTarget.classList.toggle("open");
+  $("cryo-status-x").onclick = () => W.status("");
   W.name = (path) => (window.TmvRemote?.displayPath(path)||path)?.split(/[\\/]/).pop() || "";
 
   W.select = (i) => {
