@@ -199,6 +199,33 @@ pub struct Report {
     /// halves agree better and was kept. None when it was not tried.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub views_refined: Option<bool>,
+    /// With a tilt-image average: the rounds of `tilt_stage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rounds: Option<Rounds>,
+    /// With a tilt-image average of enough particles: how the resolution
+    /// grows with their number (`scaling`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaling: Option<Scaling>,
+    /// The share of directions the particles' orientations cover between
+    /// them (`coverage`): 1 when every direction of the particle was seen
+    /// by a fair share of them, about 2/3 when all lie the same way and
+    /// the missing wedge of one is that of all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<f64>,
+    /// With a template (a card, a map the user brought): the voxel of the
+    /// template, Å, and whether the average shows detail finer than the
+    /// template could hold (twice its voxel). Detail no finer than the
+    /// template's proves little: particles picked and aligned with a
+    /// template average to that template whatever they are (Henderson,
+    /// PNAS 110, 2013); what is finer was never put in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_voxel_a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub beyond_template: Option<bool>,
+    /// Places left out before averaging because they had run together with
+    /// a better one or matched far worse than the rest (`cleaned`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleaned: Option<Cleaned>,
     /// On a drawn surface: the pattern that was found repeating in its
     /// layers and aligned (`flat::lattice`). None where there was none.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -448,6 +475,13 @@ pub(super) struct Cut {
     pub(super) cube: Vec<f32>,
 }
 
+impl Cut {
+    /// The place without its cube (for what reads the tilt images only).
+    fn clone_light(&self) -> Cut {
+        Cut { source: self.source, at: self.at, bin: self.bin, score: self.score, strength: self.strength, darkest: self.darkest, half: self.half, cube: vec![] }
+    }
+}
+
 fn assign_halves(cuts: &mut [Cut]) {
     for (i, c) in cuts.iter_mut().enumerate() {
         c.half = (i % 2) as u8;
@@ -624,6 +658,12 @@ pub fn run(sources: &[Source], diameter_a: Option<f64>, out_dir: &str, progress:
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        rounds: None,
+        scaling: None,
+        coverage: None,
+        template_voxel_a: None,
+        beyond_template: None,
+        cleaned: None,
         pattern: None,
         map: None,
         halves: None,
@@ -750,6 +790,9 @@ fn save(report: &mut Report, sources: &[Source], cuts: &[Cut], out: &super::refi
     let fsc = crate::spa::post::corrected_fsc(&out.halves[0], &out.halves[1], &masked, n);
     let shells = resolution(&fsc);
     report.resolution_a = (shells.limit > 0.0).then(|| n as f64 * voxel_a / shells.limit);
+    report.beyond_template = report.template_voxel_a.zip(report.resolution_a).map(|(t, r)| r < 0.9 * 2.0 * t);
+    let sym = super::options::symmetry_group(Path::new(out_dir));
+    report.coverage = Some(coverage(sources, cuts, &out.poses, &sym));
     report.signal_a = (shells.dip && shells.signal > 0.0).then(|| n as f64 * voxel_a / shells.signal);
     report.ctf_limited = shells.dip;
     // The map to look at: weighted by how well the halves agree, sharpened
@@ -2000,52 +2043,24 @@ pub fn run_drawn(sources: &[Source], drawn: &[Drawn], both: bool, size_a: f64, o
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        rounds: None,
+        scaling: None,
+        coverage: None,
+        template_voxel_a: None,
+        beyond_template: None,
+        cleaned: None,
         pattern,
         map: None,
         halves: None,
         table: None,
         ms: 0,
     };
-    // Also reconstruct from the 2D tilt images when the series are on record,
-    // keeping the tilt average whenever its halves agree at least as well.
-    let mut final_voxel = voxel_a;
-    if sources.iter().all(|s| s.series.is_some()) {
-        let n = (out.map.len() as f64).cbrt().round() as usize;
-        let tilt_sym: Vec<Mat> = if pattern.is_some_and(|p| p.symmetric && p.fold > 1) && sym.len() <= 1 {
-            (0..pattern.unwrap().fold).map(|k| super::cc_axis(360.0 * k as f64 / pattern.unwrap().fold as f64)).collect()
-        } else {
-            sym.clone()
-        };
-        if let Ok(tilted) = from_tilts(sources, &cuts, &out.poses, n, final_voxel, size_a, &tilt_sym, None, false, progress) {
-            let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
-            let better = area(&tilted.fsc) >= area(&out.fsc);
-            report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
-            report.fsc_other = Some(if better { out.fsc.clone() } else { tilted.fsc.clone() });
-            if better {
-                out = tilted;
-                live(&out.map);
-                if super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 {
-                    if let Ok(finer_t) = from_tilts(sources, &cuts, &out.poses, 2 * n, final_voxel / 2.0, size_a, &tilt_sym, None, false, progress) {
-                        if strength(&finer_t.fsc, final_voxel / 2.0) >= strength(&out.fsc, final_voxel) {
-                            out = finer_t;
-                            final_voxel /= 2.0;
-                            live(&out.map);
-                        }
-                    }
-                }
-                let n_cur = (out.map.len() as f64).cbrt().round() as usize;
-                let weight = shell_weight(&out.fsc);
-                if let Ok(ref_t) = from_tilts(sources, &cuts, &out.poses, n_cur, final_voxel, size_a, &tilt_sym, Some((&out.halves, &weight)), opts.refine_2d_poses, progress) {
-                    let better_r = strength(&ref_t.fsc, final_voxel) > strength(&out.fsc, final_voxel) * 1.01;
-                    report.views_refined = Some(better_r);
-                    if better_r {
-                        out = ref_t;
-                        live(&out.map);
-                    }
-                }
-            }
-        }
-    }
+    // The same places from the tilt images, when the series are on record.
+    let tilt_sym: Vec<Mat> = match pattern {
+        Some(p) if p.symmetric && p.fold > 1 && sym.len() <= 1 => (0..p.fold).map(|k| super::cc_axis(360.0 * k as f64 / p.fold as f64)).collect(),
+        _ => sym.clone(),
+    };
+    let (out, final_voxel, _) = tilt_stage(sources, &cuts, out, voxel_a, size_a, &tilt_sym, opts.refine_2d_poses, &mut report, progress, live);
     save(&mut report, sources, &cuts, &out, out_dir, size_a, final_voxel, started)?;
     Ok(report)
 }
@@ -2250,7 +2265,7 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
     let map = both.finish();
     live(&map);
     let cuts: Vec<Cut> = cuts.into_iter().map(|c| c.expect("every place has its tomogram")).collect();
-    let mut out = super::refine::Aligned { map, halves, poses, fsc, shell };
+    let out = super::refine::Aligned { map, halves, poses, fsc, shell };
     let mut report = Report {
         kinds: vec![],
         diameter_a: None,
@@ -2268,6 +2283,12 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        rounds: None,
+        scaling: None,
+        coverage: None,
+        template_voxel_a: None,
+        beyond_template: None,
+        cleaned: None,
         pattern: None,
         map: None,
         halves: None,
@@ -2276,18 +2297,8 @@ pub fn keep_kinds(sources: &[Source], dir: &str, keep: &[usize], progress: Progr
     };
     let kept = Path::new(dir).join("kinds").join("kept");
     let sym = super::options::symmetry_group(&kept);
-    if sources.iter().all(|s| s.series.is_some()) {
-        if let Ok(tilted) = from_tilts(sources, &cuts, &out.poses, n, voxel, saved.size_a, &sym, None, false, progress) {
-            let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
-            let better = area(&tilted.fsc) >= area(&out.fsc);
-            report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
-            report.fsc_other = Some(if better { out.fsc.clone() } else { tilted.fsc.clone() });
-            if better {
-                out = tilted;
-                live(&out.map);
-            }
-        }
-    }
+    let turn = super::options::load(&kept).refine_2d_poses;
+    let (out, voxel, _) = tilt_stage(sources, &cuts, out, voxel, saved.size_a, &sym, turn, &mut report, progress, live);
     save(&mut report, sources, &cuts, &out, &kept.to_string_lossy(), saved.size_a, voxel, started)?;
     Ok(report)
 }
@@ -3556,6 +3567,25 @@ pub fn run_places(
             live(&out.map);
         }
     }
+    // Places that ran together or match far worse than the rest are left
+    // out from here on.
+    let (keep, cleaned) = clean(&cuts, &out.poses, 0.5 * diameter_a / voxel, found.fewest());
+    if cleaned.together + cleaned.poor > 0 {
+        eprintln!("sta: left out {} places that ran together with a better one and {} that match far worse than the rest", cleaned.together, cleaned.poor);
+        let mut it = keep.iter();
+        cuts.retain(|_| *it.next().unwrap());
+        let mut it = keep.iter();
+        out.poses.retain(|_| *it.next().unwrap());
+        if !fine {
+            // Nothing after this makes the average again: without them, here.
+            let particles: Vec<Vec<f32>> = cuts.iter().map(|c| c.cube.clone()).collect();
+            let wedge_of: Vec<usize> = cuts.iter().map(|c| c.source).collect();
+            let radius = (0.5 * diameter_a / voxel + 2.0).min(BOX as f64 / 2.0 - 3.0);
+            let set = Set { n: BOX, particles: &particles, wedges: &wedges, wedge_of: &wedge_of, radius };
+            out = set.aligned(std::mem::take(&mut out.poses), &halves_of(&cuts), &sym);
+            live(&out.map);
+        }
+    }
     if fine {
         // The same particles at twice the sampling, from where they now
         // are: at the coarse sampling the resolution ends at its Nyquist
@@ -3627,7 +3657,7 @@ pub fn run_places(
         let set = Set { n, particles: &big, wedges: &wedges, wedge_of: &wedge_of, radius };
         out = super::refine::align_halves_on(Some(dev), &set, [&half_refs[0], &half_refs[1]], &start, &fine_halves, &sym, &|s: &str, a: usize, b: usize| progress(&s.replacen("对齐", "精细对齐", 1), a, b), live)?;
     }
-    let mut report = Report {
+    let mut report: Report = Report {
         kinds: vec![],
         diameter_a: None,
         particles: 0,
@@ -3644,6 +3674,12 @@ pub fn run_places(
         averaged_from: None,
         fsc_other: None,
         views_refined: None,
+        rounds: None,
+        scaling: None,
+        coverage: None,
+        template_voxel_a: None,
+        beyond_template: None,
+        cleaned: None,
         pattern: None,
         map: None,
         halves: None,
@@ -3652,67 +3688,10 @@ pub fn run_places(
     };
     report.searched = Some(found.searched.clone());
     report.search_voxel_a = found.search_voxel_a;
+    report.cleaned = (cleaned.together + cleaned.poor > 0).then_some(cleaned);
+    report.template_voxel_a = Some(found.voxel_a);
     // The same particles, where they now are, from the tilt images.
-    let mut spare: Option<super::refine::Aligned> = None;
-    let mut final_voxel = voxel;
-    let mut tilted_kept = false;
-    if fine && sources.iter().all(|s| s.series.is_some()) {
-        let n = (out.map.len() as f64).cbrt().round() as usize;
-        match from_tilts(sources, &cuts, &out.poses, n, voxel, diameter_a, &sym, None, false, progress) {
-            Ok(tilted) => {
-                let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
-                let better = area(&tilted.fsc) >= area(&out.fsc);
-                let (kept, other) = if better { (tilted, out) } else { (out, tilted) };
-                report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
-                report.fsc_other = Some(other.fsc.clone());
-                spare = Some(other);
-                out = kept;
-                tilted_kept = better;
-                live(&out.map);
-                // Where the halves agree nearly to the limit of this sampling,
-                // the views hold more than it shows: the same particles, the
-                // same poses, voxels half the size. Kept when the halves then
-                // agree over more (the area under the curve, 1/Å).
-                if better && super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 {
-                    match from_tilts(sources, &cuts, &out.poses, 2 * n, voxel / 2.0, diameter_a, &sym, None, false, progress) {
-                        Ok(finer) => {
-                            eprintln!("sta: at half the voxel size, FSC {}", finer.fsc.iter().map(|f| format!("{f:.3}")).collect::<Vec<_>>().join(" "));
-                            if strength(&finer.fsc, voxel / 2.0) >= strength(&out.fsc, voxel) {
-                                out = finer;
-                                final_voxel = voxel / 2.0;
-                                live(&out.map);
-                            }
-                        }
-                        Err(e) => eprintln!("sta: no average at half the voxel size ({e:#})"),
-                    }
-                }
-            }
-            Err(e) => eprintln!("sta: the average from the tilt images could not be made ({e}); keeping the one from the tomograms"),
-        }
-    }
-    // The views themselves: what all particles of a tomogram share (each
-    // view's image shift, plus optional per-particle 2D local 6-DOF pose refinement)
-    // is found against the halves just made, and the average made again with it.
-    if tilted_kept {
-        let n = (out.map.len() as f64).cbrt().round() as usize;
-        let weight = shell_weight(&out.fsc);
-        match from_tilts(sources, &cuts, &out.poses, n, final_voxel, diameter_a, &sym, Some((&out.halves, &weight)), opts.refine_2d_poses, progress) {
-            Ok(refined) => {
-                // Kept only for a clear gain: the strengths of two builds
-                // from the same particles differ a little by chance.
-                const GAIN: f64 = 1.01;
-                let (before, after) = (strength(&out.fsc, final_voxel), strength(&refined.fsc, final_voxel));
-                let better = after > before * GAIN;
-                eprintln!("sta: views refined: strength {after:.5} against {before:.5}, keeping the {}", if better { "refined average" } else { "one without" });
-                report.views_refined = Some(better);
-                if better {
-                    out = refined;
-                    live(&out.map);
-                }
-            }
-            Err(e) => eprintln!("sta: the views could not be refined ({e:#})"),
-        }
-    }
+    let (out, final_voxel, spare) = if fine { tilt_stage(sources, &cuts, out, voxel, diameter_a, &sym, opts.refine_2d_poses, &mut report, progress, live) } else { (out, voxel, None) };
     save(&mut report, sources, &cuts, &out, out_dir, diameter_a, final_voxel, started)?;
     if let Some(other) = spare {
         // The one not kept, to compare with.
@@ -3722,6 +3701,165 @@ pub fn run_places(
         }
     }
     Ok(report)
+}
+
+/// A direction of the particle counts as seen when this share of the
+/// particles measured it (as `average::Sum::coverage`).
+const SEEN: f64 = 0.1;
+
+/// The share of the particle's directions that the particles see between
+/// them: each one misses the wedge its tilt series left out, turned into
+/// the particle's frame by its orientation (and by each turn of `sym`), and
+/// copies that lie differently fill each other's. Directions are spread
+/// evenly over a half sphere (a direction and its opposite are one).
+fn coverage(sources: &[Source], cuts: &[Cut], poses: &[Pose], sym: &[Mat]) -> f64 {
+    const DIRECTIONS: usize = 400;
+    let group: &[Mat] = if sym.is_empty() { &[super::IDENTITY] } else { sym };
+    let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    let dirs: Vec<[f64; 3]> = (0..DIRECTIONS)
+        .map(|i| {
+            let z = (i as f64 + 0.5) / DIRECTIONS as f64;
+            let (r, a) = ((1.0 - z * z).sqrt(), golden * i as f64);
+            [r * a.cos(), r * a.sin(), z]
+        })
+        .collect();
+    let mut seen = vec![0usize; DIRECTIONS];
+    for (c, p) in cuts.iter().zip(poses) {
+        let [lo, hi] = sources[c.source].tilts;
+        let (lo, hi) = (lo.min(hi), lo.max(hi));
+        for g in group {
+            // A direction k of the reference lies along R·g·k in the particle.
+            let m = mul(&p.r, g);
+            for (k, n) in dirs.iter().zip(&mut seen) {
+                let (mut x, mut z) = (m[0][0] * k[0] + m[0][1] * k[1] + m[0][2] * k[2], m[2][0] * k[0] + m[2][1] * k[1] + m[2][2] * k[2]);
+                if x < 0.0 {
+                    (x, z) = (-x, -z);
+                }
+                // As `cc::wedge`: measured between the first and the last tilt.
+                let angle = z.atan2(x).to_degrees();
+                *n += (lo..=hi).contains(&angle) as usize;
+            }
+        }
+    }
+    let least = SEEN * (cuts.len() * group.len()) as f64;
+    seen.iter().filter(|n| **n as f64 >= least.max(1.0)).count() as f64 / DIRECTIONS as f64
+}
+
+/// How the resolution grows with the number of particles.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scaling {
+    /// (particles, resolution Å at FSC 0.143) of the average and of the
+    /// same made from a half, a quarter and an eighth of the particles.
+    pub points: Vec<(usize, f64)>,
+    /// The B factor those points fit (Å²; Rosenthal & Henderson, J Mol Biol
+    /// 333, 2003: ln N rises by B/2 per 1/d²). It holds everything that
+    /// blurs: the specimen, the microscope and what the alignment leaves.
+    pub b_factor: f64,
+    /// The resolution twice the particles would give at that B, Å.
+    pub doubled_a: f64,
+}
+
+/// Fewest particles for `scaling`: an eighth of them still has to make an
+/// average with halves that agree.
+const SCALING_FEWEST: usize = 400;
+
+/// See `Scaling`: None when the points do not fit a line that rises.
+fn scaling_of(points: &[(usize, f64)]) -> Option<Scaling> {
+    if points.len() < 3 {
+        return None;
+    }
+    // Least squares of ln N on 1/d².
+    let xy: Vec<(f64, f64)> = points.iter().map(|(n, d)| (1.0 / (d * d), (*n as f64).ln())).collect();
+    let m = xy.len() as f64;
+    let (mx, my) = (xy.iter().map(|p| p.0).sum::<f64>() / m, xy.iter().map(|p| p.1).sum::<f64>() / m);
+    let (sxy, sxx) = (xy.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum::<f64>(), xy.iter().map(|p| (p.0 - mx).powi(2)).sum::<f64>());
+    if sxx <= 0.0 || sxy <= 0.0 {
+        return None;
+    }
+    let slope = sxy / sxx;
+    let (_, d) = *points.iter().max_by_key(|p| p.0)?;
+    let doubled = 1.0 / (d * d) + 2f64.ln() / slope;
+    Some(Scaling { points: points.to_vec(), b_factor: 2.0 * slope, doubled_a: 1.0 / doubled.sqrt() })
+}
+
+/// What `clean` left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cleaned {
+    /// Places that the alignment moved onto a better one.
+    pub together: usize,
+    /// Places that match the average far worse than the others of their
+    /// tomogram.
+    pub poor: usize,
+}
+
+/// A place matches far worse than the rest when its score lies this many
+/// robust standard deviations below the median of its tomogram's.
+const POOR: f64 = 4.0;
+/// Fewest places of one tomogram for its scores to say what is usual.
+const POOR_FEWEST: usize = 20;
+
+/// Which aligned places are averaged (true), and what was left out:
+///
+/// - Two places closer than `apart` working voxels after the alignment are
+///   one particle found twice (the search keeps its peaks apart, the
+///   alignment then moves each to where it fits best): the better match
+///   stays (`shape::merge`, as for seeds on drawn shapes). Twice in one
+///   half it counts double; once in each, the halves share its noise and
+///   agree better than they should.
+/// - A place whose score lies `POOR` robust deviations below the median of
+///   its own tomogram (scores differ between tomograms with thickness and
+///   defocus) is not the particle the others are, or is one that has
+///   suffered: at the cut surface of a lamella, on the edge of the ice,
+///   under a gold bead. No depth or distance is assumed for that; the
+///   score says it.
+///
+/// Never fewer than `fewest` are left: then nothing is taken out for its
+/// score.
+fn clean(cuts: &[Cut], poses: &[Pose], apart: f64, fewest: usize) -> (Vec<bool>, Cleaned) {
+    let mut keep = vec![false; cuts.len()];
+    let mut cleaned = Cleaned::default();
+    let sources = cuts.iter().map(|c| c.source).max().map_or(0, |m| m + 1);
+    for s in 0..sources {
+        let of: Vec<usize> = (0..cuts.len()).filter(|i| cuts[*i].source == s).collect();
+        let at: Vec<[f64; 3]> = of.iter().map(|i| std::array::from_fn(|k| cuts[*i].at[k] / cuts[*i].bin as f64 + poses[*i].t[k])).collect();
+        let scores: Vec<f32> = of.iter().map(|i| poses[*i].score).collect();
+        let stay = super::shape::merge(&at, &scores, apart);
+        cleaned.together += of.len() - stay.len();
+        for k in stay {
+            keep[of[k]] = true;
+        }
+    }
+    let mut poor = vec![false; cuts.len()];
+    for s in 0..sources {
+        let of: Vec<usize> = (0..cuts.len()).filter(|i| keep[*i] && cuts[*i].source == s).collect();
+        if of.len() < POOR_FEWEST {
+            continue;
+        }
+        let mut scores: Vec<f64> = of.iter().map(|i| poses[*i].score as f64).collect();
+        scores.sort_by(f64::total_cmp);
+        let median = scores[scores.len() / 2];
+        let mut off: Vec<f64> = scores.iter().map(|v| (v - median).abs()).collect();
+        off.sort_by(f64::total_cmp);
+        let sd = 1.4826 * off[off.len() / 2];
+        if sd <= 0.0 {
+            continue;
+        }
+        for i in of {
+            poor[i] = (poses[i].score as f64) < median - POOR * sd;
+        }
+    }
+    let left = keep.iter().zip(&poor).filter(|(k, p)| **k && !**p).count();
+    if left >= fewest {
+        for (k, p) in keep.iter_mut().zip(&poor) {
+            if *p && *k {
+                *k = false;
+                cleaned.poor += 1;
+            }
+        }
+    }
+    (keep, cleaned)
 }
 
 /// The share of the darkest value from which a voxel counts as the body.
@@ -3773,11 +3911,50 @@ fn shell_weight(fsc: &[f64]) -> Vec<f64> {
     fsc.iter().enumerate().map(|(s, f)| if s >= 2 && s as f64 <= cut { (2.0 * f.max(0.0) / (1.0 + f.max(0.0))).sqrt() } else { 0.0 }).collect()
 }
 
+/// What the tilt images of each source are known to need beyond their
+/// alignment and CTF fit, as the particles found it (`tilt::fields`,
+/// `tilt::hand`): carried from one build of the average to the next, at
+/// whatever sampling.
+#[derive(Clone, Debug, PartialEq)]
+struct Known {
+    /// Per source and view: `tilt::Fix` with the shift and the field in Å
+    /// (the views are binned differently from level to level). Empty for a
+    /// source nothing is known of yet.
+    fixes: Vec<Vec<super::tilt::Fix>>,
+    /// Per source: the defocus runs the other way across the tilt axis
+    /// than its CTF fit says.
+    turned: Vec<bool>,
+}
+
+impl Known {
+    fn nothing(sources: usize) -> Known {
+        Known { fixes: vec![vec![]; sources], turned: vec![false; sources] }
+    }
+}
+
+/// How `from_tilts` refines before it averages.
+struct Refine<'a> {
+    /// The half maps at the build's box and voxel, and the weight of each
+    /// shell (`shell_weight`).
+    halves: &'a [Vec<f32>; 2],
+    weight: &'a [f64],
+    /// Each particle is turned by up to this many degrees to where the
+    /// views have it (`tilt::refine_poses`); 0: places and turns stay.
+    turn: f64,
+}
+
+/// At most this share of the memory that is free is taken by the views of
+/// one series (`tilt::Series::stack`).
+const VIEWS_SHARE: f64 = 0.5;
+
 /// The average of the aligned particles made from the tilt images (`tilt`),
-/// on the grid of `out` (voxels of `voxel` Å), with the same halves. With
-/// `refine` (the half maps at this `n` and `voxel`, and the shell weights)
-/// the views of each series are first refined by all its particles
-/// (`tilt::views`).
+/// on a box of `n` voxels of `voxel` Å, with the same halves, with what is
+/// `known` of the views put in. With `refine`, what the particles of each
+/// series say of its views is found first, against the halves given: which
+/// way the defocus runs (`tilt::hand`), where each view has its particles
+/// and how much it holds of them (`tilt::fields`), and each particle's own
+/// place and turn (`tilt::refine_poses`). Returns the average and what is
+/// then known.
 #[allow(clippy::too_many_arguments)]
 fn from_tilts(
     sources: &[Source],
@@ -3787,13 +3964,16 @@ fn from_tilts(
     voxel: f64,
     diameter_a: f64,
     sym: &[Mat],
-    refine: Option<(&[Vec<f32>; 2], &[f64])>,
-    refine_2d_poses: bool,
+    known: &Known,
+    refine: Option<Refine>,
     progress: Progress,
-) -> Result<super::refine::Aligned> {
+) -> Result<(super::refine::Aligned, Known)> {
     use super::tilt::{Particle, Series, Sums};
     let mut sums = Sums::new(n, n as f64 / 2.0 - 2.0);
     let mut out_poses = poses.to_vec();
+    let mut known = known.clone();
+    // What the particles said of the defocus gradient, per source.
+    let mut said: Vec<Option<bool>> = vec![None; sources.len()];
     let total = cuts.len().max(1);
     let mut before = 0;
     for (i, s) in sources.iter().enumerate() {
@@ -3823,47 +4003,77 @@ fn from_tilts(
         let info = pipeline::open(&s.path)?;
         let dims = [info.info().width, info.info().height, info.info().size_z];
         let Some(px) = d.optics.pixel_a else { bail!("不知道像素大小") };
-        let bin = (voxel / px).round().max(1.0) as usize;
-        if (bin as f64 * px / voxel - 1.0).abs() > 0.01 {
+        let bin = (voxel / px).round() as usize;
+        if bin < 1 || (bin as f64 * px / voxel - 1.0).abs() > 0.01 {
             bail!("倾斜图像的像素（{px:.3} Å）凑不成平均图的体素（{voxel:.3} Å）");
         }
         let label = format!("从倾斜图像平均 {}/{}", i + 1, sources.len());
         // Views twice as fine as the average where they can be: see `Series::fold`.
         // (Not when the finer views do not fit in memory.)
+        let fits = |fold: usize| -> bool {
+            let stack = pipeline::open(&d.stack).map(|img| {
+                let v = img.info();
+                (v.width * fold / bin) as f64 * (v.height * fold / bin) as f64 * v.size_z as f64 * 4.0
+            });
+            let free = crate::resources::memory_available_bytes() as f64;
+            stack.map_or(true, |bytes| free <= 0.0 || bytes <= VIEWS_SHARE * free)
+        };
         let open = |fold: usize| Series::open(&d, &t, dims, bin / fold, fold, &|a, b| progress(&label, a, b));
-        let (mut series, fold) = match if bin % 2 == 0 { open(2).ok() } else { None } {
+        let (mut series, fold) = match if bin % 2 == 0 && fits(2) { open(2).ok() } else { None } {
             Some(s) => (s, 2),
-            None => (open(1)?, 1),
+            None if fits(1) => (open(1)?, 1),
+            None => bail!("{} 的倾斜图像在 {voxel:.2} Å 这一级放不进内存", s.path),
         };
         // The particle's disc and what the transfer spreads beyond it.
         series.window = fold as f64 * ((0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0) + 6.0).min(n as f64 / 2.0 - 2.0);
-        if let Some((refs, weight)) = refine {
+        let short = Path::new(&s.path).file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned());
+        if known.turned[i] {
+            series.gradient = -series.gradient;
+        }
+        if known.fixes[i].len() == series.fixes.len() {
+            for (fix, k) in series.fixes.iter_mut().zip(&known.fixes[i]) {
+                *fix = super::tilt::Fix { shift: k.shift.map(|v| v / series.pixel_a), lin: k.lin.map(|row| row.map(|v| v / series.pixel_a)), ..*k };
+            }
+        }
+        if let Some(Refine { halves, weight, turn }) = &refine {
+            said[i] = super::tilt::hand(&series, &particles, halves, n, weight);
+            if said[i] == Some(true) {
+                series.gradient = -series.gradient;
+                known.turned[i] = !known.turned[i];
+                eprintln!("sta: {short}: the particles have the defocus running the other way across the tilt axis than the CTF fit; turned");
+            }
             // Within 3 voxels of where the views have them.
             const VIEW_REACH: f64 = 3.0;
-            let found = super::tilt::view_shifts(&series, &particles, refs, n, weight, VIEW_REACH);
-            let trusted: Vec<f64> = found.iter().filter(|f| f.shift != [0.0, 0.0]).map(|f| (f.shift[0].powi(2) + f.shift[1].powi(2)).sqrt() * series.pixel_a).collect();
-            eprintln!(
-                "sta: {}: views refined, {} of {} with a shift (mean {:.1} Å)",
-                Path::new(&s.path).file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned()),
-                trusted.len(),
-                found.len(),
-                trusted.iter().sum::<f64>() / trusted.len().max(1) as f64
-            );
+            let found = super::tilt::fields(&series, &particles, halves, n, weight, VIEW_REACH);
             for (fix, f) in series.fixes.iter_mut().zip(&found) {
-                fix.shift[0] += f.shift[0];
-                fix.shift[1] += f.shift[1];
+                for a in 0..2 {
+                    fix.shift[a] += f.shift[a];
+                    for c in 0..3 {
+                        fix.lin[a][c] += f.lin[a][c];
+                    }
+                }
+                fix.weight = f.weight;
             }
-            if refine_2d_poses {
-                let n_imp = super::tilt::refine_poses(&series, &mut particles, refs, n, weight, 3.0, 1.0);
-                eprintln!("sta:   2D pose refinement updated {n_imp}/{} particles", particles.len());
+            let shifted: Vec<f64> = found.iter().filter(|f| f.shift != [0.0, 0.0]).map(|f| (f.shift[0].powi(2) + f.shift[1].powi(2)).sqrt() * series.pixel_a).collect();
+            eprintln!(
+                "sta: {short}: views refined, {} of {} with a shift (mean {:.1} Å), {} with a field",
+                shifted.len(),
+                found.len(),
+                shifted.iter().sum::<f64>() / shifted.len().max(1) as f64,
+                found.iter().filter(|f| f.lin != [[0.0; 3]; 2]).count()
+            );
+            let told: Vec<String> = series.views.iter().zip(&series.fixes).map(|(v, f)| format!("{:.0}°:{:+.1},{:+.1}×{:.2}", v.theta, f.shift[0] * series.pixel_a, f.shift[1] * series.pixel_a, f.weight)).collect();
+            eprintln!("sta:   views (shift Å × weight): {}", told.join(" "));
+            if *turn > 0.0 {
+                let n_imp = super::tilt::refine_poses(&series, &mut particles, halves, n, weight, *turn, 1.0);
+                eprintln!("sta:   particles turned within {turn}°: {n_imp} of {}", particles.len());
                 for (&j, p) in indices.iter().zip(&particles) {
                     let c = &cuts[j];
                     out_poses[j].r = p.r;
                     out_poses[j].t = std::array::from_fn(|k| (p.at[k] - c.at[k]) / c.bin as f64);
                 }
             }
-            let moved: Vec<String> = series.views.iter().zip(&found).map(|(v, f)| format!("{:.0}°:{:+.1},{:+.1}", v.theta, f.shift[0] * series.pixel_a, f.shift[1] * series.pixel_a)).collect();
-            eprintln!("sta:   view shifts (Å): {}", moved.join(" "));
+            known.fixes[i] = series.fixes.iter().map(|f| super::tilt::Fix { shift: f.shift.map(|v| v * series.pixel_a), lin: f.lin.map(|row| row.map(|v| v * series.pixel_a)), ..*f }).collect();
         }
         sums.add(&series, &particles, &|a, _| progress("从倾斜图像平均", before + a, total))?;
         before += particles.len();
@@ -3871,10 +4081,167 @@ fn from_tilts(
     if sums.count < 4 {
         bail!("颗粒太少");
     }
+    // Series whose particles did not say which way their defocus runs go
+    // with the others when those all say the same against their fits: one
+    // microscope, one sign. From the next build on.
+    let clear: Vec<bool> = said.iter().flatten().copied().collect();
+    if !clear.is_empty() && clear.iter().all(|c| *c) {
+        for (i, v) in said.iter().enumerate() {
+            if v.is_none() && cuts.iter().any(|c| c.source == i) {
+                known.turned[i] = !known.turned[i];
+            }
+        }
+    }
     let radius = (0.5 * diameter_a / voxel + 2.0).min(n as f64 / 2.0 - 3.0);
     let (map, halves, fsc) = sums.finish_sym(radius + 2.0, sym);
     let shell = super::refine::cut(&fsc);
-    Ok(super::refine::Aligned { map, halves, poses: out_poses, fsc, shell })
+    Ok((super::refine::Aligned { map, halves, poses: out_poses, fsc, shell }, known))
+}
+
+/// What `tilt_stage` did, for the report.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rounds {
+    /// Rounds of refinement against the tilt images that were kept.
+    pub kept: usize,
+    /// Times the voxel was halved.
+    pub finer: usize,
+    /// Tilt series whose defocus runs the other way across the tilt axis
+    /// than their CTF fit said.
+    pub turned: usize,
+    /// Views in which the particles are moved by where they are.
+    pub fields: usize,
+}
+
+/// At most this many rounds of refinement against the tilt images.
+const TILT_ROUNDS: usize = 6;
+/// How far a particle is turned in each, degrees.
+const TILT_TURNS: [f64; TILT_ROUNDS] = [3.0, 2.0, 1.5, 1.0, 1.0, 1.0];
+/// A round is kept only for a clear gain: the strengths of two builds from
+/// the same particles differ a little by chance.
+const TILT_GAIN: f64 = 1.01;
+/// The largest box an average is made on.
+const TILT_BOX: usize = 256;
+
+/// From the average of aligned subtomograms to the one the tilt images
+/// give: `out` (box n, voxels of `voxel` Å, the poses of `cuts`) is made
+/// again from the views (`from_tilts`) and that one kept when its halves
+/// agree over as much. Then, in rounds (as the refinement loops of RELION
+/// and M go, each on what the last one made):
+///
+/// - where the halves agree nearly to the limit of the sampling, the same
+///   particles at the same poses are averaged on voxels half the size, and
+///   that kept when the halves then agree over more (1/Å);
+/// - what the views need and where each particle stands is found against
+///   the halves just made (`Refine`) and the average made again, kept for
+///   a gain of `TILT_GAIN`.
+///
+/// It ends when a round brings neither. `turn`: whether particles are
+/// turned (`Options::refine_2d_poses`). Returns the average, its voxel and
+/// the one that was not kept of the first two (to compare with).
+#[allow(clippy::too_many_arguments)]
+fn tilt_stage(
+    sources: &[Source],
+    cuts: &[Cut],
+    mut out: super::refine::Aligned,
+    mut voxel: f64,
+    diameter_a: f64,
+    sym: &[Mat],
+    turn: bool,
+    report: &mut Report,
+    progress: Progress,
+    live: Live,
+) -> (super::refine::Aligned, f64, Option<super::refine::Aligned>) {
+    if !sources.iter().all(|s| s.series.is_some()) {
+        return (out, voxel, None);
+    }
+    let mut n = (out.map.len() as f64).cbrt().round() as usize;
+    let mut known = Known::nothing(sources.len());
+    let tilted = match from_tilts(sources, cuts, &out.poses, n, voxel, diameter_a, sym, &known, None, progress) {
+        Ok((t, _)) => t,
+        Err(e) => {
+            eprintln!("sta: the average from the tilt images could not be made ({e:#}); keeping the one from the tomograms");
+            return (out, voxel, None);
+        }
+    };
+    let area = |f: &[f64]| f.iter().skip(1).map(|v| v.max(0.0)).sum::<f64>();
+    let better = area(&tilted.fsc) >= area(&out.fsc);
+    report.averaged_from = Some(if better { "tilt images" } else { "tomogram" }.into());
+    let (kept, other) = if better { (tilted, out) } else { (out, tilted) };
+    report.fsc_other = Some(other.fsc.clone());
+    out = kept;
+    if !better {
+        return (out, voxel, Some(other));
+    }
+    live(&out.map);
+    let mut rounds = Rounds::default();
+    for round in 0..TILT_ROUNDS {
+        if check_cancel().is_err() {
+            break;
+        }
+        let stage = |s: &str, a: usize, b: usize| progress(&format!("第 {} 轮精修 · {s}", round + 1), a, b);
+        // Where the halves agree nearly to the limit of this sampling, the
+        // views hold more than it shows.
+        let mut finer = false;
+        if super::refine::extent(&out.fsc) >= 0.8 * (n / 2) as f64 && 2 * n <= TILT_BOX {
+            match from_tilts(sources, cuts, &out.poses, 2 * n, voxel / 2.0, diameter_a, sym, &known, None, &stage) {
+                Ok((f, _)) => {
+                    eprintln!("sta: at half the voxel size ({:.2} Å), FSC {}", voxel / 2.0, f.fsc.iter().map(|f| format!("{f:.3}")).collect::<Vec<_>>().join(" "));
+                    if strength(&f.fsc, voxel / 2.0) >= strength(&out.fsc, voxel) {
+                        (out, n, voxel, finer) = (f, 2 * n, voxel / 2.0, true);
+                        rounds.finer += 1;
+                        live(&out.map);
+                    }
+                }
+                Err(e) => eprintln!("sta: no average at half the voxel size ({e:#})"),
+            }
+        }
+        let weight = shell_weight(&out.fsc);
+        let refine = Refine { halves: &out.halves, weight: &weight, turn: if turn { TILT_TURNS[round] } else { 0.0 } };
+        let mut gained = false;
+        match from_tilts(sources, cuts, &out.poses, n, voxel, diameter_a, sym, &known, Some(refine), &stage) {
+            Ok((refined, learnt)) => {
+                let (before, after) = (strength(&out.fsc, voxel), strength(&refined.fsc, voxel));
+                gained = after > before * TILT_GAIN;
+                eprintln!("sta: round {}: strength {after:.5} against {before:.5}, keeping the {}", round + 1, if gained { "refined average" } else { "one before" });
+                if gained {
+                    (out, known) = (refined, learnt);
+                    rounds.kept += 1;
+                    live(&out.map);
+                }
+            }
+            Err(e) => eprintln!("sta: the views could not be refined ({e:#})"),
+        }
+        if !finer && !gained {
+            break;
+        }
+    }
+    // The same from fewer particles: how the resolution grows with them.
+    if cuts.len() >= SCALING_FEWEST && check_cancel().is_ok() {
+        let measured = |fsc: &[f64]| -> Option<f64> {
+            let limit = resolution(fsc).limit;
+            (limit > 0.0 && limit < (n / 2) as f64 - 1.0).then(|| n as f64 * voxel / limit)
+        };
+        let mut points: Vec<(usize, f64)> = measured(&out.fsc).map(|d| (cuts.len(), d)).into_iter().collect();
+        for part in [2usize, 4, 8] {
+            // Every `part`-th pair, so the halves stay as large as each other.
+            let some: Vec<usize> = (0..cuts.len()).filter(|i| (i / 2) % part == 0).collect();
+            let fewer: Vec<Cut> = some.iter().map(|i| cuts[*i].clone_light()).collect();
+            let poses: Vec<Pose> = some.iter().map(|i| out.poses[*i]).collect();
+            let label = |s: &str, a: usize, b: usize| progress(&format!("颗粒数与分辨率 · {s}"), a, b);
+            match from_tilts(sources, &fewer, &poses, n, voxel, diameter_a, sym, &known, None, &label) {
+                Ok((less, _)) => points.extend(measured(&less.fsc).map(|d| (fewer.len(), d))),
+                Err(e) => eprintln!("sta: no average from 1/{part} of the particles ({e:#})"),
+            }
+        }
+        eprintln!("sta: particles and resolution: {}", points.iter().map(|(n, d)| format!("{n}: {d:.1} Å")).collect::<Vec<_>>().join(", "));
+        report.scaling = scaling_of(&points);
+    }
+    rounds.turned = known.turned.iter().filter(|t| **t).count();
+    rounds.fields = known.fixes.iter().flatten().filter(|f| f.lin != [[0.0; 3]; 2]).count();
+    report.views_refined = Some(rounds.kept > 0);
+    report.rounds = Some(rounds);
+    (out, voxel, Some(other))
 }
 
 #[cfg(test)]
@@ -4549,5 +4916,81 @@ mod around_tests {
         let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
         assert!(mean(&after) < 0.7 * mean(&before), "{after:.1?} against {before:.1?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod clean_tests {
+    use super::*;
+
+    fn cut(source: usize, at: [f64; 3]) -> Cut {
+        Cut { source, at, bin: 2, score: 0.0, strength: 0.0, darkest: 0.0, half: 0, cube: vec![] }
+    }
+
+    fn pose(t: [f64; 3], score: f32) -> Pose {
+        Pose { r: crate::sta::IDENTITY, t, score }
+    }
+
+    #[test]
+    fn places_that_ran_together_and_places_that_match_far_worse_are_left_out() {
+        // Thirty places 40 working voxels apart in one tomogram, their scores
+        // close together; one more of another tomogram at the place of the first.
+        let mut cuts: Vec<Cut> = (0..30).map(|i| cut(0, [80.0 * i as f64, 0.0, 0.0])).collect();
+        let mut poses: Vec<Pose> = (0..30).map(|i| pose([0.0; 3], 0.30 + 0.002 * (i % 5) as f32)).collect();
+        cuts.push(cut(1, [0.0, 0.0, 0.0]));
+        poses.push(pose([0.0; 3], 0.01));
+        // Place 3 was moved by the alignment onto place 2 (80 source voxels are 40 working ones) and matches worse.
+        poses[3] = pose([-38.0, 0.0, 0.0], 0.29);
+        // Place 9 matches far worse than the rest.
+        poses[9].score = 0.05;
+        let (keep, cleaned) = clean(&cuts, &poses, 6.0, 20);
+        assert_eq!(cleaned, Cleaned { together: 1, poor: 1 });
+        for (i, k) in keep.iter().enumerate() {
+            assert_eq!(*k, i != 3 && i != 9, "place {i}");
+        }
+        // The same place in another tomogram is another particle, and one
+        // place says nothing of what is usual there.
+        assert!(keep[30]);
+        // Rather a poor match than too few to average.
+        let (keep, cleaned) = clean(&cuts, &poses, 6.0, 30);
+        assert_eq!(cleaned, Cleaned { together: 1, poor: 0 });
+        assert!(keep[9]);
+    }
+
+    fn source(tilts: [f64; 2]) -> Source {
+        Source { path: String::new(), tilts, look: None, series: None }
+    }
+
+    #[test]
+    fn particles_that_lie_differently_fill_each_others_wedge() {
+        let sources = [source([-60.0, 60.0])];
+        let cuts: Vec<Cut> = (0..200).map(|_| cut(0, [0.0; 3])).collect();
+        // All the same way: a third of the directions is in the wedge.
+        let same: Vec<Pose> = (0..200).map(|_| pose([0.0; 3], 0.0)).collect();
+        let c = coverage(&sources, &cuts, &same, &[]);
+        assert!((c - 2.0 / 3.0).abs() < 0.05, "{c}");
+        // Turned about the beam only (flat on a grid): the wedge becomes a
+        // double cone about the beam, 13 % of the directions.
+        let flat: Vec<Pose> = (0..200).map(|i| Pose { r: crate::sta::cc_axis(1.8 * i as f64), t: [0.0; 3], score: 0.0 }).collect();
+        let c = coverage(&sources, &cuts, &flat, &[]);
+        assert!(c > 0.8 && c < 0.95, "{c}");
+        // Any way: everything.
+        let mut rng = crate::spa::Rng(2);
+        let any: Vec<Pose> = (0..200).map(|_| Pose { r: crate::spa::geom::axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit()), t: [0.0; 3], score: 0.0 }).collect();
+        assert_eq!(coverage(&sources, &cuts, &any, &[]), 1.0);
+    }
+
+    #[test]
+    fn twice_the_particles_follow_the_line_of_rosenthal_and_henderson() {
+        // B = 400 Å²: ln N = c + 200 / d².
+        let n_of = |d: f64| (3.0 + 200.0 / (d * d)).exp().round() as usize;
+        let points: Vec<(usize, f64)> = [20.0, 17.0, 15.0, 13.5].iter().map(|d| (n_of(*d), *d)).collect();
+        let s = scaling_of(&points).unwrap();
+        assert!((s.b_factor - 400.0).abs() < 5.0, "{}", s.b_factor);
+        let want = 1.0 / (1.0 / (13.5f64 * 13.5) + 2f64.ln() / 200.0).sqrt();
+        assert!((s.doubled_a - want).abs() < 0.05, "{} want {want}", s.doubled_a);
+        // Fewer particles and a better average: no line to read.
+        assert!(scaling_of(&[(100, 20.0), (200, 22.0), (400, 25.0)]).is_none());
+        assert!(scaling_of(&points[..2]).is_none());
     }
 }

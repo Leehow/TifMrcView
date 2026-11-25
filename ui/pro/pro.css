@@ -759,3 +759,5 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+#sta-workspace .sta-notes { margin:2px 0 6px; padding-left:18px; font-size:12px; line-height:1.5; }
+#sta-workspace .sta-notes[hidden] { display:none; }

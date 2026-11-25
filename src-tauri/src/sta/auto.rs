@@ -849,6 +849,8 @@ pub fn result_value(out: &Path, b64: &dyn Fn(&[u8]) -> String) -> Result<Option<
         "map": map, "out": out, "png": png, "fsc": fsc, "freq": freq, "voxelA": voxel,
         "resolutionA": report["resolutionA"], "signalA": report["signalA"], "ctfLimited": report["ctfLimited"],
         "particles": report["particles"], "sharpenB": report["sharpenB"], "used": used_of(out),
+        "cleaned": report["cleaned"], "rounds": report["rounds"], "coverage": report["coverage"], "scaling": report["scaling"],
+        "beyondTemplate": report["beyondTemplate"], "templateVoxelA": report["templateVoxelA"],
     })))
 }
 

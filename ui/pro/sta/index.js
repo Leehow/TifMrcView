@@ -91,6 +91,7 @@
       <p id="sta-old" class="sta-old" hidden></p>
       <p id="sta-summary"></p>
       <p id="sta-used" class="dim"></p>
+      <ul id="sta-notes" class="dim sta-notes" hidden></ul>
       <img id="sta-slices" class="ws-img" alt="平均结构的三个中心截面（XY、XZ、YZ）">
       <div id="sta-fsc"></div>
       <div class="al-row"><button id="sta-open" class="small primary">在查看器中打开</button><button id="sta-folder" class="small">打开结果文件夹</button><button id="sta-export" class="small" title="导出颗粒坐标和姿态到 RELION 5 (.star) 或 Dynamo (.tbl)">导出 STAR / TBL…</button></div>
@@ -98,7 +99,7 @@
         <select id="sta-export-fmt"><option value="both">RELION 5 (.star) + Dynamo (.tbl)</option><option value="relion">RELION 5 (particles.star)</option><option value="dynamo">Dynamo (particles.tbl)</option></select>
         <button id="sta-export-go" class="small primary">选择目录并导出</button>
       </div>
-      <div class="al-row sta-more"><button id="sta-placed" class="small" title="在清晰的断层图上，标出这些颗粒在哪里、朝哪个方向">在图上看这些颗粒</button><button id="sta-kinds-go" class="small" title="看这些颗粒是不是有几种不同的样子">看看有没有不同种类</button></div>
+      <div class="al-row sta-more"><button id="sta-placed" class="small" title="在清晰的断层图上，标出这些颗粒在哪里、朝哪个方向">在图上看这些颗粒</button><button id="sta-kinds-go" class="small" title="看这些颗粒是不是有几种不同的样子">看看有没有不同种类</button><button id="sta-refind" class="small" title="一个例子带着噪声；几百个颗粒的平均图干净得多，用它作例子通常能多找到一些。找到的照常给你确认">用这张平均图再找一遍</button></div>
       <div id="sta-placed-box" class="sta-placed" hidden>
         <p class="dim">图上：小圆点是颗粒的位置，短线指向颗粒的“上”。</p>
         <div id="sta-placed-per" class="al-row sta-which"></div>
@@ -342,6 +343,43 @@
     const ticks = [100, 50, 30, 20, 15, 10, 7, 5].filter((a) => 1 / a <= fmax).map((a) => `<text x="${x(1 / a).toFixed(1)}" y="${h - 6}" text-anchor="middle">${a}</text>`).join("");
     return `<svg viewBox="0 0 ${w} ${h}" class="sta-fsc" role="img" aria-label="两半图的 FSC 曲线"><line x1="${l}" y1="${y(0.143)}" x2="${w - 8}" y2="${y(0.143)}" stroke="var(--dim)" stroke-dasharray="4 3"/><text x="${l - 3}" y="${y(0.143) + 3}" text-anchor="end">0.143</text><text x="${l - 3}" y="${y(1) + 3}" text-anchor="end">1</text><line x1="${l}" y1="${y(0)}" x2="${w - 8}" y2="${y(0)}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="1.8" points="${pts}"/>${ticks}<text x="${w - 8}" y="${h - 6}" text-anchor="end">Å</text></svg>`;
   }
+  // What the program did and found beyond the one number, in the user's words; only what there is to say.
+  function resultNotes(r) {
+    const out = [];
+    const c = r.cleaned;
+    if (c && (c.together || c.poor)) out.push(`平均前去掉了${[c.together ? ` ${c.together} 个重复找到的` : "", c.poor ? ` ${c.poor} 个明显不像其余的` : ""].filter(Boolean).join("、")}颗粒`);
+    const k = r.rounds;
+    if (k && (k.kept || k.finer)) out.push(`对着倾转图精修了 ${k.kept} 轮${k.finer ? `，采样加细了 ${k.finer} 次` : ""}${k.fields ? `，有 ${k.fields} 张倾转图按颗粒的位置分别校正了偏移` : ""}`);
+    if (k?.turned) out.push(`有 ${k.turned} 套倾转序列的欠焦变化方向和 CTF 拟合的相反，已按颗粒自己的结果改正`);
+    if (r.coverage != null && r.coverage < 0.85) out.push(`颗粒的朝向不够多（只覆盖了 ${Math.round(r.coverage * 100)}% 的方向）：这张图在缺的方向上会被拉长，那个方向的细节不可信`);
+    const g = r.scaling;
+    if (g && r.resolutionA != null) out.push(g.doubledA < 0.93 * r.resolutionA
+      ? `颗粒再多一倍，预计能到 ${fmt(g.doubledA)} Å：多加数据还有用`
+      : `颗粒再多一倍，预计也只到 ${fmt(g.doubledA)} Å：现在卡在数据和对齐的质量上，不是颗粒数`);
+    if (r.beyondTemplate === false) out.push(`分辨率还没有超过找颗粒用的例子本身（${fmt(2 * r.templateVoxelA)} Å）：这样的图不足以证明找到的就是它`);
+    return out;
+  }
+  // The average as the example of a new search: the card of "a map I already have", made from it, then "find all".
+  async function refind() {
+    const r = W.result;
+    if (W.busy || !r?.map) return;
+    const out = W.out;
+    const inputs = W.items.filter((i) => !cur().off.has(i.path)).map((i) => i.path);
+    if (!inputs.length) return status("请先勾选要找的断层图");
+    status("用平均图作例子…");
+    try {
+      const own = await invoke("sta_own_map", { map: r.map, inputs, out });
+      const s = st(out);
+      s.own = own;
+      s.selected = "own";
+      setStatus(out, "");
+    } catch (e) {
+      return setStatus(out, `失败：${e}`);
+    }
+    if (out !== W.out) return;
+    renderCards();
+    $("sta-again").click();
+  }
   const WHICH = { auto: "卡片", points: "点", drawn: "画的", own: "自带模板", circled: "涂例子" };
   function renderResult() {
     const r = cur().result;
@@ -352,6 +390,11 @@
     const pt = r.pattern ? `。在膜${r.pattern.insideA < 0 ? "外" : "内"}侧 ${Math.round(Math.abs(r.pattern.insideA))} Å 处找到重复排列（行距 ${Math.round(r.pattern.rowsA)} Å${r.pattern.fold > 1 ? `，${r.pattern.fold} 重对称，颗粒中心已放在对称轴上${r.pattern.symmetric ? "，并按这个对称性做了平均" : ""}` : ""}），已按它对齐` : "";
     $("sta-summary").textContent = res + pt;
     $("sta-used").textContent = usedText(r.used);
+    const notes = resultNotes(r);
+    $("sta-notes").hidden = !notes.length;
+    $("sta-notes").replaceChildren(...notes.map((t) => { const li = document.createElement("li"); li.textContent = t; return li; }));
+    $("sta-refind").hidden = !!r.kept || !r.map;
+    $("sta-refind").disabled = W.busy || W.pixelNeed.length > 0;
     // A result read from the folder, not made in this session: say when it is from, until a new run ends.
     const old = $("sta-old");
     old.hidden = !r.old;
@@ -469,6 +512,7 @@
     paint();
   }
   $("sta-kinds-go").onclick = findKinds;
+  $("sta-refind").onclick = refind;
   $("sta-kinds-keep").onclick = keepKinds;
   $("sta-kept-back").onclick = () => { const s = cur(); if (s.full) { s.result = s.full; s.full = null; renderResult(); } };
   $("sta-placed").onclick = () => W.found?.placed?.toggle();

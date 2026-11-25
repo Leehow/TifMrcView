@@ -86,6 +86,18 @@ impl Set<'_> {
             )
     }
 
+    /// The particles as they stand at `poses`, averaged: the two halves
+    /// (`half_of`), how far they agree, and the average of all.
+    pub fn aligned(&self, poses: Vec<Pose>, half_of: &[u8], sym: &[Mat]) -> Aligned {
+        let mut sums = [0u8, 1].map(|h| self.average_sym(&poses, sym, |i| half_of[i] & 1 == h));
+        let halves = [sums[0].finish(), sums[1].finish()];
+        let fsc = post::fsc(&halves[0], &halves[1], self.n, self.radius + 2.0);
+        let shell = cut(&fsc);
+        let [both, other] = &mut sums;
+        both.merge(other);
+        Aligned { map: both.finish(), halves, poses, fsc, shell }
+    }
+
     fn engine(&self, low_pass: f64) -> Engine {
         Engine::new(self.n, low_pass, 1.0, (self.radius + 2.0).min(self.n as f64 / 2.0 - 3.0))
     }

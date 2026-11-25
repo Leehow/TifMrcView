@@ -78,16 +78,35 @@ pub struct Grid {
 
 /// What is found to be wrong with a view (or with the whole tomogram) beyond
 /// what the alignment and the CTF fit say, shared by all particles.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fix {
     /// Where the particles really sit in the view, relative to where
     /// `Series::place` would put them: pixels of the views (those of
     /// `centre`, columns then rows). Added to `place`'s centre.
     pub shift: [f64; 2],
+    /// How that shift changes over the specimen: pixels of the views more
+    /// (columns, rows) for a particle one half-width of the view from its
+    /// middle across the axis or along it, or half the tomogram's thickness
+    /// in depth (`Series::spot`).
+    /// A view that is slightly turned, scaled, or tilted by other than its
+    /// angle, and a specimen that bent between the views, move particles
+    /// by where they are, not all alike (`fields`).
+    pub lin: [[f64; 3]; 2],
     /// Defocus beyond what the CTF fit and the particle's place give, Å
     /// (the unit of `place`'s defocus and of `transfer`'s `extra`). Added to
     /// `place`'s defocus. One value for the tomogram, the same in every view.
     pub defocus: f64,
+    /// How much of the model the view's patches hold, relative to the other
+    /// views of the series (1: as much as most): a thick or badly aligned
+    /// view holds less than its dose and transfer say, and counts for as
+    /// much less in the average (`fields`).
+    pub weight: f64,
+}
+
+impl Default for Fix {
+    fn default() -> Fix {
+        Fix { shift: [0.0; 2], lin: [[0.0; 3]; 2], defocus: 0.0, weight: 1.0 }
+    }
 }
 
 /// The aligned (not phase flipped) views of a tilt series.
@@ -162,20 +181,46 @@ impl Series {
         })
     }
 
-    /// Where the tomogram point `at` (voxels) falls in view `i` (column,
-    /// row) and the defocus it has there beyond the view's at the axis, Å,
-    /// both with the view's `Fix` added.
-    pub fn place(&self, at: [f64; 3], i: usize) -> ([f64; 2], f64) {
+    /// Where the tomogram point `at` lies in view `i` before any fix:
+    /// pixels across the axis from the middle, the row, and the depth in
+    /// pixels of the views.
+    fn spot_px(&self, at: [f64; 3], i: usize) -> [f64; 3] {
         let g = &self.grid;
         let t = self.views[i].theta.to_radians();
         let u = (at[0] - (g.dims[0] as f64 - 1.0) / 2.0) * g.scale;
         let v = (at[2] - (g.dims[2] as f64 - 1.0) / 2.0 + g.z_offset) * g.scale;
         let across = t.cos() * u + t.sin() * v;
         let row = (at[1] - (g.dims[1] as f64 - 1.0) / 2.0) * g.scale + (self.h as f64 - 1.0) / 2.0;
+        [across, row, v]
+    }
+
+    /// The same in half-widths of the view from its middle (across the
+    /// axis and along it) and in half-thicknesses of the tomogram (in
+    /// depth): what `Fix::lin` multiplies.
+    pub fn spot(&self, at: [f64; 3], i: usize) -> [f64; 3] {
+        let [across, row, v] = self.spot_px(at, i);
+        let (hw, hh) = (self.w as f64 / 2.0, self.h as f64 / 2.0);
+        let deep = (self.grid.dims[2] as f64 * self.grid.scale / 2.0).max(1.0);
+        [across / hw, (row - (self.h as f64 - 1.0) / 2.0) / hh, v / deep]
+    }
+
+    /// Where the tomogram point `at` (voxels) falls in view `i` (column,
+    /// row) and the defocus it has there beyond the view's at the axis, Å,
+    /// both with the view's `Fix` added.
+    pub fn place(&self, at: [f64; 3], i: usize) -> ([f64; 2], f64) {
+        let t = self.views[i].theta.to_radians();
+        let [across, row, v] = self.spot_px(at, i);
         // As `tomo::ctf::flip`: the strip's defocus, then the depth's.
         let defocus = self.gradient as f64 * self.pixel_a * (t.tan() * across - v / t.cos());
         let fix = self.fixes.get(i).copied().unwrap_or_default();
-        ([across + (self.w as f64 - 1.0) / 2.0 + fix.shift[0], row + fix.shift[1]], defocus + fix.defocus)
+        let mut shift = fix.shift;
+        if fix.lin != [[0.0; 3]; 2] {
+            let s = self.spot(at, i);
+            for a in 0..2 {
+                shift[a] += fix.lin[a][0] * s[0] + fix.lin[a][1] * s[1] + fix.lin[a][2] * s[2];
+            }
+        }
+        ([across + (self.w as f64 - 1.0) / 2.0 + shift[0], row + shift[1]], defocus + fix.defocus)
     }
 
     /// The b × b patch of view `i` about `centre`, mean 0 and deviation 1,
@@ -234,11 +279,15 @@ impl Series {
         Some((re, im, [off[0] / f as f64, off[1] / f as f64]))
     }
 
-    /// Delocalization-safe patch extraction: when high defocus spreads CTF
-    /// Fresnel fringes beyond the patch width, cuts a 2× larger box (if in
-    /// bounds), phase-flips there to bring delocalized signal back inside the
-    /// particle box, then crops to `fold * b`. Returns `(re, im, off, flipped)`.
-    fn patch_ctf(&self, i: usize, centre: [f64; 2], defocus_extra: f64, b: usize, fft: &Fft, fft2: &Fft) -> Option<(Vec<f32>, Vec<f32>, [f64; 2], bool)> {
+    /// Delocalization-safe patch extraction: a transfer at defocus Δf moves
+    /// what a particle holds at frequency k by λ·Δf·k away from it, so at
+    /// high defocus part of the particle lies outside its patch. Where that
+    /// is more than a fifth of the patch at its Nyquist limit, a box twice
+    /// as wide is cut (four times, when the signal goes farther than the
+    /// margin of that one), phase-flipped there, which brings the signal
+    /// back onto the particle, and cropped to `fold * b`. `wide` transforms
+    /// boxes of 2 and 4 × `fold * b`. Returns `(re, im, off, flipped)`.
+    fn patch_ctf(&self, i: usize, centre: [f64; 2], defocus_extra: f64, b: usize, fft: &Fft, wide: &[Fft; 2]) -> Option<(Vec<f32>, Vec<f32>, [f64; 2], bool)> {
         let f = self.fold.max(1);
         let raw_b = f * b;
         if let Some([df1, df2, angle]) = self.views[i].ctf {
@@ -248,10 +297,22 @@ impl Series {
             let lambda_a = 12.2643 / (v_e * (1.0 + 0.97845e-6 * v_e)).sqrt();
             // Delocalization radius at box Nyquist in raw view pixels: λ·|Δf|/(2·fold·px²).
             let deloc_px = lambda_a * mean_df.abs() / (2.0 * f as f64 * self.pixel_a * self.pixel_a);
-            let big = 2 * raw_b;
             let whole = [centre[0].round(), centre[1].round()];
-            let (x0, y0) = (whole[0] as isize - (big / 2) as isize, whole[1] as isize - (big / 2) as isize);
-            if deloc_px > 0.20 * raw_b as f64 && x0 >= 0 && y0 >= 0 && x0 as usize + big <= self.w && y0 as usize + big <= self.h {
+            let fits = |big: usize| {
+                let (x0, y0) = (whole[0] as isize - (big / 2) as isize, whole[1] as isize - (big / 2) as isize);
+                x0 >= 0 && y0 >= 0 && x0 as usize + big <= self.w && y0 as usize + big <= self.h
+            };
+            let pick = if deloc_px <= 0.20 * raw_b as f64 {
+                None
+            } else if deloc_px > 0.5 * raw_b as f64 && fits(4 * raw_b) {
+                Some((4 * raw_b, &wide[1]))
+            } else if fits(2 * raw_b) {
+                Some((2 * raw_b, &wide[0]))
+            } else {
+                None
+            };
+            if let Some((big, fft2)) = pick {
+                let (x0, y0) = (whole[0] as isize - (big / 2) as isize, whole[1] as isize - (big / 2) as isize);
                 let plane = &self.stack[i * self.w * self.h..][..self.w * self.h];
                 let mut wide = Vec::with_capacity(big * big);
                 for y in 0..big {
@@ -363,16 +424,29 @@ pub fn frame(theta: f64) -> Mat {
 /// What one particle adds to an average: for every view it is in, the
 /// points of its plane with C·X and C².
 pub fn points(series: &Series, p: &Particle, half: &Half, fft: &Fft, acc: &Accum, out: &mut Vec<Pt>) {
-    let fft2 = Fft::new(2 * series.fold.max(1) * half.b);
-    points_with(series, p, half, fft, &fft2, acc, out);
+    let wide = wide_ffts(series, half.b);
+    points_with(series, p, half, fft, &wide, acc, out);
 }
 
-fn points_with(series: &Series, p: &Particle, half: &Half, fft: &Fft, fft2: &Fft, acc: &Accum, out: &mut Vec<Pt>) {
+/// The transforms of the boxes 2 and 4 times a patch that `patch_ctf` cuts.
+fn wide_ffts(series: &Series, b: usize) -> [Fft; 2] {
+    let raw = series.fold.max(1) * b;
+    [Fft::new(2 * raw), Fft::new(4 * raw)]
+}
+
+fn points_with(series: &Series, p: &Particle, half: &Half, fft: &Fft, fft2: &[Fft; 2], acc: &Accum, out: &mut Vec<Pt>) {
     let b = half.b;
     let k = half.len();
     let (mut x, mut c2) = (vec![0f32; 2 * k], vec![0f32; k]);
     for i in 0..series.views.len() {
         let (centre, defocus) = series.place(p.at, i);
+        // A view that holds `w` of what the others hold of the model (in
+        // units of its noise, the patches being brought to deviation 1)
+        // goes in as w·C·X over w²·C²: the weights of a least-squares mean.
+        let w = series.fixes.get(i).map_or(1.0, |f| f.weight) as f32;
+        if w <= 0.0 {
+            continue;
+        }
         let Some((re, im, off, flipped)) = series.patch_ctf(i, centre, defocus, b, fft, fft2) else { continue };
         let c = series.transfer(i, defocus, half);
         for j in 0..k {
@@ -384,10 +458,10 @@ fn points_with(series: &Series, p: &Particle, half: &Half, fft: &Fft, fft2: &Fft
             let (r, m) = (re[half.idx[j] as usize], im[half.idx[j] as usize]);
             // If `patch_ctf` already applied sign(CTF) on the 2× box, multiply only by |C|
             // so `X_pf · |C| == X · C` while `c2 == C²`.
-            let amp = if flipped { c[j].abs() } else { c[j] };
+            let amp = if flipped { c[j].abs() } else { c[j] } * w;
             x[2 * j] = (r * cs - m * sn) * amp;
             x[2 * j + 1] = (r * sn + m * cs) * amp;
-            c2[j] = c[j] * c[j];
+            c2[j] = c[j] * c[j] * w * w;
         }
         let r = mul(&frame(series.views[i].theta), &p.r);
         acc.points(&r, &[super::IDENTITY], half, &x, &c2, out);
@@ -411,6 +485,15 @@ struct Parts {
     c: Vec<f32>,
     /// The defocus beyond the view's at the axis, Å, with the view's fix.
     defocus: f64,
+}
+
+impl Parts {
+    /// The power of the model under the patch's transfer, Σ C²·|P|², in the
+    /// units of a correlation map's value up to a factor all views share
+    /// (`Matcher::place` adds the mirror of every point).
+    fn power(&self) -> f64 {
+        2.0 * self.pp.iter().zip(&self.c).map(|(q, c)| (q * c * c) as f64).sum::<f64>()
+    }
 }
 
 /// What `settle` and `views` compare patches with: the half references and
@@ -519,11 +602,19 @@ impl Matcher {
         self.place(&self.spectrum(parts))
     }
 
-    /// Per view, the sum over `particles` (cut at the views' places, `shift`
-    /// beyond) of the correlation maps; empty for a view no patch of which
-    /// lies in the image. The spectra are summed on the half plane and each
-    /// view is transformed once, not each patch.
+    /// Per view, the sum over `particles` (cut at the views' places) of the
+    /// correlation maps; empty for a view no patch of which lies in the
+    /// image. The spectra are summed on the half plane and each view is
+    /// transformed once, not each patch.
     fn summed_maps(&self, series: &Series, particles: &[Particle]) -> Vec<Vec<f32>> {
+        self.summed(series, particles).0
+    }
+
+    /// `summed_maps`, and per view the power of the model under the view's
+    /// transfer summed over the same patches (Σ C²·|P|², weighted as the
+    /// maps are): a map's value over it is how much of the model the
+    /// patches hold.
+    fn summed(&self, series: &Series, particles: &[Particle]) -> (Vec<Vec<f32>>, Vec<f64>) {
         let nv = series.views.len();
         let k = self.half.len();
         // Per view: the spectrum so far (empty until a patch comes).
@@ -537,32 +628,29 @@ impl Matcher {
                 });
             }
         };
-        let sums: Vec<Vec<[f32; 2]>> = particles
+        let zero = || (vec![Vec::<[f32; 2]>::new(); nv], vec![0f64; nv]);
+        let (sums, power) = particles
             .par_iter()
-            .fold(
-                || vec![Vec::<[f32; 2]>::new(); nv],
-                |mut acc, p| {
-                    for (i, sum) in acc.iter_mut().enumerate() {
-                        if let Some(parts) = self.parts(series, p, i, [0.0, 0.0]) {
-                            add(sum, &self.spectrum(&parts));
-                        }
+            .fold(zero, |mut acc, p| {
+                for i in 0..nv {
+                    if let Some(parts) = self.parts(series, p, i, [0.0, 0.0]) {
+                        add(&mut acc.0[i], &self.spectrum(&parts));
+                        acc.1[i] += parts.power();
                     }
-                    acc
-                },
-            )
-            .reduce(
-                || vec![Vec::<[f32; 2]>::new(); nv],
-                |mut a, b| {
-                    for (x, y) in a.iter_mut().zip(&b) {
-                        if !y.is_empty() {
-                            add(x, y);
-                        }
+                }
+                acc
+            })
+            .reduce(zero, |mut a, b| {
+                for (x, y) in a.0.iter_mut().zip(&b.0) {
+                    if !y.is_empty() {
+                        add(x, y);
                     }
-                    a
-                },
-            );
+                }
+                a.1.iter_mut().zip(&b.1).for_each(|(x, y)| *x += y);
+                a
+            });
         debug_assert!(sums.iter().all(|s| s.is_empty() || s.len() == k));
-        sums.par_iter().map(|s| if s.is_empty() { vec![] } else { self.place(s) }).collect()
+        (sums.par_iter().map(|s| if s.is_empty() { vec![] } else { self.place(s) }).collect(), power)
     }
 }
 
@@ -696,11 +784,258 @@ pub fn view_shifts(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2]
     shifts_of(series, particles, &m, reach).0
 }
 
-/// The shift per view and whether it is sure.
-fn shifts_of(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -> (Vec<Fix>, Vec<bool>) {
+/// Fewest particles of a series for `fields` to look for more than one
+/// shift per view: a field has six numbers per view and a weight one, and
+/// what a few dozen patches of one view say of them is their noise.
+const FIELD_FEWEST: usize = 40;
+
+/// A field is kept when it brings the particles it was not fitted to this
+/// share closer to the model than the one shift does.
+const FIELD_GAIN: f64 = 0.02;
+
+/// A view counts for at least this much and at most `WEIGHT_MOST` times as
+/// much as most views do.
+const WEIGHT_LEAST: f64 = 0.1;
+const WEIGHT_MOST: f64 = 2.0;
+
+/// `view_shifts`, and what many particles can say beyond one shift per view:
+///
+/// - How the shift changes over the specimen (`Fix::lin`). The particles of
+///   a tomogram are its fiducials (Tegunov et al., Nat Methods 18, 2021;
+///   Zivanov et al., eLife 11, 2022, where a view has a 2 × 4 projection):
+///   every particle's correlation map over shifts is kept about the view's
+///   one shift, and the six numbers are moved, a step at a time, to where
+///   the maps read at each particle's own place sum to the most. Whether
+///   that is the specimen or the noise is asked of particles that had no
+///   say: the field fitted to every other particle has to bring the rest
+///   closer to the model by `FIELD_GAIN`, and the other way round.
+/// - How much of the model the view's patches hold (`Fix::weight`): the
+///   least-squares size of the model in them, the summed map's value at the
+///   shift over the model's power, relative to the middle view. The
+///   patches being brought to deviation 1, that is the view's signal in
+///   units of its noise, which is what a view should count by. Thickness
+///   at high tilt, charging and a poor alignment all show there, whatever
+///   the dose says.
+///
+/// As with `views`, shifts and fields are to be added to `series.fixes`;
+/// the weight replaces the one there.
+pub fn fields(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64], reach: f64) -> Vec<Fix> {
+    let m = Matcher::new(series, refs, b, weight);
+    let (mut fixes, sure, at_shift, power) = shifts_with(series, particles, &m, reach);
+    if particles.len() < FIELD_FEWEST {
+        return fixes;
+    }
     let nv = series.views.len();
     let wide = m.wide;
-    let sums = m.summed_maps(series, particles);
+    let to_view = series.fold.max(1) as f64 / FINER as f64;
+    // Reach in pixels of the maps, and the window kept of each map.
+    let r = series.grid.scale / series.fold.max(1) as f64 * FINER as f64 * reach;
+    let win = ((r.ceil() as usize) + 2).min(wide / 2 - 1);
+    let side = 2 * win + 1;
+    let mut held = at_shift.clone();
+    for i in (0..nv).filter(|i| sure[*i]) {
+        if check_cancel().is_err() {
+            break;
+        }
+        // Each particle's map about no shift, and where the particle is.
+        let cut: Vec<(Vec<f32>, [f64; 3])> = particles
+            .par_iter()
+            .filter_map(|p| {
+                let parts = m.parts(series, p, i, [0.0, 0.0])?;
+                let map = m.map(&parts);
+                let mut crop = Vec::with_capacity(side * side);
+                for y in 0..side {
+                    let row = (wide / 2 - win + y) * wide + wide / 2 - win;
+                    crop.extend_from_slice(&map[row..row + side]);
+                }
+                Some((crop, series.spot(p.at, i)))
+            })
+            .collect();
+        if cut.len() < FIELD_FEWEST {
+            continue;
+        }
+        let g = [fixes[i].shift[0] / to_view, fixes[i].shift[1] / to_view];
+        let read = |crop: &[f32], x: f64, y: f64| -> f64 {
+            let (x, y) = (x + win as f64, y + win as f64);
+            let (fx, fy) = (x.floor(), y.floor());
+            if fx < 0.0 || fy < 0.0 || fx as usize + 1 >= side || fy as usize + 1 >= side {
+                return 0.0;
+            }
+            let (dx, dy) = (x - fx, y - fy);
+            let j = fy as usize * side + fx as usize;
+            (crop[j] as f64 * (1.0 - dx) + crop[j + 1] as f64 * dx) * (1.0 - dy) + (crop[j + side] as f64 * (1.0 - dx) + crop[j + side + 1] as f64 * dx) * dy
+        };
+        // A field: per axis of the view, what a particle's place across,
+        // along and in depth adds, and (last) what all get on top of `g`:
+        // the one shift was read from a peak the field had smeared. Places
+        // count from the middle of the particles, so that what all share
+        // and what differs between them are found apart (one step at a
+        // time does not get along a ridge between the two).
+        type Field = [[f64; 4]; 2];
+        let middle: [f64; 3] = std::array::from_fn(|c| cut.iter().map(|(_, s)| s[c]).sum::<f64>() / cut.len() as f64);
+        let cut: Vec<(Vec<f32>, [f64; 3])> = cut.into_iter().map(|(crop, s)| (crop, [s[0] - middle[0], s[1] - middle[1], s[2] - middle[2]])).collect();
+        // The sum over the particles `keep` picks of their maps at the
+        // shift the field gives each.
+        let total = |l: &Field, keep: &(dyn Fn(usize) -> bool + Sync)| -> f64 {
+            cut.par_iter()
+                .enumerate()
+                .filter(|(j, _)| keep(*j))
+                .map(|(_, (crop, s))| read(crop, g[0] + l[0][0] * s[0] + l[0][1] * s[1] + l[0][2] * s[2] + l[0][3], g[1] + l[1][0] * s[0] + l[1][1] * s[1] + l[1][2] * s[2] + l[1][3]))
+                .sum()
+        };
+        // No particle is moved by more than half the reach by any one of them.
+        let most = r / 2.0;
+        let fit = |keep: &(dyn Fn(usize) -> bool + Sync)| -> Field {
+            let mut l = [[0.0; 4]; 2];
+            let mut best = total(&l, keep);
+            let mut step = (r / 4.0).max(1.0);
+            while step >= 0.125 {
+                let mut moved = false;
+                for a in 0..2 {
+                    for c in 0..4 {
+                        for sign in [1.0, -1.0] {
+                            let mut t = l;
+                            t[a][c] = (t[a][c] + sign * step).clamp(-most, most);
+                            let v = total(&t, keep);
+                            if v > best {
+                                (best, l, moved) = (v, t, true);
+                            }
+                        }
+                    }
+                }
+                if !moved {
+                    step /= 2.0;
+                }
+            }
+            l
+        };
+        let none = [[0.0; 4]; 2];
+        let (even, odd) = (|j: usize| j % 2 == 0, |j: usize| j % 2 == 1);
+        let all = |_: usize| true;
+        let (le, lo) = (fit(&even), fit(&odd));
+        let gain = [total(&le, &odd) - total(&none, &odd), total(&lo, &even) - total(&none, &even)];
+        let flat = total(&none, &all);
+        if gain[0] > 0.0 && gain[1] > 0.0 && gain[0] + gain[1] >= FIELD_GAIN * flat {
+            let l = fit(&all);
+            fixes[i].lin = l.map(|row| [row[0] * to_view, row[1] * to_view, row[2] * to_view]);
+            for a in 0..2 {
+                fixes[i].shift[a] += (l[a][3] - (0..3).map(|c| l[a][c] * middle[c]).sum::<f64>()) * to_view;
+            }
+            held[i] = total(&l, &all);
+        }
+    }
+    // The size of the model in each view's patches, relative to the middle.
+    let size: Vec<Option<f64>> = (0..nv).map(|i| (power[i] > 0.0).then(|| held[i] / power[i])).collect();
+    let mut known: Vec<f64> = size.iter().flatten().copied().collect();
+    known.sort_by(f64::total_cmp);
+    if let Some(&middle) = known.get(known.len() / 2).filter(|m| **m > 0.0) {
+        for (fix, s) in fixes.iter_mut().zip(&size) {
+            if let Some(s) = s {
+                fix.weight = (s / middle).clamp(WEIGHT_LEAST, WEIGHT_MOST);
+            }
+        }
+    }
+    fixes
+}
+
+/// Whether the defocus changes across the tilt axis the way the series
+/// says (`Series::gradient`), asked of the particles: Some(true) when they
+/// agree clearly better with the model the other way round, Some(false)
+/// when clearly better this way, None when they do not say (no CTF, too few
+/// particles, too little detail in the model).
+///
+/// The sign is fitted from the power spectra of the steep views, which is
+/// the weakest part of that fit, and nothing downstream looks at it again;
+/// wrong, every particle off the axis is corrected with the defocus of its
+/// mirror place, and no number of particles gets past it. The model does
+/// not take sides: made with the wrong sign it holds, of a particle at g
+/// beyond the axis's defocus, the product of the transfers at +g and −g,
+/// which is the same for both signs.
+///
+/// Each patch is scored against the model's projection under the transfer
+/// at its place for both signs (as `defocus_offset` scores offsets). The
+/// particles are dealt into `HAND_GROUPS` groups; the sign is told only when
+/// all of them but one at most prefer the same one and their mean
+/// preference stands `HAND_SURE` standard errors from none.
+pub fn hand(series: &Series, particles: &[Particle], refs: &[Vec<f32>; 2], b: usize, weight: &[f64]) -> Option<bool> {
+    if series.gradient == 0 || series.views.iter().all(|v| v.ctf.is_none()) || particles.len() < 2 * HAND_GROUPS {
+        return None;
+    }
+    let m = Matcher::new(series, refs, b, weight);
+    let count = particles.len().min(2 * DEFOCUS_PARTICLES);
+    let mut subset: Vec<(usize, &Particle)> = (0..count).map(|k| (k, &particles[k * particles.len() / count])).collect();
+    // Dealt in the order of their distance across the axis, so that every
+    // group holds near and far ones alike (the far ones say the most).
+    subset.sort_by(|a, b| series.spot(a.1.at, 0)[0].total_cmp(&series.spot(b.1.at, 0)[0]));
+    subset.iter_mut().enumerate().for_each(|(rank, s)| s.0 = rank);
+    // Per group, side and sign: Σ Re(X·conj P)·C and Σ |P|²·C². The side
+    // is whether the patch's place adds defocus or takes it away: a score
+    // that leans towards more defocus, or less, whatever the truth (a
+    // patch smaller than what the transfer spreads does that), favours the
+    // told sign on one side and the other sign on the other, and drops out
+    // of their mean; what the particles really say is the same on both.
+    let zero = || vec![[[[0f64; 2]; 2]; 2]; HAND_GROUPS];
+    let sums = subset
+        .par_iter()
+        .fold(zero, |mut acc, &(k, p)| {
+            for i in 0..series.views.len() {
+                if series.views[i].ctf.is_none() {
+                    continue;
+                }
+                let Some(parts) = m.parts(series, p, i, [0.0, 0.0]) else { continue };
+                let fixed = series.fixes.get(i).map_or(0.0, |f| f.defocus);
+                let side = (parts.defocus > fixed) as usize;
+                for (c, d) in [parts.defocus, 2.0 * fixed - parts.defocus].into_iter().enumerate() {
+                    let t = series.transfer(i, d, &m.half);
+                    let cell = &mut acc[k % HAND_GROUPS][side][c];
+                    cell[0] += parts.xp.iter().zip(&t).map(|(x, t)| (x[0] * t) as f64).sum::<f64>();
+                    cell[1] += parts.pp.iter().zip(&t).map(|(q, t)| (q * t * t) as f64).sum::<f64>();
+                }
+            }
+            acc
+        })
+        .reduce(zero, |mut a, b| {
+            for (x, y) in a.iter_mut().zip(&b) {
+                for side in 0..2 {
+                    for c in 0..2 {
+                        x[side][c][0] += y[side][c][0];
+                        x[side][c][1] += y[side][c][1];
+                    }
+                }
+            }
+            a
+        });
+    let score = |c: &[f64; 2]| if c[1] > 0.0 { c[0] / c[1].sqrt() } else { 0.0 };
+    // How much better the other sign: per group, the mean of the two sides.
+    let prefer: Vec<f64> = sums.iter().map(|g| 0.5 * ((score(&g[0][1]) - score(&g[0][0])) + (score(&g[1][1]) - score(&g[1][0])))).collect();
+    let mean = prefer.iter().sum::<f64>() / HAND_GROUPS as f64;
+    let sd = (prefer.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / (HAND_GROUPS - 1) as f64).sqrt();
+    let error = sd / (HAND_GROUPS as f64).sqrt();
+    // All but one: a group whose particles lie near the axis says little.
+    let with = prefer.iter().filter(|p| (**p > 0.0) == (mean > 0.0)).count();
+    if with + 1 < HAND_GROUPS || mean.abs() < HAND_SURE * error {
+        return None;
+    }
+    Some(mean > 0.0)
+}
+
+const HAND_GROUPS: usize = 6;
+const HAND_SURE: f64 = 3.0;
+
+/// The shift per view and whether it is sure.
+fn shifts_of(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -> (Vec<Fix>, Vec<bool>) {
+    let (fixes, sure, _, _) = shifts_with(series, particles, m, reach);
+    (fixes, sure)
+}
+
+/// `shifts_of`, and per view the summed map's value at the shift taken (at
+/// no shift for a view that is not sure) and the model's power there
+/// (`Matcher::summed`).
+fn shifts_with(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -> (Vec<Fix>, Vec<bool>, Vec<f64>, Vec<f64>) {
+    let nv = series.views.len();
+    let wide = m.wide;
+    let (sums, power) = m.summed(series, particles);
+    let mut held = vec![0f64; nv];
     // Map pixels per pixel of the view: the map's pixels are 1/FINER of the
     // patch's, and a patch pixel is `fold` pixels of the view.
     let to_view = series.fold.max(1) as f64 / FINER as f64;
@@ -712,6 +1047,7 @@ fn shifts_of(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -
         if map.is_empty() {
             continue;
         }
+        held[i] = map[(wide / 2) * wide + wide / 2] as f64;
         let reach_px = r.ceil() as i64;
         let mut best = (f64::MIN, [0i64; 2]);
         let (mut n, mut s1, mut s2) = (0usize, 0f64, 0f64);
@@ -749,8 +1085,9 @@ fn shifts_of(series: &Series, particles: &[Particle], m: &Matcher, reach: f64) -
         let fy = py as f64 + peak(at(px, py - 1), best.0, at(px, py + 1));
         fixes[i].shift = [fx * to_view, fy * to_view];
         sure[i] = true;
+        held[i] = best.0;
     }
-    (fixes, sure)
+    (fixes, sure, held, power)
 }
 
 /// The defocus offset (Å) for the whole series, or None when the series has
@@ -843,7 +1180,7 @@ impl Sums {
     /// Adds the particles of one series.
     pub fn add(&mut self, series: &Series, particles: &[Particle], tick: &(dyn Fn(usize, usize) + Sync)) -> Result<()> {
         let fft = Fft::new(series.fold.max(1) * self.b);
-        let fft2 = Fft::new(2 * series.fold.max(1) * self.b);
+        let fft2 = wide_ffts(series, self.b);
         let mut done = 0;
         for chunk in particles.chunks(32) {
             check_cancel()?;
@@ -927,7 +1264,7 @@ pub fn refine_poses(
     let coarse_steps = crate::spa::geom::local(angle_range_deg, 2);
     let fine_steps = crate::spa::geom::local(angle_range_deg * 0.5, 2);
     let frames: Vec<Mat> = series.views.iter().map(|v| frame(v.theta)).collect();
-    let fft2 = Fft::new(2 * series.fold.max(1) * b);
+    let fft2 = wide_ffts(series, b);
 
     // Phase-shifted patch spectrum + effective transfer per view of one particle,
     // normalised by shell power and multiplied by shell weight once.
@@ -945,6 +1282,10 @@ pub fn refine_poses(
         let mut patches: Vec<ViewPatch> = Vec::with_capacity(series.views.len());
         for i in 0..series.views.len() {
             let (centre, defocus) = series.place(p.at, i);
+            let vw = series.fixes.get(i).map_or(1.0, |f| f.weight) as f32;
+            if vw <= 0.0 {
+                continue;
+            }
             let Some((re, im, off, flipped)) = series.patch_ctf(i, centre, defocus, b, &m.fft, &fft2) else { continue };
             let c = series.transfer(i, defocus, half);
             let mut power = vec![0f64; top + 2];
@@ -967,9 +1308,9 @@ pub fn refine_poses(
                 let (r, imv) = (re[half.idx[j] as usize], im[half.idx[j] as usize]);
                 let (xr, xi) = (r * cs - imv * sn, r * sn + imv * cs);
                 let f = (w / power[s]) as f32;
-                let amp = if flipped { c[j].abs() } else { c[j] };
+                let amp = if flipped { c[j].abs() } else { c[j] } * vw;
                 x_w[j] = [xr * amp * f, xi * amp * f];
-                c2_w[j] = c[j] * c[j] * f;
+                c2_w[j] = c[j] * c[j] * vw * vw * f;
             }
             patches.push(ViewPatch { view: i, x_w, c2_w });
         }
@@ -1065,9 +1406,16 @@ mod tests {
 
     /// The same with views `fine` times finer than the tomogram's voxels.
     fn series_at(particles: &[Particle], thetas: &[f64], ctf: Option<&[f64]>, fine: usize) -> Series {
-        let (w, h) = (128 * fine, 128 * fine);
+        series_made(particles, thetas, ctf, fine, 0, 1)
+    }
+
+    /// With `gradient` not 0 every particle has the defocus of its own place
+    /// (`Series::place` with that gradient), as in a real tilted specimen;
+    /// the tomogram is `wide` times 128 voxels across.
+    fn series_made(particles: &[Particle], thetas: &[f64], ctf: Option<&[f64]>, fine: usize, gradient: i8, wide: usize) -> Series {
+        let (w, h) = (128 * fine * wide, 128 * fine * wide);
         let px = 8.0 / fine as f64;
-        let grid = Grid { dims: [128, 128, 40], scale: fine as f64, z_offset: 2.5 };
+        let grid = Grid { dims: [128 * wide, 128 * wide, 40], scale: fine as f64, z_offset: 2.5 };
         let truth = phantom();
         let c = (N / 2) as f64;
         let mut s = Series {
@@ -1076,51 +1424,64 @@ mod tests {
             h,
             views: thetas.iter().enumerate().map(|(i, t)| View { theta: *t, ctf: ctf.map(|d| [d[i], d[i], 0.0]), dose: None }).collect(),
             pixel_a: px,
-            gradient: 0,
+            gradient,
             optics: [300.0, 2.7, 0.07],
             grid,
             fold: fine,
             window: 0.0,
             fixes: vec![Fix::default(); thetas.len()],
         };
-        let planes: Vec<Vec<f32>> = (0..thetas.len())
-            .into_par_iter()
-            .map(|i| {
-                let mut plane = vec![0f32; w * h];
-                for p in particles {
-                    for (j, v) in truth.iter().enumerate() {
-                        if *v < 1e-3 {
-                            continue;
-                        }
-                        // A reference point q appears at `at` + R·q.
-                        let q = [(j % N) as f64 - c, (j / N % N) as f64 - c, (j / N / N) as f64 - c];
-                        let at: [f64; 3] = std::array::from_fn(|a| p.at[a] + p.r[a][0] * q[0] + p.r[a][1] * q[1] + p.r[a][2] * q[2]);
-                        let ([x, y], _) = s.place(at, i);
-                        let (fx, fy) = (x.floor(), y.floor());
-                        let (dx, dy) = ((x - fx) as f32, (y - fy) as f32);
-                        let (x0, y0) = (fx as isize, fy as isize);
-                        for (yy, wy) in [(y0, 1.0 - dy), (y0 + 1, dy)] {
-                            for (xx, wx) in [(x0, 1.0 - dx), (x0 + 1, dx)] {
-                                if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
-                                    plane[yy as usize * w + xx as usize] += v * wx * wy;
-                                }
+        // The projections of `some` particles in view `i`, under the
+        // transfer at `extra` Å beyond the view's defocus.
+        let plane_of = |i: usize, some: &[Particle], extra: f64| -> Vec<f32> {
+            let mut plane = vec![0f32; w * h];
+            for p in some {
+                for (j, v) in truth.iter().enumerate() {
+                    if *v < 1e-3 {
+                        continue;
+                    }
+                    // A reference point q appears at `at` + R·q.
+                    let q = [(j % N) as f64 - c, (j / N % N) as f64 - c, (j / N / N) as f64 - c];
+                    let at: [f64; 3] = std::array::from_fn(|a| p.at[a] + p.r[a][0] * q[0] + p.r[a][1] * q[1] + p.r[a][2] * q[2]);
+                    let ([x, y], _) = s.place(at, i);
+                    let (fx, fy) = (x.floor(), y.floor());
+                    let (dx, dy) = ((x - fx) as f32, (y - fy) as f32);
+                    let (x0, y0) = (fx as isize, fy as isize);
+                    for (yy, wy) in [(y0, 1.0 - dy), (y0 + 1, dy)] {
+                        for (xx, wx) in [(x0, 1.0 - dx), (x0 + 1, dx)] {
+                            if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
+                                plane[yy as usize * w + xx as usize] += v * wx * wy;
                             }
                         }
                     }
                 }
-                if let Some(d) = ctf {
-                    let fft = Fft::new(w);
-                    let (mut re, mut im) = ft2(&fft, w, &plane);
-                    let o = crate::ctf::Optics::of(300.0, 2.7, 0.07);
-                    for ky in 0..h {
-                        for kx in 0..w {
-                            let (fx, fy) = (crate::spa::fourier::freq(kx, w) as f64 / (w as f64 * px), crate::spa::fourier::freq(ky, h) as f64 / (h as f64 * px));
-                            let t = o.gamma(d[i], fx * fx + fy * fy, 0.0).sin() as f32;
-                            re[ky * w + kx] *= t;
-                            im[ky * w + kx] *= t;
-                        }
+            }
+            if let Some(d) = ctf {
+                let fft = Fft::new(w);
+                let (mut re, mut im) = ft2(&fft, w, &plane);
+                let o = crate::ctf::Optics::of(300.0, 2.7, 0.07);
+                for ky in 0..h {
+                    for kx in 0..w {
+                        let (fx, fy) = (crate::spa::fourier::freq(kx, w) as f64 / (w as f64 * px), crate::spa::fourier::freq(ky, h) as f64 / (h as f64 * px));
+                        let t = o.gamma(d[i] + extra, fx * fx + fy * fy, 0.0).sin() as f32;
+                        re[ky * w + kx] *= t;
+                        im[ky * w + kx] *= t;
                     }
-                    plane = crate::spa::fourier::ift2(&fft, w, &re, &im);
+                }
+                plane = crate::spa::fourier::ift2(&fft, w, &re, &im);
+            }
+            plane
+        };
+        let planes: Vec<Vec<f32>> = (0..thetas.len())
+            .into_par_iter()
+            .map(|i| {
+                if gradient == 0 {
+                    return plane_of(i, particles, 0.0);
+                }
+                let mut plane = vec![0f32; w * h];
+                for p in particles {
+                    let one = plane_of(i, std::slice::from_ref(p), s.place(p.at, i).1);
+                    plane.iter_mut().zip(&one).for_each(|(a, b)| *a += b);
                 }
                 plane
             })
@@ -1250,6 +1611,115 @@ mod tests {
         for (i, f) in found.iter().enumerate() {
             let want = moved.iter().find(|m| m.0 == i).map_or([0.0, 0.0], |m| m.1);
             assert!((f.shift[0] - want[0]).abs() < 0.2 && (f.shift[1] - want[1]).abs() < 0.2, "view {i}: {:?} want {want:?}", f.shift);
+        }
+    }
+
+    /// Particles on a 7 × 7 lattice over the whole field, at any depth.
+    fn field_of_particles() -> Vec<Particle> {
+        let mut rng = Rng(11);
+        (0..49)
+            .map(|i| {
+                let at = [16.0 + 16.0 * (i % 7) as f64 + rng.unit(), 16.0 + 16.0 * (i / 7) as f64 + rng.unit(), 12.0 + 16.0 * rng.unit()];
+                Particle { at, r: axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit()), half: i % 2 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_view_that_moves_its_particles_by_where_they_are_is_put_back() {
+        let parts = field_of_particles();
+        let thetas: Vec<f64> = (0..11).map(|i| -50.0 + 10.0 * i as f64).collect();
+        let mut s = series(&parts, &thetas, None);
+        // As in the test of one shift per view: the patches are cut where the
+        // field puts them the other way.
+        let bent: [(usize, [f64; 2], [[f64; 3]; 2]); 2] = [(3, [0.5, -0.5], [[1.5, 0.0, 0.0], [0.0, -1.0, 0.0]]), (7, [0.0, 0.75], [[0.0, 1.25, 1.0], [-1.25, 0.0, 0.0]])];
+        for (i, d, l) in bent {
+            s.fixes[i].shift = [-d[0], -d[1]];
+            s.fixes[i].lin = l.map(|row| row.map(|v| -v));
+        }
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=8).contains(&s) { 1.0 } else { 0.0 }).collect();
+        let found = fields(&s, &parts, &[truth.clone(), truth], N, &weight, 3.0);
+        for (i, f) in found.iter().enumerate() {
+            let (d, l) = bent.iter().find(|b| b.0 == i).map_or(([0.0; 2], [[0.0; 3]; 2]), |b| (b.1, b.2));
+            eprintln!("view {i}: shift {:?} field {:?} weight {:.2}", f.shift, f.lin, f.weight);
+            // Every particle is put back to within half a pixel, and all of
+            // them to a quarter on the whole (the model here shows nothing
+            // finer than four pixels; without the field they are up to two off).
+            let mut sum = 0.0;
+            for p in &parts {
+                let at = s.spot(p.at, i);
+                for a in 0..2 {
+                    let (got, want) = (f.shift[a] + (0..3).map(|c| f.lin[a][c] * at[c]).sum::<f64>(), d[a] + (0..3).map(|c| l[a][c] * at[c]).sum::<f64>());
+                    assert!((got - want).abs() < 0.5, "view {i}: {got:.2} for {want:.2} at {at:?}");
+                    sum += (got - want).powi(2);
+                }
+            }
+            let rms = (sum / (2 * parts.len()) as f64).sqrt();
+            assert!(rms < 0.25, "view {i}: rms {rms:.2}");
+            assert_eq!(f.lin != [[0.0; 3]; 2], bent.iter().any(|b| b.0 == i), "view {i}");
+        }
+    }
+
+    #[test]
+    fn a_view_that_holds_less_of_the_particles_counts_for_less() {
+        let parts = field_of_particles();
+        let thetas: Vec<f64> = (0..11).map(|i| -50.0 + 10.0 * i as f64).collect();
+        let mut s = series(&parts, &thetas, None);
+        // Three views a third as strong under the same noise.
+        let faint = [0usize, 5, 10];
+        let (w, h) = (s.w, s.h);
+        let sd = {
+            let plane = &s.stack[..w * h];
+            let mean = plane.iter().map(|v| *v as f64).sum::<f64>() / plane.len() as f64;
+            (plane.iter().map(|v| (*v as f64 - mean).powi(2)).sum::<f64>() / plane.len() as f64).sqrt()
+        };
+        let mut rng = Rng(5);
+        for i in 0..thetas.len() {
+            let gain = if faint.contains(&i) { 1.0 / 3.0 } else { 1.0 };
+            for v in &mut s.stack[i * w * h..][..w * h] {
+                *v = (*v as f64 * gain + 2.0 * sd * rng.gauss()) as f32;
+            }
+        }
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=8).contains(&s) { 1.0 } else { 0.0 }).collect();
+        let found = fields(&s, &parts, &[truth.clone(), truth], N, &weight, 3.0);
+        for (i, f) in found.iter().enumerate() {
+            eprintln!("view {i} ({:.0}°): weight {:.2}", thetas[i], f.weight);
+            if faint.contains(&i) {
+                assert!(f.weight < 0.6, "view {i}: {}", f.weight);
+            } else {
+                assert!(f.weight > 0.7 && f.weight < 1.5, "view {i}: {}", f.weight);
+            }
+        }
+    }
+
+    #[test]
+    fn the_particles_say_which_way_the_defocus_runs_across_the_axis() {
+        // A tomogram 4000 Å across: at 60° a particle at its edge has 3000 Å
+        // more or less defocus than one on the axis.
+        let mut rng = Rng(11);
+        let parts: Vec<Particle> = (0..324)
+            .map(|i| {
+                let at = [36.0 + 26.0 * (i % 18) as f64 + rng.unit(), 36.0 + 26.0 * (i / 18) as f64 + rng.unit(), 12.0 + 16.0 * rng.unit()];
+                Particle { at, r: axis_angle([rng.gauss(), rng.gauss(), rng.gauss()], 360.0 * rng.unit()), half: i % 2 }
+            })
+            .collect();
+        let thetas: Vec<f64> = (0..9).map(|i| -60.0 + 15.0 * i as f64).collect();
+        let defocus: Vec<f64> = (0..9).map(|i| 9000.0 + 200.0 * i as f64).collect();
+        let truth = phantom();
+        let weight: Vec<f64> = (0..N / 2).map(|s| if (1..=13).contains(&s) { 1.0 } else { 0.0 }).collect();
+        for real in [1i8, -1] {
+            let mut s = series_made(&parts, &thetas, Some(&defocus), 1, real, 4);
+            let refs = [truth.clone(), truth.clone()];
+            assert_eq!(hand(&s, &parts, &refs, N, &weight), Some(false), "gradient {real}, told right");
+            s.gradient = -real;
+            assert_eq!(hand(&s, &parts, &refs, N, &weight), Some(true), "gradient {real}, told wrong");
+            // Nothing to tell without a gradient or with a handful of particles.
+            s.gradient = 0;
+            assert_eq!(hand(&s, &parts, &refs, N, &weight), None);
+            s.gradient = real;
+            assert_eq!(hand(&s, &parts[..8], &refs, N, &weight), None);
         }
     }
 
