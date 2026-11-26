@@ -438,9 +438,12 @@
       render();
       syncReview();
       const attn = r.series.filter(R.needsAttention).length;
-      W.status(purpose ? `${label}完成，断层图在右侧栏「④ 清晰版」里，可以接着标结构、出三维图${noteOf(r, only)}` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
+      W.status(purpose ? `${label}完成，断层图在右侧栏${polished(purpose) ? "「④ 清晰版」" : "「③ 断层图」"}里，可以接着标结构、出三维图${noteOf(r, only)}` : `${label}完成：${r.series.length} 个序列${attn ? `，${attn} 个建议看一下` : ""}`);
     }
   }
+  // A run with any of the four steps ticked makes the clear version (「④ 清晰版」);
+  // the fast tomogram (none ticked) stays in 「③ 断层图」 only.
+  const polished = (p) => !!p?.custom && ["fineAlign", "denoise", "wedge", "flatten"].some((k) => p.custom[k]);
   // The steps of the one pipeline the user ticked (kept; first use: none =
   // the fast tomogram). Order and settings stay the program's choice.
   // Subtomogram averaging is not asked here: its part of the panel makes

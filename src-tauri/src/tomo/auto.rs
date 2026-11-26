@@ -6,7 +6,7 @@
 //! - Alignment and CTF run when the dataset has none yet.
 //! - What it makes depends on what the tomogram is for (`Purpose`):
 //!   - survey: a quick look at the 3D shape, about 18 Å per voxel, SART
-//!     with phase flipping and the deconvolution; no learned steps.
+//!     with phase flipping; no other steps (no clear version).
 //!   - display (default): as clear as possible, about 9 Å per voxel,
 //!     Noise2Noise, the deconvolution and missing-wedge correction, which
 //!     always runs to the end however long it takes on this computer (about
@@ -54,8 +54,9 @@ use serde::{Deserialize, Serialize};
 ///   run as well.
 /// - `flatten`: a lamella milled at an angle is laid flat; without it the
 ///   thickness and depth of the specimen are still found, nothing is turned.
-/// Fixed: the deconvolution always runs (cheap, restores the low-resolution
-/// contrast); about 9 Å voxels when any of the first three is ticked, else
+/// Fixed: the deconvolution runs when any is ticked (cheap, restores the
+/// low-resolution contrast; its result is the clear version in `3_clean`),
+/// not for the fast tomogram; about 9 Å voxels when any of the first three is ticked, else
 /// about 18 Å; halves are reconstructed when denoise or wedge needs them.
 #[derive(Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase", default)]
@@ -74,6 +75,10 @@ impl Steps {
     /// Steps worth the finer voxels.
     fn clear(self) -> bool {
         self.fine_align || self.denoise || self.wedge
+    }
+    /// Any of the four ticked (none: the fast tomogram).
+    fn any(self) -> bool {
+        self.clear() || self.flatten
     }
     /// From `align,n2n,wedge,flat` (the CLI's `--steps`; empty: none).
     pub fn parse(list: &str) -> Result<Steps> {
@@ -232,11 +237,16 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
     // With halves the wedge step trains on them and denoises as it goes.
     let wedge_denoises = st.wedge && halves;
     let n2n = !sta && st.denoise && !wedge_denoises;
+    // Only a tomogram the user asked to be worked on (any of the four steps
+    // ticked) gets the deconvolution and so a clear version in `3_clean`;
+    // the fast tomogram (none ticked, or the first pass) stays the plain
+    // reconstruction: subtomogram averaging makes its own clear view.
+    let polish = !sta && req.purpose != Purpose::Survey && st.any();
     // Each step's own counter restarts; the label says which step of all.
     let total = match req.purpose {
         Purpose::Sta if 2 * bin <= 16 => 8,
         Purpose::Sta => 5,
-        _ => 5 + n2n as usize + st.wedge as usize + membranes as usize,
+        _ => 4 + polish as usize + n2n as usize + st.wedge as usize + membranes as usize,
     };
     // When each step was first and last heard from, for `timings` (steps
     // can overlap).
@@ -444,9 +454,11 @@ pub fn run(dev: &burn::tensor::Device, d: &mut Dataset, req: &AutoReq, progress:
             path = pipeline::denoise(dev, d, &pipeline::DenoiseStep { source: Some(path), steps: 1000 }, &stage(k))?.paths.remove(0);
             done.push("N2N 降噪".to_string());
         }
-        check_cancel()?;
-        k += 1;
-        path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+        if polish {
+            check_cancel()?;
+            k += 1;
+            path = pipeline::deconvolve(d, Some(&path), &stage(k))?.paths.remove(0);
+        }
         if st.wedge {
             check_cancel()?;
             k += 1;
