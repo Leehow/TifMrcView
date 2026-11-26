@@ -93,11 +93,24 @@ pub fn backends() -> Vec<Backend> {
     }
     if let Ok(want) = std::env::var("TMV_GPU") {
         let want = want.trim().to_ascii_lowercase();
-        if !want.is_empty() && want != "auto" {
+        if want == "cuda-first" {
+            // CUDA ahead of the others, which stay as fallbacks.
+            v.sort_by_key(|b| b.name != "CUDA");
+        } else if !want.is_empty() && want != "auto" {
             v.retain(|b| b.name.eq_ignore_ascii_case(&want) || b.name == "CPU");
         }
     }
     v
+}
+
+/// CUDA device `index` (as the process numbers its visible cards), where
+/// this build has CUDA. Not yet tried, as `more_devices`.
+#[allow(unused_variables)]
+pub fn cuda_device(index: usize) -> Option<Device> {
+    #[cfg(feature = "cuda")]
+    return Some(Device::cuda(index));
+    #[cfg(not(feature = "cuda"))]
+    None
 }
 
 /// The other GPUs of the backend `name` (as `backends` names it) beyond

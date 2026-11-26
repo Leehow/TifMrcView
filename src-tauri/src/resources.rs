@@ -181,6 +181,56 @@ pub fn memory_available_bytes() -> u64 {
             .saturating_mul(1024)
     }
 }
+/// The cards a job in this process keeps to (the desktop app on a computer
+/// with several NVIDIA cards, `keep`): their positions in `discover()`,
+/// which are their CUDA numbers, the first the job's own card. None: no job
+/// has chosen, the process's first card and any free other.
+static KEPT: std::sync::Mutex<Option<Vec<usize>>> = std::sync::Mutex::new(None);
+/// Set by the desktop app at start when CUDA numbers its NVIDIA cards as
+/// `discover()` lists them, so a job can be given cards (`keep`).
+pub static CARDS_BY_NUMBER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// While held, this process's GPU work keeps to the cards `kept()` names.
+pub struct Kept(());
+impl Drop for Kept {
+    fn drop(&mut self) {
+        *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+/// Keeps this process's GPU work to `cards` (positions in `discover()`, the
+/// first the job's own card) until the returned guard is dropped.
+pub fn keep(cards: Vec<usize>) -> Kept {
+    *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = (!cards.is_empty()).then_some(cards);
+    Kept(())
+}
+pub fn kept() -> Option<Vec<usize>> {
+    KEPT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+/// The cards for a job asked to use `uuids` (none: the program's choice,
+/// every card, the one with the most free memory first), as positions in
+/// `discover()`. None when cards cannot be given in this process.
+pub fn job_cards(uuids: Option<&[String]>) -> Option<Vec<usize>> {
+    if !CARDS_BY_NUMBER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let all = discover();
+    let mut pick: Vec<usize> = match uuids {
+        Some(u) if !u.is_empty() => (0..all.len()).filter(|&i| u.contains(&all[i].uuid)).collect(),
+        _ => (0..all.len()).collect(),
+    };
+    if pick.is_empty() {
+        return None;
+    }
+    // The freest first: it carries the job, the others help.
+    pick.sort_by_key(|&i| std::cmp::Reverse(all[i].free_mb));
+    Some(pick)
+}
+/// `CUDA_VISIBLE_DEVICES` for a job asked to use `uuids`: those of them
+/// this computer has, in its order; None when none matches.
+pub fn visible_for(uuids: &[String]) -> Option<String> {
+    let all = discover();
+    let v: Vec<&str> = all.iter().filter(|g| uuids.contains(&g.uuid)).map(|g| g.uuid.as_str()).collect();
+    (!v.is_empty()).then(|| v.join(","))
+}
 /// Remaining budget for new resident tensors; no tensor backend is initialized.
 pub fn gpu_available_bytes() -> u64 {
     #[cfg(target_os = "macos")]
@@ -190,6 +240,9 @@ pub fn gpu_available_bytes() -> u64 {
     #[cfg(not(target_os = "macos"))]
     {
         let devices = discover();
+        if let Some(g) = kept().and_then(|k| k.first().and_then(|&i| devices.get(i).cloned())) {
+            return g.free_mb * 1024 * 1024;
+        }
         let mask = std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
         let selected = devices
             .iter()

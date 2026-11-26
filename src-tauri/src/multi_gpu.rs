@@ -50,59 +50,66 @@ impl Gpus {
     }
 }
 
-/// Further cards that ran a small computation (tried once per process),
-/// with their nvidia-smi entry where there is one.
-fn extras() -> &'static [(Device, Option<crate::resources::Gpu>)] {
-    static EXTRAS: OnceLock<Vec<(Device, Option<crate::resources::Gpu>)>> = OnceLock::new();
+/// The cards of the backend in use that ran a small computation (tried
+/// once per process), by number (CUDA: as `resources::discover` lists
+/// them, the process's first card 0 included; Vulkan: the further discrete
+/// adapters 1..), with their nvidia-smi entry where there is one.
+fn extras() -> &'static [(usize, Device, Option<crate::resources::Gpu>)] {
+    static EXTRAS: OnceLock<Vec<(usize, Device, Option<crate::resources::Gpu>)>> = OnceLock::new();
     EXTRAS.get_or_init(|| {
         if std::env::var_os("TMV_GPU_WORKER").is_some() || std::env::var_os("TMV_ONE_GPU").is_some() || std::env::var("TMV_GPU").as_deref() == Ok("cpu") {
             return vec![];
         }
-        let Some((_, name)) = crate::ctf_gpu::device() else { return vec![] };
+        let Some((first, name)) = crate::ctf_gpu::device_first() else { return vec![] };
         let listed = if *name == "CUDA" { crate::resources::discover() } else { vec![] };
-        tmv_sam::more_devices(name, listed.len())
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, d)| {
-                let entry = listed.get(i + 1).cloned();
-                // A card another job fills is not even started on.
-                if entry.as_ref().is_some_and(|g| g.free_mb < MIN_FREE_MB) {
-                    return None;
+        let mut cards = vec![];
+        if *name == "CUDA" {
+            cards.push((0, first.clone(), listed.first().cloned()));
+        }
+        cards.extend(tmv_sam::more_devices(name, listed.len()).into_iter().enumerate().filter_map(|(i, d)| {
+            let entry = listed.get(i + 1).cloned();
+            // A card another job fills is not even started on.
+            if entry.as_ref().is_some_and(|g| g.free_mb < MIN_FREE_MB) {
+                return None;
+            }
+            let works = crate::ctf_gpu::guarded(|| {
+                let x = Tensor::<2>::ones([8, 8], &d);
+                let s: f32 = x.clone().matmul(x).sum().into_scalar();
+                s == 512.0
+            });
+            match works {
+                Ok(true) => {
+                    eprintln!("GPU: {name} device {} also usable", i + 1);
+                    Some((i + 1, d, entry))
                 }
-                let works = crate::ctf_gpu::guarded(|| {
-                    let x = Tensor::<2>::ones([8, 8], &d);
-                    let s: f32 = x.clone().matmul(x).sum().into_scalar();
-                    s == 512.0
-                });
-                match works {
-                    Ok(true) => {
-                        eprintln!("GPU: {name} device {} also usable", i + 1);
-                        Some((d, entry))
-                    }
-                    other => {
-                        eprintln!("GPU: {name} device {} not usable: {other:?}", i + 1);
-                        None
-                    }
+                other => {
+                    eprintln!("GPU: {name} device {} not usable: {other:?}", i + 1);
+                    None
                 }
-            })
-            .collect()
+            }
+        }));
+        cards
     })
 }
 
 /// The cards for a job on `primary`: it, plus each further card that is
-/// free now. Only `primary` when it is not the GPU (the CPU fallback).
+/// free now (and, when the job keeps to chosen cards, `resources::keep`,
+/// is one of them). Only `primary` when it is not the GPU (the CPU fallback).
 pub fn gpus(primary: &Device) -> Gpus {
     let mut g = Gpus::one(primary);
-    let is_gpu = crate::ctf_gpu::device().is_some_and(|(d, _)| d == primary);
-    if !is_gpu {
+    let Some((_, name)) = crate::ctf_gpu::device().filter(|(d, _)| d == primary) else {
         return g;
-    }
+    };
     let extras = extras();
     if extras.is_empty() {
         return g;
     }
+    let kept = if *name == "CUDA" { crate::resources::kept() } else { None };
     let now = crate::resources::discover();
-    for (d, entry) in extras {
+    for (i, d, entry) in extras {
+        if d == primary || kept.as_ref().is_some_and(|k| !k.contains(i)) {
+            continue;
+        }
         if let Some(e) = entry {
             let free = now.iter().find(|n| n.uuid == e.uuid).map_or(0, |n| n.free_mb);
             if free < MIN_FREE_MB {

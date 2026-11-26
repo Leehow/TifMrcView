@@ -281,6 +281,24 @@ fn launch(id: &str, dir: &Path) -> Result<()> {
         .append(true)
         .open(dir.join("stderr.log"))?;
     let mut c = std::process::Command::new(exe);
+    // The cards the user ticked (Cryo-ET, a server with several): the job
+    // sees only those, and everything after (the freest leading, GPU
+    // workers, the further cards of a training) follows from that.
+    if let Ok(req) = read(&dir.join("request.json")) {
+        let ticked: Vec<String> = serde_json::from_value(req["args"]["req"]["gpus"].clone()).unwrap_or_default();
+        if !ticked.is_empty() {
+            match crate::resources::visible_for(&ticked) {
+                Some(v) => {
+                    c.env("CUDA_VISIBLE_DEVICES", v);
+                }
+                None => {
+                    let e = "勾选的 GPU 在这台服务器上找不到了，请重新勾选";
+                    write(&dir.join("state.json"), &json!({"state":"failed","error":e}))?;
+                    bail!(e)
+                }
+            }
+        }
+    }
     c.args(["agent-worker", id])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

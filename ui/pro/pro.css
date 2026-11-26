@@ -759,3 +759,13 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
    advanced summary ran over the status line), and the status line stays at the bottom. */
 #spa-workspace > * { flex-shrink:0; }
 #spa-workspace > .ws-foot { position:sticky; bottom:-12px; margin-bottom:-12px; padding-bottom:12px; background:var(--surface); z-index:1; }
+/* Which GPUs a run uses (only where there are several). */
+#cryo-session .cs-gpus { flex:1 1 100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:13px; }
+#cryo-session .cs-gpus[hidden] { display:none; }
+#cryo-session .cs-gpu-list { display:flex; flex-wrap:wrap; gap:6px; }
+#cryo-session .cs-gpu { display:flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer; }
+#cryo-session .cs-gpu:has(input:checked) { border-color:var(--accent); }
+#cryo-session .cs-gpu input { margin:0; }
+#cryo-session .cs-gpu small { font-size:11px; }
+#cryo-session .cs-gpu-busy { color:#b26b00; }
+#cryo-session .cs-gpus-line { flex:1 1 100%; font-size:12px; }

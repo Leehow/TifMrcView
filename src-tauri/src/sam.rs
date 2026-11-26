@@ -750,6 +750,31 @@ fn enclosed(mask: &[bool], w: usize, h: usize) -> usize {
 /// Points the CUDA backend at the libdevice.10.bc that the Linux packages
 /// carry (/usr/lib/tifmrcview-pro/cuda, also inside the AppImage), unless
 /// CUDA_PATH already names a toolkit.
+/// A computer with several NVIDIA cards (a lab server used at its own
+/// screen) puts CUDA first: CUDA numbers the cards as nvidia-smi lists
+/// them, so a Cryo-ET run can be given the cards the user ticked
+/// (`resources::keep`); Vulkan, otherwise first, cannot be told a card.
+/// Vulkan and the CPU stay the fallbacks; a TMV_GPU the user set wins.
+/// Called once at start, before any GPU is used.
+#[cfg(all(feature = "pro", target_os = "linux"))]
+pub fn cuda_for_several_cards() {
+    if std::env::var_os("TMV_GPU").is_some() || !std::path::Path::new("/dev/nvidiactl").exists() {
+        return;
+    }
+    if crate::resources::discover().len() < 2 {
+        return;
+    }
+    use_bundled_libdevice();
+    if std::env::var_os("CUDA_PATH").is_none() {
+        return;
+    }
+    if std::env::var_os("CUDA_DEVICE_ORDER").is_none() {
+        std::env::set_var("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+    }
+    std::env::set_var("TMV_GPU", "cuda-first");
+    crate::resources::CARDS_BY_NUMBER.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(all(feature = "pro", target_os = "linux"))]
 fn use_bundled_libdevice() {
     if std::env::var_os("CUDA_PATH").is_some() {

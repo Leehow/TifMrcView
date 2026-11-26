@@ -17,7 +17,22 @@ const MAX_ELEMS: usize = 1 << 24;
 
 static INIT_FAILURE:OnceLock<String>=OnceLock::new();
 /// The GPU and its name, only after a real kernel succeeds.
+/// While a job keeps to chosen cards (`resources::keep`), its own card.
 pub fn device()->Option<&'static(Device,&'static str)>{
+ let base=device_first()?;
+ if base.1=="CUDA"{if let Some(&i)=crate::resources::kept().as_ref().and_then(|k|k.first()){if i!=0{if let Some(c)=card(i){return Some(c);}}}}
+ Some(base)
+}
+/// CUDA card `i` (a number `device` gives a job), once it ran a small computation.
+fn card(i:usize)->Option<&'static(Device,&'static str)>{
+ static CARDS:std::sync::Mutex<Vec<(usize,Option<&'static(Device,&'static str)>)>>=std::sync::Mutex::new(Vec::new());
+ let mut cards=CARDS.lock().unwrap_or_else(|e|e.into_inner());
+ if let Some((_,c))=cards.iter().find(|(n,_)|*n==i){return *c;}
+ let made=tmv_sam::cuda_device(i).and_then(|d|{let ok=guarded(||{let x=Tensor::<2>::ones([8,8],&d);let got:f32=x.clone().matmul(x).sum().into_scalar();got==512.});match ok{Ok(true)=>Some(&*Box::leak(Box::new((d,"CUDA")))),other=>{eprintln!("GPU: CUDA device {i} not usable: {other:?}");None}}});
+ cards.push((i,made));made
+}
+/// The process's first GPU, whatever card a job keeps to.
+pub fn device_first()->Option<&'static(Device,&'static str)>{
  static GPU:OnceLock<Option<(Device,&'static str)>>=OnceLock::new();
  GPU.get_or_init(||{let mut failures=vec![];for b in tmv_sam::backends(){if b.name=="CPU"{continue;}
   let tried=guarded(||->Result<Device>{let d=b.device()?;let x=Tensor::<2>::ones([8,8],&d);let got:f32=x.clone().matmul(x).sum().into_scalar();anyhow::ensure!(got==512.,"初始化校验返回 {got}，预期 512");Ok(d)}).and_then(|r|r);

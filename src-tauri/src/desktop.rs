@@ -87,6 +87,8 @@ async fn local_compute_resources(output: Option<String>) -> CmdResult<serde_json
         let mut value = serde_json::to_value(crate::resources::inspect(output.as_deref().map(std::path::Path::new)))?;
         #[cfg(target_os = "macos")]
         { value["metal"] = serde_json::to_value(crate::resources::metal_memory())?; }
+        // Whether a run here can be given the cards ticked (several NVIDIA cards, on CUDA).
+        value["gpuChoice"] = serde_json::json!(crate::resources::CARDS_BY_NUMBER.load(std::sync::atomic::Ordering::Relaxed));
         Ok(value)
     }).await
 }
@@ -2162,6 +2164,10 @@ struct TomoSessionRun {
     /// Only these series (by name); empty: all that are due.
     #[serde(default)]
     only: Vec<String>,
+    /// The cards ticked (nvidia-smi UUIDs) on a computer with several;
+    /// none: the program's choice (every card, the freest leading).
+    #[serde(default)]
+    gpus: Option<Vec<String>>,
 }
 
 /// Runs a pass over the folder's series; `tomo-session` is emitted whenever
@@ -2173,6 +2179,7 @@ async fn tomo_session_run(app: AppHandle, req: TomoSessionRun, compute_id: Optio
     let motion = MotionJob::begin(true)?;
     local_compute(app.clone(), compute_id, move || {
         let (_job, _motion) = (_job, motion);
+        let _kept = crate::resources::job_cards(req.gpus.as_deref()).map(crate::resources::keep);
         let Some((dev, _)) = crate::ctf_gpu::device() else { anyhow::bail!("没有可用 GPU") };
         let emit = tomo_emit(&app);
         let changed = || { let _ = app.emit("tomo-session", serde_json::json!({ "folder": req.folder })); };
@@ -3884,6 +3891,8 @@ fn new_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(feature = "pro", target_os = "linux"))]
+    crate::sam::cuda_for_several_cards();
     let state = AppState::default();
     let args = paths_from_args(std::env::args(), std::env::current_dir().ok().as_deref());
     if !args.is_empty() {
