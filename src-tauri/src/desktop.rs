@@ -2138,6 +2138,28 @@ async fn tomo_auto(app: AppHandle, req: TomoStepReq<crate::tomo::auto::AutoReq>,
     }).await
 }
 
+/// A run of an SSH project on this computer (`tomo::mirror`): the local
+/// folder it goes in, the paths of the copied project files, what it made.
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn tomo_mirror(action: String, folder: Option<String>, key: Option<String>, project: Option<String>, output: Option<String>, before: Option<serde_json::Value>) -> CmdResult<serde_json::Value> {
+    use crate::tomo::mirror as m;
+    use anyhow::Context as _;
+    blocking(move || {
+        let f = || folder.clone().context("folder");
+        let po = || -> anyhow::Result<(String, String)> { Ok((project.clone().context("project")?, output.clone().context("output")?)) };
+        Ok(match action.as_str() {
+            "prepare" => serde_json::json!(m::prepare(key.as_deref().unwrap_or("default"), folder.as_deref())?),
+            "rebaseIn" => { let (p, o) = po()?; m::rebase_in(&f()?, &p, &o)?; serde_json::Value::Null }
+            "manifest" => serde_json::to_value(m::manifest(&f()?)?)?,
+            "changes" => { let (p, o) = po()?; let b = serde_json::from_value(before.clone().unwrap_or_default()).unwrap_or_default(); serde_json::to_value(m::changes(&f()?, &b, &p, &o)?)? }
+            "remove" => { m::remove(&f()?)?; serde_json::Value::Null }
+            "keep" => { m::keep(&f()?)?; serde_json::Value::Null }
+            _ => anyhow::bail!("unknown action"),
+        })
+    }).await
+}
+
 /// 「重置」 on a series' card in the Cryo-ET panel: what the steps made of that
 /// series is removed (`tomo::session::reset`); answers the files removed.
 #[cfg(feature = "pro")]
@@ -4054,6 +4076,7 @@ pub fn run() {
             #[cfg(feature = "pro")] tomo_auto,
             #[cfg(feature = "pro")] tomo_session,
             #[cfg(feature = "pro")] tomo_session_reset,
+            #[cfg(feature = "pro")] tomo_mirror,
             #[cfg(feature = "pro")] tomo_session_run,
             #[cfg(feature = "pro")] tomo_pick,
             #[cfg(feature = "pro")] tomo_take,

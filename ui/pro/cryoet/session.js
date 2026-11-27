@@ -28,7 +28,6 @@
         <label class="cs-use"><input type="checkbox" data-step="flatten"><span><b>自动展平</b><span>把斜着的薄片转平，翻层时整层都在样品里</span></span></label>
       </div>
       <label class="cs-bin" title="每个体素合并多少个原始像素（bin）。bin 越小细节越多，但越慢、文件越大">体素大小 <select class="cs-bin-pick" aria-label="体素大小（bin）"></select></label>
-      <div class="cs-gpus" role="group" aria-label="用哪几块 GPU" hidden><span class="cs-gpus-title">用哪几块 GPU</span><span class="cs-gpu-list"></span><span class="dim cs-gpus-line"></span></div>
       <p class="dim cs-steps-line" role="status"></p>
       <button class="primary cs-act cs-finish" title="只对勾选的序列做最终断层图；还没处理过的序列会先处理">重构勾选序列</button>
       <span class="dim cs-selection-count" role="status"></span>
@@ -165,7 +164,7 @@
     p.textContent = folder ? (folder.split(/[\\/]/).filter(Boolean).pop() || folder) : "还没有选";
     p.title = folder || "";
     host.querySelectorAll(".cs-act").forEach((b) => { b.disabled = W.busy || !folder || !selected.size; });
-    host.querySelectorAll(".cs-purpose-box input, .cs-gpus input").forEach((b) => { b.disabled = W.busy; });
+    host.querySelectorAll(".cs-purpose-box input").forEach((b) => { b.disabled = W.busy; });
   }
 
   // Takes a session; pictures of a series that got further are loaded again.
@@ -419,8 +418,14 @@
     }
   }
 
-  async function runPass(label, purpose, only, call = () => invoke("tomo_session_run", { req: { folder, purpose, only, ...gpuReq() } })) {
-    const un = await T.event.listen("tomo-session", async () => {
+  async function runPass(label, purpose, only, call = null) {
+    // An SSH project run on this computer (运行位置): downloaded, run here, kept here or sent back.
+    let kept = null;
+    const here = !call && S.folder?.remote && window.TmvRemote?.runHere?.();
+    call ||= here
+      ? async () => { const x = await window.TmvRemote.runLocally({ folder, purpose, only }); kept = x.local || null; return x.session; }
+      : () => invoke("tomo_session_run", { req: { folder, purpose, only, ...gpuReq() } });
+    const un = here ? () => {} : await T.event.listen("tomo-session", async () => {
       // The image list reads the folder again when a series has new files.
       const files = () => session.series.map(bodySig).join("\n");
       const before = files();
@@ -433,6 +438,16 @@
     try { const running = W.run(label, call); render(); r = await running; } finally { un(); }
     // Finished: nothing to continue. Stopped or failed: the run is kept, to be continued (the cards' 继续).
     if (r && key) pref.set(key, null);
+    if (r && kept) {
+      // Kept on this computer: open what was made here; the panel follows that folder.
+      const s = r.series.find((x) => only.includes(x.name) && (x.result || x.quick)) || r.series.find((x) => only.includes(x.name));
+      const file = s?.result || s?.quick || s?.stack;
+      chose = false;
+      if (file) { try { await openPath(file); } catch (e) { W.status(`结果已保存在 ${kept}，但无法打开：${e}`); } }
+      W.status(`${label}完成，结果保存在这台电脑：${kept}`);
+      follow(); await scan();
+      return;
+    }
     render();
     if (r) {
       adopt(r);
@@ -503,66 +518,16 @@
   refreshSteps = showSteps;
   showSteps();
 
-  // Several GPUs where the run goes (the SSH server, or this computer when it
-  // has several NVIDIA cards): which to use. All ticked (the default) leaves
-  // it to the program, which spreads the work, the freest card leading; the
-  // user can keep a run off a card someone else needs. One card: not shown.
-  const gpuBox = q(".cs-gpus"), gpuList = q(".cs-gpu-list");
-  let gpuCards = [], gpuLocal = null, gpuLocalAt = 0, gpuLoading = false;
-  const gpuWhere = () => S.folder?.remote ? `ssh:${S.folder.processing?.serverIdentity || S.folder.address || ""}` : "local";
-  const gpuOff = () => { const v = pref.get(`cryo-gpus-off:${gpuWhere()}`, []); return Array.isArray(v) ? v : []; };
-  const gpuTicked = () => gpuCards.filter((g) => !gpuOff().includes(g.uuid));
-  // What the run is asked: nothing when every card is ticked (the program's choice).
+  // The GPUs ticked under 运行位置 (remote-processing.js): nothing when all are (the program's choice).
+  let localGpus = [];
   function gpuReq() {
-    if (gpuCards.length < 2) return {};
-    const on = gpuTicked();
-    return on.length && on.length < gpuCards.length ? { gpus: on.map((g) => g.uuid) } : {};
+    if (!window.TmvGpuPick) return {};
+    if (S.folder?.remote) return TmvGpuPick.req(window.TmvRemote?.gpus?.() || []);
+    return TmvGpuPick.req(localGpus, "local");
   }
-  async function gpuInventory() {
-    if (S.folder?.remote) return S.folder.processing?.resources?.gpus || [];
-    if (gpuLocal && Date.now() - gpuLocalAt < 15000) return gpuLocal;
-    if (gpuLoading) return gpuLocal || [];
-    gpuLoading = true;
-    try {
-      const r = await invoke("local_compute_resources", { output: null });
-      gpuLocal = r.gpuChoice ? r.gpus || [] : [];
-    } catch { gpuLocal = []; } finally { gpuLoading = false; gpuLocalAt = Date.now(); }
-    return gpuLocal;
-  }
-  const gb = (mb) => (mb / 1024).toFixed(mb < 10240 ? 1 : 0);
-  async function refreshGpus() {
-    const list = await gpuInventory();
-    gpuCards = list.filter((g) => g.uuid);
-    gpuBox.hidden = gpuCards.length < 2;
-    if (gpuBox.hidden) return;
-    const off = gpuOff();
-    gpuList.replaceChildren(...gpuCards.map((g) => {
-      const l = el("label", "cs-gpu");
-      const b = document.createElement("input");
-      b.type = "checkbox"; b.checked = !off.includes(g.uuid); b.disabled = !!W.busy;
-      b.onchange = () => {
-        let now = gpuOff().filter((u) => gpuCards.some((c) => c.uuid === u));
-        now = b.checked ? now.filter((u) => u !== g.uuid) : [...new Set([...now, g.uuid])];
-        if (now.length >= gpuCards.length) { b.checked = true; return W.status("至少要用一块 GPU"); }
-        pref.set(`cryo-gpus-off:${gpuWhere()}`, now);
-        gpuLine();
-      };
-      const busy = g.totalMb && g.freeMb < g.totalMb * 0.5;
-      l.title = `${g.name}：空闲显存 ${gb(g.freeMb)} / ${gb(g.totalMb)} GB，当前利用率 ${g.utilization}%`;
-      l.append(b, el("span", null, `GPU ${g.index} · ${g.name.replace(/^NVIDIA\s+(GeForce\s+)?/i, "")}`), el("small", busy ? "cs-gpu-busy" : "dim", `空闲 ${gb(g.freeMb)}/${gb(g.totalMb)} GB${busy ? "，有别的任务在用" : ""}`));
-      return l;
-    }));
-    gpuLine();
-  }
-  function gpuLine() {
-    const on = gpuTicked();
-    q(".cs-gpus-line").textContent = on.length === gpuCards.length
-      ? "都用：程序自动分工（多个序列时每块 GPU 各做一个），空闲多的先用"
-      : `只用 ${on.map((g) => `GPU ${g.index}`).join("、")}，其他的留给别的任务`;
-  }
-  document.addEventListener("tmv-remote-mounted", () => refreshGpus());
-  setInterval(() => { if (visible() && !W.busy) refreshGpus(); }, 5000);
-  refreshGpus();
+  const loadLocalGpus = () => { if (!S.folder?.remote) invoke("local_compute_resources", { output: null }).then((r) => { localGpus = r.gpuChoice ? r.gpus || [] : []; }).catch(() => {}); };
+  document.addEventListener("cryoet-open", loadLocalGpus);
+  loadLocalGpus();
   // What a run left out or said, from the series it made.
   const noteOf = (r, only) => {
     const notes = [...new Set(r.series.filter((s) => only.includes(s.name) && s.note).map((s) => s.note))];

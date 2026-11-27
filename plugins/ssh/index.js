@@ -409,6 +409,19 @@ TifMrcView.register({
           pickFolder: async (start,space)=>{check();return pickRemoteFolder(start,space);},
           call: request=>{check();return native('processing',{request});},
           engineProgress: ()=>native('engineProgress'),
+          // A whole file between this computer and the server for a Cryo-ET run here:
+          // fetchTo {path,dest} brings it into the local run's folder, upload {local,remote}
+          // sends a result back into the server's output folder. onProgress gets {done,total}.
+          transfer: async (method,args,onProgress)=>{
+            check();
+            if(!['fetchTo','upload'].includes(method))throw new Error('未知传输');
+            if(activeTransfer)throw new Error('已有图像正在传输，请等待完成或先取消');
+            const pending=connection;let on=true;
+            const poll=async()=>{if(!on)return;try{const p=await app.native('progress',{connection:pending});if(on)onProgress?.(p);}catch(_){}if(on)setTimeout(poll,500);};
+            setTimeout(poll,500);
+            try{return await native(method,args);}finally{on=false;}
+          },
+          cancelTransfer: ()=>native('cancel'),
           previewFile: async path=>{
             check();
             // Only the processed stacks requested by the Cryo-ET review use

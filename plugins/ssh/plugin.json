@@ -1,7 +1,7 @@
 {
   "id": "ssh",
   "name": "SSH 远程文件夹",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "通过密码或本地密钥连接 SSH / SFTP，浏览远程目录并按需加载图像；TifMrcView Pro 还用它在服务器上处理数据",
   "main": "index.js",
   "apiVersion": 1,

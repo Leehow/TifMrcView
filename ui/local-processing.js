@@ -27,6 +27,8 @@
       let text=`CPU ${resources.cpuThreads} 线程 · 当前可回收内存 ${(resources.memoryAvailableMb/1024).toFixed(1)} GB`;
       if(resources.metal){const m=resources.metal;text+=` · ${m.name} · ${m.unified?'统一内存':'显存'}新任务预算 ${(m.availableBytes/2**30).toFixed(1)} GB（已预留系统空间）`;}
       bar.append(node('p',text));
+      // Several NVIDIA cards here: which the Cryo-ET runs use.
+      if(kind==='tomo'&&resources.gpuChoice&&resources.gpus?.length>1&&window.TmvGpuPick){for(const g of resources.gpus)bar.append(TmvGpuPick.row(g,resources.gpus,'local',!!record?.running,refresh));bar.append(TmvGpuPick.note(resources.gpus,'local'));}
     }
     if(record?.error)bar.append(node('p',record.error));
     const id=kind==='tomo'?'cryoet-workspace':kind==='spa'?'spa-workspace':'';

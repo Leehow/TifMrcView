@@ -12,6 +12,7 @@ pub mod dataset;
 pub mod deconv;
 pub mod export;
 pub mod geometry;
+pub mod mirror;
 pub mod model;
 pub mod output;
 pub mod pipeline;

@@ -48,6 +48,40 @@ window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
     const n = p.done - d0, t = now - at; if (n < 1 || t < 5000) return '';
     const s = (p.total - p.done) * t / n / 1000;
     return s < 60 ? '约剩不到 1 分钟' : s < 3600 ? `约剩 ${Math.round(s / 60)} 分钟` : `约剩 ${(s / 3600).toFixed(1)} 小时`; }; };
+// Which GPUs a Cryo-ET run uses where there are several (the SSH server's, or this computer's NVIDIA
+// cards): a checkbox on each GPU line of the resources under 运行位置. All ticked (the default) leaves it
+// to the program; the cards left out are kept per place ('local' or 'ssh:<server>').
+window.TmvGpuPick ||= (() => {
+  const key = (w) => `cryo-gpus-off:${w}`;
+  const get = (w) => { try { const v = JSON.parse(localStorage.getItem(key(w)) || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; } };
+  const set = (w, off) => { try { localStorage.setItem(key(w), JSON.stringify(off)); } catch (_) {} };
+  const where = () => (typeof S !== 'undefined' && S.folder?.remote) ? `ssh:${S.folder.processing?.serverIdentity || S.folder.address || ''}` : 'local';
+  const on = (cards, w) => { const off = get(w); return cards.filter((g) => !off.includes(g.uuid)); };
+  // What a run is asked: nothing when all are ticked (the program's choice).
+  const req = (cards, w = where()) => { if (!cards || cards.length < 2) return {}; const o = on(cards, w); return o.length && o.length < cards.length ? { gpus: o.map((g) => g.uuid) } : {}; };
+  const gb = (mb) => (mb / 1024).toFixed(1);
+  // One GPU line with its checkbox.
+  function row(g, cards, w, disabled, changed) {
+    const l = document.createElement('label'); l.className = 'gpu-pick';
+    const b = document.createElement('input'); b.type = 'checkbox'; b.checked = !get(w).includes(g.uuid); b.disabled = !!disabled;
+    b.onchange = () => {
+      let off = get(w).filter((u) => cards.some((c) => c.uuid === u));
+      off = b.checked ? off.filter((u) => u !== g.uuid) : [...new Set([...off, g.uuid])];
+      if (off.length >= cards.length) { b.checked = true; if (typeof toast === 'function') toast('至少要用一块 GPU'); return; }
+      set(w, off); changed?.();
+    };
+    const t = document.createElement('span');
+    t.textContent = `GPU ${g.index} · ${g.name} · 可用显存 ${gb(g.freeMb)}/${gb(g.totalMb)} GB · 当前利用率 ${g.utilization}%`;
+    l.append(b, t);
+    return l;
+  }
+  function note(cards, w) {
+    const o = on(cards, w), p = document.createElement('p'); p.className = 'dim gpu-pick-note';
+    p.textContent = o.length >= cards.length ? '勾选 Cryo-ET 用哪几块 GPU。都勾着：程序自动分工（多个序列时每块 GPU 各做一个），空闲多的先用' : `Cryo-ET 只用 ${o.map((g) => `GPU ${g.index}`).join('、')}，其他的留给别的任务`;
+    return p;
+  }
+  return { where, req, row, note, on };
+})();
 // One routing boundary: local calls remain native; remote paths never reach local FS.
 (() => {
   const prefix = 'tmv-ssh:';
@@ -109,6 +143,7 @@ window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
     } finally { if(isLong && active.get(kind)?.record===record){active.delete(kind);updateBar();}else if(!isLong&&!active.size)updateBar(); }
   }
   async function remote(ctx,cmd,args,native) {
+    if(cmd==='tomo_cancel'&&localRun){localRun.cancelled=true;localRun.ctx.cancelTransfer?.().catch(()=>{});return T.core.invoke('tomo_cancel').catch(()=>{});}
     if(cmd.endsWith('_cancel')) {const job=active.get(cmd.startsWith('spa_')?'spa':'tomo');if(job)return request(job.ctx,{action:'cancel',job:job.record.job},true);return;}
     if(cmd.startsWith('live_'))return null;
     const decoded=map(args,s=>{const x=unpack(s);if(x){if(x.id!==ctx.identity)throw new Error('项目属于其他服务器，请重新连接原服务器');return x.path;}return s===S.folder.dir?S.folder.remotePath:(typeof ext!=='undefined' && ext.remoteFiles?.get(s)?.remotePath)||s;});
@@ -192,6 +227,68 @@ window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
   }
   // The first processing request on this computer downloads the server engine (about 100 MB, once).
   function watchEngine(ctx){if(!ctx.engineProgress)return 0;const mb=n=>Math.round(n/1048576);let shown=false;const timer=setInterval(()=>{ctx.engineProgress().then(p=>{if(p&&p.active&&p.total){shown=true;if(current()?.identity===ctx.identity)updateBar(`第一次使用远程计算：正在下载服务器引擎（只需一次）${mb(p.done)} / ${mb(p.total)} MB`);}else if(shown){shown=false;updateBar();}}).catch(()=>{});},700);return timer;}
+  // Where a Cryo-ET run of an SSH project goes: on the server (the default), or on this computer:
+  // what the ticked series need is downloaded, processed here, and either kept here (and opened)
+  // or sent back into the server's results and the copy here removed.
+  const hereKey = ctx => `cryo-run-here:${ctx.serverIdentity||ctx.identity}`, keepKey = ctx => `cryo-keep-here:${ctx.serverIdentity||ctx.identity}`;
+  const flag = k => { try { return localStorage.getItem(k)==='1'; } catch(_) { return false; } };
+  const setFlag = (k,v) => { try { localStorage.setItem(k,v?'1':'0'); } catch(_) {} };
+  const runHere = ctx => !!ctx?.transfer && flag(hereKey(ctx));
+  let localRun = null;
+  function whereBox(ctx,locked){
+    const box=document.createElement('div');box.className='run-where';
+    const here=runHere(ctx),keep=flag(keepKey(ctx));
+    const radio=(value,text,checked)=>{const l=document.createElement('label');const r=document.createElement('input');r.type='radio';r.name='run-where';r.checked=checked;r.disabled=locked;r.onchange=()=>{setFlag(hereKey(ctx),value==='here');updateBar();};l.append(r,document.createTextNode(text));return l;};
+    box.append(radio('server','在服务器上跑',!here),radio('here','在这台电脑上跑',here));
+    if(here){const l=document.createElement('label');l.className='run-keep';const c=document.createElement('input');c.type='checkbox';c.checked=keep;c.disabled=locked;c.onchange=()=>{setFlag(keepKey(ctx),c.checked);updateBar();};l.append(c,document.createTextNode('结果保存到这台电脑'));box.append(l);
+      const n=document.createElement('p');n.className='dim run-where-note';n.textContent=keep?'勾选序列需要的数据先下载到这台电脑，处理完结果留在这台电脑上，并在这里打开。':'勾选序列需要的数据先下载到这台电脑，处理完把结果传回服务器，再删掉这台电脑上的临时文件。';box.append(n);}
+    return box;
+  }
+  const raw = s => unpack(s)?.path || s;
+  const mb = n => Math.round(n/1048576);
+  async function runLocally(req,native){
+    const ctx=current();
+    if(!ctx)throw new Error('请先重新连接 SSH 服务器');
+    if(!ctx.transfer)throw new Error('在这台电脑上跑需要 SSH 插件 1.6.0 以上，请到插件市场更新');
+    const keep=flag(keepKey(ctx));
+    const run=localRun={ctx,cancelled:false};
+    const step=(stage,done,total)=>emit('tomo-progress',{stage,done,total});
+    const stopped=()=>{if(run.cancelled)throw new Error('已取消；已下载的文件会留着，下次接着用');};
+    try{
+      updateBar();
+      step('正在列出需要下载的文件',0,1);
+      const list=await remote(ctx,'tomo_session_files',{folder:req.folder,only:req.only||[]},native);
+      const project=raw(list.project),output=raw(list.output),files=list.files||[];
+      stopped();
+      let dir=null;
+      if(keep){
+        const name=project.split('/').filter(Boolean).pop()||'project';
+        const base=localStorage.getItem('tmv.localRun.dir')||await T.core.invoke('pick_folder',{dir:''});
+        if(!base)throw new Error('没有选保存结果的文件夹');
+        try{localStorage.setItem('tmv.localRun.dir',base);}catch(_){}
+        dir=`${base.replace(/[\\/]+$/,'')}/${name}`;
+      }
+      const folder=await T.core.invoke('tomo_mirror',{action:'prepare',key:`${ctx.serverIdentity||ctx.identity}|${project}`,folder:dir});
+      const total=files.reduce((a,f)=>a+(f.size||0),0)||1;let done=0;
+      for(const f of files){stopped();
+        await ctx.transfer('fetchTo',{path:raw(f.path),dest:`${folder}/${f.rel}`},p=>step(`下载到这台电脑：${f.rel.split('/').pop()}（MB）`,mb(done+(p.done||0)),mb(total)));
+        done+=f.size||0;}
+      await T.core.invoke('tomo_mirror',{action:'rebaseIn',folder,project,output});
+      const before=await T.core.invoke('tomo_mirror',{action:'manifest',folder});
+      stopped();
+      const here=window.TmvLocal?TmvLocal.invoke('tomo_session_run',{req:{folder,purpose:req.purpose,only:req.only}},(n,v)=>T.core.invoke(n,v)):T.core.invoke('tomo_session_run',{req:{folder,purpose:req.purpose,only:req.only}});
+      const result=await here;
+      if(keep){await T.core.invoke('tomo_mirror',{action:'keep',folder});return {local:folder,session:result};}
+      const ups=await T.core.invoke('tomo_mirror',{action:'changes',folder,project,output,before});
+      const up=ups.reduce((a,u)=>a+u.size,0)||1;let sent=0;
+      for(const u of ups){stopped();
+        await ctx.transfer('upload',{local:u.local,remote:u.remote},p=>step(`把结果传回服务器：${u.remote.split('/').pop()}（MB）`,mb(sent+(p.done||0)),mb(up)));
+        sent+=u.size;}
+      await T.core.invoke('tomo_mirror',{action:'remove',folder});
+      step('结果已传回服务器',1,1);
+      return {session:await remote(ctx,'tomo_session',{folder:req.folder},native)};
+    } finally { if(localRun===run)localRun=null; updateBar(); }
+  }
   function updateBar(message) {
     for(const id of ['cryoet-workspace','spa-workspace']) {const panel=$(id);if(!panel)continue;let bar=panel.querySelector('.remote-processing-location');if(!bar){bar=document.createElement('div');bar.className='remote-processing-location';panel.querySelector('.al-head')?.after(bar);}
       if(!current()&&window.TmvLocal){TmvLocal.render(bar,id==='spa-workspace'?'spa':'tomo');continue;}
@@ -208,7 +305,8 @@ window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
         const workers=Object.entries(rec.workers||{});if(workers.length){const grid=document.createElement('div');grid.className='remote-worker-grid';for(const [name,p]of workers){const card=document.createElement('div');card.className='remote-worker-card';const title=document.createElement('strong');title.textContent=name;const stage=document.createElement('span');stage.textContent=p.stage.replace(/^GPU \d+ · /,'');const meter=document.createElement('progress');meter.setAttribute('aria-label',name+' 当前阶段进度');if(p.total>1){meter.max=p.total;meter.value=p.done;}const count=document.createElement('small');count.textContent=p.total>1?`${p.done} / ${p.total}`:'正在处理';card.append(title,stage,meter,count);grid.append(card);}bar.append(grid);}}
 
       const ctx=current();
-      if(ctx?.resources){const r=ctx.resources,details=document.createElement('details');details.className='remote-resources';const title=document.createElement('summary');title.textContent=`服务器资源：CPU ${r.cpuThreads} 线程 · 可用内存 ${(r.memoryAvailableMb/1024).toFixed(1)} GB · ${r.gpus.length} 张 GPU`;details.append(title);for(const g of r.gpus){const row=document.createElement('p');row.textContent=`GPU ${g.index} · ${g.name} · 可用显存 ${(g.freeMb/1024).toFixed(1)}/${(g.totalMb/1024).toFixed(1)} GB · 当前利用率 ${g.utilization}%`;details.append(row);}if(r.outputFreeMb!=null){const row=document.createElement('p');row.textContent=`输出磁盘可用 ${(r.outputFreeMb/1024).toFixed(1)} GB`;details.append(row);}for(const w of r.warnings||[]){const row=document.createElement('p');row.textContent=w;details.append(row);}bar.append(details);}
+      if(id==='cryoet-workspace'&&ctx?.transfer&&window.TifMrcViewPro)bar.append(whereBox(ctx,!!task||!!localRun));
+      if(ctx?.resources){const r=ctx.resources,details=document.createElement('details');details.className='remote-resources';const title=document.createElement('summary');title.textContent=`服务器资源：CPU ${r.cpuThreads} 线程 · 可用内存 ${(r.memoryAvailableMb/1024).toFixed(1)} GB · ${r.gpus.length} 张 GPU`;details.append(title);const pickable=id==='cryoet-workspace'&&r.gpus.length>1&&!runHere(ctx);const w=`ssh:${ctx.serverIdentity||''}`;for(const g of r.gpus){if(pickable){details.append(TmvGpuPick.row(g,r.gpus,w,!!task,()=>updateBar()));continue;}const row=document.createElement('p');row.textContent=`GPU ${g.index} · ${g.name} · 可用显存 ${(g.freeMb/1024).toFixed(1)}/${(g.totalMb/1024).toFixed(1)} GB · 当前利用率 ${g.utilization}%`;details.append(row);}if(pickable)details.append(TmvGpuPick.note(r.gpus,w));if(r.outputFreeMb!=null){const row=document.createElement('p');row.textContent=`输出磁盘可用 ${(r.outputFreeMb/1024).toFixed(1)} GB`;details.append(row);}for(const w of r.warnings||[]){const row=document.createElement('p');row.textContent=w;details.append(row);}bar.append(details);}
       const placements=Object.values(ctx?.placements||{});
       const advanced=window.TmvHelp.advanced(id);
       if(placements.length){const details=document.createElement('details');details.className='remote-backends';details.open=false;const title=document.createElement('summary');title.textContent=task?'每一步实际计算设备':'上次任务的计算设备';details.append(title);for(const p of placements){const row=document.createElement('div');row.className='remote-backend-row';row.classList.toggle('fallback',p.backend==='CPU'&&!!p.reason&&p.fallback!==false);const name=document.createElement('strong');name.textContent=p.operation;const device=document.createElement('span');device.textContent=`${p.backend}${p.device?' · '+p.device:p.worker?' · '+p.worker+' 的 CPU 路径':''}`;row.append(name,device);if(p.reason){const reason=document.createElement('small');reason.textContent=(p.backend==='CPU'?(p.fallback===false?'CPU 分工：':'CPU 回退原因：'):'分工：')+p.reason;row.append(reason);}if(p.priorFallback&&p.backend!=='CPU'){const prior=document.createElement('small');prior.textContent='本次此前曾回退 CPU：'+p.priorFallback;row.append(prior);}details.append(row);}advanced.append(details);}
@@ -227,6 +325,8 @@ window.TmvEta ||= () => { let key = null, at = 0, d0 = 0;
       // Once per connection and folder: pick up jobs that kept running while the app was closed.
       const ctx=folder.processing;if(ctx){ctx.discoveredFor||=new Set();if(!ctx.discoveredFor.has(identity)){ctx.discoveredFor.add(identity);setTimeout(()=>discover(ctx),0);}}},
     label, updateBar, pack, attach, discover:()=>discover(current(),true),
+    // A Cryo-ET run of the open SSH project on this computer (the 运行位置 switch), and the server's GPUs.
+    runHere:()=>runHere(current()), runLocally:req=>runLocally(req,(c,a)=>T.core.invoke(c,a)), gpus:()=>current()?.resources?.gpus||[],
     // A server path as the panels name it: the open folder itself, or a packed remote path.
     localPath:(record,path)=>{const ctx=contexts.get(record.identity)||current();return path===S.folder?.remotePath&&ctx===current()?S.folder.dir:pack(ctx.identity,path);},
     displayPath:path=>unpack(path)?.path||path,

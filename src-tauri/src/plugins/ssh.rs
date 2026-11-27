@@ -1,5 +1,9 @@
-//! Read-only image access over SFTP. Remote writes are limited to the bundled
-//! preview helper in the user's cache; passwords and key contents never persist.
+//! Image access over SFTP. Remote writes are limited to the bundled preview
+//! helper in the user's cache and to results sent back into a processing
+//! output folder the engine made (`upload`, marked `.tifmrcview-output`);
+//! local writes outside the cache only into a folder the app prepared for a
+//! Cryo-ET run here (`fetchTo`, marked `.tmv-mirror`). Passwords and key
+//! contents never persist.
 use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -328,6 +332,9 @@ impl Ssh {
             && !["list", "download", "readText", "resolveMovie"].contains(&method)
         {
             bail!("操作已取消");
+        }
+        if method == "fetchTo" || method == "upload" {
+            return transfer(conn, session, method, args);
         }
         let sftp = session.sftp().context("无法打开 SFTP，请重新连接")?;
         let remote = sftp
@@ -987,3 +994,105 @@ mod tests {
             .contains("不一致"));
     }
 }
+
+/// Whether `path` lies in a folder the app prepared for a run on this
+/// computer (one of its parents holds `.tmv-mirror`).
+fn in_mirror(path: &Path) -> bool {
+    path.is_absolute() && !path.components().any(|c| c == std::path::Component::ParentDir) && path.ancestors().skip(1).any(|d| d.join(".tmv-mirror").is_file())
+}
+
+/// A file copied whole between this computer and the server, with the
+/// connection's progress: `fetchTo` brings `path` to `dest` (kept when it
+/// is already there with the same size), `upload` sends `local` to
+/// `remote`, into a processing output folder only.
+fn transfer(conn: &Connection, session: &Session, method: &str, args: &Value) -> Result<Value> {
+    conn.cancelled.store(false, Ordering::Relaxed);
+    conn.done.store(0, Ordering::Relaxed);
+    conn.total.store(0, Ordering::Relaxed);
+    let sftp = session.sftp().context("无法打开 SFTP，请重新连接")?;
+    let copy = |input: &mut dyn Read, output: &mut dyn Write| -> Result<u64> {
+        let mut buf = vec![0; 1 << 20];
+        let mut done = 0u64;
+        loop {
+            if conn.closed.load(Ordering::Relaxed) || conn.cancelled.load(Ordering::Relaxed) {
+                bail!("传输已取消");
+            }
+            let n = input.read(&mut buf).context("传输中断，请重试")?;
+            if n == 0 {
+                return Ok(done);
+            }
+            output.write_all(&buf[..n])?;
+            done += n as u64;
+            conn.done.store(done, Ordering::Relaxed);
+        }
+    };
+    if method == "fetchTo" {
+        let dest = PathBuf::from(text(args, "dest")?);
+        ensure!(in_mirror(&dest), "只能下载到为本机处理准备的文件夹");
+        let remote = sftp.realpath(Path::new(text(args, "path")?)).context("无法访问路径，请检查路径及读取权限")?;
+        let mut input = sftp.open(&remote).context("无法读取远程文件")?;
+        let stat = input.stat()?;
+        ensure!(stat.is_file(), "不是普通文件");
+        let size = stat.size.unwrap_or(0);
+        conn.total.store(size, Ordering::Relaxed);
+        if dest.metadata().is_ok_and(|m| m.len() == size) {
+            conn.done.store(size, Ordering::Relaxed);
+            return Ok(json!({"path": dest.to_string_lossy()}));
+        }
+        std::fs::create_dir_all(dest.parent().context("目标路径")?)?;
+        let partial = dest.with_extension("ssh-part");
+        let r = (|| -> Result<()> {
+            let mut out = std::fs::File::create(&partial)?;
+            let done = copy(&mut input, &mut out)?;
+            ensure!(done == size, "远程文件正在变化，请稍后重试");
+            out.sync_all()?;
+            drop(out);
+            std::fs::rename(&partial, &dest)?;
+            Ok(())
+        })();
+        if r.is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+        r?;
+        return Ok(json!({"path": dest.to_string_lossy()}));
+    }
+    let local = PathBuf::from(text(args, "local")?);
+    ensure!(in_mirror(&local), "只能上传本机处理文件夹里的结果");
+    let remote = PathBuf::from(text(args, "remote")?);
+    ensure!(remote.is_absolute() && !remote.components().any(|c| c == std::path::Component::ParentDir), "服务器路径无效");
+    // Only into an output folder the processing engine made.
+    let marked = remote.ancestors().skip(1).any(|d| sftp.stat(&d.join(".tifmrcview-output")).is_ok());
+    ensure!(marked, "只能把结果传回服务器上的处理结果目录");
+    let parent = remote.parent().context("服务器路径无效")?;
+    let mut missing = vec![];
+    for d in parent.ancestors() {
+        if sftp.stat(d).is_ok() {
+            break;
+        }
+        missing.push(d.to_path_buf());
+    }
+    for d in missing.into_iter().rev() {
+        sftp.mkdir(&d, 0o755).with_context(|| format!("无法在服务器上创建 {}", d.display()))?;
+    }
+    let mut input = std::fs::File::open(&local)?;
+    let size = input.metadata()?.len();
+    conn.total.store(size, Ordering::Relaxed);
+    let partial = PathBuf::from(format!("{}.tmv-part", remote.display()));
+    let r = (|| -> Result<()> {
+        let mut out = sftp.create(&partial).context("无法写入服务器")?;
+        let done = copy(&mut input, &mut out)?;
+        ensure!(done == size, "本机文件正在变化");
+        drop(out);
+        if sftp.stat(&remote).is_ok() {
+            sftp.unlink(&remote)?;
+        }
+        sftp.rename(&partial, &remote, None)?;
+        Ok(())
+    })();
+    if r.is_err() {
+        let _ = sftp.unlink(&partial);
+    }
+    r?;
+    Ok(json!({"path": remote.to_string_lossy()}))
+}
+

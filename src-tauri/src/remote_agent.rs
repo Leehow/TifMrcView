@@ -334,6 +334,7 @@ fn supported(c: &str) -> bool {
             | "tomo_session"
             | "tomo_session_reset"
             | "tomo_session_run"
+            | "tomo_session_files"
             | "tomo_view"
             | "tomo_preview_stack"
             | "tomo_take"
@@ -397,6 +398,8 @@ fn worker(id: &str) -> Result<Value> {
     };
     let project_root = base.join(hash(project.as_bytes()));
     fs::create_dir_all(&project_root)?;
+    // Marks it as made by the engine: results may be sent back into it (the SSH `upload`).
+    let _ = fs::write(project_root.join(".tifmrcview-output"), b"");
     std::env::set_var("TMV_OUTPUT_ROOT", &project_root);
     if let Some(plugin) = v.get("plugin") {
         let plugin_root = PathBuf::from(string(plugin, "root")?);
@@ -585,6 +588,7 @@ fn dispatch(cmd: &str, a: &Value, emit: &(dyn Fn(&str, usize, usize) + Sync)) ->
         }
         "tomo_session" => serde_json::to_value(crate::tomo::session::scan(string(a, "folder")?)?)?,
         "tomo_session_reset" => serde_json::to_value(crate::tomo::session::reset(string(a, "folder")?, string(a, "name")?)?)?,
+        "tomo_session_files" => crate::tomo::session::files_for(string(a, "folder")?, &serde_json::from_value::<Vec<String>>(a["only"].clone()).unwrap_or_default())?,
         "tomo_session_run" => {
             let cpu=burn::tensor::Device::default();
             let dev=crate::ctf_gpu::device().map(|(d,_)|d).unwrap_or(&cpu);

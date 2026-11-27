@@ -201,6 +201,70 @@ pub fn scan(folder: &str) -> Result<Session> {
     Ok(Session { root: text(&root), series, warnings, gains:index.gains().iter().map(|p|text(p)).collect() })
 }
 
+/// What a run of the series `only` on another computer needs from this
+/// project (`folder`): for a series whose tilt series is made, it and the
+/// files beside it with its name, and its dataset; else its mdoc, its
+/// movies and the gain references. With the project notes. Each file with
+/// its place in a copy of the project (`rel`: under the step folders for
+/// what was made, else as under the project folder), its size and time.
+pub fn files_for(folder: &str, only: &[String]) -> Result<serde_json::Value> {
+    let session = scan(folder)?;
+    let root = PathBuf::from(&session.root);
+    let out = std::env::var_os("TMV_OUTPUT_ROOT").map(PathBuf::from).unwrap_or_else(|| root.clone());
+    let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut add = |p: &Path| {
+        if !p.is_file() {
+            return;
+        }
+        let rel = p.strip_prefix(&out).ok().filter(|r| r.components().next().is_some_and(|c| crate::project_dirs::is_step_folder(&c.as_os_str().to_string_lossy())))
+            .or_else(|| p.strip_prefix(&root).ok())
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|| format!("_elsewhere/{}", p.file_name().unwrap_or_default().to_string_lossy()));
+        files.entry(p.to_path_buf()).or_insert(rel);
+    };
+    let mut movies = false;
+    for s in session.series.iter().filter(|s| only.is_empty() || only.contains(&s.name)) {
+        if let Some(m) = &s.mdoc {
+            add(Path::new(m));
+        }
+        let stack = Path::new(&s.stack);
+        if stack.is_file() {
+            let stem = stack.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if let Some(dir) = stack.parent() {
+                for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if n.starts_with(&format!("{stem}.")) || ["even", "odd", "small"].iter().any(|h| n.starts_with(&format!("{stem}_{h}"))) {
+                        add(&e.path());
+                    }
+                }
+            }
+            add(&super::dataset::path_for(&s.stack));
+        } else if let Some(m) = &s.mdoc {
+            movies = true;
+            let mdoc = Path::new(m);
+            let doc = crate::motion::series::parse(&std::fs::read_to_string(mdoc)?)?;
+            let _index = crate::acquisition::scope(&root)?;
+            for v in &doc.views {
+                if let Some(f) = crate::motion::series::resolve(mdoc, &v.movie, None) {
+                    add(&f);
+                }
+            }
+        }
+    }
+    if movies {
+        for g in &session.gains {
+            add(Path::new(g));
+        }
+    }
+    add(&notes_path(&root));
+    let list: Vec<_> = files.into_iter().map(|(p, rel)| {
+        let m = std::fs::metadata(&p).ok();
+        let modified = m.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+        serde_json::json!({"path": text(&p), "rel": rel, "size": m.map_or(0, |m| m.len()), "modified": modified})
+    }).collect();
+    Ok(serde_json::json!({"project": text(&root), "output": text(&out), "files": list}))
+}
+
 fn blank(name: String, mdoc: Option<String>, stack: String) -> Series {
     Series { name, mdoc, stack, stage: Stage::Movies, movies: 0, corrected: 0, views: 0, left_out: 0, verdict: None, take: None, chosen: true, residual: None, quality: None, small: None, aligned: None, quick: None, result: None, done: vec![], error: None, note: None, pixel_a: None, size: None, bin: None }
 }
