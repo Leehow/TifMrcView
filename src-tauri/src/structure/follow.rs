@@ -46,7 +46,7 @@ impl Values for Cached<'_> {
         }
         let v = self.vals.slice(z)?;
         let mut k = self.keep.lock().unwrap();
-        if k.len() >= 12 {
+        if k.len() >= 24 {
             k.remove(0);
         }
         k.push((z, v.clone()));
@@ -371,8 +371,34 @@ mod tests {
                 im.save(format!("{dir}/z{zz:03}.png")).unwrap();
             }
         }
-        let t0 = std::time::Instant::now();
-        let found = super::super::similar::lines(&vals, (w, h, d), z, &marks, &start, None, 200).unwrap();
-        println!("similar: {} candidates, {:.1} s; scores {:?}", found.len(), t0.elapsed().as_secs_f32(), found.iter().take(15).map(|c| (c.score * 100.0).round() / 100.0).collect::<Vec<_>>());
+        // 找所有类似, leave one out: the object with most lines is the
+        // example, the user's other objects on the slice are the answer.
+        let near0 = edt(&start, w, h);
+        let objs = crate::labels::components_where(w, h, |i| near0[i] <= 6.0);
+        let objs: Vec<Vec<usize>> = objs.into_iter().map(|o| o.into_iter().filter(|&i| start[i]).collect::<Vec<_>>()).filter(|o| o.len() >= 6).collect();
+        println!("objects on z {z}: {:?} px", objs.iter().map(|o| o.len()).collect::<Vec<_>>());
+        for (ei, ex_obj) in objs.iter().enumerate() {
+            let mut ex_px = vec![false; w * h];
+            ex_obj.iter().for_each(|&i| ex_px[i] = true);
+            let dex = edt(&ex_px, w, h);
+            let ex_marks: Vec<Mark> = marks.iter().filter(|m| m.path.iter().any(|p| (p[0] as usize) < w && (p[1] as usize) < h && dex[p[1] as usize * w + p[0] as usize] <= 4.0)).cloned().collect();
+            let mut answer = start.clone();
+            ex_obj.iter().for_each(|&i| answer[i] = false);
+            let dans = edt(&answer, w, h);
+            let t0 = std::time::Instant::now();
+            let found = super::super::similar::lines(&vals, (w, h, d), z, &ex_marks, &ex_px, None, 200).unwrap();
+            println!("example = object {ei} ({} lines): {} candidates in {:.1} s", ex_marks.len(), found.len(), t0.elapsed().as_secs_f32());
+            for (k, c) in found.iter().enumerate().take(20) {
+                let [x0, y0, bw, _] = c.rect;
+                let (mut on, mut n) = (0, 0);
+                for (j, _) in c.mask.iter().enumerate().filter(|(_, &v)| v) {
+                    n += 1;
+                    if dans[(y0 + j / bw) * w + x0 + j % bw] <= 4.0 {
+                        on += 1;
+                    }
+                }
+                println!("  #{k}: score {:.2}, {} px, on the answer {:.0}%", c.score, n, 100.0 * on as f32 / n.max(1) as f32);
+            }
+        }
     }
 }

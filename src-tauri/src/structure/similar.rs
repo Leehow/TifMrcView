@@ -98,6 +98,7 @@ pub fn lines(vals: &dyn Values, dims: (usize, usize, usize), z: usize, examples:
         if md >= mb { (1.0, dark) } else { (-1.0, bright) }
     };
     let ex_r = median(ex.iter().flat_map(|m| sample(&r, m)).collect()).max(1e-6);
+    let _ = &sample;
     let ex_len = median(ex.iter().map(|m| m.path.len() as f32 * 3.0).collect());
     let min_len = (4.0 * thick).max(20.0).min(ex_len.max(20.0));
 
@@ -111,10 +112,54 @@ pub fn lines(vals: &dyn Values, dims: (usize, usize, usize), z: usize, examples:
     blobs.sort_by(|a, b| b.0.total_cmp(&a.0));
     blobs.truncate(4 * max);
 
-    let mut out = vec![];
+    // The examples' cross-section: brightness across the line, from the
+    // centre out to a few widths on each side (which side is inside does
+    // not matter here: the profile is made symmetric).
+    let reach = (3.0 * thick).ceil().max(6.0) as i32;
+    let profile = |m: &Mark| -> Vec<f32> {
+        let pts = &m.path;
+        let mut cols: Vec<Vec<f32>> = vec![vec![]; (2 * reach + 1) as usize];
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i.saturating_sub(1)], pts[(i + 1).min(pts.len() - 1)]);
+            let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+            let n = (tx * tx + ty * ty).sqrt().max(1e-6);
+            let (nx, ny) = (-ty / n, tx / n);
+            for u in -reach..=reach {
+                let (x, y) = (pts[i][0] + nx * u as f32, pts[i][1] + ny * u as f32);
+                if x >= 0.0 && y >= 0.0 && (x as usize) < w && (y as usize) < h {
+                    cols[(u + reach) as usize].push(raw[y as usize * w + x as usize]);
+                }
+            }
+        }
+        let p: Vec<f32> = cols.into_iter().map(median).collect();
+        (0..p.len()).map(|i| (p[i] + p[p.len() - 1 - i]) / 2.0).collect()
+    };
+    let profiles = |ms: &[&Mark]| -> Vec<f32> {
+        let all: Vec<Vec<f32>> = ms.iter().map(|m| profile(m)).collect();
+        (0..(2 * reach + 1) as usize).map(|u| median(all.iter().map(|p| p[u]).collect())).collect()
+    };
+    let ex_prof = profiles(&ex);
+    let centred = |p: &[f32]| -> (Vec<f32>, f32) {
+        let m = p.iter().sum::<f32>() / p.len() as f32;
+        let c: Vec<f32> = p.iter().map(|v| v - m).collect();
+        let n = c.iter().map(|v| v * v).sum::<f32>().sqrt();
+        (c, n)
+    };
+    let (ex_c, ex_n) = centred(&ex_prof);
+    // How much like the examples' cross-section (correlation) and how
+    // strong (contrast relative to theirs).
+    let alike = |p: &[f32]| -> (f32, f32) {
+        let (c, n) = centred(p);
+        let corr = c.iter().zip(&ex_c).map(|(a, b)| a * b).sum::<f32>() / (n * ex_n).max(1e-6);
+        (corr, n / ex_n.max(1e-6))
+    };
+
+    // First pass on this slice: the line engine draws each candidate; keep
+    // those whose cross-section looks like the examples'.
+    let mut first = vec![];
     let mut used = vec![false; w * h];
     for (_, b) in blobs {
-        if out.len() >= max {
+        if first.len() >= 3 * max {
             break;
         }
         let mut paint = vec![false; w * h];
@@ -128,17 +173,42 @@ pub fn lines(vals: &dyn Values, dims: (usize, usize, usize), z: usize, examples:
         if marks.is_empty() {
             continue;
         }
+        let (corr, contrast) = alike(&profiles(&marks.iter().collect::<Vec<_>>()));
+        if corr < 0.5 || contrast < 0.35 {
+            continue;
+        }
         let mask = rasterize(w, h, &marks);
-        let strength = median(marks.iter().flat_map(|m| sample(&r, m)).collect());
-        let score = 0.8 * (strength / ex_r).clamp(0.0, 1.0);
+        mask.iter().enumerate().filter(|(_, &v)| v).for_each(|(i, _)| used[i] = true);
+        let len: f32 = marks.iter().map(|m| m.path.len() as f32 * 3.0).sum();
+        let pre = corr * contrast.min(1.0) * (len / ex_len.max(1.0)).min(1.0).sqrt();
+        first.push((pre, mask, marks, corr, contrast.min(1.0)));
+    }
+    first.sort_by(|a, b| b.0.total_cmp(&a.0));
+    first.truncate(max.min(40));
+
+    // A membrane goes on through the neighbouring slices; a streak of noise
+    // does not. Each candidate is followed a few slices up and down with the
+    // engine of 沿 Z 找全; the share of slices it holds on is its 3D score.
+    const SPAN: usize = 4;
+    let (zlo, zhi) = (z.saturating_sub(SPAN), (z + SPAN).min(dims.2.saturating_sub(1)));
+    let possible = (zhi - zlo).max(1) as f32;
+    let mut out = vec![];
+    for (_, mask, marks, corr, contrast) in first {
+        let persist = if dims.2 > 1 {
+            let r = SearchRange { poly: vec![], z0: zlo, z1: zhi };
+            let f = super::follow::follow_z(&vals, dims, z, &mask, &marks, "membrane", Some(&r), &|_| {})?;
+            f.slices.len() as f32 / possible
+        } else {
+            1.0
+        };
+        let score = 0.8 * corr.clamp(0.0, 1.0) * contrast * persist;
+        if score < 0.05 {
+            continue;
+        }
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
         for (i, _) in mask.iter().enumerate().filter(|(_, &v)| v) {
-            used[i] = true;
             let (x, y) = (i % w, i / w);
             (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-        }
-        if x0 > x1 {
-            continue;
         }
         let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
         let local: Vec<bool> = (0..bw * bh).map(|j| mask[(y0 + j / bw) * w + x0 + j % bw]).collect();
