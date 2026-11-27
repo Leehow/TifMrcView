@@ -384,6 +384,20 @@ mod tests {
         let t0 = std::time::Instant::now();
         let f = follow_z(&vals, (w, h, d), z, &start, &marks, &m.structure, None, &Default::default(), &|_| {}).unwrap();
         println!("follow: {} slices, range {:?}, {:.1} s", f.slices.len(), f.range, t0.elapsed().as_secs_f32());
+        // TMV_FOLLOW_SAVE=<label file>: the layer as 沿 Z leaves it (what the
+        // app's 沿 Z 找全 writes), saved there; the image's own file is untouched.
+        if let Ok(save) = std::env::var("TMV_FOLLOW_SAVE") {
+            let mut l = Labels::load(std::path::Path::new(&crate::labels::labels_path(&path, 0)), w, h, d).unwrap();
+            let refs: Vec<(usize, &[bool])> = f.slices.iter().map(|(z, m)| (*z, m.as_slice())).collect();
+            l.apply_masks(&refs, m.label, 0, false);
+            let mut mats = l.materials.clone();
+            if let Some(x) = mats.iter_mut().find(|x| x.label == m.label) {
+                x.marks.extend(f.marks.iter().cloned());
+            }
+            l.set_materials(mats);
+            l.save(std::path::Path::new(&save)).unwrap();
+            println!("saved {save}: {} lines on {} slices", f.marks.len() + marks.len(), f.slices.len() + 1);
+        }
         for (zz, mk) in f.slices.iter().step_by(5) {
             let ms: Vec<&Mark> = f.marks.iter().filter(|k| k.z == *zz).collect();
             println!("  z {zz}: {} px, {} lines, thick {:?}, inside {:?}", count(mk), ms.len(), ms.iter().map(|k| k.thickness).collect::<Vec<_>>(), ms.iter().map(|k| k.inside).collect::<Vec<_>>());
