@@ -18,7 +18,7 @@
 //! click (`refine`), with the piece as the paint, so a found membrane looks
 //! like the user's.
 
-use super::follow::{carry_inside, rasterize, Cached, CANCEL};
+use super::follow::{carry_inside, extended, rasterize, Cached, CANCEL};
 use super::{refine, Outcome};
 use crate::classify::{self, ForestConfig};
 use crate::labels::{components_where, edt, Mark, SearchRange, Values};
@@ -126,19 +126,29 @@ impl Sets {
     }
 }
 
-/// The 3D pieces of the structure in the layer's range (all slices when it
-/// has none), learnt from `ex`. `progress(slices done, of)`.
-pub fn pieces(vals: &dyn Values, dims: (usize, usize, usize), ex: &Examples, range: Option<&SearchRange>, progress: &dyn Fn(usize, usize)) -> Result<Vec<Piece>> {
+/// What was learnt, for one image and layer: the classifier and where it
+/// applies. Kept between searches (the user's next 找所有类似 or 沿 Z on
+/// the same examples needs no new training).
+pub struct Learnt {
+    clf: classify::Classifier,
+    dims: (usize, usize, usize),
+    /// Box [x0, y0, x1, y1) and slices searched.
+    b: [usize; 4],
+    zs: (usize, usize),
+    inside: Option<Vec<f32>>,
+    pub thick: f32,
+}
+
+/// Learns the structure from `ex` (in the layer's range, all slices when it
+/// has none).
+pub fn learn(vals: &dyn Values, dims: (usize, usize, usize), ex: &Examples, range: Option<&SearchRange>) -> Result<Learnt> {
     let (w, h, d) = dims;
-    let vals = Cached { vals, keep: Mutex::new(vec![]) };
-    let (zlo, zhi) = range.map_or((0, d - 1), |r| (r.z0.min(d - 1), r.z1.min(d - 1).max(r.z0.min(d - 1))));
+    let zs = range.map_or((0, d - 1), |r| (r.z0.min(d - 1), r.z1.min(d - 1).max(r.z0.min(d - 1))));
     let b = bounds(range, w, h);
-    let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
-    if bw < 8 || bh < 8 {
+    if b[2] - b[0] < 8 || b[3] - b[1] < 8 {
         bail!("范围太小");
     }
-    let inside = range.map(|r| crop(&r.mask(w, h).iter().map(|&v| v as u8 as f32).collect::<Vec<_>>(), w, b));
-
+    let inside = range.filter(|r| r.poly.len() >= 3).map(|r| crop(&r.mask(w, h).iter().map(|&v| v as u8 as f32).collect::<Vec<_>>(), w, b));
     // Examples on their slices: 2 = the structure, 1 = not it.
     let t = ex.thick.max(1.5);
     let (r0, r1) = (2.0 * t + 3.0, 2.0 * t + 3.0 + (3.0 * t).max(10.0));
@@ -164,193 +174,308 @@ pub fn pieces(vals: &dyn Values, dims: (usize, usize, usize), ex: &Examples, ran
             }
         }
     }
-    let slices: Vec<(Vec<f32>, Vec<u16>)> = train_z.into_iter().map(|(z, m)| Ok((mean3(&vals, z, d)?, m))).collect::<Result<_>>()?;
-    let (med, sd) = crate::segpick::median_sd(&slices[0].0);
+    let slices: Vec<(Vec<f32>, Vec<u16>)> = train_z.into_iter().map(|(z, m)| Ok((mean3(vals, z, d)?, m))).collect::<Result<_>>()?;
+    let (med, sd) = crate::segpick::median_sd(&mean3(vals, ex.z, d)?);
     let (lo, hi) = (med - 3.0 * sd, med + 3.0 * sd);
     let cfg = ForestConfig { trees: 32, max_depth: 12, ..Default::default() };
     let refs: Vec<(Vec<f32>, &[u16])> = slices.iter().map(|(v, m)| (v.clone(), m.as_slice())).collect();
     let (clf, _) = classify::on_device(|dev| classify::train(dev, &refs, w, h, lo, hi, &cfg))?;
+    Ok(Learnt { clf, dims, b, zs, inside, thick: t })
+}
 
-    // Membrane probability per slice of the box, smoothed (1 2 1) across Z.
-    let prob = |z: usize| -> Result<Vec<f32>> {
-        let v = crop(&mean3(&vals, z, d)?, w, b);
-        let ((lab, conf), _) = classify::on_device(|dev| Ok(clf.predict(dev, &v, bw, bh)))?;
-        Ok(lab.iter().zip(&conf).map(|(&l, &p)| if l == 2 { p } else { 1.0 - p }).collect())
-    };
-    let min_px = ((t * t * 2.0) as usize).max(12);
-    let mut sets = Sets(vec![]);
-    // Per 2D piece: its slice, pixels (image indices), probability sum.
-    let mut parts: Vec<(usize, Vec<u32>, f32)> = vec![];
-    let mut prev_lab: Vec<u32> = vec![0; bw * bh];
-    let mut window: Vec<(usize, Vec<f32>)> = vec![];
-    let total = zhi - zlo + 1;
-    for z in zlo..=zhi {
-        if CANCEL.load(Ordering::Relaxed) {
-            bail!("已取消");
+/// Reads probabilities from a `Learnt`, each slice once.
+pub struct Reader<'a> {
+    l: &'a Learnt,
+    vals: Cached<'a>,
+    raw: Mutex<HashMap<usize, std::sync::Arc<Vec<f32>>>>,
+}
+
+impl<'a> Reader<'a> {
+    pub fn new(l: &'a Learnt, vals: &'a dyn Values) -> Self {
+        Reader { l, vals: Cached { vals, keep: Mutex::new(vec![]) }, raw: Mutex::new(HashMap::new()) }
+    }
+
+    fn box_dims(&self) -> (usize, usize) {
+        (self.l.b[2] - self.l.b[0], self.l.b[3] - self.l.b[1])
+    }
+
+    /// Probability of the structure on slice `z`, in the box.
+    fn raw(&self, z: usize) -> Result<std::sync::Arc<Vec<f32>>> {
+        if let Some(p) = self.raw.lock().unwrap().get(&z) {
+            return Ok(p.clone());
         }
-        // Probabilities of z-1, z, z+1 in the window.
-        window.retain(|(k, _)| *k + 1 >= z);
-        for k in z.saturating_sub(1).max(zlo)..=(z + 1).min(zhi) {
-            if !window.iter().any(|(q, _)| *q == k) {
-                window.push((k, prob(k)?));
+        let (bw, bh) = self.box_dims();
+        let v = crop(&mean3(&self.vals, z, self.l.dims.2)?, self.l.dims.0, self.l.b);
+        let ((lab, conf), _) = classify::on_device(|dev| Ok(self.l.clf.predict(dev, &v, bw, bh)))?;
+        let p: Vec<f32> = lab.iter().zip(&conf).map(|(&l, &p)| if l == 2 { p } else { 1.0 - p }).collect();
+        let p = std::sync::Arc::new(p);
+        let mut m = self.raw.lock().unwrap();
+        // The pieces pass walks the stack in order: older slices go.
+        m.retain(|k, _| k.abs_diff(z) <= 4);
+        m.insert(z, p.clone());
+        Ok(p)
+    }
+
+    /// Probability on slice `z` smoothed (1 2 1) across Z, in the box, 0
+    /// outside the range.
+    pub fn prob(&self, z: usize) -> Result<Vec<f32>> {
+        let mid = self.raw(z)?;
+        let lo = if z > self.l.zs.0 { Some(self.raw(z - 1)?) } else { None };
+        let hi = if z < self.l.zs.1 { Some(self.raw(z + 1)?) } else { None };
+        let mut p = mid.to_vec();
+        for i in 0..p.len() {
+            let a = lo.as_ref().map_or(mid[i], |s| s[i]);
+            let c = hi.as_ref().map_or(mid[i], |s| s[i]);
+            p[i] = (a + 2.0 * mid[i] + c) / 4.0;
+            if self.l.inside.as_ref().is_some_and(|m| m[i] < 0.5) {
+                p[i] = 0.0;
             }
         }
-        let get = |k: usize| window.iter().find(|(q, _)| *q == k).map(|(_, p)| p);
-        let mid = get(z).unwrap();
-        let mut p = mid.clone();
-        let (lo_s, hi_s) = (z.checked_sub(1).and_then(get), get(z + 1));
-        for i in 0..p.len() {
-            let a = lo_s.map_or(mid[i], |s| s[i]);
-            let c = hi_s.map_or(mid[i], |s| s[i]);
-            p[i] = (a + 2.0 * mid[i] + c) / 4.0;
+        Ok(p)
+    }
+
+    /// `prob` over the whole slice (0 outside the box).
+    pub fn prob_image(&self, z: usize) -> Result<Vec<f32>> {
+        let (w, h, _) = self.l.dims;
+        let b = self.l.b;
+        let bw = b[2] - b[0];
+        let p = self.prob(z)?;
+        let mut out = vec![0f32; w * h];
+        for y in b[1]..b[3] {
+            out[y * w + b[0]..y * w + b[2]].copy_from_slice(&p[(y - b[1]) * bw..(y - b[1] + 1) * bw]);
         }
-        let on = |i: usize| p[i] > 0.5 && inside.as_ref().is_none_or(|m| m[i] > 0.5);
-        let comps = components_where(bw, bh, on);
-        let mut lab = vec![0u32; bw * bh];
-        for c in comps.into_iter().filter(|c| c.len() >= min_px) {
-            let id = sets.add();
-            let mut sum = 0.0;
-            let mut px = Vec::with_capacity(c.len());
-            for &i in &c {
-                lab[i] = id + 1;
-                sum += p[i];
-                px.push(((b[1] + i / bw) * w + b[0] + i % bw) as u32);
-                // Joined to the pieces it touches on the slice before.
-                let (x, y) = ((i % bw) as i64, (i / bw) as i64);
-                for dy in -1..=1i64 {
-                    for dx in -1..=1i64 {
-                        let (xx, yy) = (x + dx, y + dy);
-                        if xx >= 0 && yy >= 0 && (xx as usize) < bw && (yy as usize) < bh {
-                            let q = prev_lab[yy as usize * bw + xx as usize];
-                            if q > 0 {
-                                sets.join(id, q - 1);
+        Ok(out)
+    }
+
+    /// The 3D pieces of the structure: pixels above 0.5, joined across
+    /// slices; a piece must reach 0.75 somewhere (one weak speck chain is
+    /// noise). `progress(slices done, of)`.
+    pub fn pieces(&self, progress: &dyn Fn(usize, usize)) -> Result<Vec<Piece>> {
+        let (w, _, _) = self.l.dims;
+        let b = self.l.b;
+        let (bw, bh) = self.box_dims();
+        let (zlo, zhi) = self.l.zs;
+        let t = self.l.thick;
+        let min_px = ((t * t * 2.0) as usize).max(12);
+        let mut sets = Sets(vec![]);
+        // Per 2D piece: its slice, pixels (image indices), probability sum, peak.
+        let mut parts: Vec<(usize, Vec<u32>, f32, f32)> = vec![];
+        let mut prev_lab: Vec<u32> = vec![0; bw * bh];
+        let total = zhi - zlo + 1;
+        for z in zlo..=zhi {
+            if CANCEL.load(Ordering::Relaxed) {
+                bail!("已取消");
+            }
+            let p = self.prob(z)?;
+            let comps = components_where(bw, bh, |i| p[i] > 0.5);
+            let mut lab = vec![0u32; bw * bh];
+            for c in comps.into_iter().filter(|c| c.len() >= min_px) {
+                let id = sets.add();
+                let (mut sum, mut peak) = (0.0, 0f32);
+                let mut px = Vec::with_capacity(c.len());
+                for &i in &c {
+                    lab[i] = id + 1;
+                    sum += p[i];
+                    peak = peak.max(p[i]);
+                    px.push(((b[1] + i / bw) * w + b[0] + i % bw) as u32);
+                    // Joined to the pieces it touches on the slice before.
+                    let (x, y) = ((i % bw) as i64, (i / bw) as i64);
+                    for dy in -1..=1i64 {
+                        for dx in -1..=1i64 {
+                            let (xx, yy) = (x + dx, y + dy);
+                            if xx >= 0 && yy >= 0 && (xx as usize) < bw && (yy as usize) < bh {
+                                let q = prev_lab[yy as usize * bw + xx as usize];
+                                if q > 0 {
+                                    sets.join(id, q - 1);
+                                }
                             }
                         }
                     }
                 }
+                parts.push((z, px, sum, peak));
             }
-            parts.push((z, px, sum));
+            prev_lab = lab;
+            progress(z - zlo + 1, total);
         }
-        prev_lab = lab;
-        progress(z - zlo + 1, total);
+        let mut by_root: HashMap<u32, Piece> = HashMap::new();
+        let mut sums: HashMap<u32, (f32, usize, f32)> = HashMap::new();
+        for (k, (z, px, sum, peak)) in parts.into_iter().enumerate() {
+            let r = sets.root(k as u32);
+            let s = sums.entry(r).or_default();
+            s.0 += sum;
+            s.1 += px.len();
+            s.2 = s.2.max(peak);
+            by_root.entry(r).or_insert_with(|| Piece { px: BTreeMap::new(), prob: 0.0 }).px.entry(z).or_default().extend(px);
+        }
+        let mut out: Vec<Piece> = by_root
+            .into_iter()
+            .filter(|(r, _)| sums[r].2 >= 0.75)
+            .map(|(r, mut p)| {
+                let (s, n, _) = sums[&r];
+                p.prob = s / n.max(1) as f32;
+                p
+            })
+            .collect();
+        out.sort_by(|a, b| b.voxels().cmp(&a.voxels()));
+        Ok(out)
     }
-    // 2D pieces → 3D pieces.
-    let mut by_root: HashMap<u32, Piece> = HashMap::new();
-    let mut sums: HashMap<u32, (f32, usize)> = HashMap::new();
-    for (k, (z, px, sum)) in parts.into_iter().enumerate() {
-        let r = sets.root(k as u32);
-        let s = sums.entry(r).or_default();
-        s.0 += sum;
-        s.1 += px.len();
-        by_root.entry(r).or_insert_with(|| Piece { px: BTreeMap::new(), prob: 0.0 }).px.entry(z).or_default().extend(px);
+
+    /// 沿 Z 找全, line by line: each refined line on `z0` is carried to the
+    /// next slice where the learnt probability still holds it: the paint
+    /// there is what of the line's band (the line a little longer, a little
+    /// wider) the classifier calls structure, drawn by the type-click
+    /// engine. A line stops where too little of it is left: that one test,
+    /// learnt from the user's own example, replaces the hand-set rules.
+    /// Filled types are carried as their probable pixels near the object.
+    #[allow(clippy::too_many_arguments)]
+    pub fn follow(&self, z0: usize, start: &[Mark], start_px: &[bool], structure: &str, existing: &BTreeMap<usize, Vec<bool>>, progress: &dyn Fn(usize)) -> Result<(BTreeMap<usize, Vec<bool>>, Vec<Mark>)> {
+        let (w, h, _) = self.l.dims;
+        let dims = self.l.dims;
+        let (zlo, zhi) = self.l.zs;
+        let t = self.l.thick;
+        let line = matches!(structure, "membrane" | "membrane2" | "fibre" | "shell");
+        let gap = (2.0 * t).max(6.0);
+        let reach = t + 3.0;
+        let mut out: BTreeMap<usize, Vec<bool>> = BTreeMap::new();
+        let mut found = vec![];
+        let mut steps = 0;
+        // One run per line (lines of one membrane stay apart); a filled
+        // object is one run.
+        let runs: Vec<Vec<Mark>> = if line { start.iter().filter(|m| m.path.len() >= 2).map(|m| vec![m.clone()]).collect() } else { vec![vec![]] };
+        for run in runs {
+            let first_px = if line { rasterize(w, h, &run) } else { start_px.to_vec() };
+            let n0 = first_px.iter().filter(|&&v| v).count().max(1);
+            for dir in [-1i64, 1] {
+                let (mut prev, mut prev_px) = (run.clone(), first_px.clone());
+                let mut z = z0 as i64 + dir;
+                while z >= zlo as i64 && z <= zhi as i64 {
+                    if CANCEL.load(Ordering::Relaxed) {
+                        bail!("已取消");
+                    }
+                    let zu = z as usize;
+                    let p = self.prob_image(zu)?;
+                    // Where the object may be now.
+                    let band: Vec<bool> = if line {
+                        let longer: Vec<Mark> = prev.iter().map(|m| extended(m, EXTEND)).collect();
+                        edt(&rasterize(w, h, &longer), w, h).iter().map(|&d| d <= reach).collect()
+                    } else {
+                        edt(&prev_px, w, h).iter().map(|&d| d <= reach).collect()
+                    };
+                    let paint: Vec<bool> = band.iter().zip(&p).map(|(&b, &q)| b && q > 0.5).collect();
+                    // How much of the object before is still held up.
+                    let near_paint = edt(&paint, w, h);
+                    let held = prev_px.iter().zip(&near_paint).filter(|(&v, &d)| v && d <= reach).count();
+                    let before = prev_px.iter().filter(|&&v| v).count().max(1);
+                    if held * 10 < before * 4 || held * 10 < n0 * 3 {
+                        break;
+                    }
+                    let (mut new, px) = if line {
+                        let ms: Vec<Mark> = match refine(&self.vals, dims, zu, &paint, gap, structure)? {
+                            Outcome::Done(_, ms, _) => ms
+                                .into_iter()
+                                .filter(|m| {
+                                    let on = m.path.iter().filter(|q| (q[0] as usize) < w && (q[1] as usize) < h && near_paint[q[1] as usize * w + q[0] as usize] <= reach).count();
+                                    on * 10 >= m.path.len() * 7
+                                })
+                                .collect(),
+                            Outcome::Rough(_) => vec![],
+                        };
+                        let px = rasterize(w, h, &ms);
+                        (ms, px)
+                    } else {
+                        (vec![], paint.clone())
+                    };
+                    if line && new.is_empty() {
+                        break;
+                    }
+                    for m in new.iter_mut() {
+                        m.z = zu;
+                    }
+                    if structure != "shell" {
+                        carry_inside(&mut new, &prev);
+                    }
+                    // Already there (the user's paint, an earlier run, another
+                    // line of this run): followed on, not drawn twice.
+                    let mut taken = existing.get(&zu).cloned().unwrap_or_else(|| vec![false; w * h]);
+                    if let Some(o) = out.get(&zu) {
+                        taken.iter_mut().zip(o).for_each(|(a, &b)| *a |= b);
+                    }
+                    let (draw_px, fresh) = if line && taken.iter().any(|&v| v) {
+                        let dt = edt(&taken, w, h);
+                        let lim = (2.0 * t).max(4.0) + 2.0;
+                        let fresh: Vec<Mark> = new
+                            .iter()
+                            .filter(|m| {
+                                let on = m.path.iter().filter(|q| (q[0] as usize) < w && (q[1] as usize) < h && dt[q[1] as usize * w + q[0] as usize] <= lim).count();
+                                2 * on < m.path.len()
+                            })
+                            .cloned()
+                            .collect();
+                        (rasterize(w, h, &fresh), fresh)
+                    } else if line {
+                        (px.clone(), new.clone())
+                    } else {
+                        (px.iter().zip(&taken).map(|(&a, &b)| a && !b).collect(), vec![])
+                    };
+                    if draw_px.iter().any(|&v| v) {
+                        let slot = out.entry(zu).or_insert_with(|| vec![false; w * h]);
+                        slot.iter_mut().zip(&draw_px).for_each(|(a, &b)| *a |= b);
+                    }
+                    found.extend(fresh);
+                    steps += 1;
+                    progress(steps);
+                    prev = new;
+                    prev_px = px;
+                    z += dir;
+                }
+            }
+        }
+        Ok((out, found))
     }
-    let mut out: Vec<Piece> = by_root
-        .into_iter()
-        .map(|(r, mut p)| {
-            let (s, n) = sums[&r];
-            p.prob = s / n.max(1) as f32;
-            p
-        })
-        .collect();
-    out.sort_by(|a, b| b.voxels().cmp(&a.voxels()));
-    Ok(out)
+
+    /// Takes a found piece as the user's own: its pixels on slice `z` drawn
+    /// by the type-click engine, then followed through Z like the examples.
+    pub fn adopt(&self, z: usize, px: &[u32], structure: &str, existing: &BTreeMap<usize, Vec<bool>>, progress: &dyn Fn(usize)) -> Result<(BTreeMap<usize, Vec<bool>>, Vec<Mark>)> {
+        let (w, h, _) = self.l.dims;
+        let line = matches!(structure, "membrane" | "membrane2" | "fibre" | "shell");
+        let mut paint = vec![false; w * h];
+        px.iter().for_each(|&i| paint[i as usize] = true);
+        let (marks, own) = if line {
+            let near = edt(&paint, w, h);
+            let reach = self.l.thick + 3.0;
+            let mut ms: Vec<Mark> = match refine(&self.vals, self.l.dims, z, &paint, (2.0 * self.l.thick).max(6.0), structure)? {
+                Outcome::Done(_, ms, _) => ms
+                    .into_iter()
+                    .filter(|m| {
+                        let on = m.path.iter().filter(|q| (q[0] as usize) < w && (q[1] as usize) < h && near[q[1] as usize * w + q[0] as usize] <= reach).count();
+                        on * 10 >= m.path.len() * 7
+                    })
+                    .collect(),
+                Outcome::Rough(_) => vec![],
+            };
+            ms.iter_mut().for_each(|m| m.z = z);
+            let own = rasterize(w, h, &ms);
+            (ms, own)
+        } else {
+            (vec![], paint.clone())
+        };
+        if !own.iter().any(|&v| v) {
+            return Ok((BTreeMap::new(), vec![]));
+        }
+        let (mut out, mut found) = self.follow(z, &marks, &own, structure, existing, progress)?;
+        let slot = out.entry(z).or_insert_with(|| vec![false; w * h]);
+        slot.iter_mut().zip(&own).for_each(|(a, &b)| *a |= b);
+        found.extend(marks);
+        Ok((out, found))
+    }
 }
+
+/// How far (pixels) a line may grow at each end from one slice to the next.
+const EXTEND: f32 = 8.0;
 
 /// Whether piece `p` touches the example pixels (within `reach`) on slice `z`.
 pub fn touches(p: &Piece, z: usize, near_pos: &[f32], reach: f32) -> bool {
     p.px.get(&z).is_some_and(|px| px.iter().any(|&i| near_pos[i as usize] <= reach))
-}
-
-/// Draws `pieces` on every slice but `skip` as `structure` (the paint is the
-/// piece, the line engine draws it as a type click would). `start`: the
-/// refined objects on `from` (lines carry their inside side outwards from
-/// there). `existing`: the layer elsewhere (nothing drawn twice).
-#[allow(clippy::too_many_arguments)]
-pub fn draw(vals: &dyn Values, dims: (usize, usize, usize), pieces: &[&Piece], from: usize, skip: Option<usize>, start: &[Mark], structure: &str, thick: f32, existing: &BTreeMap<usize, Vec<bool>>, progress: &dyn Fn(usize)) -> Result<(BTreeMap<usize, Vec<bool>>, Vec<Mark>)> {
-    let (w, h, _) = dims;
-    let vals = Cached { vals, keep: Mutex::new(vec![]) };
-    let line = matches!(structure, "membrane" | "membrane2" | "fibre" | "shell");
-    let mut paint: BTreeMap<usize, Vec<bool>> = BTreeMap::new();
-    for p in pieces {
-        for (z, px) in &p.px {
-            if Some(*z) == skip {
-                continue;
-            }
-            let s = paint.entry(*z).or_insert_with(|| vec![false; w * h]);
-            px.iter().for_each(|&i| s[i as usize] = true);
-        }
-    }
-    let gap = (2.0 * thick).max(6.0);
-    let mut out = BTreeMap::new();
-    let mut marks = vec![];
-    let mut done = 0;
-    // Outwards from `from`, so each slice's lines take the side of the one before.
-    let up: Vec<usize> = paint.keys().copied().filter(|&z| z > from).collect();
-    let down: Vec<usize> = paint.keys().copied().filter(|&z| z < from).rev().collect();
-    for side in [up, down] {
-        let mut prev: Vec<Mark> = start.to_vec();
-        for z in side {
-            if CANCEL.load(Ordering::Relaxed) {
-                bail!("已取消");
-            }
-            let pz = &paint[&z];
-            let mut new = if line {
-                match refine(&vals, dims, z, pz, gap, structure)? {
-                    Outcome::Done(_, ms, _) => {
-                        // The engine may reach past the paint: only lines on the piece.
-                        let dp = edt(pz, w, h);
-                        ms.into_iter()
-                            .filter(|m| {
-                                let on = m.path.iter().filter(|q| (q[0] as usize) < w && (q[1] as usize) < h && dp[q[1] as usize * w + q[0] as usize] <= thick + 3.0).count();
-                                on * 10 >= m.path.len() * 7
-                            })
-                            .collect()
-                    }
-                    Outcome::Rough(_) => vec![],
-                }
-            } else {
-                vec![]
-            };
-            for m in new.iter_mut() {
-                m.z = z;
-            }
-            if structure != "shell" && !new.is_empty() {
-                carry_inside(&mut new, &prev);
-            }
-            let mut px = if line { rasterize(w, h, &new) } else { pz.clone() };
-            if let Some(e) = existing.get(&z) {
-                // Lines already there (an earlier run, the user's paint) are
-                // not drawn again; filled pixels just merge.
-                if line {
-                    let de = edt(e, w, h);
-                    let lim = (2.0 * thick).max(4.0) + 2.0;
-                    let fresh: Vec<Mark> = new
-                        .iter()
-                        .filter(|m| {
-                            let on = m.path.iter().filter(|q| (q[0] as usize) < w && (q[1] as usize) < h && de[q[1] as usize * w + q[0] as usize] <= lim).count();
-                            2 * on < m.path.len()
-                        })
-                        .cloned()
-                        .collect();
-                    px = rasterize(w, h, &fresh);
-                    marks.extend(fresh);
-                } else {
-                    px.iter_mut().zip(e).for_each(|(v, &k)| *v &= !k);
-                }
-            } else {
-                marks.extend(new.iter().cloned());
-            }
-            if px.iter().any(|&v| v) {
-                out.insert(z, px);
-            }
-            if !new.is_empty() {
-                prev = new;
-            }
-            done += 1;
-            progress(done);
-        }
-    }
-    Ok((out, marks))
 }
 
 #[cfg(test)]
@@ -406,7 +531,9 @@ mod tests {
         let pos = rasterize(w, h, std::slice::from_ref(&mark));
         CANCEL.store(false, Ordering::Relaxed);
         let ex = Examples { z: z0, pos: &pos, thick: 3.0, not: vec![] };
-        let ps = pieces(&img, (w, h, d), &ex, None, &|_, _| {}).unwrap();
+        let l = learn(&img, (w, h, d), &ex, None).unwrap();
+        let r = Reader::new(&l, &img);
+        let ps = r.pieces(&|_, _| {}).unwrap();
         let near = edt(&pos, w, h);
         let own: Vec<&Piece> = ps.iter().filter(|p| touches(p, z0, &near, 4.0)).collect();
         assert!(!own.is_empty(), "the example's own piece");
@@ -418,8 +545,10 @@ mod tests {
         assert!(others.iter().any(|p| at(p, 16).is_some_and(|y| (95.0..115.0).contains(&y))), "other dark line");
         assert!(!ps.iter().any(|p| p.voxels() > 200 && at(p, 16).is_some_and(|y| (58.0..66.0).contains(&y))), "bright line left out");
         // Drawn as lines on the other slices, inside side kept.
-        let (out, marks) = draw(&img, (w, h, d), &own, z0, Some(z0), std::slice::from_ref(&mark), "membrane", 3.0, &BTreeMap::new(), &|_| {}).unwrap();
+        let (out, marks) = r.follow(z0, std::slice::from_ref(&mark), &pos, "membrane", &BTreeMap::new(), &|_| {}).unwrap();
         assert!(out.len() >= 15, "slices drawn {}", out.len());
+        let (a, b) = (*out.keys().next().unwrap(), *out.keys().next_back().unwrap());
+        assert!(a >= 3 && b <= 31, "stops where the line ends: {a}..{b}");
         for m in marks.iter().filter(|m| (8..27).contains(&m.z)) {
             let off = m.z as f32 * 0.5;
             let err: f32 = m.path.iter().map(|p| (p[1] - (20.0 + off + (p[0] - 0.5) * 0.2)).abs()).sum::<f32>() / m.path.len() as f32;
@@ -450,7 +579,9 @@ mod tests {
         CANCEL.store(false, Ordering::Relaxed);
         let t0 = std::time::Instant::now();
         let ex = Examples { z, pos: &pos, thick, not: vec![] };
-        let ps = pieces(&vals, (w, h, d), &ex, None, &|_, _| {}).unwrap();
+        let l = learn(&vals, (w, h, d), &ex, None).unwrap();
+        let r = Reader::new(&l, &vals);
+        let ps = r.pieces(&|_, _| {}).unwrap();
         println!("pieces: {} in {:.1} s ({:.2} s/slice)", ps.len(), t0.elapsed().as_secs_f32(), t0.elapsed().as_secs_f32() / d as f32);
         let near = edt(&pos, w, h);
         let own: Vec<&Piece> = ps.iter().filter(|p| touches(p, z, &near, thick + 2.0)).collect();
@@ -464,7 +595,7 @@ mod tests {
             println!("  z {:?}, {} voxels, p {:.2}, score {:.2}", p.zs(), p.voxels(), p.prob, p.score());
         }
         let t1 = std::time::Instant::now();
-        let (out, found) = draw(&vals, (w, h, d), &own, z, Some(z), &marks, &m.structure, thick, &BTreeMap::new(), &|_| {}).unwrap();
+        let (out, found) = r.follow(z, &marks, &pos, &m.structure, &BTreeMap::new(), &|_| {}).unwrap();
         let zr = (out.keys().next().copied(), out.keys().next_back().copied());
         println!("draw: {} slices {:?}, {} lines, {:.1} s", out.len(), zr, found.len(), t1.elapsed().as_secs_f32());
         if let Ok(dir) = std::env::var("TMV_FOLLOW_OUT") {

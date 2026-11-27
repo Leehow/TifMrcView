@@ -480,19 +480,13 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
         };
         #[cfg(feature = "pro")]
         let f = {
-            // Learnt from the layer's own pixels, in 3D at once (structure::learn).
+            // Learnt from the layer's own pixels (structure::learn).
             let _ = &progress;
-            let (w, h, _) = dims;
-            let ps = learn_pieces(&vals, dims, token, label, z, &start, &marks, range.as_ref(), &|done, of| {
-                let _ = app2.emit("labels-follow", serde_json::json!({ "done": done, "total": of, "stage": "learn" }));
-            })?;
-            let thick = learn_thick(&marks);
-            let near = crate::labels::edt(&start, w, h);
-            let own: Vec<&crate::structure::learn::Piece> = ps.iter().filter(|p| crate::structure::learn::touches(p, z, &near, thick + 2.0)).collect();
-            let (slices, found) = crate::structure::learn::draw(&vals, dims, &own, z, Some(z), &marks, &structure, thick, &existing, &|done| {
+            let l = learnt(&vals, dims, token, label, z, &start, &marks, range.as_ref())?;
+            let r = crate::structure::learn::Reader::new(&l, &vals);
+            let (slices, found) = r.follow(z, &marks, &start, &structure, &existing, &|done| {
                 let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
             })?;
-            let _ = h;
             let range = (slices.keys().next().copied().unwrap_or(z).min(z), slices.keys().next_back().copied().unwrap_or(z).max(z));
             crate::structure::follow::Followed { slices, marks: found, range }
         };
@@ -524,22 +518,16 @@ fn learn_thick(marks: &[crate::labels::Mark]) -> f32 {
     t.get(t.len() / 2).copied().unwrap_or(3.0).max(1.5)
 }
 
-/// The last learnt pieces, so 找所有类似 after 沿 Z 找全 (or again) on the
-/// same examples does not learn and label the stack a second time.
+/// What was learnt last, so 找所有类似 after 沿 Z 找全 (or again) on the
+/// same examples does not train again.
 #[cfg(feature = "pro")]
-struct Learnt {
-    key: (u64, u16, usize, u64),
-    pieces: std::sync::Arc<Vec<crate::structure::learn::Piece>>,
-}
+static LEARNT: std::sync::Mutex<Option<((u64, u16, usize, u64), std::sync::Arc<crate::structure::learn::Learnt>)>> = std::sync::Mutex::new(None);
 
-#[cfg(feature = "pro")]
-static LEARNT: std::sync::Mutex<Option<Learnt>> = std::sync::Mutex::new(None);
-
-/// Learns `label` from its pixels `start` on slice `z` (and the pieces the
-/// user took out before) and returns the 3D pieces in the range.
+/// Learns `label` from its pixels `start` on slice `z` and the pieces the
+/// user took out before.
 #[cfg(feature = "pro")]
 #[allow(clippy::too_many_arguments)]
-fn learn_pieces(vals: &dyn crate::labels::Values, dims: (usize, usize, usize), token: u64, label: u16, z: usize, start: &[bool], marks: &[crate::labels::Mark], range: Option<&crate::labels::SearchRange>, progress: &dyn Fn(usize, usize)) -> anyhow::Result<std::sync::Arc<Vec<crate::structure::learn::Piece>>> {
+fn learnt(vals: &dyn crate::labels::Values, dims: (usize, usize, usize), token: u64, label: u16, z: usize, start: &[bool], marks: &[crate::labels::Mark], range: Option<&crate::labels::SearchRange>) -> anyhow::Result<std::sync::Arc<crate::structure::learn::Learnt>> {
     use std::hash::{Hash, Hasher};
     let not: Vec<(usize, Vec<u32>)> = crate::structure::learn::NOT.lock().unwrap().iter().filter(|(k, _, _)| *k == (token, label)).map(|(_, z, px)| (*z, px.clone())).collect();
     let mut hs = std::collections::hash_map::DefaultHasher::new();
@@ -547,13 +535,13 @@ fn learn_pieces(vals: &dyn crate::labels::Values, dims: (usize, usize, usize), t
     not.hash(&mut hs);
     format!("{range:?}").hash(&mut hs);
     let key = (token, label, z, hs.finish());
-    if let Some(l) = LEARNT.lock().unwrap().as_ref().filter(|l| l.key == key) {
-        return Ok(l.pieces.clone());
+    if let Some((_, l)) = LEARNT.lock().unwrap().as_ref().filter(|(k, _)| *k == key) {
+        return Ok(l.clone());
     }
     let ex = crate::structure::learn::Examples { z, pos: start, thick: learn_thick(marks), not };
-    let ps = std::sync::Arc::new(crate::structure::learn::pieces(vals, dims, &ex, range, progress)?);
-    *LEARNT.lock().unwrap() = Some(Learnt { key, pieces: ps.clone() });
-    Ok(ps)
+    let l = std::sync::Arc::new(crate::structure::learn::learn(vals, dims, &ex, range)?);
+    *LEARNT.lock().unwrap() = Some((key, l.clone()));
+    Ok(l)
 }
 
 /// The candidates of the last learnt 找所有类似: the pieces offered, by
@@ -568,6 +556,7 @@ struct Offered {
     structure: String,
     marks: Vec<crate::labels::Mark>,
     pieces: Vec<crate::structure::learn::Piece>,
+    learnt: std::sync::Arc<crate::structure::learn::Learnt>,
 }
 
 #[cfg(feature = "pro")]
@@ -606,8 +595,9 @@ async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, 
                 anyhow::bail!("这一层还没有这个标签");
             }
             let (w, _, _) = dims;
-            let ps = learn_pieces(&vals, dims, token, label, z, &taken, &examples, range.as_ref(), &|_, _| {})?;
-            let thick = learn_thick(&examples);
+            let l = learnt(&vals, dims, token, label, z, &taken, &examples, range.as_ref())?;
+            let ps = crate::structure::learn::Reader::new(&l, &vals).pieces(&|_, _| {})?;
+            let thick = l.thick;
             let near = crate::labels::edt(&taken, w, dims.1);
             let mut offered: Vec<crate::structure::learn::Piece> = ps
                 .iter()
@@ -639,7 +629,7 @@ async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, 
                 out.extend_from_slice(&p.score().to_le_bytes());
                 out.extend(m);
             }
-            *OFFERED.lock().unwrap() = Some(Offered { token, label, z, c, t, structure, marks: examples, pieces: offered });
+            *OFFERED.lock().unwrap() = Some(Offered { token, label, z, c, t, structure, marks: examples, pieces: offered, learnt: l.clone() });
             Ok(out)
         }
         #[cfg(not(feature = "pro"))]
@@ -688,8 +678,21 @@ async fn labels_similar_lines_apply(state: State<'_, AppState>, token: u64, z: u
                 (existing, (l.w, l.h, l.d))
             };
             let vals = crate::labels::ChannelValues { img: img.clone(), c: o.c, t: o.t };
-            let thick = learn_thick(&o.marks);
-            let (slices, marks) = crate::structure::learn::draw(&vals, dims, &kept, z, None, &o.marks, &o.structure, thick, &existing, &|_| {})?;
+            let _ = dims;
+            let r = crate::structure::learn::Reader::new(&o.learnt, &vals);
+            let mut slices: std::collections::BTreeMap<usize, Vec<bool>> = Default::default();
+            let mut marks = vec![];
+            let mut existing = existing;
+            for p in &kept {
+                let (s, m) = r.adopt(z, &p.px[&z], &o.structure, &existing, &|_| {})?;
+                for (zz, px) in s {
+                    let e = existing.entry(zz).or_insert_with(|| vec![false; px.len()]);
+                    e.iter_mut().zip(&px).for_each(|(a, &b)| *a |= b);
+                    let o = slices.entry(zz).or_insert_with(|| vec![false; px.len()]);
+                    o.iter_mut().zip(&px).for_each(|(a, &b)| *a |= b);
+                }
+                marks.extend(m);
+            }
             let mut e = e.lock().unwrap();
             let l = &mut e.labels;
             let refs: Vec<(usize, &[bool])> = slices.iter().map(|(z, m)| (*z, m.as_slice())).collect();

@@ -58,7 +58,7 @@ impl Values for Cached<'_> {
 const EXTEND: f32 = 10.0;
 
 /// An open line made `e` pixels longer at both ends, straight on.
-fn extended(m: &Mark, e: f32) -> Mark {
+pub(super) fn extended(m: &Mark, e: f32) -> Mark {
     let p = &m.path;
     if m.closed || p.len() < 2 {
         return m.clone();
