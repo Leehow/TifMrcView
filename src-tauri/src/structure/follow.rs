@@ -7,7 +7,7 @@
 //! follows it; where the object fades out, shrinks to nothing or jumps away
 //! the following stops on that side.
 
-use super::{refine, Outcome};
+use super::{median, refine, Outcome};
 use crate::labels::{edt, Labels, Mark, SearchRange, Values};
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -106,14 +106,26 @@ fn normal_near(m: &Mark, p: [f32; 2]) -> Option<([f32; 2], f32)> {
 }
 
 /// Gives each new open line the inside of the line it came from: the side
-/// is a direction in the image, the new path may run the other way.
+/// is a direction in the image, the new path may run the other way. Each
+/// point of the new line votes with the nearest old line there (a single
+/// point near a bend or an end can read the wrong way).
 fn carry_inside(new: &mut [Mark], old: &[Mark]) {
+    let olds: Vec<&Mark> = old.iter().filter(|o| o.inside != 0 && !o.closed && o.path.len() >= 2).collect();
+    if olds.is_empty() {
+        return;
+    }
     for m in new.iter_mut().filter(|m| !m.closed && m.path.len() >= 2) {
-        let mid = m.path[m.path.len() / 2];
-        let from = old.iter().filter(|o| o.inside != 0 && !o.closed).filter_map(|o| normal_near(o, mid).map(|(n, d)| (o, n, d))).min_by(|a, b| a.2.total_cmp(&b.2));
-        let (Some((o, n_old, _)), Some((n_new, _))) = (from, normal_near(m, mid)) else { continue };
-        let dot = n_old[0] * n_new[0] + n_old[1] * n_new[1];
-        m.inside = if dot >= 0.0 { o.inside } else { -o.inside };
+        let mut vote = 0f32;
+        for &p in m.path.iter() {
+            let Some((n_new, _)) = normal_near(m, p) else { continue };
+            let Some((o, n_old, d)) = olds.iter().filter_map(|o| normal_near(o, p).map(|(n, d)| (*o, n, d))).min_by(|a, b| a.2.total_cmp(&b.2)) else { continue };
+            // Far points (an end that grew) say little.
+            let wgt = 1.0 / (1.0 + d / 4.0);
+            vote += wgt * (n_old[0] * n_new[0] + n_old[1] * n_new[1]) * o.inside as f32;
+        }
+        if vote != 0.0 {
+            m.inside = if vote > 0.0 { 1 } else { -1 };
+        }
     }
 }
 
@@ -129,6 +141,8 @@ pub fn follow_z(vals: &dyn Values, dims: (usize, usize, usize), z0: usize, start
     let line = is_line(structure);
     // Two lines of a double membrane are one object: join across their gap.
     let thick = marks.iter().map(|m| m.thickness).fold(2f32, f32::max);
+    // The width the user's object has on its own slice.
+    let thick0 = if marks.is_empty() { thick } else { median(marks.iter().map(|m| m.thickness).collect()).max(1.5) };
     let spacing = if structure == "membrane2" && marks.len() >= 2 {
         let a = rasterize(w, h, &marks[..1]);
         let da = edt(&a, w, h);
@@ -200,6 +214,14 @@ pub fn follow_z(vals: &dyn Values, dims: (usize, usize, usize), z0: usize, start
                 // or jumped away from where it was.
                 if n < (0.35 * n0 as f32) as usize || 2 * n < count(&prev) || n > 3 * count(&prev) + 50 {
                     break;
+                }
+                // A line that turns into a broad smear (end of the lamella,
+                // missing-wedge blur) is no longer the membrane.
+                if line && !new_marks.is_empty() {
+                    let t = median(new_marks.iter().map(|m| m.thickness).collect());
+                    if t > (2.0 * thick0).max(thick0 + 3.0) {
+                        break;
+                    }
                 }
                 let reach = (2.0 * thick).max(5.0) + spacing;
                 let close = new.iter().zip(&dist).filter(|(&v, &dd)| v && dd <= reach).count();
@@ -311,6 +333,41 @@ mod tests {
         for (zz, mk) in f.slices.iter().step_by(5) {
             let ms: Vec<&Mark> = f.marks.iter().filter(|k| k.z == *zz).collect();
             println!("  z {zz}: {} px, {} lines, thick {:?}, inside {:?}", count(mk), ms.len(), ms.iter().map(|k| k.thickness).collect::<Vec<_>>(), ms.iter().map(|k| k.inside).collect::<Vec<_>>());
+        }
+        // Pictures: TMV_FOLLOW_OUT=<folder> gets every 8th slice with the
+        // followed lines in red and their inside side as short blue ticks.
+        if let Ok(dir) = std::env::var("TMV_FOLLOW_OUT") {
+            use crate::labels::Values;
+            std::fs::create_dir_all(&dir).unwrap();
+            for zz in (f.range.0..=f.range.1).step_by(8).chain([z]) {
+                let v = vals.slice(zz).unwrap();
+                let (med, sd) = crate::segpick::median_sd(&v);
+                let mut im = image::RgbImage::new(w as u32, h as u32);
+                for (i, p) in v.iter().enumerate() {
+                    let g = (((p - med) / sd * 40.0) + 128.0).clamp(0.0, 255.0) as u8;
+                    im.put_pixel((i % w) as u32, (i / w) as u32, image::Rgb([g, g, g]));
+                }
+                let own: Vec<&Mark> = if zz == z { marks.iter().collect() } else { f.marks.iter().filter(|k| k.z == zz).collect() };
+                for mk in own {
+                    for (k, p) in mk.path.iter().enumerate() {
+                        let (x, y) = (p[0] as u32, p[1] as u32);
+                        if x < w as u32 && y < h as u32 {
+                            im.put_pixel(x, y, image::Rgb([255, 0, 0]));
+                        }
+                        if k % 4 == 2 && mk.inside != 0 {
+                            if let Some((n, _)) = normal_near(mk, *p) {
+                                for s in 2..8 {
+                                    let (qx, qy) = (p[0] + n[0] * s as f32 * mk.inside as f32, p[1] + n[1] * s as f32 * mk.inside as f32);
+                                    if qx >= 0.0 && qy >= 0.0 && (qx as usize) < w && (qy as usize) < h {
+                                        im.put_pixel(qx as u32, qy as u32, image::Rgb([0, 120, 255]));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                im.save(format!("{dir}/z{zz:03}.png")).unwrap();
+            }
         }
         let t0 = std::time::Instant::now();
         let found = super::super::similar::lines(&vals, (w, h, d), z, &marks, &start, None, 200).unwrap();
