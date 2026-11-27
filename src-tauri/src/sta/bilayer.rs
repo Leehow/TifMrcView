@@ -58,6 +58,18 @@ const JUDGE_A: f64 = 60.0;
 const SLIDE_A: f64 = 25.0;
 /// Edge of the average patch, Å.
 pub const BOX_A: f64 = 240.0;
+/// Coarse voxels still need room: the slide and the judged part are at
+/// least this many voxels (a line drawn on a 30 Å section is easily one or
+/// two voxels off the membrane's middle).
+const FEWEST_VOXELS: f64 = 3.0;
+
+/// The slide, the judged half width and the profile's half length, voxels.
+fn reaches(voxel: f64) -> (f64, f64, f64) {
+    let slide = (SLIDE_A / voxel).max(FEWEST_VOXELS);
+    let judge = (JUDGE_A / voxel).max(FEWEST_VOXELS);
+    (slide, judge, (REACH_A / voxel).max(judge + slide + 2.0))
+}
+
 /// Profile step, voxels.
 const STEP: f64 = 0.5;
 /// Rounds of judging and averaging again.
@@ -481,9 +493,9 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
         drop(img);
         let (v, dims, voxel, bin) = binned(&s.path, px * bin as f64)?;
         voxel_a = voxel;
-        half = (REACH_A / voxel / STEP).round() as isize;
+        let (range, _, reach) = reaches(voxel);
+        half = (reach / STEP).round() as isize;
         let disc = DISC_A / voxel;
-        let range = SLIDE_A / voxel;
         let here: Vec<Seed> = mine
             .iter()
             .map(|&i| {
@@ -530,8 +542,9 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
         bail!("膜上没有取到点");
     }
     progress("判断每一小片是不是膜", 0, 1);
-    let judged = (JUDGE_A / voxel_a / STEP).round() as isize;
-    let slide = (SLIDE_A / voxel_a / STEP).round().max(1.0) as isize;
+    let (slide_v, judge_v, _) = reaches(voxel_a);
+    let judged = (judge_v / STEP).round() as isize;
+    let slide = (slide_v / STEP).round().max(1.0) as isize;
     let (state, common) = judge(&profiles, &weights, half, judged, slide);
     for (p, &(s, score, keep, end)) in patches.iter_mut().zip(&state) {
         p.score = score;
@@ -547,7 +560,8 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
     }
     let offsets: Vec<f64> = (-half..=half).map(|j| j as f64 * STEP * voxel_a).collect();
     // The common profile, scaled over the membrane part.
-    let mid: Vec<f64> = (0..offsets.len()).filter(|&k| offsets[k].abs() <= JUDGE_A).map(|k| common[k]).collect();
+    let judge_a = judge_v * voxel_a;
+    let mid: Vec<f64> = (0..offsets.len()).filter(|&k| offsets[k].abs() <= judge_a).map(|k| common[k]).collect();
     let mean = mid.iter().sum::<f64>() / mid.len().max(1) as f64;
     let sd = (mid.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / mid.len().max(1) as f64).sqrt().max(1e-12);
     let profile_n: Vec<f64> = common.iter().map(|x| (x - mean) / sd).collect();
@@ -573,7 +587,7 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
             }
         })
         .collect();
-    let judged_mid: Vec<usize> = (0..offsets.len()).filter(|&k| offsets[k].abs() <= JUDGE_A).collect();
+    let judged_mid: Vec<usize> = (0..offsets.len()).filter(|&k| offsets[k].abs() <= judge_a).collect();
     for (m, mem) in membranes.iter_mut().enumerate() {
         let mine: Vec<usize> = (0..patches.len()).filter(|&i| patches[i].membrane == m).collect();
         mem.patches = mine.len();
@@ -729,7 +743,7 @@ fn fine_average(sources: &[Source], patches: &[Patch], from: &[(usize, Seed)], d
     let n = (((BOX_A / voxel).round() as usize).div_ceil(2) * 2).max(16);
     let places: Vec<(usize, P, crate::spa::geom::Mat)> =
         patches.iter().zip(from).filter(|(p, _)| p.out == Out::Kept).map(|(p, (si, _))| (*si, p.raw, frame(p.normal))).collect();
-    let aligned = super::project::average_from_tilts(sources, &places, n, voxel, BOX_A, progress)?;
+    let aligned = super::project::average_from_tilts(sources, &places, n, voxel, BOX_A, 2, progress)?;
     let path = dir.join("membrane_patch_fine.mrc");
     output::write_mrc(&path.to_string_lossy(), &aligned.map, [n; 3], voxel, false)?;
     let raw = profile_of_map(&aligned.map, n, 0.5 * BOX_A / voxel * 0.5);

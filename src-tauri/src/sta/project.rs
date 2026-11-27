@@ -3776,9 +3776,10 @@ fn shell_weight(fsc: &[f64]) -> Vec<f64> {
 /// The average from the tilt images of places given with their turns
 /// (`(source, centre in voxels of the source tomogram, turn)`), halves
 /// alternating, on a grid of `n` voxels of `voxel` Å, nothing aligned: for
-/// places that are already where they belong (`bilayer`). Each source must
+/// places that are nearly where they belong (`bilayer`); `refine` rounds
+/// then move each a little (`tilt::refine_poses`) against the halves. Each source must
 /// have its tilt series (`Source::series`).
-pub(super) fn average_from_tilts(sources: &[Source], places: &[(usize, [f64; 3], Mat)], n: usize, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
+pub(super) fn average_from_tilts(sources: &[Source], places: &[(usize, [f64; 3], Mat)], n: usize, voxel: f64, diameter_a: f64, refine: usize, progress: Progress) -> Result<super::refine::Aligned> {
     if let Some(s) = sources.iter().find(|s| s.series.is_none()) {
         bail!("{} 没有记录它在倾斜图像里的位置，不能从倾斜图像平均", s.path);
     }
@@ -3788,7 +3789,18 @@ pub(super) fn average_from_tilts(sources: &[Source], places: &[(usize, [f64; 3],
         .map(|(i, (source, at, _))| Cut { source: *source, at: *at, bin: 1, score: 0.0, strength: 0.0, darkest: 0.0, half: (i % 2) as u8, cube: vec![] })
         .collect();
     let poses: Vec<Pose> = places.iter().map(|(_, _, r)| Pose { r: *r, t: [0.0; 3], score: 0.0 }).collect();
-    from_tilts(sources, &cuts, &poses, n, voxel, diameter_a, &[], None, false, progress)
+    let mut out = from_tilts(sources, &cuts, &poses, n, voxel, diameter_a, &[], None, false, progress)?;
+    // Each place a little nearer where its own images put it, against the
+    // halves of the round before (and the views' shifts with it).
+    for _ in 0..refine {
+        let weight = shell_weight(&out.fsc);
+        let next = from_tilts(sources, &cuts, &out.poses, n, voxel, diameter_a, &[], Some((&out.halves, &weight)), true, progress)?;
+        if next.shell + 0.25 < out.shell {
+            break;
+        }
+        out = next;
+    }
+    Ok(out)
 }
 
 /// The average of the aligned particles made from the tilt images (`tilt`),
