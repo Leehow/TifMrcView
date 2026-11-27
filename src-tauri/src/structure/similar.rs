@@ -196,7 +196,7 @@ pub fn lines(vals: &dyn Values, dims: (usize, usize, usize), z: usize, examples:
     for (_, mask, marks, corr, contrast) in first {
         let persist = if dims.2 > 1 {
             let r = SearchRange { poly: vec![], z0: zlo, z1: zhi };
-            let f = super::follow::follow_z(&vals, dims, z, &mask, &marks, "membrane", Some(&r), &|_| {})?;
+            let f = super::follow::follow_z(&vals, dims, z, &mask, &marks, "membrane", Some(&r), &Default::default(), &|_| {})?;
             f.slices.len() as f32 / possible
         } else {
             1.0

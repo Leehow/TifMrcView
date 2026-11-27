@@ -453,7 +453,7 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
     let app2 = app.clone();
     blocking(move || {
         let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
-        let (start, marks, structure, range, dims) = {
+        let (start, marks, structure, range, existing, dims) = {
             let e = e.lock().unwrap();
             let l = &e.labels;
             let Some(s) = l.slice(z) else { anyhow::bail!("这一层还没有这个标签") };
@@ -462,7 +462,12 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
             let structure = m.map(|m| m.structure.clone()).unwrap_or_default();
             let marks: Vec<_> = m.map(|m| m.marks.iter().filter(|mk| mk.z == z).cloned().collect()).unwrap_or_default();
             let range = m.and_then(|m| m.range.clone());
-            (start, marks, structure, range, (l.w, l.h, l.d))
+            // The layer on the other slices: what is there is not drawn twice.
+            let existing: std::collections::BTreeMap<usize, Vec<bool>> = (0..l.d)
+                .filter(|&zz| zz != z)
+                .filter_map(|zz| l.slice(zz).filter(|s| s.contains(&label)).map(|s| (zz, s.iter().map(|&v| v == label).collect())))
+                .collect();
+            (start, marks, structure, range, existing, (l.w, l.h, l.d))
         };
         if structure.is_empty() {
             anyhow::bail!("先给这个标签选一个结构类型（比如单层膜），再沿 Z 找全");
@@ -473,16 +478,15 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
         let progress = |done: usize| {
             let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
         };
-        let f = crate::structure::follow::follow_z(&vals, dims, z, &start, &marks, &structure, range.as_ref(), &progress)?;
+        let f = crate::structure::follow::follow_z(&vals, dims, z, &start, &marks, &structure, range.as_ref(), &existing, &progress)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
         let refs: Vec<(usize, &[bool])> = f.slices.iter().map(|(z, m)| (*z, m.as_slice())).collect();
         let zs = l.apply_masks(&refs, label, guard, false);
         if !f.marks.is_empty() {
-            // Following again replaces what an earlier run found on those slices.
+            // Lines already on a slice are not found again (see `existing`).
             let mut mats = l.materials.clone();
             if let Some(x) = mats.iter_mut().find(|x| x.label == label) {
-                x.marks.retain(|mk| mk.z == z || !f.slices.contains_key(&mk.z));
                 x.marks.extend(f.marks.iter().cloned());
             }
             l.set_materials(mats);
