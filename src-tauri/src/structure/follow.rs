@@ -398,6 +398,27 @@ mod tests {
                     }
                 }
                 println!("  #{k}: score {:.2}, {} px, on the answer {:.0}%", c.score, n, 100.0 * on as f32 / n.max(1) as f32);
+                // TMV_FOLLOW_OUT: a crop around each candidate of the first
+                // example, raw on the left, the candidate in red on the right.
+                if let (0, Ok(dir)) = (ei, std::env::var("TMV_FOLLOW_OUT")) {
+                    use crate::labels::Values;
+                    let v = vals.slice(z).unwrap();
+                    let (med, sd) = crate::segpick::median_sd(&v);
+                    let (cx, cy) = ((x0 + bw / 2) as i64, (y0 + c.rect[3] / 2) as i64);
+                    let half = 80i64;
+                    let mut im = image::RgbImage::new(4 * half as u32, 2 * half as u32);
+                    for yy in 0..2 * half {
+                        for xx in 0..2 * half {
+                            let (x, y) = (cx - half + xx, cy - half + yy);
+                            let g = if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h { (((v[y as usize * w + x as usize] - med) / sd * 40.0) + 128.0).clamp(0.0, 255.0) as u8 } else { 0 };
+                            im.put_pixel(xx as u32, yy as u32, image::Rgb([g, g, g]));
+                            let on_c = x >= x0 as i64 && y >= y0 as i64 && ((x - x0 as i64) as usize) < bw && ((y - y0 as i64) as usize) < c.rect[3] && c.mask[(y as usize - y0) * bw + x as usize - x0];
+                            im.put_pixel((xx + 2 * half) as u32, yy as u32, if on_c { image::Rgb([255, 0, 0]) } else { image::Rgb([g, g, g]) });
+                        }
+                    }
+                    let im = image::imageops::resize(&im, 8 * half as u32, 4 * half as u32, image::imageops::FilterType::Nearest);
+                    im.save(format!("{dir}/cand{k:02}.png")).unwrap();
+                }
             }
         }
     }
