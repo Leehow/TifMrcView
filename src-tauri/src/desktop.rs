@@ -478,19 +478,8 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
         let progress = |done: usize| {
             let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
         };
-        #[cfg(feature = "pro")]
-        let f = {
-            // Learnt from the layer's own pixels (structure::learn).
-            let _ = &progress;
-            let l = learnt(&vals, dims, token, label, z, &start, &marks, range.as_ref())?;
-            let r = crate::structure::learn::Reader::new(&l, &vals);
-            let (slices, found) = r.follow(z, &marks, &start, &structure, &existing, &|done| {
-                let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
-            })?;
-            let range = (slices.keys().next().copied().unwrap_or(z).min(z), slices.keys().next_back().copied().unwrap_or(z).max(z));
-            crate::structure::follow::Followed { slices, marks: found, range }
-        };
-        #[cfg(not(feature = "pro"))]
+        // The line engine slice by slice: on real tomograms it follows
+        // membranes better than the learnt probability does (2026-11-27).
         let f = crate::structure::follow::follow_z(&vals, dims, z, &start, &marks, &structure, range.as_ref(), &existing, &progress)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
@@ -554,9 +543,9 @@ struct Offered {
     c: usize,
     t: usize,
     structure: String,
-    marks: Vec<crate::labels::Mark>,
     pieces: Vec<crate::structure::learn::Piece>,
     learnt: std::sync::Arc<crate::structure::learn::Learnt>,
+    range: Option<crate::labels::SearchRange>,
 }
 
 #[cfg(feature = "pro")]
@@ -629,7 +618,7 @@ async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, 
                 out.extend_from_slice(&p.score().to_le_bytes());
                 out.extend(m);
             }
-            *OFFERED.lock().unwrap() = Some(Offered { token, label, z, c, t, structure, marks: examples, pieces: offered, learnt: l.clone() });
+            *OFFERED.lock().unwrap() = Some(Offered { token, label, z, c, t, structure, pieces: offered, learnt: l.clone(), range: range.clone() });
             Ok(out)
         }
         #[cfg(not(feature = "pro"))]
@@ -678,13 +667,23 @@ async fn labels_similar_lines_apply(state: State<'_, AppState>, token: u64, z: u
                 (existing, (l.w, l.h, l.d))
             };
             let vals = crate::labels::ChannelValues { img: img.clone(), c: o.c, t: o.t };
-            let _ = dims;
             let r = crate::structure::learn::Reader::new(&o.learnt, &vals);
             let mut slices: std::collections::BTreeMap<usize, Vec<bool>> = Default::default();
             let mut marks = vec![];
             let mut existing = existing;
+            let (w, _, _) = dims;
             for p in &kept {
-                let (s, m) = r.adopt(z, &p.px[&z], &o.structure, &existing, &|_| {})?;
+                // The piece on this slice as a type click draws it, then
+                // followed through Z like the user's own lines.
+                let (own_marks, own) = r.drawn(z, &p.px[&z], &o.structure)?;
+                if !own.iter().any(|&v| v) {
+                    continue;
+                }
+                let f = crate::structure::follow::follow_z(&vals, dims, z, &own, &own_marks, &o.structure, o.range.as_ref(), &existing, &|_| {})?;
+                let (mut s, mut m) = (f.slices, f.marks);
+                let fresh: Vec<bool> = own.iter().zip(existing.get(&z).map(|e| e.as_slice()).unwrap_or(&vec![false; w * dims.1])).map(|(&a, &b)| a && !b).collect();
+                s.insert(z, fresh);
+                m.extend(own_marks);
                 for (zz, px) in s {
                     let e = existing.entry(zz).or_insert_with(|| vec![false; px.len()]);
                     e.iter_mut().zip(&px).for_each(|(a, &b)| *a |= b);

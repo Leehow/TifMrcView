@@ -436,6 +436,22 @@ impl<'a> Reader<'a> {
     /// Takes a found piece as the user's own: its pixels on slice `z` drawn
     /// by the type-click engine, then followed through Z like the examples.
     pub fn adopt(&self, z: usize, px: &[u32], structure: &str, existing: &BTreeMap<usize, Vec<bool>>, progress: &dyn Fn(usize)) -> Result<(BTreeMap<usize, Vec<bool>>, Vec<Mark>)> {
+        let (w, _, _) = self.l.dims;
+        let (marks, own) = self.drawn(z, px, structure)?;
+        if !own.iter().any(|&v| v) {
+            return Ok((BTreeMap::new(), vec![]));
+        }
+        let (mut out, mut found) = self.follow(z, &marks, &own, structure, existing, progress)?;
+        let slot = out.entry(z).or_insert_with(|| vec![false; own.len()]);
+        let _ = w;
+        slot.iter_mut().zip(&own).for_each(|(a, &b)| *a |= b);
+        found.extend(marks);
+        Ok((out, found))
+    }
+
+    /// A found piece's pixels on slice `z` as the type-click engine draws
+    /// them: its lines and their pixels (a filled type: the pixels).
+    pub fn drawn(&self, z: usize, px: &[u32], structure: &str) -> Result<(Vec<Mark>, Vec<bool>)> {
         let (w, h, _) = self.l.dims;
         let line = matches!(structure, "membrane" | "membrane2" | "fibre" | "shell");
         let mut paint = vec![false; w * h];
@@ -459,14 +475,7 @@ impl<'a> Reader<'a> {
         } else {
             (vec![], paint.clone())
         };
-        if !own.iter().any(|&v| v) {
-            return Ok((BTreeMap::new(), vec![]));
-        }
-        let (mut out, mut found) = self.follow(z, &marks, &own, structure, existing, progress)?;
-        let slot = out.entry(z).or_insert_with(|| vec![false; w * h]);
-        slot.iter_mut().zip(&own).for_each(|(a, &b)| *a |= b);
-        found.extend(marks);
-        Ok((out, found))
+        Ok((marks, own))
     }
 }
 
