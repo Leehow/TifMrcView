@@ -201,8 +201,12 @@ pub fn lines(vals: &dyn Values, dims: (usize, usize, usize), z: usize, examples:
         } else {
             1.0
         };
-        let score = 0.8 * corr.clamp(0.0, 1.0) * contrast * persist;
-        if score < 0.05 {
+        // Membranes are long; streaks of noise and the rims of small
+        // things are short: length against the example's counts fully.
+        let len: f32 = marks.iter().map(|m| m.path.len() as f32 * 3.0).sum();
+        let long = (len / ex_len.max(1.0)).min(1.0);
+        let score = 0.8 * corr.clamp(0.0, 1.0) * contrast * persist * long;
+        if score < 0.03 {
             continue;
         }
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
