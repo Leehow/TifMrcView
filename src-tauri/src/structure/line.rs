@@ -6,7 +6,7 @@ use super::*;
 
 
 /// Thins `m` (`w`×`h`, false on the border) to one-pixel lines (Zhang & Suen).
-fn thin(m: &mut [bool], w: usize, h: usize) {
+pub(super) fn thin(m: &mut [bool], w: usize, h: usize) {
     let mut del = vec![];
     loop {
         let mut changed = false;
@@ -44,7 +44,7 @@ fn thin(m: &mut [bool], w: usize, h: usize) {
 /// region): pieces within `gap` are joined, the joined paint is thinned to a
 /// skeleton, and the longest path through the skeleton is the line. Also
 /// returns the paint's half width along that line.
-fn centre_line(paint: &[bool], w: usize, h: usize, gap: f32) -> Option<(Vec<[f32; 2]>, f32)> {
+pub(super) fn centre_line(paint: &[bool], w: usize, h: usize, gap: f32) -> Option<(Vec<[f32; 2]>, f32)> {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for (i, _) in paint.iter().enumerate().filter(|(_, &v)| v) {
         let (x, y) = (i % w, i / w);

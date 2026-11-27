@@ -21,6 +21,8 @@ use crate::labels::{Labels, Mark, Values};
 use anyhow::Result;
 use serde::Deserialize;
 
+pub mod follow;
+pub mod similar;
 mod line;
 mod region;
 

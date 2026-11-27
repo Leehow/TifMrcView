@@ -441,6 +441,137 @@ async fn labels_refine(state: State<'_, AppState>, token: u64, c: usize, t: usiz
     .await
 }
 
+/// 沿 Z 找全: follows the objects of `label` on slice `z` up and down the
+/// stack with the layer's structure type (the same refinement as a type
+/// click), writes them as one undo step and adds them to the layer's
+/// objects. Reports `labels-follow` {done, z}.
+#[tauri::command]
+async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usize, label: u16, guard: u16) -> CmdResult<Refined> {
+    let e = labels_entry(&app.state::<AppState>(), token)?;
+    let img = current(&app.state::<AppState>(), token)?;
+    crate::structure::follow::CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    let app2 = app.clone();
+    blocking(move || {
+        let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
+        let (start, marks, structure, range, dims) = {
+            let e = e.lock().unwrap();
+            let l = &e.labels;
+            let Some(s) = l.slice(z) else { anyhow::bail!("这一层还没有这个标签") };
+            let start: Vec<bool> = s.iter().map(|&v| v == label).collect();
+            let m = l.materials.iter().find(|m| m.label == label);
+            let structure = m.map(|m| m.structure.clone()).unwrap_or_default();
+            let marks: Vec<_> = m.map(|m| m.marks.iter().filter(|mk| mk.z == z).cloned().collect()).unwrap_or_default();
+            let range = m.and_then(|m| m.range.clone());
+            (start, marks, structure, range, (l.w, l.h, l.d))
+        };
+        if structure.is_empty() {
+            anyhow::bail!("先给这个标签选一个结构类型（比如单层膜），再沿 Z 找全");
+        }
+        if !start.iter().any(|&b| b) {
+            anyhow::bail!("这一层还没有这个标签");
+        }
+        let progress = |done: usize| {
+            let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
+        };
+        let f = crate::structure::follow::follow_z(&vals, dims, z, &start, &marks, &structure, range.as_ref(), &progress)?;
+        let mut e = e.lock().unwrap();
+        let l = &mut e.labels;
+        let refs: Vec<(usize, &[bool])> = f.slices.iter().map(|(z, m)| (*z, m.as_slice())).collect();
+        let zs = l.apply_masks(&refs, label, guard, false);
+        if !f.marks.is_empty() {
+            // Following again replaces what an earlier run found on those slices.
+            let mut mats = l.materials.clone();
+            if let Some(x) = mats.iter_mut().find(|x| x.label == label) {
+                x.marks.retain(|mk| mk.z == z || !f.slices.contains_key(&mk.z));
+                x.marks.extend(f.marks.iter().cloned());
+            }
+            l.set_materials(mats);
+        }
+        let note = if f.slices.is_empty() { "上下相邻的层里没找到它".to_string() } else { format!("沿 Z 找到 {} 层（第 {}–{} 层）", f.slices.len(), f.range.0 + 1, f.range.1 + 1) };
+        Ok(Refined { state: labels_state(&e, zs), marks: f.marks, note })
+    })
+    .await
+}
+
+/// 找所有类似 for a line-like layer: the layer's refined lines on slice `z`
+/// are the examples; finds the other lines like them on the slice, inside
+/// the layer's range. Reply as `sam_similar`: u32 count, then per candidate
+/// u32 x, y, width, height, f32 score and one byte per pixel of its box.
+#[tauri::command]
+async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, t: usize, z: usize, label: u16) -> CmdResult<Response> {
+    let e = labels_entry(&state, token)?;
+    let img = current(&state, token)?;
+    let bytes = blocking(move || {
+        let vals = crate::labels::ChannelValues { img: img.clone(), c, t };
+        let (examples, taken, range, dims) = {
+            let e = e.lock().unwrap();
+            let l = &e.labels;
+            let (w, h) = (l.w, l.h);
+            let taken: Vec<bool> = l.slice(z).map_or_else(|| vec![false; w * h], |s| s.iter().map(|&v| v == label).collect());
+            let m = l.materials.iter().find(|m| m.label == label);
+            let examples: Vec<_> = m.map(|m| m.marks.iter().filter(|mk| mk.z == z).cloned().collect()).unwrap_or_default();
+            let range = m.and_then(|m| m.range.clone()).filter(|r| z >= r.z0 && z <= r.z1);
+            if m.and_then(|m| m.range.as_ref()).is_some() && range.is_none() {
+                anyhow::bail!("这一层不在这个图层设定的 Z 范围里");
+            }
+            (examples, taken, range, (w, h, l.d))
+        };
+        let items = crate::structure::similar::lines(&vals, dims, z, &examples, &taken, range.as_ref(), 200)?;
+        let mut out = (items.len() as u32).to_le_bytes().to_vec();
+        for f in &items {
+            for v in f.rect {
+                out.extend_from_slice(&(v as u32).to_le_bytes());
+            }
+            out.extend_from_slice(&f.score.to_le_bytes());
+            out.extend(f.mask.iter().map(|m| *m as u8));
+        }
+        *crate::structure::similar::FOUND.lock().unwrap() = Some(crate::structure::similar::Found { token, z, items });
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Adds the kept candidates of `labels_similar_lines` to `label` (pixels
+/// and lines), as one undo step.
+#[tauri::command]
+async fn labels_similar_lines_apply(state: State<'_, AppState>, token: u64, z: usize, label: u16, guard: u16, keep: Vec<usize>) -> CmdResult<Refined> {
+    let e = labels_entry(&state, token)?;
+    blocking(move || {
+        let found = crate::structure::similar::FOUND.lock().unwrap();
+        let Some(f) = found.as_ref().filter(|f| f.token == token && f.z == z) else {
+            anyhow::bail!("没有可以加入的候选");
+        };
+        let mut e = e.lock().unwrap();
+        let l = &mut e.labels;
+        let w = l.w;
+        let mut mask = vec![false; w * l.h];
+        let mut marks = vec![];
+        for o in keep.iter().filter_map(|&k| f.items.get(k)) {
+            let [x0, y0, bw, _] = o.rect;
+            for (i, _) in o.mask.iter().enumerate().filter(|(_, m)| **m) {
+                mask[(y0 + i / bw) * w + x0 + i % bw] = true;
+            }
+            marks.extend(o.marks.iter().cloned());
+        }
+        let zs = l.apply_mask(z, &mask, label, guard, false);
+        if !marks.is_empty() {
+            let mut mats = l.materials.clone();
+            if let Some(x) = mats.iter_mut().find(|x| x.label == label) {
+                x.marks.extend(marks.iter().cloned());
+            }
+            l.set_materials(mats);
+        }
+        Ok(Refined { state: labels_state(&e, zs), marks, note: String::new() })
+    })
+    .await
+}
+
+#[tauri::command]
+fn labels_follow_cancel() {
+    crate::structure::follow::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Writes the label file when it changed; returns whether a file exists now.
 #[tauri::command]
 async fn labels_save(state: State<'_, AppState>, token: u64) -> CmdResult<bool> {
@@ -3977,6 +4108,10 @@ pub fn run() {
             labels_slice,
             labels_edit,
             labels_refine,
+            labels_follow_z,
+            labels_follow_cancel,
+            labels_similar_lines,
+            labels_similar_lines_apply,
             labels_save,
             labels_volume,
             labels_surfaces,

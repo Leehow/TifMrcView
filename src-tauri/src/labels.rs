@@ -104,6 +104,32 @@ pub struct Material {
     /// Refined objects of this layer (line and side of each membrane...).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<Mark>,
+    /// Where 沿 Z 找全 and 找所有类似 look for this layer's objects (the
+    /// layer's context menu 设定范围); none = the whole image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<SearchRange>,
+}
+
+/// A search range: a loop drawn on the image (empty = the whole slice) and
+/// the slices from `z0` to `z1` (both included).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchRange {
+    pub poly: Vec<[f32; 2]>,
+    pub z0: usize,
+    pub z1: usize,
+}
+
+impl SearchRange {
+    /// Pixels of a `w`×`h` slice inside the loop (all when there is none).
+    pub fn mask(&self, w: usize, h: usize) -> Vec<bool> {
+        if self.poly.len() < 3 {
+            return vec![true; w * h];
+        }
+        let mut tmp = Labels::new(w, h, 1);
+        tmp.polygon(0, &self.poly, 1, 0);
+        tmp.slice(0).map_or_else(|| vec![false; w * h], |s| s.iter().map(|&v| v == 1).collect())
+    }
 }
 
 /// One refined object: its centre line on slice `z` (image pixels), its

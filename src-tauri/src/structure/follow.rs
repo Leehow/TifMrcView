@@ -1,0 +1,319 @@
+//! 沿 Z 找全: carries the objects a layer has on one slice through the stack.
+//!
+//! No new detector: on each next slice the object found on the slice before
+//! is the rough paint, and the same refinement the user's type click runs
+//! (`refine`) finds it there. A membrane moves a little from slice to slice,
+//! so the band the line engine searches (a paint width beyond the paint)
+//! follows it; where the object fades out, shrinks to nothing or jumps away
+//! the following stops on that side.
+
+use super::{refine, Outcome};
+use crate::labels::{edt, Labels, Mark, SearchRange, Values};
+use anyhow::Result;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+pub static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Types refined into lines: the next slice's paint is the line found,
+/// widened a little; the written pixels are the lines only (not the rough
+/// paint the engine keeps where a stretch is unclear).
+fn is_line(structure: &str) -> bool {
+    matches!(structure, "membrane" | "membrane2" | "fibre" | "shell")
+}
+
+pub struct Followed {
+    /// Pixels to write per slice (only slices other than the start).
+    pub slices: BTreeMap<usize, Vec<bool>>,
+    /// The objects found on those slices.
+    pub marks: Vec<Mark>,
+    /// Lowest and highest slice reached.
+    pub range: (usize, usize),
+}
+
+/// Slices read once: the line engine averages a few neighbours, so each
+/// step would otherwise read five slices again.
+pub(super) struct Cached<'a> {
+    pub(super) vals: &'a dyn Values,
+    pub(super) keep: Mutex<Vec<(usize, Vec<f32>)>>,
+}
+
+impl Values for Cached<'_> {
+    fn slice(&self, z: usize) -> Result<Vec<f32>> {
+        if let Some((_, v)) = self.keep.lock().unwrap().iter().find(|(k, _)| *k == z) {
+            return Ok(v.clone());
+        }
+        let v = self.vals.slice(z)?;
+        let mut k = self.keep.lock().unwrap();
+        if k.len() >= 12 {
+            k.remove(0);
+        }
+        k.push((z, v.clone()));
+        Ok(v)
+    }
+}
+
+/// How far (pixels) a line may grow at each end from one slice to the next.
+const EXTEND: f32 = 10.0;
+
+/// An open line made `e` pixels longer at both ends, straight on.
+fn extended(m: &Mark, e: f32) -> Mark {
+    let p = &m.path;
+    if m.closed || p.len() < 2 {
+        return m.clone();
+    }
+    let k = 3.min(p.len() - 1);
+    let out = |a: [f32; 2], b: [f32; 2]| {
+        let (dx, dy) = (a[0] - b[0], a[1] - b[1]);
+        let n = (dx * dx + dy * dy).sqrt().max(1e-6);
+        [a[0] + dx / n * e, a[1] + dy / n * e]
+    };
+    let mut path = vec![out(p[0], p[k])];
+    path.extend(p.iter().copied());
+    path.push(out(p[p.len() - 1], p[p.len() - 1 - k]));
+    Mark { path, ..m.clone() }
+}
+
+/// The pixels of refined lines.
+pub(super) fn rasterize(w: usize, h: usize, marks: &[Mark]) -> Vec<bool> {
+    let mut tmp = Labels::new(w, h, 1);
+    for m in marks {
+        let mut pts = m.path.clone();
+        if m.closed && pts.len() > 2 {
+            pts.push(pts[0]);
+        }
+        tmp.stroke(0, &pts, (m.thickness / 2.0).max(0.75), 1, 0);
+    }
+    tmp.slice(0).map_or_else(|| vec![false; w * h], |s| s.iter().map(|&v| v == 1).collect())
+}
+
+fn count(m: &[bool]) -> usize {
+    m.iter().filter(|&&b| b).count()
+}
+
+/// Inside-normal (unit) of mark `m` near point `p`, and the distance to it.
+fn normal_near(m: &Mark, p: [f32; 2]) -> Option<([f32; 2], f32)> {
+    if m.path.len() < 2 {
+        return None;
+    }
+    let (k, d) = m.path.iter().enumerate().map(|(k, q)| (k, (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2))).min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let (q0, q1) = (m.path[k.saturating_sub(1)], m.path[(k + 1).min(m.path.len() - 1)]);
+    let (tx, ty) = (q1[0] - q0[0], q1[1] - q0[1]);
+    let n = (tx * tx + ty * ty).sqrt().max(1e-6);
+    // Left of the direction of travel (image y down), as the panel reads it.
+    Some(([-ty / n, tx / n], d.sqrt()))
+}
+
+/// Gives each new open line the inside of the line it came from: the side
+/// is a direction in the image, the new path may run the other way.
+fn carry_inside(new: &mut [Mark], old: &[Mark]) {
+    for m in new.iter_mut().filter(|m| !m.closed && m.path.len() >= 2) {
+        let mid = m.path[m.path.len() / 2];
+        let from = old.iter().filter(|o| o.inside != 0 && !o.closed).filter_map(|o| normal_near(o, mid).map(|(n, d)| (o, n, d))).min_by(|a, b| a.2.total_cmp(&b.2));
+        let (Some((o, n_old, _)), Some((n_new, _))) = (from, normal_near(m, mid)) else { continue };
+        let dot = n_old[0] * n_new[0] + n_old[1] * n_new[1];
+        m.inside = if dot >= 0.0 { o.inside } else { -o.inside };
+    }
+}
+
+/// Follows every object of `start` (pixels of the layer on slice `z0`,
+/// pieces within `gap` are one object; `marks`: the layer's refined objects
+/// on `z0`) up and down the stack as `structure`. `progress(slices done)`.
+pub fn follow_z(vals: &dyn Values, dims: (usize, usize, usize), z0: usize, start: &[bool], marks: &[Mark], structure: &str, range: Option<&SearchRange>, progress: &dyn Fn(usize)) -> Result<Followed> {
+    let (w, h, d) = dims;
+    // Only inside the layer's range, when it has one.
+    let inside = range.map(|r| r.mask(w, h));
+    let (zlo, zhi) = range.map_or((0, d - 1), |r| (r.z0.min(d - 1), r.z1.min(d - 1).max(r.z0.min(d - 1))));
+    let vals = Cached { vals, keep: Mutex::new(vec![]) };
+    let line = is_line(structure);
+    // Two lines of a double membrane are one object: join across their gap.
+    let thick = marks.iter().map(|m| m.thickness).fold(2f32, f32::max);
+    let spacing = if structure == "membrane2" && marks.len() >= 2 {
+        let a = rasterize(w, h, &marks[..1]);
+        let da = edt(&a, w, h);
+        let b = rasterize(w, h, &marks[1..]);
+        let mut ds: Vec<f32> = b.iter().enumerate().filter(|(_, &v)| v).map(|(i, _)| da[i]).filter(|v| *v < 60.0).collect();
+        ds.sort_by(f32::total_cmp);
+        ds.get(ds.len() / 2).copied().unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let gap = (2.0 * thick).max(6.0).max(spacing + 4.0);
+    let near0 = edt(start, w, h);
+    let objects = crate::labels::components_where(w, h, |i| near0[i] <= gap / 2.0);
+
+    let mut out: BTreeMap<usize, Vec<bool>> = BTreeMap::new();
+    let mut found = vec![];
+    let mut range = (z0, z0);
+    let mut steps = 0usize;
+    for part in objects {
+        let px: Vec<usize> = part.into_iter().filter(|&i| start[i]).collect();
+        if px.len() < 6 {
+            continue;
+        }
+        let mut obj = vec![false; w * h];
+        px.iter().for_each(|&i| obj[i] = true);
+        let near_obj = edt(&obj, w, h);
+        let own: Vec<Mark> = marks
+            .iter()
+            .filter(|m| m.path.iter().any(|p| {
+                let (x, y) = (p[0] as usize, p[1] as usize);
+                x < w && y < h && near_obj[y * w + x] <= gap
+            }))
+            .cloned()
+            .collect();
+        // The object on its first slice, as the engine draws it.
+        let first = if line && !own.is_empty() { rasterize(w, h, &own) } else { obj.clone() };
+        let n0 = count(&first).max(1);
+        for dir in [-1i64, 1] {
+            let (mut prev, mut prev_marks) = (first.clone(), own.clone());
+            let mut z = z0 as i64 + dir;
+            while z >= zlo as i64 && z <= zhi as i64 {
+                if CANCEL.load(Ordering::Relaxed) {
+                    return Ok(Followed { slices: out, marks: found, range });
+                }
+                let zu = z as usize;
+                // A line's paint is the line before, a little wider so the band
+                // may slide with it and longer at its ends so it is not cut a
+                // little shorter on every slice (the trimmed ends grow back
+                // where the line goes on). A filled object is its own outline.
+                let paint: Vec<bool> = if line && !prev_marks.is_empty() {
+                    let longer: Vec<Mark> = prev_marks.iter().map(|m| extended(m, EXTEND)).collect();
+                    let base = rasterize(w, h, &longer);
+                    edt(&base, w, h).iter().map(|&v| v <= 1.5 + spacing / 2.0).collect()
+                } else {
+                    prev.clone()
+                };
+                let dist = edt(&paint, w, h);
+                let r = refine(&vals, dims, zu, &paint, gap, structure)?;
+                let Outcome::Done(mask, mut new_marks, _) = r else { break };
+                if new_marks.is_empty() && line {
+                    break;
+                }
+                let mut new = if line { rasterize(w, h, &new_marks) } else { mask };
+                if let Some(m) = &inside {
+                    new.iter_mut().zip(m).for_each(|(v, &k)| *v &= k);
+                }
+                let n = count(&new);
+                // Faded (much less of it left), grown into something else,
+                // or jumped away from where it was.
+                if n < (0.35 * n0 as f32) as usize || 2 * n < count(&prev) || n > 3 * count(&prev) + 50 {
+                    break;
+                }
+                let reach = (2.0 * thick).max(5.0) + spacing;
+                let close = new.iter().zip(&dist).filter(|(&v, &dd)| v && dd <= reach).count();
+                if (close as f32) < 0.7 * n as f32 {
+                    break;
+                }
+                for m in new_marks.iter_mut() {
+                    m.z = zu;
+                }
+                if structure != "shell" {
+                    carry_inside(&mut new_marks, &prev_marks);
+                }
+                let slot = out.entry(zu).or_insert_with(|| vec![false; w * h]);
+                slot.iter_mut().zip(&new).for_each(|(o, &v)| *o |= v);
+                found.extend(new_marks.iter().cloned());
+                range = (range.0.min(zu), range.1.max(zu));
+                steps += 1;
+                progress(steps);
+                prev = new;
+                prev_marks = new_marks;
+                z += dir;
+            }
+        }
+    }
+    Ok(Followed { slices: out, marks: found, range })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dark tilted line whose position drifts with z, on noise-free grey.
+    struct Tilted {
+        w: usize,
+        h: usize,
+        /// Slices where the line exists.
+        zs: std::ops::Range<usize>,
+    }
+
+    impl Values for Tilted {
+        fn slice(&self, z: usize) -> Result<Vec<f32>> {
+            let mut v = vec![0f32; self.w * self.h];
+            for y in 0..self.h {
+                for x in 0..self.w {
+                    // Hash noise so the robust scale is not zero.
+                    let n = (((x * 7919 + y * 104729 + z * 1299709) % 1000) as f32 / 1000.0 - 0.5) * 0.4;
+                    v[y * self.w + x] = 1.0 + n;
+                }
+            }
+            if self.zs.contains(&z) {
+                let off = z as f32 * 0.5;
+                for x in 10..self.w - 10 {
+                    let yc = 30.0 + off + x as f32 * 0.3;
+                    for y in 0..self.h {
+                        let dy = y as f32 + 0.5 - yc;
+                        v[y * self.w + x] -= 1.5 * (-dy * dy / (2.0 * 1.2 * 1.2)).exp();
+                    }
+                }
+            }
+            Ok(v)
+        }
+    }
+
+    #[test]
+    fn membrane_followed_until_it_ends() {
+        let (w, h, d) = (120usize, 120usize, 40usize);
+        let img = Tilted { w, h, zs: 5..30 };
+        let z0 = 15;
+        // The refined line on z0 (what a type click leaves).
+        let off = z0 as f32 * 0.5;
+        let path: Vec<[f32; 2]> = (12..108).step_by(3).map(|x| [x as f32 + 0.5, 30.0 + off + x as f32 * 0.3]).collect();
+        let mark = Mark { z: z0, path, thickness: 3.0, inside: 1, closed: false };
+        let start = rasterize(w, h, std::slice::from_ref(&mark));
+        CANCEL.store(false, Ordering::Relaxed);
+        let f = follow_z(&img, (w, h, d), z0, &start, &[mark], "membrane", None, &|_| {}).unwrap();
+        // Reaches near both ends of the line's range, not far past them.
+        assert!(f.range.0 <= 8 && f.range.0 >= 3, "low end {:?}", f.range);
+        assert!(f.range.1 >= 27 && f.range.1 <= 32, "high end {:?}", f.range);
+        // Each slice's line sits on the true line.
+        for m in f.marks.iter().filter(|m| (6..29).contains(&m.z)) {
+            let off = m.z as f32 * 0.5;
+            let err: f32 = m.path.iter().map(|p| (p[1] - (30.0 + off + (p[0] - 0.5) * 0.3)).abs()).sum::<f32>() / m.path.len() as f32;
+            assert!(err < 2.0, "z {} err {err}", m.z);
+            assert_eq!(m.inside, 1, "inside kept at z {}", m.z);
+        }
+    }
+
+    /// On real data: TMV_FOLLOW_IMG=<tomogram> [TMV_FOLLOW_Z=<0-based>]
+    /// cargo test --release --lib follow::tests::real -- --ignored --nocapture
+    /// Follows the first typed layer of the image's label file from the
+    /// slice holding its refined objects, and finds lines like them there.
+    #[test]
+    #[ignore]
+    fn real() {
+        let Ok(path) = std::env::var("TMV_FOLLOW_IMG") else { return };
+        let img = crate::image::OpenImage::new(1, crate::formats::open(std::path::Path::new(&path)).unwrap(), 256 << 20);
+        let info = img.info();
+        let (w, h, d) = (info.width, info.height, info.size_z);
+        let labels = Labels::load(std::path::Path::new(&crate::labels::labels_path(&path, 0)), w, h, d).unwrap();
+        let m = labels.materials.iter().find(|m| !m.structure.is_empty() && !m.marks.is_empty()).expect("a typed layer with refined objects");
+        let z = std::env::var("TMV_FOLLOW_Z").ok().and_then(|v| v.parse().ok()).unwrap_or(m.marks[0].z);
+        let marks: Vec<Mark> = m.marks.iter().filter(|k| k.z == z).cloned().collect();
+        let start: Vec<bool> = labels.slice(z).unwrap().iter().map(|&v| v == m.label).collect();
+        println!("{path}: {w}x{h}x{d}, layer {} ({}) z {z}: {} marks, {} px", m.name, m.structure, marks.len(), count(&start));
+        let vals = crate::labels::ChannelValues { img: img.clone(), c: 0, t: 0 };
+        let t0 = std::time::Instant::now();
+        let f = follow_z(&vals, (w, h, d), z, &start, &marks, &m.structure, None, &|_| {}).unwrap();
+        println!("follow: {} slices, range {:?}, {:.1} s", f.slices.len(), f.range, t0.elapsed().as_secs_f32());
+        for (zz, mk) in f.slices.iter().step_by(5) {
+            let ms: Vec<&Mark> = f.marks.iter().filter(|k| k.z == *zz).collect();
+            println!("  z {zz}: {} px, {} lines, thick {:?}, inside {:?}", count(mk), ms.len(), ms.iter().map(|k| k.thickness).collect::<Vec<_>>(), ms.iter().map(|k| k.inside).collect::<Vec<_>>());
+        }
+        let t0 = std::time::Instant::now();
+        let found = super::super::similar::lines(&vals, (w, h, d), z, &marks, &start, None, 200).unwrap();
+        println!("similar: {} candidates, {:.1} s; scores {:?}", found.len(), t0.elapsed().as_secs_f32(), found.iter().take(15).map(|c| (c.score * 100.0).round() / 100.0).collect::<Vec<_>>());
+    }
+}

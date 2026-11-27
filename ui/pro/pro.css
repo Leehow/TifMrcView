@@ -50,7 +50,7 @@
 #label-layers #lab-op { flex: 0 1 70px; min-width: 30px; width: 70px; }
 #label-layers .ll-btn { flex: none; width: 22px; height: 22px; padding: 0; justify-content: center; border: 0; background: none; box-shadow: none; color: var(--dim); font-size: 15px; line-height: 1; }
 #label-layers .ll-btn:hover { color: var(--accent); }
-#label-layers .ll-btn svg, #lab-list .eye svg, #lab-list .lock svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; }
+#label-layers .ll-btn svg, #lab-list .eye svg, #lab-list .lock svg, #lab-list .rng svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; }
 #label-layers .ll-btn.off { opacity: 0.4; }
 #lab-list { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--line); }
 #lab-list .lab-row { position: relative; display: flex; align-items: center; gap: 3px; min-height: 30px; padding: 0 2px 0 0; border: 1px solid transparent; border-bottom-color: var(--line); cursor: pointer; font-size: 12px; min-width: 0; }
@@ -70,7 +70,7 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #lab-list .name { flex: 1 1 4em; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #lab-list .name-edit { flex: 1 1 auto; min-width: 0; width: 0; font-size: 12px; padding: 1px 4px; }
 #lab-list .n { flex: none; min-width: 0; padding: 0 2px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-#lab-list .del, #lab-list .eye, #lab-list .lock { flex: none; width: 20px; height: 22px; padding: 0; justify-content: center; font-size: 11px; color: var(--faint); background: none; border: 0; box-shadow: none; }
+#lab-list .del, #lab-list .eye, #lab-list .lock, #lab-list .rng { flex: none; width: 20px; height: 22px; padding: 0; justify-content: center; font-size: 11px; color: var(--faint); background: none; border: 0; box-shadow: none; }
 #lab-list .del, #lab-list .lock { visibility: hidden; }
 #lab-list .lab-row:hover .del, #lab-list .lab-row:hover .lock, #lab-list .lab-row.locked .lock { visibility: visible; }
 #lab-list .del:hover, #lab-list .eye:hover, #lab-list .lock:hover { color: var(--accent); }
@@ -79,7 +79,7 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #lab-list .eye { color: var(--dim); }
 /* The bar beside the selected object and the bar of "find similar". */
 #lab-chips, #lab-cand { position: absolute; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); font-size: 12px; white-space: nowrap; }
-#lab-chips[hidden], #lab-cand[hidden] { display: none; }
+#lab-chips[hidden], #lab-cand[hidden], #lab-cand > [hidden] { display: none; }
 /* The bars belong to the 2D slice: none over the 3D view. */
 #stage:has(#vol3d:not([hidden])) :is(#lab-chips, #lab-cand) { display: none; }
 #lab-chips > button { height: 24px; padding: 0 8px; font-size: 12px; border: 0; box-shadow: none; background: none; border-radius: 5px; }
@@ -102,6 +102,17 @@ body[data-layer-focus="label"] .merge-layer-row.selected { background: none; bor
 #lab-types-note:empty { display: none; }
 #lab-side { gap: 4px; flex-wrap: wrap; }
 #lab-side[hidden] { display: none; }
+/* 三维: 沿 Z 找全 / 找所有类似, under 内外. */
+#lab-find { gap: 4px; flex-wrap: wrap; }
+#lab-find[hidden], #lab-find > [hidden] { display: none; }
+#lab-list .rng { color: var(--accent); }
+#lab-list .rng[hidden] { display: none; }
+/* Range of a layer being set: a bar over the image. */
+#lab-range-bar { position: absolute; z-index: 6; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); font-size: 12px; white-space: nowrap; }
+#lab-range-bar[hidden], #lab-range-bar [hidden] { display: none; }
+#lab-range-bar .z { display: flex; align-items: center; gap: 4px; color: var(--dim); }
+#lab-range-bar input[type="number"] { width: 56px; }
+#stage:has(#vol3d:not([hidden])) #lab-range-bar { display: none; }
 #lab-side > button.on { background: var(--accent); color: #fff; }
 #lab-list select.ty { flex: none; width: auto; max-width: 70px; height: 20px; padding: 0 2px; font-size: 11px; border: 0; background: none; color: var(--dim); box-shadow: none; }
 #lab-list select.ty.unset { opacity: 0; }
