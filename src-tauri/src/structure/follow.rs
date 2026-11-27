@@ -212,7 +212,9 @@ pub fn follow_z(vals: &dyn Values, dims: (usize, usize, usize), z0: usize, start
                 let n = count(&new);
                 // Faded (much less of it left), grown into something else,
                 // or jumped away from where it was.
-                if n < (0.35 * n0 as f32) as usize || 2 * n < count(&prev) || n > 3 * count(&prev) + 50 {
+                // A sudden halving counts only when little is left (one of two
+                // lines of an object ending is no reason to drop the other).
+                if n < (0.35 * n0 as f32) as usize || (2 * n < count(&prev) && 10 * n < 6 * n0) || n > 3 * count(&prev) + 50 {
                     break;
                 }
                 // A line that turns into a broad smear (end of the lamella,
