@@ -41,6 +41,13 @@ USAGE
          | --template map.mrc | --auto] [--out DIR] [--pixel Å]
   tmv sta <tomogram> [MORE …] --kinds [--keep 1,3] [--out DIR]
                                  Sort the particles of a finished average into kinds
+  tmv sta <labelled tomogram> [MORE …] --membrane LAYER[,LAYER] [--out DIR]
+                                 Average the membrane itself from the user's
+                                 单层膜/双层膜 label layers (label number or name):
+                                 patches that do not look like the membrane are
+                                 left out and listed; <out>/membrane/ gets
+                                 membrane.json, profile.csv, patches.csv and the
+                                 average patch (also from the tilt images)
   tmv membranes <tomogram.mrc>   Membranes, vesicles and microtubules → label map
         [--model membrain.ckpt]
   tmv spa <folder>               One-click single-particle analysis
@@ -808,6 +815,76 @@ fn sta_mode(o: &Opts) -> Result<StaMode> {
     })
 }
 
+/// `tmv sta IMAGE --membrane LAYER[,LAYER]`: the membrane itself averaged
+/// from the user's label layers (`sta::bilayer`): every labelled membrane is
+/// cut into patches, patches whose profile across the membrane does not look
+/// like the others are left out (each listed with the reason), and the rest
+/// are averaged, on the tomogram and, when the tilt series is on record,
+/// from the tilt images. LAYER is a label number or a layer name of each
+/// input's label file.
+fn sta_membrane(layers: &str, found: &[auto_sta::Resolved], sources: &[crate::sta::project::Source], out: &Path, progress: &Progress, tomograms: Vec<Value>) -> Result<Value> {
+    use crate::sta::{bilayer, layers as sl};
+    let mut ticked: Vec<(String, u16)> = vec![];
+    for f in found {
+        let have = sl::layers_of(std::slice::from_ref(&f.input));
+        if have.is_empty() {
+            bail!("{} has no label layers (paint and refine membranes with the label brush first)", f.input);
+        }
+        for want in layers.split(',').map(str::trim).filter(|w| !w.is_empty()) {
+            let hit = have.iter().find(|l| want.parse::<u16>().ok() == Some(l.label) || l.name == want);
+            match hit {
+                Some(l) => ticked.push((f.input.clone(), l.label)),
+                None => bail!(
+                    "{}: no layer `{want}` (layers: {})",
+                    f.input,
+                    have.iter().map(|l| format!("{} {} ({})", l.label, l.name, l.structure)).collect::<Vec<_>>().join(", ")
+                ),
+            }
+        }
+    }
+    let given = bilayer::given(&ticked)?;
+    let inputs: Vec<String> = found.iter().map(|f| f.input.clone()).collect();
+    let report = bilayer::run(sources, &inputs, &given, &out.to_string_lossy(), &|s, i, n| progress.report(s, i, n))?;
+    progress.done();
+    let line = |thick: Option<f64>, leaf: Option<f64>, side: &str| {
+        format!(
+            "thickness {}, leaflets {}, denser side {side}",
+            thick.map_or("?".into(), |t| format!("{t:.0} Å")),
+            leaf.map_or("not resolved".into(), |l| format!("{l:.0} Å apart"))
+        )
+    };
+    eprintln!(
+        "tmv sta: membrane: {} of {} patches kept ({} membranes); tomogram ({:.1} Å voxel): {}",
+        report.kept,
+        report.patches,
+        report.membranes.len(),
+        report.voxel_a,
+        line(report.thickness_a, report.leaflets_a, &report.denser_side)
+    );
+    if let Some(f) = &report.fine {
+        eprintln!("tmv sta: membrane from the tilt images ({:.2} Å voxel): {}", f.voxel_a, line(f.thickness_a, f.leaflets_a, &f.denser_side));
+    }
+    for (i, m) in report.membranes.iter().enumerate() {
+        eprintln!(
+            "  membrane {} ({}, z {:.0}–{:.0}): {} kept, {} unlike, {} off, {} hidden, agreement {:.2}{}",
+            i + 1,
+            m.layer,
+            m.z[0],
+            m.z[1],
+            m.kept,
+            m.unlike,
+            m.off,
+            m.hidden,
+            m.score,
+            if m.side_doubt { ", inside/outside probably swapped" } else { "" }
+        );
+    }
+    let mut v = serde_json::to_value(&report)?;
+    v["tomograms"] = json!(tomograms);
+    v["open"] = json!(report.fine.as_ref().map(|f| f.map.clone()).or(report.map.clone()));
+    Ok(v)
+}
+
 /// `tmv sta --marks marks.json`: what the user marked (points, lines,
 /// surfaces, spheres, painted membranes), averaged as the workspace's
 /// "average what I marked" does (`sta::marks::run_marks`): points make a
@@ -1032,6 +1109,9 @@ fn sta(o: &Opts) -> Result<Value> {
         .map(|f| json!({ "input": f.input, "tomogram": f.tomogram, "look": f.look.as_ref().map(|l| &l.path), "tiltsDeg": f.tilts, "tiltsFrom": f.tilts_from }))
         .collect();
 
+    if let Some(layers) = o.get("membrane") {
+        return sta_membrane(layers, &found, &sources, &out, &progress, tomograms);
+    }
     if let StaMode::Find = mode {
         let cards = auto_sta::find(&sources, &out, &|| Ok(device()), &|s, i, n| progress.report(s, i, n), &|_| {}, &note)?;
         progress.done();

@@ -3773,6 +3773,24 @@ fn shell_weight(fsc: &[f64]) -> Vec<f64> {
     fsc.iter().enumerate().map(|(s, f)| if s >= 2 && s as f64 <= cut { (2.0 * f.max(0.0) / (1.0 + f.max(0.0))).sqrt() } else { 0.0 }).collect()
 }
 
+/// The average from the tilt images of places given with their turns
+/// (`(source, centre in voxels of the source tomogram, turn)`), halves
+/// alternating, on a grid of `n` voxels of `voxel` Å, nothing aligned: for
+/// places that are already where they belong (`bilayer`). Each source must
+/// have its tilt series (`Source::series`).
+pub(super) fn average_from_tilts(sources: &[Source], places: &[(usize, [f64; 3], Mat)], n: usize, voxel: f64, diameter_a: f64, progress: Progress) -> Result<super::refine::Aligned> {
+    if let Some(s) = sources.iter().find(|s| s.series.is_none()) {
+        bail!("{} 没有记录它在倾斜图像里的位置，不能从倾斜图像平均", s.path);
+    }
+    let cuts: Vec<Cut> = places
+        .iter()
+        .enumerate()
+        .map(|(i, (source, at, _))| Cut { source: *source, at: *at, bin: 1, score: 0.0, strength: 0.0, darkest: 0.0, half: (i % 2) as u8, cube: vec![] })
+        .collect();
+    let poses: Vec<Pose> = places.iter().map(|(_, _, r)| Pose { r: *r, t: [0.0; 3], score: 0.0 }).collect();
+    from_tilts(sources, &cuts, &poses, n, voxel, diameter_a, &[], None, false, progress)
+}
+
 /// The average of the aligned particles made from the tilt images (`tilt`),
 /// on the grid of `out` (voxels of `voxel` Å), with the same halves. With
 /// `refine` (the half maps at this `n` and `voxel`, and the shell weights)
