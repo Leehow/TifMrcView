@@ -68,6 +68,7 @@
   const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
   const LOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   const UNLOCK = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+  const RANGE_ICON = '<svg viewBox="0 0 24 24"><path d="M12 3c5 0 9 3.5 9 8s-4 8-9 8-9-3.5-9-8" stroke-dasharray="3 3"/><path d="M3 11c0-2 1-4 2.5-5.3"/></svg>';
   const GRIP = '<svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>';
 
   // ---------- panel ----------
@@ -323,6 +324,7 @@
         + `<button class="sw" title="改颜色"></button><span class="name" title="双击改名"></span>`
         + `<select class="ty" title="这个图层的结构类型">${TYPES.map(([t, n]) => `<option value="${t}">${t ? n : "未定类型"}</option>`).join("")}</select>`
         + `<span class="n dim"></span>`
+        + `<button class="rng" title="这个图层设了查找范围：点一下修改（右键菜单里可以清除）">${RANGE_ICON}</button>`
         + `<button class="lock" title="锁定：其他工具不会改动这个标签">${locked(k) ? LOCK : UNLOCK}</button>`
         + `<button class="del" title="删除这个标签">✕</button>`;
       const hex = "#" + colorOf(k).map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -334,11 +336,14 @@
       ty.classList.toggle("unset", !ty.value);
       ty.addEventListener("change", () => setMaterial(k, { structure: ty.value, name: mat(k).name || (ty.value ? typedName(ty.value) : "") }));
       row.querySelector(".del").hidden = !n;
+      row.querySelector(".rng").hidden = !mat(k).range;
+      row.addEventListener("contextmenu", (e) => layerMenu(e, k, row));
       row.querySelector(".grip").addEventListener("pointerdown", (e) => gripDown(e, k, row));
       row.addEventListener("click", (e) => {
         const b = e.target.closest("button, label, input, select, .grip");
         if (b && b.classList.contains("sw")) return pickColor(k, b, hex);
         if (b && b.classList.contains("del")) return deleteLabel(k);
+        if (b && b.classList.contains("rng")) return rangeStart(k);
         if (b && b.classList.contains("eye")) return setMaterial(k, { hidden: !hidden(k) });
         if (b && b.classList.contains("lock")) return setMaterial(k, { locked: !locked(k) });
         if (b) return;
@@ -447,9 +452,9 @@
   /** Changes labels' materials ({label: patch}) and stores them with the label file. */
   function setMaterials(patches) {
     const next = { ...L.materials };
-    for (const [k, patch] of Object.entries(patches)) next[k] = { label: +k, name: "", color: null, hidden: false, locked: false, order: null, structure: "", marks: [], ...mat(k), ...patch };
+    for (const [k, patch] of Object.entries(patches)) next[k] = { label: +k, name: "", color: null, hidden: false, locked: false, order: null, structure: "", marks: [], range: null, ...mat(k), ...patch };
     L.materials = next;
-    const list = Object.values(next).filter((m) => m.name || m.color || m.hidden || m.locked || m.order != null || m.structure || (m.marks && m.marks.length));
+    const list = Object.values(next).filter((m) => m.name || m.color || m.hidden || m.locked || m.order != null || m.structure || (m.marks && m.marks.length) || m.range);
     if (L.slice) repaint(0, 0, S.info.width, S.info.height);
     renderList();
     renderZMarks();
@@ -619,6 +624,7 @@
     drawPick(g);
     drawSelection(g);
     drawSides(g);
+    drawRange(g);
     placeChips();
     placeTypes();
     if (L.lasso && L.lasso.z === S.z && L.lasso.pts.length > 1) {
@@ -718,7 +724,8 @@
       if (st.zs.length || op.kind === "materials") scheduleSave();
       // A step labels.rs can undo goes into the app's shared history.
       // (Not one that replaces the step before it: sam_apply with `replace`.)
-      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label");
+      // L.undoMarks: the layer's objects before this step, put back on undo.
+      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label", L.undoMarks ? { px: true, ...L.undoMarks } : undefined);
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
       return res;
@@ -880,9 +887,33 @@
     g.restore();
   }
 
+  /** Undo or redo one step: pixels in labels.rs, and/or a layer's objects
+   *  (inside sides, lines found) kept in the step (swapped, so redo works). */
+  async function swapStep(d, kind) {
+    if (!d || d.px) await edit({ kind });
+    if (!d || !d.marks) return;
+    const cur = (mat(d.k).marks || []).slice();
+    await setMaterial(d.k, { marks: d.marks });
+    d.marks = cur;
+  }
+
+  /** Changes layer `k`'s objects as one undo step of its own. */
+  function setMarks(k, marks) {
+    ext.pushUndo("label", { k, marks: (mat(k).marks || []).slice() });
+    return setMaterial(k, { marks });
+  }
+
   ext.tools.label = {
     down(e, p) {
+      if (L.rangeEdit) {
+        L.rangeEdit.drawing = [p];
+        return draw();
+      }
       if (!ready()) return;
+      if (L.cand && L.sub !== "smart") {
+        candClick(p);
+        return;
+      }
       // A click (no drag) while asked for a membrane's inside names that side.
       if (L.askSide && L.askSide.z === S.z && ["brush", "lasso", "wand"].includes(L.sub)) {
         L.sideDown = { p, x: e.clientX, y: e.clientY, rough: e.shiftKey };
@@ -914,6 +945,12 @@
     },
     move(e, p) {
       L.hover = p;
+      const R = L.rangeEdit;
+      if (R && R.drawing) {
+        const a = R.drawing[R.drawing.length - 1];
+        if (Math.hypot(p[0] - a[0], p[1] - a[1]) * S.view.scale >= 2) R.drawing.push(p);
+        return draw();
+      }
       // The press while asked for a side became a drag: it is a new stroke.
       if (L.sideDown && Math.hypot(e.clientX - L.sideDown.x, e.clientY - L.sideDown.y) > 4 && L.slice && L.z === S.z) {
         const a = L.sideDown.p;
@@ -939,6 +976,13 @@
       draw();
     },
     up() {
+      const R = L.rangeEdit;
+      if (R && R.drawing) {
+        if (R.drawing.length > 2) R.poly = R.drawing.map(([x, y]) => [+x.toFixed(1), +y.toFixed(1)]);
+        R.drawing = null;
+        syncRange();
+        return draw();
+      }
       if (L.sideDown) {
         const p = L.sideDown.p;
         L.sideDown = null;
@@ -970,17 +1014,17 @@
       });
     },
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
-    undo() {
+    undo(h) {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       L.typeBar = null;
       L.askSide = null;
-      edit({ kind: "undo" });
+      swapStep(h && h.data, "undo");
     },
-    redo() {
+    redo(h) {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       L.typeBar = null;
       L.askSide = null;
-      edit({ kind: "redo" });
+      swapStep(h && h.data, "redo");
     },
     active(on) {
       btn.classList.toggle("on", on);
@@ -1083,6 +1127,7 @@
     types.hidden = !["brush", "lasso", "wand"].includes(L.sub);
     if (types.hidden) {
       if ($("lab-side")) $("lab-side").hidden = true;
+      if ($("lab-find")) $("lab-find").hidden = true;
       return;
     }
     const b = typeTarget();
@@ -1096,6 +1141,7 @@
     }
     $("lab-types-note").textContent = !paint ? "先用画笔、套索或魔棒涂上当前标签，再点类型" : busy ? "精修中…" : b === L.typeBar ? "" : "点类型：精修当前标签在这一层还没精修的涂抹";
     if ($("lab-side")) syncSide();
+    if ($("lab-find")) syncFind();
   }
 
   /** What a type click acts on: all of the active layer's unrefined paint
@@ -1214,8 +1260,212 @@
   const side = document.createElement("div");
   side.id = "lab-side";
   side.className = "row";
-  side.innerHTML = '<span class="dim">内外</span><button class="small" id="lab-side-pick" title="然后在图上膜的里面一侧点一下">点选膜内</button><button class="small" id="lab-side-flip" title="把膜内和膜外对调">翻转</button><span class="dim" id="lab-side-note"></span>';
+  side.innerHTML = '<span class="dim">内外</span><button class="small" id="lab-side-pick" title="然后在图上某条膜的里面一侧点一下，只改离你点的地方最近的那一条膜">点选膜内</button><button class="small" id="lab-side-flip" title="把刚才点选的那条膜的内外对调（没点选过就是这一层所有膜）">翻转</button><span class="dim" id="lab-side-note"></span>';
   $("lab-types").after(side);
+
+  // ---------- 三维: 沿 Z 找全 / 找所有类似 (structure/follow.rs, similar.rs) ----------
+  //
+  // A row under 内外. Both act on the active layer, with its structure type,
+  // from the objects it has on the shown slice, and only inside the layer's
+  // range when it has one (layer context menu → 设定范围).
+
+  const find = document.createElement("div");
+  find.id = "lab-find";
+  find.className = "row";
+  find.innerHTML = '<span class="dim">三维</span><button class="small" id="lab-follow" title="从这一层开始，用同样的精修逐层往上、往下跟着这个图层的物体走，直到它淡掉或断开（Esc 停止，可以一步撤回）">沿 Z 找全</button><button class="small" id="lab-similar" title="把这一层精修好的物体当例子，在这一层（有范围就在范围里）找出所有类似的，挑掉不对的再全部加入">找所有类似</button><span class="dim" id="lab-find-note"></span>';
+  side.after(find);
+
+  const LINE_TYPES = new Set(["membrane", "membrane2", "fibre", "shell"]);
+  const rangeText = (r) => {
+    if (!r) return "";
+    const zs = S.info && S.info.sizeZ > 1 && (r.z0 > 0 || r.z1 < S.info.sizeZ - 1) ? `第 ${r.z0 + 1}–${r.z1 + 1} 层` : "";
+    return "范围：" + [r.poly && r.poly.length > 2 ? "圈内" : "", zs].filter(Boolean).join(" · ");
+  };
+
+  function syncFind() {
+    find.hidden = types.hidden;
+    if (find.hidden) return;
+    const k = L.active, st = structureOf(k), stack = S.info && S.info.sizeZ > 1;
+    const has = S.axis === "xy" && L.token === S.token && !!L.slice && L.z === S.z && L.slice.includes(k);
+    const busy = L.busy || !!L.follow || !!(L.cand && L.cand.busy) || L.sam.busy;
+    $("lab-follow").hidden = !stack;
+    $("lab-follow").disabled = !st || !has || busy;
+    $("lab-similar").disabled = !st || !has || busy || !!L.cand;
+    const r = mat(k).range;
+    $("lab-find-note").textContent = L.follow ? (L.follow.stage === "learn" ? `正在学你画的样子，逐层识别… ${L.follow.done}/${L.follow.total}（Esc 停止）` : `正在沿 Z 画… 已画 ${L.follow.done} 层（Esc 停止）`)
+      : !st ? "先给图层选结构类型" : !has ? "这一层还没有这个图层的物体" : rangeText(r);
+  }
+
+  async function followZ() {
+    const k = L.active;
+    if (L.follow || L.busy) return;
+    L.follow = { done: 0 };
+    syncFind();
+    const un = await T.event.listen("labels-follow", (ev) => { if (L.follow) { Object.assign(L.follow, { done: ev.payload.done, total: ev.payload.total || 0, stage: ev.payload.stage || "" }); syncFind(); } });
+    try {
+      L.undoMarks = { k, marks: (mat(k).marks || []).slice() };
+      const res = await editWith("labels_follow_z", { token: L.token, c: channel(), t: S.t, z: S.z, label: k, guard: L.guard ? k : 0 });
+      if (res && res.note) toast(res.note, 5000);
+    } finally {
+      L.undoMarks = null;
+      un();
+      L.follow = null;
+      syncPanel();
+      draw();
+    }
+  }
+  $("lab-follow").addEventListener("click", followZ);
+  $("lab-similar").addEventListener("click", () => findSimilarLayer());
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && L.follow) { invoke("labels_follow_cancel"); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
+  // ---------- range of a layer: where its objects are looked for ----------
+  //
+  // Layer row → right click → 设定范围…: a loop drawn on the image (outside
+  // dims) and the slices from / to, in a bar over the image. Stored with the
+  // layer (Material.range) in the label file.
+
+  function layerMenu(e, k, row) {
+    e.preventDefault();
+    L.active = k;
+    for (const r of $("lab-list").querySelectorAll(".lab-row")) r.classList.toggle("on", r === row);
+    focusLabels();
+    const items = [{ value: "range", label: mat(k).range ? "修改范围…" : "设定范围…", hint: "圈出区域和 Z" }];
+    if (mat(k).range) items.push({ value: "clear", label: "清除范围" });
+    items.push({ value: "rename", label: "改名" });
+    if (L.counts[k] > 0) items.push({ value: "del", label: "删除图层" });
+    openMenu(row, items, (v) => {
+      if (v === "range") rangeStart(k);
+      else if (v === "clear") setMaterial(k, { range: null });
+      else if (v === "rename") rename(k, row.querySelector(".name"));
+      else if (v === "del") deleteLabel(k);
+    });
+    const m = $("dropmenu");
+    m.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8))}px`;
+    m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
+  }
+
+  const rangeBar = document.createElement("div");
+  rangeBar.id = "lab-range-bar";
+  rangeBar.hidden = true;
+  rangeBar.innerHTML = `
+    <span id="lab-range-text"></span>
+    <span class="z">Z 从 <input type="number" id="lab-range-z0" min="1" /> <button class="small" id="lab-range-z0-here" title="从当前层开始">本层</button>
+    到 <input type="number" id="lab-range-z1" min="1" /> <button class="small" id="lab-range-z1-here" title="到当前层为止">本层</button></span>
+    <button class="small" id="lab-range-clear" title="去掉圈，整张图">不圈</button>
+    <button class="small" id="lab-range-cancel" title="不改（Esc）">取消</button>
+    <button class="small primary" id="lab-range-ok" title="保存这个范围（回车）">完成</button>`;
+  $("stage").append(rangeBar);
+  for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "wheel"]) rangeBar.addEventListener(type, (e) => e.stopPropagation());
+
+  function rangeStart(k) {
+    if (!S.info) return;
+    const d = S.info.sizeZ || 1, r = mat(k).range;
+    L.cand && candCancel();
+    L.rangeEdit = { k, poly: r && r.poly ? r.poly.slice() : [], z0: r ? r.z0 : 0, z1: r ? Math.min(r.z1, d - 1) : d - 1, drawing: null };
+    if (S.tool !== "label") setTool("label");
+    syncRange();
+    draw();
+  }
+
+  function syncRange() {
+    const R = L.rangeEdit;
+    rangeBar.hidden = !R;
+    if (!R) return;
+    const d = (S.info && S.info.sizeZ) || 1;
+    $("lab-range-text").textContent = `「${nameOf(R.k)}」的范围：${R.poly.length > 2 ? "可以重新圈" : "在图上圈出区域（不圈 = 整张图）"}`;
+    rangeBar.querySelector(".z").hidden = d < 2;
+    for (const [id, v] of [["lab-range-z0", R.z0], ["lab-range-z1", R.z1]]) {
+      const el = $(id);
+      el.max = d;
+      if (document.activeElement !== el) el.value = v + 1;
+    }
+    $("lab-range-clear").hidden = R.poly.length < 3;
+  }
+
+  function rangeEnd(save) {
+    const R = L.rangeEdit;
+    L.rangeEdit = null;
+    syncRange();
+    if (save && R) {
+      const d = (S.info && S.info.sizeZ) || 1;
+      const z0 = Math.max(0, Math.min(R.z0, R.z1)), z1 = Math.min(d - 1, Math.max(R.z0, R.z1));
+      const whole = R.poly.length < 3 && z0 === 0 && z1 === d - 1;
+      setMaterial(R.k, { range: whole ? null : { poly: R.poly.length > 2 ? R.poly : [], z0, z1 } });
+      if (!whole) toast("沿 Z 找全和找所有类似只会在这个范围里找", 3000);
+    }
+    draw();
+  }
+
+  const zInput = (id, key) => $(id).addEventListener("change", (e) => {
+    const R = L.rangeEdit, d = (S.info && S.info.sizeZ) || 1;
+    if (!R) return;
+    R[key] = Math.max(0, Math.min(d - 1, Math.round(+e.target.value || 1) - 1));
+    syncRange();
+  });
+  zInput("lab-range-z0", "z0");
+  zInput("lab-range-z1", "z1");
+  $("lab-range-z0-here").addEventListener("click", () => { if (L.rangeEdit) { L.rangeEdit.z0 = S.z; syncRange(); } });
+  $("lab-range-z1-here").addEventListener("click", () => { if (L.rangeEdit) { L.rangeEdit.z1 = S.z; syncRange(); } });
+  $("lab-range-clear").addEventListener("click", () => { if (L.rangeEdit) { L.rangeEdit.poly = []; syncRange(); draw(); } });
+  $("lab-range-cancel").addEventListener("click", () => rangeEnd(false));
+  $("lab-range-ok").addEventListener("click", () => rangeEnd(true));
+  window.addEventListener("keydown", (e) => {
+    if (!L.rangeEdit || e.target.tagName === "INPUT") return;
+    if (e.key === "Escape") { rangeEnd(false); e.preventDefault(); e.stopPropagation(); }
+    if (e.key === "Enter") { rangeEnd(true); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
+  /** The range being edited (dim outside), or the active layer's (dashed). */
+  function drawRange(g) {
+    if (S.axis !== "xy" || !S.info) return;
+    const R = L.rangeEdit;
+    const r = R ? R : S.tool === "label" ? mat(L.active).range : null;
+    if (!r) return;
+    const poly = R && R.drawing ? R.drawing : r.poly || [];
+    const inZ = S.z >= r.z0 && S.z <= r.z1;
+    const path = () => {
+      g.beginPath();
+      poly.forEach(([x, y], i) => {
+        const [sx, sy] = toScreen(x, y);
+        if (i) g.lineTo(sx, sy);
+        else g.moveTo(sx, sy);
+      });
+      if (!(R && R.drawing)) g.closePath();
+    };
+    g.save();
+    if (R) {
+      // Outside the range (or the whole slice when it is outside the Z range) dims.
+      const [ax, ay] = toScreen(0, 0), sc = S.view.scale;
+      g.beginPath();
+      g.rect(ax, ay, S.info.width * sc, S.info.height * sc);
+      if (inZ && poly.length > 2 && !R.drawing) {
+        poly.forEach(([x, y], i) => {
+          const [sx, sy] = toScreen(x, y);
+          if (i) g.lineTo(sx, sy);
+          else g.moveTo(sx, sy);
+        });
+        g.closePath();
+      }
+      if (!inZ || (poly.length > 2 && !R.drawing)) {
+        g.fillStyle = "rgba(0, 0, 0, 0.45)";
+        g.fill("evenodd");
+      }
+    }
+    if (poly.length > 1) {
+      path();
+      g.setLineDash([6, 4]);
+      g.lineWidth = 2.5;
+      g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+      g.stroke();
+      g.lineWidth = 1.3;
+      g.strokeStyle = R ? "#fff" : `rgb(${colorOf(L.active).join(",")})`;
+      if (!R && !inZ) g.globalAlpha = 0.35;
+      g.stroke();
+    }
+    g.restore();
+  }
 
   /** The membranes the side row acts on: [label, [mark index…]]. */
   function sideMarks() {
@@ -1240,7 +1490,7 @@
     $("lab-side-pick").disabled = !idxs.length || L.busy;
     $("lab-side-flip").disabled = !set || L.busy;
     $("lab-side-pick").classList.toggle("on", !!L.askSide);
-    $("lab-side-note").textContent = !idxs.length ? "这一层还没有精修好的膜" : L.askSide ? "在图上点一下膜内那一侧" : set === idxs.length ? "箭头指向膜外" : set ? "有的膜还没设内外" : "还没设内外";
+    $("lab-side-note").textContent = !idxs.length ? "这一层还没有精修好的膜" : L.askSide ? "在图上点一下某条膜里面的那一侧（只改那一条）" : set === idxs.length ? "箭头指向膜外" : set ? "有的膜还没设内外" : "还没设内外";
   }
 
   $("lab-side-pick").addEventListener("click", () => {
@@ -1251,35 +1501,54 @@
     draw();
   });
   $("lab-side-flip").addEventListener("click", () => {
-    const [label, idxs] = sideMarks();
+    // The membrane picked last on this slice, else all of them.
+    const last = L.sideLast && L.sideLast.z === S.z && L.sideLast.label === L.active ? L.sideLast : null;
+    const [label, idxs] = last ? [last.label, last.idxs] : sideMarks();
     const marks = (mat(label).marks || []).slice();
     for (const k of idxs) if (marks[k] && marks[k].inside) marks[k] = { ...marks[k], inside: -marks[k].inside };
-    setMaterial(label, { marks });
+    setMarks(label, marks);
   });
 
-  /** A click while waiting: the side of `p` is the inside of the membranes asked for. */
+  /** A click while waiting: the side of `p` is the inside of the membrane
+   *  nearest to it (its stretches: pieces of one line with a gap between
+   *  them where it was unclear), and only of that one. */
   function setSide(p) {
     const a = L.askSide;
     L.askSide = null;
-    // The stretches of one object run the same way, so the side read at the
-    // nearest one holds for all of them.
     const marks = (mat(a.label).marks || []).slice();
-    let m = null, best = 0, bd = Infinity;
-    for (const k of a.idxs) {
-      const mk = marks[k];
-      if (!mk || mk.path.length < 2) continue;
-      mk.path.forEach(([x, y], i) => {
+    const open = a.idxs.filter((k) => marks[k] && marks[k].path.length > 1 && !marks[k].closed);
+    let m = null, mk = -1, best = 0, bd = Infinity;
+    for (const k of open) {
+      marks[k].path.forEach(([x, y], i) => {
         const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
-        if (d < bd) { bd = d; best = i; m = mk; }
+        if (d < bd) { bd = d; best = i; m = marks[k]; mk = k; }
       });
     }
     if (!m) return draw();
+    // Stretches of the same line: an end of one near an end of the other.
+    const ends = (q) => [q.path[0], q.path[q.path.length - 1]];
+    const group = [mk];
+    for (let i = 0; i < group.length; i++) {
+      const g = marks[group[i]], lim = Math.max(14, 4 * (g.thickness || 3));
+      for (const k of open) {
+        if (group.includes(k)) continue;
+        if (ends(g).some((e) => ends(marks[k]).some((f) => Math.hypot(e[0] - f[0], e[1] - f[1]) <= lim))) group.push(k);
+      }
+    }
     const q0 = m.path[Math.max(0, best - 1)], q1 = m.path[Math.min(m.path.length - 1, best + 1)];
     const tx = q1[0] - q0[0], ty = q1[1] - q0[1];
     const vx = p[0] - m.path[best][0], vy = p[1] - m.path[best][1];
     const inside = tx * vy - ty * vx > 0 ? 1 : -1;
-    for (const k of a.idxs) if (marks[k] && !marks[k].closed) marks[k] = { ...marks[k], inside };
-    setMaterial(a.label, { marks });
+    // Stretches may run either way: each takes the side as a direction.
+    const nx = -ty * inside, ny = tx * inside;
+    for (const k of group) {
+      const g = marks[k], j = g.path.length >> 1;
+      const r0 = g.path[Math.max(0, j - 1)], r1 = g.path[Math.min(g.path.length - 1, j + 1)];
+      const left = -(r1[1] - r0[1]) * nx + (r1[0] - r0[0]) * ny;
+      marks[k] = { ...g, inside: k === mk ? inside : left >= 0 ? 1 : -1 };
+    }
+    L.sideLast = { z: a.z, label: a.label, idxs: group };
+    setMarks(a.label, marks);
   }
 
   /** Arrows from the inside of each membrane to its outside, on the shown slice. */
@@ -1686,6 +1955,89 @@
     $("lab-cand-thr").disabled = c.busy;
     $("lab-cand-ok").disabled = c.busy || !n;
     $("lab-cand-again").disabled = c.busy || !c.items.some((it) => it.off);
+    $("lab-cand-again").hidden = !!c.layer;
+    $("lab-cand-text").textContent = c.busy ? (c.layer ? "正在找所有类似…" : $("lab-cand-text").textContent) : `找到 ${n} 个`;
+  }
+
+  /** The boxes and masks of a candidates reply into `cand.items`. */
+  function readCands(buf, cand, rgb) {
+    const dv = new DataView(buf), n = dv.getUint32(0, true);
+    let o = 4;
+    for (let i = 0; i < n; i++) {
+      const [x, y, w, h] = [0, 4, 8, 12].map((d) => dv.getUint32(o + d, true));
+      const it = { i, x, y, w, h, score: dv.getFloat32(o + 16, true), mask: new Uint8Array(buf, o + 20, w * h), off: false, cv: null };
+      it.canvas = () => (it.cv ||= maskCanvas(w, h, it.mask, rgb, 90));
+      cand.items.push(it);
+      o += 20 + w * h;
+    }
+    return n;
+  }
+
+  /** Point in polygon (even-odd). */
+  function inPoly(poly, x, y) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  /** 找所有类似 for the active layer: its objects on this slice are the
+   *  examples. Lines (膜, 纤维, 空心球) with the line engine; filled objects
+   *  with the find-similar of the smart selection. Inside the layer's range. */
+  async function findSimilarLayer() {
+    const k = L.active, st = structureOf(k);
+    if (!st || L.cand || L.busy || L.sam.busy) return;
+    const r = mat(k).range;
+    if (r && (S.z < r.z0 || S.z > r.z1)) return toast(`这一层不在「${nameOf(k)}」的 Z 范围（第 ${r.z0 + 1}–${r.z1 + 1} 层）里`, 4000);
+    const lines = LINE_TYPES.has(st);
+    const cand = { z: S.z, label: k, items: [], thr: thrOf(CAND_START), busy: true, done: 0, total: 0, layer: lines ? "lines" : "sam" };
+    L.cand = cand;
+    L.sam.busy = true;
+    $("lab-cand-thr").value = CAND_START;
+    syncCand();
+    syncFind();
+    draw();
+    const un = await T.event.listen("sam-similar", (ev) => { if (L.cand === cand && cand.busy) { Object.assign(cand, ev.payload); syncCand(); } });
+    try {
+      let buf;
+      if (lines) {
+        buf = await invoke("labels_similar_lines", { token: L.token, c: channel(), t: S.t, z: S.z, label: k });
+      } else {
+        const c = S.chans[channel()];
+        const req = { token: S.token, z: S.z, c: channel(), t: S.t, lo: c.min ?? 0, hi: c.max ?? 1, denoise: samDenoise() };
+        buf = await invoke("sam_similar", { req, label: k, seed: null });
+      }
+      readCands(buf, cand, colorOf(k));
+      // Only inside the loop of the range.
+      if (r && r.poly && r.poly.length > 2) {
+        for (const it of cand.items) if (!inPoly(r.poly, it.x + it.w / 2, it.y + it.h / 2)) it.score = -1;
+      }
+      cand.busy = false;
+      const real = cand.items.filter((it) => it.score >= 0);
+      if (real.length && !candOn(cand).length) {
+        const best = Math.max(...real.map((it) => it.score));
+        const v = Math.min(1, Math.log(0.8 / (best * 0.6)) / Math.log(0.8 / 0.02));
+        $("lab-cand-thr").value = v;
+        cand.thr = Math.min(thrOf(v), best);
+      }
+      if (L.cand === cand && !real.length) {
+        L.cand = null;
+        toast(r ? "范围里没有找到类似的" : "这一层没有找到类似的", 4000);
+      }
+    } catch (e) {
+      if (L.cand === cand) {
+        L.cand = null;
+        toast(String(e), 6000);
+      }
+    } finally {
+      un();
+      L.sam.busy = false;
+      syncCand();
+      syncPanel();
+      draw();
+    }
   }
 
   /** `again`: another round, learning from what was kept and taken out. */
@@ -1741,7 +2093,7 @@
 
   function candCancel() {
     if (!L.cand) return;
-    if (L.cand.busy) invoke("sam_cancel");
+    if (L.cand.busy && L.cand.layer !== "lines") invoke("sam_cancel");
     L.cand = null;
     syncCand();
     draw();
@@ -1754,8 +2106,11 @@
     L.cand = null;
     syncCand();
     if (!keep.length) return draw();
-    const st = await editWith("sam_similar_apply", { token: L.token, z: c.z, label: c.label, guard: L.guard ? c.label : 0, keep });
-    if (st) toast(`加入了 ${keep.length} 个`, 3000);
+    const cmd = c.layer === "lines" ? "labels_similar_lines_apply" : "sam_similar_apply";
+    if (c.layer === "lines") L.undoMarks = { k: c.label, marks: (mat(c.label).marks || []).slice() };
+    const st = await editWith(cmd, { token: L.token, z: c.z, label: c.label, guard: L.guard ? c.label : 0, keep });
+    L.undoMarks = null;
+    if (st) toast(c.layer && S.info.sizeZ > 1 ? `加入了 ${keep.length} 个；要三维的话再点「沿 Z 找全」` : `加入了 ${keep.length} 个`, 4000);
   }
 
   /** A click on a proposal takes it out, another puts it back. */
@@ -1784,8 +2139,9 @@
   $("lab-cand-ok").addEventListener("click", candAccept);
 
   function drawPick(g) {
-    if (S.tool !== "label" || L.sub !== "smart" || S.axis !== "xy") return;
+    if (S.tool !== "label" || S.axis !== "xy") return;
     if (L.cand && L.cand.z !== S.z) candCancel();
+    if (L.sub !== "smart" && !L.cand) return;
     const sc = S.view.scale;
     const blit = (cv, x, y, alpha) => {
       const [sx, sy] = toScreen(x, y);
@@ -1798,10 +2154,10 @@
     if (c) {
       for (const it of c.items) if (it.score >= c.thr) blit(it.canvas(), it.x, it.y, it.off ? 0.22 : 1);
     }
-    const hv = L.pick.hover;
+    const hv = L.sub === "smart" && L.pick.hover;
     if (!c && hv && hv.z === S.z && !L.pick.path && !L.selDrag && !L.sam.busy) blit(hv.canvas, hv.x, hv.y, 1);
     g.globalAlpha = 1;
-    const pa = L.pick.path;
+    const pa = L.sub === "smart" && L.pick.path;
     if (pa && pa.z === S.z && pa.pts.length > 1) {
       g.beginPath();
       pa.pts.forEach(([x, y], i) => {
@@ -1819,6 +2175,15 @@
     }
     g.restore();
   }
+
+  // 找所有类似 with the brush, lasso or wand: Enter adds, Esc cancels.
+  window.addEventListener("keydown", (e) => {
+    if (S.tool !== "label" || L.sub === "smart" || !L.cand) return;
+    const t = e.target;
+    if (t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "INPUT" && t.type !== "range" && t.type !== "checkbox") return;
+    if (e.key === "Escape") { candCancel(); e.preventDefault(); e.stopPropagation(); }
+    else if (e.key === "Enter") { candAccept(); e.preventDefault(); e.stopPropagation(); }
+  });
 
   // Esc backs out one step, Enter accepts the proposals, Delete removes
   // the selected object.

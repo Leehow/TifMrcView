@@ -21,6 +21,10 @@ use crate::labels::{Labels, Mark, Values};
 use anyhow::Result;
 use serde::Deserialize;
 
+pub mod follow;
+pub mod similar;
+#[cfg(feature = "pro")]
+pub mod learn;
 mod line;
 mod region;
 

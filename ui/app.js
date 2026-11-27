@@ -88,7 +88,7 @@ const S = {
 // Tools and overlays added from outside this file (the Pro label tools):
 // tools[name] = {down(e, p), move(e, p), up(), undo(), redo(), active(on),
 // undoLocal(), context(e)}: undo/redo take back a step the tool recorded
-// with ext.pushUndo(name) (false: not now), undoLocal() a step of its own
+// with ext.pushUndo(name, data?) (the entry is passed back to undo(h)/redo(h); false: not now), undoLocal() a step of its own
 // that is not in the shared history yet, context(e) a right-click,
 // where p is the pointer in image pixels; overlays are f(ctx) drawn over the
 // image in screen coordinates, under the annotations.
@@ -96,9 +96,9 @@ const S = {
 const ext = { tools: {}, overlays: [], settings: [], specOverlays: [] };
 // Undo steps of tool extensions go into the shared history as markers, so
 // undo and redo follow the order things happened whatever tool is active.
-ext.pushUndo = (name) => {
+ext.pushUndo = (name, data) => {
   S.future = [];
-  S.history.push({ ext: name });
+  S.history.push(data === undefined ? { ext: name } : { ext: name, data });
   if (S.history.length > 200) S.history.shift();
 };
 
@@ -3141,7 +3141,7 @@ function undo() {
   const h = S.history.pop();
   if (!h) return;
   if (h.ext) {
-    if (ext.tools[h.ext].undo() === false) S.history.push(h);
+    if (ext.tools[h.ext].undo(h) === false) S.history.push(h);
     else S.future.push(h);
     return;
   }
@@ -3154,7 +3154,7 @@ function redo() {
   const h = S.future.pop();
   if (!h) return;
   if (h.ext) {
-    if (ext.tools[h.ext].redo() === false) S.future.push(h);
+    if (ext.tools[h.ext].redo(h) === false) S.future.push(h);
     else S.history.push(h);
     return;
   }
