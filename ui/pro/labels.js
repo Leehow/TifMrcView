@@ -724,7 +724,8 @@
       if (st.zs.length || op.kind === "materials") scheduleSave();
       // A step labels.rs can undo goes into the app's shared history.
       // (Not one that replaces the step before it: sam_apply with `replace`.)
-      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label");
+      // L.undoMarks: the layer's objects before this step, put back on undo.
+      if (st.zs.length && op.kind !== "undo" && op.kind !== "redo" && op.kind !== "materials" && !replaces) ext.pushUndo("label", L.undoMarks ? { px: true, ...L.undoMarks } : undefined);
       renderList();
       if (window.TifMrcViewPro.volume) window.TifMrcViewPro.volume.labelsChanged();
       return res;
@@ -886,6 +887,22 @@
     g.restore();
   }
 
+  /** Undo or redo one step: pixels in labels.rs, and/or a layer's objects
+   *  (inside sides, lines found) kept in the step (swapped, so redo works). */
+  async function swapStep(d, kind) {
+    if (!d || d.px) await edit({ kind });
+    if (!d || !d.marks) return;
+    const cur = (mat(d.k).marks || []).slice();
+    await setMaterial(d.k, { marks: d.marks });
+    d.marks = cur;
+  }
+
+  /** Changes layer `k`'s objects as one undo step of its own. */
+  function setMarks(k, marks) {
+    ext.pushUndo("label", { k, marks: (mat(k).marks || []).slice() });
+    return setMaterial(k, { marks });
+  }
+
   ext.tools.label = {
     down(e, p) {
       if (L.rangeEdit) {
@@ -997,17 +1014,17 @@
       });
     },
     // Steps recorded with ext.pushUndo; false while busy, so the app keeps the step.
-    undo() {
+    undo(h) {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       L.typeBar = null;
       L.askSide = null;
-      edit({ kind: "undo" });
+      swapStep(h && h.data, "undo");
     },
-    redo() {
+    redo(h) {
       if (L.busy || L.sam.busy || L.stroke || L.lasso || L.pick.path || L.selDrag || L.cls.stroke) return false;
       L.typeBar = null;
       L.askSide = null;
-      edit({ kind: "redo" });
+      swapStep(h && h.data, "redo");
     },
     active(on) {
       btn.classList.toggle("on", on);
@@ -1243,7 +1260,7 @@
   const side = document.createElement("div");
   side.id = "lab-side";
   side.className = "row";
-  side.innerHTML = '<span class="dim">内外</span><button class="small" id="lab-side-pick" title="然后在图上膜的里面一侧点一下">点选膜内</button><button class="small" id="lab-side-flip" title="把膜内和膜外对调">翻转</button><span class="dim" id="lab-side-note"></span>';
+  side.innerHTML = '<span class="dim">内外</span><button class="small" id="lab-side-pick" title="然后在图上某条膜的里面一侧点一下，只改离你点的地方最近的那一条膜">点选膜内</button><button class="small" id="lab-side-flip" title="把刚才点选的那条膜的内外对调（没点选过就是这一层所有膜）">翻转</button><span class="dim" id="lab-side-note"></span>';
   $("lab-types").after(side);
 
   // ---------- 三维: 沿 Z 找全 / 找所有类似 (structure/follow.rs, similar.rs) ----------
@@ -1286,9 +1303,11 @@
     syncFind();
     const un = await T.event.listen("labels-follow", (ev) => { if (L.follow) { L.follow.done = ev.payload.done; syncFind(); } });
     try {
+      L.undoMarks = { k, marks: (mat(k).marks || []).slice() };
       const res = await editWith("labels_follow_z", { token: L.token, c: channel(), t: S.t, z: S.z, label: k, guard: L.guard ? k : 0 });
       if (res && res.note) toast(res.note, 5000);
     } finally {
+      L.undoMarks = null;
       un();
       L.follow = null;
       syncPanel();
@@ -1471,7 +1490,7 @@
     $("lab-side-pick").disabled = !idxs.length || L.busy;
     $("lab-side-flip").disabled = !set || L.busy;
     $("lab-side-pick").classList.toggle("on", !!L.askSide);
-    $("lab-side-note").textContent = !idxs.length ? "这一层还没有精修好的膜" : L.askSide ? "在图上点一下膜内那一侧" : set === idxs.length ? "箭头指向膜外" : set ? "有的膜还没设内外" : "还没设内外";
+    $("lab-side-note").textContent = !idxs.length ? "这一层还没有精修好的膜" : L.askSide ? "在图上点一下某条膜里面的那一侧（只改那一条）" : set === idxs.length ? "箭头指向膜外" : set ? "有的膜还没设内外" : "还没设内外";
   }
 
   $("lab-side-pick").addEventListener("click", () => {
@@ -1482,35 +1501,54 @@
     draw();
   });
   $("lab-side-flip").addEventListener("click", () => {
-    const [label, idxs] = sideMarks();
+    // The membrane picked last on this slice, else all of them.
+    const last = L.sideLast && L.sideLast.z === S.z && L.sideLast.label === L.active ? L.sideLast : null;
+    const [label, idxs] = last ? [last.label, last.idxs] : sideMarks();
     const marks = (mat(label).marks || []).slice();
     for (const k of idxs) if (marks[k] && marks[k].inside) marks[k] = { ...marks[k], inside: -marks[k].inside };
-    setMaterial(label, { marks });
+    setMarks(label, marks);
   });
 
-  /** A click while waiting: the side of `p` is the inside of the membranes asked for. */
+  /** A click while waiting: the side of `p` is the inside of the membrane
+   *  nearest to it (its stretches: pieces of one line with a gap between
+   *  them where it was unclear), and only of that one. */
   function setSide(p) {
     const a = L.askSide;
     L.askSide = null;
-    // The stretches of one object run the same way, so the side read at the
-    // nearest one holds for all of them.
     const marks = (mat(a.label).marks || []).slice();
-    let m = null, best = 0, bd = Infinity;
-    for (const k of a.idxs) {
-      const mk = marks[k];
-      if (!mk || mk.path.length < 2) continue;
-      mk.path.forEach(([x, y], i) => {
+    const open = a.idxs.filter((k) => marks[k] && marks[k].path.length > 1 && !marks[k].closed);
+    let m = null, mk = -1, best = 0, bd = Infinity;
+    for (const k of open) {
+      marks[k].path.forEach(([x, y], i) => {
         const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
-        if (d < bd) { bd = d; best = i; m = mk; }
+        if (d < bd) { bd = d; best = i; m = marks[k]; mk = k; }
       });
     }
     if (!m) return draw();
+    // Stretches of the same line: an end of one near an end of the other.
+    const ends = (q) => [q.path[0], q.path[q.path.length - 1]];
+    const group = [mk];
+    for (let i = 0; i < group.length; i++) {
+      const g = marks[group[i]], lim = Math.max(14, 4 * (g.thickness || 3));
+      for (const k of open) {
+        if (group.includes(k)) continue;
+        if (ends(g).some((e) => ends(marks[k]).some((f) => Math.hypot(e[0] - f[0], e[1] - f[1]) <= lim))) group.push(k);
+      }
+    }
     const q0 = m.path[Math.max(0, best - 1)], q1 = m.path[Math.min(m.path.length - 1, best + 1)];
     const tx = q1[0] - q0[0], ty = q1[1] - q0[1];
     const vx = p[0] - m.path[best][0], vy = p[1] - m.path[best][1];
     const inside = tx * vy - ty * vx > 0 ? 1 : -1;
-    for (const k of a.idxs) if (marks[k] && !marks[k].closed) marks[k] = { ...marks[k], inside };
-    setMaterial(a.label, { marks });
+    // Stretches may run either way: each takes the side as a direction.
+    const nx = -ty * inside, ny = tx * inside;
+    for (const k of group) {
+      const g = marks[k], j = g.path.length >> 1;
+      const r0 = g.path[Math.max(0, j - 1)], r1 = g.path[Math.min(g.path.length - 1, j + 1)];
+      const left = -(r1[1] - r0[1]) * nx + (r1[0] - r0[0]) * ny;
+      marks[k] = { ...g, inside: k === mk ? inside : left >= 0 ? 1 : -1 };
+    }
+    L.sideLast = { z: a.z, label: a.label, idxs: group };
+    setMarks(a.label, marks);
   }
 
   /** Arrows from the inside of each membrane to its outside, on the shown slice. */
@@ -2069,7 +2107,9 @@
     syncCand();
     if (!keep.length) return draw();
     const cmd = c.layer === "lines" ? "labels_similar_lines_apply" : "sam_similar_apply";
+    if (c.layer === "lines") L.undoMarks = { k: c.label, marks: (mat(c.label).marks || []).slice() };
     const st = await editWith(cmd, { token: L.token, z: c.z, label: c.label, guard: L.guard ? c.label : 0, keep });
+    L.undoMarks = null;
     if (st) toast(c.layer && S.info.sizeZ > 1 ? `加入了 ${keep.length} 个；要三维的话再点「沿 Z 找全」` : `加入了 ${keep.length} 个`, 4000);
   }
 
