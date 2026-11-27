@@ -99,6 +99,8 @@ pub enum Out {
     Hidden,
     /// Too near the tomogram's edge to measure.
     Edge,
+    /// The user took the whole membrane out.
+    Dropped,
 }
 
 /// One patch.
@@ -137,6 +139,9 @@ pub struct Membrane {
     pub hidden: usize,
     /// Median agreement of its measured patches.
     pub score: f64,
+    /// The user took it out / turned it round (`Edits`).
+    pub dropped: bool,
+    pub flipped: bool,
     /// Its kept patches agree better with the common profile turned round:
     /// inside and outside are probably swapped on this membrane.
     pub side_doubt: bool,
@@ -411,6 +416,8 @@ pub fn read_profile(offsets: &[f64], p: &[f64]) -> (i8, Option<f64>, Option<f64>
 /// where it came from.
 pub struct Given {
     pub mark: Mark,
+    /// Turned round by the user (the mark's `flip` already says so).
+    pub flipped: bool,
     pub image: String,
     pub label: u16,
     pub layer: String,
@@ -429,7 +436,7 @@ pub fn given(ticked: &[(String, u16)]) -> Result<Vec<Given>> {
         }
         for mark in super::layers::marks_of(&[(image.clone(), *label)])? {
             if mark.kind == Kind::Surface {
-                out.push(Given { mark, image: image.clone(), label: *label, layer: layer.clone() });
+                out.push(Given { mark, flipped: false, image: image.clone(), label: *label, layer: layer.clone() });
             }
         }
     }
@@ -437,6 +444,72 @@ pub fn given(ticked: &[(String, u16)]) -> Result<Vec<Given>> {
         bail!("勾选的图层里没有膜");
     }
     Ok(out)
+}
+
+/// What the user changed on the check list: membranes (indices of `given`)
+/// turned round or taken out.
+#[derive(Clone, Debug, Default, serde::Deserialize, Serialize)]
+#[serde(default)]
+pub struct Edits {
+    pub flip: Vec<usize>,
+    pub drop: Vec<usize>,
+}
+
+/// The workspace's run: the ticked label layers ([image, label]; the image is
+/// a tomogram or its clear companion), averaged into `<out>/membrane/`. Gives
+/// the report and every patch as [membrane, x, y, z, result] on its image
+/// (result: 0 kept, 1 unlike, 2 off, 3 hidden, 4 edge, 5 dropped). The
+/// report and patches are also saved (`membrane.json`, `patches.csv`).
+pub fn run_ticked(ticked: &[(String, u16)], edits: &Edits, out: &str, progress: Progress) -> Result<serde_json::Value> {
+    let mut given = given(ticked)?;
+    for &k in &edits.flip {
+        if let Some(g) = given.get_mut(k) {
+            g.mark.flip = !g.mark.flip;
+            g.flipped = true;
+        }
+    }
+    let mut inputs: Vec<String> = vec![];
+    for (image, _) in ticked {
+        if !inputs.contains(image) {
+            inputs.push(image.clone());
+        }
+    }
+    let sources: Vec<Source> = inputs
+        .iter()
+        .map(|i| {
+            let tomogram = super::auto::raw_of_look(i)?.unwrap_or_else(|| i.clone());
+            let dataset = super::auto::dataset_of(&tomogram);
+            Ok(super::auto::resolve(i, tomogram, dataset, &|_| {}).source())
+        })
+        .collect::<Result<_>>()?;
+    let report = run(&sources, &inputs, &given, &edits.drop, out, progress)?;
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(Path::new(&report.dir).join("patches.csv"))
+        .unwrap_or_default()
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(',').collect();
+            // From the end: a layer's name may hold commas.
+            let n = f.len();
+            let num = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
+            if n < 14 {
+                return None;
+            }
+            let code = match *f.last()? {
+                "kept" => 0,
+                "unlike" => 1,
+                "off" => 2,
+                "hidden" => 3,
+                "edge" => 4,
+                _ => 5,
+            };
+            Some(serde_json::json!([num(0)? as usize - 1, num(n - 12)?, num(n - 11)?, num(n - 10)?, code]))
+        })
+        .collect();
+    std::fs::write(Path::new(&report.dir).join("edits.json"), serde_json::to_vec(edits)?)?;
+    let mut v = serde_json::to_value(&report)?;
+    v["patchList"] = serde_json::Value::Array(rows);
+    Ok(v)
 }
 
 /// Raw tomogram voxel → voxel of the image `image` (a look file of the
@@ -453,7 +526,7 @@ fn to_image(p: P, source: &Source, image: &str) -> P {
 /// Measures and averages the membranes `given` (in the tomograms
 /// `sources`; `inputs` are the images as the user gave them, in the same
 /// order) into `<out_dir>/membrane/`.
-pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str, progress: Progress) -> Result<Report> {
+pub fn run(sources: &[Source], inputs: &[String], given: &[Given], dropped: &[usize], out_dir: &str, progress: Progress) -> Result<Report> {
     let started = std::time::Instant::now();
     let dir = PathBuf::from(out_dir).join("membrane");
     std::fs::create_dir_all(&dir).with_context(|| format!("建不了文件夹 {}", dir.display()))?;
@@ -531,9 +604,9 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
                 normal: sd.axis,
                 score: 0.0,
                 slide_a: 0.0,
-                out: if measured[j].is_none() { Out::Edge } else if shows < HIDDEN { Out::Hidden } else { Out::Kept },
+                out: if dropped.contains(&m) { Out::Dropped } else if measured[j].is_none() { Out::Edge } else if shows < HIDDEN { Out::Hidden } else { Out::Kept },
             });
-            weights.push(if shows < HIDDEN { 0.0 } else { shows });
+            weights.push(if shows < HIDDEN || dropped.contains(&m) { 0.0 } else { shows });
             profiles.push(measured[j].clone());
             cubes_from.push((si, sd));
         }
@@ -569,7 +642,8 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
     // Per membrane.
     let mut membranes: Vec<Membrane> = given
         .iter()
-        .map(|g| {
+        .enumerate()
+        .map(|(m, g)| {
             let zs: Vec<f64> = g.mark.points.iter().map(|p| p[2]).collect();
             Membrane {
                 image: g.image.clone(),
@@ -582,6 +656,8 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
                 off: 0,
                 hidden: 0,
                 score: 0.0,
+                dropped: dropped.contains(&m),
+                flipped: g.flipped,
                 side_doubt: false,
                 profile: vec![],
             }
@@ -597,10 +673,10 @@ pub fn run(sources: &[Source], inputs: &[String], given: &[Given], out_dir: &str
                 Out::Unlike => mem.unlike += 1,
                 Out::Off => mem.off += 1,
                 Out::Hidden => mem.hidden += 1,
-                Out::Edge => {}
+                Out::Edge | Out::Dropped => {}
             }
         }
-        let measured: Vec<usize> = mine.iter().copied().filter(|&i| matches!(patches[i].out, Out::Kept | Out::Unlike | Out::Off)).collect();
+        let measured: Vec<usize> = mine.iter().copied().filter(|&i| matches!(patches[i].out, Out::Kept | Out::Unlike | Out::Off) || (patches[i].out == Out::Dropped && profiles[i].is_some())).collect();
         mem.score = median(&mut measured.iter().map(|&i| patches[i].score).collect::<Vec<_>>());
         let use_: Vec<usize> = if mine.iter().any(|&i| patches[i].out == Out::Kept) {
             mine.iter().copied().filter(|&i| patches[i].out == Out::Kept).collect()
@@ -780,6 +856,7 @@ fn save(dir: &Path, report: &Report, patches: &[Patch]) -> Result<()> {
             Out::Off => "off",
             Out::Hidden => "hidden",
             Out::Edge => "edge",
+            Out::Dropped => "dropped",
         };
         writeln!(
             f,

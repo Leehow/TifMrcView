@@ -744,6 +744,13 @@ dialog.cs-ask .danger { background:#cf222e; border-color:#cf222e; color:#fff; }
 #sta-layers .sta-layers-empty { border:1px dashed var(--line); border-radius:6px; padding:4px 8px; }
 #sta-layers .sta-layers-empty > summary { cursor:pointer; color:var(--dim); font-size:12px; }
 #sta-layers .sta-layers-empty .sta-layer-item { margin-top:6px; }
+#sta-layers .sta-membrane { margin-top:10px; padding:8px; border:1px solid var(--line); border-radius:6px; }
+#sta-layers .sta-membrane-svg { width:100%; max-width:340px; height:auto; display:block; }
+#sta-layers .sta-membrane-svg .curve { fill:none; stroke:var(--text); stroke-width:2; }
+#sta-layers .sta-membrane-svg .axis { stroke:var(--line); stroke-dasharray:3 3; }
+#sta-layers .sta-membrane-svg .lab { font-size:10px; fill:var(--dim); }
+#sta-layers .sta-membrane-rows { list-style:none; padding:0; margin:6px 0; display:flex; flex-direction:column; gap:4px; }
+#sta-layers .sta-membrane-rows li { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; }
 #sta-layers-warn { color:#9a6700; margin:4px 0; font-size:12px; }
 #sta-size-custom { width:76px; }
 #sta-opts-box { margin-top:8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--subtle); }

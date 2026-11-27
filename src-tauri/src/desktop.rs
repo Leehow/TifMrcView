@@ -3358,6 +3358,30 @@ async fn sta_label_layers(images: Vec<String>) -> CmdResult<Vec<crate::sta::laye
     blocking(move || Ok(crate::sta::layers::layers_of(&images))).await
 }
 
+/// The membrane itself (Pro): the membranes of the ticked label layers
+/// ([[image, label]…]) cut into patches, the ones unlike the membrane left
+/// out, the rest averaged (`sta::bilayer::run_ticked`) into `<out>/membrane`.
+/// `edits` {flip, drop}: membranes (by index of the last result) the user
+/// turned round or took out. Progress as `sta_run` (`sta-progress`).
+#[cfg(feature = "pro")]
+#[tauri::command]
+async fn sta_membrane_average(app: AppHandle, ticked: Vec<(String, u16)>, out: Option<String>, edits: Option<crate::sta::bilayer::Edits>) -> CmdResult<serde_json::Value> {
+    let job = StaJob::begin()?;
+    blocking(move || {
+        let _job = job;
+        if ticked.is_empty() {
+            anyhow::bail!("请先勾选膜图层");
+        }
+        let images: Vec<String> = ticked.iter().map(|t| t.0.clone()).collect();
+        sta_apply_pixel(out.as_deref(), &images);
+        let out = out.unwrap_or_else(|| crate::sta::auto::out_of(&images[0]).to_string_lossy().into_owned());
+        let progress = |label: &str, done: usize, total: usize| {
+            let _ = app.emit("sta-progress", serde_json::json!({ "label": label, "done": done, "total": total }));
+        };
+        crate::sta::bilayer::run_ticked(&ticked, &edits.unwrap_or_default(), &out, &progress)
+    }).await
+}
+
 /// The marks of the ticked label layers ([[image, label]…]), `sta::layers::marks_of`.
 #[cfg(feature = "pro")]
 #[tauri::command]
@@ -4402,6 +4426,7 @@ pub fn run() {
             #[cfg(feature = "pro")] spa_examples_view,
             #[cfg(feature = "pro")] spa_examples_set,
             #[cfg(feature = "pro")] sta_layers_marks,
+            #[cfg(feature = "pro")] sta_membrane_average,
             #[cfg(feature = "pro")] sta_mark_preview,
             #[cfg(feature = "pro")] sta_membrane_status,
             #[cfg(feature = "pro")] sta_membrane_segment,

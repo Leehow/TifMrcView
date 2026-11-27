@@ -844,7 +844,7 @@ fn sta_membrane(layers: &str, found: &[auto_sta::Resolved], sources: &[crate::st
     }
     let given = bilayer::given(&ticked)?;
     let inputs: Vec<String> = found.iter().map(|f| f.input.clone()).collect();
-    let report = bilayer::run(sources, &inputs, &given, &out.to_string_lossy(), &|s, i, n| progress.report(s, i, n))?;
+    let report = bilayer::run(sources, &inputs, &given, &[], &out.to_string_lossy(), &|s, i, n| progress.report(s, i, n))?;
     progress.done();
     let line = |thick: Option<f64>, leaf: Option<f64>, side: &str| {
         format!(
