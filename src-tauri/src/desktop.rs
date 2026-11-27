@@ -478,6 +478,25 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
         let progress = |done: usize| {
             let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
         };
+        #[cfg(feature = "pro")]
+        let f = {
+            // Learnt from the layer's own pixels, in 3D at once (structure::learn).
+            let _ = &progress;
+            let (w, h, _) = dims;
+            let ps = learn_pieces(&vals, dims, token, label, z, &start, &marks, range.as_ref(), &|done, of| {
+                let _ = app2.emit("labels-follow", serde_json::json!({ "done": done, "total": of, "stage": "learn" }));
+            })?;
+            let thick = learn_thick(&marks);
+            let near = crate::labels::edt(&start, w, h);
+            let own: Vec<&crate::structure::learn::Piece> = ps.iter().filter(|p| crate::structure::learn::touches(p, z, &near, thick + 2.0)).collect();
+            let (slices, found) = crate::structure::learn::draw(&vals, dims, &own, z, Some(z), &marks, &structure, thick, &existing, &|done| {
+                let _ = app2.emit("labels-follow", serde_json::json!({ "done": done }));
+            })?;
+            let _ = h;
+            let range = (slices.keys().next().copied().unwrap_or(z).min(z), slices.keys().next_back().copied().unwrap_or(z).max(z));
+            crate::structure::follow::Followed { slices, marks: found, range }
+        };
+        #[cfg(not(feature = "pro"))]
         let f = crate::structure::follow::follow_z(&vals, dims, z, &start, &marks, &structure, range.as_ref(), &existing, &progress)?;
         let mut e = e.lock().unwrap();
         let l = &mut e.labels;
@@ -496,6 +515,63 @@ async fn labels_follow_z(app: AppHandle, token: u64, c: usize, t: usize, z: usiz
     })
     .await
 }
+
+/// The thickness of a layer's refined objects (for the learnt search).
+#[cfg(feature = "pro")]
+fn learn_thick(marks: &[crate::labels::Mark]) -> f32 {
+    let mut t: Vec<f32> = marks.iter().map(|m| m.thickness).collect();
+    t.sort_by(f32::total_cmp);
+    t.get(t.len() / 2).copied().unwrap_or(3.0).max(1.5)
+}
+
+/// The last learnt pieces, so 找所有类似 after 沿 Z 找全 (or again) on the
+/// same examples does not learn and label the stack a second time.
+#[cfg(feature = "pro")]
+struct Learnt {
+    key: (u64, u16, usize, u64),
+    pieces: std::sync::Arc<Vec<crate::structure::learn::Piece>>,
+}
+
+#[cfg(feature = "pro")]
+static LEARNT: std::sync::Mutex<Option<Learnt>> = std::sync::Mutex::new(None);
+
+/// Learns `label` from its pixels `start` on slice `z` (and the pieces the
+/// user took out before) and returns the 3D pieces in the range.
+#[cfg(feature = "pro")]
+#[allow(clippy::too_many_arguments)]
+fn learn_pieces(vals: &dyn crate::labels::Values, dims: (usize, usize, usize), token: u64, label: u16, z: usize, start: &[bool], marks: &[crate::labels::Mark], range: Option<&crate::labels::SearchRange>, progress: &dyn Fn(usize, usize)) -> anyhow::Result<std::sync::Arc<Vec<crate::structure::learn::Piece>>> {
+    use std::hash::{Hash, Hasher};
+    let not: Vec<(usize, Vec<u32>)> = crate::structure::learn::NOT.lock().unwrap().iter().filter(|(k, _, _)| *k == (token, label)).map(|(_, z, px)| (*z, px.clone())).collect();
+    let mut hs = std::collections::hash_map::DefaultHasher::new();
+    start.hash(&mut hs);
+    not.hash(&mut hs);
+    format!("{range:?}").hash(&mut hs);
+    let key = (token, label, z, hs.finish());
+    if let Some(l) = LEARNT.lock().unwrap().as_ref().filter(|l| l.key == key) {
+        return Ok(l.pieces.clone());
+    }
+    let ex = crate::structure::learn::Examples { z, pos: start, thick: learn_thick(marks), not };
+    let ps = std::sync::Arc::new(crate::structure::learn::pieces(vals, dims, &ex, range, progress)?);
+    *LEARNT.lock().unwrap() = Some(Learnt { key, pieces: ps.clone() });
+    Ok(ps)
+}
+
+/// The candidates of the last learnt 找所有类似: the pieces offered, by
+/// candidate index, on slice `z`.
+#[cfg(feature = "pro")]
+struct Offered {
+    token: u64,
+    label: u16,
+    z: usize,
+    c: usize,
+    t: usize,
+    structure: String,
+    marks: Vec<crate::labels::Mark>,
+    pieces: Vec<crate::structure::learn::Piece>,
+}
+
+#[cfg(feature = "pro")]
+static OFFERED: std::sync::Mutex<Option<Offered>> = std::sync::Mutex::new(None);
 
 /// 找所有类似 for a line-like layer: the layer's refined lines on slice `z`
 /// are the examples; finds the other lines like them on the slice, inside
@@ -520,17 +596,66 @@ async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, 
             }
             (examples, taken, range, (w, h, l.d))
         };
-        let items = crate::structure::similar::lines(&vals, dims, z, &examples, &taken, range.as_ref(), 200)?;
-        let mut out = (items.len() as u32).to_le_bytes().to_vec();
-        for f in &items {
-            for v in f.rect {
-                out.extend_from_slice(&(v as u32).to_le_bytes());
+        #[cfg(feature = "pro")]
+        {
+            let structure = {
+                let e = e.lock().unwrap();
+                e.labels.materials.iter().find(|m| m.label == label).map(|m| m.structure.clone()).unwrap_or_default()
+            };
+            if !taken.iter().any(|&b| b) {
+                anyhow::bail!("这一层还没有这个标签");
             }
-            out.extend_from_slice(&f.score.to_le_bytes());
-            out.extend(f.mask.iter().map(|m| *m as u8));
+            let (w, _, _) = dims;
+            let ps = learn_pieces(&vals, dims, token, label, z, &taken, &examples, range.as_ref(), &|_, _| {})?;
+            let thick = learn_thick(&examples);
+            let near = crate::labels::edt(&taken, w, dims.1);
+            let mut offered: Vec<crate::structure::learn::Piece> = ps
+                .iter()
+                .filter(|p| !crate::structure::learn::touches(p, z, &near, thick + 2.0))
+                .filter(|p| p.zs().1 - p.zs().0 >= 2 && p.px.contains_key(&z))
+                .cloned()
+                .collect();
+            offered.sort_by(|a, b| b.score().total_cmp(&a.score()));
+            offered.truncate(200);
+            let mut out = (offered.len() as u32).to_le_bytes().to_vec();
+            for p in &offered {
+                let px = &p.px[&z];
+                let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+                for &i in px {
+                    let (x, y) = (i as usize % w, i as usize / w);
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+                let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+                let mut m = vec![0u8; bw * bh];
+                for &i in px {
+                    m[(i as usize / w - y0) * bw + i as usize % w - x0] = 1;
+                }
+                for v in [x0, y0, bw, bh] {
+                    out.extend_from_slice(&(v as u32).to_le_bytes());
+                }
+                out.extend_from_slice(&p.score().to_le_bytes());
+                out.extend(m);
+            }
+            *OFFERED.lock().unwrap() = Some(Offered { token, label, z, c, t, structure, marks: examples, pieces: offered });
+            Ok(out)
         }
-        *crate::structure::similar::FOUND.lock().unwrap() = Some(crate::structure::similar::Found { token, z, items });
-        Ok(out)
+        #[cfg(not(feature = "pro"))]
+        {
+            let items = crate::structure::similar::lines(&vals, dims, z, &examples, &taken, range.as_ref(), 200)?;
+            let mut out = (items.len() as u32).to_le_bytes().to_vec();
+            for f in &items {
+                for v in f.rect {
+                    out.extend_from_slice(&(v as u32).to_le_bytes());
+                }
+                out.extend_from_slice(&f.score.to_le_bytes());
+                out.extend(f.mask.iter().map(|m| *m as u8));
+            }
+            *crate::structure::similar::FOUND.lock().unwrap() = Some(crate::structure::similar::Found { token, z, items });
+            Ok(out)
+        }
     })
     .await?;
     Ok(Response::new(bytes))
@@ -541,7 +666,44 @@ async fn labels_similar_lines(state: State<'_, AppState>, token: u64, c: usize, 
 #[tauri::command]
 async fn labels_similar_lines_apply(state: State<'_, AppState>, token: u64, z: usize, label: u16, guard: u16, keep: Vec<usize>) -> CmdResult<Refined> {
     let e = labels_entry(&state, token)?;
+    #[cfg(feature = "pro")]
+    let img = current(&state, token)?;
     blocking(move || {
+        #[cfg(feature = "pro")]
+        if let Some(o) = OFFERED.lock().unwrap().take().filter(|o| o.token == token && o.z == z && o.label == label) {
+            // The pieces kept are drawn on all their slices; the ones taken
+            // out are learnt as "not this" for the next search.
+            {
+                let mut not = crate::structure::learn::NOT.lock().unwrap();
+                for (_, p) in o.pieces.iter().enumerate().filter(|(k, _)| !keep.contains(k)) {
+                    not.push(((token, label), z, p.px[&z].clone()));
+                }
+            }
+            let kept: Vec<&crate::structure::learn::Piece> = keep.iter().filter_map(|&k| o.pieces.get(k)).collect();
+            let (existing, dims) = {
+                let e = e.lock().unwrap();
+                let l = &e.labels;
+                let existing: std::collections::BTreeMap<usize, Vec<bool>> =
+                    (0..l.d).filter_map(|zz| l.slice(zz).filter(|s| s.contains(&label)).map(|s| (zz, s.iter().map(|&v| v == label).collect()))).collect();
+                (existing, (l.w, l.h, l.d))
+            };
+            let vals = crate::labels::ChannelValues { img: img.clone(), c: o.c, t: o.t };
+            let thick = learn_thick(&o.marks);
+            let (slices, marks) = crate::structure::learn::draw(&vals, dims, &kept, z, None, &o.marks, &o.structure, thick, &existing, &|_| {})?;
+            let mut e = e.lock().unwrap();
+            let l = &mut e.labels;
+            let refs: Vec<(usize, &[bool])> = slices.iter().map(|(z, m)| (*z, m.as_slice())).collect();
+            let zs = l.apply_masks(&refs, label, guard, false);
+            if !marks.is_empty() {
+                let mut mats = l.materials.clone();
+                if let Some(x) = mats.iter_mut().find(|x| x.label == label) {
+                    x.marks.extend(marks.iter().cloned());
+                }
+                l.set_materials(mats);
+            }
+            let note = if slices.is_empty() { String::new() } else { format!("加入 {} 片，共 {} 层", kept.len(), slices.len()) };
+            return Ok(Refined { state: labels_state(&e, zs), marks, note });
+        }
         let found = crate::structure::similar::FOUND.lock().unwrap();
         let Some(f) = found.as_ref().filter(|f| f.token == token && f.z == z) else {
             anyhow::bail!("没有可以加入的候选");

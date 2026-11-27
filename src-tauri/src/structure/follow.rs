@@ -106,7 +106,7 @@ pub(super) fn rasterize(w: usize, h: usize, marks: &[Mark]) -> Vec<bool> {
     tmp.slice(0).map_or_else(|| vec![false; w * h], |s| s.iter().map(|&v| v == 1).collect())
 }
 
-fn count(m: &[bool]) -> usize {
+pub(super) fn count(m: &[bool]) -> usize {
     m.iter().filter(|&&b| b).count()
 }
 
@@ -127,7 +127,7 @@ fn normal_near(m: &Mark, p: [f32; 2]) -> Option<([f32; 2], f32)> {
 /// is a direction in the image, the new path may run the other way. Each
 /// point of the new line votes with the nearest old line there (a single
 /// point near a bend or an end can read the wrong way).
-fn carry_inside(new: &mut [Mark], old: &[Mark]) {
+pub(super) fn carry_inside(new: &mut [Mark], old: &[Mark]) {
     let olds: Vec<&Mark> = old.iter().filter(|o| o.inside != 0 && !o.closed && o.path.len() >= 2).collect();
     if olds.is_empty() {
         return;

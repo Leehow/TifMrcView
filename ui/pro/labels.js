@@ -1292,7 +1292,7 @@
     $("lab-follow").disabled = !st || !has || busy;
     $("lab-similar").disabled = !st || !has || busy || !!L.cand;
     const r = mat(k).range;
-    $("lab-find-note").textContent = L.follow ? `正在沿 Z 找… 已找到 ${L.follow.done} 层（Esc 停止）`
+    $("lab-find-note").textContent = L.follow ? (L.follow.stage === "learn" ? `正在学你画的样子，逐层识别… ${L.follow.done}/${L.follow.total}（Esc 停止）` : `正在沿 Z 画… 已画 ${L.follow.done} 层（Esc 停止）`)
       : !st ? "先给图层选结构类型" : !has ? "这一层还没有这个图层的物体" : rangeText(r);
   }
 
@@ -1301,7 +1301,7 @@
     if (L.follow || L.busy) return;
     L.follow = { done: 0 };
     syncFind();
-    const un = await T.event.listen("labels-follow", (ev) => { if (L.follow) { L.follow.done = ev.payload.done; syncFind(); } });
+    const un = await T.event.listen("labels-follow", (ev) => { if (L.follow) { Object.assign(L.follow, { done: ev.payload.done, total: ev.payload.total || 0, stage: ev.payload.stage || "" }); syncFind(); } });
     try {
       L.undoMarks = { k, marks: (mat(k).marks || []).slice() };
       const res = await editWith("labels_follow_z", { token: L.token, c: channel(), t: S.t, z: S.z, label: k, guard: L.guard ? k : 0 });
